@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { answerConfirm } from './support/confirmDialog';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 
@@ -51,13 +52,9 @@ test.describe('#1060 the secrets vault has a front end', () => {
     const deleteButton = page.getByRole('button', { name: `Delete ${NAME}`, exact: true });
 
     // The confirmation is the only place the cost of deleting is stated, and
-    // the route cannot state it — capture the real dialog.
-    let confirmText = '';
-    page.once('dialog', (dialog) => {
-      confirmText = dialog.message();
-      void dialog.accept();
-    });
+    // the route cannot state it — read the real dialog.
     await deleteButton.click();
+    const confirmText = await answerConfirm(page, 'accept');
 
     await expect(deleteButton).toHaveCount(0);
     expect(confirmText).toContain(`{"$secret":"${NAME}"}`);
@@ -124,8 +121,8 @@ test.describe('#1060 the secrets vault has a front end', () => {
       // In a `finally` for the reason the test below states: `reset-state.mjs`
       // wipes once per RUN, so a row left behind 409s the next attempt's
       // CREATE and reads as "create is broken".
-      page.once('dialog', (dialog) => void dialog.accept());
       await page.getByRole('button', { name: `Delete ${ROTATE_NAME}`, exact: true }).click();
+      await answerConfirm(page, 'accept');
       await expect(
         page.getByRole('button', { name: `Delete ${ROTATE_NAME}`, exact: true }),
       ).toHaveCount(0);
@@ -170,8 +167,8 @@ test.describe('#1060 the secrets vault has a front end', () => {
       // The form still holds what was typed, so Cancel asks first (#1396).
       await page.getByRole('button', { name: 'Cancel' }).click();
       await page.getByRole('button', { name: 'Discard changes' }).click();
-      page.once('dialog', (dialog) => void dialog.accept());
       await page.getByRole('button', { name: `Delete ${DUP_NAME}`, exact: true }).click();
+      await answerConfirm(page, 'accept');
       await expect(
         page.getByRole('button', { name: `Delete ${DUP_NAME}`, exact: true }),
       ).toHaveCount(0);

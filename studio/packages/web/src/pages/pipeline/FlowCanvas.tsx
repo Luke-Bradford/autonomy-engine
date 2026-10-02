@@ -988,8 +988,9 @@ export function FlowCanvas({
   /**
    * #748 — confirm, then remove the container.
    *
-   * Confirmed where every other destructive act in this app is (a `window.confirm`
-   * — `PipelinesPage`, `ConnectionsPage`, `TriggersPage`), and unlike "Delete
+   * Confirmed like every other destructive act in this app (still a native
+   * `window.confirm` here; the list pages moved to `useConfirm` in #1397 and
+   * this follows in a later OR6 slice), and unlike "Delete
    * node"/"Delete edge" it is confirmed AT ALL, because the two are not the same
    * risk: a container owns `exitWhen`/`items`/`maxRounds`/`timeout` that no
    * surface can re-author yet (U23, #839), so a mis-click costs more than a
@@ -1065,6 +1066,7 @@ export function FlowCanvas({
       // from the render that created the callback, not from the doc as it stands
       // when the ✕ is pressed. `state` is `store.getState()`, taken on the click.
       const name = containerLabels(state.containers).get(id) ?? CONTAINER_KIND_LABELS[kind];
+      // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
       const confirmed = window.confirm(
         `Delete this ${name} container?\n\n` +
           // U17 — this used to end "and this cannot be undone", which was true

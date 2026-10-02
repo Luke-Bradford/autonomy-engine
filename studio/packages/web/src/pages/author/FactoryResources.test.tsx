@@ -7,6 +7,7 @@ import { FactoryResources } from './FactoryResources';
 import { ApiError } from '../../api/client';
 import { createPipelinesStore } from '../../stores/pipelinesStore';
 import { renderWithRouter } from '../../testing/renderWithRouter';
+import { answerConfirm, pressInConfirm } from '../../testing/confirmDialog';
 import { hubById } from '../../shell/hubs';
 import * as pipelinesApi from '../../api/pipelines';
 import * as downloadApi from '../../api/download';
@@ -445,7 +446,6 @@ describe('FactoryResources — row actions', () => {
    */
   it('keeps the draft submit disabled while ITS request is still in flight, not the fastest one', async () => {
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     // The duplicate hangs; the delete raced against it resolves immediately.
     let finishDuplicate!: (p: Pipeline) => void;
@@ -465,6 +465,7 @@ describe('FactoryResources — row actions', () => {
     // Now delete an unrelated row — its menu was never gated on the flag.
     await openRowMenu(user, 'Beta');
     await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await answerConfirm(user, 'accept');
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('pl_2'));
 
     // The delete has come and gone; the duplicate has NOT. One `duplicatePipeline`
@@ -509,41 +510,81 @@ describe('FactoryResources — row actions', () => {
 
   it('deletes only after a confirmation', async () => {
     const user = userEvent.setup();
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     renderPane();
     await screen.findByRole('link', { name: 'Alpha' });
 
     await openRowMenu(user, 'Alpha');
     await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    const text = await answerConfirm(user, 'cancel');
+    expect(text).toContain('Delete pipeline “Alpha”?');
+    expect(text).toContain('This cannot be undone.');
     expect(deleteMock).not.toHaveBeenCalled();
 
-    confirm.mockReturnValue(true);
     await openRowMenu(user, 'Alpha');
     await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await answerConfirm(user, 'accept');
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('pl_1'));
+  });
+
+  /**
+   * #1397 — the row's `⋯` menu item that asked unmounts with its menu, so a
+   * declined delete cannot rely on Fluent handing focus back. `onDelete` names
+   * the row's `⋯` button as the place to land, which is where the keyboard user
+   * came from.
+   */
+  it('returns focus to the row’s ⋯ button when the delete is CANCELLED', async () => {
+    const user = userEvent.setup();
+    renderPane();
+    await screen.findByRole('link', { name: 'Alpha' });
+
+    await openRowMenu(user, 'Alpha');
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await answerConfirm(user, 'cancel');
+
+    expect(deleteMock).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'More actions for Alpha' })).toHaveFocus(),
+    );
+  });
+
+  it('returns focus to the row’s ⋯ button when the delete dialog is dismissed with Escape', async () => {
+    const user = userEvent.setup();
+    renderPane();
+    await screen.findByRole('link', { name: 'Alpha' });
+
+    await openRowMenu(user, 'Alpha');
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await screen.findByRole('alertdialog');
+    pressInConfirm('Escape');
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+
+    expect(deleteMock).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'More actions for Alpha' })).toHaveFocus(),
+    );
   });
 
   it('explains a 409 delete refusal in terms of run history', async () => {
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     deleteMock.mockRejectedValueOnce(new ApiError(409, 'nope'));
     renderPane();
     await screen.findByRole('link', { name: 'Alpha' });
 
     await openRowMenu(user, 'Alpha');
     await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await answerConfirm(user, 'accept');
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/run history/i);
   });
 
   it('navigates OFF a pipeline it just deleted, so the canvas cannot 404', async () => {
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderPane('/author/pipelines/pl_1');
     await screen.findByRole('link', { name: 'Alpha' });
 
     await openRowMenu(user, 'Alpha');
     await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await answerConfirm(user, 'accept');
 
     await waitFor(() => expect(deleteMock).toHaveBeenCalled());
     await waitFor(() =>
@@ -559,7 +600,6 @@ describe('FactoryResources — row actions', () => {
    */
   it('leaves the deleted pipeline by REPLACE, so Back is not a trap', async () => {
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     const store = createPipelinesStore();
     const router = createMemoryRouter(
       [
@@ -589,6 +629,7 @@ describe('FactoryResources — row actions', () => {
 
     await openRowMenu(user, 'Alpha');
     await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await answerConfirm(user, 'accept');
     await waitFor(() => expect(router.state.location.pathname).toBe('/author/pipelines'));
 
     // Back must reach the entry BEFORE the canvas, not the canvas itself.
@@ -605,13 +646,13 @@ describe('FactoryResources — row actions', () => {
    */
   it('hands focus somewhere real after deleting the row it came from', async () => {
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     listMock.mockResolvedValueOnce([ALPHA, BETA]).mockResolvedValue([BETA]);
     renderPane();
     await screen.findByRole('link', { name: 'Alpha' });
 
     await openRowMenu(user, 'Alpha');
     await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await answerConfirm(user, 'accept');
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'New pipeline' })).toHaveFocus());
   });
@@ -626,13 +667,13 @@ describe('FactoryResources — row actions', () => {
    */
   it('disarms focus restoration when the delete FAILED, so nothing steals it later', async () => {
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     deleteMock.mockRejectedValueOnce(new ApiError(409, 'nope'));
     const { store } = renderPane();
     await screen.findByRole('link', { name: 'Alpha' });
 
     await openRowMenu(user, 'Alpha');
     await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await answerConfirm(user, 'accept');
     await screen.findByRole('alert');
 
     // The row survived the failure; the user moves on to the filter.
@@ -659,7 +700,6 @@ describe('FactoryResources — row actions', () => {
    */
   it('falls back to a control that EXISTS when the draft’s row was deleted underneath it', async () => {
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     listMock.mockResolvedValueOnce([ALPHA, BETA]).mockResolvedValue([BETA]);
     renderPane();
     await screen.findByRole('link', { name: 'Alpha' });
@@ -672,6 +712,7 @@ describe('FactoryResources — row actions', () => {
     // Delete that very row while its duplicate draft is still open.
     await openRowMenu(user, 'Alpha');
     await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await answerConfirm(user, 'accept');
     await waitFor(() => expect(screen.queryByRole('link', { name: 'Alpha' })).toBeNull());
 
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -692,7 +733,6 @@ describe('FactoryResources — row actions', () => {
    */
   it('restores focus for a delete that SUCCEEDS alongside one that failed first', async () => {
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     /* BOTH held open, so they are genuinely concurrent: Alpha must fail while
        Beta is still in flight. Letting Beta settle first would complete its
@@ -710,10 +750,12 @@ describe('FactoryResources — row actions', () => {
 
     await openRowMenu(user, 'Alpha');
     await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await answerConfirm(user, 'accept');
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('pl_1'));
 
     await openRowMenu(user, 'Beta');
     await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await answerConfirm(user, 'accept');
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('pl_2'));
 
     // Alpha fails FIRST, with Beta's request still outstanding.
@@ -742,7 +784,6 @@ describe('FactoryResources — row actions', () => {
    */
   it('does not hijack an open draft’s focus target when an unrelated delete SUCCEEDS', async () => {
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     listMock.mockResolvedValueOnce([ALPHA, BETA]).mockResolvedValue([ALPHA]);
     renderPane();
     await screen.findByRole('link', { name: 'Alpha' });
@@ -755,6 +796,7 @@ describe('FactoryResources — row actions', () => {
     // Beta is deleted out from under it, successfully.
     await openRowMenu(user, 'Beta');
     await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await answerConfirm(user, 'accept');
     await waitFor(() => expect(screen.queryByRole('link', { name: 'Beta' })).toBeNull());
 
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -772,7 +814,6 @@ describe('FactoryResources — row actions', () => {
    */
   it('leaves an OPEN draft’s focus target intact when an unrelated delete fails', async () => {
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     deleteMock.mockRejectedValueOnce(new ApiError(409, 'nope'));
     renderPane();
     await screen.findByRole('link', { name: 'Alpha' });
@@ -785,6 +826,7 @@ describe('FactoryResources — row actions', () => {
     // Meanwhile the user deletes Beta, and that delete fails.
     await openRowMenu(user, 'Beta');
     await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await answerConfirm(user, 'accept');
     await screen.findByRole('alert');
 
     // Cancelling the rename must still land focus on the row it came from.
@@ -800,13 +842,13 @@ describe('FactoryResources — row actions', () => {
    */
   it('lets the user dismiss a failed action’s message', async () => {
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     deleteMock.mockRejectedValueOnce(new ApiError(409, 'nope'));
     renderPane();
     await screen.findByRole('link', { name: 'Alpha' });
 
     await openRowMenu(user, 'Alpha');
     await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await answerConfirm(user, 'accept');
     await screen.findByRole('alert');
 
     await user.click(screen.getByRole('button', { name: 'Dismiss' }));
@@ -815,12 +857,12 @@ describe('FactoryResources — row actions', () => {
 
   it('stays put when the deleted pipeline is not the one being edited', async () => {
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderPane('/author/pipelines/pl_2');
     await screen.findByRole('link', { name: 'Alpha' });
 
     await openRowMenu(user, 'Alpha');
     await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await answerConfirm(user, 'accept');
 
     await waitFor(() => expect(deleteMock).toHaveBeenCalled());
     expect(screen.getByTestId('location').textContent).toBe('/author/pipelines/pl_2');

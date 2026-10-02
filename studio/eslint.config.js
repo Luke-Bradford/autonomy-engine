@@ -110,6 +110,26 @@ export default tseslint.config(
         },
         ...HOOK_RETURNS_TEARDOWN,
       ],
+      // #1397 OR6 — every confirmation is the one dialog (`useConfirm`, in
+      // src/lib/confirm/). A native confirm cannot name its dangerous button,
+      // ask for a typed name, or be styled, and it blocks the whole tab.
+      'no-restricted-globals': [
+        'error',
+        {
+          name: 'confirm',
+          message:
+            'Use useConfirm (src/lib/confirm/useConfirm.tsx) rather than a native confirm (#1397).',
+        },
+      ],
+      'no-restricted-properties': [
+        'error',
+        ...['window', 'globalThis', 'self'].map((object) => ({
+          object,
+          property: 'confirm',
+          message:
+            'Use useConfirm (src/lib/confirm/useConfirm.tsx) rather than a native confirm (#1397).',
+        })),
+      ],
     },
   },
   {

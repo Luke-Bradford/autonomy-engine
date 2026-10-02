@@ -18,6 +18,7 @@ import { exportPipeline } from '../api/portability';
 import { pipelinesStore, type PipelinesStore } from '../stores/pipelinesStore';
 import { ImportPanel } from './ImportPanel';
 import { pipelinePath } from './author/pipelinePath';
+import { useConfirm } from '../lib/confirm/useConfirm';
 
 /**
  * Pipelines: list / create / delete, and open one on the authoring canvas.
@@ -37,6 +38,7 @@ import { pipelinePath } from './author/pipelinePath';
  * pipeline at all.
  */
 export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesStore } = {}) {
+  const [confirm, confirmDialog] = useConfirm();
   const status = useStore(store, (s) => s.status);
   const pipelines = useStore(store, (s) => s.pipelines);
   const loadError = useStore(store, (s) => s.error);
@@ -137,7 +139,11 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
 
   const onDelete = useCallback(
     async (p: Pipeline) => {
-      if (!window.confirm(`Delete pipeline "${p.name}"? This cannot be undone.`)) return;
+      const confirmed = await confirm({
+        message: `Delete pipeline "${p.name}"?\n\nThis cannot be undone.`,
+        confirmLabel: 'Delete',
+      });
+      if (!confirmed) return;
       setActionMsg(null);
       try {
         await deletePipeline(p.id);
@@ -148,7 +154,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
         setActionMsg(describeDeleteFailure(p.name, err));
       }
     },
-    [refresh],
+    [confirm, refresh],
   );
 
   /**
@@ -239,7 +245,11 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
    */
   const onArchive = useCallback(
     async (p: Pipeline) => {
-      if (!window.confirm(archiveConfirmMessage(p.name))) return;
+      const confirmed = await confirm({
+        message: archiveConfirmMessage(p.name),
+        confirmLabel: 'Archive',
+      });
+      if (!confirmed) return;
       setActionMsg(null);
       try {
         await archivePipeline(p.id);
@@ -252,7 +262,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
         setActionMsg(`Could not archive “${p.name}”: ${messageOf(err)}`);
       }
     },
-    [refresh, loadArchived, invalidateArchived],
+    [confirm, refresh, loadArchived, invalidateArchived],
   );
 
   /**
@@ -463,6 +473,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
           reported with a pointer to its own section, rather than refused by a
           client-side rule the server does not have. */}
       <ImportPanel listKind="pipeline" onImported={refresh} />
+      {confirmDialog}
     </section>
   );
 }

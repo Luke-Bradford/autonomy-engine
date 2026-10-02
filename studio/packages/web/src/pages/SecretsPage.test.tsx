@@ -5,6 +5,7 @@ import { SecretsPage } from './SecretsPage';
 import * as api from '../api/secrets';
 import { ApiError } from '../api/client';
 import { renderWithDataRouter } from '../testing/renderWithRouter';
+import { answerConfirm } from '../testing/confirmDialog';
 
 // Mock only the network calls; `SecretWriteSchema` stays REAL so the form's
 // client-side validation is exercised exactly as it ships.
@@ -215,7 +216,6 @@ describe('SecretsPage', () => {
 
   it('deletes after a confirmation, and refreshes', async () => {
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     listMock.mockResolvedValue([secret()]);
     deleteMock.mockResolvedValue(undefined);
     renderWithDataRouter(<SecretsPage />);
@@ -223,6 +223,7 @@ describe('SecretsPage', () => {
 
     listMock.mockResolvedValue([]);
     await user.click(screen.getByRole('button', { name: 'Delete stripe-key' }));
+    await answerConfirm(user, 'accept');
 
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('sec_1'));
     expect(await screen.findByText(/No secrets yet/)).toBeInTheDocument();
@@ -233,14 +234,14 @@ describe('SecretsPage', () => {
     // but it is still how a name is retired — and that breaks every node
     // referencing it, so the confirmation has to say what it costs.
     const user = userEvent.setup();
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
     listMock.mockResolvedValue([secret()]);
     renderWithDataRouter(<SecretsPage />);
     await screen.findByText('stripe-key');
 
     await user.click(screen.getByRole('button', { name: 'Delete stripe-key' }));
 
-    expect(confirmSpy.mock.calls[0]![0]).toContain('{"$secret":"stripe-key"}');
+    const asked = await answerConfirm(user, 'cancel');
+    expect(asked).toContain('{"$secret":"stripe-key"}');
     expect(deleteMock).not.toHaveBeenCalled();
   });
 
@@ -284,12 +285,12 @@ describe('SecretsPage', () => {
       const user = userEvent.setup();
       listMock.mockResolvedValue([secret()]);
       deleteMock.mockResolvedValue(undefined);
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
       renderWithDataRouter(<SecretsPage />);
       await user.click(await screen.findByRole('button', { name: 'Replace stripe-key' }));
       await user.type(screen.getByLabelText('Value'), 'half-typed');
       listMock.mockResolvedValue([]);
       await user.click(screen.getByRole('button', { name: 'Delete stripe-key' }));
+      await answerConfirm(user, 'accept');
       await waitFor(() => expect(screen.queryByRole('form', { name: 'Secret form' })).toBeNull());
       expect(screen.queryByRole('alertdialog', { name: 'Unsaved changes' })).toBeNull();
     });
@@ -390,7 +391,6 @@ describe('SecretsPage', () => {
     // delete has to be too, or navigating away mid-mutation leaves a request
     // running whose settle path still writes state into a dead component.
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     listMock.mockResolvedValue([secret()]);
     deleteMock.mockResolvedValue(undefined);
     const { unmount } = renderWithDataRouter(<SecretsPage />);
@@ -400,6 +400,7 @@ describe('SecretsPage', () => {
     const refreshLoad = deferred<api.NamedSecret[]>();
     listMock.mockReturnValueOnce(refreshLoad.promise);
     await user.click(screen.getByRole('button', { name: 'Delete stripe-key' }));
+    await answerConfirm(user, 'accept');
     await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
 
     const signal = listMock.mock.calls[1]![0];
@@ -418,7 +419,6 @@ describe('SecretsPage', () => {
     // unguarded load would start an unabortable request on behalf of a component
     // that no longer exists, so the refresh must not be issued at all.
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     listMock.mockResolvedValue([secret()]);
     const pendingDelete = deferred<void>();
     deleteMock.mockReturnValue(pendingDelete.promise);
@@ -427,6 +427,7 @@ describe('SecretsPage', () => {
     expect(listMock).toHaveBeenCalledTimes(1);
 
     await user.click(screen.getByRole('button', { name: 'Delete stripe-key' }));
+    await answerConfirm(user, 'accept');
     await waitFor(() => expect(deleteMock).toHaveBeenCalledTimes(1));
 
     // Unmount while the DELETE is still in flight, then let it resolve.
@@ -439,13 +440,13 @@ describe('SecretsPage', () => {
 
   it('reports a failed delete instead of leaving the row silently in place', async () => {
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     listMock.mockResolvedValue([secret()]);
     deleteMock.mockRejectedValue(new Error('nope'));
     renderWithDataRouter(<SecretsPage />);
     await screen.findByText('stripe-key');
 
     await user.click(screen.getByRole('button', { name: 'Delete stripe-key' }));
+    await answerConfirm(user, 'accept');
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not delete “stripe-key”');
     expect(screen.getByText('stripe-key')).toBeInTheDocument();

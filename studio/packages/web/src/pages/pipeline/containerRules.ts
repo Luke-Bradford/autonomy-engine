@@ -820,6 +820,7 @@ export function confirmContainerEdit(
     nextContainers,
     recovery,
   );
+  // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
   return message === null || window.confirm(message);
 }
 
@@ -846,6 +847,7 @@ export function confirmNewContainer(
       containers: [...doc.containers, { id: '\u0000probe', kind, children: [] }],
     }),
   );
+  // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
   return routing === null || window.confirm(`Add a ${title} container?\n\n${routing}`);
 }
 

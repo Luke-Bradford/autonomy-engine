@@ -4,6 +4,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 import { expectAccessibleNameContainsText } from '../testing/accessibleName';
 import { renderWithDataRouter } from '../testing/renderWithRouter';
 import { ROW_EDIT } from '../testing/rowActions';
+import { answerConfirm } from '../testing/confirmDialog';
 import userEvent from '@testing-library/user-event';
 import type {
   Pipeline,
@@ -745,7 +746,6 @@ describe('TriggersPage', () => {
     const alpha = trigger({ id: 'trg_a', name: 'Alpha' });
     const beta = trigger({ id: 'trg_b', name: 'Beta' });
     listTriggersMock.mockResolvedValue([alpha, beta]);
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     vi.mocked(triggersApi.deleteTrigger).mockResolvedValue(undefined as never);
     renderWithDataRouter(<TriggersPage />);
 
@@ -757,6 +757,7 @@ describe('TriggersPage', () => {
     // Alpha is deleted; the refresh that follows returns only Beta.
     listTriggersMock.mockResolvedValue([beta]);
     await user.click(screen.getByRole('button', { name: 'Delete Alpha' }));
+    await answerConfirm(user, 'accept');
 
     await waitFor(() => expect(screen.queryByText(/Fired "Alpha"/)).not.toBeInTheDocument());
     // Its run link went with it — no orphan pointing at a row that is gone.
@@ -1668,13 +1669,13 @@ describe('#1396 the trigger form drawer', () => {
   it('closes the drawer when the trigger it is editing is deleted', async () => {
     const user = userEvent.setup();
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderWithDataRouter(<TriggersPage />);
     const row = within(await screen.findByRole('row', { name: /Nightly/ }));
     await user.click(row.getByRole('button', { name: ROW_EDIT }));
     await user.type(within(formEl()).getByLabelText('Name'), ' renamed');
     listTriggersMock.mockResolvedValue([]);
     await user.click(screen.getByRole('button', { name: 'Delete Nightly' }));
+    await answerConfirm(user, 'accept');
     await waitFor(() => expect(screen.queryByRole('form', { name: 'Trigger form' })).toBeNull());
     expect(deleteMock).toHaveBeenCalledWith('trg_1');
     expect(prompt()).toBeNull();

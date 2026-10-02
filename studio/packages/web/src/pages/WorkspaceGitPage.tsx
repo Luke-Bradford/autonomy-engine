@@ -339,6 +339,7 @@ function GitStatusPanel({
 
   const onDisconnect = useCallback(async () => {
     if (
+      // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
       !window.confirm(
         `Disconnect ${status.repoUrl}? Your pipelines stay in the database — only the link to the repository is removed.`,
       )
@@ -460,6 +461,7 @@ function TokenForm({
   }
 
   async function onClear() {
+    // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
     if (!window.confirm('Remove the stored token? Pushes will fall back to your git credentials.'))
       return;
     await runExclusive(async () => {
@@ -779,6 +781,7 @@ function ImportSection({
 
   async function onImport() {
     if (readings === null || blocked !== null) return;
+    // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
     if (!window.confirm(buildImportConfirmation(readings.preview, readings.divergence, status)))
       return;
 

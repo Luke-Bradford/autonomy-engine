@@ -122,6 +122,16 @@ export default defineConfig({
         // of it for create/rename/duplicate and used an inline name row: the
         // second heavy surface would have been additive, for an interaction a
         // resources tree is better off doing in place anyway.
+        //
+        // #1397 OR6 measured (the first Fluent `Dialog`: one confirmation
+        // dialog replacing `window.confirm`) — gzip: `fluent` 95.39 -> 101.74 kB
+        // (+6.35) · entry 111.10 -> 112.14 kB (+1.04, the hook, its host and the eight
+        // pages that call it) · index css 8.82 -> 8.86 kB. Built against the
+        // branch with the hook not yet imported, then with it. The cost U4
+        // declined for create/rename/duplicate still stands for those; it is
+        // paid here because a confirmation is a real modal question, and the
+        // operator's review asked for a Fluent Dialog by name. It landed in
+        // `fluent`, not the entry.
         manualChunks(id: string): string | undefined {
           if (/[\\/]node_modules[\\/](@fluentui|@griffel|@floating-ui)[\\/]/.test(id)) {
             return 'fluent';

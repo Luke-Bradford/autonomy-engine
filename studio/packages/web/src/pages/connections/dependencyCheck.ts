@@ -36,8 +36,8 @@ export const NAME_LIST_LIMIT = 5;
 
 /**
  * `a, b and 3 more` — bounded, because no surface here has room for an
- * unbounded list. `.contract-advisory` has no `max-width` and a `window.confirm`
- * is a fixed dialog, so a workspace with forty datasets on one store would push
+ * unbounded list. `.contract-advisory` has no `max-width` and the confirmation
+ * is a fixed-width dialog, so a workspace with forty datasets on one store would push
  * the actionable half of the sentence off both.
  */
 export function formatNameList(names: readonly string[], limit = NAME_LIST_LIMIT): string {

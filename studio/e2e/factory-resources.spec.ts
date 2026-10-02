@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { answerConfirm } from './support/confirmDialog';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 import { loadBanner, openRowMenu, pane, tree } from './support/authorPane';
@@ -223,10 +224,6 @@ test.describe('U4 Factory Resources pane', () => {
 
   test('deletes a pipeline, and leaves its canvas if that is where you are', async ({ page }) => {
     const problems = collectPageProblems(page);
-    // The pane confirms deletion with `window.confirm`, which Playwright
-    // auto-DISMISSES by default — without this the delete would silently no-op
-    // and the test would fail with a confusing "still visible".
-    page.on('dialog', (dialog) => void dialog.accept());
     await gotoAuthor(page);
 
     const name = 'e2e u4 delete';
@@ -236,6 +233,8 @@ test.describe('U4 Factory Resources pane', () => {
 
     await openRowMenu(page, name);
     await page.getByRole('menuitem', { name: 'Delete' }).click();
+    // #1397 — an in-app alert dialog, not `window.confirm`.
+    expect(await answerConfirm(page, 'accept')).toContain(name);
 
     await expect(tree(page).getByRole('link', { name, exact: true })).toHaveCount(0);
     // Staying on the deleted pipeline's canvas would show a graph that no
@@ -320,7 +319,6 @@ test.describe('U4 Factory Resources pane', () => {
 
   test('a failed action can be dismissed, and does not hide Retry', async ({ page }) => {
     const problems = collectPageProblems(page);
-    page.on('dialog', (dialog) => void dialog.accept());
     await gotoAuthor(page);
 
     const name = 'e2e u4 dismiss';

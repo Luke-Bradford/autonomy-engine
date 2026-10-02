@@ -8,6 +8,7 @@ import { ApiError } from '../api/client';
 import * as download from '../api/download';
 import * as portability from '../api/portability';
 import { renderWithDataRouter } from '../testing/renderWithRouter';
+import { answerConfirm, setConfirmName } from '../testing/confirmDialog';
 
 // Network calls only; the shared schemas stay REAL, so the client-side checks
 // run exactly as they ship.
@@ -61,6 +62,15 @@ async function openEdit(user: ReturnType<typeof userEvent.setup>, name: string) 
   await user.click(await screen.findByRole('button', { name: `Edit ${name}` }));
   return form();
 }
+
+/** The delete dialog's `Type <name> to confirm` box (#1397), if it asked for one. */
+const typeBox = (name: string) =>
+  screen.queryByRole('textbox', { name: `Type ${name} to confirm` });
+
+const USAGE_READ_BY_PIPELINE = {
+  pipelines: [{ pipelineId: 'p1', pipelineName: 'Ingest', versionId: 'pv3', version: 3 }],
+  triggers: [],
+};
 
 const create = () => within(form()).getByRole('button', { name: 'Create global parameter' });
 const save = () => within(form()).getByRole('button', { name: 'Save changes' });
@@ -301,7 +311,6 @@ describe('GlobalParamsPage (#844 GL2)', () => {
     listMock.mockResolvedValue([global(), b]);
     deleteMock.mockResolvedValue(undefined);
     updateMock.mockResolvedValue(global({ value: 'unsaved' }));
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderWithDataRouter(<GlobalParamsPage />);
     await openEdit(user, 'apiUrl');
     await user.clear(field('Value'));
@@ -311,6 +320,7 @@ describe('GlobalParamsPage (#844 GL2)', () => {
     // opened with; the form's baseline is still the one it opened with.
     listMock.mockResolvedValue([global({ description: 'changed elsewhere' })]);
     await user.click(screen.getByRole('button', { name: 'Delete b' }));
+    await answerConfirm(user, 'accept');
     await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText('b')).toBeNull());
 
@@ -324,19 +334,17 @@ describe('GlobalParamsPage (#844 GL2)', () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([global()]);
     deleteMock.mockResolvedValue(undefined);
-    const confirm = vi
-      .spyOn(window, 'confirm')
-      .mockReturnValueOnce(false)
-      .mockReturnValueOnce(true);
     renderWithDataRouter(<GlobalParamsPage />);
     const del = await screen.findByRole('button', { name: 'Delete apiUrl' });
 
     await user.click(del);
+    await answerConfirm(user, 'cancel');
     expect(deleteMock).not.toHaveBeenCalled();
 
     await user.click(del);
+    const asked = await answerConfirm(user, 'accept');
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('gp_1'));
-    expect(confirm.mock.calls[0]![0]).toContain('"apiUrl"');
+    expect(asked).toContain('"apiUrl"');
     expect(usageMock).toHaveBeenCalledWith('gp_1');
   });
 
@@ -344,13 +352,13 @@ describe('GlobalParamsPage (#844 GL2)', () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([global()]);
     deleteMock.mockResolvedValue(undefined);
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderWithDataRouter(<GlobalParamsPage />);
     await openEdit(user, 'apiUrl');
     // Dirty, so the close must bypass the guard: there is nothing left to save to.
     await user.type(field('Value'), '-edited');
     listMock.mockResolvedValue([]);
     await user.click(screen.getByRole('button', { name: 'Delete apiUrl' }));
+    await answerConfirm(user, 'accept');
     await waitFor(() =>
       expect(screen.queryByRole('form', { name: 'Global parameter form' })).toBeNull(),
     );
@@ -374,15 +382,40 @@ describe('GlobalParamsPage (#844 GL2)', () => {
         },
       ],
     });
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     renderWithDataRouter(<GlobalParamsPage />);
     await user.click(await screen.findByRole('button', { name: 'Delete apiUrl' }));
-    await waitFor(() => expect(confirm).toHaveBeenCalled());
-    const text = confirm.mock.calls[0]![0]!;
-    expect(text).toContain('Read by the latest version of:\n  • Ingest (v3)');
-    expect(text).toContain('  • Nightly (Ingest v1, disabled)');
+    const text = await answerConfirm(user, 'cancel');
+    expect(text).toContain('Read by the latest version of:');
+    expect(text).toContain('• Ingest (v3)');
+    expect(text).toContain('• Nightly (Ingest v1, disabled)');
     expect(text).toMatch(/will not start until a global of that name and type exists again/);
     expect(deleteMock).not.toHaveBeenCalled();
+  });
+
+  // #1397 — a global something reads is not deleted by a stray click: the name
+  // has to be typed.
+  it('keeps Delete disabled until the name is typed, when something reads the global', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([global()]);
+    deleteMock.mockResolvedValue(undefined);
+    usageMock.mockResolvedValue(USAGE_READ_BY_PIPELINE);
+    renderWithDataRouter(<GlobalParamsPage />);
+    await user.click(await screen.findByRole('button', { name: 'Delete apiUrl' }));
+    const dialog = await screen.findByRole('alertdialog');
+    const action = within(dialog).getByRole('button', { name: 'Delete' });
+    expect(action).toBeDisabled();
+
+    const box = within(dialog).getByRole('textbox', { name: 'Type apiUrl to confirm' });
+    setConfirmName('apiUrl', 'apiUrL');
+    expect(box).toHaveValue('apiUrL');
+    expect(action).toBeDisabled();
+    setConfirmName('apiUrl', 'apiUrl');
+    expect(box).toHaveValue('apiUrl');
+    expect(action).toBeEnabled();
+    expect(deleteMock).not.toHaveBeenCalled();
+
+    await answerConfirm(user, 'accept');
+    await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('gp_1'));
   });
 
   it('says so when what reads it could not be checked, and still lets the delete go ahead', async () => {
@@ -390,12 +423,16 @@ describe('GlobalParamsPage (#844 GL2)', () => {
     listMock.mockResolvedValue([global()]);
     deleteMock.mockResolvedValue(undefined);
     usageMock.mockRejectedValue(new Error('boom'));
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderWithDataRouter(<GlobalParamsPage />);
     await user.click(await screen.findByRole('button', { name: 'Delete apiUrl' }));
+    // A failed read is advisory (GL-D4): the plain question, no name to type.
+    const dialog = await screen.findByRole('alertdialog');
+    expect(typeBox('apiUrl')).toBeNull();
+    expect(within(dialog).getByRole('button', { name: 'Delete' })).toBeEnabled();
+    const asked = await answerConfirm(user, 'accept');
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('gp_1'));
-    expect(confirm.mock.calls[0]![0]).toContain('could not be checked');
-    expect(confirm.mock.calls[0]![0]).not.toContain('No pipeline');
+    expect(asked).toContain('could not be checked');
+    expect(asked).not.toContain('No pipeline');
   });
 
   describe('the unsaved-changes guard (#1396)', () => {

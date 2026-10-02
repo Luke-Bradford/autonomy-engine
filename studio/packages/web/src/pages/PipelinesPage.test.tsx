@@ -6,6 +6,7 @@ import { PipelinesPage } from './PipelinesPage';
 import { ApiError } from '../api/client';
 import { createPipelinesStore } from '../stores/pipelinesStore';
 import { renderWithRouter } from '../testing/renderWithRouter';
+import { answerConfirm, pressInConfirm } from '../testing/confirmDialog';
 import * as pipelinesApi from '../api/pipelines';
 import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
@@ -146,16 +147,15 @@ describe('PipelinesPage', () => {
   describe('#1058 archive and the way back', () => {
     it('archives after confirmation, naming the consequences in the confirm', async () => {
       const user = userEvent.setup();
-      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
       listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
       renderPage();
 
       await user.click(await screen.findByRole('button', { name: 'Archive Nightly digest' }));
-
-      await waitFor(() => expect(archiveMock).toHaveBeenCalledWith('pl_1'));
       // The confirm is where every consequence is named — the route discards
       // the trigger ids it disabled, so nothing can be reported afterwards.
-      const asked = confirmSpy.mock.calls[0]![0] as string;
+      const asked = await answerConfirm(user, 'accept');
+
+      await waitFor(() => expect(archiveMock).toHaveBeenCalledWith('pl_1'));
       expect(asked).toContain('Nightly digest');
       expect(asked).toMatch(/run history are KEPT/i);
       expect(asked).toContain('triggers stay disabled');
@@ -167,12 +167,27 @@ describe('PipelinesPage', () => {
 
     it('does not archive when the confirmation is declined', async () => {
       const user = userEvent.setup();
-      vi.spyOn(window, 'confirm').mockReturnValue(false);
       listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
       renderPage();
 
       await user.click(await screen.findByRole('button', { name: 'Archive Nightly digest' }));
+      await answerConfirm(user, 'cancel');
       expect(archiveMock).not.toHaveBeenCalled();
+    });
+
+    // Escape answers Cancel (#1397): dismissing the dialog is never a yes.
+    it('does not archive when the dialog is dismissed with Escape', async () => {
+      const user = userEvent.setup();
+      listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
+      renderPage();
+
+      await user.click(await screen.findByRole('button', { name: 'Archive Nightly digest' }));
+      await screen.findByRole('alertdialog');
+      pressInConfirm('Escape');
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+
+      expect(archiveMock).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Archive Nightly digest' })).toBeInTheDocument();
     });
 
     it('fetches the archived set only when the section is opened', async () => {
@@ -228,7 +243,6 @@ describe('PipelinesPage', () => {
 
     it('drops a SUPERSEDED archived load, so a stale answer cannot overwrite a fresh one', async () => {
       const user = userEvent.setup();
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
       listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
 
       // Two loads whose completion order is controlled here, because that is
@@ -245,6 +259,7 @@ describe('PipelinesPage', () => {
       //    4. reopen — load #2 starts and is the only correct answer.
       await user.click(screen.getByRole('button', { name: /Hide archived/i }));
       await user.click(screen.getByRole('button', { name: 'Archive Nightly digest' }));
+      await answerConfirm(user, 'accept');
       await waitFor(() => expect(archiveMock).toHaveBeenCalled());
       await user.click(screen.getByRole('button', { name: /Show archived/i }));
 
@@ -266,7 +281,6 @@ describe('PipelinesPage', () => {
 
     it('supersedes an in-flight load when an archive invalidates the CLOSED section', async () => {
       const user = userEvent.setup();
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
       listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
 
       // The load is still in flight when the section is closed, and nothing
@@ -281,6 +295,7 @@ describe('PipelinesPage', () => {
       await user.click(screen.getByRole('button', { name: /Hide archived/i }));
 
       await user.click(screen.getByRole('button', { name: 'Archive Nightly digest' }));
+      await answerConfirm(user, 'accept');
       await waitFor(() => expect(archiveMock).toHaveBeenCalled());
 
       // Only NOW does the pre-archive load answer. Invalidation has to have
@@ -300,7 +315,6 @@ describe('PipelinesPage', () => {
 
     it('loads the archived set when a REOPEN races an in-flight archive', async () => {
       const user = userEvent.setup();
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
       listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
 
       const firstLoad = deferred<Pipeline[]>();
@@ -315,6 +329,7 @@ describe('PipelinesPage', () => {
       await waitFor(() => expect(listArchivedMock).toHaveBeenCalledTimes(1));
       await user.click(screen.getByRole('button', { name: /Hide archived/i }));
       await user.click(screen.getByRole('button', { name: 'Archive Nightly digest' }));
+      await answerConfirm(user, 'accept');
 
       // Reopen while the archive is still in flight. Load A is still 'loading',
       // so an open that only fetches on the CLICK cannot fetch here.
@@ -335,7 +350,6 @@ describe('PipelinesPage', () => {
 
     it('re-reads the archived set after an archive performed while it was closed', async () => {
       const user = userEvent.setup();
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
       listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
       renderPage();
 
@@ -346,6 +360,7 @@ describe('PipelinesPage', () => {
       await user.click(screen.getByRole('button', { name: /Hide archived/i }));
 
       await user.click(screen.getByRole('button', { name: 'Archive Nightly digest' }));
+      await answerConfirm(user, 'accept');
       await waitFor(() => expect(archiveMock).toHaveBeenCalled());
       // Still closed, so still no second request.
       expect(listArchivedMock).toHaveBeenCalledTimes(1);
@@ -372,7 +387,6 @@ describe('PipelinesPage', () => {
      */
     it('reports a follow-up READ failure as itself, not as a failed archive', async () => {
       const user = userEvent.setup();
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
       listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
       renderPage();
 
@@ -385,6 +399,7 @@ describe('PipelinesPage', () => {
       listArchivedMock.mockRejectedValue(new Error('archived list down'));
 
       await user.click(screen.getByRole('button', { name: 'Archive Nightly digest' }));
+      await answerConfirm(user, 'accept');
 
       await waitFor(() => expect(archiveMock).toHaveBeenCalledWith('pl_1'));
       expect(await screen.findByText(/Could not load archived pipelines/i)).toBeInTheDocument();
@@ -413,29 +428,29 @@ describe('PipelinesPage', () => {
 
   it('deletes a pipeline after confirmation', async () => {
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     listMock.mockResolvedValue([pipeline({ name: 'Doomed' })]);
     renderPage();
     await user.click(await screen.findByRole('button', { name: /Delete Doomed/i }));
+    await answerConfirm(user, 'accept');
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('pl_1'));
   });
 
   it('shows a friendly message when deleting a pipeline that has runs (409)', async () => {
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     deleteMock.mockRejectedValue(new ApiError(409, 'pipeline has runs'));
     listMock.mockResolvedValue([pipeline({ name: 'Busy' })]);
     renderPage();
     await user.click(await screen.findByRole('button', { name: /Delete Busy/i }));
+    await answerConfirm(user, 'accept');
     expect(await screen.findByText(/it has run history/i)).toBeInTheDocument();
   });
 
   it('does not delete when confirmation is declined', async () => {
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
     listMock.mockResolvedValue([pipeline({ name: 'Safe' })]);
     renderPage();
     await user.click(await screen.findByRole('button', { name: /Delete Safe/i }));
+    await answerConfirm(user, 'cancel');
     expect(deleteMock).not.toHaveBeenCalled();
   });
 

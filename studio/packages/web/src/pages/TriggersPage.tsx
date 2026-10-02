@@ -96,6 +96,7 @@ import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerFo
 import { payloadSignature } from './pipeline/configForm';
 import { KindSelect, TriggerModeName } from '../lib/KindName';
 import { TRIGGER_MODE_ICONS } from '../lib/kindIcons';
+import { useConfirm } from '../lib/confirm/useConfirm';
 
 const MODES = TriggerModeSchema.options;
 const POLICIES = ConcurrencyPolicySchema.options;
@@ -291,6 +292,7 @@ interface FireOutcome {
  * server refuses otherwise — mirrored here for a friendlier message).
  */
 export function TriggersPage() {
+  const [confirm, confirmDialog] = useConfirm();
   const [triggers, setTriggers] = useState<TriggerPublic[] | null>(null);
   const [bindings, setBindings] = useState<BindingOption[]>([]);
   const [pipelines, setPipelines] = useState<PipelineOption[]>([]);
@@ -403,7 +405,11 @@ export function TriggersPage() {
 
   const onDelete = useCallback(
     async (t: TriggerPublic) => {
-      if (!window.confirm(`Delete trigger "${t.name}"?`)) return;
+      const confirmed = await confirm({
+        message: `Delete trigger "${t.name}"?`,
+        confirmLabel: 'Delete',
+      });
+      if (!confirmed) return;
       try {
         await deleteTrigger(t.id);
         // A form open on the trigger just deleted would save to nothing.
@@ -413,7 +419,7 @@ export function TriggersPage() {
         setLoadError(err instanceof Error ? err.message : String(err));
       }
     },
-    [refresh, closeWhere],
+    [confirm, refresh, closeWhere],
   );
 
   /**
@@ -757,6 +763,7 @@ export function TriggersPage() {
           reported with a pointer to its own section, rather than refused by a
           client-side rule the server does not have. */}
       <ImportPanel listKind="trigger" onImported={refresh} />
+      {confirmDialog}
     </section>
   );
 }

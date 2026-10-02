@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { answerConfirm } from './support/confirmDialog';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, openSeededCanvas, seedVersion, type SeedDoc } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
@@ -146,15 +147,10 @@ test('#844 GL3 — deleting a global names the pipeline that reads it', async ({
   await page.getByRole('heading', { name: 'Global parameters' }).waitFor();
   await fluentRootReady(page);
 
-  let confirmText = '';
-  page.once('dialog', (dialog) => {
-    confirmText = dialog.message();
-    void dialog.dismiss();
-  });
   await page.getByRole('button', { name: `Delete ${USED}`, exact: true }).click();
-  await expect
-    .poll(() => confirmText)
-    .toContain(`Read by the latest version of:\n  • ${name} (v1)`);
+  const confirmText = await answerConfirm(page, 'cancel');
+  expect(confirmText).toContain('Read by the latest version of:');
+  expect(confirmText).toContain(`${name} (v1)`);
   /* Dismissed: the global is still there. */
   await expect(page.getByRole('cell', { name: USED, exact: true })).toBeVisible();
 

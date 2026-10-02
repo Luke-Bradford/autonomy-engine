@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { answerConfirm } from './support/confirmDialog';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 
@@ -42,12 +43,8 @@ test.describe('#1058 archive from the pipelines list, and unarchive back', () =>
     // The confirm is the only place the consequences can be stated — the route
     // discards the trigger ids it disabled. Capture the real dialog text rather
     // than trusting the builder's unit test, which is what makes this the seam.
-    let confirmText = '';
-    page.once('dialog', (dialog) => {
-      confirmText = dialog.message();
-      void dialog.accept();
-    });
     await archiveButton.click();
+    const confirmText = await answerConfirm(page, 'accept');
 
     // Gone from the live list — the actual retirement.
     await expect(archiveButton).toHaveCount(0);

@@ -29,7 +29,7 @@ import { formatNameList, type DependencyCheck } from './dependencyCheck';
  *
  * WHY A PURE MODULE RATHER THAN A COMPONENT. The two surfaces are not both
  * rendered: the edit form draws a note, and the delete path builds a
- * `window.confirm` STRING. A shared component would serve one of them. What
+ * confirmation STRING. A shared component would serve one of them. What
  * they actually share is the RULE and the WORDING, so those live here and each
  * surface renders the sentence its own way.
  *
@@ -116,11 +116,10 @@ export function kindChangeAdvisory(check: StrandCheck, nextKind: ConnectionKind)
 }
 
 /**
- * The `window.confirm` body for deleting a connection.
+ * The confirmation message for deleting a connection, shown by `useConfirm`
+ * (#1397): its first paragraph is the dialog's title.
  *
- * `window.confirm` is the surface every other destructive act in this app uses
- * (see `author/FactoryResources.tsx` and `pipeline/FlowCanvas.tsx`, which say
- * so), and the message is built by a named function rather than inline for the
+ * The message is built by a named function rather than inline for the
  * reason `PipelinesPage`'s `archiveConfirmMessage` is — a confirm string that
  * states a consequence is a rule, and a rule belongs somewhere a test can reach
  * it without a DOM.

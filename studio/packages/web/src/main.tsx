@@ -6,6 +6,7 @@ import './index.css';
 // must be keyed on the FluentProvider root class (see fluentTheme.ts).
 import './theme/xyThemeBridge.css';
 import { AppThemeProvider } from './theme/AppThemeProvider';
+import { ConfirmHost } from './lib/confirm/useConfirm';
 import { uiStore } from './stores/uiStore';
 import { syncColorScheme } from './theme/fluentTheme';
 
@@ -31,7 +32,11 @@ createRoot(container).render(
         `uiStore.themeMode`. U0 mounted a fixed dark provider here; U1 makes it
         reactive. */}
     <AppThemeProvider>
-      <App />
+      {/* #1397 — above the routes, so a confirmation outlives the page that
+          asked it (see `ConfirmHost`). */}
+      <ConfirmHost>
+        <App />
+      </ConfirmHost>
     </AppThemeProvider>
   </StrictMode>,
 );

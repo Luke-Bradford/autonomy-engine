@@ -44,6 +44,7 @@ import { deleteConfirmText } from './globalParamDeleteText';
 import { ImportPanel } from './ImportPanel';
 import { coerceGlobalValue, formatDefaultInput } from './pipeline/paramRules';
 import { payloadSignature } from './pipeline/configForm';
+import { useConfirm } from '../lib/confirm/useConfirm';
 
 /**
  * The open form. `stored` is the global as it was when an EDIT opened — what
@@ -106,6 +107,7 @@ const VALUE_PLACEHOLDER: Record<GlobalParamType, string> = {
  * credential to Secrets.
  */
 export function GlobalParamsPage() {
+  const [confirm, confirmDialog] = useConfirm();
   const [globals, setGlobals] = useState<GlobalParam[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const {
@@ -142,9 +144,15 @@ export function GlobalParamsPage() {
       // #844 GL3 (GL-D4) — what reads it, shown before the choice. Advisory: a
       // failed read says so and still lets the operator decide.
       const usage = await getGlobalParamUsage(global.id).catch(() => null);
-      if (!window.confirm(deleteConfirmText(global.name, usage))) {
-        return;
-      }
+      // Something is KNOWN to read it, so typing the name is asked for. A
+      // failed read stays advisory (GL-D4) and asks only the plain question.
+      const read = usage !== null && usage.pipelines.length + usage.triggers.length > 0;
+      const confirmed = await confirm({
+        message: deleteConfirmText(global.name, usage),
+        confirmLabel: 'Delete',
+        ...(read ? { typeToConfirm: global.name } : {}),
+      });
+      if (!confirmed) return;
       try {
         await deleteGlobalParam(global.id);
         closeWhere((open) => open.stored?.id === global.id);
@@ -153,7 +161,7 @@ export function GlobalParamsPage() {
         setLoadError(`Could not delete “${global.name}”: ${messageOf(err)}`);
       }
     },
-    [refresh, closeWhere],
+    [confirm, refresh, closeWhere],
   );
 
   /** #844 GL6 — save the global's export file, as Datasets does (#1143). */
@@ -297,6 +305,7 @@ export function GlobalParamsPage() {
       </div>
 
       <ImportPanel listKind="global-param" onImported={refresh} />
+      {confirmDialog}
     </section>
   );
 }

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { answerConfirm } from './support/confirmDialog';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { seedConnection, seedDataset } from './support/seedResources';
 import { fluentRootReady } from './support/theme';
@@ -325,30 +326,6 @@ test.describe('#1174 an edit says what it would strand', () => {
     return connectionId;
   }
 
-  /**
-   * Playwright DISMISSES an unhandled dialog, so a confirm has to be caught to
-   * be read at all.
-   *
-   * `waitForEvent` rather than an `on('dialog')` handler wrapped around the
-   * click, which is the shape `container-authoring.spec.ts` uses: since #1174
-   * the delete path READS THE DATASET LIST FIRST, so the confirm is raised a
-   * round-trip after the click resolves. A handler detached in a `finally` right
-   * after the click is gone before the dialog exists, and the dialog is then
-   * auto-dismissed with nothing captured.
-   */
-  async function captureConfirm(
-    page: Page,
-    act: () => Promise<void>,
-    response: 'accept' | 'dismiss' = 'dismiss',
-  ): Promise<string> {
-    const dialog = page.waitForEvent('dialog');
-    await act();
-    const raised = await dialog;
-    const seen = raised.message();
-    await (response === 'accept' ? raised.accept() : raised.dismiss());
-    return seen;
-  }
-
   test('names the datasets a kind change would strand, before the PATCH is sent', async ({
     page,
   }) => {
@@ -384,9 +361,10 @@ test.describe('#1174 an edit says what it would strand', () => {
     await gotoConnections(page);
 
     const row = page.getByRole('row', { name: /e2e-1174-strand-beta/ });
-    const said = await captureConfirm(page, async () => {
-      await row.getByRole('button', { name: /^Delete / }).click();
-    });
+    await row.getByRole('button', { name: /^Delete / }).click();
+    // A connection with a dependant asks for its name, so this decline is made
+    // with the dialog in its strictest shape: the action is disabled, Cancel is not.
+    const said = await answerConfirm(page, 'cancel');
 
     expect(said).toContain('1 dataset reads it');
     expect(said).toContain('e2e-1174-orders-beta');
