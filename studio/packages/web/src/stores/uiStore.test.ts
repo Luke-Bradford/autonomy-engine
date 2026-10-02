@@ -6,6 +6,7 @@ import {
   DOCK_MIN_HEIGHT,
   DOCK_OPEN_STORAGE_KEY,
   DOCK_SPLITTER_HEIGHT,
+  HISTORY_OPEN_STORAGE_KEY,
   MINIMAP_STORAGE_KEY,
   PROBLEMS_OPEN_STORAGE_KEY,
   DOCK_NODE_TAB_STORAGE_KEY,
@@ -320,6 +321,27 @@ describe('uiStore minimap (#1394 OR3)', () => {
     expect(createUiStore(storage).getState().minimapHidden).toBe(true);
     createUiStore(storage).getState().setMinimapHidden(false);
     expect(createUiStore(storage).getState().minimapHidden).toBe(false);
+  });
+});
+
+describe('uiStore version history (#1475 OR27)', () => {
+  it('starts closed', () => {
+    expect(createUiStore(fakeStorage()).getState().historyOpen).toBe(false);
+  });
+
+  it('persists open and closed across a new store on the same storage', () => {
+    const storage = fakeStorage();
+    createUiStore(storage).getState().setHistoryOpen(true);
+    expect(storage.data.get(HISTORY_OPEN_STORAGE_KEY)).toBe('true');
+    expect(createUiStore(storage).getState().historyOpen).toBe(true);
+    createUiStore(storage).getState().setHistoryOpen(false);
+    expect(createUiStore(storage).getState().historyOpen).toBe(false);
+  });
+
+  it('reads a garbage stored value as closed', () => {
+    expect(
+      createUiStore(fakeStorage({ [HISTORY_OPEN_STORAGE_KEY]: 'yes' })).getState().historyOpen,
+    ).toBe(false);
   });
 });
 

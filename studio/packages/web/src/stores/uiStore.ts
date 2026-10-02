@@ -69,6 +69,13 @@ export interface UiState {
   setToolboxWidth: (width: number) => void;
   toolboxCollapsed: boolean;
   setToolboxCollapsed: (collapsed: boolean) => void;
+  /**
+   * #1475 OR27 — whether the editor's version-history column is open. One
+   * preference for every pipeline, like the dock's: it is about the operator's
+   * screen, not the graph.
+   */
+  historyOpen: boolean;
+  setHistoryOpen: (open: boolean) => void;
 }
 
 export type UiStore = StoreApi<UiState>;
@@ -94,6 +101,7 @@ export const TOOLBOX_COLLAPSED_STORAGE_KEY = 'autonomy-studio.toolbox-collapsed'
 export const PROBLEMS_WIDTH_STORAGE_KEY = 'autonomy-studio.problems-width';
 export const DOCK_NODE_TAB_STORAGE_KEY = 'autonomy-studio.dock-node-tab';
 export const DOCK_PIPELINE_TAB_STORAGE_KEY = 'autonomy-studio.dock-pipeline-tab';
+export const HISTORY_OPEN_STORAGE_KEY = 'autonomy-studio.history-open';
 
 /**
  * Pane width bounds. The minimum is a readable list width; the maximum keeps
@@ -319,7 +327,8 @@ type StoredAsIs =
   | 'problemsOpen'
   | 'toolboxCollapsed'
   | 'dockNodeTab'
-  | 'dockPipelineTab';
+  | 'dockPipelineTab'
+  | 'historyOpen';
 
 /** The pane preference as it is persisted — one record, written atomically. */
 interface StoredPane {
@@ -414,6 +423,13 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       'params',
     );
 
+    const [historyOpen, setHistoryOpen] = pref(
+      'historyOpen',
+      HISTORY_OPEN_STORAGE_KEY,
+      parseBoolean,
+      false,
+    );
+
     /* Both pane setters persist the WHOLE record, so the two fields can never
        drift apart in storage — a width that survived a write the collapse flag
        did not is a state neither the user nor the code asked for. */
@@ -491,6 +507,8 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       },
       toolboxCollapsed,
       setToolboxCollapsed,
+      historyOpen,
+      setHistoryOpen,
     };
   });
 }
