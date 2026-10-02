@@ -4,6 +4,7 @@ import {
   type ConnectionKind,
   type Dataset,
 } from '@autonomy-studio/shared';
+import { advisoryDetail } from '../../api/client';
 import { formatNameList, type DependencyCheck } from './dependencyCheck';
 
 /**
@@ -101,7 +102,7 @@ export function kindChangeAdvisory(check: StrandCheck, nextKind: ConnectionKind)
     case 'loading':
       return 'Still checking which datasets read this connection.';
     case 'unavailable':
-      return `Could not check which datasets read this connection (${check.detail}) — changing its kind may strand some.`;
+      return `Could not check which datasets read this connection (${advisoryDetail(check.detail)}) — changing its kind may strand some.`;
     case 'known': {
       if (check.names.length === 0) return null;
       const count = check.names.length;
@@ -136,7 +137,7 @@ export function deleteConfirmMessage(connectionName: string, check: StrandCheck)
     case 'loading':
       return `${head}\n\nStill checking which datasets read it — any that do will be left pointing at a connection that no longer exists.`;
     case 'unavailable':
-      return `${head}\n\nCould not check which datasets read it (${check.detail}) — any that do will be left pointing at a connection that no longer exists.`;
+      return `${head}\n\nCould not check which datasets read it (${advisoryDetail(check.detail)}) — any that do will be left pointing at a connection that no longer exists.`;
     case 'known': {
       if (check.names.length === 0) return head;
       const count = check.names.length;
