@@ -15,7 +15,13 @@ import { createEngine } from '../reduce.js';
 let seq = 0;
 function node(id: string, config: Record<string, unknown> = {}, extra: Partial<Node> = {}): Node {
   seq += 1;
-  return { id, type: 'agent_task', config: { task: 't', ...config }, position: { x: seq, y: 0 }, ...extra };
+  return {
+    id,
+    type: 'agent_task',
+    config: { task: 't', ...config },
+    position: { x: seq, y: 0 },
+    ...extra,
+  };
 }
 
 const VARS: VariableDef[] = [
@@ -214,7 +220,12 @@ describe('RunState.variables', () => {
     const cmd = r.commands.find((c) => c.type === 'dispatchNode') as {
       preparedInput: Record<string, unknown>;
     };
-    expect(cmd.preparedInput).toEqual({ task: 't', n: 0, rows: [{ id: 1 }, { id: 2 }], s: 'start!' });
+    expect(cmd.preparedInput).toEqual({
+      task: 't',
+      n: 0,
+      rows: [{ id: 1 }, { id: 2 }],
+      s: 'start!',
+    });
     expect(eng.projectRunState([startedEv])).toEqual(eng.projectRunState([startedEv]));
   });
 

@@ -25,7 +25,13 @@ import { lowerAgentTaskStructuredOutputs } from '../../catalog/lower.js';
 let seq = 0;
 function node(id: string, config: Record<string, unknown> = {}, extra: Partial<Node> = {}): Node {
   seq += 1;
-  return { id, type: 'agent_task', config: { task: 't', ...config }, position: { x: seq, y: 0 }, ...extra };
+  return {
+    id,
+    type: 'agent_task',
+    config: { task: 't', ...config },
+    position: { x: seq, y: 0 },
+    ...extra,
+  };
 }
 function callNode(id: string, pipelineVersionId: string): Node {
   return node(id, {}, { type: 'call_pipeline', call: { pipelineVersionId, params: {} } });

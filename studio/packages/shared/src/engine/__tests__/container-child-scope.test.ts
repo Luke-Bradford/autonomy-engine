@@ -20,7 +20,13 @@ import type { Container, Edge, Node } from '../../index.js';
 function node(id: string, over: Partial<Node> = {}): Node {
   // #1480 — an agent_task saves only with its required `task`.
   const { config, ...rest } = over;
-  return { id, type: 'agent_task', config: { task: 't', ...config }, position: { x: 0, y: 0 }, ...rest };
+  return {
+    id,
+    type: 'agent_task',
+    config: { task: 't', ...config },
+    position: { x: 0, y: 0 },
+    ...rest,
+  };
 }
 function producer(id: string): Node {
   return node(id, { config: { outputs: [{ name: 'path', type: 'string' }] } });

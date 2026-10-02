@@ -118,7 +118,10 @@ describe('validatePipelineDoc carries the check (#1480)', () => {
       edges: [],
       variables: [],
       containers: [],
-      nodes: [node('sql_execute', {}), { ...node('copy', { ...goodCopy, mode: 'truncate' }), id: 'c' }],
+      nodes: [
+        node('sql_execute', {}),
+        { ...node('copy', { ...goodCopy, mode: 'truncate' }), id: 'c' },
+      ],
     };
     const issues = validatePipelineDoc(doc);
     expect(issues.some((i) => i.startsWith("node 'n1': type: unknown activity type"))).toBe(true);
