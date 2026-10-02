@@ -28,12 +28,10 @@ import { fluentRootReady } from './support/theme';
  * directory to the copy, so a filter that silently passed everything fails
  * the run rather than this spec passing by luck.
  *
- * SEQUENTIAL, which is studio's foreach default (`batchCount` absent). A
- * parallel foreach into ONE sqlite file is a different story: the sink holds
- * `begin immediate` across its batch yields, so sibling iterations fail
- * `database is locked` (transient, deliberately fast — `SQLITE_BUSY_TIMEOUT_MS`)
- * and wait out the 30s retry floor. Measured while writing this spec; filed
- * as #1423 rather than hidden behind a retry policy here.
+ * SEQUENTIAL, which is studio's foreach default (`batchCount` absent). The
+ * PARALLEL form of this recipe is `sqlite-parallel-writers.spec.ts`: sibling
+ * iterations into one sqlite file used to fail `database is locked`, measured
+ * while writing this spec and fixed by #1423's per-store write queue.
  *
  * `realpathSync` on the root: macOS `/var` is a symlink and `file_list`
  * reports the CANONICAL dir, which the copy then has to find inside the root.
