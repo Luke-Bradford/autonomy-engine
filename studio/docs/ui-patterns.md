@@ -28,14 +28,14 @@ required marks and display names; its layout is its own, below.
 ## Sections
 
 - The form is grouped into titled sections (`FormSection`, a `fieldset` and `legend`):
-  - for a connection: _Basics_ (name, kind), _Connection_ (the kind's settings), _Authentication_
-    (the secret) and _Advanced_;
-  - for a dataset: _Basics_ (name, store, kind), _Dataset_ (the kind's settings), _Columns_ (the
-    declared schema) and _Advanced_;
-  - for a secret: _Basics_ (name) and _Value_;
-  - for a global parameter: _Basics_ (name, type) and _Value_ (value, description);
-  - for a trigger: _Basics_ (name, enabled), _Pipeline_ (the binding), _Firing_ (the mode, its
-    schedule, event or window, and the run windows), _Concurrency_ and _Parameters_.
+  - for a connection: *Basics* (name, kind), *Connection* (the kind's settings), *Authentication*
+    (the secret) and *Advanced*;
+  - for a dataset: *Basics* (name, store, kind), *Dataset* (the kind's settings), *Columns* (the
+    declared schema) and *Advanced*;
+  - for a secret: *Basics* (name) and *Value*;
+  - for a global parameter: *Basics* (name, type) and *Value* (value, description);
+  - for a trigger: *Basics* (name, enabled), *Pipeline* (the binding), *Firing* (the mode, its
+    schedule, event or window, and the run windows), *Concurrency* and *Parameters*.
 - Triggers use the drawer too, not a full page: the form is long but narrow, and the drawer's body
   scrolls with the page while its footer stays in view. It has no Advanced section, because every
   section holds settings an ordinary trigger uses.
@@ -52,7 +52,6 @@ required marks and display names; its layout is its own, below.
     `aria-describedby`).
 
   Keep the key visible: server errors, advisories and `${}` expressions all cite it.
-
 - `unit` names what the stored value is in. It never converts the value.
 - **A number field says what it admits.** Its hint leads with the rule the schema states, read by
   `configForm.ts` (`numberRule`, `describeNumberRule`): "Whole number from 1 to 65535.",
@@ -170,7 +169,7 @@ message.
   does not show now. This changes with the kind and the JSON view; `configKeyLabel` names the config
   keys. The summary uses these names, and a refusal's issue is filed under a field only if
   `labelOf` names it.
-- **What is shown is narrower.** A check is shown once the field is left _after an edit_, or after
+- **What is shown is narrower.** A check is shown once the field is left *after an edit*, or after
   Save is pressed. Tabbing past an untouched field shows nothing, and typing never raises an error.
   A fix shows at once: the error goes the moment the value is fine, and a new problem in the same
   field waits for the next blur. A field that leaves the form takes its error with it.
@@ -182,7 +181,6 @@ message.
   - `aria-describedby` with the error first, then the hint.
 
   The line has no live role.
-
 - **A refused Save shows a summary and focuses the first invalid field**, after the errors are on
   screen. The summary lists every invalid field as a button ("Timeout (ms): must be a number") that
   takes focus to the field, opening a collapsed section on the way. It lives in the **footer**, not
@@ -240,11 +238,11 @@ message.
 
 - **Under the node's name, one line says what the activity does and names its type**
   (`Copy rows from a source dataset … \`copy\``, #1413). The sentence is the catalog entry's
-required `description`, which also titles the item in the Activities palette, so the hover and the
-panel cannot disagree. `registry.test.ts` holds every description to one sentence: not blank, not
-the title, ending in a full stop, at most 120 characters, and no two the same. A type the catalog
-does not know gets no line. A container's panel does the same with its palette description and
-its kind (`foreach`, `loop`, `stage`).
+  required `description`, which also titles the item in the Activities palette, so the hover and the
+  panel cannot disagree. `registry.test.ts` holds every description to one sentence: not blank, not
+  the title, ending in a full stop, at most 120 characters, and no two the same. A type the catalog
+  does not know gets no line. A container's panel does the same with its palette description and
+  its kind (`foreach`, `loop`, `stage`).
 - **Activity config fields are titled like any other form's** (#1396 slice 7). Every field of every
   activity the generic form renders, and every container setting, carries `presented(...)`, pinned
   by `catalog/__tests__/activity-labels.test.ts`. A structural call (`execute_pipeline`) is authored
@@ -267,18 +265,17 @@ its kind (`foreach`, `loop`, `stage`).
   list's buttons and its cells ("tools row 1 name"). The key is what a `${}` reference and a server
   message cite.
 - **The Settings tab is in three sections** (`FormSection`, not collapsible), in this order:
-  - _Bindings_: the connection or the source and sink pickers, their datasets and their overrides.
+  - *Bindings*: the connection or the source and sink pickers, their datasets and their overrides.
     An activity that binds nothing has no Bindings section.
-  - _Container_: which container the activity is in (Container membership), and the New container
+  - *Container*: which container the activity is in (Container membership), and the New container
     form. `ContainerSection` draws this section itself.
-  - _Activity settings_: the activity's own fields, Fields or JSON.
+  - *Activity settings*: the activity's own fields, Fields or JSON.
 
   Apply config, Duplicate node and Delete node act on the whole node and sit after every section.
   A section after the first is ruled off on its heading, not on its fieldset: a legend sits across
   the fieldset's top border and would break the line.
   A call node's settings stay as `CallPanel` heads them ("Call target", "Parameters"), followed by
   the Container section.
-
 - **It is not a drawer.** The panel already sits beside the canvas it edits, and it applies each
   change to the editor's draft rather than saving a record, so there is no per-record Save or Cancel
   to put in a drawer footer. The editor's Save writes the draft, and its dirty dot says it is unsaved.
