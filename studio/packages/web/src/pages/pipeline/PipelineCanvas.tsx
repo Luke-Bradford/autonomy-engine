@@ -1241,7 +1241,148 @@ export function PipelineCanvas({
         </div>
       )}
       <div className="page-header">
-        <h2 id="canvas-heading">{pipelineName}</h2>
+        {/* `title`: the toolbar row truncates a long name (#1475). */}
+        <h2 id="canvas-heading" title={pipelineName}>
+          {pipelineName}
+        </h2>
+        {/* #907 — an archived pipeline refuses every save, so say it BEFORE the
+            work happens. Without this the first Save simply bounces with a 409,
+            after however long the operator spent editing.
+
+            `role="alert"` and the `.notice-conflict` shape (not the transient
+            `.notice` below) for the same reason the save-conflict banner uses
+            them: this is a standing FACT about the pipeline that must be acted
+            on, not a message about the last thing that happened — and it carries
+            the act that resolves it. */}
+        {/* #1393 — every notice lives in ONE fixed-height strip, so none of them
+            resizes the canvas by arriving or leaving. The standing ones keep their
+            role, class and buttons unchanged; only where they are drawn moved.
+            Order is priority, but at most one of them can hold at a time: an
+            archived pipeline's save is refused before it can conflict, and a
+            failed load has nothing to save.
+            #1475 OR27 — the strip is a slot IN this toolbar row, between the
+            title and the actions, so it costs the canvas no height of its own. */}
+        <EditorStatusStrip
+          standing={[
+            archived && {
+              key: 'archived',
+              node: (
+                <div className="notice-conflict" role="alert">
+                  {/* The trailing clause is the SHARED constant, not a second copy:
+                the pipelines-list archive confirmation (#1058) states the same
+                contract, and two hand-written copies would drift. */}
+                  {/* `title`: the strip draws this on one line and truncates it. */}
+                  <p
+                    title={`This pipeline is archived, so saving is refused. Unarchive it to edit again — ${TRIGGERS_STAY_DISABLED_NOTE}.`}
+                  >
+                    This pipeline is archived, so saving is refused. Unarchive it to edit again —{' '}
+                    {TRIGGERS_STAY_DISABLED_NOTE}.
+                  </p>
+                  {unarchiveError !== null && (
+                    <p title={`Unarchive failed: ${unarchiveError}`}>
+                      Unarchive failed: {unarchiveError}
+                    </p>
+                  )}
+                  <div className="form-actions">
+                    <button type="button" onClick={() => void onUnarchive()} disabled={unarchiving}>
+                      {unarchiving ? 'Unarchiving…' : 'Unarchive pipeline'}
+                    </button>
+                  </div>
+                </div>
+              ),
+            },
+            /* #904 — a refused save. `role="alert"` because it is the ONE save
+               outcome that is not self-explanatory and that the operator must act
+               on: unannounced, the Save button simply appears to have done nothing.
+               Distinct from the `.notice` messages rather than folded into them,
+               because this one carries the two acts that resolve it. */
+            conflict && {
+              key: 'conflict',
+              node: (
+                <div className="notice-conflict" role="alert">
+                  <p title={describeSaveConflict(conflict.version)}>
+                    {describeSaveConflict(conflict.version)}
+                  </p>
+                  <div className="form-actions">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        // Show them the version that landed, in the surface that
+                        // already exists for it (#903) — a prose pointer to a panel
+                        // they then have to find is not the same thing.
+                        setHistoryOpen(true);
+                        setPreviewing(conflict.version);
+                      }}
+                      // The same lock every other route into the preview carries: this
+                      // is a fourth one, and the reported bug was precisely a route
+                      // nobody had enumerated.
+                      disabled={previewLocked}
+                      // The NAMED reason, not a second hardcoded sentence: this button
+                      // is locked by `restoring` too, and a fixed "Saving…" would be
+                      // flatly wrong on that arm — reachable, and walked by the e2e.
+                      title={historyDisabledReason ?? undefined}
+                    >
+                      {`Preview v${String(conflict.version)}`}
+                    </button>
+                    <button
+                      type="button"
+                      // Re-declares the CAS basis as the head that refused us — an
+                      // informed assertion, not a bypass. If a THIRD save has landed in
+                      // the meantime, this is refused again and lands right back here
+                      // with the newer head, which is the correct behaviour and not a
+                      // loop to be short-circuited.
+                      onClick={() => void saveWith(conflict.id)}
+                      // EXACTLY the Save button's gate, from the same expression — not a
+                      // second one written to match. Two of its terms are load-bearing
+                      // here. `previewing`, because this writes the WORKING graph, which
+                      // is not what is on screen while a version is previewed, so the
+                      // one route this banner offers would otherwise mint a version of
+                      // something the operator cannot see. And `issues` (#1141), because
+                      // this button used to be the ONE save path that escaped the badge
+                      // gate: an author who hit the 409, then edited the doc into an
+                      // invalid state, found Save dead and this one alive, and clicking
+                      // it threw a raw ZodError out of `PipelineVersionWriteSchema.parse`
+                      // before the request was even made. Refusing here is not a new
+                      // refusal — the write was always going to be refused; it is the
+                      // refusal finally being stated where the author can read it.
+                      //
+                      // It cannot dead-end them, and that is worth saying because it is
+                      // the obvious objection. `conflict` is only ever set from the 409
+                      // branch, which does not touch the store, so reaching this banner
+                      // required a Save — which required `issues` to be empty. Every
+                      // issue on screen is therefore an edit made since, and Undo
+                      // (live: nothing is previewing or in flight) walks back out.
+                      disabled={saveReason !== null}
+                      title={saveReason ?? undefined}
+                    >
+                      {saveAnywayLabel(conflict.version)}
+                    </button>
+                  </div>
+                </div>
+              ),
+            },
+            loadError !== null && {
+              key: 'load',
+              node: <p className="error" role="alert">{`Could not load pipeline: ${loadError}`}</p>,
+            },
+          ].filter((n) => n !== false && n !== null)}
+          transient={[
+            // `role="status"` so a keyboard-driven copy/paste — which changes
+            // nothing an operator is looking at — is still announced.
+            { key: 'canvas', text: canvasMsg, role: 'status' },
+            { key: 'save', text: saveMsg },
+            // `status`, so a failed Export or Archive — chosen from a menu that
+            // has closed by the time it fails — is still announced.
+            { key: 'action', text: actionMsg, role: 'status' },
+            {
+              key: 'run',
+              text: runStarted?.text ?? null,
+              ...(runStarted !== null
+                ? { link: { to: runDetailPath(runStarted.runId), label: 'Open run' } }
+                : {}),
+            },
+          ]}
+        />
         <div className="form-actions">
           {/* U17 — undo/redo. Before the Save button because they act on the
               working graph that Save is about to mint, and in that order.
@@ -1467,143 +1608,6 @@ export function PipelineCanvas({
           </Menu>
         </div>
       </div>
-
-      {/* #907 — an archived pipeline refuses every save, so say it BEFORE the
-          work happens. Without this the first Save simply bounces with a 409,
-          after however long the operator spent editing.
-
-          `role="alert"` and the `.notice-conflict` shape (not the transient
-          `.notice` below) for the same reason the save-conflict banner uses
-          them: this is a standing FACT about the pipeline that must be acted
-          on, not a message about the last thing that happened — and it carries
-          the act that resolves it. */}
-      {/* #1393 — every notice lives in ONE fixed-height strip, so none of them
-          resizes the canvas by arriving or leaving. The standing ones keep their
-          role, class and buttons unchanged; only where they are drawn moved.
-          Order is priority, but at most one of them can hold at a time: an
-          archived pipeline's save is refused before it can conflict, and a
-          failed load has nothing to save. */}
-      <EditorStatusStrip
-        standing={[
-          archived && {
-            key: 'archived',
-            node: (
-              <div className="notice-conflict" role="alert">
-                {/* The trailing clause is the SHARED constant, not a second copy:
-              the pipelines-list archive confirmation (#1058) states the same
-              contract, and two hand-written copies would drift. */}
-                {/* `title`: the strip draws this on one line and truncates it. */}
-                <p
-                  title={`This pipeline is archived, so saving is refused. Unarchive it to edit again — ${TRIGGERS_STAY_DISABLED_NOTE}.`}
-                >
-                  This pipeline is archived, so saving is refused. Unarchive it to edit again —{' '}
-                  {TRIGGERS_STAY_DISABLED_NOTE}.
-                </p>
-                {unarchiveError !== null && (
-                  <p title={`Unarchive failed: ${unarchiveError}`}>
-                    Unarchive failed: {unarchiveError}
-                  </p>
-                )}
-                <div className="form-actions">
-                  <button type="button" onClick={() => void onUnarchive()} disabled={unarchiving}>
-                    {unarchiving ? 'Unarchiving…' : 'Unarchive pipeline'}
-                  </button>
-                </div>
-              </div>
-            ),
-          },
-          /* #904 — a refused save. `role="alert"` because it is the ONE save
-             outcome that is not self-explanatory and that the operator must act
-             on: unannounced, the Save button simply appears to have done nothing.
-             Distinct from the `.notice` messages rather than folded into them,
-             because this one carries the two acts that resolve it. */
-          conflict && {
-            key: 'conflict',
-            node: (
-              <div className="notice-conflict" role="alert">
-                <p title={describeSaveConflict(conflict.version)}>
-                  {describeSaveConflict(conflict.version)}
-                </p>
-                <div className="form-actions">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      // Show them the version that landed, in the surface that
-                      // already exists for it (#903) — a prose pointer to a panel
-                      // they then have to find is not the same thing.
-                      setHistoryOpen(true);
-                      setPreviewing(conflict.version);
-                    }}
-                    // The same lock every other route into the preview carries: this
-                    // is a fourth one, and the reported bug was precisely a route
-                    // nobody had enumerated.
-                    disabled={previewLocked}
-                    // The NAMED reason, not a second hardcoded sentence: this button
-                    // is locked by `restoring` too, and a fixed "Saving…" would be
-                    // flatly wrong on that arm — reachable, and walked by the e2e.
-                    title={historyDisabledReason ?? undefined}
-                  >
-                    {`Preview v${String(conflict.version)}`}
-                  </button>
-                  <button
-                    type="button"
-                    // Re-declares the CAS basis as the head that refused us — an
-                    // informed assertion, not a bypass. If a THIRD save has landed in
-                    // the meantime, this is refused again and lands right back here
-                    // with the newer head, which is the correct behaviour and not a
-                    // loop to be short-circuited.
-                    onClick={() => void saveWith(conflict.id)}
-                    // EXACTLY the Save button's gate, from the same expression — not a
-                    // second one written to match. Two of its terms are load-bearing
-                    // here. `previewing`, because this writes the WORKING graph, which
-                    // is not what is on screen while a version is previewed, so the
-                    // one route this banner offers would otherwise mint a version of
-                    // something the operator cannot see. And `issues` (#1141), because
-                    // this button used to be the ONE save path that escaped the badge
-                    // gate: an author who hit the 409, then edited the doc into an
-                    // invalid state, found Save dead and this one alive, and clicking
-                    // it threw a raw ZodError out of `PipelineVersionWriteSchema.parse`
-                    // before the request was even made. Refusing here is not a new
-                    // refusal — the write was always going to be refused; it is the
-                    // refusal finally being stated where the author can read it.
-                    //
-                    // It cannot dead-end them, and that is worth saying because it is
-                    // the obvious objection. `conflict` is only ever set from the 409
-                    // branch, which does not touch the store, so reaching this banner
-                    // required a Save — which required `issues` to be empty. Every
-                    // issue on screen is therefore an edit made since, and Undo
-                    // (live: nothing is previewing or in flight) walks back out.
-                    disabled={saveReason !== null}
-                    title={saveReason ?? undefined}
-                  >
-                    {saveAnywayLabel(conflict.version)}
-                  </button>
-                </div>
-              </div>
-            ),
-          },
-          loadError !== null && {
-            key: 'load',
-            node: <p className="error" role="alert">{`Could not load pipeline: ${loadError}`}</p>,
-          },
-        ].filter((n) => n !== false && n !== null)}
-        transient={[
-          // `role="status"` so a keyboard-driven copy/paste — which changes
-          // nothing an operator is looking at — is still announced.
-          { key: 'canvas', text: canvasMsg, role: 'status' },
-          { key: 'save', text: saveMsg },
-          // `status`, so a failed Export or Archive — chosen from a menu that
-          // has closed by the time it fails — is still announced.
-          { key: 'action', text: actionMsg, role: 'status' },
-          {
-            key: 'run',
-            text: runStarted?.text ?? null,
-            ...(runStarted !== null
-              ? { link: { to: runDetailPath(runStarted.runId), label: 'Open run' } }
-              : {}),
-          },
-        ]}
-      />
 
       {/* `ready` gates the panel, because `versions` is `[]` both before the
           load resolves AND forever after it fails — and the panel's empty state

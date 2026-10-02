@@ -1331,7 +1331,9 @@ td button + button {
    `top` clears the app bar, so it sits just under the page header it guards. */
 .editor-leave-prompt {
   position: fixed;
-  top: 4.5rem;
+  /* Under the command bar AND the editor's toolbar row (#1475: 40 + 40px), so
+     the prompt never covers the Save it is asking about. */
+  top: 5.5rem;
   left: 50%;
   transform: translateX(-50%);
   z-index: 20;
@@ -1489,15 +1491,18 @@ button.danger {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* #1475 OR27 — the list pages' 24px/32px reading margins are dead space on a
+     work surface: 24px above the title and 24px under the dock, at every size.
+     The command bar's own border already separates the toolbar row from it. */
+  padding: 0 0.75rem 0.5rem;
 }
 
-/* Header, notice strip and version history are content-sized; the editor grid
-   takes everything that is left. Since #1393 the notice strip is a FIXED height
-   and the issue list lives in the dock, so only version history still comes and
-   goes. A flex column rather than explicit grid rows because a child can be
-   CONDITIONAL — a
-   `grid-template-rows` listing them would silently mis-assign the `1fr` row the
-   moment one of them is absent. */
+/* Header (with the notice strip in it, #1475) and version history are
+   content-sized; the editor grid takes everything that is left. Since #1393 the
+   notice strip is a FIXED height and the issue list lives in the dock, so only
+   version history still comes and goes. A flex column rather than explicit grid
+   rows because a child can be CONDITIONAL — a `grid-template-rows` listing them
+   would silently mis-assign the `1fr` row the moment one of them is absent. */
 .canvas-page {
   display: flex;
   flex-direction: column;
@@ -1527,7 +1532,7 @@ button.danger {
      a case the current fixture can demonstrate. */
   grid-template-rows: minmax(0, 1fr);
   gap: 0.75rem;
-  margin-top: 0.5rem; /* #1393 — the status strip above takes the rest of the gap. */
+  margin-top: 0.25rem;
   /* Take the leftover height from `.canvas-page`, and allow shrinking below
      intrinsic content height (same reason as the `minmax` above). */
   flex: 1 1 auto;
@@ -2027,17 +2032,55 @@ button.danger {
   text-decoration: underline;
 }
 
+/* #1475 OR27 — the editor's ONE toolbar row: title, notice strip, actions.
+   It replaced a 55px header (a 20px title in the browser's 17px h2 margins)
+   plus a 36px strip band that was empty most of the time.
+
+   A fixed height and NO wrapping, so nothing can change the row's height
+   (#1393): not what a notice says, and not an action's label ("Saving…" is
+   narrower than "Save version", which near a wrap threshold would flip the
+   wrap and move the canvas on Save). The title gives way first, down to
+   nothing; the strip keeps its minimum. Only a content area narrower than
+   about 750px runs out of room, and there the row scrolls sideways with
+   `.content` rather than growing.
+
+   `position: relative` here, not on the strip: the `+N more` list is drawn
+   across the whole row's width, not just the strip's slice of it. */
+.canvas-page > .page-header {
+  position: relative;
+  flex: 0 0 auto;
+  height: 2.5rem;
+  column-gap: 0.75rem;
+}
+
+.canvas-page > .page-header > h2 {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 30%;
+  margin: 0;
+  font-size: 1.1rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.canvas-page > .page-header > .form-actions {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
 /* #1393 — ONE fixed-height line for every editor notice. `height`, not
    `min-height`: a notice that could grow it would bring the shift back. What
    does not fit is truncated here and read in full from the overlay list. */
 .editor-status-strip {
-  position: relative;
   display: flex;
   align-items: center;
   gap: 0.75rem;
   height: 2.25rem;
-  flex: 0 0 auto;
-  margin-top: 0.5rem;
+  /* The minimum holds a standing banner's buttons ("Preview vN" and "Save as
+     vN+1 anyway" are about 230px) with a little of its text beside them. */
+  flex: 1 1 18rem;
+  min-width: 18rem;
   font-size: 0.85rem;
 }
 
@@ -2052,12 +2095,37 @@ button.danger {
   min-width: 0;
 }
 
+/* With no standing notice the message has the whole slot: in the toolbar row
+   45% of it is too little to say "Saved v3." and keep its link. */
+.editor-status-strip__standing:empty + .editor-status-strip__transient {
+  max-width: 100%;
+}
+
 .editor-status-strip .notice,
 .editor-status-strip .error {
   margin: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* The message's text gives way first; its link (#1395 "Open run") keeps its
+   width, so an ellipsis never swallows the act. In the `+N more` list too. */
+.editor-status-strip__transient > .notice,
+.editor-status-strip__list > .notice {
+  display: flex;
+  gap: 0.3em;
+}
+
+.editor-status-strip__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editor-status-strip__transient > .notice > a,
+.editor-status-strip__list > .notice > a {
+  flex: 0 0 auto;
 }
 
 /* The banners' multi-line card, flattened to one row in the strip. */
@@ -4224,7 +4292,7 @@ button.danger {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  margin-top: 1rem;
+  margin-top: 0.25rem; /* `.canvas-grid`'s, so entering a preview moves nothing above it. */
   /* Takes the leftover height exactly as `.canvas-grid` does — swapping between
      the editor and a preview must not resize the page. */
   flex: 1 1 auto;

@@ -15,10 +15,11 @@ function textsOf(notices: readonly TransientNotice[]): Record<string, string | n
 }
 
 /**
- * #1393 — ONE fixed-height line under the command bar for every notice the
- * editor raises. Each of these used to be its own sibling above the canvas, so
- * each one that came or went resized the canvas and moved the dock under the
- * operator's pointer; a copy/paste did it twice, six seconds apart.
+ * #1393 — ONE fixed-height line for every notice the editor raises, drawn in
+ * the editor's toolbar row between the title and the actions (#1475). Each of
+ * these used to be its own sibling above the canvas, so each one that came or
+ * went resized the canvas and moved the dock under the operator's pointer; a
+ * copy/paste did it twice, six seconds apart.
  *
  * Two slots, because the notices are two different things and the archived
  * canvas needs both at once (its save refusal is read beside the banner whose
@@ -70,7 +71,9 @@ export function EditorStatusStrip({
 
   const message = (n: TransientNotice & { text: string }) => (
     <p key={n.key} className="notice" role={n.role} title={n.text}>
-      {n.text}
+      {/* #1475 — the text truncates, the link does not: in the toolbar row the
+          line is narrow, and an ellipsis over "Open run" would hide the act. */}
+      <span className="editor-status-strip__text">{n.text}</span>
       {n.link && (
         <>
           {' '}

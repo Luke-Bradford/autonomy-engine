@@ -656,7 +656,7 @@ test('#1245 — form controls take the app font family, and keep the UA control 
   await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeVisible();
 
   const read = await page.evaluate(() => {
-    const row = document.querySelector('.canvas-page .page-header .form-actions');
+    const row = document.querySelector('.canvas-page > .page-header > .form-actions');
     if (!row) throw new Error('no canvas header .form-actions row');
     const probe = document.createElement('button');
     row.append(probe);
