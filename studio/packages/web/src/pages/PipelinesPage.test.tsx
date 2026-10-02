@@ -508,7 +508,10 @@ describe('PipelinesPage', () => {
   it('#1397 — names the triggers the delete takes with it, and asks for the name first', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([pipeline({ name: 'Doomed' })]);
-    dependentsMock.mockResolvedValue({ ...NO_DEPENDENTS, triggers: [{ id: 't1', name: 'At 2am' }] });
+    dependentsMock.mockResolvedValue({
+      ...NO_DEPENDENTS,
+      triggers: [{ id: 't1', name: 'At 2am' }],
+    });
     renderPage();
     await chooseRowAction(user, 'Doomed', 'Delete');
     const dialog = await screen.findByRole('alertdialog');
@@ -533,7 +536,7 @@ describe('PipelinesPage', () => {
     );
     expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(deleteMock).not.toHaveBeenCalled();
-    expect(document.activeElement).toHaveAccessibleName("Actions for Busy");
+    expect(document.activeElement).toHaveAccessibleName('Actions for Busy');
   });
 
   it('does not delete when confirmation is declined', async () => {

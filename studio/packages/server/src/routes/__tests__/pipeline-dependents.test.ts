@@ -62,7 +62,8 @@ describe('GET /api/pipelines/:id/dependents', () => {
       enabled,
     });
 
-  const read = (id: string) => app.inject({ method: 'GET', url: `/api/pipelines/${id}/dependents` });
+  const read = (id: string) =>
+    app.inject({ method: 'GET', url: `/api/pipelines/${id}/dependents` });
 
   it('names every bound trigger, enabled or not, across all of its versions', async () => {
     const target = createPipeline(app.db, { ownerId: 'local', name: 'Target' });

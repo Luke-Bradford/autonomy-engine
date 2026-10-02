@@ -10,8 +10,7 @@ import { nodeLabels } from './connections/dependentNodes';
 
 /** The dependents read, settled: a failure is carried, never thrown. */
 export type PipelineDependentsRead =
-  | { state: 'known'; value: PipelineDependentsResponse }
-  | { state: 'unavailable'; detail: string };
+  { state: 'known'; value: PipelineDependentsResponse } | { state: 'unavailable'; detail: string };
 
 /**
  * What a pipeline Delete does next: refuse outright, or ask.

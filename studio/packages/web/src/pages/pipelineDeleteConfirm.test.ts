@@ -51,7 +51,10 @@ describe('pipelineDeletePlan', () => {
       state: 'known',
       value: {
         ...none,
-        callers: [caller('p1', 'Parent', 'run child', 'v1'), caller('p1', 'Parent', 'run child', 'v2')],
+        callers: [
+          caller('p1', 'Parent', 'run child', 'v1'),
+          caller('p1', 'Parent', 'run child', 'v2'),
+        ],
       },
     });
     if (plan.kind !== 'confirm') throw new Error('expected a confirmation');
@@ -84,7 +87,9 @@ describe('pipelineDeletePlan', () => {
     });
     expect(plan).toEqual({
       kind: 'refused',
-      message: expect.stringMatching(/Cannot delete “Busy”: it has run history\. Archive it instead/),
+      message: expect.stringMatching(
+        /Cannot delete “Busy”: it has run history\. Archive it instead/,
+      ),
     });
   });
 });

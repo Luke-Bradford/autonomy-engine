@@ -145,6 +145,7 @@ test.describe('#1397 the confirmation dialog, by keyboard', () => {
           id: 'callChild',
           type: 'call_pipeline',
           config: {},
+          position: { x: 0, y: 0 },
           call: { pipelineVersionId: child.pipelineVersionId, params: {} },
         },
       ],
