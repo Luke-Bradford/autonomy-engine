@@ -5,6 +5,8 @@ import {
   MAX_RETRY_INTERVAL_SECONDS,
   type NodePolicy,
 } from '@autonomy-studio/shared';
+import { FormSection } from '../../lib/form/FormSection';
+import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import { parseWholeNumber } from '../triggers/formFields';
 import { DraftNumberField } from './DraftNumberField';
 import { enclosingContainers, nodePolicyIssues, policyIssues, validateCanvas } from './canvasDoc';
@@ -69,8 +71,7 @@ export function PolicyEditor({
   }
 
   return (
-    <fieldset className="contract-section">
-      <legend>Run policy</legend>
+    <FormSection title="Run policy" hint={FORM_SECTION_HINTS.node.runPolicy}>
       <DraftNumberField
         label="Retries"
         stored={policy?.retry}
@@ -135,6 +136,6 @@ export function PolicyEditor({
           ))}
         </ul>
       )}
-    </fieldset>
+    </FormSection>
   );
 }

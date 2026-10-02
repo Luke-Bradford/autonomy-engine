@@ -19,6 +19,7 @@ import {
   type CallTarget,
 } from './callRules';
 import { createCanvasStore } from './canvasStore';
+import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 
 /**
  * #425 — the call-node editor.
@@ -232,6 +233,19 @@ function mount() {
 }
 
 describe('CallPanel (component)', () => {
+  // #1413 — Call target and its Parameters each say what they hold, as the
+  // section's accessible description, like every FormSection.
+  it('names the Call target and Parameters sections and describes each with its hint', async () => {
+    mount();
+    await waitFor(() => expect(screen.getByLabelText(/Pipeline/)).toBeTruthy());
+    expect(screen.getByRole('region', { name: 'Call target' })).toHaveAccessibleDescription(
+      FORM_SECTION_HINTS.call.target,
+    );
+    expect(screen.getByRole('region', { name: 'Parameters' })).toHaveAccessibleDescription(
+      FORM_SECTION_HINTS.call.parameters,
+    );
+  });
+
   it('writes the chosen target, wait flag and typed params in ONE store write', async () => {
     const { store } = mount();
     // The declared params appear only after the listing resolves — which is the
@@ -292,7 +306,7 @@ describe('CallPanel (component)', () => {
 
     fireEvent.click(screen.getByLabelText('Expression'));
     // Translated, and TYPED — `limit` is a number on the far side, not '25'.
-    const json = (screen.getByLabelText(/Parameters/) as HTMLTextAreaElement).value;
+    const json = (screen.getByLabelText(/Parameters \(JSON object\)/) as HTMLTextAreaElement).value;
     expect(JSON.parse(json)).toEqual({ query: 'ships', limit: 25 });
 
     fireEvent.click(screen.getByLabelText('Pick a version'));

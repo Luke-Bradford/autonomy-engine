@@ -15,6 +15,7 @@ import {
   type ValueTypeName,
 } from '@autonomy-studio/shared';
 import { LabelledControl } from '../../lib/LabelledControl';
+import { DockSection } from '../../lib/form/DockSection';
 import type { createCanvasStore } from './canvasStore';
 import {
   coerceDefaultInput,
@@ -75,15 +76,13 @@ export function ContractSection({
   children: ReactNode;
 }) {
   return (
-    <section className="contract-section">
-      <h4>{heading}</h4>
-      <p className="page-hint">{hint}</p>
+    <DockSection heading={heading} hint={hint}>
       {count === 0 ? <p className="page-hint">None declared.</p> : null}
       {children}
       <button type="button" onClick={onAdd}>
         {addLabel}
       </button>
-    </section>
+    </DockSection>
   );
 }
 

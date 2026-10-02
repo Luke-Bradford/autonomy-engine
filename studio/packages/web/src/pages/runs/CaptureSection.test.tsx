@@ -23,6 +23,10 @@ describe('CaptureSection (#605)', () => {
   it('shows the system, each turn and the completion, labelled', () => {
     render(<CaptureSection captures={[exchange()]} />);
     const section = screen.getByRole('region', { name: 'Prompt & completion' });
+    // #1413 — the line under the heading is the section's description.
+    expect(section).toHaveAccessibleDescription(
+      'Stored because this node’s capture setting is full.',
+    );
     expect(within(section).getByText('be brief')).toBeTruthy();
     expect(within(section).getByText('what is 2+2?')).toBeTruthy();
     expect(within(section).getByText('4')).toBeTruthy();

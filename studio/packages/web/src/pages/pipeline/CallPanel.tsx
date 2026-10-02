@@ -23,6 +23,8 @@ import type { FieldPicker } from './ConfigFieldControl';
 import { PickableInput } from './PickableInput';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { JsonEditor } from '../../lib/form/JsonEditor';
+import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
+import { DockSection } from '../../lib/form/DockSection';
 
 /**
  * #425 — the call-node editor: the authoring surface for `Node.call`.
@@ -155,8 +157,7 @@ export function CallPanel({
   // section that appears only once a fetch resolves reads as a panel that is
   // missing rather than one that is loading.
   return (
-    <section className="contract-section">
-      <h4>Call target</h4>
+    <DockSection heading="Call target" hint={FORM_SECTION_HINTS.call.target}>
       {loadError !== null ? (
         // Fail LOUD. A silent empty picker would read as "there are no
         // pipelines", which is a different and much more alarming fact.
@@ -166,7 +167,7 @@ export function CallPanel({
       ) : (
         <CallEditor store={store} nodeId={nodeId} call={call} targets={targets} picker={picker} />
       )}
-    </section>
+    </DockSection>
   );
 }
 
@@ -400,69 +401,70 @@ function CallEditor({
         </p>
       )}
 
-      <h4>Parameters</h4>
-      {draft.mode === 'pick' && !chosen ? (
-        // Pick mode with nothing chosen yet: the arguments are a property OF the
-        // target, so there is nothing honest to offer — and offering the JSON
-        // fallback here would invite an operator to hand-write a record this
-        // panel is about to be able to type for them.
-        <p className="page-hint">Choose a version to see the parameters it declares.</p>
-      ) : draft.mode === 'pick' && chosen ? (
-        rows.length === 0 ? (
-          <p className="page-hint">This pipeline version declares no parameters.</p>
+      <DockSection heading="Parameters" hint={FORM_SECTION_HINTS.call.parameters}>
+        {draft.mode === 'pick' && !chosen ? (
+          // Pick mode with nothing chosen yet: the arguments are a property OF the
+          // target, so there is nothing honest to offer — and offering the JSON
+          // fallback here would invite an operator to hand-write a record this
+          // panel is about to be able to type for them.
+          <p className="page-hint">Choose a version to see the parameters it declares.</p>
+        ) : draft.mode === 'pick' && chosen ? (
+          rows.length === 0 ? (
+            <p className="page-hint">This pipeline version declares no parameters.</p>
+          ) : (
+            <ul className="call-params">
+              {rows.map((name) => {
+                const decl = declared.get(name);
+                return (
+                  <li key={name}>
+                    <PickableInput
+                      value={draft.params[name] ?? ''}
+                      onChange={(value) =>
+                        setDraft((d) => ({ ...d, params: { ...d.params, [name]: value } }))
+                      }
+                      picker={picker}
+                      pickerName={`parameter ${name}`}
+                      target={paramPosition(name, decl)}
+                    >
+                      {name}
+                      {decl ? (
+                        <span className="page-hint">
+                          {VALUE_TYPE_TITLES[decl.type]}
+                          {decl.required ? ' · required' : ''}
+                        </span>
+                      ) : (
+                        <span className="page-hint">
+                          not declared by this version — will be sent anyway
+                        </span>
+                      )}
+                    </PickableInput>
+                  </li>
+                );
+              })}
+            </ul>
+          )
         ) : (
-          <ul className="call-params">
-            {rows.map((name) => {
-              const decl = declared.get(name);
-              return (
-                <li key={name}>
-                  <PickableInput
-                    value={draft.params[name] ?? ''}
-                    onChange={(value) =>
-                      setDraft((d) => ({ ...d, params: { ...d.params, [name]: value } }))
-                    }
-                    picker={picker}
-                    pickerName={`parameter ${name}`}
-                    target={paramPosition(name, decl)}
-                  >
-                    {name}
-                    {decl ? (
-                      <span className="page-hint">
-                        {VALUE_TYPE_TITLES[decl.type]}
-                        {decl.required ? ' · required' : ''}
-                      </span>
-                    ) : (
-                      <span className="page-hint">
-                        not declared by this version — will be sent anyway
-                      </span>
-                    )}
-                  </PickableInput>
-                </li>
-              );
-            })}
-          </ul>
-        )
-      ) : (
-        <LabelledControl label="Parameters (JSON object)">
-          {(id) => (
-            <>
-              <JsonEditor
-                id={id}
-                label="Parameters (JSON object)"
-                value={draft.paramsJson}
-                onValueChange={(paramsJson) => setDraft((d) => ({ ...d, paramsJson }))}
-                rows={4}
-                placeholder="{}"
-                aria-describedby={`${id}-hint`}
-              />
-              <span id={`${id}-hint`} className="page-hint">
-                The target is not a version this workspace can list, so its declared parameters are
-                unknown — enter the arguments directly.
-              </span>
-            </>
-          )}
-        </LabelledControl>
-      )}
+          <LabelledControl label="Parameters (JSON object)">
+            {(id) => (
+              <>
+                <JsonEditor
+                  id={id}
+                  label="Parameters (JSON object)"
+                  value={draft.paramsJson}
+                  onValueChange={(paramsJson) => setDraft((d) => ({ ...d, paramsJson }))}
+                  rows={4}
+                  placeholder="{}"
+                  aria-describedby={`${id}-hint`}
+                />
+                <span id={`${id}-hint`} className="page-hint">
+                  The target is not a version this workspace can list, so its declared parameters
+                  are unknown — enter the arguments directly.
+                </span>
+              </>
+            )}
+          </LabelledControl>
+        )}
+      </DockSection>
 
       {error !== null && <p className="form-error">{error}</p>}
       <button type="button" onClick={apply}>
