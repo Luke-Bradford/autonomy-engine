@@ -114,8 +114,18 @@ function CanvasFor({ pipelineId, store }: { pipelineId: string; store: Pipelines
          has no live overlay, because `pipelinesStore` lists only un-archived
          pipelines by default and so cannot answer "is this one archived". */
       archived={pipeline.archived}
-      onUnarchived={() => setPipeline((p) => (p === null ? p : { ...p, archived: false }))}
-      backTo={PIPELINES_PATH}
+      /* #1397 — both acts change which pipelines the side pane lists (it
+         holds un-archived ones only), so the shared list is refreshed after
+         each. The archive hands back its ROW: the refresh drops this pipeline
+         from the store, and with it the name overlay above. */
+      onUnarchived={() => {
+        setPipeline((p) => (p === null ? p : { ...p, archived: false }));
+        void store.getState().refresh();
+      }}
+      onArchived={(archivedRow) => {
+        setPipeline(archivedRow);
+        void store.getState().refresh();
+      }}
     />
   );
 }

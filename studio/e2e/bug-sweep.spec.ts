@@ -538,7 +538,8 @@ test('#1239 — the run page’s back link is a themed chip, not a bare UA link'
  * `.page-back` had exactly one user when #1239 minted it, so the app carried a
  * named convention that two of its three back controls did not follow. This
  * walks both of the ones that changed, in one seeded pipeline, because they sit
- * one click apart: the canvas's `← Back to pipelines` (a `navigate()` button
+ * one click apart: the canvas's `← Back to pipelines` (since #1397, the breadcrumb's
+ * Pipelines crumb, which replaced it; before #1242 a `navigate()` button
  * until now, so it had no `href` at all) and — through it — the pipelines list,
  * whose row links are the bare anchors the new global `a` rule exists for.
  *
@@ -566,9 +567,13 @@ test('#1242 — the canvas back control is an anchor, and a bare link takes the 
      the app ships on a hash router where the unit suites mount a memory one,
      and that prefix is what makes the control copyable and openable in a new
      tab — the thing a `navigate()` button never offered. */
-  const back = page.getByRole('link', { name: '← Back to pipelines' });
+  /* #1397 retired the editor's own back chip, which duplicated the
+     breadcrumb; the Pipelines crumb is now the way back, and it is held to the
+     same bar — an anchor with an `href`. */
+  const back = page
+    .getByRole('navigation', { name: 'Breadcrumb' })
+    .getByRole('link', { name: 'Pipelines' });
   await expect(back).toHaveAttribute('href', '#/author/pipelines');
-  await expect(back).toHaveClass(/\bpage-back\b/);
 
   /* And it actually navigates, which lands us on the surface row 2 needs. */
   await back.click();
@@ -661,19 +666,21 @@ test('#1245 — form controls take the app font family, and keep the UA control 
          is what the reset left alone; its family is what the reset set. */
       const probeSize = getComputedStyle(probe).fontSize;
       const rowSize = getComputedStyle(row).fontSize;
-      const controls = [...row.querySelectorAll('button, a.page-back')]
+      const controls = [...row.querySelectorAll('button')]
         .filter((el) => el !== probe)
         .map((el) => ({
           label: el.getAttribute('aria-label') ?? el.textContent?.trim() ?? el.tagName,
           family: getComputedStyle(el).fontFamily,
         }));
-      const plain = row.querySelector<HTMLButtonElement>('button[aria-label="Undo"]');
+      /* #1397 — Undo is an icon button now; Save version is the header's
+         text button, and the one whose size this pins. */
+      const plain = row.querySelector<HTMLButtonElement>('button.primary');
       return {
         expectedFamily,
         rowSize,
         probeFamily: getComputedStyle(probe).fontFamily,
         probeSize,
-        undoSize: plain ? getComputedStyle(plain).fontSize : null,
+        saveSize: plain ? getComputedStyle(plain).fontSize : null,
         controls,
       };
     } finally {
@@ -681,10 +688,7 @@ test('#1245 — form controls take the app font family, and keep the UA control 
     }
   });
 
-  expect(
-    read.controls.length,
-    'the header row carries the back chip and its buttons',
-  ).toBeGreaterThan(2);
+  expect(read.controls.length, 'the header row carries its buttons').toBeGreaterThan(2);
   for (const c of read.controls) {
     expect(c.family, `${c.label}: in the app's font, not the UA control font`).toBe(
       read.expectedFamily,
@@ -695,10 +699,13 @@ test('#1245 — form controls take the app font family, and keep the UA control 
   expect(read.probeSize, 'a bare button keeps the UA control size, not the row size').not.toBe(
     read.rowSize,
   );
-  expect(read.undoSize, 'Undo keeps the UA control size').toBe(read.probeSize);
+  expect(read.saveSize, 'Save version keeps the UA control size').toBe(read.probeSize);
 
   /* An input, on the list page the helper walked through. */
-  await page.getByRole('link', { name: '← Back to pipelines' }).click();
+  await page
+    .getByRole('navigation', { name: 'Breadcrumb' })
+    .getByRole('link', { name: 'Pipelines' })
+    .click();
   await page.getByRole('heading', { name: 'Pipelines' }).waitFor();
   const input = await page.getByRole('textbox', { name: 'Name', exact: true }).evaluate((el) => ({
     family: getComputedStyle(el).fontFamily,

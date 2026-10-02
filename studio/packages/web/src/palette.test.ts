@@ -371,7 +371,8 @@ describe('U6c container fill', () => {
 /**
  * #1239 — the page-header back link's chip.
  *
- * `.page-back` is the only thing standing between the three header back links
+ * `.page-back` is the only thing standing between the header back links (run
+ * and dataset detail — #1397 removed the editor's, which duplicated the breadcrumb)
  * and rendering as ordinary prose — since #1242 a bare anchor is accent-coloured
  * rather than UA blue, which makes deleting this rule LESS obviously broken, not
  * more. Deleting it, or dropping `text-decoration`, is a visible regression in

@@ -1,4 +1,4 @@
-import { type Page } from '@playwright/test';
+import { type Locator, type Page } from '@playwright/test';
 import { fluentRootReady } from './theme';
 
 /**
@@ -62,4 +62,24 @@ export async function openExistingCanvas(page: Page, name: string): Promise<void
   await page.getByRole('link', { name: `Open ${name}`, exact: true }).click();
   // The RF viewport, not just the wrapper — the chrome is its child.
   await page.locator('.react-flow__renderer').waitFor();
+}
+
+/** #1397 — the pipeline editor header's ⋯ menu button. */
+export function editorMenuTrigger(page: Page): Locator {
+  return page.getByRole('button', { name: 'More pipeline actions', exact: true });
+}
+
+/**
+ * #1397 — open the pipeline editor header's ⋯ menu and return one of its items.
+ *
+ * An item's accessible name can carry a second line (Fluent `subText`: why it
+ * is disabled, or what Export leaves out), so match by a leading regex —
+ * `/^Arrange/` — not `exact`. The menu closes on every click, so call this
+ * again for each act.
+ */
+export async function editorMenuItem(page: Page, name: RegExp): Promise<Locator> {
+  await editorMenuTrigger(page).click();
+  const item = page.getByRole('menu').getByRole('menuitem', { name });
+  await item.waitFor();
+  return item;
 }
