@@ -422,6 +422,17 @@ export interface ActivityCatalogEntry {
   /** Zod schema for this activity's non-secret config settings blob. */
   configSchema: z.ZodType;
   /**
+   * #1480 — the schema the adapter parses the node's prepared input with at
+   * dispatch, and therefore the one the save gate checks a literal config
+   * against (`engine/activity-config-check.ts`): the SAME instance on both
+   * sides, so save and dispatch cannot disagree. Often the same object as
+   * `configSchema`; it differs where the palette's copy carries authoring-only
+   * presentation (`copy`'s authored mapping expression). Absent for control
+   * activities, which `validateDoc` checks by hand, and for an activity with no
+   * config to parse (`lookup`).
+   */
+  dispatchConfigSchema?: z.ZodType;
+  /**
    * Config field NAMES at which a `{ "$secret": "<name>" }` marker is permitted
    * — a secret SINK (item 7 / S2, #1 F15). A marker is allowed only within the
    * subtree of a declared sink field (its first `config` path segment must be

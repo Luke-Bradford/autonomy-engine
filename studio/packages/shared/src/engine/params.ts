@@ -22,6 +22,8 @@ import { hasSecureOutput } from './secure.js';
 import type { Expr, ExprSegment, TemplateMode } from './expr.js';
 import { interpolationMode, parseExpr, restoreEscapes } from './expr.js';
 import { getActivity } from '../catalog/registry.js';
+import type { ActivityCatalog } from '../catalog/types.js';
+import { activityNodeErrors } from './activity-config-check.js';
 import {
   APPEND_VARIABLE_ACTIVITY_TYPE,
   EXECUTE_PIPELINE_ACTIVITY_TYPE,
@@ -2590,6 +2592,12 @@ export interface ValidateDocOptions {
    * the validators report nothing, as {@link variableReadsOf} explains.
    */
   globalReads?: Set<string>;
+  /**
+   * #1480 — the activity catalog the save gate checks `type` and literal
+   * `config` against: the one the executor dispatches with. The shared catalog
+   * when absent; a test that runs an injected catalog saves against it too.
+   */
+  catalog?: ActivityCatalog;
 }
 
 /** #844 GL3 — the globals a scan may read, and where it collects the reads. */
@@ -2819,6 +2827,9 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
   // root cause, so per-ref errors would just bury it.
   const nodeById = new Map<string, Node>(doc.nodes.map((n) => [n.id, n]));
   for (const node of doc.nodes) {
+    // #1480 — an unknown `type`, or a literal config the adapter would refuse
+    // at dispatch, is refused here: a version that saves must be one that runs.
+    errors.push(...activityNodeErrors(node, options.catalog));
     const contract = outputsById.get(node.id);
     if (contract?.kind === 'invalid') {
       errors.push(`node '${node.id}': config.outputs is malformed (${contract.reason})`);
