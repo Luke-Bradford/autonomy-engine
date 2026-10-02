@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react';
-import type { FunctionOption, WrapOptions } from './ExpressionPicker';
+import type { ExampleChoices, FunctionOption, FunctionsOptions } from './ExpressionPicker';
 import {
   applyInsert,
   applyWrap,
+  outsideExpressions,
   wrapTarget,
   type InsertMode,
   type WrapSpan,
@@ -62,25 +63,45 @@ export function useCaretInsert<E extends HTMLInputElement | HTMLTextAreaElement>
       return next.value;
     },
     /**
-     * The functions half of the flyout for `text` (#864): the span the caret
-     * is in, fixed NOW (when the list opens), the functions it may be wrapped
-     * in, and an `apply` that wraps that span and leaves the caret after the
-     * closing paren. `null` when the caret is in no `${}`.
+     * The functions half of the flyout for `text`, settled NOW (when the list
+     * opens) from where the author's selection is:
+     *  - in no `${}` — the functions' worked examples (#1413), one of which is
+     *    inserted at that selection as a whole `${call}`, in the field's mode;
+     *  - in one — the functions the span there can be wrapped in (#864), and
+     *    an `apply` that wraps it and leaves the caret after the closing paren;
+     *  - `null` when neither fits: an end in quoted text, a selection across
+     *    expressions, or plain text where a spliced `${…}` would not stay one
+     *    (straight after a `$`, or after an unterminated `${`).
+     * The selection is fixed at opening for both acts, so a caret moved while
+     * the list is open cannot put an example inside an expression.
      */
-    wrapOptions: (
+    functionOptions: (
       text: string,
       functionsFor: (span: WrapSpan) => FunctionOption[],
+      examplesFor: () => ExampleChoices,
       onChange: (next: string) => void,
-    ): WrapOptions => {
-      const span = wrapTarget(text, ...selection(text));
+    ): FunctionsOptions => {
+      // The caret goes after the change once the new value has round-tripped.
+      const commit = (next: { value: string; caret: number }) => {
+        caret.current = next.caret;
+        onChange(next.value);
+      };
+      const [at, to] = selection(text);
+      if (outsideExpressions(text, at, to)) {
+        const { mode, functions } = examplesFor();
+        return {
+          kind: 'examples',
+          mode,
+          functions,
+          apply: (call) => commit(applyInsert(text, at, to, `\${${call}}`, mode)),
+        };
+      }
+      const span = wrapTarget(text, at, to);
       if (span === null) return null;
       return {
+        kind: 'wrap',
         functions: functionsFor(span),
-        apply: (name) => {
-          const next = applyWrap(text, span, name);
-          caret.current = next.caret;
-          onChange(next.value);
-        },
+        apply: (name) => commit(applyWrap(text, span, name)),
       };
     },
   };

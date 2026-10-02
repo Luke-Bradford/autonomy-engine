@@ -10,7 +10,12 @@ import {
   placeRowCandidate,
 } from './configForm';
 import type { ConfigField, FieldInput, ObjectListRow } from './configForm';
-import { ExpressionPicker, type FieldOptions, type FunctionOption } from './ExpressionPicker';
+import {
+  ExpressionPicker,
+  type ExampleChoices,
+  type FieldOptions,
+  type FunctionOption,
+} from './ExpressionPicker';
 import type { WrapSpan } from './expressionInsert';
 import { useCaretInsert } from './useCaretInsert';
 import { LabelledControl } from '../../lib/LabelledControl';
@@ -35,6 +40,12 @@ export type FieldPicker = {
    * `resolve`: it validates the whole doc once per catalog function.
    */
   wraps: (target: PickerTarget, text: string, span: WrapSpan) => FunctionOption[];
+  /**
+   * The functions whose worked examples the field accepts as a whole `${call}`
+   * inserted in its mode (#1413), each keeping only those examples. Per
+   * OPENING: it validates the whole doc once per example.
+   */
+  examples: (target: PickerTarget) => ExampleChoices;
 };
 
 /**
@@ -252,7 +263,7 @@ export function ConfigFieldControl({
     ref: inputRef,
     onSelect,
     insert: insertAtCaret,
-    wrapOptions,
+    functionOptions,
   } = useCaretInsert<HTMLInputElement | HTMLTextAreaElement>();
   const text = typeof value === 'string' ? value : '';
   const [sawLineBreak, setSawLineBreak] = useState(false);
@@ -513,12 +524,13 @@ export function ConfigFieldControl({
               describe={picker.describe}
               resolve={() => picker.resolve(target ?? topLevelTarget(field.name))}
               onSelect={(insert, mode) => onChange(insertAtCaret(text, insert, mode))}
-              wrap={{
+              functions={{
                 value: text,
                 resolve: () =>
-                  wrapOptions(
+                  functionOptions(
                     text,
                     (span) => picker.wraps(target ?? topLevelTarget(field.name), text, span),
+                    () => picker.examples(target ?? topLevelTarget(field.name)),
                     onChange,
                   ),
               }}

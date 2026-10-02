@@ -81,11 +81,19 @@ describe('function docs (#1413)', () => {
     }
   });
 
-  it('formats each example as call → JSON result', () => {
-    expect(functionDoc('toUpper').examples).toEqual(['toUpper(\'hello\') → "HELLO"']);
+  // The flyout keys a function's example buttons by call (#1413).
+  it.each(names)('%s has no example call twice', (name) => {
+    const calls = FUNCTION_DOCS[name]!.examples.map((e) => e.expr);
+    expect(new Set(calls).size).toBe(calls.length);
+  });
+
+  it('gives each example as its bare call, to insert, and its result as JSON', () => {
+    expect(functionDoc('toUpper').examples).toEqual([
+      { call: "toUpper('hello')", result: '"HELLO"' },
+    ]);
     expect(functionDoc('equals').examples).toEqual([
-      "equals('a', 'a') → true",
-      "equals(1, '1') → false",
+      { call: "equals('a', 'a')", result: 'true' },
+      { call: "equals(1, '1')", result: 'false' },
     ]);
   });
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { useStore } from 'zustand';
 import {
+  functionDoc,
   listFunctions,
   type Edge,
   type Node,
@@ -10,6 +11,7 @@ import {
   type VariableDef,
 } from '@autonomy-studio/shared';
 import { NodePanel } from './PipelineCanvas';
+import { ExpressionPicker } from './ExpressionPicker';
 import { createCanvasStore } from './canvasStore';
 import { validateCanvas } from './canvasDoc';
 import { applyWrap, wrapTarget } from './expressionInsert';
@@ -61,15 +63,20 @@ function mount(
     open: (field: string) =>
       fireEvent.click(screen.getByRole('button', { name: `Insert reference into ${field}` })),
     openFunctions: (field: string) =>
-      fireEvent.click(
-        screen.getByRole('button', { name: `Wrap an expression in ${field} in a function` }),
-      ),
+      fireEvent.click(screen.getByRole('button', { name: `Functions for ${field}` })),
     /** The functions the open list offers, by name. */
     offered: () =>
       screen
         .queryAllByRole('button')
         .map((b) => /^(\w+)\(.*\) → /.exec(b.getAttribute('aria-label') ?? '')?.[1])
         .filter((name): name is string => name !== undefined),
+    /** The examples the open list offers to insert, by the call each inserts. */
+    examples: () =>
+      screen
+        .queryAllByRole('button')
+        // The name is the first span's text; the result beside it is hidden.
+        .map((b) => /^Insert \$\{(.*)\}$/.exec(b.querySelector('span')?.textContent ?? '')?.[1])
+        .filter((call): call is string => call !== undefined),
     // The label text alone is ambiguous — the picker's toggle carries the same
     // field name in its accessible name — so the textarea is reached by role.
     field: (label: string) => screen.getByRole('textbox', { name: label }) as HTMLTextAreaElement,
@@ -503,12 +510,18 @@ describe('ExpressionPicker — wrap in a function', () => {
     expect(ui.storedConfig()['url']).toBe('${concat(toUpper(nodes.fetch.output.body), "x")}');
   });
 
-  it('says what to do when the caret is in no expression, rather than offering a bare call', () => {
+  it('says what to do when the selection ends in quoted text, and offers neither act', () => {
     const ui = mount([FETCH, CALL], CHAIN, [], 'call');
-    fireEvent.change(ui.field('Request URL'), { target: { value: 'https://a.test' } });
+    const url = ui.field('Request URL');
+    const text = '${concat("abc", nodes.fetch.output.body)}';
+    fireEvent.change(url, { target: { value: text } });
+    url.selectionStart = text.indexOf('bc');
+    url.selectionEnd = text.indexOf('bc') + 1;
+    fireEvent.select(url);
     ui.openFunctions('url');
-    expect(screen.getByText(/Put the cursor inside a \$\{…\} expression/)).toBeTruthy();
+    expect(screen.getByText(/outside its quoted text/)).toBeTruthy();
     expect(ui.offered()).toEqual([]);
+    expect(ui.examples()).toEqual([]);
   });
 
   it('offers nothing around an expression the save already refuses — a wrap cannot repair it', () => {
@@ -527,9 +540,7 @@ describe('ExpressionPicker — wrap in a function', () => {
     fireEvent.change(ui.field('Request URL'), { target: { value: edited } });
     expect(ui.offered()).toEqual([]);
     expect(
-      screen
-        .getByRole('button', { name: 'Wrap an expression in url in a function' })
-        .getAttribute('aria-expanded'),
+      screen.getByRole('button', { name: 'Functions for url' }).getAttribute('aria-expanded'),
     ).toBe('false');
     expect(ui.field('Request URL').value).toBe(edited);
 
@@ -547,5 +558,130 @@ describe('ExpressionPicker — wrap in a function', () => {
     expect(ui.offered()).toContain('toUpper');
     ui.open('url');
     expect(ui.offered()).toEqual([]);
+  });
+});
+
+// #1413 — outside every `${}`, the same list offers each function's worked
+// EXAMPLES, inserted at the caret as a whole `${call}`.
+describe('ExpressionPicker — insert an example', () => {
+  it('inserts an example at the caret as a whole ${call}, and writes it into the DOC', () => {
+    const ui = mount([FETCH, CALL], CHAIN, [], 'call');
+    fireEvent.change(ui.field('Request URL'), { target: { value: 'https://a.test/' } });
+    ui.openFunctions('url');
+    expect(screen.getByText(/Inserts a worked example at the cursor in url/)).toBeTruthy();
+    // A wrap row is not offered here: there is no expression to go around.
+    expect(ui.offered()).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: "Insert ${toUpper('hello')}" }));
+    ui.apply();
+    expect(ui.storedConfig()['url']).toBe("https://a.test/${toUpper('hello')}");
+  });
+
+  it('describes an example by its result and what the function does', () => {
+    const ui = mount([FETCH, CALL], CHAIN, [], 'call');
+    ui.openFunctions('url');
+    expect(
+      screen.getByRole('button', { name: "Insert ${toUpper('hello')}" }),
+    ).toHaveAccessibleDescription('→ "HELLO" Converts a string to upper case.');
+  });
+
+  it('offers EVERY catalog example on a plain template field', () => {
+    // So a function is never hidden by a validator quirk: on a field that
+    // accepts any string, nothing the docs show may be refused.
+    const ui = mount([FETCH, CALL], CHAIN, [], 'call');
+    ui.openFunctions('url');
+    const all = listFunctions().flatMap((name) => functionDoc(name).examples.map((e) => e.call));
+    expect(ui.examples().sort()).toEqual([...all].sort());
+  });
+
+  it('offers only what a TYPE-CHECKED field accepts, and says the insert REPLACES it', () => {
+    const src: Node = {
+      id: 'src',
+      type: 'http_request',
+      config: { method: 'GET', url: 'https://a.test', outputs: [{ name: 'rows', type: 'json' }] },
+      position: at,
+    };
+    const pick: Node = {
+      id: 'pick',
+      type: 'filter',
+      config: { items: 'abc', predicate: '${item}' },
+      position: at,
+    };
+    const ui = mount(
+      [src, pick],
+      [{ id: 'e1', from: 'src', to: 'pick', on: 'success' }],
+      [],
+      'pick',
+    );
+    ui.openFunctions('items');
+    expect(screen.getByText(/inserting an example REPLACES its current value/)).toBeTruthy();
+    const offered = ui.examples();
+    expect(offered).toContain("split('a,b,c', ',')");
+    expect(offered).not.toContain("toUpper('hello')");
+    fireEvent.click(screen.getByRole('button', { name: "Insert ${split('a,b,c', ',')}" }));
+    ui.apply();
+    expect(ui.storedConfig()['items']).toBe("${split('a,b,c', ',')}");
+  });
+
+  it('inserts where the caret was when the list OPENED, not where it moved since', () => {
+    const ui = mount([FETCH, CALL], CHAIN, [], 'call');
+    const url = ui.field('Request URL');
+    const text = '${nodes.fetch.output.body} ';
+    fireEvent.change(url, { target: { value: text } });
+    ui.openFunctions('url');
+    // Into the expression, where an example would nest.
+    url.selectionStart = url.selectionEnd = 4;
+    fireEvent.select(url);
+    fireEvent.click(screen.getByRole('button', { name: "Insert ${toUpper('hello')}" }));
+    ui.apply();
+    expect(ui.storedConfig()['url']).toBe("${nodes.fetch.output.body} ${toUpper('hello')}");
+  });
+
+  it('offers neither act over a selection holding expressions, or straight after a $', () => {
+    const ui = mount([FETCH, CALL], CHAIN, [], 'call');
+    const url = ui.field('Request URL');
+    const text = 'x ${nodes.fetch.output.body} y';
+    fireEvent.change(url, { target: { value: text } });
+    url.selectionStart = 0;
+    url.selectionEnd = text.length;
+    fireEvent.select(url);
+    ui.openFunctions('url');
+    expect(
+      screen.getByText(/not inside or across a \$\{…\}, and not straight after a \$/),
+    ).toBeTruthy();
+    expect(ui.examples()).toEqual([]);
+    expect(ui.offered()).toEqual([]);
+
+    ui.openFunctions('url');
+    fireEvent.change(url, { target: { value: 'cost: $' } });
+    ui.openFunctions('url');
+    expect(screen.getByText(/not straight after a \$/)).toBeTruthy();
+    expect(ui.examples()).toEqual([]);
+  });
+
+  it('CLOSES when the field is edited while the examples are open', () => {
+    const ui = mount([FETCH, CALL], CHAIN, [], 'call');
+    ui.openFunctions('url');
+    expect(ui.examples()).toContain("toUpper('hello')");
+    fireEvent.change(ui.field('Request URL'), { target: { value: 'edited' } });
+    expect(ui.examples()).toEqual([]);
+  });
+
+  it('says so when no example fits the field', () => {
+    render(
+      <ExpressionPicker
+        fieldName="column"
+        describe={() => ''}
+        resolve={() => ({ mode: 'insert', suggestions: [] })}
+        onSelect={() => {}}
+        functions={{
+          value: '',
+          resolve: () => ({ kind: 'examples', mode: 'insert', functions: [], apply: () => {} }),
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Functions for column' }));
+    expect(
+      screen.getByText('No function example fits column — it would be refused at save.'),
+    ).toBeTruthy();
   });
 });
