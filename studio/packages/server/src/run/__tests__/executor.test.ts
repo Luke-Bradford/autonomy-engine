@@ -44,6 +44,7 @@ import {
 } from '../../repo/connection-quota.js';
 import type { ActivityEvent, ConnectorAdapter } from '../../connectors/types.js';
 import type { Supervisor } from '../../workers/process-supervisor.js';
+import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 
 type Db = ReturnType<typeof freshDb>['db'];
 
@@ -96,7 +97,7 @@ function seedVersion(
     edges: [],
     catalogVersion: CATALOG_VERSION,
   };
-  return createPipelineVersion(db, input).id;
+  return createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG }).id;
 }
 
 function seedRun(db: Db, pvId: string) {
@@ -1126,14 +1127,18 @@ describe('createExecutor — #2 L13a dynamic connectionId routing', () => {
   // the version, so this also proves the save-gate accepts a well-formed ref.
   function routeVersion(db: Db, connExpr: string): string {
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
-    return createPipelineVersion(db, {
-      pipelineId: pipeline.id,
-      params: [{ name: 'provider', type: 'string', required: true }],
-      outputs: [],
-      nodes: [httpNode('n1', connExpr, { url: 'https://x/y', outputs: [] })],
-      edges: [],
-      catalogVersion: CATALOG_VERSION,
-    }).id;
+    return createPipelineVersion(
+      db,
+      {
+        pipelineId: pipeline.id,
+        params: [{ name: 'provider', type: 'string', required: true }],
+        outputs: [],
+        nodes: [httpNode('n1', connExpr, { url: 'https://x/y', outputs: [] })],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      },
+      { catalog: STUB_SAVE_CATALOG },
+    ).id;
   }
   function routeRun(db: Db, pvId: string, provider: string) {
     return createRun(db, {
@@ -1269,19 +1274,23 @@ describe('createExecutor — #2 L13b connection parameters (dispatch-time merge)
     connectionParams: Record<string, unknown>,
   ): string {
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
-    return createPipelineVersion(db, {
-      pipelineId: pipeline.id,
-      params: [{ name: 'm', type: 'json', required: false }],
-      outputs: [],
-      nodes: [
-        {
-          ...httpNode('n1', connectionId, { url: 'https://x/y', outputs: [] }),
-          connectionParams,
-        },
-      ],
-      edges: [],
-      catalogVersion: CATALOG_VERSION,
-    }).id;
+    return createPipelineVersion(
+      db,
+      {
+        pipelineId: pipeline.id,
+        params: [{ name: 'm', type: 'json', required: false }],
+        outputs: [],
+        nodes: [
+          {
+            ...httpNode('n1', connectionId, { url: 'https://x/y', outputs: [] }),
+            connectionParams,
+          },
+        ],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      },
+      { catalog: STUB_SAVE_CATALOG },
+    ).id;
   }
   function paramsRun(db: Db, pvId: string, params: Record<string, unknown> = {}) {
     return createRun(db, {
@@ -3473,14 +3482,18 @@ describe('createExecutor — config-sink secrets: dispatch resolution + redactio
   ): { doc: PipelineVersion; run: ReturnType<typeof createRun>; runId: string } {
     const ownerId = opts.ownerId === undefined ? 'local' : opts.ownerId;
     const pipeline = createPipeline(db, { ownerId: ownerId ?? 'local', name: 'P' });
-    const stored = createPipelineVersion(db, {
-      pipelineId: pipeline.id,
-      params: [],
-      outputs: [],
-      nodes: [httpNode('placeholder', undefined, {})],
-      edges: [],
-      catalogVersion: CATALOG_VERSION,
-    });
+    const stored = createPipelineVersion(
+      db,
+      {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [httpNode('placeholder', undefined, {})],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      },
+      { catalog: STUB_SAVE_CATALOG },
+    );
     const doc: PipelineVersion = { ...stored, nodes: [markerNode] };
     const run = createRun(db, {
       ownerId,
@@ -4354,7 +4367,7 @@ describe('createExecutor — L12 emitMessages transcript + history threading', (
       edges: edges.map(({ from, to }) => ({ id: `${from}->${to}`, from, to, on: 'success' })),
       catalogVersion: CATALOG_VERSION,
     };
-    return createPipelineVersion(db, input).id;
+    return createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG }).id;
   }
 
   it('emits the transcript output and threads it through a downstream history ref (end-to-end)', async () => {
@@ -4456,22 +4469,26 @@ describe('createExecutor — L12 transcript is connection-kind-agnostic (single 
       },
     };
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
-    const pvId = createPipelineVersion(db, {
-      pipelineId: pipeline.id,
-      params: [],
-      outputs: [],
-      nodes: [
-        {
-          id: 'a',
-          type: 'llm_call',
-          config: { prompt: 'q', emitMessages: true },
-          connectionId: connId,
-          position: { x: 0, y: 0 },
-        },
-      ],
-      edges: [],
-      catalogVersion: CATALOG_VERSION,
-    }).id;
+    const pvId = createPipelineVersion(
+      db,
+      {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [
+          {
+            id: 'a',
+            type: 'llm_call',
+            config: { prompt: 'q', emitMessages: true },
+            connectionId: connId,
+            position: { x: 0, y: 0 },
+          },
+        ],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      },
+      { catalog: STUB_SAVE_CATALOG },
+    ).id;
     const run = seedRun(db, pvId);
 
     const state = await startRun(deps(db, { adapters: new Map([['agent_cli', adapter]]) }), run);

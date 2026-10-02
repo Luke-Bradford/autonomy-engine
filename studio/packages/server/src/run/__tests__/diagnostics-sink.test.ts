@@ -16,6 +16,7 @@ import { freshDb } from '../../repo/__tests__/helpers.js';
 import { buildEngine, startRun, type DocResolver, type DriverDeps } from '../driver.js';
 import { makeStubExecutor } from './stub-executor.js';
 import { stubAlarms } from './stub-alarms.js';
+import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 
 /**
  * #497 — the reducer's `diagnostics` reach a durable, readable sink.
@@ -97,7 +98,7 @@ function seedVersion(db: Db, nodes: Node[], edges: Edge[] = []): string {
     edges,
     catalogVersion: CATALOG_VERSION,
   };
-  return createPipelineVersion(db, input).id;
+  return createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG }).id;
 }
 
 function seedRun(db: Db, pvId: string) {

@@ -21,6 +21,7 @@ import {
   type CatalogOverride,
 } from '../connection-readiness.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
+import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 
 /** An `llm_call` node (its catalog `connectionKinds` includes `ollama` +
  * `anthropic_api`) carrying `connectionId`. `config: {}` passes the write gate. */
@@ -42,17 +43,21 @@ function ifNode(id: string, connectionId?: string): Node {
 
 function versionWithNodes(db: Db, ownerId: string, nodes: Node[]): string {
   const pipeline = createPipeline(db, { ownerId, name: 'P' });
-  return createPipelineVersion(db, {
-    pipelineId: pipeline.id,
-    params: [
-      { name: 'go', type: 'boolean', required: false },
-      { name: 'conn', type: 'string', required: false },
-    ],
-    outputs: [],
-    nodes,
-    edges: [],
-    catalogVersion: CATALOG_VERSION,
-  }).id;
+  return createPipelineVersion(
+    db,
+    {
+      pipelineId: pipeline.id,
+      params: [
+        { name: 'go', type: 'boolean', required: false },
+        { name: 'conn', type: 'string', required: false },
+      ],
+      outputs: [],
+      nodes,
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    },
+    { catalog: STUB_SAVE_CATALOG },
+  ).id;
 }
 
 /** A credential-less `ollama` connection ⟹ `secretStatus: not_required`, enabled
@@ -173,14 +178,18 @@ describe('M1 #1104 — the paired binding in the readiness gates', () => {
     // an untested pass-through is where a dropped argument hides.
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
-    const version = createPipelineVersion(db, {
-      pipelineId: pipeline.id,
-      params: [],
-      outputs: [],
-      nodes: [pairNode('n1', readyConnection(db), needsSecretConnection(db))],
-      edges: [],
-      catalogVersion: CATALOG_VERSION,
-    });
+    const version = createPipelineVersion(
+      db,
+      {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [pairNode('n1', readyConnection(db), needsSecretConnection(db))],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      },
+      { catalog: STUB_SAVE_CATALOG },
+    );
     // Paired: the unready SINK drops the version out of the ready domain.
     expect(readyVersionResourceIds(db, 'local', pairedCatalog()).has(version.resourceId)).toBe(
       false,
@@ -197,14 +206,18 @@ describe('M1 #1104 — the paired binding in the readiness gates', () => {
     const { db } = freshDb();
     const sink = needsSecretConnection(db);
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
-    const vId = createPipelineVersion(db, {
-      pipelineId: pipeline.id,
-      params: [],
-      outputs: [],
-      nodes: [pairNode('n1', readyConnection(db), sink)],
-      edges: [],
-      catalogVersion: CATALOG_VERSION,
-    }).id;
+    const vId = createPipelineVersion(
+      db,
+      {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [pairNode('n1', readyConnection(db), sink)],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      },
+      { catalog: STUB_SAVE_CATALOG },
+    ).id;
     const tId = triggerOn(db, 'local', vId);
     expect(regateTriggersForConnection(db, sink, pairedCatalog())).toEqual([tId]);
     expect(getTrigger(db, tId)!.enabled).toBe(false);
@@ -605,14 +618,18 @@ describe('connectionDependents (#1211 reverse-gate PREVIEW)', () => {
 
 describe('connectionDependents — the NODE buckets (#1252)', () => {
   function versionOf(db: Db, pipelineId: string, nodes: Node[]): string {
-    return createPipelineVersion(db, {
-      pipelineId,
-      params: [{ name: 'conn', type: 'string', required: false }],
-      outputs: [],
-      nodes,
-      edges: [],
-      catalogVersion: CATALOG_VERSION,
-    }).id;
+    return createPipelineVersion(
+      db,
+      {
+        pipelineId,
+        params: [{ name: 'conn', type: 'string', required: false }],
+        outputs: [],
+        nodes,
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      },
+      { catalog: STUB_SAVE_CATALOG },
+    ).id;
   }
 
   it('names a latest-version node with no trigger bound at all, with the kinds its activity accepts', () => {

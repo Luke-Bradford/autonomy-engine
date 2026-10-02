@@ -36,6 +36,7 @@ import { createRunEventBus, type RunEventBus } from '../event-bus.js';
 import { createReseedService, RerunNotEligibleError } from '../reseed.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
 import { stubAlarms } from './stub-alarms.js';
+import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 
 type Db = ReturnType<typeof freshDb>['db'];
 
@@ -58,7 +59,7 @@ function seedVersion(db: Db, nodes: Node[], edges: Edge[] = [], params: Param[] 
     edges,
     catalogVersion: CATALOG_VERSION,
   };
-  return createPipelineVersion(db, input).id;
+  return createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG }).id;
 }
 
 function deps(db: Db, executorOpts: StubExecutorOptions = {}, bus?: RunEventBus): DriveDeps {
@@ -557,7 +558,7 @@ describe('#844 V5 — rerun-from-failed carries the copied nodes’ variable wri
       edges: [edge('a', 'b'), edge('b', 'c')],
       catalogVersion: CATALOG_VERSION,
     };
-    return createPipelineVersion(db, input).id;
+    return createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG }).id;
   }
   const variablesOf = (db: Db, pvId: string, runId: string) =>
     buildEngine(getPipelineVersion(db, pvId)!).projectRunState(loadEngineEvents(db, runId))

@@ -23,6 +23,7 @@ import { startRun, type DocResolver, type DriverDeps } from '../driver.js';
 import { createRunEventBus } from '../event-bus.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
 import { stubAlarms } from './stub-alarms.js';
+import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 
 type Db = ReturnType<typeof freshDb>['db'];
 const PLAINTEXT = 'hunter2-plaintext';
@@ -44,7 +45,7 @@ async function drive(nodes: Node[], executorOpts: StubExecutorOptions) {
     edges: [],
     catalogVersion: CATALOG_VERSION,
   };
-  const pv = createPipelineVersion(db, input);
+  const pv = createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG });
   const run = createRun(db, {
     ownerId: 'local',
     pipelineVersionId: pv.id,

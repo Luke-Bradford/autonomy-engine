@@ -18,6 +18,7 @@ import { createRunEventBus } from '../event-bus.js';
 import { foldOutOfBand, publishThenDrive } from '../out-of-band.js';
 import { makeStubExecutor } from './stub-executor.js';
 import { stubAlarms } from './stub-alarms.js';
+import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 
 /**
  * #1021 — the shared out-of-band append. The four callers' own suites cover their
@@ -38,7 +39,7 @@ function seed(db: Db) {
     edges: [],
     catalogVersion: CATALOG_VERSION,
   };
-  const pv = createPipelineVersion(db, input);
+  const pv = createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG });
   const run = createRun(db, {
     ownerId: 'local',
     pipelineVersionId: pv.id,

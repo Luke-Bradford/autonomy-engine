@@ -50,6 +50,7 @@ import {
   type TumblingLauncher,
 } from '../tumbling.js';
 import { silentLog } from './testLog.js';
+import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 
 /**
  * #5 S9 — the tumbling-window service, against a real DB, the real alarm
@@ -85,7 +86,7 @@ function seedVersion(db: Db): string {
     edges: [],
     catalogVersion: CATALOG_VERSION,
   };
-  return createPipelineVersion(db, input).id;
+  return createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG }).id;
 }
 
 function seedTumbling(

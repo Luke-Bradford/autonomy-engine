@@ -22,6 +22,7 @@ import { createRetryAlarmHandler } from '../retry-alarm.js';
 import { createWaitAlarmHandler } from '../wait-alarm.js';
 import { createLeaseService, LEASE_WAKEUP_KIND, type LeaseService } from '../lease.js';
 import { silentLog } from './testLog.js';
+import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 
 /**
  * #5 S7 — the run-lease service end to end, against the real DB, real alarm
@@ -67,7 +68,7 @@ function seedVersion(db: Db, nodes: Node[], edges: Edge[] = []): string {
     edges,
     catalogVersion: CATALOG_VERSION,
   };
-  return createPipelineVersion(db, input).id;
+  return createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG }).id;
 }
 
 function seedRun(db: Db, pvId: string) {

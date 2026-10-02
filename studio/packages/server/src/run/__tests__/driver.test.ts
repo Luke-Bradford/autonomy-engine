@@ -33,6 +33,7 @@ import { listRunDiagnostics } from '../../repo/run-diagnostics.js';
 import type { RunEvent } from '@autonomy-studio/shared';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
 import { stubAlarms } from './stub-alarms.js';
+import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 
 type Db = ReturnType<typeof freshDb>['db'];
 
@@ -76,7 +77,7 @@ function seedVersion(db: Db, nodes: Node[], edges: Edge[] = [], params: Param[] 
     edges,
     catalogVersion: CATALOG_VERSION,
   };
-  return createPipelineVersion(db, input).id;
+  return createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG }).id;
 }
 
 function seedRun(db: Db, pvId: string) {
