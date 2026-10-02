@@ -31,7 +31,8 @@ import {
 } from './configForm';
 import { validateCanvas } from './canvasDoc';
 import { containersWithUpdated } from './canvasStore';
-import { confirmContainerEdit, containerLabels } from './containerRules';
+import { CONTAINER_EDIT_TONE, containerEditQuestion, containerLabels } from './containerRules';
+import { useConfirm } from '../../lib/confirm/useConfirm';
 import { useSubjectIssues } from './issueContext';
 import { SubjectIssues } from './SubjectIssues';
 
@@ -288,7 +289,9 @@ export function ContainerPanel({
     setError(null);
   }
 
-  function apply() {
+  const [confirm, confirmDialog] = useConfirm();
+
+  async function apply() {
     const assembled = assembleConfig(stored, fields, inputs);
     if (!assembled.ok) {
       setError(assembled.message);
@@ -323,12 +326,20 @@ export function ContainerPanel({
     // can introduce a reference its own children do not satisfy, which
     // `containerEditConsequence` catches by DIFFING the validator rather than by
     // any rule written here.
+    const question = containerEditQuestion(
+      { nodes, edges, containers, params, variables, globals },
+      containersWithUpdated(containers, next),
+      recovery(stored, next),
+      `Apply these changes to ${label}?`,
+    );
+    // Synchronous when there is nothing to ask: the edit applies on the click.
     if (
-      !confirmContainerEdit(
-        { nodes, edges, containers, params, variables, globals },
-        containersWithUpdated(containers, next),
-        recovery(stored, next),
-      )
+      question !== null &&
+      !(await confirm({
+        message: question,
+        confirmLabel: 'Apply changes',
+        tone: CONTAINER_EDIT_TONE,
+      }))
     ) {
       return;
     }
@@ -347,6 +358,7 @@ export function ContainerPanel({
        input styling — would silently stop applying, and the `Properties`
        landmark four other specs address the panel by would vanish. */
     <aside className="property-panel" aria-label="Properties">
+      {confirmDialog}
       <h3>{label}</h3>
       {/* #1413 — the palette's hover sentence, kept once the box is placed, as
           the node panel does for an activity. */}
@@ -400,7 +412,7 @@ export function ContainerPanel({
               {error}
             </p>
           )}
-          <button type="button" onClick={apply}>
+          <button type="button" onClick={() => void apply()}>
             Apply container settings
           </button>
         </div>

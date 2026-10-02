@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { answerConfirm } from '../../testing/confirmDialog';
 import {
   ContainerKindSchema,
   type Container,
@@ -129,6 +131,35 @@ describe('ContainerPanel — which fields it offers', () => {
   it('names the container by its within-kind ordinal', () => {
     mount({ ...LOOP, id: 'loop_2' }, [{ ...LOOP, id: 'loop_0' }]);
     expect(screen.getByRole('heading', { name: 'Until 2' })).toBeDefined();
+  });
+});
+
+/**
+ * #1397 — an edit that leaves the pipeline unsavable is asked about in the
+ * shared dialog, titled with the question; Apply waits for the answer.
+ */
+describe('ContainerPanel — the confirmation (#1397)', () => {
+  const BROKEN = '${equals(nodes.n_nope.output.v, 1)}';
+
+  it('asks before applying an edit the validator would refuse, and a Cancel applies nothing', async () => {
+    const user = userEvent.setup();
+    const onApply = mount(LOOP);
+    fireEvent.change(screen.getByLabelText('Exit when'), { target: { value: BROKEN } });
+    apply();
+    expect(onApply).not.toHaveBeenCalled();
+    const text = await answerConfirm(user, 'cancel');
+    expect(text.startsWith('Apply these changes to Until 1?')).toBe(true);
+    expect(text).toContain('unsavable');
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it('applies the edit once the operator says Apply changes', async () => {
+    const user = userEvent.setup();
+    const onApply = mount(LOOP);
+    fireEvent.change(screen.getByLabelText('Exit when'), { target: { value: BROKEN } });
+    apply();
+    await answerConfirm(user, 'accept');
+    expect(applied(onApply).exitWhen).toBe(BROKEN);
   });
 });
 

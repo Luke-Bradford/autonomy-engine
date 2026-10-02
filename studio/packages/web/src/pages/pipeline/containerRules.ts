@@ -750,8 +750,9 @@ export function routingSentence(change: RoutingChange | null): string | null {
  * nothing worth interrupting for.
  *
  * Composed fresh from live state at the moment of the click and handed straight
- * to `window.confirm`, so there is exactly ONE evaluation and no stored message
- * to go stale — the failure mode `FlowCanvas`'s refusal panel documents (a
+ * to the confirmation dialog — as its BODY, under the caller's question
+ * (`containerEditQuestion`) — so there is exactly ONE evaluation and no stored
+ * message to go stale — the failure mode `FlowCanvas`'s refusal panel documents (a
  * frozen `role="alert"` naming an activity the operator has since deleted).
  *
  * `nextContainers`, not the current ones, label the issues: a brand-new
@@ -789,57 +790,86 @@ export function consequenceMessage(
     );
   }
   if (parts.length === 0) return null;
-  return `${parts.join('\n\n')}\n\nApply it anyway?`;
+  // #1397 — the body only. The dialog's title is the question, and it is the
+  // caller's (`containerEditQuestion`): a body that ended "Apply it anyway?"
+  // would put a paragraph of consequences where the title goes.
+  return parts.join('\n\n');
 }
 
 /**
- * Measure a container edit's consequence, ask the operator, and report whether
- * to proceed. `true` = apply it.
+ * The confirmation a container edit needs, or `null` when there is nothing to
+ * ask. `question` leads it and becomes the dialog's title ("Move 2 activities
+ * into ForEach 1?"); the consequences follow as its body.
+ *
+ * #1397 — this used to ASK (`window.confirm`) and return the answer. It is a
+ * pure builder now, and each caller asks through `useConfirm`: an in-app dialog
+ * is asynchronous, so the asking belongs to a component, and a helper that
+ * reached for `window` could not be one. `null` must stay a synchronous
+ * short-circuit at the call site — an edit with nothing to confirm applies at
+ * once, without waiting a microtask for a dialog that never opens.
  *
  * Hoisted out of `ContainerSection` (U6d) when U23 added the second call site.
  * A copy would have been the cheaper edit and the wrong one: this gate decides
  * whether an edit that makes the pipeline UNSAVABLE goes through, and two
  * copies of that decision can drift into disagreeing about what counts — the
- * one thing a pre-hoc warning must never do. One function, one behaviour, both
- * kinds of container edit.
+ * one thing a pre-hoc warning must never do. One function, one behaviour, every
+ * kind of container edit.
  *
  * `deleteContainer`'s own confirmation (`FlowCanvas.confirmDeleteContainer`) is
  * NOT a caller and should not become one: it warns about what deleting destroys
  * — settings, edges, `${item}` references — which is not a diff of the
  * validator's issues, and folding the two would make each one vaguer.
  */
-export function confirmContainerEdit(
+export function containerEditQuestion(
   doc: ContainerEditDoc,
   nextContainers: Container[],
   recovery: string,
-): boolean {
-  const message = consequenceMessage(
+  question: string,
+): string | null {
+  const body = consequenceMessage(
     containerEditConsequence(doc, nextContainers),
     doc.nodes,
     doc.edges,
     nextContainers,
     recovery,
   );
-  // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
-  return message === null || window.confirm(message);
+  return body === null ? null : `${question}\n\n${body}`;
 }
 
 /**
- * #1420 — confirm adding a NEW EMPTY container (the palette's click and drop),
- * or `true` when there is nothing to confirm.
+ * How a container-edit confirmation's action button is drawn. The LABEL is the
+ * caller's, because it names the act ("Move", "Create container"). Nothing is
+ * destroyed and Undo takes it back, so not the danger colour
+ * (`ConfirmRequest.tone`).
+ */
+export const CONTAINER_EDIT_TONE = 'primary' as const;
+
+/**
+ * "a Stage", "a ForEach", "an Until" — a container kind's title with its
+ * article, for the questions that name one. The titles are the palette's
+ * (`CONTAINER_KIND_LABELS`), so a leading vowel letter is the whole rule.
+ */
+export function withArticle(title: string): string {
+  return `${/^[aeiou]/i.test(title) ? 'an' : 'a'} ${title}`;
+}
+
+/**
+ * #1420 — the confirmation adding a NEW EMPTY container needs (the palette's
+ * click and drop), or `null` when there is nothing to ask. A pure builder, for
+ * the reason `containerEditQuestion` is one.
  *
- * Only the ROUTING half of `confirmContainerEdit`. The validator half would fire
- * on every add: an empty loop/foreach is born failing `validateDoc` by
+ * Only the ROUTING half of `containerEditQuestion`. The validator half would
+ * fire on every add: an empty loop/foreach is born failing `validateDoc` by
  * construction (no child, no items yet), so a dialog listing what the operator
  * is about to fill in would be noise — and Undo takes the box back. Routing is
  * not noise: the first container on an edge-less graph turns its inferred chain
  * into parallel partitions (`implicitRouting`), which changes what a run does.
  */
-export function confirmNewContainer(
+export function newContainerQuestion(
   doc: Pick<ContainerEditDoc, 'nodes' | 'edges' | 'containers'>,
   kind: ContainerKind,
   title: string,
-): boolean {
+): string | null {
   const routing = routingSentence(
     routingChangeBetween(doc, {
       ...doc,
@@ -847,9 +877,15 @@ export function confirmNewContainer(
       containers: [...doc.containers, { id: '\u0000probe', kind, children: [] }],
     }),
   );
-  // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
-  return routing === null || window.confirm(`Add a ${title} container?\n\n${routing}`);
+  return routing === null ? null : `Add ${withArticle(title)} container?\n\n${routing}`;
 }
+
+/** The action button a new-container confirmation draws (`newContainerQuestion`). */
+export const NEW_CONTAINER_CONFIRM = {
+  confirmLabel: 'Add container',
+  // Adding a box is a container edit, and drawn like one.
+  tone: CONTAINER_EDIT_TONE,
+} as const;
 
 /**
  * Do two `issuesBySubject` results say the same thing — the same subjects, each

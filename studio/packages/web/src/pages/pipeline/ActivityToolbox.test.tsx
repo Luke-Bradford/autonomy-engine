@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { answerConfirm } from '../../testing/confirmDialog';
 import { ACTIVITY_CATEGORY_LABELS, catalog } from '@autonomy-studio/shared';
 import { ActivityToolbox } from './ActivityToolbox';
 import { ACTIVITY_DND_MIME, CONTAINER_DND_MIME } from './activityDnd';
@@ -311,17 +312,33 @@ describe('ActivityToolbox', () => {
       expect(within(group).getAllByRole('button')).toHaveLength(3);
     });
 
-    it('a click asks first when the box would change routing, and a No adds nothing', () => {
+    it('a click asks first when the box would change routing, and a No adds nothing', async () => {
+      const user = userEvent.setup();
       const store = renderToolbox();
       // Two edge-less activities are an inferred CHAIN; the first container
       // turns that into parallel partitions (`implicitRouting`).
       store.getState().addNode('http_request');
       store.getState().addNode('http_request');
-      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
       fireEvent.click(screen.getByRole('button', { name: 'Stage' }));
-      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(await answerConfirm(user, 'cancel')).toContain('Add a Stage container?');
       expect(store.getState().containers).toEqual([]);
-      confirm.mockRestore();
+    });
+
+    it('a Yes adds the box', async () => {
+      const user = userEvent.setup();
+      const store = renderToolbox();
+      store.getState().addNode('http_request');
+      store.getState().addNode('http_request');
+      fireEvent.click(screen.getByRole('button', { name: 'Stage' }));
+      await answerConfirm(user, 'accept');
+      expect(store.getState().containers.map((c) => c.kind)).toEqual(['stage']);
+    });
+
+    it('adds at once, with no question, when routing would not change', () => {
+      const store = renderToolbox();
+      fireEvent.click(screen.getByRole('button', { name: 'Stage' }));
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(store.getState().containers.map((c) => c.kind)).toEqual(['stage']);
     });
 
     it('collapses like any other group', () => {

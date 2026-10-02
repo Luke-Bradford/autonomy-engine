@@ -4,6 +4,7 @@ import {
   clipboardCommandFor,
   historyCommandFor,
   isDeleteKeystroke,
+  isModalDialogOpen,
   isTextEntryTarget,
   redoDisabledReason,
   undoDisabledReason,
@@ -258,5 +259,37 @@ describe('arrangeDisabledReason', () => {
 
   it('says there is nothing to arrange on a loaded, empty canvas', () => {
     expect(arrangeDisabledReason({ ...live, available: false })).toBe('Nothing to arrange.');
+  });
+});
+
+describe('isModalDialogOpen (#1397)', () => {
+  function withSurface(attrs: Record<string, string>, run: () => void) {
+    const el = document.createElement('div');
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    document.body.append(el);
+    try {
+      run();
+    } finally {
+      el.remove();
+    }
+  }
+
+  it('is false on a page with no dialog', () => {
+    expect(isModalDialogOpen()).toBe(false);
+  });
+
+  it.each([
+    ['a modal alert dialog (the confirmation)', { role: 'alertdialog', 'aria-modal': 'true' }],
+    ['a modal dialog', { role: 'dialog', 'aria-modal': 'true' }],
+  ])('is true while %s is open', (_, attrs) => {
+    withSurface(attrs, () => expect(isModalDialogOpen()).toBe(true));
+  });
+
+  // The leave prompt is a NON-modal alert with its own guard; it must not count.
+  it.each([
+    ['a non-modal alert dialog', { role: 'alertdialog' }],
+    ['a non-modal dialog', { role: 'dialog', 'aria-modal': 'false' }],
+  ])('is false for %s', (_, attrs) => {
+    withSurface(attrs, () => expect(isModalDialogOpen()).toBe(false));
   });
 });

@@ -133,8 +133,9 @@ footer ("You have unsaved changes. Discard them?" with **Keep editing** and **Di
 "Dirty" compares what Save would write against the value when the form opened. Switching between
 the fields view and the JSON view is not an edit.
 
-The prompt is an inline `alertdialog`, not `window.confirm`. OR6 (#1397) owns the app's confirm
-dialogs.
+The prompt is an inline `alertdialog`, not `window.confirm`. Every other question the app asks
+goes through the one confirmation dialog, `useConfirm` (`lib/confirm/useConfirm.tsx`, #1397), and a
+lint rule forbids `window.confirm`.
 
 The prompt itself is `UnsavedChangesPrompt` (`lib/form/UnsavedChangesPrompt.tsx`), so the wording
 and the buttons are one copy wherever it appears.

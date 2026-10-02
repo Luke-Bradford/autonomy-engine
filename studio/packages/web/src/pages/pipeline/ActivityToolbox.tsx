@@ -1,12 +1,14 @@
 import { useId, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
+import type { ContainerKind } from '@autonomy-studio/shared';
 import type { StoreApi } from 'zustand';
 import { setActivityDragType, setContainerDragKind } from './activityDnd';
 import { ActivityGlyph } from './ActivityGlyph';
 import { CONTAINER_GROUP_LABEL, containerToolboxEntries, toolboxGroups } from './activityGroups';
 import type { CanvasState } from './canvasStore';
-import { confirmNewContainer } from './containerRules';
+import { NEW_CONTAINER_CONFIRM, newContainerQuestion } from './containerRules';
+import { useConfirm } from '../../lib/confirm/useConfirm';
 
 /** The Containers group's collapse key — not a catalog category, so it cannot collide with one. */
 const CONTAINERS_KEY = 'containers';
@@ -35,6 +37,17 @@ const CONTAINERS_KEY = 'containers';
  * keep the pipelines PAGE alive alongside the pane tree.)
  */
 export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
+  const [confirm, confirmDialog] = useConfirm();
+
+  /** A container from the palette by click — the drop's confirm, so the two ways to add one agree. */
+  async function addContainer(kind: ContainerKind, title: string) {
+    const question = newContainerQuestion(store.getState(), kind, title);
+    if (question !== null && !(await confirm({ message: question, ...NEW_CONTAINER_CONFIRM }))) {
+      return;
+    }
+    store.getState().addContainer(kind);
+  }
+
   /**
    * Instance-scoped id prefix for the disclosure↔list `aria-controls` pairing.
    *
@@ -138,6 +151,7 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
 
   return (
     <aside className="activity-toolbox" aria-label="Activities">
+      {confirmDialog}
       <h3>Activities</h3>
       <input
         type="search"
@@ -211,13 +225,7 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
                 onDragStart={(e) => {
                   if (e.dataTransfer) setContainerDragKind(e.dataTransfer, entry.kind);
                 }}
-                onClick={() => {
-                  // The drop's confirm, so the two ways to add one agree.
-                  const state = store.getState();
-                  if (confirmNewContainer(state, entry.kind, entry.title)) {
-                    state.addContainer(entry.kind);
-                  }
-                }}
+                onClick={() => void addContainer(entry.kind, entry.title)}
               >
                 <span aria-hidden="true" className="activity-toolbox__icon">
                   <entry.icon />
