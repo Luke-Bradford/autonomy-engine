@@ -45,6 +45,7 @@ import { ImportPanel } from './ImportPanel';
 import { coerceGlobalValue, formatDefaultInput } from './pipeline/paramRules';
 import { payloadSignature } from './pipeline/configForm';
 import { useConfirm } from '../lib/confirm/useConfirm';
+import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 
 /**
  * The open form. `stored` is the global as it was when an EDIT opened — what
@@ -140,7 +141,7 @@ export function GlobalParamsPage() {
   }, [refresh]);
 
   const onDelete = useCallback(
-    async (global: GlobalParam) => {
+    async (global: GlobalParam, origin: RowMenuOrigin) => {
       // #844 GL3 (GL-D4) — what reads it, shown before the choice. Advisory: a
       // failed read says so and still lets the operator decide.
       const usage = await getGlobalParamUsage(global.id).catch(() => null);
@@ -151,6 +152,8 @@ export function GlobalParamsPage() {
         message: deleteConfirmText(global.name, usage),
         confirmLabel: 'Delete',
         ...(read ? { typeToConfirm: global.name } : {}),
+        // The menu item that asked unmounted while the usage read ran.
+        restoreFocus: origin.find,
       });
       if (!confirmed) return;
       try {
@@ -254,31 +257,33 @@ export function GlobalParamsPage() {
                         </span>
                       </td>
                       <td>
-                        <button
-                          type="button"
-                          onClick={(e) =>
-                            drawer.openFrom(e.currentTarget, () => openForm(formForEdit(global)))
-                          }
-                          aria-label={`Edit ${global.name}`}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void onExport(global)}
-                          aria-label={`Export ${global.name}`}
-                          disabled={exporting.has(global.id)}
-                          aria-busy={exporting.has(global.id)}
-                        >
-                          Export
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void onDelete(global)}
-                          aria-label={`Delete ${global.name}`}
-                        >
-                          Delete
-                        </button>
+                        {/* #1397 — Edit is the row's one inline action; the
+                            rest are in its menu, Delete last. */}
+                        <div className="row-actions">
+                          <button
+                            type="button"
+                            onClick={(e) =>
+                              drawer.openFrom(e.currentTarget, () => openForm(formForEdit(global)))
+                            }
+                            aria-label={`Edit ${global.name}`}
+                          >
+                            Edit
+                          </button>
+                          <RowMoreMenu
+                            name={global.name}
+                            actions={[
+                              {
+                                label: 'Export',
+                                onSelect: () => void onExport(global),
+                                disabled: exporting.has(global.id),
+                              },
+                            ]}
+                            destructive={{
+                              label: 'Delete',
+                              onSelect: (origin) => void onDelete(global, origin),
+                            }}
+                          />
+                        </div>
                       </td>
                     </tr>
                   );

@@ -68,6 +68,7 @@ import { allowlistChanged, datasetAllowlistSubject } from './overrideAllowlist';
 import { DatasetKindName, KindSelect } from '../lib/KindName';
 import { DATASET_KIND_ICONS } from '../lib/kindIcons';
 import { useConfirm } from '../lib/confirm/useConfirm';
+import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 
 const KINDS = DATASET_KINDS;
 
@@ -389,7 +390,7 @@ export function DatasetsPage() {
   );
 
   const onDelete = useCallback(
-    async (dataset: Dataset) => {
+    async (dataset: Dataset, origin: RowMenuOrigin) => {
       // Names the consequence rather than only the row: nothing scans for
       // dependants at delete time (the ref is checked at DISPATCH, §3.1), so a
       // `copy` node bound to this dataset keeps its binding and fails when it
@@ -397,6 +398,7 @@ export function DatasetsPage() {
       const confirmed = await confirm({
         message: `Delete dataset "${dataset.name}"?\n\nAny pipeline node bound to it will fail at dispatch.`,
         confirmLabel: 'Delete',
+        restoreFocus: origin.find,
       });
       if (!confirmed) return;
       try {
@@ -475,31 +477,33 @@ export function DatasetsPage() {
                     </td>
                     <td>{dataset.columns.length}</td>
                     <td>
-                      <button
-                        type="button"
-                        onClick={(e) =>
-                          drawer.openFrom(e.currentTarget, () => openForm(formForEdit(dataset)))
-                        }
-                        aria-label={`Edit ${dataset.name}`}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void onExport(dataset)}
-                        aria-label={`Export ${dataset.name}`}
-                        disabled={exporting.has(dataset.id)}
-                        aria-busy={exporting.has(dataset.id)}
-                      >
-                        Export
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void onDelete(dataset)}
-                        aria-label={`Delete ${dataset.name}`}
-                      >
-                        Delete
-                      </button>
+                      {/* #1397 — Edit is the row's one inline action; the rest
+                          are in its menu, Delete last. */}
+                      <div className="row-actions">
+                        <button
+                          type="button"
+                          onClick={(e) =>
+                            drawer.openFrom(e.currentTarget, () => openForm(formForEdit(dataset)))
+                          }
+                          aria-label={`Edit ${dataset.name}`}
+                        >
+                          Edit
+                        </button>
+                        <RowMoreMenu
+                          name={dataset.name}
+                          actions={[
+                            {
+                              label: 'Export',
+                              onSelect: () => void onExport(dataset),
+                              disabled: exporting.has(dataset.id),
+                            },
+                          ]}
+                          destructive={{
+                            label: 'Delete',
+                            onSelect: (origin) => void onDelete(dataset, origin),
+                          }}
+                        />
+                      </div>
                     </td>
                   </tr>
                 ))}

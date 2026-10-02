@@ -4,7 +4,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { tree } from './support/authorPane';
 import { seedConnection, seedDataset } from './support/seedResources';
 import { fluentRootReady, resolvedPaletteColor } from './support/theme';
-import { arrowToItem } from './support/rowMenu';
+import { arrowToItem, chooseRowAction } from './support/rowMenu';
 
 /**
  * #1397 — the list pages' confirmations are an in-app alert dialog, not
@@ -108,7 +108,7 @@ test.describe('#1397 the confirmation dialog, by keyboard', () => {
     await fluentRootReady(page);
 
     const row = page.getByRole('row', { name: new RegExp(DEPENDANT) });
-    await row.getByRole('button', { name: /^Delete / }).click();
+    await chooseRowAction(row, 'Delete');
 
     const dialog = page.getByRole('alertdialog');
     await expect(dialog).toBeVisible();
@@ -154,7 +154,7 @@ test.describe('#1397 the confirmation dialog, by keyboard', () => {
       await page.getByRole('heading', { name: 'Global parameters' }).waitFor();
       await fluentRootReady(page);
 
-      await page.getByRole('button', { name: `Delete ${name}`, exact: true }).click();
+      await chooseRowAction(page, 'Delete', name);
       await expect(page.getByRole('alertdialog')).toBeVisible();
       // While open, the page behind IS hidden — the premise of the check below.
       await expect(page.locator('#root')).toHaveAttribute('aria-hidden', 'true');
@@ -183,7 +183,7 @@ test.describe('#1397 the confirmation dialog, by keyboard', () => {
     await page.getByRole('heading', { name: 'Global parameters' }).waitFor();
     await fluentRootReady(page);
 
-    await page.getByRole('button', { name: `Delete ${name}`, exact: true }).click();
+    await chooseRowAction(page, 'Delete', name);
     await expect(page.getByRole('alertdialog')).toBeVisible();
     await expect(page.locator('#root')).toHaveAttribute('aria-hidden', 'true');
     await page.goBack();

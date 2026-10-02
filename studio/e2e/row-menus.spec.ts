@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady, resolvedPaletteColor } from './support/theme';
 import { arrowToItem, rowMenuButton } from './support/rowMenu';
+import { seedConnection, seedDataset } from './support/seedResources';
 
 /**
  * #1397 OR6 — list rows keep ONE action inline (Open, Fire now) and put the
@@ -15,6 +16,7 @@ import { arrowToItem, rowMenuButton } from './support/rowMenu';
 
 const PIPELINE = `e2e 1397 row menu ${Date.now()}`;
 const TRIGGER = `e2e-1397-row-menu-${Date.now()}`;
+const STAMP = Date.now();
 
 /** The open menu's items and divider, in order; a divider reads as `—`. */
 function menuShape(page: Page): Promise<string[]> {
@@ -143,4 +145,125 @@ test.describe('#1397 row ⋯ menus, by keyboard', () => {
 
     await expectQuiet(page, problems);
   });
+
+  /* The resource pages: Edit (Replace, for a secret) stays inline and the rest
+     is in ⋯. Connections and Global parameters read what depends on the row
+     BEFORE asking, so by the time the dialog opens the menu item that asked is
+     long gone — focus has to be handed back to ⋯ by lookup. */
+  const RESOURCE_PAGES: {
+    readonly page: string;
+    readonly route: string;
+    readonly inline: string;
+    readonly shape: readonly string[];
+    readonly seed: (page: Page) => Promise<string>;
+  }[] = [
+    {
+      page: 'Connections',
+      route: '/#/manage/connections',
+      inline: 'Edit',
+      shape: ['Export', '—', 'Delete'],
+      seed: async (page) => {
+        const name = `e2e-1397-rm-conn-${STAMP}`;
+        await seedConnection(page, {
+          name,
+          kind: 'sqlite',
+          config: { file: '/tmp/e2e-1397-rm.db' },
+        });
+        return name;
+      },
+    },
+    {
+      page: 'Datasets',
+      route: '/#/manage/datasets',
+      inline: 'Edit',
+      shape: ['Export', '—', 'Delete'],
+      seed: async (page) => {
+        const connectionId = await seedConnection(page, {
+          name: `e2e-1397-rm-store-${STAMP}`,
+          kind: 'sqlite',
+          config: { file: '/tmp/e2e-1397-rm.db' },
+        });
+        const name = `e2e-1397-rm-ds-${STAMP}`;
+        await seedDataset(page, {
+          name,
+          kind: 'table',
+          connectionId,
+          config: { table: 'orders' },
+          columns: [{ name: 'id', type: 'integer', nullable: false }],
+        });
+        return name;
+      },
+    },
+    {
+      page: 'Global parameters',
+      route: '/#/manage/global-params',
+      inline: 'Edit',
+      shape: ['Export', '—', 'Delete'],
+      seed: async (page) => {
+        const name = `e2e_1397_rm_${STAMP}`;
+        const res = await page.request.post('/api/global-params', {
+          data: { name, type: 'string', value: 'v' },
+        });
+        expect(res.status(), await res.text()).toBe(201);
+        return name;
+      },
+    },
+    {
+      page: 'Secrets',
+      route: '/#/manage/secrets',
+      inline: 'Replace',
+      // Delete alone: no separator above it.
+      shape: ['Delete'],
+      seed: async (page) => {
+        const name = `e2e-1397-rm-secret-${STAMP}`;
+        const res = await page.request.post('/api/secrets', { data: { name, secret: 'x' } });
+        expect(res.ok(), await res.text()).toBe(true);
+        return name;
+      },
+    },
+  ];
+
+  for (const spec of RESOURCE_PAGES) {
+    test(`${spec.page}: ${spec.inline} inline, Delete last in red, a declined Delete returns to ⋯`, async ({
+      page,
+    }) => {
+      const problems = collectPageProblems(page);
+      const name = await spec.seed(page);
+      await page.goto(spec.route);
+      await page.getByRole('heading', { name: spec.page, exact: true }).waitFor();
+      await fluentRootReady(page);
+
+      const row = page.getByRole('row', { name: new RegExp(name) });
+      const inline = row.getByRole('button', { name: `${spec.inline} ${name}`, exact: true });
+      await expect(inline).toBeVisible();
+      // The inline action and the menu button, nothing else.
+      await expect(row.getByRole('button')).toHaveCount(2);
+
+      const opener = rowMenuButton(page, name);
+      await inline.focus();
+      await page.keyboard.press('Tab');
+      await expect(opener).toBeFocused();
+
+      await page.keyboard.press('Enter');
+      await expect(page.getByRole('menu')).toBeVisible();
+      expect(await menuShape(page)).toEqual(spec.shape);
+      const del = page.getByRole('menuitem', { name: 'Delete' });
+      await arrowToItem(page, del);
+      expect(await del.evaluate((el) => getComputedStyle(el).color)).toBe(
+        await resolvedPaletteColor(page, '--error'),
+      );
+
+      await page.keyboard.press('Enter');
+      const dialog = page.getByRole('alertdialog');
+      await expect(dialog).toBeVisible();
+      await expect(dialog).toContainText(name);
+      await page.keyboard.press('Escape');
+      await expect(dialog).toBeHidden();
+      await expect(opener).toBeFocused();
+      // Declined: the row is still there.
+      await expect(row).toBeVisible();
+
+      await expectQuiet(page, problems);
+    });
+  }
 });

@@ -3,6 +3,7 @@ import { answerConfirm } from './support/confirmDialog';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { seedConnection, seedDataset } from './support/seedResources';
 import { fluentRootReady } from './support/theme';
+import { chooseRowAction, rowMenuButton } from './support/rowMenu';
 
 /**
  * U13b (#1087) — the per-kind connection config form.
@@ -49,7 +50,7 @@ test.describe('U13b per-kind connection config', () => {
     await form(page).getByLabel('Largest file read (bytes)', { exact: true }).fill('2048');
     await form(page).getByRole('button', { name: 'Create connection' }).click();
 
-    await expect(page.getByRole('button', { name: `Export ${name}`, exact: true })).toBeVisible();
+    await expect(rowMenuButton(page, name)).toBeVisible();
 
     // Read the row back from the SERVER, not from the DOM: the point is that
     // the typed fields became those exact config keys, with those types.
@@ -131,7 +132,7 @@ test.describe('U13b per-kind connection config', () => {
     await port.fill('6543');
     await form(page).getByRole('button', { name: 'Create connection' }).click();
 
-    await expect(page.getByRole('button', { name: `Export ${name}`, exact: true })).toBeVisible();
+    await expect(rowMenuButton(page, name)).toBeVisible();
 
     const stored = await page.evaluate(async (wanted: string) => {
       type Row = {
@@ -361,7 +362,7 @@ test.describe('#1174 an edit says what it would strand', () => {
     await gotoConnections(page);
 
     const row = page.getByRole('row', { name: /e2e-1174-strand-beta/ });
-    await row.getByRole('button', { name: /^Delete / }).click();
+    await chooseRowAction(row, 'Delete');
     // A connection with a dependant asks for its name, so this decline is made
     // with the dialog in its strictest shape: the action is disabled, Cancel is not.
     const said = await answerConfirm(page, 'cancel');

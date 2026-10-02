@@ -9,6 +9,7 @@ import * as download from '../api/download';
 import * as portability from '../api/portability';
 import { renderWithDataRouter } from '../testing/renderWithRouter';
 import { answerConfirm, setConfirmName } from '../testing/confirmDialog';
+import { chooseRowAction } from '../testing/rowActions';
 
 // Network calls only; the shared schemas stay REAL, so the client-side checks
 // run exactly as they ship.
@@ -118,7 +119,7 @@ describe('GlobalParamsPage (#844 GL2)', () => {
       within(first)
         .getAllByRole('cell')
         .map((c) => c.textContent),
-    ).toEqual(['apiUrl', 'String', 'https://example.test', 'the base URL', 'EditExportDelete']);
+    ).toEqual(['apiUrl', 'String', 'https://example.test', 'the base URL', 'Edit']);
     const cfg = screen.getByText('cfg').closest('tr')!;
     expect(within(cfg).getByText('{"a":1}')).toHaveAttribute('title', '{"a":1}');
     // No form until one is asked for.
@@ -319,7 +320,7 @@ describe('GlobalParamsPage (#844 GL2)', () => {
     // The server now holds a DIFFERENT description for apiUrl than the form
     // opened with; the form's baseline is still the one it opened with.
     listMock.mockResolvedValue([global({ description: 'changed elsewhere' })]);
-    await user.click(screen.getByRole('button', { name: 'Delete b' }));
+    await chooseRowAction(user, 'b', 'Delete');
     await answerConfirm(user, 'accept');
     await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText('b')).toBeNull());
@@ -335,13 +336,13 @@ describe('GlobalParamsPage (#844 GL2)', () => {
     listMock.mockResolvedValue([global()]);
     deleteMock.mockResolvedValue(undefined);
     renderWithDataRouter(<GlobalParamsPage />);
-    const del = await screen.findByRole('button', { name: 'Delete apiUrl' });
+    await screen.findByText('apiUrl');
 
-    await user.click(del);
+    await chooseRowAction(user, 'apiUrl', 'Delete');
     await answerConfirm(user, 'cancel');
     expect(deleteMock).not.toHaveBeenCalled();
 
-    await user.click(del);
+    await chooseRowAction(user, 'apiUrl', 'Delete');
     const asked = await answerConfirm(user, 'accept');
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('gp_1'));
     expect(asked).toContain('"apiUrl"');
@@ -357,7 +358,7 @@ describe('GlobalParamsPage (#844 GL2)', () => {
     // Dirty, so the close must bypass the guard: there is nothing left to save to.
     await user.type(field('Value'), '-edited');
     listMock.mockResolvedValue([]);
-    await user.click(screen.getByRole('button', { name: 'Delete apiUrl' }));
+    await chooseRowAction(user, 'apiUrl', 'Delete');
     await answerConfirm(user, 'accept');
     await waitFor(() =>
       expect(screen.queryByRole('form', { name: 'Global parameter form' })).toBeNull(),
@@ -383,7 +384,7 @@ describe('GlobalParamsPage (#844 GL2)', () => {
       ],
     });
     renderWithDataRouter(<GlobalParamsPage />);
-    await user.click(await screen.findByRole('button', { name: 'Delete apiUrl' }));
+    await chooseRowAction(user, 'apiUrl', 'Delete');
     const text = await answerConfirm(user, 'cancel');
     expect(text).toContain('Read by the latest version of:');
     expect(text).toContain('• Ingest (v3)');
@@ -400,7 +401,7 @@ describe('GlobalParamsPage (#844 GL2)', () => {
     deleteMock.mockResolvedValue(undefined);
     usageMock.mockResolvedValue(USAGE_READ_BY_PIPELINE);
     renderWithDataRouter(<GlobalParamsPage />);
-    await user.click(await screen.findByRole('button', { name: 'Delete apiUrl' }));
+    await chooseRowAction(user, 'apiUrl', 'Delete');
     const dialog = await screen.findByRole('alertdialog');
     const action = within(dialog).getByRole('button', { name: 'Delete' });
     expect(action).toBeDisabled();
@@ -424,7 +425,7 @@ describe('GlobalParamsPage (#844 GL2)', () => {
     deleteMock.mockResolvedValue(undefined);
     usageMock.mockRejectedValue(new Error('boom'));
     renderWithDataRouter(<GlobalParamsPage />);
-    await user.click(await screen.findByRole('button', { name: 'Delete apiUrl' }));
+    await chooseRowAction(user, 'apiUrl', 'Delete');
     // A failed read is advisory (GL-D4): the plain question, no name to type.
     const dialog = await screen.findByRole('alertdialog');
     expect(typeBox('apiUrl')).toBeNull();
@@ -475,7 +476,7 @@ describe('GlobalParamsPage export and import (#844 GL6)', () => {
     const saveMock = vi.spyOn(download, 'downloadTextFile').mockImplementation(() => {});
     renderWithDataRouter(<GlobalParamsPage />);
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Export apiUrl' }));
+    await chooseRowAction(userEvent, 'apiUrl', 'Export');
 
     await waitFor(() =>
       expect(saveMock).toHaveBeenCalledWith(

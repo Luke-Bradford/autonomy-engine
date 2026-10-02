@@ -613,7 +613,7 @@ describe('TriggersPage', () => {
     expect(fireBtn).toBeDisabled();
     /* #1247 — `aria-busy`, NOT a visible "Firing…". The label naming the row is
        an `aria-label`, so a visible string absent from it would violate WCAG
-       2.5.3; the Export button in this same cell already resolves it this way. */
+       2.5.3. */
     expect(fireBtn).toHaveAttribute('aria-busy', 'true');
     expect(fireBtn).toHaveTextContent('Fire now');
     expectAccessibleNameContainsText(fireBtn);

@@ -8,6 +8,7 @@ import {
   setTheme,
   surfaceBehind,
 } from './support/theme';
+import { chooseRowAction } from './support/rowMenu';
 
 /**
  * #844 GL2 — Manage › Global parameters, end to end through the browser.
@@ -115,7 +116,7 @@ test.describe('#844 GL2 the global-params store has a front end', () => {
     await expect(drawer(page)).toHaveCount(0);
 
     // Delete, through the real confirmation.
-    await page.getByRole('button', { name: `Delete ${STR}`, exact: true }).click();
+    await chooseRowAction(page, 'Delete', STR);
     const confirmText = await answerConfirm(page, 'accept');
     await expect(saved(page, STR)).toHaveCount(0);
     expect(confirmText).toContain(`"${STR}"`);
@@ -157,18 +158,20 @@ test.describe('#844 GL2 the global-params store has a front end', () => {
     const geometry = await page.evaluate((name) => {
       const table = document.querySelector('table')!.getBoundingClientRect();
       const aside = document.querySelector('.form-drawer')!.getBoundingClientRect();
-      const del = document.querySelector(`[aria-label="Delete ${name}"]`)!;
+      // #1397 — Delete is in the row's ⋯ menu; its button must stay clickable
+      // (the point lands on its icon, hence `contains`).
+      const del = document.querySelector(`[aria-label="Actions for ${name}"]`)!;
       const box = del.getBoundingClientRect();
       const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
       return {
         drawerRightOfTable: aside.left >= table.right,
-        deleteReachable: hit === del,
+        rowMenuReachable: hit !== null && del.contains(hit),
         sections: [...document.querySelectorAll('.form-drawer legend')].map((l) => l.textContent),
       };
     }, LOOK);
     expect(geometry).toEqual({
       drawerRightOfTable: true,
-      deleteReachable: true,
+      rowMenuReachable: true,
       sections: ['Basics', 'Value'],
     });
 

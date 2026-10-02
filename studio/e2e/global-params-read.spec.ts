@@ -3,6 +3,7 @@ import { answerConfirm } from './support/confirmDialog';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, openSeededCanvas, seedVersion, type SeedDoc } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
+import { chooseRowAction } from './support/rowMenu';
 
 /**
  * #844 GL3 (global-params spec GL-D2/D3/D4/D8) — a pipeline reads a workspace
@@ -147,7 +148,7 @@ test('#844 GL3 — deleting a global names the pipeline that reads it', async ({
   await page.getByRole('heading', { name: 'Global parameters' }).waitFor();
   await fluentRootReady(page);
 
-  await page.getByRole('button', { name: `Delete ${USED}`, exact: true }).click();
+  await chooseRowAction(page, 'Delete', USED);
   const confirmText = await answerConfirm(page, 'cancel');
   expect(confirmText).toContain('Read by the latest version of:');
   expect(confirmText).toContain(`${name} (v1)`);

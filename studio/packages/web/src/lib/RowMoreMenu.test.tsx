@@ -84,4 +84,16 @@ describe('#1397 RowMoreMenu', () => {
     expect(menu.querySelectorAll('[role="menuitem"]')).toHaveLength(2);
     expect(menu.querySelector('.fui-MenuDivider')).toBeNull();
   });
+
+  it('draws no separator above Delete when Delete is the only item', async () => {
+    const user = userEvent.setup();
+    renderMenu({ actions: [] });
+    await user.click(screen.getByRole('button', { name: 'Actions for Nightly load' }));
+    const menu = await screen.findByRole('menu');
+    expect(menu.querySelectorAll('[role="menuitem"]')).toHaveLength(1);
+    expect(menu.querySelector('.fui-MenuDivider')).toBeNull();
+    expect(screen.getByRole('menuitem', { name: 'Delete' }).classList).toContain(
+      'row-menu__danger',
+    );
+  });
 });

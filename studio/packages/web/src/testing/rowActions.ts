@@ -3,8 +3,8 @@ import { screen, waitFor } from '@testing-library/react';
 import type { UserEvent } from '@testing-library/user-event';
 
 /**
- * #1253 — a list row's inline Edit button, on the pages not yet on the row
- * menu (#1397: Connections, Datasets, Global parameters). Every row action names its row
+ * #1253 — a list row's inline Edit button, on the pages where Edit is the one
+ * inline action (#1397: Connections, Datasets, Global parameters). It names its row
  * (`Edit <name>`), so a bare `'Edit'` matches nothing; this matches any row's
  * Edit and never a form's own "Edit as JSON" / "Edit as fields" toggle —
  * excluded by their WHOLE name, so a row named "as …" still matches.

@@ -136,10 +136,10 @@ test.describe('#959 portability', () => {
     // precondition for the attention item this test exists to prove.
     await form.getByLabel('Secret', { exact: true }).fill('sk-not-exported');
     await form.getByRole('button', { name: 'Create connection' }).click();
-    await expect(page.getByRole('button', { name: `Export ${name}`, exact: true })).toBeVisible();
+    await expect(rowMenuButton(page, name)).toBeVisible();
 
     const downloadPromise = page.waitForEvent('download');
-    await page.getByRole('button', { name: `Export ${name}`, exact: true }).click();
+    await chooseRowAction(page, 'Export', name);
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toMatch(/^connection-portable-conn-\d+-[\w-]+\.json$/);
 
@@ -164,14 +164,14 @@ test.describe('#959 portability', () => {
 
     // Two rows with the same name now — the import minted a fresh id and does
     // not dedupe by name, which is why the panel reports the id.
-    await expect(page.getByRole('button', { name: `Export ${name}`, exact: true })).toHaveCount(2);
+    await expect(rowMenuButton(page, name)).toHaveCount(2);
 
     await expectQuiet(page, problems);
   });
 
   // #1143 — a dataset cannot exist without a store, so its import is the one
   // that must be TOLD where to land (or resolve it by identity). Both paths,
-  // through the real file the Export button saved.
+  // through the real file the row's Export saved.
   test('exports a dataset, and re-imports it into a chosen store and by identity', async ({
     page,
   }) => {
@@ -196,7 +196,7 @@ test.describe('#959 portability', () => {
     await fluentRootReady(page);
 
     const downloadPromise = page.waitForEvent('download');
-    await page.getByRole('button', { name: `Export ${name}`, exact: true }).click();
+    await chooseRowAction(page, 'Export', name);
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toMatch(/^dataset-portable-ds-\d+-[\w-]+\.json$/);
     const file = await download.path();

@@ -8,7 +8,7 @@ import * as datasetsApi from '../api/datasets';
 import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
 import { renderWithDataRouter as renderWithRouter } from '../testing/renderWithRouter';
-import { ROW_EDIT } from '../testing/rowActions';
+import { ROW_EDIT, chooseRowAction, closeRowMenu } from '../testing/rowActions';
 import { answerConfirm, setConfirmName } from '../testing/confirmDialog';
 import { ApiError } from '../api/client';
 
@@ -144,7 +144,8 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Staging');
     for (const name of ['Staging', 'Prod']) {
-      for (const act of ['Edit', 'Export', 'Delete']) {
+      // #1397 — Export and Delete are in the row's menu, whose button names it.
+      for (const act of ['Edit', 'Actions for']) {
         expect(screen.getByRole('button', { name: `${act} ${name}` })).toBeInTheDocument();
       }
     }
@@ -526,7 +527,7 @@ describe('ConnectionsPage', () => {
     await screen.findByText('Doomed');
     expect(listMock).toHaveBeenCalledWith(expect.any(AbortSignal));
 
-    await user.click(screen.getByRole('button', { name: 'Delete Doomed' }));
+    await chooseRowAction(user, 'Doomed', 'Delete');
     await answerConfirm(user, 'accept');
     await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
     expect(listMock.mock.calls[1]![0]).toEqual(expect.any(AbortSignal));
@@ -538,7 +539,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Doomed');
 
-    await user.click(screen.getByRole('button', { name: 'Delete Doomed' }));
+    await chooseRowAction(user, 'Doomed', 'Delete');
     await answerConfirm(user, 'accept');
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('conn_1'));
   });
@@ -549,7 +550,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await user.click(await screen.findByRole('button', { name: 'Edit Doomed' }));
     expect(screen.getByRole('form', { name: 'Connection form' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Delete Doomed' }));
+    await chooseRowAction(user, 'Doomed', 'Delete');
     await answerConfirm(user, 'accept');
     await waitFor(() => expect(screen.queryByRole('form', { name: 'Connection form' })).toBeNull());
   });
@@ -560,18 +561,17 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Safe');
 
-    await user.click(screen.getByRole('button', { name: 'Delete Safe' }));
+    await chooseRowAction(user, 'Safe', 'Delete');
     await answerConfirm(user, 'cancel');
     expect(deleteMock).not.toHaveBeenCalled();
   });
 
   /**
-   * #960 — the affordance, per row. The correctness half (two clicks in one
-   * tick) is proved once in `hooks/useBusyAction.test.ts`; a click-twice test
-   * here would prove nothing, because `user.click` does not dispatch on a
-   * natively disabled button.
+   * #960 — the affordance, per row. The correctness half (two starts in one
+   * tick) is proved once in `hooks/useBusyAction.test.ts`. Since #1397 Export
+   * is an item in the row's ⋯ menu.
    */
-  it('disables the Export button for THAT connection while its export is in flight', async () => {
+  it('disables Export for THAT connection while its export is in flight', async () => {
     const user = userEvent.setup();
     const gate = deferred<string>();
     exportMock.mockReturnValue(gate.promise);
@@ -581,17 +581,33 @@ describe('ConnectionsPage', () => {
     ]);
     renderWithRouter(<ConnectionsPage />);
 
-    const target = await screen.findByRole('button', { name: 'Export My Claude' });
-    const other = await screen.findByRole('button', { name: 'Export Other key' });
+    await screen.findByText('My Claude');
+    await chooseRowAction(user, 'My Claude', 'Export');
+    expect(exportMock).toHaveBeenCalledTimes(1);
 
-    await user.click(target);
-
-    await waitFor(() => expect(target).toBeDisabled());
-    expect(target).toHaveAttribute('aria-busy', 'true');
-    expect(other).toBeEnabled();
+    // In flight it reads disabled, and choosing it anyway starts nothing. The
+    // other row's is unaffected.
+    const busy = await chooseRowAction(user, 'My Claude', 'Export');
+    expect(busy).toHaveAttribute('aria-disabled', 'true');
+    await user.click(busy);
+    await closeRowMenu(user);
+    expect(exportMock).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole('button', { name: 'Actions for Other key' }));
+    expect(await screen.findByRole('menuitem', { name: 'Export' })).not.toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    await closeRowMenu(user);
 
     gate.resolve('{"kind":"connection"}');
-    await waitFor(() => expect(target).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: 'Actions for My Claude' }));
+    await waitFor(() =>
+      expect(screen.getByRole('menuitem', { name: 'Export' })).not.toHaveAttribute(
+        'aria-disabled',
+        'true',
+      ),
+    );
+    await closeRowMenu(user);
   });
 
   // #959 — the export half. The server has carried
@@ -602,7 +618,7 @@ describe('ConnectionsPage', () => {
     exportMock.mockResolvedValue('{"kind":"connection","canonical":true}');
     renderWithRouter(<ConnectionsPage />);
 
-    await user.click(await screen.findByRole('button', { name: 'Export My Claude' }));
+    await chooseRowAction(user, 'My Claude', 'Export');
 
     expect(exportMock).toHaveBeenCalledWith('conn_9');
     // The bytes go to disk UNCHANGED — an export body is canonical JSON, and
@@ -619,7 +635,7 @@ describe('ConnectionsPage', () => {
     exportMock.mockRejectedValue(new Error('connection not found'));
     renderWithRouter(<ConnectionsPage />);
 
-    await user.click(await screen.findByRole('button', { name: 'Export My Claude' }));
+    await chooseRowAction(user, 'My Claude', 'Export');
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       /Could not export .*My Claude.*connection not found/,
@@ -654,7 +670,7 @@ describe('ConnectionsPage', () => {
     // The ROW, not the panel's own sentence — both name the connection, so this
     // asks for the one only a refreshed list can produce.
     expect(
-      await screen.findByRole('button', { name: 'Export Imported Claude' }),
+      await screen.findByRole('button', { name: 'Actions for Imported Claude' }),
     ).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent(/needs its secret/);
   });
@@ -941,7 +957,7 @@ describe('ConnectionsPage', () => {
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText('Local store');
 
-      await user.click(screen.getByRole('button', { name: 'Delete Local store' }));
+      await chooseRowAction(user, 'Local store', 'Delete');
 
       const said = await answerConfirm(user, 'cancel');
       expect(said).toContain('1 dataset reads it');
@@ -966,11 +982,10 @@ describe('ConnectionsPage', () => {
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText('Local store');
 
-      const button = screen.getByRole('button', { name: 'Delete Local store' });
-      // Both clicks land while the dataset read is still in flight — the window
-      // the guard exists to close.
-      await user.click(button);
-      await user.click(button);
+      // Both choices land while the dataset read is still in flight — the
+      // window the guard exists to close.
+      await chooseRowAction(user, 'Local store', 'Delete');
+      await chooseRowAction(user, 'Local store', 'Delete');
       held.resolve([]);
 
       // Exactly one dialog, and the second click never started a second read.
@@ -1004,8 +1019,8 @@ describe('ConnectionsPage', () => {
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText('Remote store');
 
-      await user.click(screen.getByRole('button', { name: 'Delete Local store' }));
-      await user.click(screen.getByRole('button', { name: 'Delete Remote store' }));
+      await chooseRowAction(user, 'Local store', 'Delete');
+      await chooseRowAction(user, 'Remote store', 'Delete');
 
       // The second row got its own question while the first was still reading.
       const dialog = await screen.findByRole('alertdialog');
@@ -1035,7 +1050,7 @@ describe('ConnectionsPage', () => {
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText('Local store');
 
-      await user.click(screen.getByRole('button', { name: 'Delete Local store' }));
+      await chooseRowAction(user, 'Local store', 'Delete');
 
       expect(await answerConfirm(user, 'accept')).toContain('Could not check');
       // A diagnostic that could not be computed must not BLOCK the delete —
@@ -1050,7 +1065,7 @@ describe('ConnectionsPage', () => {
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText('Local store');
 
-      await user.click(screen.getByRole('button', { name: 'Delete Local store' }));
+      await chooseRowAction(user, 'Local store', 'Delete');
 
       const dialog = await screen.findByRole('alertdialog');
       const action = within(dialog).getByRole('button', { name: 'Delete' });
@@ -1080,7 +1095,7 @@ describe('ConnectionsPage', () => {
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText('Local store');
 
-      await user.click(screen.getByRole('button', { name: 'Delete Local store' }));
+      await chooseRowAction(user, 'Local store', 'Delete');
 
       const dialog = await screen.findByRole('alertdialog');
       expect(dialog).toHaveTextContent('Could not check');
@@ -1098,7 +1113,7 @@ describe('ConnectionsPage', () => {
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText('Local store');
 
-      await user.click(screen.getByRole('button', { name: 'Delete Local store' }));
+      await chooseRowAction(user, 'Local store', 'Delete');
 
       const dialog = await screen.findByRole('alertdialog');
       expect(within(dialog).queryByLabelText(/to confirm/)).not.toBeInTheDocument();
@@ -1245,7 +1260,7 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Local');
 
-    await user.click(screen.getByRole('button', { name: /Delete/ }));
+    await chooseRowAction(user, 'Local', 'Delete');
     const message = await answerConfirm(user, 'cancel');
     expect(message).toContain('Delete connection "Local"?');
     expect(message).toContain('1 pipeline node (etl › summarise) uses it');
@@ -1262,7 +1277,7 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Local');
 
-    await user.click(screen.getByRole('button', { name: /Delete/ }));
+    await chooseRowAction(user, 'Local', 'Delete');
     const message = await answerConfirm(user, 'cancel');
     expect(message).toContain('Delete connection "Local"?');
     expect(message).toContain('1 enabled trigger (nightly)');
@@ -1283,7 +1298,7 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Local');
 
-    await user.click(screen.getByRole('button', { name: /Delete/ }));
+    await chooseRowAction(user, 'Local', 'Delete');
     const message = await answerConfirm(user, 'cancel');
     expect(message).toContain('datasets down');
     expect(message).toContain('1 enabled trigger (nightly)');

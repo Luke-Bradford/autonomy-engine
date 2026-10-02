@@ -6,6 +6,7 @@ import * as api from '../api/secrets';
 import { ApiError } from '../api/client';
 import { renderWithDataRouter } from '../testing/renderWithRouter';
 import { answerConfirm } from '../testing/confirmDialog';
+import { chooseRowAction } from '../testing/rowActions';
 
 // Mock only the network calls; `SecretWriteSchema` stays REAL so the form's
 // client-side validation is exercised exactly as it ships.
@@ -222,7 +223,7 @@ describe('SecretsPage', () => {
     await screen.findByText('stripe-key');
 
     listMock.mockResolvedValue([]);
-    await user.click(screen.getByRole('button', { name: 'Delete stripe-key' }));
+    await chooseRowAction(user, 'stripe-key', 'Delete');
     await answerConfirm(user, 'accept');
 
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('sec_1'));
@@ -238,7 +239,7 @@ describe('SecretsPage', () => {
     renderWithDataRouter(<SecretsPage />);
     await screen.findByText('stripe-key');
 
-    await user.click(screen.getByRole('button', { name: 'Delete stripe-key' }));
+    await chooseRowAction(user, 'stripe-key', 'Delete');
 
     const asked = await answerConfirm(user, 'cancel');
     expect(asked).toContain('{"$secret":"stripe-key"}');
@@ -289,7 +290,7 @@ describe('SecretsPage', () => {
       await user.click(await screen.findByRole('button', { name: 'Replace stripe-key' }));
       await user.type(screen.getByLabelText('Value'), 'half-typed');
       listMock.mockResolvedValue([]);
-      await user.click(screen.getByRole('button', { name: 'Delete stripe-key' }));
+      await chooseRowAction(user, 'stripe-key', 'Delete');
       await answerConfirm(user, 'accept');
       await waitFor(() => expect(screen.queryByRole('form', { name: 'Secret form' })).toBeNull());
       expect(screen.queryByRole('alertdialog', { name: 'Unsaved changes' })).toBeNull();
@@ -399,7 +400,7 @@ describe('SecretsPage', () => {
     // Hold the post-delete refresh open, so it is genuinely in flight at unmount.
     const refreshLoad = deferred<api.NamedSecret[]>();
     listMock.mockReturnValueOnce(refreshLoad.promise);
-    await user.click(screen.getByRole('button', { name: 'Delete stripe-key' }));
+    await chooseRowAction(user, 'stripe-key', 'Delete');
     await answerConfirm(user, 'accept');
     await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
 
@@ -426,7 +427,7 @@ describe('SecretsPage', () => {
     await screen.findByText('stripe-key');
     expect(listMock).toHaveBeenCalledTimes(1);
 
-    await user.click(screen.getByRole('button', { name: 'Delete stripe-key' }));
+    await chooseRowAction(user, 'stripe-key', 'Delete');
     await answerConfirm(user, 'accept');
     await waitFor(() => expect(deleteMock).toHaveBeenCalledTimes(1));
 
@@ -445,7 +446,7 @@ describe('SecretsPage', () => {
     renderWithDataRouter(<SecretsPage />);
     await screen.findByText('stripe-key');
 
-    await user.click(screen.getByRole('button', { name: 'Delete stripe-key' }));
+    await chooseRowAction(user, 'stripe-key', 'Delete');
     await answerConfirm(user, 'accept');
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not delete “stripe-key”');
