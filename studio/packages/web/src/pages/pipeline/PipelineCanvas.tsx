@@ -1888,7 +1888,9 @@ export function PipelineCanvas({
           <VersionHistoryPanel
             entries={entries}
             previewing={previewing}
-            locked={previewLocked}
+            /* Non-null exactly while `previewLocked`: the column only renders
+               once `ready`, so the reason's "loading" branch never reaches it. */
+            locked={historyDisabledReason}
             onPreview={(version) => {
               setPreviewing((current) => (current === version ? null : version));
             }}

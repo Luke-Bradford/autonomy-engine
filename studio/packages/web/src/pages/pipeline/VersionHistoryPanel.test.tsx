@@ -34,7 +34,7 @@ describe('VersionHistoryPanel', () => {
           entry({ id: 'plv_1', version: 1 }),
         ]}
         previewing={null}
-        locked={false}
+        locked={null}
         onPreview={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -53,7 +53,7 @@ describe('VersionHistoryPanel', () => {
       <VersionHistoryPanel
         entries={[entry({ nodeCount: 4, edgeCount: 3, containerCount: 1, paramCount: 2 })]}
         previewing={null}
-        locked={false}
+        locked={null}
         onPreview={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -75,7 +75,7 @@ describe('VersionHistoryPanel', () => {
       <VersionHistoryPanel
         entries={[entry({ createdAt })]}
         previewing={null}
-        locked={false}
+        locked={null}
         onPreview={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -90,7 +90,7 @@ describe('VersionHistoryPanel', () => {
       <VersionHistoryPanel
         entries={[entry({ id: 'plv_2', version: 2 }), entry({ id: 'plv_1', version: 1 })]}
         previewing={1}
-        locked={false}
+        locked={null}
         onPreview={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -106,7 +106,7 @@ describe('VersionHistoryPanel', () => {
       <VersionHistoryPanel
         entries={[entry({ version: 7 })]}
         previewing={null}
-        locked={false}
+        locked={null}
         onPreview={onPreview}
         onClose={vi.fn()}
       />,
@@ -125,7 +125,7 @@ describe('VersionHistoryPanel', () => {
       <VersionHistoryPanel
         entries={[entry({ id: 'plv_2', version: 2 }), entry({ id: 'plv_1', version: 1 })]}
         previewing={1}
-        locked
+        locked="Saving — wait for it to finish."
         onPreview={onPreview}
         onClose={vi.fn()}
       />,
@@ -142,7 +142,7 @@ describe('VersionHistoryPanel', () => {
       <VersionHistoryPanel
         entries={[]}
         previewing={null}
-        locked={false}
+        locked={null}
         onPreview={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -159,7 +159,7 @@ describe('VersionHistoryPanel — the column (#1475 OR27)', () => {
       <VersionHistoryPanel
         entries={[entry()]}
         previewing={null}
-        locked={false}
+        locked={null}
         onPreview={vi.fn()}
         onClose={onClose}
       />,
@@ -172,13 +172,15 @@ describe('VersionHistoryPanel — the column (#1475 OR27)', () => {
       <VersionHistoryPanel
         entries={[entry()]}
         previewing={1}
-        locked
+        locked="Saving — wait for it to finish."
         onPreview={vi.fn()}
         onClose={onClose}
       />,
     );
     const close = screen.getByRole('button', { name: 'Close version history' });
     expect(close).toBeDisabled();
+    // The tooltip names the request that is running, not always "Restoring".
+    expect(close).toHaveAttribute('title', 'Saving — wait for it to finish.');
     await userEvent.click(close);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -188,7 +190,7 @@ describe('VersionHistoryPanel — the column (#1475 OR27)', () => {
       <VersionHistoryPanel
         entries={[]}
         previewing={null}
-        locked={false}
+        locked={null}
         onPreview={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -206,7 +208,7 @@ describe('VersionHistoryPanel — the active tag (#979)', () => {
           entry({ id: 'plv_1', version: 1, isActive: true }),
         ]}
         previewing={null}
-        locked={false}
+        locked={null}
         onPreview={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -222,7 +224,7 @@ describe('VersionHistoryPanel — the active tag (#979)', () => {
       <VersionHistoryPanel
         entries={[entry({ id: 'plv_1', version: 1, isHead: true })]}
         previewing={null}
-        locked={false}
+        locked={null}
         onPreview={vi.fn()}
         onClose={vi.fn()}
       />,

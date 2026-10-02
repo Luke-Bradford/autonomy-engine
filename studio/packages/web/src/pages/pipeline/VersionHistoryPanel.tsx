@@ -21,14 +21,17 @@ interface VersionHistoryProps {
   /** The version being previewed, or `null` while the editor is on screen. */
   previewing: number | null;
   /**
-   * Inert rows. Set while a restore is in flight: a row toggles the preview,
-   * and both directions (leaving it, or switching to another version) remount
-   * the editor under a response that is about to rebase the canvas.
+   * Why the rows and Close are inert, or `null` while they are live. Set while
+   * a restore or a save is in flight: a row toggles the preview, and both
+   * directions (leaving it, or switching to another version) remount the
+   * editor under a response that is about to rebase the canvas. The REASON,
+   * not a flag, so the tooltip names the request actually running — the same
+   * sentence as the ⋯ menu's item.
    *
-   * Required rather than defaulted to `false` — a caller that forgets it should
+   * Required rather than defaulted to `null` — a caller that forgets it should
    * fail to compile, not silently get the unlocked behaviour.
    */
-  locked: boolean;
+  locked: string | null;
   onPreview: (version: number) => void;
   /** Close the column — the same act as the ⋯ menu's "Hide version history". */
   onClose: () => void;
@@ -78,10 +81,10 @@ export function VersionHistoryPanel({
              not the bare glyph. */
           className="icon-button editor-header__icon-button"
           aria-label="Close version history"
-          title={locked ? 'Restoring — wait for it to finish.' : 'Close version history'}
+          title={locked ?? 'Close version history'}
           /* Closing leaves the preview, which would remount the editor under a
              restore that is about to rebase it — the menu item is dead then too. */
-          disabled={locked}
+          disabled={locked !== null}
           onClick={onClose}
         >
           <DismissRegular aria-hidden="true" />
@@ -119,8 +122,8 @@ function VersionList({
             /* The pressed state is the honest role here: the row is a toggle
                into a preview, not a navigation. */
             aria-pressed={e.version === previewing}
-            disabled={locked}
-            title={locked ? 'Restoring — wait for it to finish.' : undefined}
+            disabled={locked !== null}
+            title={locked ?? undefined}
             onClick={() => {
               onPreview(e.version);
             }}
