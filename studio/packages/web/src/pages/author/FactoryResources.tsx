@@ -748,9 +748,11 @@ interface NameRowProps {
  *
  * A row rather than a Fluent `Dialog`: the shell has deliberately hand-rolled
  * over Fluent's heavier surfaces where capability was not the blocker (U3's
- * breadcrumb, U2's rail), the U0 spike set a bundle budget that a first `Dialog`
- * import would spend, and renaming in place is what a resources tree does — a
- * modal to type six characters into is a worse interaction, not a better one.
+ * breadcrumb, U2's rail), the U0 spike set a bundle budget a `Dialog` import
+ * spends (#1397 has since paid it for confirmations, +6.35 kB gzip, where a
+ * modal question IS the interaction), and renaming in place is what a resources
+ * tree does — a modal to type six characters into is a worse interaction, not a
+ * better one.
  *
  * `autoFocus` is correct here and not the usual anti-pattern: the row only
  * exists because the user just asked for it, and its whole purpose is to be

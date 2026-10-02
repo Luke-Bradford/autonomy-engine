@@ -736,6 +736,9 @@ Decisions worth not re-deriving:
   entry is flat (167.13 → 169.39 kB gzip, which is the pane, store, route and tree themselves).
   A `Dialog` for create/rename/duplicate would have been a second heavy surface on top, for an
   interaction a resources tree is better off doing in place.
+  *(#1397 OR6, 2026-10-02: a `Dialog` did then land — for confirmations, not for naming. One
+  shared confirm dialog replaced every list-page `window.confirm`; it cost +6.35 kB gzip in
+  `fluent` and +0.84 kB in the entry. The naming decision above stands.)*
 
 Browser-verified (Chromium, 2026-07-25): Fluent tokens resolve on `.app-fluent-root`
 (`--colorNeutralBackground1: #292929` dark / white light); ZERO `--xy-*` bridge overrides left
