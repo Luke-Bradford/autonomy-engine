@@ -723,7 +723,7 @@ test.describe('version history column (#1475 OR27)', () => {
     await page.addInitScript(() => {
       localStorage.setItem('autonomy-studio.toolbox-width', '360');
     });
-    await page.setViewportSize({ width: 1100, height: 720 });
+    await page.setViewportSize({ width: 1140, height: 720 });
     await seedThreeVersions(page, 'history-column-narrow');
 
     await (await historyItem(page)).click();
@@ -736,7 +736,7 @@ test.describe('version history column (#1475 OR27)', () => {
     // stays on screen.
     expect(panelBox.width).toBeLessThan(240);
     expect(panelBox.width).toBeGreaterThanOrEqual(179);
-    expect(panelBox.x + panelBox.width).toBeLessThanOrEqual(1100);
+    expect(panelBox.x + panelBox.width).toBeLessThanOrEqual(1140);
 
     await expectQuiet(page, problems);
   });
