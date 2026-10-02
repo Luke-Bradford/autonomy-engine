@@ -31,11 +31,12 @@ describe('activityNodeErrors (#1480)', () => {
   });
 
   it('compares only a bounded prefix of an oversized type for the hint', () => {
-    // Uncapped this took ~0.5 s for one node; capped it is a few milliseconds.
-    const started = performance.now();
-    const [error] = activityNodeErrors(node('x'.repeat(1_000_000), {}));
-    expect(error).toMatch(/unknown activity type/);
-    expect(performance.now() - started).toBeLessThan(150);
+    // The first 64 characters are nearest `file_read`; the WHOLE string, whose
+    // tail repeats `execute_pipeline`, is nearer that. So the hint names
+    // `file_read` only when the compare is capped — uncapped, one 1 MB type
+    // cost ~0.5 s of CPU at save.
+    const type = 'file_read' + 'x'.repeat(55) + 'execute_pipeline'.repeat(10);
+    expect(activityNodeErrors(node(type, {}))[0]).toMatch(/\(closest: file_read, /);
   });
 
   it('skips a structural call node, whose type the engine never dispatches on', () => {

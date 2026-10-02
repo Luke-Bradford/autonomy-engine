@@ -38,9 +38,7 @@ import { isSecretRef } from '../schemas/secret-ref.js';
 import type { ActivityCatalog } from '../catalog/types.js';
 import { catalog as sharedCatalog } from '../catalog/registry.js';
 import { interpolationMode } from './expr.js';
-// A cycle (params.ts imports this module), and a safe one: the binding is read
-// only inside a function call, never while either module is evaluating.
-import { MAX_CONFIG_DEPTH } from './params.js';
+import { MAX_CONFIG_DEPTH } from './limits.js';
 
 /** How many catalog types an unknown-type refusal offers. */
 const CLOSEST_TYPES = 3;
