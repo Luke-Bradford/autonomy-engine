@@ -1,4 +1,4 @@
-import { useId } from 'react';
+import { DockSection } from '../../lib/form/DockSection';
 import { SECURE_REDACTED } from '@autonomy-studio/shared';
 import type { CapturedText, NodeCapture } from './runSummary';
 
@@ -49,16 +49,18 @@ export function CaptureSection({ captures }: { captures: NodeCapture[] }) {
     captures.length > MAX_CAPTURE_EXCHANGES ? captures.slice(-MAX_CAPTURE_EXCHANGES) : captures;
   const offset = captures.length - shown.length;
   const showAttempt = captures.some((x) => x.attempt !== captures[0]?.attempt);
-  const headingId = useId();
   const withheld = shown.some((c) =>
     [c.system, c.completion, c.reasoning, ...c.messages].some((f) => f?.text === SECURE_REDACTED),
   );
   return (
-    <section className="contract-section" aria-labelledby={headingId}>
-      <h4 id={headingId}>Prompt &amp; completion</h4>
-      <p className="page-hint">
-        Stored because this node&rsquo;s <em>capture</em> setting is <code>full</code>.
-      </p>
+    <DockSection
+      heading="Prompt & completion"
+      hint={
+        <>
+          Stored because this node&rsquo;s <em>capture</em> setting is <code>full</code>.
+        </>
+      }
+    >
       {withheld && (
         <p className="page-hint">
           <code>{SECURE_REDACTED}</code> marks text withheld from the run log: this node&rsquo;s run
@@ -103,7 +105,7 @@ export function CaptureSection({ captures }: { captures: NodeCapture[] }) {
           … showing the most recent {shown.length} of {captures.length} exchanges.
         </p>
       )}
-    </section>
+    </DockSection>
   );
 }
 

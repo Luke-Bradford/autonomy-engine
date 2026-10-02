@@ -596,7 +596,7 @@ describe('PipelinePanel (#1 F8a) — General', () => {
       FORM_SECTION_HINTS.pipeline.general,
     );
     expect(screen.getByRole('region', { name: 'Annotations' })).toHaveAccessibleDescription(
-      /^Tags that describe this pipeline/,
+      FORM_SECTION_HINTS.pipeline.annotations,
     );
   });
 

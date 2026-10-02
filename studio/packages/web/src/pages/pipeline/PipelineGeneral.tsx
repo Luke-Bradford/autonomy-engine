@@ -3,7 +3,8 @@ import { PIPELINE_DESCRIPTION_MAX_CHARS } from '@autonomy-studio/shared';
 import { LabelledControl } from '../../lib/LabelledControl';
 import type { createCanvasStore } from './canvasStore';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
-import { ContractSection, DockSection } from './ContractEditor';
+import { DockSection } from '../../lib/form/DockSection';
+import { ContractSection } from './ContractEditor';
 
 type Store = ReturnType<typeof createCanvasStore>;
 
@@ -41,7 +42,7 @@ export function PipelineGeneral({ store }: { store: Store }) {
       </DockSection>
       <ContractSection
         heading="Annotations"
-        hint="Tags that describe this pipeline — an environment, a team, a data domain. Saved with the version, like the rest of the pipeline."
+        hint={FORM_SECTION_HINTS.pipeline.annotations}
         count={annotations.length}
         addLabel="Add annotation"
         onAdd={() => store.getState().addAnnotation()}

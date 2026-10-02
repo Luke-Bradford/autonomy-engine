@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   OutputTypeSchema,
   ParamTypeSchema,
@@ -15,6 +15,7 @@ import {
   type ValueTypeName,
 } from '@autonomy-studio/shared';
 import { LabelledControl } from '../../lib/LabelledControl';
+import { DockSection } from '../../lib/form/DockSection';
 import type { createCanvasStore } from './canvasStore';
 import {
   coerceDefaultInput,
@@ -82,34 +83,6 @@ export function ContractSection({
         {addLabel}
       </button>
     </DockSection>
-  );
-}
-
-/**
- * #1413 — a dock or panel section: a heading, then one line saying what the
- * section holds. The heading names the region and the line describes it, as
- * `FormSection`'s legend and hint do for a form, so a screen reader announces
- * both on entering it. `hint` is required for the same reason it is there.
- */
-export function DockSection({
-  heading,
-  hint,
-  children,
-}: {
-  heading: string;
-  hint: ReactNode;
-  children: ReactNode;
-}) {
-  const headingId = useId();
-  const hintId = useId();
-  return (
-    <section className="contract-section" aria-labelledby={headingId} aria-describedby={hintId}>
-      <h4 id={headingId}>{heading}</h4>
-      <p id={hintId} className="page-hint">
-        {hint}
-      </p>
-      {children}
-    </section>
   );
 }
 

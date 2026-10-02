@@ -24,7 +24,7 @@ import { PickableInput } from './PickableInput';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { JsonEditor } from '../../lib/form/JsonEditor';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
-import { DockSection } from './ContractEditor';
+import { DockSection } from '../../lib/form/DockSection';
 
 /**
  * #425 — the call-node editor: the authoring surface for `Node.call`.

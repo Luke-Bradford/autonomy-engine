@@ -43,9 +43,13 @@ export const FORM_SECTION_HINTS = {
     bindings:
       'The connections and datasets this activity uses, and any settings it overrides on them.',
     activitySettings: 'What this activity does when it runs; the settings follow from its type.',
+    runPolicy:
+      'How this activity retries a transient failure, and what of it is kept out of the run log.',
   },
   pipeline: {
-    general: 'What this pipeline is for, saved with each version like the rest of the pipeline.',
+    general: 'A short account of what this pipeline does and why it exists.',
+    annotations:
+      'Tags that describe this pipeline, such as an environment, a team or a data domain.',
   },
   call: {
     target:
