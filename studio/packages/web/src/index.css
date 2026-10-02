@@ -1539,7 +1539,10 @@ button.danger {
      not `auto`: an auto basis is the grid's content width, which would let a
      wide canvas push the history column off the row. */
   flex: 1 1 0;
-  min-width: 0;
+  /* The canvas track keeps 240px beside the toolbox when history is open: on a
+     narrow screen the history column gives way (to its own 180px floor) before
+     the canvas does. */
+  min-width: calc(var(--toolbox-width, 180px) + 8px + 240px);
 }
 
 /* #1475 OR27 — the editor (or a preview) and the version-history column, side
@@ -1615,7 +1618,8 @@ button.danger {
   overflow-y: auto;
 }
 
-.activity-toolbox__header {
+.activity-toolbox__header,
+.version-history__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -4345,7 +4349,9 @@ button.danger {
   /* #1475 OR27 — a column beside the editor, the full height of `.canvas-body`.
      Narrower on a small screen, so it does not take a laptop canvas's width;
      the list scrolls inside it once a pipeline has a long history. */
-  flex: 0 0 clamp(240px, 22vw, 300px);
+  flex: 0 1 clamp(240px, 22vw, 300px);
+  /* Yields to `.canvas-grid`'s floor first, down to a still-readable list. */
+  min-width: 180px;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -4357,10 +4363,6 @@ button.danger {
 }
 
 .version-history__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
   margin-bottom: 0.25rem;
 }
 
@@ -4393,6 +4395,11 @@ button.danger {
   border-radius: 6px;
   color: var(--text);
   cursor: pointer;
+}
+
+.version-history-row:focus-visible {
+  /* Inside the column's scroll box, which clips a ring drawn outside the row. */
+  outline-offset: -2px;
 }
 
 .version-history-row:hover {

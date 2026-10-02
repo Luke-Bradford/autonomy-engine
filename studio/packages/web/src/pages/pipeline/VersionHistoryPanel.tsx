@@ -74,7 +74,9 @@ export function VersionHistoryPanel({
         <h3 id="version-history-heading">Version history</h3>
         <button
           type="button"
-          className="icon-button"
+          /* The editor header's 32px icon-button size, so the hit target is
+             not the bare glyph. */
+          className="icon-button editor-header__icon-button"
           aria-label="Close version history"
           title={locked ? 'Restoring — wait for it to finish.' : 'Close version history'}
           /* Closing leaves the preview, which would remount the editor under a
@@ -115,7 +117,7 @@ function VersionList({
             type="button"
             className={`version-history-row${e.version === previewing ? ' is-previewing' : ''}`}
             /* The pressed state is the honest role here: the row is a toggle
-                 into a preview, not a navigation. */
+               into a preview, not a navigation. */
             aria-pressed={e.version === previewing}
             disabled={locked}
             title={locked ? 'Restoring — wait for it to finish.' : undefined}
@@ -126,10 +128,10 @@ function VersionList({
             <strong>v{e.version}</strong>
             {e.isHead && <span className="version-history-tag">latest</span>}
             {/* Two different facts, and they part company the moment a
-                  preview is open: `current` is what the EDITOR is based on. */}
+               preview is open: `current` is what the EDITOR is based on. */}
             {e.isCurrent && <span className="version-history-tag">on the canvas</span>}
             {/* #979 — a THIRD fact, and the only one that describes what is
-                  deployed: what a new `active`-bound trigger will resolve to. */}
+               deployed: what a new `active`-bound trigger will resolve to. */}
             {e.isActive && <span className="version-history-tag is-active">active</span>}
             <span className="version-history-when">{formatWhen(e.createdAt)}</span>
             <span className="version-history-shape">{shapeSummary(e)}</span>

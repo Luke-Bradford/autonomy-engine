@@ -670,8 +670,11 @@ test.describe('version history column (#1475 OR27)', () => {
     expect(panelBox.x).toBeGreaterThanOrEqual(gridAfter.x + gridAfter.width);
     expect(Math.abs(panelBox.y - gridAfter.y)).toBeLessThanOrEqual(1);
     expect(Math.abs(panelBox.height - gridAfter.height)).toBeLessThanOrEqual(1);
-    // …and the width it takes comes out of the canvas.
-    expect(canvasAfter.width).toBeLessThan(canvasBefore.width - panelBox.width + 1);
+    // …and the width it takes (plus the 8px gap) comes out of the canvas, and
+    // nothing more.
+    expect(
+      Math.abs(canvasBefore.width - canvasAfter.width - panelBox.width - 8),
+    ).toBeLessThanOrEqual(1);
 
     await page.reload();
     await fluentRootReady(page);
@@ -679,7 +682,9 @@ test.describe('version history column (#1475 OR27)', () => {
 
     await closeButton(page).click();
     await expect(page.locator('#version-history-panel')).toHaveCount(0);
-    await expect.poll(async () => (await box(page, '.canvas-wrap')).width).toBe(canvasBefore.width);
+    await expect
+      .poll(async () => Math.abs((await box(page, '.canvas-wrap')).width - canvasBefore.width))
+      .toBeLessThanOrEqual(1);
 
     await page.reload();
     await fluentRootReady(page);
@@ -703,7 +708,35 @@ test.describe('version history column (#1475 OR27)', () => {
     await closeButton(page).click();
     await expect(page.getByTestId('canvas-preview')).toHaveCount(0);
     await expect(page.locator('.canvas-grid')).toBeVisible();
+    // The Close button went with the column; focus lands on the ⋯ menu that
+    // reopens it, not on <body>.
+    await expect(page.getByRole('button', { name: 'More pipeline actions' })).toBeFocused();
     await expect(nodeById(page, 'n_c')).toHaveClass(/\bdraggable\b/);
+
+    await expectQuiet(page, problems);
+  });
+
+  test('on a narrow screen the column gives way before the canvas does', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    // A wide toolbox on a small laptop: the case where the canvas would be
+    // squeezed hardest.
+    await page.addInitScript(() => {
+      localStorage.setItem('autonomy-studio.toolbox-width', '360');
+    });
+    await page.setViewportSize({ width: 1100, height: 720 });
+    await seedThreeVersions(page, 'history-column-narrow');
+
+    await (await historyItem(page)).click();
+    await expect(rows(page)).toHaveCount(3);
+
+    const canvas = await box(page, '.canvas-wrap');
+    const panelBox = await box(page, '#version-history-panel');
+    expect(canvas.width).toBeGreaterThanOrEqual(239);
+    // The column shrank below its 240px clamp, but stays a readable list and
+    // stays on screen.
+    expect(panelBox.width).toBeLessThan(240);
+    expect(panelBox.width).toBeGreaterThanOrEqual(179);
+    expect(panelBox.x + panelBox.width).toBeLessThanOrEqual(1100);
 
     await expectQuiet(page, problems);
   });
