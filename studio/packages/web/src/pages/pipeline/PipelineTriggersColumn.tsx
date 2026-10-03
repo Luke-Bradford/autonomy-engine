@@ -4,7 +4,6 @@ import type { TriggerNextFire, TriggerPublic } from '@autonomy-studio/shared';
 import { DismissRegular } from '@fluentui/react-icons';
 import { listTriggerNextFires, listTriggers } from '../../api/triggers';
 import { useGuardedLoad } from '../../hooks/useGuardedLoad';
-import { useTickingNow } from '../../hooks/useTickingNow';
 import { useDrawerForm } from '../../lib/form/useDrawerForm';
 import { TriggerModeName } from '../../lib/KindName';
 import { TriggerForm } from '../triggers/TriggerForm';
@@ -35,37 +34,16 @@ import { nextFireText } from './triggerColumnRules';
  * through this guard's own prompt.
  *
  * Each row says when the trigger is next due (`nextFireText`), read from the
- * alarm the scheduler has armed. That read loads on its own: it only adds a
- * line of text, so its failure leaves the list as it was rather than taking
- * the list down with it.
+ * alarm the scheduler has armed, and re-read once the soonest shown time passes.
  */
-/** How often a shown next-fire time is re-checked against the clock. */
-const NEXT_FIRE_TICK_MS = 30_000;
-
-/**
- * A row's next-fire text. A leaf that owns its clock (`useTickingNow`), so a
- * time that passes while the column stays open turns into "now" rather than
- * sitting in the past; a row with nothing armed holds no timer.
- */
-function NextFire({
-  trigger,
-  next,
-}: {
-  trigger: TriggerPublic;
-  next: TriggerNextFire | undefined;
-}) {
-  if (next === undefined) return <NextFireLine text={nextFireText(trigger, undefined, 0)} />;
-  return <TickingNextFire trigger={trigger} next={next} />;
-}
-
-function TickingNextFire({ trigger, next }: { trigger: TriggerPublic; next: TriggerNextFire }) {
-  const now = useTickingNow(NEXT_FIRE_TICK_MS);
-  return <NextFireLine text={nextFireText(trigger, next, now)} />;
-}
-
-function NextFireLine({ text }: { text: string | null }) {
-  return text === null ? null : <>{` · ${text}`}</>;
-}
+/** How long after a shown time passes to re-read it: the clock delivers the
+ * tick and arms the next within about a second of it falling due. */
+const NEXT_FIRE_SETTLE_MS = 5_000;
+/** The re-read cadence while a shown time is overdue (the clock is behind). */
+const NEXT_FIRE_OVERDUE_RETRY_MS = 30_000;
+/** The longest single wait. `setTimeout` overflows past ~24.8 days and fires
+ * at once, which for a yearly schedule would be a re-read loop. */
+const NEXT_FIRE_MAX_WAIT_MS = 6 * 60 * 60 * 1000;
 
 export function PipelineTriggersColumn({
   pipelineId,
@@ -96,7 +74,11 @@ export function PipelineTriggersColumn({
   const [bindings, setBindings] = useState<BindingOption[]>([]);
   const [pipelines, setPipelines] = useState<PipelineOption[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [nextFires, setNextFires] = useState<Map<string, TriggerNextFire> | null>(null);
+  // `readAt` is when they were read: a time already past then reads "now".
+  const [nextFires, setNextFires] = useState<{
+    byId: Map<string, TriggerNextFire>;
+    readAt: number;
+  } | null>(null);
   const {
     form,
     setForm,
@@ -110,31 +92,40 @@ export function PipelineTriggersColumn({
     closeIfLatest,
   } = useDrawerForm(savePayloadSignature, { holdRoute: false });
 
-  // One load path, as on the Triggers page: both halves land together, and a
+  // One load path, as on the Triggers page: every part lands together, and a
   // refresh after a save supersedes nothing it should not (`useGuardedLoad`).
+  // The next fires ride in the same load, so a just-saved trigger is never
+  // shown beside the times read before its save ("nothing scheduled", or its
+  // old time). Their failure is caught here, not passed on: they only add a
+  // line of text, so the list still lands, with no times rather than wrong ones.
   const guardedLoad = useGuardedLoad();
-  // A second instance: one per state target (see `useGuardedLoad`).
-  const guardedNextFiresLoad = useGuardedLoad();
   const refresh = useCallback(
     () =>
-      Promise.all([
-        guardedLoad((signal) => Promise.all([listTriggers(signal), loadTriggerBindings(signal)]), {
-          onData: ([list, opts]) => {
+      guardedLoad(
+        (signal) =>
+          Promise.all([
+            listTriggers(signal),
+            loadTriggerBindings(signal),
+            listTriggerNextFires(signal).then(
+              (list) => ({
+                byId: new Map(list.map((f) => [f.triggerId, f])),
+                readAt: Date.now(),
+              }),
+              () => null,
+            ),
+          ]),
+        {
+          onData: ([list, opts, next]) => {
             setTriggers(list);
             setBindings(opts.options);
             setPipelines(opts.pipelines);
+            setNextFires(next);
             setLoadError(null);
           },
           onError: (err) => setLoadError(err instanceof Error ? err.message : String(err)),
-        }),
-        guardedNextFiresLoad(listTriggerNextFires, {
-          onData: (list) => setNextFires(new Map(list.map((f) => [f.triggerId, f]))),
-          // No times rather than wrong ones: a stale map could name a time the
-          // scheduler has since moved.
-          onError: () => setNextFires(null),
-        }),
-      ]),
-    [guardedLoad, guardedNextFiresLoad],
+        },
+      ),
+    [guardedLoad],
   );
   useEffect(() => {
     void refresh();
@@ -171,6 +162,29 @@ export function PipelineTriggersColumn({
   );
   // Every listed trigger is bound to one of `pipeline`'s versions (that is
   // what `triggersOfPipeline` matched on), so the lookup always finds it.
+  const nextFireLine = (t: TriggerPublic, next: TriggerNextFire | undefined, readAt: number) => {
+    const text = nextFireText(t, next, readAt);
+    return text === null ? '' : ` · ${text}`;
+  };
+
+  // When the earliest shown time passes, the scheduler fires it and arms the
+  // next: re-read then, so the row moves on rather than sitting on a past time.
+  useEffect(() => {
+    if (nextFires === null || shown === null) return;
+    const times = shown.flatMap((t) => {
+      const at = nextFires.byId.get(t.id)?.at;
+      return at === undefined ? [] : [at];
+    });
+    if (times.length === 0) return;
+    const wait = Math.min(...times) - Date.now();
+    const delay =
+      wait < 0
+        ? NEXT_FIRE_OVERDUE_RETRY_MS
+        : Math.min(wait + NEXT_FIRE_SETTLE_MS, NEXT_FIRE_MAX_WAIT_MS);
+    const timer = setTimeout(() => void refresh(), delay);
+    return () => clearTimeout(timer);
+  }, [nextFires, shown, refresh]);
+
   const boundVersionText = (versionId: string | null): string => {
     const v = pipeline?.versions.find((x) => x.id === versionId);
     return v === undefined ? '' : `v${String(v.version)}`;
@@ -221,7 +235,8 @@ export function PipelineTriggersColumn({
                   <span className="pipeline-triggers__meta">
                     <TriggerModeName mode={t.mode} /> · {boundVersionText(t.pipelineVersionId)} ·{' '}
                     {t.enabled ? 'enabled' : 'disabled'}
-                    {nextFires !== null && <NextFire trigger={t} next={nextFires.get(t.id)} />}
+                    {nextFires !== null &&
+                      nextFireLine(t, nextFires.byId.get(t.id), nextFires.readAt)}
                   </span>
                 </div>
                 <button

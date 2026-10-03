@@ -27,7 +27,10 @@ import { isTumblable, isWindowRefFresh, WINDOW_DUE_KIND, WindowDueRefSchema } fr
  * close, which a retry is not.
  *
  * Read through the clock's own LENIENT scan with an unbounded `now` — one
- * corrupt alarm row is skipped, never allowed to fail the whole read.
+ * corrupt alarm row is skipped, never allowed to fail the whole read. The scan
+ * covers every owner's clock alarms and the owner cut is the `triggers` lookup;
+ * that is the scan the clock itself runs every tick, bounded by the schedule
+ * and tumbling triggers that exist.
  */
 export function listTriggerNextFires(db: Db, triggers: readonly Trigger[]): TriggerNextFire[] {
   const byId = new Map(triggers.map((t) => [t.id, t]));

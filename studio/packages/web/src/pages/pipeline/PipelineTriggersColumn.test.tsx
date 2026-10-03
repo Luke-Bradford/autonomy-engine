@@ -2,7 +2,12 @@ import { createRef, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { Pipeline, PipelineVersion, TriggerPublic } from '@autonomy-studio/shared';
+import type {
+  Pipeline,
+  PipelineVersion,
+  TriggerNextFire,
+  TriggerPublic,
+} from '@autonomy-studio/shared';
 import { renderWithDataRouter } from '../../testing/renderWithRouter';
 import * as triggersApi from '../../api/triggers';
 import * as pipelinesApi from '../../api/pipelines';
@@ -252,44 +257,87 @@ describe('PipelineTriggersColumn (#1476 OR28 slice 3)', () => {
       );
     });
 
-    it('a time that passes while the column is open turns into "now"', async () => {
+    it('re-reads once the soonest shown time passes, and the row moves on', async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       try {
         const soon = Date.now() + 10_000;
+        const later = soon + 3_600_000;
         listTriggersMock.mockResolvedValue([trigger(schedule)]);
-        nextFiresMock.mockResolvedValue([{ triggerId: 'trg_1', at: soon, source: 'schedule' }]);
+        nextFiresMock
+          .mockResolvedValueOnce([{ triggerId: 'trg_1', at: soon, source: 'schedule' }])
+          .mockResolvedValue([{ triggerId: 'trg_1', at: later, source: 'schedule' }]);
         mount();
         const row = (await screen.findByText('Nightly')).closest('li')!;
         await waitFor(() => expect(row).toHaveTextContent(new Date(soon).toLocaleString()));
-        await act(() => vi.advanceTimersByTimeAsync(30_000));
-        expect(row).toHaveTextContent('enabled · next scheduled now');
+        await act(() => vi.advanceTimersByTimeAsync(16_000));
+        await waitFor(() => expect(row).toHaveTextContent(new Date(later).toLocaleString()));
       } finally {
         vi.useRealTimers();
       }
     });
 
-    it('re-reads next fires after a save', async () => {
+    it('a far-off time is waited for, never re-read at once (a timer that long would overflow)', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const nextYear = Date.now() + 400 * 86_400_000;
+        listTriggersMock.mockResolvedValue([trigger(schedule)]);
+        nextFiresMock.mockResolvedValue([{ triggerId: 'trg_1', at: nextYear, source: 'schedule' }]);
+        mount();
+        const row = (await screen.findByText('Nightly')).closest('li')!;
+        await waitFor(() => expect(row).toHaveTextContent('next scheduled'));
+        await act(() => vi.advanceTimersByTimeAsync(60_000));
+        expect(nextFiresMock).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    async function createHourly() {
       const user = userEvent.setup();
-      listTriggersMock.mockResolvedValue([trigger(schedule)]);
-      mount();
-      await screen.findByText('Nightly');
-      await waitFor(() => expect(nextFiresMock).toHaveBeenCalledTimes(1));
-      createMock.mockResolvedValue(trigger({ id: 'trg_3', name: 'Hourly' }));
+      const hourly = trigger({ id: 'trg_3', name: 'Hourly', ...schedule });
+      createMock.mockResolvedValue(hourly);
+      listTriggersMock.mockResolvedValue([trigger(schedule), hourly]);
       await user.click(screen.getByRole('button', { name: 'New trigger' }));
       await user.type(screen.getByLabelText('Name'), 'Hourly');
       await user.click(screen.getByRole('button', { name: 'Create trigger' }));
+    }
+
+    it('a just-saved trigger is never shown beside times read before its save', async () => {
+      const at = Date.now() + 3_600_000;
+      listTriggersMock.mockResolvedValue([trigger(schedule)]);
+      nextFiresMock.mockResolvedValue([{ triggerId: 'trg_1', at, source: 'schedule' }]);
+      mount();
+      await screen.findByText('Nightly');
+      let answer!: (v: TriggerNextFire[]) => void;
+      nextFiresMock.mockReturnValueOnce(new Promise((res) => (answer = res)));
+      await createHourly();
       await waitFor(() => expect(nextFiresMock).toHaveBeenCalledTimes(2));
+      // The list waits for the times: no "nothing scheduled" for the new one.
+      expect(screen.queryByText('Hourly')).not.toBeInTheDocument();
+      answer([
+        { triggerId: 'trg_1', at, source: 'schedule' },
+        { triggerId: 'trg_3', at, source: 'schedule' },
+      ]);
+      const row = (await screen.findByText('Hourly')).closest('li')!;
+      expect(row).toHaveTextContent('enabled · next scheduled');
     });
 
-    it('a failed next-fire read leaves the list as it was, with no times', async () => {
+    it('a failed next-fire read leaves the list, and drops the times it can no longer vouch for', async () => {
       listTriggersMock.mockResolvedValue([trigger(schedule)]);
-      nextFiresMock.mockRejectedValue(new Error('boom'));
+      nextFiresMock.mockResolvedValue([
+        { triggerId: 'trg_1', at: Date.now() + 3_600_000, source: 'schedule' },
+      ]);
       mount();
-      const row = (await screen.findByText('Nightly')).closest('li')!;
-      await waitFor(() => expect(nextFiresMock).toHaveBeenCalled());
-      // Not "nothing scheduled": an unknown is not shown as an absence.
-      expect(row).toHaveTextContent('v3 · enabled');
-      expect(row).not.toHaveTextContent(/next|nothing scheduled/);
+      const nightly = (await screen.findByText('Nightly')).closest('li')!;
+      await waitFor(() => expect(nightly).toHaveTextContent('next scheduled'));
+      nextFiresMock.mockRejectedValue(new Error('boom'));
+      await createHourly();
+      const hourly = (await screen.findByText('Hourly')).closest('li')!;
+      // Not "nothing scheduled" either: an unknown is not shown as an absence.
+      for (const row of [nightly, hourly]) {
+        expect(row).toHaveTextContent('enabled');
+        expect(row).not.toHaveTextContent(/next|nothing scheduled/);
+      }
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
   });

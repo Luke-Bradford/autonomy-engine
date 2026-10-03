@@ -93,9 +93,20 @@ describe('nextFireText (#1476 slice 4) — when a listed trigger is next due', (
     );
   });
 
-  it('a time already passed reads "now"', () => {
-    expect(nextFireText(schedule, tick, at)).toBe('next scheduled now');
-    expect(nextFireText(schedule, tick, at + 1)).toBe('next scheduled now');
+  it('a time already passed when it was read is due now', () => {
+    expect(nextFireText(schedule, tick, at)).toBe('a scheduled tick is due now');
+    expect(nextFireText(schedule, tick, at + 1)).toBe('a scheduled tick is due now');
+    expect(
+      nextFireText({ ...schedule, mode: 'tumbling' }, { ...tick, source: 'window' }, at + 1),
+    ).toBe('a closed window is due now');
+  });
+
+  it('an overdue tick is judged against the run windows when it was read, not when it fell due', () => {
+    const afternoons: RunWindow[] = [{ start: '11:00', end: '13:00' }];
+    const late = Date.parse('2026-10-05T13:30:00Z');
+    expect(nextFireText({ ...schedule, runWindows: afternoons }, tick, late)).toBe(
+      'a scheduled tick is due now, outside its run windows so skipped',
+    );
   });
 
   it('an enabled clock trigger with nothing armed says so', () => {

@@ -493,7 +493,7 @@ export type TriggerPublic = z.infer<typeof TriggerPublicSchema>;
  */
 export const TriggerNextFireSchema = z.object({
   triggerId: z.string().min(1),
-  at: z.number().int(),
+  at: z.number().int().nonnegative(),
   source: z.enum(['schedule', 'window']),
 });
 export type TriggerNextFire = z.infer<typeof TriggerNextFireSchema>;

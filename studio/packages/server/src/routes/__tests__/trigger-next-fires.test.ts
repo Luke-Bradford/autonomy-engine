@@ -9,6 +9,7 @@ import {
   createTrigger,
 } from '../../repo/index.js';
 import { SCHEDULE_TICK_KIND } from '../../scheduler/schedule-tick.js';
+import { WINDOW_RETRY_KIND } from '../../scheduler/tumbling.js';
 import { pendingTicks } from '../../scheduler/__tests__/pending-ticks.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 
@@ -96,6 +97,24 @@ describe('GET /api/triggers/next-fires', () => {
       at: Date.parse('2030-01-01T00:15:00.000Z'),
       source: 'window',
     });
+  });
+
+  it('a window retry is not the next window, even when it is sooner', async () => {
+    const id = await create({
+      mode: 'tumbling',
+      schedule: null,
+      concurrency: { policy: 'queue' },
+      window: { frequency: 'minute', interval: 15, startTime: '2030-01-01T00:00:00.000Z' },
+    });
+    armWakeup(app.db, {
+      kind: WINDOW_RETRY_KIND,
+      ref: { triggerId: id, windowStart: '2030-01-01T00:00:00.000Z', attempt: '1' },
+      dueAt: Date.parse('2030-01-01T00:05:00.000Z'),
+      discriminator: 'attempt-1',
+    });
+    expect((await nextFires()).find((f) => f.triggerId === id)?.at).toBe(
+      Date.parse('2030-01-01T00:15:00.000Z'),
+    );
   });
 
   it('another owner’s trigger is never returned, though its tick is armed', async () => {

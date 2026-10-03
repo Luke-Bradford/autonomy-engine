@@ -232,9 +232,9 @@ test('the Triggers column says when each trigger is next due (#1476 slice 4)', a
 
   // The time is the browser's locale rendering, so only its words are pinned.
   await expect(row(`yearly-${stamp}`)).toContainText(/enabled · next scheduled \S/);
-  await expect(row(`yearly-${stamp}`)).not.toContainText('next scheduled now');
+  await expect(row(`yearly-${stamp}`)).not.toContainText('due now');
   await expect(row(`windows-${stamp}`)).toContainText(/enabled · next window closes \S/);
-  await expect(row(`windows-${stamp}`)).not.toContainText('closes now');
+  await expect(row(`windows-${stamp}`)).not.toContainText('due now');
   await expect(row(`paused-${stamp}`)).toContainText('disabled');
   await expect(row(`paused-${stamp}`)).not.toContainText(/next|nothing scheduled/);
 
