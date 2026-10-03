@@ -1,15 +1,22 @@
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+import { existsSync, mkdirSync, realpathSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import Database from 'better-sqlite3';
+import { inArray } from 'drizzle-orm';
+import { TERMINAL_RUN_ROW_STATUS } from '@autonomy-studio/shared';
 import type {
+  DemoRemoveResponse,
   DemoSeedPipeline,
   DemoSeedResponse,
+  DemoStatus,
   NewConnection,
   NewDataset,
   NewPipelineVersion,
   NewTrigger,
 } from '@autonomy-studio/shared';
 import type { Db } from '../repo/types.js';
+import { pipelineVersions, runs } from '../db/schema.js';
+import { pipelineDependents } from '../repo/pipeline-dependents.js';
+import { regateTriggersForConnection } from '../run/connection-readiness.js';
 import { ConflictError } from '../errors.js';
 import {
   createConnection,
@@ -17,6 +24,10 @@ import {
   createPipeline,
   createPipelineVersion,
   createTrigger,
+  deleteConnection,
+  deleteDataset,
+  deletePipeline,
+  deleteTrigger,
   getConnectionByResourceId,
   getDatasetByResourceId,
   getHeadVersionRef,
@@ -92,6 +103,23 @@ export function demoDirFor(demoRoot: string, ownerId: string): string {
   const root = resolve(demoRoot);
   const dir = resolve(root, ownerId);
   if (dir === root || !dir.startsWith(root + sep)) {
+    throw new Error(`demo path for owner "${ownerId}" escapes the demo root`);
+  }
+  return dir;
+}
+
+/**
+ * The owner's demo directory, canonical (macOS `/tmp` → `/private/tmp`, which is
+ * what the connectors compare `roots` against). Refused unless it is EXACTLY
+ * `<canonical root>/<owner>`: a symlink anywhere on that path — out of the root,
+ * or across to another owner's directory inside it — would carry the demo's
+ * grants, or its delete, somewhere that is not this owner's demo.
+ */
+function canonicalOwnerDir(demoRoot: string, ownerId: string): string {
+  const root = resolve(demoRoot);
+  const ownerDir = demoDirFor(root, ownerId);
+  const dir = realpathSync(ownerDir);
+  if (dir !== join(realpathSync(root), relative(root, ownerDir))) {
     throw new Error(`demo path for owner "${ownerId}" escapes the demo root`);
   }
   return dir;
@@ -204,6 +232,11 @@ const SQL_EMPTY_STAGING =
   'NULL AS product, NULL AS qty, NULL AS unit_price, NULL AS status, ' +
   'NULL AS source_file WHERE 0';
 
+/** The demo directory's own entries — written by the seed, deleted by Remove. */
+const LANDING_DIR = 'landing';
+const REPORTS_DIR = 'reports';
+const WAREHOUSE_FILE = 'warehouse.db';
+
 interface Paths {
   dir: string;
   landing: string;
@@ -211,18 +244,21 @@ interface Paths {
   warehouse: string;
 }
 
-type ConnKey = 'fs' | 'warehouse';
-type DsKey =
-  | 'csv'
-  | 'stg'
-  | 'clean'
-  | 'sales'
-  | 'rejects'
-  | 'q_clean'
-  | 'q_sales'
-  | 'q_rejects'
-  | 'q_count'
-  | 'q_empty';
+const CONN_KEYS = ['fs', 'warehouse'] as const;
+type ConnKey = (typeof CONN_KEYS)[number];
+const DS_KEYS = [
+  'csv',
+  'stg',
+  'clean',
+  'sales',
+  'rejects',
+  'q_clean',
+  'q_sales',
+  'q_rejects',
+  'q_count',
+  'q_empty',
+] as const;
+type DsKey = (typeof DS_KEYS)[number];
 type PipelineKey = DemoSeedPipeline['key'];
 
 type ConnectionDef = Omit<NewConnection, 'ownerId'>;
@@ -283,6 +319,8 @@ export const DEMO_PIPELINE_NAMES: Readonly<Record<PipelineKey, string>> = {
   '4': `${P}4 Nightly orchestrator`,
   '5': `${P}5 Broken on purpose`,
 };
+/** Where every refusal that only Remove can clear sends the operator. */
+const REMOVE_THEN_LOAD = 'remove the demo (Author → Pipelines → Remove demo), then load it again';
 const PIPELINE_KEYS: readonly PipelineKey[] = ['1', '2', '3', '4', '5'];
 const runTriggerName = (k: PipelineKey): string =>
   `${P}run ${DEMO_PIPELINE_NAMES[k].slice(P.length)}`;
@@ -584,21 +622,13 @@ export interface SeedDemoInput {
  * a re-seed may have recreated a deleted manual trigger).
  */
 export function seedDemo({ db, ownerId, demoRoot }: SeedDemoInput): DemoSeedResponse {
-  const ownerDir = demoDirFor(demoRoot, ownerId);
-  mkdirSync(ownerDir, { recursive: true });
-  // Canonical (macOS `/tmp` → `/private/tmp`), because the connectors compare
-  // canonical paths against `roots` — and re-checked canonically, so a symlink
-  // planted at the owner's path cannot carry the demo's grants out of the root.
-  const dir = realpathSync(ownerDir);
-  const realRoot = realpathSync(resolve(demoRoot));
-  if (!dir.startsWith(realRoot + sep)) {
-    throw new Error(`demo path for owner "${ownerId}" escapes the demo root`);
-  }
+  mkdirSync(demoDirFor(demoRoot, ownerId), { recursive: true });
+  const dir = canonicalOwnerDir(demoRoot, ownerId);
   const p: Paths = {
     dir,
-    landing: join(dir, 'landing'),
-    reports: join(dir, 'reports'),
-    warehouse: join(dir, 'warehouse.db'),
+    landing: join(dir, LANDING_DIR),
+    reports: join(dir, REPORTS_DIR),
+    warehouse: join(dir, WAREHOUSE_FILE),
   };
   const connDefs = connectionDefs(p);
   const dsDefs = datasetDefs(p);
@@ -621,7 +651,7 @@ export function seedDemo({ db, ownerId, demoRoot }: SeedDemoInput): DemoSeedResp
   clash(
     'connection',
     listConnections(db, ownerId),
-    (Object.keys(connDefs) as ConnKey[]).map((k) => ({
+    CONN_KEYS.map((k) => ({
       name: connDefs[k].name,
       resourceId: rid(`conn-${k}`),
     })),
@@ -629,7 +659,7 @@ export function seedDemo({ db, ownerId, demoRoot }: SeedDemoInput): DemoSeedResp
   clash(
     'dataset',
     listDatasets(db, ownerId),
-    (Object.keys(dsDefs) as DsKey[]).map((k) => ({
+    DS_KEYS.map((k) => ({
       name: dsDefs[k].name,
       resourceId: rid(`ds-${k}`),
     })),
@@ -647,7 +677,7 @@ export function seedDemo({ db, ownerId, demoRoot }: SeedDemoInput): DemoSeedResp
     const existing = getPipelineByResourceId(db, ownerId, rid(`pl-${k}`));
     if (existing?.archived) {
       throw new ConflictError(
-        `the demo pipeline "${existing.name}" is archived — restore it, then load the demo`,
+        `the demo pipeline "${existing.name}" is archived — restore it, or ${REMOVE_THEN_LOAD}`,
       );
     }
   }
@@ -656,11 +686,11 @@ export function seedDemo({ db, ownerId, demoRoot }: SeedDemoInput): DemoSeedResp
   // remains cannot be quietly re-made: the datasets and the immutable pipeline
   // versions that survive still pin the OLD ids, so a recreated one would leave
   // a demo that loads "fine" and fails at run time.
-  const conns = (Object.keys(connDefs) as ConnKey[]).map((k) => ({
+  const conns = CONN_KEYS.map((k) => ({
     k,
     found: getConnectionByResourceId(db, ownerId, rid(`conn-${k}`)),
   }));
-  const dss = (Object.keys(dsDefs) as DsKey[]).map((k) => ({
+  const dss = DS_KEYS.map((k) => ({
     k,
     found: getDatasetByResourceId(db, ownerId, rid(`ds-${k}`)),
   }));
@@ -675,7 +705,7 @@ export function seedDemo({ db, ownerId, demoRoot }: SeedDemoInput): DemoSeedResp
     ][0];
     if (gone !== undefined) {
       throw new ConflictError(
-        `the demo is partly removed ("${gone}" is gone) — delete the rest of the demo, then load it again`,
+        `the demo is partly removed ("${gone}" is gone) — ${REMOVE_THEN_LOAD}`,
       );
     }
   }
@@ -685,7 +715,7 @@ export function seedDemo({ db, ownerId, demoRoot }: SeedDemoInput): DemoSeedResp
     const roots = (found?.config as { roots?: unknown } | undefined)?.roots;
     if (found !== null && JSON.stringify(roots) !== JSON.stringify([dir])) {
       throw new ConflictError(
-        `the demo connection "${found.name}" is not rooted at this server's demo directory — delete the demo, then load it again`,
+        `the demo connection "${found.name}" is not rooted at this server's demo directory — ${REMOVE_THEN_LOAD}`,
       );
     }
   }
@@ -704,7 +734,7 @@ export function seedDemo({ db, ownerId, demoRoot }: SeedDemoInput): DemoSeedResp
     };
 
     const conn = {} as Record<ConnKey, string>;
-    for (const k of Object.keys(connDefs) as ConnKey[]) {
+    for (const k of CONN_KEYS) {
       const resourceId = rid(`conn-${k}`);
       conn[k] = ensure(getConnectionByResourceId(db, ownerId, resourceId), () =>
         createConnection(db, { ...connDefs[k], ownerId }, { resourceId }),
@@ -712,7 +742,7 @@ export function seedDemo({ db, ownerId, demoRoot }: SeedDemoInput): DemoSeedResp
     }
 
     const ds = {} as Record<DsKey, string>;
-    for (const k of Object.keys(dsDefs) as DsKey[]) {
+    for (const k of DS_KEYS) {
       const resourceId = rid(`ds-${k}`);
       const { connection, ...def } = dsDefs[k];
       ds[k] = ensure(getDatasetByResourceId(db, ownerId, resourceId), () =>
@@ -777,5 +807,167 @@ export function seedDemo({ db, ownerId, demoRoot }: SeedDemoInput): DemoSeedResp
   // disk, and a file write that fails here heals on the next seed (every file
   // is create-if-missing, every row is reused).
   writeDemoFiles(p);
+  return result;
+}
+
+/**
+ * Every entry the demo makes in its directory: the two folders and the
+ * warehouse with the journal files SQLite may leave beside it.
+ */
+const DEMO_MADE: readonly string[] = [
+  LANDING_DIR,
+  REPORTS_DIR,
+  WAREHOUSE_FILE,
+  ...['-journal', '-wal', '-shm'].map((suffix) => WAREHOUSE_FILE + suffix),
+];
+
+/** Every trigger the demo makes: one manual trigger per pipeline, and the hourly. */
+const TRIGGER_RIDS: readonly string[] = [
+  ...PIPELINE_KEYS.map((k) => rid(`trig-${k}`)),
+  rid('trig-hourly'),
+];
+
+/** The demo's resources this owner holds, found by their fixed resourceIds. */
+function findDemo(db: Db, ownerId: string) {
+  const present = <T>(rows: (T | null)[]): T[] => rows.filter((r): r is T => r !== null);
+  return {
+    connections: present(
+      CONN_KEYS.map((k) => getConnectionByResourceId(db, ownerId, rid(`conn-${k}`))),
+    ),
+    datasets: present(DS_KEYS.map((k) => getDatasetByResourceId(db, ownerId, rid(`ds-${k}`)))),
+    // Archived ones included: an archived demo pipeline is what makes a load
+    // refuse, so Remove must be able to see and take it.
+    pipelines: present(
+      PIPELINE_KEYS.map((k) => getPipelineByResourceId(db, ownerId, rid(`pl-${k}`))),
+    ),
+    triggers: present(TRIGGER_RIDS.map((r) => getTriggerByResourceId(db, ownerId, r))),
+  };
+}
+
+/**
+ * `GET /api/demo` — whether ANY demo resource exists for this owner. True for a
+ * part-removed or archived demo too, which a load refuses; that is the case
+ * the web must offer Remove for.
+ */
+export function demoStatus(db: Db, ownerId: string): DemoStatus {
+  const found = findDemo(db, ownerId);
+  return {
+    loaded:
+      found.connections.length +
+        found.datasets.length +
+        found.pipelines.length +
+        found.triggers.length >
+      0,
+  };
+}
+
+/**
+ * Removes the demo for one owner: its pipelines WITH their run history (every
+ * version, debug versions included), its triggers, datasets and connections,
+ * then its files. Only resources carrying one of the demo's fixed resourceIds
+ * are touched — matched exactly, never by prefix, because a git import can
+ * bring in a resourceId of the operator's choosing.
+ *
+ * DELETING RUNS. Runs are audit history and a pipeline that has them cannot be
+ * deleted (`PipelineHasRunsError`); debug runs were the one sanctioned
+ * deletion. This is the second, and it is narrow: an operator-initiated,
+ * confirmed act that #1481 asked for ("delete everything tagged demo"), over
+ * runs of the demo's own sample pipelines only. See `docs/settled-decisions.md`.
+ *
+ * Refuses with a {@link ConflictError}, deleting nothing, when
+ *  - a demo run has not finished: deleting it would pull the rows out from
+ *    under the driver writing them; or
+ *  - one of the operator's OWN pipelines calls a demo pipeline, or one of
+ *    their own triggers is bound to one: the cascade would delete that trigger
+ *    or leave that call dangling, and Remove must never touch their work.
+ * A pipeline of theirs that merely uses a demo connection is handled as
+ * `DELETE /api/connections/:id` handles it: its enabled triggers are switched
+ * off ({@link regateTriggersForConnection}) rather than left to fail.
+ *
+ * The caller syncs the scheduler afterwards, as `DELETE /api/pipelines/:id`
+ * does (#1485): the cascades took triggers whose schedule rows are now stale.
+ */
+export function removeDemo({ db, ownerId, demoRoot }: SeedDemoInput): DemoRemoveResponse {
+  const result = db.transaction((tx) => {
+    const found = findDemo(tx, ownerId);
+    const demoPipelines = new Set(found.pipelines.map((p) => p.id));
+    const demoTriggers = new Set(found.triggers.map((t) => t.id));
+    for (const p of found.pipelines) {
+      const deps = pipelineDependents(tx, ownerId, p.id);
+      const caller = deps.callers.find((c) => !demoPipelines.has(c.pipelineId));
+      if (caller !== undefined) {
+        throw new ConflictError(
+          `your pipeline "${caller.pipelineName}" calls the demo pipeline "${p.name}" — change it, then remove the demo`,
+        );
+      }
+      const trigger = deps.triggers.find((t) => !demoTriggers.has(t.id));
+      if (trigger !== undefined) {
+        throw new ConflictError(
+          `your trigger "${trigger.name}" runs the demo pipeline "${p.name}" — delete or re-bind it, then remove the demo`,
+        );
+      }
+    }
+
+    const versionIds =
+      demoPipelines.size === 0
+        ? []
+        : tx
+            .select({ id: pipelineVersions.id })
+            .from(pipelineVersions)
+            .where(inArray(pipelineVersions.pipelineId, [...demoPipelines]))
+            .all()
+            .map((v) => v.id);
+    const runRows =
+      versionIds.length === 0
+        ? []
+        : tx
+            .select({ status: runs.status })
+            .from(runs)
+            .where(inArray(runs.pipelineVersionId, versionIds))
+            .all();
+    if (runRows.some((r) => !TERMINAL_RUN_ROW_STATUS.has(r.status))) {
+      throw new ConflictError(
+        'a demo run has not finished (it is queued, running or waiting) — let it finish or cancel it, then remove the demo',
+      );
+    }
+
+    // `pruneDebugVersions`' shape: the runs (their events, diagnostics and
+    // waits cascade), then the pipelines, which cascade their versions and
+    // the triggers bound to them. The demo's runs are few — its hourly
+    // schedule is created disabled — so one transaction stays small.
+    if (versionIds.length > 0)
+      tx.delete(runs).where(inArray(runs.pipelineVersionId, versionIds)).run();
+    for (const id of demoPipelines) deletePipeline(tx, id);
+    // A demo trigger re-bound to another pipeline's version did not cascade.
+    for (const id of demoTriggers) deleteTrigger(tx, id);
+    for (const d of found.datasets) deleteDataset(tx, d.id);
+    for (const c of found.connections) {
+      // The connection route's order: the row, then the re-gate scan, which
+      // reads it as gone. Demo connections carry no secret.
+      deleteConnection(tx, c.id);
+      regateTriggersForConnection(tx, c.id);
+    }
+    return {
+      runsRemoved: runRows.length,
+      removed:
+        found.connections.length + found.datasets.length + demoPipelines.size + demoTriggers.size,
+    };
+  });
+
+  // Files AFTER the commit, so a rolled-back remove leaves the demo whole. A
+  // file delete that fails here reaches the caller, and Remove can simply be
+  // repeated: with no rows left it only retries the files. Only what the demo
+  // makes is deleted — never the directory wholesale — so a demo root pointed
+  // at a populated folder loses nothing of the operator's.
+  if (existsSync(demoDirFor(demoRoot, ownerId))) {
+    const dir = canonicalOwnerDir(demoRoot, ownerId);
+    for (const made of DEMO_MADE) rmSync(join(dir, made), { recursive: true, force: true });
+    try {
+      rmdirSync(dir);
+    } catch (err) {
+      // Something that is not the demo's is still in there: leave it be.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOTEMPTY') throw err;
+    }
+  }
   return result;
 }

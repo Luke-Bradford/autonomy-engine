@@ -42,3 +42,16 @@ export function versionModuleMock(): typeof import('../api/version') {
     }),
   };
 }
+
+/**
+ * #1481 OR32 — `api/demo` for a test that mounts the Pipelines page or an empty
+ * Home without being about the demo: not loaded, and the two acts unreachable
+ * (their buttons are the demo panel's own tests' business).
+ */
+export function demoModuleMock(): typeof import('../api/demo') {
+  return {
+    getDemoStatus: vi.fn().mockResolvedValue({ loaded: false }),
+    loadDemo: vi.fn().mockRejectedValue(new Error('loadDemo not stubbed')),
+    removeDemo: vi.fn().mockRejectedValue(new Error('removeDemo not stubbed')),
+  };
+}

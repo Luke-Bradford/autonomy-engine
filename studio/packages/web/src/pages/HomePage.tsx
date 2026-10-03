@@ -1,4 +1,4 @@
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import type { Paginated, RunSummary } from '@autonomy-studio/shared';
 import { HUBS } from '../shell/hubs';
 import { listRuns } from '../api/runs';
@@ -8,6 +8,7 @@ import { NO_RUNS_YET } from './runs/runOrigin';
 import { runDetailPath } from './runs/runPath';
 import { formatWhen } from './runs/format';
 import { versionLabel } from '../lib/versionLabel';
+import { DemoPanel } from './DemoPanel';
 
 /**
  * How many recent runs Home shows.
@@ -51,6 +52,7 @@ const fetchRecentRuns = (
 export function HomePage() {
   const hubs = HUBS.filter((hub) => hub.id !== 'home');
   const { items: runs, error, loading } = usePagedList(fetchRecentRuns);
+  const navigate = useNavigate();
 
   return (
     <>
@@ -106,6 +108,13 @@ export function HomePage() {
           </ul>
         )}
       </section>
+
+      {/* #1481 OR32 — a workspace that has never run anything is offered the
+          demo, and taken to the pipelines it loaded. Load only: Remove lives on
+          the pipelines list, not on the landing page. */}
+      {runs !== null && runs.length === 0 && error === null && (
+        <DemoPanel allowRemove={false} onChanged={() => void navigate('/author/pipelines')} />
+      )}
 
       <section aria-labelledby="home-hubs" className="home-section">
         <h3 id="home-hubs">Go to</h3>

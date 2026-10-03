@@ -339,8 +339,15 @@ export async function fireManualTrigger(
   pipelineVersionId: string,
   name = 'e2e manual',
 ): Promise<string> {
-  const triggerId = await seedManualTrigger(page, pipelineVersionId, name);
+  return fireTrigger(page, await seedManualTrigger(page, pipelineVersionId, name));
+}
 
+/**
+ * Fire an EXISTING manual trigger and return the run it started — the second
+ * half of `fireManualTrigger`, split out (#1481) for a trigger the spec did not
+ * make, such as the demo pack's own.
+ */
+export async function fireTrigger(page: Page, triggerId: string): Promise<string> {
   const fired = await page.request.post(`/api/triggers/${encodeURIComponent(triggerId)}/fire`);
   expect(fired.status(), `firing trigger: ${await fired.text()}`).toBe(202);
   const { runId } = (await fired.json()) as { runId: string };
@@ -382,7 +389,20 @@ export async function fireAndSettle(
   name = 'e2e manual',
 ): Promise<string> {
   const runId = await fireManualTrigger(page, pipelineVersionId, name);
+  await waitForRunToSettle(page, runId);
+  return runId;
+}
 
+/**
+ * Poll run `runId` until its ROW reaches a terminal status — `fireAndSettle`'s
+ * second half, split out (#1481) for a run fired by a trigger that already
+ * exists, such as the demo pack's own manual triggers.
+ */
+export async function waitForRunToSettle(
+  page: Page,
+  runId: string,
+  timeout = 20_000,
+): Promise<void> {
   // Hand-listed rather than read off `RunStatusSchema.options`: no e2e file
   // imports `@autonomy-studio/shared` (the specs drive the app through its HTTP
   // surface, as an operator does). The cost is that a NEW terminal status would
@@ -399,9 +419,7 @@ export async function fireAndSettle(
         // stuck in, rather than just "false".
         return TERMINAL.includes(status) ? 'terminal' : status;
       },
-      { message: `run ${runId} never reached a terminal status`, timeout: 20_000 },
+      { message: `run ${runId} never reached a terminal status`, timeout },
     )
     .toBe('terminal');
-
-  return runId;
 }

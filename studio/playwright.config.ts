@@ -138,6 +138,9 @@ export default defineConfig({
       DB_PATH: join(DATA_DIR, 'app.sqlite'),
       AUTONOMY_DATA_DIR: DATA_DIR,
       WORKSPACE_GIT_ROOT: join(DATA_DIR, 'git'),
+      // #1481 — the demo pack's files; the default, pinned so an ambient
+      // `AUTONOMY_DEMO_ROOT` cannot send an e2e load outside the wiped dir.
+      AUTONOMY_DEMO_ROOT: join(DATA_DIR, 'demo'),
       WEB_ROOT: join(ROOT, 'packages', 'web', 'dist'),
       // Neutralise ambient credentials (see the DATA_DIR note above).
       AUTONOMY_MASTER_KEY: '',

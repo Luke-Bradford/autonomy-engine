@@ -16,6 +16,8 @@ import * as workspaceGitApi from '../api/workspaceGit';
 // Mock only the network layer. Since U4 the LIST lives in `pipelinesStore`, so
 // each case gets its own store — the app's singleton is shared with the Factory
 // Resources pane, and a shared store shared across test cases leaks state.
+vi.mock('../api/demo', async () => (await import('../testing/apiModuleMocks')).demoModuleMock());
+
 vi.mock('../api/pipelines', async (importActual) => {
   const actual = await importActual<typeof import('../api/pipelines')>();
   return {

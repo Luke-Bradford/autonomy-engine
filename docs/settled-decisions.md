@@ -532,7 +532,7 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     separately; this script is meant to be deleted when that lands.
     *(#1124; PR for #1124/#985/#969.)*
 
-- **Debug runs are kept for a configurable window, not forever — the one sanctioned run deletion.**
+- **Debug runs are kept for a configurable window, not forever — the first sanctioned run deletion.**
     The editor's Debug mints the unsaved draft as a hidden DEBUG version
     (`pipeline_versions.debug = 1`): numbered in its own sequence, excluded from
     every version listing, the head, triggers, publish, git and export, and a
@@ -545,6 +545,21 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     runs. Saved versions stay undeletable (the 0045 trigger refuses any other
     row). Until swept, debug runs block deleting their pipeline like any run.
     *(Operator 2026-09-30 via CONFIG OVER DECISIONS; #1395 slice 3.)*
+
+- **Removing the demo deletes the demo's own run history — the second sanctioned run deletion.**
+    `DELETE /api/demo` ("Remove demo" on the pipelines list) deletes the demo
+    pack's pipelines WITH their runs, then its triggers, datasets, connections
+    and files. It is narrower than the debug-run sweep above, not a loosening of
+    "runs are audit history": it is operator-initiated and confirmed, never
+    automatic; it reaches only resources holding the demo's fixed resourceIds
+    (matched exactly — never a prefix, which a git import could collide with);
+    and it REFUSES, deleting nothing, while a demo run is unfinished or while
+    one of the operator's own pipelines calls a demo pipeline or their own
+    trigger is bound to one. The operator's ticket asked for exactly this
+    ("Remove demo to delete everything tagged demo"), and a demo whose runs
+    could not be removed could never be reloaded fresh. Everywhere else,
+    `PipelineHasRunsError` stands.
+    *(Operator ask in #1481; slice 2.)*
 
 ## Adding an entry
 

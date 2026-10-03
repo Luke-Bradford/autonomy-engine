@@ -22,6 +22,7 @@ import { RowStateBadge } from './pipeline/EditorStateBadge';
 import { listRowBadge } from './pipeline/editorState';
 import { pipelinesStore, type PipelinesStore } from '../stores/pipelinesStore';
 import { ImportPanel } from './ImportPanel';
+import { DemoPanel } from './DemoPanel';
 import { pipelinePath } from './author/pipelinePath';
 import { useConfirm } from '../lib/confirm/useConfirm';
 import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
@@ -574,6 +575,8 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
           reported with a pointer to its own section, rather than refused by a
           client-side rule the server does not have. */}
       <ImportPanel listKind="pipeline" onImported={refresh} />
+      {/* #1481 OR32 — the demo loads into this list, and is removed from it. */}
+      <DemoPanel onChanged={refresh} />
       {confirmDialog}
     </section>
   );

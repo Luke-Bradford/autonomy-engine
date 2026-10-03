@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -19,8 +20,21 @@ import {
 } from '@autonomy-studio/shared';
 import { buildTestAppWithContext } from '../../__tests__/build-test-app.js';
 import { until } from '../../__tests__/poll-until.js';
-import { getRun, listConnections, listRunEvents } from '../../repo/index.js';
-import { demoDirFor, resolveDemoRoot } from '../demo-etl.js';
+import {
+  createPipeline,
+  createPipelineVersion,
+  createRun,
+  getPipelineVersion,
+  getRun,
+  listConnections,
+  listDatasets,
+  listPendingWakeups,
+  listPipelines,
+  listRunEvents,
+  listRuns,
+  listTriggers,
+} from '../../repo/index.js';
+import { demoDirFor, demoStatus, removeDemo, resolveDemoRoot, seedDemo } from '../demo-etl.js';
 
 /**
  * #1481 OR32 — the demo ETL pack, loaded and then RUN through the real app: the
@@ -179,6 +193,217 @@ describe('#1481 demo ETL pack', () => {
   });
 });
 
+describe('#1481 demo ETL pack — remove', () => {
+  const remove = async (app: FastifyInstance) => {
+    const res = await app.inject({ method: 'DELETE', url: '/api/demo' });
+    return { status: res.statusCode, body: res.json() as Record<string, unknown> };
+  };
+  const loaded = async (app: FastifyInstance): Promise<boolean> =>
+    ((await app.inject({ method: 'GET', url: '/api/demo' })).json() as { loaded: boolean }).loaded;
+  const demoRows = (app: FastifyInstance) => ({
+    connections: listConnections(app.db, 'local').filter((c) =>
+      c.resourceId.startsWith('demo-etl-'),
+    ),
+    datasets: listDatasets(app.db, 'local').filter((d) => d.resourceId.startsWith('demo-etl-')),
+    pipelines: listPipelines(app.db, 'local').filter((p) => p.resourceId.startsWith('demo-etl-')),
+    triggers: listTriggers(app.db, { ownerId: 'local' }).filter((t) =>
+      t.resourceId.startsWith('demo-etl-'),
+    ),
+  });
+
+  it("takes every demo row, its run history and its files, leaves the operator's own, and loads again fresh", async () => {
+    const { app } = await buildTestAppWithContext({ demoRoot: newDemoRoot() });
+    try {
+      expect(await loaded(app)).toBe(false);
+      const { body } = await seed(app);
+      expect(await loaded(app)).toBe(true);
+      const trig = (k: string) => body.pipelines.find((p) => p.key === k)?.triggerId ?? '';
+      expect((await fire(app, trig('1'))).status).toBe('success');
+      expect((await fire(app, trig('5'))).status).toBe('failure');
+      // An archived demo pipeline is still the demo's, and still removed.
+      const archive = await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${body.pipelines[1]?.pipelineId}/archive`,
+      });
+      expect(archive.statusCode).toBeLessThan(300);
+      const mine = createPipeline(app.db, { ownerId: 'local', name: 'mine' });
+      const myConn = await app.inject({
+        method: 'POST',
+        url: '/api/connections',
+        payload: { name: 'my files', kind: 'fs', config: { roots: [tmpdir()] } },
+      });
+      expect(myConn.statusCode).toBe(201);
+
+      const res = await remove(app);
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ removed: 23, runsRemoved: 2 });
+      expect(await loaded(app)).toBe(false);
+      expect(demoRows(app)).toEqual({ connections: [], datasets: [], pipelines: [], triggers: [] });
+      expect(listRuns(app.db)).toEqual([]);
+      expect(existsSync(body.demoDir)).toBe(false);
+      expect(listPipelines(app.db, 'local').map((p) => p.id)).toEqual([mine.id]);
+      expect(listConnections(app.db, 'local').map((c) => c.name)).toEqual(['my files']);
+
+      const again = await seed(app);
+      expect(again.status).toBe(201);
+      expect(again.body.created).toBe(28);
+      expect(existsSync(join(again.body.demoDir, 'landing', 'orders_2026-10.csv'))).toBe(true);
+      expect(await remove(app)).toEqual({ status: 200, body: { removed: 23, runsRemoved: 0 } });
+      // Nothing loaded is not an error.
+      expect(await remove(app)).toEqual({ status: 200, body: { removed: 0, runsRemoved: 0 } });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses, deleting nothing, while a demo run has not finished', async () => {
+    const { app } = await buildTestAppWithContext({ demoRoot: newDemoRoot() });
+    try {
+      const { body } = await seed(app);
+      createRun(app.db, {
+        pipelineVersionId: body.pipelines[0]?.versionId ?? '',
+        ownerId: 'local',
+        triggerId: null,
+        parentRunId: null,
+        params: {},
+        status: 'running',
+      });
+      const res = await remove(app);
+      expect(res.status).toBe(409);
+      expect(JSON.stringify(res.body)).toContain('let it finish or cancel it');
+      expect(demoRows(app).pipelines).toHaveLength(5);
+      expect(listRuns(app.db)).toHaveLength(1);
+      expect(existsSync(body.demoDir)).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("refuses when the operator's own trigger runs a demo pipeline", async () => {
+    const { app } = await buildTestAppWithContext({ demoRoot: newDemoRoot() });
+    try {
+      const { body } = await seed(app);
+      const t = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: {
+          name: 'my trigger',
+          pipelineVersionId: body.pipelines[2]?.versionId,
+          params: {},
+          mode: 'manual',
+          schedule: null,
+          webhook: null,
+          runWindows: null,
+          concurrency: { policy: 'skip_if_running' },
+          enabled: true,
+        },
+      });
+      expect(t.statusCode).toBe(201);
+      const res = await remove(app);
+      expect(res.status).toBe(409);
+      expect(JSON.stringify(res.body)).toContain('my trigger');
+      expect(demoRows(app).pipelines).toHaveLength(5);
+      expect(listTriggers(app.db, { ownerId: 'local' }).map((x) => x.name)).toContain('my trigger');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("refuses when the operator's own pipeline calls a demo pipeline", async () => {
+    const { app } = await buildTestAppWithContext({ demoRoot: newDemoRoot() });
+    try {
+      const { body } = await seed(app);
+      // The orchestrator's graph (it calls pipelines 2 and 3), saved as theirs.
+      const orchestrator = getPipelineVersion(app.db, body.pipelines[3]?.versionId ?? '');
+      if (orchestrator === null) throw new Error('no orchestrator version');
+      const mine = createPipeline(app.db, { ownerId: 'local', name: 'my caller' });
+      // The schema parse drops the source version's own id, number and stamps.
+      createPipelineVersion(app.db, { ...orchestrator, pipelineId: mine.id });
+      const res = await remove(app);
+      expect(res.status).toBe(409);
+      expect(JSON.stringify(res.body)).toContain('my caller');
+      expect(demoRows(app).pipelines).toHaveLength(5);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("removes one owner's demo and leaves another's", async () => {
+    const demoRoot = newDemoRoot();
+    const { app } = await buildTestAppWithContext({ demoRoot });
+    try {
+      seedDemo({ db: app.db, ownerId: 'local', demoRoot });
+      const other = seedDemo({ db: app.db, ownerId: 'other', demoRoot });
+      expect(removeDemo({ db: app.db, ownerId: 'local', demoRoot }).removed).toBe(23);
+      expect(demoStatus(app.db, 'local')).toEqual({ loaded: false });
+      expect(demoStatus(app.db, 'other')).toEqual({ loaded: true });
+      expect(listPipelines(app.db, 'other')).toHaveLength(5);
+      expect(existsSync(other.demoDir)).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('deletes only what the demo made in its directory', async () => {
+    const { app } = await buildTestAppWithContext({ demoRoot: newDemoRoot() });
+    try {
+      const { body } = await seed(app);
+      writeFileSync(join(body.demoDir, 'mine.txt'), 'not the demo\n');
+      expect((await remove(app)).status).toBe(200);
+      expect(existsSync(join(body.demoDir, 'landing'))).toBe(false);
+      expect(existsSync(join(body.demoDir, 'warehouse.db'))).toBe(false);
+      expect(readFileSync(join(body.demoDir, 'mine.txt'), 'utf8')).toBe('not the demo\n');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("cancels a removed schedule's pending tick", async () => {
+    const { app } = await buildTestAppWithContext({ demoRoot: newDemoRoot() });
+    try {
+      const { body } = await seed(app);
+      const hourly = body.scheduleTriggerId;
+      const on = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${hourly}`,
+        payload: { enabled: true },
+      });
+      expect(on.statusCode).toBe(200);
+      const pendingFor = () =>
+        listPendingWakeups(app.db).filter((w) => JSON.stringify(w.ref).includes(hourly));
+      expect(pendingFor()).not.toHaveLength(0);
+      expect((await remove(app)).status).toBe(200);
+      expect(pendingFor()).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses to delete through an owner dir that is a symlink, out of the root or across to another owner', async () => {
+    const demoRoot = newDemoRoot();
+    const outside = mkdtempSync(join(tmpdir(), 'studio-demo-outside-'));
+    const otherOwner = join(demoRoot, 'other');
+    try {
+      for (const target of [outside, otherOwner]) {
+        mkdirSync(join(target, 'landing'), { recursive: true });
+        writeFileSync(join(target, 'landing', 'keep.csv'), "not this owner's\n");
+        rmSync(join(demoRoot, 'local'), { force: true });
+        symlinkSync(target, join(demoRoot, 'local'));
+        const { app } = await buildTestAppWithContext({ demoRoot });
+        try {
+          const res = await app.inject({ method: 'DELETE', url: '/api/demo' });
+          expect(res.statusCode).toBe(500);
+          expect(existsSync(join(target, 'landing', 'keep.csv'))).toBe(true);
+        } finally {
+          await app.close();
+        }
+      }
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('#1481 demo ETL pack — refusals', () => {
   it('refuses, writing nothing, when a non-demo pipeline already has a demo name', async () => {
     const demoRoot = newDemoRoot();
@@ -232,6 +457,8 @@ describe('#1481 demo ETL pack — refusals', () => {
       const res = await seed(app);
       expect(res.status).toBe(409);
       expect(JSON.stringify(res.body)).toContain('partly removed');
+      // The way out it names is the button that exists.
+      expect(JSON.stringify(res.body)).toContain('Pipelines → Remove demo');
     } finally {
       await app.close();
     }
