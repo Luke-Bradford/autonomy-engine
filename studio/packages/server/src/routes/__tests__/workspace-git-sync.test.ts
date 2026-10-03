@@ -12,10 +12,7 @@ import {
 } from '../../repo/index.js';
 import { checkoutDirFor } from '../../git/checkout.js';
 import { pushNewCommit, seedRemote } from '../../git/__tests__/fixtures.js';
-import {
-  buildTestAppWithContext,
-  type TestApp,
-} from '../../__tests__/build-test-app.js';
+import { buildTestAppWithContext, type TestApp } from '../../__tests__/build-test-app.js';
 
 /**
  * #1476 OR28 — `POST /api/workspace/git/sync`, the editor badge's git read,

@@ -225,7 +225,9 @@ describe('gitState', () => {
       const head = 'ead0000000000000000000000000000000000000';
       const p = read(sync({ divergence: { state: 'behind', importBase: base, collabHead: head } }));
       expect(p).toMatchObject({ label: 'behind main — pull first', tone: 'warning' });
-      expect(p?.detail).toContain('main has moved since this workspace last imported from it (b45e000 → ead0000)');
+      expect(p?.detail).toContain(
+        'main has moved since this workspace last imported from it (b45e000 → ead0000)',
+      );
     });
 
     it('draws diverged as danger, and danger wins over an amber uncommitted', () => {

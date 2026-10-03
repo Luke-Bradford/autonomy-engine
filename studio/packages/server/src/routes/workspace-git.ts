@@ -281,9 +281,7 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
     // rather than 500ing this whole read-only report.
     const serialized = serializeWorkspaceTolerant(db, ownerId);
     const dbSnapshot = parseWorkspaceFiles(serialized.files);
-    const uncomparable = new Set(
-      serialized.unserializable.map((o) => `${o.kind}:${o.resourceId}`),
-    );
+    const uncomparable = new Set(serialized.unserializable.map((o) => `${o.kind}:${o.resourceId}`));
 
     // The committed snapshot at the base (empty when nothing is committed yet).
     // An unreadable committed blob (#664) becomes a per-file `diagnostic`, not
@@ -631,8 +629,7 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       const provider = await resolveProvider(ownerId);
 
       const checkoutPresent = existsSync(join(checkoutDirFor(workspaceGitRoot, ownerId), '.git'));
-      const stale =
-        row.lastFetchAt === null || Date.now() - row.lastFetchAt >= opts.fetchMaxAgeMs;
+      const stale = row.lastFetchAt === null || Date.now() - row.lastFetchAt >= opts.fetchMaxAgeMs;
       const fetched = !checkoutPresent || stale;
       if (fetched) {
         try {

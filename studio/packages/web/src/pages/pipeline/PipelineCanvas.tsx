@@ -989,7 +989,12 @@ export function PipelineCanvas({
     canvas: canvasVersion(editingInput),
   });
   // The saved version on (or under) the canvas: the preview, else `loaded`.
-  const gitBadge = gitState({ git, source: previewed ?? loaded ?? null, sync: gitSync, pipelineId });
+  const gitBadge = gitState({
+    git,
+    source: previewed ?? loaded ?? null,
+    sync: gitSync,
+    pipelineId,
+  });
 
   // U16 — `loaded` LEAVES the dep list: `params` moved into the store, and it
   // was the last thing this memo read off the opened version.

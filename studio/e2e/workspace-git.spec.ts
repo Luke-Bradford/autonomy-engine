@@ -322,9 +322,15 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   // and the commit the imported version came from. Worded "from", never a bare
   // sha that would read as the branch's head.
   const gitPart = page.getByRole('group', { name: 'Pipeline state' }).locator('[data-part="git"]');
-  await expect(gitPart).toHaveText(/^\S+ → main · from [0-9a-f]{7}\b/);
-  await expect(gitPart).toHaveAttribute('data-tone', 'neutral');
+  // #1476 slice 6 — and it came in from main, so it is not on the working
+  // branch: uncommitted, in amber, with the reason in the detail.
+  await expect(gitPart).toHaveText(/^\S+ → main · from [0-9a-f]{7} · uncommitted$/);
+  await expect(gitPart).toHaveAttribute('data-tone', 'warning');
   await expect(gitPart).toHaveAttribute('title', /was imported from commit [0-9a-f]{7}/);
+  await expect(gitPart).toHaveAttribute(
+    'title',
+    /This pipeline is not on studio\/local\/work yet\./,
+  );
 
   await history.getByRole('button', { name: /^v1/ }).click();
   const bar = page.getByTestId('version-preview-bar');
@@ -375,9 +381,11 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await expect(await editorMenuItem(page, /^Validate/)).toBeVisible();
   // #1476 slice 5 — and the git pill folded into ⋯ too, with its whole label:
   // still readable, and opening it goes where the repo is managed.
-  const gitItem = page.getByRole('menuitem', { name: /^Git: \S+ → main · from [0-9a-f]{7}/ });
+  const gitItem = page.getByRole('menuitem', {
+    name: /^Git: \S+ → main · from [0-9a-f]{7} · uncommitted/,
+  });
   await expect(gitItem).toBeVisible();
-  await expect(gitItem).toHaveAttribute('data-tone', 'neutral');
+  await expect(gitItem).toHaveAttribute('data-tone', 'warning');
   await page.keyboard.press('Escape');
   await page.setViewportSize({ width: 1600, height: 1000 });
   await expect(validateButton).toBeVisible();
@@ -436,7 +444,8 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await page.unroute(gitStatusUrl);
   // And the next focus reads the real state again.
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect(gitPart).toHaveAttribute('data-tone', 'neutral');
+  await expect(gitPart).toHaveText(/ · uncommitted$/);
+  await expect(gitPart).toHaveAttribute('data-tone', 'warning');
 
   /**
    * ── the publish is LEGIBLE in the audit log (#1077) ────────────────────────
@@ -536,6 +545,40 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   ).json()) as { active: { versionId: string } | null };
   expect(activeNow.active, 'the pipeline should have an active published version').not.toBeNull();
   expect(bound?.pipelineVersionId).toBe(activeNow.active!.versionId);
+
+  /**
+   * #1476 OR28 slice 6 — the git pill compares THIS pipeline with the working
+   * branch, and the workspace with main. `publishName` came in from main and
+   * read `uncommitted` above; a commit clears it. A push to main is then
+   * `behind main — pull first` once anything has fetched it — here "Check for
+   * incoming", so the editor's read sees it without waiting out the
+   * `GIT_FETCH_MAX_AGE_SECONDS` window, whose own tests are the server's.
+   */
+  await openGitPage(page);
+  await page
+    .getByRole('textbox', { name: 'Message', exact: true })
+    .fill('studio: commit the imported pipeline');
+  await page.getByRole('button', { name: 'Commit' }).click();
+  await expect(page.getByRole('status')).toContainText('Committed');
+  await openExistingCanvas(page, publishName);
+  await expect(gitPart).toHaveText(/ · in sync$/);
+  await expect(gitPart).toHaveAttribute('data-tone', 'neutral');
+  await expect(gitPart).toHaveAttribute(
+    'title',
+    /This pipeline matches studio\/local\/work at [0-9a-f]{7}, and main has not moved since the last import\./,
+  );
+
+  pushNewPipelineFile(repoDir, `${pipelineName}-later`);
+  await openGitPage(page);
+  await incoming.getByRole('button', { name: 'Check for incoming' }).click();
+  await expect(incoming).toContainText(`${pipelineName}-later`);
+  await openExistingCanvas(page, publishName);
+  await expect(gitPart).toHaveText(/ · behind main — pull first$/);
+  await expect(gitPart).toHaveAttribute('data-tone', 'warning');
+  await expect(gitPart).toHaveAttribute(
+    'title',
+    /main has moved since this workspace last imported from it \([0-9a-f]{7} → [0-9a-f]{7}\)/,
+  );
 
   await openGitPage(page);
 
