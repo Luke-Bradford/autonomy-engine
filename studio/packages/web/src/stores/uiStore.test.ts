@@ -497,7 +497,7 @@ describe('dockMaxWidth (#1475)', () => {
   });
 
   it('keeps the canvas floor in a narrower column, floored', () => {
-    // 60% of 700 is 420, which would leave the canvas 272 — fine; at 600 it is 360, leaving 232.
+    // 60% of 600.7 is 360, which would leave the canvas 232 beside the divider.
     expect(dockMaxWidth(600.7)).toBe(Math.floor(600.7 - DOCK_SPLITTER_SIZE - CANVAS_MIN_WIDTH));
   });
 

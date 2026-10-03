@@ -88,12 +88,13 @@ test('#1475 the dock moves beside the canvas, keeps its tree, and stays there af
   await expectQuiet(page, problems);
 });
 
-test('#1475 the right-hand divider drags, steps, caps, and keeps the canvas its floor', async ({
+test('#1475 the right-hand divider drags, steps, caps and maximises, and leaves the bottom height alone', async ({
   page,
 }) => {
   const problems = collectPageProblems(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await openSeededCanvas(page, `e2e 1475 dock right size ${Date.now()}`, seed);
+  const bottomHeight = Math.round((await boxes(page)).dock.height);
   await page.getByRole('button', { name: 'Dock to right' }).click();
   await expect(divider(page)).toHaveAttribute('aria-orientation', 'vertical');
   const start = Math.round((await boxes(page)).dock.width);
@@ -128,9 +129,21 @@ test('#1475 the right-hand divider drags, steps, caps, and keeps the canvas its 
     String(Math.round(capped.dock.width)),
   );
 
-  // The height chosen for the bottom dock is untouched by any of this.
+  // Reached by keyboard, the cap's double-click goes back to the default
+  // share; from there it maximises, and the next one restores.
+  await divider(page).dblclick();
+  await expect.poll(async () => Math.round((await boxes(page)).dock.width)).toBe(start);
+  await divider(page).dblclick();
+  await expect
+    .poll(async () => Math.round((await boxes(page)).dock.width))
+    .toBe(Math.round(capped.dock.width));
+  await divider(page).dblclick();
+  await expect.poll(async () => Math.round((await boxes(page)).dock.width)).toBe(start);
+
+  // The height the bottom dock had is untouched by any of this.
   await page.getByRole('button', { name: 'Dock to bottom' }).click();
   await expect(divider(page)).toHaveAttribute('aria-orientation', 'horizontal');
+  await expect.poll(async () => Math.round((await boxes(page)).dock.height)).toBe(bottomHeight);
   await expectQuiet(page, problems);
 });
 

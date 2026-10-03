@@ -352,7 +352,7 @@ function parseDockSize(
   return (raw) => (/^\d{1,5}$/.test(raw) ? (clamp(Number(raw)) ?? undefined) : undefined);
 }
 
-/** Up to three digits, then clamped: `parseDockSize`'s reasons, at a fixed-bound width's scale. */
+/** Up to three digits, then clamped: `parseDockSize`'s reasons, for a width under 1000px. */
 function parseWidth(clamp: (width: number) => number): (raw: string) => number | undefined {
   return (raw) => (/^\d{1,3}$/.test(raw) ? clamp(Number(raw)) : undefined);
 }

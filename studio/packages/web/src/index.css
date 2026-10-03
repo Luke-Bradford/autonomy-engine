@@ -1994,7 +1994,7 @@ button.danger {
   min-height: 0;
 }
 
-/* #1475 OR27 — the divider between the canvas and the dock. Its height is
+/* #1475 OR27 — the divider between the canvas and the dock. Its thickness is
    `DOCK_SPLITTER_SIZE` in `uiStore.ts`. The hover/focus mark is a thin line
    drawn in the middle of the track rather than a filled 8px band. */
 .dock-splitter {
@@ -2076,18 +2076,36 @@ button.danger {
   cursor: col-resize;
 }
 
-.dock-splitter--right:hover,
+/* Not on the unmeasured placeholder track, which offers no control. */
+.dock-splitter--right:not([aria-hidden='true']):hover,
 .dock-splitter--right:focus-visible {
   background: linear-gradient(var(--accent), var(--accent)) center / 3px 100% no-repeat;
 }
 
 /* A right-hand dock is too narrow for Problems BESIDE the properties, so it is
    stacked under them — at a FIXED height whether or not anything is wrong
-   (#1393: an issue arriving re-flows nothing). The stored width is left alone
-   for the bottom dock. */
+   (#1393: an issue arriving re-flows nothing). `--problems-width` belongs to
+   the bottom dock and is ignored here. */
 .canvas-main--dock-right .property-dock__body {
   flex-direction: column;
   gap: 0.5rem;
+}
+
+/* Three toggles in a dock that may be 320px wide: wrap rather than clip. */
+.canvas-main--dock-right .property-dock__header {
+  flex-wrap: wrap;
+}
+
+/* The editor run's drawer (`EditorRunDrawer`, an unclassed div) sat BESIDE the
+   form in the bottom dock; stacked above it here, it is bounded and scrolls, so
+   it can never squeeze the form to nothing on a short screen. */
+.canvas-main--dock-right
+  .property-dock__body
+  > :not(.property-panel, .problems-panel, .problems-splitter) {
+  flex: 0 1 auto;
+  max-height: 40%;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /* Stacked, the panel must shrink under its content to scroll inside the dock. */

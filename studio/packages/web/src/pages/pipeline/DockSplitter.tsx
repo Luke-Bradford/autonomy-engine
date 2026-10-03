@@ -10,6 +10,7 @@ import {
   dockMaxWidth,
   uiStore,
   type DockPosition,
+  type UiState,
 } from '../../stores/uiStore';
 
 /** The custom property `.property-dock`'s height reads (`index.css`). */
@@ -40,6 +41,11 @@ const AXES = {
   },
 } as const;
 
+const PREFERENCE = {
+  bottom: { get: (s: UiState) => s.dockHeight, set: (s: UiState) => s.setDockHeight },
+  right: { get: (s: UiState) => s.dockWidth, set: (s: UiState) => s.setDockWidth },
+} as const;
+
 interface DockSplitterProps {
   /** `.canvas-main`, the column the canvas and the dock share. */
   columnRef: RefObject<HTMLElement | null>;
@@ -57,19 +63,17 @@ interface DockSplitterProps {
 /**
  * #1475 OR27 — the divider between the canvas and its property dock: drag it,
  * arrow-key it, or double-click it to maximise the dock and again to put it
- * back.
- *
- * Written for the bottom dock, whose HEIGHT it sizes; for a right-hand dock
- * every "height" below reads as width, through `AXES`.
+ * back. It sizes the dock's height under the canvas, or its width beside it
+ * (`AXES`); "size" below is whichever.
  *
  * Its OWN component so its measuring re-renders only itself, never the editor
- * around it. It watches the COLUMN's height (which bounds the dock and does not
+ * around it. It watches the COLUMN's size (which bounds the dock and does not
  * change during a drag), not the dock's — a dock observer would fire on every
  * drag frame, which is exactly what `PaneSplitter` keeps out of React.
  *
- * The value it reports is the stored height under the column's cap, which is
- * what the CSS draws; until the first resize there is no stored height, only
- * the default share, and then it is the dock's RENDERED height, read from the
+ * The value it reports is the stored size under the column's cap, which is
+ * what the CSS draws; until the first resize there is no stored size, only
+ * the default share, and then it is the dock's RENDERED size, read from the
  * DOM. The store comes first because it is current the moment a key commits,
  * where a DOM read lags a render behind — so a quick run of arrow keys steps
  * from where the last one landed.
@@ -77,15 +81,13 @@ interface DockSplitterProps {
  * Until the column has been measured it draws only the empty 8px track — the
  * same box, so the divider arriving moves nothing (#1393's no-shift rule) —
  * and offers no control, so no key or drag can clamp against a maximum taken
- * from a zero-height column. jsdom, with no layout and no `ResizeObserver`,
+ * from an unmeasured column. jsdom, with no layout and no `ResizeObserver`,
  * only ever gets the track.
  */
 export function DockSplitter({ columnRef, dockRef, dockId, position }: DockSplitterProps) {
   const { axis, size, min, maxFor, cssVar } = AXES[position];
-  const dockSize = useStore(uiStore, (s) => (position === 'right' ? s.dockWidth : s.dockHeight));
-  const setDockSize = useStore(uiStore, (s) =>
-    position === 'right' ? s.setDockWidth : s.setDockHeight,
-  );
+  const dockSize = useStore(uiStore, PREFERENCE[position].get);
+  const setDockSize = useStore(uiStore, PREFERENCE[position].set);
   const column = useElementSize(columnRef, size);
   const [rendered, setRendered] = useState(0);
   /**
@@ -94,8 +96,8 @@ export function DockSplitter({ columnRef, dockRef, dockId, position }: DockSplit
    */
   const beforeMaximise = useRef<number | null | undefined>(undefined);
 
-  // Re-read after anything that can change the dock's height: a committed
-  // preference, or a new column height (which moves the default share and the cap).
+  // Re-read after anything that can change the dock's size: a committed
+  // preference, or a new column size (which moves the default share and the cap).
   // Passive, not layout, for `useElementSize`'s reason: `dockRef` is on this
   // component's next sibling, attached only after its layout effects.
   useEffect(() => {
@@ -116,8 +118,8 @@ export function DockSplitter({ columnRef, dockRef, dockId, position }: DockSplit
   function toggleMaximise() {
     if (value >= max) {
       // Already at the cap: back to what it was, or the default share when
-      // the operator got here another way — a drag, End, or a height chosen on
-      // a taller screen that this column cuts down.
+      // the operator got here another way — a drag, End, or a size chosen on
+      // a larger screen that this column cuts down.
       setDockSize(beforeMaximise.current ?? null);
       beforeMaximise.current = undefined;
       return;

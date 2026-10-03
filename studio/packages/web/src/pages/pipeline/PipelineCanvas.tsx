@@ -1732,10 +1732,10 @@ export function PipelineCanvas({
               position via `useReactFlow` on its own side of the drag. */}
                 <ActivityToolbox store={store} id={toolboxId} />
                 <ToolboxSplitter gridRef={canvasGridRef} toolboxId={toolboxId} />
-                {/* #852 / #844 — U7's BOTTOM dock: the canvas takes the width, the
-                properties sit under it (ADF's layout), and one dock serves both
-                the activity forms and the pipeline's params/outputs. #1475 — or
-                beside it. The position is a CLASS on the same tree, never a
+                {/* #852 / #844 — U7's dock: by default the canvas takes the width
+                and the properties sit under it (ADF's layout), and one dock
+                serves both the activity forms and the pipeline's params/outputs.
+                #1475 — or beside it, per viewer. The position is a CLASS on the same tree, never a
                 second branch: the dock holds drafts a remount would drop. */}
                 <div
                   className={dockRight ? 'canvas-main canvas-main--dock-right' : 'canvas-main'}
@@ -1824,12 +1824,6 @@ export function PipelineCanvas({
                           {issues.length}
                         </span>
                       </button>
-                      {/* The page's ONE announcer of a blocked save (#1249). Here
-                      in the always-shown header, not on the list: the list is
-                      `hidden` whenever Problems or the dock is folded, and a
-                      `display: none` region announces nothing. Always mounted,
-                      because a live region is announced only if it already
-                      exists when its content changes. */}
                       {/* #1475 OR27 — the label names where the dock GOES, so it
                       needs no pressed state on top. Offered folded too: it
                       decides where the dock opens. */}
@@ -1842,6 +1836,12 @@ export function PipelineCanvas({
                       >
                         {dockPosition === 'right' ? 'Dock to bottom' : 'Dock to right'}
                       </button>
+                      {/* The page's ONE announcer of a blocked save (#1249). Here
+                      in the always-shown header, not on the list: the list is
+                      `hidden` whenever Problems or the dock is folded, and a
+                      `display: none` region announces nothing. Always mounted,
+                      because a live region is announced only if it already
+                      exists when its content changes. */}
                       <span className="visually-hidden" role="status">
                         {issues.length > 0
                           ? `${String(issues.length)} validation issue(s) — fix these to save.`
