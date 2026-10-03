@@ -63,6 +63,8 @@ import { workspaceAuditRoutes } from './routes/workspace-audit.js';
 import { monitorRoutes } from './routes/monitor.js';
 import { quotaRoutes } from './routes/quota.js';
 import { settingsRoutes } from './routes/settings.js';
+import { demoRoutes } from './routes/demo.js';
+import { resolveDemoRoot } from './demo/demo-etl.js';
 import { versionRoutes } from './routes/version.js';
 import {
   createClaudeAccountQuotaReader,
@@ -289,6 +291,8 @@ export interface BuildAppOptions {
   retentionMaxBatchesPerSweep?: number;
   /** #3 G2 — where managed git checkouts live (`<root>/<ownerId>/repo`). Overrides `process.env.WORKSPACE_GIT_ROOT` / the `data/git` default. Call-time only, for test isolation. Everything under it is DERIVED state (always our own clone) — safe to wipe; a fetch re-clones. */
   workspaceGitRoot?: string;
+  /** #1481 OR32 — where the demo ETL pack writes each owner's files (`<demoRoot>/<ownerId>`). Overrides `process.env.AUTONOMY_DEMO_ROOT`; default `<AUTONOMY_DATA_DIR>/demo`, else `demo/` beside the database. Call-time only, for test isolation + operator override. */
+  demoRoot?: string;
   /** #3 G2 — test seam: a `GitProvider` override (e.g. a real `CliGitProvider` pointed at a missing binary to exercise the 503 path). Defaults to a real CLI provider. */
   workspaceGitProvider?: GitProvider;
   /** #3 G9b — the operator-env GitHub token for auto-opening PRs. Overrides `process.env.GH_TOKEN`/`GITHUB_TOKEN`. Call-time only, for test isolation (`process.env` is shared across concurrent test files). `null`/absent = no token → guided-manual PRs. */
@@ -1116,6 +1120,9 @@ export async function buildApp(opts?: BuildAppOptions) {
   await fastify.register(workspaceAuditRoutes);
   await fastify.register(monitorRoutes);
   await fastify.register(quotaRoutes);
+  // #1481 OR32 — the demo ETL pack's loader; its root is boot-resolved here
+  // (see `resolveDemoRoot` for the precedence).
+  await fastify.register(demoRoutes, { demoRoot: resolveDemoRoot(opts?.demoRoot, dbPath) });
   // #1094 — the master key's PROVENANCE, resolved once at boot above. Passed
   // as a registration option rather than read off a decoration: it is a fact
   // about this process that cannot change while it runs, and `masterKeyStatusOf`

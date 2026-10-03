@@ -57,6 +57,9 @@ export async function buildTestAppWithContext(
     // machine that has codex and one that does not. `null` is ABSENT, which is
     // the body every test saw before #990; the quota suite passes its own.
     codexAccountQuotaReader: null,
+    // #1481 — and keep a demo seed inside the test's scratch dir, never the
+    // developer's own `AUTONOMY_DATA_DIR/demo`.
+    demoRoot: join(tmpDir, 'demo'),
     ...overrides,
   });
   await app.ready();
