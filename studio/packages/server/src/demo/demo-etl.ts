@@ -314,7 +314,8 @@ function pipelineDoc(key: PipelineKey, c: DocContext): Doc {
     nodes: Record<string, unknown>[],
     edges: Record<string, string>[] = [],
     extra: Partial<Doc> = {},
-  ): Doc => ({ params: [], outputs: [], nodes, edges, containers: [], description, ...extra }) as Doc;
+  ): Doc =>
+    ({ params: [], outputs: [], nodes, edges, containers: [], description, ...extra }) as Doc;
 
   switch (key) {
     case '1':
@@ -514,6 +515,8 @@ function triggerBody(
     mode: scheduled ? 'schedule' : 'manual',
     schedule: null,
     recurrence: scheduled ? HOURLY_RECURRENCE : null,
+    webhook: null,
+    runWindows: null,
     concurrency: { policy: 'skip_if_running' },
     enabled: !scheduled,
   } as Omit<NewTrigger, 'ownerId'>;
@@ -653,7 +656,11 @@ export function seedDemo({ db, ownerId, demoRoot }: SeedDemoInput): DemoSeedResp
     for (const k of PIPELINE_KEYS) {
       const resourceId = rid(`pl-${k}`);
       const pipeline = ensure(getPipelineByResourceId(db, ownerId, resourceId), () =>
-        createPipeline(db, { ownerId, name: DEMO_PIPELINE_NAMES[k], folder: DEMO_FOLDER }, { resourceId }),
+        createPipeline(
+          db,
+          { ownerId, name: DEMO_PIPELINE_NAMES[k], folder: DEMO_FOLDER },
+          { resourceId },
+        ),
       );
       // A demo pipeline whose versions were all removed out from under it gets
       // one again; one with a head keeps it, edited or not.

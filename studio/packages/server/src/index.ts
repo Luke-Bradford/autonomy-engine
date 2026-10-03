@@ -405,7 +405,8 @@ export interface BuildAppOptions {
  * connections are rooted there, and connector roots must be absolute.
  */
 function resolveDemoRoot(option: string | undefined, dbPath: string): string {
-  const pick = (v: string | undefined): string | undefined => (v === undefined || v === '' ? undefined : v);
+  const pick = (v: string | undefined): string | undefined =>
+    v === undefined || v === '' ? undefined : v;
   const explicit = pick(option) ?? pick(process.env.AUTONOMY_DEMO_ROOT);
   if (explicit !== undefined) return resolve(explicit);
   const dataDir = pick(process.env.AUTONOMY_DATA_DIR);

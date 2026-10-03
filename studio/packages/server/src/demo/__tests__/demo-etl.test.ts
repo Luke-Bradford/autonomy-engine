@@ -4,9 +4,14 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { DemoSeedResponseSchema, type DemoSeedResponse } from '@autonomy-studio/shared';
+import {
+  DemoSeedResponseSchema,
+  TERMINAL_RUN_ROW_STATUS,
+  type DemoSeedResponse,
+} from '@autonomy-studio/shared';
 import { buildTestAppWithContext } from '../../__tests__/build-test-app.js';
-import { listConnections, listRunEvents } from '../../repo/index.js';
+import { until } from '../../__tests__/poll-until.js';
+import { getRun, listConnections, listRunEvents } from '../../repo/index.js';
 import { demoDirFor } from '../demo-etl.js';
 
 /**
@@ -20,14 +25,26 @@ const newDemoRoot = (): string => mkdtempSync(join(tmpdir(), 'studio-demo-root-'
 
 async function seed(app: FastifyInstance): Promise<{ status: number; body: DemoSeedResponse }> {
   const res = await app.inject({ method: 'POST', url: '/api/demo/seed' });
-  return { status: res.statusCode, body: res.statusCode < 300 ? DemoSeedResponseSchema.parse(res.json()) : res.json() };
+  return {
+    status: res.statusCode,
+    body: res.statusCode < 300 ? DemoSeedResponseSchema.parse(res.json()) : res.json(),
+  };
 }
 
 async function fire(app: FastifyInstance, triggerId: string): Promise<Record<string, unknown>> {
   const res = await app.inject({ method: 'POST', url: `/api/triggers/${triggerId}/fire` });
   expect(res.statusCode).toBe(202);
   const runId = res.json().runId as string;
-  await app.runLauncher.whenIdle();
+  // The copies stream on their own ticks, past the launcher going idle; wait for
+  // the ROW to settle (a call node's children settle before their parent does).
+  await until(
+    () => {
+      const status = getRun(app.db, runId)?.status;
+      return status !== undefined && TERMINAL_RUN_ROW_STATUS.has(status);
+    },
+    `demo run ${runId} to finish`,
+    { iterations: 1500 },
+  );
   return (await app.inject({ method: 'GET', url: `/api/runs/${runId}` })).json();
 }
 
@@ -99,16 +116,21 @@ describe('#1481 demo ETL pack', () => {
     expect(count('stg_orders')).toBe(92);
 
     expect((await fire(app, trigger('3'))).status).toBe('success');
-    expect([count('orders_clean'), count('rejects'), count('sales_by_country')]).toEqual([66, 20, 6]);
+    expect([count('orders_clean'), count('rejects'), count('sales_by_country')]).toEqual([
+      66, 20, 6,
+    ]);
     expect(readFileSync(join(first.demoDir, 'reports', 'rejects-summary.txt'), 'utf8')).toContain(
       'rejected rows: 20',
     );
 
     // The orchestrator re-runs 2 then 3; staging is reset first, so the counts hold.
     expect((await fire(app, trigger('4'))).status).toBe('success');
-    expect([count('stg_orders'), count('orders_clean'), count('rejects'), count('sales_by_country')]).toEqual([
-      92, 66, 20, 6,
-    ]);
+    expect([
+      count('stg_orders'),
+      count('orders_clean'),
+      count('rejects'),
+      count('sales_by_country'),
+    ]).toEqual([92, 66, 20, 6]);
     expect(existsSync(join(first.demoDir, 'reports', 'nightly-summary.txt'))).toBe(true);
   });
 
