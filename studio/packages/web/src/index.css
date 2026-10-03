@@ -2269,6 +2269,36 @@ button.danger {
   text-overflow: ellipsis;
 }
 
+/* #1476 OR28 — the state badge sits beside the title. It does not shrink:
+   the title yields first (it already ellipsises and carries a `title`), so the
+   state is never the thing that gets cut. Labels are short by design and the
+   sentence lives in the part's tooltip. Same pill as `.run-status`. */
+.editor-state-badge {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.editor-state-badge__part {
+  font-size: 0.72rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.editor-state-badge__part[data-tone='success'] {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.editor-state-badge__part[data-tone='warning'] {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+
 .canvas-page > .page-header > .form-actions {
   flex: 0 0 auto;
   margin-left: auto;
