@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { fireAndSettle, seedVersion } from './support/seedDoc';
+import { fireAndSettle, mintVersion, seedVersion, type SeedDoc } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 
 /**
@@ -672,6 +672,84 @@ test('#1484 — runs grid columns resize with the pointer, can be hidden, and pe
   // clicking its name.
   expect(sortedByStatus).toEqual([]);
   expect(new URL(page.url()).hash).not.toContain('sort=');
+
+  await expectQuiet(page, problems);
+});
+
+/**
+ * #1484 OR35 M1 — every name in the grid links the exact thing: the pipeline's
+ * name opens the version that RAN (read-only, though a later version exists),
+ * and a child run's Parent names the calling pipeline and opens the calling run.
+ * Annotations is off by default and shows the bound version's tags when on.
+ */
+test('#1484 — the runs grid links the version that ran, a child names its parent, and tags show', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  const stamp = `Lineage ${Date.now()}`;
+  const tag = `tag-${Date.now()}`;
+  const { pipelineVersionId: childPv } = await seedVersion(page, `${stamp} child`, {
+    annotations: [tag],
+    nodes: [{ id: 'w', type: 'wait', config: { seconds: '${0}' }, position: { x: 0, y: 0 } }],
+  });
+  const parentDoc: SeedDoc = {
+    nodes: [
+      {
+        id: 'callChild',
+        type: 'call_pipeline',
+        config: {},
+        call: { pipelineVersionId: childPv, params: {} },
+        position: { x: 0, y: 0 },
+      },
+    ],
+  };
+  const parentName = `${stamp} parent`;
+  const { pipelineId, pipelineVersionId: parentV1 } = await seedVersion(
+    page,
+    parentName,
+    parentDoc,
+  );
+  const parentRunId = await fireAndSettle(page, parentV1, 'e2e lineage');
+  // A LATER version, so "the version that ran" and "the latest" differ.
+  await mintVersion(page, pipelineId, parentDoc, parentV1, parentName);
+  const children = (await (
+    await page.request.get(`/api/runs?parentRunId=${encodeURIComponent(parentRunId)}`)
+  ).json()) as { items: { id: string }[] };
+  expect(children.items).toHaveLength(1);
+  const childRunId = children.items[0]!.id;
+
+  await page.goto(`/#/monitor/runs?q=${encodeURIComponent(stamp)}`);
+  await fluentRootReady(page);
+  const rowOf = (id: string) => page.getByRole('row').filter({ hasText: id });
+  await expect(rowOf(childRunId)).toHaveCount(1);
+  await expect(page.getByRole('columnheader', { name: 'Annotations', exact: true })).toHaveCount(0);
+
+  // UP: the child's Parent cell is the calling pipeline's name, opening the calling run.
+  const parentLink = rowOf(childRunId).getByRole('link', {
+    name: `${parentName}, parent run ${parentRunId}`,
+  });
+  await expect(parentLink).toHaveText(parentName);
+  await parentLink.click();
+  await expect(page).toHaveURL(new RegExp(`/monitor/runs/${parentRunId}$`));
+
+  // The version that ran: v1, read-only, although v2 is the latest.
+  await page.goBack();
+  await rowOf(parentRunId).getByRole('link', { name: parentName, exact: true }).click();
+  await expect(page).toHaveURL(
+    new RegExp(`/author/pipelines/${encodeURIComponent(pipelineId)}\\?version=1$`),
+  );
+  await expect(page.getByTestId('version-preview-bar')).toContainText('Viewing v1 — read-only.');
+
+  // Annotations, turned on: the tags of the version the child bound.
+  await page.goBack();
+  await page.getByRole('button', { name: /Columns/ }).click();
+  await page.getByRole('menuitemcheckbox', { name: 'Annotations' }).click();
+  await page.keyboard.press('Escape');
+  const headers = await page.getByRole('columnheader').allTextContents();
+  const annotationsAt = headers.findIndex((h) => h.trim() === 'Annotations');
+  expect(annotationsAt).toBeGreaterThan(0);
+  await expect(rowOf(childRunId).getByRole('cell').nth(annotationsAt)).toHaveText(tag);
+  await expect(rowOf(parentRunId).getByRole('cell').nth(annotationsAt)).toHaveText('—');
 
   await expectQuiet(page, problems);
 });
