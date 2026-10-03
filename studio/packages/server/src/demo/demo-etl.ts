@@ -1,5 +1,5 @@
-import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
-import { join, resolve, sep } from 'node:path';
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve, sep } from 'node:path';
 import Database from 'better-sqlite3';
 import type {
   DemoSeedPipeline,
@@ -64,8 +64,30 @@ const P = 'Demo — ';
  * Where one owner's demo lives: `<demoRoot>/<ownerId>`. Per owner so two owners
  * never share a warehouse or read each other's reports through a connection
  * rooted there. Containment-asserted like `checkoutDirFor` (`git/checkout.ts`):
- * a hostile ownerId must not resolve outside the root.
+ * a hostile ownerId must not resolve outside the root. Unlike a checkout dir,
+ * the root itself is refused too: an owner's demo is never the whole root.
+ * String-level; `seedDemo` re-checks the canonical path once the dir exists.
  */
+/**
+ * #1481 OR32 — the demo root, resolved once at boot: the call-time option, then
+ * `AUTONOMY_DEMO_ROOT`, then `<AUTONOMY_DATA_DIR>/demo` (the data dir Docker
+ * mounts), then `demo/` beside the database. Always absolute — the demo's
+ * connections are rooted there, and connector roots must be absolute. An empty
+ * env value counts as unset, as in `secrets.ts`'s data-dir resolution.
+ */
+export function resolveDemoRoot(
+  option: string | undefined,
+  dbPath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const set = (v: string | undefined): string | undefined => (v === '' ? undefined : v);
+  const explicit = set(option) ?? set(env.AUTONOMY_DEMO_ROOT);
+  if (explicit !== undefined) return resolve(explicit);
+  const dataDir = set(env.AUTONOMY_DATA_DIR);
+  if (dataDir !== undefined) return resolve(dataDir, 'demo');
+  return resolve(dirname(resolve(dbPath)), 'demo');
+}
+
 export function demoDirFor(demoRoot: string, ownerId: string): string {
   const root = resolve(demoRoot);
   const dir = resolve(root, ownerId);
@@ -201,7 +223,7 @@ type DsKey =
   | 'q_rejects'
   | 'q_count'
   | 'q_empty';
-type PipelineKey = '1' | '2' | '3' | '4' | '5';
+type PipelineKey = DemoSeedPipeline['key'];
 
 type ConnectionDef = Omit<NewConnection, 'ownerId'>;
 type DatasetDef = Omit<NewDataset, 'ownerId' | 'connectionId'> & { connection: ConnKey };
@@ -522,17 +544,23 @@ function triggerBody(
   } as Omit<NewTrigger, 'ownerId'>;
 }
 
-/** Writes the landing files and makes sure the warehouse and its four tables exist. */
+/**
+ * Writes any MISSING landing file and makes sure the warehouse and its four
+ * tables exist. Create-if-missing like the resources: a re-seed never rewrites a
+ * file the operator edited, nor one a running demo pipeline is reading.
+ */
 function writeDemoFiles(p: Paths): void {
   mkdirSync(p.landing, { recursive: true });
   mkdirSync(p.reports, { recursive: true });
   for (const [name, content] of Object.entries(DEMO_LANDING_FILES)) {
-    writeFileSync(join(p.landing, name), content, 'utf8');
+    const file = join(p.landing, name);
+    if (!existsSync(file)) writeFileSync(file, content, 'utf8');
   }
   const wh = new Database(p.warehouse);
   try {
-    // A demo run may hold the file when the operator re-seeds; wait it out.
-    wh.pragma('busy_timeout = 5000');
+    // A demo run may hold the file when the operator re-seeds. Short: this wait
+    // is synchronous, so it holds the event loop.
+    wh.pragma('busy_timeout = 1000');
     wh.exec(WAREHOUSE_DDL);
   } finally {
     wh.close();
@@ -559,8 +587,13 @@ export function seedDemo({ db, ownerId, demoRoot }: SeedDemoInput): DemoSeedResp
   const ownerDir = demoDirFor(demoRoot, ownerId);
   mkdirSync(ownerDir, { recursive: true });
   // Canonical (macOS `/tmp` → `/private/tmp`), because the connectors compare
-  // canonical paths against `roots`.
+  // canonical paths against `roots` — and re-checked canonically, so a symlink
+  // planted at the owner's path cannot carry the demo's grants out of the root.
   const dir = realpathSync(ownerDir);
+  const realRoot = realpathSync(resolve(demoRoot));
+  if (!dir.startsWith(realRoot + sep)) {
+    throw new Error(`demo path for owner "${ownerId}" escapes the demo root`);
+  }
   const p: Paths = {
     dir,
     landing: join(dir, 'landing'),
@@ -570,7 +603,7 @@ export function seedDemo({ db, ownerId, demoRoot }: SeedDemoInput): DemoSeedResp
   const connDefs = connectionDefs(p);
   const dsDefs = datasetDefs(p);
 
-  // ---- refuse first, before any write ---------------------------------------
+  // ---- refuse first, before any file or row is written ----------------------
   const clash = (
     kind: string,
     existing: { name: string; resourceId: string }[],
@@ -615,6 +648,44 @@ export function seedDemo({ db, ownerId, demoRoot }: SeedDemoInput): DemoSeedResp
     if (existing?.archived) {
       throw new ConflictError(
         `the demo pipeline "${existing.name}" is archived — restore it, then load the demo`,
+      );
+    }
+  }
+
+  // A demo connection or dataset that is gone while the rest of the demo
+  // remains cannot be quietly re-made: the datasets and the immutable pipeline
+  // versions that survive still pin the OLD ids, so a recreated one would leave
+  // a demo that loads "fine" and fails at run time.
+  const conns = (Object.keys(connDefs) as ConnKey[]).map((k) => ({
+    k,
+    found: getConnectionByResourceId(db, ownerId, rid(`conn-${k}`)),
+  }));
+  const dss = (Object.keys(dsDefs) as DsKey[]).map((k) => ({
+    k,
+    found: getDatasetByResourceId(db, ownerId, rid(`ds-${k}`)),
+  }));
+  const anyDemo =
+    conns.some((c) => c.found !== null) ||
+    dss.some((d) => d.found !== null) ||
+    PIPELINE_KEYS.some((k) => getPipelineByResourceId(db, ownerId, rid(`pl-${k}`)) !== null);
+  if (anyDemo) {
+    const gone = [
+      ...conns.filter((c) => c.found === null).map((c) => connDefs[c.k].name),
+      ...dss.filter((d) => d.found === null).map((d) => dsDefs[d.k].name),
+    ][0];
+    if (gone !== undefined) {
+      throw new ConflictError(
+        `the demo is partly removed ("${gone}" is gone) — delete the rest of the demo, then load it again`,
+      );
+    }
+  }
+  // Loaded before under another demo root (or re-pointed by hand): the reused
+  // connections would read and write a directory this seed is not writing.
+  for (const { found } of conns) {
+    const roots = (found?.config as { roots?: unknown } | undefined)?.roots;
+    if (found !== null && JSON.stringify(roots) !== JSON.stringify([dir])) {
+      throw new ConflictError(
+        `the demo connection "${found.name}" is not rooted at this server's demo directory — delete the demo, then load it again`,
       );
     }
   }
@@ -664,9 +735,11 @@ export function seedDemo({ db, ownerId, demoRoot }: SeedDemoInput): DemoSeedResp
       );
       // A demo pipeline whose versions were all removed out from under it gets
       // one again; one with a head keeps it, edited or not.
-      const head =
-        getHeadVersionRef(db, pipeline.id)?.id ??
-        createPipelineVersion(db, { ...pipelineDoc(k, ctx), pipelineId: pipeline.id }).id;
+      let head = getHeadVersionRef(db, pipeline.id)?.id;
+      if (head === undefined) {
+        created += 1;
+        head = createPipelineVersion(db, { ...pipelineDoc(k, ctx), pipelineId: pipeline.id }).id;
+      }
       ctx.head[k] = head;
 
       const triggerRid = rid(`trig-${k}`);
@@ -686,12 +759,14 @@ export function seedDemo({ db, ownerId, demoRoot }: SeedDemoInput): DemoSeedResp
       });
     }
 
+    const orchestrator = ctx.head['4'];
+    if (orchestrator === undefined) throw new Error('demo pipeline 4 has no version');
     const hourlyRid = rid('trig-hourly');
     const hourly = ensure(getTriggerByResourceId(db, ownerId, hourlyRid), () =>
       createTrigger(
         db,
         {
-          ...triggerBody(HOURLY_TRIGGER_NAME, ctx.head['4'] as string, true),
+          ...triggerBody(HOURLY_TRIGGER_NAME, orchestrator, true),
           ownerId,
         },
         { resourceId: hourlyRid },

@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { DemoSeedResponseSchema } from '@autonomy-studio/shared';
+import type { DemoSeedResponse } from '@autonomy-studio/shared';
 import { seedDemo } from '../demo/demo-etl.js';
 
 export interface DemoRoutesOptions {
@@ -25,6 +25,6 @@ export const demoRoutes: FastifyPluginAsync<DemoRoutesOptions> = async (fastify,
     // A re-seed may recreate a deleted manual trigger; reconcile the
     // scheduler's rows exactly as `POST /api/triggers` does.
     fastify.scheduler.sync();
-    reply.status(result.created > 0 ? 201 : 200).send(DemoSeedResponseSchema.parse(result));
+    reply.status(result.created > 0 ? 201 : 200).send(result satisfies DemoSeedResponse);
   });
 };

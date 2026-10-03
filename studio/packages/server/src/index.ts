@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { join } from 'node:path';
 import Fastify from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import { eq } from 'drizzle-orm';
@@ -64,6 +64,7 @@ import { monitorRoutes } from './routes/monitor.js';
 import { quotaRoutes } from './routes/quota.js';
 import { settingsRoutes } from './routes/settings.js';
 import { demoRoutes } from './routes/demo.js';
+import { resolveDemoRoot } from './demo/demo-etl.js';
 import { versionRoutes } from './routes/version.js';
 import {
   createClaudeAccountQuotaReader,
@@ -396,26 +397,6 @@ export interface BuildAppOptions {
    * pino uses.
    */
   loggerStream?: { write(msg: string): void };
-}
-
-/**
- * #1481 OR32 — the demo root, resolved once at boot: the call-time option, then
- * `AUTONOMY_DEMO_ROOT`, then `<AUTONOMY_DATA_DIR>/demo` (the data dir Docker
- * mounts), then `demo/` beside the database. Always absolute — the demo's
- * connections are rooted there, and connector roots must be absolute.
- */
-export function resolveDemoRoot(
-  option: string | undefined,
-  dbPath: string,
-  env: NodeJS.ProcessEnv = process.env,
-): string {
-  const pick = (v: string | undefined): string | undefined =>
-    v === undefined || v === '' ? undefined : v;
-  const explicit = pick(option) ?? pick(env.AUTONOMY_DEMO_ROOT);
-  if (explicit !== undefined) return resolve(explicit);
-  const dataDir = pick(env.AUTONOMY_DATA_DIR);
-  if (dataDir !== undefined) return resolve(dataDir, 'demo');
-  return resolve(dirname(resolve(dbPath)), 'demo');
 }
 
 export async function buildApp(opts?: BuildAppOptions) {
@@ -1139,11 +1120,13 @@ export async function buildApp(opts?: BuildAppOptions) {
   await fastify.register(workspaceAuditRoutes);
   await fastify.register(monitorRoutes);
   await fastify.register(quotaRoutes);
+  // #1481 OR32 — the demo ETL pack's loader; its root is boot-resolved here
+  // (see `resolveDemoRoot` for the precedence).
+  await fastify.register(demoRoutes, { demoRoot: resolveDemoRoot(opts?.demoRoot, dbPath) });
   // #1094 — the master key's PROVENANCE, resolved once at boot above. Passed
   // as a registration option rather than read off a decoration: it is a fact
   // about this process that cannot change while it runs, and `masterKeyStatusOf`
   // is the only thing that strips the key material off the resolution.
-  await fastify.register(demoRoutes, { demoRoot: resolveDemoRoot(opts?.demoRoot, dbPath) });
   await fastify.register(settingsRoutes, { masterKey: masterKeyStatusOf(masterKeyResolution) });
   await fastify.register(versionRoutes);
 

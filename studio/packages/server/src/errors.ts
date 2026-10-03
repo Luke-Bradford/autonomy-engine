@@ -63,10 +63,9 @@ export class PublishRefusedError extends Error {
 }
 
 /**
- * A write refused because it conflicts with resources the caller already has
- * (HTTP 409 `conflict`) — e.g. #1481's demo seed finding the operator's own
- * resource under one of the demo's names. Message author-constructed and
- * client-safe, like `BadRequestError`.
+ * A write refused because it conflicts with the caller's existing resources
+ * (HTTP 409 `conflict`), where no more specific 409 class fits. The message is
+ * author-constructed and client-safe, like `BadRequestError`.
  */
 export class ConflictError extends Error {
   constructor(message: string) {

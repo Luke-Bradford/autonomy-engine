@@ -1,4 +1,12 @@
-import { existsSync, mkdtempSync, readFileSync, realpathSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
@@ -12,8 +20,7 @@ import {
 import { buildTestAppWithContext } from '../../__tests__/build-test-app.js';
 import { until } from '../../__tests__/poll-until.js';
 import { getRun, listConnections, listRunEvents } from '../../repo/index.js';
-import { resolveDemoRoot } from '../../index.js';
-import { demoDirFor } from '../demo-etl.js';
+import { demoDirFor, resolveDemoRoot } from '../demo-etl.js';
 
 /**
  * #1481 OR32 — the demo ETL pack, loaded and then RUN through the real app: the
@@ -82,7 +89,7 @@ describe('#1481 demo ETL pack', () => {
   });
 
   it('loads 2 connections, 10 datasets, 5 pipelines in folder Demo and 6 triggers, under the owner dir', async () => {
-    expect(first.created).toBe(23);
+    expect(first.created).toBe(28); // 23 resources + 5 versions
     expect(first.reused).toBe(0);
     expect(first.demoDir).toBe(realpathSync(join(demoRoot, 'local')));
     expect(first.pipelines.map((p) => p.name)).toEqual([
@@ -124,7 +131,15 @@ describe('#1481 demo ETL pack', () => {
       'rejected rows: 20',
     );
 
-    // The orchestrator re-runs 2 then 3; staging is reset first, so the counts hold.
+    // The orchestrator re-runs 2 then 3: empty every table, and it refills them.
+    const wipe = new Database(warehouse);
+    try {
+      wipe.exec(
+        'DELETE FROM stg_orders; DELETE FROM orders_clean; DELETE FROM rejects; DELETE FROM sales_by_country;',
+      );
+    } finally {
+      wipe.close();
+    }
     expect((await fire(app, trigger('4'))).status).toBe('success');
     expect([
       count('stg_orders'),
@@ -140,6 +155,18 @@ describe('#1481 demo ETL pack', () => {
     expect(run.status).toBe('failure');
     const failed = listRunEvents(app.db, run.id as string).filter((e) => e.type === 'node.failed');
     expect(JSON.stringify(failed)).toContain('orders_2026-13.csv');
+  });
+
+  it('a re-load keeps an edited landing file and re-makes a deleted trigger only', async () => {
+    const csv = join(first.demoDir, 'landing', 'orders_2026-09.csv');
+    writeFileSync(csv, 'edited by the operator\n');
+    const del = await app.inject({ method: 'DELETE', url: `/api/triggers/${trigger('5')}` });
+    expect(del.statusCode).toBeLessThan(300);
+    const again = await seed(app);
+    expect(again.status).toBe(201);
+    expect([again.body.created, again.body.reused]).toEqual([1, 22]);
+    expect(readFileSync(csv, 'utf8')).toBe('edited by the operator\n');
+    first = again.body;
   });
 
   it('a second load creates nothing and keeps every id', async () => {
@@ -185,6 +212,61 @@ describe('#1481 demo ETL pack — refusals', () => {
       const res = await seed(app);
       expect(res.status).toBe(409);
       expect(JSON.stringify(res.body)).toContain('archived');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses a partly removed demo rather than re-making a resource others pin by id', async () => {
+    const { app } = await buildTestAppWithContext({ demoRoot: newDemoRoot() });
+    try {
+      await seed(app);
+      const ds = (await app.inject({ method: 'GET', url: '/api/datasets' })).json().items as {
+        id: string;
+        name: string;
+      }[];
+      const gone = ds.find((d) => d.name === 'Demo — rejects table');
+      expect(gone).toBeDefined();
+      const del = await app.inject({ method: 'DELETE', url: `/api/datasets/${gone?.id}` });
+      expect(del.statusCode).toBeLessThan(300);
+      const res = await seed(app);
+      expect(res.status).toBe(409);
+      expect(JSON.stringify(res.body)).toContain('partly removed');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses when the demo connections are rooted somewhere else', async () => {
+    const { app } = await buildTestAppWithContext({ demoRoot: newDemoRoot() });
+    try {
+      await seed(app);
+      const fs = listConnections(app.db, 'local').find((c) => c.kind === 'fs');
+      const patch = await app.inject({
+        method: 'PATCH',
+        url: `/api/connections/${fs?.id}`,
+        payload: { config: { roots: [tmpdir()] } },
+      });
+      expect(patch.statusCode).toBe(200);
+      const res = await seed(app);
+      expect(res.status).toBe(409);
+      expect(JSON.stringify(res.body)).toContain('not rooted');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses an owner dir that is a symlink out of the demo root', async () => {
+    const demoRoot = newDemoRoot();
+    const outside = mkdtempSync(join(tmpdir(), 'studio-demo-outside-'));
+    mkdirSync(demoRoot, { recursive: true });
+    symlinkSync(outside, join(demoRoot, 'local'));
+    const { app } = await buildTestAppWithContext({ demoRoot });
+    try {
+      const res = await seed(app);
+      expect(res.status).toBe(500);
+      expect(listConnections(app.db, 'local')).toEqual([]);
+      expect(existsSync(join(outside, 'landing'))).toBe(false);
     } finally {
       await app.close();
     }

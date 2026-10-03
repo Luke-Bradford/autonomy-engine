@@ -3,12 +3,13 @@ import { z } from 'zod';
 /**
  * #1481 OR32 — `POST /api/demo/seed`'s answer: where the demo's files live and
  * which pipelines it loaded, so a caller can open or run them without a second
- * list read. `created`/`reused` count every resource the seed manages
- * (connections, datasets, pipelines, triggers); a second seed reuses them all.
+ * list read. `created` counts every row the seed wrote (connections, datasets,
+ * pipelines, their versions, triggers); `reused` counts the resources it found
+ * already there. A second seed creates nothing.
  */
 export const DemoSeedPipelineSchema = z.object({
   /** The demo's own stable key for the pipeline, `'1'`..`'5'`. */
-  key: z.string(),
+  key: z.enum(['1', '2', '3', '4', '5']),
   name: z.string(),
   pipelineId: z.string(),
   versionId: z.string(),
