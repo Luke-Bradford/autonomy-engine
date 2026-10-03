@@ -11,6 +11,7 @@ import { answerConfirm, pressInConfirm, setConfirmName } from '../testing/confir
 import * as pipelinesApi from '../api/pipelines';
 import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
+import * as workspaceGitApi from '../api/workspaceGit';
 
 // Mock only the network layer. Since U4 the LIST lives in `pipelinesStore`, so
 // each case gets its own store — the app's singleton is shared with the Factory
@@ -29,8 +30,14 @@ vi.mock('../api/pipelines', async (importActual) => {
     archivePipeline: vi.fn(),
     restorePipeline: vi.fn(),
     listArchivedPipelines: vi.fn(),
+    listPipelineVersionStates: vi.fn(),
   };
 });
+vi.mock('../api/workspaceGit', async (importActual) => ({
+  ...(await importActual<typeof import('../api/workspaceGit')>()),
+  getWorkspaceGit: vi.fn(),
+  readWorkspaceGitSync: vi.fn(),
+}));
 
 // The real `downloadTextFile` clicks an anchor, which jsdom follows on the
 // NEXT TICK (its `_cannotNavigate` is always false for an `<a>`, whatever the
@@ -57,6 +64,9 @@ const restoreMock = vi.mocked(pipelinesApi.restorePipeline);
 const listArchivedMock = vi.mocked(pipelinesApi.listArchivedPipelines);
 const downloadMock = vi.mocked(downloadApi.downloadTextFile);
 const exportMock = vi.mocked(portabilityApi.exportPipeline);
+const statesMock = vi.mocked(pipelinesApi.listPipelineVersionStates);
+const gitMock = vi.mocked(workspaceGitApi.getWorkspaceGit);
+const syncMock = vi.mocked(workspaceGitApi.readWorkspaceGitSync);
 
 function pipeline(overrides: Partial<Pipeline> = {}): Pipeline {
   return {
@@ -89,6 +99,9 @@ beforeEach(() => {
   downloadMock.mockReset();
   exportMock.mockReset();
   exportMock.mockResolvedValue('{"kind":"pipeline"}');
+  statesMock.mockResolvedValue([]);
+  gitMock.mockResolvedValue(null);
+  syncMock.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -118,6 +131,89 @@ describe('PipelinesPage', () => {
     listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
     renderPage();
     expect(await screen.findByText('Nightly digest')).toBeInTheDocument();
+  });
+
+  /** #1476 OR28 slice 8 — each row's state badge. */
+  describe('state column', () => {
+    const repo = {
+      id: 'wg_1',
+      ownerId: null,
+      repoUrl: 'file:///tmp/repo.git',
+      collabBranch: 'main',
+      workingBranch: 'feature/x',
+      observedCollabHead: null,
+      importedFromCommit: null,
+      lastFetchAt: 1,
+      lastFetchError: null,
+      createdAt: 1,
+      updatedAt: 1,
+      state: 'ready' as const,
+      hasStoredToken: false,
+    };
+    const badge = (name: string) => screen.findByRole('group', { name: `${name} state` });
+
+    it('names the saved head, and no live part in a DB-only workspace', async () => {
+      listMock.mockResolvedValue([pipeline({ name: 'Nightly' })]);
+      statesMock.mockResolvedValue([{ pipelineId: 'pl_1', latestVersion: 2, active: null }]);
+      renderPage();
+      const group = await badge('Nightly');
+      expect(group).toHaveTextContent(/^v2 \(latest\)\./);
+      expect(group.querySelector('[data-part="live"]')).toBeNull();
+      expect(syncMock).not.toHaveBeenCalled();
+    });
+
+    it('says which rows differ from live, and which are uncommitted, with a repo', async () => {
+      listMock.mockResolvedValue([
+        pipeline({ name: 'Behind' }),
+        pipeline({ id: 'pl_2', resourceId: 'res_pl2', name: 'Current' }),
+      ]);
+      statesMock.mockResolvedValue([
+        { pipelineId: 'pl_1', latestVersion: 3, active: { versionId: 'pv_1', version: 1 } },
+        { pipelineId: 'pl_2', latestVersion: 1, active: { versionId: 'pv_2', version: 1 } },
+      ]);
+      gitMock.mockResolvedValue(repo);
+      syncMock.mockResolvedValue({
+        fetchedAt: 2,
+        fetched: false,
+        workingBranch: 'feature/x',
+        base: null,
+        baseBranch: null,
+        hasUncommittedChanges: true,
+        pipelines: [{ pipelineId: 'pl_1', change: 'modified' }],
+        divergence: { state: 'unknown', importBase: null, collabHead: null },
+      });
+      renderPage();
+      const behind = await badge('Behind');
+      await waitFor(() =>
+        expect(behind.querySelector('[data-part="git"]')).toHaveTextContent(/^uncommitted\./),
+      );
+      expect(behind.querySelector('[data-part="live"]')).toHaveAttribute('data-tone', 'warning');
+      expect(behind.querySelector('[data-part="live"]')).toHaveTextContent(/^Live: v1\./);
+      const current = await badge('Current');
+      expect(current.querySelector('[data-part="live"]')).toHaveTextContent(
+        /^Live: v1 ✓ \(the latest version\)/,
+      );
+      expect(current.querySelector('[data-part="git"]')).toBeNull();
+    });
+
+    it('a failed read leaves the row without a badge, and the list intact', async () => {
+      listMock.mockResolvedValue([pipeline({ name: 'Nightly' })]);
+      statesMock.mockRejectedValue(new ApiError(500, 'boom'));
+      renderPage();
+      expect(await screen.findByText('Nightly')).toBeInTheDocument();
+      await waitFor(() => expect(statesMock).toHaveBeenCalled());
+      expect(screen.queryByRole('group', { name: 'Nightly state' })).toBeNull();
+    });
+
+    it('re-reads on focus, where a save in another tab shows up', async () => {
+      listMock.mockResolvedValue([pipeline({ name: 'Nightly' })]);
+      statesMock.mockResolvedValue([{ pipelineId: 'pl_1', latestVersion: 1, active: null }]);
+      renderPage();
+      expect(await badge('Nightly')).toHaveTextContent(/^v1 /);
+      statesMock.mockResolvedValue([{ pipelineId: 'pl_1', latestVersion: 2, active: null }]);
+      window.dispatchEvent(new Event('focus'));
+      await waitFor(async () => expect(await badge('Nightly')).toHaveTextContent(/^v2 /));
+    });
   });
 
   it('creates a pipeline with the entered name and refreshes', async () => {
