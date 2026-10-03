@@ -159,6 +159,8 @@ import {
 import { FlowCanvas } from './FlowCanvas';
 import { RunCanvas } from '../runs/RunCanvas';
 import { VersionHistoryPanel, VersionPreviewBar } from './VersionHistoryPanel';
+import { PipelineTriggersColumn } from './PipelineTriggersColumn';
+import { newTriggerBinding, newTriggerReason, newTriggerTitle } from './triggerColumnRules';
 import {
   activeVersionLabel,
   describePublishRefusal,
@@ -432,6 +434,13 @@ export function PipelineCanvas({
   const [versions, setVersions] = useState<PipelineVersion[]>([]);
   // #1475 OR27 — a per-viewer preference, like the dock's fold.
   const historyOpen = useStore(uiStore, (s) => s.historyOpen);
+  /**
+   * #1476 OR28 — the Triggers column: `null` closed, else open, with
+   * `newRequest` bumped by each Trigger ▾ → New trigger… (0 = opened on the
+   * list). Not remembered: it is an errand, not a layout preference.
+   */
+  const [triggersColumn, setTriggersColumn] = useState<{ newRequest: number } | null>(null);
+  const triggerButtonRef = useRef<HTMLButtonElement>(null);
   const setHistoryOpen = useStore(uiStore, (s) => s.setHistoryOpen);
   /** The version NUMBER being previewed read-only, or `null` while editing. */
   const [previewing, setPreviewing] = useState<number | null>(null);
@@ -550,11 +559,20 @@ export function PipelineCanvas({
 
   const dirty = useStore(store, (s) => s.dirty);
   // #1393 — and the tab title carries it, for the operator who tabs away.
-  useShellUnsaved(dirty);
+  //
+  // #1476 — the Triggers column's open form is a second draft on this page, so
+  // the title and the leave guard below count it too.
+  const [triggerFormDirty, setTriggerFormDirty] = useState(false);
+  useShellUnsaved(dirty || triggerFormDirty);
   // #1396 — the draft lives in this mount's store, so leaving the editor's path
   // (Back, another pipeline in the tree, Open run) throws it away. Hold that at
   // the shared prompt. A same-path change keeps this instance, and the draft.
-  const leaveGuard = useUnsavedChangesGuard(dirty, { holdRoute: leavesPath });
+  //
+  // #1476 — the Triggers column's form holds no route of its own (the router
+  // consults one blocker), so it is folded in here: one prompt for either.
+  const leaveGuard = useUnsavedChangesGuard(dirty || triggerFormDirty, {
+    holdRoute: leavesPath,
+  });
   // The prompt takes focus while it asks and, on Keep, hands it back to wherever
   // the operator was: a field, a node, the tree link they clicked. Not on
   // Discard: the editor is on its way out, and focusing into it would only
@@ -983,6 +1001,18 @@ export function PipelineCanvas({
     issueCount: issues.length,
   });
   if (debugOpen && debugReason !== null) setDebugOpen(false);
+  const newReason = newTriggerReason({ ready, archived, headVersion });
+  const newBinding = newTriggerBinding({ pipelineId, head, active, gitConnected });
+  /** Open the Triggers column — on a new form, or on the list — and close
+   * version history: one side column at a time, so the canvas keeps its width. */
+  const openTriggersColumn = (withNewForm: boolean) => {
+    // Not while a restore or save holds the preview: closing history leaves
+    // the preview, which every other route into it is locked against.
+    if (historyOpen && !previewLocked) closeHistory();
+    setTriggersColumn((open) => ({
+      newRequest: withNewForm ? (open?.newRequest ?? 0) + 1 : (open?.newRequest ?? 0),
+    }));
+  };
   /* #1476 OR28 — the ticket's rule for a toolbar row that cannot hold every
      act: overflow goes into ⋯, it never wraps or spills. Validate is the act
      that folds — the one used least often of those in the row. It folds when
@@ -1553,6 +1583,8 @@ export function PipelineCanvas({
                         // they then have to find is not the same thing.
                         setHistoryOpen(true);
                         setPreviewing(conflict.version);
+                        // One side column at a time, as the ⋯ menu's item.
+                        if (!triggerFormDirty) setTriggersColumn(null);
                       }}
                       // The same lock every other route into the preview carries: this
                       // is a fourth one, and the reported bug was precisely a route
@@ -1736,7 +1768,7 @@ export function PipelineCanvas({
                 body portal, as the ⋯ menu (U0: never inside the viewport). */}
             <Menu>
               <MenuTrigger disableButtonEnhancement>
-                <button type="button">
+                <button type="button" ref={triggerButtonRef}>
                   Trigger <ChevronDownRegular aria-hidden="true" />
                 </button>
               </MenuTrigger>
@@ -1757,6 +1789,21 @@ export function PipelineCanvas({
                   >
                     Trigger now
                   </MenuItem>
+                  {/* #1476 slice 3 — create and edit this pipeline's triggers in
+                      a column beside the canvas, without leaving the editor. */}
+                  <MenuItem
+                    disabled={newReason !== null || newBinding === null}
+                    subText={
+                      newReason ??
+                      (newBinding !== null && headVersion !== null
+                        ? newTriggerTitle(newBinding, headVersion, gitConnected, dirty)
+                        : undefined)
+                    }
+                    onClick={() => openTriggersColumn(true)}
+                  >
+                    New trigger…
+                  </MenuItem>
+                  <MenuItem onClick={() => openTriggersColumn(false)}>Edit triggers…</MenuItem>
                   <MenuItem onClick={() => void navigate(triggersPath(pipelineId))}>
                     View triggers
                   </MenuItem>
@@ -1842,7 +1889,12 @@ export function PipelineCanvas({
                   subText={historyDisabledReason ?? undefined}
                   onClick={() => {
                     if (historyOpen) closeHistory();
-                    else setHistoryOpen(true);
+                    else {
+                      setHistoryOpen(true);
+                      // One side column at a time — unless the Triggers column
+                      // holds an unsaved form, which is never closed under it.
+                      if (!triggerFormDirty) setTriggersColumn(null);
+                    }
                   }}
                 >
                   {historyOpen ? 'Hide version history' : 'Show version history'}
@@ -2153,6 +2205,18 @@ export function PipelineCanvas({
               // the ⋯ menu that reopens it rather than dropping it on <body>.
               document.getElementById(moreActionsId)?.focus();
             }}
+          />
+        )}
+        {triggersColumn !== null && (
+          <PipelineTriggersColumn
+            pipelineId={pipelineId}
+            headId={head?.id ?? null}
+            newBinding={newBinding}
+            newReason={newReason}
+            newRequest={triggersColumn.newRequest}
+            returnFocusTo={triggerButtonRef}
+            onClose={() => setTriggersColumn(null)}
+            onDirtyChange={setTriggerFormDirty}
           />
         )}
       </div>

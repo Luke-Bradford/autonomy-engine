@@ -86,3 +86,30 @@ describe('useUnsavedChangesGuard — a page that goes clean while asking', () =>
     expect(router.state.location.pathname).toBe('/pipelines/p1');
   });
 });
+
+describe('useUnsavedChangesGuard — holdRoute: false (#1476, a form inside the editor)', () => {
+  it('registers no blocker, so the page guard beside it still holds the navigation', async () => {
+    let page: UnsavedChangesGuard | null = null;
+    let form: UnsavedChangesGuard | null = null;
+    function Probe() {
+      page = useUnsavedChangesGuard(true, { holdRoute: leavesPath });
+      // Mounted AFTER the page's: the router consults only the newest blocker,
+      // so a `useBlocker(false)` here would wave every navigation through.
+      form = useUnsavedChangesGuard(true, { holdRoute: false });
+      return (
+        <>
+          {page.routeHold}
+          {form.routeHold}
+        </>
+      );
+    }
+    const router = createMemoryRouter([{ path: '*', element: <Probe /> }], {
+      initialEntries: ['/pipelines/p1'],
+    });
+    render(<RouterProvider router={router} />);
+    expect(form!.routeHold).toBeNull();
+    await act(() => router.navigate('/pipelines'));
+    expect(page!.confirming).toBe(true);
+    expect(router.state.location.pathname).toBe('/pipelines/p1');
+  });
+});

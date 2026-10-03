@@ -123,3 +123,64 @@ test('Trigger ▾ → View triggers lists this pipeline’s triggers, and Show a
 
   await expectQuiet(page, problems);
 });
+
+test('Trigger ▾ → New trigger… creates and edits this pipeline’s triggers without leaving the editor', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const stamp = String(Date.now());
+  const { pipelineId, pipelineVersionId } = await seedVersion(page, `e2e 1476 s3 ${stamp}`, DOC);
+  await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+  const editorUrl = page.url();
+  const canvas = page.locator('.react-flow').first();
+  await expect(canvas).toBeVisible();
+  const canvasTop = (await canvas.boundingBox())!.y;
+
+  const newItem = await triggerMenuItem(page, /^New trigger…/);
+  // DB-only workspace: bind-to-active resolves to the latest saved version.
+  await expect(newItem).toContainText('Fires the latest saved version (v1 now).');
+  await newItem.click();
+  const column = page.getByTestId('pipeline-triggers');
+  const form = column.getByRole('form', { name: 'Trigger form' });
+  await expect(form).toBeVisible();
+  // The form has the keyboard once it opens, and its Save is in view without
+  // scrolling: the column scrolls, the footer sticks to it.
+  await expect(form.getByLabel('Name')).toBeFocused();
+  await expect(form.getByRole('button', { name: 'Create trigger' })).toBeInViewport();
+  // A column beside the canvas: it takes width, never the canvas's top (#1393).
+  expect((await canvas.boundingBox())!.y).toBe(canvasTop);
+
+  const name = `made-in-editor-${stamp}`;
+  await form.getByLabel('Name').fill(name);
+  await form.getByRole('button', { name: 'Create trigger' }).click();
+  await expect(form).toBeHidden();
+  const row = column.getByRole('listitem').filter({ hasText: name });
+  await expect(row).toContainText('v1 · disabled');
+  expect(page.url()).toBe(editorUrl);
+  const stored = (await (await page.request.get('/api/triggers')).json()) as {
+    name: string;
+    pipelineVersionId: string | null;
+  }[];
+  expect(stored.find((t) => t.name === name)?.pipelineVersionId).toBe(pipelineVersionId);
+
+  // Edit, in the same column.
+  await row.getByRole('button', { name: `Edit: ${name}` }).click();
+  await form.getByLabel('Name').fill(`${name}-renamed`);
+  await form.getByRole('button', { name: 'Save changes' }).click();
+  await expect(column.getByRole('listitem').filter({ hasText: `${name}-renamed` })).toBeVisible();
+  // Focus went back to the Edit button that opened the form.
+  await expect(column.getByRole('button', { name: `Edit: ${name}-renamed` })).toBeFocused();
+
+  // An unsaved trigger form holds leaving the editor at the editor's ONE prompt.
+  await column.getByRole('button', { name: 'New trigger' }).click();
+  await form.getByLabel('Name').fill('unsaved');
+  await page.getByRole('link', { name: 'Home', exact: true }).click();
+  const prompts = page.getByRole('alertdialog');
+  await expect(prompts).toHaveCount(1);
+  await prompts.getByRole('button', { name: 'Keep editing' }).click();
+  expect(page.url()).toBe(editorUrl);
+  await expect(form.getByLabel('Name')).toHaveValue('unsaved');
+
+  await expectQuiet(page, problems);
+});
