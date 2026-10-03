@@ -875,12 +875,9 @@ export const llmCallConfigSchema = z
       description: "Also records the model's reasoning summary. Needs Capture level full.",
     }),
   })
-  // Each object-level rule names the field it judges (#1491). The save check
-  // (`activity-config-check.ts`) leaves a refinement to dispatch when a
-  // whole-value `${}` sits under its path, and a path-less rule's subtree is the
-  // whole config, so one expression in an unrelated field would wave it through.
-  // The XOR reads only presence, which no expression changes, so it is never
-  // left to dispatch.
+  // Each rule names the field it judges, so an expression elsewhere in the
+  // config cannot wave it through the save check (#1491); the XOR reads only
+  // presence, which no expression changes.
   .refine((c) => (c.prompt !== undefined) !== (c.messages !== undefined), {
     path: ['prompt'],
     params: PRESENCE_ONLY_RULE,
