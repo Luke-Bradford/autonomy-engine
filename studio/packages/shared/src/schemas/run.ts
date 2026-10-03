@@ -267,6 +267,15 @@ export const RunSummarySchema = RunSchema.extend({
   /** #1484 OR35 M1 — what started the run (`RUN_TRIGGERED_BY_KINDS`). */
   triggeredByKind: RunTriggeredByKindSchema,
   /**
+   * #1484 OR35 M1 — the NAME of the pipeline whose run called this one
+   * (`parentRunId`), for the runs grid's Parent column.
+   *
+   * `null` when nobody called this run, and also when the parent cannot be named
+   * for this viewer: the join checks the parent's pipeline belongs to the run's
+   * owner. The id is still on the row, so the grid can link it either way.
+   */
+  parentPipelineName: z.string().nullable(),
+  /**
    * #1016 (U29) — the annotations of the version this run BOUND (F8a), exactly as
    * stored: the strings U26's `?annotation=` filter matches against, so a lane the
    * timeline groups by and a filter the list applies agree on what a tag is.

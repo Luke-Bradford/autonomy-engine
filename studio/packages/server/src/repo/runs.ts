@@ -13,6 +13,7 @@ import {
   type SQL,
   type SQLWrapper,
 } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/sqlite-core';
 import {
   computeRunCost,
   NewRunSchema,
@@ -44,6 +45,11 @@ import type { RunActivityFold } from '../run/activity-counts.js';
 import { aggregateRunCosts, listRunLastSeqs } from './run-events.js';
 import { RUN_TRIGGERED_BY_SQL } from './run-triggered-by.js';
 import type { Db } from './types.js';
+
+/** #1484 — a listed run's parent, and that parent's version and pipeline. */
+const parentRuns = alias(runs, 'parent_runs');
+const parentVersions = alias(pipelineVersions, 'parent_versions');
+const parentPipelines = alias(pipelines, 'parent_pipelines');
 
 /**
  * #796 (P3b) — `id` is a SEPARATE argument rather than a field on `NewRun`, and
@@ -434,12 +440,27 @@ export function listRunSummariesPage(
         annotations: pipelineVersions.annotations,
         triggerName: triggers.name,
         triggeredByKind: RUN_TRIGGERED_BY_SQL,
+        parentPipelineName: parentPipelines.name,
         sortValues: runSortValuesJson(sort),
       })
       .from(runs)
       .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
       .innerJoin(pipelines, eq(pipelineVersions.pipelineId, pipelines.id))
-      .leftJoin(triggers, eq(runs.triggerId, triggers.id));
+      .leftJoin(triggers, eq(runs.triggerId, triggers.id))
+      /* #1484 — the Parent column's name. LEFT joins, because most runs have no
+         parent. The name is read only when the parent's PIPELINE belongs to this
+         run's owner — the row the name comes from is the one checked, as
+         `GET /api/runs/:id`'s names are (#1392). A child is created with its
+         parent's owner, so this never drops a real name. */
+      .leftJoin(parentRuns, eq(parentRuns.id, runs.parentRunId))
+      .leftJoin(parentVersions, eq(parentVersions.id, parentRuns.pipelineVersionId))
+      .leftJoin(
+        parentPipelines,
+        and(
+          eq(parentPipelines.id, parentVersions.pipelineId),
+          eq(parentPipelines.ownerId, runs.ownerId),
+        ),
+      );
     const fetched = (conditions.length > 0 ? query.where(and(...conditions)) : query)
       .orderBy(...runSortOrderBy(sort))
       // Fetch one extra to PROBE for a next page, the `toPage` contract — so
@@ -494,6 +515,7 @@ export function listRunSummariesPage(
           annotations: row.annotations,
           triggerName: row.triggerName,
           triggeredByKind: row.triggeredByKind,
+          parentPipelineName: row.parentPipelineName,
           /* A run with no metered events has no aggregate GROUP, and its cost is a
              genuine zero — nothing was billed. `computeRunCost([])` rather than a
              hand-written zero object, so the empty value stays the FOLD's own and
