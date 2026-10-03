@@ -49,8 +49,9 @@ test('R2/U10 — the runs list names the pipeline, times the run, and filters by
   // Demoted, not discarded — still reachable for whoever needs the raw key.
   await expect(row.locator(`[title="${pipelineVersionId}"]`)).toHaveCount(1);
 
-  // R2 — the trigger's name, joined server-side.
-  await expect(row).toContainText(triggerName);
+  // R2 — the trigger's name, joined server-side; #1484 — after what started
+  // the run, which the SERVER classifies (fireAndSettle uses Fire now).
+  await expect(row).toContainText(`Fire now · ${triggerName}`);
 
   // R2 — a real measured duration for a settled run: some number followed by a
   // unit, and specifically NOT the em-dash that means "no answer".
@@ -96,6 +97,62 @@ test('R2/U10 — the runs list names the pipeline, times the run, and filters by
     'true',
   );
   await expect(page.getByRole('row').filter({ hasText: runId })).toHaveCount(1);
+
+  await expectQuiet(page, problems);
+});
+
+/**
+ * #1484 OR35 M1 — the runs list is a dense, full-width grid, and a row is a way
+ * into its run. Measured in a real layout at the ticket's 1440×900, because
+ * width, row height and what a click lands on are all things jsdom cannot see.
+ */
+test('#1484 — the runs list is a full-width grid of 32px rows, and a row opens its run', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  const pipelineName = `Runs grid ${Date.now()}`;
+  const { pipelineVersionId } = await seedVersion(page, pipelineName, {
+    nodes: [{ id: 'n1', type: 'fail', config: { message: 'expected' }, position: { x: 0, y: 0 } }],
+  });
+  const runId = await fireAndSettle(page, pipelineVersionId, 'e2e runs grid');
+
+  await page.goto('/#/monitor/runs');
+  await fluentRootReady(page);
+  const row = page.getByRole('row').filter({ hasText: runId });
+  await expect(row).toHaveCount(1);
+
+  const measured = await page.evaluate(() => {
+    const content = document.querySelector('.content');
+    const table = document.querySelector('table.runs-grid');
+    const rowEl = document.querySelector('tr.runs-grid__row');
+    const cell = rowEl?.querySelector('td');
+    return {
+      contentWidth: content?.getBoundingClientRect().width ?? 0,
+      tableWidth: table?.getBoundingClientRect().width ?? 0,
+      rowHeight: rowEl?.getBoundingClientRect().height ?? 0,
+      fontSize: cell ? getComputedStyle(cell).fontSize : '',
+      wraps: cell ? getComputedStyle(cell).whiteSpace : '',
+      sideScroll: document.documentElement.scrollWidth > window.innerWidth,
+    };
+  });
+  // The 900px reading width is gone: the page and its table use the screen.
+  expect(measured.contentWidth).toBeGreaterThan(1100);
+  expect(measured.tableWidth).toBeGreaterThan(1000);
+  expect(measured.rowHeight).toBeGreaterThan(0);
+  expect(measured.rowHeight).toBeLessThanOrEqual(33);
+  expect(measured.fontSize).toBe('13px');
+  expect(measured.wraps).toBe('nowrap');
+  expect(measured.sideScroll, 'the grid fits without a sideways scroll').toBe(false);
+
+  // The short id is drawn; the row still carries the full id for search and
+  // for assistive tech, and the link is named for it.
+  await expect(row.getByRole('link', { name: `Open run ${runId}` })).toBeVisible();
+
+  // A click on a plain cell (the status pill) opens the run.
+  await row.locator('.run-status').click();
+  await expect.poll(() => new URL(page.url()).hash).toBe(`#/monitor/runs/${runId}`);
 
   await expectQuiet(page, problems);
 });

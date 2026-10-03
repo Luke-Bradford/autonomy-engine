@@ -151,18 +151,18 @@ test('RS6 — a failed run lists its reruns, and the runs list says which runs a
   await rerunLink.click();
   await expect(runIdShown(page, rerunId)).toBeVisible();
 
-  // The runs list: the rerun's Type cell says so and names its source; the
-  // source reads Original.
+  // The runs list: the rerun's Triggered by cell (#1484, which absorbed RS6's
+  // Type column) says so and names its source; the source was a Fire now.
   await page.goto('/#/monitor/runs');
   await fluentRootReady(page);
   const headers = await page.getByRole('columnheader').allTextContents();
-  const typeColumn = headers.indexOf('Type');
-  expect(typeColumn, 'the runs list has a Type column').toBeGreaterThanOrEqual(0);
-  const typeOf = (runId: string) =>
-    page.getByRole('row').filter({ hasText: runId }).getByRole('cell').nth(typeColumn);
-  await expect(typeOf(rerunId)).toHaveText('Rerun from failed');
-  await expect(typeOf(rerunId)).toHaveAttribute('title', `Rerun of run ${sourceRunId}`);
-  await expect(typeOf(sourceRunId)).toHaveText('Original');
+  const byColumn = headers.indexOf('Triggered by');
+  expect(byColumn, 'the runs list has a Triggered by column').toBeGreaterThanOrEqual(0);
+  const triggeredBy = (runId: string) =>
+    page.getByRole('row').filter({ hasText: runId }).getByRole('cell').nth(byColumn);
+  await expect(triggeredBy(rerunId)).toHaveText('Rerun from failed');
+  await expect(triggeredBy(rerunId)).toHaveAttribute('title', `Rerun of run ${sourceRunId}`);
+  await expect(triggeredBy(sourceRunId)).toHaveText(/^Fire now · /);
 
   await expectQuiet(page, problems);
 });
