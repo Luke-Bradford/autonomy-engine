@@ -62,7 +62,9 @@ test('#870 — a parked run says WHAT it is waiting on, in one vocabulary across
   // a reason. `runStatusLabel`'s docblock owns the argument.
   await page.goto('/#/monitor/runs');
   await fluentRootReady(page);
-  const row = page.locator('tr', { has: page.getByText(runId, { exact: true }) });
+  // #1484 — the row is found by its text, as every other runs-list spec does:
+  // the grid draws the id's short tail and carries the full id in the link name.
+  const row = page.getByRole('row').filter({ hasText: runId });
   await expect(row.locator('.run-status')).toHaveText('waiting');
 
   // ── The run DETAIL header ───────────────────────────────────────────────────

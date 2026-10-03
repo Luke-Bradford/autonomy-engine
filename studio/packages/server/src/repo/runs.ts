@@ -17,6 +17,7 @@ import { newId } from './ids.js';
 import { beforeCursor, encodeCursor, pageOrderDesc, type PageArgs } from './pagination.js';
 import { isDeterministicRowCorruption } from './row-corruption.js';
 import { aggregateRunCosts } from './run-events.js';
+import { RUN_TRIGGERED_BY_SQL } from './run-triggered-by.js';
 import type { Db } from './types.js';
 
 /**
@@ -289,6 +290,7 @@ export function listRunSummariesPage(
         debug: pipelineVersions.debug,
         annotations: pipelineVersions.annotations,
         triggerName: triggers.name,
+        triggeredByKind: RUN_TRIGGERED_BY_SQL,
       })
       .from(runs)
       .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
@@ -330,6 +332,7 @@ export function listRunSummariesPage(
           debug: row.debug,
           annotations: row.annotations,
           triggerName: row.triggerName,
+          triggeredByKind: row.triggeredByKind,
           /* A run with no metered events has no aggregate GROUP, and its cost is a
              genuine zero — nothing was billed. `computeRunCost([])` rather than a
              hand-written zero object, so the empty value stays the FOLD's own and

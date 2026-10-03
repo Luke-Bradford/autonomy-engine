@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { RUN_TRIGGERED_BY_KINDS, type RunTriggeredByKind } from '@autonomy-studio/shared';
 import {
   filterRunsByTab,
   isRunTab,
@@ -10,33 +11,27 @@ import {
   type RunOrigin,
 } from './runOrigin';
 
-const NEITHER = { triggerId: null, parentRunId: null };
-
 describe('runOriginOf', () => {
-  it('classifies a triggered run, a manual run and a child run', () => {
-    expect(runOriginOf({ triggerId: 'trg_1', parentRunId: null })).toBe('triggered');
-    expect(runOriginOf(NEITHER)).toBe('manual');
-    expect(runOriginOf({ triggerId: null, parentRunId: 'run_1' })).toBe('child');
-  });
-
   /**
-   * The classification must be TOTAL — every run lands in exactly one tab, or a
-   * row is reachable from none of them and silently disappears from the list.
-   * All four combinations of the two nullable columns are enumerated, including
-   * the one the row model does not forbid: a run carrying BOTH a trigger and a
-   * parent. `child` wins there, deliberately.
+   * #1484 — every server kind lands in exactly one tab, or a row is reachable
+   * from none of them and silently disappears from the list. Enumerated from the
+   * shared enum, so a new kind that is not placed fails here (and typecheck).
    */
-  it('is total over both nullable columns, with parent winning outright', () => {
-    const combos = [
-      { triggerId: null, parentRunId: null },
-      { triggerId: 'trg_1', parentRunId: null },
-      { triggerId: null, parentRunId: 'run_1' },
-      { triggerId: 'trg_1', parentRunId: 'run_1' },
-    ];
-    for (const combo of combos) {
-      expect(RUN_ORIGINS).toContain(runOriginOf(combo));
+  it('places every server kind in exactly one origin', () => {
+    const expected: Record<RunTriggeredByKind, RunOrigin> = {
+      manual: 'triggered',
+      schedule: 'triggered',
+      tumbling: 'triggered',
+      webhook: 'triggered',
+      event: 'triggered',
+      editor: 'manual',
+      debug: 'manual',
+      rerun: 'manual',
+      call: 'child',
+    };
+    for (const kind of RUN_TRIGGERED_BY_KINDS) {
+      expect(runOriginOf({ triggeredByKind: kind }), kind).toBe(expected[kind]);
     }
-    expect(runOriginOf({ triggerId: 'trg_1', parentRunId: 'run_1' })).toBe('child');
   });
 
   it('labels every origin, and every tab', () => {
@@ -52,9 +47,9 @@ describe('runOriginOf', () => {
 });
 
 describe('filterRunsByTab', () => {
-  const triggered = { id: 'a', triggerId: 'trg_1', parentRunId: null };
-  const manual = { id: 'b', ...NEITHER };
-  const child = { id: 'c', triggerId: null, parentRunId: 'run_1' };
+  const triggered = { id: 'a', triggeredByKind: 'webhook' as const };
+  const manual = { id: 'b', triggeredByKind: 'editor' as const };
+  const child = { id: 'c', triggeredByKind: 'call' as const };
   const all = [triggered, manual, child];
 
   it('passes everything through on the All tab', () => {

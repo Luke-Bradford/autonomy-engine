@@ -28,9 +28,9 @@ import { costFigure, costHeadline, unsettledSentence } from './costReading';
  *    for it), so its total is what it RE-EXECUTED. Understating is the safe
  *    direction — nothing is double-counted and the source run keeps its own spend
  *    — but only once it is legible, and this list is where a rerun sits directly
- *    beside the run it came from, looking cheaper for no visible reason. Nothing
- *    else in the row says a run is a rerun (the Trigger cell's em-dash means
- *    "rerun OR deleted trigger", deliberately), so the cell has to.
+ *    beside the run it came from, looking cheaper for no visible reason. The
+ *    Triggered by cell (#1484) says the run IS a rerun; only this cell can say
+ *    what that does to its figure.
  *
  * The caveats `readCost` adds and this drops — floor-not-census exchange counts,
  * per-side token reporting — qualify facts the column does not show. They are
@@ -62,8 +62,8 @@ export interface CostCell {
  * `run.reseeded`'s copied nodes), because there it renders in cases the REST read
  * does not. Both are true; they differ in what is in hand.
  *
- * Note it is a different predicate from `runOriginOf`'s "manual" (`triggerId` and
- * `parentRunId` both null), which a rerun also satisfies. That one answers "who
+ * Note it is a different predicate from `runOriginOf`'s "manual" (no trigger and
+ * no parent), which a rerun also satisfies. That one answers "who
  * started this", this one "did it reuse work" — a rerun is manual AND
  * incremental, and neither predicate implies the other's meaning.
  *

@@ -363,6 +363,7 @@ export function createScheduleTickHandler(deps: ScheduleTickDeps): WakeupHandler
             // possibly-late actual `firedAt`, so a schedule expression reads the
             // slot it was armed for and is identical on a boot-recovered late fire.
             launcher.fire(trigger, {
+              fireKind: 'schedule',
               scheduledTime: new Date(delivery.scheduledFor).toISOString(),
             });
           } catch (err) {

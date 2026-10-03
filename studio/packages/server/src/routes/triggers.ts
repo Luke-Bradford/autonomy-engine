@@ -497,7 +497,10 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
     try {
-      const result = fastify.runLauncher.fire(trigger, { runNowParams: body.params });
+      const result = fastify.runLauncher.fire(trigger, {
+        fireKind: 'manual',
+        runNowParams: body.params,
+      });
       reply.status(202).send(result);
     } catch (err) {
       if (err instanceof UnboundTriggerError) {

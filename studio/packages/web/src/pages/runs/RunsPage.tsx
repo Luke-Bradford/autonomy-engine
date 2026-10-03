@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 import { Tab, TabList, ToggleButton } from '@fluentui/react-components';
 import {
   RunStatusSchema,
@@ -7,7 +14,7 @@ import {
   type TriggerPublic,
 } from '@autonomy-studio/shared';
 import { useStore } from 'zustand';
-import { Link, useSearchParams } from 'react-router';
+import { useHref, useNavigate, useSearchParams } from 'react-router';
 import { listRunAnnotations, listRuns } from '../../api/runs';
 import { usePagedList } from '../../hooks/usePagedList';
 import { getPipelineCost } from '../../api/pipelines';
@@ -19,7 +26,6 @@ import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore
 import { formatRunDuration, formatWhen } from './format';
 import { runDetailPath, runLinkLabel } from './runPath';
 import { runStatusLabel } from './runStatus';
-import { RUN_TYPE_LABEL, runTypeOf, runTypeTitle } from './runType';
 import { RunTimeline } from './RunTimeline';
 import {
   hasActiveRunFilters,
@@ -41,6 +47,8 @@ import { LabelledControl } from '../../lib/LabelledControl';
 import { FilterPicker } from './FilterPicker';
 import { RUN_GROUP_BYS, type RunGroupBy } from './runBars';
 import { versionLabel } from '../../lib/versionLabel';
+import { CopyableId } from '../../lib/CopyableId';
+import { RunTriggeredByName } from '../../lib/KindName';
 
 /**
  * U29 (#1015) — which rendering of the SAME filtered rows is on screen. A view,
@@ -119,6 +127,79 @@ function PipelineSpend({ summary }: { summary: PipelineCostSummary }) {
         {summary.excludes === null ? null : ` ${summary.excludes}`}
       </p>
     </section>
+  );
+}
+
+/**
+ * #1484 OR35 M1 — one row of the runs grid, and the whole row is the way into
+ * the run. The Run ID cell holds the REAL link (keyboard focus, Enter, the
+ * browser's own middle-click and context menu); the row's click handlers only
+ * extend that target to the rest of the row for a mouse. They stand down when
+ * the click landed on a control of its own (the link itself, the copy button)
+ * or ended a text selection, so copying a pipeline name never navigates. A
+ * middle click or a modified click opens the run in a new tab, as the link
+ * would.
+ */
+function RunRow({ run: r, loadedAt }: { run: RunSummary; loadedAt: number }) {
+  const navigate = useNavigate();
+  const path = runDetailPath(r.id);
+  const href = useHref(path);
+  const open = (e: ReactMouseEvent<HTMLTableRowElement>, newTab: boolean): void => {
+    if (e.target instanceof Element && e.target.closest('a, button, input, select, textarea')) {
+      return;
+    }
+    // Only a selection INSIDE this row means "I was selecting text"; a stale one
+    // elsewhere on the page must not make every row click do nothing.
+    const selection = window.getSelection();
+    if (
+      selection !== null &&
+      !selection.isCollapsed &&
+      selection.anchorNode !== null &&
+      e.currentTarget.contains(selection.anchorNode)
+    ) {
+      return;
+    }
+    if (newTab) window.open(href, '_blank', 'noopener');
+    else void navigate(path);
+  };
+  return (
+    <tr
+      className="runs-grid__row"
+      onClick={(e) => open(e, e.metaKey || e.ctrlKey || e.shiftKey)}
+      onAuxClick={(e) => {
+        if (e.button === 1) open(e, true);
+      }}
+    >
+      <td className="runs-grid__pipeline">
+        {/* R2 — the pipeline's NAME, which is the only thing here an operator
+            recognises. The version id stays reachable as the cell's title. */}
+        <span title={r.pipelineVersionId}>
+          {r.pipelineName}{' '}
+          <span className="run-version">{versionLabel(r.pipelineVersion, r.debug)}</span>
+        </span>
+      </td>
+      <td>
+        {/* #870 — the WORD comes from the Monitor's one run-status vocabulary;
+            the CLASS from the status itself, so hue and label cannot drift. */}
+        <span className={`run-status run-status-${r.status}`}>{runStatusLabel(r.status)}</span>
+      </td>
+      {/* #1484 — the server's `triggeredByKind`, plus the trigger's name when it
+          still exists. A rerun names its source run in the title (RS6). */}
+      <td title={r.rerunOf !== null ? `Rerun of run ${r.rerunOf}` : undefined}>
+        <RunTriggeredByName kind={r.triggeredByKind} />
+        {r.triggerName !== null && <span className="runs-grid__trigger"> · {r.triggerName}</span>}
+      </td>
+      <td>{formatWhen(r.startedAt)}</td>
+      {/* The finish TIMESTAMP is the cell's title (U10 fixed the column set). */}
+      <td className="num" title={formatWhen(r.finishedAt)}>
+        {formatRunDuration(r, loadedAt)}
+      </td>
+      {/* U27 slice 2 — the run detail page's own cost authority. */}
+      <RunCostCell run={r} />
+      <td>
+        <CopyableId id={r.id} noun="run" link={{ to: path, label: runLinkLabel('Open', r.id) }} />
+      </td>
+    </tr>
   );
 }
 
@@ -375,7 +456,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
   const visible = useMemo(() => filterRunsByTab(runs ?? [], tab), [runs, tab]);
 
   return (
-    <section aria-labelledby="runs-heading">
+    <section aria-labelledby="runs-heading" className="runs-page">
       <div className="page-header">
         <h2 id="runs-heading">Runs</h2>
         {/* A `role="group"` of toggles rather than a second Fluent `TabList`:
@@ -412,11 +493,6 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
           Refresh
         </button>
       </div>
-
-      <p className="page-hint">
-        Every fire of a trigger (or a scheduled window) creates a run. Open one to watch it unfold
-        live — its nodes and events stream in as the engine executes.
-      </p>
 
       {/* Worded apart because they are different news: a failed FIRST page
           means there are no runs on screen, while a failed older page means the
@@ -579,81 +655,25 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
                 onGroupByChange={(next) => setFilter(GROUP_PARAM, next === 'pipeline' ? '' : next)}
               />
             ) : (
-              <table>
+              <table className="runs-grid">
                 <thead>
                   <tr>
-                    <th scope="col">Run</th>
                     <th scope="col">Pipeline</th>
-                    <th scope="col">Trigger</th>
-                    <th scope="col">Type</th>
                     <th scope="col">Status</th>
+                    <th scope="col">Triggered by</th>
                     <th scope="col">Started</th>
-                    <th scope="col">Duration</th>
-                    <th scope="col">Cost</th>
-                    <th scope="col">Actions</th>
+                    <th scope="col" className="num">
+                      Duration
+                    </th>
+                    <th scope="col" className="num">
+                      Cost
+                    </th>
+                    <th scope="col">Run ID</th>
                   </tr>
                 </thead>
                 <tbody>
                   {visible.map((r) => (
-                    <tr key={r.id}>
-                      <td>
-                        <code>{r.id}</code>
-                      </td>
-                      <td>
-                        {/* R2 — the pipeline's NAME, which is the only thing here
-                            an operator recognises. The version id it replaced is
-                            not lost: it stays reachable as the cell's title, for
-                            the rare case someone needs the opaque key. */}
-                        <span title={r.pipelineVersionId}>
-                          {r.pipelineName}{' '}
-                          <span className="run-version">
-                            {versionLabel(r.pipelineVersion, r.debug)}
-                          </span>
-                        </span>
-                      </td>
-                      {/* `null` for a rerun, or a run whose trigger was deleted —
-                          an em-dash, never a manufactured name. */}
-                      <td>{r.triggerName ?? '—'}</td>
-                      {/* RS6 — the Run-type column: the one cell in the row that
-                          says a run REUSED another's work (the Trigger em-dash
-                          above means "rerun OR deleted trigger"). The source id is
-                          the cell's title, not a link: two reruns of one run would
-                          put two identically named "Source run …" links on the
-                          page, and Watch already reaches the detail page's own
-                          lineage link. */}
-                      <td title={runTypeTitle(r)}>{RUN_TYPE_LABEL[runTypeOf(r)]}</td>
-                      <td>
-                        {/* #870 — the WORD comes from the Monitor's one run-status
-                            vocabulary; the CLASS still comes from the status itself,
-                            so the pill's hue and its label cannot drift apart (and
-                            `palette.test.ts` keeps a rule for every member). No park
-                            reason is passed: this list reads the DB row, which has no
-                            such column — `runStatusLabel` owns that argument. */}
-                        <span className={`run-status run-status-${r.status}`}>
-                          {runStatusLabel(r.status)}
-                        </span>
-                      </td>
-                      <td>{formatWhen(r.startedAt)}</td>
-                      {/* Duration replaced the Finished column (U10 fixes the column
-                          set). The finish TIMESTAMP is not lost with it — it is the
-                          cell's title, the same demotion the pipeline cell applies to
-                          the version id. */}
-                      <td title={formatWhen(r.finishedAt)}>{formatRunDuration(r, loadedAt)}</td>
-                      {/* U27 slice 2 — the same headline authority the run detail
-                          page uses, so the two surfaces cannot say different things
-                          about one run's money. `costCell` owns which caveats
-                          survive the compression into one cell, and why. */}
-                      <RunCostCell run={r} />
-                      <td>
-                        {/* A real link, not `useNavigate()` on a button: the Shell
-                            section records that U10 owns this conversion. It gives
-                            the row action a hoverable/copyable/middle-clickable
-                            target, which a button never had. */}
-                        <Link to={runDetailPath(r.id)} aria-label={runLinkLabel('Watch', r.id)}>
-                          Watch
-                        </Link>
-                      </td>
-                    </tr>
+                    <RunRow key={r.id} run={r} loadedAt={loadedAt} />
                   ))}
                 </tbody>
               </table>

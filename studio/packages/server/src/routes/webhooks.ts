@@ -131,7 +131,11 @@ export const webhooksRoutes: FastifyPluginAsync = async (fastify) => {
       const outcome = fireTriggerThroughLedger(db, request.log, {
         triggerId,
         idempotencyKey,
-        fire: () => fastify.runLauncher.fire(trigger, { body: deriveBody(rawBody) }),
+        fire: () =>
+          fastify.runLauncher.fire(trigger, {
+            fireKind: 'webhook',
+            body: deriveBody(rawBody),
+          }),
       });
       switch (outcome.kind) {
         case 'duplicate':

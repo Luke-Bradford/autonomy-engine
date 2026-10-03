@@ -123,7 +123,7 @@ function fireSubscriber(
     const outcome = fireTriggerThroughLedger(db, fastify.log, {
       triggerId: trigger.id,
       idempotencyKey: idempotencyKey ?? null,
-      fire: () => fastify.runLauncher.fire(trigger, { body: payload }),
+      fire: () => fastify.runLauncher.fire(trigger, { fireKind: 'event', body: payload }),
     });
     switch (outcome.kind) {
       case 'duplicate':

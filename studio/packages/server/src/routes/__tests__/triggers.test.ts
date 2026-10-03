@@ -404,6 +404,8 @@ describe('triggers routes', () => {
       const result = fireRes.json();
       expect(result.outcome).toBe('started');
       expect(result.runId).toBeDefined();
+      // #1484 — Fire now is stamped MANUAL, whatever the trigger's own mode.
+      expect(getRun(app.db, result.runId)?.triggerContext?.fireKind).toBe('manual');
 
       // The run drives in the background — wait for it, then confirm success
       // + provenance through the public run API (the "fire → it runs" bar).

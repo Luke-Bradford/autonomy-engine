@@ -40,6 +40,7 @@ const sampleRunSummary = {
   debug: false,
   annotations: [],
   triggerName: 'Every morning',
+  triggeredByKind: 'schedule',
   /* #931 — the summary now carries the run's cost. `computeRunCost([])` rather
      than a literal, so the fixture cannot drift from `RunCost`'s own shape. */
   cost: computeRunCost([]),

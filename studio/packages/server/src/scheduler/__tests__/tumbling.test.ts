@@ -283,6 +283,7 @@ describe('window_due handler — fire + continue the chain', () => {
     expect(fl.fires.map((t) => t.id)).toEqual([trigger.id]);
     expect(fl.contexts).toEqual([
       {
+        fireKind: 'tumbling',
         scheduledTime: iso(W0_END),
         windowEpoch: windowConfigEpoch(CONFIG),
         windowStart: iso(T0),
@@ -1345,6 +1346,7 @@ describe('#5 S10 — backfill pass (sync)', () => {
     // #5 S11b — a BACKFILL fire carries the same window bounds as a live one
     // (both origins share `materializeOne`).
     expect(launcher.contexts[0]).toEqual({
+      fireKind: 'tumbling',
       scheduledTime: iso(W0_END),
       windowEpoch: windowConfigEpoch(BF10),
       windowStart: iso(T0),
@@ -2729,6 +2731,7 @@ describe('#5 S11c — per-trigger window retry', () => {
       // The new fire froze the SAME window context (S11b parity).
       const fl = launcher as ReturnType<typeof fakeLauncher>;
       expect(fl.contexts.at(-1)).toEqual({
+        fireKind: 'tumbling',
         scheduledTime: iso(W0_END),
         windowEpoch: key.configEpoch,
         windowStart: iso(T0),

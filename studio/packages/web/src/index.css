@@ -4423,6 +4423,79 @@ button.danger {
   color: var(--warning);
 }
 
+/* #1484 OR35 M1 — the runs list is a dense, full-width grid (the Monitor's
+   principle 1: data, not decoration). The page drops the 900px reading width
+   the way the canvas does; the Timeline view shares the page and widens too.
+   32px rows of 13px data, no wrapping, and numbers right-aligned in tabular
+   figures so durations and costs line up digit for digit.
+   FIXED layout with set column shares, and every cell ellipsizes: whatever a
+   row holds (a 200-character pipeline name, a long trigger name), the grid can
+   never be wider than the page. Measured: with automatic layout, the shared e2e
+   database's rows pushed the table past the viewport. */
+.content:has(.runs-page) {
+  max-width: none;
+}
+
+.runs-grid {
+  font-size: 13px;
+  table-layout: fixed;
+}
+
+.runs-grid th,
+.runs-grid td {
+  height: 32px;
+  padding: 0 0.6rem;
+  white-space: nowrap;
+  vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Column shares, in header order: Pipeline · Status · Triggered by · Started ·
+   Duration · Cost · Run ID. */
+.runs-grid th:nth-child(1) {
+  width: 28%;
+}
+.runs-grid th:nth-child(2) {
+  width: 9%;
+}
+.runs-grid th:nth-child(3) {
+  width: 19%;
+}
+.runs-grid th:nth-child(4) {
+  width: 14%;
+}
+.runs-grid th:nth-child(5),
+.runs-grid th:nth-child(6) {
+  width: 8%;
+}
+.runs-grid th:nth-child(7) {
+  width: 14%;
+}
+
+.runs-grid .num,
+.runs-grid .run-cost {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.runs-grid__row {
+  cursor: pointer;
+}
+
+.runs-grid__row:hover {
+  background: var(--panel-2);
+}
+
+.runs-grid__trigger {
+  color: var(--muted);
+}
+
+.runs-grid .copyable-id__copy {
+  padding: 0 0.4rem;
+  font-size: 12px;
+}
+
 /* U26 — the Monitor's filter pane. A wrapping row rather than a fixed grid: it
    sits above the tab strip on every width, and its controls are plain selects,
    so the only thing it genuinely needs is not to stack into a column on a wide
@@ -4443,6 +4516,15 @@ button.danger {
   gap: 0.2rem;
   font-size: 0.8rem;
   color: var(--muted);
+}
+
+/* #1484 — a native select is as wide as its longest option, so one long pipeline
+   or trigger name pushed the whole filter bar, and the page, past the viewport
+   (measured: a 200-character name put the Pipeline picker's right edge at 1622px
+   on a 1440px screen). Capped; the closed control ellipsizes, the open list
+   still shows every name in full. */
+.run-filters select {
+  max-width: 16rem;
 }
 
 /* U10 — the runs list's origin tabs are Fluent's own `TabList`, so only the

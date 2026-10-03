@@ -155,7 +155,8 @@ describe('schedule_tick handler — fire + continue the chain', () => {
     // as `scheduledTime`, so `${trigger.scheduledTime}` reads the slot it fired
     // for (immune to any lateness in actual delivery).
     expect((launcher as ReturnType<typeof fakeLauncher>).contexts).toEqual([
-      { scheduledTime: new Date(NOON).toISOString() },
+      // #1484 — and says it was a schedule tick, which the Monitor reads.
+      { fireKind: 'schedule', scheduledTime: new Date(NOON).toISOString() },
     ]);
 
     // The chain advanced: the NOON row is settled `fired`; a single pending row
