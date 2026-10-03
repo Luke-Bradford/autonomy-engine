@@ -161,6 +161,7 @@ describe('gitState', () => {
       source: saved,
       pullRequest: {
         state: 'open',
+        workingBranch: 'feature/x',
         number: 7,
         url: 'https://github.com/acme/widgets/pull/7',
         checkedAt: 1,
@@ -168,28 +169,48 @@ describe('gitState', () => {
     });
     expect(p?.link).toEqual({
       label: 'PR #7',
-      name: 'Pull request #7',
+      name: 'PR #7 (pull request)',
       href: 'https://github.com/acme/widgets/pull/7',
     });
     // Not in the label: the link is drawn after it, so it is never said twice.
     expect(p?.label).toBe('');
-    expect(p?.detail).toContain('Pull request #7 is open from feature/x.');
+    expect(p?.detail).toMatch(/Pull request #7 is open from feature\/x \(checked .+\)\./);
     expect(p?.tone).toBe('neutral');
+
+    // A reading for the branch this workspace was on before: not this one's.
+    const moved = gitState({
+      git: { ...git, workingBranch: 'feature/y' },
+      source: saved,
+      pullRequest: {
+        state: 'open',
+        workingBranch: 'feature/x',
+        number: 7,
+        url: 'https://github.com/acme/widgets/pull/7',
+        checkedAt: 1,
+      },
+    });
+    expect(moved?.link).toBeUndefined();
+    expect(moved?.detail).not.toContain('Pull request #7');
   });
 
   it('says there is no pull request only when the host said so', () => {
     const none = gitState({
       git,
       source: saved,
-      pullRequest: { state: 'none', checkedAt: 1 },
+      pullRequest: { state: 'none', workingBranch: 'feature/x', checkedAt: 1 },
     });
     expect(none?.link).toBeUndefined();
-    expect(none?.detail).toContain('No pull request is open from feature/x.');
+    expect(none?.detail).toMatch(/No pull request is open from feature\/x \(checked .+\)\./);
 
     const failed = gitState({
       git,
       source: saved,
-      pullRequest: { state: 'unknown', reason: 'lookup_failed', detail: 'HTTP 502' },
+      pullRequest: {
+        state: 'unknown',
+        workingBranch: 'feature/x',
+        reason: 'lookup_failed',
+        detail: 'HTTP 502',
+      },
     });
     expect(failed?.link).toBeUndefined();
     expect(failed?.detail).not.toContain('No pull request');
@@ -199,7 +220,12 @@ describe('gitState', () => {
     const noToken = gitState({
       git,
       source: saved,
-      pullRequest: { state: 'unknown', reason: 'no_token', detail: null },
+      pullRequest: {
+        state: 'unknown',
+        workingBranch: 'feature/x',
+        reason: 'no_token',
+        detail: null,
+      },
     });
     expect(noToken?.detail).toContain('Pull requests are not checked: no GitHub token is set.');
 
@@ -207,7 +233,12 @@ describe('gitState', () => {
     const local = gitState({
       git,
       source: saved,
-      pullRequest: { state: 'unknown', reason: 'unsupported_host', detail: null },
+      pullRequest: {
+        state: 'unknown',
+        workingBranch: 'feature/x',
+        reason: 'unsupported_host',
+        detail: null,
+      },
     });
     expect(local?.detail).toBe(gitState({ git, source: saved })?.detail);
   });

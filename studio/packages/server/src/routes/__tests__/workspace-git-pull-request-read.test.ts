@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
-import { afterEach, describe, expect, it } from 'vitest';
-import { createWorkspaceGit } from '../../repo/index.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createWorkspaceGit, setWorkspaceGitToken } from '../../repo/index.js';
+import { encrypt } from '../../secrets/secrets.js';
 import {
   GitHostApiError,
   type FindOpenPullRequestParams,
@@ -49,6 +50,7 @@ describe('GET /api/workspace/git/pull-request (#1476 OR28)', () => {
   let testApp: TestApp | undefined;
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await testApp?.app.close();
     testApp = undefined;
   });
@@ -91,6 +93,7 @@ describe('GET /api/workspace/git/pull-request (#1476 OR28)', () => {
     expect(status).toBe(200);
     expect(body.pullRequest).toMatchObject({
       state: 'open',
+      workingBranch: 'studio/local/work',
       number: 7,
       url: 'https://github.com/acme/widgets/pull/7',
     });
@@ -121,6 +124,7 @@ describe('GET /api/workspace/git/pull-request (#1476 OR28)', () => {
     expect(status).toBe(200);
     expect(body.pullRequest).toEqual({
       state: 'unknown',
+      workingBranch: 'studio/local/work',
       reason: 'lookup_failed',
       detail: 'GitHub pull-request lookup failed (HTTP 401): Bad credentials',
     });
@@ -138,12 +142,14 @@ describe('GET /api/workspace/git/pull-request (#1476 OR28)', () => {
     expect(detail).not.toContain('ghp_token');
   });
 
-  it('a non-git fault in the lookup is not swallowed into unknown', async () => {
-    const app = await boot({
-      hostClient: new FakeHostClient({ kind: 'throw', error: new Error('boom') }),
-    });
+  it('a non-git fault in the lookup is not swallowed into unknown, and is not kept', async () => {
+    const host = new FakeHostClient({ kind: 'throw', error: new Error('boom') });
+    const app = await boot({ hostClient: host });
     seed(app);
     expect((await read(app)).status).toBe(500);
+    host.outcome = { kind: 'found', pr: PR_7 };
+    expect((await read(app)).body.pullRequest).toMatchObject({ state: 'open', number: 7 });
+    expect(host.finds).toHaveLength(2);
   });
 
   it('no token → unknown/no_token, and the host is never asked', async () => {
@@ -152,6 +158,7 @@ describe('GET /api/workspace/git/pull-request (#1476 OR28)', () => {
     seed(app);
     expect((await read(app)).body.pullRequest).toEqual({
       state: 'unknown',
+      workingBranch: 'studio/local/work',
       reason: 'no_token',
       detail: null,
     });
@@ -164,6 +171,7 @@ describe('GET /api/workspace/git/pull-request (#1476 OR28)', () => {
     seed(app, '/tmp/some/local/repo');
     expect((await read(app)).body.pullRequest).toEqual({
       state: 'unknown',
+      workingBranch: 'studio/local/work',
       reason: 'unsupported_host',
       detail: null,
     });
@@ -191,6 +199,24 @@ describe('GET /api/workspace/git/pull-request (#1476 OR28)', () => {
     fresh.outcome = { kind: 'found', pr: PR_7 };
     expect((await read(every)).body.pullRequest).toMatchObject({ state: 'open', number: 7 });
     expect(fresh.finds).toHaveLength(2);
+  });
+
+  it('an answer expires once the window passes, and a clock that went back is stale', async () => {
+    const host = new FakeHostClient({ kind: 'found', pr: null });
+    const app = await boot({ hostClient: host, gitFetchMaxAgeMs: 60_000 });
+    seed(app);
+    const t0 = Date.now();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(t0);
+    await read(app);
+    now.mockReturnValue(t0 + 59_999);
+    await read(app);
+    expect(host.finds).toHaveLength(1);
+    now.mockReturnValue(t0 + 60_000);
+    await read(app);
+    expect(host.finds).toHaveLength(2);
+    now.mockReturnValue(t0 - 1);
+    await read(app);
+    expect(host.finds).toHaveLength(3);
   });
 
   it('a failed lookup waits out the window too, so a down host is not asked on every focus', async () => {
@@ -268,5 +294,40 @@ describe('GET /api/workspace/git/pull-request (#1476 OR28)', () => {
     host.outcome = { kind: 'found', pr: PR_7 };
     expect((await read(app)).body.pullRequest).toMatchObject({ state: 'open', number: 7 });
     expect(host.finds.at(-1)?.token).toBe('ghp_better');
+
+    // Clearing it falls back to the operator-env token: another credential,
+    // so asked again rather than served the stored token's answer.
+    const del = await app.inject({ method: 'DELETE', url: '/api/workspace/git/token' });
+    expect(del.statusCode).toBe(200);
+    await read(app);
+    expect(host.finds.map((f) => f.token)).toEqual(['ghp_token', 'ghp_better', 'ghp_token']);
+  });
+
+  it('an answer got with another credential is a miss, even when nothing evicted it', async () => {
+    // The token is written straight to the row, as a token change landing
+    // while a lookup was between its token read and its cache write would
+    // leave things: no route dropped the entry, so only the key can refuse it.
+    const host = new FakeHostClient({ kind: 'found', pr: null });
+    const app = await boot({ hostClient: host });
+    seed(app);
+    await read(app);
+    setWorkspaceGitToken(app.db, 'local', await encrypt('ghp_new', app.masterKey));
+    host.outcome = { kind: 'found', pr: PR_7 };
+    expect((await read(app)).body.pullRequest).toMatchObject({ state: 'open', number: 7 });
+    expect(host.finds.map((f) => f.token)).toEqual(['ghp_token', 'ghp_new']);
+  });
+
+  it('disconnecting drops the cached answer', async () => {
+    const host = new FakeHostClient({ kind: 'found', pr: PR_7 });
+    const app = await boot({ hostClient: host });
+    seed(app);
+    await read(app);
+    const gone = await app.inject({ method: 'DELETE', url: '/api/workspace/git' });
+    expect(gone.statusCode).toBe(204);
+    expect((await read(app)).status).toBe(404);
+    seed(app);
+    host.outcome = { kind: 'found', pr: null };
+    expect((await read(app)).body.pullRequest).toMatchObject({ state: 'none' });
+    expect(host.finds).toHaveLength(2);
   });
 });

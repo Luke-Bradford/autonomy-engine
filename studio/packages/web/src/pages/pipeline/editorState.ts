@@ -320,17 +320,21 @@ export function gitState({
       git.lastFetchAt === null ? 'Never fetched.' : `Last fetched ${formatWhen(git.lastFetchAt)}.`,
     );
   }
-  sentences.push(...pullRequestSentence(pullRequest, git.workingBranch));
+  // A reading for another branch (the branch changed while it was in flight)
+  // is not this branch's: no link rather than the old branch's PR.
+  const pr = pullRequest?.workingBranch === git.workingBranch ? pullRequest : undefined;
+  sentences.push(...pullRequestSentence(pr));
   return {
     name: `${git.workingBranch} → ${git.collabBranch}`,
     label: parts.join(' · '),
     detail: sentences.join(' '),
     tone,
-    ...(pullRequest?.state === 'open' && {
+    ...(pr?.state === 'open' && {
       link: {
-        label: `PR #${String(pullRequest.number)}`,
-        name: `Pull request #${String(pullRequest.number)}`,
-        href: pullRequest.url,
+        label: `PR #${String(pr.number)}`,
+        // Starts with the visible text, so voice control can say what it sees.
+        name: `PR #${String(pr.number)} (pull request)`,
+        href: pr.url,
       },
     }),
   };
@@ -342,15 +346,19 @@ export function gitState({
  * GitHub) says nothing — absent, not wrong. Never a tone: a PR is neither good
  * nor bad news.
  */
-function pullRequestSentence(
-  pr: WorkspaceGitPullRequestReading | undefined,
-  workingBranch: string,
-): string[] {
+function pullRequestSentence(pr: WorkspaceGitPullRequestReading | undefined): string[] {
   if (pr === undefined) return [];
+  // When the host answered: the server reuses one answer for a while.
   if (pr.state === 'open') {
-    return [`Pull request #${String(pr.number)} is open from ${workingBranch}.`];
+    return [
+      `Pull request #${String(pr.number)} is open from ${pr.workingBranch} (checked ${formatWhen(pr.checkedAt)}).`,
+    ];
   }
-  if (pr.state === 'none') return [`No pull request is open from ${workingBranch}.`];
+  if (pr.state === 'none') {
+    return [
+      `No pull request is open from ${pr.workingBranch} (checked ${formatWhen(pr.checkedAt)}).`,
+    ];
+  }
   if (pr.reason === 'no_token') return ['Pull requests are not checked: no GitHub token is set.'];
   if (pr.reason === 'lookup_failed') {
     return [

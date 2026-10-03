@@ -69,6 +69,7 @@ import {
 } from '../git/provider.js';
 import { GitHostApiError, GitHubHostClient, type GitHostClient } from '../git/github-host.js';
 import { redactSecrets } from '../connectors/redact.js';
+import { sha256Hex } from '../util/hash.js';
 import { decrypt, encrypt } from '../secrets/secrets.js';
 import { KeyedQueue } from '../util/keyed-queue.js';
 import { readyVersionResourceIds } from '../run/connection-readiness.js';
@@ -185,6 +186,18 @@ async function ensureCheckoutFetched(
 }
 
 /**
+ * Is a reading taken at `at` too old to reuse? `null` (never taken) is. So is a
+ * negative age — a clock that went back: stale, never "fresh until the clock
+ * catches up". Shared by `/sync`'s fetch and the pull-request read, so the two
+ * windows cannot disagree on what "older than `GIT_FETCH_MAX_AGE_SECONDS`" means.
+ */
+function isStale(at: number | null, maxAgeMs: number): boolean {
+  if (at === null) return true;
+  const age = Date.now() - at;
+  return age < 0 || age >= maxAgeMs;
+}
+
+/**
  * Resolve a repo-relative serialized path to an absolute path, asserting it
  * stays inside the checkout. Belt-and-braces (the G1 slug already neutralizes
  * `.`/`/` in a resource name, so a serialized path can't traverse) — the same
@@ -213,9 +226,10 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
   /**
    * #1476 OR28 — the last pull-request lookup per owner, for
    * `GET /api/workspace/git/pull-request`. One entry per owner: `key` is the
-   * question asked (repo + working branch), so a new branch or repo is a miss,
+   * question asked (repo, working branch, credential), so a new one is a miss,
    * not a second entry. The PROMISE is held, so concurrent reads share one host
-   * call; it never rejects (a non-host fault evicts the entry and rethrows).
+   * call. A host failure resolves as `lookup_failed` and is kept for the
+   * window; any other fault rejects and is evicted at once.
    */
   const pullRequestLookups = new Map<
     string,
@@ -649,10 +663,7 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       const provider = await resolveProvider(ownerId);
 
       const checkoutPresent = existsSync(join(checkoutDirFor(workspaceGitRoot, ownerId), '.git'));
-      // A negative age is a clock that went back: stale, never "fresh until the
-      // clock catches up".
-      const age = row.lastFetchAt === null ? null : Date.now() - row.lastFetchAt;
-      const stale = age === null || age < 0 || age >= opts.fetchMaxAgeMs;
+      const stale = isStale(row.lastFetchAt, opts.fetchMaxAgeMs);
       // A missing checkout re-clones at once — unless it is missing because the
       // last clone FAILED, which waits out the window like any failed fetch.
       const fetched = stale || (!checkoutPresent && row.lastFetchError === null);
@@ -890,57 +901,65 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
     const row = getWorkspaceGit(db, ownerId);
     if (!row) throw new NotFoundError('workspace git connection', ownerId);
 
-    const target = resolvePullRequestTarget(row.repoUrl, row.collabBranch, row.workingBranch);
+    const workingBranch = row.workingBranch;
+    const answer = (reading: WorkspaceGitPullRequestReading) => ({
+      pullRequest: WorkspaceGitPullRequestReadingSchema.parse(reading),
+    });
+
+    const target = resolvePullRequestTarget(row.repoUrl, row.collabBranch, workingBranch);
     if (target.provider !== 'github' || target.githubRepo === null) {
-      return { pullRequest: { state: 'unknown', reason: 'unsupported_host', detail: null } };
+      return answer({ state: 'unknown', workingBranch, reason: 'unsupported_host', detail: null });
     }
     // Before the cache: a stored token that will not decrypt hard-fails (500)
     // on every read, as on the POST, rather than serving an older answer.
     const token = await resolveEffectiveToken(ownerId);
     if (token === null) {
-      return { pullRequest: { state: 'unknown', reason: 'no_token', detail: null } };
+      return answer({ state: 'unknown', workingBranch, reason: 'no_token', detail: null });
     }
 
-    const key = `${row.repoUrl}\n${row.workingBranch}`;
+    // The token is in the key (hashed — the key is never sent anywhere), so an
+    // answer got with another credential is a miss even when a lookup started
+    // before a token change lands after it.
+    const key = `${row.repoUrl}\n${workingBranch}\n${sha256Hex(token)}`;
     const cached = pullRequestLookups.get(ownerId);
-    const age = cached === undefined ? null : Date.now() - cached.at;
-    if (
-      cached !== undefined &&
-      cached.key === key &&
-      age !== null &&
-      age >= 0 &&
-      age < opts.fetchMaxAgeMs
-    ) {
-      return { pullRequest: await cached.reading };
+    if (cached !== undefined && cached.key === key && !isStale(cached.at, opts.fetchMaxAgeMs)) {
+      return answer(await cached.reading);
     }
 
-    const githubRepo = target.githubRepo;
-    const head = row.workingBranch;
-    const at = Date.now();
-    const reading = hostClient.findOpenPullRequest({ repo: githubRepo, head, token }).then(
-      (pr): WorkspaceGitPullRequestReading =>
-        WorkspaceGitPullRequestReadingSchema.parse(
+    const reading = hostClient
+      .findOpenPullRequest({ repo: target.githubRepo, head: workingBranch, token })
+      .then(
+        (pr): WorkspaceGitPullRequestReading =>
           pr === null
-            ? { state: 'none', checkedAt: Date.now() }
-            : { state: 'open', number: pr.number, url: pr.htmlUrl, checkedAt: Date.now() },
-        ),
-      (err: unknown): WorkspaceGitPullRequestReading => {
-        if (err instanceof GitHostApiError) {
-          return {
-            state: 'unknown',
-            reason: 'lookup_failed',
-            detail: redactSecrets(err.message, [token]),
-          };
-        }
-        throw err;
-      },
-    );
-    const entry = { key, at, reading };
+            ? { state: 'none', workingBranch, checkedAt: Date.now() }
+            : {
+                state: 'open',
+                workingBranch,
+                number: pr.number,
+                url: pr.htmlUrl,
+                checkedAt: Date.now(),
+              },
+        (err: unknown): WorkspaceGitPullRequestReading => {
+          if (err instanceof GitHostApiError) {
+            return {
+              state: 'unknown',
+              workingBranch,
+              reason: 'lookup_failed',
+              // The client already redacts; this is the route's own guard, as
+              // the detail is the one host-authored string sent to the browser.
+              detail: redactSecrets(err.message, [token]),
+            };
+          }
+          throw err;
+        },
+      );
+    const entry = { key, at: Date.now(), reading };
     pullRequestLookups.set(ownerId, entry);
     try {
-      return { pullRequest: await reading };
+      return answer(await reading);
     } catch (err) {
-      // A fault that is not the host's answer is never cached.
+      // A fault that is not the host's answer is evicted, never kept: the next
+      // read asks again (a read already sharing this promise fails with it).
       if (pullRequestLookups.get(ownerId) === entry) pullRequestLookups.delete(ownerId);
       throw err;
     }

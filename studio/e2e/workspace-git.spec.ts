@@ -425,26 +425,32 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   const gitPrUrl = /\/api\/workspace\/git\/pull-request$/;
   await expect(gitPart).toBeVisible();
   await expect(gitPart.getByRole('link')).toHaveCount(0);
-  await page.route(gitPrUrl, (route) =>
-    route.fulfill({
+  // The real answer (`unknown`, this host cannot be asked), with the host's
+  // answer put in its place: the branch stays the one the server asked about.
+  await page.route(gitPrUrl, async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as { pullRequest: { workingBranch: string } };
+    await route.fulfill({
+      response,
       json: {
         pullRequest: {
           state: 'open',
+          workingBranch: body.pullRequest.workingBranch,
           number: 7,
           url: 'https://github.com/acme/widgets/pull/7',
           checkedAt: Date.now(),
         },
       },
-    }),
-  );
+    });
+  });
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  const prLink = gitPart.getByRole('link', { name: 'Pull request #7' });
+  const prLink = gitPart.getByRole('link', { name: 'PR #7 (pull request)' });
   await expect(prLink).toHaveText('PR #7');
   await expect(prLink).toHaveAttribute('href', 'https://github.com/acme/widgets/pull/7');
   await expect(prLink).toHaveAttribute('target', '_blank');
   await expect(prLink).toHaveAttribute('rel', 'noopener noreferrer');
   await expect(gitPart).toHaveText(/ · uncommitted · PR #7\./);
-  await expect(gitPart).toHaveAttribute('title', /Pull request #7 is open from \S+\./);
+  await expect(gitPart).toHaveAttribute('title', /Pull request #7 is open from \S+ \(checked /);
   await page.setViewportSize({ width: 1280, height: 720 });
   await expect(page.locator('.editor-state-badge__part[data-part="git"]')).toHaveCount(0);
   await editorMenuTrigger(page).click();

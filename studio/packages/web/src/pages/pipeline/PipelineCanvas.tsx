@@ -983,6 +983,7 @@ export function PipelineCanvas({
       onError: () => setGitPr(undefined),
     });
   }, [guardedPrLoad]);
+  // A trigger only: a new working branch is a new question for the server.
   const workingBranch = git?.workingBranch;
   useEffect(() => {
     if (gitConnected === true) refreshGitPr();

@@ -1,4 +1,4 @@
-import type { GitHostRepo } from '@autonomy-studio/shared';
+import { HTTP_URL_PATTERN, type GitHostRepo } from '@autonomy-studio/shared';
 import { redactSecrets } from '../connectors/redact.js';
 
 /**
@@ -207,7 +207,9 @@ export class GitHubHostClient implements GitHostClient {
    * GET the open PR from this head (into `base`, when given) — the observe
    * after a 422 already-exists, and #1476's badge read. Only a 200 list
    * answers; an empty list is `null`, anything else throws. `state=open`
-   * includes drafts.
+   * includes drafts. Without `base`, a head with PRs into several bases
+   * answers with the host's first. The `head` filter's owner is matched
+   * case-insensitively by GitHub (checked against the live API).
    */
   async findOpenPullRequest(params: FindOpenPullRequestParams): Promise<OpenedPullRequest | null> {
     const { repo, base, head, token } = params;
@@ -255,7 +257,7 @@ export class GitHubHostClient implements GitHostClient {
         Number.isInteger(number) &&
         number > 0 &&
         typeof htmlUrl === 'string' &&
-        /^https?:\/\/./i.test(htmlUrl)
+        HTTP_URL_PATTERN.test(htmlUrl)
       ) {
         return { number, htmlUrl };
       }
