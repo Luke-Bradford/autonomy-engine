@@ -1,5 +1,5 @@
-import type { WorkspaceGitStatus } from '@autonomy-studio/shared';
-import { shortSha } from '../../api/workspaceGit';
+import type { WorkspaceGitStatus, WorkspaceGitSync } from '@autonomy-studio/shared';
+import { describeDivergence, describePipelineDrift, shortSha } from '../../api/workspaceGit';
 import { formatWhen } from '../runs/format';
 import { activePhrase, type ActiveVersionLabel } from './versionHistory';
 
@@ -165,6 +165,12 @@ export function partText(part: BadgePart): string {
   return [part.name, part.label].filter((t) => t !== undefined && t !== '').join(' · ');
 }
 
+/** ` Imported from abc1234; it is now at def5678.` — only once main has moved. */
+function shasOf(state: string, from: string | null, to: string | null): string {
+  if ((state !== 'behind' && state !== 'diverged') || from === null || to === null) return '';
+  return ` Imported from ${shortSha(from)}; it is now at ${shortSha(to)}.`;
+}
+
 /** Where the version on the canvas came from in git, off its row. */
 export interface VersionSource {
   version: number;
@@ -180,6 +186,15 @@ export interface GitInput {
    * `loaded`), or `null` when nothing is saved yet.
    */
   source: VersionSource | null;
+  /**
+   * #1476 OR28 slice 6 — the repo compared with this workspace
+   * (`POST /api/workspace/git/sync`): `undefined` while unread or after a
+   * failed read, `null` when the server's last fetch failed so it compared
+   * nothing. Either way no drift or divergence is claimed.
+   */
+  sync?: WorkspaceGitSync | null;
+  /** The pipeline on the canvas, to pick its entry out of `sync.pipelines`. */
+  pipelineId?: string;
 }
 
 /**
@@ -196,11 +211,19 @@ export interface GitInput {
  * The repo's state is the one recorded at its last fetch — the read behind it
  * is a DB read, not a fetch — so the detail says when that was.
  *
- * Whether the branch has uncommitted work, or is behind or diverged from the
- * collaboration branch, is NOT said here. Both reads fetch the remote, and the
- * badge must not promise a state it has not read.
+ * #1476 slice 6 — with a `sync` reading it also says whether THIS pipeline is
+ * `uncommitted` (its latest saved version differs from the working branch),
+ * whether the collaboration branch has moved since the workspace last imported
+ * (`behind main — pull first`, or `diverged` when its history was rewritten —
+ * a workspace-wide fact, worded as one in the detail), and `in sync` when
+ * neither — or `committed` when main was never imported, so only the commit
+ * direction was compared. The reading is against the remote as fetched at `sync.fetchedAt`,
+ * and the detail says when that was. Without a reading — unread, or the
+ * server's fetch failed — none of these is claimed, and after a failed fetch
+ * the `fetch failed` state stands alone rather than beside a comparison made
+ * against refs it could not refresh.
  */
-export function gitState({ git, source }: GitInput): BadgePart | null {
+export function gitState({ git, source, sync, pipelineId }: GitInput): BadgePart | null {
   if (git === null || git === undefined) return null;
   const commit = source?.sourceCommit ?? null;
   const parts: string[] = [];
@@ -226,9 +249,55 @@ export function gitState({ git, source }: GitInput): BadgePart | null {
     sentences.push(`${git.collabBranch} was not found at the repo when it was last fetched.`);
     tone = 'warning';
   }
-  sentences.push(
-    git.lastFetchAt === null ? 'Never fetched.' : `Last fetched ${formatWhen(git.lastFetchAt)}.`,
-  );
+  // The tone only ever rises below: danger (`diverged`) is the last state set.
+  if (git.state !== 'fetch_error' && sync != null && pipelineId !== undefined) {
+    const change = sync.pipelines.find((p) => p.pipelineId === pipelineId)?.change;
+    const divergence = sync.divergence;
+    // Against whatever `base` is: before the working branch exists that is the
+    // collaboration branch, and naming the working branch then would describe a
+    // branch with no such state.
+    const against = sync.baseBranch ?? sync.workingBranch;
+    if (change !== undefined) {
+      parts.push('uncommitted');
+      sentences.push(describePipelineDrift(change, against));
+      tone = 'warning';
+    } else {
+      sentences.push(
+        `This pipeline matches ${against}` +
+          (sync.base !== null ? ` at ${shortSha(sync.base)}` : '') +
+          (against !== sync.workingBranch
+            ? `; ${sync.workingBranch} has not been created yet.`
+            : '.'),
+      );
+      // The workspace flag also counts what no pipeline entry carries (another
+      // resource kind, a committed file that will not parse), so this pipeline
+      // being clean is not the workspace being clean.
+      if (sync.hasUncommittedChanges) {
+        sentences.push('Other resources in this workspace are uncommitted.');
+      }
+    }
+    if (divergence.state === 'behind') {
+      parts.push(`behind ${git.collabBranch} — pull first`);
+      tone = 'warning';
+    } else if (divergence.state === 'diverged') {
+      parts.push('diverged');
+      tone = 'danger';
+    } else if (change === undefined) {
+      // `in sync` claims BOTH directions, so only once main was compared too; a
+      // workspace that never imported has only the commit direction.
+      parts.push(divergence.state === 'current' ? 'in sync' : 'committed');
+    }
+    // The Git page's own sentence, so the two surfaces say one thing.
+    sentences.push(
+      describeDivergence(divergence, git.collabBranch) +
+        shasOf(divergence.state, divergence.importBase, divergence.collabHead),
+    );
+    sentences.push(`Compared with the repo as fetched ${formatWhen(sync.fetchedAt)}.`);
+  } else {
+    sentences.push(
+      git.lastFetchAt === null ? 'Never fetched.' : `Last fetched ${formatWhen(git.lastFetchAt)}.`,
+    );
+  }
   return {
     name: `${git.workingBranch} → ${git.collabBranch}`,
     label: parts.join(' · '),

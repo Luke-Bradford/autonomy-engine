@@ -16,12 +16,16 @@ import {
   WorkspaceGitApplyResultSchema,
   WorkspaceGitDivergenceSchema,
   WorkspaceGitDriftSchema,
+  WorkspaceGitSyncSchema,
   WorkspaceGitImportPreviewSchema,
   deriveWorkspaceGitState,
   precheckDivergence,
   WorkspaceGitStatusSchema,
   type WorkspaceGit,
+  type WorkspaceGitDivergence,
   type WorkspaceGitDivergenceState,
+  type WorkspaceGitDrift,
+  type WorkspaceGitPipelineDrift,
 } from '@autonomy-studio/shared';
 import {
   appendWorkspaceEvent,
@@ -29,6 +33,7 @@ import {
   deleteWorkspaceGit,
   getWorkspaceGit,
   getWorkspaceGitToken,
+  listPipelines,
   listVersionResourceIds,
   setWorkspaceGitToken,
   updateWorkspaceGitImportedCommit,
@@ -49,6 +54,7 @@ import {
   serializeWorkspaceTolerant,
   unserializableDiagnostic,
   withoutResources,
+  type UnserializableResource,
 } from '../portability/index.js';
 import { checkoutDirFor, removeCheckoutDir } from '../git/checkout.js';
 import { readWorkspaceFilesAtRef } from '../git/workspace-read.js';
@@ -111,6 +117,12 @@ export interface WorkspaceGitRoutesOptions {
   githubToken?: string | null;
   /** #3 G9b — test seam for the GitHub host API; defaults to a real `GitHubHostClient`. */
   hostClient?: GitHostClient;
+  /**
+   * #1476 OR28 — how old the managed checkout's last fetch may be before
+   * `POST /api/workspace/git/sync` fetches again (ms). `0` fetches on every call.
+   * Resolved from `GIT_FETCH_MAX_AGE_SECONDS` at wiring time.
+   */
+  fetchMaxAgeMs: number;
 }
 
 function statusOf(db: Db, row: WorkspaceGit) {
@@ -237,6 +249,109 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       httpAuth: auth?.httpAuth,
       secretsToRedact: auth?.secrets ?? [],
     });
+  }
+
+  /**
+   * The drift report's body, run AFTER the caller's fetch decision: the POST
+   * /drift route always fetches first, `/sync` only when its copy is stale. Both
+   * then compare the DB against the refs as last fetched, so the two can never
+   * disagree on what "uncommitted" means. `row` is the post-fetch row (its
+   * `observedCollabHead` is the base fallback). Also returns the resources the
+   * tolerant serialize could not put in resourceId-space, which `/sync` maps to
+   * pipelines.
+   */
+  async function driftReport(
+    provider: GitProvider,
+    ownerId: string,
+    updated: WorkspaceGit,
+  ): Promise<{
+    drift: WorkspaceGitDrift;
+    baseBranch: string | null;
+    uncomparable: UnserializableResource[];
+  }> {
+    const workingBranch = WorkspaceGitBranchSchema.parse(updated.workingBranch);
+    const checkout = checkoutDirFor(workspaceGitRoot, ownerId);
+
+    // Base = what the next Commit would base on: the working-branch tip if it
+    // exists (a resolved sha), else the just-fetched collaboration head, else
+    // null (empty repo — nothing committed yet).
+    const workingHead = await provider.revParseRemoteBranch(checkout, workingBranch);
+    const base = workingHead ?? updated.observedCollabHead;
+
+    // The DB working copy through the SAME serialize+parse path import-preview
+    // uses, so both sides get identical volatile treatment (#666 archived
+    // omission included). #1043 — TOLERANT: a resource whose head cannot be put
+    // in resourceId-space has no comparable content form, so it is reported
+    // rather than 500ing this whole read-only report.
+    const serialized = serializeWorkspaceTolerant(db, ownerId);
+    const dbSnapshot = parseWorkspaceFiles(serialized.files);
+    const uncomparable = new Set(serialized.unserializable.map((o) => `${o.kind}:${o.resourceId}`));
+
+    // The committed snapshot at the base (empty when nothing is committed yet).
+    // An unreadable committed blob (#664) becomes a per-file `diagnostic`, not
+    // a 502 and not a silent `clean`.
+    const committedFiles =
+      base === null
+        ? { files: [], unreadable: [] }
+        : await readWorkspaceFilesAtRef(provider, checkout, base, MANAGED_DIRS);
+    const committed = parseWorkspaceFiles(committedFiles.files, committedFiles.unreadable);
+
+    // #1043 — the tolerant serialize already left the offenders out of the DB
+    // side; drop them from the COMMITTED side too, so an uncomparable resource
+    // is absent from BOTH. Leaving the committed file in would classify it
+    // `removed` — a claim the next Commit contradicts, since it refuses
+    // outright rather than dropping the resource from the branch.
+    const changes = computeDrift(dbSnapshot, withoutResources(committed, uncomparable));
+
+    // A committed file that would not parse yields no `change` (its content is
+    // uncomparable), but the next Commit's managed-dir reconcile WOULD drop it
+    // — so a diagnostic is itself uncommitted drift. Fold it into the flag
+    // (fail-safe: an uncomparable committed file is never a silent `clean`).
+    // #1043 — the DB-side diagnostics fold in for the SAME reason and it is
+    // load-bearing: an offender alone yields no `change` and no committed
+    // diagnostic, so reading the flag off those two would answer "no
+    // uncommitted changes" while the next Commit refuses. Fail-safe means the
+    // flag is computed over everything reported, never over a subset of it.
+    const diagnostics = [
+      ...committed.diagnostics,
+      ...serialized.unserializable.map(unserializableDiagnostic),
+    ];
+    const drift = WorkspaceGitDriftSchema.parse({
+      base,
+      hasUncommittedChanges: changes.length > 0 || diagnostics.length > 0,
+      changes,
+      diagnostics,
+    });
+    const baseBranch =
+      workingHead !== null ? workingBranch : base !== null ? updated.collabBranch : null;
+    return { drift, baseBranch, uncomparable: serialized.unserializable };
+  }
+
+  /** The divergence verdict's body, run after the caller's fetch decision (see `driftReport`). */
+  async function divergenceReport(
+    provider: GitProvider,
+    ownerId: string,
+    updated: WorkspaceGit,
+  ): Promise<WorkspaceGitDivergence> {
+    const checkout = checkoutDirFor(workspaceGitRoot, ownerId);
+
+    const importBase = updated.importedFromCommit;
+    const collabHead = updated.observedCollabHead;
+    const precheck = precheckDivergence(importBase, collabHead);
+
+    let state: WorkspaceGitDivergenceState;
+    if (precheck === 'needs-history') {
+      // Both shas are non-null here (precheck returned needs-history), so the
+      // non-null assertions are sound; the walk splits fast-forward from rewrite.
+      state = (await provider.isAncestor(checkout, importBase!, collabHead!))
+        ? 'behind'
+        : 'diverged';
+    } else {
+      // 'unknown' | 'current' map straight through.
+      state = precheck;
+    }
+
+    return WorkspaceGitDivergenceSchema.parse({ state, importBase, collabHead });
   }
 
   fastify.get('/api/workspace/git', async (request) => {
@@ -435,66 +550,12 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
     const drift = await queue.run(ownerId, async () => {
       const row = getWorkspaceGit(db, ownerId);
       if (!row) throw new NotFoundError('workspace git connection', ownerId);
-      const workingBranch = WorkspaceGitBranchSchema.parse(row.workingBranch);
       const provider = await resolveProvider(ownerId);
 
       // Fetch first (records the same tracking the fetch route does) so the base
       // refs are current; a fetch failure records + rethrows before any drift work.
       const updated = await ensureCheckoutFetched(db, provider, workspaceGitRoot, ownerId, row);
-      const checkout = checkoutDirFor(workspaceGitRoot, ownerId);
-
-      // Base = what the next Commit would base on: the working-branch tip if it
-      // exists (a resolved sha), else the just-fetched collaboration head, else
-      // null (empty repo — nothing committed yet).
-      const workingHead = await provider.revParseRemoteBranch(checkout, workingBranch);
-      const base = workingHead ?? updated.observedCollabHead;
-
-      // The DB working copy through the SAME serialize+parse path import-preview
-      // uses, so both sides get identical volatile treatment (#666 archived
-      // omission included). #1043 — TOLERANT: a resource whose head cannot be put
-      // in resourceId-space has no comparable content form, so it is reported
-      // rather than 500ing this whole read-only report.
-      const serialized = serializeWorkspaceTolerant(db, ownerId);
-      const dbSnapshot = parseWorkspaceFiles(serialized.files);
-      const uncomparable = new Set(
-        serialized.unserializable.map((o) => `${o.kind}:${o.resourceId}`),
-      );
-
-      // The committed snapshot at the base (empty when nothing is committed yet).
-      // An unreadable committed blob (#664) becomes a per-file `diagnostic`, not
-      // a 502 and not a silent `clean`.
-      const committedFiles =
-        base === null
-          ? { files: [], unreadable: [] }
-          : await readWorkspaceFilesAtRef(provider, checkout, base, MANAGED_DIRS);
-      const committed = parseWorkspaceFiles(committedFiles.files, committedFiles.unreadable);
-
-      // #1043 — the tolerant serialize already left the offenders out of the DB
-      // side; drop them from the COMMITTED side too, so an uncomparable resource
-      // is absent from BOTH. Leaving the committed file in would classify it
-      // `removed` — a claim the next Commit contradicts, since it refuses
-      // outright rather than dropping the resource from the branch.
-      const changes = computeDrift(dbSnapshot, withoutResources(committed, uncomparable));
-
-      // A committed file that would not parse yields no `change` (its content is
-      // uncomparable), but the next Commit's managed-dir reconcile WOULD drop it
-      // — so a diagnostic is itself uncommitted drift. Fold it into the flag
-      // (fail-safe: an uncomparable committed file is never a silent `clean`).
-      // #1043 — the DB-side diagnostics fold in for the SAME reason and it is
-      // load-bearing: an offender alone yields no `change` and no committed
-      // diagnostic, so reading the flag off those two would answer "no
-      // uncommitted changes" while the next Commit refuses. Fail-safe means the
-      // flag is computed over everything reported, never over a subset of it.
-      const diagnostics = [
-        ...committed.diagnostics,
-        ...serialized.unserializable.map(unserializableDiagnostic),
-      ];
-      return WorkspaceGitDriftSchema.parse({
-        base,
-        hasUncommittedChanges: changes.length > 0 || diagnostics.length > 0,
-        changes,
-        diagnostics,
-      });
+      return (await driftReport(provider, ownerId, updated)).drift;
     });
 
     return { drift };
@@ -536,28 +597,100 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       // collab head is current; a fetch failure records + rethrows before any
       // divergence work.
       const updated = await ensureCheckoutFetched(db, provider, workspaceGitRoot, ownerId, row);
-      const checkout = checkoutDirFor(workspaceGitRoot, ownerId);
-
-      const importBase = updated.importedFromCommit;
-      const collabHead = updated.observedCollabHead;
-      const precheck = precheckDivergence(importBase, collabHead);
-
-      let state: WorkspaceGitDivergenceState;
-      if (precheck === 'needs-history') {
-        // Both shas are non-null here (precheck returned needs-history), so the
-        // non-null assertions are sound; the walk splits fast-forward from rewrite.
-        state = (await provider.isAncestor(checkout, importBase!, collabHead!))
-          ? 'behind'
-          : 'diverged';
-      } else {
-        // 'unknown' | 'current' map straight through.
-        state = precheck;
-      }
-
-      return WorkspaceGitDivergenceSchema.parse({ state, importBase, collabHead });
+      return divergenceReport(provider, ownerId, updated);
     });
 
     return { divergence };
+  });
+
+  /**
+   * #1476 OR28 — the editor badge's git reading: drift (which pipelines differ
+   * from the working branch) and divergence (has the collaboration branch moved
+   * since the last import), in one read.
+   *
+   * The REFRESH POLICY is the point of this route. `/drift` and `/divergence`
+   * fetch the remote on every call, which is right for an explicit "Check" and
+   * wrong for a badge read on every open, focus and save. Here the fetch runs
+   * only when the checkout's copy is older than `fetchMaxAgeMs` (hoster config,
+   * `GIT_FETCH_MAX_AGE_SECONDS`), or the checkout is missing (a wiped checkout
+   * must re-clone, not 502 until the window passes). The comparison itself is
+   * local and runs every call, so a save shows as uncommitted at once. The
+   * answer carries `fetchedAt` so it says how old its view of the remote is.
+   *
+   * A failed fetch — now, or recorded within the window — answers `sync: null`:
+   * comparing against refs a fetch could not refresh would claim a state nobody
+   * read. The failure itself is on the row (`lastFetchError`), where the status
+   * read already reports it. An error state waits out the window like any
+   * other, so a remote that is down is not re-fetched on every focus while each
+   * attempt holds the owner's queue.
+   *
+   * POST, like `/drift`: it may fetch, which writes the row's fetch tracking.
+   */
+  fastify.post('/api/workspace/git/sync', async (request) => {
+    const ownerId = request.principal.ownerId;
+
+    const sync = await queue.run(ownerId, async () => {
+      let row = getWorkspaceGit(db, ownerId);
+      if (!row) throw new NotFoundError('workspace git connection', ownerId);
+      const provider = await resolveProvider(ownerId);
+
+      const checkoutPresent = existsSync(join(checkoutDirFor(workspaceGitRoot, ownerId), '.git'));
+      // A negative age is a clock that went back: stale, never "fresh until the
+      // clock catches up".
+      const age = row.lastFetchAt === null ? null : Date.now() - row.lastFetchAt;
+      const stale = age === null || age < 0 || age >= opts.fetchMaxAgeMs;
+      // A missing checkout re-clones at once — unless it is missing because the
+      // last clone FAILED, which waits out the window like any failed fetch.
+      const fetched = stale || (!checkoutPresent && row.lastFetchError === null);
+      if (fetched) {
+        try {
+          row = await ensureCheckoutFetched(db, provider, workspaceGitRoot, ownerId, row);
+        } catch (err) {
+          // Recorded on the row by `ensureCheckoutFetched`; anything else is a
+          // real fault and keeps its status code.
+          if (err instanceof GitOperationError || err instanceof GitUnavailableError) return null;
+          throw err;
+        }
+      }
+      if (row.lastFetchError !== null || row.lastFetchAt === null) return null;
+
+      const { drift, baseBranch, uncomparable } = await driftReport(provider, ownerId, row);
+      const divergence = await divergenceReport(provider, ownerId, row);
+
+      // Drift names resources by their stable `resourceId`; the editor knows its
+      // pipeline by row id. Archived rows are included: an archived pipeline is
+      // left out of the serialized workspace, so one still on the branch is
+      // `removed`, and its editor should say so.
+      const pipelineIdByResource = new Map(
+        listPipelines(db, ownerId).map((p) => [p.resourceId, p.id] as const),
+      );
+      const pipelines: WorkspaceGitPipelineDrift[] = [];
+      for (const c of drift.changes) {
+        const pipelineId =
+          c.kind === 'pipeline' && c.resourceId !== null
+            ? pipelineIdByResource.get(c.resourceId)
+            : undefined;
+        if (pipelineId !== undefined) pipelines.push({ pipelineId, change: c.change });
+      }
+      for (const u of uncomparable) {
+        const pipelineId =
+          u.kind === 'pipeline' ? pipelineIdByResource.get(u.resourceId) : undefined;
+        if (pipelineId !== undefined) pipelines.push({ pipelineId, change: 'uncomparable' });
+      }
+
+      return WorkspaceGitSyncSchema.parse({
+        fetchedAt: row.lastFetchAt,
+        fetched,
+        workingBranch: row.workingBranch,
+        base: drift.base,
+        baseBranch,
+        hasUncommittedChanges: drift.hasUncommittedChanges,
+        pipelines,
+        divergence,
+      });
+    });
+
+    return { sync };
   });
 
   /**

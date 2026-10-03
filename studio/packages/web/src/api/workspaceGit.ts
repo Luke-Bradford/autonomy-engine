@@ -9,6 +9,7 @@ import {
   WorkspaceGitDriftSchema,
   WorkspaceGitImportPreviewSchema,
   WorkspaceGitStatusSchema,
+  WorkspaceGitSyncSchema,
   type CommitWorkspaceGitBody,
   type ConnectWorkspaceGitBody,
   type SetWorkspaceGitTokenBody,
@@ -19,8 +20,10 @@ import {
   type WorkspaceGitDivergence,
   type WorkspaceGitDrift,
   type WorkspaceGitDriftChange,
+  type WorkspaceGitPipelineDrift,
   type WorkspaceGitImportPreview,
   type WorkspaceGitStatus,
+  type WorkspaceGitSync,
 } from '@autonomy-studio/shared';
 import { apiFetch } from './client';
 
@@ -43,6 +46,7 @@ const NullableGitEnvelopeSchema = z.object({ git: WorkspaceGitStatusSchema.nulla
 const DriftEnvelopeSchema = z.object({ drift: WorkspaceGitDriftSchema });
 const CommitEnvelopeSchema = z.object({ commit: WorkspaceGitCommitResultSchema });
 const DivergenceEnvelopeSchema = z.object({ divergence: WorkspaceGitDivergenceSchema });
+const SyncEnvelopeSchema = z.object({ sync: WorkspaceGitSyncSchema.nullable() });
 const PreviewEnvelopeSchema = z.object({ preview: WorkspaceGitImportPreviewSchema });
 const ApplyEnvelopeSchema = z.object({ import: WorkspaceGitApplyResultSchema });
 
@@ -65,6 +69,24 @@ export function getWorkspaceGit(signal?: AbortSignal): Promise<WorkspaceGitStatu
   return apiFetch('/api/workspace/git', { schema: NullableGitEnvelopeSchema, signal }).then(
     (r) => r.git,
   );
+}
+
+/**
+ * #1476 OR28 — the editor badge's git reading: which pipelines differ from the
+ * working branch, and whether main has moved since the last import.
+ *
+ * Cheap to call on open, focus and save: the server fetches the remote only
+ * when its copy is older than the hoster's `GIT_FETCH_MAX_AGE_SECONDS`, and
+ * says how old it is (`fetchedAt`). `null` means the last fetch failed, so
+ * nothing was compared — the failure itself is on the status (`fetch_error`).
+ * A POST because it may fetch; see `readWorkspaceGitDrift`.
+ */
+export function readWorkspaceGitSync(signal?: AbortSignal): Promise<WorkspaceGitSync | null> {
+  return apiFetch('/api/workspace/git/sync', {
+    method: 'POST',
+    schema: SyncEnvelopeSchema,
+    signal,
+  }).then((r) => r.sync);
 }
 
 export function connectWorkspaceGit(body: ConnectWorkspaceGitBody): Promise<WorkspaceGitStatus> {
@@ -284,6 +306,60 @@ export function describeDriftChange(change: WorkspaceGitDriftChange): string {
       return 'content differs';
     case 'renamed':
       return 'renamed';
+  }
+}
+
+/**
+ * The divergence sentence.
+ *
+ * `unknown` has TWO causes and they are not the same news: the server's
+ * precheck returns it when the import base is null (this workspace has never
+ * imported) OR when the collab head is null (the branch is empty, or was
+ * deleted at the remote). Both shas are in the payload, so the reader is told
+ * which — one sentence covering both would be false for whichever case it was
+ * not written for.
+ */
+export function describeDivergence(
+  divergence: WorkspaceGitDivergence,
+  collabBranch: string,
+): string {
+  switch (divergence.state) {
+    case 'current':
+      return `Up to date with ${collabBranch}.`;
+    case 'behind':
+      return `${collabBranch} has moved on since this workspace last imported. Importing brings it up to date.`;
+    case 'diverged':
+      return `${collabBranch}'s history was rewritten since this workspace last imported — importing replaces local resources with the branch's, and the commits this workspace came from are no longer on it.`;
+    case 'unknown':
+      if (divergence.importBase === null && divergence.collabHead === null)
+        return `This workspace has never imported, and ${collabBranch} has no commits at the remote.`;
+      if (divergence.importBase === null)
+        return `This workspace has never imported from ${collabBranch}, so there is nothing to compare against — everything on the branch is incoming.`;
+      return `${collabBranch} has no commits at the remote, or no longer exists.`;
+  }
+}
+
+/**
+ * #1476 OR28 — one pipeline's drift as a sentence about THAT pipeline, for the
+ * editor's git badge. Beside `describeDriftChange` (the drift table's cell)
+ * rather than built from it: a cell names a row, a sentence has a subject, and
+ * the badge also says `uncomparable`, which the table reports as a diagnostic.
+ */
+export function describePipelineDrift(
+  change: WorkspaceGitPipelineDrift['change'],
+  branch: string,
+): string {
+  switch (change) {
+    case 'added':
+      return `This pipeline is not on ${branch} yet.`;
+    case 'modified':
+      return `Its latest saved version differs from ${branch}.`;
+    case 'renamed':
+      return `It was renamed here; ${branch} still has the old name.`;
+    case 'removed':
+      return `It is archived here but still on ${branch}.`;
+    case 'uncomparable':
+      return `Its latest saved version could not be compared with ${branch}, so it is counted as uncommitted.`;
   }
 }
 

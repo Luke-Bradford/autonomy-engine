@@ -64,9 +64,13 @@ export async function openExistingCanvas(page: Page, name: string): Promise<void
   await page.locator('.react-flow__renderer').waitFor();
 }
 
-/** #1397 — the pipeline editor header's ⋯ menu button. */
+/**
+ * #1397 — the pipeline editor header's ⋯ menu button. Its name gains a
+ * `(git: …)` suffix when an amber or red git state is folded into it (#1476),
+ * so it is matched by prefix; specs that pin the suffix assert it directly.
+ */
 export function editorMenuTrigger(page: Page): Locator {
-  return page.getByRole('button', { name: 'More pipeline actions', exact: true });
+  return page.getByRole('button', { name: /^More pipeline actions(?: \(git: .*\))?$/ });
 }
 
 /**

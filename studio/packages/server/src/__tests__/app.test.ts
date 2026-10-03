@@ -9,6 +9,8 @@ import {
   DEFAULT_WEBHOOK_RETENTION_MS,
   resolvePort,
   resolveRetentionCount,
+  resolveGitFetchMaxAgeMs,
+  DEFAULT_GIT_FETCH_MAX_AGE_MS,
   resolveRetentionMs,
 } from '../index.js';
 import { RETENTION_BATCH, RETENTION_MAX_BATCHES_PER_SWEEP } from '../repo/retention.js';
@@ -69,6 +71,24 @@ describe('resolveRetentionMs (#464/#421)', () => {
     expect(resolveRetentionMs(undefined, webhook)).toBe(DEFAULT_WEBHOOK_RETENTION_MS);
     expect(DEFAULT_WEBHOOK_RETENTION_MS).toBe(30 * MS_PER_DAY);
     expect(() => resolveRetentionMs('nope', webhook)).toThrow(/Invalid WEBHOOK_RETENTION_DAYS/);
+  });
+});
+
+describe('resolveGitFetchMaxAgeMs (#1476)', () => {
+  it('defaults to two minutes when unset, empty, or whitespace', () => {
+    expect(DEFAULT_GIT_FETCH_MAX_AGE_MS).toBe(120_000);
+    expect(resolveGitFetchMaxAgeMs(undefined)).toBe(DEFAULT_GIT_FETCH_MAX_AGE_MS);
+    expect(resolveGitFetchMaxAgeMs('')).toBe(DEFAULT_GIT_FETCH_MAX_AGE_MS);
+    expect(resolveGitFetchMaxAgeMs('  ')).toBe(DEFAULT_GIT_FETCH_MAX_AGE_MS);
+  });
+  it('reads seconds, and 0 means fetch on every read', () => {
+    expect(resolveGitFetchMaxAgeMs('30')).toBe(30_000);
+    expect(resolveGitFetchMaxAgeMs('0')).toBe(0);
+  });
+  it('throws on a negative, a fraction, or non-numeric', () => {
+    expect(() => resolveGitFetchMaxAgeMs('-1')).toThrow(/Invalid GIT_FETCH_MAX_AGE_SECONDS/);
+    expect(() => resolveGitFetchMaxAgeMs('1.5')).toThrow(/Invalid GIT_FETCH_MAX_AGE_SECONDS/);
+    expect(() => resolveGitFetchMaxAgeMs('abc')).toThrow(/Invalid GIT_FETCH_MAX_AGE_SECONDS/);
   });
 });
 
