@@ -7,7 +7,11 @@ import {
   type RefObject,
   type SetStateAction,
 } from 'react';
-import { useUnsavedChangesGuard, type UnsavedChangesGuard } from './useUnsavedChangesGuard';
+import {
+  useUnsavedChangesGuard,
+  type UnsavedChangesGuard,
+  type UnsavedChangesGuardOptions,
+} from './useUnsavedChangesGuard';
 
 /**
  * #1396 — the page-side state of a resource form that opens in a `FormDrawer`:
@@ -46,6 +50,9 @@ export interface DrawerForm<F> {
    */
   readonly isLatest: (seq: number) => boolean;
   readonly guard: UnsavedChangesGuard;
+  /** The open form differs from what it opened with. #1476 — a host that holds
+   * route changes itself (the editor) folds this into its own guard. */
+  readonly dirty: boolean;
   /**
    * The button that opened the form on screen, so closing it returns focus
    * there. Set it when the open actually HAPPENS (inside the guarded action),
@@ -72,7 +79,12 @@ export interface DrawerForm<F> {
 
 export type { UnsavedChangesGuard };
 
-export function useDrawerForm<F>(signatureOf: (form: F) => string): DrawerForm<F> {
+export function useDrawerForm<F>(
+  signatureOf: (form: F) => string,
+  /** #1476 — `{ holdRoute: false }` where the host page already holds route
+   * changes: React Router consults only one blocker at a time. */
+  guardOptions?: UnsavedChangesGuardOptions,
+): DrawerForm<F> {
   const [form, setForm] = useState<F | null>(null);
   const [seq, setSeq] = useState(0);
   const latestSeq = useRef(0);
@@ -94,7 +106,7 @@ export function useDrawerForm<F>(signatureOf: (form: F) => string): DrawerForm<F
     () => form !== null && signatureOf(form) !== openedAs,
     [form, openedAs, signatureOf],
   );
-  const guard = useUnsavedChangesGuard(dirty);
+  const guard = useUnsavedChangesGuard(dirty, guardOptions);
   const isLatest = useCallback((s: number) => latestSeq.current === s, []);
   const { request } = guard;
   const openFrom = useCallback(
@@ -123,6 +135,7 @@ export function useDrawerForm<F>(signatureOf: (form: F) => string): DrawerForm<F
     seq,
     isLatest,
     guard,
+    dirty,
     openerRef,
     openFrom,
     requestClose,

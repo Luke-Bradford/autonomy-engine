@@ -37,7 +37,8 @@ export interface UnsavedChangesGuard {
 export interface UnsavedChangesGuardOptions {
   /**
    * Which route changes to hold while dirty. Every one by default: a resource
-   * form closes on any navigation.
+   * form closes on any navigation. `false` holds none, for a form inside a
+   * page that holds route changes itself.
    */
   readonly holdRoute?: boolean | BlockerFunction;
 }
@@ -98,7 +99,10 @@ export function useUnsavedChangesGuard(
     request,
     discard,
     keep,
-    routeHold: dirty ? <RouteHold when={holdRoute} onBlocked={setBlocked} /> : null,
+    // `false` mounts no blocker at all: even `useBlocker(false)` registers one,
+    // and the router consults only one (#1476 — the editor's own leave guard).
+    routeHold:
+      dirty && holdRoute !== false ? <RouteHold when={holdRoute} onBlocked={setBlocked} /> : null,
   };
 }
 
