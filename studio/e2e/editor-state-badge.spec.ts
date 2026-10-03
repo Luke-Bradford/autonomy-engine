@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { dragNodeBy, viewportSettled } from './support/canvasGraph';
-import { editorMenuItem } from './support/canvas';
+import { editorMenuItem, triggerMenuItem } from './support/canvas';
 import { fluentRootReady } from './support/theme';
 import { mintVersion, nodeById, seedVersion, type SeedDoc } from './support/seedDoc';
 
@@ -152,6 +152,12 @@ test('a version saved elsewhere reaches the badge and the history on focus', asy
   const history = page.getByTestId('version-history');
   await expect(history.getByRole('button', { name: /^v2\b/ })).toHaveCount(0);
 
+  // The Run form is open on v1 when v2 lands: it must stay on the version it
+  // named rather than follow the head and remount.
+  await (await triggerMenuItem(page, /^Trigger now/)).click();
+  const runForm = page.getByRole('dialog', { name: 'Run v1' });
+  await expect(runForm).toBeVisible();
+
   await mintVersion(page, pipelineId, V2, v1, name);
   // Nothing on the page has asked yet: the claim is still the open-time one.
   await expect(part(page, 'editing')).toHaveText(/^v1 \(latest\)/);
@@ -168,6 +174,8 @@ test('a version saved elsewhere reaches the badge and the history on focus', asy
   // The canvas was not moved: the operator is still on the version they opened.
   await expect(nodeById(page, 'n_c')).toHaveCount(0);
   await expect(page.locator('.notice-conflict')).toHaveCount(0);
+  await expect(runForm).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Run v2' })).toHaveCount(0);
   // DB-only: no repo, so no git part either.
   await expect(badge(page).locator('[data-part="git"]')).toHaveCount(0);
 

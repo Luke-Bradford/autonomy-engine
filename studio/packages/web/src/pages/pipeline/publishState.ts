@@ -41,3 +41,28 @@ export async function readPublishState(
   ]);
   return { active, gitConnected: git !== null, git };
 }
+
+/**
+ * #1502 — an order for the reads of one piece of state that several callers
+ * read and one caller writes (the editor's publish state: read on open, on
+ * focus and after a refused publish; written by a publish). Every read and
+ * write takes the next ticket; an answer applies only if its ticket is newer
+ * than the last one applied, and applying records it. A read that FAILS applies
+ * nothing, so it voids nothing: an older read still in flight is then the
+ * newest answer, and lands.
+ */
+export interface ReadSequence {
+  issued: number;
+  applied: number;
+}
+
+export function takeTicket(seq: ReadSequence): number {
+  return ++seq.issued;
+}
+
+/** Whether an answer with this ticket is newer than what is applied; if so, it now is. */
+export function claimTicket(seq: ReadSequence, ticket: number): boolean {
+  if (ticket <= seq.applied) return false;
+  seq.applied = ticket;
+  return true;
+}

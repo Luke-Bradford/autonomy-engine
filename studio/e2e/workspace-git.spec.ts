@@ -548,7 +548,8 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await expect(page.getByRole('form', { name: 'Connect a repository' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Connected', exact: true })).toHaveCount(0);
 
-  await expectQuiet(page, problems);
+  // The one console error is the git read this spec aborts on purpose (#1502).
+  await expectQuiet(page, problems, [/^console\.error: Failed to load resource: net::ERR_FAILED$/]);
 });
 
 test('the Git section is reachable from the Manage pane', async ({ page }) => {

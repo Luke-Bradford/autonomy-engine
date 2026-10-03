@@ -207,7 +207,7 @@ import { leavesPath } from '../../lib/form/leavesPath';
 import { UnsavedChangesPrompt } from '../../lib/form/UnsavedChangesPrompt';
 import { FormSection } from '../../lib/form/FormSection';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
-import { readPublishState } from './publishState';
+import { claimTicket, readPublishState, takeTicket, type ReadSequence } from './publishState';
 import { EditorStateBadge } from './EditorStateBadge';
 import { canvasVersion, editingState, gitState, liveState, partText } from './editorState';
 import { LabelledControl } from '../../lib/LabelledControl';
@@ -309,26 +309,6 @@ function draftBody(s: CanvasState) {
  * into a working store, renders the React Flow editor with a palette and a
  * property panel, and saves the working graph as a NEW immutable version.
  */
-/**
- * #1502 — an ordering for reads of one piece of state that several callers
- * read and one caller writes: see `publishSeq` in the editor.
- */
-interface ReadSequence {
-  issued: number;
-  applied: number;
-}
-
-function takeTicket(seq: ReadSequence): number {
-  return ++seq.issued;
-}
-
-/** Whether an answer with this ticket is newer than what is applied; if so, it now is. */
-function claimTicket(seq: ReadSequence, ticket: number): boolean {
-  if (ticket <= seq.applied) return false;
-  seq.applied = ticket;
-  return true;
-}
-
 export function PipelineCanvas({
   pipelineId,
   pipelineName,
