@@ -1,6 +1,20 @@
 import { z } from 'zod';
 
 /**
+ * #1484 OR35 M1 — HOW a trigger fired, stamped at fire time by the caller that
+ * fired it (`FireContext.fireKind`). The trigger's own `mode` cannot say this:
+ * Fire now on a schedule trigger is a manual fire of that schedule, and a
+ * deleted trigger leaves the run with no mode to read at all.
+ *
+ * Every member is a `TriggerMode` (pinned by a type check in `trigger.ts`, which
+ * may import this file; the reverse would cycle). `continuous` is absent because
+ * nothing dispatches it yet.
+ */
+export const TRIGGER_FIRE_KINDS = ['manual', 'schedule', 'tumbling', 'webhook', 'event'] as const;
+export const TriggerFireKindSchema = z.enum(TRIGGER_FIRE_KINDS);
+export type TriggerFireKind = z.infer<typeof TriggerFireKindSchema>;
+
+/**
  * The run's fire-time TRIGGER context (#5 S12), folded from the durable
  * `run.triggerContext` seed event and read by `${trigger.<field>}`.
  *
@@ -58,5 +72,14 @@ export const TriggerContextSchema = z.object({
    */
   windowStart: z.string().optional(),
   windowEnd: z.string().optional(),
+  /**
+   * #1484 OR35 M1 — how this fire happened (`TRIGGER_FIRE_KINDS`). OPTIONAL and
+   * absent on every row written before it existed; never manufactured on read.
+   * `RUN_TRIGGERED_BY_SQL` (server) falls back to the best surviving evidence
+   * for those rows. A run-ROW fact like `windowEpoch`: the `run.triggerContext`
+   * event names its fields explicitly and does not carry it, so it is not in
+   * the `${trigger.*}` field set either.
+   */
+  fireKind: TriggerFireKindSchema.optional(),
 });
 export type TriggerContext = z.infer<typeof TriggerContextSchema>;

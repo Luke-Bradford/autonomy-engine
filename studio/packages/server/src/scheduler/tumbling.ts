@@ -689,6 +689,7 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     let result: FireResult;
     try {
       result = launcher.fire(trigger, {
+        fireKind: 'tumbling',
         scheduledTime: row.windowEnd,
         windowEpoch: row.configEpoch,
         // #5 S11b — the user-facing `${trigger.windowStart/End}` facts, frozen

@@ -4,6 +4,7 @@ import type {
   Run,
   Trigger,
   TriggerContext,
+  TriggerFireKind,
 } from '@autonomy-studio/shared';
 import {
   assertJsonReplaySafe,
@@ -84,6 +85,13 @@ export type { FireOutcome, FireResult };
  * pass nothing and the launcher still records `triggerId`.
  */
 export interface FireContext {
+  /**
+   * #1484 OR35 M1 — how this fire happened, stamped onto the row's trigger
+   * context so the Monitor can say "Webhook" or "Fire now" rather than infer it
+   * from the trigger's mode. Every production caller passes it; a fire without
+   * it falls back to `RUN_TRIGGERED_BY_SQL`'s evidence for older rows.
+   */
+  fireKind?: TriggerFireKind;
   scheduledTime?: string;
   body?: unknown;
   /**
@@ -562,6 +570,9 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       // #5 S11b — the user-facing window bounds, same absent-not-null rule.
       ...(fireContext?.windowStart !== undefined ? { windowStart: fireContext.windowStart } : {}),
       ...(fireContext?.windowEnd !== undefined ? { windowEnd: fireContext.windowEnd } : {}),
+      // #1484 — same absent-not-null rule: a row-only fact (the run.triggerContext
+      // event in `driver.ts` names its fields and does not carry it).
+      ...(fireContext?.fireKind !== undefined ? { fireKind: fireContext.fireKind } : {}),
     };
 
     // #5 S12b — resolve the trigger's expression-valued param bindings against

@@ -218,6 +218,32 @@ describe('RunLauncher — a started run drives to completion in the background',
     expect(seed.triggerId).toBe(trigger.id);
     expect(seed.scheduledTime).toBe('2026-07-17T09:00:00.000Z');
   });
+
+  it('#1484 — stamps the fire kind on the ROW, and keeps it out of the run.triggerContext event', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId });
+    const launcher = createRunLauncher(deps(db));
+
+    const result = launcher.fire(trigger, { fireKind: 'webhook', body: { a: 1 } });
+    await launcher.whenIdle();
+
+    // The Monitor reads it from the row (`RUN_TRIGGERED_BY_SQL`)…
+    const row = listRuns(db, { triggerId: trigger.id })[0];
+    expect(row?.triggerContext?.fireKind).toBe('webhook');
+    // …and the durable engine event does not grow a field `${trigger.*}` would
+    // then expose: it is a row fact, like windowEpoch.
+    expect(triggerSeed(db, result.runId!)).not.toHaveProperty('fireKind');
+  });
+
+  it('#1484 — a fire with no kind leaves the stamp ABSENT, never a manufactured default', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId });
+    createRunLauncher(deps(db)).fire(trigger);
+    const row = listRuns(db, { triggerId: trigger.id })[0];
+    expect(row?.triggerContext).not.toHaveProperty('fireKind');
+  });
 });
 
 describe('RunLauncher — #5 S4: a parked (waiting) run releases its concurrency slot', () => {

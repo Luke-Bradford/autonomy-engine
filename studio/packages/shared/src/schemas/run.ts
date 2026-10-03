@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { RunCostSchema } from '../pricing/run-cost.js';
-import { TriggerContextSchema } from './trigger-context.js';
+import { TRIGGER_FIRE_KINDS, TriggerContextSchema } from './trigger-context.js';
 import { ANNOTATION_MAX_CHARS } from './pipeline.js';
 
 export const RunStatusSchema = z.enum([
@@ -86,10 +86,11 @@ export const RunSchema = z.object({
   /**
    * #5 S6a — the fire-time trigger context (#5 S12) a durably `queued` run must
    * carry so a delayed admission still seeds `${trigger.scheduledTime}` with the
-   * occurrence that fired it, not whenever the slot happened to free. `null` for
-   * an immediately-started run (its context is folded straight into the event log
-   * by `startRun`) and for a run with no trigger. Immutable, like `params`: set
-   * at enqueue, read once at admission, never patched.
+   * occurrence that fired it, not whenever the slot happened to free. Since #5 S9
+   * an immediately-started trigger run carries it too (`launcher.ts` persists
+   * it on every trigger-launched row); it is `null` for a run with no trigger
+   * and for an immediately-started row written before S9. Immutable, like
+   * `params`: set at fire time, never patched.
    */
   triggerContext: TriggerContextSchema.nullable(),
   /**
@@ -182,6 +183,42 @@ export type Run = z.infer<typeof RunSchema>;
  * equivalence test. For a LIVE one they may differ by whatever was billed in
  * between, which is the same "so far" the marker already declares.
  */
+/**
+ * #1484 OR35 M1 — what STARTED a run, as the Monitor's "Triggered by" column
+ * says it. One server-side authority (`RUN_TRIGGERED_BY_SQL`) computes it from
+ * the row, so the list, its origin tabs and any later server-side filter cannot
+ * disagree about a run. The five fire kinds come first (a trigger fired it);
+ * then:
+ * - `editor`: the editor's Run, a saved version with no trigger;
+ * - `debug`: the editor's Debug, a draft version;
+ * - `rerun`: a rerun from failed (RS). F11's plain rerun, when it lands, needs
+ *   its own discriminator rather than reusing `rerunOf`, or it will read as
+ *   this kind;
+ * - `call`: a child run an Execute Pipeline node spawned.
+ */
+export const RUN_TRIGGERED_BY_KINDS = [
+  ...TRIGGER_FIRE_KINDS,
+  'editor',
+  'debug',
+  'rerun',
+  'call',
+] as const;
+export const RunTriggeredByKindSchema = z.enum(RUN_TRIGGERED_BY_KINDS);
+export type RunTriggeredByKind = z.infer<typeof RunTriggeredByKindSchema>;
+
+/** Display only, and a `Record` so a new kind cannot ship without a name. */
+export const RUN_TRIGGERED_BY_LABELS: Record<RunTriggeredByKind, string> = {
+  manual: 'Fire now',
+  schedule: 'Schedule',
+  tumbling: 'Tumbling window',
+  webhook: 'Webhook',
+  event: 'Event',
+  editor: 'Editor run',
+  debug: 'Debug',
+  rerun: 'Rerun from failed',
+  call: 'Execute Pipeline',
+};
+
 export const RunSummarySchema = RunSchema.extend({
   /**
    * U29 (#1015) — the pipeline's IDENTITY, resolved server-side by the same join
@@ -208,6 +245,8 @@ export const RunSummarySchema = RunSchema.extend({
   debug: z.boolean(),
   /** `null` for a rerun, or for a run whose trigger has been deleted. */
   triggerName: z.string().nullable(),
+  /** #1484 OR35 M1 — what started the run (`RUN_TRIGGERED_BY_KINDS`). */
+  triggeredByKind: RunTriggeredByKindSchema,
   /**
    * #1016 (U29) — the annotations of the version this run BOUND (F8a), exactly as
    * stored: the strings U26's `?annotation=` filter matches against, so a lane the
