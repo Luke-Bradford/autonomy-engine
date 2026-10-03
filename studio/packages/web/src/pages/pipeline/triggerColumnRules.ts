@@ -1,4 +1,8 @@
-import { isWithinRunWindows, type TriggerNextFire, type TriggerPublic } from '@autonomy-studio/shared';
+import {
+  isWithinRunWindows,
+  type TriggerNextFire,
+  type TriggerPublic,
+} from '@autonomy-studio/shared';
 import { formatWhen } from '../runs/format';
 import type { BindingSelection } from '../triggers/binding';
 import type { ActiveVersionState } from './versionHistory';
@@ -83,8 +87,8 @@ export function newTriggerTitle(
  * archived pipeline can still hold or skip a fire at that moment. The one skip
  * the row can know about ahead of time it states — a schedule tick that falls
  * outside the trigger's run windows (tumbling windows are not gated by them).
- * A time already passed reads "due now": the column does not poll, so it can
- * outlive the time it showed.
+ * A time already passed reads "now": the alarm is due and the clock has not
+ * delivered it yet, or the column has stayed open past it.
  */
 export function nextFireText(
   t: Pick<TriggerPublic, 'enabled' | 'mode' | 'runWindows'>,

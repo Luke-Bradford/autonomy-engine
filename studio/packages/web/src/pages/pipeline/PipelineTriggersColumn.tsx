@@ -4,6 +4,7 @@ import type { TriggerNextFire, TriggerPublic } from '@autonomy-studio/shared';
 import { DismissRegular } from '@fluentui/react-icons';
 import { listTriggerNextFires, listTriggers } from '../../api/triggers';
 import { useGuardedLoad } from '../../hooks/useGuardedLoad';
+import { useTickingNow } from '../../hooks/useTickingNow';
 import { useDrawerForm } from '../../lib/form/useDrawerForm';
 import { TriggerModeName } from '../../lib/KindName';
 import { TriggerForm } from '../triggers/TriggerForm';
@@ -38,6 +39,34 @@ import { nextFireText } from './triggerColumnRules';
  * line of text, so its failure leaves the list as it was rather than taking
  * the list down with it.
  */
+/** How often a shown next-fire time is re-checked against the clock. */
+const NEXT_FIRE_TICK_MS = 30_000;
+
+/**
+ * A row's next-fire text. A leaf that owns its clock (`useTickingNow`), so a
+ * time that passes while the column stays open turns into "now" rather than
+ * sitting in the past; a row with nothing armed holds no timer.
+ */
+function NextFire({
+  trigger,
+  next,
+}: {
+  trigger: TriggerPublic;
+  next: TriggerNextFire | undefined;
+}) {
+  if (next === undefined) return <NextFireLine text={nextFireText(trigger, undefined, 0)} />;
+  return <TickingNextFire trigger={trigger} next={next} />;
+}
+
+function TickingNextFire({ trigger, next }: { trigger: TriggerPublic; next: TriggerNextFire }) {
+  const now = useTickingNow(NEXT_FIRE_TICK_MS);
+  return <NextFireLine text={nextFireText(trigger, next, now)} />;
+}
+
+function NextFireLine({ text }: { text: string | null }) {
+  return text === null ? null : <>{` · ${text}`}</>;
+}
+
 export function PipelineTriggersColumn({
   pipelineId,
   headId,
@@ -142,10 +171,6 @@ export function PipelineTriggersColumn({
   );
   // Every listed trigger is bound to one of `pipeline`'s versions (that is
   // what `triggersOfPipeline` matched on), so the lookup always finds it.
-  const withNextFire = (t: TriggerPublic, next: TriggerNextFire | undefined): string => {
-    const text = nextFireText(t, next, Date.now());
-    return text === null ? '' : ` · ${text}`;
-  };
   const boundVersionText = (versionId: string | null): string => {
     const v = pipeline?.versions.find((x) => x.id === versionId);
     return v === undefined ? '' : `v${String(v.version)}`;
@@ -196,7 +221,7 @@ export function PipelineTriggersColumn({
                   <span className="pipeline-triggers__meta">
                     <TriggerModeName mode={t.mode} /> · {boundVersionText(t.pipelineVersionId)} ·{' '}
                     {t.enabled ? 'enabled' : 'disabled'}
-                    {nextFires !== null && withNextFire(t, nextFires.get(t.id))}
+                    {nextFires !== null && <NextFire trigger={t} next={nextFires.get(t.id)} />}
                   </span>
                 </div>
                 <button

@@ -252,6 +252,22 @@ describe('PipelineTriggersColumn (#1476 OR28 slice 3)', () => {
       );
     });
 
+    it('a time that passes while the column is open turns into "now"', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const soon = Date.now() + 10_000;
+        listTriggersMock.mockResolvedValue([trigger(schedule)]);
+        nextFiresMock.mockResolvedValue([{ triggerId: 'trg_1', at: soon, source: 'schedule' }]);
+        mount();
+        const row = (await screen.findByText('Nightly')).closest('li')!;
+        await waitFor(() => expect(row).toHaveTextContent(new Date(soon).toLocaleString()));
+        await act(() => vi.advanceTimersByTimeAsync(30_000));
+        expect(row).toHaveTextContent('enabled · next scheduled now');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('re-reads next fires after a save', async () => {
       const user = userEvent.setup();
       listTriggersMock.mockResolvedValue([trigger(schedule)]);

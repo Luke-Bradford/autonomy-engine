@@ -50,7 +50,11 @@ describe('GET /api/triggers/next-fires', () => {
   }
 
   async function create(overrides: Record<string, unknown> = {}): Promise<string> {
-    const res = await app.inject({ method: 'POST', url: '/api/triggers', payload: body(overrides) });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/triggers',
+      payload: body(overrides),
+    });
     expect(res.statusCode).toBe(201);
     return (res.json() as { id: string }).id;
   }
