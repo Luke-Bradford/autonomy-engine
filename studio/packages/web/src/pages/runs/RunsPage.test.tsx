@@ -1228,8 +1228,21 @@ describe('U29 runs view toggle', () => {
  * `uiStore` singleton.
  */
 describe('#1484 — runs grid columns', () => {
+  /* Its OWN storage, never `createUiStore(undefined)`: an explicit `undefined`
+     takes the factory's DEFAULT, the ambient `localStorage`. That is an inert
+     stub on some Node versions and a working store on others (CI's), where one
+     case's hidden column or width was read back by the next. */
+  const freshUi = () => {
+    const data = new Map<string, string>();
+    return createUiStore({
+      getItem: (key) => data.get(key) ?? null,
+      setItem: (key, value) => {
+        data.set(key, value);
+      },
+    });
+  };
   async function renderGrid(path = '/') {
-    const ui = createUiStore(undefined);
+    const ui = freshUi();
     listMock.mockResolvedValue(pageOf([run({ id: 'run_abc', status: 'success' })]));
     renderWithRouter(<RunsPage ui={ui} />, path);
     // The pipeline's name is on both views; the run id only in the grid's.
@@ -1286,7 +1299,7 @@ describe('#1484 — runs grid columns', () => {
   });
 
   it('draws a hidden column while the grid is sorted by it, keeping the choice', async () => {
-    const ui = createUiStore(undefined);
+    const ui = freshUi();
     ui.getState().setRunsGridHidden(['duration', 'cost']);
     listMock.mockResolvedValue(pageOf([run({ id: 'run_abc' })]));
     renderWithRouter(<RunsPage ui={ui} />, '/?sort=duration');
@@ -1297,7 +1310,7 @@ describe('#1484 — runs grid columns', () => {
   });
 
   it('sizes each column from the stored width, else its default', async () => {
-    const ui = createUiStore(undefined);
+    const ui = freshUi();
     ui.getState().setRunsGridWidth('status', 140);
     listMock.mockResolvedValue(pageOf([run({ id: 'run_abc' })]));
     const { container } = renderWithRouter(<RunsPage ui={ui} />);
