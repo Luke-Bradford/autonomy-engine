@@ -264,7 +264,11 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
     provider: GitProvider,
     ownerId: string,
     updated: WorkspaceGit,
-  ): Promise<{ drift: WorkspaceGitDrift; uncomparable: UnserializableResource[] }> {
+  ): Promise<{
+    drift: WorkspaceGitDrift;
+    baseBranch: string | null;
+    uncomparable: UnserializableResource[];
+  }> {
     const workingBranch = WorkspaceGitBranchSchema.parse(updated.workingBranch);
     const checkout = checkoutDirFor(workspaceGitRoot, ownerId);
 
@@ -318,7 +322,9 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       changes,
       diagnostics,
     });
-    return { drift, uncomparable: serialized.unserializable };
+    const baseBranch =
+      workingHead !== null ? workingBranch : base !== null ? updated.collabBranch : null;
+    return { drift, baseBranch, uncomparable: serialized.unserializable };
   }
 
   /** The divergence verdict's body, run after the caller's fetch decision (see `driftReport`). */
@@ -629,8 +635,13 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       const provider = await resolveProvider(ownerId);
 
       const checkoutPresent = existsSync(join(checkoutDirFor(workspaceGitRoot, ownerId), '.git'));
-      const stale = row.lastFetchAt === null || Date.now() - row.lastFetchAt >= opts.fetchMaxAgeMs;
-      const fetched = !checkoutPresent || stale;
+      // A negative age is a clock that went back: stale, never "fresh until the
+      // clock catches up".
+      const age = row.lastFetchAt === null ? null : Date.now() - row.lastFetchAt;
+      const stale = age === null || age < 0 || age >= opts.fetchMaxAgeMs;
+      // A missing checkout re-clones at once — unless it is missing because the
+      // last clone FAILED, which waits out the window like any failed fetch.
+      const fetched = stale || (!checkoutPresent && row.lastFetchError === null);
       if (fetched) {
         try {
           row = await ensureCheckoutFetched(db, provider, workspaceGitRoot, ownerId, row);
@@ -643,7 +654,7 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       }
       if (row.lastFetchError !== null || row.lastFetchAt === null) return null;
 
-      const { drift, uncomparable } = await driftReport(provider, ownerId, row);
+      const { drift, baseBranch, uncomparable } = await driftReport(provider, ownerId, row);
       const divergence = await divergenceReport(provider, ownerId, row);
 
       // Drift names resources by their stable `resourceId`; the editor knows its
@@ -672,6 +683,7 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
         fetched,
         workingBranch: row.workingBranch,
         base: drift.base,
+        baseBranch,
         hasUncommittedChanges: drift.hasUncommittedChanges,
         pipelines,
         divergence,

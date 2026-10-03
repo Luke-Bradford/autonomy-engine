@@ -190,6 +190,7 @@ describe('gitState', () => {
       fetched: false,
       workingBranch: 'feature/x',
       base,
+      baseBranch: 'feature/x',
       hasUncommittedChanges: false,
       pipelines: [],
       divergence: { state: 'current', importBase: base, collabHead: base },
@@ -201,16 +202,36 @@ describe('gitState', () => {
     it('says in sync when this pipeline matches the branch and main has not moved', () => {
       const p = read(sync());
       expect(p).toMatchObject({ label: 'in sync', tone: 'neutral' });
-      expect(p?.detail).toContain('This pipeline matches feature/x at b45e000');
+      expect(p?.detail).toContain(
+        'This pipeline matches feature/x at b45e000. Up to date with main.',
+      );
       expect(p?.detail).toContain('Compared with the repo as fetched');
+      expect(p?.detail).not.toContain('Other resources');
     });
 
-    it('says it is not compared with main when the workspace never imported', () => {
+    it('says committed, not in sync, when main was never imported to compare', () => {
       const p = read(
         sync({ divergence: { state: 'unknown', importBase: null, collabHead: base } }),
       );
+      expect(p).toMatchObject({ label: 'committed', tone: 'neutral' });
+      expect(p?.detail).toContain('This workspace has never imported from main');
+    });
+
+    it('names main, not the working branch, before the working branch exists', () => {
+      const p = read(sync({ baseBranch: 'main' }));
+      expect(p?.detail).toContain(
+        'This pipeline matches main at b45e000; feature/x has not been created yet.',
+      );
+      const added = read(
+        sync({ baseBranch: 'main', pipelines: [{ pipelineId: 'p1', change: 'added' }] }),
+      );
+      expect(added?.detail).toContain('This pipeline is not on main yet.');
+    });
+
+    it('says when other resources are uncommitted though this pipeline is not', () => {
+      const p = read(sync({ hasUncommittedChanges: true }));
       expect(p?.label).toBe('in sync');
-      expect(p?.detail).toContain('It is not compared with main');
+      expect(p?.detail).toContain('Other resources in this workspace are uncommitted.');
     });
 
     it('marks only THIS pipeline uncommitted, in amber, and says why', () => {
@@ -226,7 +247,7 @@ describe('gitState', () => {
       const p = read(sync({ divergence: { state: 'behind', importBase: base, collabHead: head } }));
       expect(p).toMatchObject({ label: 'behind main — pull first', tone: 'warning' });
       expect(p?.detail).toContain(
-        'main has moved since this workspace last imported from it (b45e000 → ead0000)',
+        'main has moved on since this workspace last imported. Importing brings it up to date. Imported from b45e000; it is now at ead0000.',
       );
     });
 

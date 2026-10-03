@@ -1,9 +1,5 @@
-import type {
-  WorkspaceGitPipelineDrift,
-  WorkspaceGitStatus,
-  WorkspaceGitSync,
-} from '@autonomy-studio/shared';
-import { shortSha } from '../../api/workspaceGit';
+import type { WorkspaceGitStatus, WorkspaceGitSync } from '@autonomy-studio/shared';
+import { describeDivergence, describePipelineDrift, shortSha } from '../../api/workspaceGit';
 import { formatWhen } from '../runs/format';
 import { activePhrase, type ActiveVersionLabel } from './versionHistory';
 
@@ -169,9 +165,10 @@ export function partText(part: BadgePart): string {
   return [part.name, part.label].filter((t) => t !== undefined && t !== '').join(' · ');
 }
 
-/** ` (abc1234 → def5678)`, or nothing when either end is unknown. */
-function shasOf(from: string | null, to: string | null): string {
-  return from !== null && to !== null ? ` (${shortSha(from)} → ${shortSha(to)})` : '';
+/** ` Imported from abc1234; it is now at def5678.` — only once main has moved. */
+function shasOf(state: string, from: string | null, to: string | null): string {
+  if ((state !== 'behind' && state !== 'diverged') || from === null || to === null) return '';
+  return ` Imported from ${shortSha(from)}; it is now at ${shortSha(to)}.`;
 }
 
 /** Where the version on the canvas came from in git, off its row. */
@@ -200,22 +197,6 @@ export interface GitInput {
   pipelineId?: string;
 }
 
-/** Why this pipeline differs from the working branch, as a sentence. */
-function driftSentence(change: WorkspaceGitPipelineDrift['change'], branch: string): string {
-  switch (change) {
-    case 'added':
-      return `This pipeline is not on ${branch} yet.`;
-    case 'modified':
-      return `Its latest saved version differs from ${branch}.`;
-    case 'renamed':
-      return `It was renamed here; ${branch} still has the old name.`;
-    case 'removed':
-      return `It is archived here but still on ${branch}.`;
-    case 'uncomparable':
-      return `Its latest saved version could not be compared with ${branch}, so it is counted as uncommitted.`;
-  }
-}
-
 /**
  * The git part: which branch this workspace commits to, against the branch it
  * opens pull requests into, and the commit the canvas version came from.
@@ -235,7 +216,8 @@ function driftSentence(change: WorkspaceGitPipelineDrift['change'], branch: stri
  * whether the collaboration branch has moved since the workspace last imported
  * (`behind main — pull first`, or `diverged` when its history was rewritten —
  * a workspace-wide fact, worded as one in the detail), and `in sync` when
- * neither. The reading is against the remote as fetched at `sync.fetchedAt`,
+ * neither — or `committed` when main was never imported, so only the commit
+ * direction was compared. The reading is against the remote as fetched at `sync.fetchedAt`,
  * and the detail says when that was. Without a reading — unread, or the
  * server's fetch failed — none of these is claimed, and after a failed fetch
  * the `fetch failed` state stands alone rather than beside a comparison made
@@ -271,34 +253,45 @@ export function gitState({ git, source, sync, pipelineId }: GitInput): BadgePart
   if (git.state !== 'fetch_error' && sync != null && pipelineId !== undefined) {
     const change = sync.pipelines.find((p) => p.pipelineId === pipelineId)?.change;
     const divergence = sync.divergence;
+    // Against whatever `base` is: before the working branch exists that is the
+    // collaboration branch, and naming the working branch then would describe a
+    // branch with no such state.
+    const against = sync.baseBranch ?? sync.workingBranch;
     if (change !== undefined) {
       parts.push('uncommitted');
-      sentences.push(driftSentence(change, sync.workingBranch));
+      sentences.push(describePipelineDrift(change, against));
       tone = 'warning';
+    } else {
+      sentences.push(
+        `This pipeline matches ${against}` +
+          (sync.base !== null ? ` at ${shortSha(sync.base)}` : '') +
+          (against !== sync.workingBranch
+            ? `; ${sync.workingBranch} has not been created yet.`
+            : '.'),
+      );
+      // The workspace flag also counts what no pipeline entry carries (another
+      // resource kind, a committed file that will not parse), so this pipeline
+      // being clean is not the workspace being clean.
+      if (sync.hasUncommittedChanges) {
+        sentences.push('Other resources in this workspace are uncommitted.');
+      }
     }
     if (divergence.state === 'behind') {
       parts.push(`behind ${git.collabBranch} — pull first`);
-      sentences.push(
-        `${git.collabBranch} has moved since this workspace last imported from it` +
-          `${shasOf(divergence.importBase, divergence.collabHead)}. Import it on Manage → Git before publishing.`,
-      );
       tone = 'warning';
     } else if (divergence.state === 'diverged') {
       parts.push('diverged');
-      sentences.push(
-        `${git.collabBranch}'s history was rewritten since this workspace imported from it` +
-          `${shasOf(divergence.importBase, divergence.collabHead)}, so the next import will not fast-forward.`,
-      );
       tone = 'danger';
     } else if (change === undefined) {
-      parts.push('in sync');
-      sentences.push(
-        `This pipeline matches ${sync.workingBranch}${sync.base !== null ? ` at ${shortSha(sync.base)}` : ''}` +
-          (divergence.state === 'current'
-            ? `, and ${git.collabBranch} has not moved since the last import.`
-            : `. It is not compared with ${git.collabBranch}: this workspace has not imported from it.`),
-      );
+      // `in sync` claims BOTH directions, so only once main was compared too; a
+      // workspace that never imported has only the commit direction.
+      parts.push(divergence.state === 'current' ? 'in sync' : 'committed');
     }
+    // The Git page's own sentence, so the two surfaces say one thing.
+    sentences.push(
+      describeDivergence(divergence, git.collabBranch) +
+        shasOf(divergence.state, divergence.importBase, divergence.collabHead),
+    );
     sentences.push(`Compared with the repo as fetched ${formatWhen(sync.fetchedAt)}.`);
   } else {
     sentences.push(

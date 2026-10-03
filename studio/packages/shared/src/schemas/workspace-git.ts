@@ -624,7 +624,9 @@ export type WorkspaceGitPipelineDrift = z.infer<typeof WorkspaceGitPipelineDrift
  * only when that copy is older than the hoster's `GIT_FETCH_MAX_AGE_SECONDS`;
  * `fetched` says whether this call did). `pipelines` lists only the pipelines
  * that differ, keyed by pipeline id; a pipeline not listed matches `base`.
- * `workingBranch` is the branch the comparison was made against. The envelope's
+ * `workingBranch` is the branch commits go to; `baseBranch` is the branch whose
+ * tip `base` is — the working branch once it exists, the collaboration branch
+ * before that, `null` when neither has a commit. The envelope's
  * `sync` is `null` when the last fetch failed — nothing is compared against refs
  * a fetch could not refresh.
  */
@@ -633,6 +635,7 @@ export const WorkspaceGitSyncSchema = z.object({
   fetched: z.boolean(),
   workingBranch: z.string().min(1),
   base: z.string().min(1).nullable(),
+  baseBranch: z.string().min(1).nullable(),
   hasUncommittedChanges: z.boolean(),
   pipelines: z.array(WorkspaceGitPipelineDriftSchema),
   divergence: WorkspaceGitDivergenceSchema,

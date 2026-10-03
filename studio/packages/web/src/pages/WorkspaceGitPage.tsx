@@ -22,6 +22,7 @@ import {
   describeAppliedAction,
   describeDisposition,
   UNVERIFIED_CONTENT_SUFFIX,
+  describeDivergence,
   describeDriftChange,
   disconnectWorkspaceGit,
   fetchWorkspaceGit,
@@ -923,33 +924,6 @@ function describeImportBlock({
   if (preview.diagnostics.some(refusesImport))
     return 'The import would be refused while any file on the branch cannot be read.';
   return null;
-}
-
-/**
- * The divergence sentence.
- *
- * `unknown` has TWO causes and they are not the same news: the server's
- * precheck returns it when the import base is null (this workspace has never
- * imported) OR when the collab head is null (the branch is empty, or was
- * deleted at the remote). Both shas are in the payload, so the reader is told
- * which — one sentence covering both would be false for whichever case it was
- * not written for.
- */
-function describeDivergence(divergence: WorkspaceGitDivergence, collabBranch: string): string {
-  switch (divergence.state) {
-    case 'current':
-      return `Up to date with ${collabBranch}.`;
-    case 'behind':
-      return `${collabBranch} has moved on since this workspace last imported. Importing brings it up to date.`;
-    case 'diverged':
-      return `${collabBranch}'s history was rewritten since this workspace last imported — importing replaces local resources with the branch's, and the commits this workspace came from are no longer on it.`;
-    case 'unknown':
-      if (divergence.importBase === null && divergence.collabHead === null)
-        return `This workspace has never imported, and ${collabBranch} has no commits at the remote.`;
-      if (divergence.importBase === null)
-        return `This workspace has never imported from ${collabBranch}, so there is nothing to compare against — everything on the branch is incoming.`;
-      return `${collabBranch} has no commits at the remote, or no longer exists.`;
-  }
 }
 
 /** What is on the branch: the dispositions, the archive proposals, the unreadable files. */

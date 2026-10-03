@@ -572,7 +572,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await expect(gitPart).toHaveAttribute('data-tone', 'neutral');
   await expect(gitPart).toHaveAttribute(
     'title',
-    /This pipeline matches studio\/local\/work at [0-9a-f]{7}, and main has not moved since the last import\./,
+    /This pipeline matches studio\/local\/work at [0-9a-f]{7}\. Up to date with main\./,
   );
 
   pushNewPipelineFile(repoDir, `${pipelineName}-later`);
@@ -584,7 +584,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await expect(gitPart).toHaveAttribute('data-tone', 'warning');
   await expect(gitPart).toHaveAttribute(
     'title',
-    /main has moved since this workspace last imported from it \([0-9a-f]{7} → [0-9a-f]{7}\)/,
+    /main has moved on since this workspace last imported\. Importing brings it up to date\. Imported from [0-9a-f]{7}; it is now at [0-9a-f]{7}\./,
   );
 
   await openGitPage(page);

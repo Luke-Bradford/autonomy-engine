@@ -167,6 +167,50 @@ describe('workspace-git sync route', () => {
     expect((await sync()).pipelines).toEqual([{ pipelineId: p.id, change: 'removed' }]);
   });
 
+  it('names the branch it compared against: main until the working branch exists', async () => {
+    await boot(60_000);
+    const { remote } = seedRemote(testApp.tmpDir);
+    await connect(remote);
+    const workingBranch = getWorkspaceGit(app.db, 'local')!.workingBranch;
+    expect((await sync()).baseBranch).toBe('main');
+
+    const p = createPipeline(app.db, { ownerId: 'local', name: 'Orders' });
+    createPipelineVersion(app.db, version(p.id));
+    expect((await commit('add orders')).statusCode).toBe(200);
+    expect((await sync()).baseBranch).toBe(workingBranch);
+  });
+
+  it('treats a fetch stamped in the future (a clock that went back) as stale', async () => {
+    await boot(60_000);
+    const { remote } = seedRemote(testApp.tmpDir);
+    await connect(remote);
+    const row = getWorkspaceGit(app.db, 'local')!;
+    updateWorkspaceGitSync(app.db, 'local', {
+      observedCollabHead: row.observedCollabHead,
+      lastFetchAt: Date.now() + 3_600_000,
+      lastFetchError: null,
+    });
+
+    expect((await sync()).fetched).toBe(true);
+  });
+
+  it('does not re-clone on every call when the checkout is missing because a clone failed', async () => {
+    await boot(60_000);
+    const { remote } = seedRemote(testApp.tmpDir);
+    await connect(remote);
+    rmSync(checkoutDirFor(join(testApp.tmpDir, 'git'), 'local'), { recursive: true, force: true });
+    const row = getWorkspaceGit(app.db, 'local')!;
+    const failedAt = Date.now();
+    updateWorkspaceGitSync(app.db, 'local', {
+      observedCollabHead: row.observedCollabHead,
+      lastFetchAt: failedAt,
+      lastFetchError: 'clone failed',
+    });
+
+    expect(await sync()).toBeNull();
+    expect(getWorkspaceGit(app.db, 'local')!.lastFetchAt).toBe(failedAt);
+  });
+
   it('agrees with /drift and /divergence', async () => {
     await boot(0);
     const { remote, work } = seedRemote(testApp.tmpDir);
