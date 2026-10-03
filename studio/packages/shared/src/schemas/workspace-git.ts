@@ -957,6 +957,55 @@ export const PullRequestResultSchema = z.object({
 export type PullRequestResult = z.infer<typeof PullRequestResultSchema>;
 
 /**
+ * An http(s) URL — the only kind a value from a git host may become as a link
+ * `href`, so it can never be a `javascript:` URL. The one copy: the host client
+ * refuses anything else at its source, and the reading schema re-checks it.
+ */
+export const HTTP_URL_PATTERN = /^https?:\/\/./i;
+
+/**
+ * #1476 OR28 — `GET /api/workspace/git/pull-request`: is a pull request open
+ * from the working branch, into ANY base? `repoUrl` and `workingBranch` are
+ * the question the server asked, so a client can refuse a reading for a repo or
+ * branch it no longer shows (a reconnect to another repo keeps the default
+ * branch name).
+ * - `open`: the host answered with one; `url` is its web page. With several
+ *   (one per base), the host's first.
+ * - `none`: the host answered and there is none.
+ * - `unknown`: nobody asked the host, or it could not answer. `no_token` (a
+ *   GitHub remote with no token to ask with), `unsupported_host` (a local or
+ *   non-GitHub remote), `lookup_failed` (the host call failed; `detail` is its
+ *   token-redacted message). Absent rather than wrong: only a host answer is
+ *   ever `none`.
+ * `checkedAt` is when the host answered (the server reuses one answer for the
+ * hoster's `GIT_FETCH_MAX_AGE_SECONDS`).
+ */
+export const WorkspaceGitPullRequestReadingSchema = z.discriminatedUnion('state', [
+  z.object({
+    state: z.literal('open'),
+    repoUrl: z.string().min(1),
+    workingBranch: z.string().min(1),
+    number: z.number().int().positive(),
+    url: z.string().regex(HTTP_URL_PATTERN, 'must be an http(s) URL'),
+    checkedAt: z.number().int(),
+  }),
+  z.object({
+    state: z.literal('none'),
+    repoUrl: z.string().min(1),
+    workingBranch: z.string().min(1),
+    checkedAt: z.number().int(),
+  }),
+  z.object({
+    state: z.literal('unknown'),
+    repoUrl: z.string().min(1),
+    workingBranch: z.string().min(1),
+    reason: z.enum(['no_token', 'unsupported_host', 'lookup_failed']),
+    detail: z.string().nullable(),
+  }),
+]);
+export type WorkspaceGitPullRequestReading = z.infer<typeof WorkspaceGitPullRequestReadingSchema>;
+
+/**
  * #3 G9 — classify a repo's PR surface: is it a GitHub remote we can auto-open a
  * PR against (G9b), and what is the guided-manual compare URL (G9a) either way?
  * The SINGLE source of github-detection + compare-url building (CLAUDE.md: one

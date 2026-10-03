@@ -2314,6 +2314,13 @@ button.danger {
   color: var(--warning);
 }
 
+/* #1476 — the open pull request, a link inside the git pill: the pill's own
+   colour (its tone), underlined so it reads as a link without a second hue. */
+.editor-state-badge__link {
+  color: inherit;
+  text-decoration: underline;
+}
+
 /* A part's name (the git part's branches) has no length limit —
    `studio/<owner id>/work` by default — so it ellipsises inside its pill and the
    toolbar row keeps its one-line budget. Only the name: the label after it

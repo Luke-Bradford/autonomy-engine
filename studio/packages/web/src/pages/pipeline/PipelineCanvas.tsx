@@ -54,6 +54,7 @@ import {
   type Pipeline,
   type PipelineVersion,
   type WorkspaceGitStatus,
+  type WorkspaceGitPullRequestReading,
   type WorkspaceGitSync,
 } from '@autonomy-studio/shared';
 import {
@@ -83,6 +84,7 @@ import { listConnections } from '../../api/connections';
 import { listDatasets } from '../../api/datasets';
 import { listGlobalParams, toGlobalReads } from '../../api/globalParams';
 import { useGuardedLoad } from '../../hooks/useGuardedLoad';
+import { useRefreshOnFocus } from '../../hooks/useRefreshOnFocus';
 import { eligibleForBinding } from './bindingPickers';
 import { ActivityToolbox } from './ActivityToolbox';
 import {
@@ -209,7 +211,7 @@ import { UnsavedChangesPrompt } from '../../lib/form/UnsavedChangesPrompt';
 import { FormSection } from '../../lib/form/FormSection';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import { claimTicket, readPublishState, takeTicket, type ReadSequence } from './publishState';
-import { readWorkspaceGitSync } from '../../api/workspaceGit';
+import { readWorkspaceGitPullRequest, readWorkspaceGitSync } from '../../api/workspaceGit';
 import { EditorStateBadge } from './EditorStateBadge';
 import { canvasVersion, editingState, gitState, liveState, partText } from './editorState';
 import { LabelledControl } from '../../lib/LabelledControl';
@@ -882,10 +884,7 @@ export function PipelineCanvas({
       },
     );
   }, [refreshGlobals, guardedFocusLoad, pipelineId]);
-  useEffect(() => {
-    window.addEventListener('focus', refreshOnFocus);
-    return () => window.removeEventListener('focus', refreshOnFocus);
-  }, [refreshOnFocus]);
+  useRefreshOnFocus(refreshOnFocus);
 
   const nodes = useStore(store, (s) => s.nodes);
   const edges = useStore(store, (s) => s.edges);
@@ -959,11 +958,31 @@ export function PipelineCanvas({
   useEffect(() => {
     if (gitConnected === true) refreshGitSync();
   }, [gitConnected, headVersion, refreshGitSync]);
+  useRefreshOnFocus(refreshGitSync, gitConnected === true);
+
+  /**
+   * #1476 OR28 slice 7 — the pull request open from the working branch, for
+   * the git part's `PR #n` link. Read when a repo is connected, when its
+   * working branch changes, and on focus — not on save, which cannot open or
+   * close a PR. The server asks the host at most once per
+   * `GIT_FETCH_MAX_AGE_SECONDS`, so focus reads are cheap. A failed read
+   * clears it, and it is not passed on without a repo: no link is better than
+   * one the page cannot back.
+   */
+  const [gitPr, setGitPr] = useState<WorkspaceGitPullRequestReading | undefined>(undefined);
+  const guardedPrLoad = useGuardedLoad();
+  const refreshGitPr = useCallback(() => {
+    void guardedPrLoad((signal) => readWorkspaceGitPullRequest(signal), {
+      onData: setGitPr,
+      onError: () => setGitPr(undefined),
+    });
+  }, [guardedPrLoad]);
+  // A trigger only: a new working branch is a new question for the server.
+  const workingBranch = git?.workingBranch;
   useEffect(() => {
-    if (gitConnected !== true) return;
-    window.addEventListener('focus', refreshGitSync);
-    return () => window.removeEventListener('focus', refreshGitSync);
-  }, [gitConnected, refreshGitSync]);
+    if (gitConnected === true) refreshGitPr();
+  }, [gitConnected, workingBranch, refreshGitPr]);
+  useRefreshOnFocus(refreshGitPr, gitConnected === true);
   const entries = useMemo(
     () => historyEntries(versions, loaded?.version ?? null, active?.versionId),
     [versions, loaded, active],
@@ -994,6 +1013,7 @@ export function PipelineCanvas({
     source: previewed ?? loaded ?? null,
     sync: gitSync,
     pipelineId,
+    pullRequest: gitConnected === true ? gitPr : undefined,
   });
 
   // U16 — `loaded` LEAVES the dep list: `params` moved into the store, and it
@@ -1157,7 +1177,7 @@ export function PipelineCanvas({
   const [folds, setFolds] = useState<readonly number[]>([]);
   const foldable = gitBadge === null ? 1 : 2;
   const headerWidth = useElementSize(headerRef, 'width');
-  const rowContent = `${editingBadge.label}|${liveBadge?.label ?? ''}|${gitBadge?.label ?? ''}|${String(saving)}`;
+  const rowContent = `${editingBadge.label}|${liveBadge?.label ?? ''}|${gitBadge?.label ?? ''}|${gitBadge?.link?.label ?? ''}|${String(saving)}`;
   useLayoutEffect(() => {
     const header = headerRef.current;
     if (header === null) return;
@@ -1170,6 +1190,7 @@ export function PipelineCanvas({
   }, [headerWidth, rowContent, folds, foldable]);
   const validateFolded = folds.length >= 1;
   const gitFolded = folds.length >= 2;
+  const foldedPrLink = gitBadge?.link;
   const foldedGitAlert =
     gitFolded && gitBadge !== null && gitBadge.tone !== 'neutral' ? gitBadge : null;
   const moreActionsLabel =
@@ -2040,6 +2061,15 @@ export function PipelineCanvas({
                     subText={gitBadge.detail}
                   >
                     Git: {partText(gitBadge)}
+                  </MenuItem>
+                )}
+                {/* `partText` leaves the link out, so the folded PR is its own
+                    item; it opens the host's page in a new tab. */}
+                {gitFolded && foldedPrLink !== undefined && (
+                  <MenuItem
+                    onClick={() => window.open(foldedPrLink.href, '_blank', 'noopener,noreferrer')}
+                  >
+                    Open {foldedPrLink.label}
                   </MenuItem>
                 )}
                 {/* U9 — Arrange moves the DOCUMENT, not the view, so it is not

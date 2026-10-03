@@ -416,6 +416,55 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   ).toContainText('active');
 
   /**
+   * #1476 OR28 slice 7 — `PR #n`, linked, when the working branch has an open
+   * pull request. This repo is a local path, so the server asks no host and
+   * there is no link: absent, not wrong. The host's answer is stubbed to prove
+   * the link — a github.com remote cannot be cloned here — and it reaches the
+   * badge on focus, beside the label, and folded into ⋯ at 1280.
+   */
+  const gitPrUrl = /\/api\/workspace\/git\/pull-request$/;
+  await expect(gitPart).toBeVisible();
+  await expect(gitPart.getByRole('link')).toHaveCount(0);
+  // The real answer (`unknown`, this host cannot be asked), with the host's
+  // answer put in its place: the repo and branch stay the ones the server asked about.
+  await page.route(gitPrUrl, async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as {
+      pullRequest: { repoUrl: string; workingBranch: string };
+    };
+    await route.fulfill({
+      response,
+      json: {
+        pullRequest: {
+          state: 'open',
+          repoUrl: body.pullRequest.repoUrl,
+          workingBranch: body.pullRequest.workingBranch,
+          number: 7,
+          url: 'https://github.com/acme/widgets/pull/7',
+          checkedAt: Date.now(),
+        },
+      },
+    });
+  });
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  const prLink = gitPart.getByRole('link', { name: 'PR #7 (pull request)' });
+  await expect(prLink).toHaveText('PR #7');
+  await expect(prLink).toHaveAttribute('href', 'https://github.com/acme/widgets/pull/7');
+  await expect(prLink).toHaveAttribute('target', '_blank');
+  await expect(prLink).toHaveAttribute('rel', 'noopener noreferrer');
+  await expect(gitPart).toHaveText(/ · uncommitted · PR #7\./);
+  await expect(gitPart).toHaveAttribute('title', /Pull request #7 is open from \S+ \(checked /);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await expect(page.locator('.editor-state-badge__part[data-part="git"]')).toHaveCount(0);
+  await editorMenuTrigger(page).click();
+  await expect(page.getByRole('menuitem', { name: 'Open PR #7' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.setViewportSize({ width: 1920, height: 1000 });
+  await page.unroute(gitPrUrl);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(gitPart.getByRole('link')).toHaveCount(0);
+
+  /**
    * #1502 — the editor re-reads the repo and the pointer on focus. A failed
    * re-read keeps what is on screen (focus arrives on wake, when requests
    * fail); a successful one that reports a failed fetch turns the git pill red,

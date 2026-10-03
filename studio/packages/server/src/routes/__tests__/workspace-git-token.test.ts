@@ -24,6 +24,9 @@ class FakeHostClient implements GitHostClient {
     this.calls.push(params);
     return { number: 7, htmlUrl: 'https://github.com/acme/widgets/pull/7' };
   }
+  async findOpenPullRequest(): Promise<null> {
+    return null;
+  }
 }
 
 describe('workspace-git token routes (#3 G10)', () => {

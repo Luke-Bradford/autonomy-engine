@@ -1,4 +1,4 @@
-import type { GitHostRepo } from '@autonomy-studio/shared';
+import { HTTP_URL_PATTERN, type GitHostRepo } from '@autonomy-studio/shared';
 import { redactSecrets } from '../connectors/redact.js';
 
 /**
@@ -50,8 +50,25 @@ export interface OpenedPullRequest {
   htmlUrl: string;
 }
 
+/**
+ * #1476 OR28 — which PR, if any, is open from `head`: into `base` when given
+ * (the observe after an already-exists), into any branch when not (the badge).
+ */
+export interface FindOpenPullRequestParams {
+  repo: GitHostRepo;
+  base?: string;
+  head: string;
+  token: string;
+}
+
 export interface GitHostClient {
   openPullRequest(params: OpenPullRequestParams): Promise<OpenedPullRequest>;
+  /**
+   * The open PR for the branch pair, or `null` when the host answered and there
+   * is none. Throws `GitHostApiError` when the host could not answer: a failed
+   * lookup is never reported as "no pull request".
+   */
+  findOpenPullRequest(params: FindOpenPullRequestParams): Promise<OpenedPullRequest | null>;
 }
 
 /**
@@ -154,7 +171,16 @@ export class GitHubHostClient implements GitHostClient {
 
     // A PR already exists for this head/base → OBSERVE it (make open idempotent).
     if (created.status === 422 && isAlreadyExists(created.json)) {
-      return this.observe(repo, base, head, token, owner, name);
+      const existing = await this.findOpenPullRequest({ repo, base, head, token });
+      if (existing === null) {
+        // The create said one exists, but the open-PR filter found none — it was
+        // closed/merged in the race, or the filter mismatched. Fail HONESTLY
+        // (#473 shape): never manufacture a null-url result.
+        throw new GitHostApiError(
+          'GitHub reported an existing pull request but none was found open for the branch pair',
+        );
+      }
+      return existing;
     }
 
     // A 422 that isn't "already exists" (e.g. "No commits between …") is a
@@ -177,24 +203,27 @@ export class GitHubHostClient implements GitHostClient {
     );
   }
 
-  /** GET the single open PR matching this head/base after a 422 already-exists. */
-  private async observe(
-    repo: GitHostRepo,
-    base: string,
-    head: string,
-    token: string,
-    owner: string,
-    name: string,
-  ): Promise<OpenedPullRequest> {
+  /**
+   * GET the open PR from this head (into `base`, when given) — the observe
+   * after a 422 already-exists, and #1476's badge read. Only a 200 list
+   * answers; an empty list is `null`, anything else throws. `state=open`
+   * includes drafts. Without `base`, a head with PRs into several bases
+   * answers with the host's first. The `head` filter's owner is matched
+   * case-insensitively by GitHub (checked against the live API).
+   */
+  async findOpenPullRequest(params: FindOpenPullRequestParams): Promise<OpenedPullRequest | null> {
+    const { repo, base, head, token } = params;
+    const owner = encodeURIComponent(repo.owner);
+    const name = encodeURIComponent(repo.repo);
     // The `head` filter is `<owner>:<branch>`; both query values are encoded —
     // a working branch is `studio/<owner>/work`, so the `/` (and any URL-
     // significant char) must not break the filter (or it silently matches
-    // nothing → the empty-result guard below).
+    // nothing, which would read as "no pull request").
     const headFilter = encodeURIComponent(`${repo.owner}:${head}`);
-    const baseFilter = encodeURIComponent(base);
+    const baseFilter = base === undefined ? '' : `&base=${encodeURIComponent(base)}`;
     const listed = await this.request(
       'GET',
-      `${GITHUB_API_BASE}/repos/${owner}/${name}/pulls?state=open&head=${headFilter}&base=${baseFilter}`,
+      `${GITHUB_API_BASE}/repos/${owner}/${name}/pulls?state=open&head=${headFilter}${baseFilter}`,
       token,
       undefined,
     );
@@ -202,7 +231,7 @@ export class GitHubHostClient implements GitHostClient {
     if (listed.status !== 200 || !Array.isArray(listed.json)) {
       throw new GitHostApiError(
         redactSecrets(
-          `GitHub pull-request observe failed (HTTP ${listed.status}): ${describeGitHubError(
+          `GitHub pull-request lookup failed (HTTP ${listed.status}): ${describeGitHubError(
             listed.json,
           )}`,
           [token],
@@ -210,19 +239,14 @@ export class GitHubHostClient implements GitHostClient {
       );
     }
 
-    const first = listed.json[0];
-    if (first === undefined) {
-      // The create said one exists, but the open-PR filter found none — it was
-      // closed/merged in the race, or the filter mismatched. Fail HONESTLY
-      // (#473 shape): never crash on `[0]`, never manufacture a null-url result.
-      throw new GitHostApiError(
-        'GitHub reported an existing pull request but none was found open for the branch pair',
-      );
-    }
-    return this.parsePr(first, 'observe', token);
+    const first: unknown = listed.json[0];
+    return first === undefined ? null : this.parsePr(first, 'lookup', token);
   }
 
-  /** Validate + extract `{ number, htmlUrl }` — a malformed payload fails loudly, never manufactured. */
+  /**
+   * Validate + extract `{ number, htmlUrl }` — a malformed payload fails loudly,
+   * never manufactured. `htmlUrl` must be http(s): it becomes a link `href`.
+   */
   private parsePr(json: unknown, context: string, token: string): OpenedPullRequest {
     if (json !== null && typeof json === 'object') {
       const obj = json as Record<string, unknown>;
@@ -233,7 +257,7 @@ export class GitHubHostClient implements GitHostClient {
         Number.isInteger(number) &&
         number > 0 &&
         typeof htmlUrl === 'string' &&
-        htmlUrl.length > 0
+        HTTP_URL_PATTERN.test(htmlUrl)
       ) {
         return { number, htmlUrl };
       }

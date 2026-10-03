@@ -5,10 +5,12 @@ import type { BadgePart } from './editorState';
  * at a glance from the toolbar row.
  *
  * The detail is a native `title` for the mouse and visually-hidden text for a
- * screen reader. No tab stop: nothing here is actionable, so a sighted keyboard
- * user reads the label alone — the same trade the toolbar's `title` reasons
- * make. No live region either: announcing "Draft" on the first edit of every
- * session would be noise.
+ * screen reader. The pills are no tab stop: they are not actionable, so a
+ * sighted keyboard user reads the label alone — the same trade the toolbar's
+ * `title` reasons make. The one exception is a part's `link` (the git part's
+ * open pull request), which IS actionable and so is a real link. No live
+ * region either: announcing "Draft" on the first edit of every session would
+ * be noise.
  */
 export function EditorStateBadge({
   editing,
@@ -49,6 +51,22 @@ function Part({
       {part.name !== undefined && <span className="editor-state-badge__name">{part.name}</span>}
       {part.name !== undefined && part.label !== '' && ' · '}
       {part.label}
+      {part.link !== undefined && (
+        <>
+          {(part.name !== undefined || part.label !== '') && ' · '}
+          {/* Opens the host's page in a new tab, away from an editor that
+              may hold unsaved work. */}
+          <a
+            className="editor-state-badge__link"
+            href={part.link.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={part.link.name}
+          >
+            {part.link.label}
+          </a>
+        </>
+      )}
       {part.current === true && (
         <>
           <span aria-hidden="true"> ✓</span>
