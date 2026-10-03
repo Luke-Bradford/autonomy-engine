@@ -11,11 +11,11 @@ import { freshDb } from '../../repo/__tests__/helpers.js';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun, listRunSummariesPage } from '../../repo/runs.js';
-import { appendRunEvent, listRunLogFacts } from '../../repo/run-events.js';
+import { appendRunEvent, listRunEvents, listRunLastSeqs } from '../../repo/run-events.js';
 import type { Db } from '../../repo/types.js';
 import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 import { activityCountsFromState, makeRunActivityFold } from '../activity-counts.js';
-import { makeDocResolver, startRun, type DocResolver } from '../driver.js';
+import { buildEngine, makeDocResolver, startRun, type DocResolver } from '../driver.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
 import { stubAlarms } from './stub-alarms.js';
 
@@ -186,6 +186,48 @@ describe('#1484 runs list — Activities', () => {
   });
 });
 
+describe('#1484 the fold memo', () => {
+  it('evicts the least recently listed run once it holds more than its limit', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a')]);
+    const first = await drive(db, pvId);
+    const second = await drive(db, pvId);
+    const real = makeDocResolver(db);
+    let resolved = 0;
+    const fold = makeRunActivityFold(
+      (id) => {
+        resolved += 1;
+        return real(id);
+      },
+      { memoLimit: 1 },
+    );
+    const read = (id: string) =>
+      fold(db, [{ id, pipelineVersionId: pvId, lastSeq: listRunLastSeqs(db, [id]).get(id) }]);
+
+    read(first);
+    read(first);
+    expect(resolved).toBe(1);
+    read(second);
+    read(first);
+    expect(resolved).toBe(3);
+  });
+
+  it('reports a fold that throws, and keeps the rows written it could still read', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a')]);
+    const runId = await drive(db, pvId, { a: { outputs: { rowsWritten: 3 } } });
+    const real = makeDocResolver(db);
+    const errors: string[] = [];
+    // A version whose nodes are not a list makes the engine itself throw.
+    const fold = makeRunActivityFold((id) => ({ ...real(id), nodes: null as never }), {
+      onFoldError: (id) => errors.push(id),
+    });
+
+    expect(summaryOf(db, runId, fold)).toMatchObject({ activities: null, rowsWritten: 3 });
+    expect(errors).toEqual([runId]);
+  });
+});
+
 describe('#1484 runs list — Rows written', () => {
   it("sums every success's rowsWritten", async () => {
     const { db } = freshDb();
@@ -215,11 +257,12 @@ describe('#1484 runs list — Rows written', () => {
 
   it("ignores a failed copy's running total and any value that is not a non-negative integer", async () => {
     const { db } = freshDb();
-    const pvId = seedVersion(db, [node('a'), node('b'), node('c')]);
+    const pvId = seedVersion(db, [node('a'), node('b'), node('c'), node('d')]);
     const runId = await drive(db, pvId, {
       a: { outputs: { rowsWritten: '5' } },
       b: { outputs: { rowsWritten: -3 } },
       c: { outputs: { rowsWritten: 2.5 } },
+      d: { outputs: { rowsWritten: 2 ** 60 } },
     });
     // A failed copy reports its uncommitted total as `node.output`, never as a success.
     appendRunEvent(db, {
@@ -244,7 +287,21 @@ describe('#1484 runs list — Rows written', () => {
       },
     });
 
-    expect(summaryOf(db, runId).rowsWritten).toBeNull();
+    const summary = summaryOf(db, runId);
+    // The appended events must PARSE, or the null below would be the
+    // unreadable-log null rather than the one this test is about.
+    expect(summary.activities?.succeeded).toBe(4);
+    expect(summary.rowsWritten).toBeNull();
+  });
+
+  it('counts a success redelivered for the same attempt once', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a')]);
+    const runId = await drive(db, pvId, { a: { outputs: { rowsWritten: 7 } } });
+    const success = listRunEvents(db, runId).find((e) => e.type === 'node.succeeded');
+    appendRunEvent(db, { runId, type: 'node.succeeded', payload: success?.payload });
+
+    expect(summaryOf(db, runId).rowsWritten).toBe(7);
   });
 
   it("is owner-scoped: another owner's runs contribute nothing", async () => {
@@ -252,8 +309,42 @@ describe('#1484 runs list — Rows written', () => {
     const pvId = seedVersion(db, [node('a')]);
     const runId = await drive(db, pvId, { a: { outputs: { rowsWritten: 7 } } });
 
-    expect(listRunLogFacts(db, [runId], 'local').get(runId)?.rowsWritten).toBe(7);
-    expect(listRunLogFacts(db, [runId], 'someone-else').size).toBe(0);
+    expect(summaryOf(db, runId).rowsWritten).toBe(7);
+    expect(listRunLastSeqs(db, [runId], 'local').has(runId)).toBe(true);
+    expect(listRunLastSeqs(db, [runId], 'someone-else').size).toBe(0);
+  });
+});
+
+describe('#1484 activityCountsFromState — a real rerun-from-failed fold', () => {
+  it("counts the frontier and a copied container's body (still pending) as reused", () => {
+    const doc = {
+      nodes: [node('a'), node('inner'), node('after')],
+      edges: [edge('a', 'loop'), { id: 'loop->after', from: 'loop', to: 'after', on: 'success' }],
+      containers: [{ id: 'loop', kind: 'foreach', children: ['inner'], items: '[1]' }],
+      variables: [],
+    } as never as Parameters<typeof buildEngine>[0];
+    const events = [
+      { type: 'run.started', runId: 'R2', pipelineVersionId: 'pv', params: {}, rerunOf: 'R1' },
+      {
+        type: 'run.reseeded',
+        runId: 'R2',
+        sourceRunId: 'R1',
+        frontier: ['a'],
+        copiedOutputs: { a: {} },
+        copiedContainers: { loop: { status: 'success', round: 1, outputs: {} } },
+      },
+    ] as EngineEvent[];
+    const state = buildEngine(doc).projectRunState(events);
+    // The premise: the fold leaves the copied container's body pending.
+    expect(state.nodes.inner?.status).toBe('pending');
+
+    expect(activityCountsFromState(doc, events, state)).toEqual({
+      succeeded: 0,
+      failed: 0,
+      skipped: 0,
+      reused: 3,
+      unfinished: 1,
+    });
   });
 });
 

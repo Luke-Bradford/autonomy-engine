@@ -5,8 +5,10 @@ import { formatCount } from './format';
 export interface ActivitiesCell {
   /** What the cell draws. Glyphs, so it fits a 32px row. */
   readonly figure: string;
-  /** The same counts in words: the cell's title and its accessible text. */
+  /** The same counts in words: the cell's accessible text. */
   readonly words: string;
+  /** The cell's hover text. */
+  readonly title: string;
 }
 
 /**
@@ -26,7 +28,9 @@ export function activitiesCell(run: Pick<RunSummary, 'activities' | 'status'>): 
   if (counts === null) {
     return {
       figure: '—',
-      words: 'No activity counts: the run has not started, or its log cannot be read',
+      words: 'No activity counts',
+      title:
+        'No activity counts: the run has not started, or its log or pipeline version cannot be read',
     };
   }
   const unfinished = TERMINAL_RUN_ROW_STATUS.has(run.status) ? 'not run' : 'in progress';
@@ -38,9 +42,11 @@ export function activitiesCell(run: Pick<RunSummary, 'activities' | 'status'>): 
     { n: counts.unfinished, figure: unfinished, words: unfinished },
   ];
   const shown = parts.filter((p) => p.always === true || p.n > 0);
+  const words = shown.map((p) => `${formatCount(p.n)} ${p.words}`).join(', ');
   return {
     figure: shown.map((p) => `${formatCount(p.n)} ${p.figure}`).join(' · '),
-    words: shown.map((p) => `${formatCount(p.n)} ${p.words}`).join(', '),
+    words,
+    title: words,
   };
 }
 

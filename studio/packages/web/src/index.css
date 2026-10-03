@@ -4454,7 +4454,7 @@ button.danger {
 /* Column shares, in header order: Pipeline · Status · Triggered by · Started ·
    Duration · Activities · Rows written · Cost · Run ID. */
 .runs-grid th:nth-child(1) {
-  width: 21%;
+  width: 19%;
 }
 .runs-grid th:nth-child(2) {
   width: 8%;
@@ -4469,7 +4469,7 @@ button.danger {
   width: 7%;
 }
 .runs-grid th:nth-child(6) {
-  width: 12%;
+  width: 14%;
 }
 .runs-grid th:nth-child(7),
 .runs-grid th:nth-child(8) {

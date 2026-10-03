@@ -18,7 +18,11 @@ describe('#1484 activitiesCell', () => {
         status: 'failure',
         activities: counts({ succeeded: 8, failed: 1, skipped: 2 }),
       }),
-    ).toEqual({ figure: '8 ✓ · 1 ✗ · 2 skipped', words: '8 succeeded, 1 failed, 2 skipped' });
+    ).toEqual({
+      figure: '8 ✓ · 1 ✗ · 2 skipped',
+      words: '8 succeeded, 1 failed, 2 skipped',
+      title: '8 succeeded, 1 failed, 2 skipped',
+    });
   });
 
   it('always shows succeeded, so a run that did nothing reads 0 ✓', () => {
@@ -38,7 +42,10 @@ describe('#1484 activitiesCell', () => {
   });
 
   it('draws the em-dash, never 0 ✓, when there are no counts', () => {
-    expect(activitiesCell({ status: 'queued', activities: null }).figure).toBe('—');
+    const cell = activitiesCell({ status: 'queued', activities: null });
+    expect(cell.figure).toBe('—');
+    expect(cell.words).toBe('No activity counts');
+    expect(cell.title).toMatch(/has not started/);
   });
 });
 

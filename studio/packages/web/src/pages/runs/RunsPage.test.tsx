@@ -257,6 +257,18 @@ describe('RunsPage', () => {
       'visually-hidden',
     );
     expect(cellUnder(row, 'Rows written')).toHaveTextContent('1,092');
+    expect(cellUnder(row, 'Rows written')).toHaveAttribute(
+      'title',
+      "Rows this run's successful activities wrote",
+    );
+  });
+
+  it('draws the em-dash in both new columns when the server has no figure', async () => {
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_abc', status: 'queued' })]));
+    renderWithRouter(<RunsPage />);
+    const row = (await screen.findByText('run_abc')).closest('tr') as HTMLElement;
+    expect(cellUnder(row, 'Activities')).toHaveTextContent('—No activity counts');
+    expect(cellUnder(row, 'Rows written')).toHaveTextContent(/^—$/);
   });
 
   it('a run that billed nothing says so, rather than showing $0.00', async () => {

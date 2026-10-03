@@ -113,6 +113,8 @@ test.describe('#1481 the demo workspace', () => {
     // skipped activity, and its three copies write 66 + 6 + 20. Demo 2: a
     // sequential ForEach over two files, whose 49 + 43 rows are summed across
     // items. Demo 5: one failed copy, which reports no rows written.
+    // At the issue's 1440×900 target, not the suite's wider default.
+    await page.setViewportSize({ width: 1440, height: 900 });
     const headers = await page.getByRole('columnheader').allTextContents();
     const cell = (runId: string, header: string) =>
       page
@@ -127,6 +129,10 @@ test.describe('#1481 the demo workspace', () => {
       '7 succeeded, 1 skipped',
     );
     await expect(cell(runIds['3']!, 'Rows written')).toHaveText('92');
+    // Drawn whole at 1440px, not cut to an ellipsis that would hide a count.
+    expect(
+      await cell(runIds['3']!, 'Activities').evaluate((td) => td.scrollWidth <= td.clientWidth),
+    ).toBe(true);
     await expect(cell(runIds['2']!, 'Activities')).toContainText('5 ✓');
     await expect(cell(runIds['2']!, 'Rows written')).toHaveText('92');
     await expect(cell(broken, 'Activities')).toContainText('0 ✓ · 1 ✗');

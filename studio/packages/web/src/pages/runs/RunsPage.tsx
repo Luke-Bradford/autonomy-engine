@@ -105,7 +105,7 @@ function RunCostCell({ run }: { run: RunSummary }) {
 function RunActivitiesCell({ run }: { run: RunSummary }) {
   const cell = activitiesCell(run);
   return (
-    <td className="runs-grid__activities" title={cell.words}>
+    <td className="runs-grid__activities" title={cell.title}>
       <span aria-hidden="true">{cell.figure}</span>
       <span className="visually-hidden">{cell.words}</span>
     </td>

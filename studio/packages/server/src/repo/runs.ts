@@ -33,7 +33,7 @@ import { newId } from './ids.js';
 import { beforeCursor, encodeCursor, pageOrderDesc, type PageArgs } from './pagination.js';
 import { isDeterministicRowCorruption } from './row-corruption.js';
 import type { RunActivityFold } from '../run/activity-counts.js';
-import { aggregateRunCosts, listRunLogFacts } from './run-events.js';
+import { aggregateRunCosts, listRunLastSeqs } from './run-events.js';
 import { RUN_TRIGGERED_BY_SQL } from './run-triggered-by.js';
 import type { Db } from './types.js';
 
@@ -429,20 +429,20 @@ export function listRunSummariesPage(
       filter.ownerId,
     );
     /* #1484 — the Activities and Rows-written columns, for this page's rows only
-       and inside the same snapshot. One grouped scan gives each log's last seq
-       (the fold's memo key) and its rows written; the fold then reads only the
-       logs it has not already counted at that seq. */
-    const logFacts = listRunLogFacts(
+       and inside the same snapshot. An index-only read gives each log's last seq
+       (the fold's memo key); the fold then reads only the logs it has not
+       already read at that seq. */
+    const lastSeqs = listRunLastSeqs(
       tx,
       rows.map((row) => row.run.id),
       filter.ownerId,
     );
-    const activities = foldActivities(
+    const readings = foldActivities(
       tx,
       rows.map((row) => ({
         id: row.run.id,
         pipelineVersionId: row.run.pipelineVersionId,
-        lastSeq: logFacts.get(row.run.id)?.lastSeq,
+        lastSeq: lastSeqs.get(row.run.id),
       })),
     );
     return {
@@ -461,8 +461,8 @@ export function listRunSummariesPage(
              hand-written zero object, so the empty value stays the FOLD's own and
              cannot fall out of step when `RunCost` grows a field. */
           cost: costs.get(row.run.id) ?? computeRunCost([]),
-          activities: activities.get(row.run.id) ?? null,
-          rowsWritten: logFacts.get(row.run.id)?.rowsWritten ?? null,
+          activities: readings.get(row.run.id)?.activities ?? null,
+          rowsWritten: readings.get(row.run.id)?.rowsWritten ?? null,
         }),
       ),
       // The cursor's numeric slot carries `startedAt` — the ordering scalar —

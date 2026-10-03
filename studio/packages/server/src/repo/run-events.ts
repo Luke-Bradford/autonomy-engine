@@ -203,64 +203,36 @@ export function aggregateRunCosts(
   return costs;
 }
 
-/** #1484 — what `listRunLogFacts` reads off one run's log. */
-export interface RunLogFacts {
-  /** The log's highest `seq` — it only ever grows, so it versions the log. */
-  readonly lastSeq: number;
-  /** `RunSummary.rowsWritten` — see there for what `null` means. */
-  readonly rowsWritten: number | null;
-}
-
 /**
- * #1484 OR35 M1 — per run, ONE grouped scan of its log for two facts the runs
- * list needs: the log's last `seq` (the key `run/activity-counts.ts` memoises
- * its fold on) and the rows the run's successful activities report writing.
+ * #1484 OR35 M1 — each run's highest event `seq`, the version of its log. The log
+ * is append-only and `seq` strictly grows, so `(runId, lastSeq)` names exactly one
+ * log, and `run/activity-counts.ts` memoises its fold on it. A run with no events
+ * has no entry.
  *
- * Rows written sums `outputs.rowsWritten` over EVERY `node.succeeded`, not the
- * reducer's latest output per node: a ForEach copy succeeds once per item, and
- * a late success the reducer ignores as stale still committed its rows. Only a
- * success counts — on a failed copy the figure is a rolled-back 0 or an
- * uncommitted running total (`copy.ts`), not rows written.
- *
- * TOTAL over its input, so one odd payload cannot 500 the whole list: only a
- * non-negative JSON `integer` is summed (a hand-edited string, real or negative
- * value is ignored), and `total()` rather than `sum()`, which raises on integer
- * overflow. A run with no qualifying success gets `null`, never a manufactured 0.
- *
- * Owner-scoped when `ownerId` is passed, as `aggregateRunCosts` is.
+ * Index-only — `run_events_run_id_seq_idx` covers `(run_id, seq)` — so asking on
+ * every list request does not read a single payload. Owner-scoped when `ownerId`
+ * is passed, as `aggregateRunCosts` is.
  */
-export function listRunLogFacts(
+export function listRunLastSeqs(
   db: Db,
   runIds: readonly string[],
   ownerId?: string,
-): Map<string, RunLogFacts> {
-  const facts = new Map<string, RunLogFacts>();
-  const rowsWritten = sql`json_extract(${runEvents.payload}, '$.outputs.rowsWritten')`;
-  const counts = sql`(${runEvents.type} = 'node.succeeded' and json_type(${runEvents.payload}, '$.outputs.rowsWritten') = 'integer' and ${rowsWritten} >= 0)`;
+): Map<string, number> {
+  const seqs = new Map<string, number>();
   for (let i = 0; i < runIds.length; i += RUN_ID_BIND_CHUNK) {
     const chunk = runIds.slice(i, i + RUN_ID_BIND_CHUNK);
     const conditions = [inArray(runEvents.runId, chunk)];
     if (ownerId !== undefined) conditions.push(eq(runs.ownerId, ownerId));
     const rows = db
-      .select({
-        runId: runEvents.runId,
-        lastSeq: max(runEvents.seq),
-        reported: sql<number>`count(case when ${counts} then 1 end)`,
-        rowsWritten: sql<number>`total(case when ${counts} then ${rowsWritten} end)`,
-      })
+      .select({ runId: runEvents.runId, lastSeq: max(runEvents.seq) })
       .from(runEvents)
       .innerJoin(runs, eq(runEvents.runId, runs.id))
       .where(and(...conditions))
       .groupBy(runEvents.runId)
       .all();
-    for (const row of rows) {
-      facts.set(row.runId, {
-        lastSeq: row.lastSeq ?? 0,
-        rowsWritten: row.reported > 0 ? Math.round(row.rowsWritten) : null,
-      });
-    }
+    for (const row of rows) if (row.lastSeq !== null) seqs.set(row.runId, row.lastSeq);
   }
-  return facts;
+  return seqs;
 }
 
 /**
