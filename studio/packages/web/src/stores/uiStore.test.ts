@@ -26,6 +26,10 @@ import {
   PANE_MAX_WIDTH,
   PANE_MIN_WIDTH,
   PANE_STORAGE_KEY,
+  RUN_GRID_COLUMN_MAX_WIDTH,
+  RUN_GRID_COLUMN_WIDTHS,
+  RUN_GRID_HIDDEN_STORAGE_KEY,
+  RUN_GRID_WIDTHS_STORAGE_KEY,
   THEME_STORAGE_KEY,
   TOOLBOX_COLLAPSED_STORAGE_KEY,
   TOOLBOX_DEFAULT_WIDTH,
@@ -620,5 +624,114 @@ describe('uiStore dock tabs (#1475 OR27)', () => {
     ).getState();
     expect(state.dockNodeTab).toBe('settings');
     expect(state.dockPipelineTab).toBe('params');
+  });
+});
+
+describe('uiStore runs grid columns (#1484 OR35 M1)', () => {
+  it('starts with every column shown at its default width', () => {
+    const state = createUiStore(fakeStorage()).getState();
+    expect(state.runsGridHidden).toEqual([]);
+    expect(state.runsGridWidths).toEqual({});
+  });
+
+  it('persists hidden columns in column order, deduplicated, across a new store', () => {
+    const storage = fakeStorage();
+    createUiStore(storage).getState().setRunsGridHidden(['cost', 'status', 'cost']);
+    expect(storage.data.get(RUN_GRID_HIDDEN_STORAGE_KEY)).toBe('["status","cost"]');
+    expect(createUiStore(storage).getState().runsGridHidden).toEqual(['status', 'cost']);
+  });
+
+  it('never hides a required column, on write or on read', () => {
+    const store = createUiStore(fakeStorage());
+    store.getState().setRunsGridHidden(['pipeline', 'runId', 'duration']);
+    expect(store.getState().runsGridHidden).toEqual(['duration']);
+    const read = createUiStore(
+      fakeStorage({ [RUN_GRID_HIDDEN_STORAGE_KEY]: '["runId","pipeline","cost"]' }),
+    ).getState();
+    expect(read.runsGridHidden).toEqual(['cost']);
+  });
+
+  it('drops an unknown column id and reads garbage as nothing hidden', () => {
+    expect(
+      createUiStore(
+        fakeStorage({ [RUN_GRID_HIDDEN_STORAGE_KEY]: '["retired","cost",7,null]' }),
+      ).getState().runsGridHidden,
+    ).toEqual(['cost']);
+    for (const raw of ['', 'cost', '{"cost":true}', 'null', '"cost"']) {
+      expect(
+        createUiStore(fakeStorage({ [RUN_GRID_HIDDEN_STORAGE_KEY]: raw })).getState()
+          .runsGridHidden,
+      ).toEqual([]);
+    }
+  });
+
+  it("persists a width per column, clamped to that column's own bounds", () => {
+    const storage = fakeStorage();
+    const store = createUiStore(storage);
+    store.getState().setRunsGridWidth('status', 120.6);
+    store.getState().setRunsGridWidth('runId', 5);
+    store.getState().setRunsGridWidth('pipeline', 99999);
+    expect(store.getState().runsGridWidths).toEqual({
+      status: 121,
+      runId: RUN_GRID_COLUMN_WIDTHS.runId.min,
+      pipeline: RUN_GRID_COLUMN_MAX_WIDTH,
+    });
+    expect(createUiStore(storage).getState().runsGridWidths).toEqual(
+      store.getState().runsGridWidths,
+    );
+  });
+
+  it('forgets a width set to null, and a non-finite one', () => {
+    const store = createUiStore(fakeStorage());
+    store.getState().setRunsGridWidth('status', 120);
+    store.getState().setRunsGridWidth('cost', 90);
+    store.getState().setRunsGridWidth('status', null);
+    store.getState().setRunsGridWidth('cost', Number.NaN);
+    expect(store.getState().runsGridWidths).toEqual({});
+  });
+
+  it('reads each stored width on its own: a bad entry does not cost the good ones', () => {
+    const state = createUiStore(
+      fakeStorage({
+        [RUN_GRID_WIDTHS_STORAGE_KEY]: JSON.stringify({
+          status: 130,
+          retired: 200,
+          cost: 'wide',
+          started: 1e9,
+          duration: 1,
+        }),
+      }),
+    ).getState();
+    expect(state.runsGridWidths).toEqual({
+      status: 130,
+      started: RUN_GRID_COLUMN_MAX_WIDTH,
+      duration: RUN_GRID_COLUMN_WIDTHS.duration.min,
+    });
+    for (const raw of ['', '[]', 'null', '120', '{']) {
+      expect(
+        createUiStore(fakeStorage({ [RUN_GRID_WIDTHS_STORAGE_KEY]: raw })).getState()
+          .runsGridWidths,
+      ).toEqual({});
+    }
+  });
+
+  it('reset shows every column at its default width again, in storage too', () => {
+    const storage = fakeStorage();
+    const store = createUiStore(storage);
+    store.getState().setRunsGridHidden(['cost']);
+    store.getState().setRunsGridWidth('status', 140);
+    store.getState().resetRunsGridColumns();
+    expect(store.getState().runsGridHidden).toEqual([]);
+    expect(store.getState().runsGridWidths).toEqual({});
+    const reread = createUiStore(storage).getState();
+    expect(reread.runsGridHidden).toEqual([]);
+    expect(reread.runsGridWidths).toEqual({});
+  });
+
+  it('gives every column a default inside its own bounds', () => {
+    for (const { min, default: width } of Object.values(RUN_GRID_COLUMN_WIDTHS)) {
+      expect(width).toBeGreaterThanOrEqual(min);
+      expect(width).toBeLessThanOrEqual(RUN_GRID_COLUMN_MAX_WIDTH);
+    }
   });
 });

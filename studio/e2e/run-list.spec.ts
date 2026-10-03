@@ -189,7 +189,7 @@ test('U26 — the runs list filters by status, pipeline and window, and the filt
 
   // STATUS — the failed run stays, the successful one is filtered out by the
   // SERVER (it is not merely hidden: the row is not in the response at all).
-  await page.getByLabel('Status').selectOption('failure');
+  await page.getByRole('combobox', { name: 'Status' }).selectOption('failure');
   await expect(rowFor(failedRun)).toHaveCount(1);
   await expect(rowFor(passedRun)).toHaveCount(0);
   expect(page.url()).toContain('status=failure');
@@ -198,7 +198,7 @@ test('U26 — the runs list filters by status, pipeline and window, and the filt
   // on the same filtered view, with the control still showing what is applied.
   await page.reload();
   await fluentRootReady(page);
-  await expect(page.getByLabel('Status')).toHaveValue('failure');
+  await expect(page.getByRole('combobox', { name: 'Status' })).toHaveValue('failure');
   await expect(rowFor(failedRun)).toHaveCount(1);
   await expect(rowFor(passedRun)).toHaveCount(0);
 
@@ -215,8 +215,9 @@ test('U26 — the runs list filters by status, pipeline and window, and the filt
      cross-spec coupling through the shared database, and one that would keep
      recurring. `^Pipeline` can only match the picker whose own label starts with
      it. (`{ exact: true }` does NOT work here: the option text is part of the
-     string, so nothing is exactly "Pipeline".) */
-  await page.getByLabel(/^Pipeline/).selectOption({ label: passingName });
+     string, so nothing is exactly "Pipeline".) A COMBOBOX, since #1484 named the
+     grid's Pipeline header "Pipeline" too. */
+  await page.getByRole('combobox', { name: /^Pipeline/ }).selectOption({ label: passingName });
   await expect(rowFor(failedRun)).toHaveCount(0);
   await expect(page.getByText(/No runs match these filters/i)).toBeVisible();
   await page.getByRole('button', { name: 'Clear filters' }).click();
@@ -229,7 +230,7 @@ test('U26 — the runs list filters by status, pipeline and window, and the filt
   // WINDOW — the runs were fired seconds ago, so the tightest window keeps them
   // both; this pins that the relative preset resolves to a real bound server-side
   // rather than being dropped.
-  await page.getByLabel('Started').selectOption('1h');
+  await page.getByRole('combobox', { name: 'Started' }).selectOption('1h');
   expect(page.url()).toContain('since=1h');
   await expect(rowFor(failedRun)).toHaveCount(1);
 
@@ -237,7 +238,7 @@ test('U26 — the runs list filters by status, pipeline and window, and the filt
   // error page — the server would 400 this query, so the page must never send it.
   await page.goto('/#/monitor/runs?status=not-a-status&since=forever');
   await fluentRootReady(page);
-  await expect(page.getByLabel('Status')).toHaveValue('');
+  await expect(page.getByRole('combobox', { name: 'Status' })).toHaveValue('');
   await expect(rowFor(failedRun)).toHaveCount(1);
 
   await expectQuiet(page, problems);
@@ -426,7 +427,7 @@ test('#1484 — the filter bar searches runs and days, in one row above a dense 
   // A day long before any run: the empty state, not an empty table.
   await page.goto('/#/monitor/runs?on=2000-01-01');
   await fluentRootReady(page);
-  await expect(page.getByLabel('Started')).toHaveValue('on');
+  await expect(page.getByRole('combobox', { name: 'Started' })).toHaveValue('on');
   await expect(page.getByLabel('Day')).toHaveValue('2000-01-01');
   await expect(page.getByText(/No runs match these filters/)).toBeVisible();
   await expect(page.locator('table.runs-grid')).toHaveCount(0);
@@ -560,6 +561,110 @@ test('#1484 — the runs grid sorts by a header, server side, and the sort is a 
   await expect.poll(() => new URL(page.url()).hash).not.toContain('sort=');
   // The search survived every sort click: the sort is not a filter.
   expect(new URL(page.url()).hash).toContain('q=');
+
+  await expectQuiet(page, problems);
+});
+
+/**
+ * #1484 OR35 M1 — the grid's columns are resized and chosen per viewer, and
+ * both survive a reload (`uiStore`'s localStorage). The resize is measured, not
+ * assumed: the handle must move WITH the pointer (a column absorbing the slack
+ * would leave the edge where it was), and widening every column past the page
+ * must scroll the GRID, never the page.
+ */
+test('#1484 — runs grid columns resize with the pointer, can be hidden, and persist per viewer', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  const stamp = `Columns ${Date.now()}`;
+  const { pipelineVersionId } = await seedVersion(page, stamp, {
+    nodes: [{ id: 'n1', type: 'fail', config: { message: 'x' }, position: { x: 0, y: 0 } }],
+  });
+  const runId = await fireAndSettle(page, pipelineVersionId, 'e2e columns');
+
+  await page.goto(`/#/monitor/runs?q=${encodeURIComponent(stamp)}`);
+  await fluentRootReady(page);
+  await expect(page.getByRole('row').filter({ hasText: runId })).toHaveCount(1);
+  const header = (name: string) => page.getByRole('columnheader', { name, exact: true });
+  // Every list request this test causes. Asserted at the END, long after the
+  // drag, so a sort the drag set off has had all the time it needs to show.
+  const sortedByStatus: string[] = [];
+  page.on('request', (r) => {
+    if (r.url().includes('/api/runs?') && r.url().includes('sort=status')) {
+      sortedByStatus.push(r.url());
+    }
+  });
+  const measure = () =>
+    page.evaluate(() => {
+      const box = (sel: string) => document.querySelector(sel)?.getBoundingClientRect();
+      const scroll = document.querySelector('.runs-grid-scroll');
+      const content = document.querySelector('.content');
+      return {
+        status: box('#runs-grid-col-status')?.width ?? 0,
+        statusRight: box('#runs-grid-col-status')?.right ?? 0,
+        runId: box('#runs-grid-col-runId')?.width ?? 0,
+        filler: box('th.runs-grid__filler')?.width ?? -1,
+        gridScrolls: (scroll?.scrollWidth ?? 0) > (scroll?.clientWidth ?? 0) + 1,
+        pageScrolls: (content?.scrollWidth ?? 0) > (content?.clientWidth ?? 0) + 1,
+      };
+    });
+
+  // Defaults: the columns at their set widths, and the filler takes the rest.
+  const start = await measure();
+  expect(start.status).toBeCloseTo(88, 0);
+  expect(start.filler).toBeGreaterThan(0);
+  expect(start.gridScrolls).toBe(false);
+
+  // A pointer drag of 40px moves the Status edge 40px.
+  const handle = page.getByRole('separator', { name: 'Resize Status column' });
+  const hb = await handle.boundingBox();
+  if (hb === null) throw new Error('no Status resize handle');
+  await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(hb.x + hb.width / 2 + 20, hb.y + hb.height / 2);
+  await page.mouse.move(hb.x + hb.width / 2 + 40, hb.y + hb.height / 2);
+  await page.mouse.up();
+  const dragged = await measure();
+  expect(dragged.status).toBeCloseTo(128, 0);
+  expect(dragged.statusRight - start.statusRight).toBeCloseTo(40, 0);
+  // The drag did not sort.
+  await expect(header('Status')).not.toHaveAttribute('aria-sort', /.*/);
+
+  // The keyboard path: one step on Run ID.
+  await page.getByRole('separator', { name: 'Resize Run ID column' }).press('ArrowRight');
+  await expect.poll(async () => Math.round((await measure()).runId)).toBe(136);
+
+  // Hide Cost from the picker.
+  await page.getByRole('button', { name: /^Columns/ }).click();
+  await page.getByRole('menuitemcheckbox', { name: 'Cost' }).click();
+  await page.keyboard.press('Escape');
+  await expect(header('Cost')).toHaveCount(0);
+
+  // A reload keeps the widths and the choice: they are the viewer's.
+  await page.reload();
+  await fluentRootReady(page);
+  await expect(page.getByRole('row').filter({ hasText: runId })).toHaveCount(1);
+  await expect(header('Cost')).toHaveCount(0);
+  const reloaded = await measure();
+  expect(reloaded.status).toBeCloseTo(128, 0);
+  expect(reloaded.runId).toBeCloseTo(136, 0);
+
+  // Wider than the page: the GRID scrolls sideways, the page does not.
+  await page.getByRole('separator', { name: 'Resize Pipeline column' }).press('End');
+  await page.getByRole('separator', { name: 'Resize Triggered by column' }).press('End');
+  await expect.poll(async () => (await measure()).gridScrolls).toBe(true);
+  expect((await measure()).pageScrolls).toBe(false);
+
+  // Reset brings every column back at its default width.
+  await page.getByRole('button', { name: /^Columns/ }).click();
+  await page.getByRole('menuitem', { name: 'Reset columns' }).click();
+  await expect(header('Cost')).toHaveCount(1);
+  await expect.poll(async () => Math.round((await measure()).status)).toBe(88);
+  expect((await measure()).gridScrolls).toBe(false);
+  // No step of this test sorted the grid: dragging a header's edge is not
+  // clicking its name.
+  expect(sortedByStatus).toEqual([]);
+  expect(new URL(page.url()).hash).not.toContain('sort=');
 
   await expectQuiet(page, problems);
 });
