@@ -404,12 +404,16 @@ export interface BuildAppOptions {
  * mounts), then `demo/` beside the database. Always absolute — the demo's
  * connections are rooted there, and connector roots must be absolute.
  */
-function resolveDemoRoot(option: string | undefined, dbPath: string): string {
+export function resolveDemoRoot(
+  option: string | undefined,
+  dbPath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   const pick = (v: string | undefined): string | undefined =>
     v === undefined || v === '' ? undefined : v;
-  const explicit = pick(option) ?? pick(process.env.AUTONOMY_DEMO_ROOT);
+  const explicit = pick(option) ?? pick(env.AUTONOMY_DEMO_ROOT);
   if (explicit !== undefined) return resolve(explicit);
-  const dataDir = pick(process.env.AUTONOMY_DATA_DIR);
+  const dataDir = pick(env.AUTONOMY_DATA_DIR);
   if (dataDir !== undefined) return resolve(dataDir, 'demo');
   return resolve(dirname(resolve(dbPath)), 'demo');
 }

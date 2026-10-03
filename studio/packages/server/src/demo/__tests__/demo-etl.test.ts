@@ -12,6 +12,7 @@ import {
 import { buildTestAppWithContext } from '../../__tests__/build-test-app.js';
 import { until } from '../../__tests__/poll-until.js';
 import { getRun, listConnections, listRunEvents } from '../../repo/index.js';
+import { resolveDemoRoot } from '../../index.js';
 import { demoDirFor } from '../demo-etl.js';
 
 /**
@@ -193,5 +194,17 @@ describe('#1481 demo ETL pack — refusals', () => {
     expect(demoDirFor('/srv/demo', 'local')).toBe('/srv/demo/local');
     expect(() => demoDirFor('/srv/demo', '../etc')).toThrow(/escapes/);
     expect(() => demoDirFor('/srv/demo', '.')).toThrow(/escapes/);
+  });
+
+  it('resolves the demo root: option, then AUTONOMY_DEMO_ROOT, then the data dir, then beside the DB', () => {
+    const env = { AUTONOMY_DEMO_ROOT: '/env/demo', AUTONOMY_DATA_DIR: '/data' };
+    expect(resolveDemoRoot('/opt/demo', '/db/app.sqlite', env)).toBe('/opt/demo');
+    expect(resolveDemoRoot(undefined, '/db/app.sqlite', env)).toBe('/env/demo');
+    expect(resolveDemoRoot(undefined, '/db/app.sqlite', { AUTONOMY_DATA_DIR: '/data' })).toBe(
+      '/data/demo',
+    );
+    expect(resolveDemoRoot(undefined, '/db/app.sqlite', { AUTONOMY_DEMO_ROOT: '' })).toBe(
+      '/db/demo',
+    );
   });
 });
