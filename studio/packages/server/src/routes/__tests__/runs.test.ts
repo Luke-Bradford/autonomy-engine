@@ -208,9 +208,51 @@ describe('runs routes (read-only)', () => {
       ['since', 'since=garbage'],
       ['since (empty string)', 'since='],
       ['pipelineId (empty string)', 'pipelineId='],
+      // #1484 — the one-row filter bar's axes.
+      ['kind', 'kind=not-a-kind'],
+      ['kind (one bad member)', 'kind=schedule,nope'],
+      ['kind (empty string)', 'kind='],
+      ['q (blank)', 'q=%20%20'],
+      ['from (empty string)', 'from='],
+      ['to (not digits)', 'to=yesterday'],
     ])('refuses an out-of-vocabulary %s with a 400', async (_label, query) => {
       const res = await app.inject({ method: 'GET', url: `/api/runs?${query}` });
       expect(res.statusCode).toBe(400);
+    });
+
+    it('#1484 — kind, search and day bounds reach the query, ANDed with the owner scope', async () => {
+      const seed = (ownerId: string, startedAt: number) => {
+        const r = createRun(app.db, {
+          ownerId,
+          pipelineVersionId,
+          triggerId: null,
+          parentRunId: null,
+          params: {},
+        });
+        app.db.update(runs).set({ startedAt }).where(eq(runs.id, r.id)).run();
+        return r.id;
+      };
+      const day = Date.UTC(2020, 0, 2);
+      const wanted = seed('local', day + 1000);
+      const dayBefore = seed('local', day - 1);
+      const foreign = seed('someone-else', day + 1000);
+
+      const res = await app.inject({
+        method: 'GET',
+        // `editor` is what a run with no trigger reads as; `For runs` is the
+        // pipeline's name, searched case-insensitively.
+        url: `/api/runs?kind=editor,debug&q=for%20RUNS&from=${day}&to=${day + 86_400_000}`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(runIdsOf(res)).toEqual([wanted]);
+      expect(runIdsOf(res)).not.toContain(dayBefore);
+      expect(runIdsOf(res)).not.toContain(foreign);
+
+      const otherKind = await app.inject({
+        method: 'GET',
+        url: `/api/runs?kind=schedule&from=${day}&to=${day + 86_400_000}`,
+      });
+      expect(runIdsOf(otherKind)).toEqual([]);
     });
 
     /**

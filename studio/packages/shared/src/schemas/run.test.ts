@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   NewRunEventSchema,
+  RUN_SEARCH_MAX_CHARS,
+  RunEpochBoundSchema,
+  RunSearchSchema,
+  RunTriggeredByKindListSchema,
   NewRunSchema,
   RunEventSchema,
   RunLifecyclePatchSchema,
@@ -248,5 +252,39 @@ describe('TERMINAL_RUN_ROW_STATUS (#930)', () => {
        terminal, since neither is one of its three non-terminal names. */
     expect(TERMINAL_RUN_ROW_STATUS.has('skipped')).toBe(true);
     expect(TERMINAL_RUN_ROW_STATUS.has('queued')).toBe(false);
+  });
+});
+
+describe('#1484 — the runs list filter wire schemas', () => {
+  it('a kind list is canonical: deduplicated and in vocabulary order', () => {
+    expect(RunTriggeredByKindListSchema.parse('webhook,schedule,webhook')).toEqual([
+      'schedule',
+      'webhook',
+    ]);
+    expect(RunTriggeredByKindListSchema.parse('call')).toEqual(['call']);
+  });
+
+  it.each(['', 'schedule,', ',schedule', 'schedule,,webhook', 'Schedule', 'nope'])(
+    'a kind list refuses %j whole rather than dropping the bad member',
+    (raw) => {
+      expect(RunTriggeredByKindListSchema.safeParse(raw).success).toBe(false);
+    },
+  );
+
+  it('search is trimmed, and an all-space or over-long value refuses', () => {
+    expect(RunSearchSchema.parse('  orders  ')).toBe('orders');
+    expect(RunSearchSchema.safeParse('   ').success).toBe(false);
+    expect(RunSearchSchema.safeParse('x'.repeat(RUN_SEARCH_MAX_CHARS + 1)).success).toBe(false);
+  });
+
+  it.each(['', '-1', '1.5', '1e3', ' 12', '1234567890123456'])(
+    'an epoch bound refuses %j',
+    (raw) => {
+      expect(RunEpochBoundSchema.safeParse(raw).success).toBe(false);
+    },
+  );
+
+  it('an epoch bound reads digits as a number', () => {
+    expect(RunEpochBoundSchema.parse('1759363200000')).toBe(1759363200000);
   });
 });

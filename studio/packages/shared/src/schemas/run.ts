@@ -514,3 +514,47 @@ export const RunAnnotationFilterSchema = z.string().min(1).max(ANNOTATION_MAX_CH
  */
 export const RunAnnotationsResponseSchema = z.object({ items: z.array(z.string()) });
 export type RunAnnotationsResponse = z.infer<typeof RunAnnotationsResponseSchema>;
+
+/**
+ * #1484 OR35 M1 — a multi-value filter axis on the wire: one query param holding
+ * a comma-separated list (`?kind=schedule,webhook`), every member parsed by
+ * `member`. Comma-joined rather than a repeated param because the web keeps the
+ * same string in its own URL and hands it to `pageQuery` unchanged, and both are
+ * a `Record<string, string>`.
+ *
+ * The output is CANONICAL — deduplicated and in the vocabulary's order — so two
+ * spellings of one selection are one filter. An empty member (`?kind=`,
+ * `?kind=a,,b`) or one outside the vocabulary refuses the whole value: a filter
+ * that silently dropped a typo would answer a narrower question than was asked.
+ */
+export function commaListSchema<const T extends readonly [string, ...string[]]>(vocabulary: T) {
+  const member = z.enum(vocabulary);
+  return z
+    .string()
+    .transform((raw) => raw.split(','))
+    .pipe(z.array(member).min(1))
+    .transform((picked) => vocabulary.filter((v) => picked.includes(v)) as T[number][]);
+}
+
+/** `?kind=` — the Monitor's "Triggered by" axis (`RUN_TRIGGERED_BY_KINDS`). */
+export const RunTriggeredByKindListSchema = commaListSchema(RUN_TRIGGERED_BY_KINDS);
+
+/**
+ * `?q=` — the runs list's search: a run id (any part of it — the grid draws the
+ * id's TAIL), a pipeline or trigger name, or the text of a failure. Trimmed; an
+ * all-space value refuses rather than matching everything.
+ */
+export const RUN_SEARCH_MAX_CHARS = 200;
+export const RunSearchSchema = z.string().trim().min(1).max(RUN_SEARCH_MAX_CHARS);
+
+/**
+ * `?from=` / `?to=` — an ABSOLUTE bound on `started_at`, in epoch ms (`from`
+ * inclusive, `to` exclusive). The browser computes them from the day(s) the
+ * operator picked, because a calendar day is the viewer's, not the server's.
+ * Digits only: `z.coerce.number()` would read `?from=` as `0`, and 15 digits
+ * keep the value a safe integer.
+ */
+export const RunEpochBoundSchema = z
+  .string()
+  .regex(/^\d{1,15}$/)
+  .transform(Number);
