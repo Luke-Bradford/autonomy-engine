@@ -138,7 +138,7 @@ describe('#1484 runs list — Activities', () => {
     appendRunEvent(db, {
       runId: unstarted.id,
       type: 'run.triggerContext',
-      payload: { type: 'run.triggerContext', runId: unstarted.id, triggerContext: null },
+      payload: { type: 'run.triggerContext', runId: unstarted.id, triggerId: 't1' },
     });
 
     expect(summaryOf(db, empty.id).activities).toBeNull();
@@ -218,6 +218,22 @@ describe('#1484 runs list — Rows written', () => {
       runId,
       type: 'node.output',
       payload: { type: 'node.output', runId, nodeId: 'a', name: 'rowsWritten', value: 40 },
+    });
+
+    // A child pipeline's outputs come back on `call.returned`; the child's rows
+    // are on the child's own row, so they must not be counted again here.
+    appendRunEvent(db, {
+      runId,
+      type: 'call.returned',
+      payload: {
+        type: 'call.returned',
+        runId,
+        callNodeId: 'a',
+        attemptId: 'a#0',
+        childRunId: 'child',
+        childOutcome: 'success',
+        outputs: { rowsWritten: 9 },
+      },
     });
 
     expect(summaryOf(db, runId).rowsWritten).toBeNull();

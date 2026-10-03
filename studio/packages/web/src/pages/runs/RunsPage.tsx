@@ -31,6 +31,7 @@ import { listRunAnnotations, listRuns } from '../../api/runs';
 import { usePagedList } from '../../hooks/usePagedList';
 import { getPipelineCost } from '../../api/pipelines';
 import { ApiError, messageOf } from '../../api/client';
+import { activitiesCell, rowsWrittenCell } from './activitiesColumn';
 import { costCell } from './costColumn';
 import { pipelineCostSummary, type PipelineCostSummary } from './pipelineCostSummary';
 import { listTriggers } from '../../api/triggers';
@@ -93,6 +94,20 @@ function RunCostCell({ run }: { run: RunSummary }) {
     <td className="run-cost" {...(cell.note === null ? {} : { title: cell.note })}>
       {cell.figure}
       {cell.unsettled ? <span className="run-cost-unsettled"> so far</span> : null}
+    </td>
+  );
+}
+
+/**
+ * #1484 — one Activities cell. The glyph form is drawn but hidden from assistive
+ * tech, which reads the same counts in words instead ("1 failed", not "1 ✗").
+ */
+function RunActivitiesCell({ run }: { run: RunSummary }) {
+  const cell = activitiesCell(run);
+  return (
+    <td className="runs-grid__activities" title={cell.words}>
+      <span aria-hidden="true">{cell.figure}</span>
+      <span className="visually-hidden">{cell.words}</span>
     </td>
   );
 }
@@ -201,6 +216,11 @@ function RunRow({ run: r, loadedAt }: { run: RunSummary; loadedAt: number }) {
       {/* The finish TIMESTAMP is the cell's title (U10 fixed the column set). */}
       <td className="num" title={formatWhen(r.finishedAt)}>
         {formatRunDuration(r, loadedAt)}
+      </td>
+      <RunActivitiesCell run={r} />
+      {/* #1484 — this run's OWN rows; a child's are on the child's row. */}
+      <td className="num" title="Rows this run's successful activities wrote">
+        {rowsWrittenCell(r)}
       </td>
       {/* U27 slice 2 — the run detail page's own cost authority. */}
       <RunCostCell run={r} />
@@ -765,6 +785,10 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
                 <th scope="col">Started</th>
                 <th scope="col" className="num">
                   Duration
+                </th>
+                <th scope="col">Activities</th>
+                <th scope="col" className="num">
+                  Rows written
                 </th>
                 <th scope="col" className="num">
                   Cost
