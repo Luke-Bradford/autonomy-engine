@@ -199,7 +199,8 @@ describe('RunDetailPage', () => {
     expect(await screen.findByRole('heading', { name: 'Nightly load v1' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Nightly load' })).toHaveAttribute(
       'href',
-      '/author/pipelines/pl_1',
+      // #1484 — the version this run is bound to, not the latest.
+      '/author/pipelines/pl_1?version=1',
     );
     expect(screen.getByRole('link', { name: 'Every night' })).toHaveAttribute(
       'href',
