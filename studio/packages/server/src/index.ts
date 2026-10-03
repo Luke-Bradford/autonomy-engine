@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import Fastify from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import { eq } from 'drizzle-orm';
@@ -63,6 +63,7 @@ import { workspaceAuditRoutes } from './routes/workspace-audit.js';
 import { monitorRoutes } from './routes/monitor.js';
 import { quotaRoutes } from './routes/quota.js';
 import { settingsRoutes } from './routes/settings.js';
+import { demoRoutes } from './routes/demo.js';
 import { versionRoutes } from './routes/version.js';
 import {
   createClaudeAccountQuotaReader,
@@ -289,6 +290,8 @@ export interface BuildAppOptions {
   retentionMaxBatchesPerSweep?: number;
   /** #3 G2 — where managed git checkouts live (`<root>/<ownerId>/repo`). Overrides `process.env.WORKSPACE_GIT_ROOT` / the `data/git` default. Call-time only, for test isolation. Everything under it is DERIVED state (always our own clone) — safe to wipe; a fetch re-clones. */
   workspaceGitRoot?: string;
+  /** #1481 OR32 — where the demo ETL pack writes each owner's files (`<demoRoot>/<ownerId>`). Overrides `process.env.AUTONOMY_DEMO_ROOT`; default `<AUTONOMY_DATA_DIR>/demo`, else `demo/` beside the database. Call-time only, for test isolation + operator override. */
+  demoRoot?: string;
   /** #3 G2 — test seam: a `GitProvider` override (e.g. a real `CliGitProvider` pointed at a missing binary to exercise the 503 path). Defaults to a real CLI provider. */
   workspaceGitProvider?: GitProvider;
   /** #3 G9b — the operator-env GitHub token for auto-opening PRs. Overrides `process.env.GH_TOKEN`/`GITHUB_TOKEN`. Call-time only, for test isolation (`process.env` is shared across concurrent test files). `null`/absent = no token → guided-manual PRs. */
@@ -393,6 +396,21 @@ export interface BuildAppOptions {
    * pino uses.
    */
   loggerStream?: { write(msg: string): void };
+}
+
+/**
+ * #1481 OR32 — the demo root, resolved once at boot: the call-time option, then
+ * `AUTONOMY_DEMO_ROOT`, then `<AUTONOMY_DATA_DIR>/demo` (the data dir Docker
+ * mounts), then `demo/` beside the database. Always absolute — the demo's
+ * connections are rooted there, and connector roots must be absolute.
+ */
+function resolveDemoRoot(option: string | undefined, dbPath: string): string {
+  const pick = (v: string | undefined): string | undefined => (v === undefined || v === '' ? undefined : v);
+  const explicit = pick(option) ?? pick(process.env.AUTONOMY_DEMO_ROOT);
+  if (explicit !== undefined) return resolve(explicit);
+  const dataDir = pick(process.env.AUTONOMY_DATA_DIR);
+  if (dataDir !== undefined) return resolve(dataDir, 'demo');
+  return resolve(dirname(resolve(dbPath)), 'demo');
 }
 
 export async function buildApp(opts?: BuildAppOptions) {
@@ -1120,6 +1138,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   // as a registration option rather than read off a decoration: it is a fact
   // about this process that cannot change while it runs, and `masterKeyStatusOf`
   // is the only thing that strips the key material off the resolution.
+  await fastify.register(demoRoutes, { demoRoot: resolveDemoRoot(opts?.demoRoot, dbPath) });
   await fastify.register(settingsRoutes, { masterKey: masterKeyStatusOf(masterKeyResolution) });
   await fastify.register(versionRoutes);
 

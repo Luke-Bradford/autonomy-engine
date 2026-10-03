@@ -63,6 +63,19 @@ export class PublishRefusedError extends Error {
 }
 
 /**
+ * A write refused because it conflicts with resources the caller already has
+ * (HTTP 409 `conflict`) — e.g. #1481's demo seed finding the operator's own
+ * resource under one of the demo's names. Message author-constructed and
+ * client-safe, like `BadRequestError`.
+ */
+export class ConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConflictError';
+  }
+}
+
+/**
  * #904 — a version write refused because its declared CAS basis
  * (`basedOnVersionId`) is not the pipeline's current head: someone else saved
  * while this author was editing, and minting anyway would orphan their work off
@@ -233,6 +246,11 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     // state; message client-safe (author-constructed, ids only).
     if (error instanceof PublishRefusedError) {
       request.log.warn({ err: error }, 'conflict: publish refused');
+      reply.status(409).send({ error: 'conflict', message: error.message } satisfies ApiErrorBody);
+      return;
+    }
+    if (error instanceof ConflictError) {
+      request.log.warn({ err: error }, 'conflict');
       reply.status(409).send({ error: 'conflict', message: error.message } satisfies ApiErrorBody);
       return;
     }
