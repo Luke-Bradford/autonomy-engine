@@ -38,7 +38,7 @@ vi.mock('../../api/runs', async (importActual) => ({
   listRunAnnotations: vi.fn(),
   getRun: vi.fn(),
   getRunEvents: vi.fn(),
-  // #1206 — the Watch cases navigate to the run detail route, which loads R1
+  // #1206 — the row-link cases navigate to the run detail route, which loads R1
   // (`getRunDetail`) and the diagnostics list. The detail read REJECTS, which is
   // what the unmocked call already did: the page then falls back to `getRun`
   // above, the path these tests have always exercised.
@@ -286,12 +286,11 @@ describe('RunsPage', () => {
   });
 
   /*
-     RS6 — the Run-type column. Before it, nothing in a row said a run was a
-     rerun: the Trigger em-dash means "rerun OR deleted trigger", and the Cost
-     title is reachable only on hover. The source id rides in the cell's title,
-     NOT as a link — two reruns of one run would otherwise put two identically
-     named "Source run …" links on the page, and each row's Watch link already
-     reaches the detail page's own lineage link.
+     RS6, carried by #1484's Triggered by cell — the row says a run is a rerun
+     from failed. The source id rides in the cell's title, NOT as a link: two
+     reruns of one run would otherwise put two identically named "Source run …"
+     links on the page, and the row itself already reaches the detail page's own
+     lineage link.
   */
   it('says which runs are reruns from failed, and names the source run', async () => {
     listMock.mockResolvedValue(
@@ -597,6 +596,31 @@ describe('RunsPage', () => {
       const router = mountList();
       await userEvent.click(await screen.findByRole('button', { name: 'Copy run id run_abc' }));
       expect(router.state.location.pathname).toBe('/monitor/runs');
+    });
+
+    function select(node: Node): void {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      window.getSelection()?.removeAllRanges();
+      window.getSelection()?.addRange(range);
+    }
+
+    it('a click that ends a text selection IN the row does not navigate', async () => {
+      const router = mountList();
+      const cell = await screen.findByText('Nightly');
+      select(cell);
+      fireEvent.click(cell);
+      expect(router.state.location.pathname).toBe('/monitor/runs');
+      window.getSelection()?.removeAllRanges();
+    });
+
+    it('a selection elsewhere on the page does not disable the row', async () => {
+      const router = mountList();
+      const cell = await screen.findByText('Nightly');
+      select(screen.getByRole('heading', { name: 'Runs' }));
+      fireEvent.click(cell);
+      expect(router.state.location.pathname).toBe('/monitor/runs/run_abc');
+      window.getSelection()?.removeAllRanges();
     });
 
     it('a middle or modified click opens it in a new tab instead', async () => {

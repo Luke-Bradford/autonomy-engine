@@ -607,7 +607,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
 
               A `<Link>`, not a `navigate`-on-a-button. The anchor is the
               correct control for going somewhere (hover, copy, middle-click, new
-              tab), and `RunsPage`'s Watch cell records the argument in place.
+              tab), and `RunsPage`'s Run ID link (`RunRow`) records the argument in place.
               #1232 converted the `Rerun of` row above to match — so the two
               lineage rows now state the same act the same way, and every
               run-navigation site in the app is an anchor.

@@ -61,17 +61,17 @@ export function TriggerModeName({ mode }: { mode: TriggerMode }) {
   return <KindName icons={TRIGGER_MODE_ICONS} labels={TRIGGER_MODE_LABELS} kind={mode} />;
 }
 
+/** #1484 — what started a run, as the Monitor's "Triggered by" column says it. */
+export function RunTriggeredByName({ kind }: { kind: RunTriggeredByKind }) {
+  return <KindName icons={RUN_TRIGGERED_BY_ICONS} labels={RUN_TRIGGERED_BY_LABELS} kind={kind} />;
+}
+
 /**
  * A form's Kind or Mode picker with the chosen kind's icon on its left. A
  * native `<option>` cannot hold an icon, so the picker shows the current one
  * beside it. `children` is the `<select>` itself, which keeps its label, id and
  * full width (`.kind-select > select` in index.css).
  */
-/** #1484 — what started a run, as the Monitor's "Triggered by" column says it. */
-export function RunTriggeredByName({ kind }: { kind: RunTriggeredByKind }) {
-  return <KindName icons={RUN_TRIGGERED_BY_ICONS} labels={RUN_TRIGGERED_BY_LABELS} kind={kind} />;
-}
-
 export function KindSelect<K extends string>({
   icons,
   kind,

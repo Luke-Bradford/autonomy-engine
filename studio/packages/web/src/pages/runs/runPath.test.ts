@@ -19,8 +19,8 @@ describe('runDetailPath', () => {
  */
 describe('runLinkLabel', () => {
   it('names an ACT with the control’s own visible text as the lead', () => {
-    // RunsPage's Watch cell — visible text `Watch`.
-    expect(runLinkLabel('Watch', 'run_abc')).toBe('Watch run run_abc');
+    // RunsPage's Run ID cell (#1484) — visible text the id's tail.
+    expect(runLinkLabel('Open', 'run_abc')).toBe('Open run run_abc');
     // TriggersPage's notice — visible text `Watch live →`, arrow included.
     expect(runLinkLabel('Watch live →', 'run_9')).toBe('Watch live → run run_9');
   });
@@ -41,7 +41,7 @@ describe('runLinkLabel', () => {
    * There is no third shape in which the name could omit either.
    */
   it('contains its lead and its run id, which is what 2.5.3 tests', () => {
-    for (const lead of ['Watch', 'Watch live →', 'Source', 'Parent', 'Child']) {
+    for (const lead of ['Open', 'Watch live →', 'Source', 'Parent', 'Child']) {
       const name = runLinkLabel(lead, 'run_x');
       expect(name.includes(lead)).toBe(true);
       expect(name.includes('run_x')).toBe(true);

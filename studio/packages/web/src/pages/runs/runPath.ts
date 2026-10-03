@@ -36,13 +36,15 @@ export function runDetailPath(runId: string): string {
  * separator here once broke containment on the arrow alone.
  *
  * That property holds BY CONSTRUCTION under this signature, which is the whole
- * reason there are two parameters rather than three. The five call sites are of
+ * reason there are two parameters rather than three. The call sites are of
  * exactly two kinds:
  *
- * - an ACT (`Watch`, `Watch live →`) passes its own visible text as the `lead`,
- *   so the name STARTS with what the control reads;
- * - a RELATIONSHIP (`Source`, `Parent`, `Child`) renders the run id as its
- *   visible text, so the name ENDS with it.
+ * - an ACT (`Watch live →`) passes its own visible text as the `lead`, so the
+ *   name STARTS with what the control reads;
+ * - a RELATIONSHIP (`Source`, `Parent`, `Child`) or the runs grid's `Open`
+ *   (#1484) renders the run id as its visible text, so the name ENDS with it.
+ *   The grid draws only the id's SHORT tail and carries the full name as
+ *   visually-hidden text (`CopyableId`'s `link`); the tail still ends the name.
  *
  * There is no third shape in which the name could omit either, so there is
  * nothing left for a runtime check to catch — and a check comparing two
@@ -52,8 +54,8 @@ export function runDetailPath(runId: string): string {
  * the rendered anchor in each call site's own spec.
  *
  * The verb/noun split is deliberate and stays with the caller. `Source`/`Parent`
- * name a relationship the row's `<dt>` has already introduced; `Watch` names an
- * act. Collapsing them onto one lead would flatten a distinction the call sites
+ * name a relationship the row's `<dt>` has already introduced; `Watch live →`
+ * names an act. Collapsing them onto one lead would flatten a distinction the call sites
  * argue for in place.
  */
 export function runLinkLabel(lead: string, runId: string): string {

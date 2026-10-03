@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { TriggerMode } from './trigger.js';
 
 /**
  * #1484 OR35 M1 — HOW a trigger fired, stamped at fire time by the caller that
@@ -6,11 +7,17 @@ import { z } from 'zod';
  * Fire now on a schedule trigger is a manual fire of that schedule, and a
  * deleted trigger leaves the run with no mode to read at all.
  *
- * Every member is a `TriggerMode` (pinned by a type check in `trigger.ts`, which
- * may import this file; the reverse would cycle). `continuous` is absent because
- * nothing dispatches it yet.
+ * Every member is a `TriggerMode` (the `satisfies` below; a type-only import, so
+ * no runtime cycle with `trigger.ts`). `continuous` is absent because nothing
+ * dispatches it yet.
  */
-export const TRIGGER_FIRE_KINDS = ['manual', 'schedule', 'tumbling', 'webhook', 'event'] as const;
+export const TRIGGER_FIRE_KINDS = [
+  'manual',
+  'schedule',
+  'tumbling',
+  'webhook',
+  'event',
+] as const satisfies readonly TriggerMode[];
 export const TriggerFireKindSchema = z.enum(TRIGGER_FIRE_KINDS);
 export type TriggerFireKind = z.infer<typeof TriggerFireKindSchema>;
 

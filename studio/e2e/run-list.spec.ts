@@ -55,8 +55,8 @@ test('R2/U10 — the runs list names the pipeline, times the run, and filters by
 
   // R2 — a real measured duration for a settled run: some number followed by a
   // unit, and specifically NOT the em-dash that means "no answer".
-  // Located by its HEADER, not a fixed index — RS6's Type column shifted every
-  // cell after Trigger, and a hardcoded position silently reads the wrong one.
+  // Located by its HEADER, not a fixed index — columns have been added and
+  // reordered (RS6, #1484), and a hardcoded position silently reads the wrong one.
   const durationColumn = (await page.getByRole('columnheader').allTextContents()).indexOf(
     'Duration',
   );
@@ -140,7 +140,7 @@ test('#1484 — the runs list is a full-width grid of 32px rows, and a row opens
   // The 900px reading width is gone: the page and its table use the screen.
   expect(measured.contentWidth).toBeGreaterThan(1100);
   expect(measured.tableWidth).toBeGreaterThan(1000);
-  expect(measured.rowHeight).toBeGreaterThan(0);
+  expect(measured.rowHeight).toBeGreaterThanOrEqual(31);
   expect(measured.rowHeight).toBeLessThanOrEqual(33);
   expect(measured.fontSize).toBe('13px');
   expect(measured.wraps).toBe('nowrap');

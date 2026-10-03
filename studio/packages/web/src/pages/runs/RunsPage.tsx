@@ -148,7 +148,17 @@ function RunRow({ run: r, loadedAt }: { run: RunSummary; loadedAt: number }) {
     if (e.target instanceof Element && e.target.closest('a, button, input, select, textarea')) {
       return;
     }
-    if ((window.getSelection()?.toString() ?? '') !== '') return;
+    // Only a selection INSIDE this row means "I was selecting text"; a stale one
+    // elsewhere on the page must not make every row click do nothing.
+    const selection = window.getSelection();
+    if (
+      selection !== null &&
+      !selection.isCollapsed &&
+      selection.anchorNode !== null &&
+      e.currentTarget.contains(selection.anchorNode)
+    ) {
+      return;
+    }
     if (newTab) window.open(href, '_blank', 'noopener');
     else void navigate(path);
   };

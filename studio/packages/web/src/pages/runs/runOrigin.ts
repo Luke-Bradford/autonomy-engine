@@ -8,7 +8,8 @@ import type { RunSummary } from '@autonomy-studio/shared';
  * Filtering by STATUS is a different ticket (U26's filter pane) and is not built
  * here — the status vocabulary this page renders is #870's `runStatus.ts`.
  *
- * The classification is the server's (`runOriginOf` below).
+ * Each tab is a fixed set of the server's `triggeredByKind` values
+ * (`runOriginOf` below), so the server classifies and this file only groups.
  */
 export const RUN_ORIGINS = ['triggered', 'manual', 'child'] as const;
 export type RunOrigin = (typeof RUN_ORIGINS)[number];

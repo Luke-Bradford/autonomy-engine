@@ -125,6 +125,42 @@ export const RunSchema = z.object({
 export type Run = z.infer<typeof RunSchema>;
 
 /**
+ * #1484 OR35 M1 — what STARTED a run, as the Monitor's "Triggered by" column
+ * says it. One server-side authority (`RUN_TRIGGERED_BY_SQL`) computes it from
+ * the row, so the list, its origin tabs and any later server-side filter cannot
+ * disagree about a run. The five fire kinds come first (a trigger fired it);
+ * then:
+ * - `editor`: the editor's Run, a saved version with no trigger;
+ * - `debug`: the editor's Debug, a draft version;
+ * - `rerun`: a rerun from failed (RS). F11's plain rerun, when it lands, needs
+ *   its own discriminator rather than reusing `rerunOf`, or it will read as
+ *   this kind;
+ * - `call`: a child run an Execute Pipeline node spawned.
+ */
+export const RUN_TRIGGERED_BY_KINDS = [
+  ...TRIGGER_FIRE_KINDS,
+  'editor',
+  'debug',
+  'rerun',
+  'call',
+] as const;
+export const RunTriggeredByKindSchema = z.enum(RUN_TRIGGERED_BY_KINDS);
+export type RunTriggeredByKind = z.infer<typeof RunTriggeredByKindSchema>;
+
+/** Display only, and a `Record` so a new kind cannot ship without a name. */
+export const RUN_TRIGGERED_BY_LABELS: Record<RunTriggeredByKind, string> = {
+  manual: 'Fire now',
+  schedule: 'Schedule',
+  tumbling: 'Tumbling window',
+  webhook: 'Webhook',
+  event: 'Event',
+  editor: 'Editor run',
+  debug: 'Debug',
+  rerun: 'Rerun from failed',
+  call: 'Execute Pipeline',
+};
+
+/**
  * R2 — a run PLUS the human names the Monitor's list needs, resolved server-side
  * in one query so U10 needn't N+1.
  *
@@ -183,42 +219,6 @@ export type Run = z.infer<typeof RunSchema>;
  * equivalence test. For a LIVE one they may differ by whatever was billed in
  * between, which is the same "so far" the marker already declares.
  */
-/**
- * #1484 OR35 M1 — what STARTED a run, as the Monitor's "Triggered by" column
- * says it. One server-side authority (`RUN_TRIGGERED_BY_SQL`) computes it from
- * the row, so the list, its origin tabs and any later server-side filter cannot
- * disagree about a run. The five fire kinds come first (a trigger fired it);
- * then:
- * - `editor`: the editor's Run, a saved version with no trigger;
- * - `debug`: the editor's Debug, a draft version;
- * - `rerun`: a rerun from failed (RS). F11's plain rerun, when it lands, needs
- *   its own discriminator rather than reusing `rerunOf`, or it will read as
- *   this kind;
- * - `call`: a child run an Execute Pipeline node spawned.
- */
-export const RUN_TRIGGERED_BY_KINDS = [
-  ...TRIGGER_FIRE_KINDS,
-  'editor',
-  'debug',
-  'rerun',
-  'call',
-] as const;
-export const RunTriggeredByKindSchema = z.enum(RUN_TRIGGERED_BY_KINDS);
-export type RunTriggeredByKind = z.infer<typeof RunTriggeredByKindSchema>;
-
-/** Display only, and a `Record` so a new kind cannot ship without a name. */
-export const RUN_TRIGGERED_BY_LABELS: Record<RunTriggeredByKind, string> = {
-  manual: 'Fire now',
-  schedule: 'Schedule',
-  tumbling: 'Tumbling window',
-  webhook: 'Webhook',
-  event: 'Event',
-  editor: 'Editor run',
-  debug: 'Debug',
-  rerun: 'Rerun from failed',
-  call: 'Execute Pipeline',
-};
-
 export const RunSummarySchema = RunSchema.extend({
   /**
    * U29 (#1015) — the pipeline's IDENTITY, resolved server-side by the same join

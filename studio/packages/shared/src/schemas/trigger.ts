@@ -4,7 +4,6 @@ import { addParamsReplaySafetyIssues } from './replay-safety.js';
 import { RecurrenceSchema, RecurrenceWriteSchema } from './recurrence.js';
 import { WindowConfigSchema, WindowConfigWriteSchema } from './window.js';
 import { parseRunWindowTime } from '../triggers/run-window.js';
-import { TRIGGER_FIRE_KINDS } from './trigger-context.js';
 
 export const TriggerModeSchema = z.enum([
   'manual',
@@ -21,10 +20,6 @@ export const TriggerModeSchema = z.enum([
   'tumbling',
 ]);
 export type TriggerMode = z.infer<typeof TriggerModeSchema>;
-
-/** #1484 — every fire kind is a trigger mode; a kind that is not fails typecheck here. */
-const FIRE_KINDS_ARE_MODES: readonly TriggerMode[] = TRIGGER_FIRE_KINDS;
-void FIRE_KINDS_ARE_MODES;
 
 /**
  * #1396 — what a form or a list CALLS each mode. The enum value stays the

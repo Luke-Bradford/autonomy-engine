@@ -2062,7 +2062,7 @@ describe('RunDetailPage — the rerun-from-failed action (RS2)', () => {
     /* #1232 — an ANCHOR, and pinned by role so a regression to
        `navigate`-on-a-button reds here rather than silently taking away
        hover/copy/middle-click/new-tab. Named `Source run …` rather than by the
-       bare id, the same treatment `Called by` and `RunsPage`'s Watch cell get:
+       bare id, the same treatment `Called by` and `RunsPage`'s Run ID link get:
        "run_0" alone tells a screen-reader user nothing about where it goes.
 
        Containment (2.5.3) is asserted through the shared helper rather than by

@@ -44,8 +44,12 @@ export function CopyableId({
   return (
     <span className="copyable-id">
       {link ? (
-        <Link to={link.to} title={id} className="copyable-id__link">
-          <code aria-hidden="true">{shortId(id)}</code>
+        <Link to={link.to} className="copyable-id__link">
+          {/* The hover title sits on the hidden code, so assistive tech does not
+              hear the id a third time as the link's description. */}
+          <code aria-hidden="true" title={id}>
+            {shortId(id)}
+          </code>
           <span className="visually-hidden">{link.label}</span>
         </Link>
       ) : (
