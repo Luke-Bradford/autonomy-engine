@@ -608,6 +608,38 @@ export const WorkspaceGitDivergenceSchema = z.object({
 export type WorkspaceGitDivergence = z.infer<typeof WorkspaceGitDivergenceSchema>;
 
 /**
+ * #1476 OR28 — how one pipeline differs from the working branch, for the
+ * editor badge: a drift `change`, or `uncomparable` when its saved version
+ * could not be serialized for comparison (#1043) — never a silent "in sync".
+ */
+export const WorkspaceGitPipelineDriftSchema = z.object({
+  pipelineId: z.string().min(1),
+  change: z.union([WorkspaceGitDriftChangeSchema, z.literal('uncomparable')]),
+});
+export type WorkspaceGitPipelineDrift = z.infer<typeof WorkspaceGitPipelineDriftSchema>;
+
+/**
+ * #1476 OR28 — the `POST /api/workspace/git/sync` reading: drift and divergence
+ * together, against the remote as fetched at `fetchedAt` (the route fetches
+ * only when that copy is older than the hoster's `GIT_FETCH_MAX_AGE_SECONDS`;
+ * `fetched` says whether this call did). `pipelines` lists only the pipelines
+ * that differ, keyed by pipeline id; a pipeline not listed matches `base`.
+ * `workingBranch` is the branch the comparison was made against. The envelope's
+ * `sync` is `null` when the last fetch failed — nothing is compared against refs
+ * a fetch could not refresh.
+ */
+export const WorkspaceGitSyncSchema = z.object({
+  fetchedAt: z.number().int(),
+  fetched: z.boolean(),
+  workingBranch: z.string().min(1),
+  base: z.string().min(1).nullable(),
+  hasUncommittedChanges: z.boolean(),
+  pipelines: z.array(WorkspaceGitPipelineDriftSchema),
+  divergence: WorkspaceGitDivergenceSchema,
+});
+export type WorkspaceGitSync = z.infer<typeof WorkspaceGitSyncSchema>;
+
+/**
  * The GIT-INDEPENDENT part of the divergence classification (a pure fn so it is
  * unit-tested without a real repo, mirroring the reconcile/drift pure
  * classifiers). Decides the cases that need no history walk; a `needs-history`

@@ -150,16 +150,62 @@ export function resolveRetentionMs(
   raw: string | undefined,
   opts: { envName: string; defaultMs: number },
 ): number {
-  // `.trim()` so a whitespace-only value falls to the default rather than
-  // `Number('   ') === 0` silently DISABLING retention.
-  if (raw === undefined || raw.trim() === '') return opts.defaultMs;
+  const days = resolveEnvInteger(raw, {
+    envName: opts.envName,
+    min: 0,
+    defaultValue: null,
+    expected: 'a non-negative integer number of days (0 disables retention)',
+  });
+  return days === null ? opts.defaultMs : days * MS_PER_DAY;
+}
+
+/**
+ * The one validated integer-env read behind `resolveRetentionMs`,
+ * `resolveRetentionCount` and `resolveGitFetchMaxAgeMs`. Empty, unset or
+ * whitespace-only = `defaultValue` — `.trim()` so `Number('   ') === 0` cannot
+ * silently become a zero. Anything else must be an integer `>= min`, or boot
+ * fails naming the variable and what it `expected`.
+ */
+function resolveEnvInteger<D>(
+  raw: string | undefined,
+  opts: { envName: string; min: number; defaultValue: D; expected: string },
+): number | D {
+  if (raw === undefined || raw.trim() === '') return opts.defaultValue;
   const n = Number(raw);
-  if (!Number.isInteger(n) || n < 0) {
-    throw new Error(
-      `Invalid ${opts.envName} "${raw}" — must be a non-negative integer number of days (0 disables retention)`,
-    );
+  if (!Number.isInteger(n) || n < opts.min) {
+    throw new Error(`Invalid ${opts.envName} "${raw}" — must be ${opts.expected}`);
   }
-  return n * MS_PER_DAY;
+  return n;
+}
+
+/** #1476 OR28 — the default for `GIT_FETCH_MAX_AGE_SECONDS`, in ms. */
+export const DEFAULT_GIT_FETCH_MAX_AGE_MS = 120_000;
+
+/**
+ * #1476 OR28 — resolve `GIT_FETCH_MAX_AGE_SECONDS` → ms: how stale the managed
+ * checkout's fetch may be before the editor's git badge read fetches again.
+ * `0` fetches on every read. Default 2 minutes: the badge is read on every open,
+ * focus and save, and a fetch per focus is a network round trip to the remote
+ * each time the operator switches windows.
+ */
+export function resolveGitFetchMaxAgeMs(raw: string | undefined): number {
+  return (
+    resolveEnvInteger(raw, {
+      envName: 'GIT_FETCH_MAX_AGE_SECONDS',
+      min: 0,
+      defaultValue: DEFAULT_GIT_FETCH_MAX_AGE_MS / 1000,
+      expected: 'a non-negative integer number of seconds (0 fetches on every read)',
+    }) * 1000
+  );
+}
+
+/** The `gitFetchMaxAgeMs` override wins over the env, and is held to the same floor. */
+function resolveFetchMaxAgeOption(override: number | undefined): number {
+  if (override === undefined) return resolveGitFetchMaxAgeMs(process.env.GIT_FETCH_MAX_AGE_SECONDS);
+  if (!Number.isFinite(override) || override < 0) {
+    throw new Error(`Invalid gitFetchMaxAgeMs ${override} — must be a finite number >= 0`);
+  }
+  return override;
 }
 
 /**
@@ -180,12 +226,7 @@ export function resolveRetentionCount(
   raw: string | undefined,
   opts: { envName: string; defaultValue: number },
 ): number {
-  if (raw === undefined || raw.trim() === '') return opts.defaultValue;
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n < 1) {
-    throw new Error(`Invalid ${opts.envName} "${raw}" — must be a positive integer (>= 1)`);
-  }
-  return n;
+  return resolveEnvInteger(raw, { ...opts, min: 1, expected: 'a positive integer (>= 1)' });
 }
 
 const PORT = resolvePort(process.env.PORT);
@@ -254,6 +295,8 @@ export interface BuildAppOptions {
   githubToken?: string | null;
   /** #3 G9b — test seam: a `GitHostClient` override (a fake fetch-backed client). Defaults to a real `GitHubHostClient` (Node global `fetch`). */
   workspaceGitHostClient?: GitHostClient;
+  /** #1476 OR28 — overrides `GIT_FETCH_MAX_AGE_SECONDS`/the 2-minute default (ms). `0` fetches on every git badge read. Call-time only, for test isolation + operator override. */
+  gitFetchMaxAgeMs?: number;
   /**
    * #409 P7 — directory of the built web bundle to serve the SPA from (same
    * server as the API). Overrides `process.env.WEB_ROOT`. Unlike `dbPath` /
@@ -1066,6 +1109,9 @@ export async function buildApp(opts?: BuildAppOptions) {
         ? opts.githubToken
         : (process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN ?? null),
     hostClient: opts?.workspaceGitHostClient,
+    // #1476 OR28 — the badge read's refresh policy. Validated at boot like the
+    // retention windows, so a typo fails loudly rather than fetching on every focus.
+    fetchMaxAgeMs: resolveFetchMaxAgeOption(opts?.gitFetchMaxAgeMs),
   });
   await fastify.register(workspaceAuditRoutes);
   await fastify.register(monitorRoutes);
