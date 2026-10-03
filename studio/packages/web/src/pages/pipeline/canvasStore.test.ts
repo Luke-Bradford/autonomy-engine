@@ -2247,7 +2247,7 @@ describe('canvasStore — back-edges (U6e)', () => {
           {
             id: 'n_b',
             type: 'llm_call',
-            config: { note: '${nodes.n_a.status}' },
+            config: { prompt: 'p', note: '${nodes.n_a.status}' },
             position: { x: 100, y: 0 },
           },
         ],
