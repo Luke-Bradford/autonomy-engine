@@ -155,9 +155,15 @@ describe('#1484 runs list — Activities', () => {
     const good = await drive(db, pvId);
     const bad = seedRun(db, pvId);
     appendRunEvent(db, { runId: bad.id, type: 'run.started', payload: { type: 'run.started' } });
+    const unreadable: string[] = [];
+    const fold = makeRunActivityFold(makeDocResolver(db), {
+      onUnreadable: (id) => unreadable.push(id),
+    });
 
-    expect(summaryOf(db, bad.id).activities).toBeNull();
-    expect(summaryOf(db, good).activities?.succeeded).toBe(1);
+    expect(summaryOf(db, bad.id, fold).activities).toBeNull();
+    expect(summaryOf(db, good, fold).activities?.succeeded).toBe(1);
+    // Reported, not a silent em-dash — and the healthy run is not.
+    expect(unreadable).toEqual([bad.id]);
   });
 
   it('folds a settled run once, and refolds it when its log grows', async () => {
@@ -220,7 +226,7 @@ describe('#1484 the fold memo', () => {
     const errors: string[] = [];
     // A version whose nodes are not a list makes the engine itself throw.
     const fold = makeRunActivityFold((id) => ({ ...real(id), nodes: null as never }), {
-      onFoldError: (id) => errors.push(id),
+      onUnreadable: (id) => errors.push(id),
     });
 
     expect(summaryOf(db, runId, fold)).toMatchObject({ activities: null, rowsWritten: 3 });

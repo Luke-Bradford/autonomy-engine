@@ -5,7 +5,12 @@ import type {
   RunState,
 } from '@autonomy-studio/shared';
 import type { Db } from '../repo/types.js';
-import { buildEngine, DocUnresolvableError, type DocResolver } from './driver.js';
+import {
+  buildEngine,
+  DocUnparseableError,
+  DocUnresolvableError,
+  type DocResolver,
+} from './driver.js';
 import { loadEngineEvents, RunLogUnparseableError } from './events.js';
 
 /**
@@ -148,8 +153,13 @@ export const ACTIVITY_FOLD_MEMO_LIMIT = 2000;
 export interface RunActivityFoldOptions {
   /** Defaults to `ACTIVITY_FOLD_MEMO_LIMIT`. */
   readonly memoLimit?: number;
-  /** Told when the fold itself throws, which the row then shows as `null`. */
-  readonly onFoldError?: (runId: string, err: unknown) => void;
+  /**
+   * Told when a run cannot be read because something is CORRUPT: its log or its
+   * version does not parse, or the fold throws. The row then shows `null`, and
+   * this is what keeps that from being a silent em-dash. A version that is
+   * simply gone is not reported: that is a state, not a fault.
+   */
+  readonly onUnreadable?: (runId: string, err: unknown) => void;
 }
 
 const EMPTY: RunLogReading = { activities: null, rowsWritten: null };
@@ -166,8 +176,9 @@ const EMPTY: RunLogReading = { activities: null, rowsWritten: null };
  * - the bound version is gone or does not parse;
  * - the log does not parse (rows written is `null` too);
  * - the fold itself throws. The reducer is pure, so that is this log meeting
- *   this reducer, and it is reported through `onFoldError` so a reducer
- *   regression is not silent.
+ *   this reducer.
+ * Every cause but a missing version or an empty log is reported through
+ * `onUnreadable`, so corruption or a reducer regression is not silent.
  * A transient DB read error propagates, as every other read on this route does.
  */
 export function makeRunActivityFold(
@@ -191,7 +202,7 @@ export function makeRunActivityFold(
       const reading =
         hit !== undefined && hit.lastSeq === row.lastSeq
           ? hit.reading
-          : readOne(db, row, docs, resolveDoc, options.onFoldError);
+          : readOne(db, row, docs, resolveDoc, options.onUnreadable);
       memo.set(row.id, { lastSeq: row.lastSeq, reading });
       if (memo.size > limit) {
         const oldest = memo.keys().next().value;
@@ -208,14 +219,15 @@ function readOne(
   row: RunActivityFoldRow,
   docs: Map<string, PipelineVersion | null>,
   resolveDoc: DocResolver,
-  onFoldError: RunActivityFoldOptions['onFoldError'],
+  onUnreadable: RunActivityFoldOptions['onUnreadable'],
 ): RunLogReading {
   let events: EngineEvent[];
   try {
     events = loadEngineEvents(db, row.id);
   } catch (err) {
-    if (err instanceof RunLogUnparseableError) return EMPTY;
-    throw err;
+    if (!(err instanceof RunLogUnparseableError)) throw err;
+    onUnreadable?.(row.id, err);
+    return EMPTY;
   }
   const rowsWritten = rowsWrittenFromLog(events);
   let doc = docs.get(row.pipelineVersionId);
@@ -223,8 +235,9 @@ function readOne(
     try {
       doc = resolveDoc(row.pipelineVersionId);
     } catch (err) {
-      // `DocUnparseableError` is a subclass: both are permanent.
+      // Both are permanent; only the unparseable subclass is a fault to report.
       if (!(err instanceof DocUnresolvableError)) throw err;
+      if (err instanceof DocUnparseableError) onUnreadable?.(row.id, err);
       doc = null;
     }
     docs.set(row.pipelineVersionId, doc);
@@ -234,7 +247,7 @@ function readOne(
     const state = buildEngine(doc).projectRunState(events);
     return { activities: activityCountsFromState(doc, events, state), rowsWritten };
   } catch (err) {
-    onFoldError?.(row.id, err);
+    onUnreadable?.(row.id, err);
     return { activities: null, rowsWritten };
   }
 }

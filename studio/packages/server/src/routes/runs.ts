@@ -106,8 +106,8 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
   const resolveDoc = makeDocResolver(db);
   // #1484 — one per app, so its memo of settled runs' counts outlives a request.
   const foldActivities = makeRunActivityFold(resolveDoc, {
-    onFoldError: (runId, err) =>
-      fastify.log.warn({ err, runId }, 'runs list: the engine fold of this run threw'),
+    onUnreadable: (runId, err) =>
+      fastify.log.warn({ err, runId }, 'runs list: cannot count the activities of this run'),
   });
 
   /**
