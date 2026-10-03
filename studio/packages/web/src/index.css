@@ -2280,6 +2280,13 @@ button.danger {
   align-items: center;
 }
 
+/* #1476 slice 8 — the same badge in a pipelines-list row. A table cell has
+   no one-line budget, so a narrow window wraps the pills instead of widening
+   the table. */
+.editor-state-badge--row {
+  flex-wrap: wrap;
+}
+
 /* The pill itself is the shared `.run-status` rule; this adds the neutral
    colour, and `relative` so its visually-hidden detail stays inside it. */
 .editor-state-badge__part {
