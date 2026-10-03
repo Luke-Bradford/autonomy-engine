@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { Link } from 'react-router';
 import type { RunSortKey, RunSummary } from '@autonomy-studio/shared';
 import {
   RUN_GRID_COLUMNS,
@@ -6,12 +7,14 @@ import {
   type RunGridColumnId,
 } from '../../stores/uiStore';
 import { CopyableId } from '../../lib/CopyableId';
+import { shortId } from '../../lib/ids';
 import { RunTriggeredByName } from '../../lib/KindName';
 import { versionLabel } from '../../lib/versionLabel';
+import { runVersionPath } from '../author/pipelinePath';
 import { activitiesCell, rowsWrittenCell } from './activitiesColumn';
 import { costCell } from './costColumn';
 import { formatRunDuration, formatWhen } from './format';
-import { runLinkLabel } from './runPath';
+import { runDetailPath, runLinkLabel } from './runPath';
 import { runStatusLabel } from './runStatus';
 
 /** What a cell needs besides its run. */
@@ -73,10 +76,14 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
     cell: (r) => (
       <td className="runs-grid__pipeline">
         {/* R2 — the pipeline's NAME, which is the only thing here an operator
-            recognises. The version id stays reachable as the cell's title. */}
+            recognises. The version id stays reachable as the cell's title.
+            #1484 — it links to the version that RAN, not the latest, and the
+            version chip is inside the link so its name says which one. */}
         <span title={r.pipelineVersionId}>
-          {r.pipelineName}{' '}
-          <span className="run-version">{versionLabel(r.pipelineVersion, r.debug)}</span>
+          <Link to={runVersionPath(r.pipelineId, r.pipelineVersion, r.debug)}>
+            {r.pipelineName}{' '}
+            <span className="run-version">{versionLabel(r.pipelineVersion, r.debug)}</span>
+          </Link>
         </span>
       </td>
     ),
@@ -145,6 +152,41 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
     cell: (r, { path }) => (
       <td>
         <CopyableId id={r.id} noun="run" link={{ to: path, label: runLinkLabel('Open', r.id) }} />
+      </td>
+    ),
+  },
+  parent: {
+    label: 'Parent',
+    /* #1484 — the run that called this one, by its pipeline's NAME. The short
+       id stands in when the name cannot be read for this viewer. */
+    cell: (r) => (
+      <td title={r.parentRunId ?? undefined}>
+        {r.parentRunId === null ? (
+          '—'
+        ) : (
+          <Link
+            to={runDetailPath(r.parentRunId)}
+            /* The name AND the run, so a list of children of one pipeline does
+               not read as many identical links. */
+            aria-label={
+              r.parentPipelineName === null
+                ? runLinkLabel('Parent', r.parentRunId)
+                : `${r.parentPipelineName}, ${runLinkLabel('parent', r.parentRunId)}`
+            }
+          >
+            {r.parentPipelineName ?? shortId(r.parentRunId)}
+          </Link>
+        )}
+      </td>
+    ),
+  },
+  annotations: {
+    label: 'Annotations',
+    /* #1016 — the tags of the version this run bound, as the annotation filter
+       matches them. */
+    cell: (r) => (
+      <td title={r.annotations.length > 0 ? r.annotations.join(', ') : undefined}>
+        {r.annotations.length > 0 ? r.annotations.join(', ') : '—'}
       </td>
     ),
   },

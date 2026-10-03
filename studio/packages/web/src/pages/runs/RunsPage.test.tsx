@@ -20,7 +20,12 @@ import * as pipelinesApi from '../../api/pipelines';
 import * as triggersApi from '../../api/triggers';
 import { ApiError } from '../../api/client';
 import { createPipelinesStore } from '../../stores/pipelinesStore';
-import { createUiStore, RUN_GRID_COLUMN_WIDTHS, RUN_GRID_RESIZE_STEP } from '../../stores/uiStore';
+import {
+  createUiStore,
+  RUN_GRID_COLUMN_WIDTHS,
+  RUN_GRID_HIDDEN_STORAGE_KEY,
+  RUN_GRID_RESIZE_STEP,
+} from '../../stores/uiStore';
 
 // Mock the whole api/runs network surface (matching the ConnectionsPage test
 // convention of stubbing every network fn of the module, so no real call ever
@@ -144,6 +149,7 @@ function run(overrides: Partial<RunSummary> = {}): RunSummary {
     pipelineId: 'pipe_1',
     triggerId: 'trg_1',
     triggeredByKind: 'manual',
+    parentPipelineName: null,
     parentRunId: null,
     params: {},
     status: 'running',
@@ -262,6 +268,60 @@ describe('RunsPage', () => {
       'title',
       "Rows this run's successful activities wrote",
     );
+  });
+
+  /** #1484 — a child run names its caller's pipeline and links that run. */
+  it('a child run names the pipeline that called it, linking the calling run', async () => {
+    listMock.mockResolvedValue(
+      pageOf([
+        run({
+          id: 'run_child',
+          parentRunId: 'run_parent_1234',
+          parentPipelineName: 'Orchestrator',
+        }),
+        run({ id: 'run_unnamed', parentRunId: 'run_parent_5678', parentPipelineName: null }),
+        run({ id: 'run_top' }),
+      ]),
+    );
+    renderWithRouter(<RunsPage />);
+    const rowOf = async (id: string) => (await screen.findByText(id)).closest('tr') as HTMLElement;
+    const named = within(cellUnder(await rowOf('run_child'), 'Parent')).getByRole('link');
+    expect(named).toHaveTextContent(/^Orchestrator$/);
+    expect(named).toHaveAccessibleName('Orchestrator, parent run run_parent_1234');
+    expect(named).toHaveAttribute(
+      'href',
+      expect.stringContaining('/monitor/runs/run_parent_1234') as unknown as string,
+    );
+    // No name for this viewer: the short id, and still the link.
+    expect(
+      within(cellUnder(await rowOf('run_unnamed'), 'Parent')).getByRole('link'),
+    ).toHaveTextContent(/^ent_5678$/);
+    expect(cellUnder(await rowOf('run_top'), 'Parent')).toHaveTextContent(/^—$/);
+  });
+
+  it('shows the annotations of the version a run bound once the column is turned on', async () => {
+    const data = new Map<string, string>([[RUN_GRID_HIDDEN_STORAGE_KEY, '[]']]);
+    const ui = createUiStore({
+      getItem: (key) => data.get(key) ?? null,
+      setItem: (key, value) => {
+        data.set(key, value);
+      },
+    });
+    listMock.mockResolvedValue(
+      pageOf([
+        run({ id: 'run_tagged', annotations: ['finance', 'nightly'] }),
+        run({ id: 'run_bare' }),
+      ]),
+    );
+    renderWithRouter(<RunsPage ui={ui} />);
+    const tagged = cellUnder(
+      (await screen.findByText('run_tagged')).closest('tr') as HTMLElement,
+      'Annotations',
+    );
+    expect(tagged).toHaveTextContent(/^finance, nightly$/);
+    expect(
+      cellUnder((await screen.findByText('run_bare')).closest('tr') as HTMLElement, 'Annotations'),
+    ).toHaveTextContent(/^—$/);
   });
 
   it('draws the em-dash in both new columns when the server has no figure', async () => {
@@ -504,7 +564,10 @@ describe('RunsPage', () => {
    */
   describe('the row is a link', () => {
     function mountList() {
-      listMock.mockResolvedValue(pageOf([run({ id: 'run_abc', pipelineName: 'Nightly' })]));
+      // A plain cell's text to click: the Pipeline cell's name is a link of its own.
+      listMock.mockResolvedValue(
+        pageOf([run({ id: 'run_abc', pipelineName: 'Nightly', rowsWritten: 4321 })]),
+      );
       vi.mocked(runsApi.getRun).mockResolvedValue({ id: 'run_abc' } as never);
       const router = createMemoryRouter(ROUTES, { initialEntries: ['/monitor/runs'] });
       render(<RouterProvider router={router} />);
@@ -513,8 +576,15 @@ describe('RunsPage', () => {
 
     it('a click anywhere on the row opens the run', async () => {
       const router = mountList();
-      await userEvent.click(await screen.findByText('Nightly'));
+      await userEvent.click(await screen.findByText('4,321'));
       expect(router.state.location.pathname).toBe('/monitor/runs/run_abc');
+    });
+
+    it("the pipeline's name opens the version that ran, not the run", async () => {
+      const router = mountList();
+      await userEvent.click(await screen.findByRole('link', { name: 'Nightly v3' }));
+      expect(router.state.location.pathname).toBe('/author/pipelines/pipe_1');
+      expect(router.state.location.search).toBe('?version=3');
     });
 
     it('a click on the copy button does not navigate', async () => {
@@ -536,7 +606,7 @@ describe('RunsPage', () => {
 
     it('a click that ends a text selection IN the row does not navigate', async () => {
       const router = mountList();
-      const cell = await screen.findByText('Nightly');
+      const cell = await screen.findByText('4,321');
       select(cell);
       fireEvent.click(cell);
       expect(router.state.location.pathname).toBe('/monitor/runs');
@@ -545,7 +615,7 @@ describe('RunsPage', () => {
 
     it('a selection elsewhere on the page does not disable the row', async () => {
       const router = mountList();
-      const cell = await screen.findByText('Nightly');
+      const cell = await screen.findByText('4,321');
       select(screen.getByRole('heading', { name: 'Runs' }));
       fireEvent.click(cell);
       expect(router.state.location.pathname).toBe('/monitor/runs/run_abc');
@@ -555,7 +625,7 @@ describe('RunsPage', () => {
     it('a middle or modified click opens it in a new tab instead', async () => {
       const open = vi.spyOn(window, 'open').mockReturnValue(null);
       const router = mountList();
-      const cell = await screen.findByText('Nightly');
+      const cell = await screen.findByText('4,321');
       // jsdom's user-event does not raise `auxclick` for a middle button, so it
       // is dispatched as the browser would.
       fireEvent(cell, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
@@ -1254,7 +1324,7 @@ describe('#1484 — runs grid columns', () => {
       .getAllByRole('columnheader')
       .map((h) => h.getAttribute('aria-label'));
 
-  it('draws every column by default, each header named by its label alone', async () => {
+  it('draws every column but Annotations by default, each header named by its label alone', async () => {
     await renderGrid();
     expect(headers()).toEqual([
       'Pipeline',
@@ -1266,6 +1336,7 @@ describe('#1484 — runs grid columns', () => {
       'Rows written',
       'Cost',
       'Run ID',
+      'Parent',
     ]);
     // The resize handle inside the header must not join its accessible name.
     expect(screen.getByRole('columnheader', { name: 'Status' })).toBeInTheDocument();
@@ -1275,11 +1346,11 @@ describe('#1484 — runs grid columns', () => {
     const ui = await renderGrid();
     await userEvent.click(screen.getByRole('button', { name: /Columns/ }));
     await userEvent.click(await screen.findByRole('menuitemcheckbox', { name: 'Cost' }));
-    expect(ui.getState().runsGridHidden).toEqual(['cost']);
+    expect(ui.getState().runsGridHidden).toEqual(['cost', 'annotations']);
     expect(headers()).not.toContain('Cost');
     const row = screen.getByText('run_abc').closest('tr') as HTMLElement;
     // Header and cells stay in step: the cell under Run ID is still the run id.
-    expect(within(row).getAllByRole('cell')).toHaveLength(8);
+    expect(within(row).getAllByRole('cell')).toHaveLength(9);
     expect(cellUnder(row, 'Run ID')).toHaveTextContent('run_abc');
   });
 
@@ -1341,7 +1412,7 @@ describe('#1484 — runs grid columns', () => {
     expect(listMock.mock.calls.length).toBe(calls);
   });
 
-  it('Reset columns shows every column at its default width', async () => {
+  it('Reset columns returns to the default columns at their default widths', async () => {
     const ui = await renderGrid();
     act(() => {
       ui.getState().setRunsGridWidth('status', 200);
@@ -1349,9 +1420,9 @@ describe('#1484 — runs grid columns', () => {
     });
     await userEvent.click(screen.getByRole('button', { name: /Columns/ }));
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Reset columns' }));
-    expect(ui.getState().runsGridHidden).toEqual([]);
+    expect(ui.getState().runsGridHidden).toEqual(['annotations']);
     expect(ui.getState().runsGridWidths).toEqual({});
-    expect(headers()).toHaveLength(9);
+    expect(headers()).toHaveLength(10);
     expect(document.querySelector('col.runs-grid__col--status')).toHaveStyle({
       width: `${RUN_GRID_COLUMN_WIDTHS.status.default}px`,
     });

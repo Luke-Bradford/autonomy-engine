@@ -33,7 +33,7 @@ import { RunDiagnostics } from './RunDiagnostics';
 import { RunGraph } from './RunGraph.lazy';
 import { useRunProjection } from './useRunProjection';
 import { isSecureMarker } from './secureMarker';
-import { pipelinePath } from '../author/pipelinePath';
+import { runVersionPath } from '../author/pipelinePath';
 import { CopyableId } from '../../lib/CopyableId';
 import { useConfirm } from '../../lib/confirm/useConfirm';
 import { shortId } from '../../lib/ids';
@@ -537,11 +537,13 @@ export function RunDetailPage({ runId }: { runId: string }) {
           </dd>
           <dt>Pipeline</dt>
           <dd>
-            {/* The link carries the NAME only: the canvas opens the pipeline's
-                latest version, which need not be the one this run is bound to. */}
+            {/* #1484 — the link opens the version this run is bound to: a
+                read-only preview, or the editor when it is still the latest. */}
             {names?.pipeline && doc ? (
               <>
-                <Link to={pipelinePath(doc.pipelineId)}>{names.pipeline}</Link>{' '}
+                <Link to={runVersionPath(doc.pipelineId, doc.version, names.debug)}>
+                  {names.pipeline}
+                </Link>{' '}
                 {versionLabel(doc.version, names.debug)}
               </>
             ) : (

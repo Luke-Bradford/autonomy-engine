@@ -41,6 +41,7 @@ const sampleRunSummary = {
   annotations: [],
   triggerName: 'Every morning',
   triggeredByKind: 'schedule',
+  parentPipelineName: null,
   /* #931 — the summary now carries the run's cost. `computeRunCost([])` rather
      than a literal, so the fixture cannot drift from `RunCost`'s own shape. */
   cost: computeRunCost([]),

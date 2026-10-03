@@ -100,10 +100,11 @@ function ColumnHeader({
 
 /**
  * #1484 OR35 M1 — one row of the runs grid, and the whole row is the way into
- * the run. The Run ID cell holds the REAL link (keyboard focus, Enter, the
+ * the run. The Run ID cell holds the REAL link to it (keyboard focus, Enter, the
  * browser's own middle-click and context menu); the row's click handlers only
  * extend that target to the rest of the row for a mouse. They stand down when
- * the click landed on a control of its own (the link itself, the copy button)
+ * the click landed on a control of its own (any link — Pipeline and Parent go
+ * elsewhere — or the copy button)
  * or ended a text selection, so copying a pipeline name never navigates. A
  * middle click or a modified click opens the run in a new tab, as the link
  * would.

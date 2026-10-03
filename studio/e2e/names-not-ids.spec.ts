@@ -69,7 +69,8 @@ test('a run is named by its pipeline, with the run id short and copyable', async
   const meta = page.locator('.run-meta');
   await expect(meta.getByRole('link', { name, exact: true })).toHaveAttribute(
     'href',
-    `#/author/pipelines/${pipelineId}`,
+    // #1484 — the version this run is bound to.
+    `#/author/pipelines/${pipelineId}?version=1`,
   );
   await expect(meta.getByRole('link', { name: trigger })).toBeVisible();
   await expect(meta.getByText(short, { exact: true })).toHaveAttribute('title', runId);

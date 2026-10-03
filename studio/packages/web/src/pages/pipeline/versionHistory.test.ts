@@ -9,6 +9,7 @@ import {
   describeSaveConflict,
   docUnchanged,
   historyEntries,
+  initialPreview,
   isPublishRefused,
   isStaleWrite,
   publishConfirmMessage,
@@ -598,5 +599,21 @@ describe('describeRestoreConflict', () => {
     const msg = describeRestoreConflict(null);
     expect(msg).toContain('Not restored');
     expect(msg).not.toMatch(/v\d/);
+  });
+});
+
+describe('initialPreview (#1484)', () => {
+  const versions = [version({ version: 1 }), version({ id: 'plv_2', version: 2 })];
+
+  it('previews an older saved version a link asked for', () => {
+    expect(initialPreview(1, versions)).toBe(1);
+  });
+
+  it('opens the editor for the latest version, an unknown one, or no request', () => {
+    // The editor already IS the latest version, so a preview would only hide it.
+    expect(initialPreview(2, versions)).toBeNull();
+    expect(initialPreview(9, versions)).toBeNull();
+    expect(initialPreview(undefined, versions)).toBeNull();
+    expect(initialPreview(1, [])).toBeNull();
   });
 });
