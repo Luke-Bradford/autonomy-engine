@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { PipelineVersionSchema, type PipelineVersion } from '@autonomy-studio/shared';
 import { ApiError } from '../../api/client';
 import {
+  mergeVersionLists,
   activeVersionLabel,
   describePublishRefusal,
   describeRestoreConflict,
@@ -39,6 +40,29 @@ function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
     ...overrides,
   });
 }
+
+describe('mergeVersionLists (#1502)', () => {
+  it('adds the versions another tab saved, in version order', () => {
+    const v1 = version({ id: 'plv_1', version: 1 });
+    const v2 = version({ id: 'plv_2', version: 2 });
+    const v3 = version({ id: 'plv_3', version: 3 });
+    expect(mergeVersionLists([v1, v2], [v3, v1, v2]).map((v) => v.version)).toEqual([1, 2, 3]);
+  });
+
+  it('keeps a version this page just saved when the re-read predates it', () => {
+    const v1 = version({ id: 'plv_1', version: 1 });
+    const v2 = version({ id: 'plv_2', version: 2 });
+    // The save appended v2; the focus read was issued before it landed.
+    expect(mergeVersionLists([v1, v2], [v1]).map((v) => v.id)).toEqual(['plv_1', 'plv_2']);
+  });
+
+  it('does not list a version twice when the save lands after a re-read that holds it', () => {
+    const v1 = version({ id: 'plv_1', version: 1 });
+    const v2 = version({ id: 'plv_2', version: 2 });
+    // The focus read already brought v2 in; then the save's own answer arrives.
+    expect(mergeVersionLists([v1, v2], [v2]).map((v) => v.id)).toEqual(['plv_1', 'plv_2']);
+  });
+});
 
 describe('historyEntries', () => {
   it('is newest-first, and marks the head and the version the canvas is on', () => {

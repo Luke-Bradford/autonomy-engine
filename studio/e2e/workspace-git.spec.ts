@@ -318,6 +318,13 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
     .locator('[data-part="live"]');
   await expect(livePart).toHaveText(/^Not published/);
   await expect(livePart).toHaveAttribute('data-tone', 'warning');
+  // #1476 OR28 slice 5 — the branch this workspace commits to, against main,
+  // and the commit the imported version came from. Worded "from", never a bare
+  // sha that would read as the branch's head.
+  const gitPart = page.getByRole('group', { name: 'Pipeline state' }).locator('[data-part="git"]');
+  await expect(gitPart).toHaveText(/^\S+ → main · from [0-9a-f]{7}\b/);
+  await expect(gitPart).toHaveAttribute('data-tone', 'neutral');
+  await expect(gitPart).toHaveAttribute('title', /was imported from commit [0-9a-f]{7}/);
 
   await history.getByRole('button', { name: /^v1/ }).click();
   const bar = page.getByTestId('version-preview-bar');
@@ -342,32 +349,39 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   // its spoken form, never colour alone.
   await expect(livePart).toHaveText(/^Live: v1 ✓ \(on the canvas\)/);
   await expect(livePart).toHaveAttribute('data-tone', 'success');
-  // Both pills at once is the widest the badge gets; at 1280 the toolbar row
-  // must still hold it without overflowing or clipping either pill.
+  // All three pills at once is the widest the badge gets, and at 1280 the
+  // toolbar row cannot hold them beside every act. It must still not overflow
+  // or clip: it folds instead, Validate first and then the git pill.
   await page.setViewportSize({ width: 1280, height: 720 });
-  // Polled: the row makes room by folding Validate (below), which it does in
-  // response to the resize, a frame after it.
+  // Polled: the row folds in response to the resize, a frame after it, and
+  // one fold at a time.
   await expect
     .poll(() =>
       page.evaluate(() => {
         const header = document.querySelector('.canvas-page > .page-header')!;
         const parts = [...document.querySelectorAll<HTMLElement>('.editor-state-badge__part')];
         return {
-          parts: parts.length,
+          parts: parts.map((p) => p.dataset.part),
           headerOverflows: header.scrollWidth > header.clientWidth,
           clipped: parts.some((p) => p.scrollWidth > p.clientWidth),
         };
       }),
     )
-    .toEqual({ parts: 2, headerOverflows: false, clipped: false });
+    .toEqual({ parts: ['editing', 'live'], headerOverflows: false, clipped: false });
   // #1476 slice 2 — what made room: Validate folded into ⋯, where it still
   // works, and is back in the row once there is space for it.
   const validateButton = page.getByRole('button', { name: 'Validate', exact: true });
   await expect(validateButton).toHaveCount(0);
   await expect(await editorMenuItem(page, /^Validate/)).toBeVisible();
+  // #1476 slice 5 — and the git pill folded into ⋯ too, with its whole label:
+  // still readable, and opening it goes where the repo is managed.
+  const gitItem = page.getByRole('menuitem', { name: /^Git: \S+ → main · from [0-9a-f]{7}/ });
+  await expect(gitItem).toBeVisible();
+  await expect(gitItem).toHaveAttribute('data-tone', 'neutral');
   await page.keyboard.press('Escape');
   await page.setViewportSize({ width: 1600, height: 1000 });
   await expect(validateButton).toBeVisible();
+  await expect(gitPart).toBeVisible();
 
   /**
    * And it is DURABLE, not merely optimistic local state: a reload re-reads the
@@ -380,6 +394,49 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await expect(
     page.getByTestId('version-history').getByRole('button', { name: /^v1/ }),
   ).toContainText('active');
+
+  /**
+   * #1502 — the editor re-reads the repo and the pointer on focus. A failed
+   * re-read keeps what is on screen (focus arrives on wake, when requests
+   * fail); a successful one that reports a failed fetch turns the git pill red,
+   * in words, and — folded at 1280 — puts the same words on ⋯.
+   */
+  const gitStatusUrl = /\/api\/workspace\/git$/;
+  await expect(livePart).toHaveText(/^Live: v1/);
+  await page.route(gitStatusUrl, (route) => route.abort());
+  const failedRead = page.waitForEvent('requestfailed', (r) => gitStatusUrl.test(r.url()));
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await failedRead;
+  await expect(livePart).toHaveText(/^Live: v1/);
+  await expect(gitPart).toHaveText(/ → main · from [0-9a-f]{7}/);
+  await page.unroute(gitStatusUrl);
+
+  await page.route(gitStatusUrl, async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as { git: Record<string, unknown> };
+    body.git.state = 'fetch_error';
+    body.git.lastFetchError = 'simulated: could not reach the remote';
+    await route.fulfill({ response, json: body });
+  });
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(gitPart).toHaveText(/ → main · from [0-9a-f]{7} · fetch failed/);
+  await expect(gitPart).toHaveAttribute('data-tone', 'danger');
+  await expect(gitPart).toHaveAttribute('title', /simulated: could not reach the remote\./);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await expect(gitPart).toHaveCount(0);
+  const more = page.getByRole('button', { name: /^More pipeline actions/ });
+  await expect(more).toHaveAttribute(
+    'aria-label',
+    /^More pipeline actions \(git: from [0-9a-f]{7} · fetch failed\)$/,
+  );
+  await expect(more).toHaveAttribute('data-tone', 'danger');
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await expect(gitPart).toBeVisible();
+  await expect(more).toHaveAttribute('aria-label', 'More pipeline actions');
+  await page.unroute(gitStatusUrl);
+  // And the next focus reads the real state again.
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(gitPart).toHaveAttribute('data-tone', 'neutral');
 
   /**
    * ── the publish is LEGIBLE in the audit log (#1077) ────────────────────────
@@ -491,7 +548,8 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await expect(page.getByRole('form', { name: 'Connect a repository' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Connected', exact: true })).toHaveCount(0);
 
-  await expectQuiet(page, problems);
+  // The one console error is the git read this spec aborts on purpose (#1502).
+  await expectQuiet(page, problems, [/^console\.error: Failed to load resource: net::ERR_FAILED$/]);
 });
 
 test('the Git section is reachable from the Manage pane', async ({ page }) => {

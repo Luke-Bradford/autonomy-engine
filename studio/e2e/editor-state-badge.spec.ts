@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { dragNodeBy, viewportSettled } from './support/canvasGraph';
-import { editorMenuItem } from './support/canvas';
+import { editorMenuItem, triggerMenuItem } from './support/canvas';
 import { fluentRootReady } from './support/theme';
 import { mintVersion, nodeById, seedVersion, type SeedDoc } from './support/seedDoc';
 
@@ -127,4 +127,57 @@ test('the badge names the editing state: latest, draft, overtaken, previewing', 
   await expectQuiet(page, problems, [
     /^console\.error: Failed to load resource: the server responded with a status of 409 \(Conflict\)$/,
   ]);
+});
+
+/**
+ * #1502 — another tab saves while this editor sits idle. The editor learns of it
+ * when the window regains focus, with NO save attempt to provoke a re-read: the
+ * badge names the newer version, and the history column lists it.
+ */
+test('a version saved elsewhere reaches the badge and the history on focus', async ({ page }) => {
+  const problems = collectPageProblems(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const name = `e2e 1502 focus ${String(Date.now())}`;
+  const { pipelineId, pipelineVersionId: v1 } = await seedVersion(page, name, V1);
+
+  const publishRead = page.waitForResponse((r) =>
+    r.url().endsWith(`/api/pipelines/${pipelineId}/active`),
+  );
+  await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+  await publishRead;
+  await fluentRootReady(page);
+  await expect(nodeById(page, 'n_b')).toBeVisible();
+  await expect(part(page, 'editing')).toHaveText(/^v1 \(latest\)/);
+  await (await editorMenuItem(page, /^Show version history/)).click();
+  const history = page.getByTestId('version-history');
+  await expect(history.getByRole('button', { name: /^v2\b/ })).toHaveCount(0);
+
+  // The Run form is open on v1 when v2 lands: it must stay on the version it
+  // named rather than follow the head and remount.
+  await (await triggerMenuItem(page, /^Trigger now/)).click();
+  const runForm = page.getByRole('dialog', { name: 'Run v1' });
+  await expect(runForm).toBeVisible();
+
+  await mintVersion(page, pipelineId, V2, v1, name);
+  // Nothing on the page has asked yet: the claim is still the open-time one.
+  await expect(part(page, 'editing')).toHaveText(/^v1 \(latest\)/);
+
+  const reread = page.waitForResponse(
+    (r) =>
+      r.url().endsWith(`/api/pipelines/${pipelineId}/versions`) && r.request().method() === 'GET',
+  );
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await reread;
+  await expect(part(page, 'editing')).toHaveText(/^v1 · v2 is newer/);
+  await expect(part(page, 'editing')).toHaveAttribute('data-tone', 'warning');
+  await expect(history.getByRole('button', { name: /^v2\b/ })).toContainText('latest');
+  // The canvas was not moved: the operator is still on the version they opened.
+  await expect(nodeById(page, 'n_c')).toHaveCount(0);
+  await expect(page.locator('.notice-conflict')).toHaveCount(0);
+  await expect(runForm).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Run v2' })).toHaveCount(0);
+  // DB-only: no repo, so no git part either.
+  await expect(badge(page).locator('[data-part="git"]')).toHaveCount(0);
+
+  await expectQuiet(page, problems);
 });

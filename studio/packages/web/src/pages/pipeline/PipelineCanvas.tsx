@@ -53,6 +53,7 @@ import {
   type Node,
   type Pipeline,
   type PipelineVersion,
+  type WorkspaceGitStatus,
 } from '@autonomy-studio/shared';
 import {
   clipboardCommandFor,
@@ -177,6 +178,7 @@ import {
   restoreBodyFrom,
   restoreConfirmMessage,
   restoreRefusal,
+  mergeVersionLists,
   saveAnywayLabel,
   type ActiveVersionState,
 } from './versionHistory';
@@ -205,9 +207,9 @@ import { leavesPath } from '../../lib/form/leavesPath';
 import { UnsavedChangesPrompt } from '../../lib/form/UnsavedChangesPrompt';
 import { FormSection } from '../../lib/form/FormSection';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
-import { readPublishState } from './publishState';
+import { claimTicket, readPublishState, takeTicket, type ReadSequence } from './publishState';
 import { EditorStateBadge } from './EditorStateBadge';
-import { canvasVersion, editingState, liveState } from './editorState';
+import { canvasVersion, editingState, gitState, liveState, partText } from './editorState';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { useConfirm } from '../../lib/confirm/useConfirm';
 
@@ -356,7 +358,13 @@ export function PipelineCanvas({
   // #1395 OR4 — the Run form's open state, and the last run it started. Its
   // notice links to the run page, and stays until the next press of Run — the
   // save line's rule — so the link is there for as long as it is wanted.
-  const [runOpen, setRunOpen] = useState(false);
+  //
+  // #1502 — the form holds the version it was OPENED for, not the live head: a
+  // focus re-read can move the head while it is open, and following it would
+  // remount the form (it is keyed by version), dropping what was typed, and run
+  // a version the form never named.
+  const [runFor, setRunFor] = useState<PipelineVersion | null>(null);
+  const runOpen = runFor !== null;
   // #1395 slice 3 — the Debug form's. Opening one form closes the other: both
   // hang from the same anchor over the canvas.
   const [debugOpen, setDebugOpen] = useState(false);
@@ -454,7 +462,22 @@ export function PipelineCanvas({
    * together and are meaningless apart.
    */
   const [active, setActive] = useState<ActiveVersionState>(undefined);
-  const [gitConnected, setGitConnected] = useState<boolean | undefined>(undefined);
+  /**
+   * #1476 OR28 — the repo itself, `null` when none is connected; whether one is
+   * connected is derived from it so the two cannot disagree.
+   */
+  const [git, setGit] = useState<WorkspaceGitStatus | null | undefined>(undefined);
+  const gitConnected = git === undefined ? undefined : git !== null;
+  /**
+   * #1502 — the publish state is read on open, on focus, and after a refused
+   * publish, and is written by a publish. Every read and write takes the next
+   * number from `issued`; a read's answer applies only if it is newer than the
+   * last thing applied (`applied`), and applying records it. So a slow read
+   * cannot put back a pointer a later read or a publish has already set, while
+   * a read that FAILED claims nothing and voids nothing — an older read still in
+   * flight is then still the newest answer, and lands.
+   */
+  const publishSeq = useRef<ReadSequence>({ issued: 0, applied: 0 });
   const [publishing, setPublishing] = useState(false);
   /**
    * #904 — the head this canvas was refused against, or `null` when there is no
@@ -776,12 +799,6 @@ export function PipelineCanvas({
       }),
     [guardedLoad, store],
   );
-  useEffect(() => {
-    const onFocus = () => void refreshGlobals();
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, [refreshGlobals]);
-
   /**
    * #979 — the publish state, read SEPARATELY from the load above and never
    * folded into its `Promise.all`.
@@ -794,21 +811,79 @@ export function PipelineCanvas({
    */
   useEffect(() => {
     const ctrl = new AbortController();
+    const ticket = takeTicket(publishSeq.current);
     readPublishState(pipelineId, ctrl.signal)
       .then((s) => {
+        if (!claimTicket(publishSeq.current, ticket)) return;
         setActive(s.active);
-        setGitConnected(s.gitConnected);
+        setGit(s.git);
       })
       .catch(() => {
-        if (ctrl.signal.aborted) return;
+        if (ctrl.signal.aborted || !claimTicket(publishSeq.current, ticket)) return;
         // Back to unread, not to a default. A failed read that left a STALE
         // pointer on screen would be worse than one showing none: the CAS would
         // then be sent an expectation nothing currently supports.
         setActive(undefined);
-        setGitConnected(undefined);
+        setGit(undefined);
       });
     return () => ctrl.abort();
   }, [pipelineId]);
+
+  /**
+   * #1502 — the version list and the publish state are re-read when the window
+   * regains focus, beside the globals above. Another tab, another operator or
+   * the build loop can save or publish while this editor sits idle, and without
+   * this the badge and the history's `latest`/`active` tags kept naming what was
+   * true when the page opened.
+   *
+   * No write is decided by these reads alone: a save's basis is `loaded`, which
+   * neither touches, and a restore or publish carries a CAS the server checks,
+   * built from what the operator was looking at when they clicked. These reads
+   * make the page TELL the truth sooner; the server keeps it honest.
+   *
+   * ONE read of both, applied together, so the history and the badge cannot
+   * disagree — a pointer newer than the list would flash "Live: not listed
+   * yet". The versions MERGE into the list (`mergeVersionLists`) rather than
+   * replace it, so a read racing this page's own save cannot drop the version
+   * it just minted.
+   *
+   * A failed read KEEPS what is on screen, unlike the open-time read above,
+   * which has nothing to keep. Focus arrives on wake and reconnect, exactly when
+   * requests fail, and blanking the pointer then would hide the badge, hold
+   * Publish back and re-word the Triggers column over a network blip — while
+   * the kept value is one the server read and every write re-checks.
+   *
+   * Its own `useGuardedLoad` instance, so it is unmount-safe and latest-wins
+   * among focus reads without superseding the globals' re-read on the other
+   * instance. The `publishSeq` ticket orders it against the publish state's
+   * OTHER readers and its one local writer, a publish, which the hook cannot
+   * see.
+   */
+  const guardedFocusLoad = useGuardedLoad();
+  const refreshOnFocus = useCallback(() => {
+    void refreshGlobals();
+    const ticket = takeTicket(publishSeq.current);
+    void guardedFocusLoad(
+      (signal) =>
+        Promise.all([
+          listPipelineVersions(pipelineId, signal),
+          readPublishState(pipelineId, signal),
+        ]),
+      {
+        onData: ([fresh, s]) => {
+          setVersions((prev) => mergeVersionLists(prev, fresh));
+          if (!claimTicket(publishSeq.current, ticket)) return;
+          setActive(s.active);
+          setGit(s.git);
+        },
+        onError: () => {},
+      },
+    );
+  }, [refreshGlobals, guardedFocusLoad, pipelineId]);
+  useEffect(() => {
+    window.addEventListener('focus', refreshOnFocus);
+    return () => window.removeEventListener('focus', refreshOnFocus);
+  }, [refreshOnFocus]);
 
   const nodes = useStore(store, (s) => s.nodes);
   const edges = useStore(store, (s) => s.edges);
@@ -866,6 +941,8 @@ export function PipelineCanvas({
     active: activeVersionLabel(active, versions),
     canvas: canvasVersion(editingInput),
   });
+  // The saved version on (or under) the canvas: the preview, else `loaded`.
+  const gitBadge = gitState({ git, source: previewed ?? loaded ?? null });
 
   // U16 — `loaded` LEAVES the dep list: `params` moved into the store, and it
   // was the last thing this memo read off the opened version.
@@ -993,7 +1070,7 @@ export function PipelineCanvas({
   // A refusal arriving (a preview opened, the pipeline archived) CLOSES the Run
   // form rather than hiding it, so it does not spring back open with reset
   // values when the refusal lifts. Render-phase, like `EditorStatusStrip`'s.
-  if (runOpen && runReason !== null) setRunOpen(false);
+  if (runOpen && runReason !== null) setRunFor(null);
   const debugReason = debugDisabledReason({
     ready,
     archived,
@@ -1014,28 +1091,39 @@ export function PipelineCanvas({
     }));
   };
   /* #1476 OR28 — the ticket's rule for a toolbar row that cannot hold every
-     act: overflow goes into ⋯, it never wraps or spills. Validate is the act
-     that folds — the one used least often of those in the row. It folds when
+     act: overflow goes into ⋯, it never wraps or spills. Two things fold, one
+     at a time and in this order: Validate — the act used least often of those
+     in the row — and then the git part of the badge, the widest pill and the
+     one fact with a page of its own to open (Manage → Git). Each folds when
      the row overflows, remembering the width it needed, and comes back only
      once the row is that wide again: comparing against the width that DID
      overflow, not the narrower one without it, is what stops it flapping.
-     Measured on the header's own width and on what changes the row's content
-     (the badge's labels, the Save label) — not on every render, which would
-     force a layout on every node drag. */
-  const [validateFolded, setValidateFolded] = useState<{ needs: number } | null>(null);
+     `folds` holds those widths, last-folded last. Measured on the header's own
+     width and on what changes the row's content (the badge's labels, the Save
+     label) — not on every render, which would force a layout on every node
+     drag. */
+  const [folds, setFolds] = useState<readonly number[]>([]);
+  const foldable = gitBadge === null ? 1 : 2;
   const headerWidth = useElementSize(headerRef, 'width');
-  const rowContent = `${editingBadge.label}|${liveBadge?.label ?? ''}|${String(saving)}`;
+  const rowContent = `${editingBadge.label}|${liveBadge?.label ?? ''}|${gitBadge?.label ?? ''}|${String(saving)}`;
   useLayoutEffect(() => {
     const header = headerRef.current;
     if (header === null) return;
-    if (validateFolded === null) {
-      if (header.scrollWidth > header.clientWidth) {
-        setValidateFolded({ needs: header.scrollWidth });
-      }
-    } else if (header.clientWidth >= validateFolded.needs) {
-      setValidateFolded(null);
+    const last = folds.at(-1);
+    if (last !== undefined && (header.clientWidth >= last || folds.length > foldable)) {
+      setFolds((f) => f.slice(0, -1));
+    } else if (header.scrollWidth > header.clientWidth && folds.length < foldable) {
+      setFolds((f) => [...f, header.scrollWidth]);
     }
-  }, [headerWidth, rowContent, validateFolded]);
+  }, [headerWidth, rowContent, folds, foldable]);
+  const validateFolded = folds.length >= 1;
+  const gitFolded = folds.length >= 2;
+  const foldedGitAlert =
+    gitFolded && gitBadge !== null && gitBadge.tone !== 'neutral' ? gitBadge : null;
+  const moreActionsLabel =
+    foldedGitAlert === null
+      ? 'More pipeline actions'
+      : `More pipeline actions (git: ${foldedGitAlert.label})`;
   const validateReason = validateDisabledReason({
     ready,
     previewing: previewing !== null,
@@ -1176,7 +1264,7 @@ export function PipelineCanvas({
         }
         // #903 — the history is appended to rather than refetched: the server
         // just told us the whole row, and a refetch would race the next save.
-        setVersions((prev) => [...prev, created]);
+        setVersions((prev) => mergeVersionLists(prev, [created]));
         // #904 — the save landed, so whatever conflict sent us here is over.
         setConflict(null);
         setSaveMsg(`Saved v${created.version}.`);
@@ -1195,7 +1283,7 @@ export function PipelineCanvas({
           // is the one thing that makes the page honest again.
           try {
             const fresh = await listPipelineVersions(pipelineId);
-            setVersions(fresh);
+            setVersions((prev) => mergeVersionLists(prev, fresh));
             const head = latestVersion(fresh);
             if (head) {
               setConflict(head);
@@ -1300,7 +1388,7 @@ export function PipelineCanvas({
         pipelineId,
         restoreBodyFrom(previewed, head?.id ?? null),
       );
-      setVersions((prev) => [...prev, created]);
+      setVersions((prev) => mergeVersionLists(prev, [created]));
       const s = store.getState();
       if (docUnchanged(before, s)) {
         s.loadVersion(created);
@@ -1340,7 +1428,7 @@ export function PipelineCanvas({
         // WORKING graph, which is not what was being attempted here.
         try {
           const fresh = await listPipelineVersions(pipelineId);
-          setVersions(fresh);
+          setVersions((prev) => mergeVersionLists(prev, fresh));
           setSaveMsg(describeRestoreConflict(latestVersion(fresh)?.version ?? null));
           return;
         } catch {
@@ -1405,7 +1493,9 @@ export function PipelineCanvas({
       });
       // The response CARRIES the post-call pointer, so re-reading it would be a
       // round trip for a fact already in hand (the same move the restore makes
-      // with the version it just minted).
+      // with the version it just minted). It is the newest fact, so it voids
+      // any publish-state read still in flight (#1502).
+      claimTicket(publishSeq.current, takeTicket(publishSeq.current));
       setActive(result.active);
       setSaveMsg(
         publishOutcomeMessage({ published: result.published, selectedVersion: previewed.version }),
@@ -1416,15 +1506,20 @@ export function PipelineCanvas({
         // Re-read the state — the page is otherwise left asserting a pointer the
         // server has just contradicted — and describe what it now shows.
         let fresh: ActivePipelineVersion | null | undefined;
+        const ticket = takeTicket(publishSeq.current);
         try {
           const s = await readPublishState(pipelineId);
-          setActive(s.active);
-          setGitConnected(s.gitConnected);
           fresh = s.active;
+          if (claimTicket(publishSeq.current, ticket)) {
+            setActive(s.active);
+            setGit(s.git);
+          }
         } catch {
-          setActive(undefined);
-          setGitConnected(undefined);
           fresh = undefined;
+          if (claimTicket(publishSeq.current, ticket)) {
+            setActive(undefined);
+            setGit(undefined);
+          }
         }
         // Through the ONE resolver, so a failed re-read stays `undefined` and a
         // version this page cannot name stays distinct from "nothing published".
@@ -1515,7 +1610,13 @@ export function PipelineCanvas({
         </h2>
         {/* #1476 OR28 — nothing until the load lands: an empty version list
             before then would read as "Not saved" on every open. */}
-        {ready && <EditorStateBadge editing={editingBadge} live={liveBadge} />}
+        {ready && (
+          <EditorStateBadge
+            editing={editingBadge}
+            live={liveBadge}
+            git={gitFolded ? null : gitBadge}
+          />
+        )}
         {/* #907 — an archived pipeline refuses every save, so say it BEFORE the
             work happens. Without this the first Save simply bounces with a 409,
             after however long the operator spent editing.
@@ -1733,7 +1834,7 @@ export function PipelineCanvas({
           )}
           {/* #1476 OR28 — Validate: the save's own check, without saving.
               In ⋯ instead while the row is too narrow (`validateFolded`). */}
-          {validateFolded === null && (
+          {!validateFolded && (
             <button
               type="button"
               disabled={validateReason !== null}
@@ -1755,7 +1856,7 @@ export function PipelineCanvas({
               title={debugReason ?? DEBUG_TITLE}
               onClick={() => {
                 setRunStarted(null);
-                setRunOpen(false);
+                setRunFor(null);
                 setDebugOpen((o) => !o);
               }}
             >
@@ -1784,7 +1885,7 @@ export function PipelineCanvas({
                       // Run owns the notice, so it always describes the latest run.
                       setRunStarted(null);
                       setDebugOpen(false);
-                      setRunOpen(true);
+                      setRunFor(head);
                     }}
                   >
                     Trigger now
@@ -1810,17 +1911,17 @@ export function PipelineCanvas({
                 </MenuList>
               </MenuPopover>
             </Menu>
-            {runOpen && runReason === null && head !== null && (
+            {runFor !== null && runReason === null && (
               <RunNowPanel
-                key={head.id}
+                key={runFor.id}
                 pipelineId={pipelineId}
-                version={head}
+                version={runFor}
                 dirty={dirty}
-                onClose={() => setRunOpen(false)}
+                onClose={() => setRunFor(null)}
                 onStarted={(runId) => {
-                  setRunOpen(false);
-                  setRunStarted({ text: `Run started from v${String(head.version)}.`, runId });
-                  setEditorRun({ runId, version: head });
+                  setRunFor(null);
+                  setRunStarted({ text: `Run started from v${String(runFor.version)}.`, runId });
+                  setEditorRun({ runId, version: runFor });
                 }}
               />
             )}
@@ -1855,21 +1956,38 @@ export function PipelineCanvas({
                 id={moreActionsId}
                 type="button"
                 className="icon-button editor-header__icon-button"
-                aria-label="More pipeline actions"
-                title="More pipeline actions"
+                // #1476 — a git state that needs attention, folded in here,
+                // must not vanish with its pill: the button takes its colour
+                // and says it in words.
+                data-tone={foldedGitAlert?.tone}
+                aria-label={moreActionsLabel}
+                title={moreActionsLabel}
               >
                 <MoreHorizontalRegular aria-hidden="true" />
               </button>
             </MenuTrigger>
             <MenuPopover>
               <MenuList>
-                {validateFolded !== null && (
+                {validateFolded && (
                   <MenuItem
                     onClick={() => void onValidate()}
                     disabled={validateReason !== null}
                     subText={validateReason ?? undefined}
                   >
                     Validate
+                  </MenuItem>
+                )}
+                {/* The git part, folded: its label is the item, its sentence
+                    the second line, and opening it goes where the repo is
+                    managed. */}
+                {gitFolded && gitBadge !== null && (
+                  <MenuItem
+                    data-part="git"
+                    data-tone={gitBadge.tone}
+                    onClick={() => void navigate('/manage/git')}
+                    subText={gitBadge.detail}
+                  >
+                    Git: {partText(gitBadge)}
                   </MenuItem>
                 )}
                 {/* U9 — Arrange moves the DOCUMENT, not the view, so it is not

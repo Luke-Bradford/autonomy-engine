@@ -2297,6 +2297,36 @@ button.danger {
   border-color: var(--warning);
 }
 
+.editor-state-badge__part[data-tone='danger'] {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+/* #1476 — the ⋯ button, and the git item inside it, when a folded git state
+   needs attention. The button's label says it in words too. */
+.editor-header__icon-button[data-tone='danger'],
+[role='menuitem'][data-part='git'][data-tone='danger'] {
+  color: var(--error);
+}
+
+.editor-header__icon-button[data-tone='warning'],
+[role='menuitem'][data-part='git'][data-tone='warning'] {
+  color: var(--warning);
+}
+
+/* A part's name (the git part's branches) has no length limit —
+   `studio/<owner id>/work` by default — so it ellipsises inside its pill and the
+   toolbar row keeps its one-line budget. Only the name: the label after it
+   carries the state and is never cut. The whole sentence is the part's tooltip
+   and hidden text. */
+.editor-state-badge__name {
+  display: inline-block;
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
 .canvas-page > .page-header > .form-actions {
   flex: 0 0 auto;
   margin-left: auto;

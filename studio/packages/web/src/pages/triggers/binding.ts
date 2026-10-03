@@ -102,9 +102,10 @@ export function bindingIsBound(selection: BindingSelection): boolean {
  * How the publish pair reads right now. `'loading'` and `'unread'` are kept
  * apart from a successful read for the #979 reason: collapsing either into
  * `{active: null}` would assert "this pipeline has never been published" on no
- * evidence.
+ * evidence. Only the pair is read here, not the repo the editor's badge also
+ * takes from the same reading.
  */
-export type PublishReading = PublishState | 'loading' | 'unread';
+export type PublishReading = Pick<PublishState, 'active' | 'gitConnected'> | 'loading' | 'unread';
 
 export interface ActiveBindingAdvice {
   /** Prose shown beside the control. */

@@ -1,3 +1,6 @@
+import type { WorkspaceGitStatus } from '@autonomy-studio/shared';
+import { shortSha } from '../../api/workspaceGit';
+import { formatWhen } from '../runs/format';
 import { activePhrase, type ActiveVersionLabel } from './versionHistory';
 
 /**
@@ -5,17 +8,24 @@ import { activePhrase, type ActiveVersionLabel } from './versionHistory';
  *
  * Colour follows ONE rule: `success` when the live version is what the canvas
  * shows, `warning` when something is pending — a draft, a newer saved version,
- * nothing published, or a live version that is not the canvas — and `neutral`
- * otherwise. The text always carries the meaning on its own, so the colour is
- * never the only cue (WCAG 1.4.1).
+ * nothing published, or a live version that is not the canvas — `danger` when
+ * the repo could not be read, and `neutral` otherwise. The text always carries
+ * the meaning on its own, so the colour is never the only cue (WCAG 1.4.1).
  *
  * Labels are SHORT on purpose: they share the fixed-height toolbar row with the
  * title, the notice strip and every action, and that row must not wrap at
  * 1280px (#1475). The sentence lives in `detail`.
  */
-export type BadgeTone = 'success' | 'warning' | 'neutral';
+export type BadgeTone = 'success' | 'warning' | 'danger' | 'neutral';
 
 export interface BadgePart {
+  /**
+   * A name drawn BEFORE the label that may be cut short with an ellipsis — a
+   * branch has no length limit — so the label, which carries the state, never
+   * is. Absent on parts that name nothing.
+   */
+  name?: string;
+  /** The state, in words. Empty only when `name` alone says everything. */
   label: string;
   /** The full sentence behind the label: its tooltip and its hidden text. */
   detail: string;
@@ -147,5 +157,82 @@ export function liveState(s: LiveInput): BadgePart | null {
     label: `Live: v${v}`,
     detail: `v${v} is the active (published) version; the canvas shows ${s.canvas === null ? 'unsaved changes' : `v${String(s.canvas)}`}.`,
     tone: 'warning',
+  };
+}
+
+/** A part as one line of text: its name, then its label. */
+export function partText(part: BadgePart): string {
+  return [part.name, part.label].filter((t) => t !== undefined && t !== '').join(' · ');
+}
+
+/** Where the version on the canvas came from in git, off its row. */
+export interface VersionSource {
+  version: number;
+  sourceCommit: string | null;
+  sourceBranch: string | null;
+}
+
+export interface GitInput {
+  /** The workspace's repo, `null` when none is connected, `undefined` while unread. */
+  git: WorkspaceGitStatus | null | undefined;
+  /**
+   * The saved version the canvas shows or was opened from (the preview, else
+   * `loaded`), or `null` when nothing is saved yet.
+   */
+  source: VersionSource | null;
+}
+
+/**
+ * The git part: which branch this workspace commits to, against the branch it
+ * opens pull requests into, and the commit the canvas version came from.
+ *
+ * Hidden when no repo is connected, and while the repo is unread — absent, not
+ * wrong, the live part's rule. The commit is the one the version was IMPORTED
+ * from (`sourceCommit` is stamped only by an import), so it is worded that way:
+ * a bare sha beside the branch pair would read as that branch's head. A version
+ * saved here has none, and naming the branch head instead would claim a
+ * provenance it does not have.
+ *
+ * The repo's state is the one recorded at its last fetch — the read behind it
+ * is a DB read, not a fetch — so the detail says when that was.
+ *
+ * Whether the branch has uncommitted work, or is behind or diverged from the
+ * collaboration branch, is NOT said here. Both reads fetch the remote, and the
+ * badge must not promise a state it has not read.
+ */
+export function gitState({ git, source }: GitInput): BadgePart | null {
+  if (git === null || git === undefined) return null;
+  const commit = source?.sourceCommit ?? null;
+  const parts: string[] = [];
+  const sentences = [
+    `Commits go to ${git.workingBranch}; pull requests open into ${git.collabBranch}.`,
+  ];
+  if (source !== null && commit !== null) {
+    parts.push(`from ${shortSha(commit)}`);
+    sentences.push(
+      `v${String(source.version)} was imported from commit ${shortSha(commit)}` +
+        (source.sourceBranch !== null ? ` on ${source.sourceBranch}.` : '.'),
+    );
+  }
+  let tone: BadgeTone = 'neutral';
+  if (git.state === 'fetch_error') {
+    parts.push('fetch failed');
+    sentences.push(
+      `The last fetch from the repo failed${git.lastFetchError !== null ? `: ${git.lastFetchError.replace(/\.?$/, '.')}` : '.'}`,
+    );
+    tone = 'danger';
+  } else if (git.state === 'collab_branch_missing') {
+    parts.push(`no ${git.collabBranch} yet`);
+    sentences.push(`${git.collabBranch} was not found at the repo when it was last fetched.`);
+    tone = 'warning';
+  }
+  sentences.push(
+    git.lastFetchAt === null ? 'Never fetched.' : `Last fetched ${formatWhen(git.lastFetchAt)}.`,
+  );
+  return {
+    name: `${git.workingBranch} → ${git.collabBranch}`,
+    label: parts.join(' · '),
+    detail: sentences.join(' '),
+    tone,
   };
 }
