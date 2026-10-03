@@ -1,4 +1,4 @@
-import type { Run } from '@autonomy-studio/shared';
+import type { RunSummary } from '@autonomy-studio/shared';
 
 /**
  * U10 — WHERE a run came from, which is the axis the Monitor's list filters on.
@@ -8,43 +8,43 @@ import type { Run } from '@autonomy-studio/shared';
  * Filtering by STATUS is a different ticket (U26's filter pane) and is not built
  * here — the status vocabulary this page renders is #870's `runStatus.ts`.
  *
- * The classification reads exactly two columns already on every `Run`, so it
- * needs no new server field and no new index.
+ * The classification is the server's (`runOriginOf` below).
  */
 export const RUN_ORIGINS = ['triggered', 'manual', 'child'] as const;
 export type RunOrigin = (typeof RUN_ORIGINS)[number];
 
 /**
  * A TOTAL classification: every run is exactly one origin, so no row can be
- * hidden from all three tabs. `parentRunId` is checked FIRST and wins outright —
- * a child run's defining fact is that a parent spawned it, and that stays true
- * however it was bound.
+ * hidden from all three tabs.
  *
- * MEASURED reachability, because "backed by current data" is a claim about the
- * engine as it stands, not about the schema:
- *  - `triggered` — the ordinary path; a fired trigger stamps `triggerId`.
- *  - `manual` — a run the operator started by hand without a trigger: the
- *    editor's Run (#1395, `launcher.runNow`) or a RERUN (`run/reseed.ts`). Both
- *    set `triggerId = null, parentRunId = null` deliberately ("an explicit
- *    operator action"), so they are precisely the runs no trigger and no parent
- *    produced.
- *  - `child` — a run a `call_pipeline` node spawned. It carries rows since P3b
- *    slice 1 (#796) landed the spawn seam: `run/child.ts` creates the child with
- *    `parentRunId` set, against the CALLED pipeline's version. This docblock said
- *    the tab "carries no rows today" until #931 corrected it — the claim was true
- *    when written and quietly stopped being true, which is the failure mode a
- *    docblock that names its evidence is supposed to make visible.
+ * #1484 OR35 M1 — read from the SERVER's `triggeredByKind`, the same field the
+ * list's "Triggered by" column renders, so a tab and the column beside it cannot
+ * disagree about a run. This used to re-derive origin here from `triggerId` and
+ * `parentRunId`, and that read a deleted trigger's runs as `manual` because
+ * `runs.trigger_id` is `onDelete: 'set null'`. The server classifies from the
+ * row's frozen trigger context, which survives the deletion, so those runs stay
+ * `triggered`. `RUN_TRIGGERED_BY_SQL` (server) owns the precedence.
  *
- * KNOWN LIMITATION, stated rather than papered over: `runs.trigger_id` is
- * `onDelete: 'set null'`, so deleting a trigger re-classifies its historical runs
- * from `triggered` to `manual`. The row genuinely stops carrying the fact, and
- * this function will not invent it back — the alternative (inferring from
- * `triggerContext`) would make two columns disagree about the same run.
+ * - `triggered` — a trigger fired it, including Fire now on a trigger's row.
+ * - `manual` — the operator started it with no trigger: the editor's Run, its
+ *   Debug, or a rerun from failed.
+ * - `child` — an Execute Pipeline node spawned it.
  */
-export function runOriginOf(run: Pick<Run, 'triggerId' | 'parentRunId'>): RunOrigin {
-  if (run.parentRunId !== null) return 'child';
-  if (run.triggerId !== null) return 'triggered';
-  return 'manual';
+export function runOriginOf(run: Pick<RunSummary, 'triggeredByKind'>): RunOrigin {
+  switch (run.triggeredByKind) {
+    case 'call':
+      return 'child';
+    case 'editor':
+    case 'debug':
+    case 'rerun':
+      return 'manual';
+    case 'manual':
+    case 'schedule':
+    case 'tumbling':
+    case 'webhook':
+    case 'event':
+      return 'triggered';
+  }
 }
 
 /**
@@ -71,7 +71,7 @@ export const RUN_TAB_LABEL: Record<RunTab, string> = {
  * spec's and stay as written, but two of them would mislead on their own:
  * firing a trigger by hand still stamps `triggerId` (`launcher.fire` → `launch`),
  * so "Manual" is NOT "the ones I started myself" — it is the runs with no
- * trigger at all, which today means reruns. And "Child" is empty until P3b.
+ * trigger at all: the editor's Run and Debug, and reruns.
  */
 export const RUN_TAB_HINT: Record<RunTab, string> = {
   // Scoped to the ORIGIN axis on purpose. "Every run" stopped being true the
@@ -104,7 +104,7 @@ export const RUN_TAB_HINT: Record<RunTab, string> = {
  * refetch, cannot make the tabs disagree with each other about a run that
  * changed status mid-session.
  */
-export function filterRunsByTab<T extends Pick<Run, 'triggerId' | 'parentRunId'>>(
+export function filterRunsByTab<T extends Pick<RunSummary, 'triggeredByKind'>>(
   runs: readonly T[],
   tab: RunTab,
 ): T[] {

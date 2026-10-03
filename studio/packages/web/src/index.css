@@ -4423,6 +4423,59 @@ button.danger {
   color: var(--warning);
 }
 
+/* #1484 OR35 M1 — the runs list is a dense, full-width grid (the Monitor's
+   principle 1: data, not decoration). The page drops the 900px reading width
+   the way the canvas does; the Timeline view shares the page and widens too.
+   32px rows of 13px data, no wrapping (a long pipeline name ellipsizes and keeps
+   its full text in the title), and numbers right-aligned in tabular figures so
+   durations and costs line up digit for digit. */
+.content:has(.runs-page) {
+  max-width: none;
+}
+
+.runs-grid {
+  font-size: 13px;
+}
+
+.runs-grid th,
+.runs-grid td {
+  height: 32px;
+  padding: 0 0.6rem;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.runs-grid .num,
+.runs-grid .run-cost {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.runs-grid__pipeline > span {
+  display: inline-block;
+  max-width: 32rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+
+.runs-grid__row {
+  cursor: pointer;
+}
+
+.runs-grid__row:hover {
+  background: var(--panel-2);
+}
+
+.runs-grid__trigger {
+  color: var(--muted);
+}
+
+.runs-grid .copyable-id__copy {
+  padding: 0 0.4rem;
+  font-size: 12px;
+}
+
 /* U26 — the Monitor's filter pane. A wrapping row rather than a fixed grid: it
    sits above the tab strip on every width, and its controls are plain selects,
    so the only thing it genuinely needs is not to stack into a column on a wide

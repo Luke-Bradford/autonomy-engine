@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
 import { renderWithRouter } from '../../testing/renderWithRouter';
@@ -141,6 +141,7 @@ function run(overrides: Partial<RunSummary> = {}): RunSummary {
     pipelineVersionId: 'pv_1',
     pipelineId: 'pipe_1',
     triggerId: 'trg_1',
+    triggeredByKind: 'manual',
     parentRunId: null,
     params: {},
     status: 'running',
@@ -295,14 +296,14 @@ describe('RunsPage', () => {
   it('says which runs are reruns from failed, and names the source run', async () => {
     listMock.mockResolvedValue(
       pageOf([
-        run({ id: 'run_rerun', triggerId: null, rerunOf: 'run_source' }),
+        run({ id: 'run_rerun', triggerId: null, rerunOf: 'run_source', triggeredByKind: 'rerun' }),
         run({ id: 'run_source', status: 'failure' }),
       ]),
     );
     renderWithRouter(<RunsPage />);
     const rerunType = cellUnder(
       (await screen.findByText('run_rerun')).closest('tr') as HTMLElement,
-      'Type',
+      'Triggered by',
     );
     expect(rerunType).toHaveTextContent('Rerun from failed');
     expect(rerunType.title).toContain('run_source');
@@ -310,19 +311,19 @@ describe('RunsPage', () => {
 
     const sourceType = cellUnder(
       screen.getByText('run_source').closest('tr') as HTMLElement,
-      'Type',
+      'Triggered by',
     );
-    expect(sourceType).toHaveTextContent('Original');
+    expect(sourceType).toHaveTextContent('Fire now');
     expect(sourceType.title).toBe('');
   });
 
-  it('Watch navigates to the run detail route', async () => {
+  it('the Run ID link navigates to the run detail route', async () => {
     listMock.mockResolvedValue(pageOf([run({ id: 'run_abc' })]));
     vi.mocked(runsApi.getRun).mockResolvedValue({ id: 'run_abc' } as never);
     const router = createMemoryRouter(ROUTES, { initialEntries: ['/monitor/runs'] });
     render(<RouterProvider router={router} />);
 
-    await userEvent.click(await screen.findByLabelText('Watch run run_abc'));
+    await userEvent.click(await screen.findByRole('link', { name: 'Open run run_abc' }));
 
     // The run detail page renders the id in its heading.
     expect(await screen.findByRole('heading', { name: /run_abc/ })).toBeInTheDocument();
@@ -392,20 +393,26 @@ describe('RunsPage', () => {
     expect(screen.getByTitle('pv_opaque')).toBeInTheDocument();
   });
 
-  it('names the trigger, and em-dashes a run that has none', async () => {
+  it('says what started each run, and names the trigger when there is one', async () => {
     listMock.mockResolvedValue(
       pageOf([
         run({ id: 'run_t', triggerName: 'Every morning' }),
-        run({ id: 'run_m', triggerId: null, triggerName: null }),
+        run({ id: 'run_m', triggerId: null, triggerName: null, triggeredByKind: 'editor' }),
       ]),
     );
     renderWithRouter(<RunsPage />);
-    expect(await screen.findByText('Every morning')).toBeInTheDocument();
-    // Scoped to the trigger-less run's own TRIGGER cell: an unscoped `—` search
-    // would also match the Duration column, and pass even if the trigger cell
-    // rendered nothing at all.
-    const manualRow = screen.getByRole('row', { name: /run_m/ });
-    expect(within(manualRow).getAllByRole('cell')[2]).toHaveTextContent('—');
+    // #1484 — what started it, then the trigger's name when there is one.
+    const triggered = cellUnder(
+      (await screen.findByText('run_t')).closest('tr') as HTMLElement,
+      'Triggered by',
+    );
+    expect(triggered).toHaveTextContent('Fire now · Every morning');
+    // No trigger: the kind alone, never a manufactured name or a dangling `·`.
+    const editor = cellUnder(
+      screen.getByText('run_m').closest('tr') as HTMLElement,
+      'Triggered by',
+    );
+    expect(editor).toHaveTextContent(/^Editor run$/);
   });
 
   it('renders a finished run duration, and marks an unfinished one "so far"', async () => {
@@ -430,9 +437,21 @@ describe('RunsPage', () => {
   it('filters the list by run origin, and marks the selected tab', async () => {
     listMock.mockResolvedValue(
       pageOf([
-        run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null }),
-        run({ id: 'run_manual', triggerId: null, parentRunId: null, triggerName: null }),
-        run({ id: 'run_child', triggerId: null, parentRunId: 'run_trig', triggerName: null }),
+        run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null, triggeredByKind: 'schedule' }),
+        run({
+          id: 'run_manual',
+          triggerId: null,
+          parentRunId: null,
+          triggerName: null,
+          triggeredByKind: 'editor',
+        }),
+        run({
+          id: 'run_child',
+          triggerId: null,
+          parentRunId: 'run_trig',
+          triggerName: null,
+          triggeredByKind: 'call',
+        }),
       ]),
     );
     renderWithRouter(<RunsPage />);
@@ -462,9 +481,15 @@ describe('RunsPage', () => {
   it('counts each tab with the same filter the table applies', async () => {
     listMock.mockResolvedValue(
       pageOf([
-        run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null }),
-        run({ id: 'run_trig2', triggerId: 'trg_1', parentRunId: null }),
-        run({ id: 'run_child', triggerId: null, parentRunId: 'run_trig', triggerName: null }),
+        run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null, triggeredByKind: 'schedule' }),
+        run({ id: 'run_trig2', triggerId: 'trg_1', parentRunId: null, triggeredByKind: 'webhook' }),
+        run({
+          id: 'run_child',
+          triggerId: null,
+          parentRunId: 'run_trig',
+          triggerName: null,
+          triggeredByKind: 'call',
+        }),
       ]),
     );
     renderWithRouter(<RunsPage />);
@@ -492,8 +517,14 @@ describe('RunsPage', () => {
   it('takes the selected tab from the URL', async () => {
     listMock.mockResolvedValue(
       pageOf([
-        run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null }),
-        run({ id: 'run_manual', triggerId: null, parentRunId: null, triggerName: null }),
+        run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null, triggeredByKind: 'schedule' }),
+        run({
+          id: 'run_manual',
+          triggerId: null,
+          parentRunId: null,
+          triggerName: null,
+          triggeredByKind: 'editor',
+        }),
       ]),
     );
     renderWithRouter(<RunsPage />, '/monitor/runs?tab=manual');
@@ -534,9 +565,56 @@ describe('RunsPage', () => {
   it('renders the row action as a link with a real href', async () => {
     listMock.mockResolvedValue(pageOf([run({ id: 'run_abc' })]));
     renderWithRouter(<RunsPage />);
-    const link = await screen.findByRole('link', { name: 'Watch run run_abc' });
+    const link = await screen.findByRole('link', { name: 'Open run run_abc' });
     expect(link).toHaveAttribute('href', expect.stringContaining('run_abc') as unknown as string);
     expectAccessibleNameContainsText(link);
+  });
+
+  /**
+   * #1484 OR35 M1 — the whole ROW is the way in, not only its Run ID link.
+   * Mounted on the real route table so a navigation lands somewhere observable.
+   */
+  describe('the row is a link', () => {
+    function mountList() {
+      listMock.mockResolvedValue(pageOf([run({ id: 'run_abc', pipelineName: 'Nightly' })]));
+      vi.mocked(runsApi.getRun).mockResolvedValue({ id: 'run_abc' } as never);
+      const router = createMemoryRouter(ROUTES, { initialEntries: ['/monitor/runs'] });
+      render(<RouterProvider router={router} />);
+      return router;
+    }
+
+    it('a click anywhere on the row opens the run', async () => {
+      const router = mountList();
+      await userEvent.click(await screen.findByText('Nightly'));
+      expect(router.state.location.pathname).toBe('/monitor/runs/run_abc');
+    });
+
+    it('a click on the copy button does not navigate', async () => {
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { writeText: vi.fn().mockResolvedValue(undefined) },
+        configurable: true,
+      });
+      const router = mountList();
+      await userEvent.click(await screen.findByRole('button', { name: 'Copy run id run_abc' }));
+      expect(router.state.location.pathname).toBe('/monitor/runs');
+    });
+
+    it('a middle or modified click opens it in a new tab instead', async () => {
+      const open = vi.spyOn(window, 'open').mockReturnValue(null);
+      const router = mountList();
+      const cell = await screen.findByText('Nightly');
+      // jsdom's user-event does not raise `auxclick` for a middle button, so it
+      // is dispatched as the browser would.
+      fireEvent(cell, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+      fireEvent.click(cell, { shiftKey: true });
+      expect(open).toHaveBeenCalledTimes(2);
+      expect(open).toHaveBeenCalledWith(
+        expect.stringContaining('/monitor/runs/run_abc'),
+        '_blank',
+        'noopener',
+      );
+      expect(router.state.location.pathname).toBe('/monitor/runs');
+    });
   });
 });
 

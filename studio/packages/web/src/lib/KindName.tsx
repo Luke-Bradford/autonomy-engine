@@ -3,12 +3,19 @@ import type { FluentIcon } from '@fluentui/react-icons';
 import {
   CONNECTION_KIND_LABELS,
   DATASET_KIND_LABELS,
+  RUN_TRIGGERED_BY_LABELS,
   TRIGGER_MODE_LABELS,
   type ConnectionKind,
   type DatasetKind,
+  type RunTriggeredByKind,
   type TriggerMode,
 } from '@autonomy-studio/shared';
-import { CONNECTION_KIND_ICONS, DATASET_KIND_ICONS, TRIGGER_MODE_ICONS } from './kindIcons';
+import {
+  CONNECTION_KIND_ICONS,
+  DATASET_KIND_ICONS,
+  RUN_TRIGGERED_BY_ICONS,
+  TRIGGER_MODE_ICONS,
+} from './kindIcons';
 
 /**
  * The glyph alone, hidden from assistive technology: the name beside it (or
@@ -60,6 +67,11 @@ export function TriggerModeName({ mode }: { mode: TriggerMode }) {
  * beside it. `children` is the `<select>` itself, which keeps its label, id and
  * full width (`.kind-select > select` in index.css).
  */
+/** #1484 — what started a run, as the Monitor's "Triggered by" column says it. */
+export function RunTriggeredByName({ kind }: { kind: RunTriggeredByKind }) {
+  return <KindName icons={RUN_TRIGGERED_BY_ICONS} labels={RUN_TRIGGERED_BY_LABELS} kind={kind} />;
+}
+
 export function KindSelect<K extends string>({
   icons,
   kind,

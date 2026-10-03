@@ -1,13 +1,17 @@
 import {
+  ArrowClockwiseRegular,
   ArrowRepeatAllRegular,
   BotRegular,
+  BugRegular,
   CalendarClockRegular,
   CursorClickRegular,
   DatabaseRegular,
   DatabaseSearchRegular,
   DocumentCsvRegular,
   DocumentTableRegular,
+  EditRegular,
   FlashRegular,
+  FlowchartRegular,
   FolderRegular,
   GlobeRegular,
   PlugConnectedRegular,
@@ -16,7 +20,12 @@ import {
   TimerRegular,
   type FluentIcon,
 } from '@fluentui/react-icons';
-import type { ConnectionKind, DatasetKind, TriggerMode } from '@autonomy-studio/shared';
+import type {
+  ConnectionKind,
+  DatasetKind,
+  RunTriggeredByKind,
+  TriggerMode,
+} from '@autonomy-studio/shared';
 
 /**
  * #1396 — a kind is shown as its display name WITH an icon ("Anthropic API"
@@ -61,4 +70,21 @@ export const TRIGGER_MODE_ICONS: Record<TriggerMode, FluentIcon> = {
   event: FlashRegular,
   continuous: ArrowRepeatAllRegular,
   tumbling: TimerRegular,
+};
+
+/**
+ * #1484 OR35 M1 — what started a run. A fire kind wears its trigger mode's
+ * glyph, so "Schedule" looks the same on a trigger's row and on the runs it
+ * fired.
+ */
+export const RUN_TRIGGERED_BY_ICONS: Record<RunTriggeredByKind, FluentIcon> = {
+  manual: TRIGGER_MODE_ICONS.manual,
+  schedule: TRIGGER_MODE_ICONS.schedule,
+  tumbling: TRIGGER_MODE_ICONS.tumbling,
+  webhook: TRIGGER_MODE_ICONS.webhook,
+  event: TRIGGER_MODE_ICONS.event,
+  editor: EditRegular,
+  debug: BugRegular,
+  rerun: ArrowClockwiseRegular,
+  call: FlowchartRegular,
 };

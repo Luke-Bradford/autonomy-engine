@@ -62,8 +62,8 @@ export interface CostCell {
  * `run.reseeded`'s copied nodes), because there it renders in cases the REST read
  * does not. Both are true; they differ in what is in hand.
  *
- * Note it is a different predicate from `runOriginOf`'s "manual" (`triggerId` and
- * `parentRunId` both null), which a rerun also satisfies. That one answers "who
+ * Note it is a different predicate from `runOriginOf`'s "manual" (no trigger and
+ * no parent), which a rerun also satisfies. That one answers "who
  * started this", this one "did it reuse work" — a rerun is manual AND
  * incremental, and neither predicate implies the other's meaning.
  *
