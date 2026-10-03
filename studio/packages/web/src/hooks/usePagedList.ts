@@ -69,6 +69,15 @@ export interface PagedList<T> {
 
 export function usePagedList<T>(
   fetchPage: (cursor: string | undefined, signal: AbortSignal) => Promise<Paginated<T>>,
+  /**
+   * #1484 — an item's identity. When given, an appended page drops any item the
+   * list already holds: a walk over a MUTABLE sort key can see a row twice (it
+   * moved across the cursor between requests), and the first sighting is kept —
+   * with the values it had then, until the next refresh re-reads the head.
+   * Must be stable (module-level), like `fetchPage`, because it is a dependency
+   * of the first-page effect.
+   */
+  keyOf?: (item: T) => string,
 ): PagedList<T> {
   const runLoad = useGuardedLoad();
   const [items, setItems] = useState<T[] | null>(null);
@@ -137,7 +146,13 @@ export function usePagedList<T>(
       // to await and nothing a caller could do with it.
       void runLoad<Paginated<T>>((signal) => fetchPage(cursor, signal), {
         onData: (page) => {
-          setItems((prev) => (scope === 'first' ? page.items : [...(prev ?? []), ...page.items]));
+          setItems((prev) => {
+            if (scope === 'first') return page.items;
+            const held = prev ?? [];
+            if (keyOf === undefined) return [...held, ...page.items];
+            const seen = new Set(held.map(keyOf));
+            return [...held, ...page.items.filter((item) => !seen.has(keyOf(item)))];
+          });
           setNextCursor(page.nextCursor);
           setError(null);
           setPending(null);
@@ -151,7 +166,7 @@ export function usePagedList<T>(
         },
       });
     },
-    [fetchPage, runLoad],
+    [fetchPage, keyOf, runLoad],
   );
 
   useEffect(() => {

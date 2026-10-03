@@ -2,11 +2,14 @@ import { z } from 'zod';
 import type { FastifyPluginAsync } from 'fastify';
 import {
   computeRunCost,
+  PaginationQuerySchema,
   CompleteExternalWaitBodySchema,
   RUN_SINCE_MS,
   RunAnnotationFilterSchema,
   RunEpochBoundSchema,
   RunSearchSchema,
+  RunSortDirSchema,
+  RunSortKeySchema,
   RunTriggeredByKindListSchema,
   type RunAnnotationsResponse,
   RunSinceSchema,
@@ -32,12 +35,14 @@ import { getExternalWaitByAttempt, listPendingExternalWaitsByRun } from '../repo
 import { deriveExternalWaitToken } from '../webhooks/external-wait-token.js';
 import { makeRunActivityFold } from '../run/activity-counts.js';
 import { makeDocResolver } from '../run/driver.js';
-import { NotFoundError } from '../errors.js';
+import { BadRequestError, NotFoundError } from '../errors.js';
 import {
   ExternalWaitPayloadError,
   ExternalWaitSettledError,
 } from '../run/external-wait-service.js';
-import { noStore, pageArgsFromQuery, requireOwned } from './util.js';
+import { noStore, requireOwned } from './util.js';
+import { decodeRunCursor, resolveRunSort, type RunSort } from '../repo/run-sort.js';
+import type { RunPageArgs } from '../repo/runs.js';
 
 /**
  * `pipelineVersionId`/`triggerId`/`parentRunId` are opaque ids, not
@@ -90,7 +95,28 @@ const ListRunsQuerystringSchema = z.object({
   q: RunSearchSchema.optional(),
   from: RunEpochBoundSchema.optional(),
   to: RunEpochBoundSchema.optional(),
+  /**
+   * #1484 OR35 M1 — the grid's sort (`repo/run-sort.ts`). Closed enums, so a
+   * junk value is a 400. An absent `dir` is the column's natural direction
+   * (`RUN_SORT_NATURAL_DIR`), the same reading the browser makes of its URL.
+   */
+  sort: RunSortKeySchema.optional(),
+  dir: RunSortDirSchema.optional(),
 });
+
+/**
+ * `pageArgsFromQuery` for the runs list, whose cursor names the sort that minted
+ * it (`decodeRunCursor`). A cursor that is unreadable, OR was minted under a
+ * different sort or direction than this request asks for, is a 400: resuming it
+ * would answer a coherent but different slice, and nothing downstream could tell.
+ */
+function runPageArgsFromQuery(query: unknown, sort: RunSort): RunPageArgs {
+  const { limit, cursor } = PaginationQuerySchema.parse(query);
+  if (cursor === undefined) return { limit, sort };
+  const decoded = decodeRunCursor(cursor, sort);
+  if (!decoded) throw new BadRequestError('invalid cursor, or one minted under another sort');
+  return { limit, sort, cursor: decoded };
+}
 
 /**
  * Runs are created by the engine/scheduler (P2-P4), so there is deliberately no
@@ -121,11 +147,11 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
    * response grew for the life of the workspace and never fell, and every
    * element carries a joined summary plus an aggregated cost.
    *
-   * NEWEST-FIRST ONLY — deliberately NO `?order=` param, unlike
-   * `/api/workspace/audit`. That route has two genuine readers (a newest-first
-   * page and the append-order provenance readers); this one has a single
-   * meaning, "the operator's recent runs". A parameter with one legal value is
-   * a contract nobody can rely on and every caller must still pass.
+   * NEWEST-FIRST BY DEFAULT. This route once refused an `?order=` param because
+   * it had one reader with one meaning; #1484's runs grid is a second reader that
+   * sorts by column, so `?sort=`/`?dir=` now exist (`repo/run-sort.ts`). Unlike
+   * the audit log's `order`, the cursor here NAMES its sort, and a cursor
+   * replayed under another one is a 400 (`runPageArgsFromQuery`).
    *
    * The response shape widened from `Run[]` to `RunSummary[]`, which is safe
    * because `RunSummarySchema` is strictly ADDITIVE over `RunSchema` — it adds
@@ -166,6 +192,8 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       q,
       from,
       to,
+      sort,
+      dir,
     } = ListRunsQuerystringSchema.parse(request.query);
     const sinceBound = since === undefined ? undefined : Date.now() - RUN_SINCE_MS[since];
     const page = listRunSummariesPage(
@@ -190,7 +218,7 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
         startedBefore: to,
         ownerId: request.principal.ownerId,
       },
-      pageArgsFromQuery(request.query),
+      runPageArgsFromQuery(request.query, resolveRunSort(sort, dir)),
       foldActivities,
     );
     return { items: page.items, nextCursor: page.nextCursor };

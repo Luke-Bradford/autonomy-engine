@@ -597,3 +597,73 @@ export const RunEpochBoundSchema = z
   .string()
   .regex(/^\d{1,15}$/)
   .transform(Number);
+
+/**
+ * #1484 OR35 M1 — the runs grid's sortable columns (`?sort=`). Only columns the
+ * SERVER can order by are here, because the list is keyset-paged and a sort the
+ * server did not apply would reorder one page and not the history. Activities,
+ * Rows written and Cost are computed per page after the query, and a run id is a
+ * random nanoid, so none of those four is a key.
+ */
+export const RUN_SORT_KEYS = ['started', 'duration', 'pipeline', 'status', 'triggeredBy'] as const;
+export const RunSortKeySchema = z.enum(RUN_SORT_KEYS);
+export type RunSortKey = z.infer<typeof RunSortKeySchema>;
+
+export const RunSortDirSchema = z.enum(['asc', 'desc']);
+export type RunSortDir = z.infer<typeof RunSortDirSchema>;
+
+/** One sort of the runs grid: the column and its direction. The server's
+ * resolved request and the page's URL state are both this. */
+export interface RunSort {
+  key: RunSortKey;
+  dir: RunSortDir;
+}
+
+/**
+ * Each column's FIRST-click direction, which is also what an absent `?dir=`
+ * means for that column, on the server and in the browser alike. One map, so a
+ * URL the page wrote without `dir` asks the server for exactly what the header
+ * shows. Times and durations open largest first, text and ranks open A–Z.
+ */
+export const RUN_SORT_NATURAL_DIR: Record<RunSortKey, RunSortDir> = {
+  started: 'desc',
+  duration: 'desc',
+  pipeline: 'asc',
+  status: 'asc',
+  triggeredBy: 'asc',
+};
+
+/** The list's order when nothing is asked: newest first. */
+export const RUN_SORT_DEFAULT_KEY: RunSortKey = 'started';
+
+/**
+ * The Status column's order, as a rank rather than the slug's spelling (which
+ * would put `cancelled` before `failure` for no reason a reader could see).
+ * ASCENDING puts what needs attention first: ended badly, then still going, then
+ * not started, then ended well. A `Record`, so a new status cannot ship unranked.
+ */
+export const RUN_STATUS_SORT_RANK: Record<RunStatus, number> = {
+  failure: 0,
+  interrupted: 1,
+  cancelled: 2,
+  running: 3,
+  waiting: 4,
+  pending: 5,
+  queued: 6,
+  success: 7,
+  skipped: 8,
+};
+
+/**
+ * The Triggered by column's order: A–Z by the LABEL the grid draws, not by the
+ * stored slug (`call` would otherwise sort first while reading "Execute
+ * Pipeline"). Derived from `RUN_TRIGGERED_BY_LABELS`, so renaming a label
+ * re-ranks it.
+ */
+export const RUN_TRIGGERED_BY_SORT_RANK: Record<RunTriggeredByKind, number> = Object.fromEntries(
+  [...RUN_TRIGGERED_BY_KINDS]
+    // Code-point order, not `localeCompare`: the labels are plain ASCII, and a
+    // comparison with no ICU data in it ranks identically on every runtime.
+    .sort((a, b) => (RUN_TRIGGERED_BY_LABELS[a] < RUN_TRIGGERED_BY_LABELS[b] ? -1 : 1))
+    .map((kind, rank) => [kind, rank]),
+) as Record<RunTriggeredByKind, number>;

@@ -7,7 +7,7 @@ import { createPipelineVersion } from '../pipeline-versions.js';
 import { createPipeline } from '../pipelines.js';
 import { createRun, listRunSummariesPage, type ListRunSummariesFilter } from '../runs.js';
 import { createTrigger } from '../triggers.js';
-import { decodeCursor, type CursorKey } from '../pagination.js';
+import { decodeRunCursor, RUN_SORT_DEFAULT, type RunCursor } from '../run-sort.js';
 import { freshDb } from './helpers.js';
 import { makeRunActivityFold } from '../../run/activity-counts.js';
 import { makeDocResolver } from '../../run/driver.js';
@@ -213,11 +213,14 @@ describe('#1484 — the runs list search', () => {
     const matching = [run(s.db, v), run(s.db, v), run(s.db, v)];
     const filter = { ownerId: 'local', search: 'orders' };
     const walked: string[] = [];
-    let cursor: CursorKey | undefined;
+    let cursor: RunCursor | undefined;
     do {
       const page = listRunSummariesPage(s.db, filter, { limit: 1, cursor }, testFold(s.db));
       walked.push(...page.items.map((r) => r.id));
-      cursor = page.nextCursor === null ? undefined : (decodeCursor(page.nextCursor) ?? undefined);
+      cursor =
+        page.nextCursor === null
+          ? undefined
+          : (decodeRunCursor(page.nextCursor, RUN_SORT_DEFAULT) ?? undefined);
     } while (cursor !== undefined);
     expect(walked.sort()).toEqual([...matching, s.byPipeline].sort());
   });

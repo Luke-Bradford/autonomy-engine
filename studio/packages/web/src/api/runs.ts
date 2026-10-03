@@ -16,6 +16,8 @@ import {
   type RunCancelAccepted,
   type Run,
   type RunDiagnostic,
+  type RunSortDir,
+  type RunSortKey,
   type RunSummary,
   type RunDetail,
   type RunEvent,
@@ -104,11 +106,16 @@ export interface ListRunsQuery {
    * query string. */
   from?: string;
   to?: string;
+  /** #1484 — the grid's sort (`RunSortKeySchema`/`RunSortDirSchema`); absent is
+   * newest first. The page omits the default and always sends `dir` otherwise. */
+  sort?: RunSortKey;
+  dir?: RunSortDir;
 }
 
 /**
- * Owner-scoped PAGE of runs, newest-first — an order the server genuinely
- * imposes (`started_at DESC, id DESC`). It did not always: `listRuns` once
+ * Owner-scoped PAGE of runs, newest-first by default — an order the server
+ * genuinely imposes (`started_at DESC, id DESC`); #1484's `sort`/`dir` ask it for
+ * another, still server-side. It did not always: `listRuns` once
  * issued no `ORDER BY` at all, so an earlier version of this docblock described
  * SQLite's incidental row order as if it were a promise.
  *
@@ -125,9 +132,10 @@ export interface ListRunsQuery {
  * millisecond therefore read back in stable-but-arbitrary order rather than
  * creation order.
  *
- * NO `order` PARAMETER, unlike the audit wrapper: this list has one meaning.
- * A cursor still names a POSITION and not a direction, so nothing here may
- * pair one with a differently-ordered request.
+ * Unlike the audit wrapper's `order`, this list's cursor NAMES the sort that
+ * minted it (#1484), and the server refuses it with a 400 under any other — so
+ * a fetcher must send the same `sort`/`dir` on every page of a walk, which
+ * `RunsPage`'s memoised fetcher does by construction.
  *
  * R2 — each element is a `RunSummary`, the run row PLUS the pipeline name +
  * version number and trigger name the list renders. Strictly additive over

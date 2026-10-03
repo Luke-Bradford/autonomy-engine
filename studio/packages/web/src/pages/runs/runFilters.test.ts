@@ -1,6 +1,16 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { ANNOTATION_MAX_CHARS } from '@autonomy-studio/shared';
-import { canonicalKindParam, dayRangeBounds, readKinds, readRunFilters } from './runFilters';
+import {
+  canonicalKindParam,
+  dayRangeBounds,
+  hasRunFilterParams,
+  isDefaultRunSort,
+  nextRunSort,
+  readKinds,
+  readRunFilters,
+  readRunSort,
+  runSortParams,
+} from './runFilters';
 
 describe('readRunFilters — U26 annotation', () => {
   it('keeps an annotation, decoded, exactly as written', () => {
@@ -100,5 +110,62 @@ describe('dayRangeBounds — #1484', () => {
     });
     expect(dayRangeBounds({ from: '2026-01-01' })).toEqual({ from: String(Date.UTC(2026, 0, 1)) });
     expect(dayRangeBounds({})).toEqual({});
+  });
+});
+
+describe('the runs grid sort in the URL — #1484', () => {
+  const read = (q: string) => readRunSort(new URLSearchParams(q));
+
+  it("reads newest first by default, and an absent dir as the column's natural one", () => {
+    expect(read('')).toEqual({ key: 'started', dir: 'desc' });
+    expect(read('sort=pipeline')).toEqual({ key: 'pipeline', dir: 'asc' });
+    expect(read('sort=duration')).toEqual({ key: 'duration', dir: 'desc' });
+    expect(read('sort=status&dir=desc')).toEqual({ key: 'status', dir: 'desc' });
+  });
+
+  it('drops a junk key or dir rather than sending the server a 400', () => {
+    expect(read('sort=cost&dir=up')).toEqual({ key: 'started', dir: 'desc' });
+    expect(read('sort=status&dir=sideways')).toEqual({ key: 'status', dir: 'asc' });
+  });
+
+  it('writes nothing for the default, and no dir when it is the natural one', () => {
+    expect(runSortParams({ key: 'started', dir: 'desc' })).toEqual({ sort: '', dir: '' });
+    expect(runSortParams({ key: 'started', dir: 'asc' })).toEqual({ sort: 'started', dir: 'asc' });
+    expect(runSortParams({ key: 'pipeline', dir: 'asc' })).toEqual({ sort: 'pipeline', dir: '' });
+    expect(runSortParams({ key: 'pipeline', dir: 'desc' })).toEqual({
+      sort: 'pipeline',
+      dir: 'desc',
+    });
+  });
+
+  it('round-trips every sort through the URL', () => {
+    for (const key of ['started', 'duration', 'pipeline', 'status', 'triggeredBy'] as const) {
+      for (const dir of ['asc', 'desc'] as const) {
+        const params = new URLSearchParams();
+        for (const [k, v] of Object.entries(runSortParams({ key, dir }))) if (v) params.set(k, v);
+        expect(readRunSort(params)).toEqual({ key, dir });
+      }
+    }
+  });
+
+  it('flips the sorted column and opens any other in its natural direction', () => {
+    expect(nextRunSort({ key: 'started', dir: 'desc' }, 'started')).toEqual({
+      key: 'started',
+      dir: 'asc',
+    });
+    expect(nextRunSort({ key: 'started', dir: 'desc' }, 'pipeline')).toEqual({
+      key: 'pipeline',
+      dir: 'asc',
+    });
+    expect(nextRunSort({ key: 'pipeline', dir: 'desc' }, 'duration')).toEqual({
+      key: 'duration',
+      dir: 'desc',
+    });
+  });
+
+  it('is not a filter: a sorted URL has no filter params', () => {
+    expect(hasRunFilterParams(new URLSearchParams('sort=status&dir=desc'))).toBe(false);
+    expect(isDefaultRunSort(read('sort=status'))).toBe(false);
+    expect(isDefaultRunSort(read(''))).toBe(true);
   });
 });

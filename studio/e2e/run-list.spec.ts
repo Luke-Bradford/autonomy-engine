@@ -485,3 +485,81 @@ test('#1484 — the filter bar searches runs and days, in one row above a dense 
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * #1484 OR35 M1 slice 4 — the grid sorts by column, on the SERVER, and the sort
+ * lives in the URL. Three pipelines ('Beta', 'alpha', 'charlie') are fired in
+ * that order, so newest first (c, a, B), A–Z (a, B, c) and Z–A (c, B, a) are
+ * three different orders: each assertion can only pass if the server applied
+ * that exact sort and direction, without regard to case (a byte sort would put
+ * 'B' before 'a').
+ */
+test('#1484 — the runs grid sorts by a header, server side, and the sort is a linkable URL', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  const stamp = `Sort ${Date.now()}`;
+  const fire = async (suffix: string) => {
+    const { pipelineVersionId } = await seedVersion(page, `${stamp} ${suffix}`, {
+      nodes: [{ id: 'n1', type: 'fail', config: { message: 'x' }, position: { x: 0, y: 0 } }],
+    });
+    return fireAndSettle(page, pipelineVersionId, `e2e sort ${suffix}`);
+  };
+  const upper = await fire('Beta');
+  const lower = await fire('alpha');
+  const last = await fire('charlie');
+
+  await page.goto(`/#/monitor/runs?q=${encodeURIComponent(stamp)}`);
+  await fluentRootReady(page);
+  const rows = page.locator('tr.runs-grid__row');
+  const order = async () => {
+    const texts = await rows.allTextContents();
+    return texts.map((t) =>
+      t.includes(lower) ? 'alpha' : t.includes(upper) ? 'Beta' : t.includes(last) ? 'charlie' : '?',
+    );
+  };
+  const header = (name: string) => page.getByRole('columnheader', { name, exact: true });
+
+  // Default: newest first, and Started says so.
+  await expect.poll(order).toEqual(['charlie', 'alpha', 'Beta']);
+  await expect(header('Started')).toHaveAttribute('aria-sort', 'descending');
+  await expect(header('Pipeline')).not.toHaveAttribute('aria-sort', /.*/);
+
+  // Pipeline A–Z: the request carries the sort, and the order is the server's.
+  const sorted = page.waitForRequest((r) => r.url().includes('sort=pipeline'));
+  await header('Pipeline').getByRole('button').click();
+  await sorted;
+  await expect.poll(order).toEqual(['alpha', 'Beta', 'charlie']);
+  await expect(header('Pipeline')).toHaveAttribute('aria-sort', 'ascending');
+  await expect(header('Started')).not.toHaveAttribute('aria-sort', /.*/);
+  expect(new URL(page.url()).hash).toContain('sort=pipeline');
+  expect(new URL(page.url()).hash).not.toContain('dir=');
+
+  // Again flips it, and a reload keeps it: the URL is the state.
+  await header('Pipeline').getByRole('button').click();
+  await expect.poll(order).toEqual(['charlie', 'Beta', 'alpha']);
+  await expect.poll(() => new URL(page.url()).hash).toContain('dir=desc');
+  await page.reload();
+  await fluentRootReady(page);
+  await expect(header('Pipeline')).toHaveAttribute('aria-sort', 'descending');
+  await expect.poll(order).toEqual(['charlie', 'Beta', 'alpha']);
+
+  // The timeline view lays runs out by time and pages "older", so it asks for
+  // the default order whatever the grid's sort is.
+  const timeline = page.waitForRequest(
+    (r) => r.url().includes('/api/runs?') && !r.url().includes('sort='),
+  );
+  await page.getByRole('button', { name: 'Timeline', exact: true }).click();
+  await timeline;
+  await page.getByRole('button', { name: 'List', exact: true }).click();
+  await expect(header('Pipeline')).toHaveAttribute('aria-sort', 'descending');
+
+  // Back to Started is back to the default, which writes no sort at all.
+  await header('Started').getByRole('button').click();
+  await expect(header('Started')).toHaveAttribute('aria-sort', 'descending');
+  await expect.poll(() => new URL(page.url()).hash).not.toContain('sort=');
+  // The search survived every sort click: the sort is not a filter.
+  expect(new URL(page.url()).hash).toContain('q=');
+
+  await expectQuiet(page, problems);
+});

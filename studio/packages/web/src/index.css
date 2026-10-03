@@ -4479,6 +4479,31 @@ button.danger {
   width: 11%;
 }
 
+/* #1484 — a sortable header is a button that looks like the header text. The
+   arrow's box is always there, so sorting never moves a label. */
+.runs-grid__sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.runs-grid__sort:hover {
+  text-decoration: underline;
+}
+
+.runs-grid__sort-arrow {
+  display: inline-block;
+  width: 0.8em;
+  font-size: 0.75em;
+}
+
 .runs-grid .num,
 .runs-grid .run-cost {
   text-align: right;

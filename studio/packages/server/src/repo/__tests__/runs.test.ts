@@ -32,7 +32,7 @@ import {
   updateRun,
 } from '../runs.js';
 import { appendRunEvent } from '../run-events.js';
-import { decodeCursor, type CursorKey } from '../pagination.js';
+import { decodeRunCursor, RUN_SORT_DEFAULT, type RunCursor } from '../run-sort.js';
 import { freshDb } from './helpers.js';
 import { runs } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
@@ -960,7 +960,7 @@ describe('listRunSummariesPage — keyset paging', () => {
    * requests it took — the walk a client actually performs. */
   function walk(db: ReturnType<typeof freshDb>['db'], limit: number) {
     const seen: string[] = [];
-    let cursor: CursorKey | undefined;
+    let cursor: RunCursor | undefined;
     let pages = 0;
     for (;;) {
       const page = listRunSummariesPage(db, { ownerId: 'local' }, { limit, cursor }, testFold(db));
@@ -968,10 +968,10 @@ describe('listRunSummariesPage — keyset paging', () => {
       seen.push(...page.items.map((r) => r.id));
       if (page.nextCursor === null) return { seen, pages };
       // Through the real codec, exactly as the route does (`pageArgsFromQuery`):
-      // the repo takes a decoded `CursorKey`, and the opaque string is the wire
+      // the repo takes a decoded `RunCursor`, and the opaque string is the wire
       // form. Round-tripping it here is what makes this a walk a CLIENT could
       // perform rather than one only the repo's internals could.
-      const key = decodeCursor(page.nextCursor);
+      const key = decodeRunCursor(page.nextCursor, RUN_SORT_DEFAULT);
       expect(key).not.toBeNull();
       cursor = key ?? undefined;
       // A non-advancing cursor would loop forever; fail loudly instead.
@@ -1044,7 +1044,7 @@ describe('listRunSummariesPage — keyset paging', () => {
     }
 
     const seen: string[] = [];
-    let cursor: CursorKey | undefined;
+    let cursor: RunCursor | undefined;
     for (;;) {
       const page = listRunSummariesPage(
         db,
@@ -1054,7 +1054,7 @@ describe('listRunSummariesPage — keyset paging', () => {
       );
       seen.push(...page.items.map((r) => r.id));
       if (page.nextCursor === null) break;
-      cursor = decodeCursor(page.nextCursor) ?? undefined;
+      cursor = decodeRunCursor(page.nextCursor, RUN_SORT_DEFAULT) ?? undefined;
     }
     expect(seen).toEqual([...mine].reverse());
   });
@@ -1092,7 +1092,9 @@ describe('listRunSummariesPage — keyset paging', () => {
 
     const rest: string[] = [];
     let cursor =
-      first.nextCursor === null ? undefined : (decodeCursor(first.nextCursor) ?? undefined);
+      first.nextCursor === null
+        ? undefined
+        : (decodeRunCursor(first.nextCursor, RUN_SORT_DEFAULT) ?? undefined);
     while (cursor !== undefined) {
       const page = listRunSummariesPage(
         db,
@@ -1101,7 +1103,10 @@ describe('listRunSummariesPage — keyset paging', () => {
         testFold(db),
       );
       rest.push(...page.items.map((r) => r.id));
-      cursor = page.nextCursor === null ? undefined : (decodeCursor(page.nextCursor) ?? undefined);
+      cursor =
+        page.nextCursor === null
+          ? undefined
+          : (decodeRunCursor(page.nextCursor, RUN_SORT_DEFAULT) ?? undefined);
     }
 
     const seen = [...first.items.map((r) => r.id), ...rest];

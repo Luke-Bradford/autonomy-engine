@@ -30,7 +30,15 @@ import {
 } from '@autonomy-studio/shared';
 import { pipelines, pipelineVersions, runEvents, runs, triggers } from '../db/schema.js';
 import { newId } from './ids.js';
-import { beforeCursor, encodeCursor, pageOrderDesc, type PageArgs } from './pagination.js';
+import {
+  afterRunCursor,
+  encodeRunCursor,
+  RUN_SORT_DEFAULT,
+  runSortOrderBy,
+  runSortValuesJson,
+  type RunCursor,
+  type RunSort,
+} from './run-sort.js';
 import { isDeterministicRowCorruption } from './row-corruption.js';
 import type { RunActivityFold } from '../run/activity-counts.js';
 import { aggregateRunCosts, listRunLastSeqs } from './run-events.js';
@@ -143,6 +151,15 @@ export interface ListRunSummariesFilter extends ListRunsFilter {
    * failure error or finishing reason contains it case-insensitively.
    */
   search?: string;
+}
+
+/** #1484 — one page of the runs list: how many rows, in which order, and the
+ * cursor (minted under that same order) to resume after. */
+export interface RunPageArgs {
+  limit: number;
+  /** Absent means `RUN_SORT_DEFAULT`, newest first. */
+  sort?: RunSort;
+  cursor?: RunCursor;
 }
 
 /**
@@ -259,7 +276,9 @@ export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
  * silently, and indistinguishably from "you have no reruns". A child run will
  * join them once P3b lands the spawn seam (#796); nothing creates one yet.
  *
- * ORDER is a total, deterministic newest-first (`started_at DESC, id DESC`).
+ * ORDER is a total, deterministic newest-first (`started_at DESC, id DESC`) by
+ * default. #1484 made it sortable by column (`repo/run-sort.ts`); every sort
+ * still ends in `id`, so the order stays total.
  *
  * THE TIE-BREAK MOVED FROM `rowid` TO `id` (#1083), reversing what this docblock
  * argued before, so the reason is recorded rather than the conclusion swapped.
@@ -306,7 +325,10 @@ export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
  * in the `WHERE` as well as the select list, so its two correlated subqueries
  * run twice per owner row, and one of them is the `SCAN webhook_deliveries` the
  * select already paid for (its index is #1410). Accepted at the same scale, and
- * re-measured by OR19. `listRuns` issues no
+ * re-measured by OR19. MEASURED for #1484's sorts: every key keeps
+ * `runs_owner_id_idx` + the temp b-tree (the default already paid for one), and
+ * `triggeredBy` evaluates `RUN_TRIGGERED_BY_SQL`'s correlated subqueries again in
+ * the `ORDER BY` and in each branch of the resume predicate. `listRuns` issues no
  * `ORDER BY` at all, yet the page consuming it
  * claimed rows arrived "newest-first as the server returns them" — SQLite's row
  * order is an implementation detail, so that was never a promise anything kept.
@@ -325,6 +347,15 @@ export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
  * `RunLifecyclePatchSchema` is `.strict()` and omits it precisely so that
  * admission stays the single exception.
  *
+ * THAT ARGUMENT IS FOR THE DEFAULT SORT ONLY (#1484). Under `started` ASC an
+ * admitted run moves toward the TAIL, past the cursor, and can be seen TWICE;
+ * under the other sorts the key itself is mutable — a status settles, a run
+ * finishes and gains a duration, a pipeline is renamed, a rerun's source is
+ * deleted (`rerun_of` is SET NULL) — so a row can cross the cursor either way and
+ * be missed or repeated by a walk already under way. Accepted for a monitoring
+ * list: the next refresh is exact, and the browser drops a row it already holds
+ * (`usePagedList`'s `keyOf`) so a repeat never renders twice.
+ *
  * SECURITY — the ownership proof is the RUN's, exactly as `GET /api/runs/:id/detail`
  * documents. `ownerId` filters the RUNS table; the joined version and pipeline
  * are reachable only from a run that filter already cleared, and a run's binding
@@ -338,20 +369,26 @@ export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
 export function listRunSummariesPage(
   db: Db,
   filter: ListRunSummariesFilter,
-  args: PageArgs,
+  args: RunPageArgs,
   /** #1484 — the Activities fold (`run/activity-counts.ts`), injected so this
    * repo module does not import the engine-facing `run/` layer. Required: a
    * caller that forgot it must not get every row's activities as `null`. */
   foldActivities: RunActivityFold,
 ): Paginated<RunSummary> {
   const conditions = listRunsConditions(filter);
+  const sort = args.sort ?? RUN_SORT_DEFAULT;
+  // A cursor is decoded against the sort of the request carrying it
+  // (`decodeRunCursor`), so a mismatch here is a caller bug, not a client's.
+  if (args.cursor && (args.cursor.sort.key !== sort.key || args.cursor.sort.dir !== sort.dir)) {
+    throw new Error('listRunSummariesPage: the cursor was minted under a different sort');
+  }
   // The keyset resume, ANDed with the caller's filters rather than replacing
   // them: a walk stays inside the same filtered set from the first page to the
   // last. `startedAfter` (the `since` axis) narrows the very column the walk
   // orders by, which is coherent by construction — it moves the far end of the
   // range, not the direction of travel.
   if (args.cursor) {
-    const resume = beforeCursor(runs.startedAt, runs.id, args.cursor);
+    const resume = afterRunCursor(args.cursor);
     if (resume) conditions.push(resume);
   }
   // U26 — the two axes that cannot live in `listRunsConditions`, because they
@@ -397,13 +434,14 @@ export function listRunSummariesPage(
         annotations: pipelineVersions.annotations,
         triggerName: triggers.name,
         triggeredByKind: RUN_TRIGGERED_BY_SQL,
+        sortValues: runSortValuesJson(sort),
       })
       .from(runs)
       .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
       .innerJoin(pipelines, eq(pipelineVersions.pipelineId, pipelines.id))
       .leftJoin(triggers, eq(runs.triggerId, triggers.id));
     const fetched = (conditions.length > 0 ? query.where(and(...conditions)) : query)
-      .orderBy(...pageOrderDesc(runs.startedAt, runs.id))
+      .orderBy(...runSortOrderBy(sort))
       // Fetch one extra to PROBE for a next page, the `toPage` contract — so
       // `nextCursor` is set only when a real next row exists, never a false
       // "more" and never an empty trailing page.
@@ -465,11 +503,15 @@ export function listRunSummariesPage(
           rowsWritten: readings.get(row.run.id)?.rowsWritten ?? null,
         }),
       ),
-      // The cursor's numeric slot carries `startedAt` — the ordering scalar —
-      // matching the `beforeCursor(startedAt, id, …)` predicate above.
+      // The boundary row's own term values, as SQL computed them for the
+      // `ORDER BY`, so `afterRunCursor` resumes exactly where this page ended.
       nextCursor:
         hasMore && boundary
-          ? encodeCursor({ createdAt: boundary.run.startedAt, id: boundary.run.id })
+          ? encodeRunCursor({
+              sort,
+              values: JSON.parse(boundary.sortValues) as (string | number)[],
+              id: boundary.run.id,
+            })
           : null,
     };
   });

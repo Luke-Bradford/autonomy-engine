@@ -21,6 +21,9 @@ import {
   RUN_TRIGGERED_BY_LABELS,
   RunSearchSchema,
   RunStatusSchema,
+  RUN_SORT_DEFAULT_KEY,
+  RUN_SORT_NATURAL_DIR,
+  type RunSortKey,
   type PipelineCostRollup,
   type RunSummary,
   type TriggerPublic,
@@ -46,13 +49,18 @@ import {
   dayRangeBounds,
   hasActiveRunFilters,
   hasRunFilterParams,
+  isDefaultRunSort,
+  nextRunSort,
   NO_RUNS_YET,
   readKinds,
   readRunFilters,
+  readRunSort,
+  runSortParams,
   RUN_FILTER_PARAMS,
   RUN_SINCE_LABEL,
   RUN_SINCE_OPTIONS,
   startedModeOf,
+  type RunSortState,
 } from './runFilters';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { FilterPicker } from './FilterPicker';
@@ -142,6 +150,46 @@ function PipelineSpend({ summary }: { summary: PipelineCostSummary }) {
     </section>
   );
 }
+
+/**
+ * #1484 OR35 M1 — a header the grid can sort by. The `<th>` carries `aria-sort`
+ * (only when it is the sorted column, as ARIA asks) and the button inside it is
+ * the control, so a keyboard reaches it and a screen reader announces the
+ * column's name and its order. The order is the SERVER's (`?sort=`), so it holds
+ * across every page rather than only the rows loaded.
+ */
+function SortHeader({
+  column,
+  label,
+  sort,
+  onSort,
+  numeric = false,
+}: {
+  column: RunSortKey;
+  label: string;
+  sort: RunSortState;
+  onSort: (column: RunSortKey) => void;
+  numeric?: boolean;
+}) {
+  const active = sort.key === column;
+  return (
+    <th
+      scope="col"
+      {...(numeric ? { className: 'num' } : {})}
+      {...(active ? { 'aria-sort': sort.dir === 'asc' ? 'ascending' : 'descending' } : {})}
+    >
+      <button type="button" className="runs-grid__sort" onClick={() => onSort(column)}>
+        {label}
+        <span className="runs-grid__sort-arrow" aria-hidden="true">
+          {active ? (sort.dir === 'asc' ? '▲' : '▼') : ''}
+        </span>
+      </button>
+    </th>
+  );
+}
+
+/** A run's identity, for `usePagedList` to drop a row a sorted walk repeats. */
+const runKey = (run: RunSummary) => run.id;
 
 /** `prev` with each of `next` set, or deleted where its value is `''`. */
 function withParams(prev: URLSearchParams, next: Record<string, string>): URLSearchParams {
@@ -296,6 +344,17 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
     to,
   } = filters;
   const filtered = hasActiveRunFilters(filters);
+  /* #1484 — the grid's sort. The timeline view always asks for the default
+     order: it lays runs out by time and pages "older", which a status sort would
+     turn into a different question. Switching view therefore changes the fetcher
+     and reloads the list, as any filter change does. */
+  const urlSort = useMemo(() => readRunSort(searchParams), [searchParams]);
+  const sortKey = view === 'list' ? urlSort.key : RUN_SORT_DEFAULT_KEY;
+  const sortDir = view === 'list' ? urlSort.dir : RUN_SORT_NATURAL_DIR[RUN_SORT_DEFAULT_KEY];
+  const sortedByDefault = isDefaultRunSort({ key: sortKey, dir: sortDir });
+  function sortBy(column: RunSortKey) {
+    setFilters(runSortParams(nextRunSort({ key: sortKey, dir: sortDir }, column)));
+  }
 
   /** Write several params as ONE history entry; `''` deletes. A push, not a
    * replace, so Back undoes a filter change. */
@@ -420,12 +479,29 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
           kind,
           q,
           ...dayRangeBounds({ on, from, to }),
+          // The default order is not sent, so the plain list's request is
+          // unchanged; any other sort is, with its direction always explicit.
+          ...(sortedByDefault ? {} : { sort: sortKey, dir: sortDir }),
         },
         cursor,
         signal,
       ),
     // Primitives only — see above. `kind` is the canonical joined string.
-    [statusFilter, pipelineId, triggerId, since, annotation, kind, q, on, from, to],
+    [
+      statusFilter,
+      pipelineId,
+      triggerId,
+      since,
+      annotation,
+      kind,
+      q,
+      on,
+      from,
+      to,
+      sortKey,
+      sortDir,
+      sortedByDefault,
+    ],
   );
   const {
     items: runs,
@@ -436,7 +512,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
     lastUpdatedAt,
     loadMore,
     refresh,
-  } = usePagedList(fetchPage);
+  } = usePagedList(fetchPage, runKey);
   /* The clock an UNFINISHED row's duration is measured against — captured when
      the first page was requested rather than read per render, so every row's "so
      far" is as-of the same instant and rendering stays pure. `0` before the
@@ -779,13 +855,22 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
           <table className="runs-grid">
             <thead>
               <tr>
-                <th scope="col">Pipeline</th>
-                <th scope="col">Status</th>
-                <th scope="col">Triggered by</th>
-                <th scope="col">Started</th>
-                <th scope="col" className="num">
-                  Duration
-                </th>
+                <SortHeader column="pipeline" label="Pipeline" sort={urlSort} onSort={sortBy} />
+                <SortHeader column="status" label="Status" sort={urlSort} onSort={sortBy} />
+                <SortHeader
+                  column="triggeredBy"
+                  label="Triggered by"
+                  sort={urlSort}
+                  onSort={sortBy}
+                />
+                <SortHeader column="started" label="Started" sort={urlSort} onSort={sortBy} />
+                <SortHeader
+                  column="duration"
+                  label="Duration"
+                  sort={urlSort}
+                  onSort={sortBy}
+                  numeric
+                />
                 <th scope="col">Activities</th>
                 <th scope="col" className="num">
                   Rows written
@@ -811,7 +896,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
           OUTSIDE the "are there rows" guard above, like the filter bar. */}
       {hasMore && (
         <button type="button" onClick={loadMore} disabled={busy}>
-          Load older runs
+          {sortedByDefault ? 'Load older runs' : 'Load more runs'}
         </button>
       )}
     </section>

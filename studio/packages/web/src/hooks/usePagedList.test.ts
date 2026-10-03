@@ -84,6 +84,17 @@ describe('usePagedList (#1076)', () => {
     expect(result.current.hasMore).toBe(false);
   });
 
+  it('drops a row an older page repeats when keyOf is given, keeping the first sighting (#1484)', async () => {
+    // A sorted runs list orders by MUTABLE keys, so a row can cross the cursor
+    // between two pages and come back; rendered twice it is a React key clash.
+    const { fetchPage } = scriptedFetcher([page(['a', 'b'], 'c1'), page(['b', 'c'])]);
+    const keyOf = (s: string) => s;
+    const { result } = renderHook(() => usePagedList(fetchPage, keyOf));
+    await waitFor(() => expect(result.current.items).toEqual(['a', 'b']));
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.items).toEqual(['a', 'b', 'c']));
+  });
+
   it('does not offer to load more once the server says there is no next page', async () => {
     const { fetchPage } = scriptedFetcher([page(['a'], null)]);
     const { result } = renderHook(() => usePagedList(fetchPage));
