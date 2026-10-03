@@ -481,3 +481,20 @@ export const TriggerPublicSchema = TriggerSchema.extend({
   webhook: WebhookPublicConfigSchema.nullable(),
 });
 export type TriggerPublic = z.infer<typeof TriggerPublicSchema>;
+
+/**
+ * #1476 — when a trigger is next due, read from its armed alarm
+ * (`GET /api/triggers/next-fires`). `source` says what the time IS:
+ * `schedule` is the next scheduled tick, `window` is when the next tumbling
+ * window closes. Neither is a promise that a run starts then — a run window,
+ * a concurrency cap or an archived pipeline can still hold or skip it, so the
+ * UI words it as "scheduled", never "next run". A trigger with nothing armed
+ * (disabled, unbound, a finished schedule, a non-scheduling mode) is absent.
+ */
+export const TriggerNextFireSchema = z.object({
+  triggerId: z.string().min(1),
+  at: z.number().int(),
+  source: z.enum(['schedule', 'window']),
+});
+export type TriggerNextFire = z.infer<typeof TriggerNextFireSchema>;
+export const TriggerNextFireListSchema = z.array(TriggerNextFireSchema);

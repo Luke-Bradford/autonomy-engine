@@ -38,6 +38,7 @@ import { noStore, requireOwned } from './util.js';
 import { UnboundTriggerError } from '../run/launcher.js';
 import { unreadyConnectionsForVersion } from '../run/connection-readiness.js';
 import { exportTrigger } from '../portability/index.js';
+import { listTriggerNextFires } from '../scheduler/next-fire.js';
 import type { Principal } from '../auth/principal.js';
 import type { Db } from '../repo/types.js';
 import { GlobalStartError, resolveRunGlobals } from '../run/globals.js';
@@ -356,6 +357,14 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get('/api/triggers', async (request) => {
     return listTriggers(db, { ownerId: request.principal.ownerId }).map(toPublic);
+  });
+
+  // #1476 — when each of the caller's triggers is next due (the armed alarm).
+  // Owner-scoped by reading only the caller's triggers: another owner's alarm
+  // has no trigger to match and is never returned. A static path, so it is
+  // matched ahead of `/api/triggers/:id`.
+  fastify.get('/api/triggers/next-fires', async (request) => {
+    return listTriggerNextFires(db, listTriggers(db, { ownerId: request.principal.ownerId }));
   });
 
   fastify.get<{ Params: { id: string } }>('/api/triggers/:id', async (request) => {
