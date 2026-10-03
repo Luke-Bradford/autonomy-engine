@@ -50,8 +50,22 @@ export interface OpenedPullRequest {
   htmlUrl: string;
 }
 
+/** #1476 OR28 — which PR, if any, is open from `head` into `base`. */
+export interface FindOpenPullRequestParams {
+  repo: GitHostRepo;
+  base: string;
+  head: string;
+  token: string;
+}
+
 export interface GitHostClient {
   openPullRequest(params: OpenPullRequestParams): Promise<OpenedPullRequest>;
+  /**
+   * The open PR for the branch pair, or `null` when the host answered and there
+   * is none. Throws `GitHostApiError` when the host could not answer: a failed
+   * lookup is never reported as "no pull request".
+   */
+  findOpenPullRequest(params: FindOpenPullRequestParams): Promise<OpenedPullRequest | null>;
 }
 
 /**
@@ -154,7 +168,16 @@ export class GitHubHostClient implements GitHostClient {
 
     // A PR already exists for this head/base → OBSERVE it (make open idempotent).
     if (created.status === 422 && isAlreadyExists(created.json)) {
-      return this.observe(repo, base, head, token, owner, name);
+      const existing = await this.findOpenPullRequest({ repo, base, head, token });
+      if (existing === null) {
+        // The create said one exists, but the open-PR filter found none — it was
+        // closed/merged in the race, or the filter mismatched. Fail HONESTLY
+        // (#473 shape): never manufacture a null-url result.
+        throw new GitHostApiError(
+          'GitHub reported an existing pull request but none was found open for the branch pair',
+        );
+      }
+      return existing;
     }
 
     // A 422 that isn't "already exists" (e.g. "No commits between …") is a
@@ -177,19 +200,19 @@ export class GitHubHostClient implements GitHostClient {
     );
   }
 
-  /** GET the single open PR matching this head/base after a 422 already-exists. */
-  private async observe(
-    repo: GitHostRepo,
-    base: string,
-    head: string,
-    token: string,
-    owner: string,
-    name: string,
-  ): Promise<OpenedPullRequest> {
+  /**
+   * GET the open PR matching this head/base — the observe after a 422
+   * already-exists, and #1476's badge read. Only a 200 list answers; an empty
+   * list is `null`, anything else throws.
+   */
+  async findOpenPullRequest(params: FindOpenPullRequestParams): Promise<OpenedPullRequest | null> {
+    const { repo, base, head, token } = params;
+    const owner = encodeURIComponent(repo.owner);
+    const name = encodeURIComponent(repo.repo);
     // The `head` filter is `<owner>:<branch>`; both query values are encoded —
     // a working branch is `studio/<owner>/work`, so the `/` (and any URL-
     // significant char) must not break the filter (or it silently matches
-    // nothing → the empty-result guard below).
+    // nothing, which would read as "no pull request").
     const headFilter = encodeURIComponent(`${repo.owner}:${head}`);
     const baseFilter = encodeURIComponent(base);
     const listed = await this.request(
@@ -202,7 +225,7 @@ export class GitHubHostClient implements GitHostClient {
     if (listed.status !== 200 || !Array.isArray(listed.json)) {
       throw new GitHostApiError(
         redactSecrets(
-          `GitHub pull-request observe failed (HTTP ${listed.status}): ${describeGitHubError(
+          `GitHub pull-request lookup failed (HTTP ${listed.status}): ${describeGitHubError(
             listed.json,
           )}`,
           [token],
@@ -210,16 +233,8 @@ export class GitHubHostClient implements GitHostClient {
       );
     }
 
-    const first = listed.json[0];
-    if (first === undefined) {
-      // The create said one exists, but the open-PR filter found none — it was
-      // closed/merged in the race, or the filter mismatched. Fail HONESTLY
-      // (#473 shape): never crash on `[0]`, never manufacture a null-url result.
-      throw new GitHostApiError(
-        'GitHub reported an existing pull request but none was found open for the branch pair',
-      );
-    }
-    return this.parsePr(first, 'observe', token);
+    const first: unknown = listed.json[0];
+    return first === undefined ? null : this.parsePr(first, 'lookup', token);
   }
 
   /** Validate + extract `{ number, htmlUrl }` — a malformed payload fails loudly, never manufactured. */

@@ -223,3 +223,52 @@ describe('GitHubHostClient.openPullRequest', () => {
     expect(calls[0]?.url).toBe('https://api.github.com/repos/ac%20me/wid%23g/pulls');
   });
 });
+
+describe('GitHubHostClient.findOpenPullRequest', () => {
+  const find = { repo: REPO, base: 'main', head: 'studio/local/work', token: TOKEN };
+
+  it('returns the open PR for the branch pair, filtered by head and base (both encoded)', async () => {
+    const { fetchImpl, calls } = scriptedFetch([
+      { status: 200, body: [{ number: 7, html_url: 'https://github.com/acme/widgets/pull/7' }] },
+    ]);
+    const client = new GitHubHostClient({ fetchImpl });
+    await expect(client.findOpenPullRequest(find)).resolves.toEqual({
+      number: 7,
+      htmlUrl: 'https://github.com/acme/widgets/pull/7',
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.method).toBe('GET');
+    expect(calls[0]!.url).toBe(
+      'https://api.github.com/repos/acme/widgets/pulls?state=open&head=acme%3Astudio%2Flocal%2Fwork&base=main',
+    );
+    expect(calls[0]!.headers.Authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it('an empty list is a successful "none" — null, not an error', async () => {
+    const { fetchImpl } = scriptedFetch([{ status: 200, body: [] }]);
+    const client = new GitHubHostClient({ fetchImpl });
+    await expect(client.findOpenPullRequest(find)).resolves.toBeNull();
+  });
+
+  it('a non-200 is a failed lookup, never "none" — GitHostApiError with GitHub text, token redacted', async () => {
+    const { fetchImpl } = scriptedFetch([
+      { status: 401, body: { message: `Bad credentials ${TOKEN}` } },
+    ]);
+    const client = new GitHubHostClient({ fetchImpl });
+    const err = await client.findOpenPullRequest(find).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GitHostApiError);
+    expect((err as Error).message).toMatch(/HTTP 401.*Bad credentials/);
+    expect((err as Error).message).not.toContain(TOKEN);
+  });
+
+  it('a 200 that is not a list, or a malformed entry, fails loudly rather than reading as none', async () => {
+    const notList = new GitHubHostClient({
+      fetchImpl: scriptedFetch([{ status: 200, body: { number: 7 } }]).fetchImpl,
+    });
+    await expect(notList.findOpenPullRequest(find)).rejects.toBeInstanceOf(GitHostApiError);
+    const malformed = new GitHubHostClient({
+      fetchImpl: scriptedFetch([{ status: 200, body: [{ number: 7 }] }]).fetchImpl,
+    });
+    await expect(malformed.findOpenPullRequest(find)).rejects.toBeInstanceOf(GitHostApiError);
+  });
+});
