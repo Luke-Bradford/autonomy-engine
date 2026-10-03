@@ -5,9 +5,10 @@ import type { BadgePart } from './editorState';
  * at a glance from the toolbar row.
  *
  * The detail is a native `title` for the mouse and visually-hidden text for a
- * screen reader. No tab stop and no live region, for `VersionBadge`'s reasons:
- * nothing here is actionable, and a region announcing "Draft" on the first edit
- * of every session would be noise.
+ * screen reader. No tab stop: nothing here is actionable, so a sighted keyboard
+ * user reads the label alone — the same trade the toolbar's `title` reasons
+ * make. No live region either: announcing "Draft" on the first edit of every
+ * session would be noise.
  */
 export function EditorStateBadge({
   editing,

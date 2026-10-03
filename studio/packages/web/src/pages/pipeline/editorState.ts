@@ -1,12 +1,13 @@
-import type { ActiveVersionLabel } from './versionHistory';
+import { activePhrase, type ActiveVersionLabel } from './versionHistory';
 
 /**
  * #1476 OR28 — the editor's state badge, as pure rules.
  *
- * Colour follows ONE rule (the issue's): `success` when the live version is the
- * canvas, `warning` when something is pending (a draft, a newer head, nothing
- * published), `neutral` otherwise. The text always carries the meaning on its
- * own, so the colour is never the only cue (WCAG 1.4.1).
+ * Colour follows ONE rule: `success` when the live version is what the canvas
+ * shows, `warning` when something is pending — a draft, a newer saved version,
+ * nothing published, or a live version that is not the canvas — and `neutral`
+ * otherwise. The text always carries the meaning on its own, so the colour is
+ * never the only cue (WCAG 1.4.1).
  *
  * Labels are SHORT on purpose: they share the fixed-height toolbar row with the
  * title, the notice strip and every action, and that row must not wrap at
@@ -31,6 +32,8 @@ export interface EditingInput {
   headVersion: number | null;
   /** The version shown read-only in place of the editor, or `null`. */
   previewedVersion: number | null;
+  /** An archived pipeline refuses every save, so a draft must not promise one. */
+  archived: boolean;
 }
 
 /**
@@ -62,7 +65,7 @@ export function editingState(s: EditingInput): BadgePart {
     return s.dirty
       ? {
           label: 'Draft',
-          detail: 'Unsaved changes. Nothing is saved yet: Save version keeps them as v1.',
+          detail: `Unsaved changes; nothing is saved yet.${saveHint(s.archived, 'as v1')}`,
           tone: 'warning',
         }
       : { label: 'Not saved', detail: 'This pipeline has no saved version yet.', tone: 'neutral' };
@@ -76,7 +79,7 @@ export function editingState(s: EditingInput): BadgePart {
       detail:
         `Draft — unsaved changes on v${v}.` +
         (newer !== null ? ` v${newer} is newer.` : '') +
-        ' Save version keeps them as a new version.',
+        saveHint(s.archived, 'as a new version'),
       tone: 'warning',
     };
   }
@@ -90,6 +93,13 @@ export function editingState(s: EditingInput): BadgePart {
   return { label: `v${v} (latest)`, detail: `v${v}, the latest saved version.`, tone: 'neutral' };
 }
 
+/** What Save would do with a draft — or that it will not, on an archived pipeline. */
+function saveHint(archived: boolean, as: string): string {
+  return archived
+    ? ' The pipeline is archived, so it cannot be saved.'
+    : ` Save version keeps them ${as}.`;
+}
+
 export interface LiveInput {
   /** Is a git repo connected? `undefined` while unread or after a failed read. */
   gitConnected: boolean | undefined;
@@ -99,11 +109,9 @@ export interface LiveInput {
   canvas: number | null;
 }
 
-/** Live is the ACTIVE (published) version — the word the history list uses. */
-const LIVE_MEANS = 'Live is the active (published) version.';
-
 /**
- * The live part, or `null` when it is not shown.
+ * The live part, or `null` when it is not shown. "Live" is the ACTIVE
+ * (published) version — the history list's word, used in every detail below.
  *
  * Hidden outside git mode: a DB-only workspace has no publish and no active
  * pointer (triggers bind to the latest version), so "Not published" there would
@@ -115,14 +123,14 @@ export function liveState(s: LiveInput): BadgePart | null {
   if (s.active === null) {
     return {
       label: 'Not published',
-      detail: `No version is published yet. ${LIVE_MEANS}`,
+      detail: 'No version is active (published) yet.',
       tone: 'warning',
     };
   }
   if (s.active === 'unnamed') {
     return {
-      label: 'Live: unlisted version',
-      detail: `A version published after this page loaded is live; reload to see which. ${LIVE_MEANS}`,
+      label: 'Live: not listed yet',
+      detail: `Active (published): ${activePhrase('unnamed')}.`,
       tone: 'warning',
     };
   }
@@ -130,14 +138,14 @@ export function liveState(s: LiveInput): BadgePart | null {
   if (s.active === s.canvas) {
     return {
       label: `Live: v${v}`,
-      detail: `v${v} is live and is what the canvas shows. ${LIVE_MEANS}`,
+      detail: `v${v} is the active (published) version, and is what the canvas shows.`,
       tone: 'success',
       current: true,
     };
   }
   return {
     label: `Live: v${v}`,
-    detail: `v${v} is live; the canvas shows ${s.canvas === null ? 'unsaved changes' : `v${String(s.canvas)}`}. ${LIVE_MEANS}`,
+    detail: `v${v} is the active (published) version; the canvas shows ${s.canvas === null ? 'unsaved changes' : `v${String(s.canvas)}`}.`,
     tone: 'warning',
   };
 }

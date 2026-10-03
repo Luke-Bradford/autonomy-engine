@@ -75,7 +75,14 @@ test('the badge names the editing state: latest, draft, overtaken, previewing', 
   const { pipelineId, pipelineVersionId: v1 } = await seedVersion(page, name, V1);
   const v2 = await mintVersion(page, pipelineId, V2, v1, name);
 
+  // The publish state is its own read, after the load. Wait for it, or the
+  // "no live part" check below would pass merely by running first.
+  const publishRead = Promise.all([
+    page.waitForResponse((r) => r.url().endsWith('/api/workspace/git')),
+    page.waitForResponse((r) => r.url().endsWith(`/api/pipelines/${pipelineId}/active`)),
+  ]);
   await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+  await publishRead;
   await fluentRootReady(page);
   await expect(nodeById(page, 'n_c')).toBeVisible();
   await viewportSettled(page);

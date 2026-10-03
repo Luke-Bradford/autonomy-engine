@@ -342,6 +342,20 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   // its spoken form, never colour alone.
   await expect(livePart).toHaveText(/^Live: v1 ✓ \(on the canvas\)/);
   await expect(livePart).toHaveAttribute('data-tone', 'success');
+  // Both pills at once is the widest the badge gets; at 1280 the toolbar row
+  // must still hold it without overflowing or clipping either pill.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const fit = await page.evaluate(() => {
+    const header = document.querySelector('.canvas-page > .page-header')!;
+    const parts = [...document.querySelectorAll<HTMLElement>('.editor-state-badge__part')];
+    return {
+      parts: parts.length,
+      headerOverflows: header.scrollWidth > header.clientWidth,
+      clipped: parts.some((p) => p.scrollWidth > p.clientWidth),
+    };
+  });
+  expect(fit).toEqual({ parts: 2, headerOverflows: false, clipped: false });
+  await page.setViewportSize({ width: 1600, height: 1000 });
 
   /**
    * And it is DURABLE, not merely optimistic local state: a reload re-reads the

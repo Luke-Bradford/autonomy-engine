@@ -6,6 +6,7 @@ const base: EditingInput = {
   loadedVersion: 3,
   headVersion: 3,
   previewedVersion: null,
+  archived: false,
 };
 
 describe('editingState', () => {
@@ -51,6 +52,15 @@ describe('editingState', () => {
       tone: 'warning',
     });
   });
+
+  it('a draft on an archived pipeline promises no save', () => {
+    expect(editingState({ ...base, dirty: true }).detail).toContain('Save version keeps them');
+    const archived = editingState({ ...base, dirty: true, archived: true });
+    expect(archived.detail).not.toContain('Save version');
+    expect(archived.detail).toContain('archived');
+    const none = { ...base, loadedVersion: null, headVersion: null, dirty: true, archived: true };
+    expect(editingState(none).detail).not.toContain('Save version');
+  });
 });
 
 describe('canvasVersion', () => {
@@ -93,7 +103,7 @@ describe('liveState', () => {
 
   it('an active version the page has not listed is named as such, never guessed', () => {
     expect(liveState({ gitConnected: true, active: 'unnamed', canvas: 3 })).toMatchObject({
-      label: 'Live: unlisted version',
+      label: 'Live: not listed yet',
       tone: 'warning',
     });
   });

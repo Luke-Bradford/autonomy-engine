@@ -781,6 +781,7 @@ export function PipelineCanvas({
     loadedVersion: loaded?.version ?? null,
     headVersion,
     previewedVersion: previewed?.version ?? null,
+    archived,
   };
   const editingBadge = editingState(editingInput);
   const liveBadge = liveState({
