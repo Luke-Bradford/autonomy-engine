@@ -166,7 +166,7 @@ import {
 } from './versionHistory';
 import { useTransientNotice } from './useTransientNotice';
 import { EditorStatusStrip } from './EditorStatusStrip';
-import { DOCK_HEIGHT_VAR, DockSplitter } from './DockSplitter';
+import { DOCK_HEIGHT_VAR, DOCK_WIDTH_VAR, DockSplitter } from './DockSplitter';
 import { TOOLBOX_WIDTH_VAR, ToolboxSplitter } from './ToolboxSplitter';
 import { PROBLEMS_WIDTH_VAR, ProblemsSplitter } from './ProblemsSplitter';
 import { TOOLBOX_RAIL_WIDTH, uiStore, type NodeTab, type PipelineTab } from '../../stores/uiStore';
@@ -272,6 +272,12 @@ export function PipelineCanvas({
   const dockOpen = useStore(uiStore, (s) => s.dockOpen);
   const setDockOpen = useStore(uiStore, (s) => s.setDockOpen);
   const dockHeight = useStore(uiStore, (s) => s.dockHeight);
+  /* #1475 OR27 — bottom or right, per viewer. A FOLDED dock is the header bar
+     under the canvas in both, so it never costs the canvas any width. */
+  const dockPosition = useStore(uiStore, (s) => s.dockPosition);
+  const setDockPosition = useStore(uiStore, (s) => s.setDockPosition);
+  const dockWidth = useStore(uiStore, (s) => s.dockWidth);
+  const dockRight = dockOpen && dockPosition === 'right';
   const dockId = useId();
   const dockBodyId = useId();
   const canvasMainRef = useRef<HTMLDivElement>(null);
@@ -1713,7 +1719,7 @@ export function PipelineCanvas({
             <EditorRunProvider run={editorRun}>
               <div
                 ref={canvasGridRef}
-                className="canvas-grid"
+                className={dockRight ? 'canvas-grid canvas-grid--dock-right' : 'canvas-grid'}
                 /* Folded, the track is the rail's; the stored width is kept for
                  unfolding to restore. */
                 style={
@@ -1726,10 +1732,15 @@ export function PipelineCanvas({
               position via `useReactFlow` on its own side of the drag. */}
                 <ActivityToolbox store={store} id={toolboxId} />
                 <ToolboxSplitter gridRef={canvasGridRef} toolboxId={toolboxId} />
-                {/* #852 / #844 — U7's BOTTOM dock: the canvas takes the width, the
-                properties sit under it (ADF's layout), and one dock serves both
-                the activity forms and the pipeline's params/outputs. */}
-                <div className="canvas-main" ref={canvasMainRef}>
+                {/* #852 / #844 — U7's dock: by default the canvas takes the width
+                and the properties sit under it (ADF's layout), and one dock
+                serves both the activity forms and the pipeline's params/outputs.
+                #1475 — or beside it, per viewer. The position is a CLASS on the same tree, never a
+                second branch: the dock holds drafts a remount would drop. */}
+                <div
+                  className={dockRight ? 'canvas-main canvas-main--dock-right' : 'canvas-main'}
+                  ref={canvasMainRef}
+                >
                   <div className="canvas-wrap">
                     <ReactFlowProvider>
                       <FlowCanvas
@@ -1742,7 +1753,13 @@ export function PipelineCanvas({
                     </ReactFlowProvider>
                   </div>
                   {dockOpen && (
-                    <DockSplitter columnRef={canvasMainRef} dockRef={dockRef} dockId={dockId} />
+                    <DockSplitter
+                      key={dockPosition}
+                      columnRef={canvasMainRef}
+                      dockRef={dockRef}
+                      dockId={dockId}
+                      position={dockPosition}
+                    />
                   )}
                   <div
                     id={dockId}
@@ -1754,9 +1771,14 @@ export function PipelineCanvas({
                      reload paints the operator's height first time rather than
                      the default and then a jump. `null` leaves the CSS default. */
                     style={
-                      dockHeight === null
-                        ? undefined
-                        : ({ [DOCK_HEIGHT_VAR]: `${String(dockHeight)}px` } as CSSProperties)
+                      {
+                        ...(dockHeight === null
+                          ? {}
+                          : { [DOCK_HEIGHT_VAR]: `${String(dockHeight)}px` }),
+                        ...(dockWidth === null
+                          ? {}
+                          : { [DOCK_WIDTH_VAR]: `${String(dockWidth)}px` }),
+                      } as CSSProperties
                     }
                   >
                     <div className="property-dock__header">
@@ -1802,6 +1824,18 @@ export function PipelineCanvas({
                           {issues.length}
                         </span>
                       </button>
+                      {/* #1475 OR27 — the label names where the dock GOES, so it
+                      needs no pressed state on top. Offered folded too: it
+                      decides where the dock opens. */}
+                      <button
+                        type="button"
+                        className="property-dock__toggle"
+                        onClick={() =>
+                          setDockPosition(dockPosition === 'right' ? 'bottom' : 'right')
+                        }
+                      >
+                        {dockPosition === 'right' ? 'Dock to bottom' : 'Dock to right'}
+                      </button>
                       {/* The page's ONE announcer of a blocked save (#1249). Here
                       in the always-shown header, not on the list: the list is
                       `hidden` whenever Problems or the dock is folded, and a
@@ -1836,7 +1870,9 @@ export function PipelineCanvas({
                         pipelineId={pipelineId}
                         onNotice={showCanvasMsg}
                       />
-                      {problemsOpen && (
+                      {/* Stacked under the properties in a right-hand dock, at a
+                      fixed height, so there is no width to resize there. */}
+                      {problemsOpen && dockPosition === 'bottom' && (
                         <ProblemsSplitter bodyRef={dockBodyRef} problemsId={problemsId} />
                       )}
                       {/* #1393 — the validation list, moved here from above the

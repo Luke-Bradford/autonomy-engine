@@ -5,7 +5,12 @@ import {
   DOCK_HEIGHT_STORAGE_KEY,
   DOCK_MIN_HEIGHT,
   DOCK_OPEN_STORAGE_KEY,
-  DOCK_SPLITTER_HEIGHT,
+  DOCK_SPLITTER_SIZE,
+  CANVAS_MIN_WIDTH,
+  DOCK_MIN_WIDTH,
+  DOCK_POSITION_STORAGE_KEY,
+  DOCK_WIDTH_STORAGE_KEY,
+  dockMaxWidth,
   HISTORY_OPEN_STORAGE_KEY,
   MINIMAP_STORAGE_KEY,
   PROBLEMS_OPEN_STORAGE_KEY,
@@ -420,7 +425,7 @@ describe('dockMaxHeight (#1475)', () => {
 
   it('keeps the canvas floor in a shorter column', () => {
     // 75% of 600 is 450, which would leave the canvas 142px.
-    expect(dockMaxHeight(600)).toBe(600 - DOCK_SPLITTER_HEIGHT - CANVAS_MIN_HEIGHT);
+    expect(dockMaxHeight(600)).toBe(600 - DOCK_SPLITTER_SIZE - CANVAS_MIN_HEIGHT);
   });
 
   /** A measured column is fractional; the cap must never round UP past what CSS draws. */
@@ -431,6 +436,73 @@ describe('dockMaxHeight (#1475)', () => {
 
   it('never goes under the dock floor', () => {
     expect(dockMaxHeight(300)).toBe(DOCK_MIN_HEIGHT);
+  });
+});
+
+describe('uiStore dock position (#1475 OR27)', () => {
+  it('starts at the bottom, at the default width', () => {
+    const state = createUiStore(fakeStorage()).getState();
+    expect(state.dockPosition).toBe('bottom');
+    expect(state.dockWidth).toBeNull();
+  });
+
+  it('persists the position and the width across a new store on the same storage', () => {
+    const storage = fakeStorage();
+    const first = createUiStore(storage).getState();
+    first.setDockPosition('right');
+    first.setDockWidth(1234.4);
+    const second = createUiStore(storage).getState();
+    expect(second.dockPosition).toBe('right');
+    // Four digits: 60% of a wide monitor is over 999px.
+    expect(second.dockWidth).toBe(1234);
+  });
+
+  it('keeps the height when the width is set, and the other way round', () => {
+    const store = createUiStore(fakeStorage());
+    store.getState().setDockHeight(300);
+    store.getState().setDockWidth(500);
+    expect(store.getState().dockHeight).toBe(300);
+    expect(store.getState().dockWidth).toBe(500);
+  });
+
+  it.each(['left', 'top', '', 'RIGHT'])('reads a stored position of %j as the bottom', (raw) => {
+    expect(
+      createUiStore(fakeStorage({ [DOCK_POSITION_STORAGE_KEY]: raw })).getState().dockPosition,
+    ).toBe('bottom');
+  });
+
+  it.each(['', 'abc', '-50', '1e9', '12.5', '99999999999999999999'])(
+    'reads a stored width of %j as not resized',
+    (raw) => {
+      expect(
+        createUiStore(fakeStorage({ [DOCK_WIDTH_STORAGE_KEY]: raw })).getState().dockWidth,
+      ).toBeNull();
+    },
+  );
+
+  it('raises a width under the floor to the floor, on write and on read', () => {
+    const storage = fakeStorage({ [DOCK_WIDTH_STORAGE_KEY]: '90' });
+    const store = createUiStore(storage);
+    expect(store.getState().dockWidth).toBe(DOCK_MIN_WIDTH);
+    store.getState().setDockWidth(10);
+    expect(storage.data.get(DOCK_WIDTH_STORAGE_KEY)).toBe(String(DOCK_MIN_WIDTH));
+    store.getState().setDockWidth(null);
+    expect(createUiStore(storage).getState().dockWidth).toBeNull();
+  });
+});
+
+describe('dockMaxWidth (#1475)', () => {
+  it('caps a right-hand dock at three fifths of a wide column', () => {
+    expect(dockMaxWidth(1500)).toBe(900);
+  });
+
+  it('keeps the canvas floor in a narrower column, floored', () => {
+    // 60% of 600.7 is 360, which would leave the canvas 232 beside the divider.
+    expect(dockMaxWidth(600.7)).toBe(Math.floor(600.7 - DOCK_SPLITTER_SIZE - CANVAS_MIN_WIDTH));
+  });
+
+  it('never goes under the dock floor', () => {
+    expect(dockMaxWidth(400)).toBe(DOCK_MIN_WIDTH);
   });
 });
 
