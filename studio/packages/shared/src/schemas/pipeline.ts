@@ -1179,6 +1179,29 @@ export const CreatePipelineVersionBodySchema = NewPipelineVersionSchema.omit({
 export type CreatePipelineVersionBody = z.input<typeof CreatePipelineVersionBodySchema>;
 
 /**
+ * The editor's unsaved draft as a request body: the doc a save would send,
+ * minus its CAS basis — Debug (#1395) and Validate (#1476) overwrite nothing,
+ * so they have nothing to be stale against. `POST /api/pipelines/:id/validate`
+ * takes it as the whole body; `DebugRunRequestSchema` as its `version`.
+ */
+export const PipelineDraftBodySchema = NewPipelineVersionSchema.omit({
+  pipelineId: true,
+});
+export type PipelineDraftBody = z.input<typeof PipelineDraftBodySchema>;
+
+/**
+ * The Validate answer: the issues a save of that draft would be refused with,
+ * in the save gate's order, the first `ISSUE_LIST_CAP` of them. `totalIssues`
+ * is ALWAYS the true count, so a truncated list says so rather than reading as
+ * complete. `issues: []` means a save would pass the gate.
+ */
+export const PipelineValidationSchema = z.object({
+  issues: z.array(z.string()),
+  totalIssues: z.number().int().nonnegative(),
+});
+export type PipelineValidation = z.infer<typeof PipelineValidationSchema>;
+
+/**
  * #3 G6c-1 — the current active/deployable pointer for a pipeline, a PROJECTION
  * of the `pipeline.published` workspace-audit log (never a stored mutable row).
  * `versionId` is the concrete immutable DB version id a trigger/run would bind;

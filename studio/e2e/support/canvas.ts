@@ -83,3 +83,15 @@ export async function editorMenuItem(page: Page, name: RegExp): Promise<Locator>
   await item.waitFor();
   return item;
 }
+
+/**
+ * #1476 OR28 — an item of the editor's Trigger ▾ menu (Trigger now, View
+ * triggers), opened first. Matched by a leading regex for the same reason as
+ * `editorMenuItem`: a disabled item's name carries its reason.
+ */
+export async function triggerMenuItem(page: Page, name: RegExp): Promise<Locator> {
+  await page.getByRole('button', { name: 'Trigger', exact: true }).click();
+  const item = page.getByRole('menu').getByRole('menuitem', { name });
+  await item.waitFor();
+  return item;
+}

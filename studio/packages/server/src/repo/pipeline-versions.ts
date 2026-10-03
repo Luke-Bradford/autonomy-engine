@@ -88,11 +88,110 @@ export interface CreatePipelineVersionOptions extends CreateResourceOptions {
   catalog?: ActivityCatalog;
 }
 
+/**
+ * The outcome of THE write gate, without the write. `ok: false` carries exactly
+ * the issues `createPipelineVersion` would throw as `InvalidPipelineDocError`;
+ * `ok: true` carries what the insert needs, so the gate runs once per save.
+ */
+type VersionGate =
+  | { ok: false; issues: string[] }
+  | {
+      ok: true;
+      lowered: z.output<typeof NewPipelineVersionSchema>;
+      id: string;
+      globals: ReturnType<typeof listOwnerGlobalTypes>;
+      globalReadNames: Set<string>;
+    };
+
+/**
+ * #1476 OR28 — the editor's Validate: THE save gate run as a dry run. Returns
+ * the issues a save of `input` would be refused with — the same list, in the
+ * same order — and writes nothing. A doc the strict parse refuses still throws
+ * its `ZodError`, as a save does.
+ *
+ * It exists because the web client's own badges are `validatePipelineDoc`
+ * WITHOUT the server's reads: the owner-scoped call-graph walk and the
+ * debug-callee refusal both need the database, so a draft can look clean in
+ * the editor and still be refused on save.
+ */
+export function checkPipelineVersion(
+  db: Db,
+  input: NewPipelineVersion,
+  opts?: CreatePipelineVersionOptions,
+): string[] {
+  const gate = gatePipelineVersion(db, input, opts);
+  return gate.ok ? [] : gate.issues;
+}
+
 export function createPipelineVersion(
   db: Db,
   input: NewPipelineVersion,
   opts?: CreatePipelineVersionOptions,
 ): PipelineVersion {
+  const gate = gatePipelineVersion(db, input, opts);
+  if (!gate.ok) throw new InvalidPipelineDocError(gate.issues);
+  const { lowered, id, globals, globalReadNames } = gate;
+  const globalReads: GlobalRead[] = [...globalReadNames].sort().map((name) => {
+    const type = globals.get(name);
+    // The validator adds a name only after finding it in `globals`.
+    if (type === undefined) throw new Error(`global read '${name}' has no type`);
+    return { name, type };
+  });
+
+  const debug = opts?.debug ?? false;
+  return db.transaction((tx) => {
+    // Numbered within its own kind (#1395): a Debug never takes, or leaves a gap
+    // in, the saved sequence.
+    const maxRow = tx
+      .select({ maxVersion: max(pipelineVersions.version) })
+      .from(pipelineVersions)
+      .where(
+        and(eq(pipelineVersions.pipelineId, lowered.pipelineId), eq(pipelineVersions.debug, debug)),
+      )
+      .get();
+    const nextVersion = (maxRow?.maxVersion ?? 0) + 1;
+
+    // Persist the LOWERED doc (#456 G1): validating `lowered` but storing
+    // `parsed` would certify a seeded contract that is never written — the
+    // worst outcome (validation passes against a contract the runtime lacks).
+    const row: PipelineVersion = {
+      id, // minted above (before validation) so the call graph had a `selfId`
+      // #3 G1 — every immutable version gets its OWN stable identity
+      // ((pipelineId, version#) is not stable across machines).
+      // #3 G5c — the workspace-git reconcile apply PRESERVES the file's version
+      // resourceId so a re-pull recognises the same immutable version instead of
+      // re-minting it (and any binding to it keeps resolving); else mint fresh.
+      resourceId: opts?.resourceId ?? newId('res'),
+      ...lowered,
+      version: nextVersion,
+      createdAt: Date.now(),
+      // #3 G6b — git provenance, stamped ONCE at mint from the workspace-git
+      // import context (`CreateResourceOptions`). `null` on every non-git create
+      // path (this route, portable import, tests) — the honest "no source commit"
+      // value, never a manufactured default (#473). Immutable hereafter (the
+      // `no_update` trigger covers these columns like every other version field).
+      sourceCommit: opts?.sourceCommit ?? null,
+      sourceBranch: opts?.sourceBranch ?? null,
+      sourceFilePath: opts?.sourceFilePath ?? null,
+      sourceBlobSha: opts?.sourceBlobSha ?? null,
+    };
+    tx.insert(pipelineVersions)
+      .values({ ...row, globalReads: JSON.stringify(globalReads), debug })
+      .run();
+    return PipelineVersionSchema.parse(row);
+  });
+}
+
+/**
+ * THE write gate (#444), up to but not including the insert — see the comments
+ * inside for each stage. Shared by `createPipelineVersion` and
+ * `checkPipelineVersion`, so a dry run can never drift from a save.
+ */
+function gatePipelineVersion(
+  db: Db,
+  input: NewPipelineVersion,
+  opts?: CreatePipelineVersionOptions,
+): VersionGate {
   const parsed = NewPipelineVersionSchema.parse(input);
 
   // #456 (F13b) — LOWER the catalog's canonical `outputs` into each known-type
@@ -196,12 +295,13 @@ export function createPipelineVersion(
       );
     });
   if (debugCallees.length > 0) {
-    throw new InvalidPipelineDocError(
-      debugCallees.map(
+    return {
+      ok: false,
+      issues: debugCallees.map(
         (id) =>
           `a call_pipeline node cannot call debug version '${id}': debug versions are deleted after a while — call a saved version`,
       ),
-    );
+    };
   }
   const resolvePipeline: PipelineResolver = (calleeVersionId) => {
     const callee = getPipelineVersion(db, calleeVersionId);
@@ -247,56 +347,8 @@ export function createPipelineVersion(
     globalReads: globalReadNames,
     ...(opts?.catalog !== undefined ? { catalog: opts.catalog } : {}),
   });
-  if (issues.length > 0) throw new InvalidPipelineDocError(issues);
-  const globalReads: GlobalRead[] = [...globalReadNames].sort().map((name) => {
-    const type = globals.get(name);
-    // The validator adds a name only after finding it in `globals`.
-    if (type === undefined) throw new Error(`global read '${name}' has no type`);
-    return { name, type };
-  });
-
-  const debug = opts?.debug ?? false;
-  return db.transaction((tx) => {
-    // Numbered within its own kind (#1395): a Debug never takes, or leaves a gap
-    // in, the saved sequence.
-    const maxRow = tx
-      .select({ maxVersion: max(pipelineVersions.version) })
-      .from(pipelineVersions)
-      .where(
-        and(eq(pipelineVersions.pipelineId, lowered.pipelineId), eq(pipelineVersions.debug, debug)),
-      )
-      .get();
-    const nextVersion = (maxRow?.maxVersion ?? 0) + 1;
-
-    // Persist the LOWERED doc (#456 G1): validating `lowered` but storing
-    // `parsed` would certify a seeded contract that is never written — the
-    // worst outcome (validation passes against a contract the runtime lacks).
-    const row: PipelineVersion = {
-      id, // minted above (before validation) so the call graph had a `selfId`
-      // #3 G1 — every immutable version gets its OWN stable identity
-      // ((pipelineId, version#) is not stable across machines).
-      // #3 G5c — the workspace-git reconcile apply PRESERVES the file's version
-      // resourceId so a re-pull recognises the same immutable version instead of
-      // re-minting it (and any binding to it keeps resolving); else mint fresh.
-      resourceId: opts?.resourceId ?? newId('res'),
-      ...lowered,
-      version: nextVersion,
-      createdAt: Date.now(),
-      // #3 G6b — git provenance, stamped ONCE at mint from the workspace-git
-      // import context (`CreateResourceOptions`). `null` on every non-git create
-      // path (this route, portable import, tests) — the honest "no source commit"
-      // value, never a manufactured default (#473). Immutable hereafter (the
-      // `no_update` trigger covers these columns like every other version field).
-      sourceCommit: opts?.sourceCommit ?? null,
-      sourceBranch: opts?.sourceBranch ?? null,
-      sourceFilePath: opts?.sourceFilePath ?? null,
-      sourceBlobSha: opts?.sourceBlobSha ?? null,
-    };
-    tx.insert(pipelineVersions)
-      .values({ ...row, globalReads: JSON.stringify(globalReads), debug })
-      .run();
-    return PipelineVersionSchema.parse(row);
-  });
+  if (issues.length > 0) return { ok: false, issues };
+  return { ok: true, lowered, id, globals, globalReadNames };
 }
 
 /**

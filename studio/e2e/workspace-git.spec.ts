@@ -345,17 +345,29 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   // Both pills at once is the widest the badge gets; at 1280 the toolbar row
   // must still hold it without overflowing or clipping either pill.
   await page.setViewportSize({ width: 1280, height: 720 });
-  const fit = await page.evaluate(() => {
-    const header = document.querySelector('.canvas-page > .page-header')!;
-    const parts = [...document.querySelectorAll<HTMLElement>('.editor-state-badge__part')];
-    return {
-      parts: parts.length,
-      headerOverflows: header.scrollWidth > header.clientWidth,
-      clipped: parts.some((p) => p.scrollWidth > p.clientWidth),
-    };
-  });
-  expect(fit).toEqual({ parts: 2, headerOverflows: false, clipped: false });
+  // Polled: the row makes room by folding Validate (below), which it does in
+  // response to the resize, a frame after it.
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const header = document.querySelector('.canvas-page > .page-header')!;
+        const parts = [...document.querySelectorAll<HTMLElement>('.editor-state-badge__part')];
+        return {
+          parts: parts.length,
+          headerOverflows: header.scrollWidth > header.clientWidth,
+          clipped: parts.some((p) => p.scrollWidth > p.clientWidth),
+        };
+      }),
+    )
+    .toEqual({ parts: 2, headerOverflows: false, clipped: false });
+  // #1476 slice 2 — what made room: Validate folded into ⋯, where it still
+  // works, and is back in the row once there is space for it.
+  const validateButton = page.getByRole('button', { name: 'Validate', exact: true });
+  await expect(validateButton).toHaveCount(0);
+  await expect(await editorMenuItem(page, /^Validate/)).toBeVisible();
+  await page.keyboard.press('Escape');
   await page.setViewportSize({ width: 1600, height: 1000 });
+  await expect(validateButton).toBeVisible();
 
   /**
    * And it is DURABLE, not merely optimistic local state: a reload re-reads the

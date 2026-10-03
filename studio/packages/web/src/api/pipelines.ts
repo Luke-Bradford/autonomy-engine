@@ -16,10 +16,14 @@ import {
   type PublishPipelineBody,
   type PublishPipelineResult,
   DebugRunRequestSchema,
+  PipelineValidationSchema,
+  PipelineDraftBodySchema,
   DebugRunResultSchema,
   FireResultSchema,
   ManualRunRequestSchema,
   type DebugRunRequest,
+  type PipelineValidation,
+  type PipelineDraftBody,
   type DebugRunResult,
   type FireResult,
   type ManualRunRequest,
@@ -534,6 +538,23 @@ export function debugPipelineDraft(
     method: 'POST',
     body: DebugRunRequestSchema.parse(body),
     schema: DebugRunResultSchema,
+  });
+}
+
+/**
+ * #1476 OR28 — the editor's Validate (`POST /api/pipelines/:id/validate`): the
+ * server's save gate run over the draft as a dry run. Resolves with the issues
+ * a save would be refused with (`issues: []` = a save would pass); writes
+ * nothing. A body the write schema refuses is a 400 `ApiError`, as on save.
+ */
+export function validatePipelineDraft(
+  pipelineId: string,
+  body: PipelineDraftBody,
+): Promise<PipelineValidation> {
+  return apiFetch(`/api/pipelines/${encodeURIComponent(pipelineId)}/validate`, {
+    method: 'POST',
+    body: PipelineDraftBodySchema.parse(body),
+    schema: PipelineValidationSchema,
   });
 }
 

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { NewPipelineVersionSchema, PipelineVersionSchema } from './pipeline.js';
+import { PipelineDraftBodySchema, PipelineVersionSchema } from './pipeline.js';
 import { addParamsReplaySafetyIssues } from './replay-safety.js';
 
 /**
@@ -97,7 +97,7 @@ export type ManualRunRequest = z.infer<typeof ManualRunRequestSchema>;
  */
 export const DebugRunRequestSchema = z
   .object({
-    version: NewPipelineVersionSchema.omit({ pipelineId: true }),
+    version: PipelineDraftBodySchema,
     params: z.record(z.string(), z.unknown()).optional(),
   })
   .superRefine((body, ctx) => {
