@@ -6,8 +6,19 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from 'react';
-import { Tab, TabList, ToggleButton } from '@fluentui/react-components';
 import {
+  Menu,
+  MenuItemCheckbox,
+  MenuList,
+  MenuPopover,
+  MenuTrigger,
+  ToggleButton,
+  Tooltip,
+} from '@fluentui/react-components';
+import {
+  RUN_TRIGGERED_BY_KINDS,
+  RUN_TRIGGERED_BY_LABELS,
+  RunSearchSchema,
   RunStatusSchema,
   type PipelineCostRollup,
   type RunSummary,
@@ -28,21 +39,17 @@ import { runDetailPath, runLinkLabel } from './runPath';
 import { runStatusLabel } from './runStatus';
 import { RunTimeline } from './RunTimeline';
 import {
+  canonicalKindParam,
+  dayOf,
+  dayRangeBounds,
   hasActiveRunFilters,
+  NO_RUNS_YET,
+  readKinds,
   readRunFilters,
   RUN_FILTER_PARAMS,
   RUN_SINCE_LABEL,
   RUN_SINCE_OPTIONS,
 } from './runFilters';
-import {
-  NO_RUNS_YET,
-  filterRunsByTab,
-  isRunTab,
-  RUN_TAB_HINT,
-  RUN_TAB_LABEL,
-  RUN_TABS,
-  type RunTab,
-} from './runOrigin';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { FilterPicker } from './FilterPicker';
 import { RUN_GROUP_BYS, type RunGroupBy } from './runBars';
@@ -53,7 +60,7 @@ import { RunTriggeredByName } from '../../lib/KindName';
 /**
  * U29 (#1015) — which rendering of the SAME filtered rows is on screen. A view,
  * not a filter: it changes nothing about which runs are in scope, which is why
- * it lives beside the tab rather than inside `runFilters.ts`.
+ * it lives here rather than inside `runFilters.ts`.
  */
 type RunView = 'list' | 'timeline';
 
@@ -88,46 +95,44 @@ function RunCostCell({ run }: { run: RunSummary }) {
 }
 
 /**
- * #931 (U27 slice 2) — the filtered pipeline's lifetime spend, above the rows.
+ * #931 (U27 slice 2) — the filtered pipeline's lifetime spend, above the rows,
+ * as ONE dense line (#1484: summary numbers go in a line, not tiles, and
+ * explanations go in a tooltip, not a paragraph). The figure and its tokens come
+ * from `pipelineCostSummary`, the same reading the tiles drew.
  *
- * The tile strip is `AiActivityPage`'s (`.monitor-tiles`), not a second one: that
- * page already pairs `costFigure`/`tokenSummary` from a bounded SQL aggregate in
- * exactly this markup, and a per-page summary that looked different would imply a
- * different kind of number.
- *
- * The caveats sit in ONE paragraph rather than a stack of notices because they
- * qualify one figure, and because `FlowCanvas` records that this app already runs
- * as many live regions as it should — this is static text, announced by nothing.
- * Scope comes FIRST: it is the sentence that stops the figure being read as the
- * total of the rows underneath it.
+ * The line LEADS with "Lifetime", which is the part of the old scope sentence
+ * that stops the figure being read as the total of the rows underneath; the rest
+ * of the caveats (what the figure covers, what it leaves out) are the `?`
+ * button's description, reachable by keyboard focus as well as hover.
  */
 function PipelineSpend({ summary }: { summary: PipelineCostSummary }) {
+  const caveats = [summary.scope, summary.reading, summary.incomplete, summary.excludes]
+    .filter((part) => part !== null && part !== '')
+    .join(' ');
   return (
-    <section className="lifetime-spend" aria-labelledby="lifetime-spend-heading">
-      <h3 id="lifetime-spend-heading">Lifetime spend</h3>
-      {/* No tiles for a pipeline that has never run: every figure would be a
-          reading of a measurement nobody took, which is what `figure: null` says. */}
-      {summary.figure !== null && (
-        <dl className="monitor-tiles">
-          <div>
-            <dt>Spend</dt>
-            <dd className="run-cost">{summary.figure}</dd>
-          </div>
-          {summary.tokens !== null && (
-            <div>
-              <dt>Tokens</dt>
-              <dd>{summary.tokens}</dd>
-            </div>
-          )}
-        </dl>
-      )}
-      <p className="page-hint">
-        {summary.scope} {summary.reading}
-        {summary.incomplete === null ? null : ` ${summary.incomplete}`}
-        {summary.excludes === null ? null : ` ${summary.excludes}`}
-      </p>
+    <section className="runs-summary-line" aria-label="Lifetime spend">
+      <span className="runs-summary-line__label">Lifetime spend</span>{' '}
+      {/* A pipeline that has never run has no figure: a dash, never a $0.00
+          that would read as a measurement. */}
+      <span className="run-cost">{summary.figure ?? '—'}</span>
+      {summary.tokens !== null && <span> · {summary.tokens}</span>}
+      <Tooltip content={caveats} relationship="description">
+        <button type="button" className="runs-summary-line__help" aria-label="About lifetime spend">
+          ?
+        </button>
+      </Tooltip>
     </section>
   );
+}
+
+/** `prev` with each of `next` set, or deleted where its value is `''`. */
+function withParams(prev: URLSearchParams, next: Record<string, string>): URLSearchParams {
+  const params = new URLSearchParams(prev);
+  for (const [param, value] of Object.entries(next)) {
+    if (value === '') params.delete(param);
+    else params.set(param, value);
+  }
+  return params;
 }
 
 /**
@@ -213,29 +218,14 @@ function RunRow({ run: r, loadedAt }: { run: RunSummary; loadedAt: number }) {
  *
  * R2 + U10 — each row is a `RunSummary`, so the identity column reads the
  * PIPELINE'S NAME rather than the opaque `pv_…` version id it used to render,
- * and the trigger reads its name. The tab strip filters by where a run came
- * from (`runOrigin.ts`), client-side over the rows fetched so far.
+ * and the trigger reads its name.
  *
- * U26 — and above that strip, the SERVER-side filter pane: status, pipeline,
- * trigger and a relative time window, each an optional query param on
- * `GET /api/runs`. Two filters with two authorities is forced rather than
- * chosen, and `runFilters.ts` records why (the origin axis needs an `isNull`
- * predicate the repo layer has no arm for).
- *
- * PAGED SINCE #1083, and that changed what the ORIGIN STRIP can honestly say.
- * The page used to fetch every run the filters matched, so a tab count was a
- * census: `Child 0` meant the workspace held none. Now it counts the rows
- * LOADED, and an unqualified `0` beside "No child runs" would assert something
- * a Load more can immediately falsify. So while older pages remain, a count
- * renders open-ended (`12+`) and the empty-tab line says "in the runs loaded so
- * far". Once the walk is exhausted both revert to the plain, complete claim —
- * which is the ordinary case, since the first page holds `RUNS_PAGE_SIZE` runs.
- *
- * The alternative — moving the origin axis server-side and counting in SQL — is
- * a bigger change than it looks (`runOriginOf` is expressible as a CASE, but
- * honest per-tab totals need their own grouped query and a place in the response
- * envelope) and is deliberately NOT bundled here. What is fixed here is that the
- * strip stops making claims it cannot support.
+ * #1484 OR35 M1 — ONE filter row above the grid, every axis server-side and in
+ * the URL (`runFilters.ts`): status, pipeline, what started the run (a
+ * multi-select over `RUN_TRIGGERED_BY_KINDS`, which replaced U10's client-side
+ * origin tabs), trigger, annotation, when it started (a relative window, one
+ * day, or a range of days) and a search box. Because every axis is answered by
+ * the server, a paged list filters every run, not just the pages loaded.
  */
 export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } = {}) {
   /**
@@ -247,31 +237,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
    */
   const [reloadKey, setReloadKey] = useState(0);
 
-  /**
-   * U10 — the selected tab lives in the URL, which the Shell section names as a
-   * slot this ticket owns ("monitor filter tab (U10)"). Component state would
-   * make the filtered view unlinkable, lost on reload, and invisible to Back.
-   * The URL is the single authority here — there is no `useState` mirror of it
-   * to disagree with, which is the same reason `SecondaryPane` refused a
-   * component that wanted its own `selectedValue`.
-   *
-   * An unrecognised `?tab=` is not an error to shout about: it falls back to
-   * `all`, so a hand-edited or stale link still shows the operator their runs.
-   */
   const [searchParams, setSearchParams] = useSearchParams();
-  const rawTab = searchParams.get('tab');
-  const tab: RunTab = isRunTab(rawTab) ? rawTab : 'all';
-
-  function selectTab(next: RunTab) {
-    const params = new URLSearchParams(searchParams);
-    // `all` is the default view, so it is expressed by the ABSENCE of the param
-    // rather than by `?tab=all` — one canonical URL per view.
-    if (next === 'all') params.delete('tab');
-    else params.set('tab', next);
-    // A push, not a replace: Back undoing a filter change is the behaviour a
-    // URL-addressable tab is for.
-    setSearchParams(params);
-  }
 
   /**
    * U26 — the server-side axes, read from the URL under the same rules `?tab=`
@@ -284,8 +250,8 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
    * unrecognised falls back to the default rather than erroring. That makes a
    * timeline link shareable and Back a working undo.
    *
-   * It costs nothing to keep across the other URL writers: `selectTab`,
-   * `setFilter` and `clearFilters` all COPY `searchParams` and `clearFilters`
+   * It costs nothing to keep across the other URL writers: `setFilter`,
+   * `setFilters` and `clearFilters` all COPY `searchParams` and `clearFilters`
    * deletes only `RUN_FILTER_PARAMS`, so switching a filter keeps the view.
    */
   const view: RunView = searchParams.get('view') === 'timeline' ? 'timeline' : 'list';
@@ -299,15 +265,96 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
   }
 
   const filters = useMemo(() => readRunFilters(searchParams), [searchParams]);
-  const { status: statusFilter, pipelineId, triggerId, since, annotation } = filters;
+  const {
+    status: statusFilter,
+    pipelineId,
+    triggerId,
+    since,
+    annotation,
+    kind,
+    q,
+    on,
+    from,
+    to,
+  } = filters;
   const filtered = hasActiveRunFilters(filters);
 
-  function setFilter(param: string, next: string) {
-    const params = new URLSearchParams(searchParams);
-    if (next === '') params.delete(param);
-    else params.set(param, next);
-    setSearchParams(params);
+  /** Write several params as ONE history entry; `''` deletes. A push, not a
+   * replace, so Back undoes a filter change. */
+  function setFilters(next: Record<string, string>) {
+    setSearchParams((prev) => withParams(prev, next));
   }
+
+  function setFilter(param: string, next: string) {
+    setFilters({ [param]: next });
+  }
+
+  /**
+   * #1484 — the Started picker: a relative window, "On a day", or "Between
+   * days". Each choice clears the others' params, so the URL holds one kind of
+   * time bound and the picker shows exactly what was asked of the server. The
+   * two day modes open on today and on the last seven days, so choosing one is
+   * already a working filter rather than a half-made one.
+   */
+  const startedMode =
+    on !== undefined ? 'on' : from !== undefined || to !== undefined ? 'range' : (since ?? '');
+  function selectStartedMode(mode: string) {
+    const today = new Date();
+    const weekAgo = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 6);
+    const cleared = {
+      [RUN_FILTER_PARAMS.since]: '',
+      [RUN_FILTER_PARAMS.on]: '',
+      [RUN_FILTER_PARAMS.from]: '',
+      [RUN_FILTER_PARAMS.to]: '',
+    };
+    if (mode === 'on') setFilters({ ...cleared, [RUN_FILTER_PARAMS.on]: dayOf(today) });
+    else if (mode === 'range')
+      setFilters({
+        ...cleared,
+        [RUN_FILTER_PARAMS.from]: dayOf(weekAgo),
+        [RUN_FILTER_PARAMS.to]: dayOf(today),
+      });
+    else setFilters({ ...cleared, [RUN_FILTER_PARAMS.since]: mode });
+  }
+
+  /**
+   * #1484 — the search box. What is TYPED is local; what is SEARCHED is the
+   * URL's `q`, written 300ms after typing stops so a word is one request, not
+   * one per letter. The first write of a search pushes a history entry and every
+   * refinement replaces it, so Back leaves the search in one step rather than one
+   * letter at a time — and never skips it entirely.
+   *
+   * When `q` changes from OUTSIDE (Clear filters, Back, a link), the box follows
+   * it. The comparison is on the trimmed text, so the box does not eat a
+   * trailing space the operator is mid-way through typing.
+   */
+  const [searchText, setSearchText] = useState(q ?? '');
+  // Adjusted during render rather than in an effect (React's "storing
+  // information from previous renders"), so the box never paints stale.
+  const [syncedQ, setSyncedQ] = useState(q);
+  if (syncedQ !== q) {
+    setSyncedQ(q);
+    if (searchText.trim() !== (q ?? '')) setSearchText(q ?? '');
+  }
+  useEffect(() => {
+    const parsed = RunSearchSchema.safeParse(searchText);
+    const next = parsed.success ? parsed.data : '';
+    if (next === (q ?? '')) return;
+    const timer = window.setTimeout(() => {
+      setSearchParams((prev) => withParams(prev, { [RUN_FILTER_PARAMS.q]: next }), {
+        replace: q !== undefined,
+      });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [searchText, q, setSearchParams]);
+
+  const kinds = readKinds(kind);
+  const kindSummary =
+    kinds.length === 0
+      ? 'All'
+      : kinds.length === 1
+        ? RUN_TRIGGERED_BY_LABELS[kinds[0]!]
+        : `${kinds.length} kinds`;
 
   function clearFilters() {
     const params = new URLSearchParams(searchParams);
@@ -336,8 +383,22 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
    */
   const fetchPage = useCallback(
     (cursor: string | undefined, signal: AbortSignal) =>
-      listRuns({ status: statusFilter, pipelineId, triggerId, since, annotation }, cursor, signal),
-    [statusFilter, pipelineId, triggerId, since, annotation],
+      listRuns(
+        {
+          status: statusFilter,
+          pipelineId,
+          triggerId,
+          since,
+          annotation,
+          kind,
+          q,
+          ...dayRangeBounds({ on, from, to }),
+        },
+        cursor,
+        signal,
+      ),
+    // Primitives only — see above. `kind` is the canonical joined string.
+    [statusFilter, pipelineId, triggerId, since, annotation, kind, q, on, from, to],
   );
   const {
     items: runs,
@@ -443,26 +504,12 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
     return () => controller.abort();
   }, []);
 
-  // Both derived by the SAME predicate, so a tab can never advertise a number
-  // of rows it then declines to show — but keyed separately, because the counts
-  // describe every tab and so do not change when the selected one does.
-  const counts = useMemo(
-    () =>
-      Object.fromEntries(
-        RUN_TABS.map((key) => [key, filterRunsByTab(runs ?? [], key).length]),
-      ) as Record<RunTab, number>,
-    [runs],
-  );
-  const visible = useMemo(() => filterRunsByTab(runs ?? [], tab), [runs, tab]);
-
   return (
     <section aria-labelledby="runs-heading" className="runs-page">
       <div className="page-header">
         <h2 id="runs-heading">Runs</h2>
-        {/* A `role="group"` of toggles rather than a second Fluent `TabList`:
-            the panel below is already labelled by the ORIGIN tab, and two
-            `role="tab"` sets over one panel is a claim about the markup that
-            is not true. */}
+        {/* A `role="group"` of toggles rather than a `TabList`: List and
+            Timeline are two renderings of one set of rows, not two panels. */}
         <div role="group" aria-label="Runs view" className="run-view-toggle">
           <ToggleButton size="small" checked={view === 'list'} onClick={() => selectView('list')}>
             List
@@ -511,7 +558,23 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
           pane that renders only when rows exist would vanish exactly when the
           operator needs it to undo the filter that emptied the list. */}
       <div className="run-filters" role="group" aria-label="Filter runs">
-        <LabelledControl label="Status">
+        {/* #1484 — ONE row. Each control keeps its label for assistive tech but
+            draws none: the "All …" first option names the axis on screen, and
+            a row of stacked labels is what pushed the first run off the top. */}
+        <LabelledControl label={<span className="visually-hidden">Search runs</span>}>
+          {(id) => (
+            <input
+              id={id}
+              type="search"
+              className="run-filters__search"
+              placeholder="Search run id, pipeline, trigger, error…"
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+            />
+          )}
+        </LabelledControl>
+
+        <LabelledControl label={<span className="visually-hidden">Status</span>}>
           {(id) => (
             <select
               id={id}
@@ -528,8 +591,35 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
           )}
         </LabelledControl>
 
+        {/* What started the run, several at once. Fluent's checkbox menu: it
+            brings the `menuitemcheckbox` roles and arrow-key movement a
+            multi-select needs, which a native `<select multiple>` draws as a
+            tall list box. The button says the selection, so the label is the
+            button's own text. */}
+        <Menu
+          checkedValues={{ kind: kinds }}
+          onCheckedValueChange={(_, data) =>
+            setFilter(RUN_FILTER_PARAMS.kind, canonicalKindParam(data.checkedItems) ?? '')
+          }
+        >
+          <MenuTrigger disableButtonEnhancement>
+            <button type="button" className="run-filters__menu">
+              Triggered by: {kindSummary} ▾
+            </button>
+          </MenuTrigger>
+          <MenuPopover>
+            <MenuList>
+              {RUN_TRIGGERED_BY_KINDS.map((k) => (
+                <MenuItemCheckbox key={k} name="kind" value={k}>
+                  {RUN_TRIGGERED_BY_LABELS[k]}
+                </MenuItemCheckbox>
+              ))}
+            </MenuList>
+          </MenuPopover>
+        </Menu>
+
         <FilterPicker
-          label="Pipeline"
+          label={<span className="visually-hidden">Pipeline</span>}
           allLabel="All pipelines"
           value={pipelineId}
           options={pipelines.map((p) => ({ value: p.id, label: p.name }))}
@@ -537,37 +627,77 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
         />
 
         <FilterPicker
-          label="Annotation"
-          allLabel="All annotations"
-          value={annotation}
-          options={annotations.map((a) => ({ value: a, label: a }))}
-          onChange={(next) => setFilter(RUN_FILTER_PARAMS.annotation, next)}
-        />
-
-        <FilterPicker
-          label="Trigger"
+          label={<span className="visually-hidden">Trigger</span>}
           allLabel="All triggers"
           value={triggerId}
           options={triggers.map((t) => ({ value: t.id, label: t.name }))}
           onChange={(next) => setFilter(RUN_FILTER_PARAMS.triggerId, next)}
         />
 
-        <LabelledControl label="Started">
+        <FilterPicker
+          label={<span className="visually-hidden">Annotation</span>}
+          allLabel="All annotations"
+          value={annotation}
+          options={annotations.map((a) => ({ value: a, label: a }))}
+          onChange={(next) => setFilter(RUN_FILTER_PARAMS.annotation, next)}
+        />
+
+        <LabelledControl label={<span className="visually-hidden">Started</span>}>
           {(id) => (
-            <select
-              id={id}
-              value={since ?? ''}
-              onChange={(e) => setFilter(RUN_FILTER_PARAMS.since, e.target.value)}
-            >
+            <select id={id} value={startedMode} onChange={(e) => selectStartedMode(e.target.value)}>
               <option value="">Any time</option>
               {RUN_SINCE_OPTIONS.map((w) => (
                 <option key={w} value={w}>
                   {RUN_SINCE_LABEL[w]}
                 </option>
               ))}
+              <option value="on">On a day…</option>
+              <option value="range">Between days…</option>
             </select>
           )}
         </LabelledControl>
+
+        {/* The day picker is the browser's own date input: a calendar on every
+            engine, keyboard-typable, and it always yields `YYYY-MM-DD`. A
+            cleared input removes its bound. */}
+        {startedMode === 'on' && (
+          <LabelledControl label={<span className="visually-hidden">Day</span>}>
+            {(id) => (
+              <input
+                id={id}
+                type="date"
+                value={on ?? ''}
+                onChange={(e) => setFilter(RUN_FILTER_PARAMS.on, e.target.value)}
+              />
+            )}
+          </LabelledControl>
+        )}
+        {startedMode === 'range' && (
+          <>
+            <LabelledControl label={<span className="visually-hidden">From day</span>}>
+              {(id) => (
+                <input
+                  id={id}
+                  type="date"
+                  value={from ?? ''}
+                  max={to}
+                  onChange={(e) => setFilter(RUN_FILTER_PARAMS.from, e.target.value)}
+                />
+              )}
+            </LabelledControl>
+            <LabelledControl label={<span className="visually-hidden">To day</span>}>
+              {(id) => (
+                <input
+                  id={id}
+                  type="date"
+                  value={to ?? ''}
+                  min={from}
+                  onChange={(e) => setFilter(RUN_FILTER_PARAMS.to, e.target.value)}
+                />
+              )}
+            </LabelledControl>
+          </>
+        )}
 
         {filtered && (
           <button type="button" onClick={clearFilters}>
@@ -596,99 +726,48 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
         <p>No runs match these filters. Widen them, or clear them, to see more.</p>
       )}
 
-      {runs !== null && (runs.length > 0 || filtered) && (
-        <>
-          {/* Fluent's own TabList, not a hand-rolled strip: it brings the roving
-              tabindex and arrow-key movement the `tab` role advertises, which a
-              row of plain buttons claims and does not implement. */}
-          <TabList
-            selectedValue={tab}
-            // Fluent types `data.value` as `unknown`, so it is narrowed by the
-            // same guard the URL param uses rather than asserted to be a tab.
-            onTabSelect={(_, data) => {
-              if (isRunTab(data.value)) selectTab(data.value);
-            }}
-            aria-label="Filter runs by origin"
-          >
-            {RUN_TABS.map((key) => (
-              <Tab key={key} value={key} id={`run-tab-${key}`} title={RUN_TAB_HINT[key]}>
-                {RUN_TAB_LABEL[key]}{' '}
-                {/* #1083 — OPEN-ENDED while older pages remain. This counts the
-                    runs loaded, not the runs that exist, and a bare `0` next to
-                    "No child runs" would state as fact something the very next
-                    click can falsify. `12+` is the honest form of a lower
-                    bound; once the walk is exhausted it is a complete count
-                    again and the marker goes. */}
-                <span className="run-tab-count">
-                  {counts[key]}
-                  {hasMore ? '+' : ''}
-                </span>
-              </Tab>
-            ))}
-          </TabList>
-
-          <div role="tabpanel" aria-labelledby={`run-tab-${tab}`}>
-            {visible.length === 0 ? (
-              /* Only when the SERVER returned rows and this tab holds none of
-                 them — otherwise the "no runs match these filters" line above
-                 has already said it, and saying it twice in different words
-                 reads as two separate findings. */
-              runs.length > 0 && (
-                <p>
-                  No {RUN_TAB_LABEL[tab].toLowerCase()} runs
-                  {filtered ? ' match these filters' : ''}
-                  {/* Scoped to what has been LOADED while older pages remain —
-                      the unqualified sentence claims the workspace holds none,
-                      which is only true once the walk has ended. */}
-                  {hasMore ? ' in the runs loaded so far' : ''}.
-                </p>
-              )
-            ) : view === 'timeline' ? (
-              /* One panel, one rendering — the timeline REPLACES the table
-                 rather than sitting above it. Showing both would put every run
-                 id and pipeline name on screen twice, which is the ambiguity
-                 `AttemptTimeline` records for its own untimed list, and would
-                 make the table's existing row queries match two things. */
-              <RunTimeline
-                runs={visible}
-                groupBy={groupBy}
-                onGroupByChange={(next) => setFilter(GROUP_PARAM, next === 'pipeline' ? '' : next)}
-              />
-            ) : (
-              <table className="runs-grid">
-                <thead>
-                  <tr>
-                    <th scope="col">Pipeline</th>
-                    <th scope="col">Status</th>
-                    <th scope="col">Triggered by</th>
-                    <th scope="col">Started</th>
-                    <th scope="col" className="num">
-                      Duration
-                    </th>
-                    <th scope="col" className="num">
-                      Cost
-                    </th>
-                    <th scope="col">Run ID</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visible.map((r) => (
-                    <RunRow key={r.id} run={r} loadedAt={loadedAt} />
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </>
-      )}
+      {runs !== null &&
+        runs.length > 0 &&
+        (view === 'timeline' ? (
+          /* One rendering at a time — the timeline REPLACES the table rather
+             than sitting above it. Showing both would put every run id and
+             pipeline name on screen twice, which is the ambiguity
+             `AttemptTimeline` records for its own untimed list. */
+          <RunTimeline
+            runs={runs}
+            groupBy={groupBy}
+            onGroupByChange={(next) => setFilter(GROUP_PARAM, next === 'pipeline' ? '' : next)}
+          />
+        ) : (
+          <table className="runs-grid">
+            <thead>
+              <tr>
+                <th scope="col">Pipeline</th>
+                <th scope="col">Status</th>
+                <th scope="col">Triggered by</th>
+                <th scope="col">Started</th>
+                <th scope="col" className="num">
+                  Duration
+                </th>
+                <th scope="col" className="num">
+                  Cost
+                </th>
+                <th scope="col">Run ID</th>
+              </tr>
+            </thead>
+            <tbody>
+              {runs.map((r) => (
+                <RunRow key={r.id} run={r} loadedAt={loadedAt} />
+              ))}
+            </tbody>
+          </table>
+        ))}
 
       {/* Rendered only when the server said there IS an older page. An
           always-present button that sometimes did nothing would make the end of
           the history indistinguishable from a list that had stopped loading —
           and where the history ends is exactly what a reader is checking.
-          OUTSIDE the "are there rows" guard above, because a tab holding none of
-          the loaded rows is precisely when the reader needs to reach further
-          back rather than being told there is nothing there. */}
+          OUTSIDE the "are there rows" guard above, like the filter bar. */}
       {hasMore && (
         <button type="button" onClick={loadMore} disabled={busy}>
           Load older runs

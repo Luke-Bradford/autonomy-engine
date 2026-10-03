@@ -4,7 +4,7 @@ import { HUBS } from '../shell/hubs';
 import { listRuns } from '../api/runs';
 import { usePagedList } from '../hooks/usePagedList';
 import { runStatusLabel } from './runs/runStatus';
-import { NO_RUNS_YET } from './runs/runOrigin';
+import { NO_RUNS_YET } from './runs/runFilters';
 import { runDetailPath } from './runs/runPath';
 import { formatWhen } from './runs/format';
 import { versionLabel } from '../lib/versionLabel';

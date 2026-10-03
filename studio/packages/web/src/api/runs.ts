@@ -95,6 +95,15 @@ export interface ListRunsQuery {
   /** U26 — exact match on the annotations of the version each run BOUND. */
   annotation?: string;
   rerunOf?: string;
+  /** #1484 — a canonical comma list of triggered-by kinds (`canonicalKindParam`). */
+  kind?: string;
+  /** #1484 — the search box. */
+  q?: string;
+  /** #1484 — absolute epoch-ms bounds on the start time, `from` inclusive and
+   * `to` exclusive (`dayRangeBounds`). Strings because they go straight to the
+   * query string. */
+  from?: string;
+  to?: string;
 }
 
 /**

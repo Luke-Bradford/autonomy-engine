@@ -4496,17 +4496,29 @@ button.danger {
   font-size: 12px;
 }
 
-/* U26 — the Monitor's filter pane. A wrapping row rather than a fixed grid: it
-   sits above the tab strip on every width, and its controls are plain selects,
-   so the only thing it genuinely needs is not to stack into a column on a wide
-   screen. Richer controls (a Fluent combobox, saved views) are deferred polish —
-   this makes the axis reachable, which is the part that was missing. */
+/* U26 + #1484 — the runs list's filter bar: ONE row at 1440px. The labels are
+   visually hidden (the "All …" options name each axis), the controls are
+   narrow, and the search box takes whatever width is left. It may still wrap on
+   a narrow window rather than push the page sideways. */
 .run-filters {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.run-filters .labelled-control:has(.run-filters__search) {
+  flex: 1 1 12rem;
+  min-width: 8rem;
+}
+
+.run-filters__search {
+  width: 100%;
+}
+
+.run-filters__menu {
+  white-space: nowrap;
 }
 
 .run-filters label,
@@ -4524,14 +4536,7 @@ button.danger {
    on a 1440px screen). Capped; the closed control ellipsizes, the open list
    still shows every name in full. */
 .run-filters select {
-  max-width: 16rem;
-}
-
-/* U10 — the runs list's origin tabs are Fluent's own `TabList`, so only the
-   count badge inside each tab needs a rule of its own. */
-.run-tab-count {
-  color: var(--muted);
-  font-size: 0.75rem;
+  max-width: 10rem;
 }
 
 /* The version number beside a run's pipeline NAME — present but subordinate to
@@ -4561,20 +4566,21 @@ button.danger {
    the AI-activity page, because the two show the same kind of number from the
    same kind of bounded aggregate and a second visual treatment would imply
    otherwise. All this rule owns is the heading's weight and the block's rhythm. */
-.lifetime-spend {
-  margin-bottom: 1rem;
+/* #1484 — the filtered pipeline's lifetime spend, as one dense line. */
+.runs-summary-line {
+  font-size: 13px;
+  margin-bottom: 0.5rem;
 }
 
-.lifetime-spend h3 {
-  margin: 0;
-  font-size: 0.95rem;
+.runs-summary-line__label {
+  color: var(--muted);
 }
 
-/* The caveats. Deliberately not a notice or an alert — they qualify the figure
-   permanently rather than reporting an event, and the page already runs as many
-   live regions as it should. */
-.lifetime-spend .page-hint {
-  margin-top: 0.35rem;
+.runs-summary-line__help {
+  margin-left: 0.4rem;
+  padding: 0 0.4rem;
+  font-size: 12px;
+  line-height: 1.2;
 }
 
 /* --- #1476 OR28: the editor's Triggers column ------------------------------ */
