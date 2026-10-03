@@ -971,8 +971,9 @@ export function PipelineCanvas({
    * the git part's `PR #n` link. Read when a repo is connected, when its
    * working branch changes, and on focus — not on save, which cannot open or
    * close a PR. The server asks the host at most once per
-   * `GIT_FETCH_MAX_AGE_SECONDS`, so focus reads are cheap. A failed read, or
-   * no repo, clears it: no link is better than one the page cannot back.
+   * `GIT_FETCH_MAX_AGE_SECONDS`, so focus reads are cheap. A failed read
+   * clears it, and it is not passed on without a repo: no link is better than
+   * one the page cannot back.
    */
   const [gitPr, setGitPr] = useState<WorkspaceGitPullRequestReading | undefined>(undefined);
   const guardedPrLoad = useGuardedLoad();
@@ -985,7 +986,6 @@ export function PipelineCanvas({
   const workingBranch = git?.workingBranch;
   useEffect(() => {
     if (gitConnected === true) refreshGitPr();
-    else setGitPr(undefined);
   }, [gitConnected, workingBranch, refreshGitPr]);
   useEffect(() => {
     if (gitConnected !== true) return;
@@ -1022,7 +1022,7 @@ export function PipelineCanvas({
     source: previewed ?? loaded ?? null,
     sync: gitSync,
     pipelineId,
-    pullRequest: gitPr,
+    pullRequest: gitConnected === true ? gitPr : undefined,
   });
 
   // U16 — `loaded` LEAVES the dep list: `params` moved into the store, and it

@@ -6,7 +6,6 @@ import {
   type FindOpenPullRequestParams,
   type GitHostClient,
   type OpenedPullRequest,
-  type OpenPullRequestParams,
 } from '../../git/github-host.js';
 import { buildTestAppWithContext, type TestApp } from '../../__tests__/build-test-app.js';
 
@@ -30,7 +29,7 @@ class FakeHostClient implements GitHostClient {
     public outcome: Outcome,
     private readonly hold = false,
   ) {}
-  async openPullRequest(_params: OpenPullRequestParams): Promise<OpenedPullRequest> {
+  async openPullRequest(): Promise<OpenedPullRequest> {
     return { number: 12, htmlUrl: 'https://github.com/acme/widgets/pull/12' };
   }
   async findOpenPullRequest(params: FindOpenPullRequestParams): Promise<OpenedPullRequest | null> {
@@ -228,7 +227,10 @@ describe('GET /api/workspace/git/pull-request (#1476 OR28)', () => {
       payload: {},
     });
     expect(opened.statusCode).toBe(200);
-    host.outcome = { kind: 'found', pr: { number: 12, htmlUrl: 'https://github.com/acme/widgets/pull/12' } };
+    host.outcome = {
+      kind: 'found',
+      pr: { number: 12, htmlUrl: 'https://github.com/acme/widgets/pull/12' },
+    };
     expect((await read(app)).body.pullRequest).toMatchObject({ state: 'open', number: 12 });
     expect(host.finds).toHaveLength(2);
   });
@@ -250,7 +252,10 @@ describe('GET /api/workspace/git/pull-request (#1476 OR28)', () => {
   });
 
   it('setting or clearing the stored token drops the cached answer', async () => {
-    const host = new FakeHostClient({ kind: 'throw', error: new GitHostApiError('Bad credentials') });
+    const host = new FakeHostClient({
+      kind: 'throw',
+      error: new GitHostApiError('Bad credentials'),
+    });
     const app = await boot({ hostClient: host });
     seed(app);
     expect((await read(app)).body.pullRequest).toMatchObject({ state: 'unknown' });
