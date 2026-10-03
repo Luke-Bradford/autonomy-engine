@@ -1,3 +1,9 @@
+import {
+  isWithinRunWindows,
+  type TriggerNextFire,
+  type TriggerPublic,
+} from '@autonomy-studio/shared';
+import { formatWhen } from '../runs/format';
 import type { BindingSelection } from '../triggers/binding';
 import type { ActiveVersionState } from './versionHistory';
 
@@ -70,4 +76,37 @@ export function newTriggerTitle(
         : `Fires the latest saved version (v${String(headVersion)} now).`
       : `Fires v${String(headVersion)}, the latest saved version.`;
   return dirty ? `${what} Your unsaved edits are not included.` : what;
+}
+
+/**
+ * #1476 slice 4 — when a listed trigger is next due, as row text, or `null`
+ * when there is nothing to say (a disabled trigger, or a mode that does not
+ * fire on a clock).
+ *
+ * Worded as what is SCHEDULED, never "next run": a concurrency cap or an
+ * archived pipeline can still hold or skip a fire at that moment. The one skip
+ * the row can know about ahead of time it states — a schedule tick that falls
+ * outside the trigger's run windows (tumbling windows are not gated by them).
+ * That check is best-effort: the handler judges the instant it is DELIVERED,
+ * which is the due time unless the clock runs late, so an overdue tick is
+ * judged at `readAt`, the closest the row can come to it.
+ *
+ * A time already past at `readAt` reads "due now": the alarm is due and the
+ * clock has not delivered it yet (an overdue backfill window included).
+ */
+export function nextFireText(
+  t: Pick<TriggerPublic, 'enabled' | 'mode' | 'runWindows'>,
+  next: TriggerNextFire | undefined,
+  readAt: number,
+): string | null {
+  if (!t.enabled || (t.mode !== 'schedule' && t.mode !== 'tumbling')) return null;
+  if (next === undefined) return 'nothing scheduled';
+  const overdue = next.at <= readAt;
+  if (next.source === 'window') {
+    return overdue ? 'a closed window is due now' : `next window closes ${formatWhen(next.at)}`;
+  }
+  const what = overdue ? 'a scheduled tick is due now' : `next scheduled ${formatWhen(next.at)}`;
+  return isWithinRunWindows(t.runWindows, new Date(Math.max(next.at, readAt)))
+    ? what
+    : `${what}, outside its run windows so skipped`;
 }

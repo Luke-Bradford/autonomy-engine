@@ -2,9 +2,11 @@ import { z } from 'zod';
 import {
   FireResultSchema,
   TriggerCreateBodySchema,
+  TriggerNextFireListSchema,
   TriggerPublicSchema,
   TriggerWriteBodySchema,
   type FireResult,
+  type TriggerNextFire,
   type TriggerPublic,
 } from '@autonomy-studio/shared';
 import { apiFetch } from './client';
@@ -49,6 +51,11 @@ export type WebhookSecretResult = z.infer<typeof WebhookSecretResultSchema>;
 /** Owner-scoped list of triggers (webhook `secretRef` never present — `TriggerPublic`). */
 export function listTriggers(signal?: AbortSignal): Promise<TriggerPublic[]> {
   return apiFetch('/api/triggers', { schema: TriggerListSchema, signal });
+}
+
+/** #1476 — when each of the caller's triggers is next due (its armed alarm). */
+export function listTriggerNextFires(signal?: AbortSignal): Promise<TriggerNextFire[]> {
+  return apiFetch('/api/triggers/next-fires', { schema: TriggerNextFireListSchema, signal });
 }
 
 export function createTrigger(body: TriggerCreateWrite): Promise<TriggerPublic> {
