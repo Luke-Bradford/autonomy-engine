@@ -1,3 +1,5 @@
+import { isWithinRunWindows, type TriggerNextFire, type TriggerPublic } from '@autonomy-studio/shared';
+import { formatWhen } from '../runs/format';
 import type { BindingSelection } from '../triggers/binding';
 import type { ActiveVersionState } from './versionHistory';
 
@@ -70,4 +72,30 @@ export function newTriggerTitle(
         : `Fires the latest saved version (v${String(headVersion)} now).`
       : `Fires v${String(headVersion)}, the latest saved version.`;
   return dirty ? `${what} Your unsaved edits are not included.` : what;
+}
+
+/**
+ * #1476 slice 4 — when a listed trigger is next due, as row text, or `null`
+ * when there is nothing to say (next fires not loaded, a disabled trigger, or
+ * a mode that does not fire on a clock).
+ *
+ * Worded as what is SCHEDULED, never "next run": a concurrency cap or an
+ * archived pipeline can still hold or skip a fire at that moment. The one skip
+ * the row can know about ahead of time it states — a schedule tick that falls
+ * outside the trigger's run windows (tumbling windows are not gated by them).
+ * A time already passed reads "due now": the column does not poll, so it can
+ * outlive the time it showed.
+ */
+export function nextFireText(
+  t: Pick<TriggerPublic, 'enabled' | 'mode' | 'runWindows'>,
+  next: TriggerNextFire | undefined,
+  now: number,
+): string | null {
+  if (!t.enabled || (t.mode !== 'schedule' && t.mode !== 'tumbling')) return null;
+  if (next === undefined) return 'nothing scheduled';
+  const when = next.at <= now ? 'now' : formatWhen(next.at);
+  if (next.source === 'window') return `next window closes ${when}`;
+  return isWithinRunWindows(t.runWindows, new Date(next.at))
+    ? `next scheduled ${when}`
+    : `next scheduled ${when}, outside its run windows so skipped`;
 }

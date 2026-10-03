@@ -12,6 +12,7 @@ import { PipelineTriggersColumn } from './PipelineTriggersColumn';
 vi.mock('../../api/triggers', async (importActual) => ({
   ...(await importActual<typeof import('../../api/triggers')>()),
   listTriggers: vi.fn(),
+  listTriggerNextFires: vi.fn(),
   createTrigger: vi.fn(),
   updateTrigger: vi.fn(),
 }));
@@ -22,6 +23,7 @@ vi.mock('../../api/pipelines', () => ({
 vi.mock('../../api/workspaceGit', () => ({ getWorkspaceGit: vi.fn() }));
 
 const listTriggersMock = vi.mocked(triggersApi.listTriggers);
+const nextFiresMock = vi.mocked(triggersApi.listTriggerNextFires);
 const createMock = vi.mocked(triggersApi.createTrigger);
 const listAllVersionsMock = vi.mocked(pipelinesApi.listAllPipelineVersions);
 
@@ -94,6 +96,7 @@ beforeEach(() => {
     trigger(),
     trigger({ id: 'trg_2', name: 'Not mine', pipelineVersionId: 'plv_9' }),
   ]);
+  nextFiresMock.mockResolvedValue([]);
   vi.mocked(workspaceGitApi.getWorkspaceGit).mockResolvedValue(null);
   vi.mocked(pipelinesApi.getActivePipelineVersion).mockResolvedValue(null);
 });
@@ -233,5 +236,45 @@ describe('PipelineTriggersColumn (#1476 OR28 slice 3)', () => {
     await user.click(screen.getByRole('button', { name: 'save v4' }));
     const row = (await screen.findByText('On v4')).closest('li')!;
     expect(within(row).getByText(/v4 · enabled/)).toBeInTheDocument();
+  });
+
+  describe('next fire time (#1476 slice 4)', () => {
+    const schedule = { mode: 'schedule' as const, schedule: '0 2 * * *' };
+    const at = Date.now() + 3_600_000;
+
+    it('says when a schedule trigger is next due', async () => {
+      listTriggersMock.mockResolvedValue([trigger(schedule)]);
+      nextFiresMock.mockResolvedValue([{ triggerId: 'trg_1', at, source: 'schedule' }]);
+      mount();
+      const row = (await screen.findByText('Nightly')).closest('li')!;
+      await waitFor(() =>
+        expect(row).toHaveTextContent(`enabled · next scheduled ${new Date(at).toLocaleString()}`),
+      );
+    });
+
+    it('re-reads next fires after a save', async () => {
+      const user = userEvent.setup();
+      listTriggersMock.mockResolvedValue([trigger(schedule)]);
+      mount();
+      await screen.findByText('Nightly');
+      await waitFor(() => expect(nextFiresMock).toHaveBeenCalledTimes(1));
+      createMock.mockResolvedValue(trigger({ id: 'trg_3', name: 'Hourly' }));
+      await user.click(screen.getByRole('button', { name: 'New trigger' }));
+      await user.type(screen.getByLabelText('Name'), 'Hourly');
+      await user.click(screen.getByRole('button', { name: 'Create trigger' }));
+      await waitFor(() => expect(nextFiresMock).toHaveBeenCalledTimes(2));
+    });
+
+    it('a failed next-fire read leaves the list as it was, with no times', async () => {
+      listTriggersMock.mockResolvedValue([trigger(schedule)]);
+      nextFiresMock.mockRejectedValue(new Error('boom'));
+      mount();
+      const row = (await screen.findByText('Nightly')).closest('li')!;
+      await waitFor(() => expect(nextFiresMock).toHaveBeenCalled());
+      // Not "nothing scheduled": an unknown is not shown as an absence.
+      expect(row).toHaveTextContent('v3 · enabled');
+      expect(row).not.toHaveTextContent(/next|nothing scheduled/);
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
   });
 });

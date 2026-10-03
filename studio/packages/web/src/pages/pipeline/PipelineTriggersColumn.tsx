@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { Link } from 'react-router';
-import type { TriggerPublic } from '@autonomy-studio/shared';
+import type { TriggerNextFire, TriggerPublic } from '@autonomy-studio/shared';
 import { DismissRegular } from '@fluentui/react-icons';
-import { listTriggers } from '../../api/triggers';
+import { listTriggerNextFires, listTriggers } from '../../api/triggers';
 import { useGuardedLoad } from '../../hooks/useGuardedLoad';
 import { useDrawerForm } from '../../lib/form/useDrawerForm';
 import { TriggerModeName } from '../../lib/KindName';
@@ -18,6 +18,7 @@ import {
 } from '../triggers/triggerFormState';
 import type { BindingSelection } from '../triggers/binding';
 import { triggersPath } from '../triggers/triggersPath';
+import { nextFireText } from './triggerColumnRules';
 
 /**
  * #1476 OR28 slice 3 — this pipeline's triggers, in a column beside the editor:
@@ -32,9 +33,10 @@ import { triggersPath } from '../triggers/triggersPath';
  * one guard. In-column exits (Close, Cancel, another row's Edit) still go
  * through this guard's own prompt.
  *
- * Not here yet: each trigger's next fire time, which no API exposes — it is
- * the pending `schedule_tick`/`window_due` alarm, a server read of its own
- * (a later #1476 slice).
+ * Each row says when the trigger is next due (`nextFireText`), read from the
+ * alarm the scheduler has armed. That read loads on its own: it only adds a
+ * line of text, so its failure leaves the list as it was rather than taking
+ * the list down with it.
  */
 export function PipelineTriggersColumn({
   pipelineId,
@@ -65,6 +67,7 @@ export function PipelineTriggersColumn({
   const [bindings, setBindings] = useState<BindingOption[]>([]);
   const [pipelines, setPipelines] = useState<PipelineOption[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [nextFires, setNextFires] = useState<Map<string, TriggerNextFire> | null>(null);
   const {
     form,
     setForm,
@@ -81,18 +84,28 @@ export function PipelineTriggersColumn({
   // One load path, as on the Triggers page: both halves land together, and a
   // refresh after a save supersedes nothing it should not (`useGuardedLoad`).
   const guardedLoad = useGuardedLoad();
+  // A second instance: one per state target (see `useGuardedLoad`).
+  const guardedNextFiresLoad = useGuardedLoad();
   const refresh = useCallback(
     () =>
-      guardedLoad((signal) => Promise.all([listTriggers(signal), loadTriggerBindings(signal)]), {
-        onData: ([list, opts]) => {
-          setTriggers(list);
-          setBindings(opts.options);
-          setPipelines(opts.pipelines);
-          setLoadError(null);
-        },
-        onError: (err) => setLoadError(err instanceof Error ? err.message : String(err)),
-      }),
-    [guardedLoad],
+      Promise.all([
+        guardedLoad((signal) => Promise.all([listTriggers(signal), loadTriggerBindings(signal)]), {
+          onData: ([list, opts]) => {
+            setTriggers(list);
+            setBindings(opts.options);
+            setPipelines(opts.pipelines);
+            setLoadError(null);
+          },
+          onError: (err) => setLoadError(err instanceof Error ? err.message : String(err)),
+        }),
+        guardedNextFiresLoad(listTriggerNextFires, {
+          onData: (list) => setNextFires(new Map(list.map((f) => [f.triggerId, f]))),
+          // No times rather than wrong ones: a stale map could name a time the
+          // scheduler has since moved.
+          onError: () => setNextFires(null),
+        }),
+      ]),
+    [guardedLoad, guardedNextFiresLoad],
   );
   useEffect(() => {
     void refresh();
@@ -129,6 +142,10 @@ export function PipelineTriggersColumn({
   );
   // Every listed trigger is bound to one of `pipeline`'s versions (that is
   // what `triggersOfPipeline` matched on), so the lookup always finds it.
+  const withNextFire = (t: TriggerPublic, next: TriggerNextFire | undefined): string => {
+    const text = nextFireText(t, next, Date.now());
+    return text === null ? '' : ` · ${text}`;
+  };
   const boundVersionText = (versionId: string | null): string => {
     const v = pipeline?.versions.find((x) => x.id === versionId);
     return v === undefined ? '' : `v${String(v.version)}`;
@@ -179,6 +196,7 @@ export function PipelineTriggersColumn({
                   <span className="pipeline-triggers__meta">
                     <TriggerModeName mode={t.mode} /> · {boundVersionText(t.pipelineVersionId)} ·{' '}
                     {t.enabled ? 'enabled' : 'disabled'}
+                    {nextFires !== null && withNextFire(t, nextFires.get(t.id))}
                   </span>
                 </div>
                 <button
