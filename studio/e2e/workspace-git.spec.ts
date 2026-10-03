@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
-import { editorMenuItem, openExistingCanvas } from './support/canvas';
+import { editorMenuItem, editorMenuTrigger, openExistingCanvas } from './support/canvas';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 import { disconnectWorkspaceGit, makeBareRepo } from './support/workspaceGit';
@@ -324,7 +324,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   const gitPart = page.getByRole('group', { name: 'Pipeline state' }).locator('[data-part="git"]');
   // #1476 slice 6 — and it came in from main, so it is not on the working
   // branch: uncommitted, in amber, with the reason in the detail.
-  await expect(gitPart).toHaveText(/^\S+ → main · from [0-9a-f]{7} · uncommitted$/);
+  await expect(gitPart).toHaveText(/^\S+ → main · from [0-9a-f]{7} · uncommitted\./);
   await expect(gitPart).toHaveAttribute('data-tone', 'warning');
   await expect(gitPart).toHaveAttribute('title', /was imported from commit [0-9a-f]{7}/);
   await expect(gitPart).toHaveAttribute(
@@ -386,8 +386,15 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   });
   await expect(gitItem).toBeVisible();
   await expect(gitItem).toHaveAttribute('data-tone', 'warning');
+  // Amber folded into ⋯ colours it and is named in its label, never colour alone.
+  await expect(editorMenuTrigger(page)).toHaveAttribute(
+    'aria-label',
+    /^More pipeline actions \(git: from [0-9a-f]{7} · uncommitted\)$/,
+  );
   await page.keyboard.press('Escape');
-  await page.setViewportSize({ width: 1600, height: 1000 });
+  // 1920, not the 1600 default: with the history column open, the row holds an
+  // `uncommitted` git pill at 1600 only with Validate folded (#1476 slice 6).
+  await page.setViewportSize({ width: 1920, height: 1000 });
   await expect(validateButton).toBeVisible();
   await expect(gitPart).toBeVisible();
 
@@ -438,13 +445,13 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
     /^More pipeline actions \(git: from [0-9a-f]{7} · fetch failed\)$/,
   );
   await expect(more).toHaveAttribute('data-tone', 'danger');
-  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.setViewportSize({ width: 1920, height: 1000 });
   await expect(gitPart).toBeVisible();
   await expect(more).toHaveAttribute('aria-label', 'More pipeline actions');
   await page.unroute(gitStatusUrl);
   // And the next focus reads the real state again.
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect(gitPart).toHaveText(/ · uncommitted$/);
+  await expect(gitPart).toHaveText(/ · uncommitted\./);
   await expect(gitPart).toHaveAttribute('data-tone', 'warning');
 
   /**
@@ -561,7 +568,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await page.getByRole('button', { name: 'Commit' }).click();
   await expect(page.getByRole('status')).toContainText('Committed');
   await openExistingCanvas(page, publishName);
-  await expect(gitPart).toHaveText(/ · in sync$/);
+  await expect(gitPart).toHaveText(/ · in sync\./);
   await expect(gitPart).toHaveAttribute('data-tone', 'neutral');
   await expect(gitPart).toHaveAttribute(
     'title',
@@ -573,7 +580,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await incoming.getByRole('button', { name: 'Check for incoming' }).click();
   await expect(incoming).toContainText(`${pipelineName}-later`);
   await openExistingCanvas(page, publishName);
-  await expect(gitPart).toHaveText(/ · behind main — pull first$/);
+  await expect(gitPart).toHaveText(/ · behind main — pull first\./);
   await expect(gitPart).toHaveAttribute('data-tone', 'warning');
   await expect(gitPart).toHaveAttribute(
     'title',
