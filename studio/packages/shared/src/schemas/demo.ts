@@ -28,3 +28,23 @@ export const DemoSeedResponseSchema = z.object({
   scheduleTriggerId: z.string(),
 });
 export type DemoSeedResponse = z.infer<typeof DemoSeedResponseSchema>;
+
+/**
+ * #1481 OR32 — `GET /api/demo`: whether ANY of the demo's resources exist for
+ * the caller (an archived demo pipeline counts). The web offers Load when this
+ * is false and Remove when it is true, so a part-removed or archived demo,
+ * which a load refuses, still has a way out.
+ */
+export const DemoStatusSchema = z.object({ loaded: z.boolean() });
+export type DemoStatus = z.infer<typeof DemoStatusSchema>;
+
+/**
+ * #1481 OR32 — `DELETE /api/demo`'s answer. `removed` counts the demo's
+ * connections, datasets, pipelines and triggers deleted; `runsRemoved` counts
+ * the run history that went with the pipelines.
+ */
+export const DemoRemoveResponseSchema = z.object({
+  removed: z.number().int().nonnegative(),
+  runsRemoved: z.number().int().nonnegative(),
+});
+export type DemoRemoveResponse = z.infer<typeof DemoRemoveResponseSchema>;

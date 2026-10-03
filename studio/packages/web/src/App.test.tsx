@@ -16,6 +16,8 @@ import { AppThemeProvider } from './theme/AppThemeProvider';
 // stubbed. Shared rather than hand-rolled here: this is the fourth file to need
 // the same pair, which is the pattern the guard in `vitest.setup.ts` exists to
 // stop repeating.
+vi.mock('./api/demo', async () => (await import('./testing/apiModuleMocks')).demoModuleMock());
+
 vi.mock('./api/version', async () =>
   (await import('./testing/apiModuleMocks')).versionModuleMock(),
 );

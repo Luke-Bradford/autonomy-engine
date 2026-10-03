@@ -7,6 +7,8 @@ import { listRuns } from '../api/runs';
 import { runStatusLabel } from './runs/runStatus';
 import { runDetailPath } from './runs/runPath';
 
+vi.mock('../api/demo', async () => (await import('../testing/apiModuleMocks')).demoModuleMock());
+
 vi.mock('../api/runs', async (importActual) => ({
   ...(await importActual<typeof import('../api/runs')>()),
   listRuns: vi.fn(),
