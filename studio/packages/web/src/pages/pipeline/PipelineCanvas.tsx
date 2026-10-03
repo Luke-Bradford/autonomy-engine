@@ -1080,28 +1080,33 @@ export function PipelineCanvas({
     }));
   };
   /* #1476 OR28 — the ticket's rule for a toolbar row that cannot hold every
-     act: overflow goes into ⋯, it never wraps or spills. Validate is the act
-     that folds — the one used least often of those in the row. It folds when
+     act: overflow goes into ⋯, it never wraps or spills. Two things fold, one
+     at a time and in this order: Validate — the act used least often of those
+     in the row — and then the git part of the badge, the widest pill and the
+     one fact with a page of its own to open (Manage → Git). Each folds when
      the row overflows, remembering the width it needed, and comes back only
      once the row is that wide again: comparing against the width that DID
      overflow, not the narrower one without it, is what stops it flapping.
-     Measured on the header's own width and on what changes the row's content
-     (the badge's labels, the Save label) — not on every render, which would
-     force a layout on every node drag. */
-  const [validateFolded, setValidateFolded] = useState<{ needs: number } | null>(null);
+     `folds` holds those widths, last-folded last. Measured on the header's own
+     width and on what changes the row's content (the badge's labels, the Save
+     label) — not on every render, which would force a layout on every node
+     drag. */
+  const [folds, setFolds] = useState<readonly number[]>([]);
+  const foldable = gitBadge === null ? 1 : 2;
   const headerWidth = useElementSize(headerRef, 'width');
-  const rowContent = `${editingBadge.label}|${liveBadge?.label ?? ''}|${String(saving)}`;
+  const rowContent = `${editingBadge.label}|${liveBadge?.label ?? ''}|${gitBadge?.label ?? ''}|${String(saving)}`;
   useLayoutEffect(() => {
     const header = headerRef.current;
     if (header === null) return;
-    if (validateFolded === null) {
-      if (header.scrollWidth > header.clientWidth) {
-        setValidateFolded({ needs: header.scrollWidth });
-      }
-    } else if (header.clientWidth >= validateFolded.needs) {
-      setValidateFolded(null);
+    const last = folds.at(-1);
+    if (last !== undefined && (header.clientWidth >= last || folds.length > foldable)) {
+      setFolds((f) => f.slice(0, -1));
+    } else if (header.scrollWidth > header.clientWidth && folds.length < foldable) {
+      setFolds((f) => [...f, header.scrollWidth]);
     }
-  }, [headerWidth, rowContent, validateFolded]);
+  }, [headerWidth, rowContent, folds, foldable]);
+  const validateFolded = folds.length >= 1;
+  const gitFolded = folds.length >= 2;
   const validateReason = validateDisabledReason({
     ready,
     previewing: previewing !== null,
@@ -1588,7 +1593,13 @@ export function PipelineCanvas({
         </h2>
         {/* #1476 OR28 — nothing until the load lands: an empty version list
             before then would read as "Not saved" on every open. */}
-        {ready && <EditorStateBadge editing={editingBadge} live={liveBadge} git={gitBadge} />}
+        {ready && (
+          <EditorStateBadge
+            editing={editingBadge}
+            live={liveBadge}
+            git={gitFolded ? null : gitBadge}
+          />
+        )}
         {/* #907 — an archived pipeline refuses every save, so say it BEFORE the
             work happens. Without this the first Save simply bounces with a 409,
             after however long the operator spent editing.
@@ -1806,7 +1817,7 @@ export function PipelineCanvas({
           )}
           {/* #1476 OR28 — Validate: the save's own check, without saving.
               In ⋯ instead while the row is too narrow (`validateFolded`). */}
-          {validateFolded === null && (
+          {!validateFolded && (
             <button
               type="button"
               disabled={validateReason !== null}
@@ -1936,13 +1947,26 @@ export function PipelineCanvas({
             </MenuTrigger>
             <MenuPopover>
               <MenuList>
-                {validateFolded !== null && (
+                {validateFolded && (
                   <MenuItem
                     onClick={() => void onValidate()}
                     disabled={validateReason !== null}
                     subText={validateReason ?? undefined}
                   >
                     Validate
+                  </MenuItem>
+                )}
+                {/* The git part, folded: its label is the item, its sentence
+                    the second line, and opening it goes where the repo is
+                    managed. */}
+                {gitFolded && gitBadge !== null && (
+                  <MenuItem
+                    data-part="git"
+                    data-tone={gitBadge.tone}
+                    onClick={() => void navigate('/manage/git')}
+                    subText={gitBadge.detail}
+                  >
+                    Git: {gitBadge.label}
                   </MenuItem>
                 )}
                 {/* U9 — Arrange moves the DOCUMENT, not the view, so it is not
