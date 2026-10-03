@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { canvasVersion, editingState, liveState, type EditingInput } from './editorState';
+import type { WorkspaceGitStatus } from '@autonomy-studio/shared';
+import { canvasVersion, editingState, gitState, liveState, type EditingInput } from './editorState';
 
 const base: EditingInput = {
   dirty: false,
@@ -106,5 +107,61 @@ describe('liveState', () => {
       label: 'Live: not listed yet',
       tone: 'warning',
     });
+  });
+});
+
+describe('gitState', () => {
+  const git: WorkspaceGitStatus = {
+    id: 'wg_1',
+    ownerId: null,
+    repoUrl: 'file:///tmp/repo.git',
+    collabBranch: 'main',
+    workingBranch: 'feature/x',
+    observedCollabHead: 'c0ffee0000000000000000000000000000000000',
+    importedFromCommit: null,
+    lastFetchAt: 1,
+    lastFetchError: null,
+    createdAt: 1,
+    updatedAt: 1,
+    state: 'ready',
+    hasStoredToken: false,
+  };
+  const saved = { version: 3, sourceCommit: null, sourceBranch: null };
+
+  it('is hidden with no repo, and while the repo is unread', () => {
+    expect(gitState({ git: null, source: saved })).toBeNull();
+    expect(gitState({ git: undefined, source: saved })).toBeNull();
+  });
+
+  it('names the working branch against the collaboration branch', () => {
+    const p = gitState({ git, source: saved });
+    expect(p).toMatchObject({ label: 'feature/x → main', tone: 'neutral' });
+    expect(p?.detail).toMatch(
+      /^Commits go to feature\/x; pull requests open into main\. Last fetched /,
+    );
+  });
+
+  it('adds the commit the canvas version came from, and only when it has one', () => {
+    const p = gitState({
+      git,
+      source: { version: 2, sourceCommit: 'abcdef1234567890', sourceBranch: 'main' },
+    });
+    expect(p?.label).toBe('feature/x → main · from abcdef1');
+    expect(p?.detail).toContain('v2 was imported from commit abcdef1 on main.');
+    expect(gitState({ git, source: null })?.label).toBe('feature/x → main');
+  });
+
+  it('says in words when the last fetch failed, and draws it as danger', () => {
+    const p = gitState({
+      git: { ...git, state: 'fetch_error', lastFetchError: 'could not resolve host' },
+      source: saved,
+    });
+    expect(p).toMatchObject({ label: 'feature/x → main · fetch failed', tone: 'danger' });
+    expect(p?.detail).toContain('The last fetch from the repo failed: could not resolve host');
+  });
+
+  it('says when the collaboration branch does not exist at the repo yet', () => {
+    const p = gitState({ git: { ...git, state: 'collab_branch_missing' }, source: saved });
+    expect(p).toMatchObject({ label: 'feature/x → main · no main yet', tone: 'warning' });
   });
 });

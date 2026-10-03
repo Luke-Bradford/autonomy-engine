@@ -31,6 +31,7 @@ import {
   readWorkspaceGitDivergence,
   readWorkspaceGitDrift,
   setWorkspaceGitToken,
+  shortSha,
 } from '../api/workspaceGit';
 import { ApiError, messageOf } from '../api/client';
 import { formatWhen } from './runs/format';
@@ -1414,10 +1415,6 @@ function describeState(status: WorkspaceGitStatus): string {
 }
 
 /** A commit sha at review length, or an em-dash when there is none to show. */
-function shortSha(sha: string | null): string {
-  return sha === null ? '—' : sha.slice(0, 7);
-}
-
 function countFiles(files: string[]): string {
   return countOf(files.length, 'file');
 }

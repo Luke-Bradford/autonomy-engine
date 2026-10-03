@@ -13,19 +13,29 @@ import type { BadgePart } from './editorState';
 export function EditorStateBadge({
   editing,
   live,
+  git,
 }: {
   editing: BadgePart;
   live: BadgePart | null;
+  /** The repo's branches, when one is connected (`gitState`). */
+  git: BadgePart | null;
 }): React.JSX.Element {
   return (
     <div className="editor-state-badge" role="group" aria-label="Pipeline state">
       <Part part={editing} name="editing" />
       {live !== null && <Part part={live} name="live" />}
+      {git !== null && <Part part={git} name="git" />}
     </div>
   );
 }
 
-function Part({ part, name }: { part: BadgePart; name: 'editing' | 'live' }): React.JSX.Element {
+function Part({
+  part,
+  name,
+}: {
+  part: BadgePart;
+  name: 'editing' | 'live' | 'git';
+}): React.JSX.Element {
   return (
     <span
       className="editor-state-badge__part"
@@ -33,7 +43,9 @@ function Part({ part, name }: { part: BadgePart; name: 'editing' | 'live' }): Re
       data-tone={part.tone}
       title={part.detail}
     >
-      {part.label}
+      {/* Its own span so a long branch name can ellipsise inside the pill
+          rather than widen the toolbar row; the full text is in the detail. */}
+      <span className="editor-state-badge__label">{part.label}</span>
       {part.current === true && (
         <>
           <span aria-hidden="true"> ✓</span>

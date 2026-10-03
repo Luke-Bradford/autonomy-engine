@@ -2297,6 +2297,23 @@ button.danger {
   border-color: var(--warning);
 }
 
+.editor-state-badge__part[data-tone='danger'] {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+/* The git part names branches, and a branch name has no length limit
+   (`studio/<owner id>/work` by default). It ellipsises inside its pill so the
+   toolbar row keeps its one-line budget; the whole sentence is the part's
+   tooltip and hidden text. */
+.editor-state-badge__part[data-part='git'] .editor-state-badge__label {
+  display: inline-block;
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
 .canvas-page > .page-header > .form-actions {
   flex: 0 0 auto;
   margin-left: auto;

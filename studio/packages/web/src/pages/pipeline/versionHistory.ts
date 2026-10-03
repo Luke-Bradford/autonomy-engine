@@ -22,6 +22,27 @@ import { ApiError } from '../../api/client';
 import { latestVersion, type PipelineVersionWrite } from '../../api/pipelines';
 import { toVersionBody } from './canvasDoc';
 
+/**
+ * #1502 — fold a re-read version list into the one on screen.
+ *
+ * A UNION by id, not a replacement, because the re-read can race this page's
+ * own write: a save appends the version it minted (`[...prev, created]`), and a
+ * focus re-read issued just before that save landed would otherwise answer with
+ * a list that predates it and drop the row the canvas is now on. Versions are
+ * immutable and a pipeline's are never deleted one by one, so a row once seen is
+ * still true and keeping it is never stale. Ordered by version number, the order
+ * every list here is read in.
+ */
+export function mergeVersionLists(
+  current: readonly PipelineVersion[],
+  fresh: readonly PipelineVersion[],
+): PipelineVersion[] {
+  const byId = new Map<string, PipelineVersion>();
+  for (const v of current) byId.set(v.id, v);
+  for (const v of fresh) byId.set(v.id, v);
+  return [...byId.values()].sort((a, b) => a.version - b.version);
+}
+
 /** One row of the history list — a version summarised, never its whole doc. */
 export interface VersionEntry {
   id: string;

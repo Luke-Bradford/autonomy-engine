@@ -53,6 +53,7 @@ import {
   type Node,
   type Pipeline,
   type PipelineVersion,
+  type WorkspaceGitStatus,
 } from '@autonomy-studio/shared';
 import {
   clipboardCommandFor,
@@ -177,6 +178,7 @@ import {
   restoreBodyFrom,
   restoreConfirmMessage,
   restoreRefusal,
+  mergeVersionLists,
   saveAnywayLabel,
   type ActiveVersionState,
 } from './versionHistory';
@@ -207,7 +209,7 @@ import { FormSection } from '../../lib/form/FormSection';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import { readPublishState } from './publishState';
 import { EditorStateBadge } from './EditorStateBadge';
-import { canvasVersion, editingState, liveState } from './editorState';
+import { canvasVersion, editingState, gitState, liveState } from './editorState';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { useConfirm } from '../../lib/confirm/useConfirm';
 
@@ -454,7 +456,19 @@ export function PipelineCanvas({
    * together and are meaningless apart.
    */
   const [active, setActive] = useState<ActiveVersionState>(undefined);
-  const [gitConnected, setGitConnected] = useState<boolean | undefined>(undefined);
+  /**
+   * #1476 OR28 — the repo itself, `null` when none is connected; whether one is
+   * connected is derived from it so the two cannot disagree.
+   */
+  const [git, setGit] = useState<WorkspaceGitStatus | null | undefined>(undefined);
+  const gitConnected = git === undefined ? undefined : git !== null;
+  /**
+   * #1502 — the publish state is read on open, on focus, and after a refused
+   * publish, and is written by a publish. Each read takes a ticket from here and
+   * applies only if no newer read or write has happened since, so a slow focus
+   * read cannot put back a pointer this page has just moved.
+   */
+  const publishEpoch = useRef(0);
   const [publishing, setPublishing] = useState(false);
   /**
    * #904 — the head this canvas was refused against, or `null` when there is no
@@ -776,12 +790,6 @@ export function PipelineCanvas({
       }),
     [guardedLoad, store],
   );
-  useEffect(() => {
-    const onFocus = () => void refreshGlobals();
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, [refreshGlobals]);
-
   /**
    * #979 — the publish state, read SEPARATELY from the load above and never
    * folded into its `Promise.all`.
@@ -794,21 +802,77 @@ export function PipelineCanvas({
    */
   useEffect(() => {
     const ctrl = new AbortController();
+    const ticket = ++publishEpoch.current;
     readPublishState(pipelineId, ctrl.signal)
       .then((s) => {
+        if (ticket !== publishEpoch.current) return;
         setActive(s.active);
-        setGitConnected(s.gitConnected);
+        setGit(s.git);
       })
       .catch(() => {
-        if (ctrl.signal.aborted) return;
+        if (ctrl.signal.aborted || ticket !== publishEpoch.current) return;
         // Back to unread, not to a default. A failed read that left a STALE
         // pointer on screen would be worse than one showing none: the CAS would
         // then be sent an expectation nothing currently supports.
         setActive(undefined);
-        setGitConnected(undefined);
+        setGit(undefined);
       });
     return () => ctrl.abort();
   }, [pipelineId]);
+
+  /**
+   * #1502 — the version list and the publish state are re-read when the window
+   * regains focus, beside the globals above. Another tab, another operator or
+   * the build loop can save or publish while this editor sits idle, and without
+   * this the badge and the history's `latest`/`active` tags kept naming what was
+   * true when the page opened.
+   *
+   * No write is decided by these reads alone: a save's basis is `loaded`, which
+   * neither touches, and a restore or publish carries a CAS the server checks,
+   * built from what the operator was looking at when they clicked. These reads
+   * make the page TELL the truth sooner; the server keeps it honest.
+   *
+   * ONE read of both, applied together, so the history and the badge cannot
+   * disagree — a pointer newer than the list would flash "Live: not listed
+   * yet". The versions MERGE into the list (`mergeVersionLists`) rather than
+   * replace it, so a read racing this page's own save cannot drop the version
+   * it just minted.
+   *
+   * A failed read KEEPS what is on screen, unlike the open-time read above,
+   * which has nothing to keep. Focus arrives on wake and reconnect, exactly when
+   * requests fail, and blanking the pointer then would hide the badge, hold
+   * Publish back and re-word the Triggers column over a network blip — while
+   * the kept value is one the server read and every write re-checks.
+   *
+   * Its own `useGuardedLoad` instance (latest-wins and unmount-safe), plus the
+   * `publishEpoch` ticket, because the hook cannot be told about the one write
+   * that moves the pointer locally: a publish.
+   */
+  const guardedFocusLoad = useGuardedLoad();
+  const refreshOnFocus = useCallback(() => {
+    void refreshGlobals();
+    const ticket = ++publishEpoch.current;
+    void guardedFocusLoad(
+      (signal) =>
+        Promise.all([
+          listPipelineVersions(pipelineId, signal),
+          readPublishState(pipelineId, signal),
+        ]),
+      {
+        onData: ([fresh, s]) => {
+          setVersions((prev) => mergeVersionLists(prev, fresh));
+          if (ticket !== publishEpoch.current) return;
+          setActive(s.active);
+          setGit(s.git);
+        },
+        onError: () => {},
+      },
+    );
+  }, [refreshGlobals, guardedFocusLoad, pipelineId]);
+  useEffect(() => {
+    window.addEventListener('focus', refreshOnFocus);
+    return () => window.removeEventListener('focus', refreshOnFocus);
+  }, [refreshOnFocus]);
 
   const nodes = useStore(store, (s) => s.nodes);
   const edges = useStore(store, (s) => s.edges);
@@ -866,6 +930,8 @@ export function PipelineCanvas({
     active: activeVersionLabel(active, versions),
     canvas: canvasVersion(editingInput),
   });
+  // The saved version on (or under) the canvas: the preview, else `loaded`.
+  const gitBadge = gitState({ git, source: previewed ?? loaded ?? null });
 
   // U16 — `loaded` LEAVES the dep list: `params` moved into the store, and it
   // was the last thing this memo read off the opened version.
@@ -1176,7 +1242,7 @@ export function PipelineCanvas({
         }
         // #903 — the history is appended to rather than refetched: the server
         // just told us the whole row, and a refetch would race the next save.
-        setVersions((prev) => [...prev, created]);
+        setVersions((prev) => mergeVersionLists(prev, [created]));
         // #904 — the save landed, so whatever conflict sent us here is over.
         setConflict(null);
         setSaveMsg(`Saved v${created.version}.`);
@@ -1300,7 +1366,7 @@ export function PipelineCanvas({
         pipelineId,
         restoreBodyFrom(previewed, head?.id ?? null),
       );
-      setVersions((prev) => [...prev, created]);
+      setVersions((prev) => mergeVersionLists(prev, [created]));
       const s = store.getState();
       if (docUnchanged(before, s)) {
         s.loadVersion(created);
@@ -1405,7 +1471,9 @@ export function PipelineCanvas({
       });
       // The response CARRIES the post-call pointer, so re-reading it would be a
       // round trip for a fact already in hand (the same move the restore makes
-      // with the version it just minted).
+      // with the version it just minted). It is the newest fact, so it voids
+      // any publish-state read still in flight (#1502).
+      ++publishEpoch.current;
       setActive(result.active);
       setSaveMsg(
         publishOutcomeMessage({ published: result.published, selectedVersion: previewed.version }),
@@ -1416,15 +1484,20 @@ export function PipelineCanvas({
         // Re-read the state — the page is otherwise left asserting a pointer the
         // server has just contradicted — and describe what it now shows.
         let fresh: ActivePipelineVersion | null | undefined;
+        const ticket = ++publishEpoch.current;
         try {
           const s = await readPublishState(pipelineId);
-          setActive(s.active);
-          setGitConnected(s.gitConnected);
           fresh = s.active;
+          if (ticket === publishEpoch.current) {
+            setActive(s.active);
+            setGit(s.git);
+          }
         } catch {
-          setActive(undefined);
-          setGitConnected(undefined);
           fresh = undefined;
+          if (ticket === publishEpoch.current) {
+            setActive(undefined);
+            setGit(undefined);
+          }
         }
         // Through the ONE resolver, so a failed re-read stays `undefined` and a
         // version this page cannot name stays distinct from "nothing published".
@@ -1515,7 +1588,7 @@ export function PipelineCanvas({
         </h2>
         {/* #1476 OR28 — nothing until the load lands: an empty version list
             before then would read as "Not saved" on every open. */}
-        {ready && <EditorStateBadge editing={editingBadge} live={liveBadge} />}
+        {ready && <EditorStateBadge editing={editingBadge} live={liveBadge} git={gitBadge} />}
         {/* #907 — an archived pipeline refuses every save, so say it BEFORE the
             work happens. Without this the first Save simply bounces with a 409,
             after however long the operator spent editing.

@@ -1,4 +1,4 @@
-import type { ActivePipelineVersion } from '@autonomy-studio/shared';
+import type { ActivePipelineVersion, WorkspaceGitStatus } from '@autonomy-studio/shared';
 import { getActivePipelineVersion } from '../../api/pipelines';
 import { getWorkspaceGit } from '../../api/workspaceGit';
 
@@ -6,6 +6,8 @@ import { getWorkspaceGit } from '../../api/workspaceGit';
 export interface PublishState {
   active: ActivePipelineVersion | null;
   gitConnected: boolean;
+  /** #1476 OR28 — the repo itself, for the editor's git badge; `null` when none. */
+  git: WorkspaceGitStatus | null;
 }
 
 /**
@@ -37,5 +39,5 @@ export async function readPublishState(
     getActivePipelineVersion(pipelineId, signal),
     getWorkspaceGit(signal),
   ]);
-  return { active, gitConnected: git !== null };
+  return { active, gitConnected: git !== null, git };
 }
