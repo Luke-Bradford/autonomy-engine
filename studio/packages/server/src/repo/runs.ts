@@ -451,14 +451,15 @@ export function listRunSummariesPage(
          parent. The name is read only when the parent's PIPELINE belongs to this
          run's owner — the row the name comes from is the one checked, as
          `GET /api/runs/:id`'s names are (#1392). A child is created with its
-         parent's owner, so this never drops a real name. */
+         parent's owner, so this never drops a real name. `IS`, not `=`, so a
+         row with no owner on either side compares as the route's `===` does. */
       .leftJoin(parentRuns, eq(parentRuns.id, runs.parentRunId))
       .leftJoin(parentVersions, eq(parentVersions.id, parentRuns.pipelineVersionId))
       .leftJoin(
         parentPipelines,
         and(
           eq(parentPipelines.id, parentVersions.pipelineId),
-          eq(parentPipelines.ownerId, runs.ownerId),
+          sql`${parentPipelines.ownerId} is ${runs.ownerId}`,
         ),
       );
     const fetched = (conditions.length > 0 ? query.where(and(...conditions)) : query)

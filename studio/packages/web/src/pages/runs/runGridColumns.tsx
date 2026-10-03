@@ -10,7 +10,7 @@ import { CopyableId } from '../../lib/CopyableId';
 import { shortId } from '../../lib/ids';
 import { RunTriggeredByName } from '../../lib/KindName';
 import { versionLabel } from '../../lib/versionLabel';
-import { pipelinePath } from '../author/pipelinePath';
+import { runVersionPath } from '../author/pipelinePath';
 import { activitiesCell, rowsWrittenCell } from './activitiesColumn';
 import { costCell } from './costColumn';
 import { formatRunDuration, formatWhen } from './format';
@@ -77,14 +77,13 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
       <td className="runs-grid__pipeline">
         {/* R2 — the pipeline's NAME, which is the only thing here an operator
             recognises. The version id stays reachable as the cell's title.
-            #1484 — it links to the version that RAN, not the latest; a debug
-            version is not in the pipeline's history, so that one opens the
-            pipeline. */}
+            #1484 — it links to the version that RAN, not the latest, and the
+            version chip is inside the link so its name says which one. */}
         <span title={r.pipelineVersionId}>
-          <Link to={pipelinePath(r.pipelineId, r.debug ? undefined : r.pipelineVersion)}>
-            {r.pipelineName}
-          </Link>{' '}
-          <span className="run-version">{versionLabel(r.pipelineVersion, r.debug)}</span>
+          <Link to={runVersionPath(r.pipelineId, r.pipelineVersion, r.debug)}>
+            {r.pipelineName}{' '}
+            <span className="run-version">{versionLabel(r.pipelineVersion, r.debug)}</span>
+          </Link>
         </span>
       </td>
     ),

@@ -734,7 +734,9 @@ test('#1484 — the runs grid links the version that ran, a child names its pare
 
   // The version that ran: v1, read-only, although v2 is the latest.
   await page.goBack();
-  await rowOf(parentRunId).getByRole('link', { name: parentName, exact: true }).click();
+  await rowOf(parentRunId)
+    .getByRole('link', { name: `${parentName} v1`, exact: true })
+    .click();
   await expect(page).toHaveURL(
     new RegExp(`/author/pipelines/${encodeURIComponent(pipelineId)}\\?version=1$`),
   );

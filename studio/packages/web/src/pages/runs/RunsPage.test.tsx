@@ -582,7 +582,7 @@ describe('RunsPage', () => {
 
     it("the pipeline's name opens the version that ran, not the run", async () => {
       const router = mountList();
-      await userEvent.click(await screen.findByRole('link', { name: 'Nightly' }));
+      await userEvent.click(await screen.findByRole('link', { name: 'Nightly v3' }));
       expect(router.state.location.pathname).toBe('/author/pipelines/pipe_1');
       expect(router.state.location.search).toBe('?version=3');
     });

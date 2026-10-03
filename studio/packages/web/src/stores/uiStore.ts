@@ -142,8 +142,9 @@ export type RunGridColumnId = (typeof RUN_GRID_COLUMNS)[number];
 /**
  * Columns the picker cannot turn off. Pipeline is what an operator recognises a
  * run by (principle 3: every id has a name next to it). Run ID holds the row's
- * only REAL link — the one a keyboard reaches and a middle-click opens — so a
- * grid without it could be entered with a mouse only.
+ * link to the RUN — the one a keyboard reaches and a middle-click opens (the
+ * Pipeline and Parent links go elsewhere) — so a grid without it could be
+ * entered with a mouse only.
  */
 export const RUN_GRID_REQUIRED_COLUMNS: readonly RunGridColumnId[] = ['pipeline', 'runId'];
 
@@ -153,14 +154,15 @@ export const RUN_GRID_REQUIRED_COLUMNS: readonly RunGridColumnId[] = ['pipeline'
  * fills the grid's 1083px at 1440×900 (the widths below), and most runs carry
  * no tag; the runs list's annotation filter reaches them without it. A viewer
  * who already stored a choice keeps it, so for them the column appears, as any
- * column a later release adds does.
+ * column a later release adds does, and the grid scrolls sideways within
+ * itself until they hide a column or narrow one.
  */
 export const RUN_GRID_DEFAULT_HIDDEN: readonly RunGridColumnId[] = ['annotations'];
 
 /**
- * Each column's floor and default width, in px. The defaults are the shares
- * the fixed layout drew before columns could be resized, taken at the 1083px
- * the grid has at 1440×900 beside the hub nav, so that screen looks as it did.
+ * Each column's floor and default width, in px. The default columns fill the
+ * 1083px the grid has at 1440×900 beside the hub nav, leaving a few px to the
+ * filler; the Activities default still draws `7 ✓ · 1 skipped` whole.
  * The floors keep each column's content legible: a status pill, a short run id
  * with its Copy button.
  */

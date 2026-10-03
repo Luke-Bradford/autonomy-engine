@@ -24,6 +24,14 @@ export function pipelinePath(pipelineId: string, version?: number): string {
  */
 const OPEN_VERSION_PARAM = 'version';
 
+/**
+ * The editor path for the version a RUN bound: that saved version, or for a
+ * debug run (whose version is not in the history) the pipeline itself.
+ */
+export function runVersionPath(pipelineId: string, version: number, debug: boolean): string {
+  return pipelinePath(pipelineId, debug ? undefined : version);
+}
+
 /** The version `pipelinePath` asked to open, or `undefined` for none or a malformed one. */
 export function readOpenVersion(params: URLSearchParams): number | undefined {
   const raw = params.get(OPEN_VERSION_PARAM);

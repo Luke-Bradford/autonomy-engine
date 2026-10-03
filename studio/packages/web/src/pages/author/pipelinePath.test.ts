@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { pipelinePath, readOpenVersion } from './pipelinePath';
+import { pipelinePath, readOpenVersion, runVersionPath } from './pipelinePath';
 
 describe('pipelinePath (#1484)', () => {
   it('opens the pipeline, or one exact saved version of it', () => {
     expect(pipelinePath('pl_1')).toBe('/author/pipelines/pl_1');
     expect(pipelinePath('pl_1', 3)).toBe('/author/pipelines/pl_1?version=3');
+  });
+
+  it("a run's version link names the saved version, never a debug one", () => {
+    expect(runVersionPath('pl_1', 3, false)).toBe('/author/pipelines/pl_1?version=3');
+    expect(runVersionPath('pl_1', 3, true)).toBe('/author/pipelines/pl_1');
   });
 
   it('reads back only a whole positive version number', () => {

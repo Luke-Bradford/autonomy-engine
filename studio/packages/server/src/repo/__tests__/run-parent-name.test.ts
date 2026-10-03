@@ -13,7 +13,7 @@ import { makeDocResolver } from '../../run/driver.js';
  */
 type TestDb = ReturnType<typeof freshDb>['db'];
 
-function versionOf(db: TestDb, ownerId: string, name: string): string {
+function versionOf(db: TestDb, ownerId: string | null, name: string): string {
   const pipeline = createPipeline(db, { ownerId, name });
   return createPipelineVersion(db, {
     pipelineId: pipeline.id,
@@ -25,7 +25,12 @@ function versionOf(db: TestDb, ownerId: string, name: string): string {
   }).id;
 }
 
-function run(db: TestDb, ownerId: string, versionId: string, parentRunId: string | null): string {
+function run(
+  db: TestDb,
+  ownerId: string | null,
+  versionId: string,
+  parentRunId: string | null,
+): string {
   return createRun(db, {
     ownerId,
     pipelineVersionId: versionId,
@@ -35,11 +40,14 @@ function run(db: TestDb, ownerId: string, versionId: string, parentRunId: string
   }).id;
 }
 
-function parentNameOf(db: TestDb, runId: string): string | null | undefined {
+function parentNameOf(
+  db: TestDb,
+  runId: string,
+  filter: { ownerId?: string } = { ownerId: 'local' },
+): string | null | undefined {
   const fold = makeRunActivityFold(makeDocResolver(db));
-  return listRunSummariesPage(db, { ownerId: 'local' }, { limit: 100 }, fold).items.find(
-    (r) => r.id === runId,
-  )?.parentPipelineName;
+  return listRunSummariesPage(db, filter, { limit: 100 }, fold).items.find((r) => r.id === runId)
+    ?.parentPipelineName;
 }
 
 describe('RunSummary.parentPipelineName (#1484)', () => {
@@ -56,5 +64,12 @@ describe('RunSummary.parentPipelineName (#1484)', () => {
     const foreign = run(db, 'other', versionOf(db, 'other', 'Secret plan'), null);
     const child = run(db, 'local', versionOf(db, 'local', 'Ingest'), foreign);
     expect(parentNameOf(db, child)).toBeNull();
+  });
+
+  it('names the parent of an ownerless child, as the run detail route does', () => {
+    const { db } = freshDb();
+    const parent = run(db, null, versionOf(db, null, 'Orchestrator'), null);
+    const child = run(db, null, versionOf(db, null, 'Ingest'), parent);
+    expect(parentNameOf(db, child, {})).toBe('Orchestrator');
   });
 });
