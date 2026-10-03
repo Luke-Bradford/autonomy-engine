@@ -690,10 +690,8 @@ export function seedDemo({ db, ownerId, demoRoot }: SeedDemoInput): DemoSeedResp
     }
   }
 
-  writeDemoFiles(p);
-
   // ---- create what is missing, in one transaction ----------------------------
-  return db.transaction(() => {
+  const result = db.transaction(() => {
     let created = 0;
     let reused = 0;
     const ensure = <T extends { id: string }>(found: T | null, make: () => T): T => {
@@ -775,4 +773,9 @@ export function seedDemo({ db, ownerId, demoRoot }: SeedDemoInput): DemoSeedResp
 
     return { demoDir: dir, created, reused, pipelines, scheduleTriggerId: hourly.id };
   });
+  // Files AFTER the commit: a seed the save gate rolls back leaves nothing on
+  // disk, and a file write that fails here heals on the next seed (every file
+  // is create-if-missing, every row is reused).
+  writeDemoFiles(p);
+  return result;
 }
