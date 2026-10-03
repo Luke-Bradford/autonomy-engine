@@ -225,9 +225,9 @@ describe('GitHubHostClient.openPullRequest', () => {
 });
 
 describe('GitHubHostClient.findOpenPullRequest', () => {
-  const find = { repo: REPO, base: 'main', head: 'studio/local/work', token: TOKEN };
+  const find = { repo: REPO, head: 'studio/local/work', token: TOKEN };
 
-  it('returns the open PR for the branch pair, filtered by head and base (both encoded)', async () => {
+  it('returns the open PR from the branch, into any base (head encoded)', async () => {
     const { fetchImpl, calls } = scriptedFetch([
       { status: 200, body: [{ number: 7, html_url: 'https://github.com/acme/widgets/pull/7' }] },
     ]);
@@ -239,9 +239,24 @@ describe('GitHubHostClient.findOpenPullRequest', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]!.method).toBe('GET');
     expect(calls[0]!.url).toBe(
-      'https://api.github.com/repos/acme/widgets/pulls?state=open&head=acme%3Astudio%2Flocal%2Fwork&base=main',
+      'https://api.github.com/repos/acme/widgets/pulls?state=open&head=acme%3Astudio%2Flocal%2Fwork',
     );
     expect(calls[0]!.headers.Authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it('filters on base too when one is given (encoded)', async () => {
+    const { fetchImpl, calls } = scriptedFetch([{ status: 200, body: [] }]);
+    const client = new GitHubHostClient({ fetchImpl });
+    await client.findOpenPullRequest({ ...find, base: 'release/1' });
+    expect(calls[0]!.url).toMatch(/&base=release%2F1$/);
+  });
+
+  it('a non-http(s) html_url is refused, so it can never become a javascript: link', async () => {
+    const { fetchImpl } = scriptedFetch([
+      { status: 200, body: [{ number: 7, html_url: 'javascript:alert(1)' }] },
+    ]);
+    const client = new GitHubHostClient({ fetchImpl });
+    await expect(client.findOpenPullRequest(find)).rejects.toBeInstanceOf(GitHostApiError);
   });
 
   it('an empty list is a successful "none" — null, not an error', async () => {

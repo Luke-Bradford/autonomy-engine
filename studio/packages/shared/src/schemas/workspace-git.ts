@@ -957,6 +957,38 @@ export const PullRequestResultSchema = z.object({
 export type PullRequestResult = z.infer<typeof PullRequestResultSchema>;
 
 /**
+ * #1476 OR28 — `GET /api/workspace/git/pull-request`: is a pull request open
+ * from the working branch into the collaboration branch?
+ * - `open`: the host answered with one; `url` is its web page.
+ * - `none`: the host answered and there is none.
+ * - `unknown`: nobody asked the host, or it could not answer. `no_token` (a
+ *   GitHub remote with no token to ask with), `unsupported_host` (a local or
+ *   non-GitHub remote), `lookup_failed` (the host call failed; `detail` is its
+ *   token-redacted message). Absent rather than wrong: only a host answer is
+ *   ever `none`.
+ * `checkedAt` is when the host answered (the server reuses one answer for the
+ * hoster's `GIT_FETCH_MAX_AGE_SECONDS`).
+ *
+ * `url` must be http(s): it becomes a link `href`, so a value from the host can
+ * never be a `javascript:` URL.
+ */
+export const WorkspaceGitPullRequestReadingSchema = z.discriminatedUnion('state', [
+  z.object({
+    state: z.literal('open'),
+    number: z.number().int().positive(),
+    url: z.string().regex(/^https?:\/\//i, 'must be an http(s) URL'),
+    checkedAt: z.number().int(),
+  }),
+  z.object({ state: z.literal('none'), checkedAt: z.number().int() }),
+  z.object({
+    state: z.literal('unknown'),
+    reason: z.enum(['no_token', 'unsupported_host', 'lookup_failed']),
+    detail: z.string().nullable(),
+  }),
+]);
+export type WorkspaceGitPullRequestReading = z.infer<typeof WorkspaceGitPullRequestReadingSchema>;
+
+/**
  * #3 G9 — classify a repo's PR surface: is it a GitHub remote we can auto-open a
  * PR against (G9b), and what is the guided-manual compare URL (G9a) either way?
  * The SINGLE source of github-detection + compare-url building (CLAUDE.md: one

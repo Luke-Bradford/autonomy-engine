@@ -50,10 +50,13 @@ export interface OpenedPullRequest {
   htmlUrl: string;
 }
 
-/** #1476 OR28 — which PR, if any, is open from `head` into `base`. */
+/**
+ * #1476 OR28 — which PR, if any, is open from `head`: into `base` when given
+ * (the observe after an already-exists), into any branch when not (the badge).
+ */
 export interface FindOpenPullRequestParams {
   repo: GitHostRepo;
-  base: string;
+  base?: string;
   head: string;
   token: string;
 }
@@ -201,9 +204,10 @@ export class GitHubHostClient implements GitHostClient {
   }
 
   /**
-   * GET the open PR matching this head/base — the observe after a 422
-   * already-exists, and #1476's badge read. Only a 200 list answers; an empty
-   * list is `null`, anything else throws.
+   * GET the open PR from this head (into `base`, when given) — the observe
+   * after a 422 already-exists, and #1476's badge read. Only a 200 list
+   * answers; an empty list is `null`, anything else throws. `state=open`
+   * includes drafts.
    */
   async findOpenPullRequest(params: FindOpenPullRequestParams): Promise<OpenedPullRequest | null> {
     const { repo, base, head, token } = params;
@@ -214,10 +218,10 @@ export class GitHubHostClient implements GitHostClient {
     // significant char) must not break the filter (or it silently matches
     // nothing, which would read as "no pull request").
     const headFilter = encodeURIComponent(`${repo.owner}:${head}`);
-    const baseFilter = encodeURIComponent(base);
+    const baseFilter = base === undefined ? '' : `&base=${encodeURIComponent(base)}`;
     const listed = await this.request(
       'GET',
-      `${GITHUB_API_BASE}/repos/${owner}/${name}/pulls?state=open&head=${headFilter}&base=${baseFilter}`,
+      `${GITHUB_API_BASE}/repos/${owner}/${name}/pulls?state=open&head=${headFilter}${baseFilter}`,
       token,
       undefined,
     );
@@ -237,7 +241,10 @@ export class GitHubHostClient implements GitHostClient {
     return first === undefined ? null : this.parsePr(first, 'lookup', token);
   }
 
-  /** Validate + extract `{ number, htmlUrl }` — a malformed payload fails loudly, never manufactured. */
+  /**
+   * Validate + extract `{ number, htmlUrl }` — a malformed payload fails loudly,
+   * never manufactured. `htmlUrl` must be http(s): it becomes a link `href`.
+   */
   private parsePr(json: unknown, context: string, token: string): OpenedPullRequest {
     if (json !== null && typeof json === 'object') {
       const obj = json as Record<string, unknown>;
@@ -248,7 +255,7 @@ export class GitHubHostClient implements GitHostClient {
         Number.isInteger(number) &&
         number > 0 &&
         typeof htmlUrl === 'string' &&
-        htmlUrl.length > 0
+        /^https?:\/\/./i.test(htmlUrl)
       ) {
         return { number, htmlUrl };
       }

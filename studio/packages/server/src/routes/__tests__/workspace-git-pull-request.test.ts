@@ -36,6 +36,9 @@ class FakeHostClient implements GitHostClient {
     if (this.outcome.kind === 'throw') throw this.outcome.error;
     return { number: this.outcome.number, htmlUrl: this.outcome.htmlUrl };
   }
+  async findOpenPullRequest(): Promise<null> {
+    return null;
+  }
 }
 
 describe('workspace-git pull-request route — auto-open (G9b)', () => {

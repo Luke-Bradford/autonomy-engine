@@ -18,6 +18,7 @@ import {
   WorkspaceGitDriftSchema,
   WorkspaceGitSyncSchema,
   WorkspaceGitImportPreviewSchema,
+  WorkspaceGitPullRequestReadingSchema,
   deriveWorkspaceGitState,
   precheckDivergence,
   WorkspaceGitStatusSchema,
@@ -26,6 +27,7 @@ import {
   type WorkspaceGitDivergenceState,
   type WorkspaceGitDrift,
   type WorkspaceGitPipelineDrift,
+  type WorkspaceGitPullRequestReading,
 } from '@autonomy-studio/shared';
 import {
   appendWorkspaceEvent,
@@ -65,7 +67,8 @@ import {
   GitUnavailableError,
   type GitProvider,
 } from '../git/provider.js';
-import { GitHubHostClient, type GitHostClient } from '../git/github-host.js';
+import { GitHostApiError, GitHubHostClient, type GitHostClient } from '../git/github-host.js';
+import { redactSecrets } from '../connectors/redact.js';
 import { decrypt, encrypt } from '../secrets/secrets.js';
 import { KeyedQueue } from '../util/keyed-queue.js';
 import { readyVersionResourceIds } from '../run/connection-readiness.js';
@@ -207,6 +210,17 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
   // rather than attempting an auth that would 401. `null` = no token.
   const githubToken = (opts.githubToken ?? '').trim() || null;
   const queue = new KeyedQueue();
+  /**
+   * #1476 OR28 — the last pull-request lookup per owner, for
+   * `GET /api/workspace/git/pull-request`. One entry per owner: `key` is the
+   * question asked (repo + working branch), so a new branch or repo is a miss,
+   * not a second entry. The PROMISE is held, so concurrent reads share one host
+   * call; it never rejects (a non-host fault evicts the entry and rethrows).
+   */
+  const pullRequestLookups = new Map<
+    string,
+    { key: string; at: number; reading: Promise<WorkspaceGitPullRequestReading> }
+  >();
 
   /**
    * #3 G10 — resolve the EFFECTIVE git token for an owner, the SINGLE source of
@@ -740,6 +754,8 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       }
       const ciphertext = await encrypt(body.token, masterKey);
       const row = setWorkspaceGitToken(db, ownerId, ciphertext);
+      // A new credential may answer what the old one could not.
+      pullRequestLookups.delete(ownerId);
       // Non-null: the existence check above ran in the SAME queue slot, so no
       // concurrent disconnect could have removed the row between the two.
       return row!;
@@ -759,6 +775,7 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
     const updated = await queue.run(ownerId, async () => {
       const row = setWorkspaceGitToken(db, ownerId, null);
       if (!row) throw new NotFoundError('workspace git connection', ownerId);
+      pullRequestLookups.delete(ownerId);
       return row;
     });
 
@@ -814,6 +831,8 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
         body: `Opened by Autonomy Studio from working branch \`${row.workingBranch}\` into \`${row.collabBranch}\`.`,
         token: effectiveToken,
       });
+      // The badge's cached "none" is now wrong: ask again on the next read.
+      pullRequestLookups.delete(ownerId);
       const pullRequest = PullRequestResultSchema.parse({
         mode: 'opened',
         provider: 'github',
@@ -835,6 +854,96 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       collabBranch: row.collabBranch,
     });
     return { pullRequest };
+  });
+
+  /**
+   * #1476 OR28 — the editor badge's `PR #n`: is a pull request open from the
+   * working branch? Into ANY base, not only the collaboration branch: the
+   * question is "does this branch have a PR", and a PR into another branch is
+   * still one.
+   *
+   * ABSENT RATHER THAN WRONG. Only a host answer is ever `none`. A local or
+   * non-GitHub remote is `unsupported_host` and a GitHub remote with no token
+   * is `no_token` — neither asks the host. A failed host call is
+   * `lookup_failed` with its (token-redacted) message, at 200: the badge reads
+   * this on every focus, and a host outage is a state to show, not a fault.
+   *
+   * The PROVIDER is the workspace's own repo URL, as for the POST below:
+   * `resolvePullRequestTarget` reads the host from it and `GitHostClient` is
+   * the seam another host plugs into. There is no separate per-workspace
+   * provider setting to drift from the URL.
+   *
+   * REFRESH POLICY: one host call per owner per `fetchMaxAgeMs`
+   * (`GIT_FETCH_MAX_AGE_SECONDS`, the hoster's "how often the server contacts
+   * the remote" — the same window `/sync` fetches on), shared by concurrent
+   * reads, and a failure waits out the window too so a host that is down is
+   * not asked on every focus. Opening a PR here, changing the stored token or
+   * disconnecting drops the cached answer; a new working branch or repo is a
+   * different question and misses the cache by its key.
+   *
+   * NOT queued, like the POST: no checkout is touched and the host call is
+   * bounded. Owner-scoped: the row, the token and the cache entry are all the
+   * principal's own.
+   */
+  fastify.get('/api/workspace/git/pull-request', async (request) => {
+    const ownerId = request.principal.ownerId;
+    const row = getWorkspaceGit(db, ownerId);
+    if (!row) throw new NotFoundError('workspace git connection', ownerId);
+
+    const target = resolvePullRequestTarget(row.repoUrl, row.collabBranch, row.workingBranch);
+    if (target.provider !== 'github' || target.githubRepo === null) {
+      return { pullRequest: { state: 'unknown', reason: 'unsupported_host', detail: null } };
+    }
+    // Before the cache: a stored token that will not decrypt hard-fails (500)
+    // on every read, as on the POST, rather than serving an older answer.
+    const token = await resolveEffectiveToken(ownerId);
+    if (token === null) {
+      return { pullRequest: { state: 'unknown', reason: 'no_token', detail: null } };
+    }
+
+    const key = `${row.repoUrl}\n${row.workingBranch}`;
+    const cached = pullRequestLookups.get(ownerId);
+    const age = cached === undefined ? null : Date.now() - cached.at;
+    if (
+      cached !== undefined &&
+      cached.key === key &&
+      age !== null &&
+      age >= 0 &&
+      age < opts.fetchMaxAgeMs
+    ) {
+      return { pullRequest: await cached.reading };
+    }
+
+    const githubRepo = target.githubRepo;
+    const head = row.workingBranch;
+    const at = Date.now();
+    const reading = hostClient.findOpenPullRequest({ repo: githubRepo, head, token }).then(
+      (pr): WorkspaceGitPullRequestReading =>
+        WorkspaceGitPullRequestReadingSchema.parse(
+          pr === null
+            ? { state: 'none', checkedAt: Date.now() }
+            : { state: 'open', number: pr.number, url: pr.htmlUrl, checkedAt: Date.now() },
+        ),
+      (err: unknown): WorkspaceGitPullRequestReading => {
+        if (err instanceof GitHostApiError) {
+          return {
+            state: 'unknown',
+            reason: 'lookup_failed',
+            detail: redactSecrets(err.message, [token]),
+          };
+        }
+        throw err;
+      },
+    );
+    const entry = { key, at, reading };
+    pullRequestLookups.set(ownerId, entry);
+    try {
+      return { pullRequest: await reading };
+    } catch (err) {
+      // A fault that is not the host's answer is never cached.
+      if (pullRequestLookups.get(ownerId) === entry) pullRequestLookups.delete(ownerId);
+      throw err;
+    }
   });
 
   fastify.post('/api/workspace/git/import-preview', async (request) => {
@@ -1040,6 +1149,7 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       if (!deleteWorkspaceGit(db, ownerId)) {
         throw new NotFoundError('workspace git connection', ownerId);
       }
+      pullRequestLookups.delete(ownerId);
       // Row first, then dir: if the rm fails midway the leftover dir is an
       // orphan the next connect clears (the reverse order would leave a LIVE
       // row pointing at a missing checkout — also healed, by fetch's
