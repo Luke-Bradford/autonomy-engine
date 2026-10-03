@@ -93,7 +93,7 @@ export function activeVersionLabel(
 }
 
 /** The active version in a sentence, however much of it is known. */
-function activePhrase(activeVersion: number | 'unnamed'): string {
+export function activePhrase(activeVersion: number | 'unnamed'): string {
   return activeVersion === 'unnamed'
     ? 'the version that is currently active (published after this page loaded, so it is not in the history list yet)'
     : `v${String(activeVersion)}`;

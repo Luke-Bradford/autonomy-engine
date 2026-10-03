@@ -188,6 +188,8 @@ import { UnsavedChangesPrompt } from '../../lib/form/UnsavedChangesPrompt';
 import { FormSection } from '../../lib/form/FormSection';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import { readPublishState } from './publishState';
+import { EditorStateBadge } from './EditorStateBadge';
+import { canvasVersion, editingState, liveState } from './editorState';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { useConfirm } from '../../lib/confirm/useConfirm';
 
@@ -772,6 +774,22 @@ export function PipelineCanvas({
     [versions, previewing],
   );
 
+  // #1476 OR28 — the toolbar's state badge. `previewed`, not `previewing`: only
+  // a version this page holds is actually drawn in place of the editor.
+  const editingInput = {
+    dirty,
+    loadedVersion: loaded?.version ?? null,
+    headVersion,
+    previewedVersion: previewed?.version ?? null,
+    archived,
+  };
+  const editingBadge = editingState(editingInput);
+  const liveBadge = liveState({
+    gitConnected,
+    active: activeVersionLabel(active, versions),
+    canvas: canvasVersion(editingInput),
+  });
+
   // U16 — `loaded` LEAVES the dep list: `params` moved into the store, and it
   // was the last thing this memo read off the opened version.
   //
@@ -1292,6 +1310,9 @@ export function PipelineCanvas({
         <h2 id="canvas-heading" title={pipelineName}>
           {pipelineName}
         </h2>
+        {/* #1476 OR28 — nothing until the load lands: an empty version list
+            before then would read as "Not saved" on every open. */}
+        {ready && <EditorStateBadge editing={editingBadge} live={liveBadge} />}
         {/* #907 — an archived pipeline refuses every save, so say it BEFORE the
             work happens. Without this the first Save simply bounces with a 409,
             after however long the operator spent editing.

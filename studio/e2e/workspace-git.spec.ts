@@ -312,6 +312,12 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   // Nothing is published yet, so no row may claim to be active. This is the
   // assertion that would catch an unread pointer being rendered as a fact.
   await expect(history).not.toContainText('active');
+  // #1476 OR28 — and the toolbar says so at a glance, in git mode only.
+  const livePart = page
+    .getByRole('group', { name: 'Pipeline state' })
+    .locator('[data-part="live"]');
+  await expect(livePart).toHaveText(/^Not published/);
+  await expect(livePart).toHaveAttribute('data-tone', 'warning');
 
   await history.getByRole('button', { name: /^v1/ }).click();
   const bar = page.getByTestId('version-preview-bar');
@@ -332,6 +338,24 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await expect(page.getByText('Published v1', { exact: false })).toBeVisible();
   // The pointer reached the list, which is the whole visible outcome.
   await expect(history.getByRole('button', { name: /^v1/ })).toContainText('active');
+  // The canvas (a preview of v1) IS the live version: green, with the ✓ and
+  // its spoken form, never colour alone.
+  await expect(livePart).toHaveText(/^Live: v1 ✓ \(on the canvas\)/);
+  await expect(livePart).toHaveAttribute('data-tone', 'success');
+  // Both pills at once is the widest the badge gets; at 1280 the toolbar row
+  // must still hold it without overflowing or clipping either pill.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const fit = await page.evaluate(() => {
+    const header = document.querySelector('.canvas-page > .page-header')!;
+    const parts = [...document.querySelectorAll<HTMLElement>('.editor-state-badge__part')];
+    return {
+      parts: parts.length,
+      headerOverflows: header.scrollWidth > header.clientWidth,
+      clipped: parts.some((p) => p.scrollWidth > p.clientWidth),
+    };
+  });
+  expect(fit).toEqual({ parts: 2, headerOverflows: false, clipped: false });
+  await page.setViewportSize({ width: 1600, height: 1000 });
 
   /**
    * And it is DURABLE, not merely optimistic local state: a reload re-reads the
