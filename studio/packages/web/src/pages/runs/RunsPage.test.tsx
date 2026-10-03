@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
-import { renderWithRouter } from '../../testing/renderWithRouter';
+import { renderWithDataRouter, renderWithRouter } from '../../testing/renderWithRouter';
+import { dayOf, dayRangeBounds } from './runFilters';
 import { ROUTES } from '../../routes';
 import userEvent from '@testing-library/user-event';
 import {
@@ -433,127 +434,16 @@ describe('RunsPage', () => {
    * that renders but filters nothing: a no-op filter would still show the
    * triggered run under "Triggered" and pass a single-tab check.
    */
-  it('filters the list by run origin, and marks the selected tab', async () => {
-    listMock.mockResolvedValue(
-      pageOf([
-        run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null, triggeredByKind: 'schedule' }),
-        run({
-          id: 'run_manual',
-          triggerId: null,
-          parentRunId: null,
-          triggerName: null,
-          triggeredByKind: 'editor',
-        }),
-        run({
-          id: 'run_child',
-          triggerId: null,
-          parentRunId: 'run_trig',
-          triggerName: null,
-          triggeredByKind: 'call',
-        }),
-      ]),
-    );
-    renderWithRouter(<RunsPage />);
-    await screen.findByText('run_trig');
-
-    await userEvent.click(screen.getByRole('tab', { name: /Triggered/ }));
-    expect(screen.getByText('run_trig')).toBeInTheDocument();
-    expect(screen.queryByText('run_manual')).not.toBeInTheDocument();
-    expect(screen.queryByText('run_child')).not.toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /Triggered/ })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('tab', { name: /^All/ })).toHaveAttribute('aria-selected', 'false');
-
-    await userEvent.click(screen.getByRole('tab', { name: /Manual/ }));
-    expect(screen.getByText('run_manual')).toBeInTheDocument();
-    expect(screen.queryByText('run_trig')).not.toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole('tab', { name: /Child/ }));
-    expect(screen.getByText('run_child')).toBeInTheDocument();
-    expect(screen.queryByText('run_manual')).not.toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole('tab', { name: /^All/ }));
-    expect(screen.getByText('run_trig')).toBeInTheDocument();
-    expect(screen.getByText('run_manual')).toBeInTheDocument();
-    expect(screen.getByText('run_child')).toBeInTheDocument();
-  });
-
-  it('counts each tab with the same filter the table applies', async () => {
-    listMock.mockResolvedValue(
-      pageOf([
-        run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null, triggeredByKind: 'schedule' }),
-        run({ id: 'run_trig2', triggerId: 'trg_1', parentRunId: null, triggeredByKind: 'webhook' }),
-        run({
-          id: 'run_child',
-          triggerId: null,
-          parentRunId: 'run_trig',
-          triggerName: null,
-          triggeredByKind: 'call',
-        }),
-      ]),
-    );
-    renderWithRouter(<RunsPage />);
-    await screen.findByText('run_trig');
-    expect(screen.getByRole('tab', { name: /^All/ })).toHaveTextContent('3');
-    expect(screen.getByRole('tab', { name: /Triggered/ })).toHaveTextContent('2');
-    expect(screen.getByRole('tab', { name: /Child/ })).toHaveTextContent('1');
-    expect(screen.getByRole('tab', { name: /Manual/ })).toHaveTextContent('0');
-  });
-
-  it('says so when a tab has no runs, rather than showing an empty table', async () => {
-    listMock.mockResolvedValue(pageOf([run({ id: 'run_trig', triggerId: 'trg_1' })]));
-    renderWithRouter(<RunsPage />);
-    await screen.findByText('run_trig');
-    await userEvent.click(screen.getByRole('tab', { name: /Manual/ }));
-    expect(screen.getByText(/No manual runs/i)).toBeInTheDocument();
-    expect(screen.queryByRole('table')).not.toBeInTheDocument();
-  });
-
   /**
-   * U10 — the filter tab is a URL slot the Shell section names as this ticket's
-   * ("monitor filter tab (U10)"). Read FROM the url on first paint: a link to a
-   * filtered view has to arrive filtered, not flash All and then correct itself.
+   * #1484 — what started a run is a SERVER-side axis now (`?kind=`), so the
+   * client-side origin tabs are gone and a stale `?tab=` link is simply ignored.
    */
-  it('takes the selected tab from the URL', async () => {
-    listMock.mockResolvedValue(
-      pageOf([
-        run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null, triggeredByKind: 'schedule' }),
-        run({
-          id: 'run_manual',
-          triggerId: null,
-          parentRunId: null,
-          triggerName: null,
-          triggeredByKind: 'editor',
-        }),
-      ]),
-    );
-    renderWithRouter(<RunsPage />, '/monitor/runs?tab=manual');
-    expect(await screen.findByText('run_manual')).toBeInTheDocument();
-    expect(screen.queryByText('run_trig')).not.toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /Manual/ })).toHaveAttribute('aria-selected', 'true');
-  });
-
-  it('falls back to All on an unrecognised ?tab, rather than showing nothing', async () => {
-    listMock.mockResolvedValue(pageOf([run({ id: 'run_trig', triggerId: 'trg_1' })]));
-    renderWithRouter(<RunsPage />, '/monitor/runs?tab=not-a-tab');
-    expect(await screen.findByText('run_trig')).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /^All/ })).toHaveAttribute('aria-selected', 'true');
-  });
-
-  /**
-   * And WRITTEN back, so the filtered view is linkable and Back undoes it. `all`
-   * is expressed by the param's ABSENCE — one canonical URL per view.
-   */
-  it('writes the selected tab to the URL, and clears it for All', async () => {
-    listMock.mockResolvedValue(pageOf([run({ id: 'run_trig', triggerId: 'trg_1' })]));
-    const router = createMemoryRouter(ROUTES, { initialEntries: ['/monitor/runs'] });
-    render(<RouterProvider router={router} />);
-    await screen.findByText('run_trig');
-
-    await userEvent.click(screen.getByRole('tab', { name: /Triggered/ }));
-    expect(router.state.location.search).toBe('?tab=triggered');
-
-    await userEvent.click(screen.getByRole('tab', { name: /^All/ }));
-    expect(router.state.location.search).toBe('');
+  it('has no origin tabs, and a stale ?tab= link lists every run unfiltered', async () => {
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_a', triggeredByKind: 'editor' })]));
+    renderWithRouter(<RunsPage />, '/monitor/runs?tab=child');
+    await screen.findByText('run_a');
+    expect(screen.queryByRole('tab')).not.toBeInTheDocument();
+    expect(listMock).toHaveBeenCalledWith({}, undefined, expect.anything());
   });
 
   /**
@@ -778,14 +668,20 @@ describe('RunsPage — U26 filter pane', () => {
 
     /* The sentence that stops the figure being read as the total of the rows
        below it — which it is not, under ANY of the filters or the tab. */
+    /* #1484 — one dense line, and the caveats are the `?` button's
+       description rather than a paragraph on the page. */
     it('says the figure covers every run of the pipeline, not the rows on screen', async () => {
       renderWithRouter(
         <RunsPage store={storeWith(pipeline('pl_1', 'Reports'))} />,
         '/monitor/runs?pipeline=pl_1&status=failure',
       );
       const section = await screen.findByRole('region', { name: 'Lifetime spend' });
-      expect(section).toHaveTextContent(/Across all 2 runs, every version/);
-      expect(section).toHaveTextContent(/not just the runs listed below/);
+      expect(section).toHaveTextContent(/^Lifetime spend \$2\.50/);
+      expect(section).not.toHaveTextContent(/not just the runs listed below/);
+      await userEvent.hover(within(section).getByRole('button', { name: 'About lifetime spend' }));
+      const tip = await screen.findByRole('tooltip');
+      expect(tip).toHaveTextContent(/Across all 2 runs, every version/);
+      expect(tip).toHaveTextContent(/not just the runs listed below/);
     });
 
     it('does not fetch or render it when no pipeline is selected', async () => {
@@ -996,37 +892,17 @@ describe('RunsPage — U26 filter pane', () => {
       expect(screen.queryByRole('button', { name: 'Load older runs' })).not.toBeInTheDocument();
     });
 
-    it('marks a tab count as a LOWER BOUND while older runs remain', async () => {
-      listMock.mockResolvedValue(pageOf([run({ id: 'run_1', triggerId: 'trg_1' })], 'cur_1'));
-      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
+    /* #1484 — the reason the origin axis moved to the server: an older page is
+       asked for under the SAME kind filter, so a filtered list is never just
+       the matching subset of the pages that happened to be loaded. */
+    it('asks for an older page under the same kind filter', async () => {
+      listMock.mockResolvedValue(pageOf([run({ id: 'run_1', triggeredByKind: 'call' })], 'cur_1'));
+      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?kind=call');
       await screen.findByText('run_1');
-
-      // `1+`, not `1`: one run of this origin has been LOADED, and the workspace
-      // may hold more. The bare number would be a census claim over a prefix.
-      const tabs = screen.getByRole('tablist');
-      expect(within(tabs).getByRole('tab', { name: /Triggered 1\+/ })).toBeInTheDocument();
-      expect(within(tabs).getByRole('tab', { name: /Manual 0\+/ })).toBeInTheDocument();
-
-      listMock.mockResolvedValue(pageOf([run({ id: 'run_2', triggerId: 'trg_1' })]));
+      listMock.mockResolvedValue(pageOf([run({ id: 'run_2', triggeredByKind: 'call' })]));
       await userEvent.click(screen.getByRole('button', { name: 'Load older runs' }));
       await screen.findByText('run_2');
-
-      // The walk is exhausted, so the counts are complete claims again.
-      expect(within(tabs).getByRole('tab', { name: /Triggered 2$/ })).toBeInTheDocument();
-      expect(within(tabs).getByRole('tab', { name: /Manual 0$/ })).toBeInTheDocument();
-    });
-
-    it('scopes the empty-tab line to what has been loaded while older runs remain', async () => {
-      listMock.mockResolvedValue(pageOf([run({ id: 'run_1', triggerId: 'trg_1' })], 'cur_1'));
-      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?tab=manual');
-      await screen.findByText(/No manual runs in the runs loaded so far/i);
-
-      listMock.mockResolvedValue(pageOf([run({ id: 'run_2', triggerId: 'trg_1' })]));
-      await userEvent.click(screen.getByRole('button', { name: 'Load older runs' }));
-
-      // Once the walk has ended the unqualified sentence is TRUE, and is what
-      // the reader should see.
-      expect(await screen.findByText(/^No manual runs\.$/i)).toBeInTheDocument();
+      expect(listMock).toHaveBeenLastCalledWith({ kind: 'call' }, 'cur_1', expect.anything());
     });
 
     it('words a failed OLDER page apart from a failed first one, keeping the loaded runs', async () => {
@@ -1043,6 +919,104 @@ describe('RunsPage — U26 filter pane', () => {
       // The history already on screen is real and stays — a failed older page
       // must not cost the reader what they were already looking at.
       expect(screen.getByText('run_1')).toBeInTheDocument();
+    });
+  });
+
+  describe('#1484 — the one-row filter bar', () => {
+    it('the Triggered by menu writes a canonical ?kind= and asks the server for it', async () => {
+      const { router } = renderWithDataRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
+      await screen.findByText(/No runs yet/i);
+      const menu = () => screen.getByRole('button', { name: /^Triggered by:/ });
+      expect(menu()).toHaveTextContent('Triggered by: All');
+
+      await userEvent.click(menu());
+      await userEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Webhook' }));
+      expect(router.state.location.search).toBe('?kind=webhook');
+      await userEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Schedule' }));
+      // Canonical: vocabulary order, whatever order they were picked in.
+      expect(router.state.location.search).toBe('?kind=schedule%2Cwebhook');
+      expect(listMock).toHaveBeenLastCalledWith(
+        { kind: 'schedule,webhook' },
+        undefined,
+        expect.anything(),
+      );
+      expect(menu()).toHaveTextContent('Triggered by: 2 kinds');
+
+      await userEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Schedule' }));
+      await userEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Webhook' }));
+      // Nothing picked is the unfiltered list, which is the param's absence.
+      expect(router.state.location.search).toBe('');
+    });
+
+    it('searches 300ms after typing stops: the first write pushes, refinements replace', async () => {
+      const { router } = renderWithDataRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
+      await screen.findByText(/No runs yet/i);
+      const box = screen.getByRole('searchbox', { name: 'Search runs' });
+
+      await userEvent.type(box, 'ord');
+      // Not yet: one request per word, not per letter.
+      expect(router.state.location.search).toBe('');
+      await vi.waitFor(() => expect(router.state.location.search).toBe('?q=ord'));
+      expect(router.state.historyAction).toBe('PUSH');
+      await vi.waitFor(() =>
+        expect(listMock).toHaveBeenLastCalledWith({ q: 'ord' }, undefined, expect.anything()),
+      );
+
+      await userEvent.type(box, 'ers ');
+      await vi.waitFor(() => expect(router.state.location.search).toBe('?q=orders'));
+      expect(router.state.historyAction).toBe('REPLACE');
+      // The trailing space being typed is the operator's, not overwritten.
+      expect(box).toHaveValue('orders ');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+      expect(router.state.location.search).toBe('');
+      expect(box).toHaveValue('');
+    });
+
+    it('Started offers one day or a range of days, each clearing the other time bounds', async () => {
+      const { router } = renderWithDataRouter(
+        <RunsPage store={storeWith()} />,
+        '/monitor/runs?since=24h',
+      );
+      await screen.findByText(/No runs match these filters/i);
+      const started = () => screen.getByLabelText('Started');
+
+      await userEvent.selectOptions(started(), 'on');
+      const today = dayOf(new Date());
+      expect(new URLSearchParams(router.state.location.search).get('on')).toBe(today);
+      expect(router.state.location.search).not.toContain('since');
+      // A calendar pick is one change event carrying the whole day.
+      fireEvent.change(await screen.findByLabelText('Day'), { target: { value: '2026-01-15' } });
+      expect(router.state.location.search).toBe('?on=2026-01-15');
+      const bounds = dayRangeBounds({ on: '2026-01-15' });
+      await vi.waitFor(() =>
+        expect(listMock).toHaveBeenLastCalledWith(bounds, undefined, expect.anything()),
+      );
+
+      await userEvent.selectOptions(started(), 'range');
+      const params = new URLSearchParams(router.state.location.search);
+      expect(params.get('on')).toBeNull();
+      expect(params.get('to')).toBe(today);
+      expect(await screen.findByLabelText('From day')).toHaveValue(params.get('from'));
+
+      await userEvent.selectOptions(started(), '7d');
+      expect(router.state.location.search).toBe('?since=7d');
+    });
+
+    it('reads a day range from the URL and asks the server for its epoch bounds', async () => {
+      renderWithRouter(
+        <RunsPage store={storeWith()} />,
+        '/monitor/runs?from=2026-01-01&to=2026-01-31&since=1h',
+      );
+      await screen.findByText(/No runs match these filters/i);
+      // The days win over a relative window in the same URL: one time bound,
+      // the one the picker shows.
+      expect(screen.getByLabelText('Started')).toHaveValue('range');
+      expect(listMock).toHaveBeenCalledWith(
+        dayRangeBounds({ from: '2026-01-01', to: '2026-01-31' }),
+        undefined,
+        expect.anything(),
+      );
     });
   });
 
