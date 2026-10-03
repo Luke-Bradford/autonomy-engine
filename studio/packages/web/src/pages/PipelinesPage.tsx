@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { useStore } from 'zustand';
-import type { Pipeline } from '@autonomy-studio/shared';
+import type { Pipeline, PipelineVersionState, WorkspaceGitSync } from '@autonomy-studio/shared';
 import { useBusyAction } from '../hooks/useBusyAction';
+import { useGuardedLoad } from '../hooks/useGuardedLoad';
+import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus';
 import { messageOf } from '../api/client';
 import { downloadPipelineExport } from '../api/pipelineExport';
 import {
@@ -12,8 +14,12 @@ import {
   deletePipeline,
   describeDeleteFailure,
   listArchivedPipelines,
+  listPipelineVersionStates,
   restorePipeline,
 } from '../api/pipelines';
+import { getWorkspaceGit, readWorkspaceGitSync } from '../api/workspaceGit';
+import { RowStateBadge } from './pipeline/EditorStateBadge';
+import { listRowBadge } from './pipeline/editorState';
 import { pipelinesStore, type PipelinesStore } from '../stores/pipelinesStore';
 import { ImportPanel } from './ImportPanel';
 import { pipelinePath } from './author/pipelinePath';
@@ -58,6 +64,63 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
   const ensureFresh = useStore(store, (s) => s.ensureFresh);
   const retryIfFailed = useStore(store, (s) => s.retryIfFailed);
   const refresh = useStore(store, (s) => s.refresh);
+
+  /**
+   * #1476 OR28 slice 8 — each row's state badge: its saved head and live
+   * version, and `uncommitted` when a repo is connected and this pipeline is
+   * not on the working branch. Three reads, each failing on its own into
+   * absence — a row without a badge says nothing, which is not a claim. Read
+   * whenever the list itself is (a create, archive or delete changes both) and
+   * on focus, where a save in another tab shows up. The sync read fetches the
+   * remote only when the server's copy is older than the hoster's
+   * `GIT_FETCH_MAX_AGE_SECONDS`, the editor's own policy.
+   */
+  const [versionStates, setVersionStates] = useState<
+    ReadonlyMap<string, PipelineVersionState> | undefined
+  >(undefined);
+  const [gitConnected, setGitConnected] = useState<boolean | undefined>(undefined);
+  const [gitSync, setGitSync] = useState<WorkspaceGitSync | null | undefined>(undefined);
+  const guardedStatesLoad = useGuardedLoad();
+  const guardedGitLoad = useGuardedLoad();
+  const guardedSyncLoad = useGuardedLoad();
+  // Through the sync guard, so a sync still in flight from before the repo
+  // went away is superseded rather than landing afterwards.
+  const clearGitSync = useCallback(() => {
+    void guardedSyncLoad(() => Promise.resolve(undefined), {
+      onData: setGitSync,
+      onError: () => setGitSync(undefined),
+    });
+  }, [guardedSyncLoad]);
+  const refreshRowStates = useCallback(() => {
+    void guardedStatesLoad((signal) => listPipelineVersionStates(signal), {
+      onData: (items) => setVersionStates(new Map(items.map((st) => [st.pipelineId, st]))),
+      onError: () => setVersionStates(undefined),
+    });
+    void guardedGitLoad((signal) => getWorkspaceGit(signal), {
+      onData: (git) => {
+        setGitConnected(git !== null);
+        if (git === null) {
+          clearGitSync();
+          return;
+        }
+        void guardedSyncLoad((signal) => readWorkspaceGitSync(signal), {
+          onData: setGitSync,
+          onError: () => setGitSync(undefined),
+        });
+      },
+      onError: () => {
+        setGitConnected(undefined);
+        clearGitSync();
+      },
+    });
+  }, [guardedStatesLoad, guardedGitLoad, guardedSyncLoad, clearGitSync]);
+  // On the ids, not the array: a refresh hands back a new array whose rows may
+  // be the same, and an empty list has no row to badge.
+  const pipelineIds = pipelines.map((p) => p.id).join('\n');
+  useEffect(() => {
+    if (pipelineIds !== '') refreshRowStates();
+  }, [pipelineIds, refreshRowStates]);
+  useRefreshOnFocus(refreshRowStates);
 
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [name, setName] = useState('');
@@ -359,47 +422,59 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
           <thead>
             <tr>
               <th>Name</th>
+              <th>State</th>
               <th aria-label="actions" />
             </tr>
           </thead>
           <tbody>
-            {pipelines.map((p) => (
-              <tr key={p.id}>
-                <td>{p.name}</td>
-                <td>
-                  <div className="row-actions">
-                    {/* A link, so it can be middle-clicked, copied and bookmarked
+            {pipelines.map((p) => {
+              const state = versionStates?.get(p.id);
+              return (
+                <tr key={p.id}>
+                  <td>{p.name}</td>
+                  <td>
+                    {state !== undefined && (
+                      <RowStateBadge
+                        pipelineName={p.name}
+                        {...listRowBadge({ state, gitConnected, sync: gitSync })}
+                      />
+                    )}
+                  </td>
+                  <td>
+                    <div className="row-actions">
+                      {/* A link, so it can be middle-clicked, copied and bookmarked
                         — the navigation idiom U2 settled: `useNavigate` on a
                         button is only for navigating as the RESULT of an action. */}
-                    <Link to={pipelinePath(p.id)} aria-label={`Open ${p.name}`}>
-                      Open
-                    </Link>
-                    {/* #1397 — Open is the row's one inline action; the rest are
+                      <Link to={pipelinePath(p.id)} aria-label={`Open ${p.name}`}>
+                        Open
+                      </Link>
+                      {/* #1397 — Open is the row's one inline action; the rest are
                         in its menu. #1058: Archive stays in the same menu as
                         Delete on purpose. Delete is refused with a 409 the
                         moment the pipeline has run history, and
                         `pipelineHasRunsMessage` (shared with the Factory
                         Resources pane, which has no Archive) names where
                         Archive is. Here it is the item above Delete. */}
-                    <RowMoreMenu
-                      name={p.name}
-                      actions={[
-                        {
-                          label: 'Export',
-                          onSelect: () => void onExport(p),
-                          disabled: exporting.has(p.id),
-                        },
-                        { label: 'Archive', onSelect: (origin) => void onArchive(p, origin) },
-                      ]}
-                      destructive={{
-                        label: 'Delete',
-                        onSelect: (origin) => void onDelete(p, origin),
-                      }}
-                    />
-                  </div>
-                </td>
-              </tr>
-            ))}
+                      <RowMoreMenu
+                        name={p.name}
+                        actions={[
+                          {
+                            label: 'Export',
+                            onSelect: () => void onExport(p),
+                            disabled: exporting.has(p.id),
+                          },
+                          { label: 'Archive', onSelect: (origin) => void onArchive(p, origin) },
+                        ]}
+                        destructive={{
+                          label: 'Delete',
+                          onSelect: (origin) => void onDelete(p, origin),
+                        }}
+                      />
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}

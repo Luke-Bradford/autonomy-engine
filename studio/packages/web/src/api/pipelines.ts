@@ -6,6 +6,7 @@ import {
   PipelineCostRollupSchema,
   PipelineSchema,
   PipelineVersionSchema,
+  PipelineVersionStatesResponseSchema,
   PublishPipelineBodySchema,
   PublishPipelineResultSchema,
   paginatedResponseSchema,
@@ -28,6 +29,7 @@ import {
   type FireResult,
   type ManualRunRequest,
   PipelineDependentsResponseSchema,
+  type PipelineVersionState,
   type PipelineDependentsResponse,
 } from '@autonomy-studio/shared';
 import { ApiError, apiFetch, messageOf } from './client';
@@ -478,6 +480,18 @@ export function getActivePipelineVersion(
     schema: ActivePipelineVersionResponseSchema,
     signal,
   }).then((res) => res.active);
+}
+
+/**
+ * #1476 OR28 — every live pipeline's saved head and active version
+ * (`GET /api/pipelines/version-states`), one read for the pipelines list's
+ * state column. Not git-gated: a DB-only workspace answers `active: null`.
+ */
+export function listPipelineVersionStates(signal?: AbortSignal): Promise<PipelineVersionState[]> {
+  return apiFetch('/api/pipelines/version-states', {
+    schema: PipelineVersionStatesResponseSchema,
+    signal,
+  }).then((res) => res.items);
 }
 
 /**

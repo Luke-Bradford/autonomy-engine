@@ -181,3 +181,35 @@ test('a version saved elsewhere reaches the badge and the history on focus', asy
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * #1476 OR28 slice 8 — the same badge, compact, on the pipelines list: the
+ * saved head per row, read in one request for the whole list. DB-only here, so
+ * no row has a live or git part; `workspace-git.spec.ts` covers both.
+ */
+test('the pipelines list names each row’s saved head', async ({ page }) => {
+  const problems = collectPageProblems(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const name = `e2e 1476 list ${String(Date.now())}`;
+  const { pipelineId, pipelineVersionId: v1 } = await seedVersion(page, name, V1);
+  const v2 = await mintVersion(page, pipelineId, V2, v1, name);
+
+  const statesRead = page.waitForResponse((r) => r.url().endsWith('/api/pipelines/version-states'));
+  await page.goto('/#/author/pipelines');
+  await fluentRootReady(page);
+  await statesRead;
+  const row = page.getByRole('group', { name: `${name} state` });
+  await expect(row.locator('[data-part="editing"]')).toHaveText(/^v2 \(latest\)/);
+  await expect(row.locator('[data-part="editing"]')).toHaveAttribute(
+    'title',
+    'v2, the latest saved version.',
+  );
+  await expect(row.locator('[data-part="live"]')).toHaveCount(0);
+  await expect(row.locator('[data-part="git"]')).toHaveCount(0);
+
+  // A save elsewhere reaches the row on focus.
+  await mintVersion(page, pipelineId, V1, v2, name);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(row.locator('[data-part="editing"]')).toHaveText(/^v3 \(latest\)/);
+  await expectQuiet(page, problems);
+});

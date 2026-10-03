@@ -31,12 +31,45 @@ export function EditorStateBadge({
   );
 }
 
+/**
+ * #1476 OR28 slice 8 — the same parts, compact, in a pipelines-list row. Named
+ * for its pipeline, since a list holds many; the ✓ there means the live version
+ * is the latest saved one, as there is no canvas to be on.
+ */
+export function RowStateBadge({
+  pipelineName,
+  editing,
+  live,
+  git,
+}: {
+  pipelineName: string;
+  editing: BadgePart;
+  live: BadgePart | null;
+  git: BadgePart | null;
+}): React.JSX.Element {
+  const current = 'the latest version';
+  return (
+    <div
+      className="editor-state-badge editor-state-badge--row"
+      role="group"
+      aria-label={`${pipelineName} state`}
+    >
+      <Part part={editing} name="editing" current={current} />
+      {live !== null && <Part part={live} name="live" current={current} />}
+      {git !== null && <Part part={git} name="git" current={current} />}
+    </div>
+  );
+}
+
 function Part({
   part,
   name,
+  current = 'on the canvas',
 }: {
   part: BadgePart;
   name: 'editing' | 'live' | 'git';
+  /** What the ✓ says aloud. */
+  current?: string;
 }): React.JSX.Element {
   return (
     <span
@@ -70,7 +103,7 @@ function Part({
       {part.current === true && (
         <>
           <span aria-hidden="true"> ✓</span>
-          <span className="visually-hidden"> (on the canvas)</span>
+          <span className="visually-hidden"> ({current})</span>
         </>
       )}
       <span className="visually-hidden">. {part.detail}</span>

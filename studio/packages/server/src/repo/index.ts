@@ -6,6 +6,7 @@ export * from './datasets.js';
 export * from './global-params.js';
 export * from './pipelines.js';
 export * from './pipeline-versions.js';
+export * from './pipeline-version-states.js';
 export * from './triggers.js';
 export * from './archive.js';
 export * from './row-corruption.js';

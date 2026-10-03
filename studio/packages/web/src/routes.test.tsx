@@ -148,6 +148,7 @@ vi.mock('./api/globalParams', async (importActual) => ({
 vi.mock('./api/pipelines', async (importActual) => ({
   ...(await importActual<typeof import('./api/pipelines')>()),
   listPipelines: vi.fn().mockResolvedValue([]),
+  listPipelineVersionStates: vi.fn().mockResolvedValue([]),
   listPipelineVersions: vi.fn().mockResolvedValue([]),
   // #1206 — mocked DIRECTLY, not composed from the two above: the real
   // `listAllPipelineVersions` calls them through module-internal references that

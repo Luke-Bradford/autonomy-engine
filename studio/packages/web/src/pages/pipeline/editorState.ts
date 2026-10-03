@@ -1,4 +1,6 @@
 import type {
+  PipelineVersionState,
+  WorkspaceGitPipelineDrift,
   WorkspaceGitPullRequestReading,
   WorkspaceGitStatus,
   WorkspaceGitSync,
@@ -125,8 +127,14 @@ export interface LiveInput {
   gitConnected: boolean | undefined;
   /** `activeVersionLabel(active, versions)`. */
   active: ActiveVersionLabel;
-  /** `canvasVersion(...)`. */
+  /** `canvasVersion(...)` — or, with `subject: 'latest'`, the saved head. */
   canvas: number | null;
+  /**
+   * What `canvas` is: the editor's canvas (the default), or the latest saved
+   * version — a pipelines-list row, which has no canvas (#1476 slice 8). Only
+   * the wording changes; the tone rule is this function's alone.
+   */
+  subject?: 'canvas' | 'latest';
 }
 
 /**
@@ -155,17 +163,20 @@ export function liveState(s: LiveInput): BadgePart | null {
     };
   }
   const v = String(s.active);
+  const latest = s.subject === 'latest';
   if (s.active === s.canvas) {
     return {
       label: `Live: v${v}`,
-      detail: `v${v} is the active (published) version, and is what the canvas shows.`,
+      detail: `v${v} is the active (published) version, and is ${latest ? 'the latest saved version' : 'what the canvas shows'}.`,
       tone: 'success',
       current: true,
     };
   }
   return {
     label: `Live: v${v}`,
-    detail: `v${v} is the active (published) version; the canvas shows ${s.canvas === null ? 'unsaved changes' : `v${String(s.canvas)}`}.`,
+    detail: latest
+      ? `v${v} is the active (published) version; ${s.canvas === null ? 'there is no saved version' : `the latest saved version is v${String(s.canvas)}`}.`
+      : `v${v} is the active (published) version; the canvas shows ${s.canvas === null ? 'unsaved changes' : `v${String(s.canvas)}`}.`,
     tone: 'warning',
   };
 }
@@ -273,12 +284,8 @@ export function gitState({
   }
   // The tone only ever rises below: danger (`diverged`) is the last state set.
   if (git.state !== 'fetch_error' && sync != null && pipelineId !== undefined) {
-    const change = sync.pipelines.find((p) => p.pipelineId === pipelineId)?.change;
+    const { change, against } = pipelineDrift(sync, pipelineId);
     const divergence = sync.divergence;
-    // Against whatever `base` is: before the working branch exists that is the
-    // collaboration branch, and naming the working branch then would describe a
-    // branch with no such state.
-    const against = sync.baseBranch ?? sync.workingBranch;
     if (change !== undefined) {
       parts.push('uncommitted');
       sentences.push(describePipelineDrift(change, against));
@@ -342,6 +349,72 @@ export function gitState({
       },
     }),
   };
+}
+
+/**
+ * This pipeline's entry in a sync reading — `undefined` when it matches — and
+ * the branch it was compared against: whatever `base` is. Before the working
+ * branch exists that is the collaboration branch, and naming the working
+ * branch then would describe a branch with no such state.
+ */
+export function pipelineDrift(
+  sync: WorkspaceGitSync,
+  pipelineId: string,
+): { change: WorkspaceGitPipelineDrift['change'] | undefined; against: string } {
+  return {
+    change: sync.pipelines.find((p) => p.pipelineId === pipelineId)?.change,
+    against: sync.baseBranch ?? sync.workingBranch,
+  };
+}
+
+export interface ListRowInput {
+  /** This pipeline's head and live version (`GET /api/pipelines/version-states`). */
+  state: PipelineVersionState;
+  /** Is a git repo connected? `undefined` while unread or after a failed read. */
+  gitConnected: boolean | undefined;
+  /** As `GitInput.sync`: `undefined` unread or failed, `null` when the server's fetch failed. */
+  sync: WorkspaceGitSync | null | undefined;
+}
+
+/**
+ * #1476 OR28 slice 8 — the badge, compact, for one row of the pipelines list,
+ * so which pipelines differ from live shows without opening each one.
+ *
+ * The same rules as the editor's, about the LATEST SAVED version rather than a
+ * canvas — a list row has no draft and no preview: the editing part is
+ * `editingState` of a clean editor on the head, and the live part is
+ * `liveState` against the head, in those words. Git says only `uncommitted`,
+ * for a pipeline the sync reading lists; a clean row says nothing, so the rows
+ * that differ are the ones that stand out. Without a reading — unread, or the
+ * server's fetch failed — nothing is claimed either way.
+ */
+export function listRowBadge({ state, gitConnected, sync }: ListRowInput): {
+  editing: BadgePart;
+  live: BadgePart | null;
+  git: BadgePart | null;
+} {
+  const head = state.latestVersion;
+  const editing = editingState({
+    dirty: false,
+    loadedVersion: head,
+    headVersion: head,
+    previewedVersion: null,
+    archived: false,
+  });
+  const active = state.active === null ? null : (state.active.version ?? 'unnamed');
+  const live = liveState({ gitConnected, active, canvas: head, subject: 'latest' });
+  let git: BadgePart | null = null;
+  if (gitConnected === true && sync != null) {
+    const { change, against } = pipelineDrift(sync, state.pipelineId);
+    if (change !== undefined) {
+      git = {
+        label: 'uncommitted',
+        detail: describePipelineDrift(change, against),
+        tone: 'warning',
+      };
+    }
+  }
+  return { editing, live, git };
 }
 
 /**

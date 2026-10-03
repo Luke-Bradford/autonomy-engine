@@ -4,6 +4,7 @@ import {
   canvasVersion,
   editingState,
   gitState,
+  listRowBadge,
   liveState,
   partText,
   type EditingInput,
@@ -384,5 +385,94 @@ describe('gitState', () => {
       });
       expect(failed?.label).toBe('fetch failed');
     });
+  });
+});
+
+describe('listRowBadge (#1476 slice 8)', () => {
+  const sha = 'abc1234000000000000000000000000000000000';
+  const sync = (over: Partial<WorkspaceGitSync> = {}): WorkspaceGitSync => ({
+    fetchedAt: 2,
+    fetched: false,
+    workingBranch: 'feature/x',
+    base: sha,
+    baseBranch: 'feature/x',
+    hasUncommittedChanges: false,
+    pipelines: [],
+    divergence: { state: 'current', importBase: sha, collabHead: sha },
+    ...over,
+  });
+  // `gitConnected` is read with `in`, not a default: `undefined` is a case.
+  const row = (
+    latestVersion: number | null,
+    active: { versionId: string; version: number | null } | null,
+    over: { gitConnected?: boolean | undefined; sync?: WorkspaceGitSync | null } = {},
+  ) =>
+    listRowBadge({
+      state: { pipelineId: 'p1', latestVersion, active },
+      gitConnected: 'gitConnected' in over ? over.gitConnected : true,
+      sync: over.sync,
+    });
+
+  it('names the saved head as the editor does on a clean open', () => {
+    expect(row(3, null).editing).toEqual(editingState(base));
+    expect(row(null, null).editing).toMatchObject({ label: 'Not saved', tone: 'neutral' });
+  });
+
+  it('is green with ✓ when live IS the latest saved version, in list words', () => {
+    expect(row(2, { versionId: 'v2', version: 2 }).live).toEqual({
+      label: 'Live: v2',
+      detail: 'v2 is the active (published) version, and is the latest saved version.',
+      tone: 'success',
+      current: true,
+    });
+  });
+
+  it('is amber when live is behind the latest saved version, and says which', () => {
+    const live = row(3, { versionId: 'v1', version: 1 }).live;
+    expect(live).toMatchObject({ label: 'Live: v1', tone: 'warning' });
+    expect(live?.current).toBeUndefined();
+    expect(live?.detail).toBe(
+      'v1 is the active (published) version; the latest saved version is v3.',
+    );
+    expect(row(null, { versionId: 'v1', version: 1 }).live?.detail).toBe(
+      'v1 is the active (published) version; there is no saved version.',
+    );
+  });
+
+  it('says Not published, or not listed, rather than a number it does not have', () => {
+    expect(row(2, null).live).toMatchObject({ label: 'Not published', tone: 'warning' });
+    expect(row(null, null).live).toMatchObject({ label: 'Not published' });
+    expect(row(2, { versionId: 'vx', version: null }).live).toMatchObject({
+      label: 'Live: not listed yet',
+      tone: 'warning',
+    });
+  });
+
+  it('has no live part outside git mode, or while that is unread', () => {
+    for (const connected of [false, undefined]) {
+      expect(row(2, null, { gitConnected: connected }).live).toBeNull();
+      expect(row(2, { versionId: 'v2', version: 2 }, { gitConnected: connected }).live).toBeNull();
+    }
+  });
+
+  it('says uncommitted only for a pipeline the sync reading lists', () => {
+    const listed = sync({ pipelines: [{ pipelineId: 'p1', change: 'modified' }] });
+    expect(row(2, null, { sync: listed }).git).toEqual({
+      label: 'uncommitted',
+      detail: 'Its latest saved version differs from feature/x.',
+      tone: 'warning',
+    });
+    // Before the working branch exists, it was compared with main.
+    expect(row(2, null, { sync: sync({ ...listed, baseBranch: 'main' }) }).git?.detail).toBe(
+      'Its latest saved version differs from main.',
+    );
+    // A clean row, another pipeline listed, no reading, a failed fetch: nothing.
+    expect(row(2, null, { sync: sync() }).git).toBeNull();
+    expect(
+      row(2, null, { sync: sync({ pipelines: [{ pipelineId: 'p2', change: 'added' }] }) }).git,
+    ).toBeNull();
+    expect(row(2, null, { sync: undefined }).git).toBeNull();
+    expect(row(2, null, { sync: null }).git).toBeNull();
+    expect(row(2, null, { gitConnected: false, sync: listed }).git).toBeNull();
   });
 });

@@ -509,6 +509,28 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await expect(gitPart).toHaveAttribute('data-tone', 'warning');
 
   /**
+   * #1476 OR28 slice 8 — the same badge, compact, on the pipelines list, so
+   * which pipelines differ from live shows without opening each one: the
+   * published one is live and on its latest version, but not yet on the
+   * working branch; the committed one has never been published.
+   */
+  await page.goto('/#/author/pipelines');
+  await fluentRootReady(page);
+  const listRow = (n: string) => page.getByRole('group', { name: `${n} state` });
+  const rowPart = (n: string, p: string) => listRow(n).locator(`[data-part="${p}"]`);
+  await expect(rowPart(publishName, 'editing')).toHaveText(/^v1 \(latest\)/);
+  await expect(rowPart(publishName, 'live')).toHaveText(/^Live: v1 ✓ \(the latest version\)/);
+  await expect(rowPart(publishName, 'live')).toHaveAttribute('data-tone', 'success');
+  await expect(rowPart(publishName, 'git')).toHaveText(/^uncommitted\./);
+  await expect(rowPart(publishName, 'git')).toHaveAttribute(
+    'title',
+    'This pipeline is not on studio/local/work yet.',
+  );
+  await expect(rowPart(pipelineName, 'live')).toHaveText(/^Not published/);
+  await expect(rowPart(pipelineName, 'live')).toHaveAttribute('data-tone', 'warning');
+  await expect(rowPart(pipelineName, 'git')).toHaveCount(0);
+
+  /**
    * ── the publish is LEGIBLE in the audit log (#1077) ────────────────────────
    *
    * Here because this is the only spec in the suite that reaches a real
