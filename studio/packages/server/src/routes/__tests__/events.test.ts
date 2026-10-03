@@ -198,6 +198,8 @@ describe('POST /api/events', () => {
     const first = await publish({ name: 't7.created', idempotencyKey: 'evt-1' });
     expect(first.json().results[0].outcome).toBe('started');
     await app.runLauncher.whenIdle();
+    // #1484 — the row says an EVENT started it, for the Monitor.
+    expect(listRuns(app.db, { triggerId: trig.id })[0]?.triggerContext?.fireKind).toBe('event');
 
     const replay = await publish({ name: 't7.created', idempotencyKey: 'evt-1' });
     expect(replay.json().results[0].outcome).toBe('duplicate');

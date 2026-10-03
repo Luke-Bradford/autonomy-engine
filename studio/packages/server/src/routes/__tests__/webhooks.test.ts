@@ -142,6 +142,8 @@ describe('webhook routes', () => {
     const run = (await app.inject({ method: 'GET', url: `/api/runs/${runId}` })).json();
     expect(run.status).toBe('success');
     expect(run.triggerId).toBe(id);
+    // #1484 — the row says a webhook DELIVERY started it, for the Monitor.
+    expect(listRuns(app.db, { triggerId: id })[0]?.triggerContext?.fireKind).toBe('webhook');
   });
 
   // #5 S8 — the webhook body is the FIRST production feeder of
