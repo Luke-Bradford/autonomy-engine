@@ -127,3 +127,17 @@ export function formatZodIssues(
   });
   return summarizeIssueList(rendered, issues.length);
 }
+
+/**
+ * #1491 — `params` for a refinement that reads only which keys are PRESENT
+ * (`.refine(fn, { params: PRESENCE_ONLY_RULE })`). A whole-value `${}` never
+ * resolves to `undefined` (substitution throws or yields a value), so no
+ * expression can change such a rule's verdict, and the save check
+ * (`activity-config-check.ts`) must never leave it to dispatch.
+ */
+export const PRESENCE_ONLY_RULE = { presenceOnly: true } as const;
+
+/** Whether `issue` was raised by a rule marked with `PRESENCE_ONLY_RULE`. */
+export function isPresenceOnlyIssue(issue: z.core.$ZodIssue): boolean {
+  return issue.code === 'custom' && issue.params?.['presenceOnly'] === true;
+}

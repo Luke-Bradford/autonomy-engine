@@ -94,21 +94,69 @@ describe('activityNodeErrors (#1480)', () => {
     // refinement still judges presence correctly and must still refuse.
     const both = { prompt: 'hi ${params.x}', messages: [{ role: 'user', content: 'x' }] };
     expect(activityNodeErrors(node('llm_call', both)).length).toBeGreaterThan(0);
-    // A whole-value expression may resolve to anything, so the refinement is
-    // left to dispatch.
-    const opaque = { prompt: 'hi', messages: '${params.history}' };
+    // A whole-value expression may resolve to anything, so the non-system rule
+    // on `messages` is left to dispatch.
+    const opaque = { messages: '${params.history}' };
     expect(activityNodeErrors(node('llm_call', opaque))).toEqual([]);
+    const opaqueRole = { messages: [{ role: '${params.role}', content: 'x' }] };
+    expect(activityNodeErrors(node('llm_call', opaqueRole))).toEqual([]);
+  });
+
+  it('judges prompt XOR messages by presence, which no expression changes (#1491)', () => {
+    // A whole-value expression never resolves to `undefined` (substitution
+    // throws or yields a value), so a present key stays present and an absent
+    // one absent: an expression ELSEWHERE in the config cannot decide the rule.
+    const neither = { model: '${params.m}' };
+    expect(activityNodeErrors(node('llm_call', neither))).toEqual([
+      "node 'n1': config.prompt: llm_call requires exactly one of `prompt` or `messages`",
+    ]);
+    const both = {
+      prompt: 'p',
+      messages: [{ role: 'user', content: 'x' }],
+      system: '${params.m}',
+    };
+    expect(activityNodeErrors(node('llm_call', both))).toEqual([
+      "node 'n1': config.prompt: llm_call requires exactly one of `prompt` or `messages`",
+    ]);
+    // Nor does a whole-value `prompt` itself: it resolves to SOME value, so
+    // the key is still present at dispatch.
+    const wholePrompt = { prompt: '${params.p}', messages: [{ role: 'user', content: 'x' }] };
+    expect(activityNodeErrors(node('llm_call', wholePrompt))).toEqual([
+      "node 'n1': config.prompt: llm_call requires exactly one of `prompt` or `messages`",
+    ]);
+  });
+
+  it('scopes the non-system rule to `messages`, not the whole config (#1491)', () => {
+    const systemOnly = {
+      messages: [{ role: 'system', content: 'x' }],
+      model: '${params.m}',
+    };
+    expect(activityNodeErrors(node('llm_call', systemOnly))).toEqual([
+      "node 'n1': config.messages: llm_call `messages` must contain at least one non-system (user/assistant) message",
+    ]);
   });
 
   it('does not overflow the stack on a hostile nesting under a refinement issue', () => {
-    // prompt AND messages raise a root-level refinement, whose drop decision
-    // walks the whole config: past MAX_CONFIG_DEPTH it stops rather than throw
-    // out of the save gate as a 500, and a whole-value expression buried past
-    // the bound does not wave the refinement through — the issue stands.
+    // A root-level refinement's drop decision walks the whole config: past
+    // MAX_CONFIG_DEPTH it stops rather than throw out of the save gate as a
+    // 500, and a whole-value expression buried past the bound does not wave
+    // the refinement through — the issue stands.
+    const entry: ActivityCatalogEntry = {
+      ...catalog.get('file_read')!,
+      type: 'test_activity',
+      dispatchConfigSchema: z
+        .object({ n: z.number(), extra: z.unknown() })
+        .refine((c) => c.n > 0, { message: 'n must be positive' }),
+    };
+    const injected: ActivityCatalog = new Map([['test_activity', entry]]);
     let deep: unknown = '${params.x}';
     for (let i = 0; i < 20_000; i += 1) deep = [deep];
-    const config = { prompt: 'p', messages: [{ role: 'user', content: 'x' }], extra: deep };
-    expect(activityNodeErrors(node('llm_call', config)).length).toBeGreaterThan(0);
+    expect(activityNodeErrors(node('test_activity', { n: 0, extra: deep }), injected)).toEqual([
+      "node 'n1': config: n must be positive",
+    ]);
+    // Within the bound, the same whole-value expression does drop it.
+    const shallow = { n: 0, extra: ['${params.x}'] };
+    expect(activityNodeErrors(node('test_activity', shallow), injected)).toEqual([]);
   });
 
   it('checks against an injected catalog, the one the executor dispatches with', () => {

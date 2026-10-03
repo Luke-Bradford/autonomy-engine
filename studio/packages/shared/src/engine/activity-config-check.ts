@@ -21,7 +21,9 @@
  *    WHOLE-value expression or a marker anywhere: a whole value keeps its native
  *    type and may resolve to anything, so a cross-field rule cannot be judged.
  *    An interpolated descendant does not drop it — presence and type survive
- *    interpolation, which is what those rules read.
+ *    interpolation, which is what those rules read. A rule that reads ONLY
+ *    presence (`PRESENCE_ONLY_RULE`, #1491) is never dropped: no expression
+ *    resolves to `undefined`, so none can change which keys are present.
  *
  * The boundary errs one way only: a dropped issue is a config dispatch may
  * still refuse, exactly as before this gate; it is never a refusal of a config
@@ -35,6 +37,7 @@
 import type { z } from 'zod';
 import type { Node } from '../schemas/pipeline.js';
 import { isSecretRef } from '../schemas/secret-ref.js';
+import { isPresenceOnlyIssue } from '../schemas/zod-issues.js';
 import type { ActivityCatalog } from '../catalog/types.js';
 import { catalog as sharedCatalog } from '../catalog/registry.js';
 import { interpolationMode } from './expr.js';
@@ -92,6 +95,7 @@ function valuesAlong(config: unknown, path: readonly PropertyKey[]): unknown[] {
 
 /** True when the issue could be an artefact of judging the template, not its value. */
 function decidedByExpression(config: unknown, issue: z.core.$ZodIssue): boolean {
+  if (isPresenceOnlyIssue(issue)) return false;
   const values = valuesAlong(config, issue.path);
   if (values.some((v) => opaque(v, 'any'))) return true;
   if (values.length <= issue.path.length) return false;

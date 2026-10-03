@@ -7,6 +7,7 @@ import {
   VALUE_TYPE_TITLES,
 } from '../schemas/field-presentation.js';
 import { isAddressableOutputName, type Output, type OutputType } from '../schemas/pipeline.js';
+import { PRESENCE_ONLY_RULE } from '../schemas/zod-issues.js';
 
 /**
  * #2 L1 — the `llm_call` activity config v2 (the rich model) + its provider-
@@ -874,10 +875,19 @@ export const llmCallConfigSchema = z
       description: "Also records the model's reasoning summary. Needs Capture level full.",
     }),
   })
+  // Each object-level rule names the field it judges (#1491). The save check
+  // (`activity-config-check.ts`) leaves a refinement to dispatch when a
+  // whole-value `${}` sits under its path, and a path-less rule's subtree is the
+  // whole config, so one expression in an unrelated field would wave it through.
+  // The XOR reads only presence, which no expression changes, so it is never
+  // left to dispatch.
   .refine((c) => (c.prompt !== undefined) !== (c.messages !== undefined), {
+    path: ['prompt'],
+    params: PRESENCE_ONLY_RULE,
     message: 'llm_call requires exactly one of `prompt` or `messages`',
   })
   .refine((c) => c.messages === undefined || c.messages.some((m) => m.role !== 'system'), {
+    path: ['messages'],
     message: 'llm_call `messages` must contain at least one non-system (user/assistant) message',
   })
   .superRefine(refineOutputModeCoupling)
