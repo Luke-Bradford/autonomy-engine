@@ -6,6 +6,12 @@ import {
   RunSinceSchema,
   RunStatusSchema,
   RunTriggeredByKindListSchema,
+  RUN_SORT_DEFAULT_KEY,
+  RUN_SORT_NATURAL_DIR,
+  RunSortDirSchema,
+  RunSortKeySchema,
+  type RunSort,
+  type RunSortKey,
   type RunTriggeredByKind,
 } from '@autonomy-studio/shared';
 import type { RunSince, RunStatus } from '@autonomy-studio/shared';
@@ -250,4 +256,50 @@ export const NO_RUNS_YET =
  * "nothing matches these filters" apart from "you have no runs". */
 export function hasActiveRunFilters(filters: RunFilters): boolean {
   return Object.values(filters).some((value) => value !== undefined);
+}
+
+/**
+ * #1484 OR35 M1 — the grid's sort, in the URL like the filters but NOT one of
+ * them: it is not in `RUN_FILTER_PARAMS`, so a sort never lights Clear, Clear
+ * keeps it, and an empty sorted list still reads as "no runs match these
+ * filters" only when a filter is actually set.
+ */
+export const RUN_SORT_PARAMS = { sort: 'sort', dir: 'dir' } as const;
+
+export type RunSortState = RunSort;
+
+/** The sort the URL asks for. A junk key falls back to the default and a junk
+ * or absent `dir` to the column's natural direction — the server's own reading
+ * of the same params (`resolveRunSort`), so the header and the rows agree. */
+export function readRunSort(params: URLSearchParams): RunSortState {
+  const key = RunSortKeySchema.safeParse(params.get(RUN_SORT_PARAMS.sort));
+  const dir = RunSortDirSchema.safeParse(params.get(RUN_SORT_PARAMS.dir));
+  const k = key.success ? key.data : RUN_SORT_DEFAULT_KEY;
+  return { key: k, dir: dir.success ? dir.data : RUN_SORT_NATURAL_DIR[k] };
+}
+
+/** The params a sort writes: nothing for the default column, and no `dir` when
+ * it is the column's natural one, so the plain list keeps a plain URL. `''`
+ * deletes a param (`withParams`). */
+export function runSortParams(sort: RunSortState): Record<string, string> {
+  const isDefaultKey = sort.key === RUN_SORT_DEFAULT_KEY;
+  const isNatural = sort.dir === RUN_SORT_NATURAL_DIR[sort.key];
+  return {
+    [RUN_SORT_PARAMS.sort]: isDefaultKey && isNatural ? '' : sort.key,
+    [RUN_SORT_PARAMS.dir]: isNatural ? '' : sort.dir,
+  };
+}
+
+/** A header click: the sorted column flips, any other opens in its natural
+ * direction. */
+export function nextRunSort(current: RunSortState, clicked: RunSortKey): RunSortState {
+  if (current.key === clicked) return { key: clicked, dir: current.dir === 'asc' ? 'desc' : 'asc' };
+  return { key: clicked, dir: RUN_SORT_NATURAL_DIR[clicked] };
+}
+
+/** Whether the list is in its default order, newest first. */
+export function isDefaultRunSort(sort: RunSortState): boolean {
+  return (
+    sort.key === RUN_SORT_DEFAULT_KEY && sort.dir === RUN_SORT_NATURAL_DIR[RUN_SORT_DEFAULT_KEY]
+  );
 }

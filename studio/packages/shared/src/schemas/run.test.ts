@@ -3,6 +3,12 @@ import {
   NewRunEventSchema,
   RUN_SEARCH_MAX_CHARS,
   RunEpochBoundSchema,
+  RUN_SORT_KEYS,
+  RUN_SORT_NATURAL_DIR,
+  RUN_STATUS_SORT_RANK,
+  RUN_TRIGGERED_BY_KINDS,
+  RUN_TRIGGERED_BY_LABELS,
+  RUN_TRIGGERED_BY_SORT_RANK,
   RunSearchSchema,
   RunTriggeredByKindListSchema,
   NewRunSchema,
@@ -286,5 +292,41 @@ describe('#1484 — the runs list filter wire schemas', () => {
 
   it('an epoch bound reads digits as a number', () => {
     expect(RunEpochBoundSchema.parse('1759363200000')).toBe(1759363200000);
+  });
+});
+
+describe('#1484 — the runs grid sort ranks', () => {
+  it('ranks Triggered by A–Z by the label the grid draws, not the slug', () => {
+    const byRank = [...RUN_TRIGGERED_BY_KINDS].sort(
+      (a, b) => RUN_TRIGGERED_BY_SORT_RANK[a] - RUN_TRIGGERED_BY_SORT_RANK[b],
+    );
+    expect(byRank.map((k) => RUN_TRIGGERED_BY_LABELS[k])).toEqual([
+      'Debug',
+      'Editor run',
+      'Event',
+      'Execute Pipeline',
+      'Fire now',
+      'Rerun from failed',
+      'Schedule',
+      'Tumbling window',
+      'Webhook',
+    ]);
+  });
+
+  it('gives every status its own rank, failures first and successes last', () => {
+    const ranks = Object.values(RUN_STATUS_SORT_RANK);
+    expect(new Set(ranks).size).toBe(RunStatusSchema.options.length);
+    expect(RUN_STATUS_SORT_RANK.failure).toBe(Math.min(...ranks));
+    expect(RUN_STATUS_SORT_RANK.success).toBeGreaterThan(RUN_STATUS_SORT_RANK.running);
+  });
+
+  it('opens time columns newest/largest first and the rest A–Z', () => {
+    expect(RUN_SORT_KEYS.map((k) => RUN_SORT_NATURAL_DIR[k])).toEqual([
+      'desc',
+      'desc',
+      'asc',
+      'asc',
+      'asc',
+    ]);
   });
 });

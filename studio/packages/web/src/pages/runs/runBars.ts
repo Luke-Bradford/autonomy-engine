@@ -136,8 +136,9 @@ export interface GroupedRuns {
    *
    * Stated as a pass-through rather than as "newest first", which is what it
    * LOOKS like on screen and would be a claim this function cannot keep:
-   * `listRunSummariesPage` orders `desc(startedAt), desc(id)` and the page hands
-   * them on unfiltered, so the rows arrive newest-first and the list renders newest-first —
+   * `listRunSummariesPage` orders `desc(startedAt), desc(id)` by default (the
+   * timeline view never asks for another sort) and the page hands them on
+   * unfiltered, so the rows arrive newest-first and the list renders newest-first —
    * but nothing here enforces that, and a caller passing rows in another order,
    * or a change to the server's `ORDER BY`, would quietly falsify it. The
    * precondition is the caller's; `groupRuns`'s docblock repeats it.

@@ -723,6 +723,52 @@ describe('runs routes (read-only)', () => {
       }
     });
 
+    it('#1484 — sorts by ?sort/&dir across pages, and an absent dir is the natural one', async () => {
+      const newestFirst = seedRuns(5);
+      const oldestFirst = [...newestFirst].reverse();
+
+      const first = await pageApp.inject({
+        method: 'GET',
+        url: '/api/runs?limit=2&sort=started&dir=asc',
+      });
+      expect(first.statusCode).toBe(200);
+      expect(runIdsOf(first)).toEqual(oldestFirst.slice(0, 2));
+      const cursor = encodeURIComponent(first.json().nextCursor);
+      const second = await pageApp.inject({
+        method: 'GET',
+        url: `/api/runs?limit=2&sort=started&dir=asc&cursor=${cursor}`,
+      });
+      expect(runIdsOf(second)).toEqual(oldestFirst.slice(2, 4));
+
+      // `started` opens newest first, so `?sort=started` alone is the default.
+      const natural = await pageApp.inject({ method: 'GET', url: '/api/runs?sort=started' });
+      expect(runIdsOf(natural)).toEqual(newestFirst);
+    });
+
+    it('#1484 — refuses a junk sort, and a cursor replayed under another sort', async () => {
+      seedRuns(3);
+      for (const query of ['sort=cost', 'sort=id', 'dir=up', 'sort=']) {
+        const res = await pageApp.inject({ method: 'GET', url: `/api/runs?${query}` });
+        expect(res.statusCode).toBe(400);
+      }
+      const first = await pageApp.inject({ method: 'GET', url: '/api/runs?limit=1&sort=status' });
+      const cursor = encodeURIComponent(first.json().nextCursor);
+      // The same position under another order would be a coherent but different
+      // slice; refusing it is the only answer a client cannot misread.
+      for (const query of ['', '&sort=status&dir=desc', '&sort=pipeline']) {
+        const res = await pageApp.inject({
+          method: 'GET',
+          url: `/api/runs?limit=1&cursor=${cursor}${query}`,
+        });
+        expect(res.statusCode).toBe(400);
+      }
+      const resumed = await pageApp.inject({
+        method: 'GET',
+        url: `/api/runs?limit=1&sort=status&cursor=${cursor}`,
+      });
+      expect(resumed.statusCode).toBe(200);
+    });
+
     it('refuses a limit outside [1, MAX_PAGE_SIZE] rather than clamping it', async () => {
       for (const limit of ['0', '-1', String(MAX_PAGE_SIZE + 1), 'all']) {
         const res = await pageApp.inject({ method: 'GET', url: `/api/runs?limit=${limit}` });

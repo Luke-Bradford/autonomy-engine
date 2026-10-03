@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, lt, or, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, lt, or, sql, type SQL } from 'drizzle-orm';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 import { z } from 'zod';
 import type { Paginated } from '@autonomy-studio/shared';
@@ -24,6 +24,8 @@ import type { Paginated } from '@autonomy-studio/shared';
  * walk a row moves toward the head and can be missed, never duplicated. The rule
  * for anyone adding the next list: a mutable ordering scalar needs that argument
  * made explicitly for its own direction of travel, not assumed from this one.
+ * #1484's runs sorts (`run-sort.ts`, its own cursor) order by keys that are ALL
+ * mutable, and `listRunSummariesPage` states what that costs.
  * The `id` half of the key is a primary key everywhere, so it never moves. */
 export interface CursorKey {
   createdAt: number;
@@ -52,8 +54,7 @@ const CursorPayloadSchema = z.object({
 /** Opaque, URL-safe (`base64url`) handle naming the last row of a page. The
  * client treats it as a blob — the encoding is an implementation detail. */
 export function encodeCursor(key: CursorKey): string {
-  const json = JSON.stringify({ v: CURSOR_VERSION, c: key.createdAt, i: key.id });
-  return Buffer.from(json, 'utf8').toString('base64url');
+  return encodeCursorPayload({ v: CURSOR_VERSION, c: key.createdAt, i: key.id });
 }
 
 /**
@@ -64,14 +65,23 @@ export function encodeCursor(key: CursorKey): string {
  * (which would hand the client a different result set than it asked to resume).
  */
 export function decodeCursor(cursor: string): CursorKey | null {
-  let json: unknown;
-  try {
-    json = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
-  } catch {
-    return null;
-  }
-  const parsed = CursorPayloadSchema.safeParse(json);
+  const parsed = CursorPayloadSchema.safeParse(decodeCursorPayload(cursor));
   return parsed.success ? { createdAt: parsed.data.c, id: parsed.data.i } : null;
+}
+
+/** The wire half of every cursor codec: a payload as `base64url` JSON. */
+export function encodeCursorPayload(payload: unknown): string {
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+}
+
+/** `encodeCursorPayload` reversed, or `undefined` when the text is not
+ * `base64url` JSON. The caller's schema judges the shape; this never throws. */
+export function decodeCursorPayload(cursor: string): unknown {
+  try {
+    return JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as unknown;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -160,4 +170,40 @@ export function toPage<T extends CursorKey>(rows: T[], limit: number): Paginated
     items,
     nextCursor: hasMore && boundary ? encodeCursor(boundary) : null,
   };
+}
+
+/** One term of a keyset order: the expression, its direction, and the value
+ * the cursor's row holds for it. */
+export interface KeysetTerm {
+  expr: SQL | AnySQLiteColumn;
+  dir: 'asc' | 'desc';
+  value: string | number;
+}
+
+/**
+ * #1484 — the keyset predicate for an order of ANY length whose terms may run in
+ * DIFFERENT directions: rows strictly after the cursor's row. It generalises
+ * `afterCursor`/`beforeCursor` (two terms, one direction) to
+ * `(t1 > v1) OR (t1 = v1 AND t2 > v2) OR …`, each `>` flipped to `<` for a
+ * descending term. SQLite's row-value comparison would be one expression, but it
+ * compares every term in ONE direction, and the runs grid's secondary order
+ * (newest first) has to hold whichever way its primary column is sorted.
+ *
+ * The last term must be unique (a primary key), or two rows equal on every term
+ * would straddle a page boundary and one would be dropped. No term may be NULL:
+ * `=` and `<` against NULL are never true, so a NULL-valued row would vanish from
+ * every page after the first. Callers wrap a nullable expression in `coalesce`.
+ */
+export function afterKeyset(terms: readonly KeysetTerm[]): SQL | undefined {
+  // Each term as a plain `SQL` fragment, so a column and a computed expression
+  // compare the same way: against a bound parameter holding the cursor's value.
+  const exprs = terms.map((term) => sql`${term.expr}`);
+  return or(
+    ...terms.map((term, i) =>
+      and(
+        ...terms.slice(0, i).map((prior, j) => eq(exprs[j] as SQL, prior.value)),
+        term.dir === 'asc' ? gt(exprs[i] as SQL, term.value) : lt(exprs[i] as SQL, term.value),
+      ),
+    ),
+  );
 }
