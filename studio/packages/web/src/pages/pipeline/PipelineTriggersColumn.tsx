@@ -20,6 +20,15 @@ import type { BindingSelection } from '../triggers/binding';
 import { triggersPath } from '../triggers/triggersPath';
 import { nextFireText } from './triggerColumnRules';
 
+/** How long after a shown time passes to re-read it: the clock delivers the
+ * tick and arms the next within about a second of it falling due. */
+const NEXT_FIRE_SETTLE_MS = 5_000;
+/** The re-read cadence while a shown time is overdue (the clock is behind). */
+const NEXT_FIRE_OVERDUE_RETRY_MS = 30_000;
+/** The longest single wait. `setTimeout` overflows past ~24.8 days and fires
+ * at once, which for a yearly schedule would be a re-read loop. */
+const NEXT_FIRE_MAX_WAIT_MS = 6 * 60 * 60 * 1000;
+
 /**
  * #1476 OR28 slice 3 — this pipeline's triggers, in a column beside the editor:
  * Trigger ▾ → New trigger… / Edit triggers… create and edit them without leaving
@@ -36,15 +45,6 @@ import { nextFireText } from './triggerColumnRules';
  * Each row says when the trigger is next due (`nextFireText`), read from the
  * alarm the scheduler has armed, and re-read once the soonest shown time passes.
  */
-/** How long after a shown time passes to re-read it: the clock delivers the
- * tick and arms the next within about a second of it falling due. */
-const NEXT_FIRE_SETTLE_MS = 5_000;
-/** The re-read cadence while a shown time is overdue (the clock is behind). */
-const NEXT_FIRE_OVERDUE_RETRY_MS = 30_000;
-/** The longest single wait. `setTimeout` overflows past ~24.8 days and fires
- * at once, which for a yearly schedule would be a re-read loop. */
-const NEXT_FIRE_MAX_WAIT_MS = 6 * 60 * 60 * 1000;
-
 export function PipelineTriggersColumn({
   pipelineId,
   headId,
