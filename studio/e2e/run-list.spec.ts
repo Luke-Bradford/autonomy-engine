@@ -447,17 +447,36 @@ test('#1484 — the filter bar searches runs and days, in one row above a dense 
     return {
       controlCount: controls.length,
       tops: controls.map((r) => Math.round(r.top + r.height / 2)),
+      widths: controls.map((r) => Math.round(r.width)),
+      barWidth: Math.round(bar?.getBoundingClientRect().width ?? 0),
       firstRowTop: rect?.top ?? Infinity,
       rowHeight: rect?.height ?? 0,
       viewport: window.innerHeight,
+      // Where the height above the first row goes, for the failure message.
+      stack: [
+        '.content',
+        '.runs-page .page-header',
+        '.run-filters',
+        '.runs-summary-line',
+        'table.runs-grid thead',
+      ]
+        .map((sel) => {
+          const r = document.querySelector(sel)?.getBoundingClientRect();
+          return r ? `${sel}@${Math.round(r.top)}+${Math.round(r.height)}` : `${sel}:none`;
+        })
+        .join(' '),
       sideScroll: document.documentElement.scrollWidth > window.innerWidth,
     };
   });
-  // Search, status, kind, pipeline, trigger, annotation, started, two days, Clear.
-  expect(measured.controlCount).toBe(10);
+  // Status, kind, pipeline, trigger, annotation, started, two days, Clear. (The
+  // search box is on the title row.)
+  expect(measured.controlCount).toBe(9);
   const spread = Math.max(...measured.tops) - Math.min(...measured.tops);
-  expect(spread, `one row: control centres ${measured.tops.join(',')}`).toBeLessThanOrEqual(4);
-  expect(measured.firstRowTop).toBeLessThanOrEqual(200);
+  expect(
+    spread,
+    `one row: centres ${measured.tops.join(',')} widths ${measured.widths.join(',')} of ${measured.barWidth}`,
+  ).toBeLessThanOrEqual(4);
+  expect(measured.firstRowTop, measured.stack).toBeLessThanOrEqual(200);
   // ≥ 20 rows fit below the first one's top at 32px each.
   expect(
     Math.floor((measured.viewport - measured.firstRowTop) / measured.rowHeight),

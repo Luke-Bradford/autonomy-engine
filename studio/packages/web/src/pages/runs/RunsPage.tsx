@@ -508,6 +508,25 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
     <section aria-labelledby="runs-heading" className="runs-page">
       <div className="page-header">
         <h2 id="runs-heading">Runs</h2>
+        {/* #1484 — the search box sits on the title row, not in the filter
+            bar: measured at 1440×900 beside the hub nav, the bar has ~1080px
+            and its widest state (a range of days plus Clear) left the box
+            no room without wrapping. It searches the same list, under every
+            filter below. */}
+        <LabelledControl
+          className="runs-search"
+          label={<span className="visually-hidden">Search runs</span>}
+        >
+          {(id) => (
+            <input
+              id={id}
+              type="search"
+              placeholder="Search run id, pipeline, trigger, error…"
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+            />
+          )}
+        </LabelledControl>
         {/* A `role="group"` of toggles rather than a `TabList`: List and
             Timeline are two renderings of one set of rows, not two panels. */}
         <div role="group" aria-label="Runs view" className="run-view-toggle">
@@ -561,19 +580,6 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
         {/* #1484 — ONE row. Each control keeps its label for assistive tech but
             draws none: the "All …" first option names the axis on screen, and
             a row of stacked labels is what pushed the first run off the top. */}
-        <LabelledControl label={<span className="visually-hidden">Search runs</span>}>
-          {(id) => (
-            <input
-              id={id}
-              type="search"
-              className="run-filters__search"
-              placeholder="Search run id, pipeline, trigger, error…"
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-            />
-          )}
-        </LabelledControl>
-
         <LabelledControl label={<span className="visually-hidden">Status</span>}>
           {(id) => (
             <select
@@ -699,9 +705,11 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
           </>
         )}
 
+        {/* "Clear" on screen to keep the bar one row; the accessible name
+            keeps the whole phrase, and starts with the visible word. */}
         {filtered && (
-          <button type="button" onClick={clearFilters}>
-            Clear filters
+          <button type="button" onClick={clearFilters} aria-label="Clear filters">
+            Clear
           </button>
         )}
       </div>
