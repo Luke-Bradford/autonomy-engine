@@ -3087,6 +3087,7 @@ describe('RunDetailPage — the reruns of this run', () => {
       annotations: [],
       triggerName: null,
       triggeredByKind: 'rerun',
+      parentPipelineName: null,
       cost: computeRunCost([]),
       activities: null,
       rowsWritten: null,

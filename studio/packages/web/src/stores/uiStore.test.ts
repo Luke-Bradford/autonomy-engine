@@ -26,8 +26,10 @@ import {
   PANE_MAX_WIDTH,
   PANE_MIN_WIDTH,
   PANE_STORAGE_KEY,
+  RUN_GRID_COLUMNS,
   RUN_GRID_COLUMN_MAX_WIDTH,
   RUN_GRID_COLUMN_WIDTHS,
+  RUN_GRID_DEFAULT_HIDDEN,
   RUN_GRID_HIDDEN_STORAGE_KEY,
   RUN_GRID_WIDTHS_STORAGE_KEY,
   THEME_STORAGE_KEY,
@@ -628,10 +630,22 @@ describe('uiStore dock tabs (#1475 OR27)', () => {
 });
 
 describe('uiStore runs grid columns (#1484 OR35 M1)', () => {
-  it('starts with every column shown at its default width', () => {
+  it('starts with only the default-hidden columns off, every column at its default width', () => {
     const state = createUiStore(fakeStorage()).getState();
-    expect(state.runsGridHidden).toEqual([]);
+    expect(state.runsGridHidden).toEqual(['annotations']);
     expect(state.runsGridWidths).toEqual({});
+  });
+
+  it('a stored choice wins over the default-hidden set, even an empty one', () => {
+    expect(
+      createUiStore(fakeStorage({ [RUN_GRID_HIDDEN_STORAGE_KEY]: '[]' })).getState().runsGridHidden,
+    ).toEqual([]);
+  });
+
+  it('the default columns fit the 1083px grid at 1440×900 with room for the filler', () => {
+    const shown = RUN_GRID_COLUMNS.filter((c) => !RUN_GRID_DEFAULT_HIDDEN.includes(c));
+    const total = shown.reduce((sum, c) => sum + RUN_GRID_COLUMN_WIDTHS[c].default, 0);
+    expect(total).toBeLessThan(1083);
   });
 
   it('persists hidden columns in column order, deduplicated, across a new store', () => {
@@ -661,7 +675,7 @@ describe('uiStore runs grid columns (#1484 OR35 M1)', () => {
       expect(
         createUiStore(fakeStorage({ [RUN_GRID_HIDDEN_STORAGE_KEY]: raw })).getState()
           .runsGridHidden,
-      ).toEqual([]);
+      ).toEqual(RUN_GRID_DEFAULT_HIDDEN);
     }
   });
 
@@ -715,16 +729,16 @@ describe('uiStore runs grid columns (#1484 OR35 M1)', () => {
     }
   });
 
-  it('reset shows every column at its default width again, in storage too', () => {
+  it('reset returns to the default columns at their default widths, in storage too', () => {
     const storage = fakeStorage();
     const store = createUiStore(storage);
     store.getState().setRunsGridHidden(['cost']);
     store.getState().setRunsGridWidth('status', 140);
     store.getState().resetRunsGridColumns();
-    expect(store.getState().runsGridHidden).toEqual([]);
+    expect(store.getState().runsGridHidden).toEqual(['annotations']);
     expect(store.getState().runsGridWidths).toEqual({});
     const reread = createUiStore(storage).getState();
-    expect(reread.runsGridHidden).toEqual([]);
+    expect(reread.runsGridHidden).toEqual(['annotations']);
     expect(reread.runsGridWidths).toEqual({});
   });
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, Navigate, useParams } from 'react-router';
+import { Link, Navigate, useParams, useSearchParams } from 'react-router';
 import { useStore } from 'zustand';
 import type { Pipeline } from '@autonomy-studio/shared';
 import { ApiError } from '../../api/client';
@@ -7,6 +7,7 @@ import { getPipeline } from '../../api/pipelines';
 import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore';
 import { PipelineCanvas } from '../pipeline/PipelineCanvas';
 import { useShellLabel } from '../../shell/shellLabel';
+import { readOpenVersion } from './pipelinePath';
 
 /** Where "back" goes, and where a missing pipeline sends you. */
 const PIPELINES_PATH = '/author/pipelines';
@@ -35,12 +36,28 @@ const PIPELINES_PATH = '/author/pipelines';
  */
 export function PipelineCanvasRoute({ store = pipelinesStore }: { store?: PipelinesStore } = {}) {
   const { pipelineId } = useParams();
+  const [searchParams] = useSearchParams();
   // The route only matches with a non-empty `:pipelineId`, so this is defensive.
   if (!pipelineId) return <Navigate to={PIPELINES_PATH} replace />;
-  return <CanvasFor key={pipelineId} pipelineId={pipelineId} store={store} />;
+  return (
+    <CanvasFor
+      key={pipelineId}
+      pipelineId={pipelineId}
+      openVersion={readOpenVersion(searchParams)}
+      store={store}
+    />
+  );
 }
 
-function CanvasFor({ pipelineId, store }: { pipelineId: string; store: PipelinesStore }) {
+function CanvasFor({
+  pipelineId,
+  openVersion,
+  store,
+}: {
+  pipelineId: string;
+  openVersion: number | undefined;
+  store: PipelinesStore;
+}) {
   const [pipeline, setPipeline] = useState<Pipeline | null>(null);
   const [error, setError] = useState<{ message: string; missing: boolean } | null>(null);
 
@@ -109,6 +126,7 @@ function CanvasFor({ pipelineId, store }: { pipelineId: string; store: Pipelines
     <PipelineCanvas
       pipelineId={pipeline.id}
       pipelineName={liveName ?? pipeline.name}
+      openVersion={openVersion}
       /* #907 — the canvas warns on an archived pipeline (every save is
          refused). The fetched row is the authority: unlike the NAME, `archived`
          has no live overlay, because `pipelinesStore` lists only un-archived

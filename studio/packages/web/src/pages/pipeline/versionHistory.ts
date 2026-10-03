@@ -121,6 +121,24 @@ export function activePhrase(activeVersion: number | 'unnamed'): string {
 }
 
 /**
+ * #1484 OR35 — the version to preview when the editor opens on a link that
+ * asked for one (`pipelinePath(id, version)`), or `null` for the editor.
+ *
+ * The latest version is the editor's own, so asking for it opens the editor. A
+ * version this pipeline does not have opens the editor too: there is nothing
+ * else to show, and the version badge says which version that is.
+ */
+export function initialPreview(
+  requested: number | undefined,
+  versions: readonly PipelineVersion[],
+): number | null {
+  if (requested === undefined) return null;
+  const latest = latestVersion(versions);
+  if (latest === null || requested === latest.version) return null;
+  return versions.some((v) => v.version === requested) ? requested : null;
+}
+
+/**
  * The versions newest-first, each marked against the head and against the one
  * the canvas is open on.
  *

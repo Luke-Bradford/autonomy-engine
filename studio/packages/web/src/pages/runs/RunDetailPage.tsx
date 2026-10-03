@@ -537,11 +537,14 @@ export function RunDetailPage({ runId }: { runId: string }) {
           </dd>
           <dt>Pipeline</dt>
           <dd>
-            {/* The link carries the NAME only: the canvas opens the pipeline's
-                latest version, which need not be the one this run is bound to. */}
+            {/* #1484 — the link opens the version this run is bound to, read-only.
+                A debug version is not in the pipeline's history, so that one
+                opens the pipeline. */}
             {names?.pipeline && doc ? (
               <>
-                <Link to={pipelinePath(doc.pipelineId)}>{names.pipeline}</Link>{' '}
+                <Link to={pipelinePath(doc.pipelineId, names.debug ? undefined : doc.version)}>
+                  {names.pipeline}
+                </Link>{' '}
                 {versionLabel(doc.version, names.debug)}
               </>
             ) : (

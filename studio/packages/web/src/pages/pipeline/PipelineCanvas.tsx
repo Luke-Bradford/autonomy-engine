@@ -173,6 +173,7 @@ import {
   docUnchanged,
   type DocSnapshot,
   historyEntries,
+  initialPreview,
   isPublishRefused,
   isStaleWrite,
   publishConfirmMessage,
@@ -263,6 +264,13 @@ interface PipelineCanvasProps {
   /** Called after a successful unarchive, so the route's copy stops saying archived. */
   onUnarchived: () => void;
   /**
+   * #1484 OR35 — the saved version a link asked to open (`?version=N`), shown
+   * as a read-only preview once the versions load (`initialPreview`). Read at
+   * mount only: the route keeps this canvas mounted when only the query
+   * changes, and a later change must not throw the editor's work away.
+   */
+  openVersion?: number;
+  /**
    * #1397 — called with the pipeline the archive returned, so the route's copy
    * says archived (and the banner appears). The ROW, not a flag: the archive
    * drops the pipeline from the side pane's list, which is where the heading's
@@ -319,7 +327,9 @@ export function PipelineCanvas({
   archived,
   onUnarchived,
   onArchived,
+  openVersion,
 }: PipelineCanvasProps) {
+  const [requestedVersion] = useState(openVersion);
   const store = useState(() => createCanvasStore())[0];
   const [connections, setConnections] = useState<ConnectionPublic[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
@@ -775,6 +785,7 @@ export function PipelineCanvas({
         store.getState().setGlobals(toGlobalReads(globals));
         store.getState().loadVersion(latestVersion(loadedVersions));
         setVersions(loadedVersions);
+        setPreviewing(initialPreview(requestedVersion, loadedVersions));
         setConnections(conns);
         setDatasets(sets);
         setReady(true);
@@ -784,7 +795,7 @@ export function PipelineCanvas({
         setLoadError(err instanceof Error ? err.message : String(err));
       });
     return () => ctrl.abort();
-  }, [pipelineId, store]);
+  }, [pipelineId, store, requestedVersion]);
 
   /**
    * #844 GL3 (spec GL-D8) — the globals change in ANOTHER page (Manage → Global

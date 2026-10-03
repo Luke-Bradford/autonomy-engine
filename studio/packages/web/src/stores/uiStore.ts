@@ -91,7 +91,8 @@ export interface UiState {
    * #1484 OR35 M1 — the runs grid's column choice and widths, per viewer.
    * `runsGridHidden` names the columns the operator turned OFF, in column
    * order; storing the hidden set rather than the shown one means a column a
-   * later release adds appears by default. A required column is never in it.
+   * later release adds appears by default. With no stored choice it is
+   * `RUN_GRID_DEFAULT_HIDDEN`. A required column is never in it.
    * `runsGridWidths` holds only the columns the operator resized, in px; an
    * absent column draws at its default.
    */
@@ -133,6 +134,8 @@ export const RUN_GRID_COLUMNS = [
   'rowsWritten',
   'cost',
   'runId',
+  'parent',
+  'annotations',
 ] as const;
 export type RunGridColumnId = (typeof RUN_GRID_COLUMNS)[number];
 
@@ -145,6 +148,16 @@ export type RunGridColumnId = (typeof RUN_GRID_COLUMNS)[number];
 export const RUN_GRID_REQUIRED_COLUMNS: readonly RunGridColumnId[] = ['pipeline', 'runId'];
 
 /**
+ * The hidden set a viewer starts from: no stored choice, unreadable storage,
+ * or Reset columns. Annotations starts off because every other column already
+ * fills the grid's 1083px at 1440×900 (the widths below), and most runs carry
+ * no tag; the runs list's annotation filter reaches them without it. A viewer
+ * who already stored a choice keeps it, so for them the column appears, as any
+ * column a later release adds does.
+ */
+export const RUN_GRID_DEFAULT_HIDDEN: readonly RunGridColumnId[] = ['annotations'];
+
+/**
  * Each column's floor and default width, in px. The defaults are the shares
  * the fixed layout drew before columns could be resized, taken at the 1083px
  * the grid has at 1440×900 beside the hub nav, so that screen looks as it did.
@@ -152,15 +165,17 @@ export const RUN_GRID_REQUIRED_COLUMNS: readonly RunGridColumnId[] = ['pipeline'
  * with its Copy button.
  */
 export const RUN_GRID_COLUMN_WIDTHS: Record<RunGridColumnId, { min: number; default: number }> = {
-  pipeline: { min: 120, default: 205 },
+  pipeline: { min: 120, default: 185 },
   status: { min: 72, default: 88 },
-  triggeredBy: { min: 96, default: 160 },
-  started: { min: 110, default: 130 },
-  duration: { min: 56, default: 76 },
-  activities: { min: 80, default: 152 },
-  rowsWritten: { min: 56, default: 76 },
-  cost: { min: 56, default: 76 },
-  runId: { min: 110, default: 120 },
+  triggeredBy: { min: 96, default: 136 },
+  started: { min: 110, default: 124 },
+  duration: { min: 56, default: 68 },
+  activities: { min: 80, default: 128 },
+  rowsWritten: { min: 56, default: 68 },
+  cost: { min: 56, default: 68 },
+  runId: { min: 110, default: 112 },
+  parent: { min: 72, default: 100 },
+  annotations: { min: 72, default: 120 },
 };
 export const RUN_GRID_COLUMN_MAX_WIDTH = 640;
 export const RUN_GRID_RESIZE_STEP = 16;
@@ -691,7 +706,12 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       historyOpen,
       setHistoryOpen,
 
-      runsGridHidden: readStored(storage, RUN_GRID_HIDDEN_STORAGE_KEY, parseRunGridHidden, []),
+      runsGridHidden: readStored(
+        storage,
+        RUN_GRID_HIDDEN_STORAGE_KEY,
+        parseRunGridHidden,
+        RUN_GRID_DEFAULT_HIDDEN,
+      ),
       setRunsGridHidden: (hidden) => {
         const runsGridHidden = canonicalHidden(hidden);
         writeStored(storage, RUN_GRID_HIDDEN_STORAGE_KEY, JSON.stringify(runsGridHidden));
@@ -706,9 +726,9 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
         set({ runsGridWidths });
       },
       resetRunsGridColumns: () => {
-        writeStored(storage, RUN_GRID_HIDDEN_STORAGE_KEY, '[]');
+        writeStored(storage, RUN_GRID_HIDDEN_STORAGE_KEY, JSON.stringify(RUN_GRID_DEFAULT_HIDDEN));
         writeStored(storage, RUN_GRID_WIDTHS_STORAGE_KEY, '{}');
-        set({ runsGridHidden: [], runsGridWidths: {} });
+        set({ runsGridHidden: RUN_GRID_DEFAULT_HIDDEN, runsGridWidths: {} });
       },
     };
   });

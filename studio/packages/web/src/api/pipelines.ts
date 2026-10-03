@@ -386,7 +386,7 @@ export async function movePipelineToFolder(id: string, folder: string | null): P
  * graph. Shared by the canvas (which loads it for editing) and `duplicate`
  * below (which copies it) — one rule, not two that can drift.
  */
-export function latestVersion(versions: PipelineVersion[]): PipelineVersion | null {
+export function latestVersion(versions: readonly PipelineVersion[]): PipelineVersion | null {
   return versions.reduce<PipelineVersion | null>(
     (best, v) => (best === null || v.version > best.version ? v : best),
     null,
