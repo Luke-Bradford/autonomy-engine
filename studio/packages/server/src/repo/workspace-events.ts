@@ -1,4 +1,4 @@
-import { and, desc, eq, max, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, max, sql } from 'drizzle-orm';
 import {
   PipelinePublishedEventSchema,
   WorkspaceEventRowSchema,
@@ -171,4 +171,43 @@ export function getActivePublishedVersion(
     .get();
 
   return row ? PipelinePublishedEventSchema.parse(row.payload) : null;
+}
+
+/**
+ * #1476 OR28 — `getActivePublishedVersion` for many pipelines in one read: the
+ * active version id per pipeline `resourceId`, for those of `resourceIds` that
+ * were ever published. The same projection — the latest `pipeline.published`
+ * event per resource by `seq`, owner-scoped in the subquery AND the outer
+ * select (`seq` is per owner) — so the two cannot disagree.
+ */
+export function listActivePublishedVersionIds(
+  db: Db,
+  ownerId: string,
+  resourceIds: readonly string[],
+): Map<string, string> {
+  const active = new Map<string, string>();
+  if (resourceIds.length === 0) return active;
+  const pipelineOf = sql<string>`json_extract(${workspaceEvents.payload}, '$.pipeline')`;
+  const published = () =>
+    and(
+      eq(workspaceEvents.ownerId, ownerId),
+      eq(workspaceEvents.type, 'pipeline.published'),
+      inArray(pipelineOf, [...resourceIds]),
+    );
+  const latestSeqs = db
+    .select({ seq: max(workspaceEvents.seq) })
+    .from(workspaceEvents)
+    .where(published())
+    .groupBy(pipelineOf);
+  for (const row of db
+    .select({ payload: workspaceEvents.payload })
+    .from(workspaceEvents)
+    .where(and(published(), inArray(workspaceEvents.seq, latestSeqs)))
+    .all()) {
+    // A payload that will not parse fails the read, as `/active` does: no
+    // badge is better than a "not published" made up for a pointer it lost.
+    const event = PipelinePublishedEventSchema.parse(row.payload);
+    active.set(event.pipeline, event.to);
+  }
+  return active;
 }

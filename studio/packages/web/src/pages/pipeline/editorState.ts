@@ -127,8 +127,14 @@ export interface LiveInput {
   gitConnected: boolean | undefined;
   /** `activeVersionLabel(active, versions)`. */
   active: ActiveVersionLabel;
-  /** `canvasVersion(...)`. */
+  /** `canvasVersion(...)` — or, with `subject: 'latest'`, the saved head. */
   canvas: number | null;
+  /**
+   * What `canvas` is: the editor's canvas (the default), or the latest saved
+   * version — a pipelines-list row, which has no canvas (#1476 slice 8). Only
+   * the wording changes; the tone rule is this function's alone.
+   */
+  subject?: 'canvas' | 'latest';
 }
 
 /**
@@ -157,17 +163,20 @@ export function liveState(s: LiveInput): BadgePart | null {
     };
   }
   const v = String(s.active);
+  const latest = s.subject === 'latest';
   if (s.active === s.canvas) {
     return {
       label: `Live: v${v}`,
-      detail: `v${v} is the active (published) version, and is what the canvas shows.`,
+      detail: `v${v} is the active (published) version, and is ${latest ? 'the latest saved version' : 'what the canvas shows'}.`,
       tone: 'success',
       current: true,
     };
   }
   return {
     label: `Live: v${v}`,
-    detail: `v${v} is the active (published) version; the canvas shows ${s.canvas === null ? 'unsaved changes' : `v${String(s.canvas)}`}.`,
+    detail: latest
+      ? `v${v} is the active (published) version; the latest saved version is ${s.canvas === null ? 'none' : `v${String(s.canvas)}`}.`
+      : `v${v} is the active (published) version; the canvas shows ${s.canvas === null ? 'unsaved changes' : `v${String(s.canvas)}`}.`,
     tone: 'warning',
   };
 }
@@ -373,8 +382,8 @@ export interface ListRowInput {
  *
  * The same rules as the editor's, about the LATEST SAVED version rather than a
  * canvas — a list row has no draft and no preview: the editing part is
- * `editingState` of a clean editor on the head, and the live part says the
- * live version against the head, in those words. Git says only `uncommitted`,
+ * `editingState` of a clean editor on the head, and the live part is
+ * `liveState` against the head, in those words. Git says only `uncommitted`,
  * for a pipeline the sync reading lists; a clean row says nothing, so the rows
  * that differ are the ones that stand out. Without a reading — unread, or the
  * server's fetch failed — nothing is claimed either way.
@@ -393,26 +402,7 @@ export function listRowBadge({ state, gitConnected, sync }: ListRowInput): {
     archived: false,
   });
   const active = state.active === null ? null : (state.active.version ?? 'unnamed');
-  let live: BadgePart | null;
-  if (typeof active !== 'number') {
-    // Not published / not listed: nothing in those sentences is about a canvas.
-    live = liveState({ gitConnected, active, canvas: head });
-  } else if (gitConnected !== true) {
-    live = null;
-  } else if (active === head) {
-    live = {
-      label: `Live: v${String(active)}`,
-      detail: `v${String(active)} is the active (published) version, and is the latest saved version.`,
-      tone: 'success',
-      current: true,
-    };
-  } else {
-    live = {
-      label: `Live: v${String(active)}`,
-      detail: `v${String(active)} is the active (published) version; the latest saved version is ${head === null ? 'none' : `v${String(head)}`}.`,
-      tone: 'warning',
-    };
-  }
+  const live = liveState({ gitConnected, active, canvas: head, subject: 'latest' });
   let git: BadgePart | null = null;
   if (gitConnected === true && sync != null) {
     const { change, against } = pipelineDrift(sync, state.pipelineId);

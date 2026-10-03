@@ -205,6 +205,37 @@ describe('PipelinesPage', () => {
       expect(screen.queryByRole('group', { name: 'Nightly state' })).toBeNull();
     });
 
+    it('a failed re-read takes back what it can no longer back', async () => {
+      listMock.mockResolvedValue([pipeline({ name: 'Nightly' })]);
+      statesMock.mockResolvedValue([{ pipelineId: 'pl_1', latestVersion: 2, active: null }]);
+      gitMock.mockResolvedValue(repo);
+      syncMock.mockResolvedValue({
+        fetchedAt: 2,
+        fetched: false,
+        workingBranch: 'feature/x',
+        base: null,
+        baseBranch: null,
+        hasUncommittedChanges: true,
+        pipelines: [{ pipelineId: 'pl_1', change: 'added' }],
+        divergence: { state: 'unknown', importBase: null, collabHead: null },
+      });
+      renderPage();
+      const group = await badge('Nightly');
+      await waitFor(() => expect(group.querySelector('[data-part="git"]')).not.toBeNull());
+      syncMock.mockRejectedValue(new ApiError(500, 'boom'));
+      window.dispatchEvent(new Event('focus'));
+      await waitFor(() => expect(group.querySelector('[data-part="git"]')).toBeNull());
+      expect(group.querySelector('[data-part="live"]')).toHaveTextContent(/^Not published/);
+      gitMock.mockRejectedValue(new ApiError(500, 'boom'));
+      window.dispatchEvent(new Event('focus'));
+      await waitFor(() => expect(group.querySelector('[data-part="live"]')).toBeNull());
+      statesMock.mockRejectedValue(new ApiError(500, 'boom'));
+      window.dispatchEvent(new Event('focus'));
+      await waitFor(() =>
+        expect(screen.queryByRole('group', { name: 'Nightly state' })).toBeNull(),
+      );
+    });
+
     it('re-reads on focus, where a save in another tab shows up', async () => {
       listMock.mockResolvedValue([pipeline({ name: 'Nightly' })]);
       statesMock.mockResolvedValue([{ pipelineId: 'pl_1', latestVersion: 1, active: null }]);

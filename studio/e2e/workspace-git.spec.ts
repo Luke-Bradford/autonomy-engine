@@ -509,23 +509,6 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await expect(gitPart).toHaveAttribute('data-tone', 'warning');
 
   /**
-   * ── the publish is LEGIBLE in the audit log (#1077) ────────────────────────
-   *
-   * Here because this is the only spec in the suite that reaches a real
-   * publish — it needs a connected repo AND a git-provenanced version, which
-   * nothing else sets up. `manage-audit.spec.ts` owns the audit page's own
-   * narrative but runs in DB-only mode, so the `pipeline.published` variant is
-   * unreachable from it.
-   *
-   * What this proves that no unit test can: the name survives the WHOLE seam —
-   * the shared schema's new optional field, the server writing it through
-   * `appendWorkspaceEvent`'s parse, SQLite, the api wrapper, and the renderer.
-   * That parse is the trap: a server built against a stale `@autonomy-studio/
-   * shared` strips an unknown key SILENTLY at write, so every unit suite passes
-   * while the stored row has no name. This assertion is the only thing that
-   * fails in that world.
-   */
-  /**
    * #1476 OR28 slice 8 — the same badge, compact, on the pipelines list, so
    * which pipelines differ from live shows without opening each one: the
    * published one is live and on its latest version, but not yet on the
@@ -547,6 +530,23 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await expect(rowPart(pipelineName, 'live')).toHaveAttribute('data-tone', 'warning');
   await expect(rowPart(pipelineName, 'git')).toHaveCount(0);
 
+  /**
+   * ── the publish is LEGIBLE in the audit log (#1077) ────────────────────────
+   *
+   * Here because this is the only spec in the suite that reaches a real
+   * publish — it needs a connected repo AND a git-provenanced version, which
+   * nothing else sets up. `manage-audit.spec.ts` owns the audit page's own
+   * narrative but runs in DB-only mode, so the `pipeline.published` variant is
+   * unreachable from it.
+   *
+   * What this proves that no unit test can: the name survives the WHOLE seam —
+   * the shared schema's new optional field, the server writing it through
+   * `appendWorkspaceEvent`'s parse, SQLite, the api wrapper, and the renderer.
+   * That parse is the trap: a server built against a stale `@autonomy-studio/
+   * shared` strips an unknown key SILENTLY at write, so every unit suite passes
+   * while the stored row has no name. This assertion is the only thing that
+   * fails in that world.
+   */
   await page.goto('/#/monitor/audit');
   await fluentRootReady(page);
   const publishedRow = page

@@ -1,7 +1,8 @@
-import { and, eq, inArray, max, sql } from 'drizzle-orm';
-import { PipelinePublishedEventSchema, type PipelineVersionState } from '@autonomy-studio/shared';
-import { pipelineVersions, pipelines, workspaceEvents } from '../db/schema.js';
+import { and, eq, inArray, max } from 'drizzle-orm';
+import type { PipelineVersionState } from '@autonomy-studio/shared';
+import { pipelineVersions, pipelines } from '../db/schema.js';
 import type { Db } from './types.js';
+import { listActivePublishedVersionIds } from './workspace-events.js';
 
 /**
  * #1476 OR28 — every live pipeline's saved head and active version, in three
@@ -9,10 +10,9 @@ import type { Db } from './types.js';
  *
  * The head is the highest SAVED version (`debug = false`, the
  * `getHeadVersionRef` rule — a Debug is never the head, #1395). The active
- * pointer is `getActivePublishedVersion`'s projection done for every pipeline
- * at once: the latest `pipeline.published` event per pipeline `resourceId` by
- * `seq` (the per-owner append order, never wall-clock). Events key on the
- * `resourceId`, not the row id, so the join is through it.
+ * pointer is `listActivePublishedVersionIds`, `getActivePublishedVersion`'s
+ * projection for every live pipeline at once. Events key on the `resourceId`,
+ * not the row id, so the join is through it.
  *
  * An active version id is turned into a number only when it is a version OF
  * THAT PIPELINE; otherwise `version: null` — "not listed" — rather than another
@@ -34,23 +34,11 @@ export function listPipelineVersionStates(db: Db, ownerId: string): PipelineVers
     .groupBy(pipelines.id)
     .all();
 
-  const pipelineOf = sql<string>`json_extract(${workspaceEvents.payload}, '$.pipeline')`;
-  const published = () =>
-    and(eq(workspaceEvents.ownerId, ownerId), eq(workspaceEvents.type, 'pipeline.published'));
-  const latestSeqs = db
-    .select({ seq: max(workspaceEvents.seq) })
-    .from(workspaceEvents)
-    .where(published())
-    .groupBy(pipelineOf);
-  const activeByResource = new Map<string, string>();
-  for (const row of db
-    .select({ payload: workspaceEvents.payload })
-    .from(workspaceEvents)
-    .where(and(published(), inArray(workspaceEvents.seq, latestSeqs)))
-    .all()) {
-    const event = PipelinePublishedEventSchema.parse(row.payload);
-    activeByResource.set(event.pipeline, event.to);
-  }
+  const activeByResource = listActivePublishedVersionIds(
+    db,
+    ownerId,
+    heads.flatMap((h) => (h.resourceId === null ? [] : [h.resourceId])),
+  );
 
   const activeIds = [...activeByResource.values()];
   const versionOf = new Map<string, { pipelineId: string; version: number }>();
@@ -62,7 +50,8 @@ export function listPipelineVersionStates(db: Db, ownerId: string): PipelineVers
         version: pipelineVersions.version,
       })
       .from(pipelineVersions)
-      .where(inArray(pipelineVersions.id, activeIds))
+      // A Debug is never published (#1395); were one named, it reads "not listed".
+      .where(and(inArray(pipelineVersions.id, activeIds), eq(pipelineVersions.debug, false)))
       .all()) {
       versionOf.set(row.id, row);
     }

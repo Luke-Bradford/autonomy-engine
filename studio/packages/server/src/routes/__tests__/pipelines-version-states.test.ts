@@ -157,6 +157,28 @@ describe('GET /api/pipelines/version-states (#1476 OR28)', () => {
     expect(items[0]).toMatchObject({ active: null });
   });
 
+  it("another owner's NEWER publish on the same resourceId does not hide this owner's", async () => {
+    const mine = createPipeline(app.db, { ownerId: 'local', name: 'Mine' });
+    const v1 = createPipelineVersion(app.db, doc(mine.id));
+    const theirs = createPipeline(app.db, { ownerId: 'other', name: 'Theirs' });
+    const theirVersion = createPipelineVersion(app.db, doc(theirs.id));
+    const event = (to: string, by: string) =>
+      ({
+        type: 'pipeline.published',
+        pipeline: mine.resourceId,
+        from: null,
+        to,
+        commit: 'c',
+        blob: 'b',
+        by,
+      }) as const;
+    appendWorkspaceEvent(app.db, 'local', event(v1.id, 'local'));
+    // Pushes the other owner's per-owner `seq` past this owner's.
+    for (let i = 0; i < 3; i++)
+      appendWorkspaceEvent(app.db, 'other', event(theirVersion.id, 'other'));
+    expect(await stateOf(mine.id)).toMatchObject({ active: { versionId: v1.id, version: 1 } });
+  });
+
   it('lists live pipelines only: an archived one is not on the list it serves', async () => {
     const live = createPipeline(app.db, { ownerId: 'local', name: 'Live' });
     const gone = createPipeline(app.db, { ownerId: 'local', name: 'Gone' });

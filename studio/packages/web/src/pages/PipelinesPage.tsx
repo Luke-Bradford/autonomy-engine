@@ -83,6 +83,14 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
   const guardedStatesLoad = useGuardedLoad();
   const guardedGitLoad = useGuardedLoad();
   const guardedSyncLoad = useGuardedLoad();
+  // Through the sync guard, so a sync still in flight from before the repo
+  // went away is superseded rather than landing afterwards.
+  const clearGitSync = useCallback(() => {
+    void guardedSyncLoad(() => Promise.resolve(undefined), {
+      onData: setGitSync,
+      onError: () => setGitSync(undefined),
+    });
+  }, [guardedSyncLoad]);
   const refreshRowStates = useCallback(() => {
     void guardedStatesLoad((signal) => listPipelineVersionStates(signal), {
       onData: (items) => setVersionStates(new Map(items.map((st) => [st.pipelineId, st]))),
@@ -92,7 +100,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
       onData: (git) => {
         setGitConnected(git !== null);
         if (git === null) {
-          setGitSync(undefined);
+          clearGitSync();
           return;
         }
         void guardedSyncLoad((signal) => readWorkspaceGitSync(signal), {
@@ -102,13 +110,16 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
       },
       onError: () => {
         setGitConnected(undefined);
-        setGitSync(undefined);
+        clearGitSync();
       },
     });
-  }, [guardedStatesLoad, guardedGitLoad, guardedSyncLoad]);
+  }, [guardedStatesLoad, guardedGitLoad, guardedSyncLoad, clearGitSync]);
+  // On the ids, not the array: a refresh hands back a new array whose rows may
+  // be the same, and an empty list has no row to badge.
+  const pipelineIds = pipelines.map((p) => p.id).join('\n');
   useEffect(() => {
-    refreshRowStates();
-  }, [pipelines, refreshRowStates]);
+    if (pipelineIds !== '') refreshRowStates();
+  }, [pipelineIds, refreshRowStates]);
   useRefreshOnFocus(refreshRowStates);
 
   const [actionMsg, setActionMsg] = useState<string | null>(null);
