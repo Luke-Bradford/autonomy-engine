@@ -67,7 +67,12 @@ describe('#1484 — the runs list kind axis', () => {
     const t = namedTrigger(db, v, 'T');
     const scheduled = run(db, v, {
       triggerId: t,
-      triggerContext: { triggerId: t, scheduledTime: '2026-10-01T00:00:00.000Z', body: null, fireKind: 'schedule' },
+      triggerContext: {
+        triggerId: t,
+        scheduledTime: '2026-10-01T00:00:00.000Z',
+        body: null,
+        fireKind: 'schedule',
+      },
     });
     const fired = run(db, v, {
       triggerId: t,

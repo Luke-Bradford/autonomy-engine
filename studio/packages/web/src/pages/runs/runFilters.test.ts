@@ -28,7 +28,10 @@ describe('readRunFilters — #1484 kind, search and days', () => {
   it.each([
     ['junk', 'kind=nope'],
     ['an empty member', 'kind=schedule,'],
-    ['every kind, which narrows nothing', `kind=${'manual,schedule,tumbling,webhook,event,editor,debug,rerun,call'}`],
+    [
+      'every kind, which narrows nothing',
+      `kind=${'manual,schedule,tumbling,webhook,event,editor,debug,rerun,call'}`,
+    ],
   ])('drops a kind list that is %s', (_label, query) => {
     expect(read(query)).toEqual({});
   });
@@ -84,7 +87,7 @@ describe('dayRangeBounds — #1484', () => {
     expect(Number(to) - Number(from)).toBe(23 * 60 * 60 * 1000);
   });
 
-  it('a range runs from the first day\'s midnight to the midnight after the last', () => {
+  it("a range runs from the first day's midnight to the midnight after the last", () => {
     process.env.TZ = 'UTC';
     expect(dayRangeBounds({ from: '2026-01-01', to: '2026-01-02' })).toEqual({
       from: String(Date.UTC(2026, 0, 1)),

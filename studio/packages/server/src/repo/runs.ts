@@ -1,4 +1,4 @@
-import { and, asc, count, eq, exists, gte, inArray, lt, ne, or, sql } from 'drizzle-orm';
+import { and, asc, count, eq, exists, gte, inArray, lt, ne, or, sql, type SQL } from 'drizzle-orm';
 import {
   computeRunCost,
   NewRunSchema,
@@ -140,7 +140,9 @@ const SEARCHED_EVENT_TEXT = [
   { type: 'run.finished', field: 'reason' },
 ] as const satisfies readonly {
   type: EngineEvent['type'];
-  field: keyof Extract<EngineEvent, { type: 'node.failed' }> | keyof Extract<EngineEvent, { type: 'run.finished' }>;
+  field:
+    | keyof Extract<EngineEvent, { type: 'node.failed' }>
+    | keyof Extract<EngineEvent, { type: 'run.finished' }>;
 }[];
 
 /**
@@ -156,7 +158,7 @@ const SEARCHED_EVENT_TEXT = [
  * owner can already read every event through `GET /api/runs/:id/events`, so the
  * search finds nothing the caller could not open.
  */
-function runSearchCondition(text: string) {
+function runSearchCondition(text: string): SQL {
   const needle = text.toLowerCase();
   const eventText = sql.join(
     SEARCHED_EVENT_TEXT.map(
@@ -165,12 +167,13 @@ function runSearchCondition(text: string) {
     ),
     sql` or `,
   );
-  return or(
+  const arms = [
     sql`instr(${runs.id}, ${text}) > 0`,
     sql`instr(lower(${pipelines.name}), ${needle}) > 0`,
     sql`instr(lower(${triggers.name}), ${needle}) > 0`,
     sql`exists (select 1 from ${runEvents} where ${runEvents.runId} = ${runs.id} and (${eventText}))`,
-  );
+  ];
+  return sql`(${sql.join(arms, sql` or `)})`;
 }
 
 function listRunsConditions(filter: ListRunsFilter) {

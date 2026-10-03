@@ -176,7 +176,11 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
         search: q,
         // The later of two lower bounds is the one that narrows.
         startedAfter:
-          sinceBound === undefined ? from : from === undefined ? sinceBound : Math.max(from, sinceBound),
+          sinceBound === undefined
+            ? from
+            : from === undefined
+              ? sinceBound
+              : Math.max(from, sinceBound),
         startedBefore: to,
         ownerId: request.principal.ownerId,
       },
