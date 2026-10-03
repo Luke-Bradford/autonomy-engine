@@ -184,3 +184,59 @@ test('Trigger ▾ → New trigger… creates and edits this pipeline’s trigger
 
   await expectQuiet(page, problems);
 });
+
+test('the Triggers column says when each trigger is next due (#1476 slice 4)', async ({ page }) => {
+  const problems = collectPageProblems(page);
+  const stamp = String(Date.now());
+  const { pipelineId, pipelineVersionId } = await seedVersion(page, `e2e 1476 s4 ${stamp}`, DOC);
+  const base = {
+    pipelineVersionId,
+    params: {},
+    webhook: null,
+    runWindows: null,
+  };
+  for (const data of [
+    // New Year's midnight: armed, and never due while this spec runs.
+    {
+      ...base,
+      name: `yearly-${stamp}`,
+      mode: 'schedule',
+      schedule: '0 0 1 1 *',
+      concurrency: { policy: 'skip_if_running' },
+      enabled: true,
+    },
+    {
+      ...base,
+      name: `windows-${stamp}`,
+      mode: 'tumbling',
+      schedule: null,
+      window: { frequency: 'minute', interval: 15, startTime: '2030-01-01T00:00:00.000Z' },
+      concurrency: { policy: 'queue' },
+      enabled: true,
+    },
+    {
+      ...base,
+      name: `paused-${stamp}`,
+      mode: 'schedule',
+      schedule: '0 0 1 1 *',
+      concurrency: { policy: 'skip_if_running' },
+      enabled: false,
+    },
+  ]) {
+    expect((await page.request.post('/api/triggers', { data })).status()).toBe(201);
+  }
+  await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+  await (await triggerMenuItem(page, /^Edit triggers…/)).click();
+  const column = page.getByTestId('pipeline-triggers');
+  const row = (name: string) => column.getByRole('listitem').filter({ hasText: name });
+
+  // The time is the browser's locale rendering, so only its words are pinned.
+  await expect(row(`yearly-${stamp}`)).toContainText(/enabled · next scheduled \S/);
+  await expect(row(`yearly-${stamp}`)).not.toContainText('next scheduled now');
+  await expect(row(`windows-${stamp}`)).toContainText(/enabled · next window closes \S/);
+  await expect(row(`windows-${stamp}`)).not.toContainText('closes now');
+  await expect(row(`paused-${stamp}`)).toContainText('disabled');
+  await expect(row(`paused-${stamp}`)).not.toContainText(/next|nothing scheduled/);
+
+  await expectQuiet(page, problems);
+});
