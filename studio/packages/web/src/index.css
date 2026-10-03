@@ -4518,6 +4518,15 @@ button.danger {
   color: var(--muted);
 }
 
+/* #1484 — a native select is as wide as its longest option, so one long pipeline
+   or trigger name pushed the whole filter bar, and the page, past the viewport
+   (measured: a 200-character name put the Pipeline picker's right edge at 1622px
+   on a 1440px screen). Capped; the closed control ellipsizes, the open list
+   still shows every name in full. */
+.run-filters select {
+  max-width: 16rem;
+}
+
 /* U10 — the runs list's origin tabs are Fluent's own `TabList`, so only the
    count badge inside each tab needs a rule of its own. */
 .run-tab-count {
