@@ -175,7 +175,7 @@ export function liveState(s: LiveInput): BadgePart | null {
   return {
     label: `Live: v${v}`,
     detail: latest
-      ? `v${v} is the active (published) version; the latest saved version is ${s.canvas === null ? 'none' : `v${String(s.canvas)}`}.`
+      ? `v${v} is the active (published) version; ${s.canvas === null ? 'there is no saved version' : `the latest saved version is v${String(s.canvas)}`}.`
       : `v${v} is the active (published) version; the canvas shows ${s.canvas === null ? 'unsaved changes' : `v${String(s.canvas)}`}.`,
     tone: 'warning',
   };

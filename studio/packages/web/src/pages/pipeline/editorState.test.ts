@@ -434,6 +434,9 @@ describe('listRowBadge (#1476 slice 8)', () => {
     expect(live?.detail).toBe(
       'v1 is the active (published) version; the latest saved version is v3.',
     );
+    expect(row(null, { versionId: 'v1', version: 1 }).live?.detail).toBe(
+      'v1 is the active (published) version; there is no saved version.',
+    );
   });
 
   it('says Not published, or not listed, rather than a number it does not have', () => {
