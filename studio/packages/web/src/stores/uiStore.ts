@@ -87,6 +87,20 @@ export interface UiState {
    */
   historyOpen: boolean;
   setHistoryOpen: (open: boolean) => void;
+  /**
+   * #1484 OR35 M1 — the runs grid's column choice and widths, per viewer.
+   * `runsGridHidden` names the columns the operator turned OFF, in column
+   * order; storing the hidden set rather than the shown one means a column a
+   * later release adds appears by default. A required column is never in it.
+   * `runsGridWidths` holds only the columns the operator resized, in px; an
+   * absent column draws at its default.
+   */
+  runsGridHidden: readonly RunGridColumnId[];
+  setRunsGridHidden: (hidden: readonly RunGridColumnId[]) => void;
+  runsGridWidths: Partial<Record<RunGridColumnId, number>>;
+  /** `null`, or a non-finite width, returns the column to its default. */
+  setRunsGridWidth: (column: RunGridColumnId, width: number | null) => void;
+  resetRunsGridColumns: () => void;
 }
 
 export type UiStore = StoreApi<UiState>;
@@ -101,6 +115,61 @@ export type PipelineTab = (typeof PIPELINE_TABS)[number];
 /** #1475 OR27 — the dock's places; the first is the default. */
 export const DOCK_POSITIONS = ['bottom', 'right'] as const;
 export type DockPosition = (typeof DOCK_POSITIONS)[number];
+
+/**
+ * #1484 OR35 M1 — the runs grid's columns, in the order they are drawn. The
+ * store keeps their ids and width bounds, which it needs to clamp a stored
+ * width on read; the labels and cells are the page's
+ * (`pages/runs/runGridColumns.tsx`), keyed by these ids so a column added here
+ * without a definition there fails the typecheck.
+ */
+export const RUN_GRID_COLUMNS = [
+  'pipeline',
+  'status',
+  'triggeredBy',
+  'started',
+  'duration',
+  'activities',
+  'rowsWritten',
+  'cost',
+  'runId',
+] as const;
+export type RunGridColumnId = (typeof RUN_GRID_COLUMNS)[number];
+
+/**
+ * Columns the picker cannot turn off. Pipeline is what an operator recognises a
+ * run by (principle 3: every id has a name next to it). Run ID holds the row's
+ * only REAL link — the one a keyboard reaches and a middle-click opens — so a
+ * grid without it could be entered with a mouse only.
+ */
+export const RUN_GRID_REQUIRED_COLUMNS: readonly RunGridColumnId[] = ['pipeline', 'runId'];
+
+/**
+ * Each column's floor and default width, in px. The defaults are the shares
+ * the fixed layout drew before columns could be resized, taken at the 1083px
+ * the grid has at 1440×900 beside the hub nav, so that screen looks as it did.
+ * The floors keep each column's content legible: a status pill, a short run id
+ * with its Copy button.
+ */
+export const RUN_GRID_COLUMN_WIDTHS: Record<RunGridColumnId, { min: number; default: number }> = {
+  pipeline: { min: 120, default: 205 },
+  status: { min: 72, default: 88 },
+  triggeredBy: { min: 96, default: 160 },
+  started: { min: 110, default: 130 },
+  duration: { min: 56, default: 76 },
+  activities: { min: 80, default: 152 },
+  rowsWritten: { min: 56, default: 76 },
+  cost: { min: 56, default: 76 },
+  runId: { min: 110, default: 120 },
+};
+export const RUN_GRID_COLUMN_MAX_WIDTH = 640;
+export const RUN_GRID_RESIZE_STEP = 16;
+
+/** A column width within that column's bounds; non-finite → its default (`clampWidth`'s rule). */
+export function clampRunGridWidth(column: RunGridColumnId, width: number): number {
+  const { min, default: fallback } = RUN_GRID_COLUMN_WIDTHS[column];
+  return clampWidth(width, min, RUN_GRID_COLUMN_MAX_WIDTH, fallback);
+}
 
 export const THEME_STORAGE_KEY = 'autonomy-studio.theme';
 export const PANE_STORAGE_KEY = 'autonomy-studio.pane';
@@ -119,6 +188,9 @@ export const PROBLEMS_WIDTH_STORAGE_KEY = 'autonomy-studio.problems-width';
 export const DOCK_NODE_TAB_STORAGE_KEY = 'autonomy-studio.dock-node-tab';
 export const DOCK_PIPELINE_TAB_STORAGE_KEY = 'autonomy-studio.dock-pipeline-tab';
 export const HISTORY_OPEN_STORAGE_KEY = 'autonomy-studio.history-open';
+/* Two keys, not one record, for the dock keys' reason above. */
+export const RUN_GRID_HIDDEN_STORAGE_KEY = 'autonomy-studio.runs-grid-hidden';
+export const RUN_GRID_WIDTHS_STORAGE_KEY = 'autonomy-studio.runs-grid-widths';
 
 /**
  * Pane width bounds. The minimum is a readable list width; the maximum keeps
@@ -394,17 +466,60 @@ interface StoredPane {
  * maximum must not resurrect a pane that overruns today's shell.
  */
 function parsePane(raw: string): StoredPane | undefined {
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
+  const value = parseJson(raw);
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const { width, collapsed } = value as Record<string, unknown>;
   if (typeof width !== 'number' || !Number.isFinite(width)) return undefined;
   if (typeof collapsed !== 'boolean') return undefined;
   return { width: clampPaneWidth(width), collapsed };
+}
+
+function isRunGridColumn(value: unknown): value is RunGridColumnId {
+  return RUN_GRID_COLUMNS.some((column) => column === value);
+}
+
+/**
+ * The hidden set as it is kept: known ids only (a column a later release
+ * renamed or removed is dropped, not trusted), never a required one, each once,
+ * in column order. Applied on write as well as on read, so the store can never
+ * hold a set the picker could not have produced.
+ */
+function canonicalHidden(ids: readonly unknown[]): RunGridColumnId[] {
+  return RUN_GRID_COLUMNS.filter(
+    (column) => ids.includes(column) && !RUN_GRID_REQUIRED_COLUMNS.includes(column),
+  );
+}
+
+/** `JSON.parse`, or `undefined` for text that is not JSON. */
+function parseJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseRunGridHidden(raw: string): RunGridColumnId[] | undefined {
+  const value = parseJson(raw);
+  return Array.isArray(value) ? canonicalHidden(value) : undefined;
+}
+
+/**
+ * Each entry is judged on its own, so one column a later release dropped, or
+ * one bad value, does not cost the operator every other width they set. A
+ * width is clamped to its column's CURRENT bounds on the way in, for
+ * `parsePane`'s reason.
+ */
+function parseRunGridWidths(raw: string): Partial<Record<RunGridColumnId, number>> | undefined {
+  const value = parseJson(raw);
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const widths: Partial<Record<RunGridColumnId, number>> = {};
+  for (const [column, width] of Object.entries(value as Record<string, unknown>)) {
+    if (isRunGridColumn(column) && typeof width === 'number' && Number.isFinite(width)) {
+      widths[column] = clampRunGridWidth(column, width);
+    }
+  }
+  return widths;
 }
 
 /**
@@ -575,6 +690,26 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       setToolboxCollapsed,
       historyOpen,
       setHistoryOpen,
+
+      runsGridHidden: readStored(storage, RUN_GRID_HIDDEN_STORAGE_KEY, parseRunGridHidden, []),
+      setRunsGridHidden: (hidden) => {
+        const runsGridHidden = canonicalHidden(hidden);
+        writeStored(storage, RUN_GRID_HIDDEN_STORAGE_KEY, JSON.stringify(runsGridHidden));
+        set({ runsGridHidden });
+      },
+      runsGridWidths: readStored(storage, RUN_GRID_WIDTHS_STORAGE_KEY, parseRunGridWidths, {}),
+      setRunsGridWidth: (column, width) => {
+        const runsGridWidths = { ...get().runsGridWidths };
+        if (width === null || !Number.isFinite(width)) delete runsGridWidths[column];
+        else runsGridWidths[column] = clampRunGridWidth(column, width);
+        writeStored(storage, RUN_GRID_WIDTHS_STORAGE_KEY, JSON.stringify(runsGridWidths));
+        set({ runsGridWidths });
+      },
+      resetRunsGridColumns: () => {
+        writeStored(storage, RUN_GRID_HIDDEN_STORAGE_KEY, '[]');
+        writeStored(storage, RUN_GRID_WIDTHS_STORAGE_KEY, '{}');
+        set({ runsGridHidden: [], runsGridWidths: {} });
+      },
     };
   });
 }

@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type MouseEvent as ReactMouseEvent,
-} from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Menu,
   MenuItemCheckbox,
@@ -29,20 +22,18 @@ import {
   type TriggerPublic,
 } from '@autonomy-studio/shared';
 import { useStore } from 'zustand';
-import { useHref, useNavigate, useSearchParams } from 'react-router';
+import { useSearchParams } from 'react-router';
 import { listRunAnnotations, listRuns } from '../../api/runs';
 import { usePagedList } from '../../hooks/usePagedList';
 import { getPipelineCost } from '../../api/pipelines';
 import { ApiError, messageOf } from '../../api/client';
-import { activitiesCell, rowsWrittenCell } from './activitiesColumn';
-import { costCell } from './costColumn';
 import { pipelineCostSummary, type PipelineCostSummary } from './pipelineCostSummary';
 import { listTriggers } from '../../api/triggers';
 import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore';
-import { formatRunDuration, formatWhen } from './format';
-import { runDetailPath, runLinkLabel } from './runPath';
 import { runStatusLabel } from './runStatus';
 import { RunTimeline } from './RunTimeline';
+import { RunGridColumnsMenu, RunsGrid } from './RunsGrid';
+import { uiStore, type UiStore } from '../../stores/uiStore';
 import {
   canonicalKindParam,
   dayOf,
@@ -60,14 +51,10 @@ import {
   RUN_SINCE_LABEL,
   RUN_SINCE_OPTIONS,
   startedModeOf,
-  type RunSortState,
 } from './runFilters';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { FilterPicker } from './FilterPicker';
 import { RUN_GROUP_BYS, type RunGroupBy } from './runBars';
-import { versionLabel } from '../../lib/versionLabel';
-import { CopyableId } from '../../lib/CopyableId';
-import { RunTriggeredByName } from '../../lib/KindName';
 
 /**
  * U29 (#1015) — which rendering of the SAME filtered rows is on screen. A view,
@@ -87,37 +74,6 @@ const GROUP_PARAM = 'group';
 function readGroupBy(params: URLSearchParams): RunGroupBy {
   const raw = params.get(GROUP_PARAM);
   return RUN_GROUP_BYS.find((by) => by === raw) ?? 'pipeline';
-}
-
-/**
- * One Cost cell. A component rather than an inline expression so the decision
- * (`costCell`) stays a pure function this file merely renders — and so the
- * unsettled qualifier has somewhere to be marked up rather than concatenated into
- * a string, which is what lets it read as secondary while staying VISIBLE text
- * rather than a hover.
- */
-function RunCostCell({ run }: { run: RunSummary }) {
-  const cell = costCell(run);
-  return (
-    <td className="run-cost" {...(cell.note === null ? {} : { title: cell.note })}>
-      {cell.figure}
-      {cell.unsettled ? <span className="run-cost-unsettled"> so far</span> : null}
-    </td>
-  );
-}
-
-/**
- * #1484 — one Activities cell. The glyph form is drawn but hidden from assistive
- * tech, which reads the same counts in words instead ("1 failed", not "1 ✗").
- */
-function RunActivitiesCell({ run }: { run: RunSummary }) {
-  const cell = activitiesCell(run);
-  return (
-    <td className="runs-grid__activities" title={cell.title}>
-      <span aria-hidden="true">{cell.figure}</span>
-      <span className="visually-hidden">{cell.words}</span>
-    </td>
-  );
 }
 
 /**
@@ -151,43 +107,6 @@ function PipelineSpend({ summary }: { summary: PipelineCostSummary }) {
   );
 }
 
-/**
- * #1484 OR35 M1 — a header the grid can sort by. The `<th>` carries `aria-sort`
- * (only when it is the sorted column, as ARIA asks) and the button inside it is
- * the control, so a keyboard reaches it and a screen reader announces the
- * column's name and its order. The order is the SERVER's (`?sort=`), so it holds
- * across every page rather than only the rows loaded.
- */
-function SortHeader({
-  column,
-  label,
-  sort,
-  onSort,
-  numeric = false,
-}: {
-  column: RunSortKey;
-  label: string;
-  sort: RunSortState;
-  onSort: (column: RunSortKey) => void;
-  numeric?: boolean;
-}) {
-  const active = sort.key === column;
-  return (
-    <th
-      scope="col"
-      {...(numeric ? { className: 'num' } : {})}
-      {...(active ? { 'aria-sort': sort.dir === 'asc' ? 'ascending' : 'descending' } : {})}
-    >
-      <button type="button" className="runs-grid__sort" onClick={() => onSort(column)}>
-        {label}
-        <span className="runs-grid__sort-arrow" aria-hidden="true">
-          {active ? (sort.dir === 'asc' ? '▲' : '▼') : ''}
-        </span>
-      </button>
-    </th>
-  );
-}
-
 /** A run's identity, for `usePagedList` to drop a row a sorted walk repeats. */
 const runKey = (run: RunSummary) => run.id;
 
@@ -199,84 +118,6 @@ function withParams(prev: URLSearchParams, next: Record<string, string>): URLSea
     else params.set(param, value);
   }
   return params;
-}
-
-/**
- * #1484 OR35 M1 — one row of the runs grid, and the whole row is the way into
- * the run. The Run ID cell holds the REAL link (keyboard focus, Enter, the
- * browser's own middle-click and context menu); the row's click handlers only
- * extend that target to the rest of the row for a mouse. They stand down when
- * the click landed on a control of its own (the link itself, the copy button)
- * or ended a text selection, so copying a pipeline name never navigates. A
- * middle click or a modified click opens the run in a new tab, as the link
- * would.
- */
-function RunRow({ run: r, loadedAt }: { run: RunSummary; loadedAt: number }) {
-  const navigate = useNavigate();
-  const path = runDetailPath(r.id);
-  const href = useHref(path);
-  const open = (e: ReactMouseEvent<HTMLTableRowElement>, newTab: boolean): void => {
-    if (e.target instanceof Element && e.target.closest('a, button, input, select, textarea')) {
-      return;
-    }
-    // Only a selection INSIDE this row means "I was selecting text"; a stale one
-    // elsewhere on the page must not make every row click do nothing.
-    const selection = window.getSelection();
-    if (
-      selection !== null &&
-      !selection.isCollapsed &&
-      selection.anchorNode !== null &&
-      e.currentTarget.contains(selection.anchorNode)
-    ) {
-      return;
-    }
-    if (newTab) window.open(href, '_blank', 'noopener');
-    else void navigate(path);
-  };
-  return (
-    <tr
-      className="runs-grid__row"
-      onClick={(e) => open(e, e.metaKey || e.ctrlKey || e.shiftKey)}
-      onAuxClick={(e) => {
-        if (e.button === 1) open(e, true);
-      }}
-    >
-      <td className="runs-grid__pipeline">
-        {/* R2 — the pipeline's NAME, which is the only thing here an operator
-            recognises. The version id stays reachable as the cell's title. */}
-        <span title={r.pipelineVersionId}>
-          {r.pipelineName}{' '}
-          <span className="run-version">{versionLabel(r.pipelineVersion, r.debug)}</span>
-        </span>
-      </td>
-      <td>
-        {/* #870 — the WORD comes from the Monitor's one run-status vocabulary;
-            the CLASS from the status itself, so hue and label cannot drift. */}
-        <span className={`run-status run-status-${r.status}`}>{runStatusLabel(r.status)}</span>
-      </td>
-      {/* #1484 — the server's `triggeredByKind`, plus the trigger's name when it
-          still exists. A rerun names its source run in the title (RS6). */}
-      <td title={r.rerunOf !== null ? `Rerun of run ${r.rerunOf}` : undefined}>
-        <RunTriggeredByName kind={r.triggeredByKind} />
-        {r.triggerName !== null && <span className="runs-grid__trigger"> · {r.triggerName}</span>}
-      </td>
-      <td>{formatWhen(r.startedAt)}</td>
-      {/* The finish TIMESTAMP is the cell's title (U10 fixed the column set). */}
-      <td className="num" title={formatWhen(r.finishedAt)}>
-        {formatRunDuration(r, loadedAt)}
-      </td>
-      <RunActivitiesCell run={r} />
-      {/* #1484 — this run's OWN rows; a child's are on the child's row. */}
-      <td className="num" title="Rows this run's successful activities wrote">
-        {rowsWrittenCell(r)}
-      </td>
-      {/* U27 slice 2 — the run detail page's own cost authority. */}
-      <RunCostCell run={r} />
-      <td>
-        <CopyableId id={r.id} noun="run" link={{ to: path, label: runLinkLabel('Open', r.id) }} />
-      </td>
-    </tr>
-  );
 }
 
 /**
@@ -298,7 +139,14 @@ function RunRow({ run: r, loadedAt }: { run: RunSummary; loadedAt: number }) {
  * day, or a range of days) and a search box. Because every axis is answered by
  * the server, a paged list filters every run, not just the pages loaded.
  */
-export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } = {}) {
+export function RunsPage({
+  store = pipelinesStore,
+  ui = uiStore,
+}: {
+  store?: PipelinesStore;
+  /** #1484 — the grid's per-viewer column preferences; injected by tests. */
+  ui?: UiStore;
+} = {}) {
   /**
    * Bumped by "Refresh" so BOTH panels re-fetch from one button. Since #1083
    * the run list itself is refreshed through `usePagedList` rather than by this
@@ -630,6 +478,9 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
             )}
           </LabelledControl>
         </div>
+        {/* #1484 — which columns the grid draws. The Timeline has no columns,
+            so it has no picker either. */}
+        {view === 'list' && <RunGridColumnsMenu ui={ui} sortKey={urlSort.key} />}
         {/* A `role="group"` of toggles rather than a `TabList`: List and
             Timeline are two renderings of one set of rows, not two panels. */}
         <div role="group" aria-label="Runs view" className="run-view-toggle">
@@ -852,41 +703,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
             onGroupByChange={(next) => setFilter(GROUP_PARAM, next === 'pipeline' ? '' : next)}
           />
         ) : (
-          <table className="runs-grid">
-            <thead>
-              <tr>
-                <SortHeader column="pipeline" label="Pipeline" sort={urlSort} onSort={sortBy} />
-                <SortHeader column="status" label="Status" sort={urlSort} onSort={sortBy} />
-                <SortHeader
-                  column="triggeredBy"
-                  label="Triggered by"
-                  sort={urlSort}
-                  onSort={sortBy}
-                />
-                <SortHeader column="started" label="Started" sort={urlSort} onSort={sortBy} />
-                <SortHeader
-                  column="duration"
-                  label="Duration"
-                  sort={urlSort}
-                  onSort={sortBy}
-                  numeric
-                />
-                <th scope="col">Activities</th>
-                <th scope="col" className="num">
-                  Rows written
-                </th>
-                <th scope="col" className="num">
-                  Cost
-                </th>
-                <th scope="col">Run ID</th>
-              </tr>
-            </thead>
-            <tbody>
-              {runs.map((r) => (
-                <RunRow key={r.id} run={r} loadedAt={loadedAt} />
-              ))}
-            </tbody>
-          </table>
+          <RunsGrid runs={runs} loadedAt={loadedAt} sort={urlSort} onSort={sortBy} ui={ui} />
         ))}
 
       {/* Rendered only when the server said there IS an older page. An

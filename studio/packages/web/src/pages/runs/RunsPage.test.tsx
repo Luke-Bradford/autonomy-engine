@@ -20,6 +20,7 @@ import * as pipelinesApi from '../../api/pipelines';
 import * as triggersApi from '../../api/triggers';
 import { ApiError } from '../../api/client';
 import { createPipelinesStore } from '../../stores/pipelinesStore';
+import { createUiStore, RUN_GRID_COLUMN_WIDTHS, RUN_GRID_RESIZE_STEP } from '../../stores/uiStore';
 
 // Mock the whole api/runs network surface (matching the ConnectionsPage test
 // convention of stubbing every network fn of the module, so no real call ever
@@ -838,7 +839,8 @@ describe('RunsPage — U26 filter pane', () => {
     // A request that never settles: the page is now mid-flight on the new
     // filter, which is exactly the window this guards.
     listMock.mockReturnValue(new Promise(() => {}));
-    await userEvent.selectOptions(screen.getByLabelText('Status'), 'failure');
+    // The ROLE, not the label alone: the grid's Status header is named "Status" too.
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'failure');
 
     expect(screen.queryByText('run_old')).not.toBeInTheDocument();
     expect(screen.getByText(/Loading runs/i)).toBeInTheDocument();
@@ -1217,5 +1219,146 @@ describe('U29 runs view toggle', () => {
       'aria-pressed',
       'true',
     );
+  });
+});
+
+/**
+ * #1484 OR35 M1 — the column picker and column widths. Each case injects its
+ * OWN ui store, so a choice made here never leaks into another case through the
+ * `uiStore` singleton.
+ */
+describe('#1484 — runs grid columns', () => {
+  /* Its OWN storage, never `createUiStore(undefined)`: an explicit `undefined`
+     takes the factory's DEFAULT, the ambient `localStorage`. That is an inert
+     stub on some Node versions and a working store on others (CI's), where one
+     case's hidden column or width was read back by the next. */
+  const freshUi = () => {
+    const data = new Map<string, string>();
+    return createUiStore({
+      getItem: (key) => data.get(key) ?? null,
+      setItem: (key, value) => {
+        data.set(key, value);
+      },
+    });
+  };
+  async function renderGrid(path = '/') {
+    const ui = freshUi();
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_abc', status: 'success' })]));
+    renderWithRouter(<RunsPage ui={ui} />, path);
+    // The pipeline's name is on both views; the run id only in the grid's.
+    await screen.findAllByText(/Nightly report/);
+    return ui;
+  }
+  const headers = () =>
+    within(screen.getByRole('table'))
+      .getAllByRole('columnheader')
+      .map((h) => h.getAttribute('aria-label'));
+
+  it('draws every column by default, each header named by its label alone', async () => {
+    await renderGrid();
+    expect(headers()).toEqual([
+      'Pipeline',
+      'Status',
+      'Triggered by',
+      'Started',
+      'Duration',
+      'Activities',
+      'Rows written',
+      'Cost',
+      'Run ID',
+    ]);
+    // The resize handle inside the header must not join its accessible name.
+    expect(screen.getByRole('columnheader', { name: 'Status' })).toBeInTheDocument();
+  });
+
+  it('hides a column from the header AND every row, and stores the choice', async () => {
+    const ui = await renderGrid();
+    await userEvent.click(screen.getByRole('button', { name: /Columns/ }));
+    await userEvent.click(await screen.findByRole('menuitemcheckbox', { name: 'Cost' }));
+    expect(ui.getState().runsGridHidden).toEqual(['cost']);
+    expect(headers()).not.toContain('Cost');
+    const row = screen.getByText('run_abc').closest('tr') as HTMLElement;
+    // Header and cells stay in step: the cell under Run ID is still the run id.
+    expect(within(row).getAllByRole('cell')).toHaveLength(8);
+    expect(cellUnder(row, 'Run ID')).toHaveTextContent('run_abc');
+  });
+
+  it('will not hide a required column, or the column the grid is sorted by', async () => {
+    await renderGrid('/?sort=duration');
+    await userEvent.click(screen.getByRole('button', { name: /Columns/ }));
+    for (const name of ['Pipeline', 'Run ID', 'Duration']) {
+      expect(await screen.findByRole('menuitemcheckbox', { name })).toHaveAttribute(
+        'aria-disabled',
+        'true',
+      );
+    }
+    expect(screen.getByRole('menuitemcheckbox', { name: 'Started' })).not.toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+  });
+
+  it('draws a hidden column while the grid is sorted by it, keeping the choice', async () => {
+    const ui = freshUi();
+    ui.getState().setRunsGridHidden(['duration', 'cost']);
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_abc' })]));
+    renderWithRouter(<RunsPage ui={ui} />, '/?sort=duration');
+    await screen.findByText('run_abc');
+    expect(headers()).toContain('Duration');
+    expect(headers()).not.toContain('Cost');
+    expect(ui.getState().runsGridHidden).toEqual(['duration', 'cost']);
+  });
+
+  it('sizes each column from the stored width, else its default', async () => {
+    const ui = freshUi();
+    ui.getState().setRunsGridWidth('status', 140);
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_abc' })]));
+    const { container } = renderWithRouter(<RunsPage ui={ui} />);
+    await screen.findByText('run_abc');
+    const col = (id: string) => container.querySelector(`col.runs-grid__col--${id}`);
+    expect(col('status')).toHaveStyle({ width: '140px' });
+    expect(col('cost')).toHaveStyle({ width: `${RUN_GRID_COLUMN_WIDTHS.cost.default}px` });
+  });
+
+  it('resizes a column from the keyboard, and a double-click returns it to its default', async () => {
+    const ui = await renderGrid();
+    const handle = screen.getByRole('separator', { name: 'Resize Status column' });
+    fireEvent.keyDown(handle, { key: 'ArrowRight' });
+    const widened = RUN_GRID_COLUMN_WIDTHS.status.default + RUN_GRID_RESIZE_STEP;
+    expect(ui.getState().runsGridWidths).toEqual({ status: widened });
+    expect(handle).toHaveAttribute('aria-valuenow', String(widened));
+    fireEvent.doubleClick(handle);
+    expect(ui.getState().runsGridWidths).toEqual({});
+  });
+
+  it('a click on the resize handle does not sort the column', async () => {
+    await renderGrid();
+    const calls = listMock.mock.calls.length;
+    // A CLICK, which is what would bubble to the sort button were the handle
+    // inside it; a key press never reaches the button's click either way.
+    await userEvent.click(screen.getByRole('separator', { name: 'Resize Status column' }));
+    expect(screen.getByRole('columnheader', { name: 'Status' })).not.toHaveAttribute('aria-sort');
+    expect(listMock.mock.calls.length).toBe(calls);
+  });
+
+  it('Reset columns shows every column at its default width', async () => {
+    const ui = await renderGrid();
+    act(() => {
+      ui.getState().setRunsGridWidth('status', 200);
+      ui.getState().setRunsGridHidden(['cost', 'activities']);
+    });
+    await userEvent.click(screen.getByRole('button', { name: /Columns/ }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Reset columns' }));
+    expect(ui.getState().runsGridHidden).toEqual([]);
+    expect(ui.getState().runsGridWidths).toEqual({});
+    expect(headers()).toHaveLength(9);
+    expect(document.querySelector('col.runs-grid__col--status')).toHaveStyle({
+      width: `${RUN_GRID_COLUMN_WIDTHS.status.default}px`,
+    });
+  });
+
+  it('offers no column picker on the Timeline, which has no columns', async () => {
+    await renderGrid('/?view=timeline');
+    expect(screen.queryByRole('button', { name: /Columns/ })).not.toBeInTheDocument();
   });
 });

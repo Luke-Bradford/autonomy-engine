@@ -4428,9 +4428,9 @@ button.danger {
    the way the canvas does; the Timeline view shares the page and widens too.
    32px rows of 13px data, no wrapping, and numbers right-aligned in tabular
    figures so durations and costs line up digit for digit.
-   FIXED layout with set column shares, and every cell ellipsizes: whatever a
-   row holds (a 200-character pipeline name, a long trigger name), the grid can
-   never be wider than the page. Measured: with automatic layout, the shared e2e
+   FIXED layout at the columns' set widths, and every cell ellipsizes: whatever
+   a row holds (a 200-character pipeline name, a long trigger name), a column
+   never grows past its width. Measured: with automatic layout, the shared e2e
    database's rows pushed the table past the viewport. */
 .content:has(.runs-page) {
   max-width: none;
@@ -4451,32 +4451,66 @@ button.danger {
   text-overflow: ellipsis;
 }
 
-/* Column shares, in header order: Pipeline · Status · Triggered by · Started ·
-   Duration · Activities · Rows written · Cost · Run ID. */
-.runs-grid th:nth-child(1) {
-  width: 19%;
+/* #1484 — column widths are the `<col>`s' own, set inline from the column
+   definitions and the operator's resizes (`RunsGrid`), no longer positional
+   shares here. The grid scrolls sideways in its own box once the columns
+   outgrow the page, so the page itself never does. The table sits flush under
+   the filter bar inside it (`.runs-page > .runs-grid-scroll > table`, below). */
+.runs-grid-scroll {
+  overflow-x: auto;
 }
-.runs-grid th:nth-child(2) {
-  width: 8%;
+
+.runs-grid th {
+  position: relative;
 }
-.runs-grid th:nth-child(3) {
-  width: 15%;
+
+/* The trailing filler takes the page's leftover width. It has no padding, so
+   once the columns fill the page it is truly zero wide. */
+.runs-grid .runs-grid__filler {
+  padding: 0;
 }
-.runs-grid th:nth-child(4) {
-  width: 12%;
+
+/* The resize handle sits INSIDE the header's right edge (the cell clips
+   overflow), over the 0.6rem padding, so it never covers a label. A
+   right-aligned header keeps its arrow and label clear of it too. Drawn only
+   on hover and keyboard focus: the line is the affordance, the 8px strip is
+   the target. */
+.runs-grid__resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+  /* A drag that starts here must not start a text selection across the rows:
+     `RunRow` reads a selection inside a row as "I was selecting text" and
+     would then ignore the next click on it. */
+  user-select: none;
 }
-.runs-grid th:nth-child(5) {
-  width: 7%;
+
+.runs-grid__resizer::after {
+  content: '';
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  right: 3px;
+  width: 2px;
+  background: transparent;
 }
-.runs-grid th:nth-child(6) {
-  width: 14%;
+
+.runs-grid th:hover .runs-grid__resizer::after {
+  background: var(--border);
 }
-.runs-grid th:nth-child(7),
-.runs-grid th:nth-child(8) {
-  width: 7%;
+
+.runs-grid__resizer:hover::after,
+.runs-grid__resizer:focus-visible::after {
+  background: var(--accent);
 }
-.runs-grid th:nth-child(9) {
-  width: 11%;
+
+.runs-grid__resizer:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 /* #1484 — a sortable header is a button that looks like the header text. The
@@ -4563,7 +4597,7 @@ button.danger {
   font-size: 1.15rem;
 }
 
-.runs-page > table.runs-grid {
+.runs-page > .runs-grid-scroll > table.runs-grid {
   margin-top: 0;
 }
 
