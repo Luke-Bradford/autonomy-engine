@@ -200,9 +200,6 @@ export interface GitInput {
   pipelineId?: string;
 }
 
-const TONE_RANK: Record<BadgeTone, number> = { neutral: 0, success: 0, warning: 1, danger: 2 };
-const worse = (a: BadgeTone, b: BadgeTone): BadgeTone => (TONE_RANK[b] > TONE_RANK[a] ? b : a);
-
 /** Why this pipeline differs from the working branch, as a sentence. */
 function driftSentence(change: WorkspaceGitPipelineDrift['change'], branch: string): string {
   switch (change) {
@@ -270,13 +267,14 @@ export function gitState({ git, source, sync, pipelineId }: GitInput): BadgePart
     sentences.push(`${git.collabBranch} was not found at the repo when it was last fetched.`);
     tone = 'warning';
   }
+  // The tone only ever rises below: danger (`diverged`) is the last state set.
   if (git.state !== 'fetch_error' && sync != null && pipelineId !== undefined) {
     const change = sync.pipelines.find((p) => p.pipelineId === pipelineId)?.change;
     const divergence = sync.divergence;
     if (change !== undefined) {
       parts.push('uncommitted');
       sentences.push(driftSentence(change, sync.workingBranch));
-      tone = worse(tone, 'warning');
+      tone = 'warning';
     }
     if (divergence.state === 'behind') {
       parts.push(`behind ${git.collabBranch} — pull first`);
@@ -284,14 +282,14 @@ export function gitState({ git, source, sync, pipelineId }: GitInput): BadgePart
         `${git.collabBranch} has moved since this workspace last imported from it` +
           `${shasOf(divergence.importBase, divergence.collabHead)}. Import it on Manage → Git before publishing.`,
       );
-      tone = worse(tone, 'warning');
+      tone = 'warning';
     } else if (divergence.state === 'diverged') {
       parts.push('diverged');
       sentences.push(
         `${git.collabBranch}'s history was rewritten since this workspace imported from it` +
           `${shasOf(divergence.importBase, divergence.collabHead)}, so the next import will not fast-forward.`,
       );
-      tone = worse(tone, 'danger');
+      tone = 'danger';
     } else if (change === undefined) {
       parts.push('in sync');
       sentences.push(
