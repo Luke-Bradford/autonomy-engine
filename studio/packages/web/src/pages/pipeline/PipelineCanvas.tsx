@@ -84,6 +84,7 @@ import { listConnections } from '../../api/connections';
 import { listDatasets } from '../../api/datasets';
 import { listGlobalParams, toGlobalReads } from '../../api/globalParams';
 import { useGuardedLoad } from '../../hooks/useGuardedLoad';
+import { useRefreshOnFocus } from '../../hooks/useRefreshOnFocus';
 import { eligibleForBinding } from './bindingPickers';
 import { ActivityToolbox } from './ActivityToolbox';
 import {
@@ -883,10 +884,7 @@ export function PipelineCanvas({
       },
     );
   }, [refreshGlobals, guardedFocusLoad, pipelineId]);
-  useEffect(() => {
-    window.addEventListener('focus', refreshOnFocus);
-    return () => window.removeEventListener('focus', refreshOnFocus);
-  }, [refreshOnFocus]);
+  useRefreshOnFocus(refreshOnFocus);
 
   const nodes = useStore(store, (s) => s.nodes);
   const edges = useStore(store, (s) => s.edges);
@@ -960,11 +958,7 @@ export function PipelineCanvas({
   useEffect(() => {
     if (gitConnected === true) refreshGitSync();
   }, [gitConnected, headVersion, refreshGitSync]);
-  useEffect(() => {
-    if (gitConnected !== true) return;
-    window.addEventListener('focus', refreshGitSync);
-    return () => window.removeEventListener('focus', refreshGitSync);
-  }, [gitConnected, refreshGitSync]);
+  useRefreshOnFocus(refreshGitSync, gitConnected === true);
 
   /**
    * #1476 OR28 slice 7 — the pull request open from the working branch, for
@@ -988,11 +982,7 @@ export function PipelineCanvas({
   useEffect(() => {
     if (gitConnected === true) refreshGitPr();
   }, [gitConnected, workingBranch, refreshGitPr]);
-  useEffect(() => {
-    if (gitConnected !== true) return;
-    window.addEventListener('focus', refreshGitPr);
-    return () => window.removeEventListener('focus', refreshGitPr);
-  }, [gitConnected, refreshGitPr]);
+  useRefreshOnFocus(refreshGitPr, gitConnected === true);
   const entries = useMemo(
     () => historyEntries(versions, loaded?.version ?? null, active?.versionId),
     [versions, loaded, active],
