@@ -320,9 +320,13 @@ export function gitState({
       git.lastFetchAt === null ? 'Never fetched.' : `Last fetched ${formatWhen(git.lastFetchAt)}.`,
     );
   }
-  // A reading for another branch (the branch changed while it was in flight)
-  // is not this branch's: no link rather than the old branch's PR.
-  const pr = pullRequest?.workingBranch === git.workingBranch ? pullRequest : undefined;
+  // A reading for another repo or branch (either changed while it was in
+  // flight, or a reconnect kept the default branch name) is not this one's: no
+  // link rather than the old one's PR.
+  const pr =
+    pullRequest?.repoUrl === git.repoUrl && pullRequest.workingBranch === git.workingBranch
+      ? pullRequest
+      : undefined;
   sentences.push(...pullRequestSentence(pr));
   return {
     name: `${git.workingBranch} → ${git.collabBranch}`,

@@ -161,6 +161,7 @@ describe('gitState', () => {
       source: saved,
       pullRequest: {
         state: 'open',
+        repoUrl: 'file:///tmp/repo.git',
         workingBranch: 'feature/x',
         number: 7,
         url: 'https://github.com/acme/widgets/pull/7',
@@ -183,6 +184,7 @@ describe('gitState', () => {
       source: saved,
       pullRequest: {
         state: 'open',
+        repoUrl: 'file:///tmp/repo.git',
         workingBranch: 'feature/x',
         number: 7,
         url: 'https://github.com/acme/widgets/pull/7',
@@ -191,13 +193,33 @@ describe('gitState', () => {
     });
     expect(moved?.link).toBeUndefined();
     expect(moved?.detail).not.toContain('Pull request #7');
+
+    // And one for another repo, though the branch name is the same.
+    const reconnected = gitState({
+      git: { ...git, repoUrl: 'file:///tmp/other.git' },
+      source: saved,
+      pullRequest: {
+        state: 'open',
+        repoUrl: 'file:///tmp/repo.git',
+        workingBranch: 'feature/x',
+        number: 7,
+        url: 'https://github.com/acme/widgets/pull/7',
+        checkedAt: 1,
+      },
+    });
+    expect(reconnected?.link).toBeUndefined();
   });
 
   it('says there is no pull request only when the host said so', () => {
     const none = gitState({
       git,
       source: saved,
-      pullRequest: { state: 'none', workingBranch: 'feature/x', checkedAt: 1 },
+      pullRequest: {
+        state: 'none',
+        repoUrl: 'file:///tmp/repo.git',
+        workingBranch: 'feature/x',
+        checkedAt: 1,
+      },
     });
     expect(none?.link).toBeUndefined();
     expect(none?.detail).toMatch(/No pull request is open from feature\/x \(checked .+\)\./);
@@ -207,6 +229,7 @@ describe('gitState', () => {
       source: saved,
       pullRequest: {
         state: 'unknown',
+        repoUrl: 'file:///tmp/repo.git',
         workingBranch: 'feature/x',
         reason: 'lookup_failed',
         detail: 'HTTP 502',
@@ -222,6 +245,7 @@ describe('gitState', () => {
       source: saved,
       pullRequest: {
         state: 'unknown',
+        repoUrl: 'file:///tmp/repo.git',
         workingBranch: 'feature/x',
         reason: 'no_token',
         detail: null,
@@ -235,6 +259,7 @@ describe('gitState', () => {
       source: saved,
       pullRequest: {
         state: 'unknown',
+        repoUrl: 'file:///tmp/repo.git',
         workingBranch: 'feature/x',
         reason: 'unsupported_host',
         detail: null,

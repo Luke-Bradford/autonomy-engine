@@ -965,9 +965,10 @@ export const HTTP_URL_PATTERN = /^https?:\/\/./i;
 
 /**
  * #1476 OR28 — `GET /api/workspace/git/pull-request`: is a pull request open
- * from the working branch, into ANY base? `workingBranch` is the branch the
- * server asked about, so a client can refuse a reading for a branch it no
- * longer shows.
+ * from the working branch, into ANY base? `repoUrl` and `workingBranch` are
+ * the question the server asked, so a client can refuse a reading for a repo or
+ * branch it no longer shows (a reconnect to another repo keeps the default
+ * branch name).
  * - `open`: the host answered with one; `url` is its web page. With several
  *   (one per base), the host's first.
  * - `none`: the host answered and there is none.
@@ -982,6 +983,7 @@ export const HTTP_URL_PATTERN = /^https?:\/\/./i;
 export const WorkspaceGitPullRequestReadingSchema = z.discriminatedUnion('state', [
   z.object({
     state: z.literal('open'),
+    repoUrl: z.string().min(1),
     workingBranch: z.string().min(1),
     number: z.number().int().positive(),
     url: z.string().regex(HTTP_URL_PATTERN, 'must be an http(s) URL'),
@@ -989,11 +991,13 @@ export const WorkspaceGitPullRequestReadingSchema = z.discriminatedUnion('state'
   }),
   z.object({
     state: z.literal('none'),
+    repoUrl: z.string().min(1),
     workingBranch: z.string().min(1),
     checkedAt: z.number().int(),
   }),
   z.object({
     state: z.literal('unknown'),
+    repoUrl: z.string().min(1),
     workingBranch: z.string().min(1),
     reason: z.enum(['no_token', 'unsupported_host', 'lookup_failed']),
     detail: z.string().nullable(),

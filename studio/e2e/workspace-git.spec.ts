@@ -426,15 +426,18 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await expect(gitPart).toBeVisible();
   await expect(gitPart.getByRole('link')).toHaveCount(0);
   // The real answer (`unknown`, this host cannot be asked), with the host's
-  // answer put in its place: the branch stays the one the server asked about.
+  // answer put in its place: the repo and branch stay the ones the server asked about.
   await page.route(gitPrUrl, async (route) => {
     const response = await route.fetch();
-    const body = (await response.json()) as { pullRequest: { workingBranch: string } };
+    const body = (await response.json()) as {
+      pullRequest: { repoUrl: string; workingBranch: string };
+    };
     await route.fulfill({
       response,
       json: {
         pullRequest: {
           state: 'open',
+          repoUrl: body.pullRequest.repoUrl,
           workingBranch: body.pullRequest.workingBranch,
           number: 7,
           url: 'https://github.com/acme/widgets/pull/7',

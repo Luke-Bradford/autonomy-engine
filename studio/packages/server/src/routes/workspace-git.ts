@@ -901,26 +901,32 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
     const row = getWorkspaceGit(db, ownerId);
     if (!row) throw new NotFoundError('workspace git connection', ownerId);
 
-    const workingBranch = row.workingBranch;
+    const { repoUrl, workingBranch } = row;
     const answer = (reading: WorkspaceGitPullRequestReading) => ({
       pullRequest: WorkspaceGitPullRequestReadingSchema.parse(reading),
     });
 
     const target = resolvePullRequestTarget(row.repoUrl, row.collabBranch, workingBranch);
     if (target.provider !== 'github' || target.githubRepo === null) {
-      return answer({ state: 'unknown', workingBranch, reason: 'unsupported_host', detail: null });
+      return answer({
+        state: 'unknown',
+        repoUrl,
+        workingBranch,
+        reason: 'unsupported_host',
+        detail: null,
+      });
     }
     // Before the cache: a stored token that will not decrypt hard-fails (500)
     // on every read, as on the POST, rather than serving an older answer.
     const token = await resolveEffectiveToken(ownerId);
     if (token === null) {
-      return answer({ state: 'unknown', workingBranch, reason: 'no_token', detail: null });
+      return answer({ state: 'unknown', repoUrl, workingBranch, reason: 'no_token', detail: null });
     }
 
     // The token is in the key (hashed — the key is never sent anywhere), so an
     // answer got with another credential is a miss even when a lookup started
     // before a token change lands after it.
-    const key = `${row.repoUrl}\n${workingBranch}\n${sha256Hex(token)}`;
+    const key = `${repoUrl}\n${workingBranch}\n${sha256Hex(token)}`;
     const cached = pullRequestLookups.get(ownerId);
     if (cached !== undefined && cached.key === key && !isStale(cached.at, opts.fetchMaxAgeMs)) {
       return answer(await cached.reading);
@@ -931,9 +937,10 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       .then(
         (pr): WorkspaceGitPullRequestReading =>
           pr === null
-            ? { state: 'none', workingBranch, checkedAt: Date.now() }
+            ? { state: 'none', repoUrl, workingBranch, checkedAt: Date.now() }
             : {
                 state: 'open',
+                repoUrl,
                 workingBranch,
                 number: pr.number,
                 url: pr.htmlUrl,
@@ -943,6 +950,7 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
           if (err instanceof GitHostApiError) {
             return {
               state: 'unknown',
+              repoUrl,
               workingBranch,
               reason: 'lookup_failed',
               // The client already redacts; this is the route's own guard, as

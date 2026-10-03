@@ -93,6 +93,7 @@ describe('GET /api/workspace/git/pull-request (#1476 OR28)', () => {
     expect(status).toBe(200);
     expect(body.pullRequest).toMatchObject({
       state: 'open',
+      repoUrl: 'https://github.com/acme/widgets.git',
       workingBranch: 'studio/local/work',
       number: 7,
       url: 'https://github.com/acme/widgets/pull/7',
@@ -124,6 +125,7 @@ describe('GET /api/workspace/git/pull-request (#1476 OR28)', () => {
     expect(status).toBe(200);
     expect(body.pullRequest).toEqual({
       state: 'unknown',
+      repoUrl: 'https://github.com/acme/widgets.git',
       workingBranch: 'studio/local/work',
       reason: 'lookup_failed',
       detail: 'GitHub pull-request lookup failed (HTTP 401): Bad credentials',
@@ -158,6 +160,7 @@ describe('GET /api/workspace/git/pull-request (#1476 OR28)', () => {
     seed(app);
     expect((await read(app)).body.pullRequest).toEqual({
       state: 'unknown',
+      repoUrl: 'https://github.com/acme/widgets.git',
       workingBranch: 'studio/local/work',
       reason: 'no_token',
       detail: null,
@@ -171,6 +174,7 @@ describe('GET /api/workspace/git/pull-request (#1476 OR28)', () => {
     seed(app, '/tmp/some/local/repo');
     expect((await read(app)).body.pullRequest).toEqual({
       state: 'unknown',
+      repoUrl: '/tmp/some/local/repo',
       workingBranch: 'studio/local/work',
       reason: 'unsupported_host',
       detail: null,
@@ -183,7 +187,7 @@ describe('GET /api/workspace/git/pull-request (#1476 OR28)', () => {
     expect((await read(app)).status).toBe(404);
   });
 
-  it('reuses one answer for the window, then asks again', async () => {
+  it('reuses one answer for the window', async () => {
     const host = new FakeHostClient({ kind: 'found', pr: null });
     const app = await boot({ hostClient: host, gitFetchMaxAgeMs: 60_000 });
     seed(app);
@@ -191,14 +195,16 @@ describe('GET /api/workspace/git/pull-request (#1476 OR28)', () => {
     host.outcome = { kind: 'found', pr: PR_7 };
     expect((await read(app)).body.pullRequest).toMatchObject({ state: 'none' });
     expect(host.finds).toHaveLength(1);
+  });
 
-    const fresh = new FakeHostClient({ kind: 'found', pr: null });
-    const every = await boot({ hostClient: fresh, gitFetchMaxAgeMs: 0 });
-    seed(every);
-    await read(every);
-    fresh.outcome = { kind: 'found', pr: PR_7 };
-    expect((await read(every)).body.pullRequest).toMatchObject({ state: 'open', number: 7 });
-    expect(fresh.finds).toHaveLength(2);
+  it('a zero window asks the host on every read', async () => {
+    const host = new FakeHostClient({ kind: 'found', pr: null });
+    const app = await boot({ hostClient: host, gitFetchMaxAgeMs: 0 });
+    seed(app);
+    await read(app);
+    host.outcome = { kind: 'found', pr: PR_7 };
+    expect((await read(app)).body.pullRequest).toMatchObject({ state: 'open', number: 7 });
+    expect(host.finds).toHaveLength(2);
   });
 
   it('an answer expires once the window passes, and a clock that went back is stale', async () => {
