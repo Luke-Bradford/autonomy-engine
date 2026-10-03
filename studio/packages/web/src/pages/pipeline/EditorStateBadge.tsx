@@ -25,7 +25,7 @@ export function EditorStateBadge({
   );
 }
 
-function Part({ part, name }: { part: BadgePart; name: string }): React.JSX.Element {
+function Part({ part, name }: { part: BadgePart; name: 'editing' | 'live' }): React.JSX.Element {
   return (
     <span
       className="editor-state-badge__part"
