@@ -32,7 +32,8 @@ import { pipelines, pipelineVersions, runEvents, runs, triggers } from '../db/sc
 import { newId } from './ids.js';
 import { beforeCursor, encodeCursor, pageOrderDesc, type PageArgs } from './pagination.js';
 import { isDeterministicRowCorruption } from './row-corruption.js';
-import { aggregateRunCosts } from './run-events.js';
+import type { RunActivityFold } from '../run/activity-counts.js';
+import { aggregateRunCosts, listRunLogFacts } from './run-events.js';
 import { RUN_TRIGGERED_BY_SQL } from './run-triggered-by.js';
 import type { Db } from './types.js';
 
@@ -338,6 +339,10 @@ export function listRunSummariesPage(
   db: Db,
   filter: ListRunSummariesFilter,
   args: PageArgs,
+  /** #1484 — the Activities fold (`run/activity-counts.ts`), injected so this
+   * repo module does not import the engine-facing `run/` layer. Required: a
+   * caller that forgot it must not get every row's activities as `null`. */
+  foldActivities: RunActivityFold,
 ): Paginated<RunSummary> {
   const conditions = listRunsConditions(filter);
   // The keyset resume, ANDed with the caller's filters rather than replacing
@@ -423,6 +428,23 @@ export function listRunSummariesPage(
       rows.map((row) => row.run.id),
       filter.ownerId,
     );
+    /* #1484 — the Activities and Rows-written columns, for this page's rows only
+       and inside the same snapshot. One grouped scan gives each log's last seq
+       (the fold's memo key) and its rows written; the fold then reads only the
+       logs it has not already counted at that seq. */
+    const logFacts = listRunLogFacts(
+      tx,
+      rows.map((row) => row.run.id),
+      filter.ownerId,
+    );
+    const activities = foldActivities(
+      tx,
+      rows.map((row) => ({
+        id: row.run.id,
+        pipelineVersionId: row.run.pipelineVersionId,
+        lastSeq: logFacts.get(row.run.id)?.lastSeq,
+      })),
+    );
     return {
       items: rows.map((row) =>
         RunSummarySchema.parse({
@@ -439,6 +461,8 @@ export function listRunSummariesPage(
              hand-written zero object, so the empty value stays the FOLD's own and
              cannot fall out of step when `RunCost` grows a field. */
           cost: costs.get(row.run.id) ?? computeRunCost([]),
+          activities: activities.get(row.run.id) ?? null,
+          rowsWritten: logFacts.get(row.run.id)?.rowsWritten ?? null,
         }),
       ),
       // The cursor's numeric slot carries `startedAt` — the ordering scalar —

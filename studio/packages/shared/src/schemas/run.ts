@@ -219,6 +219,25 @@ export const RUN_TRIGGERED_BY_LABELS: Record<RunTriggeredByKind, string> = {
  * equivalence test. For a LIVE one they may differ by whatever was billed in
  * between, which is the same "so far" the marker already declares.
  */
+/**
+ * #1484 OR35 M1 — a run's activities by how they ended, for the runs list's
+ * Activities column (`8 ✓ · 1 ✗ · 2 skipped`).
+ *
+ * - `reused`: carried over from the source run by a rerun-from-failed
+ *   (`run.reseeded`), so it succeeded THERE, not here. Kept apart from
+ *   `succeeded` because nothing in this run's log ran it.
+ * - `unfinished`: anything not terminal yet — pending, running, waiting, or (on
+ *   a run that has ended) never reached.
+ */
+export const RunActivityCountsSchema = z.object({
+  succeeded: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  skipped: z.number().int().nonnegative(),
+  reused: z.number().int().nonnegative(),
+  unfinished: z.number().int().nonnegative(),
+});
+export type RunActivityCounts = z.infer<typeof RunActivityCountsSchema>;
+
 export const RunSummarySchema = RunSchema.extend({
   /**
    * U29 (#1015) — the pipeline's IDENTITY, resolved server-side by the same join
@@ -270,6 +289,25 @@ export const RunSummarySchema = RunSchema.extend({
    * around.
    */
   cost: RunCostSchema,
+  /**
+   * #1484 OR35 M1 — how this run's activities ended, from the ENGINE's own fold
+   * (`run/activity-counts.ts`), so the list never re-derives node status.
+   *
+   * `null` when there is no fold to read: the run has not started (no
+   * `run.started`, so the reducer has seeded no node at all), or its log or bound
+   * version cannot be read. Never a zeroed object — "0 succeeded" would claim the
+   * run did nothing, which is a different and false statement (#473).
+   */
+  activities: RunActivityCountsSchema.nullable(),
+  /**
+   * #1484 OR35 M1 — the rows this run's OWN successful activities report writing
+   * (`node.succeeded` `outputs.rowsWritten`, summed over every success, so each
+   * ForEach item counts). A child run's rows are on the child's own row.
+   *
+   * `null` when no success in this run reported the figure — no copy ran, or none
+   * has succeeded yet. `0` is a copy that succeeded and wrote nothing.
+   */
+  rowsWritten: z.number().int().nonnegative().nullable(),
 });
 export type RunSummary = z.infer<typeof RunSummarySchema>;
 
