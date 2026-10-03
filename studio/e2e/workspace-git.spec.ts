@@ -127,6 +127,11 @@ test.afterAll(async ({ request }) => {
 test('a workspace connects to a repo, commits itself, imports it back, and disconnects', async ({
   page,
 }) => {
+  // One journey through every git act, each a real clone/fetch/commit against a
+  // bare repo, over a workspace every earlier spec has filled. On CI it ran 31s
+  // against the 30s default once #1476 slice 6 added a commit, a push and a
+  // check (measured from the trace: the last assertion began at 29.6s).
+  test.setTimeout(90_000);
   const problems = collectPageProblems(page);
 
   /**
