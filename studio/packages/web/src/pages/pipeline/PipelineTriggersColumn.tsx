@@ -160,8 +160,6 @@ export function PipelineTriggersColumn({
     () => (triggers === null ? null : triggersOfPipeline(triggers, pipeline)),
     [triggers, pipeline],
   );
-  // Every listed trigger is bound to one of `pipeline`'s versions (that is
-  // what `triggersOfPipeline` matched on), so the lookup always finds it.
   const nextFireLine = (t: TriggerPublic, next: TriggerNextFire | undefined, readAt: number) => {
     const text = nextFireText(t, next, readAt);
     return text === null ? '' : ` · ${text}`;
@@ -185,6 +183,8 @@ export function PipelineTriggersColumn({
     return () => clearTimeout(timer);
   }, [nextFires, shown, refresh]);
 
+  // Every listed trigger is bound to one of `pipeline`'s versions (that is
+  // what `triggersOfPipeline` matched on), so the lookup always finds it.
   const boundVersionText = (versionId: string | null): string => {
     const v = pipeline?.versions.find((x) => x.id === versionId);
     return v === undefined ? '' : `v${String(v.version)}`;
