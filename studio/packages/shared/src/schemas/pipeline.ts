@@ -1249,3 +1249,31 @@ export const ActivePipelineVersionResponseSchema = z.object({
   active: ActivePipelineVersionSchema.nullable(),
 });
 export type ActivePipelineVersionResponse = z.infer<typeof ActivePipelineVersionResponseSchema>;
+
+/**
+ * #1476 OR28 — one pipeline's saved head and live (active) version, for the
+ * pipelines list's state column. `latestVersion` is the newest SAVED version
+ * (a Debug is never the head, #1395), `null` when nothing is saved yet.
+ * `active` is the projected pointer (`GET /api/pipelines/:id/active`'s rule),
+ * `null` when never published; its `version` is `null` when the pointer names
+ * no saved version of THIS pipeline — the history list's "not listed" case,
+ * said rather than guessed.
+ */
+export const PipelineVersionStateSchema = z.object({
+  pipelineId: z.string().min(1),
+  latestVersion: z.number().int().positive().nullable(),
+  active: z
+    .object({
+      versionId: z.string().min(1),
+      version: z.number().int().positive().nullable(),
+    })
+    .nullable(),
+});
+export type PipelineVersionState = z.infer<typeof PipelineVersionStateSchema>;
+
+/** `GET /api/pipelines/version-states` — every live (unarchived) pipeline the
+ * owner has, one entry each. */
+export const PipelineVersionStatesResponseSchema = z.object({
+  items: z.array(PipelineVersionStateSchema),
+});
+export type PipelineVersionStatesResponse = z.infer<typeof PipelineVersionStatesResponseSchema>;

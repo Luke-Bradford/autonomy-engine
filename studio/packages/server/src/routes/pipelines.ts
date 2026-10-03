@@ -10,6 +10,7 @@ import {
   ManualRunRequestSchema,
   NewPipelineSchema,
   PipelineFolderSchema,
+  PipelineVersionStatesResponseSchema,
   PublishPipelineBodySchema,
   PublishPipelineResultSchema,
   ParamResolveError,
@@ -37,6 +38,7 @@ import {
   getPipelineVersion,
   getWorkspaceGit,
   isDebugVersion,
+  listPipelineVersionStates,
   listPipelineVersions,
   listPipelinesPage,
   restorePipeline,
@@ -131,6 +133,19 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
       archived: archived === 'true',
     });
   });
+
+  /**
+   * #1476 OR28 — every live pipeline's saved head and active version, for the
+   * pipelines list's state column: one read for the whole list, where the
+   * editor's per-pipeline `/active` + versions reads would be two per row.
+   * Not git-gated, like `/active`: a DB-only workspace answers `active: null`
+   * throughout. A static path, so it is matched ahead of `/:id`.
+   */
+  fastify.get('/api/pipelines/version-states', async (request) =>
+    PipelineVersionStatesResponseSchema.parse({
+      items: listPipelineVersionStates(db, request.principal.ownerId),
+    }),
+  );
 
   fastify.get<{ Params: { id: string } }>('/api/pipelines/:id', async (request) => {
     return requireOwned(
