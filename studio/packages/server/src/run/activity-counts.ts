@@ -48,7 +48,8 @@ export function activityCountsFromState(
     else counts.unfinished += 1;
   };
   for (const node of doc.nodes) tally(node.id, state.nodes[node.id]?.status);
-  for (const container of doc.containers) tally(container.id, state.containers[container.id]?.status);
+  for (const container of doc.containers)
+    tally(container.id, state.containers[container.id]?.status);
   return counts;
 }
 

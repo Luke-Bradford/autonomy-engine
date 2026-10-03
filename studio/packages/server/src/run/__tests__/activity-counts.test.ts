@@ -85,7 +85,11 @@ function summaryOf(db: Db, runId: string, fold = makeRunActivityFold(makeDocReso
 describe('#1484 runs list — Activities', () => {
   it('counts a failure and the downstream node the failure skipped', async () => {
     const { db } = freshDb();
-    const pvId = seedVersion(db, [node('a'), node('b'), node('c')], [edge('a', 'b'), edge('b', 'c')]);
+    const pvId = seedVersion(
+      db,
+      [node('a'), node('b'), node('c')],
+      [edge('a', 'b'), edge('b', 'c')],
+    );
     const runId = await drive(db, pvId, { b: { outcome: 'failure', error: 'boom' } });
 
     expect(summaryOf(db, runId).activities).toEqual({
@@ -185,7 +189,11 @@ describe('#1484 runs list — Activities', () => {
 describe('#1484 runs list — Rows written', () => {
   it("sums every success's rowsWritten", async () => {
     const { db } = freshDb();
-    const pvId = seedVersion(db, [node('a'), node('b'), node('c')], [edge('a', 'b'), edge('b', 'c')]);
+    const pvId = seedVersion(
+      db,
+      [node('a'), node('b'), node('c')],
+      [edge('a', 'b'), edge('b', 'c')],
+    );
     const runId = await drive(db, pvId, {
       a: { outputs: { rowsWritten: 66 } },
       b: { outputs: { rowsWritten: 6 } },

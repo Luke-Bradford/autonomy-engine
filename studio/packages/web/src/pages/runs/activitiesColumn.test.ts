@@ -14,7 +14,10 @@ const counts = (over: Partial<RunActivityCounts> = {}): RunActivityCounts => ({
 describe('#1484 activitiesCell', () => {
   it('draws the dense form the issue specifies, and says it in words', () => {
     expect(
-      activitiesCell({ status: 'failure', activities: counts({ succeeded: 8, failed: 1, skipped: 2 }) }),
+      activitiesCell({
+        status: 'failure',
+        activities: counts({ succeeded: 8, failed: 1, skipped: 2 }),
+      }),
     ).toEqual({ figure: '8 ✓ · 1 ✗ · 2 skipped', words: '8 succeeded, 1 failed, 2 skipped' });
   });
 

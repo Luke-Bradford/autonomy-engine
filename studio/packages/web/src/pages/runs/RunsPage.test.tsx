@@ -249,7 +249,10 @@ describe('RunsPage', () => {
     renderWithRouter(<RunsPage />);
     const row = (await screen.findByText('run_abc')).closest('tr') as HTMLElement;
     const activities = cellUnder(row, 'Activities');
-    expect(within(activities).getByText('8 ✓ · 1 ✗ · 2 skipped')).toHaveAttribute('aria-hidden', 'true');
+    expect(within(activities).getByText('8 ✓ · 1 ✗ · 2 skipped')).toHaveAttribute(
+      'aria-hidden',
+      'true',
+    );
     expect(within(activities).getByText('8 succeeded, 1 failed, 2 skipped')).toHaveClass(
       'visually-hidden',
     );

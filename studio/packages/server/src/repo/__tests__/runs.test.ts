@@ -40,7 +40,8 @@ import { makeRunActivityFold } from '../../run/activity-counts.js';
 import { makeDocResolver } from '../../run/driver.js';
 
 /** #1484 — the real Activities fold, as the runs route builds it. */
-const testFold = (db: Parameters<typeof makeDocResolver>[0]) => makeRunActivityFold(makeDocResolver(db));
+const testFold = (db: Parameters<typeof makeDocResolver>[0]) =>
+  makeRunActivityFold(makeDocResolver(db));
 
 function setupPipelineVersion(db: ReturnType<typeof freshDb>['db']) {
   const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
@@ -1048,7 +1049,9 @@ describe('listRunSummariesPage — keyset paging', () => {
       const page = listRunSummariesPage(
         db,
         { ownerId: 'local', status: 'success' },
-        { limit: 2, cursor }, testFold(db));
+        { limit: 2, cursor },
+        testFold(db),
+      );
       seen.push(...page.items.map((r) => r.id));
       if (page.nextCursor === null) break;
       cursor = decodeCursor(page.nextCursor) ?? undefined;
@@ -1091,7 +1094,12 @@ describe('listRunSummariesPage — keyset paging', () => {
     let cursor =
       first.nextCursor === null ? undefined : (decodeCursor(first.nextCursor) ?? undefined);
     while (cursor !== undefined) {
-      const page = listRunSummariesPage(db, { ownerId: 'local' }, { limit: 2, cursor }, testFold(db));
+      const page = listRunSummariesPage(
+        db,
+        { ownerId: 'local' },
+        { limit: 2, cursor },
+        testFold(db),
+      );
       rest.push(...page.items.map((r) => r.id));
       cursor = page.nextCursor === null ? undefined : (decodeCursor(page.nextCursor) ?? undefined);
     }

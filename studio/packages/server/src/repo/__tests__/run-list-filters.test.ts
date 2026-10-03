@@ -13,7 +13,8 @@ import { makeRunActivityFold } from '../../run/activity-counts.js';
 import { makeDocResolver } from '../../run/driver.js';
 
 /** #1484 — the real Activities fold, as the runs route builds it. */
-const testFold = (db: Parameters<typeof makeDocResolver>[0]) => makeRunActivityFold(makeDocResolver(db));
+const testFold = (db: Parameters<typeof makeDocResolver>[0]) =>
+  makeRunActivityFold(makeDocResolver(db));
 
 /**
  * #1484 OR35 M1 slice 2 — the runs list's one-row filter bar, server side: the
@@ -47,7 +48,9 @@ function run(db: TestDb, versionId: string, overrides: Partial<NewRun> = {}): st
 }
 
 function ids(db: TestDb, filter: Omit<ListRunSummariesFilter, 'ownerId'>, ownerId = 'local') {
-  return listRunSummariesPage(db, { ...filter, ownerId }, { limit: 100 }, testFold(db)).items.map((r) => r.id);
+  return listRunSummariesPage(db, { ...filter, ownerId }, { limit: 100 }, testFold(db)).items.map(
+    (r) => r.id,
+  );
 }
 
 function namedTrigger(db: TestDb, versionId: string, name: string): string {

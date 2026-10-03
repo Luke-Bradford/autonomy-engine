@@ -24,7 +24,10 @@ export interface ActivitiesCell {
 export function activitiesCell(run: Pick<RunSummary, 'activities' | 'status'>): ActivitiesCell {
   const counts = run.activities;
   if (counts === null) {
-    return { figure: '—', words: 'No activity counts: the run has not started, or its log cannot be read' };
+    return {
+      figure: '—',
+      words: 'No activity counts: the run has not started, or its log cannot be read',
+    };
   }
   const unfinished = TERMINAL_RUN_ROW_STATUS.has(run.status) ? 'not run' : 'in progress';
   const parts: { figure: string; words: string; n: number; always?: boolean }[] = [
