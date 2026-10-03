@@ -190,16 +190,6 @@ function readDays(
 }
 
 /**
- * The epoch-ms bounds a day range asks the server for: `from` is the first
- * day's local midnight (inclusive) and `to` the midnight AFTER the last day
- * (exclusive), so "On a day" covers the whole day whatever its length — a
- * daylight-saving day is 23 or 25 hours, which is why this steps by calendar
- * day rather than adding 24 hours.
- *
- * The VIEWER'S zone, for now: a calendar day is the reader's, not the server's.
- * When #1484's display-timezone setting lands it owns this boundary too.
- */
-/**
  * Which kind of time bound the URL is ASKING for, from the params' PRESENCE
  * rather than their validity: a date input mid-edit (a half-typed year, or just
  * cleared) holds no valid day, and a picker that inferred its mode from valid
@@ -218,6 +208,16 @@ export function hasRunFilterParams(params: URLSearchParams): boolean {
   return Object.values(RUN_FILTER_PARAMS).some((param) => params.has(param));
 }
 
+/**
+ * The epoch-ms bounds a day range asks the server for: `from` is the first
+ * day's local midnight (inclusive) and `to` the midnight AFTER the last day
+ * (exclusive), so "On a day" covers the whole day whatever its length — a
+ * daylight-saving day is 23 or 25 hours, which is why this steps by calendar
+ * day rather than adding 24 hours.
+ *
+ * The VIEWER'S zone, for now: a calendar day is the reader's, not the server's.
+ * When #1484's display-timezone setting lands it owns this boundary too.
+ */
 export function dayRangeBounds(days: { on?: string; from?: string; to?: string }): {
   from?: string;
   to?: string;
