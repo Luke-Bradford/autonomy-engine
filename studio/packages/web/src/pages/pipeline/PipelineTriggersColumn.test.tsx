@@ -276,6 +276,24 @@ describe('PipelineTriggersColumn (#1476 OR28 slice 3)', () => {
       }
     });
 
+    it('a failed re-read drops the passed time and says why, rather than leaving it on screen', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const soon = Date.now() + 10_000;
+        listTriggersMock.mockResolvedValue([trigger(schedule)]);
+        nextFiresMock.mockResolvedValue([{ triggerId: 'trg_1', at: soon, source: 'schedule' }]);
+        mount();
+        const row = (await screen.findByText('Nightly')).closest('li')!;
+        await waitFor(() => expect(row).toHaveTextContent('next scheduled'));
+        listTriggersMock.mockRejectedValue(new Error('server gone'));
+        await act(() => vi.advanceTimersByTimeAsync(16_000));
+        expect(await screen.findByRole('alert')).toHaveTextContent('server gone');
+        expect(row).not.toHaveTextContent(/next scheduled|due now/);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('a far-off time is waited for, never re-read at once (a timer that long would overflow)', async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       try {

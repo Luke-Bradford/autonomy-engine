@@ -122,7 +122,13 @@ export function PipelineTriggersColumn({
             setNextFires(next);
             setLoadError(null);
           },
-          onError: (err) => setLoadError(err instanceof Error ? err.message : String(err)),
+          onError: (err) => {
+            setLoadError(err instanceof Error ? err.message : String(err));
+            // The times it can no longer vouch for go too: a failed re-read
+            // would otherwise leave a passed time on screen with no re-read
+            // after it (the error says why they are gone).
+            setNextFires(null);
+          },
         },
       ),
     [guardedLoad],
