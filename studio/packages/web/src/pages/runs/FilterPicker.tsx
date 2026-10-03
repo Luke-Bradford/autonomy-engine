@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { LabelledControl } from '../../lib/LabelledControl';
 
 export interface FilterOption {
@@ -24,7 +25,8 @@ export function FilterPicker({
   options,
   onChange,
 }: {
-  label: string;
+  /** A node so the runs bar can pass a visually-hidden label (#1484). */
+  label: ReactNode;
   allLabel: string;
   value: string | undefined;
   options: readonly FilterOption[];

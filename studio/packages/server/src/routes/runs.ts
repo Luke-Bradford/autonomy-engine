@@ -5,6 +5,9 @@ import {
   CompleteExternalWaitBodySchema,
   RUN_SINCE_MS,
   RunAnnotationFilterSchema,
+  RunEpochBoundSchema,
+  RunSearchSchema,
+  RunTriggeredByKindListSchema,
   type RunAnnotationsResponse,
   RunSinceSchema,
   RunStatusSchema,
@@ -73,6 +76,19 @@ const ListRunsQuerystringSchema = z.object({
   // U26 — exact match against the bound version's annotations. Shape-checked
   // by the ONE schema the web also reads the URL with (see its docblock).
   annotation: RunAnnotationFilterSchema.optional(),
+  /**
+   * #1484 OR35 M1 — the one-row filter bar's axes. `kind` is a comma list of
+   * `RUN_TRIGGERED_BY_KINDS`, canonicalised; `q` is the search box; `from`/`to`
+   * are the day picker's ABSOLUTE bounds (epoch ms, `from` inclusive, `to`
+   * exclusive). Unlike `since`, a picked DAY is the viewer's calendar day, so
+   * the browser resolves it; the server's clock has no say in where it starts.
+   * `since` and `from` may both arrive, and both are lower bounds: ANDed, they
+   * only narrow.
+   */
+  kind: RunTriggeredByKindListSchema.optional(),
+  q: RunSearchSchema.optional(),
+  from: RunEpochBoundSchema.optional(),
+  to: RunEpochBoundSchema.optional(),
 });
 
 /**
@@ -140,7 +156,12 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       pipelineId,
       since,
       annotation,
+      kind,
+      q,
+      from,
+      to,
     } = ListRunsQuerystringSchema.parse(request.query);
+    const sinceBound = since === undefined ? undefined : Date.now() - RUN_SINCE_MS[since];
     const page = listRunSummariesPage(
       db,
       {
@@ -151,7 +172,16 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
         status,
         pipelineId,
         annotation,
-        startedAfter: since === undefined ? undefined : Date.now() - RUN_SINCE_MS[since],
+        kinds: kind,
+        search: q,
+        // The later of two lower bounds is the one that narrows.
+        startedAfter:
+          sinceBound === undefined
+            ? from
+            : from === undefined
+              ? sinceBound
+              : Math.max(from, sinceBound),
+        startedBefore: to,
         ownerId: request.principal.ownerId,
       },
       pageArgsFromQuery(request.query),

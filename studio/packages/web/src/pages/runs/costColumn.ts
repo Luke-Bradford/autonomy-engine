@@ -62,10 +62,9 @@ export interface CostCell {
  * `run.reseeded`'s copied nodes), because there it renders in cases the REST read
  * does not. Both are true; they differ in what is in hand.
  *
- * Note it is a different predicate from `runOriginOf`'s "manual" (no trigger and
- * no parent), which a rerun also satisfies. That one answers "who
- * started this", this one "did it reuse work" — a rerun is manual AND
- * incremental, and neither predicate implies the other's meaning.
+ * Note it is a different question from `triggeredByKind`, which also reads
+ * `rerun` for such a row. That one answers "who started this", this one "did it
+ * reuse work", and neither implies the other's meaning.
  *
  * Worded to stay TRUE when the copied frontier was EMPTY (the first node failed,
  * so nothing was reusable): "any work it reused" is then vacuous, where "excludes

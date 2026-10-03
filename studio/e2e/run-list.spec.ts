@@ -21,7 +21,7 @@ import { fluentRootReady } from './support/theme';
  * true only until another spec created a rerun; "our triggered run is absent
  * from the Child tab" is true no matter what else has run.
  */
-test('R2/U10 — the runs list names the pipeline, times the run, and filters by origin', async ({
+test('R2/U10 — the runs list names the pipeline, times the run, and filters by what started it', async ({
   page,
 }) => {
   const problems = collectPageProblems(page);
@@ -64,39 +64,24 @@ test('R2/U10 — the runs list names the pipeline, times the run, and filters by
   const duration = row.getByRole('cell').nth(durationColumn);
   await expect(duration).toHaveText(/^\d+(\.\d+)?(ms|s|m \d+s|h \d+m)$/);
 
-  // U10 — the origin tabs. This run was fired by a trigger, so it belongs to
-  // Triggered and to no other origin tab.
-  await expect(page.getByRole('tab')).toHaveCount(4);
-  await page.getByRole('tab', { name: /Triggered/ }).click();
-  await expect(page.getByRole('tab', { name: /Triggered/ })).toHaveAttribute(
-    'aria-selected',
-    'true',
-  );
+  // #1484 — what started the run is a SERVER-side filter now, a checkbox menu
+  // over the kinds. This run was a Fire now, so it is kept under "Fire now" and
+  // dropped under "Schedule"; and the filter is URL state that survives a reload.
+  const kindMenu = page.getByRole('button', { name: /^Triggered by:/ });
+  await kindMenu.click();
+  await page.getByRole('menuitemcheckbox', { name: 'Fire now' }).click();
+  await expect.poll(() => new URL(page.url()).hash).toContain('kind=manual');
   await expect(page.getByRole('row').filter({ hasText: runId })).toHaveCount(1);
-
-  await page.getByRole('tab', { name: /Child/ }).click();
+  await page.getByRole('menuitemcheckbox', { name: 'Fire now' }).click();
+  await page.getByRole('menuitemcheckbox', { name: 'Schedule' }).click();
+  await expect.poll(() => new URL(page.url()).hash).toContain('kind=schedule');
   await expect(page.getByRole('row').filter({ hasText: runId })).toHaveCount(0);
-
-  await page.getByRole('tab', { name: /Manual/ }).click();
-  await expect(page.getByRole('row').filter({ hasText: runId })).toHaveCount(0);
-
-  await page.getByRole('tab', { name: /^All/ }).click();
-  await expect(page.getByRole('row').filter({ hasText: runId })).toHaveCount(1);
-  // `all` is the default view, so it is the ABSENCE of the param.
-  expect(page.url()).not.toContain('tab=');
-
-  // U10 — the tab is URL state, which is the half a unit test cannot prove: a
-  // filtered view must survive a real RELOAD and be linkable, not just re-render.
-  await page.getByRole('tab', { name: /Triggered/ }).click();
-  expect(page.url()).toContain('tab=triggered');
+  await page.keyboard.press('Escape');
 
   await page.reload();
   await fluentRootReady(page);
-  await expect(page.getByRole('tab', { name: /Triggered/ })).toHaveAttribute(
-    'aria-selected',
-    'true',
-  );
-  await expect(page.getByRole('row').filter({ hasText: runId })).toHaveCount(1);
+  await expect(kindMenu).toHaveText(/Triggered by: Schedule/);
+  await expect(page.getByRole('row').filter({ hasText: runId })).toHaveCount(0);
 
   await expectQuiet(page, problems);
 });
@@ -367,7 +352,7 @@ test('#1083 — the runs list is served a page at a time, and extends on demand'
   const bad = await page.request.get('/api/runs?cursor=not-a-real-cursor');
   expect(bad.status()).toBe(400);
 
-  // ── The UI: Load older runs appends, and the tab count says so ─────────────
+  // ── The UI: Load older runs appends ─────────────────────────────────────────
   /* The two pages are built from the REAL summaries fetched above — the same
      rows, re-served one at a time so the boundary lands after row one. The
      intercept deliberately does NOT forward to the server: the second request
@@ -391,18 +376,112 @@ test('#1083 — the runs list is served a page at a time, and extends on demand'
 
   await expect(page.getByRole('row').filter({ hasText: newer })).toHaveCount(1);
   await expect(page.getByRole('row').filter({ hasText: older })).toHaveCount(0);
-  // OPEN-ENDED while older pages remain: the strip counts what is loaded, and a
-  // bare number there would be a census claim over a prefix.
-  await expect(page.getByRole('tab', { name: /Triggered \d+\+/ })).toHaveCount(1);
 
   await page.getByRole('button', { name: 'Load older runs' }).click();
 
   // APPENDED — the reader keeps the rows they were already looking at.
   await expect(page.getByRole('row').filter({ hasText: older })).toHaveCount(1);
   await expect(page.getByRole('row').filter({ hasText: newer })).toHaveCount(1);
-  // The walk ended, so the control goes and the count is a complete claim again.
+  // The walk ended, so the control goes.
   await expect(page.getByRole('button', { name: 'Load older runs' })).toHaveCount(0);
-  await expect(page.getByRole('tab', { name: /Triggered \d+\+/ })).toHaveCount(0);
+
+  await expectQuiet(page, problems);
+});
+
+/**
+ * #1484 OR35 M1 slice 2 — the one-row filter bar: search finds a run by the id
+ * the grid draws, by the start of its id, and by its error text; a day with no
+ * runs says so; and the bar plus the grid meet the density target at 1440×900.
+ */
+test('#1484 — the filter bar searches runs and days, in one row above a dense grid', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  const marker = `boom-${Date.now()}`;
+  const pipelineName = `Filter bar ${Date.now()}`;
+  const { pipelineId, pipelineVersionId } = await seedVersion(page, pipelineName, {
+    nodes: [{ id: 'n1', type: 'fail', config: { message: marker }, position: { x: 0, y: 0 } }],
+  });
+  const runId = await fireAndSettle(page, pipelineVersionId, 'e2e filter bar');
+
+  await page.goto('/#/monitor/runs');
+  await fluentRootReady(page);
+  const search = page.getByRole('searchbox', { name: 'Search runs' });
+  const ours = page.getByRole('row').filter({ hasText: runId });
+
+  // The error text, case-insensitively: only our run failed with this marker.
+  await search.fill(marker.toUpperCase());
+  await expect.poll(() => new URL(page.url()).hash).toContain(`q=${marker.toUpperCase()}`);
+  await expect(ours).toHaveCount(1);
+  await expect(page.locator('tr.runs-grid__row')).toHaveCount(1);
+  // The tail the grid draws, and the first 8 characters of the id.
+  for (const part of [runId.slice(-8), runId.slice(0, 8)]) {
+    await search.fill(part);
+    await expect.poll(() => new URL(page.url()).hash).toContain(`q=${part}`);
+    await expect(ours).toHaveCount(1);
+  }
+
+  // A day long before any run: the empty state, not an empty table.
+  await page.goto('/#/monitor/runs?on=2000-01-01');
+  await fluentRootReady(page);
+  await expect(page.getByLabel('Started')).toHaveValue('on');
+  await expect(page.getByLabel('Day')).toHaveValue('2000-01-01');
+  await expect(page.getByText(/No runs match these filters/)).toBeVisible();
+  await expect(page.locator('table.runs-grid')).toHaveCount(0);
+
+  // DENSITY, at the widest the bar gets: a pipeline filter (so the spend line
+  // shows) and a range of days (two date inputs), still one row.
+  await page.goto(
+    `/#/monitor/runs?pipeline=${encodeURIComponent(pipelineId)}&from=2000-01-01&to=2100-01-01`,
+  );
+  await fluentRootReady(page);
+  await expect(ours).toHaveCount(1);
+  await expect(page.getByRole('region', { name: 'Lifetime spend' })).toBeVisible();
+  const measured = await page.evaluate(() => {
+    const bar = document.querySelector('.run-filters');
+    const controls = bar ? [...bar.children].map((c) => c.getBoundingClientRect()) : [];
+    const row = document.querySelector('tr.runs-grid__row');
+    const rect = row?.getBoundingClientRect();
+    return {
+      controlCount: controls.length,
+      tops: controls.map((r) => Math.round(r.top + r.height / 2)),
+      widths: controls.map((r) => Math.round(r.width)),
+      barWidth: Math.round(bar?.getBoundingClientRect().width ?? 0),
+      firstRowTop: rect?.top ?? Infinity,
+      rowHeight: rect?.height ?? 0,
+      viewport: window.innerHeight,
+      // Where the height above the first row goes, for the failure message.
+      stack: [
+        '.content',
+        '.runs-page .page-header',
+        '.run-filters',
+        '.runs-summary-line',
+        'table.runs-grid thead',
+      ]
+        .map((sel) => {
+          const r = document.querySelector(sel)?.getBoundingClientRect();
+          return r ? `${sel}@${Math.round(r.top)}+${Math.round(r.height)}` : `${sel}:none`;
+        })
+        .join(' '),
+      sideScroll: document.documentElement.scrollWidth > window.innerWidth,
+    };
+  });
+  // Status, kind, pipeline, trigger, annotation, started, two days, Clear. (The
+  // search box is on the title row.)
+  expect(measured.controlCount).toBe(9);
+  const spread = Math.max(...measured.tops) - Math.min(...measured.tops);
+  expect(
+    spread,
+    `one row: centres ${measured.tops.join(',')} widths ${measured.widths.join(',')} of ${measured.barWidth}`,
+  ).toBeLessThanOrEqual(4);
+  expect(measured.firstRowTop, measured.stack).toBeLessThanOrEqual(200);
+  // ≥ 20 rows fit below the first one's top at 32px each.
+  expect(
+    Math.floor((measured.viewport - measured.firstRowTop) / measured.rowHeight),
+  ).toBeGreaterThanOrEqual(20);
+  expect(measured.sideScroll).toBe(false);
 
   await expectQuiet(page, problems);
 });

@@ -46,7 +46,7 @@ import { costFigure, costHeadline, costSentence, tokenSummary } from './costRead
  * ## Scope, which is the other thing a reader would get wrong
  *
  * The rollup is EVERY run of the pipeline, every version, every status, all time.
- * The rows underneath it are narrowed by status/window/trigger and the origin tab.
+ * The rows underneath it are narrowed by every other filter in the bar.
  * Those two sets are routinely different, so the scope sentence is not decoration:
  * without it the figure reads as the total of what is on screen.
  */

@@ -372,23 +372,24 @@ test('#931 — the run list states what a whole pipeline has cost, across every 
   await fluentRootReady(page);
 
   const spend = page.getByRole('region', { name: 'Lifetime spend' });
-  await expect(spend.getByRole('heading', { name: 'Lifetime spend', level: 3 })).toBeVisible();
+  // #1484 — one dense line, led by the word that scopes it.
+  await expect(spend).toHaveText(/^Lifetime spend No marginal cost/);
 
   // A KNOWN covered zero — not a priced $0.00, and not a measurement gap.
   await expect(spend.getByText('No marginal cost')).toBeVisible();
   await expect(spend.getByText('$0.00', { exact: true })).toHaveCount(0);
   await expect(spend.getByText('Cost unknown')).toHaveCount(0);
 
-  // The SUM across runs, and the scope that stops it reading as the rows' total.
-  await expect(spend.getByText(/Across all 2 runs, every version/)).toBeVisible();
-  await expect(spend.getByText(/not just the runs listed below/)).toBeVisible();
-  await expect(
-    spend.getByText(/2 billed exchanges, every one a subscription or CLI call/),
-  ).toBeVisible();
+  // The SUM across runs, and the scope that stops it reading as the rows' total —
+  // #1484 moved these caveats off the page into the `?` button's tooltip, which
+  // opens on keyboard focus as well as hover.
+  await spend.getByRole('button', { name: 'About lifetime spend' }).focus();
+  const caveats = page.getByRole('tooltip');
+  await expect(caveats).toContainText(/Across all 2 runs, every version/);
+  await expect(caveats).toContainText(/not just the runs listed below/);
+  await expect(caveats).toContainText(/2 billed exchanges, every one a subscription or CLI call/);
   // The exclusion the rollup's own scoping forces, said out loud.
-  await expect(
-    spend.getByText(/Excludes what any sub-pipeline this one calls spent/),
-  ).toBeVisible();
+  await expect(caveats).toContainText(/Excludes what any sub-pipeline this one calls spent/);
 
   // No pipeline filter, no claim about any one pipeline's spend.
   await page.goto('/#/monitor/runs');
@@ -401,7 +402,6 @@ test('#931 — the run list states what a whole pipeline has cost, across every 
   await fluentRootReady(page);
   await expect(page.getByText(/No runs match these filters/)).toBeVisible();
   await expect(spend.getByText('No marginal cost')).toBeVisible();
-  await expect(spend.getByText(/Across all 2 runs/)).toBeVisible();
 
   await expectQuiet(page, problems);
 });

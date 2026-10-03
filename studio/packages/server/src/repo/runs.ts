@@ -1,4 +1,18 @@
-import { and, asc, count, eq, exists, gte, inArray, ne, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  eq,
+  exists,
+  gte,
+  inArray,
+  lt,
+  ne,
+  or,
+  sql,
+  type SQL,
+  type SQLWrapper,
+} from 'drizzle-orm';
 import {
   computeRunCost,
   NewRunSchema,
@@ -10,6 +24,8 @@ import {
   type RunSummary,
   type RunLifecyclePatch,
   type RunStatus,
+  type RunTriggeredByKind,
+  type EngineEvent,
   type Paginated,
 } from '@autonomy-studio/shared';
 import { pipelines, pipelineVersions, runEvents, runs, triggers } from '../db/schema.js';
@@ -74,9 +90,8 @@ export interface ListRunsFilter {
    *
    * The epoch is the primitive; the WINDOW (`?since=24h`) is the wire/UI
    * vocabulary that resolves to one, and it resolves server-side
-   * (`RUN_SINCE_MS`). There is deliberately no upper bound to pair with it —
-   * nothing consumes one (the presets are all "the last N"), and a filter field
-   * no caller sets is a field nobody maintains.
+   * (`RUN_SINCE_MS`). #1484 adds an ABSOLUTE form beside it: the day picker's
+   * `?from=` lands here too, and `startedBefore` below is its upper bound.
    *
    * STATED, not discovered later: `admitQueuedRun` RE-STAMPS `started_at` when a
    * durably-queued fire is admitted, so a `queued` run enters this window when
@@ -85,6 +100,13 @@ export interface ListRunsFilter {
    * `queued_at` is the column that records the enqueue, and it is not this axis.
    */
   startedAfter?: number;
+  /**
+   * #1484 OR35 M1 — the day picker's EXCLUSIVE upper bound on `started_at`
+   * (`?to=`, the next day's midnight in the viewer's zone). Exclusive so two
+   * adjacent days never both hold the run stamped on the midnight between them.
+   * The `admitQueuedRun` re-stamp caveat above applies to it equally.
+   */
+  startedBefore?: number;
 }
 
 /**
@@ -105,6 +127,67 @@ export interface ListRunSummariesFilter extends ListRunsFilter {
   /** U26 — runs whose BOUND version carries this annotation, matched exactly
    * (case-sensitive, like the version doc stores it). */
   annotation?: string;
+  /**
+   * #1484 OR35 M1 — runs whose `triggeredByKind` is one of these. Judged by
+   * `RUN_TRIGGERED_BY_SQL` itself, in the `WHERE`, so the filter and the column
+   * the grid draws are one classifier and cannot disagree about a run. An empty
+   * array is not "no filter"; the route never sends one (`commaListSchema` is
+   * `min(1)`), and this would match nothing.
+   */
+  kinds?: readonly RunTriggeredByKind[];
+  /**
+   * #1484 OR35 M1 — the search box: a run whose id CONTAINS the text (the grid
+   * draws the id's tail, and every id begins `run_`, so a prefix match would
+   * find nothing the operator can see), or whose pipeline name, trigger name,
+   * failure error or finishing reason contains it case-insensitively.
+   */
+  search?: string;
+}
+
+/**
+ * The event types whose text the search reads, and the payload field each keeps
+ * it in. Typed against the event union so a renamed event or field is a compile
+ * error here rather than a search that silently stops finding failures.
+ */
+const SEARCHED_EVENT_TEXT: {
+  [T in 'node.failed' | 'run.finished']: keyof Extract<EngineEvent, { type: T }>;
+} = {
+  'node.failed': 'error',
+  'run.finished': 'reason',
+};
+
+/**
+ * The search predicate. `instr`, not `LIKE`: every value is a bound parameter
+ * and `instr` has no wildcards, so a `%` or `_` the operator types is literal
+ * text with no escaping to get wrong. `lower()` folds ASCII only, which is
+ * SQLite's own limit and is stated rather than worked around: a non-ASCII name
+ * matches only in the case it was typed. The run id is
+ * matched AS TYPED, because ids are case-sensitive.
+ *
+ * The error arm is a correlated `EXISTS` over that run's events, through
+ * `run_events_run_id_idx`, reading only the two event types above. Error text is
+ * withheld from the log at EMIT time for a secure node (`engine.redact`), and the
+ * owner can already read every event through `GET /api/runs/:id/events`, so the
+ * search finds nothing the caller could not open.
+ */
+function runSearchCondition(text: string): SQL {
+  // Folded by SQLite on BOTH sides, so needle and haystack go through one
+  // `lower()` (a JS `toLowerCase()` would fold non-ASCII the column never is).
+  const contains = (column: SQLWrapper) => sql`instr(lower(${column}), lower(${text})) > 0`;
+  const eventText = sql.join(
+    Object.entries(SEARCHED_EVENT_TEXT).map(
+      ([type, field]) =>
+        sql`(${runEvents.type} = ${type} and ${contains(sql`json_extract(${runEvents.payload}, ${`$.${field}`})`)})`,
+    ),
+    sql` or `,
+  );
+  const arms = [
+    sql`instr(${runs.id}, ${text}) > 0`,
+    contains(pipelines.name),
+    contains(triggers.name),
+    sql`exists (select 1 from ${runEvents} where ${runEvents.runId} = ${runs.id} and (${eventText}))`,
+  ];
+  return sql`(${sql.join(arms, sql` or `)})`;
 }
 
 function listRunsConditions(filter: ListRunsFilter) {
@@ -129,6 +212,9 @@ function listRunsConditions(filter: ListRunsFilter) {
   }
   if (filter.startedAfter !== undefined) {
     conditions.push(gte(runs.startedAt, filter.startedAfter));
+  }
+  if (filter.startedBefore !== undefined) {
+    conditions.push(lt(runs.startedAt, filter.startedBefore));
   }
   return conditions;
 }
@@ -212,7 +298,14 @@ export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
  * only re-orders the join so `pipelines` leads). MEASURED again for the
  * `annotation` axis: still `runs_owner_id_idx` + the temp b-tree, plus one
  * correlated `SCAN je EXISTS VIRTUAL TABLE` per joined version row — a scan of
- * that version's own annotations, at most `MAX_ANNOTATIONS`. `listRuns` issues no
+ * that version's own annotations, at most `MAX_ANNOTATIONS`. MEASURED for #1484's
+ * three axes: `startedBefore` and `search` keep `runs_owner_id_idx` + the temp
+ * b-tree, the search adding one correlated `SEARCH run_events USING INDEX
+ * run_events_run_id_idx` per owner row; `kinds` evaluates `RUN_TRIGGERED_BY_SQL`
+ * in the `WHERE` as well as the select list, so its two correlated subqueries
+ * run twice per owner row, and one of them is the `SCAN webhook_deliveries` the
+ * select already paid for (its index is #1410). Accepted at the same scale, and
+ * re-measured by OR19. `listRuns` issues no
  * `ORDER BY` at all, yet the page consuming it
  * claimed rows arrived "newest-first as the server returns them" — SQLite's row
  * order is an implementation detail, so that was never a promise anything kept.
@@ -271,6 +364,14 @@ export function listRunSummariesPage(
     conditions.push(
       sql`exists (select 1 from json_each(${pipelineVersions.annotations}) as je where je.value = ${filter.annotation})`,
     );
+  }
+  // #1484 — both read JOINED columns too: the kind CASE reads the version and
+  // the trigger, and the search reads the pipeline and trigger names.
+  if (filter.kinds !== undefined) {
+    conditions.push(inArray(RUN_TRIGGERED_BY_SQL, [...filter.kinds]));
+  }
+  if (filter.search !== undefined) {
+    conditions.push(runSearchCondition(filter.search));
   }
   /* #931 — the rows and their costs are read inside ONE transaction, so both come
      from a single consistent SQLite snapshot and a metered event appended between

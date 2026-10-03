@@ -4496,26 +4496,76 @@ button.danger {
   font-size: 12px;
 }
 
-/* U26 — the Monitor's filter pane. A wrapping row rather than a fixed grid: it
-   sits above the tab strip on every width, and its controls are plain selects,
-   so the only thing it genuinely needs is not to stack into a column on a wide
-   screen. Richer controls (a Fluent combobox, saved views) are deferred polish —
-   this makes the axis reachable, which is the part that was missing. */
+/* U26 + #1484 — the runs list's filter bar: ONE row at 1440px. The labels are
+   visually hidden (the "All …" options name each axis), the controls are
+   narrow, and the search box takes whatever width is left. It may still wrap on
+   a narrow window rather than push the page sideways. */
 .run-filters {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
+  align-items: center;
+  gap: 0.375rem;
+  margin-bottom: 0.375rem;
 }
 
-.run-filters label,
+/* Measured at 1440×900 beside the hub nav: the bar has ~1080px, and at the
+   app's default control size its widest state (a range of days plus Clear)
+   needed ~1240px. Data-sized controls (13px, the grid's own size) and 7rem
+   selects bring that to ~1050px. */
+.run-filters select,
+.run-filters input,
+.run-filters button {
+  font-size: 13px;
+  padding: 0.2rem 0.35rem;
+}
+
+/* #1484 — the density target is the first run at y ≤ 200 at 1440×900. Measured
+   before this rule: a 55px title row (an h2's default margins), then the bar,
+   the spend line and the table's own top margin put it at 226. The title row
+   is one control high, and the gaps between the bands are the bar's own. */
+.runs-page > .page-header {
+  margin-bottom: 0.375rem;
+}
+
+.runs-page > .page-header h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.runs-page > table.runs-grid {
+  margin-top: 0;
+}
+
+/* The search box, on the title row between the heading and the view toggle. */
+.runs-search {
+  flex: 0 1 24rem;
+  margin: 0 0.75rem 0 auto;
+}
+
+.runs-search input {
+  width: 100%;
+  font-size: 13px;
+}
+
+/* Capped like the selects: one long kind label ("Tumbling window") must not
+   push the bar onto a second row. */
+.run-filters__menu {
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .run-filters .labelled-control:not(.config-field) {
   display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  font-size: 0.8rem;
-  color: var(--muted);
+  align-items: center;
+}
+
+/* #1484 — a reversed day range is refused (`readRunFilters`), and each date
+   input's `min`/`max` makes it natively `:invalid` — drawn, so a range that
+   narrows nothing does not look like one that does. */
+.run-filters input:invalid {
+  outline: 1px solid var(--error);
 }
 
 /* #1484 — a native select is as wide as its longest option, so one long pipeline
@@ -4524,14 +4574,7 @@ button.danger {
    on a 1440px screen). Capped; the closed control ellipsizes, the open list
    still shows every name in full. */
 .run-filters select {
-  max-width: 16rem;
-}
-
-/* U10 — the runs list's origin tabs are Fluent's own `TabList`, so only the
-   count badge inside each tab needs a rule of its own. */
-.run-tab-count {
-  color: var(--muted);
-  font-size: 0.75rem;
+  max-width: 7rem;
 }
 
 /* The version number beside a run's pipeline NAME — present but subordinate to
@@ -4556,25 +4599,21 @@ button.danger {
   font-size: 0.8rem;
 }
 
-/* #931 (U27 slice 2) — the filtered pipeline's lifetime spend, above the rows.
-   No panel chrome of its own: the tiles inside are `.monitor-tiles`, shared with
-   the AI-activity page, because the two show the same kind of number from the
-   same kind of bounded aggregate and a second visual treatment would imply
-   otherwise. All this rule owns is the heading's weight and the block's rhythm. */
-.lifetime-spend {
-  margin-bottom: 1rem;
+/* #931 + #1484 — the filtered pipeline's lifetime spend, as one dense line. */
+.runs-summary-line {
+  font-size: 13px;
+  margin-bottom: 0.375rem;
 }
 
-.lifetime-spend h3 {
-  margin: 0;
-  font-size: 0.95rem;
+.runs-summary-line__label {
+  color: var(--muted);
 }
 
-/* The caveats. Deliberately not a notice or an alert — they qualify the figure
-   permanently rather than reporting an event, and the page already runs as many
-   live regions as it should. */
-.lifetime-spend .page-hint {
-  margin-top: 0.35rem;
+.runs-summary-line__help {
+  margin-left: 0.4rem;
+  padding: 0 0.4rem;
+  font-size: 12px;
+  line-height: 1.2;
 }
 
 /* --- #1476 OR28: the editor's Triggers column ------------------------------ */

@@ -4,7 +4,7 @@ import { HUBS } from '../shell/hubs';
 import { listRuns } from '../api/runs';
 import { usePagedList } from '../hooks/usePagedList';
 import { runStatusLabel } from './runs/runStatus';
-import { NO_RUNS_YET } from './runs/runOrigin';
+import { NO_RUNS_YET } from './runs/runFilters';
 import { runDetailPath } from './runs/runPath';
 import { formatWhen } from './runs/format';
 import { versionLabel } from '../lib/versionLabel';
@@ -40,9 +40,10 @@ const fetchRecentRuns = (
  *
  * What it shows is a PREFIX, not a census: the newest few runs, with no counts
  * and no totals anywhere on the page. The distinction is one this repo has
- * already paid for — `RunsPage`'s origin tabs render `12+` rather than a count
- * over the rows that happen to be loaded, because a derived display must say
- * something about the DATA, not about what the client fetched. Home fetches
+ * already paid for — `RunsPage` once counted its origin tabs over the rows that
+ * happened to be loaded, and had to render `12+` to stay honest, because a
+ * derived display must say something about the DATA, not about what the client
+ * fetched (#1484 moved that filter to the server). Home fetches
  * exactly one page and never walks: there is deliberately no "load more" here,
  * and `hasMore` is ignored rather than surfaced.
  *
