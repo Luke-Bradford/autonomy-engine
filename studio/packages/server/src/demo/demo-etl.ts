@@ -61,14 +61,6 @@ export const DEMO_FOLDER = 'Demo';
 const P = 'Demo — ';
 
 /**
- * Where one owner's demo lives: `<demoRoot>/<ownerId>`. Per owner so two owners
- * never share a warehouse or read each other's reports through a connection
- * rooted there. Containment-asserted like `checkoutDirFor` (`git/checkout.ts`):
- * a hostile ownerId must not resolve outside the root. Unlike a checkout dir,
- * the root itself is refused too: an owner's demo is never the whole root.
- * String-level; `seedDemo` re-checks the canonical path once the dir exists.
- */
-/**
  * #1481 OR32 — the demo root, resolved once at boot: the call-time option, then
  * `AUTONOMY_DEMO_ROOT`, then `<AUTONOMY_DATA_DIR>/demo` (the data dir Docker
  * mounts), then `demo/` beside the database. Always absolute — the demo's
@@ -88,6 +80,14 @@ export function resolveDemoRoot(
   return resolve(dirname(resolve(dbPath)), 'demo');
 }
 
+/**
+ * Where one owner's demo lives: `<demoRoot>/<ownerId>`. Per owner so two owners
+ * never share a warehouse or read each other's reports through a connection
+ * rooted there. Containment-asserted like `checkoutDirFor` (`git/checkout.ts`):
+ * a hostile ownerId must not resolve outside the root. Unlike a checkout dir,
+ * the root itself is refused too: an owner's demo is never the whole root.
+ * String-level; `seedDemo` re-checks the canonical path once the dir exists.
+ */
 export function demoDirFor(demoRoot: string, ownerId: string): string {
   const root = resolve(demoRoot);
   const dir = resolve(root, ownerId);
