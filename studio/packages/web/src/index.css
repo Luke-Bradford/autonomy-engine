@@ -4452,25 +4452,31 @@ button.danger {
 }
 
 /* Column shares, in header order: Pipeline · Status · Triggered by · Started ·
-   Duration · Cost · Run ID. */
+   Duration · Activities · Rows written · Cost · Run ID. */
 .runs-grid th:nth-child(1) {
-  width: 28%;
-}
-.runs-grid th:nth-child(2) {
-  width: 9%;
-}
-.runs-grid th:nth-child(3) {
   width: 19%;
 }
-.runs-grid th:nth-child(4) {
-  width: 14%;
-}
-.runs-grid th:nth-child(5),
-.runs-grid th:nth-child(6) {
+.runs-grid th:nth-child(2) {
   width: 8%;
 }
-.runs-grid th:nth-child(7) {
+.runs-grid th:nth-child(3) {
+  width: 15%;
+}
+.runs-grid th:nth-child(4) {
+  width: 12%;
+}
+.runs-grid th:nth-child(5) {
+  width: 7%;
+}
+.runs-grid th:nth-child(6) {
   width: 14%;
+}
+.runs-grid th:nth-child(7),
+.runs-grid th:nth-child(8) {
+  width: 7%;
+}
+.runs-grid th:nth-child(9) {
+  width: 11%;
 }
 
 .runs-grid .num,

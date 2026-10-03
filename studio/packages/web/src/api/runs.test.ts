@@ -44,6 +44,8 @@ const sampleRunSummary = {
   /* #931 — the summary now carries the run's cost. `computeRunCost([])` rather
      than a literal, so the fixture cannot drift from `RunCost`'s own shape. */
   cost: computeRunCost([]),
+  activities: { succeeded: 2, failed: 0, skipped: 1, reused: 0, unfinished: 0 },
+  rowsWritten: 92,
 };
 
 const sampleEvent = {

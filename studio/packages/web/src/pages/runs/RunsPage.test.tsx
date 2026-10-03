@@ -159,6 +159,8 @@ function run(overrides: Partial<RunSummary> = {}): RunSummary {
     debug: false,
     annotations: [],
     triggerName: 'Every morning',
+    activities: null,
+    rowsWritten: null,
     ...overrides,
   };
 }
@@ -226,6 +228,47 @@ describe('RunsPage', () => {
     );
     expect(cost).toHaveTextContent('$0.03');
     expect(cost).not.toHaveTextContent(/so far/);
+  });
+
+  /**
+   * #1484 — the Activities and Rows-written columns, each under its OWN header
+   * (`cellUnder` fails if a `<th>` and its `<td>` drift apart). The glyphs are
+   * hidden from assistive tech, which reads the counts in words.
+   */
+  it("shows each run's activity counts and rows written under their headers", async () => {
+    listMock.mockResolvedValue(
+      pageOf([
+        run({
+          id: 'run_abc',
+          status: 'failure',
+          activities: { succeeded: 8, failed: 1, skipped: 2, reused: 0, unfinished: 0 },
+          rowsWritten: 1092,
+        }),
+      ]),
+    );
+    renderWithRouter(<RunsPage />);
+    const row = (await screen.findByText('run_abc')).closest('tr') as HTMLElement;
+    const activities = cellUnder(row, 'Activities');
+    expect(within(activities).getByText('8 ✓ · 1 ✗ · 2 skipped')).toHaveAttribute(
+      'aria-hidden',
+      'true',
+    );
+    expect(within(activities).getByText('8 succeeded, 1 failed, 2 skipped')).toHaveClass(
+      'visually-hidden',
+    );
+    expect(cellUnder(row, 'Rows written')).toHaveTextContent('1,092');
+    expect(cellUnder(row, 'Rows written')).toHaveAttribute(
+      'title',
+      "Rows this run's successful activities wrote",
+    );
+  });
+
+  it('draws the em-dash in both new columns when the server has no figure', async () => {
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_abc', status: 'queued' })]));
+    renderWithRouter(<RunsPage />);
+    const row = (await screen.findByText('run_abc')).closest('tr') as HTMLElement;
+    expect(cellUnder(row, 'Activities')).toHaveTextContent('—No activity counts');
+    expect(cellUnder(row, 'Rows written')).toHaveTextContent(/^—$/);
   });
 
   it('a run that billed nothing says so, rather than showing $0.00', async () => {

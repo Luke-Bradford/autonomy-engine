@@ -9,6 +9,12 @@ import { createRun, listRunSummariesPage, type ListRunSummariesFilter } from '..
 import { createTrigger } from '../triggers.js';
 import { decodeCursor, type CursorKey } from '../pagination.js';
 import { freshDb } from './helpers.js';
+import { makeRunActivityFold } from '../../run/activity-counts.js';
+import { makeDocResolver } from '../../run/driver.js';
+
+/** #1484 — the real Activities fold, as the runs route builds it. */
+const testFold = (db: Parameters<typeof makeDocResolver>[0]) =>
+  makeRunActivityFold(makeDocResolver(db));
 
 /**
  * #1484 OR35 M1 slice 2 — the runs list's one-row filter bar, server side: the
@@ -42,7 +48,9 @@ function run(db: TestDb, versionId: string, overrides: Partial<NewRun> = {}): st
 }
 
 function ids(db: TestDb, filter: Omit<ListRunSummariesFilter, 'ownerId'>, ownerId = 'local') {
-  return listRunSummariesPage(db, { ...filter, ownerId }, { limit: 100 }).items.map((r) => r.id);
+  return listRunSummariesPage(db, { ...filter, ownerId }, { limit: 100 }, testFold(db)).items.map(
+    (r) => r.id,
+  );
 }
 
 function namedTrigger(db: TestDb, versionId: string, name: string): string {
@@ -207,7 +215,7 @@ describe('#1484 — the runs list search', () => {
     const walked: string[] = [];
     let cursor: CursorKey | undefined;
     do {
-      const page = listRunSummariesPage(s.db, filter, { limit: 1, cursor });
+      const page = listRunSummariesPage(s.db, filter, { limit: 1, cursor }, testFold(s.db));
       walked.push(...page.items.map((r) => r.id));
       cursor = page.nextCursor === null ? undefined : (decodeCursor(page.nextCursor) ?? undefined);
     } while (cursor !== undefined);

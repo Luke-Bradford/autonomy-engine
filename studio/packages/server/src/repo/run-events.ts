@@ -204,6 +204,38 @@ export function aggregateRunCosts(
 }
 
 /**
+ * #1484 OR35 M1 — each run's highest event `seq`, the version of its log. The log
+ * is append-only and `seq` strictly grows, so `(runId, lastSeq)` names exactly one
+ * log, and `run/activity-counts.ts` memoises its fold on it. A run with no events
+ * has no entry.
+ *
+ * Index-only — `run_events_run_id_seq_idx` covers `(run_id, seq)` — so asking on
+ * every list request does not read a single payload. Owner-scoped when `ownerId`
+ * is passed, as `aggregateRunCosts` is.
+ */
+export function listRunLastSeqs(
+  db: Db,
+  runIds: readonly string[],
+  ownerId?: string,
+): Map<string, number> {
+  const seqs = new Map<string, number>();
+  for (let i = 0; i < runIds.length; i += RUN_ID_BIND_CHUNK) {
+    const chunk = runIds.slice(i, i + RUN_ID_BIND_CHUNK);
+    const conditions = [inArray(runEvents.runId, chunk)];
+    if (ownerId !== undefined) conditions.push(eq(runs.ownerId, ownerId));
+    const rows = db
+      .select({ runId: runEvents.runId, lastSeq: max(runEvents.seq) })
+      .from(runEvents)
+      .innerJoin(runs, eq(runEvents.runId, runs.id))
+      .where(and(...conditions))
+      .groupBy(runEvents.runId)
+      .all();
+    for (const row of rows) if (row.lastSeq !== null) seqs.set(row.runId, row.lastSeq);
+  }
+  return seqs;
+}
+
+/**
  * #2 L6 / #599 — the per-pipeline cost rollup's BOUNDED aggregation: SUM/COUNT
  * `activity.metered` cost + tokens across ALL runs of a pipeline (all versions)
  * in a fixed number of scalar queries whose result set is O(1), rather than

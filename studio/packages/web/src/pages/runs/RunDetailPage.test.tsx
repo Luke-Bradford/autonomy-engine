@@ -3088,6 +3088,8 @@ describe('RunDetailPage — the reruns of this run', () => {
       triggerName: null,
       triggeredByKind: 'rerun',
       cost: computeRunCost([]),
+      activities: null,
+      rowsWritten: null,
     } as RunSummary;
   }
 

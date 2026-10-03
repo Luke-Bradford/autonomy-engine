@@ -36,6 +36,12 @@ import { decodeCursor, type CursorKey } from '../pagination.js';
 import { freshDb } from './helpers.js';
 import { runs } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
+import { makeRunActivityFold } from '../../run/activity-counts.js';
+import { makeDocResolver } from '../../run/driver.js';
+
+/** #1484 — the real Activities fold, as the runs route builds it. */
+const testFold = (db: Parameters<typeof makeDocResolver>[0]) =>
+  makeRunActivityFold(makeDocResolver(db));
 
 function setupPipelineVersion(db: ReturnType<typeof freshDb>['db']) {
   const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
@@ -705,7 +711,7 @@ function summariesOf(
   db: ReturnType<typeof freshDb>['db'],
   filter: Parameters<typeof listRunSummariesPage>[1] = {},
 ) {
-  return listRunSummariesPage(db, filter, { limit: MAX_PAGE_SIZE }).items;
+  return listRunSummariesPage(db, filter, { limit: MAX_PAGE_SIZE }, testFold(db)).items;
 }
 
 describe('listRunSummaries (R2)', () => {
@@ -957,7 +963,7 @@ describe('listRunSummariesPage — keyset paging', () => {
     let cursor: CursorKey | undefined;
     let pages = 0;
     for (;;) {
-      const page = listRunSummariesPage(db, { ownerId: 'local' }, { limit, cursor });
+      const page = listRunSummariesPage(db, { ownerId: 'local' }, { limit, cursor }, testFold(db));
       pages += 1;
       seen.push(...page.items.map((r) => r.id));
       if (page.nextCursor === null) return { seen, pages };
@@ -976,14 +982,14 @@ describe('listRunSummariesPage — keyset paging', () => {
   it('returns one page newest-first, and a cursor only when older rows exist', () => {
     const { db, newestFirst } = setup(7);
 
-    const first = listRunSummariesPage(db, { ownerId: 'local' }, { limit: 3 });
+    const first = listRunSummariesPage(db, { ownerId: 'local' }, { limit: 3 }, testFold(db));
     expect(first.items.map((r) => r.id)).toEqual(newestFirst.slice(0, 3));
     expect(first.nextCursor).not.toBeNull();
 
     // The LAST page fits exactly, which is the fetch-one-extra probe's whole
     // point: a `nextCursor` here would promise an older page that does not
     // exist, and the reader would be offered a Load more that returns nothing.
-    const exact = listRunSummariesPage(db, { ownerId: 'local' }, { limit: 7 });
+    const exact = listRunSummariesPage(db, { ownerId: 'local' }, { limit: 7 }, testFold(db));
     expect(exact.items).toHaveLength(7);
     expect(exact.nextCursor).toBeNull();
   });
@@ -1044,6 +1050,7 @@ describe('listRunSummariesPage — keyset paging', () => {
         db,
         { ownerId: 'local', status: 'success' },
         { limit: 2, cursor },
+        testFold(db),
       );
       seen.push(...page.items.map((r) => r.id));
       if (page.nextCursor === null) break;
@@ -1076,7 +1083,7 @@ describe('listRunSummariesPage — keyset paging', () => {
     const queued = createRun(db, buildRunInput(version.id, { status: 'queued' }));
     db.update(runs).set({ startedAt: 500 }).where(eq(runs.id, queued.id)).run();
 
-    const first = listRunSummariesPage(db, { ownerId: 'local' }, { limit: 2 });
+    const first = listRunSummariesPage(db, { ownerId: 'local' }, { limit: 2 }, testFold(db));
     expect(first.items.map((r) => r.id)).toEqual([older[3], older[2]]);
 
     // Admission re-stamps `started_at` to NOW — far newer than the cursor, so
@@ -1087,7 +1094,12 @@ describe('listRunSummariesPage — keyset paging', () => {
     let cursor =
       first.nextCursor === null ? undefined : (decodeCursor(first.nextCursor) ?? undefined);
     while (cursor !== undefined) {
-      const page = listRunSummariesPage(db, { ownerId: 'local' }, { limit: 2, cursor });
+      const page = listRunSummariesPage(
+        db,
+        { ownerId: 'local' },
+        { limit: 2, cursor },
+        testFold(db),
+      );
       rest.push(...page.items.map((r) => r.id));
       cursor = page.nextCursor === null ? undefined : (decodeCursor(page.nextCursor) ?? undefined);
     }
@@ -1099,7 +1111,7 @@ describe('listRunSummariesPage — keyset paging', () => {
     expect(seen).toEqual(older.slice().reverse());
     // A fresh read finds it at the head, which is where a just-admitted run
     // belongs — the miss is confined to the walk that was already under way.
-    const fresh = listRunSummariesPage(db, { ownerId: 'local' }, { limit: 2 });
+    const fresh = listRunSummariesPage(db, { ownerId: 'local' }, { limit: 2 }, testFold(db));
     expect(fresh.items[0]!.id).toBe(queued.id);
   });
 });

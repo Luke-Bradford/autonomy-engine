@@ -13,6 +13,12 @@ import { createPipeline } from '../pipelines.js';
 import { createRun, listRunSummariesPage } from '../runs.js';
 import { createTrigger, deleteTrigger } from '../triggers.js';
 import { freshDb } from './helpers.js';
+import { makeRunActivityFold } from '../../run/activity-counts.js';
+import { makeDocResolver } from '../../run/driver.js';
+
+/** #1484 — the real Activities fold, as the runs route builds it. */
+const testFold = (db: Parameters<typeof makeDocResolver>[0]) =>
+  makeRunActivityFold(makeDocResolver(db));
 
 /**
  * #1484 OR35 M1 — `RUN_TRIGGERED_BY_SQL`'s truth table, read back through the
@@ -72,7 +78,7 @@ function run(db: TestDb, versionId: string, overrides: Partial<NewRun> = {}): st
 }
 
 function kindOf(db: TestDb, runId: string): RunTriggeredByKind | undefined {
-  return listRunSummariesPage(db, { ownerId: 'local' }, { limit: 100 }).items.find(
+  return listRunSummariesPage(db, { ownerId: 'local' }, { limit: 100 }, testFold(db)).items.find(
     (r) => r.id === runId,
   )?.triggeredByKind;
 }

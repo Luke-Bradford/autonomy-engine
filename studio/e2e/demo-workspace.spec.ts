@@ -84,8 +84,10 @@ test.describe('#1481 the demo workspace', () => {
     expect(again.status()).toBe(200);
     const seeded = (await again.json()) as Seeded;
 
+    const runIds: Record<string, string> = {};
     for (const key of ['1', '2', '3', '4']) {
       const runId = await runDemo(page, seeded, key);
+      runIds[key] = runId;
       expect(await statusOf(page, runId), `demo pipeline ${key}`).toBe('success');
       if (key === '3') {
         const written = Object.fromEntries(
@@ -105,6 +107,36 @@ test.describe('#1481 the demo workspace', () => {
     for (const name of NAMES.slice(2)) {
       await expect(page.getByRole('row').filter({ hasText: name }).first()).toBeVisible();
     }
+
+    // #1484 OR35 M1 — the Activities and Rows-written columns, from the server's
+    // fold of each run. Demo 3: the If takes `true`, so `mark_clean` is the one
+    // skipped activity, and its three copies write 66 + 6 + 20. Demo 2: a
+    // sequential ForEach over two files, whose 49 + 43 rows are summed across
+    // items. Demo 5: one failed copy, which reports no rows written.
+    // At the issue's 1440×900 target, not the suite's wider default.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const headers = await page.getByRole('columnheader').allTextContents();
+    const cell = (runId: string, header: string) =>
+      page
+        .getByRole('row')
+        .filter({ hasText: runId })
+        .getByRole('cell')
+        .nth(headers.indexOf(header));
+    expect(headers).toEqual(expect.arrayContaining(['Activities', 'Rows written']));
+    await expect(cell(runIds['3']!, 'Activities')).toContainText('7 ✓ · 1 skipped');
+    await expect(cell(runIds['3']!, 'Activities')).toHaveAttribute(
+      'title',
+      '7 succeeded, 1 skipped',
+    );
+    await expect(cell(runIds['3']!, 'Rows written')).toHaveText('92');
+    // Drawn whole at 1440px, not cut to an ellipsis that would hide a count.
+    expect(
+      await cell(runIds['3']!, 'Activities').evaluate((td) => td.scrollWidth <= td.clientWidth),
+    ).toBe(true);
+    await expect(cell(runIds['2']!, 'Activities')).toContainText('5 ✓');
+    await expect(cell(runIds['2']!, 'Rows written')).toHaveText('92');
+    await expect(cell(broken, 'Activities')).toContainText('0 ✓ · 1 ✗');
+    await expect(cell(broken, 'Rows written')).toHaveText('—');
 
     await page.goto('/#/author/pipelines');
     await page.getByRole('button', { name: 'Remove demo' }).click();

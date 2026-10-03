@@ -30,6 +30,7 @@ import {
 } from '../repo/index.js';
 import { getExternalWaitByAttempt, listPendingExternalWaitsByRun } from '../repo/external-waits.js';
 import { deriveExternalWaitToken } from '../webhooks/external-wait-token.js';
+import { makeRunActivityFold } from '../run/activity-counts.js';
 import { makeDocResolver } from '../run/driver.js';
 import { NotFoundError } from '../errors.js';
 import {
@@ -103,6 +104,11 @@ const ListRunsQuerystringSchema = z.object({
 export const runsRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
   const resolveDoc = makeDocResolver(db);
+  // #1484 — one per app, so its memo of settled runs' counts outlives a request.
+  const foldActivities = makeRunActivityFold(resolveDoc, {
+    onUnreadable: (runId, err) =>
+      fastify.log.warn({ err, runId }, 'runs list: cannot count the activities of this run'),
+  });
 
   /**
    * R2 — the Monitor's list read-model. Each item is a `RunSummary`: every field
@@ -185,6 +191,7 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
         ownerId: request.principal.ownerId,
       },
       pageArgsFromQuery(request.query),
+      foldActivities,
     );
     return { items: page.items, nextCursor: page.nextCursor };
   });
