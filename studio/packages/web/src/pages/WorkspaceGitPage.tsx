@@ -1414,7 +1414,6 @@ function describeState(status: WorkspaceGitStatus): string {
   }
 }
 
-/** A commit sha at review length, or an em-dash when there is none to show. */
 function countFiles(files: string[]): string {
   return countOf(files.length, 'file');
 }

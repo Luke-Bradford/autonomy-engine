@@ -209,7 +209,7 @@ import { FormSection } from '../../lib/form/FormSection';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import { readPublishState } from './publishState';
 import { EditorStateBadge } from './EditorStateBadge';
-import { canvasVersion, editingState, gitState, liveState } from './editorState';
+import { canvasVersion, editingState, gitState, liveState, partText } from './editorState';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { useConfirm } from '../../lib/confirm/useConfirm';
 
@@ -309,6 +309,26 @@ function draftBody(s: CanvasState) {
  * into a working store, renders the React Flow editor with a palette and a
  * property panel, and saves the working graph as a NEW immutable version.
  */
+/**
+ * #1502 — an ordering for reads of one piece of state that several callers
+ * read and one caller writes: see `publishSeq` in the editor.
+ */
+interface ReadSequence {
+  issued: number;
+  applied: number;
+}
+
+function takeTicket(seq: ReadSequence): number {
+  return ++seq.issued;
+}
+
+/** Whether an answer with this ticket is newer than what is applied; if so, it now is. */
+function claimTicket(seq: ReadSequence, ticket: number): boolean {
+  if (ticket <= seq.applied) return false;
+  seq.applied = ticket;
+  return true;
+}
+
 export function PipelineCanvas({
   pipelineId,
   pipelineName,
@@ -358,7 +378,13 @@ export function PipelineCanvas({
   // #1395 OR4 — the Run form's open state, and the last run it started. Its
   // notice links to the run page, and stays until the next press of Run — the
   // save line's rule — so the link is there for as long as it is wanted.
-  const [runOpen, setRunOpen] = useState(false);
+  //
+  // #1502 — the form holds the version it was OPENED for, not the live head: a
+  // focus re-read can move the head while it is open, and following it would
+  // remount the form (it is keyed by version), dropping what was typed, and run
+  // a version the form never named.
+  const [runFor, setRunFor] = useState<PipelineVersion | null>(null);
+  const runOpen = runFor !== null;
   // #1395 slice 3 — the Debug form's. Opening one form closes the other: both
   // hang from the same anchor over the canvas.
   const [debugOpen, setDebugOpen] = useState(false);
@@ -464,11 +490,14 @@ export function PipelineCanvas({
   const gitConnected = git === undefined ? undefined : git !== null;
   /**
    * #1502 — the publish state is read on open, on focus, and after a refused
-   * publish, and is written by a publish. Each read takes a ticket from here and
-   * applies only if no newer read or write has happened since, so a slow focus
-   * read cannot put back a pointer this page has just moved.
+   * publish, and is written by a publish. Every read and write takes the next
+   * number from `issued`; a read's answer applies only if it is newer than the
+   * last thing applied (`applied`), and applying records it. So a slow read
+   * cannot put back a pointer a later read or a publish has already set, while
+   * a read that FAILED claims nothing and voids nothing — an older read still in
+   * flight is then still the newest answer, and lands.
    */
-  const publishEpoch = useRef(0);
+  const publishSeq = useRef<ReadSequence>({ issued: 0, applied: 0 });
   const [publishing, setPublishing] = useState(false);
   /**
    * #904 — the head this canvas was refused against, or `null` when there is no
@@ -802,15 +831,15 @@ export function PipelineCanvas({
    */
   useEffect(() => {
     const ctrl = new AbortController();
-    const ticket = ++publishEpoch.current;
+    const ticket = takeTicket(publishSeq.current);
     readPublishState(pipelineId, ctrl.signal)
       .then((s) => {
-        if (ticket !== publishEpoch.current) return;
+        if (!claimTicket(publishSeq.current, ticket)) return;
         setActive(s.active);
         setGit(s.git);
       })
       .catch(() => {
-        if (ctrl.signal.aborted || ticket !== publishEpoch.current) return;
+        if (ctrl.signal.aborted || !claimTicket(publishSeq.current, ticket)) return;
         // Back to unread, not to a default. A failed read that left a STALE
         // pointer on screen would be worse than one showing none: the CAS would
         // then be sent an expectation nothing currently supports.
@@ -844,14 +873,16 @@ export function PipelineCanvas({
    * Publish back and re-word the Triggers column over a network blip — while
    * the kept value is one the server read and every write re-checks.
    *
-   * Its own `useGuardedLoad` instance (latest-wins and unmount-safe), plus the
-   * `publishEpoch` ticket, because the hook cannot be told about the one write
-   * that moves the pointer locally: a publish.
+   * Its own `useGuardedLoad` instance, so it is unmount-safe and latest-wins
+   * among focus reads without superseding the globals' re-read on the other
+   * instance. The `publishSeq` ticket orders it against the publish state's
+   * OTHER readers and its one local writer, a publish, which the hook cannot
+   * see.
    */
   const guardedFocusLoad = useGuardedLoad();
   const refreshOnFocus = useCallback(() => {
     void refreshGlobals();
-    const ticket = ++publishEpoch.current;
+    const ticket = takeTicket(publishSeq.current);
     void guardedFocusLoad(
       (signal) =>
         Promise.all([
@@ -861,7 +892,7 @@ export function PipelineCanvas({
       {
         onData: ([fresh, s]) => {
           setVersions((prev) => mergeVersionLists(prev, fresh));
-          if (ticket !== publishEpoch.current) return;
+          if (!claimTicket(publishSeq.current, ticket)) return;
           setActive(s.active);
           setGit(s.git);
         },
@@ -1059,7 +1090,7 @@ export function PipelineCanvas({
   // A refusal arriving (a preview opened, the pipeline archived) CLOSES the Run
   // form rather than hiding it, so it does not spring back open with reset
   // values when the refusal lifts. Render-phase, like `EditorStatusStrip`'s.
-  if (runOpen && runReason !== null) setRunOpen(false);
+  if (runOpen && runReason !== null) setRunFor(null);
   const debugReason = debugDisabledReason({
     ready,
     archived,
@@ -1107,6 +1138,12 @@ export function PipelineCanvas({
   }, [headerWidth, rowContent, folds, foldable]);
   const validateFolded = folds.length >= 1;
   const gitFolded = folds.length >= 2;
+  const foldedGitAlert =
+    gitFolded && gitBadge !== null && gitBadge.tone !== 'neutral' ? gitBadge : null;
+  const moreActionsLabel =
+    foldedGitAlert === null
+      ? 'More pipeline actions'
+      : `More pipeline actions (git: ${foldedGitAlert.label})`;
   const validateReason = validateDisabledReason({
     ready,
     previewing: previewing !== null,
@@ -1266,7 +1303,7 @@ export function PipelineCanvas({
           // is the one thing that makes the page honest again.
           try {
             const fresh = await listPipelineVersions(pipelineId);
-            setVersions(fresh);
+            setVersions((prev) => mergeVersionLists(prev, fresh));
             const head = latestVersion(fresh);
             if (head) {
               setConflict(head);
@@ -1411,7 +1448,7 @@ export function PipelineCanvas({
         // WORKING graph, which is not what was being attempted here.
         try {
           const fresh = await listPipelineVersions(pipelineId);
-          setVersions(fresh);
+          setVersions((prev) => mergeVersionLists(prev, fresh));
           setSaveMsg(describeRestoreConflict(latestVersion(fresh)?.version ?? null));
           return;
         } catch {
@@ -1478,7 +1515,7 @@ export function PipelineCanvas({
       // round trip for a fact already in hand (the same move the restore makes
       // with the version it just minted). It is the newest fact, so it voids
       // any publish-state read still in flight (#1502).
-      ++publishEpoch.current;
+      claimTicket(publishSeq.current, takeTicket(publishSeq.current));
       setActive(result.active);
       setSaveMsg(
         publishOutcomeMessage({ published: result.published, selectedVersion: previewed.version }),
@@ -1489,17 +1526,17 @@ export function PipelineCanvas({
         // Re-read the state — the page is otherwise left asserting a pointer the
         // server has just contradicted — and describe what it now shows.
         let fresh: ActivePipelineVersion | null | undefined;
-        const ticket = ++publishEpoch.current;
+        const ticket = takeTicket(publishSeq.current);
         try {
           const s = await readPublishState(pipelineId);
           fresh = s.active;
-          if (ticket === publishEpoch.current) {
+          if (claimTicket(publishSeq.current, ticket)) {
             setActive(s.active);
             setGit(s.git);
           }
         } catch {
           fresh = undefined;
-          if (ticket === publishEpoch.current) {
+          if (claimTicket(publishSeq.current, ticket)) {
             setActive(undefined);
             setGit(undefined);
           }
@@ -1839,7 +1876,7 @@ export function PipelineCanvas({
               title={debugReason ?? DEBUG_TITLE}
               onClick={() => {
                 setRunStarted(null);
-                setRunOpen(false);
+                setRunFor(null);
                 setDebugOpen((o) => !o);
               }}
             >
@@ -1868,7 +1905,7 @@ export function PipelineCanvas({
                       // Run owns the notice, so it always describes the latest run.
                       setRunStarted(null);
                       setDebugOpen(false);
-                      setRunOpen(true);
+                      setRunFor(head);
                     }}
                   >
                     Trigger now
@@ -1894,17 +1931,17 @@ export function PipelineCanvas({
                 </MenuList>
               </MenuPopover>
             </Menu>
-            {runOpen && runReason === null && head !== null && (
+            {runFor !== null && runReason === null && (
               <RunNowPanel
-                key={head.id}
+                key={runFor.id}
                 pipelineId={pipelineId}
-                version={head}
+                version={runFor}
                 dirty={dirty}
-                onClose={() => setRunOpen(false)}
+                onClose={() => setRunFor(null)}
                 onStarted={(runId) => {
-                  setRunOpen(false);
-                  setRunStarted({ text: `Run started from v${String(head.version)}.`, runId });
-                  setEditorRun({ runId, version: head });
+                  setRunFor(null);
+                  setRunStarted({ text: `Run started from v${String(runFor.version)}.`, runId });
+                  setEditorRun({ runId, version: runFor });
                 }}
               />
             )}
@@ -1939,8 +1976,12 @@ export function PipelineCanvas({
                 id={moreActionsId}
                 type="button"
                 className="icon-button editor-header__icon-button"
-                aria-label="More pipeline actions"
-                title="More pipeline actions"
+                // #1476 — a git state that needs attention, folded in here,
+                // must not vanish with its pill: the button takes its colour
+                // and says it in words.
+                data-tone={foldedGitAlert?.tone}
+                aria-label={moreActionsLabel}
+                title={moreActionsLabel}
               >
                 <MoreHorizontalRegular aria-hidden="true" />
               </button>
@@ -1966,7 +2007,7 @@ export function PipelineCanvas({
                     onClick={() => void navigate('/manage/git')}
                     subText={gitBadge.detail}
                   >
-                    Git: {gitBadge.label}
+                    Git: {partText(gitBadge)}
                   </MenuItem>
                 )}
                 {/* U9 — Arrange moves the DOCUMENT, not the view, so it is not

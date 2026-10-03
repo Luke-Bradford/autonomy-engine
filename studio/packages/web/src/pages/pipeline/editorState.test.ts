@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkspaceGitStatus } from '@autonomy-studio/shared';
-import { canvasVersion, editingState, gitState, liveState, type EditingInput } from './editorState';
+import {
+  canvasVersion,
+  editingState,
+  gitState,
+  liveState,
+  partText,
+  type EditingInput,
+} from './editorState';
 
 const base: EditingInput = {
   dirty: false,
@@ -133,9 +140,16 @@ describe('gitState', () => {
     expect(gitState({ git: undefined, source: saved })).toBeNull();
   });
 
+  it('says when the repo has never been fetched, rather than printing a dash', () => {
+    expect(gitState({ git: { ...git, lastFetchAt: null }, source: saved })?.detail).toContain(
+      'Never fetched.',
+    );
+  });
+
   it('names the working branch against the collaboration branch', () => {
     const p = gitState({ git, source: saved });
-    expect(p).toMatchObject({ label: 'feature/x → main', tone: 'neutral' });
+    expect(p).toMatchObject({ name: 'feature/x → main', label: '', tone: 'neutral' });
+    expect(partText(p!)).toBe('feature/x → main');
     expect(p?.detail).toMatch(
       /^Commits go to feature\/x; pull requests open into main\. Last fetched /,
     );
@@ -146,9 +160,9 @@ describe('gitState', () => {
       git,
       source: { version: 2, sourceCommit: 'abcdef1234567890', sourceBranch: 'main' },
     });
-    expect(p?.label).toBe('feature/x → main · from abcdef1');
+    expect(partText(p!)).toBe('feature/x → main · from abcdef1');
     expect(p?.detail).toContain('v2 was imported from commit abcdef1 on main.');
-    expect(gitState({ git, source: null })?.label).toBe('feature/x → main');
+    expect(gitState({ git, source: null })?.label).toBe('');
   });
 
   it('says in words when the last fetch failed, and draws it as danger', () => {
@@ -156,12 +170,16 @@ describe('gitState', () => {
       git: { ...git, state: 'fetch_error', lastFetchError: 'could not resolve host' },
       source: saved,
     });
-    expect(p).toMatchObject({ label: 'feature/x → main · fetch failed', tone: 'danger' });
-    expect(p?.detail).toContain('The last fetch from the repo failed: could not resolve host');
+    // The state is the LABEL, not part of the name, so a long branch name can
+    // be cut short without cutting the words that carry the state.
+    expect(p).toMatchObject({ name: 'feature/x → main', label: 'fetch failed', tone: 'danger' });
+    expect(p?.detail).toContain(
+      'The last fetch from the repo failed: could not resolve host. Last',
+    );
   });
 
   it('says when the collaboration branch does not exist at the repo yet', () => {
     const p = gitState({ git: { ...git, state: 'collab_branch_missing' }, source: saved });
-    expect(p).toMatchObject({ label: 'feature/x → main · no main yet', tone: 'warning' });
+    expect(p).toMatchObject({ label: 'no main yet', tone: 'warning' });
   });
 });

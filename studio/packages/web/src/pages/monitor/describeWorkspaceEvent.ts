@@ -1,5 +1,6 @@
 import { appliedActionWroteNothing, type WorkspaceEvent } from '@autonomy-studio/shared';
 import { TRIGGERS_STAY_DISABLED_NOTE } from '../../api/pipelines';
+import { shortSha } from '../../api/workspaceGit';
 import { countOf } from '../../lib/countOf';
 import { namedList } from '../../lib/namedList';
 
@@ -9,11 +10,6 @@ export interface WorkspaceEventDescription {
   summary: string;
   /** The particulars, or `null` when the summary already says everything. */
   detail: string | null;
-}
-
-/** Git object ids are rendered short, as every git surface in the app does. */
-function shortSha(sha: string): string {
-  return sha.slice(0, 7);
 }
 
 /**

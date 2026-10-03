@@ -211,6 +211,15 @@ export function importWorkspaceGit(): Promise<WorkspaceGitApplyResult> {
 }
 
 /**
+ * A commit's short form, as git prints it, or an em-dash for an unobserved one.
+ * Shared by the Git page, the workspace audit log and the editor's state badge
+ * (#1476), so every surface prints one sha the same way.
+ */
+export function shortSha(sha: string | null): string {
+  return sha === null ? '—' : sha.slice(0, 7);
+}
+
+/**
  * #1018 — the suffix that qualifies a change label whose comparison could not be
  * fully made: the branch's version names a stored row that references a resource
  * which has since been DELETED (typically a connection — versions are immutable
@@ -224,15 +233,6 @@ export function importWorkspaceGit(): Promise<WorkspaceGitApplyResult> {
  * own because it qualifies the CONFIDENCE of the change, not the change — the
  * resource really is `superseded`/`unchanged`; what is weaker is the evidence.
  */
-/**
- * A commit's short form, as git prints it, or an em-dash for an unobserved one.
- * Shared by the Git page and the editor's state badge (#1476), so the two print
- * one sha the same way.
- */
-export function shortSha(sha: string | null): string {
-  return sha === null ? '—' : sha.slice(0, 7);
-}
-
 export const UNVERIFIED_CONTENT_SUFFIX =
   ' (a ref names a deleted resource, so it was not compared)';
 

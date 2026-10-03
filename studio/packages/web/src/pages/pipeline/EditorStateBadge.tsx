@@ -43,9 +43,12 @@ function Part({
       data-tone={part.tone}
       title={part.detail}
     >
-      {/* Its own span so a long branch name can ellipsise inside the pill
-          rather than widen the toolbar row; the full text is in the detail. */}
-      <span className="editor-state-badge__label">{part.label}</span>
+      {/* The name in its own span so a long branch name can ellipsise inside
+          the pill rather than widen the toolbar row, while the label — the
+          state — is never cut. The full text is in the detail. */}
+      {part.name !== undefined && <span className="editor-state-badge__name">{part.name}</span>}
+      {part.name !== undefined && part.label !== '' && ' · '}
+      {part.label}
       {part.current === true && (
         <>
           <span aria-hidden="true"> ✓</span>

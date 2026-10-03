@@ -9,8 +9,8 @@ import { activePhrase, type ActiveVersionLabel } from './versionHistory';
  * Colour follows ONE rule: `success` when the live version is what the canvas
  * shows, `warning` when something is pending — a draft, a newer saved version,
  * nothing published, or a live version that is not the canvas — `danger` when
- * the repo could not be read, and `neutral` otherwise. The text always carries the meaning on its own, so the colour is
- * never the only cue (WCAG 1.4.1).
+ * the repo could not be read, and `neutral` otherwise. The text always carries
+ * the meaning on its own, so the colour is never the only cue (WCAG 1.4.1).
  *
  * Labels are SHORT on purpose: they share the fixed-height toolbar row with the
  * title, the notice strip and every action, and that row must not wrap at
@@ -19,6 +19,13 @@ import { activePhrase, type ActiveVersionLabel } from './versionHistory';
 export type BadgeTone = 'success' | 'warning' | 'danger' | 'neutral';
 
 export interface BadgePart {
+  /**
+   * A name drawn BEFORE the label that may be cut short with an ellipsis — a
+   * branch has no length limit — so the label, which carries the state, never
+   * is. Absent on parts that name nothing.
+   */
+  name?: string;
+  /** The state, in words. Empty only when `name` alone says everything. */
   label: string;
   /** The full sentence behind the label: its tooltip and its hidden text. */
   detail: string;
@@ -153,6 +160,11 @@ export function liveState(s: LiveInput): BadgePart | null {
   };
 }
 
+/** A part as one line of text: its name, then its label. */
+export function partText(part: BadgePart): string {
+  return [part.name, part.label].filter((t) => t !== undefined && t !== '').join(' · ');
+}
+
 /** Where the version on the canvas came from in git, off its row. */
 export interface VersionSource {
   version: number;
@@ -190,9 +202,8 @@ export interface GitInput {
  */
 export function gitState({ git, source }: GitInput): BadgePart | null {
   if (git === null || git === undefined) return null;
-  const branches = `${git.workingBranch} → ${git.collabBranch}`;
   const commit = source?.sourceCommit ?? null;
-  const parts = [branches];
+  const parts: string[] = [];
   const sentences = [
     `Commits go to ${git.workingBranch}; pull requests open into ${git.collabBranch}.`,
   ];
@@ -207,7 +218,7 @@ export function gitState({ git, source }: GitInput): BadgePart | null {
   if (git.state === 'fetch_error') {
     parts.push('fetch failed');
     sentences.push(
-      `The last fetch from the repo failed${git.lastFetchError !== null ? `: ${git.lastFetchError}` : '.'}`,
+      `The last fetch from the repo failed${git.lastFetchError !== null ? `: ${git.lastFetchError.replace(/\.?$/, '.')}` : '.'}`,
     );
     tone = 'danger';
   } else if (git.state === 'collab_branch_missing') {
@@ -215,6 +226,13 @@ export function gitState({ git, source }: GitInput): BadgePart | null {
     sentences.push(`${git.collabBranch} was not found at the repo when it was last fetched.`);
     tone = 'warning';
   }
-  sentences.push(`Last fetched ${formatWhen(git.lastFetchAt)}.`);
-  return { label: parts.join(' · '), detail: sentences.join(' '), tone };
+  sentences.push(
+    git.lastFetchAt === null ? 'Never fetched.' : `Last fetched ${formatWhen(git.lastFetchAt)}.`,
+  );
+  return {
+    name: `${git.workingBranch} → ${git.collabBranch}`,
+    label: parts.join(' · '),
+    detail: sentences.join(' '),
+    tone,
+  };
 }

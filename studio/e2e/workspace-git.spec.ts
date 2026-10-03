@@ -396,6 +396,49 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   ).toContainText('active');
 
   /**
+   * #1502 — the editor re-reads the repo and the pointer on focus. A failed
+   * re-read keeps what is on screen (focus arrives on wake, when requests
+   * fail); a successful one that reports a failed fetch turns the git pill red,
+   * in words, and — folded at 1280 — puts the same words on ⋯.
+   */
+  const gitStatusUrl = /\/api\/workspace\/git$/;
+  await expect(livePart).toHaveText(/^Live: v1/);
+  await page.route(gitStatusUrl, (route) => route.abort());
+  const failedRead = page.waitForEvent('requestfailed', (r) => gitStatusUrl.test(r.url()));
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await failedRead;
+  await expect(livePart).toHaveText(/^Live: v1/);
+  await expect(gitPart).toHaveText(/ → main · from [0-9a-f]{7}/);
+  await page.unroute(gitStatusUrl);
+
+  await page.route(gitStatusUrl, async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as { git: Record<string, unknown> };
+    body.git.state = 'fetch_error';
+    body.git.lastFetchError = 'simulated: could not reach the remote';
+    await route.fulfill({ response, json: body });
+  });
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(gitPart).toHaveText(/ → main · from [0-9a-f]{7} · fetch failed/);
+  await expect(gitPart).toHaveAttribute('data-tone', 'danger');
+  await expect(gitPart).toHaveAttribute('title', /simulated: could not reach the remote\./);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await expect(gitPart).toHaveCount(0);
+  const more = page.getByRole('button', { name: /^More pipeline actions/ });
+  await expect(more).toHaveAttribute(
+    'aria-label',
+    /^More pipeline actions \(git: from [0-9a-f]{7} · fetch failed\)$/,
+  );
+  await expect(more).toHaveAttribute('data-tone', 'danger');
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await expect(gitPart).toBeVisible();
+  await expect(more).toHaveAttribute('aria-label', 'More pipeline actions');
+  await page.unroute(gitStatusUrl);
+  // And the next focus reads the real state again.
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(gitPart).toHaveAttribute('data-tone', 'neutral');
+
+  /**
    * ── the publish is LEGIBLE in the audit log (#1077) ────────────────────────
    *
    * Here because this is the only spec in the suite that reaches a real
