@@ -10,6 +10,7 @@ import {
   WorkspaceGitImportPreviewSchema,
   WorkspaceGitStatusSchema,
   WorkspaceGitSyncSchema,
+  WorkspaceGitPullRequestReadingSchema,
   type CommitWorkspaceGitBody,
   type ConnectWorkspaceGitBody,
   type SetWorkspaceGitTokenBody,
@@ -24,6 +25,7 @@ import {
   type WorkspaceGitImportPreview,
   type WorkspaceGitStatus,
   type WorkspaceGitSync,
+  type WorkspaceGitPullRequestReading,
 } from '@autonomy-studio/shared';
 import { apiFetch } from './client';
 
@@ -47,6 +49,9 @@ const DriftEnvelopeSchema = z.object({ drift: WorkspaceGitDriftSchema });
 const CommitEnvelopeSchema = z.object({ commit: WorkspaceGitCommitResultSchema });
 const DivergenceEnvelopeSchema = z.object({ divergence: WorkspaceGitDivergenceSchema });
 const SyncEnvelopeSchema = z.object({ sync: WorkspaceGitSyncSchema.nullable() });
+const PullRequestReadingEnvelopeSchema = z.object({
+  pullRequest: WorkspaceGitPullRequestReadingSchema,
+});
 const PreviewEnvelopeSchema = z.object({ preview: WorkspaceGitImportPreviewSchema });
 const ApplyEnvelopeSchema = z.object({ import: WorkspaceGitApplyResultSchema });
 
@@ -87,6 +92,22 @@ export function readWorkspaceGitSync(signal?: AbortSignal): Promise<WorkspaceGit
     schema: SyncEnvelopeSchema,
     signal,
   }).then((r) => r.sync);
+}
+
+/**
+ * #1476 OR28 — the badge's `PR #n`: is a pull request open from the working
+ * branch? `unknown` when the host was not asked (no token, a non-GitHub
+ * remote) or could not answer; only a host answer is `none`. The server asks
+ * the host at most once per `GIT_FETCH_MAX_AGE_SECONDS`, so this is cheap to
+ * read on focus.
+ */
+export function readWorkspaceGitPullRequest(
+  signal?: AbortSignal,
+): Promise<WorkspaceGitPullRequestReading> {
+  return apiFetch('/api/workspace/git/pull-request', {
+    schema: PullRequestReadingEnvelopeSchema,
+    signal,
+  }).then((r) => r.pullRequest);
 }
 
 export function connectWorkspaceGit(body: ConnectWorkspaceGitBody): Promise<WorkspaceGitStatus> {

@@ -155,6 +155,63 @@ describe('gitState', () => {
     );
   });
 
+  it('links the open pull request from the working branch, beside the label', () => {
+    const p = gitState({
+      git,
+      source: saved,
+      pullRequest: {
+        state: 'open',
+        number: 7,
+        url: 'https://github.com/acme/widgets/pull/7',
+        checkedAt: 1,
+      },
+    });
+    expect(p?.link).toEqual({
+      label: 'PR #7',
+      name: 'Pull request #7',
+      href: 'https://github.com/acme/widgets/pull/7',
+    });
+    // Not in the label: the link is drawn after it, so it is never said twice.
+    expect(p?.label).toBe('');
+    expect(p?.detail).toContain('Pull request #7 is open from feature/x.');
+    expect(p?.tone).toBe('neutral');
+  });
+
+  it('says there is no pull request only when the host said so', () => {
+    const none = gitState({
+      git,
+      source: saved,
+      pullRequest: { state: 'none', checkedAt: 1 },
+    });
+    expect(none?.link).toBeUndefined();
+    expect(none?.detail).toContain('No pull request is open from feature/x.');
+
+    const failed = gitState({
+      git,
+      source: saved,
+      pullRequest: { state: 'unknown', reason: 'lookup_failed', detail: 'HTTP 502' },
+    });
+    expect(failed?.link).toBeUndefined();
+    expect(failed?.detail).not.toContain('No pull request');
+    expect(failed?.detail).toContain('Could not check for a pull request: HTTP 502.');
+    expect(failed?.tone).toBe('neutral');
+
+    const noToken = gitState({
+      git,
+      source: saved,
+      pullRequest: { state: 'unknown', reason: 'no_token', detail: null },
+    });
+    expect(noToken?.detail).toContain('Pull requests are not checked: no GitHub token is set.');
+
+    // A local or non-GitHub remote has no pull requests studio can see: nothing said.
+    const local = gitState({
+      git,
+      source: saved,
+      pullRequest: { state: 'unknown', reason: 'unsupported_host', detail: null },
+    });
+    expect(local?.detail).toBe(gitState({ git, source: saved })?.detail);
+  });
+
   it('adds the commit the canvas version came from, and only when it has one', () => {
     const p = gitState({
       git,

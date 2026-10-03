@@ -1,4 +1,8 @@
-import type { WorkspaceGitStatus, WorkspaceGitSync } from '@autonomy-studio/shared';
+import type {
+  WorkspaceGitPullRequestReading,
+  WorkspaceGitStatus,
+  WorkspaceGitSync,
+} from '@autonomy-studio/shared';
 import { describeDivergence, describePipelineDrift, shortSha } from '../../api/workspaceGit';
 import { formatWhen } from '../runs/format';
 import { activePhrase, type ActiveVersionLabel } from './versionHistory';
@@ -32,6 +36,12 @@ export interface BadgePart {
   tone: BadgeTone;
   /** The canvas IS this version — drawn as a ✓ beside the label. */
   current?: boolean;
+  /**
+   * #1476 OR28 — a link drawn after the label (the open pull request): `label`
+   * is its text, `name` its accessible name, `href` an http(s) URL. Not part of
+   * `label`, so nothing says it twice.
+   */
+  link?: { label: string; name: string; href: string };
 }
 
 export interface EditingInput {
@@ -195,6 +205,12 @@ export interface GitInput {
   sync?: WorkspaceGitSync | null;
   /** The pipeline on the canvas, to pick its entry out of `sync.pipelines`. */
   pipelineId?: string;
+  /**
+   * #1476 OR28 slice 7 — the pull request open from the working branch
+   * (`GET /api/workspace/git/pull-request`), `undefined` while unread or after
+   * a failed read.
+   */
+  pullRequest?: WorkspaceGitPullRequestReading;
 }
 
 /**
@@ -223,7 +239,13 @@ export interface GitInput {
  * the `fetch failed` state stands alone rather than beside a comparison made
  * against refs it could not refresh.
  */
-export function gitState({ git, source, sync, pipelineId }: GitInput): BadgePart | null {
+export function gitState({
+  git,
+  source,
+  sync,
+  pipelineId,
+  pullRequest,
+}: GitInput): BadgePart | null {
   if (git === null || git === undefined) return null;
   const commit = source?.sourceCommit ?? null;
   const parts: string[] = [];
@@ -298,10 +320,42 @@ export function gitState({ git, source, sync, pipelineId }: GitInput): BadgePart
       git.lastFetchAt === null ? 'Never fetched.' : `Last fetched ${formatWhen(git.lastFetchAt)}.`,
     );
   }
+  sentences.push(...pullRequestSentence(pullRequest, git.workingBranch));
   return {
     name: `${git.workingBranch} → ${git.collabBranch}`,
     label: parts.join(' · '),
     detail: sentences.join(' '),
     tone,
+    ...(pullRequest?.state === 'open' && {
+      link: {
+        label: `PR #${String(pullRequest.number)}`,
+        name: `Pull request #${String(pullRequest.number)}`,
+        href: pullRequest.url,
+      },
+    }),
   };
+}
+
+/**
+ * The pull request's sentence. `none` only when the host said so; a failed
+ * lookup says it could not check, and a remote studio cannot ask (local, not
+ * GitHub) says nothing — absent, not wrong. Never a tone: a PR is neither good
+ * nor bad news.
+ */
+function pullRequestSentence(
+  pr: WorkspaceGitPullRequestReading | undefined,
+  workingBranch: string,
+): string[] {
+  if (pr === undefined) return [];
+  if (pr.state === 'open') {
+    return [`Pull request #${String(pr.number)} is open from ${workingBranch}.`];
+  }
+  if (pr.state === 'none') return [`No pull request is open from ${workingBranch}.`];
+  if (pr.reason === 'no_token') return ['Pull requests are not checked: no GitHub token is set.'];
+  if (pr.reason === 'lookup_failed') {
+    return [
+      `Could not check for a pull request${pr.detail !== null ? `: ${pr.detail.replace(/\.?$/, '.')}` : '.'}`,
+    ];
+  }
+  return [];
 }
