@@ -29,8 +29,7 @@ const V1: SeedDoc = {
 const V2: SeedDoc = { ...V1, nodes: [...V1.nodes, { id: 'n_c', position: { x: 640, y: 0 } }] };
 
 const badge = (page: Page) => page.getByRole('group', { name: 'Pipeline state' });
-const part = (page: Page, name: 'editing' | 'live') =>
-  badge(page).locator(`[data-part="${name}"]`);
+const part = (page: Page, name: 'editing' | 'live') => badge(page).locator(`[data-part="${name}"]`);
 
 /** One read: the parts as drawn, their colour against the tone tokens, and clipping. */
 async function read(page: Page) {
@@ -113,10 +112,7 @@ test('the badge names the editing state: latest, draft, overtaken, previewing', 
 
   // ── previewing an older version over the kept draft ─────────────────────
   await (await editorMenuItem(page, /^Show version history/)).click();
-  await page
-    .getByTestId('version-history')
-    .getByRole('button', { name: /^v1\b/ })
-    .click();
+  await page.getByTestId('version-history').getByRole('button', { name: /^v1\b/ }).click();
   await expect(page.getByTestId('canvas-preview')).toBeVisible();
   await expect(part(page, 'editing')).toHaveText(/^Viewing v1/);
   await expect(part(page, 'editing')).toHaveAttribute('title', /unsaved changes are kept/);
