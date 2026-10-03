@@ -112,7 +112,8 @@ test('#1484 — the runs list is a full-width grid of 32px rows, and a row opens
   const problems = collectPageProblems(page);
   await page.setViewportSize({ width: 1440, height: 900 });
 
-  const pipelineName = `Runs grid ${Date.now()}`;
+  // Long on purpose: whatever a row holds, the grid must not widen the page.
+  const pipelineName = `Runs grid ${Date.now()} ${'with a very long name '.repeat(8)}`.trim();
   const { pipelineVersionId } = await seedVersion(page, pipelineName, {
     nodes: [{ id: 'n1', type: 'fail', config: { message: 'expected' }, position: { x: 0, y: 0 } }],
   });
@@ -134,7 +135,10 @@ test('#1484 — the runs list is a full-width grid of 32px rows, and a row opens
       rowHeight: rowEl?.getBoundingClientRect().height ?? 0,
       fontSize: cell ? getComputedStyle(cell).fontSize : '',
       wraps: cell ? getComputedStyle(cell).whiteSpace : '',
-      sideScroll: document.documentElement.scrollWidth > window.innerWidth,
+      // `.content` is the element that scrolls (the shell is viewport-height).
+      sideScroll:
+        (content?.scrollWidth ?? 0) > (content?.clientWidth ?? 0) + 1 ||
+        document.documentElement.scrollWidth > window.innerWidth,
     };
   });
   // The 900px reading width is gone: the page and its table use the screen.

@@ -4426,15 +4426,19 @@ button.danger {
 /* #1484 OR35 M1 — the runs list is a dense, full-width grid (the Monitor's
    principle 1: data, not decoration). The page drops the 900px reading width
    the way the canvas does; the Timeline view shares the page and widens too.
-   32px rows of 13px data, no wrapping (a long pipeline name ellipsizes and keeps
-   its full text in the title), and numbers right-aligned in tabular figures so
-   durations and costs line up digit for digit. */
+   32px rows of 13px data, no wrapping, and numbers right-aligned in tabular
+   figures so durations and costs line up digit for digit.
+   FIXED layout with set column shares, and every cell ellipsizes: whatever a
+   row holds (a 200-character pipeline name, a long trigger name), the grid can
+   never be wider than the page. Measured: with automatic layout, the shared e2e
+   database's rows pushed the table past the viewport. */
 .content:has(.runs-page) {
   max-width: none;
 }
 
 .runs-grid {
   font-size: 13px;
+  table-layout: fixed;
 }
 
 .runs-grid th,
@@ -4443,20 +4447,36 @@ button.danger {
   padding: 0 0.6rem;
   white-space: nowrap;
   vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Column shares, in header order: Pipeline · Status · Triggered by · Started ·
+   Duration · Cost · Run ID. */
+.runs-grid th:nth-child(1) {
+  width: 28%;
+}
+.runs-grid th:nth-child(2) {
+  width: 9%;
+}
+.runs-grid th:nth-child(3) {
+  width: 19%;
+}
+.runs-grid th:nth-child(4) {
+  width: 14%;
+}
+.runs-grid th:nth-child(5),
+.runs-grid th:nth-child(6) {
+  width: 8%;
+}
+.runs-grid th:nth-child(7) {
+  width: 14%;
 }
 
 .runs-grid .num,
 .runs-grid .run-cost {
   text-align: right;
   font-variant-numeric: tabular-nums;
-}
-
-.runs-grid__pipeline > span {
-  display: inline-block;
-  max-width: 32rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  vertical-align: middle;
 }
 
 .runs-grid__row {
