@@ -9,6 +9,7 @@ import {
   WorkspaceGitDriftSchema,
   WorkspaceGitImportPreviewSchema,
   WorkspaceGitStatusSchema,
+  WorkspaceGitSyncSchema,
   type CommitWorkspaceGitBody,
   type ConnectWorkspaceGitBody,
   type SetWorkspaceGitTokenBody,
@@ -21,6 +22,7 @@ import {
   type WorkspaceGitDriftChange,
   type WorkspaceGitImportPreview,
   type WorkspaceGitStatus,
+  type WorkspaceGitSync,
 } from '@autonomy-studio/shared';
 import { apiFetch } from './client';
 
@@ -43,6 +45,7 @@ const NullableGitEnvelopeSchema = z.object({ git: WorkspaceGitStatusSchema.nulla
 const DriftEnvelopeSchema = z.object({ drift: WorkspaceGitDriftSchema });
 const CommitEnvelopeSchema = z.object({ commit: WorkspaceGitCommitResultSchema });
 const DivergenceEnvelopeSchema = z.object({ divergence: WorkspaceGitDivergenceSchema });
+const SyncEnvelopeSchema = z.object({ sync: WorkspaceGitSyncSchema.nullable() });
 const PreviewEnvelopeSchema = z.object({ preview: WorkspaceGitImportPreviewSchema });
 const ApplyEnvelopeSchema = z.object({ import: WorkspaceGitApplyResultSchema });
 
@@ -65,6 +68,24 @@ export function getWorkspaceGit(signal?: AbortSignal): Promise<WorkspaceGitStatu
   return apiFetch('/api/workspace/git', { schema: NullableGitEnvelopeSchema, signal }).then(
     (r) => r.git,
   );
+}
+
+/**
+ * #1476 OR28 — the editor badge's git reading: which pipelines differ from the
+ * working branch, and whether main has moved since the last import.
+ *
+ * Cheap to call on open, focus and save: the server fetches the remote only
+ * when its copy is older than the hoster's `GIT_FETCH_MAX_AGE_SECONDS`, and
+ * says how old it is (`fetchedAt`). `null` means the last fetch failed, so
+ * nothing was compared — the failure itself is on the status (`fetch_error`).
+ * A POST because it may fetch; see `readWorkspaceGitDrift`.
+ */
+export function readWorkspaceGitSync(signal?: AbortSignal): Promise<WorkspaceGitSync | null> {
+  return apiFetch('/api/workspace/git/sync', {
+    method: 'POST',
+    schema: SyncEnvelopeSchema,
+    signal,
+  }).then((r) => r.sync);
 }
 
 export function connectWorkspaceGit(body: ConnectWorkspaceGitBody): Promise<WorkspaceGitStatus> {

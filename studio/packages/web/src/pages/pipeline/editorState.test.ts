@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { WorkspaceGitStatus } from '@autonomy-studio/shared';
+import type { WorkspaceGitStatus, WorkspaceGitSync } from '@autonomy-studio/shared';
 import {
   canvasVersion,
   editingState,
@@ -181,5 +181,72 @@ describe('gitState', () => {
   it('says when the collaboration branch does not exist at the repo yet', () => {
     const p = gitState({ git: { ...git, state: 'collab_branch_missing' }, source: saved });
     expect(p).toMatchObject({ label: 'no main yet', tone: 'warning' });
+  });
+
+  describe('with a sync reading (#1476 slice 6)', () => {
+    const base = 'b45e000000000000000000000000000000000000';
+    const sync = (over: Partial<WorkspaceGitSync> = {}): WorkspaceGitSync => ({
+      fetchedAt: 2,
+      fetched: false,
+      workingBranch: 'feature/x',
+      base,
+      hasUncommittedChanges: false,
+      pipelines: [],
+      divergence: { state: 'current', importBase: base, collabHead: base },
+      ...over,
+    });
+    const read = (s: WorkspaceGitSync | null | undefined, g: WorkspaceGitStatus = git) =>
+      gitState({ git: g, source: saved, sync: s, pipelineId: 'p1' });
+
+    it('says in sync when this pipeline matches the branch and main has not moved', () => {
+      const p = read(sync());
+      expect(p).toMatchObject({ label: 'in sync', tone: 'neutral' });
+      expect(p?.detail).toContain('This pipeline matches feature/x at b45e000');
+      expect(p?.detail).toContain('Compared with the repo as fetched');
+    });
+
+    it('says it is not compared with main when the workspace never imported', () => {
+      const p = read(
+        sync({ divergence: { state: 'unknown', importBase: null, collabHead: base } }),
+      );
+      expect(p?.label).toBe('in sync');
+      expect(p?.detail).toContain('It is not compared with main');
+    });
+
+    it('marks only THIS pipeline uncommitted, in amber, and says why', () => {
+      const other = read(sync({ pipelines: [{ pipelineId: 'p2', change: 'added' }] }));
+      expect(other?.label).toBe('in sync');
+      const p = read(sync({ pipelines: [{ pipelineId: 'p1', change: 'removed' }] }));
+      expect(p).toMatchObject({ label: 'uncommitted', tone: 'warning' });
+      expect(p?.detail).toContain('It is archived here but still on feature/x.');
+    });
+
+    it('says behind main — pull first, with both commits', () => {
+      const head = 'ead0000000000000000000000000000000000000';
+      const p = read(sync({ divergence: { state: 'behind', importBase: base, collabHead: head } }));
+      expect(p).toMatchObject({ label: 'behind main — pull first', tone: 'warning' });
+      expect(p?.detail).toContain('main has moved since this workspace last imported from it (b45e000 → ead0000)');
+    });
+
+    it('draws diverged as danger, and danger wins over an amber uncommitted', () => {
+      const p = read(
+        sync({
+          pipelines: [{ pipelineId: 'p1', change: 'modified' }],
+          divergence: { state: 'diverged', importBase: base, collabHead: 'f00' },
+        }),
+      );
+      expect(p).toMatchObject({ label: 'uncommitted · diverged', tone: 'danger' });
+    });
+
+    it('claims nothing without a reading, or when the fetch failed', () => {
+      expect(read(undefined)?.label).toBe('');
+      expect(read(null)?.label).toBe('');
+      const failed = read(sync({ pipelines: [{ pipelineId: 'p1', change: 'added' }] }), {
+        ...git,
+        state: 'fetch_error',
+        lastFetchError: 'boom',
+      });
+      expect(failed?.label).toBe('fetch failed');
+    });
   });
 });

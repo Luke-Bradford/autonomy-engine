@@ -54,6 +54,7 @@ import {
   type Pipeline,
   type PipelineVersion,
   type WorkspaceGitStatus,
+  type WorkspaceGitSync,
 } from '@autonomy-studio/shared';
 import {
   clipboardCommandFor,
@@ -208,6 +209,7 @@ import { UnsavedChangesPrompt } from '../../lib/form/UnsavedChangesPrompt';
 import { FormSection } from '../../lib/form/FormSection';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import { claimTicket, readPublishState, takeTicket, type ReadSequence } from './publishState';
+import { readWorkspaceGitSync } from '../../api/workspaceGit';
 import { EditorStateBadge } from './EditorStateBadge';
 import { canvasVersion, editingState, gitState, liveState, partText } from './editorState';
 import { LabelledControl } from '../../lib/LabelledControl';
@@ -917,6 +919,51 @@ export function PipelineCanvas({
   // separately would be two readers of one fact, free to drift.
   const head = useMemo(() => latestVersion(versions), [versions]);
   const headVersion = head?.version ?? null;
+
+  /**
+   * #1476 OR28 slice 6 — the repo compared with this workspace, for the git
+   * part of the badge: is this pipeline uncommitted, has main moved. Read when
+   * a repo is known to be connected, again whenever the newest saved version
+   * changes (a save or restore here, or one the focus re-read found), and on
+   * focus. That is often, and is meant to be: the server fetches the remote
+   * only when its copy is older than the hoster's `GIT_FETCH_MAX_AGE_SECONDS`,
+   * and the comparison itself is local.
+   *
+   * Any failure clears the reading rather than keeping it — a drift claim the
+   * page can no longer back is worse than none, and absence reads as "not
+   * said". A `null` answer means the server's own fetch failed, which is
+   * recorded on the repo's status; the status is re-read then, through the
+   * publish-state ticket, so `fetch failed` replaces the comparison at once
+   * instead of on the next focus.
+   */
+  const [gitSync, setGitSync] = useState<WorkspaceGitSync | null | undefined>(undefined);
+  const guardedSyncLoad = useGuardedLoad();
+  const refreshGitSync = useCallback(() => {
+    void guardedSyncLoad((signal) => readWorkspaceGitSync(signal), {
+      onData: (s) => {
+        setGitSync(s);
+        if (s !== null) return;
+        const ticket = takeTicket(publishSeq.current);
+        readPublishState(pipelineId).then(
+          (st) => {
+            if (!claimTicket(publishSeq.current, ticket)) return;
+            setActive(st.active);
+            setGit(st.git);
+          },
+          () => {},
+        );
+      },
+      onError: () => setGitSync(undefined),
+    });
+  }, [guardedSyncLoad, pipelineId]);
+  useEffect(() => {
+    if (gitConnected === true) refreshGitSync();
+  }, [gitConnected, headVersion, refreshGitSync]);
+  useEffect(() => {
+    if (gitConnected !== true) return;
+    window.addEventListener('focus', refreshGitSync);
+    return () => window.removeEventListener('focus', refreshGitSync);
+  }, [gitConnected, refreshGitSync]);
   const entries = useMemo(
     () => historyEntries(versions, loaded?.version ?? null, active?.versionId),
     [versions, loaded, active],
@@ -942,7 +989,7 @@ export function PipelineCanvas({
     canvas: canvasVersion(editingInput),
   });
   // The saved version on (or under) the canvas: the preview, else `loaded`.
-  const gitBadge = gitState({ git, source: previewed ?? loaded ?? null });
+  const gitBadge = gitState({ git, source: previewed ?? loaded ?? null, sync: gitSync, pipelineId });
 
   // U16 — `loaded` LEAVES the dep list: `params` moved into the store, and it
   // was the last thing this memo read off the opened version.
