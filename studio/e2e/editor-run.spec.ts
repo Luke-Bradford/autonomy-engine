@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
+import { triggerMenuItem } from './support/canvas';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
 
 /**
@@ -10,6 +11,8 @@ import { nodeById, openSeededCanvas } from './support/seedDoc';
  *
  * Slice 2 adds the live overlay: the run's node states on THIS canvas, and the
  * selected node's part in the run in the dock, without leaving the editor.
+ *
+ * #1476 OR28 moved Run into the header's Trigger ▾ menu, as ADF's Trigger now.
  */
 
 /** The run page's header pill, scoped off the node table's own status words. */
@@ -34,16 +37,17 @@ test('#1395 — Run in the editor starts the saved version with the params typed
     ],
   });
 
-  const run = page.getByRole('button', { name: 'Run', exact: true });
-  await expect(run).toHaveAttribute('title', 'Run v1, the latest saved version.');
-
   // Opening the form moves nothing on the page (#1393): it is drawn OVER the canvas.
   const canvas = page.locator('.react-flow');
   const before = await canvas.boundingBox();
+  const run = await triggerMenuItem(page, /^Trigger now/);
+  await expect(run).toContainText('Run v1, the latest saved version.');
   await run.click();
   const form = page.getByRole('dialog', { name: 'Run v1' });
   await expect(form).toBeVisible();
   expect(await canvas.boundingBox()).toEqual(before);
+  // The menu closing does not take focus back from the form it opened.
+  await expect(form.getByLabel('city')).toBeFocused();
 
   // Prefilled from the defaults; the operator overrides one.
   await expect(form.getByLabel('city')).toHaveValue('Leeds');
@@ -89,12 +93,11 @@ test('#1395 — Run is refused, with the reason, before the pipeline has a saved
   const { id } = (await created.json()) as { id: string };
   await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
 
-  const run = page.getByRole('button', { name: 'Run', exact: true });
+  const run = await triggerMenuItem(page, /^Trigger now/);
   await expect(run).toBeDisabled();
-  await expect(run).toHaveAttribute(
-    'title',
-    'Save a version first: Run starts the latest saved version.',
-  );
+  await expect(run).toContainText('Save a version first: Run starts the latest saved version.');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('menu')).toHaveCount(0);
 
   await expectQuiet(page, problems);
 });
@@ -136,7 +139,7 @@ test('#1395 — the run started in the editor plays out on the authoring canvas,
   const canvasBefore = await canvas.boundingBox();
   const holdBefore = await nodeById(page, 'hold').boundingBox();
 
-  await page.getByRole('button', { name: 'Run', exact: true }).click();
+  await (await triggerMenuItem(page, /^Trigger now/)).click();
   await page
     .getByRole('dialog', { name: 'Run v1' })
     .getByRole('button', { name: 'Start run' })

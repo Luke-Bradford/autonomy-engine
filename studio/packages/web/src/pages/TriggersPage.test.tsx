@@ -2008,3 +2008,50 @@ describe('TriggersPage — inline validation (#1396)', () => {
     expect(form.getByRole('alert')).toHaveTextContent('Fix this field:Name: too long');
   });
 });
+
+describe('TriggersPage — ?pipeline= filter (#1476)', () => {
+  const other: Pipeline = { ...pipeline, id: 'pl_2', resourceId: 'res_pl2', name: 'Other' };
+  const otherVersion: PipelineVersion = {
+    ...version,
+    id: 'plv_9',
+    resourceId: 'res_plv9',
+    pipelineId: 'pl_2',
+  };
+
+  beforeEach(() => {
+    listAllVersionsMock.mockResolvedValue([
+      { pipeline, version },
+      { pipeline: other, version: otherVersion },
+    ]);
+    listTriggersMock.mockResolvedValue([
+      trigger(),
+      trigger({ id: 'trg_2', resourceId: 'res_trg2', name: 'Theirs', pipelineVersionId: 'plv_9' }),
+      trigger({ id: 'trg_3', resourceId: 'res_trg3', name: 'Unbound', pipelineVersionId: null }),
+    ]);
+  });
+
+  it('lists only the triggers bound to that pipeline’s versions, and links back to all', async () => {
+    const { router } = renderWithDataRouter(<TriggersPage />, '/manage/triggers?pipeline=pl_1');
+    expect(await screen.findByText('Nightly')).toBeInTheDocument();
+    expect(screen.queryByText('Theirs')).toBeNull();
+    expect(screen.queryByText('Unbound')).toBeNull();
+    const note = screen.getByTestId('trigger-pipeline-filter');
+    expect(note).toHaveTextContent('Showing the triggers of My pipeline.');
+
+    fireEvent.click(within(note).getByRole('link', { name: 'Show all triggers' }));
+    expect(await screen.findByText('Theirs')).toBeInTheDocument();
+    expect(screen.getByText('Unbound')).toBeInTheDocument();
+    expect(router.state.location.search).toBe('');
+  });
+
+  it('says so when that pipeline has no triggers', async () => {
+    renderWithDataRouter(<TriggersPage />, '/manage/triggers?pipeline=pl_none');
+    expect(
+      await screen.findByText('No triggers are bound to this pipeline yet.'),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('trigger-pipeline-filter')).toHaveTextContent(
+      'Showing the triggers of one pipeline.',
+    );
+    expect(screen.queryByText('Nightly')).toBeNull();
+  });
+});

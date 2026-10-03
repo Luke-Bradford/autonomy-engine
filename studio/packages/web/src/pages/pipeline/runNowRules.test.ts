@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Param } from '@autonomy-studio/shared';
 import {
+  validateDisabledReason,
   buildRunNowParams,
   debugDisabledReason,
   debugStartedText,
@@ -111,5 +112,19 @@ describe('debugStartedText (#1395 slice 3)', () => {
     expect(debugStartedText(7)).toContain('kept for 7 days');
     expect(debugStartedText(1)).toContain('kept for 1 day)');
     expect(debugStartedText(null)).toContain('kept until deleted');
+  });
+});
+
+describe('validateDisabledReason (#1476)', () => {
+  const ok = { ready: true, previewing: false, validating: false };
+  it('is pressable on a loaded working graph, whatever it already lists', () => {
+    expect(validateDisabledReason(ok)).toBeNull();
+  });
+  it('says why it is not', () => {
+    expect(validateDisabledReason({ ...ok, ready: false })).toBe('Wait for the pipeline to load.');
+    expect(validateDisabledReason({ ...ok, previewing: true })).toBe(
+      'Leave the preview to validate your working graph.',
+    );
+    expect(validateDisabledReason({ ...ok, validating: true })).toBe('Validating…');
   });
 });

@@ -3,6 +3,7 @@ import {
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -18,7 +19,17 @@ import {
   MenuPopover,
   MenuTrigger,
 } from '@fluentui/react-components';
-import { ArrowRedoRegular, ArrowUndoRegular, MoreHorizontalRegular } from '@fluentui/react-icons';
+import {
+  ArrowRedoRegular,
+  ArrowUndoRegular,
+  ChevronDownRegular,
+  MoreHorizontalRegular,
+} from '@fluentui/react-icons';
+import { useNavigate } from 'react-router';
+import { ZodError } from 'zod';
+import { triggersPath } from '../triggers/triggersPath';
+import { serverOnlyIssues, validationAnnouncement } from './validateDraft';
+import { useElementSize } from './useElementSize';
 import {
   CONTAINER_KIND_LABELS,
   ContainerKindSchema,
@@ -63,6 +74,7 @@ import {
   publishPipeline,
   restorePipeline,
   TRIGGERS_STAY_DISABLED_NOTE,
+  validatePipelineDraft,
 } from '../../api/pipelines';
 import { downloadPipelineExport } from '../../api/pipelineExport';
 import { listConnections } from '../../api/connections';
@@ -79,6 +91,7 @@ import {
   singleSelection,
   type PasteOutcome,
   type Selection,
+  type CanvasState,
 } from './canvasStore';
 import { useExpressionPicker } from './useExpressionPicker';
 import { ConfigEditor } from './ConfigEditor';
@@ -152,6 +165,7 @@ import {
   describeRestoreConflict,
   describeSaveConflict,
   docUnchanged,
+  type DocSnapshot,
   historyEntries,
   isPublishRefused,
   isStaleWrite,
@@ -176,7 +190,9 @@ import { EditorRunContext, type EditorRun } from './editorRunContext';
 import { runDetailPath } from '../runs/runPath';
 import {
   DEBUG_TITLE,
+  VALIDATE_TITLE,
   debugDisabledReason,
+  validateDisabledReason,
   debugStartedText,
   runDisabledReason,
   runTitle,
@@ -250,6 +266,40 @@ interface PipelineCanvasProps {
      line above it. */
 }
 
+/** The doc slices `docUnchanged` compares — picked, so a held snapshot keeps
+ * no undo history alive. */
+function docOf(s: CanvasState): DocSnapshot {
+  return {
+    nodes: s.nodes,
+    edges: s.edges,
+    containers: s.containers,
+    params: s.params,
+    outputs: s.outputs,
+    variables: s.variables,
+    description: s.description,
+    annotations: s.annotations,
+  };
+}
+
+/**
+ * The working graph as Debug and Validate send it: the SAME body a save sends.
+ * Its `basedOnVersionId` is a save's CAS basis and means nothing to either —
+ * they overwrite nothing — so `PipelineDraftBodySchema` strips it.
+ */
+function draftBody(s: CanvasState) {
+  return toVersionBody(
+    s.nodes,
+    s.edges,
+    s.containers,
+    s.params,
+    s.outputs,
+    s.variables,
+    s.description,
+    s.annotations,
+    null,
+  );
+}
+
 /**
  * The authoring canvas for one pipeline: loads the latest immutable version
  * into a working store, renders the React Flow editor with a palette and a
@@ -308,6 +358,15 @@ export function PipelineCanvas({
   // #1395 slice 3 — the Debug form's. Opening one form closes the other: both
   // hang from the same anchor over the canvas.
   const [debugOpen, setDebugOpen] = useState(false);
+  // #1476 OR28 — the last Validate's server-only findings, with the draft they
+  // describe (see `sameDraft`).
+  const [serverCheck, setServerCheck] = useState<{
+    doc: DocSnapshot;
+    raw: string[];
+  } | null>(null);
+  const [validating, setValidating] = useState(false);
+  const headerRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
   const [runStarted, setRunStarted] = useState<{ text: string; runId: string } | null>(null);
   /* #1395 OR4 — the run drawn over the canvas. Held apart from `runStarted`,
      which pressing Run clears to open the form: the overlay stays until the
@@ -827,7 +886,7 @@ export function PipelineCanvas({
       })),
     [nodes, edges, containers, params, variables, globals],
   );
-  const issues = useMemo(
+  const clientIssues = useMemo(
     () => [
       ...located.map((issue) => issue.text),
       ...nameIssues(params, outputs, variables),
@@ -835,9 +894,51 @@ export function PipelineCanvas({
     ],
     [located, params, outputs, variables, description, annotations],
   );
+  // #1476 OR28 — what the last Validate found that the badges above cannot see
+  // (the server's call-graph and debug-callee reads). Listed, attributed, and
+  // refusing Save — as the server would — only while the doc is the one it
+  // checked: by identity, as `docUnchanged` judges a save, so any edit (a node
+  // drag included) retires it and the save's own 400 still stands behind that.
+  // `globals` is not part of it: the window-focus refresh replaces that array
+  // with the doc unchanged, and the server-only checks never read it.
+  const serverCheckCurrent =
+    serverCheck !== null &&
+    docUnchanged(serverCheck.doc, {
+      nodes,
+      edges,
+      containers,
+      params,
+      outputs,
+      variables,
+      description,
+      annotations,
+    });
+  const serverLocated = useMemo(
+    () =>
+      serverCheckCurrent
+        ? serverCheck.raw.map((raw) => ({
+            raw,
+            text: readableIssue(raw, nodes, edges, containers),
+          }))
+        : [],
+    [serverCheckCurrent, serverCheck, nodes, edges, containers],
+  );
+  const issues = useMemo(
+    () =>
+      serverLocated.length === 0
+        ? clientIssues
+        : [...clientIssues, ...serverLocated.map((issue) => issue.text)],
+    [clientIssues, serverLocated],
+  );
   const attribution = useMemo(
-    () => issuesBySubject(located, nodes, edges, containers),
-    [located, nodes, edges, containers],
+    () =>
+      issuesBySubject(
+        serverLocated.length === 0 ? located : [...located, ...serverLocated],
+        nodes,
+        edges,
+        containers,
+      ),
+    [located, serverLocated, nodes, edges, containers],
   );
   // Held at a STABLE identity while its content is unchanged. `located` is
   // recomputed on every param keystroke, so without this each one would hand
@@ -882,6 +983,78 @@ export function PipelineCanvas({
     issueCount: issues.length,
   });
   if (debugOpen && debugReason !== null) setDebugOpen(false);
+  /* #1476 OR28 — the ticket's rule for a toolbar row that cannot hold every
+     act: overflow goes into ⋯, it never wraps or spills. Validate is the act
+     that folds — the one used least often of those in the row. It folds when
+     the row overflows, remembering the width it needed, and comes back only
+     once the row is that wide again: comparing against the width that DID
+     overflow, not the narrower one without it, is what stops it flapping.
+     Measured on the header's own width and on what changes the row's content
+     (the badge's labels, the Save label) — not on every render, which would
+     force a layout on every node drag. */
+  const [validateFolded, setValidateFolded] = useState<{ needs: number } | null>(null);
+  const headerWidth = useElementSize(headerRef, 'width');
+  const rowContent = `${editingBadge.label}|${liveBadge?.label ?? ''}|${String(saving)}`;
+  useLayoutEffect(() => {
+    const header = headerRef.current;
+    if (header === null) return;
+    if (validateFolded === null) {
+      if (header.scrollWidth > header.clientWidth) {
+        setValidateFolded({ needs: header.scrollWidth });
+      }
+    } else if (header.clientWidth >= validateFolded.needs) {
+      setValidateFolded(null);
+    }
+  }, [headerWidth, rowContent, validateFolded]);
+  const validateReason = validateDisabledReason({
+    ready,
+    previewing: previewing !== null,
+    validating,
+  });
+
+  /**
+   * #1476 OR28 — Validate: run the server's save gate over the working graph as
+   * a dry run, open Problems, and say how many there are. The editor's badges
+   * already mirror most of that gate; the server adds what needs its database.
+   *
+   * A draft that cannot even be SENT (the client's write-schema badges — a
+   * nameless param, a bad policy — make the body refuse to parse) is already
+   * listed in Problems, so that refusal announces the listed count rather than
+   * an error. Only a Validate that found nothing to point at says it failed.
+   */
+  async function onValidate() {
+    const s = store.getState();
+    const checked = docOf(s);
+    const clientRaw = new Set(located.map((issue) => issue.raw));
+    const clientCount = clientIssues.length;
+    setDockOpen(true);
+    setProblemsOpen(true);
+    setValidating(true);
+    try {
+      const result = await validatePipelineDraft(pipelineId, draftBody(s));
+      // Edited while the check was in flight: the answer is about a doc that
+      // is no longer on screen. Said, so a quiet button does not read as a pass.
+      if (!docUnchanged(checked, store.getState())) {
+        showCanvasMsg('Validation: the graph changed while it was checked — validate again.');
+        return;
+      }
+      const found = serverOnlyIssues(result, clientRaw);
+      setServerCheck({ doc: checked, raw: found.raw });
+      showCanvasMsg(validationAnnouncement(clientCount + found.raw.length, found.truncated));
+    } catch (err) {
+      setServerCheck(null);
+      // The draft's own body refused to parse before any request: that is the
+      // write-schema badges already in Problems, so it reports their count. Any
+      // other failure means the save check did not run, and says so.
+      showCanvasMsg(
+        err instanceof ZodError && clientCount > 0
+          ? validationAnnouncement(clientCount)
+          : `Validation could not run: ${messageOf(err)}`,
+      );
+    } finally {
+      setValidating(false);
+    }
+  }
 
   /**
    * Save the working graph as a new version, based on `basedOnVersionId`.
@@ -1305,7 +1478,7 @@ export function PipelineCanvas({
           <UnsavedChangesPrompt guard={leavePrompt} keepRef={leaveKeepRef} />
         </div>
       )}
-      <div className="page-header">
+      <div className="page-header" ref={headerRef}>
         {/* `title`: the toolbar row truncates a long name (#1475). */}
         <h2 id="canvas-heading" title={pipelineName}>
           {pipelineName}
@@ -1526,25 +1699,21 @@ export function PipelineCanvas({
               {saveReason}
             </span>
           )}
-          {/* #1395 OR4 — Run the latest saved version, with no trigger. The
-              anchor positions the form over the canvas, so opening it moves
-              nothing (#1393). */}
-          <span className="run-now-anchor">
+          {/* #1476 OR28 — Validate: the save's own check, without saving.
+              In ⋯ instead while the row is too narrow (`validateFolded`). */}
+          {validateFolded === null && (
             <button
               type="button"
-              aria-expanded={runOpen}
-              disabled={runReason !== null}
-              title={runReason ?? (headVersion !== null ? runTitle(headVersion, dirty) : undefined)}
-              onClick={() => {
-                // Like every save opening with `setSaveMsg(null)`: the next Run
-                // owns the notice, so it always describes the latest run.
-                setRunStarted(null);
-                setDebugOpen(false);
-                setRunOpen((o) => !o);
-              }}
+              disabled={validateReason !== null}
+              title={validateReason ?? VALIDATE_TITLE}
+              onClick={() => void onValidate()}
             >
-              <span aria-hidden="true">▶ </span>Run
+              Validate
             </button>
+          )}
+          {/* #1395 OR4 — the run forms. The anchor positions them over the
+              canvas, so opening one moves nothing (#1393). */}
+          <span className="run-now-anchor">
             {/* #1395 slice 3 — Debug: run the working graph as it stands, saved
                 or not, as a hidden debug version. */}
             <button
@@ -1560,6 +1729,40 @@ export function PipelineCanvas({
             >
               Debug
             </button>
+            {/* #1476 OR28 — Trigger ▾, ADF's: Trigger now is #1395's Run (the
+                latest saved version, no trigger); View triggers lists this
+                pipeline's. Always pressable — an item that cannot run says why
+                on its own second line, as the ⋯ menu's do. Fluent's default
+                body portal, as the ⋯ menu (U0: never inside the viewport). */}
+            <Menu>
+              <MenuTrigger disableButtonEnhancement>
+                <button type="button">
+                  Trigger <ChevronDownRegular aria-hidden="true" />
+                </button>
+              </MenuTrigger>
+              <MenuPopover>
+                <MenuList>
+                  <MenuItem
+                    disabled={runReason !== null}
+                    subText={
+                      runReason ?? (headVersion !== null ? runTitle(headVersion, dirty) : undefined)
+                    }
+                    onClick={() => {
+                      // Like every save opening with `setSaveMsg(null)`: the next
+                      // Run owns the notice, so it always describes the latest run.
+                      setRunStarted(null);
+                      setDebugOpen(false);
+                      setRunOpen(true);
+                    }}
+                  >
+                    Trigger now
+                  </MenuItem>
+                  <MenuItem onClick={() => void navigate(triggersPath(pipelineId))}>
+                    View triggers
+                  </MenuItem>
+                </MenuList>
+              </MenuPopover>
+            </Menu>
             {runOpen && runReason === null && head !== null && (
               <RunNowPanel
                 key={head.id}
@@ -1581,23 +1784,7 @@ export function PipelineCanvas({
                 key={JSON.stringify(params)}
                 pipelineId={pipelineId}
                 params={params}
-                draft={() => {
-                  // The SAME body a save sends. Its `basedOnVersionId` is a
-                  // save's CAS basis and means nothing to a Debug, which
-                  // overwrites nothing: `DebugRunRequestSchema` strips it.
-                  const s = store.getState();
-                  return toVersionBody(
-                    s.nodes,
-                    s.edges,
-                    s.containers,
-                    s.params,
-                    s.outputs,
-                    s.variables,
-                    s.description,
-                    s.annotations,
-                    null,
-                  );
-                }}
+                draft={() => draftBody(store.getState())}
                 onClose={() => setDebugOpen(false)}
                 onStarted={(result) => {
                   setDebugOpen(false);
@@ -1629,6 +1816,15 @@ export function PipelineCanvas({
             </MenuTrigger>
             <MenuPopover>
               <MenuList>
+                {validateFolded !== null && (
+                  <MenuItem
+                    onClick={() => void onValidate()}
+                    disabled={validateReason !== null}
+                    subText={validateReason ?? undefined}
+                  >
+                    Validate
+                  </MenuItem>
+                )}
                 {/* U9 — Arrange moves the DOCUMENT, not the view, so it is not
                     in React Flow's `<Controls>` (the camera). Undoable with the
                     Undo button beside this menu. */}

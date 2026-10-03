@@ -3,6 +3,9 @@ import { z } from 'zod';
 import {
   ActivePipelineVersionResponseSchema,
   CreatePipelineVersionBodySchema,
+  ISSUE_LIST_CAP,
+  PipelineDraftBodySchema,
+  type PipelineValidation,
   DebugRunRequestSchema,
   ManualRunRequestSchema,
   NewPipelineSchema,
@@ -25,6 +28,7 @@ import {
   appendWorkspaceEvent,
   archivePipeline,
   createPipeline,
+  checkPipelineVersion,
   createPipelineVersion,
   deletePipeline,
   getActivePublishedVersion,
@@ -610,6 +614,34 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
         .send({ ...result, pipelineVersion: version, retentionDays } satisfies DebugRunResult);
     },
   );
+
+  /**
+   * #1476 OR28 — `POST /api/pipelines/:id/validate`: the editor's Validate. THE
+   * save gate (`checkPipelineVersion`) run over the draft as a dry run: `200`
+   * with the issues a save would be refused with, and nothing written — no
+   * version, no run. Ownership is checked as a save checks it; an ARCHIVED
+   * pipeline is not refused, because a check that changes nothing has nothing
+   * to protect it from.
+   *
+   * SECURITY: the issues quote ids and `${}` text from the doc the caller just
+   * sent, and owned callee version ids only — the same echo-safety argument as
+   * the save's `invalid_pipeline_doc` 400 (#444), because it is the same gate.
+   * The list is capped at `ISSUE_LIST_CAP`, with the true total stated.
+   */
+  fastify.post<{ Params: { id: string } }>('/api/pipelines/:id/validate', async (request) => {
+    const pipeline = requireOwned(
+      getPipeline(db, request.params.id),
+      request.principal,
+      'pipeline',
+      request.params.id,
+    );
+    const draft = PipelineDraftBodySchema.parse(request.body);
+    const issues = checkPipelineVersion(db, { ...draft, pipelineId: pipeline.id });
+    return {
+      issues: issues.slice(0, ISSUE_LIST_CAP),
+      totalIssues: issues.length,
+    } satisfies PipelineValidation;
+  });
 
   fastify.get<{ Params: { id: string } }>('/api/pipelines/:id/versions', async (request) => {
     const pipeline = requireOwned(

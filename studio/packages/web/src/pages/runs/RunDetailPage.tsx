@@ -10,6 +10,7 @@ import { canRerunFromFailed, RERUN_COST_WARNING } from './rerunAction';
 import { RerunHistory } from './RerunHistory';
 import { canCancelRun, cancelConfirmMessage } from './cancelAction';
 import { runDetailPath, runLinkLabel } from './runPath';
+import { triggersPath } from '../triggers/triggersPath';
 import { useRunStream, type StreamPhase } from './useRunStream';
 import {
   deriveNodeActivity,
@@ -553,7 +554,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
                 is on. A trigger deleted since the run leaves `triggerId` null. */}
             {run.triggerId ? (
               names?.trigger ? (
-                <Link to="/manage/triggers">{names.trigger}</Link>
+                <Link to={triggersPath()}>{names.trigger}</Link>
               ) : (
                 <code>{run.triggerId}</code>
               )

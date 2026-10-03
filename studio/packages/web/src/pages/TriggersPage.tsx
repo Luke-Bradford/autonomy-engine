@@ -13,7 +13,9 @@ import {
   type PipelineVersion,
   type TriggerPublic,
 } from '@autonomy-studio/shared';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
+import { triggersPath } from './triggers/triggersPath';
+import { RUN_FILTER_PARAMS } from './runs/runFilters';
 import { messageOf } from '../api/client';
 import { downloadTextFile, exportFileName } from '../api/download';
 import { exportTrigger } from '../api/portability';
@@ -555,12 +557,30 @@ export function TriggersPage() {
      the one this page performs. `triggers === null` is the pre-load state ONLY —
      `refresh` replaces the list and never returns it to null — so this cannot
      transiently hide a live outcome mid-refresh. */
+  /* #1476 OR28 — `?pipeline=` narrows the list to one pipeline's triggers (the
+     editor's Trigger ▾ → View triggers). A stored trigger names a VERSION, so
+     the match is on that pipeline's versions — the ones this page already
+     loads. `null` = unfiltered. The URL is the only authority, as on Runs. */
+  const [searchParams] = useSearchParams();
+  const pipelineFilter = searchParams.get(RUN_FILTER_PARAMS.pipelineId);
+  const filterPipeline =
+    pipelineFilter === null
+      ? null
+      : (pipelines.find((p) => p.pipelineId === pipelineFilter) ?? null);
+  const shownTriggers = useMemo(() => {
+    if (triggers === null || pipelineFilter === null) return triggers;
+    const versionIds = new Set(filterPipeline?.versions.map((v) => v.id) ?? []);
+    return triggers.filter(
+      (t) => t.pipelineVersionId !== null && versionIds.has(t.pipelineVersionId),
+    );
+  }, [triggers, pipelineFilter, filterPipeline]);
+
   const visibleOutcomes = useMemo(
     () =>
-      triggers === null
+      shownTriggers === null
         ? fireOutcomes
-        : fireOutcomes.filter((o) => triggers.some((t) => t.id === o.triggerId)),
-    [fireOutcomes, triggers],
+        : fireOutcomes.filter((o) => shownTriggers.some((t) => t.id === o.triggerId)),
+    [fireOutcomes, shownTriggers],
   );
 
   return (
@@ -663,11 +683,23 @@ export function TriggersPage() {
         <div>
           {triggers === null && !loadError && <p>Loading triggers…</p>}
 
-          {triggers !== null && triggers.length === 0 && (
-            <p>No triggers yet. Create one to bind a pipeline version and fire it.</p>
+          {pipelineFilter !== null && (
+            <p className="page-hint" data-testid="trigger-pipeline-filter">
+              Showing the triggers of{' '}
+              {filterPipeline !== null ? <strong>{filterPipeline.name}</strong> : 'one pipeline'}.{' '}
+              <Link to={triggersPath()}>Show all triggers</Link>
+            </p>
           )}
 
-          {triggers !== null && triggers.length > 0 && (
+          {shownTriggers !== null && shownTriggers.length === 0 && (
+            <p>
+              {pipelineFilter !== null
+                ? 'No triggers are bound to this pipeline yet.'
+                : 'No triggers yet. Create one to bind a pipeline version and fire it.'}
+            </p>
+          )}
+
+          {shownTriggers !== null && shownTriggers.length > 0 && (
             <table>
               <thead>
                 <tr>
@@ -679,7 +711,7 @@ export function TriggersPage() {
                 </tr>
               </thead>
               <tbody>
-                {triggers.map((t) => (
+                {shownTriggers.map((t) => (
                   <tr key={t.id}>
                     <td>{t.name}</td>
                     <td>

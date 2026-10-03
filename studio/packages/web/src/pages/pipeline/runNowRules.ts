@@ -113,6 +113,10 @@ export function debugDisabledReason({
 /** What an enabled Debug says it will do. */
 export const DEBUG_TITLE = 'Run what is on the canvas now, without saving it as a version.';
 
+/** #1476 OR28 — Validate's tooltip when it can be pressed. */
+export const VALIDATE_TITLE =
+  'Run the save check on the canvas now, without saving: Problems lists what it finds.';
+
 /**
  * The status line after a Debug starts: that it ran the draft, and how long the
  * run is kept (`DEBUG_RETENTION_DAYS`, reported by the server; `null` = forever).
@@ -123,4 +127,26 @@ export function debugStartedText(retentionDays: number | null): string {
       ? 'kept until deleted'
       : `kept for ${String(retentionDays)} day${retentionDays === 1 ? '' : 's'}`;
   return `Debug run started from the unsaved draft (not added to the versions; ${kept}).`;
+}
+
+/**
+ * #1476 OR28 — why the header's Validate cannot be pressed, or `null` when it
+ * can. Validate CHECKS the working graph and writes nothing, so — unlike Debug
+ * — issues already listed do not refuse it (finding them is its job), and
+ * neither does an archived pipeline. A preview hides the working graph, so
+ * validating it would check something that is not on screen.
+ */
+export function validateDisabledReason({
+  ready,
+  previewing,
+  validating,
+}: {
+  ready: boolean;
+  previewing: boolean;
+  validating: boolean;
+}): string | null {
+  if (!ready) return 'Wait for the pipeline to load.';
+  if (previewing) return 'Leave the preview to validate your working graph.';
+  if (validating) return 'Validating…';
+  return null;
 }
