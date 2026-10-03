@@ -55,8 +55,13 @@ describe('readRunFilters — #1484 kind, search and days', () => {
     ['a day that does not exist (no roll-over into March)', 'on=2026-02-30'],
     ['a malformed day', 'on=2026-1-5'],
     ['a reversed range', 'from=2026-02-01&to=2026-01-31'],
+    ['a cleared day input', 'on='],
   ])('drops %s', (_label, query) => {
     expect(read(query)).toEqual({});
+  });
+
+  it('reads a year below 100 as that year, not as 19xx', () => {
+    expect(read('on=0002-10-03')).toEqual({ on: '0002-10-03' });
   });
 
   it('drops a relative window when days are set, and keeps it otherwise', () => {

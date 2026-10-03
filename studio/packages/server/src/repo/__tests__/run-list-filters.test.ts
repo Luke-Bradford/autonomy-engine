@@ -163,6 +163,22 @@ describe('#1484 — the runs list search', () => {
     expect(ids(s.db, { search: 'cancelled by' })).toEqual([s.byRunReason]);
   });
 
+  it('reads only failure text: the same words in any other event never match', () => {
+    const s = seeded();
+    appendRunEvent(s.db, {
+      runId: s.unrelated,
+      type: 'node.output',
+      payload: {
+        type: 'node.output',
+        runId: s.unrelated,
+        nodeId: 'n1',
+        name: 'log',
+        value: 'database is locked',
+      },
+    });
+    expect(ids(s.db, { search: 'database is locked' })).toEqual([s.byNodeError]);
+  });
+
   it('matches any part of a run id, so the tail the grid draws finds the run', () => {
     const s = seeded();
     expect(ids(s.db, { search: s.unrelated.slice(-8) })).toEqual([s.unrelated]);
@@ -172,7 +188,8 @@ describe('#1484 — the runs list search', () => {
   it('treats LIKE wildcards as literal text', () => {
     const s = seeded();
     expect(ids(s.db, { search: '%' })).toEqual([]);
-    expect(ids(s.db, { search: '_' }).length).toBeGreaterThan(0); // every id holds `run_`
+    // Every id holds `run_`, so a literal `_` matches every run of this owner.
+    expect(ids(s.db, { search: '_' }).length).toBe(ids(s.db, {}).length);
     expect(ids(s.db, { search: 'Load_Orders' })).toEqual([]);
   });
 

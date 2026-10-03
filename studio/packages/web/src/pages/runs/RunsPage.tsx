@@ -17,6 +17,7 @@ import {
 } from '@fluentui/react-components';
 import {
   RUN_TRIGGERED_BY_KINDS,
+  RUN_SEARCH_MAX_CHARS,
   RUN_TRIGGERED_BY_LABELS,
   RunSearchSchema,
   RunStatusSchema,
@@ -43,12 +44,14 @@ import {
   dayOf,
   dayRangeBounds,
   hasActiveRunFilters,
+  hasRunFilterParams,
   NO_RUNS_YET,
   readKinds,
   readRunFilters,
   RUN_FILTER_PARAMS,
   RUN_SINCE_LABEL,
   RUN_SINCE_OPTIONS,
+  startedModeOf,
 } from './runFilters';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { FilterPicker } from './FilterPicker';
@@ -240,12 +243,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
   const [searchParams, setSearchParams] = useSearchParams();
 
   /**
-   * U26 — the server-side axes, read from the URL under the same rules `?tab=`
-   * follows: the URL is the only authority, a default is the param's ABSENCE,
-   * and anything unrecognised falls back to unfiltered rather than erroring.
-   */
-  /**
-   * U29 (#1015) — List or Timeline, under exactly the rules `?tab=` follows: the
+   * U29 (#1015) — List or Timeline, under exactly the rules every filter follows: the
    * URL is the only authority, the default is the param's ABSENCE, and anything
    * unrecognised falls back to the default rather than erroring. That makes a
    * timeline link shareable and Back a working undo.
@@ -289,6 +287,16 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
     setFilters({ [param]: next });
   }
 
+  /** A date input's value, KEPT in the URL even when empty, so the Started
+   * mode (`startedModeOf`) and the input survive a cleared or half-typed day. */
+  function setDay(param: string, value: string) {
+    setSearchParams((prev) => {
+      const params = new URLSearchParams(prev);
+      params.set(param, value);
+      return params;
+    });
+  }
+
   /**
    * #1484 — the Started picker: a relative window, "On a day", or "Between
    * days". Each choice clears the others' params, so the URL holds one kind of
@@ -296,8 +304,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
    * two day modes open on today and on the last seven days, so choosing one is
    * already a working filter rather than a half-made one.
    */
-  const startedMode =
-    on !== undefined ? 'on' : from !== undefined || to !== undefined ? 'range' : (since ?? '');
+  const startedMode = startedModeOf(searchParams, since);
   function selectStartedMode(mode: string) {
     const today = new Date();
     const weekAgo = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 6);
@@ -513,20 +520,20 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
             and its widest state (a range of days plus Clear) left the box
             no room without wrapping. It searches the same list, under every
             filter below. */}
-        <LabelledControl
-          className="runs-search"
-          label={<span className="visually-hidden">Search runs</span>}
-        >
-          {(id) => (
-            <input
-              id={id}
-              type="search"
-              placeholder="Search run id, pipeline, trigger, error…"
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-            />
-          )}
-        </LabelledControl>
+        <div role="search" className="runs-search">
+          <LabelledControl label={<span className="visually-hidden">Search runs</span>}>
+            {(id) => (
+              <input
+                id={id}
+                type="search"
+                maxLength={RUN_SEARCH_MAX_CHARS}
+                placeholder="Search run id, pipeline, trigger, error…"
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+              />
+            )}
+          </LabelledControl>
+        </div>
         {/* A `role="group"` of toggles rather than a `TabList`: List and
             Timeline are two renderings of one set of rows, not two panels. */}
         <div role="group" aria-label="Runs view" className="run-view-toggle">
@@ -610,7 +617,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
         >
           <MenuTrigger disableButtonEnhancement>
             <button type="button" className="run-filters__menu">
-              Triggered by: {kindSummary} ▾
+              Triggered by: {kindSummary} <span aria-hidden="true">▾</span>
             </button>
           </MenuTrigger>
           <MenuPopover>
@@ -664,8 +671,10 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
         </LabelledControl>
 
         {/* The day picker is the browser's own date input: a calendar on every
-            engine, keyboard-typable, and it always yields `YYYY-MM-DD`. A
-            cleared input removes its bound. */}
+            engine, keyboard-typable, and it always yields `YYYY-MM-DD` or ''.
+            A cleared input keeps its place and removes its bound. A reversed
+            range is refused by `readRunFilters`, and `min`/`max` make each
+            input natively `:invalid`, which the bar draws. */}
         {startedMode === 'on' && (
           <LabelledControl label={<span className="visually-hidden">Day</span>}>
             {(id) => (
@@ -673,7 +682,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
                 id={id}
                 type="date"
                 value={on ?? ''}
-                onChange={(e) => setFilter(RUN_FILTER_PARAMS.on, e.target.value)}
+                onChange={(e) => setDay(RUN_FILTER_PARAMS.on, e.target.value)}
               />
             )}
           </LabelledControl>
@@ -687,7 +696,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
                   type="date"
                   value={from ?? ''}
                   max={to}
-                  onChange={(e) => setFilter(RUN_FILTER_PARAMS.from, e.target.value)}
+                  onChange={(e) => setDay(RUN_FILTER_PARAMS.from, e.target.value)}
                 />
               )}
             </LabelledControl>
@@ -698,7 +707,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
                   type="date"
                   value={to ?? ''}
                   min={from}
-                  onChange={(e) => setFilter(RUN_FILTER_PARAMS.to, e.target.value)}
+                  onChange={(e) => setDay(RUN_FILTER_PARAMS.to, e.target.value)}
                 />
               )}
             </LabelledControl>
@@ -707,7 +716,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
 
         {/* "Clear" on screen to keep the bar one row; the accessible name
             keeps the whole phrase, and starts with the visible word. */}
-        {filtered && (
+        {hasRunFilterParams(searchParams) && (
           <button type="button" onClick={clearFilters} aria-label="Clear filters">
             Clear
           </button>

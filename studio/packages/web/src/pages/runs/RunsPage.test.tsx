@@ -430,11 +430,6 @@ describe('RunsPage', () => {
   });
 
   /**
-   * U10 — the origin tabs. Every tab is asserted, because the risk is a tab
-   * that renders but filters nothing: a no-op filter would still show the
-   * triggered run under "Triggered" and pass a single-tab check.
-   */
-  /**
    * #1484 — what started a run is a SERVER-side axis now (`?kind=`), so the
    * client-side origin tabs are gone and a stale `?tab=` link is simply ignored.
    */
@@ -868,10 +863,9 @@ describe('RunsPage — U26 filter pane', () => {
   });
 
   /**
-   * #1083 — the page renders ONE page of runs and extends it on demand. What is
-   * pinned here is the honesty of the surfaces that used to describe a complete
-   * list: the origin tab counts and the empty-tab line were a census when every
-   * run was fetched, and they must not keep claiming that over a prefix.
+   * #1083 — the page renders ONE page of runs and extends it on demand, and
+   * every filter is asked of the server on each page (#1484), so no surface
+   * here describes only the rows that happen to be loaded.
    */
   describe('paging (#1083)', () => {
     it('offers Load older runs only while the server says there are older ones', async () => {
@@ -954,7 +948,8 @@ describe('RunsPage — U26 filter pane', () => {
       const box = screen.getByRole('searchbox', { name: 'Search runs' });
 
       await userEvent.type(box, 'ord');
-      // Not yet: one request per word, not per letter.
+      // Not yet, and not 150ms later either: one request per word, not per letter.
+      await new Promise((resolve) => setTimeout(resolve, 150));
       expect(router.state.location.search).toBe('');
       await vi.waitFor(() => expect(router.state.location.search).toBe('?q=ord'));
       expect(router.state.historyAction).toBe('PUSH');
@@ -992,6 +987,17 @@ describe('RunsPage — U26 filter pane', () => {
       await vi.waitFor(() =>
         expect(listMock).toHaveBeenLastCalledWith(bounds, undefined, expect.anything()),
       );
+
+      // Clearing the day keeps the picker on "On a day" with its input in place,
+      // and the bound leaves the request: the list is no longer narrowed by it.
+      fireEvent.change(screen.getByLabelText('Day'), { target: { value: '' } });
+      expect(started()).toHaveValue('on');
+      expect(screen.getByLabelText('Day')).toHaveValue('');
+      await vi.waitFor(() =>
+        expect(listMock).toHaveBeenLastCalledWith({}, undefined, expect.anything()),
+      );
+      // The day is still a filter param, so it can still be cleared in one click.
+      expect(screen.getByRole('button', { name: 'Clear filters' })).toBeInTheDocument();
 
       await userEvent.selectOptions(started(), 'range');
       const params = new URLSearchParams(router.state.location.search);
@@ -1058,7 +1064,7 @@ describe('RunsPage — U26 filter pane', () => {
 /**
  * U29 (#1015) — the List/Timeline switch.
  *
- * Its rules are `?tab=`'s, and the interesting one is that the view is a VIEW:
+ * Its rules are every filter's, and the interesting one is that the view is a VIEW:
  * it must not disturb which rows are in scope, and the other URL writers on this
  * page must not disturb it.
  */

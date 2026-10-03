@@ -4556,13 +4556,16 @@ button.danger {
   white-space: nowrap;
 }
 
-.run-filters label,
 .run-filters .labelled-control:not(.config-field) {
   display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  font-size: 0.8rem;
-  color: var(--muted);
+  align-items: center;
+}
+
+/* #1484 — a reversed day range is refused (`readRunFilters`), and each date
+   input's `min`/`max` makes it natively `:invalid` — drawn, so a range that
+   narrows nothing does not look like one that does. */
+.run-filters input:invalid {
+  outline: 1px solid var(--error);
 }
 
 /* #1484 — a native select is as wide as its longest option, so one long pipeline
@@ -4596,12 +4599,7 @@ button.danger {
   font-size: 0.8rem;
 }
 
-/* #931 (U27 slice 2) — the filtered pipeline's lifetime spend, above the rows.
-   No panel chrome of its own: the tiles inside are `.monitor-tiles`, shared with
-   the AI-activity page, because the two show the same kind of number from the
-   same kind of bounded aggregate and a second visual treatment would imply
-   otherwise. All this rule owns is the heading's weight and the block's rhythm. */
-/* #1484 — the filtered pipeline's lifetime spend, as one dense line. */
+/* #931 + #1484 — the filtered pipeline's lifetime spend, as one dense line. */
 .runs-summary-line {
   font-size: 13px;
   margin-bottom: 0.375rem;

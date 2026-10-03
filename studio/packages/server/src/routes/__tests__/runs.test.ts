@@ -248,6 +248,19 @@ describe('runs routes (read-only)', () => {
       expect(runIdsOf(res)).not.toContain(dayBefore);
       expect(runIdsOf(res)).not.toContain(foreign);
 
+      // `since` and `from` are both lower bounds, and the LATER one narrows: a
+      // `since=1h` beside a 2020 `from` excludes the 2020 run.
+      const both = await app.inject({
+        method: 'GET',
+        url: `/api/runs?since=1h&from=${day}&to=${day + 86_400_000}`,
+      });
+      expect(runIdsOf(both)).toEqual([]);
+      const fromOnly = await app.inject({
+        method: 'GET',
+        url: `/api/runs?from=${day}&to=${day + 86_400_000}`,
+      });
+      expect(runIdsOf(fromOnly)).toEqual([wanted]);
+
       const otherKind = await app.inject({
         method: 'GET',
         url: `/api/runs?kind=schedule&from=${day}&to=${day + 86_400_000}`,

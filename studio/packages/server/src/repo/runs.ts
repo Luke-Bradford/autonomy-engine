@@ -1,4 +1,18 @@
-import { and, asc, count, eq, exists, gte, inArray, lt, ne, or, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  eq,
+  exists,
+  gte,
+  inArray,
+  lt,
+  ne,
+  or,
+  sql,
+  type SQL,
+  type SQLWrapper,
+} from 'drizzle-orm';
 import {
   computeRunCost,
   NewRunSchema,
@@ -135,21 +149,19 @@ export interface ListRunSummariesFilter extends ListRunsFilter {
  * it in. Typed against the event union so a renamed event or field is a compile
  * error here rather than a search that silently stops finding failures.
  */
-const SEARCHED_EVENT_TEXT = [
-  { type: 'node.failed', field: 'error' },
-  { type: 'run.finished', field: 'reason' },
-] as const satisfies readonly {
-  type: EngineEvent['type'];
-  field:
-    | keyof Extract<EngineEvent, { type: 'node.failed' }>
-    | keyof Extract<EngineEvent, { type: 'run.finished' }>;
-}[];
+const SEARCHED_EVENT_TEXT: {
+  [T in 'node.failed' | 'run.finished']: keyof Extract<EngineEvent, { type: T }>;
+} = {
+  'node.failed': 'error',
+  'run.finished': 'reason',
+};
 
 /**
  * The search predicate. `instr`, not `LIKE`: every value is a bound parameter
  * and `instr` has no wildcards, so a `%` or `_` the operator types is literal
  * text with no escaping to get wrong. `lower()` folds ASCII only, which is
- * SQLite's own limit and is stated rather than worked around. The run id is
+ * SQLite's own limit and is stated rather than worked around: a non-ASCII name
+ * matches only in the case it was typed. The run id is
  * matched AS TYPED, because ids are case-sensitive.
  *
  * The error arm is a correlated `EXISTS` over that run's events, through
@@ -159,18 +171,20 @@ const SEARCHED_EVENT_TEXT = [
  * search finds nothing the caller could not open.
  */
 function runSearchCondition(text: string): SQL {
-  const needle = text.toLowerCase();
+  // Folded by SQLite on BOTH sides, so needle and haystack go through one
+  // `lower()` (a JS `toLowerCase()` would fold non-ASCII the column never is).
+  const contains = (column: SQLWrapper) => sql`instr(lower(${column}), lower(${text})) > 0`;
   const eventText = sql.join(
-    SEARCHED_EVENT_TEXT.map(
-      ({ type, field }) =>
-        sql`(${runEvents.type} = ${type} and instr(lower(json_extract(${runEvents.payload}, ${`$.${field}`})), ${needle}) > 0)`,
+    Object.entries(SEARCHED_EVENT_TEXT).map(
+      ([type, field]) =>
+        sql`(${runEvents.type} = ${type} and ${contains(sql`json_extract(${runEvents.payload}, ${`$.${field}`})`)})`,
     ),
     sql` or `,
   );
   const arms = [
     sql`instr(${runs.id}, ${text}) > 0`,
-    sql`instr(lower(${pipelines.name}), ${needle}) > 0`,
-    sql`instr(lower(${triggers.name}), ${needle}) > 0`,
+    contains(pipelines.name),
+    contains(triggers.name),
     sql`exists (select 1 from ${runEvents} where ${runEvents.runId} = ${runs.id} and (${eventText}))`,
   ];
   return sql`(${sql.join(arms, sql` or `)})`;

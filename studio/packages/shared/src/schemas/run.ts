@@ -127,8 +127,8 @@ export type Run = z.infer<typeof RunSchema>;
 /**
  * #1484 OR35 M1 — what STARTED a run, as the Monitor's "Triggered by" column
  * says it. One server-side authority (`RUN_TRIGGERED_BY_SQL`) computes it from
- * the row, so the list, its origin tabs and any later server-side filter cannot
- * disagree about a run. The five fire kinds come first (a trigger fired it);
+ * the row, so the list's column and its `?kind=` filter cannot disagree about
+ * a run. The five fire kinds come first (a trigger fired it);
  * then:
  * - `editor`: the editor's Run, a saved version with no trigger;
  * - `debug`: the editor's Debug, a draft version;
@@ -518,7 +518,8 @@ export type RunAnnotationsResponse = z.infer<typeof RunAnnotationsResponseSchema
 /**
  * #1484 OR35 M1 — a multi-value filter axis on the wire: one query param holding
  * a comma-separated list (`?kind=schedule,webhook`), every member parsed by
- * `member`. Comma-joined rather than a repeated param because the web keeps the
+ * `member`. One caller today; it is the reuse point for M3's multi-value
+ * `status`/`pipeline`/`trigger` axes. Comma-joined rather than a repeated param because the web keeps the
  * same string in its own URL and hands it to `pageQuery` unchanged, and both are
  * a `Record<string, string>`.
  *

@@ -9,6 +9,7 @@ import {
   type RunTriggeredByKind,
 } from '@autonomy-studio/shared';
 import type { RunSince, RunStatus } from '@autonomy-studio/shared';
+import { pad } from '../triggers/formFields';
 
 /**
  * U26 + #1484 OR35 M1 — the runs list's filter bar state, and the URL it lives
@@ -159,7 +160,10 @@ function localMidnight(day: string): Date | null {
   const m = DAY.exec(day);
   if (m === null) return null;
   const [y, mo, d] = [Number(m[1]), Number(m[2]) - 1, Number(m[3])];
-  const date = new Date(y, mo, d);
+  // `setFullYear`, not `new Date(y, mo, d)`: the constructor reads a year below
+  // 100 as 19xx, and a year typed into a date input passes through `0002-…`.
+  const date = new Date(2000, 0, 1);
+  date.setFullYear(y, mo, d);
   return date.getFullYear() === y && date.getMonth() === mo && date.getDate() === d ? date : null;
 }
 
@@ -195,6 +199,25 @@ function readDays(
  * The VIEWER'S zone, for now: a calendar day is the reader's, not the server's.
  * When #1484's display-timezone setting lands it owns this boundary too.
  */
+/**
+ * Which kind of time bound the URL is ASKING for, from the params' PRESENCE
+ * rather than their validity: a date input mid-edit (a half-typed year, or just
+ * cleared) holds no valid day, and a picker that inferred its mode from valid
+ * days would unmount the very input being typed into. An unusable day is still
+ * dropped from the REQUEST by `readRunFilters`.
+ */
+export function startedModeOf(params: URLSearchParams, since: RunSince | undefined): string {
+  if (params.has(RUN_FILTER_PARAMS.on)) return 'on';
+  if (params.has(RUN_FILTER_PARAMS.from) || params.has(RUN_FILTER_PARAMS.to)) return 'range';
+  return since ?? '';
+}
+
+/** Whether the URL holds ANY filter param, usable or not — so Clear is offered
+ * for a filter that is set but currently narrows nothing (a reversed range). */
+export function hasRunFilterParams(params: URLSearchParams): boolean {
+  return Object.values(RUN_FILTER_PARAMS).some((param) => params.has(param));
+}
+
 export function dayRangeBounds(days: { on?: string; from?: string; to?: string }): {
   from?: string;
   to?: string;
@@ -213,7 +236,6 @@ export function dayRangeBounds(days: { on?: string; from?: string; to?: string }
 
 /** A local `Date` as the `YYYY-MM-DD` a date input and the URL hold. */
 export function dayOf(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
