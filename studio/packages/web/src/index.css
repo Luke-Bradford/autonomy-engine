@@ -1597,10 +1597,6 @@ button.danger {
 .problems-splitter {
   cursor: col-resize;
   touch-action: none;
-  /* A drag that starts here must not start a text selection across the rows:
-     `RunRow` reads a selection inside a row as "I was selecting text" and
-     would then ignore the next click on it. */
-  user-select: none;
 }
 
 /* A flex item in the dock body, where the toolbox's is a grid track. */
@@ -4487,6 +4483,10 @@ button.danger {
   width: 8px;
   cursor: col-resize;
   touch-action: none;
+  /* A drag that starts here must not start a text selection across the rows:
+     `RunRow` reads a selection inside a row as "I was selecting text" and
+     would then ignore the next click on it. */
+  user-select: none;
 }
 
 .runs-grid__resizer::after {

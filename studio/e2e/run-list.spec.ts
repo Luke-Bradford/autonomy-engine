@@ -604,6 +604,10 @@ test('#1484 — runs grid columns resize with the pointer, can be hidden, and pe
         statusRight: box('#runs-grid-col-status')?.right ?? 0,
         runId: box('#runs-grid-col-runId')?.width ?? 0,
         filler: box('th.runs-grid__filler')?.width ?? -1,
+        handleSelects: (() => {
+          const handle = document.querySelector('.runs-grid__resizer');
+          return handle ? getComputedStyle(handle).userSelect : 'missing';
+        })(),
         gridScrolls: (scroll?.scrollWidth ?? 0) > (scroll?.clientWidth ?? 0) + 1,
         pageScrolls: (content?.scrollWidth ?? 0) > (content?.clientWidth ?? 0) + 1,
       };
@@ -614,6 +618,9 @@ test('#1484 — runs grid columns resize with the pointer, can be hidden, and pe
   expect(start.status).toBeCloseTo(88, 0);
   expect(start.filler).toBeGreaterThan(0);
   expect(start.gridScrolls).toBe(false);
+  // A drag from the handle must not select text across the rows (`RunRow`
+  // ignores a click that ends a selection inside it).
+  expect(start.handleSelects).toBe('none');
 
   // A pointer drag of 40px moves the Status edge 40px.
   const handle = page.getByRole('separator', { name: 'Resize Status column' });
