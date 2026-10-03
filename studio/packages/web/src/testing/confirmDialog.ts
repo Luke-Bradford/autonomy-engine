@@ -20,8 +20,10 @@ export async function answerConfirm(
   answer: 'accept' | 'cancel',
 ): Promise<string> {
   const dialog = await screen.findByRole('alertdialog');
+  // Wait for the BUTTONS too (#1495): the dialog can be found while Fluent is
+  // still mounting it, before its contents are in the accessibility tree.
+  const buttons = await within(dialog).findAllByRole('button');
   const text = dialog.textContent ?? '';
-  const buttons = within(dialog).getAllByRole('button');
   const target = answer === 'cancel' ? buttons[0]! : buttons[buttons.length - 1]!;
   await user.click(target);
   await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
