@@ -113,7 +113,7 @@ export function debugRunsOnlyMessage(name: string, retentionDays: number | null)
   }
   return (
     `Cannot delete “${name}”: its only runs are Debug runs, ${debugKeptFor(retentionDays)} ` +
-    "after each Debug starts — it can be deleted once they are gone. To hide it now, archive it " +
+    'after each Debug starts — it can be deleted once they are gone. To hide it now, archive it ' +
     "from the Pipelines list or the editor's ⋯ menu."
   );
 }
