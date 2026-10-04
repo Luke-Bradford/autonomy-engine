@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import {
+  RUN_PAGE_SIZES,
+  type RunPageSize,
   paginatedResponseSchema,
   PendingExternalWaitListSchema,
   RerunAcceptedSchema,
@@ -40,7 +42,7 @@ const RunPageSchema = paginatedResponseSchema(RunSummarySchema);
  * history, not a paragraph. Exported so the tests and the e2e spec assert
  * against the real value instead of re-literalling it.
  */
-export const RUNS_PAGE_SIZE = 50;
+export const RUNS_PAGE_SIZE: RunPageSize = RUN_PAGE_SIZES[0];
 const RunEventListSchema = z.array(RunEventSchema);
 /* Declared HERE rather than in the shared package, following `RunEventListSchema`
    two lines up: this is a client-side parse of a run sub-resource, and the server
