@@ -1,4 +1,5 @@
 import { createStore, type StoreApi } from 'zustand/vanilla';
+import { RUN_PAGE_SIZES, type RunPageSize } from '@autonomy-studio/shared';
 import {
   DEFAULT_DISPLAY_TIME_ZONE,
   parseDisplayTimeZone,
@@ -115,6 +116,15 @@ export interface UiState {
   /** `null`, or a non-finite width, returns the column to its default. */
   setRunsGridWidth: (column: RunGridColumnId, width: number | null) => void;
   resetRunsGridColumns: () => void;
+  /**
+   * #1484 OR35 M1 — whether the runs list keeps itself current (`RunsPage`'s
+   * Live toggle), and how many runs it reads per page. Per viewer, not in the
+   * URL: both are about how this reader watches, not which runs a link names.
+   */
+  runsLive: boolean;
+  setRunsLive: (live: boolean) => void;
+  runsPageSize: RunPageSize;
+  setRunsPageSize: (size: RunPageSize) => void;
 }
 
 export type UiStore = StoreApi<UiState>;
@@ -222,6 +232,8 @@ export const DISPLAY_TIME_ZONE_STORAGE_KEY = 'autonomy-studio.display-time-zone'
 /* Two keys, not one record, for the dock keys' reason above. */
 export const RUN_GRID_HIDDEN_STORAGE_KEY = 'autonomy-studio.runs-grid-hidden';
 export const RUN_GRID_WIDTHS_STORAGE_KEY = 'autonomy-studio.runs-grid-widths';
+export const RUNS_LIVE_STORAGE_KEY = 'autonomy-studio.runs-live';
+export const RUNS_PAGE_SIZE_STORAGE_KEY = 'autonomy-studio.runs-page-size';
 
 /**
  * Pane width bounds. The minimum is a readable list width; the maximum keeps
@@ -469,6 +481,12 @@ function parseOneOf<T extends string>(choices: readonly T[]): (raw: string) => T
   return (raw) => choices.find((choice) => choice === raw);
 }
 
+/** One of the runs grid's page sizes; anything else — a size a later release
+ *  dropped included — reads as absent, so the default applies. */
+function parseRunPageSize(raw: string): RunPageSize | undefined {
+  return RUN_PAGE_SIZES.find((size) => String(size) === raw);
+}
+
 /** The preferences `createUiStore`'s `pref` stores as their own string. */
 type StoredAsIs =
   | 'minimapHidden'
@@ -479,7 +497,9 @@ type StoredAsIs =
   | 'dockNodeTab'
   | 'dockPipelineTab'
   | 'historyOpen'
-  | 'displayTimeZone';
+  | 'displayTimeZone'
+  | 'runsLive'
+  | 'runsPageSize';
 
 /** The pane preference as it is persisted — one record, written atomically. */
 interface StoredPane {
@@ -637,6 +657,14 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       false,
     );
 
+    const [runsLive, setRunsLive] = pref('runsLive', RUNS_LIVE_STORAGE_KEY, parseBoolean, false);
+    const [runsPageSize, setRunsPageSize] = pref(
+      'runsPageSize',
+      RUNS_PAGE_SIZE_STORAGE_KEY,
+      parseRunPageSize,
+      RUN_PAGE_SIZES[0],
+    );
+
     /* Both pane setters persist the WHOLE record, so the two fields can never
        drift apart in storage — a width that survived a write the collapse flag
        did not is a state neither the user nor the code asked for. */
@@ -730,6 +758,10 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       historyOpen,
       setHistoryOpen,
       displayTimeZone,
+      runsLive,
+      setRunsLive,
+      runsPageSize,
+      setRunsPageSize,
       /* Validated on the way IN as well as out: a zone the runtime cannot
          format in would make every timestamp on every page throw. */
       setDisplayTimeZone: (zone) => {
