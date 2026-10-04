@@ -26,6 +26,7 @@ const BASE: ActivityRun = {
   childRunId: null,
   childRun: null,
   error: null,
+  skipReason: null,
 };
 
 function show(rows: ActivityRun[] | null, error: string | null = null) {
@@ -104,6 +105,29 @@ describe('#1484 M2 ActivityRunsTable', () => {
     });
   });
 
+  it('says why a skipped row was skipped, after its status', () => {
+    show([
+      {
+        ...BASE,
+        key: 'skip:w:1',
+        nodeId: 'w',
+        activityId: 'w',
+        attemptId: null,
+        attempt: null,
+        status: 'skipped',
+        startedAt: null,
+        finishedAt: null,
+        durationMs: null,
+        skipReason: { kind: 'upstream', from: 'a', outcome: 'failure' },
+      },
+      { ...BASE, key: 'skip:a:2', status: 'skipped', skipReason: null },
+    ]);
+    const [why, bare] = screen.getAllByRole('row').slice(1);
+    expect(cellsOf(why!).Status).toBe('skipped · upstream failed: Copy 1');
+    // A skip the read model could not give a reason for is just skipped.
+    expect(cellsOf(bare!).Status).toBe('skipped');
+  });
+
   it('links a called run by its pipeline name, and keeps a bare id it cannot resolve', () => {
     show([
       {
@@ -157,6 +181,7 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
     kind: 'foreach',
     status: 'failure',
     reason: 'child_failed:w@1',
+    skipReason: null,
     reused: false,
     startedAt: BASE.startedAt,
     finishedAt: BASE.finishedAt,
@@ -208,6 +233,23 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
     </MemoryRouter>
   );
   const showGroups = (group: ActivityRunGroup = GROUP) => render(table(null, group));
+
+  it('says why a skipped container was skipped, after its status', () => {
+    showGroups({
+      ...GROUP,
+      status: 'skipped',
+      reason: null,
+      skipReason: { kind: 'upstream', from: 'w', outcome: 'failure' },
+      startedAt: null,
+      finishedAt: null,
+      durationMs: null,
+      itemCount: null,
+      iterations: [],
+    });
+    expect(cellsOf(screen.getAllByRole('row')[1]!).Status).toBe(
+      'skipped · upstream failed: HTTP Request 1',
+    );
+  });
   const bodyRows = () => screen.getAllByRole('row').slice(1);
 
   it('heads its rows with the container, then a line per item', () => {
@@ -276,6 +318,7 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
               ...GROUP,
               status: 'skipped',
               reason: null,
+              skipReason: null,
               startedAt: null,
               finishedAt: null,
               iterations: [],

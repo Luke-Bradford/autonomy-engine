@@ -4705,6 +4705,11 @@ button.danger {
   vertical-align: middle;
 }
 
+.activity-runs__why {
+  color: var(--colorNeutralForeground3);
+  white-space: nowrap;
+}
+
 .activity-runs__error {
   max-width: 32rem;
   overflow: hidden;

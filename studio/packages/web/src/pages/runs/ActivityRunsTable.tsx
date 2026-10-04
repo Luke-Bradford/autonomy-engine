@@ -19,6 +19,7 @@ import {
 import { runDetailPath } from './runPath';
 import { ACTIVITY_RUN_COLUMNS, iterationText } from './activityRunsColumns';
 import { activityRunEntries } from './activityRunsTree';
+import { skipReasonText } from './skipReasonText';
 
 /** Bytes as the activity reported them, saying which way they moved. */
 function bytesText(row: ActivityRun): string {
@@ -129,6 +130,8 @@ export function ActivityRunsTable({
   selected?: { key: string } | null;
 }) {
   const selectedRow = useRef<HTMLTableRowElement>(null);
+  /** A skip's cause may be an activity or a container. */
+  const anyNameOf = (id: string) => nameOf(id) ?? containerNameOf(id);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const entries = useMemo(
     () => (rows === null ? [] : activityRunEntries(rows, groups)),
@@ -213,6 +216,12 @@ export function ActivityRunsTable({
                             {containerStatusLabel(group.status, runStatus)}
                           </span>
                         )}
+                        {group.status === 'skipped' && group.skipReason !== null && (
+                          <span className="activity-runs__why">
+                            {' · '}
+                            {skipReasonText(group.skipReason, anyNameOf)}
+                          </span>
+                        )}
                       </td>
                       <Times at={group} />
                       <td />
@@ -288,6 +297,12 @@ export function ActivityRunsTable({
                       ) : (
                         <span className={nodeStatusPillClass(row.status, runStatus)}>
                           {nodeStatusLabel(row.status, runStatus)}
+                        </span>
+                      )}
+                      {row.status === 'skipped' && row.skipReason !== null && (
+                        <span className="activity-runs__why">
+                          {' · '}
+                          {skipReasonText(row.skipReason, anyNameOf)}
                         </span>
                       )}
                     </td>
