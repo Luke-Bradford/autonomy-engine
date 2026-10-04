@@ -2965,8 +2965,14 @@ export function createEngine(doc: EngineDoc): Engine {
       if (nodes === state.nodes) nodes = { ...nodes };
       // The key is REMOVED, not set undefined: a reset node looks exactly as it
       // did before #1484 gave skips a reason.
-      const { skipReason: _skipReason, ...kept } = ns;
-      nodes[id] = { ...kept, status: 'pending', currentAttemptId: undefined, retries: 0 };
+      const reset: NodeRunState = {
+        ...ns,
+        status: 'pending',
+        currentAttemptId: undefined,
+        retries: 0,
+      };
+      delete reset.skipReason;
+      nodes[id] = reset;
       if (Object.prototype.hasOwnProperty.call(outputs, id)) {
         if (outputs === state.outputs) outputs = { ...outputs };
         delete outputs[id];
