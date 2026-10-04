@@ -1,4 +1,9 @@
-import { isValidTimeZone } from '@autonomy-studio/shared';
+import {
+  civilDayNumber,
+  isValidTimeZone,
+  zonedCalendar,
+  type ZonedCalendar,
+} from '@autonomy-studio/shared';
 
 /**
  * #1484 OR35 principle 4 — every timestamp the app shows, in ONE display time
@@ -205,49 +210,38 @@ const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
  * The first instant of a `YYYY-MM-DD` day in the display zone, as epoch ms, or
  * `null` for a string that is not a real day (`2026-02-30`).
  *
- * A zone's offset is itself a function of the instant, so this starts from the
- * day's UTC midnight, measures the zone's offset THERE, corrects, and measures
- * again at the corrected instant — the second pass is what lands a day whose
- * offset changes overnight. Where midnight does not exist (a zone that springs
- * forward AT midnight), the day begins at the first instant it has, which is
- * what "on that day" means; where it happens twice, at the first.
- *
- * The scheduler answers the same question server-side with a bisection
- * (`scheduler/recurrence.ts`, `localDayStartInstant`); web cannot import the
- * server, and that one is a closure inside the period model.
+ * Where midnight does not exist (a zone that springs forward AT midnight), the
+ * day begins at the first instant it has, which is what "on that day" means;
+ * where it happens twice, at the first; and a day the zone skipped entirely
+ * begins where the next one does, an empty range. The answer comes from
+ * `zonedCalendar` in `@autonomy-studio/shared` (#1525), the bisection the
+ * scheduler steps its zone-aware recurrences with, so the two cannot disagree
+ * about where a day begins. `local` goes through it too, as the zone the
+ * runtime resolves it to.
  */
 export function zonedDayStart(day: string, zone: DisplayTimeZone): number | null {
   const match = DAY.exec(day);
   if (match === null) return null;
   const [year, month, date] = [Number(match[1]), Number(match[2]), Number(match[3])];
-  const utcMidnight = calendarDay(year, month, date);
-  if (utcMidnight === null) return null;
-  if (zone === LOCAL_TIME_ZONE) {
-    // `setFullYear`, as `calendarDay` — the constructor reads a year below 100
-    // as 19xx, and a year typed into a date input passes through `0002-…`.
-    const local = new Date(2000, 0, 1);
-    local.setFullYear(year, month - 1, date);
-    return local.getTime();
-  }
-  let start = utcMidnight - offsetAt(utcMidnight, zone);
-  start = utcMidnight - offsetAt(start, zone);
-  /* The guess is the day's midnight wherever midnight happens once. Where it
-     does not, walk on the 15-minute grid every zone offset sits on:
-     - a midnight skipped by a spring-forward lands on the day before, so step
-       FORWARD to the day's first instant (and past a day the zone skipped
-       entirely, as Samoa skipped 2011-12-30, to the next day's — an empty
-       range, which is the truth);
-     - a fall-back from 01:00 to 00:00 lands on the SECOND midnight, so step
-       BACK while the instant before is still on the day.
-     Day strings are zero-padded `YYYY-MM-DD`, so they compare in calendar
-     order. Each walk is bounded by a day's worth of steps. */
-  for (let i = 0; i < STEPS_PER_DAY && dayOf(start, zone) < day; i++) start += STEP_MS;
-  for (let i = 0; i < STEPS_PER_DAY && dayOf(start - STEP_MS, zone) === day; i++) start -= STEP_MS;
-  return start;
+  if (calendarDay(year, month, date) === null) return null;
+  return calendarFor(zone).dayStart(civilDayNumber(year, month, date));
 }
 
-const STEP_MS = 15 * 60_000;
-const STEPS_PER_DAY = 26 * 4;
+/* One calendar per zone, for the reason `formatterFor` keeps one formatter:
+   building it is the costly part, and the cache is bounded by the zones a
+   viewer ever picks. `local` is cached under its own key, so a machine that
+   changes zone under an open tab keeps the old one until a reload, as the
+   formatters do. */
+const calendars = new Map<string, ZonedCalendar>();
+
+function calendarFor(zone: DisplayTimeZone): ZonedCalendar {
+  let calendar = calendars.get(zone);
+  if (calendar === undefined) {
+    calendar = zonedCalendar(intlZone(zone) ?? new Intl.DateTimeFormat().resolvedOptions().timeZone);
+    calendars.set(zone, calendar);
+  }
+  return calendar;
+}
 
 /** A calendar day's UTC midnight, or `null` when it is not on the calendar —
  * `2026-02-30` is refused rather than rolled into March. `setUTCFullYear`
@@ -278,14 +272,4 @@ export function shiftDay(day: string, days: number): string {
   const moved = new Date(0);
   moved.setUTCFullYear(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + days);
   return moved.toISOString().slice(0, 10);
-}
-
-/** The zone's offset from UTC at an instant, in ms (`+3_600_000` for GMT+1). */
-function offsetAt(ms: number, zone: DisplayTimeZone): number {
-  const p = zonedParts(ms, zone);
-  // `setUTCFullYear`, not `Date.UTC`, which reads a year below 100 as 19xx.
-  const asUtc = new Date(0);
-  asUtc.setUTCFullYear(Number(p.year), Number(p.month) - 1, Number(p.day));
-  asUtc.setUTCHours(Number(p.hour), Number(p.minute), Number(p.second), Number(p.fraction));
-  return asUtc.getTime() - ms;
 }
