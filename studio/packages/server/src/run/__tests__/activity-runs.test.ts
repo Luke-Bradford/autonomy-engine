@@ -54,7 +54,8 @@ function seedVersion(
   const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
   const input: NewPipelineVersion = {
     pipelineId: pipeline.id,
-    params: list === undefined ? [] : [{ name: 'list', type: 'json', required: false, default: list }],
+    params:
+      list === undefined ? [] : [{ name: 'list', type: 'json', required: false, default: list }],
     outputs: [],
     nodes,
     edges,
@@ -96,7 +97,11 @@ const stub = (nodes: StubExecutorOptions['nodes'] = {}) => makeStubExecutor({ no
 describe('#1484 activity runs — one row per attempt', () => {
   it('times each attempt, names a failure, and adds the downstream skip as a row', async () => {
     const { db } = freshDb();
-    const pvId = seedVersion(db, [node('a'), node('b'), node('c')], [edge('a', 'b'), edge('b', 'c')]);
+    const pvId = seedVersion(
+      db,
+      [node('a'), node('b'), node('c')],
+      [edge('a', 'b'), edge('b', 'c')],
+    );
     const runId = await drive(db, pvId, stub({ b: { outcome: 'failure', error: 'boom' } }));
 
     const rows = project(db, pvId, runId);
@@ -110,7 +115,12 @@ describe('#1484 activity runs — one row per attempt', () => {
     expect(typeof a!.startedAt).toBe('number');
     expect(a!.finishedAt).toBeGreaterThanOrEqual(a!.startedAt!);
     expect(a!.durationMs).toBe(a!.finishedAt! - a!.startedAt!);
-    expect(b!.error).toEqual({ message: 'boom', kind: 'permanent', connectionId: null });
+    expect(b!.error).toEqual({
+      message: 'boom',
+      kind: 'permanent',
+      code: null,
+      connectionId: null,
+    });
     // A skip never ran: no attempt, no times.
     expect(c).toMatchObject({ attemptId: null, startedAt: null, finishedAt: null, error: null });
   });
@@ -185,9 +195,7 @@ describe('#1484 activity runs — one row per attempt', () => {
     const runId = await drive(db, pvId, stub());
 
     const rows = project(db, pvId, runId);
-    expect(
-      rows.map((r) => [r.nodeId, r.activityId, r.status, r.iteration?.index]).sort(),
-    ).toEqual([
+    expect(rows.map((r) => [r.nodeId, r.activityId, r.status, r.iteration?.index]).sort()).toEqual([
       ['w@0', 'w', 'success', 0],
       ['w@1', 'w', 'success', 1],
       ['w@2', 'w', 'success', 2],
@@ -246,11 +254,12 @@ describe('#1484 activity runs — one row per attempt', () => {
     // An old row, written before `kind` existed: the parse defaults it.
     const log = loadEngineLog(db, runId).map((l) => {
       if (l.event.type !== 'node.failed') return l;
-      const { kind: _dropped, ...payload } = l.payload as Record<string, unknown>;
+      const payload = { ...(l.payload as Record<string, unknown>) };
+      delete payload.kind;
       return { ...l, payload };
     });
 
     const [row] = projectActivityRuns(doc, buildEngine(doc), log);
-    expect(row?.error).toEqual({ message: 'old', kind: null, connectionId: null });
+    expect(row?.error).toEqual({ message: 'old', kind: null, code: null, connectionId: null });
   });
 });

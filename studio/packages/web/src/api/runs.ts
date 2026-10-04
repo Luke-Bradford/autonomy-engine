@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import {
+  ActivityRunsResponseSchema,
+  type ActivityRunsResponse,
   RUN_PAGE_SIZES,
   type RunPageSize,
   PendingExternalWaitListSchema,
@@ -227,6 +229,21 @@ export function getRun(id: string, signal?: AbortSignal): Promise<Run> {
 export function getRunDetail(id: string, signal?: AbortSignal): Promise<RunDetail> {
   return apiFetch(`/api/runs/${encodeURIComponent(id)}/detail`, {
     schema: RunDetailSchema,
+    signal,
+  });
+}
+
+/**
+ * #1484 OR35 M2 — the run's activity runs (`GET /api/runs/:id/activity-runs`):
+ * one row per attempt of each activity, per iteration, projected server-side
+ * from the event log.
+ */
+export function getRunActivityRuns(
+  id: string,
+  signal?: AbortSignal,
+): Promise<ActivityRunsResponse> {
+  return apiFetch(`/api/runs/${encodeURIComponent(id)}/activity-runs`, {
+    schema: ActivityRunsResponseSchema,
     signal,
   });
 }

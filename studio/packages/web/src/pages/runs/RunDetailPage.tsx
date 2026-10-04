@@ -20,11 +20,13 @@ import {
   streamStillLive,
 } from './runSummary';
 import { eventGloss, failureClass, formatOutputValue } from './format';
-import { activityLabels } from '../pipeline/activityLabel';
+import { activityLabel, activityLabels } from '../pipeline/activityLabel';
 import { nodeStatusLabel, nodeStatusPillClass } from './nodeStatus';
 import { runStatusLabel } from './runStatus';
 import { AttemptTimeline } from './AttemptTimeline';
 import { NodeActivityPanel, PANEL_ID } from './NodeActivityPanel';
+import { ActivityRunsTable } from './ActivityRunsTable';
+import { useActivityRuns } from './useActivityRuns';
 import { NodeDuration } from './NodeDuration';
 import { RunCostSummary } from './RunCostSummary';
 import { RunGlobals } from './RunGlobals';
@@ -276,6 +278,13 @@ export function RunDetailPage({ runId }: { runId: string }) {
      which is the defect this closes rather than a smaller version of it. */
   const nodeNames = useMemo(() => (doc === null ? null : activityLabels(doc.nodes)), [doc]);
   const nameOf = (nodeId: string) => nodeNames?.get(nodeId) ?? null;
+  const nodeTypes = useMemo(
+    () => (doc === null ? null : new Map(doc.nodes.map((n) => [n.id, activityLabel(n)]))),
+    [doc],
+  );
+  const typeOf = (nodeId: string) => nodeTypes?.get(nodeId) ?? null;
+  // #1484 M2 — re-read as the stream grows; see `useActivityRuns`.
+  const activityRuns = useActivityRuns(runId, stream.events.at(-1)?.seq);
 
   // U24 — which node's drill-in is open. Held as an ID and RESOLVED against the
   // live fold rather than storing the row itself, so the panel tracks a running
@@ -676,6 +685,18 @@ export function RunDetailPage({ runId }: { runId: string }) {
           }
         />
       )}
+
+      {/* #1484 OR35 M2 — the activity runs, directly under the run's header and
+          any action the operator has to take, so the first thing below the run
+          is what each activity did. The Nodes table further down stays until
+          the M2 drawer slice replaces its drill-in. */}
+      <ActivityRunsTable
+        rows={activityRuns.rows}
+        error={activityRuns.error}
+        runStatus={status}
+        nameOf={nameOf}
+        typeOf={typeOf}
+      />
 
       {/* U27 (#930) — the run-level spend. Placed AFTER the parked-callback block
           and before the Graph: a pending callback is an ACTION the operator has

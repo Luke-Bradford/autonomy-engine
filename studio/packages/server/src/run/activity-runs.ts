@@ -200,8 +200,7 @@ export function projectActivityRuns(
   const settle = (row: ProjectedActivityRun, status: NodeRunStatus, ts: number) => {
     row.status = status;
     row.finishedAt = ts;
-    row.durationMs =
-      row.startedAt !== null && ts >= row.startedAt ? ts - row.startedAt : null;
+    row.durationMs = row.startedAt !== null && ts >= row.startedAt ? ts - row.startedAt : null;
     open.delete(row);
   };
 
@@ -233,7 +232,11 @@ export function projectActivityRuns(
     if (e.type === 'condition.evaluated' || e.type === 'switch.evaluated') {
       const row = byAttempt.get(e.attemptId);
       if (row !== undefined) row.branch = e.branch;
-    } else if (e.type === 'call.started' || e.type === 'call.detached' || e.type === 'call.returned') {
+    } else if (
+      e.type === 'call.started' ||
+      e.type === 'call.detached' ||
+      e.type === 'call.returned'
+    ) {
       const row = byAttempt.get(e.attemptId);
       if (row !== undefined) row.childRunId ??= e.childRunId;
     } else if (e.type === 'node.succeeded') {
@@ -250,6 +253,7 @@ export function projectActivityRuns(
         row.error = {
           message: e.error,
           kind: statedKind(payload) ? e.kind : null,
+          code: e.code ?? null,
           connectionId: e.connectionId ?? null,
         };
       }
@@ -259,7 +263,7 @@ export function projectActivityRuns(
     const own = result === null ? undefined : byAttempt.get(result.attemptId);
     if (result !== null && own !== undefined && open.has(own)) {
       if (result.error !== undefined && own.error === null) {
-        own.error = { message: result.error, kind: null, connectionId: null };
+        own.error = { message: result.error, kind: null, code: null, connectionId: null };
       }
       settle(own, result.status, ts);
     }
@@ -279,7 +283,9 @@ export function projectActivityRuns(
         if (entry.currentAttemptId !== undefined && byAttempt.has(entry.currentAttemptId)) {
           continue;
         }
-        rows.push(blank(`skip:${nodeId}:${rows.length}`, nodeId, 'skipped', iterationOf(nodeId, before)));
+        rows.push(
+          blank(`skip:${nodeId}:${rows.length}`, nodeId, 'skipped', iterationOf(nodeId, before)),
+        );
       }
     }
   }

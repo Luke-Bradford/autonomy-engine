@@ -45,6 +45,8 @@ export const ActivityRunErrorSchema = z.object({
   /** `null` when the log did not state a kind: old `node.failed` rows parse
    * with a default of `permanent`, which would be a claim the log never made. */
   kind: FailureKindSchema.nullable(),
+  /** The adapter's finer reason (`rate_limit`), when it gave one. */
+  code: z.string().nullable(),
   connectionId: z.string().nullable(),
 });
 export type ActivityRunError = z.infer<typeof ActivityRunErrorSchema>;

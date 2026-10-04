@@ -4544,6 +4544,37 @@ button.danger {
   color: var(--colorNeutralForeground3);
 }
 
+/* #1484 OR35 M2 — the run's activity runs: the runs grid's density (32px rows,
+   13px text, tabular right-aligned numbers), with columns sized by content and
+   a sideways scroll of its own so the page never scrolls sideways. */
+.activity-runs__scroll {
+  overflow-x: auto;
+}
+
+.activity-runs__table {
+  font-size: 13px;
+  width: 100%;
+}
+
+.activity-runs__table th,
+.activity-runs__table td {
+  height: 32px;
+  padding: 0 0.6rem;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.activity-runs__table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-runs__error {
+  max-width: 32rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .runs-grid .num,
 .runs-grid .run-cost {
   text-align: right;
