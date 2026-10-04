@@ -17,9 +17,23 @@ export const POLL_DEADLINE_MS = 15_000;
  * Refresh button shut, so the reader can retry without reloading the page.
  */
 export const PAGE_STALLED_MS = 15_000;
+// Not `POLL_DEADLINE_MS`, though equal today: that one ABORTS a request and this
+// one only reports it, so the two may need to move apart.
 
 /** What a list says while `stalled` is true, worded from the threshold it uses. */
 export const PAGE_STALLED_LABEL = `No answer in ${PAGE_STALLED_MS / 1_000}s — Refresh to try again`;
+
+/** A controller that also aborts when `outer` does; `cleanUp` drops the link. */
+function linkedController(outer: AbortSignal): {
+  controller: AbortController;
+  cleanUp: () => void;
+} {
+  const controller = new AbortController();
+  const forward = () => controller.abort(outer.reason);
+  if (outer.aborted) forward();
+  else outer.addEventListener('abort', forward, { once: true });
+  return { controller, cleanUp: () => outer.removeEventListener('abort', forward) };
+}
 
 /**
  * Runs `run` with a signal that also aborts after `ms`, and rejects at that
@@ -32,11 +46,7 @@ function withDeadline<R>(
   outer: AbortSignal,
   ms: number,
 ): Promise<R> {
-  const controller = new AbortController();
-  const forward = () => controller.abort(outer.reason);
-  if (outer.aborted) forward();
-  else outer.addEventListener('abort', forward, { once: true });
-  const cleanUp = () => outer.removeEventListener('abort', forward);
+  const { controller, cleanUp } = linkedController(outer);
   let request: Promise<R>;
   try {
     request = run(controller.signal);
@@ -94,9 +104,9 @@ function withDeadline<R>(
  * #1484 — A POLL IS THE QUIET REFRESH. `poll()` re-reads the first page for a
  * caller that keeps a list live, and it differs from `refresh()` in three ways,
  * each of which a 5-second ticker would otherwise turn into a visible fault:
- *  - it LOSES to everything. It is skipped while any request of this list is in
- *    flight (counted until each SETTLES, so a superseded one still counts), and
- *    a later refresh or older page supersedes it. On a server slower than the
+ *  - it LOSES to everything. It is skipped while the list's current request is
+ *    in flight, and a later refresh or older page supersedes it. On a server
+ *    slower than the
  *    tick, polls that superseded each other would never land — the starvation
  *    `usePolledResource`'s #1000 docblock records.
  *  - it is skipped once an older page has been appended (`extended`). Replacing
@@ -106,12 +116,18 @@ function withDeadline<R>(
  *    not disabled on every tick; and a failed poll is its own error scope,
  *    `'live'`, cleared by the next good answer, rather than a first-page failure
  *    shouting over rows that are still true.
- *  - it has a DEADLINE (#1527). Because a poll waits for every request to
- *    settle, one that never did would hold polling off for good — a Refresh
- *    supersedes its answer but cannot settle it. So a poll still unanswered
- *    after `POLL_DEADLINE_MS` is aborted and FAILS, which the `'live'` scope
- *    already reports, and the next tick polls again. Only a poll: a first or
- *    older page is one the reader asked for and is watching load.
+ *  - it has a DEADLINE (#1527). Because a poll waits for the current request
+ *    to settle, a poll that never did would hold the next one off for good. So
+ *    a poll still unanswered after `POLL_DEADLINE_MS` is aborted and FAILS,
+ *    which the `'live'` scope already reports, and the next tick polls again.
+ *    Only a poll: a first or older page is one the reader asked for and is
+ *    watching load.
+ *
+ * A SUPERSEDED REQUEST IS ABORTED (#1529). `useGuardedLoad` drops its answer
+ * but cannot cancel it, so it stops counting as the list's request the moment a
+ * newer one is issued, and its signal is aborted. Without that, a hung request a
+ * Refresh had replaced would hold every poll off for good, and would keep its
+ * connection open.
  *
  * #1529 — A READER'S PAGE THAT NEVER ANSWERS IS STALLED, NOT FAILED. It keeps
  * its request (no deadline, above), but after `PAGE_STALLED_MS` the list says
@@ -186,8 +202,9 @@ export function usePagedList<T>(
   /* `poll()`'s two guards, read through refs so its identity stays stable and a
      caller's interval is not re-armed on every answer. Written only outside
      render. A ref that lags its state can only make a poll SKIP (an extended
-     flag not yet cleared), never fire over a request. */
-  const inFlight = useRef(0);
+     flag not yet cleared), never fire over a request. `current` is the
+     request still in flight that no newer one has superseded, if any. */
+  const current = useRef<AbortController | null>(null);
   const extendedRef = useRef(false);
 
   /**
@@ -249,16 +266,24 @@ export function usePagedList<T>(
       // `void`: the runner's promise settles after its handlers have written
       // state, and it rejects only if one of THEM threw — there is nothing here
       // to await and nothing a caller could do with it.
-      inFlight.current += 1;
+      current.current?.abort(new Error('superseded'));
+      current.current = null;
+      let request: AbortController | null = null;
       // A fetcher that THROWS rather than rejecting is read as a rejection, so
       // the request still settles: otherwise `.finally` below would never be
-      // attached and `inFlight` would hold polling off for good.
+      // attached and `current` would hold polling off for good.
       const fetchSettling = (signal: AbortSignal): Promise<Paginated<T>> => {
+        const { controller, cleanUp } = linkedController(signal);
+        request = controller;
+        current.current = controller;
         try {
-          return scope === 'live'
-            ? withDeadline((s) => fetchPage(cursor, s), signal, POLL_DEADLINE_MS)
-            : fetchPage(cursor, signal);
+          return (
+            scope === 'live'
+              ? withDeadline((s) => fetchPage(cursor, s), controller.signal, POLL_DEADLINE_MS)
+              : fetchPage(cursor, controller.signal)
+          ).finally(cleanUp);
         } catch (err: unknown) {
+          cleanUp();
           return Promise.reject(err instanceof Error ? err : new Error(String(err)));
         }
       };
@@ -287,9 +312,9 @@ export function usePagedList<T>(
           setPending(null);
         },
       }).finally(() => {
-        // On EVERY settle, superseded or not: a superseded load runs neither
-        // handler, so clearing this there would leave polling stuck for good.
-        inFlight.current -= 1;
+        // On EVERY settle, not in a handler: a superseded load runs neither.
+        // Only while still current — a newer request has replaced it otherwise.
+        if (current.current !== null && current.current === request) current.current = null;
       });
     },
     [fetchPage, keyOf, runLoad],
@@ -329,7 +354,7 @@ export function usePagedList<T>(
   }, [pending]);
 
   const poll = useCallback(() => {
-    if (inFlight.current > 0 || extendedRef.current) return;
+    if (current.current !== null || extendedRef.current) return;
     load(undefined, 'live');
   }, [load]);
 

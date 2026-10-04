@@ -1606,7 +1606,7 @@ describe('#1484 — runs list Live mode and page size', () => {
    * #1529 — a first page that never answers held Refresh shut until a page
    * reload, while Live claimed to be updating though no poll could run.
    */
-  it('lets the reader retry a stalled load, and says it has stalled rather than updating', () => {
+  it('lets the reader retry a stalled load, says it has stalled, and polls again after', async () => {
     vi.useFakeTimers({
       toFake: ['Date', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'],
       now: NOW,
@@ -1615,6 +1615,7 @@ describe('#1484 — runs list Live mode and page size', () => {
     renderWithRouter(<RunsPage ui={liveUi()} />);
     const refresh = screen.getByRole('button', { name: 'Refresh' });
     expect(refresh).toBeDisabled();
+    expect(screen.getByText(RUNS_LIVE_UPDATING_LABEL)).toBeInTheDocument();
 
     tick(PAGE_STALLED_MS);
     expect(refresh).toBeEnabled();
@@ -1623,10 +1624,17 @@ describe('#1484 — runs list Live mode and page size', () => {
     // Still no poll over the reader's own request.
     expect(listMock).toHaveBeenCalledTimes(1);
 
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_back0001', status: 'success' })]));
     fireEvent.click(refresh);
     expect(listMock).toHaveBeenCalledTimes(2);
-    expect(refresh).toBeDisabled();
     expect(screen.queryByText(PAGE_STALLED_LABEL)).not.toBeInTheDocument();
+    await act(async () => {});
+    expect(screen.getByText('run_back0001')).toBeInTheDocument();
+    expect(screen.getByText(RUNS_LIVE_UPDATING_LABEL)).toBeInTheDocument();
+
+    // The hung first request no longer holds Live off: the next tick polls.
+    tick(RUNS_LIVE_POLL_MS);
+    expect(listMock).toHaveBeenCalledTimes(3);
   });
 
   it('pauses while the container holding the rows is scrolled down, and resumes at the top', async () => {

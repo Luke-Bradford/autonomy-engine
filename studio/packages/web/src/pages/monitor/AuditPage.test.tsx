@@ -219,7 +219,8 @@ describe('AuditPage (#1075)', () => {
   });
 
   it('threads an abort signal into the load and aborts it on unmount', async () => {
-    pageMock.mockResolvedValue(page([]));
+    // In flight at unmount: a request that has already answered has nothing to abort.
+    pageMock.mockReturnValue(new Promise(() => {}));
     const { unmount } = renderWithRouter(<AuditPage />);
     await waitFor(() => expect(pageMock).toHaveBeenCalled());
 
