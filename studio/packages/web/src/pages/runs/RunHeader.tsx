@@ -18,6 +18,7 @@ import { runDetailPath, runLinkLabel } from './runPath';
 export interface RunHeaderNames {
   pipeline: string | null;
   trigger: string | null;
+  /** #1395 — the doc is a DEBUG version, so it reads `debug <n>`, not `v<n>`. */
   debug: boolean;
   triggeredByKind: RunTriggeredByKind;
   parentPipelineName: string | null;

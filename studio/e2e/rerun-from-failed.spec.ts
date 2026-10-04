@@ -83,6 +83,9 @@ test('#895 — a failed run reruns from the monitor, and the new run says where 
   await expect(action).toHaveAccessibleDescription(/may incur additional cost/);
   await page.getByLabel('About rerunning from the failure').click();
   await expect(page.getByText(/may incur additional cost/)).toBeVisible();
+  // It floats over the page, so it dismisses like a popover.
+  await page.keyboard.press('Escape');
+  await expect(page.getByText(/may incur additional cost/)).toBeHidden();
 
   // A run that is not a rerun says nothing about lineage, rather than "—".
   await expect(page.getByText('Rerun of')).toHaveCount(0);

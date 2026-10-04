@@ -1,6 +1,6 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { computeRunUsage, TERMINAL_RUN_ROW_STATUS } from '@autonomy-studio/shared';
-import type { PipelineVersion, Run, RunStatus, RunTriggeredByKind } from '@autonomy-studio/shared';
+import type { PipelineVersion, Run, RunStatus } from '@autonomy-studio/shared';
 import { useNavigate } from 'react-router';
 import { cancelRun, getRun, getRunDetail, rerunFromFailed } from '../../api/runs';
 import { messageOf } from '../../api/client';
@@ -25,10 +25,10 @@ import { runStatusLabel } from './runStatus';
 import { AttemptTimeline } from './AttemptTimeline';
 import { NodeActivityPanel, PANEL_ID } from './NodeActivityPanel';
 import { ActivityRunsTable } from './ActivityRunsTable';
-import { RunHeader } from './RunHeader';
+import { RunHeader, type RunHeaderNames } from './RunHeader';
 import { RunFailureBanner } from './RunFailureBanner';
 import { runFailure, runFinished, runStartedAt } from './runFailure';
-import { closeOnEscape, closeOnLeave } from './helpDisclosure';
+import { closeOnEscape, closeOnLeave, closeOnOutsidePointer } from './helpDisclosure';
 import { containerLabels } from '../pipeline/containerRules';
 import { useActivityRuns } from './useActivityRuns';
 import { NodeDuration } from './NodeDuration';
@@ -89,15 +89,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
   // #1392 — the names R1 resolves alongside the doc. A `null` name (none the
   // owner may see), or no names at all on the fallback path (the doc would not
   // resolve), leaves the page showing ids, as it did before.
-  const [names, setNames] = useState<{
-    pipeline: string | null;
-    trigger: string | null;
-    /** #1395 — the doc is a DEBUG version, so it reads `debug <n>`, not `v<n>`. */
-    debug: boolean;
-    /** #1484 M2 — the header's Triggered by and Parent. */
-    triggeredByKind: RunTriggeredByKind;
-    parentPipelineName: string | null;
-  } | null>(null);
+  // The names `/detail` resolves, in the header's own shape (`RunHeaderNames`).
+  const [names, setNames] = useState<RunHeaderNames | null>(null);
   useShellLabel(names?.pipeline ? `${names.pipeline} · run ${shortId(runId)}` : undefined);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [rerunning, setRerunning] = useState(false);
@@ -530,6 +523,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
                   className="run-header__help"
                   onKeyDown={closeOnEscape}
                   onBlur={closeOnLeave}
+                  onToggle={closeOnOutsidePointer}
                 >
                   <summary aria-label="About rerunning from the failure" title="About rerunning">
                     ?
