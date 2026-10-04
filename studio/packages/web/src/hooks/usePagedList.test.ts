@@ -272,3 +272,147 @@ describe('usePagedList (#1076)', () => {
     expect(calls[0]!.signal.aborted).toBe(true);
   });
 });
+
+describe('usePagedList poll (#1484 live mode)', () => {
+  it('re-reads the first page and replaces the head without ever going busy', async () => {
+    const { fetchPage, calls } = deferredFetcher();
+    const { result } = renderHook(() => usePagedList(fetchPage));
+    await act(async () => calls[0]!.resolve(page(['a'], 'cur_1')));
+    expect(result.current.items).toEqual(['a']);
+
+    // The "as of" stamp moves with a poll, so an unfinished row's clock does too.
+    const now = vi.spyOn(Date, 'now').mockReturnValue(9_999_999_999_999);
+    act(() => result.current.poll());
+    now.mockRestore();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.cursor).toBeUndefined();
+    // In flight, and still not busy: a Refresh button stays enabled on every tick.
+    expect(result.current.busy).toBe(false);
+
+    await act(async () => calls[1]!.resolve(page(['new', 'a'], 'cur_2')));
+    expect(result.current.items).toEqual(['new', 'a']);
+    expect(result.current.hasMore).toBe(true);
+    expect(result.current.lastUpdatedAt).toBe(9_999_999_999_999);
+  });
+
+  it('is skipped while any request is in flight, so it never supersedes one', async () => {
+    const { fetchPage, calls } = deferredFetcher();
+    const { result } = renderHook(() => usePagedList(fetchPage));
+
+    // The first page is still in flight.
+    act(() => result.current.poll());
+    expect(calls).toHaveLength(1);
+
+    await act(async () => calls[0]!.resolve(page(['a'])));
+    act(() => result.current.poll());
+    expect(calls).toHaveLength(2);
+    // A second tick while that poll is in flight is dropped too.
+    act(() => result.current.poll());
+    expect(calls).toHaveLength(2);
+  });
+
+  it('does not stick when a poll is superseded and never runs its handlers', async () => {
+    const { fetchPage, calls } = deferredFetcher();
+    const { result } = renderHook(() => usePagedList(fetchPage));
+    await act(async () => calls[0]!.resolve(page(['a'])));
+
+    act(() => result.current.poll());
+    act(() => result.current.refresh());
+    await act(async () => calls[2]!.resolve(page(['b'])));
+    // The superseded poll settles afterwards; its answer is dropped…
+    await act(async () => calls[1]!.resolve(page(['stale'])));
+    expect(result.current.items).toEqual(['b']);
+
+    // …but it no longer counts as in flight, so the next tick polls.
+    act(() => result.current.poll());
+    expect(calls).toHaveLength(4);
+  });
+
+  it('is skipped once an older page is appended, and resumes after a refresh', async () => {
+    const { fetchPage, calls } = deferredFetcher();
+    const { result } = renderHook(() => usePagedList(fetchPage));
+    await act(async () => calls[0]!.resolve(page(['a'], 'cur_1')));
+
+    act(() => result.current.loadMore());
+    await act(async () => calls[1]!.resolve(page(['b'])));
+    expect(result.current.items).toEqual(['a', 'b']);
+    expect(result.current.extended).toBe(true);
+
+    // Replacing the head now would throw away 'b', which the reader asked for.
+    act(() => result.current.poll());
+    expect(calls).toHaveLength(2);
+
+    act(() => result.current.refresh());
+    await act(async () => calls[2]!.resolve(page(['a'], 'cur_1')));
+    expect(result.current.extended).toBe(false);
+    act(() => result.current.poll());
+    expect(calls).toHaveLength(4);
+  });
+
+  it("keeps the rows on a failed poll, reports it as 'live', and clears it on the next good one", async () => {
+    const { fetchPage, calls } = deferredFetcher();
+    const { result } = renderHook(() => usePagedList(fetchPage));
+    await act(async () => calls[0]!.resolve(page(['a'])));
+
+    act(() => result.current.poll());
+    await act(async () => calls[1]!.reject(new Error('down')));
+    expect(result.current.items).toEqual(['a']);
+    expect(result.current.error).toEqual({ message: 'down', scope: 'live' });
+
+    act(() => result.current.poll());
+    await act(async () => calls[2]!.resolve(page(['a'])));
+    expect(result.current.error).toBeNull();
+  });
+});
+
+describe('usePagedList poll — regressions (#1484 review)', () => {
+  it('polls again after a NEW list whose first page failed, even if the old one was extended', async () => {
+    const first = deferredFetcher();
+    const { result, rerender } = renderHook(({ f }: { f: Fetcher }) => usePagedList(f), {
+      initialProps: { f: first.fetchPage as Fetcher },
+    });
+    await act(async () => first.calls[0]!.resolve(page(['a'], 'cur_1')));
+    act(() => result.current.loadMore());
+    await act(async () => first.calls[1]!.resolve(page(['b'])));
+    expect(result.current.extended).toBe(true);
+
+    // A filter change: a new list, whose first page fails.
+    const second = deferredFetcher();
+    rerender({ f: second.fetchPage as Fetcher });
+    await act(async () => second.calls[0]!.reject(new Error('down')));
+    expect(result.current.extended).toBe(false);
+
+    act(() => result.current.poll());
+    expect(second.calls).toHaveLength(2);
+  });
+
+  it('a fetcher that throws synchronously still settles, so polling is not held off', async () => {
+    let throwNext = false;
+    const fetchPage = vi.fn((): Promise<Page> => {
+      if (throwNext) throw new Error('sync');
+      return Promise.resolve(page(['a']));
+    });
+    const { result } = renderHook(() => usePagedList(fetchPage));
+    await waitFor(() => expect(result.current.items).toEqual(['a']));
+
+    throwNext = true;
+    act(() => result.current.poll());
+    await waitFor(() => expect(result.current.error?.scope).toBe('live'));
+    throwNext = false;
+    act(() => result.current.poll());
+    expect(fetchPage).toHaveBeenCalledTimes(3);
+  });
+
+  it('a good poll does not clear a failed older page', async () => {
+    const { fetchPage, calls } = deferredFetcher();
+    const { result } = renderHook(() => usePagedList(fetchPage));
+    await act(async () => calls[0]!.resolve(page(['a'], 'cur_1')));
+    act(() => result.current.loadMore());
+    await act(async () => calls[1]!.reject(new Error('older failed')));
+    expect(result.current.error?.scope).toBe('more');
+
+    act(() => result.current.poll());
+    await act(async () => calls[2]!.resolve(page(['a'], 'cur_1')));
+    expect(result.current.error).toEqual({ message: 'older failed', scope: 'more' });
+  });
+});

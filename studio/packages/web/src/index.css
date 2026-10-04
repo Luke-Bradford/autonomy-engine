@@ -4455,7 +4455,7 @@ button.danger {
    definitions and the operator's resizes (`RunsGrid`), no longer positional
    shares here. The grid scrolls sideways in its own box once the columns
    outgrow the page, so the page itself never does. The table sits flush under
-   the filter bar inside it (`.runs-page > .runs-grid-scroll > table`, below). */
+   the filter bar inside it (`.runs-page > .runs-list > .runs-grid-scroll > table`, below). */
 .runs-grid-scroll {
   overflow-x: auto;
 }
@@ -4603,7 +4603,7 @@ button.danger {
   font-size: 1.15rem;
 }
 
-.runs-page > .runs-grid-scroll > table.runs-grid {
+.runs-page > .runs-list > .runs-grid-scroll > table.runs-grid {
   margin-top: 0;
 }
 
@@ -5161,6 +5161,15 @@ button.danger {
 .run-view-toggle {
   display: flex;
   gap: 0.5rem;
+}
+
+/* #1484 — Live's one-line status beside the toggle: quiet, and never wrapping
+   the title row. Empty (and so zero-width) while Live is off, but never
+   removed: a live region must already exist when its text first changes. */
+.runs-live-status {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 /* #967 — the token-flow chart. Hand-rolled bars; see TokenFlowChart.tsx for why

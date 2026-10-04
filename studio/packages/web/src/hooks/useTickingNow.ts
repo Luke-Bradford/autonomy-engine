@@ -10,14 +10,20 @@ import { useEffect, useState } from 'react';
  * only itself. Mount it only where something is actually counting — an idle
  * page should hold no timer at all.
  *
+ * #1484 — `running: false` HOLDS the clock: no timer, and the last reading
+ * stays. A caller that pauses a count (the runs grid, while its list is not
+ * polling) then shows the figure it had reached, rather than one rewound to an
+ * older reference time.
+ *
  * Not `AiActivityPage`'s `useNow`, which reads the clock once per render and
  * never ticks. The two names differ on purpose.
  */
-export function useTickingNow(intervalMs: number): number {
+export function useTickingNow(intervalMs: number, running = true): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
+    if (!running) return;
     const timer = setInterval(() => setNow(Date.now()), intervalMs);
     return () => clearInterval(timer);
-  }, [intervalMs]);
+  }, [intervalMs, running]);
   return now;
 }

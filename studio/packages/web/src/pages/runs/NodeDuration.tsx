@@ -1,10 +1,6 @@
 import { useTickingNow } from '../../hooks/useTickingNow';
-import { formatLiveElapsed, formatNodeDuration, liveSpanStart } from './format';
+import { DURATION_TICK_MS, formatLiveElapsed, formatNodeDuration, liveSpanStart } from './format';
 import type { NodeActivity } from './runSummary';
-
-/** Once a second: `formatLiveElapsed` shows whole seconds below an hour, so a slower
- * tick would visibly skip, and a faster one would change nothing it prints. */
-const TICK_MS = 1_000;
 
 /**
  * #890 — a node's Duration, counting up while its attempt is still running.
@@ -31,6 +27,6 @@ export function NodeDuration({
 }
 
 function LiveElapsed({ startedAtMs }: { startedAtMs: number }) {
-  const now = useTickingNow(TICK_MS);
+  const now = useTickingNow(DURATION_TICK_MS);
   return formatLiveElapsed(startedAtMs, now);
 }

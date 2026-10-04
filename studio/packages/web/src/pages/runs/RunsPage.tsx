@@ -14,6 +14,7 @@ import {
   RUN_TRIGGERED_BY_LABELS,
   RunSearchSchema,
   RunStatusSchema,
+  RUN_PAGE_SIZES,
   RUN_SORT_DEFAULT_KEY,
   RUN_SORT_NATURAL_DIR,
   type RunSortKey,
@@ -56,6 +57,12 @@ import { LabelledControl } from '../../lib/LabelledControl';
 import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import { FilterPicker } from './FilterPicker';
 import { RUN_GROUP_BYS, type RunGroupBy } from './runBars';
+import {
+  RUNS_LIVE_FAILING_LABEL,
+  RUNS_LIVE_PAUSE_LABEL,
+  RUNS_LIVE_UPDATING_LABEL,
+  useRunsLive,
+} from './useRunsLive';
 
 /**
  * U29 (#1015) — which rendering of the SAME filtered rows is on screen. A view,
@@ -127,7 +134,8 @@ function withParams(prev: URLSearchParams, next: Record<string, string>): URLSea
  * page is read-only: it lists what has run and links each to its live detail
  * view. A run that is still executing is watched live on the detail page (the
  * WebSocket tail); this list itself is a point-in-time snapshot, refreshed on
- * demand.
+ * demand — or, with Live on (#1484, `useRunsLive`), re-read every few seconds
+ * while the reader is not scrolled into it or selecting from it.
  *
  * R2 + U10 — each row is a `RunSummary`, so the identity column reads the
  * PIPELINE'S NAME rather than the opaque `pv_…` version id it used to render,
@@ -149,6 +157,11 @@ export function RunsPage({
   ui?: UiStore;
 } = {}) {
   const zone = useDisplayTimeZone(ui);
+  const live = useStore(ui, (s) => s.runsLive);
+  const setLive = useStore(ui, (s) => s.setRunsLive);
+  const pageSize = useStore(ui, (s) => s.runsPageSize);
+  const setPageSize = useStore(ui, (s) => s.setRunsPageSize);
+  const listRef = useRef<HTMLDivElement>(null);
   /**
    * Bumped by "Refresh" so BOTH panels re-fetch from one button. Since #1083
    * the run list itself is refreshed through `usePagedList` rather than by this
@@ -336,6 +349,9 @@ export function RunsPage({
         },
         cursor,
         signal,
+        // A new size is a new list: the cursor of a 50-row walk names nothing
+        // in a 200-row one, so the fetcher changes and the list reloads.
+        pageSize,
       ),
     // Primitives only — see above. `kind` is the canonical joined string.
     [
@@ -353,6 +369,7 @@ export function RunsPage({
       sortKey,
       sortDir,
       sortedByDefault,
+      pageSize,
     ],
   );
   const {
@@ -364,7 +381,19 @@ export function RunsPage({
     lastUpdatedAt,
     loadMore,
     refresh,
+    extended,
+    poll,
   } = usePagedList(fetchPage, runKey);
+  /* Live re-reads the run list only; the lifetime-spend panel is all-time and
+     stays on Refresh, so a tick never re-aggregates a pipeline's whole history. */
+  const liveFailing = pageError?.scope === 'live';
+  const { pause, ticking } = useRunsLive({
+    live,
+    extended,
+    failing: liveFailing,
+    poll,
+    listRef,
+  });
   /* The clock an UNFINISHED row's duration is measured against — captured when
      the first page was requested rather than read per render, so every row's "so
      far" is as-of the same instant and rendering stays pure. `0` before the
@@ -516,6 +545,49 @@ export function RunsPage({
         >
           Refresh
         </button>
+        {/* #1484 — keeps the list current (`useRunsLive`). The status beside it
+            says why it is not updating when it is not, so a paused list is
+            never mistaken for a quiet workspace. The live region is always
+            mounted and only its text changes: a region inserted already
+            populated is often not announced. */}
+        <ToggleButton
+          size="small"
+          checked={live}
+          onClick={() => setLive(!live)}
+          title="Re-read the list every few seconds, pausing while you scroll or select"
+        >
+          Live
+        </ToggleButton>
+        <span role="status" className="runs-live-status">
+          {!live
+            ? ''
+            : pause !== null
+              ? RUNS_LIVE_PAUSE_LABEL[pause]
+              : liveFailing
+                ? RUNS_LIVE_FAILING_LABEL
+                : RUNS_LIVE_UPDATING_LABEL}
+        </span>
+        {/* #1484 — how many runs a page reads. Keyset "load more" stays the
+            paging model (#1083); this sizes each step of it. Per viewer, and on
+            the title row so it never unmounts while the list reloads under it. */}
+        <LabelledControl label={<span className="visually-hidden">Runs per page</span>}>
+          {(id) => (
+            <select
+              id={id}
+              value={pageSize}
+              onChange={(e) => {
+                const size = RUN_PAGE_SIZES.find((n) => String(n) === e.target.value);
+                if (size !== undefined) setPageSize(size);
+              }}
+            >
+              {RUN_PAGE_SIZES.map((n) => (
+                <option key={n} value={n}>
+                  {n} per page
+                </option>
+              ))}
+            </select>
+          )}
+        </LabelledControl>
       </div>
 
       {/* Worded apart because they are different news: a failed FIRST page
@@ -526,7 +598,9 @@ export function RunsPage({
         <p role="alert" className="error">
           {pageError.scope === 'more'
             ? `Could not load older runs: ${pageError.message}`
-            : pageError.message}
+            : pageError.scope === 'live'
+              ? `Live update failed: ${pageError.message}`
+              : pageError.message}
         </p>
       )}
 
@@ -694,21 +768,33 @@ export function RunsPage({
         <p>No runs match these filters. Widen them, or clear them, to see more.</p>
       )}
 
-      {runs !== null &&
-        runs.length > 0 &&
-        (view === 'timeline' ? (
-          /* One rendering at a time — the timeline REPLACES the table rather
+      {/* The rows, and nothing else: `useRunsLive` pauses while the reader is
+          scrolled into this or selecting from it, so the search box and filters
+          must stay outside. */}
+      <div ref={listRef} className="runs-list">
+        {runs !== null &&
+          runs.length > 0 &&
+          (view === 'timeline' ? (
+            /* One rendering at a time — the timeline REPLACES the table rather
              than sitting above it. Showing both would put every run id and
              pipeline name on screen twice, which is the ambiguity
              `AttemptTimeline` records for its own untimed list. */
-          <RunTimeline
-            runs={runs}
-            groupBy={groupBy}
-            onGroupByChange={(next) => setFilter(GROUP_PARAM, next === 'pipeline' ? '' : next)}
-          />
-        ) : (
-          <RunsGrid runs={runs} loadedAt={loadedAt} sort={urlSort} onSort={sortBy} ui={ui} />
-        ))}
+            <RunTimeline
+              runs={runs}
+              groupBy={groupBy}
+              onGroupByChange={(next) => setFilter(GROUP_PARAM, next === 'pipeline' ? '' : next)}
+            />
+          ) : (
+            <RunsGrid
+              runs={runs}
+              loadedAt={loadedAt}
+              ticking={ticking}
+              sort={urlSort}
+              onSort={sortBy}
+              ui={ui}
+            />
+          ))}
+      </div>
 
       {/* Rendered only when the server said there IS an older page. An
           always-present button that sometimes did nothing would make the end of

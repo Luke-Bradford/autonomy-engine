@@ -17,6 +17,12 @@ import {
 import { RunsPage } from './RunsPage';
 import { runStatusLabel } from './runStatus';
 import * as runsApi from '../../api/runs';
+import { RUNS_PAGE_SIZE } from '../../api/runs';
+import {
+  RUNS_LIVE_FAILING_LABEL,
+  RUNS_LIVE_POLL_MS,
+  RUNS_LIVE_UPDATING_LABEL,
+} from './useRunsLive';
 import * as pipelinesApi from '../../api/pipelines';
 import * as triggersApi from '../../api/triggers';
 import { ApiError } from '../../api/client';
@@ -26,6 +32,7 @@ import {
   RUN_GRID_COLUMN_WIDTHS,
   RUN_GRID_HIDDEN_STORAGE_KEY,
   RUN_GRID_RESIZE_STEP,
+  RUNS_LIVE_STORAGE_KEY,
 } from '../../stores/uiStore';
 
 // Mock the whole api/runs network surface (matching the ConnectionsPage test
@@ -543,7 +550,7 @@ describe('RunsPage', () => {
     renderWithRouter(<RunsPage />, '/monitor/runs?tab=child');
     await screen.findByText('run_a');
     expect(screen.queryByRole('tab')).not.toBeInTheDocument();
-    expect(listMock).toHaveBeenCalledWith({}, undefined, expect.anything());
+    expect(listMock).toHaveBeenCalledWith({}, undefined, expect.anything(), RUNS_PAGE_SIZE);
   });
 
   /**
@@ -665,7 +672,7 @@ describe('RunsPage — U26 filter pane', () => {
     // rather than waved through with `expect.anything()`: a first request that
     // carried a cursor would resume mid-list, which is exactly the bug a
     // stale-cursor regression produces.
-    expect(listMock).toHaveBeenCalledWith({}, undefined, expect.anything());
+    expect(listMock).toHaveBeenCalledWith({}, undefined, expect.anything(), RUNS_PAGE_SIZE);
   });
 
   it('reads every axis out of the URL and asks the SERVER for it', async () => {
@@ -678,6 +685,7 @@ describe('RunsPage — U26 filter pane', () => {
       { status: 'failure', pipelineId: 'pl_1', triggerId: 'trg_1', since: '24h' },
       undefined,
       expect.anything(),
+      RUNS_PAGE_SIZE,
     );
   });
 
@@ -688,7 +696,12 @@ describe('RunsPage — U26 filter pane', () => {
 
     await userEvent.selectOptions(screen.getByLabelText('Status'), 'failure');
 
-    expect(listMock).toHaveBeenCalledWith({ status: 'failure' }, undefined, expect.anything());
+    expect(listMock).toHaveBeenCalledWith(
+      { status: 'failure' },
+      undefined,
+      expect.anything(),
+      RUNS_PAGE_SIZE,
+    );
     expect(await screen.findByText(/No runs match these filters/i)).toBeInTheDocument();
   });
 
@@ -701,7 +714,7 @@ describe('RunsPage — U26 filter pane', () => {
   it('ignores an unrecognised status/window rather than sending or erroring on it', async () => {
     renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?status=nope&since=forever');
     await screen.findByText(/No runs yet/i);
-    expect(listMock).toHaveBeenCalledWith({}, undefined, expect.anything());
+    expect(listMock).toHaveBeenCalledWith({}, undefined, expect.anything(), RUNS_PAGE_SIZE);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
@@ -735,14 +748,24 @@ describe('RunsPage — U26 filter pane', () => {
 
     // The filters are read from the URL alone (no state mirror), so the request
     // carrying it is the URL carrying it.
-    expect(listMock).toHaveBeenCalledWith({ annotation: 'nightly' }, undefined, expect.anything());
+    expect(listMock).toHaveBeenCalledWith(
+      { annotation: 'nightly' },
+      undefined,
+      expect.anything(),
+      RUNS_PAGE_SIZE,
+    );
     expect(select.value).toBe('nightly');
   });
 
   it('shows a filtered-but-unknown annotation as a disabled option, not as "All annotations"', async () => {
     renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?annotation=retired');
     await screen.findByText(/No runs match these filters/i);
-    expect(listMock).toHaveBeenCalledWith({ annotation: 'retired' }, undefined, expect.anything());
+    expect(listMock).toHaveBeenCalledWith(
+      { annotation: 'retired' },
+      undefined,
+      expect.anything(),
+      RUNS_PAGE_SIZE,
+    );
     const select = screen.getByLabelText<HTMLSelectElement>('Annotation');
     expect(select.value).toBe('retired');
     expect(screen.getByRole('option', { name: /retired/ })).toBeDisabled();
@@ -892,7 +915,7 @@ describe('RunsPage — U26 filter pane', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
 
     expect(await screen.findByText('run_back')).toBeInTheDocument();
-    expect(listMock).toHaveBeenLastCalledWith({}, undefined, expect.anything());
+    expect(listMock).toHaveBeenLastCalledWith({}, undefined, expect.anything(), RUNS_PAGE_SIZE);
     expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
   });
 
@@ -996,7 +1019,7 @@ describe('RunsPage — U26 filter pane', () => {
       // APPENDED, not replaced — the reader keeps what they were looking at.
       expect(await screen.findByText('run_2')).toBeInTheDocument();
       expect(screen.getByText('run_1')).toBeInTheDocument();
-      expect(listMock).toHaveBeenLastCalledWith({}, 'cur_1', expect.anything());
+      expect(listMock).toHaveBeenLastCalledWith({}, 'cur_1', expect.anything(), RUNS_PAGE_SIZE);
       // The walk ended, so the control goes: a button that did nothing would
       // make the end of the history indistinguishable from a stalled load.
       expect(screen.queryByRole('button', { name: 'Load older runs' })).not.toBeInTheDocument();
@@ -1012,7 +1035,12 @@ describe('RunsPage — U26 filter pane', () => {
       listMock.mockResolvedValue(pageOf([run({ id: 'run_2', triggeredByKind: 'call' })]));
       await userEvent.click(screen.getByRole('button', { name: 'Load older runs' }));
       await screen.findByText('run_2');
-      expect(listMock).toHaveBeenLastCalledWith({ kind: 'call' }, 'cur_1', expect.anything());
+      expect(listMock).toHaveBeenLastCalledWith(
+        { kind: 'call' },
+        'cur_1',
+        expect.anything(),
+        RUNS_PAGE_SIZE,
+      );
     });
 
     it('words a failed OLDER page apart from a failed first one, keeping the loaded runs', async () => {
@@ -1049,6 +1077,7 @@ describe('RunsPage — U26 filter pane', () => {
         { kind: 'schedule,webhook' },
         undefined,
         expect.anything(),
+        RUNS_PAGE_SIZE,
       );
       expect(menu()).toHaveTextContent('Triggered by: 2 kinds');
 
@@ -1070,7 +1099,12 @@ describe('RunsPage — U26 filter pane', () => {
       await vi.waitFor(() => expect(router.state.location.search).toBe('?q=ord'));
       expect(router.state.historyAction).toBe('PUSH');
       await vi.waitFor(() =>
-        expect(listMock).toHaveBeenLastCalledWith({ q: 'ord' }, undefined, expect.anything()),
+        expect(listMock).toHaveBeenLastCalledWith(
+          { q: 'ord' },
+          undefined,
+          expect.anything(),
+          RUNS_PAGE_SIZE,
+        ),
       );
 
       await userEvent.type(box, 'ers ');
@@ -1101,7 +1135,12 @@ describe('RunsPage — U26 filter pane', () => {
       expect(router.state.location.search).toBe('?on=2026-01-15');
       const bounds = dayRangeBounds({ on: '2026-01-15' }, 'local');
       await vi.waitFor(() =>
-        expect(listMock).toHaveBeenLastCalledWith(bounds, undefined, expect.anything()),
+        expect(listMock).toHaveBeenLastCalledWith(
+          bounds,
+          undefined,
+          expect.anything(),
+          RUNS_PAGE_SIZE,
+        ),
       );
 
       // Clearing the day keeps the picker on "On a day" with its input in place,
@@ -1110,7 +1149,7 @@ describe('RunsPage — U26 filter pane', () => {
       expect(started()).toHaveValue('on');
       expect(screen.getByLabelText('Day')).toHaveValue('');
       await vi.waitFor(() =>
-        expect(listMock).toHaveBeenLastCalledWith({}, undefined, expect.anything()),
+        expect(listMock).toHaveBeenLastCalledWith({}, undefined, expect.anything(), RUNS_PAGE_SIZE),
       );
       // The day is still a filter param, so it can still be cleared in one click.
       expect(screen.getByRole('button', { name: 'Clear filters' })).toBeInTheDocument();
@@ -1138,6 +1177,7 @@ describe('RunsPage — U26 filter pane', () => {
         dayRangeBounds({ from: '2026-01-01', to: '2026-01-31' }, 'local'),
         undefined,
         expect.anything(),
+        RUNS_PAGE_SIZE,
       );
     });
 
@@ -1154,6 +1194,7 @@ describe('RunsPage — U26 filter pane', () => {
         { from: String(Date.UTC(2026, 9, 4, 4)), to: String(Date.UTC(2026, 9, 5, 4)) },
         undefined,
         expect.anything(),
+        RUNS_PAGE_SIZE,
       );
       act(() => ui.getState().setDisplayTimeZone('UTC'));
       await vi.waitFor(() =>
@@ -1161,6 +1202,7 @@ describe('RunsPage — U26 filter pane', () => {
           { from: String(Date.UTC(2026, 9, 4)), to: String(Date.UTC(2026, 9, 5)) },
           undefined,
           expect.anything(),
+          RUNS_PAGE_SIZE,
         ),
       );
     });
@@ -1456,5 +1498,180 @@ describe('#1484 — runs grid columns', () => {
   it('offers no column picker on the Timeline, which has no columns', async () => {
     await renderGrid('/?view=timeline');
     expect(screen.queryByRole('button', { name: /Columns/ })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * #1484 OR35 M1 — Live mode and the page size. Only `Date` and the interval
+ * timers are faked (`RunDetailPage.test.tsx`'s recipe): faking `setTimeout`
+ * too would stall Testing Library's `findBy*` polling.
+ */
+describe('#1484 — runs list Live mode and page size', () => {
+  const NOW = 1_700_000_065_000;
+  const freshUi = (seed: Record<string, string> = {}) => {
+    const data = new Map<string, string>(Object.entries(seed));
+    return createUiStore({
+      getItem: (key) => data.get(key) ?? null,
+      setItem: (key, value) => {
+        data.set(key, value);
+      },
+    });
+  };
+  const liveUi = () => freshUi({ [RUNS_LIVE_STORAGE_KEY]: 'true' });
+  const tick = (ms: number) => {
+    act(() => {
+      vi.advanceTimersByTime(ms);
+    });
+  };
+  const durationOf = (runId: string) =>
+    cellUnder(screen.getByText(runId).closest('tr') as HTMLElement, 'Duration');
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'], now: NOW });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    document.getSelection()?.removeAllRanges();
+  });
+
+  it('does not poll while Live is off — the list is a snapshot until Refresh', async () => {
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_old00001', status: 'success' })]));
+    renderWithRouter(<RunsPage ui={freshUi()} />);
+    await screen.findByText('run_old00001');
+    tick(15_000);
+    expect(listMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(RUNS_LIVE_UPDATING_LABEL)).not.toBeInTheDocument();
+  });
+
+  it('shows a new run without Refresh while Live is on, and says it is updating', async () => {
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_old00001', status: 'success' })]));
+    renderWithRouter(<RunsPage ui={liveUi()} />);
+    await screen.findByText('run_old00001');
+    expect(screen.getByText(RUNS_LIVE_UPDATING_LABEL)).toBeInTheDocument();
+
+    listMock.mockResolvedValue(
+      pageOf([run({ id: 'run_new00002' }), run({ id: 'run_old00001', status: 'success' })]),
+    );
+    tick(RUNS_LIVE_POLL_MS);
+    expect(await screen.findByText('run_new00002')).toBeInTheDocument();
+    expect(listMock).toHaveBeenLastCalledWith({}, undefined, expect.anything(), RUNS_PAGE_SIZE);
+  });
+
+  it('turning Live on reads at once and is remembered for this viewer', async () => {
+    const ui = freshUi();
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_old00001', status: 'success' })]));
+    renderWithRouter(<RunsPage ui={ui} />);
+    await screen.findByText('run_old00001');
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_new00002' })]));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Live' }));
+    expect(await screen.findByText('run_new00002')).toBeInTheDocument();
+    expect(ui.getState().runsLive).toBe(true);
+  });
+
+  it('counts an unfinished run up while live, and freezes it while paused', async () => {
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_live0001', startedAt: NOW - 65_000 })]));
+    renderWithRouter(<RunsPage ui={liveUi()} />);
+    await screen.findByText('run_live0001');
+    expect(durationOf('run_live0001')).toHaveTextContent('1m 05s so far');
+    tick(2_000);
+    expect(durationOf('run_live0001')).toHaveTextContent('1m 07s so far');
+
+    // Select text in the rows: the list pauses, and the count stops with it —
+    // the page would no longer hear the run finish.
+    const range = document.createRange();
+    range.selectNodeContents(screen.getByText('Nightly report'));
+    act(() => {
+      document.getSelection()?.addRange(range);
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+    expect(screen.getByText('paused while text is selected')).toBeInTheDocument();
+    // Held where it was — not rewound to when the list was read (1m 05s).
+    expect(durationOf('run_live0001')).toHaveTextContent('1m 07s so far');
+    const calls = listMock.mock.calls.length;
+    tick(RUNS_LIVE_POLL_MS * 2);
+    expect(durationOf('run_live0001')).toHaveTextContent('1m 07s so far');
+    expect(listMock).toHaveBeenCalledTimes(calls);
+  });
+
+  it('pauses while the container holding the rows is scrolled down, and resumes at the top', async () => {
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_old00001', status: 'success' })]));
+    const { container } = renderWithRouter(<RunsPage ui={liveUi()} />);
+    await screen.findByText('run_old00001');
+    const calls = listMock.mock.calls.length;
+
+    Object.defineProperty(container, 'scrollTop', { value: 240, configurable: true });
+    fireEvent.scroll(container);
+    expect(screen.getByText('paused while scrolled down')).toBeInTheDocument();
+    tick(RUNS_LIVE_POLL_MS * 2);
+    expect(listMock).toHaveBeenCalledTimes(calls);
+
+    Object.defineProperty(container, 'scrollTop', { value: 0, configurable: true });
+    fireEvent.scroll(container);
+    expect(screen.getByText(RUNS_LIVE_UPDATING_LABEL)).toBeInTheDocument();
+    // Resuming reads at once rather than a whole interval later.
+    expect(listMock).toHaveBeenCalledTimes(calls + 1);
+  });
+
+  it('a failed live read keeps the rows, says so, and stops the count', async () => {
+    listMock.mockResolvedValueOnce(pageOf([run({ id: 'run_live0001', startedAt: NOW - 65_000 })]));
+    renderWithRouter(<RunsPage ui={liveUi()} />);
+    await screen.findByText('run_live0001');
+    listMock.mockRejectedValueOnce(new Error('server down'));
+    tick(RUNS_LIVE_POLL_MS);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Live update failed: server down');
+    expect(screen.getByText(RUNS_LIVE_FAILING_LABEL)).toBeInTheDocument();
+    // The page cannot hear this run finish now, so its duration stops counting.
+    const held = durationOf('run_live0001').textContent;
+    tick(3_000);
+    expect(durationOf('run_live0001').textContent).toBe(held);
+  });
+
+  it('pauses while the tab is hidden', async () => {
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_old00001', status: 'success' })]));
+    renderWithRouter(<RunsPage ui={liveUi()} />);
+    await screen.findByText('run_old00001');
+    const calls = listMock.mock.calls.length;
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    tick(RUNS_LIVE_POLL_MS * 2);
+    expect(listMock).toHaveBeenCalledTimes(calls);
+    visibility.mockReturnValue('visible');
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    // Waking reads at once.
+    expect(listMock).toHaveBeenCalledTimes(calls + 1);
+  });
+
+  it('pauses for a selection that starts above the rows and ends in them', async () => {
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_old00001', status: 'success' })]));
+    renderWithRouter(<RunsPage ui={liveUi()} />);
+    await screen.findByText('run_old00001');
+    const selection = document.getSelection()!;
+    act(() => {
+      selection.setBaseAndExtent(
+        screen.getByRole('heading', { name: 'Runs' }),
+        0,
+        screen.getByText('run_old00001'),
+        0,
+      );
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+    expect(screen.getByText('paused while text is selected')).toBeInTheDocument();
+  });
+
+  it('reads the chosen page size, and remembers it for this viewer', async () => {
+    vi.useRealTimers();
+    const ui = freshUi();
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_old00001', status: 'success' })]));
+    renderWithRouter(<RunsPage ui={ui} />);
+    await screen.findByText('run_old00001');
+
+    await userEvent.selectOptions(screen.getByLabelText('Runs per page'), '100');
+    expect(listMock).toHaveBeenLastCalledWith({}, undefined, expect.anything(), 100);
+    expect(ui.getState().runsPageSize).toBe(100);
   });
 });

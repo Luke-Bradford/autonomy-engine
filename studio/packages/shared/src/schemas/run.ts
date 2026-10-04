@@ -2,6 +2,12 @@ import { z } from 'zod';
 import { RunCostSchema } from '../pricing/run-cost.js';
 import { TRIGGER_FIRE_KINDS, TriggerContextSchema } from './trigger-context.js';
 import { ANNOTATION_MAX_CHARS } from './pipeline.js';
+import {
+  DEFAULT_PAGE_SIZE,
+  MAX_PAGE_SIZE,
+  pageLimitSchema,
+  PaginationQuerySchema,
+} from './pagination.js';
 
 export const RunStatusSchema = z.enum([
   'pending',
@@ -594,6 +600,25 @@ export const RunTriggeredByKindListSchema = commaListSchema(RUN_TRIGGERED_BY_KIN
  */
 export const RUN_SEARCH_MAX_CHARS = 200;
 export const RunSearchSchema = z.string().trim().min(1).max(RUN_SEARCH_MAX_CHARS);
+
+/**
+ * #1484 OR35 M1 — the page sizes the runs grid offers, smallest (the default)
+ * first. The runs list is the one route allowed past `MAX_PAGE_SIZE`: a run row
+ * is scanned rather than read, and an operator looking for "the failure this
+ * morning" asks for a screenful of history. Its ceiling is the largest size
+ * offered, derived rather than written twice.
+ */
+export const RUN_PAGE_SIZES = [DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, 200] as const;
+export type RunPageSize = (typeof RUN_PAGE_SIZES)[number];
+export const RUNS_MAX_PAGE_SIZE: number = Math.max(...RUN_PAGE_SIZES);
+
+/**
+ * `PaginationQuerySchema` with the runs list's ceiling. Out of range is still a
+ * 400, never a clamp — an accepted request means what it says.
+ */
+export const RunsPaginationQuerySchema = PaginationQuerySchema.extend({
+  limit: pageLimitSchema(RUNS_MAX_PAGE_SIZE),
+});
 
 /**
  * `?from=` / `?to=` — an ABSOLUTE bound on `started_at`, in epoch ms (`from`

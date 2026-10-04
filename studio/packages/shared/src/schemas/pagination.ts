@@ -22,8 +22,16 @@ export const DEFAULT_PAGE_SIZE = 50;
 
 /** Hard ceiling on `?limit`. A larger request is a 400 at the boundary
  * (loud), never silently clamped — an accepted request must mean what it
- * says. SSOT. */
+ * says. SSOT. The one deliberate exception is the runs list, whose ceiling is
+ * `RUNS_MAX_PAGE_SIZE` (`run.ts`, #1484). */
 export const MAX_PAGE_SIZE = 100;
+
+/** `?limit=` bounded `[1, max]`, defaulting to `DEFAULT_PAGE_SIZE`. One
+ *  definition, so a route with its own ceiling (`RunsPaginationQuerySchema`)
+ *  cannot drift from the rules every other list follows. */
+export function pageLimitSchema(max: number) {
+  return z.coerce.number().int().min(1).max(max).default(DEFAULT_PAGE_SIZE);
+}
 
 /**
  * The list-endpoint query contract. `limit` is coerced from the query string
@@ -33,7 +41,7 @@ export const MAX_PAGE_SIZE = 100;
  * legitimately carry unrelated params), so this is intentionally NOT `.strict()`.
  */
 export const PaginationQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE),
+  limit: pageLimitSchema(MAX_PAGE_SIZE),
   cursor: z.string().min(1).optional(),
 });
 export type PaginationQuery = z.infer<typeof PaginationQuerySchema>;

@@ -13,6 +13,8 @@ import {
   dockMaxWidth,
   HISTORY_OPEN_STORAGE_KEY,
   DISPLAY_TIME_ZONE_STORAGE_KEY,
+  RUNS_LIVE_STORAGE_KEY,
+  RUNS_PAGE_SIZE_STORAGE_KEY,
   MINIMAP_STORAGE_KEY,
   PROBLEMS_OPEN_STORAGE_KEY,
   DOCK_NODE_TAB_STORAGE_KEY,
@@ -778,5 +780,36 @@ describe('uiStore runs grid columns (#1484 OR35 M1)', () => {
       expect(width).toBeGreaterThanOrEqual(min);
       expect(width).toBeLessThanOrEqual(RUN_GRID_COLUMN_MAX_WIDTH);
     }
+  });
+});
+
+describe('uiStore runs list live mode and page size (#1484)', () => {
+  it('starts with Live off and the smallest page size', () => {
+    const state = createUiStore(fakeStorage()).getState();
+    expect(state.runsLive).toBe(false);
+    expect(state.runsPageSize).toBe(50);
+  });
+
+  it('persists both across a new store on the same storage', () => {
+    const storage = fakeStorage();
+    const store = createUiStore(storage);
+    store.getState().setRunsLive(true);
+    store.getState().setRunsPageSize(200);
+    expect(storage.data.get(RUNS_LIVE_STORAGE_KEY)).toBe('true');
+    expect(storage.data.get(RUNS_PAGE_SIZE_STORAGE_KEY)).toBe('200');
+    const reread = createUiStore(storage).getState();
+    expect(reread.runsLive).toBe(true);
+    expect(reread.runsPageSize).toBe(200);
+  });
+
+  it('reads a page size the grid does not offer as the default, fail-closed', () => {
+    for (const raw of ['75', '1000', '100.0', ' 100', 'all', '']) {
+      expect(
+        createUiStore(fakeStorage({ [RUNS_PAGE_SIZE_STORAGE_KEY]: raw })).getState().runsPageSize,
+      ).toBe(50);
+    }
+    expect(createUiStore(fakeStorage({ [RUNS_LIVE_STORAGE_KEY]: 'yes' })).getState().runsLive).toBe(
+      false,
+    );
   });
 });

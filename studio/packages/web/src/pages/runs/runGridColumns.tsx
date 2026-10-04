@@ -21,8 +21,10 @@ import type { DisplayTimeZone } from '../../lib/displayTime';
 
 /** What a cell needs besides its run. */
 export interface CellContext {
-  /** When the list was read, for an unfinished run's duration "so far". */
+  /** The clock an unfinished run's duration "so far" is measured against: when
+   *  the list was read, or the grid's own count while it is live (#1484). */
   loadedAt: number;
+
   /** The run's detail route, for the Run ID column's real link. */
   path: string;
   /** The viewer's display time zone (#1484), for timestamps inside a title. */

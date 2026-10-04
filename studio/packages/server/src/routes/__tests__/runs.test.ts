@@ -5,6 +5,8 @@ import {
   CATALOG_VERSION,
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
+  RUN_PAGE_SIZES,
+  RUNS_MAX_PAGE_SIZE,
   paginatedResponseSchema,
   RerunAcceptedSchema,
   RunAnnotationsResponseSchema,
@@ -769,13 +771,26 @@ describe('runs routes (read-only)', () => {
       expect(resumed.statusCode).toBe(200);
     });
 
-    it('refuses a limit outside [1, MAX_PAGE_SIZE] rather than clamping it', async () => {
-      for (const limit of ['0', '-1', String(MAX_PAGE_SIZE + 1), 'all']) {
+    it('refuses a limit outside [1, RUNS_MAX_PAGE_SIZE] rather than clamping it', async () => {
+      for (const limit of ['0', '-1', String(RUNS_MAX_PAGE_SIZE + 1), 'all']) {
         const res = await pageApp.inject({ method: 'GET', url: `/api/runs?limit=${limit}` });
         expect(res.statusCode).toBe(400);
       }
-      const ok = await pageApp.inject({ method: 'GET', url: `/api/runs?limit=${MAX_PAGE_SIZE}` });
+      const ok = await pageApp.inject({
+        method: 'GET',
+        url: `/api/runs?limit=${RUNS_MAX_PAGE_SIZE}`,
+      });
       expect(ok.statusCode).toBe(200);
+    });
+
+    it('accepts every page size the grid offers, past the shared MAX_PAGE_SIZE (#1484)', async () => {
+      // The runs list is the one route allowed past the shared ceiling; every
+      // other list route still refuses MAX_PAGE_SIZE + 1 (secrets.test.ts).
+      expect(RUNS_MAX_PAGE_SIZE).toBeGreaterThan(MAX_PAGE_SIZE);
+      for (const limit of [...RUN_PAGE_SIZES, MAX_PAGE_SIZE + 1]) {
+        const res = await pageApp.inject({ method: 'GET', url: `/api/runs?limit=${limit}` });
+        expect(res.statusCode).toBe(200);
+      }
     });
 
     it('defaults to DEFAULT_PAGE_SIZE, so an omitted limit is still BOUNDED', async () => {

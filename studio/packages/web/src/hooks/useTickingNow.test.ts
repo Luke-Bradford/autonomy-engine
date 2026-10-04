@@ -37,3 +37,29 @@ describe('useTickingNow (#890)', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+describe('useTickingNow running flag (#1484)', () => {
+  it('holds its last reading with no timer while not running, and resumes from there', () => {
+    const { result, rerender } = renderHook(({ running }) => useTickingNow(1_000, running), {
+      initialProps: { running: true },
+    });
+    act(() => {
+      vi.advanceTimersByTime(2_000);
+    });
+    expect(result.current).toBe(12_000);
+
+    rerender({ running: false });
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+    // Held, not rewound and not advanced.
+    expect(result.current).toBe(12_000);
+
+    rerender({ running: true });
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(result.current).toBe(18_000);
+  });
+});

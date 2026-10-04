@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Paginated } from '@autonomy-studio/shared';
 import { messageOf } from '../api/client';
 import { useGuardedLoad } from './useGuardedLoad';
@@ -36,6 +36,22 @@ import { useGuardedLoad } from './useGuardedLoad';
  * the whole descending sequence, so a refreshed head glued to a stale tail
  * would silently skip the rows in between.
  *
+ * #1484 — A POLL IS THE QUIET REFRESH. `poll()` re-reads the first page for a
+ * caller that keeps a list live, and it differs from `refresh()` in three ways,
+ * each of which a 5-second ticker would otherwise turn into a visible fault:
+ *  - it LOSES to everything. It is skipped while any request of this list is in
+ *    flight (counted until each SETTLES, so a superseded one still counts), and
+ *    a later refresh or older page supersedes it. On a server slower than the
+ *    tick, polls that superseded each other would never land — the starvation
+ *    `usePolledResource`'s #1000 docblock records.
+ *  - it is skipped once an older page has been appended (`extended`). Replacing
+ *    the head discards the tail, so polling then would take away the history the
+ *    reader asked for.
+ *  - it sets no `pending`, so `busy` does not flicker and a Refresh button is
+ *    not disabled on every tick; and a failed poll is its own error scope,
+ *    `'live'`, cleared by the next good answer, rather than a first-page failure
+ *    shouting over rows that are still true.
+ *
  * THE FETCHER MUST BE MEMOIZED (`useCallback`) — the same half of the contract
  * `usePolledResource` asks for, and for the same reason: it is a dependency of
  * the mount effect, so an inline arrow would re-issue the first page on every
@@ -46,7 +62,8 @@ import { useGuardedLoad } from './useGuardedLoad';
  * failed first page and a failed older page are not the same news. */
 export interface PagedListError {
   message: string;
-  scope: 'first' | 'more';
+  /** `'live'` — a background `poll()` failed; the rows on screen are still the last good read. */
+  scope: 'first' | 'more' | 'live';
 }
 
 export interface PagedList<T> {
@@ -65,6 +82,10 @@ export interface PagedList<T> {
   loadMore: () => void;
   /** Re-reads the first page, discarding any accumulated tail. */
   refresh: () => void;
+  /** True once an older page has been appended to the current head; `poll()` then does nothing. */
+  extended: boolean;
+  /** A background re-read of the first page — see the docblock. Stable identity. */
+  poll: () => void;
 }
 
 export function usePagedList<T>(
@@ -85,6 +106,13 @@ export function usePagedList<T>(
   const [error, setError] = useState<PagedListError | null>(null);
   const [pending, setPending] = useState<'first' | 'more' | null>('first');
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+  const [extended, setExtended] = useState(false);
+  /* `poll()`'s two guards, read through refs so its identity stays stable and a
+     caller's interval is not re-armed on every answer. Written only outside
+     render. A ref that lags its state can only make a poll SKIP (an extended
+     flag not yet cleared), never fire over a request. */
+  const inFlight = useRef(0);
+  const extendedRef = useRef(false);
 
   /**
    * #1083 — A NEW FETCHER IS A NEW LIST, so the accumulated one is dropped
@@ -125,6 +153,7 @@ export function usePagedList<T>(
     setNextCursor(null);
     setError(null);
     setLastUpdatedAt(null);
+    setExtended(false);
     setPending('first');
   }
 
@@ -136,7 +165,7 @@ export function usePagedList<T>(
    * the two USER-driven entry points set it themselves before calling in.
    */
   const load = useCallback(
-    (cursor: string | undefined, scope: 'first' | 'more') => {
+    (cursor: string | undefined, scope: PagedListError['scope']) => {
       // Stamped at ISSUE, not at arrival, so a caller's "as of" is literally
       // true for a response that was in flight for a while — `usePolledResource`
       // makes the same promise in the same words.
@@ -144,19 +173,34 @@ export function usePagedList<T>(
       // `void`: the runner's promise settles after its handlers have written
       // state, and it rejects only if one of THEM threw — there is nothing here
       // to await and nothing a caller could do with it.
-      void runLoad<Paginated<T>>((signal) => fetchPage(cursor, signal), {
+      inFlight.current += 1;
+      // A fetcher that THROWS rather than rejecting is read as a rejection, so
+      // the request still settles: otherwise `.finally` below would never be
+      // attached and `inFlight` would hold polling off for good.
+      const fetchSettling = (signal: AbortSignal): Promise<Paginated<T>> => {
+        try {
+          return fetchPage(cursor, signal);
+        } catch (err: unknown) {
+          return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      };
+      void runLoad<Paginated<T>>(fetchSettling, {
         onData: (page) => {
+          extendedRef.current = scope === 'more';
+          setExtended(scope === 'more');
           setItems((prev) => {
-            if (scope === 'first') return page.items;
+            if (scope !== 'more') return page.items;
             const held = prev ?? [];
             if (keyOf === undefined) return [...held, ...page.items];
             const seen = new Set(held.map(keyOf));
             return [...held, ...page.items.filter((item) => !seen.has(keyOf(item)))];
           });
           setNextCursor(page.nextCursor);
-          setError(null);
+          // A good POLL leaves "could not load older runs" up: the head is
+          // fresh, but the older page the reader asked for still never came.
+          setError((prev) => (scope === 'live' && prev?.scope === 'more' ? prev : null));
           setPending(null);
-          if (scope === 'first') setLastUpdatedAt(issuedAt);
+          if (scope !== 'more') setLastUpdatedAt(issuedAt);
         },
         onError: (err) => {
           // The items already loaded stay rendered. A failed older page must not
@@ -164,12 +208,20 @@ export function usePagedList<T>(
           setError({ message: messageOf(err), scope });
           setPending(null);
         },
+      }).finally(() => {
+        // On EVERY settle, superseded or not: a superseded load runs neither
+        // handler, so clearing this there would leave polling stuck for good.
+        inFlight.current -= 1;
       });
     },
     [fetchPage, keyOf, runLoad],
   );
 
   useEffect(() => {
+    // A new list holds no older page. Cleared HERE, not only on an answer: if
+    // this first load fails, or is superseded, no answer ever clears it, and a
+    // flag left over from the previous list would hold `poll()` off for good.
+    extendedRef.current = false;
     load(undefined, 'first');
   }, [load]);
 
@@ -192,6 +244,11 @@ export function usePagedList<T>(
     load(nextCursor, 'more');
   }, [load, nextCursor, pending]);
 
+  const poll = useCallback(() => {
+    if (inFlight.current > 0 || extendedRef.current) return;
+    load(undefined, 'live');
+  }, [load]);
+
   return {
     items,
     error,
@@ -201,5 +258,7 @@ export function usePagedList<T>(
     lastUpdatedAt,
     loadMore,
     refresh,
+    extended,
+    poll,
   };
 }
