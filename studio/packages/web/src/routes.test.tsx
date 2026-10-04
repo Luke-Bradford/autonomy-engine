@@ -95,6 +95,8 @@ vi.mock('./api/runs', async (importActual) => {
         // #1392 — the names the page publishes to the breadcrumb and title.
         pipelineName: 'Nightly load',
         triggerName: null,
+        triggeredByKind: 'editor',
+        parentPipelineName: null,
       }),
     ),
     // #1206 — the detail page reads the run on its own too (the R1 fallback, and
@@ -579,6 +581,8 @@ describe('route tree', () => {
             pipelineVersion: { id: 'pv_1', version: 1, nodes: [], edges: [], containers: [] },
             pipelineName: 'B pipe',
             triggerName: null,
+            triggeredByKind: 'editor',
+            parentPipelineName: null,
           } as never),
     );
 

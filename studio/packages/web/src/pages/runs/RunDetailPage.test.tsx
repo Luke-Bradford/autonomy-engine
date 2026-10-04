@@ -2971,7 +2971,7 @@ describe('RunDetailPage — the parent a child run was called by', () => {
   });
 
   // #1484 M2 — named by the parent's pipeline when `/detail` can name it.
-  it("names the parent by its pipeline when it can", async () => {
+  it('names the parent by its pipeline when it can', async () => {
     getRunDetailMock.mockResolvedValue({
       ...NAMES,
       triggeredByKind: 'call',

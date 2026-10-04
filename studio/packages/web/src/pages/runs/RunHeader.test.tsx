@@ -101,10 +101,7 @@ describe('RunHeader (#1484 OR35 M2)', () => {
       scheduledTime: '2026-10-04T12:59:59.500Z',
       body: null,
     };
-    header(
-      { ...RUN, triggerContext },
-      { sourceCommit: '0123456789abcdef', sourceBranch: 'main' },
-    );
+    header({ ...RUN, triggerContext }, { sourceCommit: '0123456789abcdef', sourceBranch: 'main' });
     expect(fact('Scheduled')?.textContent).toMatch(/:59:59\.500/);
     expect(fact('Source')?.textContent).toBe('main @ 0123456');
   });
@@ -134,7 +131,12 @@ const failedRow = (over: Partial<ActivityRun> = {}): ActivityRun => ({
   bytesWritten: null,
   childRunId: null,
   childRun: null,
-  error: { message: 'database is locked\nat sqlite', kind: 'transient', code: null, connectionId: null },
+  error: {
+    message: 'database is locked\nat sqlite',
+    kind: 'transient',
+    code: null,
+    connectionId: null,
+  },
   ...over,
 });
 
@@ -173,13 +175,17 @@ describe('RunFailureBanner (#1484 OR35 M2)', () => {
 
   it('says a container failed on its own, with no row to show', () => {
     banner({ kind: 'container', containerId: 'loop', reason: 'timeout' });
-    expect(screen.getByRole('group', { name: 'Failure' })).toHaveTextContent('Failed: Until 1 · timeout');
+    expect(screen.getByRole('group', { name: 'Failure' })).toHaveTextContent(
+      'Failed: Until 1 · timeout',
+    );
     expect(screen.queryByRole('button', { name: 'Show activity' })).toBeNull();
   });
 
   it('a run-level failure states the engine’s reason', () => {
     banner({ kind: 'run', reason: 'stalled' });
-    expect(screen.getByRole('group', { name: 'Failure' })).toHaveTextContent('Run failed · stalled');
+    expect(screen.getByRole('group', { name: 'Failure' })).toHaveTextContent(
+      'Run failed · stalled',
+    );
   });
 });
 

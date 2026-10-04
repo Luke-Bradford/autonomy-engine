@@ -88,8 +88,12 @@ export function RunHeader({
   const endedSameDay =
     run !== null &&
     endedAt !== null &&
-    formatTimestamp(run.startedAt, zone).slice(0, 10) === formatTimestamp(endedAt, zone).slice(0, 10);
+    formatTimestamp(run.startedAt, zone).slice(0, 10) ===
+      formatTimestamp(endedAt, zone).slice(0, 10);
   const scheduledTime = run?.triggerContext?.scheduledTime ?? null;
+  // Bound with `?? null`, as the page bound it before this header: a row read
+  // before RS6 added the column has no `rerunOf` key at all.
+  const rerunOf = run?.rerunOf ?? null;
   return (
     <header className="run-header">
       {/* #1392 — the heading names the pipeline and the version this run is
@@ -210,15 +214,12 @@ export function RunHeader({
             )}
             {/* RS6 lineage — only when there IS a source run (`rerunOf` is the
                 row projection of `run.started.rerunOf`). */}
-            {run.rerunOf !== null && (
+            {rerunOf !== null && (
               <div>
                 <dt>Rerun of</dt>
                 <dd>
-                  <Link
-                    to={runDetailPath(run.rerunOf)}
-                    aria-label={runLinkLabel('Source', run.rerunOf)}
-                  >
-                    <code>{shortId(run.rerunOf)}</code>
+                  <Link to={runDetailPath(rerunOf)} aria-label={runLinkLabel('Source', rerunOf)}>
+                    <code>{shortId(rerunOf)}</code>
                   </Link>
                 </dd>
               </div>

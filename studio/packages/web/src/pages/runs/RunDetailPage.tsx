@@ -1,7 +1,7 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { computeRunUsage, TERMINAL_RUN_ROW_STATUS } from '@autonomy-studio/shared';
 import type { PipelineVersion, Run, RunStatus, RunTriggeredByKind } from '@autonomy-studio/shared';
-import { Link, useNavigate } from 'react-router';
+import { useNavigate } from 'react-router';
 import { cancelRun, getRun, getRunDetail, rerunFromFailed } from '../../api/runs';
 import { messageOf } from '../../api/client';
 import { owesCallback } from './externalWaits';
@@ -9,8 +9,7 @@ import { PendingCallbacks } from './PendingCallbacks';
 import { canRerunFromFailed, RERUN_COST_WARNING } from './rerunAction';
 import { RerunHistory } from './RerunHistory';
 import { canCancelRun, cancelConfirmMessage } from './cancelAction';
-import { runDetailPath, runLinkLabel } from './runPath';
-import { triggersPath } from '../triggers/triggersPath';
+import { runDetailPath } from './runPath';
 import { useRunStream, type StreamPhase } from './useRunStream';
 import {
   deriveNodeActivity,
@@ -39,12 +38,9 @@ import { RunGraph } from './RunGraph.lazy';
 import { useRunProjection } from './useRunProjection';
 import { isSecureMarker } from './secureMarker';
 import { runVersionPath } from '../author/pipelinePath';
-import { CopyableId } from '../../lib/CopyableId';
 import { useConfirm } from '../../lib/confirm/useConfirm';
 import { shortId } from '../../lib/ids';
 import { useShellLabel } from '../../shell/shellLabel';
-import { versionLabel } from '../../lib/versionLabel';
-import { When } from '../../lib/When';
 import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import { formatTimeOfDay, zoneLabel } from '../../lib/displayTime';
 
@@ -315,9 +311,6 @@ export function RunDetailPage({ runId }: { runId: string }) {
   /* The REST row carries no park reason (`RunSchema` has no such column), so
      the fallback tail is `null` rather than a guess — see `runStatusLabel`. */
   const waitingReason = view?.waitingReason ?? null;
-  /* Bound once so the lineage row below narrows without a non-null assertion —
-     `run.rerunOf` inside a callback would not stay narrowed. */
-  const rerunOf = run?.rerunOf ?? null;
   /* #890 — whether a running node's Duration may COUNT UP. Only while this page
      would hear the node settle: the socket open with its replay complete
      (`live` is set only after `replay_complete`, so a truncated log never

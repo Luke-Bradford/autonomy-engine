@@ -1175,7 +1175,10 @@ describe('runs routes (read-only)', () => {
       const parent = mkRun(mkVersion('local', 'Caller pipe').id, null);
       const called = RunDetailSchema.parse(
         (
-          await app.inject({ method: 'GET', url: `/api/runs/${mkRun(child.id, parent.id).id}/detail` })
+          await app.inject({
+            method: 'GET',
+            url: `/api/runs/${mkRun(child.id, parent.id).id}/detail`,
+          })
         ).json(),
       );
       expect(called.parentPipelineName).toBe('Caller pipe');

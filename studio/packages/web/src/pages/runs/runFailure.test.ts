@@ -49,7 +49,10 @@ describe('runFailure (#1484 M2 — the failure banner reads the engine’s blame
       // A handled failure inside the same container, AFTER the blamed one.
       row({ key: 'handled', nodeId: 'handled', activityId: 'handled' }),
     ];
-    const containers = { outer: container('child_failed:mid'), mid: container('child_failed:inner') };
+    const containers = {
+      outer: container('child_failed:mid'),
+      mid: container('child_failed:inner'),
+    };
     const f = runFailure('node_failed:outer', containers, rows);
     expect(f.kind === 'activity' && f.row?.key).toBe('inner');
   });
@@ -87,7 +90,11 @@ describe('runFailure (#1484 M2 — the failure banner reads the engine’s blame
   });
 
   it('a cycle of child_failed reasons cannot spin', () => {
-    const f = runFailure('node_failed:x', { x: container('child_failed:y'), y: container('child_failed:x') }, []);
+    const f = runFailure(
+      'node_failed:x',
+      { x: container('child_failed:y'), y: container('child_failed:x') },
+      [],
+    );
     expect(f.kind).toBe('activity');
   });
 });
@@ -101,9 +108,11 @@ describe('runFinished', () => {
         { type: 'run.finished', payload: { outcome: 'failure', reason: 'node_failed:a' }, ts: 7 },
       ]),
     ).toEqual({ reason: 'node_failed:a', ts: 7 });
-    expect(runFinished([{ type: 'run.finished', payload: { outcome: 'success' }, ts: 9 }])).toEqual({
-      reason: null,
-      ts: 9,
-    });
+    expect(runFinished([{ type: 'run.finished', payload: { outcome: 'success' }, ts: 9 }])).toEqual(
+      {
+        reason: null,
+        ts: 9,
+      },
+    );
   });
 });

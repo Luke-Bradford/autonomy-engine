@@ -42,7 +42,9 @@ export function RunFailureBanner({
   const message = row?.error?.message ?? null;
   const [firstLine, ...rest] = message?.split('\n') ?? [];
   const cls =
-    row?.error == null ? '' : failureClass(row.error.kind ?? undefined, row.error.code ?? undefined);
+    row?.error == null
+      ? ''
+      : failureClass(row.error.kind ?? undefined, row.error.code ?? undefined);
   return (
     <div className="run-failure" role="group" aria-label="Failure">
       <strong>Failed: {name}</strong>

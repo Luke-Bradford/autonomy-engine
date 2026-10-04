@@ -50,7 +50,8 @@ export function runFailure(
   for (let hops = 0; containers !== null && hops <= Object.keys(containers).length; hops++) {
     const why = containers[blamed]?.reason;
     if (why === undefined) break;
-    if (!why.startsWith(CHILD_FAILED)) return { kind: 'container', containerId: blamed, reason: why };
+    if (!why.startsWith(CHILD_FAILED))
+      return { kind: 'container', containerId: blamed, reason: why };
     blamed = why.slice(CHILD_FAILED.length);
   }
   const parsed = parseInstanceKey(blamed)?.docId ?? blamed;
