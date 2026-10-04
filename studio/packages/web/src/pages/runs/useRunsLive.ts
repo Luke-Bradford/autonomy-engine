@@ -31,6 +31,20 @@ function inside(within: Element | null, node: Node | null): boolean {
 }
 
 /**
+ * Whether the list, or anything scrolling it, is scrolled away from the top —
+ * the state `scroll` events report, read directly for a list that is already
+ * scrolled before any event arrives. The list itself counts, as it does for
+ * the events (`inside` is inclusive).
+ */
+function scrolledDown(list: Element | null): boolean {
+  if ((document.scrollingElement?.scrollTop ?? 0) > 0) return true;
+  for (let el = list; el !== null; el = el.parentElement) {
+    if (el.scrollTop > 0) return true;
+  }
+  return false;
+}
+
+/**
  * #1484 OR35 M1 — keeps a runs list live: while `live` is on and nothing pauses
  * it, `poll()` runs at once and then every `RUNS_LIVE_POLL_MS`.
  *
@@ -98,6 +112,11 @@ export function useRunsLive({
         setScrolled(target.scrollTop > 0);
       }
     };
+    /* #1527 — the reader can already be scrolled or selecting when this
+       attaches (a list mounted under a content pane that kept its scroll), and
+       no event will say so until they move. Read both now. */
+    onSelection();
+    setScrolled(scrolledDown(listRef.current));
     document.addEventListener('visibilitychange', onVisibility);
     document.addEventListener('selectionchange', onSelection);
     document.addEventListener('scroll', onScroll, { capture: true, passive: true });

@@ -511,10 +511,10 @@ describe('nextOccurrence — zone-aware interval > 1 stepping (#623)', () => {
     // Companion to the spring-forward case above, pinning the OTHER DST direction the
     // bisection's monotonicity claim rests on. A fall-back (Nov 1 2026, 02:00 EDT →
     // 01:00 EST) REPEATS the 01:00 local hour: the offset decreases and the local clock
-    // re-enters an earlier wall-time — the one direction where `localDayNumber` could,
+    // re-enters an earlier wall-time — the one direction where the local day number could,
     // in theory, regress across a local midnight. It cannot: the repeated hour stays on
-    // the SAME calendar day (Nov 1), so `localDayNumber` is still monotonic non-decreasing
-    // and the day-start bisection in `localDayStartInstant` stays exact. This test would
+    // the SAME calendar day (Nov 1), so the local day number is still monotonic non-decreasing
+    // and the day-start bisection in `zonedCalendar(...).dayStart` stays exact. This test would
     // fail loudly if a future change (or croner upgrade) let the local day briefly regress.
     // Anchor = Oct 28 local-midnight (2026-10-28T04:00:00Z, EDT). Qualifying local days
     // are Oct 28, 30, Nov 1, 3, 5. The 09:00 occurrence is 13:00Z while EDT (-4) and
@@ -576,13 +576,14 @@ describe('nextOccurrence — zone-aware interval > 1 stepping (#623)', () => {
 });
 
 /**
- * #626 — the zone-aware `localDayStartInstant` bisects a ±1-day window to find the
- * exact UTC instant a local calendar day begins. It now bisects on the MINUTE grid
- * (a modern IANA offset is whole-minute, so the boundary is minute-aligned) guarded
- * by a whole-minute check that falls back to exact 1ms bisection for a rare
- * pre-standardization sub-minute LMT offset. These pin (a) the reduced `Intl` call
- * count, (b) the ICU dependency the guard rests on, and (c) that the sub-minute
- * FALLBACK stays exact — the correctness the perf win must not cost.
+ * #626 — the zone-aware day start (`zonedCalendar(...).dayStart`, in shared since
+ * #1525) bisects a ±1-day window to find the exact UTC instant a local calendar day
+ * begins. It bisects on the MINUTE grid (a modern IANA offset is whole-minute, so the
+ * boundary is minute-aligned) guarded by a whole-minute check that falls back to exact
+ * 1ms bisection for a rare pre-standardization sub-minute LMT offset. These pin (a)
+ * the reduced `Intl` call count and (b) that the sub-minute FALLBACK stays exact —
+ * the correctness the perf win must not cost. The ICU dependency the guard rests on
+ * is pinned beside the calendar, in shared's `zoned-calendar.test.ts`.
  */
 describe('nextOccurrence — zone-aware bisection Intl-call bound (#626)', () => {
   const at = (iso: string) => Date.parse(iso);
@@ -606,25 +607,6 @@ describe('nextOccurrence — zone-aware bisection Intl-call bound (#626)', () =>
     expect(next).toBe(at('2026-03-04T14:00:00Z')); // still correct
     expect(spy.mock.calls.length).toBeLessThan(45);
     expect(spy.mock.calls.length).toBeGreaterThan(20); // not accidentally skipping the boundary
-  });
-
-  it('the ICU build emits a `second` part with no hour/minute — the whole-minute guard depends on it', () => {
-    // The guard reads local second-of-minute from a formatter carrying only Y/M/D +
-    // `second` (never `hour`, to dodge the ICU 24:00 midnight quirk). Some ICU builds
-    // drop `second` when neither `hour` nor `minute` is present; THIS runtime does not.
-    // Pin it: a future Node/ICU that dropped it would silently `NaN` the guard (making
-    // it never take the fast path — a perf regression, not a correctness one, but still
-    // worth catching), so fail loudly here instead.
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: NY,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      second: '2-digit',
-    }).formatToParts(new Date(at('2026-07-01T12:00:00Z')));
-    const second = parts.find((p) => p.type === 'second');
-    expect(second).toBeDefined();
-    expect(Number(second!.value)).toBe(0); // minute-aligned UTC, whole-minute modern offset → 0
   });
 
   it('stays EXACT for a sub-minute LMT offset — the fallback path (America/New_York 1883, −04:56:02)', () => {

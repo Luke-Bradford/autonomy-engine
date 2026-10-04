@@ -4,6 +4,50 @@ import { messageOf } from '../api/client';
 import { useGuardedLoad } from './useGuardedLoad';
 
 /**
+ * #1527 — how long a background `poll()` may go unanswered before it counts as
+ * failed. Three of the runs list's 5s ticks: long enough for a slow server to
+ * answer, short enough that "Updating every 5s" is never a minute out of date.
+ */
+export const POLL_DEADLINE_MS = 15_000;
+
+/**
+ * Runs `run` with a signal that also aborts after `ms`, and rejects at that
+ * deadline whether or not `run` honours the abort — a fetcher that ignores its
+ * signal must not be able to outlive it. `run` is called synchronously, so a
+ * caller's request is issued in the same tick as it was before the deadline.
+ */
+function withDeadline<R>(
+  run: (signal: AbortSignal) => Promise<R>,
+  outer: AbortSignal,
+  ms: number,
+): Promise<R> {
+  const controller = new AbortController();
+  const forward = () => controller.abort(outer.reason);
+  if (outer.aborted) forward();
+  else outer.addEventListener('abort', forward, { once: true });
+  const cleanUp = () => outer.removeEventListener('abort', forward);
+  let request: Promise<R>;
+  try {
+    request = run(controller.signal);
+  } catch (err: unknown) {
+    cleanUp();
+    throw err;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error(`no answer in ${ms / 1_000}s`);
+      controller.abort(err);
+      reject(err);
+    }, ms);
+  });
+  return Promise.race([request, deadline]).finally(() => {
+    clearTimeout(timer);
+    cleanUp();
+  });
+}
+
+/**
  * #1076 — a keyset-paginated list a reader extends on demand: the first page on
  * mount, then one older page per "load more".
  *
@@ -51,6 +95,12 @@ import { useGuardedLoad } from './useGuardedLoad';
  *    not disabled on every tick; and a failed poll is its own error scope,
  *    `'live'`, cleared by the next good answer, rather than a first-page failure
  *    shouting over rows that are still true.
+ *  - it has a DEADLINE (#1527). Because a poll waits for every request to
+ *    settle, one that never did would hold polling off for good — a Refresh
+ *    supersedes its answer but cannot settle it. So a poll still unanswered
+ *    after `POLL_DEADLINE_MS` is aborted and FAILS, which the `'live'` scope
+ *    already reports, and the next tick polls again. Only a poll: a first or
+ *    older page is one the reader asked for and is watching load.
  *
  * THE FETCHER MUST BE MEMOIZED (`useCallback`) — the same half of the contract
  * `usePolledResource` asks for, and for the same reason: it is a dependency of
@@ -179,7 +229,9 @@ export function usePagedList<T>(
       // attached and `inFlight` would hold polling off for good.
       const fetchSettling = (signal: AbortSignal): Promise<Paginated<T>> => {
         try {
-          return fetchPage(cursor, signal);
+          return scope === 'live'
+            ? withDeadline((s) => fetchPage(cursor, s), signal, POLL_DEADLINE_MS)
+            : fetchPage(cursor, signal);
         } catch (err: unknown) {
           return Promise.reject(err instanceof Error ? err : new Error(String(err)));
         }

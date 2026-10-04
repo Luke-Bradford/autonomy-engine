@@ -86,8 +86,8 @@ describe('displayTime — #1484 principle 4', () => {
   it('lands a day whose offset at UTC midnight is not the offset at its own midnight', () => {
     // Sydney leaves daylight time at 03:00 on 2026-04-05 (16:00Z on the 4th).
     // UTC midnight of the 5th is already standard time (+10), but the 5th's own
-    // midnight was still daylight time (+11): 13:00Z on the 4th. One offset
-    // reading lands an hour late; the second, taken at that guess, corrects it.
+    // midnight was still daylight time (+11): 13:00Z on the 4th. An offset read
+    // at UTC midnight would land an hour late.
     expect(zonedDayStart('2026-04-05', 'Australia/Sydney')).toBe(Date.UTC(2026, 3, 4, 13));
   });
 
@@ -118,6 +118,12 @@ describe('displayTime — #1484 principle 4', () => {
     expect(formatTimestamp(new Date('0999-06-15T00:00:00Z').getTime(), 'UTC')).toBe(
       '0999-06-15 00:00:00 UTC',
     );
+  });
+
+  it('starts a local day where the zone the runtime resolves `local` to starts it', () => {
+    const resolved = new Intl.DateTimeFormat().resolvedOptions().timeZone;
+    expect(zonedDayStart('2026-03-29', 'local')).toBe(zonedDayStart('2026-03-29', resolved));
+    expect(zonedDayStart('0002-06-15', 'local')).toBe(zonedDayStart('0002-06-15', resolved));
   });
 
   it('refuses a day that is not on the calendar', () => {
