@@ -790,7 +790,7 @@ test('#1484 — Live shows a new run without Refresh and counts its duration; pa
     // No Refresh click anywhere: the poll brings it in.
     const row = page.getByRole('row').filter({ hasText: runId });
     await expect(row).toHaveCount(1, { timeout: 15_000 });
-    const duration = row.getByRole('cell').filter({ hasText: /so far$/ });
+    const duration = row.getByRole('cell').filter({ hasText: /^[\dhms ]+ so far$/ });
     await expect(duration).toHaveCount(1);
     const first = await duration.textContent();
     await expect.poll(() => duration.textContent(), { timeout: 5_000 }).not.toBe(first);
