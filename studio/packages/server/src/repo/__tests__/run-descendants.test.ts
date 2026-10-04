@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { runs } from '../../db/schema.js';
-import { CATALOG_VERSION } from '@autonomy-studio/shared';
+import { CATALOG_VERSION, RUN_DESCENDANTS_MAX } from '@autonomy-studio/shared';
 import { createPipelineVersion } from '../pipeline-versions.js';
 import { createPipeline } from '../pipelines.js';
-import { createRun, listRunSummariesPage, RUN_DESCENDANTS_MAX } from '../runs.js';
+import { createRun, listRunSummariesPage } from '../runs.js';
 import { createTrigger } from '../triggers.js';
 import { freshDb } from './helpers.js';
 import { makeRunActivityFold } from '../../run/activity-counts.js';

@@ -137,6 +137,26 @@ describe('runs API', () => {
     });
   });
 
+  it('#1484 — asks for the descendants on the wire, and parses them as run summaries', async () => {
+    const child = { ...sampleRunSummary, id: 'run_child', parentRunId: sampleRunSummary.id };
+    const fetchMock = stubFetch(200, {
+      items: [sampleRunSummary],
+      nextCursor: null,
+      descendants: [child],
+    });
+    const out = await listRuns({ includeChildren: 'true' });
+    expect(out.descendants).toEqual([child]);
+    const url = new URL(fetchMock.mock.calls[0]![0] as string, 'http://x');
+    expect(url.searchParams.get('includeChildren')).toBe('true');
+    // A descendant is parsed with the same schema as a page row.
+    stubFetch(200, {
+      items: [],
+      nextCursor: null,
+      descendants: [{ ...child, childRunCount: undefined }],
+    });
+    await expect(listRuns({ includeChildren: 'true' })).rejects.toThrow();
+  });
+
   it('asks for a caller-sized page when one is given, not a reader screenful', async () => {
     // #1085 — the Home hub shows five. The size reaches the WIRE rather than
     // being sliced off a 50-row response, because the server aggregates metered

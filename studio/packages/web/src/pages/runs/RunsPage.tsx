@@ -552,9 +552,9 @@ export function RunsPage({
             size="small"
             checked={includeChildren}
             onClick={() => setFilter(CHILDREN_PARAM, includeChildren ? 'off' : '')}
-            title="Include child runs: show the runs each run called, nested under it"
+            title="Show the runs each run called, nested under it"
           >
-            Child runs
+            Include child runs
           </ToggleButton>
         )}
         {/* A `role="group"` of toggles rather than a `TabList`: List and

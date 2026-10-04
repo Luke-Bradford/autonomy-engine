@@ -29,9 +29,8 @@ import {
   type RunStatus,
   type RunTriggeredByKind,
   type EngineEvent,
-  type Paginated,
+  type RunSummaryPage,
 } from '@autonomy-studio/shared';
-export { RUN_DESCENDANTS_MAX } from '@autonomy-studio/shared';
 import { pipelines, pipelineVersions, runEvents, runs, triggers } from '../db/schema.js';
 import { newId } from './ids.js';
 import {
@@ -53,6 +52,9 @@ import type { Db } from './types.js';
 const parentRuns = alias(runs, 'parent_runs');
 const parentVersions = alias(pipelineVersions, 'parent_versions');
 const parentPipelines = alias(pipelines, 'parent_pipelines');
+/** #1484 — the recursive step's `runs`, in `listRunDescendantIds`. In a raw `sql`
+ * template an alias renders as its name alone, so the step writes `${runs} as ${stepRuns}`. */
+const stepRuns = alias(runs, 'step_runs');
 
 /**
  * #796 (P3b) — `id` is a SEPARATE argument rather than a field on `NewRun`, and
@@ -389,7 +391,7 @@ export function listRunSummariesPage(
    * repo module does not import the engine-facing `run/` layer. Required: a
    * caller that forgot it must not get every row's activities as `null`. */
   foldActivities: RunActivityFold,
-): Paginated<RunSummary> & { descendants?: RunSummary[] } {
+): RunSummaryPage {
   const conditions = listRunsConditions(filter);
   const sort = args.sort ?? RUN_SORT_DEFAULT;
   // A cursor is decoded against the sort of the request carrying it
@@ -478,10 +480,25 @@ export function listRunSummariesPage(
       rows.map((row) => row.run.id),
       filter.ownerId,
     );
-    const below =
-      order.length === 0 ? [] : withSummaryColumns(tx, sort).where(inArray(runs.id, order)).all();
-    const at = new Map(order.map((id, i) => [id, i]));
-    below.sort((a, b) => (at.get(a.run.id) ?? 0) - (at.get(b.run.id) ?? 0));
+    // Owner-scoped again here, though the walk already was: the convention of
+    // `aggregateRunCosts` and `countChildRuns`, a second lock on the same door.
+    // `order` is at most `RUN_DESCENDANTS_MAX` ids, within `RUN_ID_BIND_CHUNK`.
+    const read = [inArray(runs.id, order)];
+    if (filter.ownerId !== undefined) read.push(eq(runs.ownerId, filter.ownerId));
+    const byId = new Map(
+      (order.length === 0
+        ? []
+        : withSummaryColumns(tx, sort)
+            .where(and(...read))
+            .all()
+      ).map((row) => [row.run.id, row]),
+    );
+    // In the walk's order. An id the read did not return is not listed, rather
+    // than placed somewhere invented.
+    const below = order.flatMap((id) => {
+      const row = byId.get(id);
+      return row === undefined ? [] : [row];
+    });
     return { ...page, descendants: toRunSummaries(tx, below, filter.ownerId, foldActivities) };
   });
 }
@@ -589,8 +606,8 @@ function toRunSummaries(
 
 /**
  * #1484 — how many runs each of `runIds` called directly (`runs_parent_run_id_idx`),
- * owner-scoped as the list is. Chunked like `aggregateRunCosts`, because a page
- * and its descendants together can pass the bind ceiling's safe margin.
+ * owner-scoped as the list is. Chunked like `aggregateRunCosts`; a call passes at
+ * most a page or the descendants cap, so the chunking is defensive.
  */
 function countChildRuns(
   tx: Db,
@@ -617,22 +634,19 @@ function countChildRuns(
 
 /**
  * #1484 OR35 M1 — the ids of every run below `pageIds` in the call tree, that is
- * not itself on the page: shallowest first (then oldest), and at most
+ * not itself on the page: shallowest first (then oldest, then by id), and at most
  * `RUN_DESCENDANTS_MAX` of them.
  *
  * One `WITH RECURSIVE` over `parent_run_id` (indexed), seeded with the page.
  * - The step never re-enters a page run. A run has one parent, so without that a
  *   page run that is also another page run's child would be walked twice, its
  *   whole subtree with it; with it, every run below the page is reached once.
- * - The walk's `LIMIT` caps the rows it ever ADDS (SQLite's documented
- *   recursive-CTE semantics), so a fan-out of thousands stops at the cap rather
- *   than being read and then cut. The seeds count towards it, hence
- *   `+ pageIds.length`. SQLite's queue is FIFO, so the walk is already
- *   breadth-first and the cap keeps the shallowest runs; `ORDER BY depth,
- *   started_at` states that, and makes the oldest calls of the cut depth the
- *   ones kept.
- * - Depth stops at `MAX_CALL_DEPTH` below a seed: no chain is taller, and it
- *   bounds the walk even over a hand-made cycle.
+ * - The `LIMIT` is the cap. In a recursive CTE it bounds the rows the walk ever
+ *   ADDS (SQLite's documented semantics, seeds included, hence
+ *   `+ pageIds.length`), so a fan-out of thousands stops at the cap rather than
+ *   being read and then cut. `ORDER BY depth, started_at, id` makes the queue a
+ *   priority queue, so the runs kept are the shallowest, then the oldest calls.
+ * - Depth stops at `MAX_CALL_DEPTH` below a seed: no call chain is taller.
  * - Every step is owner-scoped as the page is, so a parent link can never lead
  *   into another owner's runs.
  * Every id is a bound parameter; a page is at most `RUNS_MAX_PAGE_SIZE` (200)
@@ -648,20 +662,20 @@ function listRunDescendantIds(
     pageIds.map((id) => sql`${id}`),
     sql`, `,
   );
-  const owner = ownerId === undefined ? sql`` : sql` and r.owner_id = ${ownerId}`;
+  const owner = ownerId === undefined ? sql`` : sql` and ${stepRuns.ownerId} = ${ownerId}`;
   const rows = tx.all<{ id: string }>(sql`
     with recursive walk(id, depth, started_at) as (
-      select id, 0, started_at from runs where id in (${seeds})
+      select ${runs.id}, 0, ${runs.startedAt} from ${runs} where ${runs.id} in (${seeds})
       union all
-      select r.id, walk.depth + 1, r.started_at
-        from runs r join walk on r.parent_run_id = walk.id
-        where walk.depth < ${MAX_CALL_DEPTH} and r.id not in (${seeds})${owner}
-        order by 2, 3
+      select ${stepRuns.id}, walk.depth + 1, ${stepRuns.startedAt}
+        from ${runs} as ${stepRuns} join walk on ${stepRuns.parentRunId} = walk.id
+        where walk.depth < ${MAX_CALL_DEPTH} and ${stepRuns.id} not in (${seeds})${owner}
+        order by 2, 3, 1
         limit ${RUN_DESCENDANTS_MAX + pageIds.length}
     )
     select id from walk where depth > 0 order by depth, started_at, id
   `);
-  return rows.slice(0, RUN_DESCENDANTS_MAX).map((row) => row.id);
+  return rows.map((row) => row.id);
 }
 
 /**

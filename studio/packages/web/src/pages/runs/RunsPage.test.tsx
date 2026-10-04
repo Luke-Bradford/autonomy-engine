@@ -182,18 +182,18 @@ function run(overrides: Partial<RunSummary> = {}): RunSummary {
   };
 }
 
+/** What the list asks for by default (#1484 "Include child runs"). */
+const CHILDREN = { includeChildren: 'true' } as const;
+
 /**
  * #1083 — `listRuns` answers a `{ items, nextCursor }` page. Every mock goes
  * through this rather than hand-writing the envelope, so a test states WHICH
  * runs come back and, where it matters, whether an older page exists.
  * `nextCursor` defaults to `null` — "this is the whole list" is what almost
  * every case here means, and it is what keeps a tab count a complete count.
+ * #1484 — it carries `descendants`, as the server's answer to the list's
+ * default request does.
  */
-/** A page as the server answers the list's default request, which asks for
- * the page's `descendants` (#1484 "Include child runs", on by default). */
-/** What the list asks for by default (#1484 "Include child runs"). */
-const CHILDREN = { includeChildren: 'true' } as const;
-
 function pageOf(
   items: RunSummary[],
   nextCursor: string | null = null,
@@ -348,12 +348,16 @@ describe('RunsPage', () => {
     const parentRow = rowOf('run_parent');
     // Two of the three calls are loaded, and the cell says so.
     expect(cellUnder(parentRow, 'Pipeline')).toHaveTextContent('2 of 3');
-    const hide = within(parentRow).getByRole('button', { name: 'Hide 2 child runs' });
-    expect(hide).toHaveAttribute('aria-expanded', 'true');
+    // One stable name; the state is `aria-expanded`'s alone.
+    const disclosure = within(parentRow).getByRole('button', { name: /^2 child runs of / });
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+    // A child says in words what called it, not only by its indent.
+    expect(rowOf('run_kid_a')).toHaveTextContent(/Called by .*:/);
 
-    await userEvent.click(hide);
+    await userEvent.click(disclosure);
     expect(order()).toEqual(['run_parent']);
-    await userEvent.click(within(parentRow).getByRole('button', { name: 'Show 2 child runs' }));
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(disclosure);
     expect(order()).toEqual(['run_parent', 'run_kid_a', 'run_grand', 'run_kid_b']);
   });
 
@@ -367,8 +371,8 @@ describe('RunsPage', () => {
     renderWithRouter(<RunsPage />, '/monitor/runs?children=off');
     await screen.findByText('run_kid');
     expect(listMock).toHaveBeenLastCalledWith({}, undefined, expect.anything(), RUNS_PAGE_SIZE);
-    expect(screen.queryByRole('button', { name: /child run/ })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Child runs' })).toHaveAttribute(
+    expect(screen.queryByRole('button', { name: /child runs? of/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Include child runs' })).toHaveAttribute(
       'aria-pressed',
       'false',
     );
@@ -381,7 +385,7 @@ describe('RunsPage', () => {
     renderWithRouter(<RunsPage />, '/monitor/runs?view=timeline');
     await waitFor(() => expect(listMock).toHaveBeenCalled());
     expect(listMock.mock.calls.at(-1)?.[0]).not.toHaveProperty('includeChildren');
-    expect(screen.queryByRole('button', { name: 'Child runs' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Include child runs' })).toBeNull();
   });
 
   it('#1484 — a page without the descendants it asked for is a failed load, not a childless list', async () => {
@@ -1135,6 +1139,28 @@ describe('RunsPage — U26 filter pane', () => {
       // The walk ended, so the control goes: a button that did nothing would
       // make the end of the history indistinguishable from a stalled load.
       expect(screen.queryByRole('button', { name: 'Load older runs' })).not.toBeInTheDocument();
+    });
+
+    /* #1484 — a child newer than its parent lands on page 1 and its parent on
+       page 2. Page 1 draws the child as a root (its parent is not loaded); page
+       2 brings the parent, with the child among its descendants again. The
+       child is drawn ONCE, now under its parent — `usePagedList`'s `runKey`
+       keeps one copy, and `nestRuns` draws an id once whatever it is handed. */
+    it('draws a child seen on two pages once, under its parent once that loads', async () => {
+      const kid = run({ id: 'run_kid', parentRunId: 'run_parent', startedAt: 2 });
+      listMock.mockResolvedValue(pageOf([kid], 'cur_1'));
+      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
+      await screen.findByText('run_kid');
+
+      listMock.mockResolvedValue(
+        pageOf([run({ id: 'run_parent', childRunCount: 1, startedAt: 1 })], null, [kid]),
+      );
+      await userEvent.click(screen.getByRole('button', { name: 'Load older runs' }));
+      await waitFor(() => expect(screen.getAllByRole('row')).toHaveLength(3));
+      const rows = screen.getAllByRole('row').slice(1);
+      expect(
+        rows.map((row) => /run_[a-z]+/.exec(cellUnder(row, 'Run ID').textContent ?? '')?.[0]),
+      ).toEqual(['run_parent', 'run_kid']);
     });
 
     /* #1484 — the reason the origin axis moved to the server: an older page is

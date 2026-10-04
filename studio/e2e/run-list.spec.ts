@@ -922,16 +922,19 @@ test('#1484 — a trigger filter shows the runs its run called, nested and colla
 
   // Collapse, then expand: the child row goes and comes back, and the click on
   // the disclosure never opens the run.
-  const hide = dataRows.nth(0).getByRole('button', { name: 'Hide 1 child run' });
-  await expect(hide).toHaveAttribute('aria-expanded', 'true');
-  await hide.click();
+  const disclosure = dataRows
+    .nth(0)
+    .getByRole('button', { name: `1 child run of ${stamp} parent` });
+  await expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+  await disclosure.click();
   await expect(dataRows).toHaveCount(1);
+  await expect(disclosure).toHaveAttribute('aria-expanded', 'false');
   await expect(page).toHaveURL(/\/monitor\/runs\?/);
-  await dataRows.nth(0).getByRole('button', { name: 'Show 1 child run' }).click();
+  await disclosure.click();
   await expect(dataRows).toHaveCount(2);
 
   // Off: only what the filter matched, and the choice is in the URL.
-  const toggle = page.getByRole('button', { name: 'Child runs' });
+  const toggle = page.getByRole('button', { name: 'Include child runs' });
   await expect(toggle).toHaveAttribute('aria-pressed', 'true');
   await toggle.click();
   await expect(page).toHaveURL(/children=off/);
