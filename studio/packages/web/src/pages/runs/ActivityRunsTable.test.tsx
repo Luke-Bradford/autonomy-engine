@@ -168,6 +168,49 @@ describe('#1484 M2 ActivityRunsTable', () => {
     expect(cellsOf(screen.getAllByRole('row')[3]!)['Child run']).toBe('Later · queued (slot)');
   });
 
+  it("counts a running called run's duration up only while the page is live", async () => {
+    vi.useFakeTimers();
+    try {
+      const running = (live: boolean) => (
+        <MemoryRouter>
+          <ActivityRunsTable
+            rows={[
+              {
+                ...BASE,
+                childRunId: 'run_child',
+                childRun: {
+                  id: 'run_child',
+                  pipelineName: 'Load orders',
+                  status: 'running',
+                  startedAt: Date.now() - 2_000,
+                  finishedAt: null,
+                },
+              },
+            ]}
+            groups={[]}
+            error={null}
+            runStatus="running"
+            nameOf={() => null}
+            typeOf={() => null}
+            containerNameOf={() => null}
+            live={live}
+          />
+        </MemoryRouter>
+      );
+      const childCell = () => cellsOf(screen.getAllByRole('row')[1]!)['Child run'];
+      const view = render(running(false));
+      const frozen = childCell();
+      await act(async () => vi.advanceTimersByTimeAsync(3_000));
+      expect(childCell()).toBe(frozen);
+      view.rerender(running(true));
+      const live = childCell();
+      await act(async () => vi.advanceTimersByTimeAsync(3_000));
+      expect(childCell()).not.toBe(live);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('marks what a rerun reused, and leaves its times empty', () => {
     show([
       {
