@@ -1049,6 +1049,12 @@ test('#1484 — the list remembers the last-used query per viewer, and a link ca
   // Clear is remembered too: a later bare visit stays unfiltered.
   await page.getByRole('button', { name: 'Clear filters' }).click();
   await expect.poll(() => query().has('status')).toBe(false);
+  // The hash moves before React commits the cleared list (a router navigation
+  // is a transition), so wait for what the list REMEMBERED, not the address:
+  // leaving within the same frame would supersede the render that writes it.
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem('autonomy-studio.runs-last-query')))
+    .toBe('sort=status&children=off');
   await page.goto('/#/author/pipelines');
   await fluentRootReady(page);
   await page.goto('/#/monitor/runs');
