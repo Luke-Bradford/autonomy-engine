@@ -79,8 +79,9 @@ test('a run card says what the step does and what the run measured, inside its b
     overflows: false,
     insideBox: true,
   });
-  // A real measurement of a one-second timer — asserted by shape, not value.
-  expect(read.hold.facts).toMatch(/^\d+(ms|s)$/);
+  // A real measurement of a one-second timer — asserted by shape, not value,
+  // in the one duration format (#1484): seconds to the ms, zeros trimmed.
+  expect(read.hold.facts).toMatch(/^\d+(\.\d{1,3})?s$/);
   // A `fail` settles on ONE event: nothing was measured, so nothing is said.
   expect(read.stop).toMatchObject({
     summary: 'planned',
