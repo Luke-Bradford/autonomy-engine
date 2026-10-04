@@ -816,7 +816,9 @@ describe('shell chrome over the real route tree', () => {
     await router.navigate('/monitor/runs/run_42');
     await page().findByRole('heading', { name: 'Run run_42' });
     expect(leaf()).toBe('Run run_42');
-    expect(document.title).toBe('Run run_42 — Monitor — autonomy studio');
+    // AppShell writes the title in an effect, which may run after the heading
+    // has committed (#1536).
+    await waitFor(() => expect(document.title).toBe('Run run_42 — Monitor — autonomy studio'));
   });
 
   /**
