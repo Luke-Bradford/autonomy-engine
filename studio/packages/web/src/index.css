@@ -4562,6 +4562,39 @@ button.danger {
   color: var(--muted);
 }
 
+/* #1484 — "Include child runs": a child is indented 1rem per level under its
+   parent. Every nested row reserves the disclosure slot, so names line up whether
+   or not a run called anything. */
+.runs-grid__nest {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  margin-inline-end: 0.25rem;
+  vertical-align: middle;
+}
+
+.runs-grid__disclosure {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+}
+
+button.runs-grid__disclosure {
+  cursor: pointer;
+}
+
+.runs-grid__child-count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .runs-grid .copyable-id__copy {
   padding: 0 0.4rem;
   font-size: 12px;

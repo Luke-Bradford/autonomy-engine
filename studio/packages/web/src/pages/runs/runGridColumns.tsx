@@ -29,6 +29,66 @@ export interface CellContext {
   path: string;
   /** The viewer's display time zone (#1484), for timestamps inside a title. */
   zone: DisplayTimeZone;
+  /** #1484 — where the row sits under "Include child runs"; absent while the
+   *  grid is flat. */
+  nest?: RunNest;
+}
+
+/** #1484 — one row's place in the nested grid (`nestRuns`). */
+export interface RunNest {
+  depth: number;
+  /** The run's children that are loaded, and so drawn under it when expanded. */
+  shown: number;
+  /** Every run it called (`RunSummary.childRunCount`). */
+  total: number;
+  expanded: boolean;
+  onToggle: () => void;
+}
+
+/** "1 child run" / "3 child runs". */
+function childRuns(n: number): string {
+  return `${n} child run${n === 1 ? '' : 's'}`;
+}
+
+/**
+ * #1484 — the Pipeline cell's lead under "Include child runs": an indent per
+ * level, the disclosure button on a run whose children are loaded, and how many
+ * it called. When fewer are loaded than it called (`RUN_DESCENDANTS_MAX` cut the
+ * walk), the count says "2 of 7" rather than passing 2 off as all of them, and
+ * points at the run, whose own page names every call.
+ */
+function NestLead({ nest }: { nest: RunNest }) {
+  const cut = nest.shown < nest.total;
+  return (
+    <span className="runs-grid__nest" style={{ paddingInlineStart: `${nest.depth}rem` }}>
+      {nest.shown > 0 ? (
+        <button
+          type="button"
+          className="runs-grid__disclosure"
+          aria-expanded={nest.expanded}
+          aria-label={`${nest.expanded ? 'Hide' : 'Show'} ${childRuns(nest.shown)}`}
+          onClick={nest.onToggle}
+        >
+          <span aria-hidden="true">{nest.expanded ? '▾' : '▸'}</span>
+        </button>
+      ) : (
+        <span className="runs-grid__disclosure" aria-hidden="true" />
+      )}
+      {nest.total > 0 && (
+        <span
+          className="runs-grid__child-count"
+          title={
+            cut
+              ? `${nest.shown} of ${childRuns(nest.total)} loaded — open the run to see every one`
+              : childRuns(nest.total)
+          }
+        >
+          {cut ? `${nest.shown} of ${nest.total}` : nest.total}
+          <span className="visually-hidden"> child runs</span>
+        </span>
+      )}
+    </span>
+  );
 }
 
 /**
@@ -81,8 +141,9 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
   pipeline: {
     label: 'Pipeline',
     sort: 'pipeline',
-    cell: (r) => (
+    cell: (r, ctx) => (
       <td className="runs-grid__pipeline">
+        {ctx.nest && <NestLead nest={ctx.nest} />}
         {/* R2 — the pipeline's NAME, which is the only thing here an operator
             recognises. The version id stays reachable as the cell's title.
             #1484 — it links to the version that RAN, not the latest, and the

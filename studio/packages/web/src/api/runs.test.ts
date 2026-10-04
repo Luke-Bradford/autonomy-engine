@@ -47,6 +47,7 @@ const sampleRunSummary = {
   cost: computeRunCost([]),
   activities: { succeeded: 2, failed: 0, skipped: 1, reused: 0, unfinished: 0 },
   rowsWritten: 92,
+  childRunCount: 0,
 };
 
 const sampleEvent = {

@@ -19,7 +19,9 @@ import {
   RUN_SORT_NATURAL_DIR,
   type RunSortKey,
   type PipelineCostRollup,
+  type Paginated,
   type RunSummary,
+  type RunSummaryPage,
   type TriggerPublic,
 } from '@autonomy-studio/shared';
 import { useStore } from 'zustand';
@@ -78,6 +80,32 @@ type RunView = 'list' | 'timeline';
  * and it survives a switch to List, so returning to the timeline restores it.
  */
 const GROUP_PARAM = 'group';
+
+/**
+ * #1484 OR35 M1 — "Include child runs", ON unless the URL says `children=off`.
+ * When on, the list asks the server for each page's `descendants` (the runs its
+ * runs called, which carry no trigger of their own, so a trigger filter alone
+ * drops them) and the grid draws each under the run that called it. A view
+ * setting like `group`, not a filter: "Clear filters" keeps it, and it does not
+ * make an empty list "filtered". List view only — the Timeline lays runs out by
+ * time and does not nest, so it gets exactly the runs that matched.
+ */
+const CHILDREN_PARAM = 'children';
+
+/**
+ * A page with its `descendants` folded into `items`, so the paged list holds one
+ * flat set of runs and the grid nests it. `usePagedList`'s `runKey` keeps a run
+ * that arrives twice (as one page's descendant and a later page's match) once.
+ * The server sends `descendants` whenever it was asked; an answer without it is a
+ * broken read, and treating it as "no children" would draw a parent as if it had
+ * called nothing — so it fails the load instead.
+ */
+function withDescendants(page: RunSummaryPage): Paginated<RunSummary> {
+  if (page.descendants === undefined) {
+    throw new Error('The server did not return the child runs this list asked for.');
+  }
+  return { items: [...page.items, ...page.descendants], nextCursor: page.nextCursor };
+}
 
 function readGroupBy(params: URLSearchParams): RunGroupBy {
   const raw = params.get(GROUP_PARAM);
@@ -185,6 +213,7 @@ export function RunsPage({
    */
   const view: RunView = searchParams.get('view') === 'timeline' ? 'timeline' : 'list';
   const groupBy = readGroupBy(searchParams);
+  const includeChildren = view === 'list' && searchParams.get(CHILDREN_PARAM) !== 'off';
 
   function selectView(next: RunView) {
     const params = new URLSearchParams(searchParams);
@@ -346,13 +375,14 @@ export function RunsPage({
           // The default order is not sent, so the plain list's request is
           // unchanged; any other sort is, with its direction always explicit.
           ...(sortedByDefault ? {} : { sort: sortKey, dir: sortDir }),
+          ...(includeChildren ? { includeChildren: 'true' as const } : {}),
         },
         cursor,
         signal,
         // A new size is a new list: the cursor of a 50-row walk names nothing
         // in a 200-row one, so the fetcher changes and the list reloads.
         pageSize,
-      ),
+      ).then((page) => (includeChildren ? withDescendants(page) : page)),
     // Primitives only — see above. `kind` is the canonical joined string.
     [
       statusFilter,
@@ -370,6 +400,7 @@ export function RunsPage({
       sortDir,
       sortedByDefault,
       pageSize,
+      includeChildren,
     ],
   );
   const {
@@ -515,6 +546,17 @@ export function RunsPage({
         {/* #1484 — which columns the grid draws. The Timeline has no columns,
             so it has no picker either. */}
         {view === 'list' && <RunGridColumnsMenu ui={ui} sortKey={urlSort.key} />}
+        {/* #1484 — `CHILDREN_PARAM`. In the URL (a push), so Back undoes it. */}
+        {view === 'list' && (
+          <ToggleButton
+            size="small"
+            checked={includeChildren}
+            onClick={() => setFilter(CHILDREN_PARAM, includeChildren ? 'off' : '')}
+            title="Include child runs: show the runs each run called, nested under it"
+          >
+            Child runs
+          </ToggleButton>
+        )}
         {/* A `role="group"` of toggles rather than a `TabList`: List and
             Timeline are two renderings of one set of rows, not two panels. */}
         <div role="group" aria-label="Runs view" className="run-view-toggle">
@@ -799,6 +841,7 @@ export function RunsPage({
               sort={urlSort}
               onSort={sortBy}
               ui={ui}
+              nested={includeChildren}
             />
           ))}
       </div>

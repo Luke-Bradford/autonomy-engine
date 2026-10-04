@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
+import { runs } from '../../db/schema.js';
 import { CATALOG_VERSION } from '@autonomy-studio/shared';
 import { createPipelineVersion } from '../pipeline-versions.js';
 import { createPipeline } from '../pipelines.js';
@@ -101,14 +103,19 @@ describe('listRunSummariesPage includeChildren (#1484)', () => {
     const all = page(db, { ownerId: 'local' }, { includeChildren: true });
     expect(all.items).toHaveLength(4);
     expect(all.descendants).toEqual([]);
-    // A page holding the root and one child (but not the grandchild): the
-    // grandchild is reachable twice — through the root and through the child —
-    // and is returned once.
+    // A page holding the root and one child, but not the sibling or grandchild:
+    // the grandchild is reachable twice — through the root and through the child —
+    // and the child is itself a descendant of the root. Each comes back once, and
+    // nothing on the page comes back at all.
+    const at = (id: string, startedAt: number) =>
+      db.update(runs).set({ startedAt }).where(eq(runs.id, id)).run();
+    at(c.root, 4000);
+    at(c.child, 3000);
+    at(c.sibling, 2000);
+    at(c.grandchild, 1000);
     const narrow = page(db, { ownerId: 'local' }, { includeChildren: true, limit: 2 });
-    const pageIds = narrow.items.map((r) => r.id);
-    const ids = narrow.descendants?.map((r) => r.id) ?? [];
-    expect(new Set(ids).size).toBe(ids.length);
-    expect(ids.filter((id) => pageIds.includes(id))).toEqual([]);
+    expect(narrow.items.map((r) => r.id)).toEqual([c.root, c.child]);
+    expect(narrow.descendants?.map((r) => r.id)).toEqual([c.grandchild, c.sibling]);
     expect(narrow.nextCursor).toBe(page(db, { ownerId: 'local' }, { limit: 2 }).nextCursor);
   });
 

@@ -2,7 +2,6 @@ import { z } from 'zod';
 import {
   RUN_PAGE_SIZES,
   type RunPageSize,
-  paginatedResponseSchema,
   PendingExternalWaitListSchema,
   RerunAcceptedSchema,
   RunAnnotationsResponseSchema,
@@ -10,7 +9,7 @@ import {
   RunDetailSchema,
   RunDiagnosticSchema,
   RunSchema,
-  RunSummarySchema,
+  RunSummaryPageSchema,
   RunEventSchema,
   type CompleteExternalWaitBody,
   type PendingExternalWait,
@@ -23,14 +22,13 @@ import {
   type RunSummary,
   type RunDetail,
   type RunEvent,
-  type Paginated,
+  type RunSummaryPage,
   type RunSince,
   type RunStatus,
 } from '@autonomy-studio/shared';
 import { apiFetch } from './client';
 import { pageQuery } from './pagination';
 
-const RunPageSchema = paginatedResponseSchema(RunSummarySchema);
 
 /**
  * How many runs one page holds unless the caller says otherwise: the smallest
@@ -111,6 +109,9 @@ export interface ListRunsQuery {
    * newest first. The page omits the default and always sends `dir` otherwise. */
   sort?: RunSortKey;
   dir?: RunSortDir;
+  /** #1484 — also return the page's `descendants`, the runs its runs called
+   * ("Include child runs"). Not a filter: the page is the same either way. */
+  includeChildren?: 'true';
 }
 
 /**
@@ -156,7 +157,7 @@ export function listRuns(
   cursor?: string,
   signal?: AbortSignal,
   pageSize: number = RUNS_PAGE_SIZE,
-): Promise<Paginated<RunSummary>> {
+): Promise<RunSummaryPage> {
   // Only SET axes reach the wire. An empty-string param is not "no filter" to
   // the server — `pipelineId`/`triggerId` are `min(1)`, so `?pipelineId=` is a
   // 400, and `since`/`status` are closed enums that refuse it too. This loop
@@ -169,7 +170,7 @@ export function listRuns(
     if (value !== undefined && value !== '') extra[key] = value;
   }
   return apiFetch(`/api/runs${pageQuery(cursor, extra, pageSize)}`, {
-    schema: RunPageSchema,
+    schema: RunSummaryPageSchema,
     signal,
   });
 }

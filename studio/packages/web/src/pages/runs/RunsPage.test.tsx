@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
 import { renderWithDataRouter, renderWithRouter } from '../../testing/renderWithRouter';
@@ -177,6 +177,7 @@ function run(overrides: Partial<RunSummary> = {}): RunSummary {
     triggerName: 'Every morning',
     activities: null,
     rowsWritten: null,
+    childRunCount: 0,
     ...overrides,
   };
 }
@@ -188,8 +189,17 @@ function run(overrides: Partial<RunSummary> = {}): RunSummary {
  * `nextCursor` defaults to `null` — "this is the whole list" is what almost
  * every case here means, and it is what keeps a tab count a complete count.
  */
-function pageOf(items: RunSummary[], nextCursor: string | null = null) {
-  return { items, nextCursor };
+/** A page as the server answers the list's default request, which asks for
+ * the page's `descendants` (#1484 "Include child runs", on by default). */
+/** What the list asks for by default (#1484 "Include child runs"). */
+const CHILDREN = { includeChildren: 'true' } as const;
+
+function pageOf(
+  items: RunSummary[],
+  nextCursor: string | null = null,
+  descendants: RunSummary[] = [],
+) {
+  return { items, nextCursor, descendants };
 }
 
 beforeEach(() => {
@@ -306,6 +316,82 @@ describe('RunsPage', () => {
       within(cellUnder(await rowOf('run_unnamed'), 'Parent')).getByRole('link'),
     ).toHaveTextContent(/^ent_5678$/);
     expect(cellUnder(await rowOf('run_top'), 'Parent')).toHaveTextContent(/^—$/);
+  });
+
+  it('#1484 — nests the runs each run called under it, and collapses them', async () => {
+    listMock.mockResolvedValue(
+      pageOf(
+        [run({ id: 'run_parent', childRunCount: 3, startedAt: 1 })],
+        null,
+        // The server's descendants; one of the three calls was not loaded.
+        [
+          run({ id: 'run_kid_b', parentRunId: 'run_parent', startedAt: 3 }),
+          run({ id: 'run_kid_a', parentRunId: 'run_parent', startedAt: 2, childRunCount: 1 }),
+          run({ id: 'run_grand', parentRunId: 'run_kid_a', startedAt: 4 }),
+        ],
+      ),
+    );
+    renderWithRouter(<RunsPage />);
+    await screen.findByText('run_grand');
+    const order = () =>
+      screen
+        .getAllByRole('row')
+        .slice(1)
+        .map((row) => /run_[a-z_]+/.exec(cellUnder(row, 'Run ID').textContent ?? '')?.[0]);
+    const rowOf = (id: string) =>
+      screen
+        .getAllByRole('row')
+        .slice(1)
+        .find((row) => cellUnder(row, 'Run ID').textContent?.includes(id))!;
+    // Under its parent, in call order, grandchild under its own parent.
+    expect(order()).toEqual(['run_parent', 'run_kid_a', 'run_grand', 'run_kid_b']);
+    const parentRow = rowOf('run_parent');
+    // Two of the three calls are loaded, and the cell says so.
+    expect(cellUnder(parentRow, 'Pipeline')).toHaveTextContent('2 of 3');
+    const hide = within(parentRow).getByRole('button', { name: 'Hide 2 child runs' });
+    expect(hide).toHaveAttribute('aria-expanded', 'true');
+
+    await userEvent.click(hide);
+    expect(order()).toEqual(['run_parent']);
+    await userEvent.click(within(parentRow).getByRole('button', { name: 'Show 2 child runs' }));
+    expect(order()).toEqual(['run_parent', 'run_kid_a', 'run_grand', 'run_kid_b']);
+  });
+
+  it('#1484 — `children=off` asks for no descendants and draws the list flat', async () => {
+    listMock.mockResolvedValue(
+      pageOf([
+        run({ id: 'run_kid', parentRunId: 'run_parent', startedAt: 2 }),
+        run({ id: 'run_parent', childRunCount: 1, startedAt: 1 }),
+      ]),
+    );
+    renderWithRouter(<RunsPage />, '/monitor/runs?children=off');
+    await screen.findByText('run_kid');
+    expect(listMock).toHaveBeenLastCalledWith({}, undefined, expect.anything(), RUNS_PAGE_SIZE);
+    expect(screen.queryByRole('button', { name: /child run/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Child runs' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+    // The server's order, untouched: the child first.
+    const rows = screen.getAllByRole('row').slice(1);
+    expect(rows[0]).toHaveTextContent('run_kid');
+  });
+
+  it('#1484 — the Timeline asks for no descendants', async () => {
+    renderWithRouter(<RunsPage />, '/monitor/runs?view=timeline');
+    await waitFor(() => expect(listMock).toHaveBeenCalled());
+    expect(listMock.mock.calls.at(-1)?.[0]).not.toHaveProperty('includeChildren');
+    expect(screen.queryByRole('button', { name: 'Child runs' })).toBeNull();
+  });
+
+  it('#1484 — a page without the descendants it asked for is a failed load, not a childless list', async () => {
+    listMock.mockResolvedValue({
+      items: [run({ id: 'run_parent', childRunCount: 2 })],
+      nextCursor: null,
+    });
+    renderWithRouter(<RunsPage />);
+    expect(await screen.findByText(/did not return the child runs/)).toBeInTheDocument();
+    expect(screen.queryByText('run_parent')).toBeNull();
   });
 
   it('shows the annotations of the version a run bound once the column is turned on', async () => {
@@ -551,7 +637,12 @@ describe('RunsPage', () => {
     renderWithRouter(<RunsPage />, '/monitor/runs?tab=child');
     await screen.findByText('run_a');
     expect(screen.queryByRole('tab')).not.toBeInTheDocument();
-    expect(listMock).toHaveBeenCalledWith({}, undefined, expect.anything(), RUNS_PAGE_SIZE);
+    expect(listMock).toHaveBeenCalledWith(
+      { ...CHILDREN },
+      undefined,
+      expect.anything(),
+      RUNS_PAGE_SIZE,
+    );
   });
 
   /**
@@ -673,7 +764,12 @@ describe('RunsPage — U26 filter pane', () => {
     // rather than waved through with `expect.anything()`: a first request that
     // carried a cursor would resume mid-list, which is exactly the bug a
     // stale-cursor regression produces.
-    expect(listMock).toHaveBeenCalledWith({}, undefined, expect.anything(), RUNS_PAGE_SIZE);
+    expect(listMock).toHaveBeenCalledWith(
+      { ...CHILDREN },
+      undefined,
+      expect.anything(),
+      RUNS_PAGE_SIZE,
+    );
   });
 
   it('reads every axis out of the URL and asks the SERVER for it', async () => {
@@ -683,7 +779,7 @@ describe('RunsPage — U26 filter pane', () => {
     );
     await screen.findByText(/No runs match these filters/i);
     expect(listMock).toHaveBeenCalledWith(
-      { status: 'failure', pipelineId: 'pl_1', triggerId: 'trg_1', since: '24h' },
+      { ...CHILDREN, status: 'failure', pipelineId: 'pl_1', triggerId: 'trg_1', since: '24h' },
       undefined,
       expect.anything(),
       RUNS_PAGE_SIZE,
@@ -698,7 +794,7 @@ describe('RunsPage — U26 filter pane', () => {
     await userEvent.selectOptions(screen.getByLabelText('Status'), 'failure');
 
     expect(listMock).toHaveBeenCalledWith(
-      { status: 'failure' },
+      { ...CHILDREN, status: 'failure' },
       undefined,
       expect.anything(),
       RUNS_PAGE_SIZE,
@@ -715,7 +811,12 @@ describe('RunsPage — U26 filter pane', () => {
   it('ignores an unrecognised status/window rather than sending or erroring on it', async () => {
     renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?status=nope&since=forever');
     await screen.findByText(/No runs yet/i);
-    expect(listMock).toHaveBeenCalledWith({}, undefined, expect.anything(), RUNS_PAGE_SIZE);
+    expect(listMock).toHaveBeenCalledWith(
+      { ...CHILDREN },
+      undefined,
+      expect.anything(),
+      RUNS_PAGE_SIZE,
+    );
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
@@ -750,7 +851,7 @@ describe('RunsPage — U26 filter pane', () => {
     // The filters are read from the URL alone (no state mirror), so the request
     // carrying it is the URL carrying it.
     expect(listMock).toHaveBeenCalledWith(
-      { annotation: 'nightly' },
+      { ...CHILDREN, annotation: 'nightly' },
       undefined,
       expect.anything(),
       RUNS_PAGE_SIZE,
@@ -762,7 +863,7 @@ describe('RunsPage — U26 filter pane', () => {
     renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?annotation=retired');
     await screen.findByText(/No runs match these filters/i);
     expect(listMock).toHaveBeenCalledWith(
-      { annotation: 'retired' },
+      { ...CHILDREN, annotation: 'retired' },
       undefined,
       expect.anything(),
       RUNS_PAGE_SIZE,
@@ -916,7 +1017,12 @@ describe('RunsPage — U26 filter pane', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
 
     expect(await screen.findByText('run_back')).toBeInTheDocument();
-    expect(listMock).toHaveBeenLastCalledWith({}, undefined, expect.anything(), RUNS_PAGE_SIZE);
+    expect(listMock).toHaveBeenLastCalledWith(
+      { ...CHILDREN },
+      undefined,
+      expect.anything(),
+      RUNS_PAGE_SIZE,
+    );
     expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
   });
 
@@ -1020,7 +1126,12 @@ describe('RunsPage — U26 filter pane', () => {
       // APPENDED, not replaced — the reader keeps what they were looking at.
       expect(await screen.findByText('run_2')).toBeInTheDocument();
       expect(screen.getByText('run_1')).toBeInTheDocument();
-      expect(listMock).toHaveBeenLastCalledWith({}, 'cur_1', expect.anything(), RUNS_PAGE_SIZE);
+      expect(listMock).toHaveBeenLastCalledWith(
+        { ...CHILDREN },
+        'cur_1',
+        expect.anything(),
+        RUNS_PAGE_SIZE,
+      );
       // The walk ended, so the control goes: a button that did nothing would
       // make the end of the history indistinguishable from a stalled load.
       expect(screen.queryByRole('button', { name: 'Load older runs' })).not.toBeInTheDocument();
@@ -1037,7 +1148,7 @@ describe('RunsPage — U26 filter pane', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Load older runs' }));
       await screen.findByText('run_2');
       expect(listMock).toHaveBeenLastCalledWith(
-        { kind: 'call' },
+        { ...CHILDREN, kind: 'call' },
         'cur_1',
         expect.anything(),
         RUNS_PAGE_SIZE,
@@ -1075,7 +1186,7 @@ describe('RunsPage — U26 filter pane', () => {
       // Canonical: vocabulary order, whatever order they were picked in.
       expect(router.state.location.search).toBe('?kind=schedule%2Cwebhook');
       expect(listMock).toHaveBeenLastCalledWith(
-        { kind: 'schedule,webhook' },
+        { ...CHILDREN, kind: 'schedule,webhook' },
         undefined,
         expect.anything(),
         RUNS_PAGE_SIZE,
@@ -1101,7 +1212,7 @@ describe('RunsPage — U26 filter pane', () => {
       expect(router.state.historyAction).toBe('PUSH');
       await vi.waitFor(() =>
         expect(listMock).toHaveBeenLastCalledWith(
-          { q: 'ord' },
+          { ...CHILDREN, q: 'ord' },
           undefined,
           expect.anything(),
           RUNS_PAGE_SIZE,
@@ -1137,7 +1248,7 @@ describe('RunsPage — U26 filter pane', () => {
       const bounds = dayRangeBounds({ on: '2026-01-15' }, 'local');
       await vi.waitFor(() =>
         expect(listMock).toHaveBeenLastCalledWith(
-          bounds,
+          { ...CHILDREN, ...bounds },
           undefined,
           expect.anything(),
           RUNS_PAGE_SIZE,
@@ -1150,7 +1261,12 @@ describe('RunsPage — U26 filter pane', () => {
       expect(started()).toHaveValue('on');
       expect(screen.getByLabelText('Day')).toHaveValue('');
       await vi.waitFor(() =>
-        expect(listMock).toHaveBeenLastCalledWith({}, undefined, expect.anything(), RUNS_PAGE_SIZE),
+        expect(listMock).toHaveBeenLastCalledWith(
+          { ...CHILDREN },
+          undefined,
+          expect.anything(),
+          RUNS_PAGE_SIZE,
+        ),
       );
       // The day is still a filter param, so it can still be cleared in one click.
       expect(screen.getByRole('button', { name: 'Clear filters' })).toBeInTheDocument();
@@ -1175,7 +1291,7 @@ describe('RunsPage — U26 filter pane', () => {
       // the one the picker shows.
       expect(screen.getByLabelText('Started')).toHaveValue('range');
       expect(listMock).toHaveBeenCalledWith(
-        dayRangeBounds({ from: '2026-01-01', to: '2026-01-31' }, 'local'),
+        { ...CHILDREN, ...dayRangeBounds({ from: '2026-01-01', to: '2026-01-31' }, 'local') },
         undefined,
         expect.anything(),
         RUNS_PAGE_SIZE,
@@ -1192,7 +1308,7 @@ describe('RunsPage — U26 filter pane', () => {
       renderWithRouter(<RunsPage store={storeWith()} ui={ui} />, '/monitor/runs?on=2026-10-04');
       await screen.findByText(/No runs match these filters/i);
       expect(listMock).toHaveBeenLastCalledWith(
-        { from: String(Date.UTC(2026, 9, 4, 4)), to: String(Date.UTC(2026, 9, 5, 4)) },
+        { ...CHILDREN, from: String(Date.UTC(2026, 9, 4, 4)), to: String(Date.UTC(2026, 9, 5, 4)) },
         undefined,
         expect.anything(),
         RUNS_PAGE_SIZE,
@@ -1200,7 +1316,7 @@ describe('RunsPage — U26 filter pane', () => {
       act(() => ui.getState().setDisplayTimeZone('UTC'));
       await vi.waitFor(() =>
         expect(listMock).toHaveBeenLastCalledWith(
-          { from: String(Date.UTC(2026, 9, 4)), to: String(Date.UTC(2026, 9, 5)) },
+          { ...CHILDREN, from: String(Date.UTC(2026, 9, 4)), to: String(Date.UTC(2026, 9, 5)) },
           undefined,
           expect.anything(),
           RUNS_PAGE_SIZE,
@@ -1555,7 +1671,12 @@ describe('#1484 — runs list Live mode and page size', () => {
     );
     tick(RUNS_LIVE_POLL_MS);
     expect(await screen.findByText('run_new00002')).toBeInTheDocument();
-    expect(listMock).toHaveBeenLastCalledWith({}, undefined, expect.anything(), RUNS_PAGE_SIZE);
+    expect(listMock).toHaveBeenLastCalledWith(
+      { ...CHILDREN },
+      undefined,
+      expect.anything(),
+      RUNS_PAGE_SIZE,
+    );
   });
 
   it('turning Live on reads at once and is remembered for this viewer', async () => {
@@ -1734,7 +1855,7 @@ describe('#1484 — runs list Live mode and page size', () => {
     await screen.findByText('run_old00001');
 
     await userEvent.selectOptions(screen.getByLabelText('Runs per page'), '100');
-    expect(listMock).toHaveBeenLastCalledWith({}, undefined, expect.anything(), 100);
+    expect(listMock).toHaveBeenLastCalledWith({ ...CHILDREN }, undefined, expect.anything(), 100);
     expect(ui.getState().runsPageSize).toBe(100);
   });
 });
