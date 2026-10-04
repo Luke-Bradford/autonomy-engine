@@ -512,13 +512,6 @@ const NOW_CEILING_MS = 1e15;
 // the SAME value before computing `dueAt` — one constant, never a redeclared copy.
 export const MAX_WAIT_SECONDS = Math.floor((Number.MAX_SAFE_INTEGER - NOW_CEILING_MS) / 1000);
 
-/**
- * Bind a pipeline's graph and return the pure engine. All graph analysis
- * (incoming/outgoing edges, the implicit success-chain, container membership,
- * back-edge bodies, sorted orders) is precomputed ONCE here and closed over —
- * `reduce` itself does no graph walk beyond readiness lookups, and never
- * touches anything outside `state`/`event`.
- */
 /** #1546 — the skip reasons a settle's resets cleared, by state node id. */
 type ClearedSkips = Record<string, SkipReason>;
 
@@ -527,6 +520,13 @@ function noteResetSkip(cleared: ClearedSkips, id: string, ns: NodeRunState | und
   if (ns?.status === 'skipped' && ns.skipReason !== undefined) cleared[id] = ns.skipReason;
 }
 
+/**
+ * Bind a pipeline's graph and return the pure engine. All graph analysis
+ * (incoming/outgoing edges, the implicit success-chain, container membership,
+ * back-edge bodies, sorted orders) is precomputed ONCE here and closed over —
+ * `reduce` itself does no graph walk beyond readiness lookups, and never
+ * touches anything outside `state`/`event`.
+ */
 export function createEngine(doc: EngineDoc): Engine {
   const nodeIds = doc.nodes.map((n) => n.id);
   const nodeById = new Map<string, Node>(doc.nodes.map((n) => [n.id, n]));
@@ -3035,9 +3035,8 @@ export function createEngine(doc: EngineDoc): Engine {
    * settled predicate the outcome DEPENDS on draining, so an eager exit would
    * change the answer, not just the cost. An operator seeing spend on a doomed
    * run should find this paragraph.
-   */
-  /**
-   * Settle, and return beside the state the skip reasons the walk's resets
+   *
+   * It also returns, beside the state, the skip reasons the walk's resets
    * cleared (`ReduceResult.resetSkips`, #1546). Every reset runs inside this
    * walk, and each one takes `cleared` as a REQUIRED argument, so a new reset
    * site cannot forget to report what it clears.
