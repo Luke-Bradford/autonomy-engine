@@ -46,10 +46,16 @@ test('U24 — a failed node names its failure CLASS, and opens a drill-in', asyn
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
 
+  /* Scoped to the Nodes table: since #1484 M2 the activity runs above it show
+     the same failure, and this spec is about the node table and its drill-in. */
+  const nodeTable = page
+    .getByRole('table')
+    .filter({ has: page.getByRole('columnheader', { name: 'Node', exact: true }) });
+
   // The node table's Detail column now carries the class beside the message.
   // Retrying assertion: it can only hold once the stream has replayed.
   await expect(
-    page.getByRole('cell', { name: 'planned (permanent · forced_fail)', exact: true }),
+    nodeTable.getByRole('cell', { name: 'planned (permanent · forced_fail)', exact: true }),
   ).toBeVisible();
 
   /* #882 — the table names a node the way the GRAPH beside it does, and keeps
@@ -63,7 +69,11 @@ test('U24 — a failed node names its failure CLASS, and opens a drill-in', asyn
      `getByRole('button', { name: 'Fail 1', exact: true })` is therefore already
      the load-bearing assertion for the naming half; this adds the id's survival,
      which nothing else here would notice the loss of. */
-  const nodeCell = page.getByRole('row').filter({ hasText: 'Fail 1' }).getByRole('cell').first();
+  const nodeCell = nodeTable
+    .getByRole('row')
+    .filter({ hasText: 'Fail 1' })
+    .getByRole('cell')
+    .first();
   await expect(nodeCell).toContainText('start');
 
   // No drill-in until one is asked for.
