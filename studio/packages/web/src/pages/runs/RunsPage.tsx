@@ -567,12 +567,12 @@ export function RunsPage({
           {stalled
             ? PAGE_STALLED_LABEL
             : !live
-            ? ''
-            : pause !== null
-              ? RUNS_LIVE_PAUSE_LABEL[pause]
-              : liveFailing
-                ? RUNS_LIVE_FAILING_LABEL
-                : RUNS_LIVE_UPDATING_LABEL}
+              ? ''
+              : pause !== null
+                ? RUNS_LIVE_PAUSE_LABEL[pause]
+                : liveFailing
+                  ? RUNS_LIVE_FAILING_LABEL
+                  : RUNS_LIVE_UPDATING_LABEL}
         </span>
         {/* #1484 — how many runs a page reads. Keyset "load more" stays the
             paging model (#1083); this sizes each step of it. Per viewer, and on
