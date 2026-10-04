@@ -342,11 +342,7 @@ describe('#1484 activity runs — one row per attempt', () => {
 
     const skips = project(db, pvId, runId).filter((r) => r.activityId === 'h');
     expect(skips.map((r) => [r.status, r.iteration?.index, r.skipReason])).toEqual(
-      [0, 1, 2].map((i) => [
-        'skipped',
-        i,
-        { kind: 'upstream', from: 'x', outcome: 'success' },
-      ]),
+      [0, 1, 2].map((i) => ['skipped', i, { kind: 'upstream', from: 'x', outcome: 'success' }]),
     );
   });
 
