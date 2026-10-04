@@ -293,14 +293,16 @@ describe('#1484 activity runs — one row per attempt', () => {
       ['c', 'success', 'false', 'y'],
       ['t', 'skipped', null, 'y'],
     ]);
-    // KNOWN GAP: item x's skip is reset in the same reduce that ends the item
-    // (a loop round's end does the same), so it is only inferred here, after
-    // the reducer dropped its reason (#1546). The LAST item is not reset, so it keeps it.
+    // #1546 — item x's skip is reset in the same reduce that ends the item, so
+    // its reason comes from the reducer's `resetSkips`, not the state.
     expect(
       project(db, pvId, runId)
         .filter((r) => r.activityId === 't')
         .map((r) => r.skipReason),
-    ).toEqual([null, { kind: 'branch', from: 'c', taken: 'false' }]);
+    ).toEqual([
+      { kind: 'branch', from: 'c', taken: 'false' },
+      { kind: 'branch', from: 'c', taken: 'false' },
+    ]);
   });
 
   it('keeps the skip inside every item of a parallel ForEach', async () => {
@@ -321,6 +323,31 @@ describe('#1484 activity runs — one row per attempt', () => {
       ['t@0', 'skipped', 0],
       ['t@1', 'skipped', 1],
     ]);
+    // #1546 — each item's body is deleted in the reduce that skipped `t`.
+    expect(rows.filter((r) => r.activityId === 't').map((r) => r.skipReason)).toEqual([
+      { kind: 'branch', from: 'c', taken: 'false' },
+      { kind: 'branch', from: 'c', taken: 'false' },
+    ]);
+  });
+
+  it('says why a loop body handler was skipped in every round, not only the last', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('x'), node('h')],
+      [{ id: 'x->h', from: 'x', to: 'h', on: 'failure' }],
+      [{ id: 'lp', kind: 'loop', children: ['x', 'h'], exitWhen: '${equals(1, 2)}', maxRounds: 3 }],
+    );
+    const runId = await drive(db, pvId, stub());
+
+    const skips = project(db, pvId, runId).filter((r) => r.activityId === 'h');
+    expect(skips.map((r) => [r.status, r.iteration?.index, r.skipReason])).toEqual(
+      [0, 1, 2].map((i) => [
+        'skipped',
+        i,
+        { kind: 'upstream', from: 'x', outcome: 'success' },
+      ]),
+    );
   });
 
   it('ends a Wait at its timer, not at the moment it was scheduled', async () => {
