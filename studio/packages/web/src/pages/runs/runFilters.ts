@@ -388,3 +388,10 @@ export function isDefaultRunSort(sort: RunSortState): boolean {
     sort.key === RUN_SORT_DEFAULT_KEY && sort.dir === RUN_SORT_NATURAL_DIR[RUN_SORT_DEFAULT_KEY]
   );
 }
+
+/** #1484 OR35 M2 — the runs list filtered to one trigger's runs, under the
+ * list's own `?trigger=` param. */
+export function triggerRunsPath(triggerId: string): string {
+  const query = new URLSearchParams({ [RUN_FILTER_PARAMS.triggerId]: triggerId });
+  return `/monitor/runs?${query.toString()}`;
+}

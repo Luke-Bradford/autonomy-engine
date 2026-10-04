@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { Link } from 'react-router';
 import type { ActivityRun, RunStatus } from '@autonomy-studio/shared';
 import { When } from '../../lib/When';
@@ -32,13 +33,29 @@ export function ActivityRunsTable({
   runStatus,
   nameOf,
   typeOf,
+  selected = null,
 }: {
   rows: readonly ActivityRun[] | null;
   error: string | null;
   runStatus: RunStatus;
   nameOf: (activityId: string) => string | null;
   typeOf: (activityId: string) => string | null;
+  /**
+   * #1484 M2 — the row the failure banner's "Show activity" asked for. A new
+   * object on every ask, so asking again for the same row scrolls to it again.
+   * It is marked `aria-current` and takes focus; the drawer slice will own a
+   * real selection model.
+   */
+  selected?: { key: string } | null;
 }) {
+  const selectedRow = useRef<HTMLTableRowElement>(null);
+  useEffect(() => {
+    if (selected === null) return;
+    const tr = selectedRow.current;
+    // jsdom has no `scrollIntoView`.
+    tr?.scrollIntoView?.({ block: 'center' });
+    tr?.focus({ preventScroll: true });
+  }, [selected]);
   return (
     <section className="activity-runs" aria-labelledby="activity-runs-heading">
       <h3 id="activity-runs-heading">Activity runs</h3>
@@ -73,7 +90,18 @@ export function ActivityRunsTable({
                     ? ''
                     : failureClass(row.error.kind ?? undefined, row.error.code ?? undefined);
                 return (
-                  <tr key={row.key} data-activity-id={row.activityId}>
+                  <tr
+                    key={row.key}
+                    data-activity-id={row.activityId}
+                    {...(row.key === selected?.key
+                      ? {
+                          ref: selectedRow,
+                          tabIndex: -1,
+                          'aria-current': true,
+                          className: 'activity-runs__selected',
+                        }
+                      : {})}
+                  >
                     <td title={row.nodeId}>{name ?? <code>{row.nodeId}</code>}</td>
                     <td>{typeOf(row.activityId) ?? ''}</td>
                     <td>

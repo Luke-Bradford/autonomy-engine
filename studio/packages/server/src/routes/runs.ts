@@ -29,6 +29,7 @@ import {
 import {
   getPipeline,
   getRun,
+  getRunSummaryNames,
   isDebugVersion,
   getTrigger,
   listRunAnnotations,
@@ -434,7 +435,20 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       ? ownedName(getTrigger(db, run.triggerId), run.ownerId)
       : null;
     const debug = isDebugVersion(db, run.pipelineVersionId) === true;
-    return { run, pipelineVersion, debug, pipelineName, triggerName } satisfies RunDetail;
+    // #1484 M2 — the header's Triggered by and Parent, from the runs list's own
+    // query (`getRunSummaryNames`): one classifier and one owner rule for both.
+    // The run was read above and the version join is `restrict`, so the row is
+    // there; a delete racing this read is a 404 like any missing run.
+    const summary = getRunSummaryNames(db, run.id);
+    if (summary === null) throw new NotFoundError('run', run.id);
+    return {
+      run,
+      pipelineVersion,
+      debug,
+      pipelineName,
+      triggerName,
+      ...summary,
+    } satisfies RunDetail;
   });
 
   /**

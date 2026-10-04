@@ -997,18 +997,6 @@ a {
   max-width: 60ch;
 }
 
-/* RS2 — the run monitor's action row. The button and the cost warning sit on one
-   line and wrap together on a narrow viewport, so the warning can never be
-   separated from the button it qualifies. `align-items: center` keeps a
-   multi-line warning centred against the control rather than top-aligned. */
-.run-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.75rem;
-  margin-top: 0.75rem;
-}
-
 table {
   width: 100%;
   border-collapse: collapse;
@@ -4544,6 +4532,153 @@ button.danger {
   color: var(--colorNeutralForeground3);
 }
 
+/* #1484 OR35 M2 — the run page is a Monitor page too, so it drops the 900px
+   reading width as the runs list does (principle 1: data, not decoration). */
+.content:has(.run-page) {
+  max-width: none;
+}
+
+/* #1484 OR35 M2 — the run's header: ONE band of facts (`dt` muted beside its
+   `dd`), wrapping as a whole on a narrow screen, with the actions at its end. It
+   replaces a heading, a status line and a tall two-column list, so the activity
+   runs begin near the top. */
+.run-header {
+  margin-bottom: 0.5rem;
+  line-height: 1.75;
+}
+
+.run-header::after {
+  content: '';
+  display: block;
+  clear: both;
+}
+
+/* INLINE flow, not flex: the heading and the facts wrap as one paragraph of
+   facts, so a long band takes two lines and not one line per group. Measured
+   at 1440x900 with flex groups: three lines, the first activity row at 278. */
+.run-header > h2 {
+  display: inline;
+  margin: 0 1rem 0 0;
+  font-size: 1.15rem;
+}
+
+.run-header__facts {
+  display: inline;
+  margin: 0;
+  font-size: 13px;
+}
+
+.run-header__facts > div {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  margin-right: 1rem;
+  white-space: nowrap;
+}
+
+.run-header__facts dt {
+  color: var(--muted);
+}
+
+.run-header__facts dd {
+  margin: 0;
+}
+
+.run-header__facts .num {
+  font-variant-numeric: tabular-nums;
+}
+
+.run-header__actions {
+  float: right;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: 1rem;
+}
+
+/* The rerun's cost warning (RS2) as `?` help beside the button it qualifies:
+   open, it floats under the header rather than pushing the page down. */
+.run-header__help {
+  position: relative;
+}
+
+.run-header__help > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 0 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.run-header__help > summary::-webkit-details-marker {
+  display: none;
+}
+
+.run-header__help > span {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  z-index: 10;
+  width: 22rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 13px;
+}
+
+/* #1484 OR35 M2 — a failed run's banner: one line under the header. */
+.run-failure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  margin-bottom: 0.5rem;
+  padding: 0.25rem 0.75rem;
+  border-left: 3px solid var(--error);
+  background: var(--panel-2);
+  font-size: 13px;
+}
+
+/* Compact controls, so the banner stays one 13px line. */
+.run-failure button {
+  padding: 0.1rem 0.6rem;
+  font-size: 13px;
+}
+
+.run-failure strong {
+  color: var(--error);
+}
+
+.run-failure__kind {
+  color: var(--muted);
+}
+
+.run-failure__message {
+  min-width: 0;
+  max-width: 48rem;
+  overflow-wrap: anywhere;
+}
+
+.run-failure__message pre {
+  margin: 0.25rem 0 0;
+  white-space: pre-wrap;
+}
+
+.run-failure__actions {
+  display: inline-flex;
+  gap: 0.75rem;
+  align-items: center;
+  margin-left: auto;
+}
+
+/* The row the banner's "Show activity" asked for. */
+.activity-runs__selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 /* #1484 OR35 M2 — the run's activity runs: the runs grid's density (32px rows,
    13px text, tabular right-aligned numbers), with columns sized by content and
    a sideways scroll of its own so the page never scrolls sideways. */
@@ -4551,7 +4686,13 @@ button.danger {
   overflow-x: auto;
 }
 
+/* The table's label, close to it: the first row is what the page is for. */
+.activity-runs > h3 {
+  margin: 0.25rem 0;
+}
+
 .activity-runs__table {
+  margin: 0;
   font-size: 13px;
   width: 100%;
 }

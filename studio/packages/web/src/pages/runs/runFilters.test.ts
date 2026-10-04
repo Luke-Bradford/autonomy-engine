@@ -15,6 +15,7 @@ import {
   readRunGridHiddenParam,
   runGridHiddenParam,
   RUN_GRID_HIDDEN_PARAM,
+  triggerRunsPath,
 } from './runFilters';
 
 describe('readRunFilters — U26 annotation', () => {
@@ -254,5 +255,14 @@ describe('the runs grid column choice in the URL — #1484', () => {
       'status',
       'cost',
     ]);
+  });
+});
+
+describe('triggerRunsPath — #1484 M2', () => {
+  it("is the runs list under the list's own trigger filter, and reads back as one", () => {
+    const path = triggerRunsPath('trg a&b');
+    expect(path).toBe('/monitor/runs?trigger=trg+a%26b');
+    const params = new URLSearchParams(path.slice(path.indexOf('?')));
+    expect(readRunFilters(params).triggerId).toBe('trg a&b');
   });
 });

@@ -24,10 +24,10 @@ import { fluentRootReady } from './support/theme';
 /**
  * Which run a detail page is showing. Since #1392 the heading names the
  * PIPELINE (a source run and its rerun share one), so the run is identified by
- * its id in the metadata: shown short, carried whole in the tooltip.
+ * its id in the header (#1484 M2): shown short, carried whole in the tooltip.
  */
 function runIdShown(page: Page, runId: string): Locator {
-  return page.locator('.run-meta').getByTitle(runId, { exact: true });
+  return page.locator('.run-header').getByTitle(runId, { exact: true });
 }
 
 const FAILING_DOC = {
@@ -75,11 +75,17 @@ test('#895 — a failed run reruns from the monitor, and the new run says where 
   await page.goto(`/#/monitor/runs/${encodeURIComponent(sourceRunId)}`);
   await fluentRootReady(page);
 
-  // The action is offered, and the spec's cost warning is on screen beside it —
-  // a rerun re-executes from the failure onward, so it is not free.
+  // The action is offered, and the spec's cost warning qualifies it — a rerun
+  // re-executes from the failure onward, so it is not free. Since #1484 M2 it is
+  // the button's description and its `?` help rather than prose in the header.
   const action = page.getByRole('button', { name: 'Rerun from failed' });
   await expect(action).toBeVisible();
+  await expect(action).toHaveAccessibleDescription(/may incur additional cost/);
+  await page.getByLabel('About rerunning from the failure').click();
   await expect(page.getByText(/may incur additional cost/)).toBeVisible();
+  // It floats over the page, so it dismisses like a popover.
+  await page.keyboard.press('Escape');
+  await expect(page.getByText(/may incur additional cost/)).toBeHidden();
 
   // A run that is not a rerun says nothing about lineage, rather than "—".
   await expect(page.getByText('Rerun of')).toHaveCount(0);
@@ -312,7 +318,8 @@ test("RS4 — a rerun reuses a copied call node's child, and links to it", async
      does not exist. */
   await panel.getByRole('link', { name: `Reused child run ${childRunId}` }).click();
   await expect(page).toHaveURL(new RegExp(`/monitor/runs/${childRunId}$`));
-  await expect(page.getByRole('link', { name: `Parent run ${sourceRunId}` })).toBeVisible();
+  // #1484 M2 — the header's Parent link, named by its pipeline; the id is its hover.
+  await expect(page.locator('.run-header').getByTitle(sourceRunId, { exact: true })).toBeVisible();
 
   await expectQuiet(page, problems);
 });

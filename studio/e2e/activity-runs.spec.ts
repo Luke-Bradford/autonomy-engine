@@ -72,6 +72,15 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
       firstRowTop: top(firstRow),
       graphTop: top(graph ?? null),
       pageScrollsSideways: document.documentElement.scrollWidth > window.innerWidth,
+      // #1484 M2 slice 2 — the header band and the failure banner.
+      facts: Object.fromEntries(
+        [...document.querySelectorAll('.run-header__facts > div')].map((d) => [
+          d.querySelector('dt')?.textContent,
+          (d.querySelector('dd')?.textContent ?? '').trim(),
+        ]),
+      ),
+      banner: (document.querySelector('.run-failure')?.textContent ?? '').trim(),
+      bannerAboveTable: top(document.querySelector('.run-failure')) < top(firstRow),
     };
   });
 
@@ -103,6 +112,23 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
     type: 'first activity row y at 1440x900',
     description: String(Math.round(seen.firstRowTop)),
   });
+
+  // The header is one band of facts, and the activity runs start high enough
+  // that the table is the first thing below it (OR35: y ≤ 260 at 1440x900).
+  expect(seen.facts['Triggered by']).toBe('Fire now · M2 activity runs');
+  expect(seen.facts['Duration']).toMatch(/^\d+(\.\d+)?s$/);
+  expect(seen.facts['Ended']).toMatch(/\d\d:\d\d:\d\d\.\d{3}/);
+  expect(seen.firstRowTop).toBeLessThanOrEqual(260);
+  // The banner names the activity the engine blamed, with its error, above the table.
+  expect(seen.banner).toContain('Failed:');
+  expect(seen.banner).toContain('planned stop');
+  expect(seen.bannerAboveTable).toBe(true);
+
+  // Show activity takes the reader to that activity's row.
+  await page.getByRole('button', { name: 'Show activity' }).click();
+  const current = table.locator('tbody tr[aria-current="true"]');
+  await expect(current).toHaveAttribute('data-activity-id', 'stop');
+  await expect(current).toBeFocused();
 
   await expectQuiet(page, problems);
 });

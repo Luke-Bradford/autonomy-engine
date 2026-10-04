@@ -1,7 +1,7 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { computeRunUsage, TERMINAL_RUN_ROW_STATUS } from '@autonomy-studio/shared';
 import type { PipelineVersion, Run, RunStatus } from '@autonomy-studio/shared';
-import { Link, useNavigate } from 'react-router';
+import { useNavigate } from 'react-router';
 import { cancelRun, getRun, getRunDetail, rerunFromFailed } from '../../api/runs';
 import { messageOf } from '../../api/client';
 import { owesCallback } from './externalWaits';
@@ -9,8 +9,7 @@ import { PendingCallbacks } from './PendingCallbacks';
 import { canRerunFromFailed, RERUN_COST_WARNING } from './rerunAction';
 import { RerunHistory } from './RerunHistory';
 import { canCancelRun, cancelConfirmMessage } from './cancelAction';
-import { runDetailPath, runLinkLabel } from './runPath';
-import { triggersPath } from '../triggers/triggersPath';
+import { runDetailPath } from './runPath';
 import { useRunStream, type StreamPhase } from './useRunStream';
 import {
   deriveNodeActivity,
@@ -26,6 +25,11 @@ import { runStatusLabel } from './runStatus';
 import { AttemptTimeline } from './AttemptTimeline';
 import { NodeActivityPanel, PANEL_ID } from './NodeActivityPanel';
 import { ActivityRunsTable } from './ActivityRunsTable';
+import { RunHeader, type RunHeaderNames } from './RunHeader';
+import { RunFailureBanner } from './RunFailureBanner';
+import { runFailure, runFinished, runStartedAt } from './runFailure';
+import { HelpDisclosure } from './HelpDisclosure';
+import { containerLabels } from '../pipeline/containerRules';
 import { useActivityRuns } from './useActivityRuns';
 import { NodeDuration } from './NodeDuration';
 import { RunCostSummary } from './RunCostSummary';
@@ -36,12 +40,9 @@ import { RunGraph } from './RunGraph.lazy';
 import { useRunProjection } from './useRunProjection';
 import { isSecureMarker } from './secureMarker';
 import { runVersionPath } from '../author/pipelinePath';
-import { CopyableId } from '../../lib/CopyableId';
 import { useConfirm } from '../../lib/confirm/useConfirm';
 import { shortId } from '../../lib/ids';
 import { useShellLabel } from '../../shell/shellLabel';
-import { versionLabel } from '../../lib/versionLabel';
-import { When } from '../../lib/When';
 import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import { formatTimeOfDay, zoneLabel } from '../../lib/displayTime';
 
@@ -88,12 +89,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
   // #1392 — the names R1 resolves alongside the doc. A `null` name (none the
   // owner may see), or no names at all on the fallback path (the doc would not
   // resolve), leaves the page showing ids, as it did before.
-  const [names, setNames] = useState<{
-    pipeline: string | null;
-    trigger: string | null;
-    /** #1395 — the doc is a DEBUG version, so it reads `debug <n>`, not `v<n>`. */
-    debug: boolean;
-  } | null>(null);
+  // The names `/detail` resolves, in the header's own shape (`RunHeaderNames`).
+  const [names, setNames] = useState<RunHeaderNames | null>(null);
   useShellLabel(names?.pipeline ? `${names.pipeline} · run ${shortId(runId)}` : undefined);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [rerunning, setRerunning] = useState(false);
@@ -173,7 +170,13 @@ export function RunDetailPage({ runId }: { runId: string }) {
       .then((d) => {
         setRun(d.run);
         setDoc(d.pipelineVersion);
-        setNames({ pipeline: d.pipelineName, trigger: d.triggerName, debug: d.debug });
+        setNames({
+          pipeline: d.pipelineName,
+          trigger: d.triggerName,
+          debug: d.debug,
+          triggeredByKind: d.triggeredByKind,
+          parentPipelineName: d.parentPipelineName,
+        });
       })
       .catch((detailErr: unknown) => {
         if (ac.signal.aborted) return;
@@ -303,9 +306,6 @@ export function RunDetailPage({ runId }: { runId: string }) {
   /* The REST row carries no park reason (`RunSchema` has no such column), so
      the fallback tail is `null` rather than a guess — see `runStatusLabel`. */
   const waitingReason = view?.waitingReason ?? null;
-  /* Bound once so the lineage row below narrows without a non-null assertion —
-     `run.rerunOf` inside a callback would not stay narrowed. */
-  const rerunOf = run?.rerunOf ?? null;
   /* #890 — whether a running node's Duration may COUNT UP. Only while this page
      would hear the node settle: the socket open with its replay complete
      (`live` is set only after `replay_complete`, so a truncated log never
@@ -315,6 +315,38 @@ export function RunDetailPage({ runId }: { runId: string }) {
      set, as `RunCostSummary`'s `settled` below, because `status` can fall back
      to the REST row's `queued`/`skipped`. */
   const countingLive = streamStillLive(stream.phase, status);
+  /* #1484 M2 — when the run ended and why. The `run.finished` event as well as
+     the row's stamp, because the row was read once and the run may have ended
+     since. */
+  const finished = useMemo(() => runFinished(stream.events), [stream.events]);
+  const endedAt = run?.finishedAt ?? finished?.ts ?? null;
+  // The log's start, which a run admitted from the queue since the row was read
+  // has and the row does not (its `startedAt` was the enqueue placeholder).
+  const loggedStart = useMemo(() => runStartedAt(stream.events), [stream.events]);
+  const streamEnded = stream.phase === 'closed' || stream.phase === 'error';
+  /* The failure banner, on a FAILED run only. It names what the log blames, so
+     it waits for the projected state the container walk needs, unless that
+     will never come (the stream has ended, or the version will not resolve).
+     A failed run whose log never says why (a truncated log, or the REST
+     fallback) still gets a banner, saying only that it failed. */
+  const failure = useMemo(() => {
+    if (status !== 'failure') return null;
+    if (finished === null) return streamEnded ? runFailure(null, null, null) : null;
+    if (!overlay.ready && !streamEnded && loadError === null) return null;
+    return runFailure(
+      finished.reason,
+      overlay.ready ? overlay.state.containers : null,
+      activityRuns.rows,
+    );
+  }, [status, finished, streamEnded, overlay, loadError, activityRuns.rows]);
+  /* A container has no node label, so the banner names one by its container
+     label, as the editor does. */
+  const containerNames = useMemo(
+    () => (doc === null ? null : containerLabels(doc.containers)),
+    [doc],
+  );
+  // #1484 M2 — the row "Show activity" asked for; a new object per ask.
+  const [selectedRow, setSelectedRow] = useState<{ key: string } | null>(null);
 
   /* CX4 (#1320) — "Cancelling…": the cancel is FOLDED (the log carries
      `run.cancelRequested`) but the run has not finished, because in-flight work
@@ -447,72 +479,76 @@ export function RunDetailPage({ runId }: { runId: string }) {
   );
 
   return (
-    <section aria-labelledby="run-heading">
-      <div className="page-header">
-        {/* #1392 — the heading names the pipeline and the version this run is
-            bound to; the run's own id moves to the metadata, short and
-            copyable. Until the names load (or on the doc-less fallback) the
-            heading is the run's short id, as the breadcrumb is. */}
-        <h2 id="run-heading">
-          {names?.pipeline && doc ? (
-            <>
-              {names.pipeline}{' '}
-              <span className="run-heading__version">{versionLabel(doc.version, names.debug)}</span>
-            </>
-          ) : (
-            <>
-              Run <code>{shortId(runId)}</code>
-            </>
-          )}
-        </h2>
-        {/* #1239 — an anchor, not `navigate()` on a button: going somewhere is
-            what an anchor is for, and this one is now hoverable, copyable,
-            middle-clickable and openable in a new tab like every run link on
-            the page. `.page-back` keeps the header chip the global `button`
-            rule was drawing; without it this would render as accent-coloured
-            prose — #1242 gave bare anchors a palette colour, so the fallback is
-            no longer the UA link blue, but it is still not a control. */}
-        <Link className="page-back" to="/monitor/runs">
-          ← All runs
-        </Link>
-      </div>
-
-      <p className="page-hint">
-        {cancelling ? (
-          <span className="run-status run-status-cancelling">Cancelling…</span>
-        ) : (
-          <span className={`run-status run-status-${status}`}>
-            {runStatusLabel(status, waitingReason)}
-          </span>
-        )}{' '}
-        <span className={`stream-phase stream-phase-${stream.phase}`} role="status">
-          {phaseLabel(stream.phase)}
-        </span>
-      </p>
-
-      {/* RS2 — the rerun action, offered only on a run that FAILED. `status` is
-          the page's one status value (the log's, falling back to the row), so the
-          control appears on exactly what the header says failed. The spec's cost
-          warning sits beside the button rather than behind a confirm: it is the
-          fact an operator needs BEFORE deciding, and "Fire now" on the triggers
-          page sets the precedent that starting work is a direct action here. */}
-      {canRerunFromFailed(status) && (
-        <div className="run-actions">
-          <button type="button" onClick={() => void onRerun()} disabled={rerunning}>
-            {rerunning ? 'Starting rerun…' : 'Rerun from failed'}
-          </button>
-          <span className="page-hint">{RERUN_COST_WARNING}</span>
-        </div>
-      )}
-      {/* CX4 (#1320) — the cancel action, on any run that has not ended (D5),
-          and withdrawn once the cancel is folded: the run is then already
-          stopping, and the header says so. */}
-      {canCancelRun(status) && !cancelling && (
-        <div className="run-actions">
-          <button type="button" onClick={() => void onCancel()} disabled={cancelBusy}>
-            {cancelBusy ? 'Cancelling…' : 'Cancel run'}
-          </button>
-        </div>
+    <section aria-labelledby="run-heading" className="run-page">
+      <RunHeader
+        runId={runId}
+        run={run}
+        doc={doc}
+        names={names}
+        status={status}
+        startedAt={loggedStart ?? run?.startedAt ?? 0}
+        statusPill={
+          <>
+            {cancelling ? (
+              <span className="run-status run-status-cancelling">Cancelling…</span>
+            ) : (
+              <span className={`run-status run-status-${status}`}>
+                {runStatusLabel(status, waitingReason)}
+              </span>
+            )}{' '}
+            <span className={`stream-phase stream-phase-${stream.phase}`} role="status">
+              {phaseLabel(stream.phase)}
+            </span>
+          </>
+        }
+        endedAt={endedAt}
+        counting={countingLive}
+        actions={
+          <>
+            {/* RS2 — the rerun action, offered only on a run that FAILED. The
+                spec's cost warning is the button's accessible description and
+                its `?` help (#1484 principle 1: explanations live in help, not
+                in prose on the page), so the header stays one band. */}
+            {canRerunFromFailed(status) && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void onRerun()}
+                  disabled={rerunning}
+                  aria-describedby="rerun-cost-warning"
+                >
+                  {rerunning ? 'Starting rerun…' : 'Rerun from failed'}
+                </button>
+                <HelpDisclosure
+                  label="About rerunning from the failure"
+                  noteId="rerun-cost-warning"
+                >
+                  {RERUN_COST_WARNING}
+                </HelpDisclosure>
+              </>
+            )}
+            {/* CX4 (#1320) — the cancel action, on any run that has not ended
+                (D5), and withdrawn once the cancel is folded: the run is then
+                already stopping, and the header says so. */}
+            {canCancelRun(status) && !cancelling && (
+              <button type="button" onClick={() => void onCancel()} disabled={cancelBusy}>
+                {cancelBusy ? 'Cancelling…' : 'Cancel run'}
+              </button>
+            )}
+          </>
+        }
+      />
+      {failure !== null && (
+        <RunFailureBanner
+          failure={failure}
+          nameOf={(id) => nameOf(id) ?? containerNames?.get(id) ?? null}
+          versionHref={
+            doc === null || names === null
+              ? null
+              : runVersionPath(doc.pipelineId, doc.version, names.debug)
+          }
+          onShowActivity={(key) => setSelectedRow({ key })}
+        />
       )}
       {cancelWaitsOnChild && (
         <p className="page-hint">
@@ -540,128 +576,6 @@ export function RunDetailPage({ runId }: { runId: string }) {
         <p role="alert" className="error">
           {stream.error}
         </p>
-      )}
-
-      {run && (
-        <dl className="run-meta">
-          <dt>Run id</dt>
-          <dd>
-            <CopyableId id={run.id} noun="run" />
-          </dd>
-          <dt>Pipeline</dt>
-          <dd>
-            {/* #1484 — the link opens the version this run is bound to: a
-                read-only preview, or the editor when it is still the latest. */}
-            {names?.pipeline && doc ? (
-              <>
-                <Link to={runVersionPath(doc.pipelineId, doc.version, names.debug)}>
-                  {names.pipeline}
-                </Link>{' '}
-                {versionLabel(doc.version, names.debug)}
-              </>
-            ) : (
-              <code>{run.pipelineVersionId}</code>
-            )}
-          </dd>
-          <dt>Trigger</dt>
-          <dd>
-            {/* No per-trigger route exists, so the name links to the list it
-                is on. A trigger deleted since the run leaves `triggerId` null. */}
-            {run.triggerId ? (
-              names?.trigger ? (
-                <Link to={triggersPath()}>{names.trigger}</Link>
-              ) : (
-                <code>{run.triggerId}</code>
-              )
-            ) : (
-              '—'
-            )}
-          </dd>
-          {/* RS6 lineage — shown only when there IS a source run. `rerunOf` is
-              the durable row projection of `run.started.rerunOf`, written in the
-              same transaction as the reseed pair, so it cannot disagree with the
-              log. A row reading "—" on every ordinary run would be noise; the
-              absence of this row is what "not a rerun" looks like.
-
-              This is the LINK half. The copied-vs-executed render — a copied
-              frontier node saying "reused from run R1" rather than a plain
-              "success" — landed with #918, in the node table's Detail cell and
-              in the drill-in panel, both sourced from the `run.reseeded` fold
-              rather than from this row (the fold renders when this REST read
-              does not).
-
-              The run GRAPH is still exempt, and deliberately: the reducer writes
-              a copied node `{status:'success', attempts:0}`, byte-identical to
-              an executed success, so `RunState` carries no marker for
-              `runFlow`/`RunGraph` to read and colouring one would need a second
-              source threaded into the graph. The two surfaces that CAN say it
-              now do. */}
-          {rerunOf !== null && (
-            <>
-              <dt>Rerun of</dt>
-              <dd>
-                <Link to={runDetailPath(rerunOf)} aria-label={runLinkLabel('Source', rerunOf)}>
-                  <code>{rerunOf}</code>
-                </Link>
-              </dd>
-            </>
-          )}
-          {/* RS6 — the rerun-history grouping, the DOWNWARD half of the
-              lineage `Rerun of` starts: this run's own reruns, each a link.
-              Absent when there are none; `RerunHistory` owns why. */}
-          <RerunHistory runId={run.id} />
-          {/* #1231 / U20 — the drill UP, and the only place a child run says it
-              IS one. `parentRunId` has been on the row since #796 stamped it and
-              was read by nothing: the runs list's Child tab could say a run was
-              a child and never whose.
-
-              Same rule as the `Rerun of` row above — the row is ABSENT on a run
-              nothing called, rather than present reading "—", because this list
-              is the one surface every run shares and a permanent empty row is
-              noise on all of them.
-
-              A `<Link>`, not a `navigate`-on-a-button. The anchor is the
-              correct control for going somewhere (hover, copy, middle-click, new
-              tab), and `RunsPage`'s Run ID link (`RunRow`) records the argument in place.
-              #1232 converted the `Rerun of` row above to match — so the two
-              lineage rows now state the same act the same way, and every
-              run-navigation site in the app is an anchor.
-
-              The `← All runs` control in this page's header followed in #1239.
-              It is not a RUN-navigation site (it goes to a list), and converting
-              it needed a restyle as well — a `.page-back` rule to keep the chip
-              the global `button` rule had been drawing. Back controls elsewhere
-              in the app are still buttons or unthemed anchors (#1242).
-
-              The list is gated on the run ROW alone, so this renders on the
-              doc-resolution fallback too — which is when a failed child most
-              needs a way back to whatever called it. */}
-          {run.parentRunId !== null && (
-            <>
-              <dt>Called by</dt>
-              <dd>
-                <Link
-                  to={runDetailPath(run.parentRunId)}
-                  aria-label={runLinkLabel('Parent', run.parentRunId)}
-                >
-                  <code>{run.parentRunId}</code>
-                </Link>
-              </dd>
-            </>
-          )}
-          <dt>Started</dt>
-          <dd>
-            <When ms={run.startedAt} precision="ms" />
-          </dd>
-          <dt>Finished</dt>
-          <dd>
-            <When ms={run.finishedAt} precision="ms" />
-          </dd>
-          <dt>Params</dt>
-          <dd>
-            <code>{JSON.stringify(run.params)}</code>
-          </dd>
-        </dl>
       )}
 
       {/* #900 — the parked-on-a-callback surface. Rendered only for an EXTERNAL
@@ -696,7 +610,20 @@ export function RunDetailPage({ runId }: { runId: string }) {
         runStatus={status}
         nameOf={nameOf}
         typeOf={typeOf}
+        selected={selectedRow}
       />
+
+      {/* The run's inputs and its downward rerun lineage (RS6): facts about the
+          run that the header has no room for, below the activity runs. */}
+      {run && (
+        <dl className="run-meta">
+          <dt>Params</dt>
+          <dd>
+            <code>{JSON.stringify(run.params)}</code>
+          </dd>
+          <RerunHistory runId={run.id} />
+        </dl>
+      )}
 
       {/* U27 (#930) — the run-level spend. Placed AFTER the parked-callback block
           and before the Graph: a pending callback is an ACTION the operator has

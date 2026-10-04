@@ -54,7 +54,7 @@ const TIMER_DOC = {
 };
 
 /** The header pill, scoped so it cannot match the node table's own status word. */
-const headerStatus = '.page-hint .run-status';
+const headerStatus = '.run-header .run-status';
 
 test('#900 — a parked run says where its callback goes, and the URL it reveals resumes it', async ({
   page,

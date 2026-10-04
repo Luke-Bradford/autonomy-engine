@@ -21,7 +21,8 @@ type Reruns =
 
 /**
  * RS6 — the rerun-history grouping: the DOWNWARD half of a run's lineage, as a
- * `<dt>`/`<dd>` pair inside the detail page's `run-meta` list. `Rerun of` walks
+ * `<dt>`/`<dd>` pair inside the detail page's `run-meta` list (below its activity
+ * runs since #1484 M2; the header holds `Rerun of`). `Rerun of` walks
  * from a rerun to its source; this walks from a source to its reruns, so a chain
  * R1 → R2 → R3 is navigable both ways. Direct reruns only — each rerun's own
  * page carries the next link, rather than this row re-deriving a tree.
@@ -29,7 +30,7 @@ type Reruns =
  * Read through the server's `?rerunOf=` filter, not the run's event fold: a
  * rerun is a SEPARATE run, and nothing in R1's log records that R2 exists.
  *
- * ABSENT on a run nothing has rerun — the rule `Rerun of` and `Called by` set,
+ * ABSENT on a run nothing has rerun — the rule `Rerun of` and `Parent` set,
  * because a permanent empty row is noise on every ordinary run. A FAILED read is
  * the exception: hiding the row then would say "never rerun", which is the one
  * thing the page does not know, so it says it could not load them instead.

@@ -1100,6 +1100,10 @@ describe('runs routes (read-only)', () => {
       );
       expect(detail.pipelineName).toBe('Renamed pipe');
       expect(detail.triggerName).toBe('Nightly');
+      // #1484 M2 — the runs list's own classifier: a pre-S9 row with no context
+      // reads its schedule trigger's mode.
+      expect(detail.triggeredByKind).toBe('schedule');
+      expect(detail.parentPipelineName).toBeNull();
 
       // A deleted trigger `set null`s the run's link, so there is no name to give.
       deleteTrigger(app.db, trigger.id);
@@ -1147,6 +1151,48 @@ describe('runs routes (read-only)', () => {
       );
       expect(detail.pipelineName).toBeNull();
       expect(detail.triggerName).toBeNull();
+    });
+
+    it("#1484 M2 — names a called run's parent pipeline, and only when the run's owner owns it", async () => {
+      const mkVersion = (ownerId: string, name: string) =>
+        createPipelineVersion(app.db, {
+          pipelineId: createPipeline(app.db, { ownerId, name }).id,
+          params: [],
+          outputs: [],
+          nodes: [],
+          edges: [],
+          catalogVersion: CATALOG_VERSION,
+        });
+      const mkRun = (versionId: string, parentRunId: string | null) =>
+        createRun(app.db, {
+          ownerId: 'local',
+          pipelineVersionId: versionId,
+          triggerId: null,
+          parentRunId,
+          params: {},
+        });
+      const child = mkVersion('local', 'Child pipe');
+      const parent = mkRun(mkVersion('local', 'Caller pipe').id, null);
+      const called = RunDetailSchema.parse(
+        (
+          await app.inject({
+            method: 'GET',
+            url: `/api/runs/${mkRun(child.id, parent.id).id}/detail`,
+          })
+        ).json(),
+      );
+      expect(called.parentPipelineName).toBe('Caller pipe');
+      expect(called.triggeredByKind).toBe('call');
+
+      // Built at the repo layer, as above: a parent whose pipeline is not the
+      // run owner's is linked by id only, never named.
+      const foreignParent = mkRun(mkVersion('someone-else', 'Not yours either').id, null);
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/runs/${mkRun(child.id, foreignParent.id).id}/detail`,
+      });
+      expect(RunDetailSchema.parse(res.json()).parentPipelineName).toBeNull();
+      expect(res.body).not.toContain('Not yours either');
     });
 
     it("404s for a run belonging to a different owner — a run handle must not leak someone else's doc", async () => {

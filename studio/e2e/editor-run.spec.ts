@@ -16,7 +16,7 @@ import { nodeById, openSeededCanvas } from './support/seedDoc';
  */
 
 /** The run page's header pill, scoped off the node table's own status words. */
-const headerStatus = '.page-hint .run-status';
+const headerStatus = '.run-header .run-status';
 
 test('#1395 — Run in the editor starts the saved version with the params typed, and no trigger', async ({
   page,

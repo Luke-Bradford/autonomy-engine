@@ -60,7 +60,7 @@ async function cancelFromPage(
 const nodeRowStatus = (page: Page, name: string) =>
   page.locator('tr', { has: page.getByRole('button', { name }) }).locator('.node-status');
 
-const headerPill = (page: Page) => page.locator('.page-hint .run-status');
+const headerPill = (page: Page) => page.locator('.run-header .run-status');
 
 /** The pill's colour, and the colour `--muted` resolves to in the same scope. */
 async function pillColours(page: Page): Promise<{ pill: string; muted: string; error: string }> {
