@@ -5,7 +5,8 @@ import {
   type TokenSeriesBucket,
 } from '@autonomy-studio/shared';
 import type { DisplayTimeZone } from '../../lib/displayTime';
-import { useDisplayTimeZone, When } from '../../lib/When';
+import { When } from '../../lib/When';
+import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import { formatWhen } from '../runs/format';
 
 /**

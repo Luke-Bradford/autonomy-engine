@@ -19,7 +19,7 @@ import {
 import type { BindingSelection } from '../triggers/binding';
 import { triggersPath } from '../triggers/triggersPath';
 import { nextFireText } from './triggerColumnRules';
-import { useDisplayTimeZone } from '../../lib/When';
+import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 
 /** How long after a shown time passes to re-read it: the clock delivers the
  * tick and arms the next within about a second of it falling due. */

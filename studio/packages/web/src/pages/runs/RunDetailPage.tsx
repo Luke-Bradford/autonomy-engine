@@ -39,7 +39,8 @@ import { useConfirm } from '../../lib/confirm/useConfirm';
 import { shortId } from '../../lib/ids';
 import { useShellLabel } from '../../shell/shellLabel';
 import { versionLabel } from '../../lib/versionLabel';
-import { useDisplayTimeZone, When } from '../../lib/When';
+import { When } from '../../lib/When';
+import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 
 /* The local `message(err)` this file used to declare was one of the twenty-odd
    inline copies `messageOf` was named to replace; `api/client.ts` asks each to

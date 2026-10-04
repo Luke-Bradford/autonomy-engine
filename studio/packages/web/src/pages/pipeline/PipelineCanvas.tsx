@@ -217,7 +217,7 @@ import { EditorStateBadge } from './EditorStateBadge';
 import { canvasVersion, editingState, gitState, liveState, partText } from './editorState';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { useConfirm } from '../../lib/confirm/useConfirm';
-import { useDisplayTimeZone } from '../../lib/When';
+import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 
 /**
  * How long a canvas-gesture notice stays up — copy/paste/duplicate, and U9's

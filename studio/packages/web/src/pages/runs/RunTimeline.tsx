@@ -8,7 +8,7 @@ import { groupRuns, type RunBar, type RunGroupBy } from './runBars';
 import { runStatusLabel, runStatusTone } from './runStatus';
 import { runDetailPath } from './runPath';
 import { versionLabel } from '../../lib/versionLabel';
-import { useDisplayTimeZone } from '../../lib/When';
+import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import type { DisplayTimeZone } from '../../lib/displayTime';
 
 /**

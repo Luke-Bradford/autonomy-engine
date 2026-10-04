@@ -3,7 +3,7 @@ import type { NodeActivity, AttemptSpan } from './runSummary';
 import { nodeStatusLabel, nodeStatusTone, type StatusTone } from './nodeStatus';
 import { formatClock, formatElapsed } from './format';
 import { placeSpans, timelineWindow, untimedReason } from './attemptSpans';
-import { useDisplayTimeZone } from '../../lib/When';
+import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 
 /**
  * U12a (#1007) — the run's spans drawn against one shared time axis, so an

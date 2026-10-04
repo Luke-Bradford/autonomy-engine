@@ -29,7 +29,7 @@ import {
   type CellContext,
 } from './runGridColumns';
 import type { RunSortState } from './runFilters';
-import { useDisplayTimeZone } from '../../lib/When';
+import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 
 /** A column's drawn width: the operator's, else its default. */
 function widthOf(widths: Partial<Record<RunGridColumnId, number>>, column: RunGridColumnId) {
