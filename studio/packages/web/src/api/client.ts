@@ -186,8 +186,9 @@ export async function apiFetch<T = unknown>(path: string, opts: ApiRequest<T> = 
  * `apiFetch`'s sibling for a response whose BYTES are the payload: the same
  * failure mapping, but the 2xx body is returned as raw text and never parsed.
  *
- * This is the one response in the app that is not validated against a shared
- * Zod schema, and that is the deliberate point of it. The portability export
+ * This and its sibling `apiFetchFile` are the only responses in the app not
+ * validated against a shared Zod schema, and that is the deliberate point of
+ * them. The portability export
  * routes send canonical JSON (#3 G1 — sorted keys, stable bytes) and the
  * operator's artifact must be the server's exact bytes. Round-tripping it
  * through `ExportEnvelopeSchema.parse` + a re-serialize would make the client
@@ -202,4 +203,21 @@ export async function apiFetchText(
   const res = await fetch(path, { method: 'GET', signal: opts.signal });
   if (!res.ok) await throwApiError(res);
   return res.text();
+}
+
+/**
+ * `apiFetchText`'s rule for a file kept as BYTES, plus the response headers —
+ * the runs export (#1484), whose reply says beside the file whether it was cut.
+ *
+ * A `Blob`, not text, because decoding is not lossless: `Response.text()`
+ * decodes UTF-8 and DROPS a leading byte-order mark, and the CSV's BOM is what
+ * makes Excel read it as UTF-8. Measured: the e2e download arrived without it.
+ */
+export async function apiFetchFile(
+  path: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<{ file: Blob; headers: Headers }> {
+  const res = await fetch(path, { method: 'GET', signal: opts.signal });
+  if (!res.ok) await throwApiError(res);
+  return { file: await res.blob(), headers: res.headers };
 }

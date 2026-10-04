@@ -4637,7 +4637,23 @@ button.danger {
 /* The search box, on the title row between the heading and the view toggle. */
 .runs-search {
   flex: 0 1 24rem;
+  min-width: 12rem;
   margin: 0 0.75rem 0 auto;
+}
+
+/* #1484 — every other title-row control keeps its natural width, so the search
+   box is the one thing that gives way: a control added to the row narrows the
+   box rather than wrapping a button's label onto a second line and growing the
+   row (measured: Export CSV did exactly that, pushing the first run past y=200). */
+.runs-page > .page-header > :not(.runs-search) {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* #1484 — what the last CSV export has to say, under the title row. */
+.runs-export-note {
+  margin: 0 0 0.375rem;
+  font-size: 13px;
 }
 
 .runs-search input {

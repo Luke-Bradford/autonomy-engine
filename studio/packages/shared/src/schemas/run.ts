@@ -132,6 +132,16 @@ export const RunSchema = z.object({
 export type Run = z.infer<typeof RunSchema>;
 
 /**
+ * Whether a run's `startedAt` is a real start. A `queued` run's is an
+ * ENQUEUE-time placeholder that admission re-stamps (`repo/runs.ts::
+ * admitQueuedRun`), so a duration measured from it would be queue age under the
+ * wrong name. One rule for the grid's Duration and the runs CSV export (#1484).
+ */
+export function runStartIsReal(run: Pick<Run, 'status'>): boolean {
+  return run.status !== 'queued';
+}
+
+/**
  * #1484 OR35 M1 — what STARTED a run, as the Monitor's "Triggered by" column
  * says it. One server-side authority (`RUN_TRIGGERED_BY_SQL`) computes it from
  * the row, so the list's column and its `?kind=` filter cannot disagree about
@@ -642,6 +652,13 @@ export const RunSearchSchema = z.string().trim().min(1).max(RUN_SEARCH_MAX_CHARS
 export const RUN_PAGE_SIZES = [DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, 200] as const;
 export type RunPageSize = (typeof RUN_PAGE_SIZES)[number];
 export const RUNS_MAX_PAGE_SIZE: number = Math.max(...RUN_PAGE_SIZES);
+
+/**
+ * #1484 OR35 M1 — set on `GET /api/runs/export.csv` when the export stopped at
+ * its cap with more runs matching. The value is the cap, so the page can say how
+ * many it holds without a second copy of the number.
+ */
+export const RUNS_EXPORT_TRUNCATED_HEADER = 'x-runs-export-truncated';
 
 /**
  * `PaginationQuerySchema` with the runs list's ceiling. Out of range is still a

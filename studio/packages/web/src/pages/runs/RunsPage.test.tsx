@@ -51,6 +51,7 @@ vi.mock('../../api/version', async () =>
 vi.mock('../../api/runs', async (importActual) => ({
   ...(await importActual<typeof import('../../api/runs')>()),
   listRuns: vi.fn(),
+  exportRunsCsv: vi.fn(),
   listRunAnnotations: vi.fn(),
   getRun: vi.fn(),
   getRunEvents: vi.fn(),
@@ -216,6 +217,30 @@ describe('RunsPage', () => {
   it('shows the empty state after loading', async () => {
     renderWithRouter(<RunsPage />);
     expect(await screen.findByText(/No runs yet/i)).toBeInTheDocument();
+  });
+
+  /**
+   * #1484 — Export CSV asks for the list ON SCREEN: the same filters, day
+   * bounds and sort the paged list was fetched with, and not the grid's
+   * include-children display mode. Pinned against the list's own request, so
+   * the two cannot drift apart.
+   */
+  it('exports exactly the filters and sort the list was fetched with', async () => {
+    vi.mocked(runsApi.exportRunsCsv).mockReturnValue(new Promise(() => undefined));
+    renderWithRouter(<RunsPage />, '/?status=failure&sort=duration&dir=asc&q=orders');
+    await waitFor(() => expect(listMock).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
+    const [exported] = vi.mocked(runsApi.exportRunsCsv).mock.calls[0]!;
+    const { includeChildren, ...listed } = listMock.mock.calls.at(-1)![0]!;
+    expect(includeChildren).toBe('true');
+    expect(exported).toEqual(listed);
+    expect(exported).toMatchObject({
+      status: 'failure',
+      sort: 'duration',
+      dir: 'asc',
+      q: 'orders',
+    });
+    expect(exported).not.toHaveProperty('includeChildren');
   });
 
   it('renders a run row with its status', async () => {

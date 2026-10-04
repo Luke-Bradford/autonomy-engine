@@ -218,6 +218,32 @@ describe('#1484 the fold memo', () => {
     expect(resolved).toBe(3);
   });
 
+  /* The runs CSV export's fold (`routes/runs.ts`) is built with `memoLimit: 0`
+     so a ten-thousand-run walk cannot evict the grid's memo. Pinned here: with
+     0 it remembers nothing, so every read is a fresh read. */
+  it('remembers nothing with a limit of 0', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a')]);
+    const runId = await drive(db, pvId);
+    const real = makeDocResolver(db);
+    let resolved = 0;
+    const fold = makeRunActivityFold(
+      (id) => {
+        resolved += 1;
+        return real(id);
+      },
+      { memoLimit: 0 },
+    );
+    const row = {
+      id: runId,
+      pipelineVersionId: pvId,
+      lastSeq: listRunLastSeqs(db, [runId]).get(runId),
+    };
+    expect(fold(db, [row]).get(runId)?.activities).not.toBeNull();
+    fold(db, [row]);
+    expect(resolved).toBe(2);
+  });
+
   it('reports a fold that throws, and keeps the rows written it could still read', async () => {
     const { db } = freshDb();
     const pvId = seedVersion(db, [node('a')]);

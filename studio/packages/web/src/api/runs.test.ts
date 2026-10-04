@@ -7,6 +7,7 @@ import {
   listExternalWaits,
   listRunAnnotations,
   listRuns,
+  exportRunsCsv,
   RUNS_PAGE_SIZE,
 } from './runs';
 
@@ -314,5 +315,54 @@ describe('runs API', () => {
     delete bad.callbackPath;
     stubFetch(200, [bad]);
     await expect(listExternalWaits('run_1')).rejects.toThrow();
+  });
+});
+
+describe('exportRunsCsv (#1484)', () => {
+  function stubCsv(headers: Record<string, string> = {}, status = 200) {
+    const fetchMock = vi.fn().mockResolvedValue(
+      // The server's bytes start with a BOM, which must reach the file.
+      new Response(status === 200 ? '\uFEFFrun_id\r\n' : JSON.stringify({ error: 'boom' }), {
+        status,
+        headers,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  it('sends only the set filter axes, never includeChildren, and returns the file', async () => {
+    const fetchMock = stubCsv();
+    const out = await exportRunsCsv({
+      status: 'failure',
+      q: '',
+      pipelineId: undefined,
+      sort: 'duration',
+      dir: 'asc',
+      includeChildren: 'true',
+    });
+    expect(fetchMock.mock.calls[0]![0]).toBe(
+      '/api/runs/export.csv?status=failure&sort=duration&dir=asc',
+    );
+    expect(out.truncated).toBeNull();
+    expect(new Uint8Array(await out.file.arrayBuffer())).toEqual(
+      new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode('run_id\r\n')]),
+    );
+  });
+
+  it('asks for the bare path with no filters', async () => {
+    const fetchMock = stubCsv();
+    await exportRunsCsv({});
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/runs/export.csv');
+  });
+
+  it('reads the cap the server stopped at from its header', async () => {
+    stubCsv({ 'x-runs-export-truncated': '10000' });
+    expect((await exportRunsCsv({})).truncated).toBe(10000);
+  });
+
+  it('throws the server error rather than returning its body as a file', async () => {
+    stubCsv({ 'content-type': 'application/json' }, 500);
+    await expect(exportRunsCsv({})).rejects.toMatchObject({ status: 500 });
   });
 });
