@@ -75,7 +75,7 @@ test('#870 — a parked run says WHAT it is waiting on, in one vocabulary across
      for an operator, on the surface that has the event log. `wait` parks on an
      A6 timer, so the reason is `waiting_timer` — and the header must say which
      alarm, not merely that something is pending. */
-  const header = page.locator('.page-hint .run-status');
+  const header = page.locator('.run-header .run-status');
   await expect(header).toHaveText('waiting (timer)');
 
   /* One evaluate, every remaining assertion — a per-assertion round trip is
@@ -89,7 +89,7 @@ test('#870 — a parked run says WHAT it is waiting on, in one vocabulary across
      — the colour would fall through to the unstyled default — and no
      word-level assertion would notice. */
   const pill = await page.evaluate(() => {
-    const el = document.querySelector('.page-hint .run-status');
+    const el = document.querySelector('.run-header .run-status');
     if (el === null) return null;
     const cs = getComputedStyle(el);
     return {

@@ -88,15 +88,19 @@ test('#1231 — a call node names its child run, and the child names its caller'
 
   /* UP. The child page must say WHOSE child it is — before this row it was
      indistinguishable from any other run. */
-  await expect(page.getByText('Called by')).toBeVisible();
-  await page.getByRole('link', { name: `Parent run ${parentRunId}` }).click();
+  /* #1484 M2 — the header's Parent, named by the parent's pipeline, with the
+     parent's run id as its hover. */
+  const parentLink = page.locator('.run-header').getByTitle(parentRunId, { exact: true });
+  await expect(page.locator('.run-header dt', { hasText: /^Parent$/ })).toBeVisible();
+  await expect(parentLink).toHaveText(/\S/);
+  await parentLink.click();
   await expect(page).toHaveURL(new RegExp(`/monitor/runs/${parentRunId}$`));
 
   /* Back where we started, and the parent is NOT itself a child: the absence of
      the row is what "nothing called this" looks like, so a row that rendered
      unconditionally would pass every assertion above and still be wrong. */
   await expect(page.getByRole('heading', { name: 'Nodes' })).toBeVisible();
-  await expect(page.getByText('Called by')).toHaveCount(0);
+  await expect(page.locator('.run-header dt', { hasText: /^Parent$/ })).toHaveCount(0);
 
   await expectQuiet(page, problems);
 });

@@ -27,7 +27,7 @@ import { fluentRootReady } from './support/theme';
  * its id in the metadata: shown short, carried whole in the tooltip.
  */
 function runIdShown(page: Page, runId: string): Locator {
-  return page.locator('.run-meta').getByTitle(runId, { exact: true });
+  return page.locator('.run-header').getByTitle(runId, { exact: true });
 }
 
 const FAILING_DOC = {
