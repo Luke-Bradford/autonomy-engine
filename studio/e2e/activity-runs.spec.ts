@@ -182,5 +182,33 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
   await toggle.click();
   await expect(table.locator('tbody tr')).toHaveCount(10);
 
+  /* Filtered within the run: failed rows only, the filter in the URL, so a
+     reload (or a shared link) keeps it. */
+  await page.getByRole('combobox', { name: 'Status' }).selectOption('failure');
+  await expect(table.locator('tbody tr')).toHaveCount(1);
+  await expect(table.locator('tbody tr')).toHaveAttribute('data-activity-id', 'stop');
+  expect(page.url()).toContain('arStatus=failure');
+  await page.reload();
+  await fluentRootReady(page);
+  await expect(table.locator('tbody tr')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Clear' }).click();
+  await expect(table.locator('tbody tr')).toHaveCount(10);
+
+  // Searched: the item's file name finds its row, under its group and item lines.
+  await page.getByRole('searchbox', { name: 'Search activity runs' }).fill('orders_b');
+  await expect(table.locator('tbody tr')).toHaveCount(3);
+  await page.getByRole('button', { name: 'Clear' }).click();
+
+  /* Sorted by Duration: one flat list of the 7 rows, longest first — the two
+     one-second waits ahead of everything that took no time. */
+  const duration = table.getByRole('columnheader', { name: /Duration/ });
+  await duration.getByRole('button').click();
+  await expect(duration).toHaveAttribute('aria-sort', 'descending');
+  await expect(table.locator('tbody tr')).toHaveCount(7);
+  const firstTwo = await table
+    .locator('tbody tr')
+    .evaluateAll((trs) => trs.slice(0, 2).map((tr) => (tr as HTMLElement).dataset.activityId));
+  expect(firstTwo).toEqual(['hold', 'hold']);
+
   await expectQuiet(page, problems);
 });
