@@ -121,9 +121,9 @@ const MAX_PERIOD_PROBES = 1000;
  * `startInstant` returns the exact instant a local period begins. That local-period
  * boundary is found by MONOTONIC BISECTION on the local-day number
  * (`zonedCalendar(...).dayStart`, in `@autonomy-studio/shared`) rather than an
- * offset-inverse, because a naive wall-clock→instant inverse OVER-CORRECTS across a DST gap at midnight (a rare
- * zone that springs forward at 00:00, e.g. historical America/Santiago) and lands
- * on the PREVIOUS local day. Bisection is exact for every transition — gap,
+ * offset-inverse, because a naive wall-clock→instant inverse OVER-CORRECTS across
+ * a DST gap at midnight (a rare zone that springs forward at 00:00, e.g. historical
+ * America/Santiago) and lands on the PREVIOUS local day. Bisection is exact for every transition — gap,
  * fall-back, sub-hour-offset, even a fully-skipped civil day (Samoa 2011-12-30) —
  * because the local-day number is monotonic non-decreasing in the instant.
  *
