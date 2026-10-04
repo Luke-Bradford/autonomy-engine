@@ -102,6 +102,13 @@ const ListRunsQuerystringSchema = z.object({
    */
   sort: RunSortKeySchema.optional(),
   dir: RunSortDirSchema.optional(),
+  /**
+   * #1484 OR35 M1 — also return the page's `descendants` (the runs its runs
+   * called), for the grid's "Include child runs". A display mode, not a filter:
+   * the page and its cursor are the same either way. `pipelines.ts`'s `archived`
+   * convention, so a junk value is a 400.
+   */
+  includeChildren: z.enum(['true', 'false']).optional(),
 });
 
 /**
@@ -194,6 +201,7 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       to,
       sort,
       dir,
+      includeChildren,
     } = ListRunsQuerystringSchema.parse(request.query);
     const sinceBound = since === undefined ? undefined : Date.now() - RUN_SINCE_MS[since];
     const page = listRunSummariesPage(
@@ -218,10 +226,13 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
         startedBefore: to,
         ownerId: request.principal.ownerId,
       },
-      runPageArgsFromQuery(request.query, resolveRunSort(sort, dir)),
+      {
+        ...runPageArgsFromQuery(request.query, resolveRunSort(sort, dir)),
+        includeChildren: includeChildren === 'true',
+      },
       foldActivities,
     );
-    return { items: page.items, nextCursor: page.nextCursor };
+    return page;
   });
 
   // U26 — the annotation filter's options, scoped by `runs.owner_id` like the
