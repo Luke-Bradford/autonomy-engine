@@ -1,4 +1,4 @@
-import { parseInstanceKey, type SkipReason } from '@autonomy-studio/shared';
+import { docNodeIdOf, type SkipReason } from '@autonomy-studio/shared';
 
 /**
  * #1484 M2 — why an activity or container was skipped, in words, from the
@@ -19,6 +19,6 @@ export function skipReasonText(reason: SkipReason, nameOf: (id: string) => strin
     case 'timeout':
       return `loop timed out: ${named(reason.containerId)}`;
     case 'doomed':
-      return `ForEach stopped: ${named(parseInstanceKey(reason.blame)?.docId ?? reason.blame)} failed`;
+      return `ForEach stopped: ${named(docNodeIdOf(reason.blame))} failed`;
   }
 }

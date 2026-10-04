@@ -6,6 +6,7 @@ import {
   type ActivityRunGroup,
   type ActivityRunIterationGroup,
   type RunStatus,
+  type SkipReason,
 } from '@autonomy-studio/shared';
 import { When } from '../../lib/When';
 import { countOf } from '../../lib/countOf';
@@ -43,6 +44,25 @@ function iterationLabel(group: ActivityRunGroup, it: ActivityRunIterationGroup):
   const { index, count, item } = it;
   const text = iterationText({ containerId: group.containerId, index, count, item });
   return group.kind === 'loop' ? `Round ${text}` : `Item ${text}`;
+}
+
+/** A skip's reason after its status pill: `skipped · upstream failed: Copy 1`. */
+function SkipWhy({
+  status,
+  reason,
+  nameOf,
+}: {
+  status: string;
+  reason: SkipReason | null;
+  nameOf: (id: string) => string | null;
+}) {
+  if (status !== 'skipped' || reason === null) return null;
+  return (
+    <span className="activity-runs__why">
+      {' · '}
+      {skipReasonText(reason, nameOf)}
+    </span>
+  );
 }
 
 function Toggle({
@@ -216,12 +236,11 @@ export function ActivityRunsTable({
                             {containerStatusLabel(group.status, runStatus)}
                           </span>
                         )}
-                        {group.status === 'skipped' && group.skipReason !== null && (
-                          <span className="activity-runs__why">
-                            {' · '}
-                            {skipReasonText(group.skipReason, anyNameOf)}
-                          </span>
-                        )}
+                        <SkipWhy
+                          status={group.status}
+                          reason={group.skipReason}
+                          nameOf={anyNameOf}
+                        />
                       </td>
                       <Times at={group} />
                       <td />
@@ -299,12 +318,7 @@ export function ActivityRunsTable({
                           {nodeStatusLabel(row.status, runStatus)}
                         </span>
                       )}
-                      {row.status === 'skipped' && row.skipReason !== null && (
-                        <span className="activity-runs__why">
-                          {' · '}
-                          {skipReasonText(row.skipReason, anyNameOf)}
-                        </span>
-                      )}
+                      <SkipWhy status={row.status} reason={row.skipReason} nameOf={anyNameOf} />
                     </td>
                     <td>
                       <When ms={row.startedAt} precision="ms" timeOfDay />

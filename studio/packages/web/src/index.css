@@ -4707,7 +4707,6 @@ button.danger {
 
 .activity-runs__why {
   color: var(--colorNeutralForeground3);
-  white-space: nowrap;
 }
 
 .activity-runs__error {

@@ -38,6 +38,9 @@ describe('#1484 M2 skipReasonText', () => {
     expect(skipReasonText({ kind: 'doomed', containerId: 'fe', blame: 'a@1' }, nameOf)).toBe(
       'ForEach stopped: Copy Data 1 failed',
     );
+    expect(skipReasonText({ kind: 'doomed', containerId: 'fe', blame: 'a' }, nameOf)).toBe(
+      'ForEach stopped: Copy Data 1 failed',
+    );
   });
 
   it('falls back to the id when the version has no name for it', () => {

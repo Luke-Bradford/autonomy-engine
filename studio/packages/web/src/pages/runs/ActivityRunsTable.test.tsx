@@ -250,6 +250,33 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
       'skipped · upstream failed: HTTP Request 1',
     );
   });
+
+  it('names a container that caused a skip by its container name', () => {
+    render(
+      <MemoryRouter>
+        <ActivityRunsTable
+          rows={[
+            {
+              ...item(0),
+              containerId: null,
+              iteration: null,
+              status: 'skipped',
+              skipReason: { kind: 'timeout', containerId: 'fe' },
+            },
+          ]}
+          groups={[]}
+          error={null}
+          runStatus="failure"
+          nameOf={() => null}
+          typeOf={() => null}
+          containerNameOf={(id) => ({ fe: 'ForEach 1' })[id] ?? null}
+        />
+      </MemoryRouter>,
+    );
+    expect(cellsOf(screen.getAllByRole('row')[1]!).Status).toBe(
+      'skipped · loop timed out: ForEach 1',
+    );
+  });
   const bodyRows = () => screen.getAllByRole('row').slice(1);
 
   it('heads its rows with the container, then a line per item', () => {

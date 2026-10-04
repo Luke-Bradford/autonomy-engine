@@ -1058,10 +1058,11 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
-   * #1484 M2 — WHY `computeReadiness` said `skipped`: the FIRST dead predecessor
-   * group, in incoming-edge order, that has an outcome to name. Under `all` any
-   * one dead group is the cause; under `any` every group is dead, so the first
-   * is as true as any. A SKIPPED predecessor passes on its own reason, so a skip
+   * #1484 M2 — WHY `computeReadiness` said `skipped`: the dead predecessor
+   * groups, in incoming-edge order, that have an outcome to name — preferring an
+   * upstream FAILURE, then the first. Under `all` any one dead group is the
+   * cause; under `any` every group is dead, and "x failed" says more than "a
+   * handler was not needed". A SKIPPED predecessor passes on its own reason, so a skip
    * three deep still names the activity that failed. A dead group with no
    * outcome is passed over (defensive: the doc's edges are filtered to known
    * endpoints, so it is not reachable today) rather than hiding a later one.
@@ -1072,6 +1073,7 @@ export function createEngine(doc: EngineDoc): Engine {
     state: RunState,
     scope?: ItemScope,
   ): SkipReason | undefined {
+    const reasons: SkipReason[] = [];
     for (const g of predecessorGroups(incoming, state, scope)) {
       if (g.group !== 'dead') continue;
       const oc = endpointOutcome(g.from, state, scope);
@@ -1080,16 +1082,18 @@ export function createEngine(doc: EngineDoc): Engine {
         const inherited = containerById.has(g.from)
           ? state.containers[g.from]?.skipReason
           : state.nodes[ikey(g.from, scope)]?.skipReason;
-        return inherited ?? { kind: 'upstream', from: g.from, outcome: 'skipped' };
-      }
-      // A branch edge is dead from a SUCCESSFUL source only when the source took
-      // another label (`edgeState`); a failed source is an upstream failure.
-      if (oc === 'success' && g.edges.some((e) => e.on === 'branch')) {
-        return { kind: 'branch', from: g.from, taken: state.branches[ikey(g.from, scope)] ?? null };
-      }
-      return { kind: 'upstream', from: g.from, outcome: oc };
+        reasons.push(inherited ?? { kind: 'upstream', from: g.from, outcome: 'skipped' });
+      } else if (oc === 'success' && g.edges.some((e) => e.on === 'branch')) {
+        // A branch edge is dead from a SUCCESSFUL source only when the source
+        // took another label (`edgeState`); a failed source is an upstream failure.
+        reasons.push({
+          kind: 'branch',
+          from: g.from,
+          taken: state.branches[ikey(g.from, scope)] ?? null,
+        });
+      } else reasons.push({ kind: 'upstream', from: g.from, outcome: oc });
     }
-    return undefined;
+    return reasons.find((r) => r.kind === 'upstream' && r.outcome === 'failure') ?? reasons[0];
   }
 
   /**
@@ -2963,8 +2967,8 @@ export function createEngine(doc: EngineDoc): Engine {
       const ns = nodes[id];
       if (ns === undefined) continue;
       if (nodes === state.nodes) nodes = { ...nodes };
-      // The key is REMOVED, not set undefined: a reset node looks exactly as it
-      // did before #1484 gave skips a reason.
+      // The skip's reason is REMOVED, not set undefined, so no key lingers on a
+      // node that is no longer skipped.
       const reset: NodeRunState = {
         ...ns,
         status: 'pending',

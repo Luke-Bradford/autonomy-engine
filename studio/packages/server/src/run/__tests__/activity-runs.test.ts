@@ -293,9 +293,9 @@ describe('#1484 activity runs — one row per attempt', () => {
       ['c', 'success', 'false', 'y'],
       ['t', 'skipped', null, 'y'],
     ]);
-    // KNOWN GAP: item x's skip is reset in the same reduce that ends the item,
-    // so it is only inferred here, after the reducer dropped its reason. The
-    // LAST item is not reset, so its skip keeps the reason.
+    // KNOWN GAP: item x's skip is reset in the same reduce that ends the item
+    // (a loop round's end does the same), so it is only inferred here, after
+    // the reducer dropped its reason. The LAST item is not reset, so it keeps it.
     expect(
       project(db, pvId, runId)
         .filter((r) => r.activityId === 't')
@@ -611,6 +611,15 @@ describe('#1484 activity runs — containers are groups', () => {
     expect(g!.iterations.map((i) => [i.index, i.status])).toEqual([
       [0, 'failure'],
       [1, 'skipped'],
+    ]);
+    // Each skip says why: item 0's by its own failure, item 1's by the doom.
+    expect(
+      project(db, pvId, runId)
+        .filter((r) => r.status === 'skipped')
+        .map((r) => [r.nodeId, r.skipReason]),
+    ).toEqual([
+      ['y@0', { kind: 'upstream', from: 'x', outcome: 'failure' }],
+      ['y@1', { kind: 'doomed', containerId: 'fe', blame: 'x@0' }],
     ]);
   });
 

@@ -89,6 +89,20 @@ describe('skipReason — the reducer records why it skipped (#1484 M2)', () => {
     });
   });
 
+  it('join any: a failure is named before a failure handler that was not needed', () => {
+    const j: Node = { ...node('j'), config: { join: 'any' } };
+    const e = eng(
+      [node('fine'), node('bad'), j],
+      [edge('fine', 'j', 'failure'), edge('bad', 'j', 'success')],
+    );
+    const { state } = driveRun(e, { resolve: simpleResolve({ bad: 'failure' }) });
+    expect(state.nodes.j!.skipReason).toEqual({
+      kind: 'upstream',
+      from: 'bad',
+      outcome: 'failure',
+    });
+  });
+
   it('a container skipped by its outer edge carries the reason too', () => {
     const e = eng(
       [node('a'), node('inner')],

@@ -93,8 +93,8 @@ export const ActivityRunSchema = z.object({
   childRun: ActivityRunChildSchema.nullable(),
   error: ActivityRunErrorSchema.nullable(),
   /** Why it was skipped, as the reducer recorded it; `null` on every other
-   * status, and on a skip only inferred when an item ended (the reset that ends
-   * the item drops the reason before it can be read). */
+   * status, and on a skip only inferred when a ForEach item or loop round ended
+   * (the reset that ends it drops the reason before it can be read). */
   skipReason: SkipReasonSchema.nullable(),
 });
 export type ActivityRun = z.infer<typeof ActivityRunSchema>;
