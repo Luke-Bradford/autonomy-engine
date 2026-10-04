@@ -4501,9 +4501,10 @@ button.danger {
   outline-offset: -2px;
 }
 
-/* #1484 — a sortable header is a button that looks like the header text. The
-   arrow's box is always there, so sorting never moves a label. */
-.runs-grid__sort {
+/* #1484 — a sortable header is a button that looks like the header text
+   (`SortButton`). The arrow's box is always there, so sorting never moves a
+   label. */
+.sort-button {
   display: inline-flex;
   align-items: center;
   gap: 0.2rem;
@@ -4516,11 +4517,11 @@ button.danger {
   cursor: pointer;
 }
 
-.runs-grid__sort:hover {
+.sort-button:hover {
   text-decoration: underline;
 }
 
-.runs-grid__sort-arrow {
+.sort-button__arrow {
   display: inline-block;
   width: 0.8em;
   font-size: 0.75em;
@@ -4686,9 +4687,33 @@ button.danger {
   overflow-x: auto;
 }
 
-/* The table's label, close to it: the first row is what the page is for. */
-.activity-runs > h3 {
+/* The table's label, close to it: the first row is what the page is for. Its
+   filters share the label's row, so filtering never pushes the first row down. */
+.activity-runs__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
   margin: 0.25rem 0;
+  font-size: 13px;
+}
+
+.activity-runs__bar > h3 {
+  margin: 0 0.5rem 0 0;
+}
+
+.activity-runs__bar select {
+  max-width: 10rem;
+}
+
+.activity-runs__search {
+  flex: 0 1 18rem;
+  min-width: 10rem;
+}
+
+.activity-runs__search input {
+  width: 100%;
+  font-size: 13px;
 }
 
 .activity-runs__table {

@@ -187,7 +187,7 @@ test('#895 — a run that SUCCEEDED is offered no rerun-from-failed', async ({ p
      `skipped` or `interrupted` would satisfy every assertion below while the
      title claimed it had succeeded. The absences only mean something once the
      run is known to be the case the title names. */
-  await expect(page.locator('.run-status')).toHaveText('success');
+  await expect(page.locator('.run-header .run-status')).toHaveText('success');
 
   /* The withhold half, and it is the one worth an e2e: the server would refuse a
      successful run with `409 the run succeeded (nothing to resume from)`, so
@@ -217,7 +217,7 @@ test('#918 — a rerun says which of its nodes it REUSED, and shows what they pr
      assertion after the rerun is about a frontier that only exists because
      `pick` really succeeded and `stop` really failed. A fixture that ended some
      other way would satisfy the rest while the title claimed otherwise. */
-  await expect(page.locator('.run-status')).toHaveText('failure');
+  await expect(page.locator('.run-header .run-status')).toHaveText('failure');
   const sourceRow = page.getByRole('button', { name: 'Filter 1' }).locator('xpath=ancestor::tr');
   await expect(sourceRow.getByText('success')).toBeVisible();
   // In R1 the node EXECUTED, so it must make no claim about being reused.
@@ -298,12 +298,12 @@ test("RS4 — a rerun reuses a copied call node's child, and links to it", async
 
   await page.goto(`/#/monitor/runs/${encodeURIComponent(sourceRunId)}`);
   await fluentRootReady(page);
-  await expect(page.locator('.run-status')).toHaveText('failure');
+  await expect(page.locator('.run-header .run-status')).toHaveText('failure');
   await page.getByRole('button', { name: 'Rerun from failed' }).click();
   await expect(page.getByText('Rerun of')).toBeVisible();
   const rerunId = decodeURIComponent(page.url().split('/monitor/runs/')[1]!);
   expect(rerunId).not.toBe(sourceRunId);
-  await expect(page.locator('.run-status')).toHaveText('failure');
+  await expect(page.locator('.run-header .run-status')).toHaveText('failure');
 
   /* The call node was COPIED, so the rerun started no child of its own. */
   expect(await childrenOf(rerunId)).toHaveLength(0);

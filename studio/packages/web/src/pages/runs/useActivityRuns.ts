@@ -1,11 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ActivityRun, ActivityRunGroup } from '@autonomy-studio/shared';
+import {
+  TERMINAL_RUN_ROW_STATUS,
+  type ActivityRun,
+  type ActivityRunGroup,
+} from '@autonomy-studio/shared';
 import { getRunActivityRuns } from '../../api/runs';
 import { messageOf } from '../../api/client';
 import { useGuardedLoad } from '../../hooks/useGuardedLoad';
 
 /** The least time between two reads of a run's activity runs while its log grows. */
 export const ACTIVITY_RUNS_REFRESH_MS = 500;
+
+/** How often the rows are re-read while a run this one called is still going. */
+export const ACTIVITY_RUNS_CHILD_POLL_MS = 2_000;
 
 export interface ActivityRunsReading {
   /** `null` until the first read answers. */
@@ -28,8 +35,17 @@ export interface ActivityRunsReading {
  *   a time, never a pile of superseded ones.
  * Since the server appends an event before streaming it, the read that follows
  * the last frame always sees it.
+ *
+ * A run this one CALLED moves without a word in this run's log: its status and
+ * duration are the child's own row. So while the page is `live` and a called
+ * run shown is not finished, the rows are also re-read every
+ * `ACTIVITY_RUNS_CHILD_POLL_MS`, through the same single flight.
  */
-export function useActivityRuns(runId: string, lastSeq: number | undefined): ActivityRunsReading {
+export function useActivityRuns(
+  runId: string,
+  lastSeq: number | undefined,
+  live: boolean,
+): ActivityRunsReading {
   const load = useGuardedLoad();
   const [reading, setReading] = useState<ActivityRunsReading>({
     rows: null,
@@ -39,13 +55,25 @@ export function useActivityRuns(runId: string, lastSeq: number | undefined): Act
   const flight = useRef<{
     timer: ReturnType<typeof setTimeout> | null;
     inFlight: boolean;
-    /** The `lastSeq` the newest render saw. */
-    wanted: number | undefined;
-    /** The `lastSeq` the last read was issued at; `null` before any read. */
-    asked: number | undefined | null;
+    /** The `lastSeq` and child-poll tick the newest render saw. */
+    wanted: string;
+    /** The `wanted` the last read was issued at; `null` before any read. */
+    asked: string | null;
     /** Set on unmount, so a read landing afterwards schedules nothing. */
     gone: boolean;
-  }>({ timer: null, inFlight: false, wanted: lastSeq, asked: null, gone: false });
+  }>({ timer: null, inFlight: false, wanted: '', asked: null, gone: false });
+
+  const childGoing =
+    live &&
+    (reading.rows ?? []).some(
+      (r) => r.childRun !== null && !TERMINAL_RUN_ROW_STATUS.has(r.childRun.status),
+    );
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!childGoing) return;
+    const timer = setInterval(() => setTick((t) => t + 1), ACTIVITY_RUNS_CHILD_POLL_MS);
+    return () => clearInterval(timer);
+  }, [childGoing]);
 
   // Declared FIRST, so StrictMode's simulated remount clears `gone` before the
   // read below is scheduled.
@@ -61,7 +89,7 @@ export function useActivityRuns(runId: string, lastSeq: number | undefined): Act
 
   useEffect(() => {
     const f = flight.current;
-    f.wanted = lastSeq;
+    f.wanted = `${lastSeq ?? ''}|${tick}`;
     const schedule = (delay: number) => {
       if (f.timer !== null || f.inFlight || f.gone) return;
       f.timer = setTimeout(() => {
@@ -78,7 +106,7 @@ export function useActivityRuns(runId: string, lastSeq: number | undefined): Act
       }, delay);
     };
     schedule(f.asked === null ? 0 : ACTIVITY_RUNS_REFRESH_MS);
-  }, [load, runId, lastSeq]);
+  }, [load, runId, lastSeq, tick]);
 
   return reading;
 }

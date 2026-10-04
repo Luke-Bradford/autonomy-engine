@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import type { ActivityRun, ActivityRunGroup } from '@autonomy-studio/shared';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ActivityRunsTable } from './ActivityRunsTable';
 import { ACTIVITY_RUN_COLUMNS, iterationText } from './activityRunsColumns';
+import { nodeStatusLabel } from './nodeStatus';
 
 const BASE: ActivityRun = {
   key: 'a#0',
@@ -29,9 +30,9 @@ const BASE: ActivityRun = {
   skipReason: null,
 };
 
-function show(rows: ActivityRun[] | null, error: string | null = null) {
+function show(rows: ActivityRun[] | null, error: string | null = null, url = '/') {
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[url]}>
       <ActivityRunsTable
         rows={rows}
         groups={[]}
@@ -133,14 +134,81 @@ describe('#1484 M2 ActivityRunsTable', () => {
       {
         ...BASE,
         childRunId: 'run_child',
-        childRun: { id: 'run_child', pipelineName: 'Load orders', status: 'success' },
+        childRun: {
+          id: 'run_child',
+          pipelineName: 'Load orders',
+          status: 'success',
+          startedAt: 10_000,
+          finishedAt: 12_500,
+        },
       },
       { ...BASE, key: 'b#0', childRunId: 'run_gone', childRun: null },
+      {
+        ...BASE,
+        key: 'c#0',
+        childRunId: 'run_queued',
+        childRun: {
+          id: 'run_queued',
+          pipelineName: 'Later',
+          status: 'queued',
+          startedAt: 10_000,
+          finishedAt: null,
+        },
+      },
     ]);
     expect(screen.getByRole('link', { name: 'Load orders' }).getAttribute('href')).toBe(
       '/monitor/runs/run_child',
     );
+    // The called run's status and how long it took, from its own row.
+    expect(cellsOf(screen.getAllByRole('row')[1]!)['Child run']).toBe(
+      'Load orders · success · 2.5s',
+    );
     expect(cellsOf(screen.getAllByRole('row')[2]!)['Child run']).toBe('run_gone');
+    // A queued child has not started: its start is the enqueue placeholder.
+    expect(cellsOf(screen.getAllByRole('row')[3]!)['Child run']).toBe('Later · queued (slot)');
+  });
+
+  it("counts a running called run's duration up only while the page is live", async () => {
+    vi.useFakeTimers();
+    try {
+      const running = (live: boolean) => (
+        <MemoryRouter>
+          <ActivityRunsTable
+            rows={[
+              {
+                ...BASE,
+                childRunId: 'run_child',
+                childRun: {
+                  id: 'run_child',
+                  pipelineName: 'Load orders',
+                  status: 'running',
+                  startedAt: Date.now() - 2_000,
+                  finishedAt: null,
+                },
+              },
+            ]}
+            groups={[]}
+            error={null}
+            runStatus="running"
+            nameOf={() => null}
+            typeOf={() => null}
+            containerNameOf={() => null}
+            live={live}
+          />
+        </MemoryRouter>
+      );
+      const childCell = () => cellsOf(screen.getAllByRole('row')[1]!)['Child run'];
+      const view = render(running(false));
+      const frozen = childCell();
+      await act(async () => vi.advanceTimersByTimeAsync(3_000));
+      expect(childCell()).toBe(frozen);
+      view.rerender(running(true));
+      const live = childCell();
+      await act(async () => vi.advanceTimersByTimeAsync(3_000));
+      expect(childCell()).not.toBe(live);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('marks what a rerun reused, and leaves its times empty', () => {
@@ -165,6 +233,87 @@ describe('#1484 M2 ActivityRunsTable', () => {
     show([BASE], 'HTTP 500');
     expect(screen.getByRole('alert').textContent).toContain('HTTP 500');
     expect(screen.getAllByRole('row')).toHaveLength(2);
+  });
+});
+
+describe('#1484 M2 ActivityRunsTable — filter and sort', () => {
+  const ROWS: ActivityRun[] = [
+    { ...BASE, key: 'a#0', durationMs: 100 },
+    {
+      ...BASE,
+      key: 'w#0',
+      nodeId: 'w',
+      activityId: 'w',
+      attemptId: 'w#0',
+      status: 'failure',
+      durationMs: 900,
+      error: { message: 'connect ECONNREFUSED', kind: 'transient', code: null, connectionId: null },
+    },
+    { ...BASE, key: 'a#1', attemptId: 'a#1', attempt: 2, durationMs: 400 },
+  ];
+  const bodyKeys = () =>
+    screen
+      .getAllByRole('row')
+      .slice(1)
+      .map((tr) => `${tr.dataset.activityId}:${within(tr).getAllByRole('cell')[6]?.textContent}`);
+
+  it('filters to a status chosen from the statuses the run has', () => {
+    show(ROWS);
+    const status = screen.getByRole('combobox', { name: 'Status' });
+    expect(
+      within(status)
+        .getAllByRole('option')
+        .map((o) => o.textContent),
+    ).toEqual([
+      'All statuses',
+      nodeStatusLabel('success', 'failure'),
+      nodeStatusLabel('failure', 'failure'),
+    ]);
+    fireEvent.change(status, { target: { value: 'failure' } });
+    expect(bodyKeys()).toEqual(['w:1']);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(bodyKeys()).toHaveLength(3);
+  });
+
+  it('reads its filters from the URL', () => {
+    show(ROWS, null, '/?arType=Copy');
+    expect(bodyKeys()).toEqual(['a:1', 'a:2']);
+  });
+
+  it('says when nothing matches, and Clear brings the rows back', () => {
+    show(ROWS, null, '/?arQ=nothing-like-this');
+    expect(screen.getByText('No matches.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(bodyKeys()).toHaveLength(3);
+  });
+
+  it('searches what it shows, once typing stops', async () => {
+    vi.useFakeTimers();
+    try {
+      show(ROWS);
+      fireEvent.change(screen.getByRole('searchbox', { name: 'Search activity runs' }), {
+        target: { value: 'econnrefused' },
+      });
+      expect(bodyKeys()).toHaveLength(3);
+      await act(async () => vi.advanceTimersByTimeAsync(300));
+      expect(bodyKeys()).toEqual(['w:1']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sorts by a header: natural direction, flipped, then run order again', () => {
+    show(ROWS);
+    const header = () => screen.getByRole('columnheader', { name: /Duration/ });
+    fireEvent.click(within(header()).getByRole('button'));
+    expect(header()).toHaveAttribute('aria-sort', 'descending');
+    expect(bodyKeys()).toEqual(['w:1', 'a:2', 'a:1']);
+    fireEvent.click(within(header()).getByRole('button'));
+    expect(header()).toHaveAttribute('aria-sort', 'ascending');
+    expect(bodyKeys()).toEqual(['a:1', 'a:2', 'w:1']);
+    fireEvent.click(within(header()).getByRole('button'));
+    expect(header()).not.toHaveAttribute('aria-sort');
+    expect(bodyKeys()).toEqual(['a:1', 'w:1', 'a:2']);
   });
 });
 
@@ -218,8 +367,12 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
     iteration: { containerId: 'fe', index, count: 2, item: index === 0 ? 'a.csv' : 'b.csv' },
   });
 
-  const table = (selected: { key: string } | null = null, group: ActivityRunGroup = GROUP) => (
-    <MemoryRouter>
+  const table = (
+    selected: { key: string } | null = null,
+    group: ActivityRunGroup = GROUP,
+    url = '/',
+  ) => (
+    <MemoryRouter initialEntries={[url]}>
       <ActivityRunsTable
         rows={[item(0), item(1)]}
         groups={[group]}
@@ -333,6 +486,54 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
     const current = bodyRows().find((tr) => tr.getAttribute('aria-current') === 'true');
     expect(current?.dataset.activityId).toBe('w');
     expect(current).toHaveFocus();
+  });
+
+  it('keeps the group and item lines a matching row sits under', () => {
+    render(table(null, GROUP, '/?arQ=b.csv'));
+    expect(bodyRows().map((tr) => tr.className || tr.dataset.activityId)).toEqual([
+      'activity-runs__group',
+      'activity-runs__iteration',
+      'w',
+    ]);
+  });
+
+  it('sorts into one list that says which container each row ran in', () => {
+    render(table(null, GROUP, '/?arSort=activity'));
+    expect(bodyRows().map((tr) => within(tr).getAllByRole('cell')[0]?.textContent)).toEqual([
+      'HTTP Request 1 · in ForEach 1',
+      'HTTP Request 1 · in ForEach 1',
+    ]);
+  });
+
+  it('drops a filter that hides the row the banner asked for', () => {
+    const view = render(table(null, GROUP, '/?arStatus=failure'));
+    expect(screen.getByText('No matches.')).toBeInTheDocument();
+    view.rerender(table({ key: 'w#1' }, GROUP, '/?arStatus=failure'));
+    const current = bodyRows().find((tr) => tr.getAttribute('aria-current') === 'true');
+    expect(current?.dataset.activityId).toBe('w');
+    expect(current).toHaveFocus();
+    expect(screen.getByRole('combobox', { name: 'Status' })).toHaveValue('');
+  });
+
+  it('answers an ask once: a filter set afterwards stands, even one that hides the row', async () => {
+    vi.useFakeTimers();
+    try {
+      // One ask, as the page holds it across renders; a new object is a new ask.
+      const ask = { key: 'w#1' };
+      const view = render(table(ask));
+      expect(bodyRows().find((tr) => tr.getAttribute('aria-current') === 'true')).toHaveFocus();
+      fireEvent.change(screen.getByRole('searchbox', { name: 'Search activity runs' }), {
+        target: { value: 'a.csv' },
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(300));
+      view.rerender(table(ask));
+      await act(async () => vi.advanceTimersByTimeAsync(300));
+      // Item 1 (`a.csv`) is shown; the asked-for row, in item 2, stays filtered out.
+      expect(bodyRows().some((tr) => tr.getAttribute('aria-current') === 'true')).toBe(false);
+      expect(screen.getByRole('searchbox', { name: 'Search activity runs' })).toHaveValue('a.csv');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shows a group whose activities never ran', () => {

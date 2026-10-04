@@ -2,7 +2,12 @@ import { StrictMode } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as runsApi from '../../api/runs';
-import { ACTIVITY_RUNS_REFRESH_MS, useActivityRuns } from './useActivityRuns';
+import type { ActivityRun, RunStatus } from '@autonomy-studio/shared';
+import {
+  ACTIVITY_RUNS_CHILD_POLL_MS,
+  ACTIVITY_RUNS_REFRESH_MS,
+  useActivityRuns,
+} from './useActivityRuns';
 
 vi.mock('../../api/runs', async (importActual) => ({
   ...(await importActual<typeof import('../../api/runs')>()),
@@ -19,7 +24,7 @@ describe('#1484 M2 useActivityRuns', () => {
   afterEach(() => vi.useRealTimers());
 
   it('reads at once, then at most once per interval while frames keep arriving, never starving', async () => {
-    const { rerender } = renderHook(({ seq }) => useActivityRuns('r', seq), {
+    const { rerender } = renderHook(({ seq }) => useActivityRuns('r', seq, true), {
       initialProps: { seq: undefined as number | undefined },
     });
     await act(async () => vi.advanceTimersByTimeAsync(0));
@@ -49,7 +54,7 @@ describe('#1484 M2 useActivityRuns', () => {
           answer = resolve;
         }),
     );
-    const { rerender } = renderHook(({ seq }) => useActivityRuns('r', seq), {
+    const { rerender } = renderHook(({ seq }) => useActivityRuns('r', seq, true), {
       initialProps: { seq: 1 as number | undefined },
     });
     await act(async () => vi.advanceTimersByTimeAsync(0));
@@ -78,7 +83,7 @@ describe('#1484 M2 useActivityRuns', () => {
           answer = resolve;
         }),
     );
-    const { rerender, unmount } = renderHook(({ seq }) => useActivityRuns('r', seq), {
+    const { rerender, unmount } = renderHook(({ seq }) => useActivityRuns('r', seq, true), {
       initialProps: { seq: 1 as number | undefined },
     });
     await act(async () => vi.advanceTimersByTimeAsync(0));
@@ -95,8 +100,43 @@ describe('#1484 M2 useActivityRuns', () => {
   });
 
   it('reads at once under StrictMode, whose simulated remount runs every cleanup first', async () => {
-    renderHook(() => useActivityRuns('r', 1), { wrapper: StrictMode });
+    renderHook(() => useActivityRuns('r', 1, true), { wrapper: StrictMode });
     await act(async () => vi.advanceTimersByTimeAsync(0));
     expect(getMock).toHaveBeenCalled();
+  });
+
+  it('re-reads while a called run is going and the page is live, and stops when it ends', async () => {
+    const caller = (status: RunStatus) =>
+      ({
+        key: 'c#0',
+        childRun: { id: 'k', pipelineName: 'Child', status, startedAt: 1, finishedAt: null },
+      }) as unknown as ActivityRun;
+    getMock.mockResolvedValue({ runId: 'r', rows: [caller('running')], groups: [] });
+    // Time in steps, so each tick's render lands before the next one.
+    const pass = async (ms: number) => {
+      for (let t = 0; t < ms; t += 250) await act(async () => vi.advanceTimersByTimeAsync(250));
+    };
+    const { rerender } = renderHook(({ live }) => useActivityRuns('r', 1, live), {
+      initialProps: { live: true },
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(getMock).toHaveBeenCalledTimes(1);
+    // No new frame in this run's log, yet the child's row is read again.
+    await pass(ACTIVITY_RUNS_CHILD_POLL_MS * 2 + 1_000);
+    expect(getMock.mock.calls.length).toBeGreaterThanOrEqual(3);
+
+    // A page that would not hear the run settle does not poll for it.
+    rerender({ live: false });
+    let before = getMock.mock.calls.length;
+    await pass(ACTIVITY_RUNS_CHILD_POLL_MS * 3);
+    expect(getMock.mock.calls.length).toBe(before);
+
+    // Live again, the child finishes: one read sees it, then nothing more.
+    getMock.mockResolvedValue({ runId: 'r', rows: [caller('success')], groups: [] });
+    rerender({ live: true });
+    await pass(ACTIVITY_RUNS_CHILD_POLL_MS * 2);
+    before = getMock.mock.calls.length;
+    await pass(ACTIVITY_RUNS_CHILD_POLL_MS * 3);
+    expect(getMock.mock.calls.length).toBe(before);
   });
 });

@@ -12,7 +12,6 @@ import {
   RUN_TRIGGERED_BY_KINDS,
   RUN_SEARCH_MAX_CHARS,
   RUN_TRIGGERED_BY_LABELS,
-  RunSearchSchema,
   RunStatusSchema,
   RUN_PAGE_SIZES,
   RUN_SORT_DEFAULT_KEY,
@@ -71,6 +70,8 @@ import {
 import { dayOf, shiftDay } from '../../lib/displayTime';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
+import { withParams } from '../../lib/withParams';
+import { useSearchBox } from '../../lib/useSearchBox';
 import { FilterPicker } from './FilterPicker';
 import { RUN_GROUP_BYS, type RunGroupBy } from './runBars';
 import {
@@ -148,16 +149,6 @@ function PipelineSpend({ summary }: { summary: PipelineCostSummary }) {
 
 /** A run's identity, for `usePagedList` to drop a row a sorted walk repeats. */
 const runKey = (run: RunSummary) => run.id;
-
-/** `prev` with each of `next` set, or deleted where its value is `''`. */
-function withParams(prev: URLSearchParams, next: Record<string, string>): URLSearchParams {
-  const params = new URLSearchParams(prev);
-  for (const [param, value] of Object.entries(next)) {
-    if (value === '') params.delete(param);
-    else params.set(param, value);
-  }
-  return params;
-}
 
 /**
  * The Runs list — the entry to the P6 live monitor. Runs are created elsewhere
@@ -388,36 +379,10 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
     else setFilters({ ...cleared, [RUN_FILTER_PARAMS.since]: mode });
   }
 
-  /**
-   * #1484 — the search box. What is TYPED is local; what is SEARCHED is the
-   * URL's `q`, written 300ms after typing stops so a word is one request, not
-   * one per letter. The first write of a search pushes a history entry and every
-   * refinement replaces it, so Back leaves the search in one step rather than one
-   * letter at a time — and never skips it entirely.
-   *
-   * When `q` changes from OUTSIDE (Clear filters, Back, a link), the box follows
-   * it. The comparison is on the trimmed text, so the box does not eat a
-   * trailing space the operator is mid-way through typing.
-   */
-  const [searchText, setSearchText] = useState(q ?? '');
-  // Adjusted during render rather than in an effect (React's "storing
-  // information from previous renders"), so the box never paints stale.
-  const [syncedQ, setSyncedQ] = useState(q);
-  if (syncedQ !== q) {
-    setSyncedQ(q);
-    if (searchText.trim() !== (q ?? '')) setSearchText(q ?? '');
-  }
-  useEffect(() => {
-    const parsed = RunSearchSchema.safeParse(searchText);
-    const next = parsed.success ? parsed.data : '';
-    if (next === (q ?? '')) return;
-    const timer = window.setTimeout(() => {
-      setSearchParams((prev) => withParams(prev, { [RUN_FILTER_PARAMS.q]: next }), {
-        replace: q !== undefined,
-      });
-    }, 300);
-    return () => window.clearTimeout(timer);
-  }, [searchText, q, setSearchParams]);
+  /** #1484 — the search box over the URL's `q` (`useSearchBox`). */
+  const [searchText, setSearchText] = useSearchBox(q, (next, replace) =>
+    setSearchParams((prev) => withParams(prev, { [RUN_FILTER_PARAMS.q]: next }), { replace }),
+  );
 
   const kinds = readKinds(kind);
   const kindSummary =

@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import {
   CONTAINER_KIND_LABELS,
+  RUN_SEARCH_MAX_CHARS,
+  TERMINAL_RUN_ROW_STATUS,
+  runStartIsReal,
   type ActivityRun,
+  type ActivityRunChild,
   type ActivityRunGroup,
   type ActivityRunIterationGroup,
   type RunStatus,
@@ -10,6 +14,28 @@ import {
 } from '@autonomy-studio/shared';
 import { When } from '../../lib/When';
 import { countOf } from '../../lib/countOf';
+import { LabelledControl } from '../../lib/LabelledControl';
+import { withParams } from '../../lib/withParams';
+import { useSearchBox } from '../../lib/useSearchBox';
+import { FilterPicker, type FilterOption } from './FilterPicker';
+import { SortButton } from './SortButton';
+import { RunDuration } from './RunHeader';
+import { runStatusLabel } from './runStatus';
+import {
+  ACTIVITY_RUN_SORT_COLUMNS,
+  ACTIVITY_RUNS_PARAMS,
+  activityRunSortParams,
+  activityRunsViewParams,
+  isViewChanged,
+  nextActivityRunSort,
+  parseStatusKey,
+  readActivityRunsView,
+  statusKeyLabel,
+  statusKeyOf,
+  viewEntries,
+  type ActivityRunStatusKey,
+  type RowFacts,
+} from './activityRunsView';
 import { failureClass, formatCount, formatElapsed } from './format';
 import {
   containerStatusLabel,
@@ -84,6 +110,40 @@ function Toggle({
   );
 }
 
+/** The params that put the table back in plain run order. */
+const PLAIN_VIEW = activityRunsViewParams({ status: null, type: null, q: null, sort: null });
+
+/**
+ * #1484 M2 — an Execute Pipeline row's called run: its pipeline, how it stands
+ * and how long it took (the child's own row, read with the activity runs). The
+ * clock counts only while the page is live and the child unfinished, as the run
+ * header's does, so an interrupted child never ticks forever.
+ */
+function ChildRunCell({ child, live }: { child: ActivityRunChild; live: boolean }) {
+  return (
+    <>
+      <Link to={runDetailPath(child.id)}>{child.pipelineName ?? <code>{child.id}</code>}</Link>
+      {' · '}
+      <span className={`run-status run-status-${child.status}`}>
+        {runStatusLabel(child.status)}
+      </span>
+      {runStartIsReal(child) && (
+        <>
+          {' · '}
+          <RunDuration
+            status={child.status}
+            startedAt={child.startedAt}
+            endedAt={child.finishedAt}
+            counting={
+              live && child.finishedAt === null && !TERMINAL_RUN_ROW_STATUS.has(child.status)
+            }
+          />
+        </>
+      )}
+    </>
+  );
+}
+
 /** The Start, End and Duration cells, as a group or an iteration states them. */
 function Times({
   at,
@@ -123,6 +183,10 @@ const BETWEEN_ITERATION_AND_ERROR = ACTIVITY_RUN_COLUMNS.slice(
  *
  * Names and types come from the version that ran (`nameOf`, `typeOf`,
  * `containerNameOf`), never from the server, which names nothing.
+ *
+ * It can be filtered by status, type and text, and sorted by a header click
+ * (`activityRunsView.ts`); the view lives in the URL. A filter keeps a row's
+ * group and item lines; a sort is one flat list.
  */
 export function ActivityRunsTable({
   rows,
@@ -133,6 +197,7 @@ export function ActivityRunsTable({
   typeOf,
   containerNameOf,
   selected = null,
+  live = false,
 }: {
   rows: readonly ActivityRun[] | null;
   groups: readonly ActivityRunGroup[];
@@ -148,6 +213,9 @@ export function ActivityRunsTable({
    * real selection model.
    */
   selected?: { key: string } | null;
+  /** Whether the page would hear the run settle; a called run's duration
+   * counts up only then (`streamStillLive`). */
+  live?: boolean;
 }) {
   const selectedRow = useRef<HTMLTableRowElement>(null);
   /** A skip's cause may be an activity or a container. */
@@ -157,6 +225,67 @@ export function ActivityRunsTable({
     () => (rows === null ? [] : activityRunEntries(rows, groups)),
     [rows, groups],
   );
+  const [searchParams, setSearchParams] = useSearchParams();
+  const view = readActivityRunsView(searchParams);
+  /* Each control writes only its OWN params, so two quick changes cannot undo
+     each other, and pushes a history entry, so Back steps out of a filter as
+     it does on the runs list. */
+  const setParams = (next: Record<string, string>) =>
+    setSearchParams((prev) => withParams(prev, next));
+  const [searchText, setSearchText] = useSearchBox(view.q, (next, replace) =>
+    setSearchParams((prev) => withParams(prev, { [ACTIVITY_RUNS_PARAMS.q]: next }), { replace }),
+  );
+  // Clear drops text typed but not yet searched, too.
+  const clearView = () => {
+    setSearchText('');
+    setParams(PLAIN_VIEW);
+  };
+  const labelOf = (key: ActivityRunStatusKey) => statusKeyLabel(key, runStatus);
+
+  const factsOf = (row: ActivityRun): RowFacts => {
+    const name = nameOf(row.activityId);
+    const type = typeOf(row.activityId);
+    const statusLabel = labelOf(statusKeyOf(row));
+    const text = [
+      name,
+      row.nodeId,
+      type,
+      statusLabel,
+      iterationText(row.iteration),
+      row.branch,
+      row.error?.message,
+      row.childRun?.pipelineName,
+      row.childRunId,
+      row.skipReason === null ? null : skipReasonText(row.skipReason, anyNameOf),
+      row.containerId === null ? null : containerNameOf(row.containerId),
+    ]
+      .filter((t) => t !== null && t !== undefined && t !== '')
+      .join(' ')
+      .toLowerCase();
+    return { name, type, statusLabel, text };
+  };
+  const shown = viewEntries(entries, view, factsOf, labelOf);
+  /* The filter's choices are what the WHOLE run has, not what the filter left,
+     so a chosen status never drops out of its own list as the rows change. One
+     choice per WORDING: keys that read alike are one status to the reader. */
+  const statusOptions: FilterOption[] = [];
+  const typeOptions: FilterOption[] = [];
+  for (const row of rows ?? []) {
+    const key = statusKeyOf(row);
+    const label = labelOf(key);
+    if (!statusOptions.some((o) => o.label === label)) statusOptions.push({ value: key, label });
+    const type = typeOf(row.activityId);
+    if (type !== null && !typeOptions.some((o) => o.value === type))
+      typeOptions.push({ value: type, label: type });
+  }
+  typeOptions.sort((a, b) => a.label.localeCompare(b.label));
+  // A linked key that reads like an offered one shows as that one.
+  const pickedStatus =
+    view.status === null
+      ? undefined
+      : (statusOptions.find((o) => o.label === labelOf(view.status!))?.value ?? view.status);
+  const changed = isViewChanged(view) || searchText.trim() !== '';
+
   const toggle = (key: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -178,16 +307,76 @@ export function ActivityRunsTable({
       }
     }
   }
+  /* Each ask is answered ONCE. A new ask for a row the view hides puts the view
+     back to plain run order, so "Show activity" lands on the row rather than on
+     nothing; once the row is on screen it takes focus. A filter the viewer sets
+     afterwards stands, even one that hides that row. */
+  const askedShown = askedFor !== null && shown.some((e) => e.key === askedFor.key);
+  const answeredAsk = useRef<{ key: string } | null>(null);
+  /* The reset happens at most once per ask, so an ask whose row a later read
+     no longer has can never keep wiping the viewer's view. */
+  const resetFor = useRef<{ key: string } | null>(null);
   useEffect(() => {
-    if (askedFor === null) return;
+    if (askedFor === null || askedFor === answeredAsk.current) return;
+    if (!askedShown) {
+      if (resetFor.current !== askedFor) {
+        resetFor.current = askedFor;
+        setSearchParams((prev) => withParams(prev, PLAIN_VIEW), { replace: true });
+      }
+      return;
+    }
+    answeredAsk.current = askedFor;
     const tr = selectedRow.current;
     // jsdom has no `scrollIntoView`.
     tr?.scrollIntoView?.({ block: 'center' });
     tr?.focus({ preventScroll: true });
-  }, [askedFor]);
+  }, [askedFor, askedShown, setSearchParams]);
   return (
     <section className="activity-runs" aria-labelledby="activity-runs-heading">
-      <h3 id="activity-runs-heading">Activity runs</h3>
+      <div className="activity-runs__bar">
+        <h3 id="activity-runs-heading">Activity runs</h3>
+        {rows !== null && rows.length > 0 && (
+          <>
+            <FilterPicker
+              label={<span className="visually-hidden">Status</span>}
+              allLabel="All statuses"
+              value={pickedStatus}
+              options={statusOptions}
+              onChange={(v) =>
+                setParams({ [ACTIVITY_RUNS_PARAMS.status]: parseStatusKey(v) ?? '' })
+              }
+            />
+            <FilterPicker
+              label={<span className="visually-hidden">Type</span>}
+              allLabel="All types"
+              value={view.type ?? undefined}
+              options={typeOptions}
+              onChange={(v) => setParams({ [ACTIVITY_RUNS_PARAMS.type]: v })}
+            />
+            <div role="search" className="activity-runs__search">
+              <LabelledControl
+                label={<span className="visually-hidden">Search activity runs</span>}
+              >
+                {(id) => (
+                  <input
+                    id={id}
+                    type="search"
+                    maxLength={RUN_SEARCH_MAX_CHARS}
+                    placeholder="Search activity, item, error…"
+                    value={searchText}
+                    onChange={(e) => setSearchText(e.target.value)}
+                  />
+                )}
+              </LabelledControl>
+            </div>
+            {changed && (
+              <button type="button" onClick={clearView}>
+                Clear
+              </button>
+            )}
+          </>
+        )}
+      </div>
       {error !== null && (
         <p role="alert" className="error">
           Could not read the activity runs: {error}
@@ -197,20 +386,43 @@ export function ActivityRunsTable({
         error === null && <p>Loading activity runs…</p>
       ) : entries.length === 0 ? (
         <p>No activity has run yet.</p>
+      ) : shown.length === 0 ? (
+        <p>No matches.</p>
       ) : (
         <div className="activity-runs__scroll">
           <table className="activity-runs__table">
             <thead>
               <tr>
-                {ACTIVITY_RUN_COLUMNS.map((c) => (
-                  <th key={c} scope="col">
-                    {c}
-                  </th>
-                ))}
+                {ACTIVITY_RUN_COLUMNS.map((c) => {
+                  const key = ACTIVITY_RUN_SORT_COLUMNS[c];
+                  const active = key !== undefined && view.sort?.key === key;
+                  return (
+                    <th
+                      key={c}
+                      scope="col"
+                      {...(active
+                        ? { 'aria-sort': view.sort?.dir === 'asc' ? 'ascending' : 'descending' }
+                        : {})}
+                    >
+                      {key === undefined ? (
+                        c
+                      ) : (
+                        <SortButton
+                          dir={active ? view.sort!.dir : null}
+                          onClick={() =>
+                            setParams(activityRunSortParams(nextActivityRunSort(view.sort, key)))
+                          }
+                        >
+                          {c}
+                        </SortButton>
+                      )}
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
-              {entries.map((entry) => {
+              {shown.map((entry) => {
                 if (entry.parents.some((k) => collapsed.has(k))) return null;
                 if (entry.kind === 'group') {
                   const { group } = entry;
@@ -308,7 +520,16 @@ export function ActivityRunsTable({
                         }
                       : {})}
                   >
-                    <td title={row.nodeId}>{name ?? <code>{row.nodeId}</code>}</td>
+                    <td title={row.nodeId}>
+                      {name ?? <code>{row.nodeId}</code>}
+                      {/* A sorted list has no group lines, so a row says where it ran. */}
+                      {view.sort !== null && row.containerId !== null && (
+                        <span className="activity-runs__why">
+                          {' · in '}
+                          {containerNameOf(row.containerId) ?? row.containerId}
+                        </span>
+                      )}
+                    </td>
                     <td>{typeOf(row.activityId) ?? ''}</td>
                     <td>
                       {row.reused ? (
@@ -337,9 +558,7 @@ export function ActivityRunsTable({
                     <td className="num">{bytesText(row)}</td>
                     <td>
                       {row.childRun !== null ? (
-                        <Link to={runDetailPath(row.childRun.id)}>
-                          {row.childRun.pipelineName ?? <code>{row.childRun.id}</code>}
-                        </Link>
+                        <ChildRunCell child={row.childRun} live={live} />
                       ) : row.childRunId !== null ? (
                         <code>{row.childRunId}</code>
                       ) : null}

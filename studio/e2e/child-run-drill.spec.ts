@@ -71,6 +71,17 @@ test('#1231 — a call node names its child run, and the child names its caller'
   await page.goto(`/#/monitor/runs/${encodeURIComponent(parentRunId)}`);
   await fluentRootReady(page);
 
+  /* #1484 M2 — the activity runs' Child run cell names the called run's
+     pipeline, how it ended and how long it took (the child's own row). The cell
+     is found by its column's header, so a column added before it moves nothing. */
+  const childRunCell = await page.locator('.activity-runs__table').evaluate((table) => {
+    const col = [...table.querySelectorAll('thead th')].findIndex(
+      (th) => th.textContent?.trim() === 'Child run',
+    );
+    return table.querySelector('tr[data-activity-id="callChild"]')?.children[col]?.textContent;
+  });
+  expect(childRunCell).toMatch(/^#1231 child · success · \d+(\.\d+)?s$/);
+
   /* Open the drill-in by ROW rather than by the button's label: the button is
      named by the activity's ordinal label (`Execute Pipeline 1`), which is a
      presentation fact this spec has no stake in, while the raw node id beside it

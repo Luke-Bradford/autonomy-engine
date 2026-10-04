@@ -25,8 +25,9 @@ export interface RunHeaderNames {
 }
 
 /** The ticking half, in a leaf so the page's folds do not re-run every second
- * (`useTickingNow`'s docblock). The clock runs only while the run is counting. */
-function RunDuration({
+ * (`useTickingNow`'s docblock). The clock runs only while the run is counting.
+ * Also a called run's duration in the activity runs (#1484 M2). */
+export function RunDuration({
   status,
   startedAt,
   endedAt,
