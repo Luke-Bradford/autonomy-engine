@@ -205,6 +205,77 @@ export function hasRunFilterParams(params: URLSearchParams): boolean {
 }
 
 /**
+ * #1484 OR35 M1 — "Include child runs", ON unless the URL says `children=off`.
+ * When on, the list asks the server for each page's `descendants` (the runs its
+ * runs called, which carry no trigger of their own, so a trigger filter alone
+ * drops them) and the grid draws each under the run that called it. A view
+ * setting like `group`, not a filter: "Clear filters" keeps it, and it does not
+ * make an empty list "filtered". List view only — the Timeline lays runs out by
+ * time and does not nest, so it gets exactly the runs that matched.
+ */
+export const RUN_CHILDREN_PARAM = 'children';
+
+/**
+ * #1484 — the grid's column choice (`readRunGridHiddenParam`). The HIDDEN set,
+ * as the viewer's stored choice is, so a column a later release adds shows on
+ * an old link too; `none` spells the empty set, which a bare `hide=` cannot.
+ */
+export const RUN_GRID_HIDDEN_PARAM = 'hide';
+
+/**
+ * Whether the URL names any of the list's state — a filter, the sort, the
+ * children toggle or the columns — usable or not. A URL that names none is a
+ * bare visit to the list, the one case `RunsPage` restores the viewer's
+ * last-used query into; any other URL is a link that says what it wants, and
+ * is honoured exactly. `view` and `group` are not list state here: a bare
+ * Timeline visit is still bare.
+ */
+export function hasRunsListParams(params: URLSearchParams): boolean {
+  return (
+    hasRunFilterParams(params) ||
+    Object.values(RUN_SORT_PARAMS).some((param) => params.has(param)) ||
+    params.has(RUN_CHILDREN_PARAM) ||
+    params.has(RUN_GRID_HIDDEN_PARAM)
+  );
+}
+
+/**
+ * #1484 principle 5 — the part of the list's URL remembered per viewer, as its
+ * canonical query string ('' for none): the filters that describe a standing
+ * view of the runs (status, pipeline, trigger, annotation, what started them,
+ * the relative window), the sort, and the children toggle.
+ *
+ * Built from the PARSED values, never copied, so junk, an empty value and a
+ * default never make a remembered query that restores to a lit Clear button.
+ * Deliberately NOT remembered:
+ * - `q` and the absolute days (`on`/`from`/`to`): a search or a day is a
+ *   one-off question, and landing on last Tuesday's list a week later reads as
+ *   a broken page rather than a remembered one;
+ * - the columns: the viewer's stored choice (`runsGridHidden`) already is the
+ *   remembered one, and a shared link's `hide` must not become it by being
+ *   visited;
+ * - `view` and `group`, which are not filters.
+ */
+export function rememberedRunsQuery(params: URLSearchParams): string {
+  const filters = readRunFilters(params);
+  const remembered = new URLSearchParams();
+  const keep = (param: string, value: string | undefined) => {
+    if (value !== undefined && value !== '') remembered.set(param, value);
+  };
+  keep(RUN_FILTER_PARAMS.status, filters.status);
+  keep(RUN_FILTER_PARAMS.pipelineId, filters.pipelineId);
+  keep(RUN_FILTER_PARAMS.triggerId, filters.triggerId);
+  keep(RUN_FILTER_PARAMS.since, filters.since);
+  keep(RUN_FILTER_PARAMS.annotation, filters.annotation);
+  keep(RUN_FILTER_PARAMS.kind, filters.kind);
+  for (const [param, value] of Object.entries(runSortParams(readRunSort(params)))) {
+    keep(param, value);
+  }
+  if (params.get(RUN_CHILDREN_PARAM) === 'off') remembered.set(RUN_CHILDREN_PARAM, 'off');
+  return remembered.toString();
+}
+
+/**
  * The epoch-ms bounds a day range asks the server for: `from` is the first
  * day's first instant (inclusive) and `to` the first instant of the day AFTER
  * the last (exclusive), so "On a day" covers the whole day whatever its length
