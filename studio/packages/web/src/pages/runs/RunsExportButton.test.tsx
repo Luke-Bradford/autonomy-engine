@@ -3,11 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import * as runsApi from '../../api/runs';
 import * as download from '../../api/download';
 import { ApiError } from '../../api/client';
-import {
-  RunsExportButton,
-  runsExportFileName,
-  runsExportTruncatedLabel,
-} from './RunsExportButton';
+import { RunsExportButton, runsExportFileName, runsExportTruncatedLabel } from './RunsExportButton';
 
 vi.mock('../../api/runs', async (importActual) => ({
   ...(await importActual<typeof import('../../api/runs')>()),

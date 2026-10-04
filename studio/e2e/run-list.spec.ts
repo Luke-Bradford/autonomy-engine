@@ -946,3 +946,54 @@ test('#1484 — a trigger filter shows the runs its run called, nested and colla
 
   await expectQuiet(page, problems);
 });
+
+test('#1484 — Export CSV saves every run the filters match, as the list shows them', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  const marker = `export-${Date.now()}`;
+  // A comma in the name, so the file has to quote it.
+  const pipelineName = `Export, ${marker}`;
+  const { pipelineVersionId } = await seedVersion(page, pipelineName, {
+    nodes: [{ id: 'n1', type: 'fail', config: { message: marker }, position: { x: 0, y: 0 } }],
+  });
+  const runId = await fireAndSettle(page, pipelineVersionId, 'e2e export');
+
+  await page.goto(`/#/monitor/runs?q=${encodeURIComponent(marker)}`);
+  await fluentRootReady(page);
+  await expect(page.getByRole('row').filter({ hasText: runId })).toHaveCount(1);
+
+  // On the title row beside Refresh, not wrapped onto a line of its own.
+  const exportButton = page.getByRole('button', { name: 'Export CSV' });
+  const [exportBox, refreshBox] = await Promise.all([
+    exportButton.boundingBox(),
+    page.getByRole('button', { name: 'Refresh' }).boundingBox(),
+  ]);
+  expect(Math.abs((exportBox?.y ?? 0) - (refreshBox?.y ?? Infinity))).toBeLessThan(4);
+
+  const downloadPromise = page.waitForEvent('download');
+  await exportButton.click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/^runs-\d{8}-\d{6}Z\.csv$/);
+  const chunks: Buffer[] = [];
+  for await (const chunk of await download.createReadStream()) chunks.push(Buffer.from(chunk));
+  const text = Buffer.concat(chunks).toString('utf8');
+
+  expect(text.startsWith('﻿run_id,pipeline,')).toBe(true);
+  const lines = text.slice(1).split('\r\n');
+  // The header, our one run (the search matched only it), and the final CRLF.
+  expect(lines).toHaveLength(3);
+  expect(lines[2]).toBe('');
+  const record = lines[1]!;
+  expect(record.startsWith(`${runId},"${pipelineName}",`)).toBe(true);
+  expect(record).toContain(',failure,');
+  // Times are ISO UTC to the millisecond.
+  expect(record).toMatch(/,\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z,/);
+  // Nothing was cut, so nothing says so.
+  await expect(page.getByText(/Exported the first/)).toHaveCount(0);
+  await expect(exportButton).toBeEnabled();
+
+  await expectQuiet(page, problems);
+});

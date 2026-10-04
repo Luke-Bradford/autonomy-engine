@@ -234,7 +234,12 @@ describe('RunsPage', () => {
     const { includeChildren, ...listed } = listMock.mock.calls.at(-1)![0]!;
     expect(includeChildren).toBe('true');
     expect(exported).toEqual(listed);
-    expect(exported).toMatchObject({ status: 'failure', sort: 'duration', dir: 'asc', q: 'orders' });
+    expect(exported).toMatchObject({
+      status: 'failure',
+      sort: 'duration',
+      dir: 'asc',
+      q: 'orders',
+    });
     expect(exported).not.toHaveProperty('includeChildren');
   });
 

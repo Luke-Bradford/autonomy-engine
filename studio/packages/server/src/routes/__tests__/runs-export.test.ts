@@ -43,7 +43,10 @@ describe('GET /api/runs/export.csv (#1484 OR35 M1)', () => {
     await app.close();
   });
 
-  function seed(startedAt: number, opts: { ownerId?: string; status?: 'success' | 'failure' } = {}) {
+  function seed(
+    startedAt: number,
+    opts: { ownerId?: string; status?: 'success' | 'failure' } = {},
+  ) {
     const run = createRun(app.db, {
       ownerId: opts.ownerId ?? 'local',
       pipelineVersionId: versionId,

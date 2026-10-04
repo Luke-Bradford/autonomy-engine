@@ -43,12 +43,7 @@ import {
   ExternalWaitSettledError,
 } from '../run/external-wait-service.js';
 import { noStore, requireOwned } from './util.js';
-import {
-  decodeRunCursor,
-  resolveRunSort,
-  type RunCursor,
-  type RunSort,
-} from '../repo/run-sort.js';
+import { decodeRunCursor, resolveRunSort, type RunCursor, type RunSort } from '../repo/run-sort.js';
 import type { ListRunSummariesFilter, RunPageArgs } from '../repo/runs.js';
 import { RUNS_EXPORT_MAX_ROWS } from '../limits.js';
 import { collectRunsForExport, RUN_EXPORT_COLUMNS, runExportRow } from '../run/run-export.js';
@@ -158,7 +153,11 @@ function runFilterFromQuery(
     search: q,
     // The later of two lower bounds is the one that narrows.
     startedAfter:
-      sinceBound === undefined ? from : from === undefined ? sinceBound : Math.max(from, sinceBound),
+      sinceBound === undefined
+        ? from
+        : from === undefined
+          ? sinceBound
+          : Math.max(from, sinceBound),
     startedBefore: to,
     ownerId,
   };
