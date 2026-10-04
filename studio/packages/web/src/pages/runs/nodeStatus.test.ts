@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ContainerRunStatusSchema, NodeRunStatusSchema } from '@autonomy-studio/shared';
 import {
+  containerStatusPillClass,
   containerStatusLabel,
   containerStatusTone,
   nodeStatusLabel,
@@ -120,6 +121,21 @@ describe('nodeStatusLabel', () => {
   it('words no two statuses the same — a label an operator cannot invert is not a label', () => {
     const labels = NodeRunStatusSchema.options.map((s) => nodeStatusLabel(s));
     expect(new Set(labels).size).toBe(labels.length);
+  });
+});
+
+describe('containerStatusPillClass', () => {
+  it('#1484 — a live container takes the running pill, and a cancel-stopped one the muted pill', () => {
+    expect(containerStatusPillClass('active', 'running')).toBe(
+      'node-status node-status-dispatched',
+    );
+    expect(containerStatusPillClass('failure', 'failure')).toBe('node-status node-status-failure');
+    expect(containerStatusPillClass('active', 'cancelled')).toBe(
+      'node-status node-status-cancelled',
+    );
+    expect(containerStatusPillClass('success', 'cancelled')).toBe(
+      'node-status node-status-success',
+    );
   });
 });
 

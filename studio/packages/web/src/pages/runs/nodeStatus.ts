@@ -130,6 +130,23 @@ export function nodeStatusPillClass(status: NodeRunStatus, runStatus?: RunStatus
 }
 
 /**
+ * #1484 M2 — a container's pill class, as `nodeStatusPillClass`. The pills are
+ * styled on the node vocabulary, so a live container takes `dispatched`, the
+ * hue of a running node, and a container a cancel stopped takes the muted one.
+ */
+export function containerStatusPillClass(
+  status: ContainerRunStatus,
+  runStatus?: RunStatus | null,
+): string {
+  const pill = containerStoppedByCancel(status, runStatus)
+    ? 'cancelled'
+    : status === 'active'
+      ? 'dispatched'
+      : status;
+  return `node-status node-status-${pill}`;
+}
+
+/**
  * What an OPERATOR is told a node is doing. Same exhaustive-`Record`
  * construction as the tones, and for the same reason: a new engine status must
  * be worded deliberately rather than leak its identifier onto the screen.

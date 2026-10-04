@@ -42,7 +42,8 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
   const table = page.locator('.activity-runs__table');
-  await expect(table.locator('tbody tr')).toHaveCount(5);
+  // 5 activity rows, plus the ForEach's group line and a line per item.
+  await expect(table.locator('tbody tr')).toHaveCount(8);
 
   // Every reading in one evaluate: a round trip per assertion is what costs.
   const seen = await page.evaluate(() => {
@@ -53,6 +54,15 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
       const cells = [...tr.cells].map((c) => (c.textContent ?? '').trim());
       return {
         id: tr.dataset.activityId,
+        container: tr.dataset.containerId,
+        line: tr.dataset.iteration === undefined ? null : `item ${tr.dataset.iteration}`,
+        depth: tr.dataset.depth,
+        // A group or item line's label: its toggle's text, without the chevron.
+        label: [...(tr.querySelector('.activity-runs__toggle')?.childNodes ?? [])]
+          .filter((n) => !(n instanceof Element && n.getAttribute('aria-hidden') === 'true'))
+          .map((n) => n.textContent)
+          .join(''),
+        type: cells[col('Type')],
         status: cells[col('Status')],
         start: cells[col('Start')],
         duration: cells[col('Duration')],
@@ -85,6 +95,28 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
   });
 
   const byId = (id: string) => seen.rows.filter((r) => r.id === id);
+  // #1484 M2 — the ForEach is a group line, with a line per item and each
+  // item's activity under it.
+  expect(
+    seen.rows
+      .filter((r) => r.container === 'fe' || r.id === 'hold')
+      .map((r) => [r.line ?? r.id ?? 'group', r.depth, r.status]),
+  ).toEqual([
+    ['group', '0', 'success'],
+    ['item 0', '1', 'success'],
+    ['hold', '2', 'success'],
+    ['item 1', '1', 'success'],
+    ['hold', '2', 'success'],
+  ]);
+  const group = seen.rows.find((r) => r.container === 'fe' && r.line === null)!;
+  expect(group).toMatchObject({ type: 'ForEach', iteration: '2 items' });
+  // Two one-second waits, one after the other.
+  expect(group.duration).toMatch(/^\d+(\.\d+)?s$/);
+  expect(parseFloat(group.duration!)).toBeGreaterThanOrEqual(2);
+  expect(seen.rows.filter((r) => r.line !== null).map((r) => r.label)).toEqual([
+    'Item 1 of 2 · orders_a.csv',
+    'Item 2 of 2 · orders_b.csv',
+  ]);
   // The If is a row though it is never dispatched, and it says which way it went.
   expect(byId('pick')).toMatchObject([{ status: 'success', branch: 'true' }]);
   // One row per ForEach item, each naming its item.
@@ -129,6 +161,14 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
   const current = table.locator('tbody tr[aria-current="true"]');
   await expect(current).toHaveAttribute('data-activity-id', 'stop');
   await expect(current).toBeFocused();
+
+  // Collapsing the ForEach leaves its own line; opening it brings the items back.
+  const toggle = table.locator('tr.activity-runs__group button');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(table.locator('tbody tr')).toHaveCount(4);
+  await toggle.click();
+  await expect(table.locator('tbody tr')).toHaveCount(8);
 
   await expectQuiet(page, problems);
 });

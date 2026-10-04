@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ActivityRun } from '@autonomy-studio/shared';
+import type { ActivityRun, ActivityRunGroup } from '@autonomy-studio/shared';
 import { getRunActivityRuns } from '../../api/runs';
 import { messageOf } from '../../api/client';
 import { useGuardedLoad } from '../../hooks/useGuardedLoad';
@@ -10,6 +10,8 @@ export const ACTIVITY_RUNS_REFRESH_MS = 500;
 export interface ActivityRunsReading {
   /** `null` until the first read answers. */
   readonly rows: readonly ActivityRun[] | null;
+  /** The containers the rows sit in, read with them; empty before the first read. */
+  readonly groups: readonly ActivityRunGroup[];
   /** The last read's failure; the rows before it stay on screen. */
   readonly error: string | null;
 }
@@ -29,7 +31,11 @@ export interface ActivityRunsReading {
  */
 export function useActivityRuns(runId: string, lastSeq: number | undefined): ActivityRunsReading {
   const load = useGuardedLoad();
-  const [reading, setReading] = useState<ActivityRunsReading>({ rows: null, error: null });
+  const [reading, setReading] = useState<ActivityRunsReading>({
+    rows: null,
+    groups: [],
+    error: null,
+  });
   const flight = useRef<{
     timer: ReturnType<typeof setTimeout> | null;
     inFlight: boolean;
@@ -63,8 +69,8 @@ export function useActivityRuns(runId: string, lastSeq: number | undefined): Act
         f.inFlight = true;
         f.asked = f.wanted;
         void load((signal) => getRunActivityRuns(runId, signal), {
-          onData: (res) => setReading({ rows: res.rows, error: null }),
-          onError: (err) => setReading((prev) => ({ rows: prev.rows, error: messageOf(err) })),
+          onData: (res) => setReading({ rows: res.rows, groups: res.groups, error: null }),
+          onError: (err) => setReading((prev) => ({ ...prev, error: messageOf(err) })),
         }).finally(() => {
           f.inFlight = false;
           if (f.wanted !== f.asked) schedule(ACTIVITY_RUNS_REFRESH_MS);

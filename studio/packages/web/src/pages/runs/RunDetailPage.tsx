@@ -606,10 +606,12 @@ export function RunDetailPage({ runId }: { runId: string }) {
           the M2 drawer slice replaces its drill-in. */}
       <ActivityRunsTable
         rows={activityRuns.rows}
+        groups={activityRuns.groups}
         error={activityRuns.error}
         runStatus={status}
         nameOf={nameOf}
         typeOf={typeOf}
+        containerNameOf={(id) => containerNames?.get(id) ?? null}
         selected={selectedRow}
       />
 

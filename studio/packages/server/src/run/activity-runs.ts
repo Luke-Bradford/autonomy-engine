@@ -1,8 +1,13 @@
 import {
   parseInstanceKey,
+  TERMINAL_CONTAINER,
   TERMINAL_NODE,
   type ActivityRun,
+  type ActivityRunGroup,
   type ActivityRunIteration,
+  type ActivityRunIterationGroup,
+  type ContainerRunState,
+  type ContainerRunStatus,
   type EngineEvent,
   type NodeRunStatus,
   type PipelineVersion,
@@ -38,8 +43,8 @@ import type { LoggedEngineEvent } from './events.js';
  *   with no row in that item was skipped.
  * - What a rerun REUSED from the run it reran is a row, marked `reused`, with no
  *   times: it did not run here.
- * Container-level outcomes (a loop that timed out or hit its cap) are not rows;
- * containers become group rows in a later M2 slice.
+ * Containers are not rows. Each one the run reached is a GROUP (`projectGroups`
+ * below), and every row says which container it sits in.
  *
  * HOW AN ATTEMPT SETTLES:
  * 1. An event about the attempt counts only if the attempt was the node's live
@@ -59,6 +64,11 @@ import type { LoggedEngineEvent } from './events.js';
  * operator's retry does not spend the policy, so its attempt keeps the number.
  */
 export type ProjectedActivityRun = Omit<ActivityRun, 'childRun'>;
+
+export interface ProjectedActivityRuns {
+  rows: ProjectedActivityRun[];
+  groups: ActivityRunGroup[];
+}
 
 /** How many runs' projections one server remembers (`routes/runs.ts`). */
 export const ACTIVITY_RUNS_MEMO_LIMIT = 200;
@@ -151,7 +161,7 @@ export function projectActivityRuns(
   doc: Doc,
   engine: Engine,
   log: readonly LoggedEngineEvent[],
-): ProjectedActivityRun[] {
+): ProjectedActivityRuns {
   const docIds = new Set(doc.nodes.map((n) => n.id));
   const containerOf = new Map<string, Container>();
   for (const c of doc.containers) for (const child of c.children) containerOf.set(child, c);
@@ -184,6 +194,10 @@ export function projectActivityRuns(
     };
   };
 
+  const placeOf = (nodeId: string) => {
+    const { activityId } = resolve(nodeId);
+    return { activityId, containerId: containerOf.get(activityId)?.id ?? null };
+  };
   const blank = (
     key: string,
     nodeId: string,
@@ -192,7 +206,7 @@ export function projectActivityRuns(
   ): ProjectedActivityRun => ({
     key,
     nodeId,
-    activityId: resolve(nodeId).activityId,
+    ...placeOf(nodeId),
     attemptId: null,
     attempt: null,
     status,
@@ -224,6 +238,11 @@ export function projectActivityRuns(
   const addSkip = (nodeId: string, iteration: ActivityRunIteration | null) =>
     push(blank(`skip:${nodeId}:${rows.length}`, nodeId, 'skipped', iteration));
   const iterating = doc.containers.filter((c) => c.kind !== 'stage');
+  const reused = reusedIds(
+    doc,
+    log.map((l) => l.event),
+  );
+  const groups = new Map<string, ActivityRunGroup>();
 
   const settle = (row: ProjectedActivityRun, status: NodeRunStatus, ts: number) => {
     row.status = status;
@@ -238,10 +257,63 @@ export function projectActivityRuns(
     else row.status = status;
   };
 
+  /**
+   * A container becomes a group the first time the state holds it past
+   * `pending`. One reduce can take it pending → active → done (a ForEach with
+   * no items exits as it enters), so the start and the end are read from the
+   * same before/after pair:
+   * - a container the rerun's `run.reseeded` copied is REUSED, with no times;
+   * - one that went straight from pending to `skipped` never started: no times;
+   * - otherwise it started at this event, and if it is now terminal it ended
+   *   here too.
+   */
+  const trackGroups = (e: EngineEvent, ts: number, before: RunState, after: RunState) => {
+    for (const c of doc.containers) {
+      const now = after.containers[c.id];
+      if (now === undefined || now.status === 'pending') continue;
+      let group = groups.get(c.id);
+      if (group === undefined) {
+        const copied = e.type === 'run.reseeded' && reused.has(c.id);
+        const unstarted =
+          copied ||
+          ((before.containers[c.id] === undefined ||
+            before.containers[c.id]?.status === 'pending') &&
+            now.status === 'skipped');
+        group = {
+          containerId: c.id,
+          kind: c.kind,
+          status: now.status,
+          reason: null,
+          reused: copied,
+          startedAt: unstarted ? null : ts,
+          finishedAt: null,
+          durationMs: null,
+          itemCount: null,
+          iterations: [],
+          position: rows.length,
+        };
+        groups.set(c.id, group);
+      }
+      group.status = now.status;
+      group.reason = now.reason ?? null;
+      if (c.kind === 'foreach') group.itemCount = now.items?.length ?? null;
+      if (
+        group.startedAt !== null &&
+        group.finishedAt === null &&
+        TERMINAL_CONTAINER.has(now.status)
+      ) {
+        group.finishedAt = ts;
+        group.durationMs = ts >= group.startedAt ? ts - group.startedAt : null;
+      }
+    }
+  };
+
   let state = engine.seedState();
   for (const { event: e, ts, payload } of log) {
     const before = state;
     state = engine.reduce(before, e).state;
+
+    if (state.containers !== before.containers) trackGroups(e, ts, before, state);
 
     const ref = attemptOf(e);
     if (ref !== null && !byAttempt.has(ref.attemptId)) {
@@ -354,12 +426,92 @@ export function projectActivityRuns(
     }
   }
 
-  const reused = reusedIds(
-    doc,
-    log.map((l) => l.event),
-  );
   const carried = doc.nodes
     .filter((n) => reused.has(n.id))
     .map((n) => ({ ...blank(`reused:${n.id}`, n.id, 'success', null), reused: true }));
-  return [...carried, ...rows];
+  // The carried rows lead, so every group made while stepping moves down past
+  // them; a reused group leads with them.
+  for (const group of groups.values()) {
+    group.position = group.reused ? 0 : group.position + carried.length;
+    const cs = state.containers[group.containerId];
+    if (group.kind !== 'stage' && cs !== undefined) {
+      group.iterations = iterationGroups(group.containerId, cs, rows);
+    }
+  }
+  return {
+    rows: [...carried, ...rows],
+    groups: [...groups.values()].sort((a, b) => a.position - b.position),
+  };
+}
+
+/**
+ * The status of a ForEach item or a loop round, from what the engine recorded
+ * about the container rather than from its rows: a failure the body handled
+ * still completes the item, and a round cut short by a timeout leaves its live
+ * rows `skipped`, which a tally would read as a clean finish.
+ * - A ForEach item with a result completed. So did every loop round, and every
+ *   sequential item, before the current one: the engine only moves on after a
+ *   clean one.
+ * - An item a parallel ForEach's doom cut short reads `skipped`, unless one of
+ *   its own attempts failed while it drained: then it failed, as its row says.
+ * - Any other item or round reads as its container does: still `active` while
+ *   the container is, and otherwise the way it ended (the blamed item, the
+ *   loop's last round).
+ */
+function iterationStatus(
+  cs: ContainerRunState,
+  index: number,
+  failedHere: boolean,
+): ContainerRunStatus {
+  const result = cs.results?.[index];
+  if (result !== undefined && result !== null) return 'success';
+  if (cs.nextItem === undefined && index < cs.round) return 'success';
+  if (cs.doomed !== undefined && parseInstanceKey(cs.doomed.blame)?.itemIndex !== index) {
+    const cut = cs.doomed.flipped.some((k) => parseInstanceKey(k)?.itemIndex === index);
+    if (cut) return failedHere ? 'failure' : 'skipped';
+  }
+  return cs.status;
+}
+
+/** One group per item or round that has rows, in index order. */
+function iterationGroups(
+  containerId: string,
+  cs: ContainerRunState,
+  rows: readonly ProjectedActivityRun[],
+): ActivityRunIterationGroup[] {
+  const byIndex = new Map<number, ProjectedActivityRun[]>();
+  for (const row of rows) {
+    if (row.iteration?.containerId !== containerId) continue;
+    const list = byIndex.get(row.iteration.index) ?? [];
+    list.push(row);
+    byIndex.set(row.iteration.index, list);
+  }
+  return [...byIndex.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([index, list]) => {
+      const first = list[0]!.iteration!;
+      const starts = list.flatMap((r) => (r.startedAt === null ? [] : [r.startedAt]));
+      const ends = list.flatMap((r) => (r.finishedAt === null ? [] : [r.finishedAt]));
+      const startedAt = starts.length === 0 ? null : starts.reduce((a, b) => Math.min(a, b));
+      // A skip has no times of its own, so "settled" is every row terminal,
+      // and the end is the latest end among the rows that have one.
+      const settled = list.every((r) => TERMINAL_NODE.has(r.status));
+      const finishedAt = settled && ends.length > 0 ? ends.reduce((a, b) => Math.max(a, b)) : null;
+      return {
+        index,
+        count: first.count,
+        item: first.item,
+        status: iterationStatus(
+          cs,
+          index,
+          list.some((r) => r.status === 'failure'),
+        ),
+        startedAt,
+        finishedAt,
+        durationMs:
+          startedAt !== null && finishedAt !== null && finishedAt >= startedAt
+            ? finishedAt - startedAt
+            : null,
+      };
+    });
 }

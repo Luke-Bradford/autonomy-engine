@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { FailureKindSchema, NodeRunStatusSchema } from '../engine/types.js';
+import {
+  ContainerRunStatusSchema,
+  FailureKindSchema,
+  NodeRunStatusSchema,
+} from '../engine/types.js';
+import { ContainerKindSchema } from './pipeline.js';
 import { RunStatusSchema } from './run.js';
 
 /**
@@ -62,6 +67,9 @@ export const ActivityRunSchema = z.object({
   nodeId: z.string(),
   /** The doc node id in the version that ran. */
   activityId: z.string(),
+  /** The container (ForEach, Until or Stage) the activity sits in, if any. For a
+   * row in an iteration it is the iteration's `containerId`. */
+  containerId: z.string().nullable(),
   attemptId: z.string().nullable(),
   /** 1-based, counting policy retries within this iteration. */
   attempt: z.number().int().positive().nullable(),
@@ -86,8 +94,61 @@ export const ActivityRunSchema = z.object({
 });
 export type ActivityRun = z.infer<typeof ActivityRunSchema>;
 
+/**
+ * #1484 OR35 M2 — one iteration of a ForEach or Until: the item or round, and
+ * how it ended. The status is the ENGINE's account, not a tally of its rows: a
+ * failure the body handled still completes the item, and a round a timeout cut
+ * short is not a success because its live rows were skipped.
+ */
+export const ActivityRunIterationGroupSchema = z.object({
+  /** 0-based. The page shows it 1-based. */
+  index: z.number().int().nonnegative(),
+  /** As on `ActivityRunIteration`. */
+  count: z.number().int().nonnegative().nullable(),
+  item: z.string().nullable(),
+  status: ContainerRunStatusSchema,
+  /** The earliest start and the latest end of its rows; `finishedAt` is `null`
+   * until every row in it has settled. */
+  startedAt: z.number().int().nullable(),
+  finishedAt: z.number().int().nullable(),
+  durationMs: count,
+});
+export type ActivityRunIterationGroup = z.infer<typeof ActivityRunIterationGroupSchema>;
+
+/**
+ * #1484 OR35 M2 — a container of the run, the group its activities' rows sit
+ * under. A container the run never reached is not a group, as an activity that
+ * never ran is not a row.
+ */
+export const ActivityRunGroupSchema = z.object({
+  containerId: z.string(),
+  kind: ContainerKindSchema,
+  status: ContainerRunStatusSchema,
+  /** Why it ended (`timeout`, `child_failed:w@2`, …), as the engine said. */
+  reason: z.string().nullable(),
+  /** Carried over from the run this one reran, not executed here. */
+  reused: z.boolean(),
+  /** Epoch ms of the event that started it; `null` when it never started (it
+   * was skipped) or was reused. */
+  startedAt: z.number().int().nullable(),
+  finishedAt: z.number().int().nullable(),
+  durationMs: count,
+  /** A ForEach's item count, once it has resolved its items; `null` for an
+   * Until or a Stage. */
+  itemCount: count,
+  /** One per item or round that ran, in index order; empty for a Stage. */
+  iterations: z.array(ActivityRunIterationGroupSchema),
+  /** Where it sits among `rows`: the index of the first row logged after it
+   * started (or was skipped or reused). Its own rows all come later, and the
+   * page shows them together under it, so a row that ran beside the container
+   * (a parallel branch) is listed after the whole group, not between its rows. */
+  position: z.number().int().nonnegative(),
+});
+export type ActivityRunGroup = z.infer<typeof ActivityRunGroupSchema>;
+
 export const ActivityRunsResponseSchema = z.object({
   runId: z.string(),
   rows: z.array(ActivityRunSchema),
+  groups: z.array(ActivityRunGroupSchema),
 });
 export type ActivityRunsResponse = z.infer<typeof ActivityRunsResponseSchema>;

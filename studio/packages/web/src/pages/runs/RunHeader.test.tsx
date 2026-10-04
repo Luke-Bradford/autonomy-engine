@@ -123,6 +123,7 @@ const failedRow = (over: Partial<ActivityRun> = {}): ActivityRun => ({
   key: 'copy#2',
   nodeId: 'copy',
   activityId: 'copy',
+  containerId: null,
   attemptId: 'copy#2',
   attempt: 2,
   status: 'failure',
@@ -203,10 +204,12 @@ describe('ActivityRunsTable — the row "Show activity" asked for', () => {
       <MemoryRouter>
         <ActivityRunsTable
           rows={rows}
+          groups={[]}
           error={null}
           runStatus="failure"
           nameOf={() => null}
           typeOf={() => null}
+          containerNameOf={() => null}
           selected={{ key: 'copy#2' }}
         />
       </MemoryRouter>,

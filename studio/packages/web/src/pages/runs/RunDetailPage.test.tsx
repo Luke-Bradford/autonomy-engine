@@ -51,7 +51,7 @@ vi.mock('../../api/runs', async (importActual) => ({
      over. */
   getRunDiagnostics: vi.fn().mockResolvedValue([]),
   // #1484 M2 — read from a mount effect, like `getRunDiagnostics`.
-  getRunActivityRuns: vi.fn().mockResolvedValue({ runId: 'r', rows: [] }),
+  getRunActivityRuns: vi.fn().mockResolvedValue({ runId: 'r', rows: [], groups: [] }),
   /* Mocked so an un-mocked write cannot reach `fetch`. NOT for the mount-effect
      reason above, which is specific to a member called from a MOUNT EFFECT:
      this one is only reachable from a click, so no other test in this file can
@@ -3314,6 +3314,7 @@ describe('RunDetailPage — the failure banner', () => {
     key: 'greet#0',
     nodeId: 'greet',
     activityId: 'greet',
+    containerId: null,
     attemptId: 'greet#0',
     attempt: 1,
     status: 'failure' as const,
@@ -3338,7 +3339,11 @@ describe('RunDetailPage — the failure banner', () => {
       run: run({ status: 'failure', finishedAt: 1_700_000_001_000 }),
       pipelineVersion: version(),
     });
-    vi.mocked(runsApi.getRunActivityRuns).mockResolvedValue({ runId: 'run_1', rows: [failedRow] });
+    vi.mocked(runsApi.getRunActivityRuns).mockResolvedValue({
+      runId: 'run_1',
+      rows: [failedRow],
+      groups: [],
+    });
   });
 
   it('names the blamed activity and its error, and Show activity selects its row', async () => {

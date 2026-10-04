@@ -47,7 +47,7 @@ import { buildEngine, makeDocResolver } from '../run/driver.js';
 import {
   ACTIVITY_RUNS_MEMO_LIMIT,
   projectActivityRuns,
-  type ProjectedActivityRun,
+  type ProjectedActivityRuns,
 } from '../run/activity-runs.js';
 import { loadEngineLog } from '../run/events.js';
 import { BadRequestError, BusyError, NotFoundError } from '../errors.js';
@@ -215,23 +215,23 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
      (the log is append-only, so an unchanged `seq` is an unchanged log): a page
      re-reads it as the run's log grows, and a settled run is folded once. The
      bound keeps a long-lived server from holding every run anyone has opened. */
-  const activityRunsMemo = new Map<string, { lastSeq: number; rows: ProjectedActivityRun[] }>();
-  const projectedActivityRuns = (runId: string, versionId: string): ProjectedActivityRun[] => {
+  const activityRunsMemo = new Map<string, { lastSeq: number; runs: ProjectedActivityRuns }>();
+  const projectedActivityRuns = (runId: string, versionId: string): ProjectedActivityRuns => {
     const lastSeq = listRunLastSeqs(db, [runId]).get(runId);
-    if (lastSeq === undefined) return [];
+    if (lastSeq === undefined) return { rows: [], groups: [] };
     const hit = activityRunsMemo.get(runId);
     activityRunsMemo.delete(runId);
-    let rows = hit !== undefined && hit.lastSeq === lastSeq ? hit.rows : undefined;
-    if (rows === undefined) {
+    let runs = hit !== undefined && hit.lastSeq === lastSeq ? hit.runs : undefined;
+    if (runs === undefined) {
       const doc = resolveDoc(versionId);
-      rows = projectActivityRuns(doc, buildEngine(doc), loadEngineLog(db, runId));
+      runs = projectActivityRuns(doc, buildEngine(doc), loadEngineLog(db, runId));
     }
-    activityRunsMemo.set(runId, { lastSeq, rows });
+    activityRunsMemo.set(runId, { lastSeq, runs });
     if (activityRunsMemo.size > ACTIVITY_RUNS_MEMO_LIMIT) {
       const oldest = activityRunsMemo.keys().next().value;
       if (oldest !== undefined) activityRunsMemo.delete(oldest);
     }
-    return rows;
+    return runs;
   };
   // #1484 — one per app, so its memo of settled runs' counts outlives a request.
   const foldActivities = makeRunActivityFold(resolveDoc, {
@@ -475,7 +475,7 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
         'run',
         request.params.id,
       );
-      const rows = projectedActivityRuns(run.id, run.pipelineVersionId);
+      const { rows, groups } = projectedActivityRuns(run.id, run.pipelineVersionId);
       // Only the children this run's own log names, read leniently so one
       // corrupt child row costs its link and not the whole table.
       const children =
@@ -512,6 +512,7 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
                 };
           return { ...row, childRun };
         }),
+        groups,
       };
     },
   );
