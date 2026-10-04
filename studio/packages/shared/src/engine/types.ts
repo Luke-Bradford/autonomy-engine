@@ -217,6 +217,40 @@ export const TERMINAL_NODE: ReadonlySet<NodeRunStatus> = new Set<NodeRunStatus>(
   TerminalNodeStatusSchema.options satisfies readonly NodeRunStatus[],
 );
 
+/**
+ * #1484 M2 — WHY a node or container is `skipped`, recorded by the reducer at the
+ * site that decides the skip, so a reader (the Monitor's activity runs) is told
+ * the cause instead of re-deriving the walk.
+ *
+ * - `upstream`: a predecessor's outcome left every edge from it dead — it
+ *   `failure`d on a success path, `success`ed on a failure-only path, or was
+ *   itself `skipped` with no reason of its own to pass on.
+ * - `branch`: an If/Switch recorded a different label (`taken`), or none.
+ * - `timeout`: a loop's wall-clock timeout abandoned it mid-round.
+ * - `doomed`: a parallel ForEach's failure stopped it; `blame` is the blamed
+ *   INSTANCE key (`<docNodeId>@<i>`), as in `ContainerRunState.doomed`.
+ *
+ * A skip downstream of another skip INHERITS the predecessor's reason, so a
+ * chain three deep still names the activity that failed.
+ *
+ * This is state, not an event: skips are derived by the fold and were never
+ * logged, and state is never persisted (always re-folded from `run_events`), so
+ * old logs gain reasons too. The one event it reaches is `run.reseeded`, whose
+ * `copiedContainers` embeds this schema; the field is optional and the reseed
+ * copies only `success` containers, so old payloads parse unchanged.
+ */
+export const SkipReasonSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('upstream'),
+    from: z.string(),
+    outcome: z.enum(['success', 'failure', 'skipped']),
+  }),
+  z.object({ kind: z.literal('branch'), from: z.string(), taken: z.string().nullable() }),
+  z.object({ kind: z.literal('timeout'), containerId: z.string() }),
+  z.object({ kind: z.literal('doomed'), containerId: z.string(), blame: z.string() }),
+]);
+export type SkipReason = z.infer<typeof SkipReasonSchema>;
+
 export const NodeRunStateSchema = z.object({
   status: NodeRunStatusSchema,
   attempts: z.number().int().nonnegative(),
@@ -230,6 +264,9 @@ export const NodeRunStateSchema = z.object({
    * outrank a child the node spawned itself — which is why nothing clears it.
    */
   sourceChildRunId: z.string().optional(),
+  /** #1484 M2 — why it is `skipped` (`SkipReasonSchema`); set only with that
+   * status, and removed when a loop round resets the node. */
+  skipReason: SkipReasonSchema.optional(),
   /**
    * F2b — POLICY retries taken for this node in the CURRENT loop round, and the
    * ONLY counter retry-eligibility reads (`retries < policy.retry`).
@@ -413,6 +450,9 @@ export const ContainerRunStateSchema = z.object({
       flipped: z.array(z.string()),
     })
     .optional(),
+  /** #1484 M2 — why it is `skipped` (`SkipReasonSchema`). Containers are never
+   * reset, so it is never cleared. */
+  skipReason: SkipReasonSchema.optional(),
 });
 export type ContainerRunState = z.infer<typeof ContainerRunStateSchema>;
 

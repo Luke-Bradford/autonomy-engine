@@ -521,6 +521,8 @@ describe('containers — loop wall-clock timeout (#4 A17)', () => {
     // with its attempt cleared, so a late result cannot fold against it.
     expect(s.nodes.work!.status).toBe('skipped');
     expect(s.nodes.work!.currentAttemptId).toBeUndefined();
+    // #1484 M2 — the abandoned child says the loop's timeout cut it short.
+    expect(s.nodes.work!.skipReason).toEqual({ kind: 'timeout', containerId: 'lp' });
     // The outer FAILURE edge routes.
     const rec = t.commands.find((c) => c.type === 'dispatchNode') as Extract<
       EngineCommand,

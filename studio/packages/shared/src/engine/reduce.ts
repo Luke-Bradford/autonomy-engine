@@ -7,6 +7,7 @@ import type {
   FailureKind,
   Node,
   NodeRunState,
+  SkipReason,
   ContainerRunState,
   PipelineVersion,
   ReduceResult,
@@ -1023,6 +1024,75 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
+   * An entity's incoming edges grouped BY PREDECESSOR, in first-edge order, each
+   * with its group verdict: `ready` if ANY of its conditions is satisfied, `dead`
+   * if ALL are dead (`impossible` ∪ `unsatisfied-terminal`), else `pending`. A
+   * GROUP is never 'skipped' (only a whole entity is), hence its own type rather
+   * than `Readiness`. The one grouping `computeReadiness` folds and
+   * `explainSkip` names a cause from — two definitions of "dead" would drift.
+   */
+  function predecessorGroups(
+    incoming: Edge[],
+    state: RunState,
+    scope?: ItemScope,
+  ): { from: string; edges: Edge[]; group: 'ready' | 'dead' | 'pending' }[] {
+    const byPredecessor = new Map<string, { edges: Edge[]; states: EdgeState[] }>();
+    for (const e of incoming) {
+      const g = byPredecessor.get(e.from);
+      if (g === undefined)
+        byPredecessor.set(e.from, { edges: [e], states: [edgeState(e, state, scope)] });
+      else {
+        g.edges.push(e);
+        g.states.push(edgeState(e, state, scope));
+      }
+    }
+    return [...byPredecessor].map(([from, { edges, states }]) => ({
+      from,
+      edges,
+      group: states.some((s) => s === 'satisfied')
+        ? 'ready'
+        : states.every(isEdgeStateDead)
+          ? 'dead'
+          : 'pending',
+    }));
+  }
+
+  /**
+   * #1484 M2 — WHY `computeReadiness` said `skipped`: the FIRST dead predecessor
+   * group, in incoming-edge order, that has an outcome to name. Under `all` any
+   * one dead group is the cause; under `any` every group is dead, so the first
+   * is as true as any. A SKIPPED predecessor passes on its own reason, so a skip
+   * three deep still names the activity that failed. A dead group with no
+   * outcome is passed over (defensive: the doc's edges are filtered to known
+   * endpoints, so it is not reachable today) rather than hiding a later one.
+   * Read the PRE-skip `state`: the cause is upstream, never the entity itself.
+   */
+  function explainSkip(
+    incoming: Edge[],
+    state: RunState,
+    scope?: ItemScope,
+  ): SkipReason | undefined {
+    for (const g of predecessorGroups(incoming, state, scope)) {
+      if (g.group !== 'dead') continue;
+      const oc = endpointOutcome(g.from, state, scope);
+      if (oc === null) continue;
+      if (oc === 'skipped') {
+        const inherited = containerById.has(g.from)
+          ? state.containers[g.from]?.skipReason
+          : state.nodes[ikey(g.from, scope)]?.skipReason;
+        return inherited ?? { kind: 'upstream', from: g.from, outcome: 'skipped' };
+      }
+      // A branch edge is dead from a SUCCESSFUL source only when the source took
+      // another label (`edgeState`); a failed source is an upstream failure.
+      if (oc === 'success' && g.edges.some((e) => e.on === 'branch')) {
+        return { kind: 'branch', from: g.from, taken: state.branches[ikey(g.from, scope)] ?? null };
+      }
+      return { kind: 'upstream', from: g.from, outcome: oc };
+    }
+    return undefined;
+  }
+
+  /**
    * The join truth table over an entity's incoming edges (CP1, corrected by
    * F14/T7). No incoming edge → a root (ready).
    *
@@ -1046,24 +1116,9 @@ export function createEngine(doc: EngineDoc): Engine {
   ): Readiness {
     if (incoming.length === 0) return 'ready';
 
-    const byPredecessor = new Map<string, EdgeState[]>();
-    for (const e of incoming) {
-      const states = byPredecessor.get(e.from);
-      if (states === undefined) byPredecessor.set(e.from, [edgeState(e, state, scope)]);
-      else states.push(edgeState(e, state, scope));
-    }
-    // Order-independent (`every`/`some`), so Map iteration order can't affect
-    // the result — the reducer stays pure and replay-stable. A GROUP is never
-    // 'skipped' (only a whole entity is), hence its own type rather than
-    // `Readiness`.
-    type Group = 'ready' | 'dead' | 'pending';
-    const groups = [...byPredecessor.values()].map((states): Group =>
-      states.some((s) => s === 'satisfied')
-        ? 'ready'
-        : states.every(isEdgeStateDead)
-          ? 'dead'
-          : 'pending',
-    );
+    // Order-independent (`every`/`some`), so the group order can't affect the
+    // result — the reducer stays pure and replay-stable.
+    const groups = predecessorGroups(incoming, state, scope).map((g) => g.group);
 
     if (join === 'all') {
       if (groups.every((g) => g === 'ready')) return 'ready';
@@ -1669,7 +1724,11 @@ export function createEngine(doc: EngineDoc): Engine {
     const r = computeReadiness(incoming, nodeJoin(node), state, scope);
     if (r === 'skipped') {
       noteDeadBranchOnSkip(id, incoming, state, diagnostics, scope);
-      return { state: withNode(state, sid, { status: 'skipped' }), changed: true };
+      const skipReason = explainSkip(incoming, state, scope);
+      return {
+        state: withNode(state, sid, { status: 'skipped', ...(skipReason && { skipReason }) }),
+        changed: true,
+      };
     }
     if (r !== 'ready') return { state, changed: false };
     // CX1 (#1320) D2 — cancel mode starts no work: a node READY to dispatch stays
@@ -2551,13 +2610,18 @@ export function createEngine(doc: EngineDoc): Engine {
    * left to the existing orphan-settle sweep (#580) — the status flip already makes
    * a late callback/expiry fold a no-op.
    */
-  function abandonLiveChildren(state: RunState, ids: string[]): RunState {
+  function abandonLiveChildren(state: RunState, containerId: string, ids: string[]): RunState {
     let nodes = state.nodes;
     for (const id of ids) {
       const ns = nodes[id];
       if (ns === undefined || TERMINAL_NODE.has(ns.status)) continue;
       if (nodes === state.nodes) nodes = { ...nodes };
-      nodes[id] = { ...ns, status: 'skipped', currentAttemptId: undefined };
+      nodes[id] = {
+        ...ns,
+        status: 'skipped',
+        currentAttemptId: undefined,
+        skipReason: { kind: 'timeout', containerId },
+      };
     }
     return nodes === state.nodes ? state : { ...state, nodes };
   }
@@ -2804,7 +2868,12 @@ export function createEngine(doc: EngineDoc): Engine {
             }
             if (TERMINAL_NODE.has(ns.status) || isNodeInFlight(ns.status)) continue;
             if (nodes === state.nodes) nodes = { ...nodes };
-            nodes[k] = { ...ns, status: 'skipped', currentAttemptId: undefined };
+            nodes[k] = {
+              ...ns,
+              status: 'skipped',
+              currentAttemptId: undefined,
+              skipReason: { kind: 'doomed', containerId: cid, blame },
+            };
             flipped.push(k);
           }
           const next: RunState = {
@@ -2894,7 +2963,10 @@ export function createEngine(doc: EngineDoc): Engine {
       const ns = nodes[id];
       if (ns === undefined) continue;
       if (nodes === state.nodes) nodes = { ...nodes };
-      nodes[id] = { ...ns, status: 'pending', currentAttemptId: undefined, retries: 0 };
+      // The key is REMOVED, not set undefined: a reset node looks exactly as it
+      // did before #1484 gave skips a reason.
+      const { skipReason: _skipReason, ...kept } = ns;
+      nodes[id] = { ...kept, status: 'pending', currentAttemptId: undefined, retries: 0 };
       if (Object.prototype.hasOwnProperty.call(outputs, id)) {
         if (outputs === state.outputs) outputs = { ...outputs };
         delete outputs[id];
@@ -3017,7 +3089,11 @@ export function createEngine(doc: EngineDoc): Engine {
             }
           } else if (r === 'skipped') {
             noteDeadBranchOnSkip(id, topIncoming.get(id)!, state, diagnostics);
-            state = withContainer(state, id, { status: 'skipped' });
+            const skipReason = explainSkip(topIncoming.get(id)!, state);
+            state = withContainer(state, id, {
+              status: 'skipped',
+              ...(skipReason && { skipReason }),
+            });
             changed = true;
           }
           continue;
@@ -4151,7 +4227,7 @@ export function createEngine(doc: EngineDoc): Engine {
     const c = containerById.get(event.containerId);
     if (c === undefined) return { state, commands: [], diagnostics };
     diagnostics.push(`container '${c.id}' timed out (wall-clock ${c.timeout}s)`);
-    const neutralized = abandonLiveChildren(state, c.children);
+    const neutralized = abandonLiveChildren(state, c.id, c.children);
     return settle(exitContainer(neutralized, c, 'failure', 'timeout'), diagnostics);
   }
 
