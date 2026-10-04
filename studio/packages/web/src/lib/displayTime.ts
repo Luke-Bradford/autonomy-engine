@@ -237,7 +237,9 @@ const calendars = new Map<string, ZonedCalendar>();
 function calendarFor(zone: DisplayTimeZone): ZonedCalendar {
   let calendar = calendars.get(zone);
   if (calendar === undefined) {
-    calendar = zonedCalendar(intlZone(zone) ?? new Intl.DateTimeFormat().resolvedOptions().timeZone);
+    calendar = zonedCalendar(
+      intlZone(zone) ?? new Intl.DateTimeFormat().resolvedOptions().timeZone,
+    );
     calendars.set(zone, calendar);
   }
   return calendar;

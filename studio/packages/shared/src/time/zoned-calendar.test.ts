@@ -30,9 +30,9 @@ describe('zonedCalendar — #1525, the one day-start implementation', () => {
     expect(dayStart('Europe/London', 2026, 3, 30) - dayStart('Europe/London', 2026, 3, 29)).toBe(
       23 * HOUR,
     );
-    expect(
-      dayStart('Europe/London', 2026, 10, 26) - dayStart('Europe/London', 2026, 10, 25),
-    ).toBe(25 * HOUR);
+    expect(dayStart('Europe/London', 2026, 10, 26) - dayStart('Europe/London', 2026, 10, 25)).toBe(
+      25 * HOUR,
+    );
   });
 
   it('a skipped midnight: the day begins at the first instant it has (Santiago springs forward AT 00:00)', () => {
