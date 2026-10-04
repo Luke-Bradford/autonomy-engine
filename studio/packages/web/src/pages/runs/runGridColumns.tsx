@@ -33,12 +33,14 @@ export interface CellContext {
  * #1484 OR35 M1 — one column of the runs grid. Keyed by the store's
  * `RunGridColumnId` (`RUN_GRID_COLUMNS` owns the order), so a column added
  * there without a definition here fails the typecheck. `sort` names the
- * server's sort key where the column has one; `numeric` right-aligns it.
+ * server's sort key where the column has one; `numeric` right-aligns it;
+ * `zoned` names the display zone in the header, for a time without one.
  */
 interface RunGridColumn {
   label: string;
   sort?: RunSortKey;
   numeric?: boolean;
+  zoned?: boolean;
   cell: (run: RunSummary, ctx: CellContext) => ReactNode;
 }
 
@@ -120,9 +122,10 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
     sort: 'started',
     /* #1484 — compact (`10-04 13:05:07`) to fit the 124px column; the full
        form, the zone and the relative time are the hover title. */
-    cell: (r) => (
+    zoned: true,
+    cell: (r, { zone }) => (
       <td>
-        <When ms={r.startedAt} compact />
+        <When ms={r.startedAt} compact zone={zone} />
       </td>
     ),
   },

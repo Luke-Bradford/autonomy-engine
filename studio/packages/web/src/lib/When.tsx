@@ -5,6 +5,8 @@ import {
   formatRelative,
   formatTimestamp,
   INVALID_TIME,
+  isInstant,
+  type DisplayTimeZone,
   type TimestampPrecision,
 } from './displayTime';
 import { useDisplayTimeZone } from './useDisplayTimeZone';
@@ -18,6 +20,8 @@ interface WhenProps {
   compact?: boolean;
   /** Injectable for tests; the app uses the singleton. */
   store?: UiStore;
+  /** The zone, when the caller already holds it from an injected store. */
+  zone?: DisplayTimeZone;
 }
 
 /**
@@ -27,17 +31,18 @@ interface WhenProps {
  * A `<time>` element, so the machine-readable instant (`dateTime`, ISO UTC) is
  * in the DOM whatever zone is displayed. The hover title holds the full form at
  * millisecond precision plus the relative time. "Now" for that is taken at
- * mount and again whenever the pointer or focus arrives — the moment the title
- * is about to be read — so it is fresh when shown and costs no timer per cell
- * (and render stays pure).
+ * mount and again whenever the pointer arrives — the moment the title is about
+ * to be read — so it is fresh when shown and costs no timer per cell (and
+ * render stays pure).
  */
-export function When({ ms, precision = 'second', compact = false, store }: WhenProps) {
-  const zone = useDisplayTimeZone(store);
+export function When({ ms, precision = 'second', compact = false, store, zone: given }: WhenProps) {
+  const stored = useDisplayTimeZone(store);
+  const zone = given ?? stored;
   const [now, setNow] = useState(Date.now);
   if (ms === null) return <>—</>;
   // Not an instant (a corrupt or missing field): say so, without a `<time>`
   // whose `dateTime` would throw.
-  if (!Number.isFinite(ms)) return <>{INVALID_TIME}</>;
+  if (!isInstant(ms)) return <>{INVALID_TIME}</>;
   const refresh = () => setNow(Date.now());
   const text = compact
     ? formatCompactTimestamp(ms, zone, now)
@@ -47,7 +52,6 @@ export function When({ ms, precision = 'second', compact = false, store }: WhenP
       dateTime={new Date(ms).toISOString()}
       title={`${formatTimestamp(ms, zone, 'ms')} · ${formatRelative(ms, now)}`}
       onPointerEnter={refresh}
-      onFocus={refresh}
     >
       {text}
     </time>

@@ -3,13 +3,14 @@ import { Link } from 'react-router';
 import { ToggleButton } from '@fluentui/react-components';
 import type { RunSummary } from '@autonomy-studio/shared';
 import { placeSpans } from './attemptSpans';
-import { formatClock, formatElapsed } from './format';
+import { formatElapsed } from './format';
 import { groupRuns, type RunBar, type RunGroupBy } from './runBars';
 import { runStatusLabel, runStatusTone } from './runStatus';
 import { runDetailPath } from './runPath';
 import { versionLabel } from '../../lib/versionLabel';
 import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import type { DisplayTimeZone } from '../../lib/displayTime';
+import { formatTimeOfDay, formatTimestamp } from '../../lib/displayTime';
 
 /**
  * U29 (#1015) — the runs list on ONE shared time axis, grouped by pipeline or,
@@ -95,7 +96,7 @@ const LANE_SENTENCE: Record<RunGroupBy, string> = {
 
 /** What a bar states about itself, in one phrase, for the title and SR text. */
 function barSentence(bar: RunBar, durationMs: number | null, zone: DisplayTimeZone): string {
-  const started = `started ${formatClock(bar.startedAtMs, zone)}`;
+  const started = `started ${formatTimeOfDay(bar.startedAtMs, zone)}`;
   const length = durationMs === null ? 'no finish on record' : formatElapsed(durationMs);
   return `${runStatusLabel(bar.run.status)} · ${started} · ${length}`;
 }
@@ -132,7 +133,7 @@ export function RunTimeline({
       <h3 id="run-timeline-heading">Timeline</h3>
       <GroupByToggle groupBy={groupBy} onGroupByChange={onGroupByChange} />
       <p className="timeline-axis-note">
-        {formatClock(window.from, zone)} → {formatClock(window.to, zone)} ·{' '}
+        {formatTimestamp(window.from, zone)} → {formatTimestamp(window.to, zone)} ·{' '}
         {formatElapsed(Math.max(0, window.to - window.from))} of measured wall clock, as of the last
         refresh. {LANE_SENTENCE[groupBy]}. All lanes are on the same axis, so two bars that overlap
         horizontally were running at the same time. A very wide axis floors short bars at a few
@@ -165,7 +166,7 @@ export function RunTimeline({
                             other lane mixes pipelines, so the row must say which. */}
                         {group.lane.kind === 'pipeline' ? '' : `${bar.run.pipelineName} `}
                         {versionLabel(bar.run.pipelineVersion, bar.run.debug)} ·{' '}
-                        {formatClock(bar.startedAtMs, zone)}
+                        {formatTimeOfDay(bar.startedAtMs, zone)}
                       </Link>
                     </span>
                     <span className="timeline-track">

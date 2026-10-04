@@ -2,7 +2,7 @@ import { useTickingNow } from '../../hooks/useTickingNow';
 import { formatLiveElapsed, formatNodeDuration, liveSpanStart } from './format';
 import type { NodeActivity } from './runSummary';
 
-/** Once a second: `formatElapsed` shows seconds below an hour, so a slower
+/** Once a second: `formatLiveElapsed` shows whole seconds below an hour, so a slower
  * tick would visibly skip, and a faster one would change nothing it prints. */
 const TICK_MS = 1_000;
 

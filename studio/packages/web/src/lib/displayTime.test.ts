@@ -8,6 +8,7 @@ import {
   formatTimestamp,
   parseDisplayTimeZone,
   shiftDay,
+  zoneLabel,
   zonedDayStart,
 } from './displayTime';
 
@@ -27,6 +28,8 @@ describe('displayTime — #1484 principle 4', () => {
     expect(formatTimestamp(Number.NaN, 'UTC')).toBe('invalid time');
     expect(formatTimeOfDay(Number.NaN, 'UTC')).toBe('invalid time');
     expect(formatCompactTimestamp(Number.NaN, 'UTC', AT)).toBe('invalid time');
+    // Finite, but past what a Date can hold.
+    expect(formatTimestamp(1e16, 'UTC')).toBe('invalid time');
   });
 
   it('formats a time of day alone, for a feed whose day is known', () => {
@@ -95,9 +98,37 @@ describe('displayTime — #1484 principle 4', () => {
     expect(dayOf(start - 1, 'America/Santiago')).toBe('2026-09-05');
   });
 
+  it('starts a day with two midnights at the first', () => {
+    // Amman fell back from 01:00 to 00:00 on 2021-10-29: 00:00–01:00 happened twice.
+    const start = zonedDayStart('2021-10-29', 'Asia/Amman')!;
+    expect(dayOf(start - 1, 'Asia/Amman')).toBe('2021-10-28');
+    expect(zonedDayStart('2021-10-30', 'Asia/Amman')! - start).toBe(25 * 3_600_000);
+  });
+
+  it('gives a day the zone skipped an empty range', () => {
+    // Samoa moved across the date line and had no 2011-12-30.
+    expect(zonedDayStart('2011-12-30', 'Pacific/Apia')).toBe(
+      zonedDayStart('2011-12-31', 'Pacific/Apia'),
+    );
+  });
+
+  it('handles a year below 1000 in a named zone, as a date input passes through one', () => {
+    expect(zonedDayStart('0999-06-15', 'UTC')).toBe(new Date('0999-06-15T00:00:00Z').getTime());
+    expect(zonedDayStart('0002-06-15', 'UTC')).toBe(new Date('0002-06-15T00:00:00Z').getTime());
+    expect(formatTimestamp(new Date('0999-06-15T00:00:00Z').getTime(), 'UTC')).toBe(
+      '0999-06-15 00:00:00 UTC',
+    );
+  });
+
   it('refuses a day that is not on the calendar', () => {
     expect(zonedDayStart('2026-02-30', 'UTC')).toBeNull();
     expect(zonedDayStart('not a day', 'UTC')).toBeNull();
+  });
+
+  it('names the zone at an instant, as the offset or name in force then', () => {
+    expect(zoneLabel(AT, 'UTC')).toBe('UTC');
+    expect(zoneLabel(AT, 'Europe/London')).toBe('GMT+1');
+    expect(zoneLabel(Date.UTC(2026, 0, 1), 'Europe/London')).toBe('GMT');
   });
 
   it('names the calendar day an instant falls on in the zone', () => {

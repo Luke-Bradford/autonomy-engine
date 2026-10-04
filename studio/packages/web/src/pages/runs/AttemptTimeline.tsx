@@ -1,9 +1,10 @@
 import type { RunStatus } from '@autonomy-studio/shared';
 import type { NodeActivity, AttemptSpan } from './runSummary';
 import { nodeStatusLabel, nodeStatusTone, type StatusTone } from './nodeStatus';
-import { formatClock, formatElapsed } from './format';
+import { formatElapsed } from './format';
 import { placeSpans, timelineWindow, untimedReason } from './attemptSpans';
 import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
+import { formatTimeOfDay, formatTimestamp } from '../../lib/displayTime';
 
 /**
  * U12a (#1007) — the run's spans drawn against one shared time axis, so an
@@ -109,7 +110,7 @@ export function AttemptTimeline({
     <section aria-labelledby="timeline-heading" className="attempt-timeline">
       <h3 id="timeline-heading">Timeline</h3>
       <p className="timeline-axis-note">
-        {formatClock(window.from, zone)} → {formatClock(window.to, zone)} ·{' '}
+        {formatTimestamp(window.from, zone, 'ms')} → {formatTimeOfDay(window.to, zone, 'ms')} ·{' '}
         {formatElapsed(Math.max(0, window.to - window.from))} of measured wall clock. A node that
         ran more than once has one bar per run, and the gap between two bars is time the node was
         not running — a retry hold, or simply waiting its turn.
@@ -147,7 +148,7 @@ export function AttemptTimeline({
                          to jsdom and quietly voided the test asserting it. */
                       ...(placed.width === null ? { right: '0' } : { width: `${placed.width}%` }),
                     }}
-                    title={`${name ?? node.nodeId} · ${spanLabel(placed.span, runStatus)} · started ${formatClock(
+                    title={`${name ?? node.nodeId} · ${spanLabel(placed.span, runStatus)} · started ${formatTimeOfDay(
                       placed.span.startedAtMs,
                       zone,
                       'ms',

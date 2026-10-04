@@ -1140,6 +1140,30 @@ describe('RunsPage — U26 filter pane', () => {
         expect.anything(),
       );
     });
+
+    it('bounds the day in the viewer’s display zone, and asks again when it changes', async () => {
+      const data = new Map<string, string>();
+      const ui = createUiStore({
+        getItem: (key) => data.get(key) ?? null,
+        setItem: (key, value) => void data.set(key, value),
+      });
+      ui.getState().setDisplayTimeZone('America/New_York');
+      renderWithRouter(<RunsPage store={storeWith()} ui={ui} />, '/monitor/runs?on=2026-10-04');
+      await screen.findByText(/No runs match these filters/i);
+      expect(listMock).toHaveBeenLastCalledWith(
+        { from: String(Date.UTC(2026, 9, 4, 4)), to: String(Date.UTC(2026, 9, 5, 4)) },
+        undefined,
+        expect.anything(),
+      );
+      act(() => ui.getState().setDisplayTimeZone('UTC'));
+      await vi.waitFor(() =>
+        expect(listMock).toHaveBeenLastCalledWith(
+          { from: String(Date.UTC(2026, 9, 4)), to: String(Date.UTC(2026, 9, 5)) },
+          undefined,
+          expect.anything(),
+        ),
+      );
+    });
   });
 
   it('does not offer Clear when nothing is filtered', async () => {

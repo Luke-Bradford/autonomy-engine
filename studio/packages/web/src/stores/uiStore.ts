@@ -730,7 +730,11 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       historyOpen,
       setHistoryOpen,
       displayTimeZone,
-      setDisplayTimeZone,
+      /* Validated on the way IN as well as out: a zone the runtime cannot
+         format in would make every timestamp on every page throw. */
+      setDisplayTimeZone: (zone) => {
+        if (parseDisplayTimeZone(zone) !== undefined) setDisplayTimeZone(zone);
+      },
 
       runsGridHidden: readStored(
         storage,

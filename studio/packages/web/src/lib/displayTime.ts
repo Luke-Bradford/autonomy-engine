@@ -18,7 +18,8 @@ import { isValidTimeZone } from '@autonomy-studio/shared';
  * unambiguous (`UTC`, `EDT`) — measured on Node 25, not assumed.
  *
  * Pure: every function takes the zone, and `now` where it needs one, as an
- * argument. The store and the React side live in `When.tsx`.
+ * argument. The preference lives in `uiStore`, the hook in
+ * `useDisplayTimeZone.ts`, and the component in `When.tsx`.
  */
 
 /** `local`, or an IANA zone name such as `UTC` or `Europe/London`. */
@@ -68,10 +69,11 @@ interface ZonedParts {
   zoneName: string;
 }
 
-/* Formatters are costly to build and a grid renders hundreds of cells, so one
-   per NAMED zone is kept, bounded by the zones a viewer ever picks. `local` is
-   not cached: a formatter fixes the runtime's zone when it is built, and the
-   machine's zone can change under a long-lived tab. */
+/* Formatters are costly to build (~25µs, against ~5µs to use one) and a grid
+   renders hundreds of cells, so one per zone is kept, bounded by the zones a
+   viewer ever picks. A cached `local` formatter keeps the machine zone it was
+   built in; a machine that changes zone under an open tab shows the old one
+   until a reload, which is the trade for a grid that renders fast. */
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
 function formatterFor(zone: DisplayTimeZone): Intl.DateTimeFormat {
@@ -89,9 +91,18 @@ function formatterFor(zone: DisplayTimeZone): Intl.DateTimeFormat {
       hourCycle: 'h23',
       timeZoneName: 'short',
     });
-    if (zone !== LOCAL_TIME_ZONE) formatters.set(zone, formatter);
+    formatters.set(zone, formatter);
   }
   return formatter;
+}
+
+/** The `Date` range: a finite number outside it is still not an instant, and
+ * `formatToParts` throws on it. */
+const MAX_INSTANT_MS = 8.64e15;
+
+/** Whether `ms` is an instant a `Date` can hold. */
+export function isInstant(ms: number): boolean {
+  return Number.isFinite(ms) && Math.abs(ms) <= MAX_INSTANT_MS;
 }
 
 /** What a timestamp that is not an instant renders as — the old
@@ -103,7 +114,8 @@ function zonedParts(ms: number, zone: DisplayTimeZone): ZonedParts {
   const parts: Partial<Record<Intl.DateTimeFormatPartTypes, string>> = {};
   for (const part of formatterFor(zone).formatToParts(ms)) parts[part.type] = part.value;
   return {
-    year: parts.year ?? '',
+    // `year: 'numeric'` does not pad: year 999 must still read `0999`.
+    year: (parts.year ?? '').padStart(4, '0'),
     month: parts.month ?? '',
     day: parts.day ?? '',
     hour: parts.hour ?? '',
@@ -117,13 +129,19 @@ function zonedParts(ms: number, zone: DisplayTimeZone): ZonedParts {
 /** How much of the clock a timestamp shows: detail views show milliseconds. */
 export type TimestampPrecision = 'second' | 'ms';
 
+/** The zone's short name at an instant — `UTC`, `GMT+1`, `EDT` — for a
+ * surface that shows only clock times and names the zone once. */
+export function zoneLabel(ms: number, zone: DisplayTimeZone): string {
+  return isInstant(ms) ? zonedParts(ms, zone).zoneName : '';
+}
+
 /** `2026-10-04 13:05:07 GMT+1`, or with `.123` at `ms` precision. */
 export function formatTimestamp(
   ms: number,
   zone: DisplayTimeZone,
   precision: TimestampPrecision = 'second',
 ): string {
-  if (!Number.isFinite(ms)) return INVALID_TIME;
+  if (!isInstant(ms)) return INVALID_TIME;
   const p = zonedParts(ms, zone);
   const fraction = precision === 'ms' ? `.${p.fraction}` : '';
   return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}${fraction} ${p.zoneName}`;
@@ -135,7 +153,7 @@ export function formatTimeOfDay(
   zone: DisplayTimeZone,
   precision: TimestampPrecision = 'second',
 ): string {
-  if (!Number.isFinite(ms)) return INVALID_TIME;
+  if (!isInstant(ms)) return INVALID_TIME;
   const p = zonedParts(ms, zone);
   return `${p.hour}:${p.minute}:${p.second}${precision === 'ms' ? `.${p.fraction}` : ''}`;
 }
@@ -147,7 +165,7 @@ export function formatTimeOfDay(
  * text drops nothing that is not one hover away.
  */
 export function formatCompactTimestamp(ms: number, zone: DisplayTimeZone, now: number): string {
-  if (!Number.isFinite(ms)) return INVALID_TIME;
+  if (!isInstant(ms)) return INVALID_TIME;
   const p = zonedParts(ms, zone);
   if (p.year === zonedParts(now, zone).year) {
     return `${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
@@ -192,7 +210,7 @@ const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
  * again at the corrected instant — the second pass is what lands a day whose
  * offset changes overnight. Where midnight does not exist (a zone that springs
  * forward AT midnight), the day begins at the first instant it has, which is
- * what "on that day" means.
+ * what "on that day" means; where it happens twice, at the first.
  *
  * The scheduler answers the same question server-side with a bisection
  * (`scheduler/recurrence.ts`, `localDayStartInstant`); web cannot import the
@@ -211,13 +229,25 @@ export function zonedDayStart(day: string, zone: DisplayTimeZone): number | null
     local.setFullYear(year, month - 1, date);
     return local.getTime();
   }
-  let guess = utcMidnight - offsetAt(utcMidnight, zone);
-  guess = utcMidnight - offsetAt(guess, zone);
-  // A midnight skipped by a spring-forward lands on the previous day's 23:00;
-  // step to the first instant that is on the asked-for day.
-  if (dayOf(guess, zone) !== day) guess += 3_600_000;
-  return guess;
+  let start = utcMidnight - offsetAt(utcMidnight, zone);
+  start = utcMidnight - offsetAt(start, zone);
+  /* The guess is the day's midnight wherever midnight happens once. Where it
+     does not, walk on the 15-minute grid every zone offset sits on:
+     - a midnight skipped by a spring-forward lands on the day before, so step
+       FORWARD to the day's first instant (and past a day the zone skipped
+       entirely, as Samoa skipped 2011-12-30, to the next day's — an empty
+       range, which is the truth);
+     - a fall-back from 01:00 to 00:00 lands on the SECOND midnight, so step
+       BACK while the instant before is still on the day.
+     Day strings are zero-padded `YYYY-MM-DD`, so they compare in calendar
+     order. Each walk is bounded by a day's worth of steps. */
+  for (let i = 0; i < STEPS_PER_DAY && dayOf(start, zone) < day; i++) start += STEP_MS;
+  for (let i = 0; i < STEPS_PER_DAY && dayOf(start - STEP_MS, zone) === day; i++) start -= STEP_MS;
+  return start;
 }
+
+const STEP_MS = 15 * 60_000;
+const STEPS_PER_DAY = 26 * 4;
 
 /** A calendar day's UTC midnight, or `null` when it is not on the calendar —
  * `2026-02-30` is refused rather than rolled into March. `setUTCFullYear`
@@ -253,14 +283,9 @@ export function shiftDay(day: string, days: number): string {
 /** The zone's offset from UTC at an instant, in ms (`+3_600_000` for GMT+1). */
 function offsetAt(ms: number, zone: DisplayTimeZone): number {
   const p = zonedParts(ms, zone);
-  const asUtc = Date.UTC(
-    Number(p.year),
-    Number(p.month) - 1,
-    Number(p.day),
-    Number(p.hour),
-    Number(p.minute),
-    Number(p.second),
-    Number(p.fraction),
-  );
-  return asUtc - ms;
+  // `setUTCFullYear`, not `Date.UTC`, which reads a year below 100 as 19xx.
+  const asUtc = new Date(0);
+  asUtc.setUTCFullYear(Number(p.year), Number(p.month) - 1, Number(p.day));
+  asUtc.setUTCHours(Number(p.hour), Number(p.minute), Number(p.second), Number(p.fraction));
+  return asUtc.getTime() - ms;
 }

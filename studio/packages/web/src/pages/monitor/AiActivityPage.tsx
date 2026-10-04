@@ -9,7 +9,7 @@ import { fetchAccountQuotaDisplay, fetchAiActivity } from '../../api/monitor';
 import { usePolledResource } from '../../hooks/usePolledResource';
 import { costFigure, costHeadline, tokenSummary } from '../runs/costReading';
 import { RUN_SINCE_LABEL, RUN_SINCE_OPTIONS, isRunSince } from '../runs/runFilters';
-import { formatElapsed } from '../runs/format';
+import { formatAge } from '../runs/format';
 import { TokenFlowChart } from './TokenFlowChart';
 import { reportedActivitySummary, reportedTokenSummary } from './reportedActivity';
 import {
@@ -122,10 +122,7 @@ function QuotaWindowTable({ windows, now }: { windows: QuotaWindowReading[]; now
                   a number would silently restore it against 1970. */}
               <When ms={w.resetsAtMs} />
               {w.resetsAtMs !== null && w.resetsAtMs > now && (
-                <span className="quota-reset-relative">
-                  {' '}
-                  (in {formatElapsed(w.resetsAtMs - now)})
-                </span>
+                <span className="quota-reset-relative"> (in {formatAge(w.resetsAtMs - now)})</span>
               )}
             </td>
           </tr>
@@ -167,8 +164,8 @@ function ProviderQuota({ entry, now }: { entry: ProviderQuotaReading; now: numbe
           {reading.lastKnown !== undefined && (
             <div className="quota-last-known">
               <p className="page-hint">
-                <strong>Last known reading</strong>, taken {formatElapsed(reading.lastKnown.ageMs)}{' '}
-                ago — not a current figure.
+                <strong>Last known reading</strong>, taken {formatAge(reading.lastKnown.ageMs)} ago
+                — not a current figure.
                 {reading.lastKnown.ageMs > QUOTA_STALE_AFTER_MS && (
                   <>
                     {' '}
@@ -191,7 +188,7 @@ function ProviderQuota({ entry, now }: { entry: ProviderQuotaReading; now: numbe
               current. A polled provider carries no `ageMs` and says nothing. */}
           {reading.ageMs !== undefined && (
             <p className="page-hint quota-scraped-age">
-              Read from {label}&apos;s own session records {formatElapsed(reading.ageMs)} ago — it
+              Read from {label}&apos;s own session records {formatAge(reading.ageMs)} ago — it
               reports usage only when it runs, so this is as current as its last run.
             </p>
           )}

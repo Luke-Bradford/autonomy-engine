@@ -369,6 +369,15 @@ describe('uiStore display time zone (#1484)', () => {
     expect(createUiStore(storage).getState().displayTimeZone).toBe('Europe/London');
   });
 
+  it('refuses to store a zone this runtime cannot format in', () => {
+    const storage = fakeStorage();
+    const store = createUiStore(storage);
+    store.getState().setDisplayTimeZone('UTC');
+    store.getState().setDisplayTimeZone('Mars/Olympus_Mons');
+    expect(store.getState().displayTimeZone).toBe('UTC');
+    expect(storage.data.get(DISPLAY_TIME_ZONE_STORAGE_KEY)).toBe('UTC');
+  });
+
   it('reads a zone this runtime cannot format in as local, never as itself', () => {
     expect(
       createUiStore(

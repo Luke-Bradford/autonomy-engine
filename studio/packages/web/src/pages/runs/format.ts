@@ -4,12 +4,7 @@ import {
   surrogateSafeCut,
 } from '@autonomy-studio/shared';
 import type { Run, RunEvent } from '@autonomy-studio/shared';
-import {
-  formatTimeOfDay,
-  formatTimestamp,
-  type DisplayTimeZone,
-  type TimestampPrecision,
-} from '../../lib/displayTime';
+import { formatTimestamp, type DisplayTimeZone } from '../../lib/displayTime';
 import type { NodeActivity } from './runSummary';
 
 /**
@@ -37,12 +32,12 @@ export function formatCount(n: number): string {
  * column of durations compares by eye.
  */
 export function formatElapsed(ms: number): string {
+  if (!Number.isFinite(ms)) return '—';
   const whole = Math.round(ms);
   if (whole < 60_000) return `${(whole / 1_000).toFixed(3).replace(/\.?0+$/, '')}s`;
   const totalSeconds = Math.floor(whole / 1_000);
   const seconds = totalSeconds % 60;
   const totalMinutes = Math.floor(totalSeconds / 60);
-  if (totalMinutes === 0) return `${seconds}s`;
   const minutes = totalMinutes % 60;
   const hours = Math.floor(totalMinutes / 60);
   if (hours === 0) return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
@@ -73,7 +68,7 @@ export function formatRunDuration(
   if (run.finishedAt !== null) {
     return formatElapsed(Math.max(0, run.finishedAt - run.startedAt));
   }
-  return `${formatAge(now - run.startedAt)} so far`;
+  return formatLiveElapsed(run.startedAt, now);
 }
 
 /**
@@ -195,15 +190,6 @@ export function formatLiveElapsed(startedAtMs: number, now: number): string {
  */
 export function formatAge(ms: number): string {
   return formatElapsed(Math.floor(Math.max(0, ms) / 1_000) * 1_000);
-}
-
-/** Epoch-ms → a time of day in the display zone, for a feed or axis on one run. */
-export function formatClock(
-  ms: number,
-  zone: DisplayTimeZone,
-  precision: TimestampPrecision = 'second',
-): string {
-  return formatTimeOfDay(ms, zone, precision);
 }
 
 /**

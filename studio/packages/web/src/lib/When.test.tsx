@@ -33,6 +33,20 @@ describe('When — #1484 principle 4', () => {
     expect(container.textContent).toBe('2026-10-04 08:05:07 EDT');
   });
 
+  it('is compact for the grid, and takes a zone its caller already holds', () => {
+    const store = createUiStore(memoryStorage());
+    const { container } = render(<When ms={AT} compact zone="UTC" store={store} />);
+    // Compact against a `now` in 2026 or later: month-day, or the year when it differs.
+    expect(container.textContent).toMatch(/^(10-04 12:05:07|2026-10-04 12:05)$/);
+    expect(container.querySelector('time')!.getAttribute('title')).toMatch(/ UTC · /);
+  });
+
+  it('says a timestamp that is not an instant is invalid, and renders no <time>', () => {
+    const { container } = render(<When ms={1e16} store={createUiStore(memoryStorage())} />);
+    expect(container.textContent).toBe('invalid time');
+    expect(container.querySelector('time')).toBeNull();
+  });
+
   it('renders an em-dash for a time that has not happened', () => {
     const { container } = render(<When ms={null} store={createUiStore(memoryStorage())} />);
     expect(container.textContent).toBe('—');

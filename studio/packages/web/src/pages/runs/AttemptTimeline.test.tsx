@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { AttemptTimeline } from './AttemptTimeline';
 import { placeSpans, timelineWindow, untimedReason } from './attemptSpans';
-import { formatClock } from './format';
 import { emptyNodeCost, type AttemptSpan, type NodeActivity } from './runSummary';
+import { formatTimeOfDay } from '../../lib/displayTime';
 
 const span = (over: Partial<AttemptSpan> & { startedAtMs: number }): AttemptSpan => ({
   endedAtMs: undefined,
@@ -338,7 +338,7 @@ describe('<AttemptTimeline>', () => {
     const titles = [...container.querySelectorAll('.timeline-row .timeline-span')].map((b) =>
       b.getAttribute('title'),
     );
-    const at0 = formatClock(0, 'local', 'ms');
+    const at0 = formatTimeOfDay(0, 'local', 'ms');
 
     expect(titles[0]).toBe(`A · running · started ${at0} · no end on record`);
     expect(titles[1]).toBe(`B · waiting (timer) · started ${at0} · no end on record`);

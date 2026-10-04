@@ -3,6 +3,7 @@ import type { RunEvent } from '@autonomy-studio/shared';
 import {
   eventGloss,
   failureClass,
+  formatElapsed,
   formatLiveElapsed,
   formatNodeDuration,
   formatOutputValue,
@@ -188,12 +189,13 @@ describe('formatRunDuration', () => {
     expect(span(10_500)).toBe('10.5s');
     expect(span(59_999)).toBe('59.999s');
     expect(span(60_000)).toBe('1m 00s');
+    expect(formatElapsed(Number.NaN)).toBe('—');
     expect(span(3 * 60_000 + 7_000)).toBe('3m 07s');
     expect(span(60 * 60_000 + 4 * 60_000)).toBe('1h 04m');
   });
 
   it('never renders a negative duration from a clock that ran backwards', () => {
-    expect(formatRunDuration(run({ status: 'running', finishedAt: null }), 0)).toBe('0s so far');
+    expect(formatRunDuration(run({ status: 'running', finishedAt: null }), 0)).toBe('<1s so far');
     expect(formatRunDuration(run({ startedAt: 8_000, finishedAt: 1_000 }), 0)).toBe('0s');
   });
 
