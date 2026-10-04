@@ -57,7 +57,8 @@ import type { LoggedEngineEvent } from './events.js';
  *    item's state, the result EVENT is the only record left, and it decides
  *    (`resultOf`).
  * 4. An attempt the engine abandoned with no event of its own (a loop's timeout,
- *    a doomed ForEach) is settled `skipped` when its node turns `skipped`.
+ *    a doomed ForEach) is settled `skipped` when its node turns `skipped`, or
+ *    when the reduce that skipped it also deleted its item (#1548).
  * 5. Anything else stays at the last status it had. On a cancelled run the page
  *    names that with the run's status.
  *
@@ -414,25 +415,35 @@ export function projectActivityRuns(
       // A skip this reduce also reset or deleted: when an item ends, a body node
       // with no row in it was skipped, for the reason the reset cleared.
       const cleared = reduced.resetSkips;
+      const reasonOf = (nodeId: string) =>
+        cleared !== undefined && Object.hasOwn(cleared, nodeId) ? cleared[nodeId]! : null;
       const ended: string[] = [];
-      for (const c of iterating) {
-        const was = before.containers[c.id];
-        const now = state.containers[c.id];
-        if (was !== undefined && now !== undefined && now.round > was.round)
-          ended.push(...c.children);
+      // A rerun's reseed COPIES its containers' rounds: none ended here (#1549).
+      if (e.type !== 'run.reseeded') {
+        for (const c of iterating) {
+          const was = before.containers[c.id];
+          const now = state.containers[c.id];
+          if (was !== undefined && now !== undefined && now.round > was.round)
+            ended.push(...c.children);
+        }
       }
-      for (const nodeId of Object.keys(before.nodes)) {
-        if (state.nodes[nodeId] === undefined && parseInstanceKey(nodeId) !== null)
-          ended.push(nodeId);
+      for (const [nodeId, was] of Object.entries(before.nodes)) {
+        if (state.nodes[nodeId] !== undefined || parseInstanceKey(nodeId) === null) continue;
+        ended.push(nodeId);
+        // Rule 4 for a deleted instance: an attempt still in flight when the
+        // reduce deleted its item (a doom that skipped it, then ended the item)
+        // is that row (#1548).
+        const abandoned =
+          was.currentAttemptId === undefined ? undefined : byAttempt.get(was.currentAttemptId);
+        if (abandoned !== undefined && open.has(abandoned)) {
+          settle(abandoned, 'skipped', ts);
+          abandoned.skipReason = reasonOf(nodeId);
+        }
       }
       for (const nodeId of ended) {
         const iteration = iterationOf(nodeId, before);
         if (iteration !== null && !inItem.has(itemKey(nodeId, iteration)))
-          addSkip(
-            nodeId,
-            iteration,
-            cleared !== undefined && Object.hasOwn(cleared, nodeId) ? cleared[nodeId]! : null,
-          );
+          addSkip(nodeId, iteration, reasonOf(nodeId));
       }
     }
 

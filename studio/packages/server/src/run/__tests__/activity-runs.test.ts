@@ -660,11 +660,20 @@ describe('#1484 activity runs — containers are groups', () => {
     );
     const runId = await drive(db, pvId, stub({ 'x@0': { outcome: 'failure', delayMs: 30 } }));
 
-    const y1 = project(db, pvId, runId).find((r) => r.nodeId === 'y@1');
-    expect(y1).toMatchObject({
+    const doomed = { kind: 'doomed', containerId: 'fe', blame: 'x@0' };
+    const rows = project(db, pvId, runId);
+    expect(rows.find((r) => r.nodeId === 'y@1')).toMatchObject({
       status: 'skipped',
-      skipReason: { kind: 'doomed', containerId: 'fe', blame: 'x@0' },
+      skipReason: doomed,
     });
+    // #1548 — the Wait the doom abandoned is that row, settled, not left waiting
+    // on a finished run, and the item it was in has ended.
+    const hold = rows.filter((r) => r.nodeId === 'hold@1');
+    expect(hold).toHaveLength(1);
+    expect(hold[0]).toMatchObject({ status: 'skipped', skipReason: doomed });
+    expect(hold[0]!.finishedAt).not.toBeNull();
+    const [g] = groupsOf(db, pvId, runId);
+    expect(g!.iterations.find((i) => i.index === 1)?.finishedAt).not.toBeNull();
   });
 
   it('keeps an item that completed a success when another item failed the ForEach', async () => {
@@ -867,6 +876,39 @@ describe('#1484 activity runs — containers are groups', () => {
         position: 0,
       }),
     ]);
+  });
+
+  it('adds no skipped rows for a loop a rerun copied past its first round (#1549)', () => {
+    const doc = {
+      nodes: [node('a'), node('b')],
+      edges: [edge('lp', 'b')],
+      containers: [
+        { id: 'lp', kind: 'loop', children: ['a'], exitWhen: '${equals(1, 2)}', maxRounds: 5 },
+      ],
+      variables: [],
+    } as never as Parameters<typeof buildEngine>[0];
+    const at = (ts: number, event: EngineEvent) => ({ ts, event, payload: event });
+    const log = [
+      at(1, {
+        type: 'run.started',
+        runId: 'R2',
+        pipelineVersionId: 'pv',
+        params: {},
+        rerunOf: 'R1',
+      }),
+      at(2, {
+        type: 'run.reseeded',
+        runId: 'R2',
+        sourceRunId: 'R1',
+        frontier: ['a'],
+        copiedOutputs: { a: {} },
+        copiedContainers: { lp: { status: 'success', round: 2, outputs: {} } },
+      }),
+    ];
+
+    const { rows } = projectActivityRuns(doc, buildEngine(doc), log);
+    expect(rows.filter((r) => r.status === 'skipped')).toEqual([]);
+    expect(rows[0]).toMatchObject({ key: 'reused:a', reused: true });
   });
 
   it('places a group a rerun started after the rows it carried', () => {
