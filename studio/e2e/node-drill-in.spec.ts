@@ -79,7 +79,7 @@ test('U24 — a failed node names its failure CLASS, and opens a drill-in', asyn
   // No drill-in until one is asked for.
   await expect(page.getByRole('complementary', { name: 'Node Fail 1' })).toHaveCount(0);
 
-  await page.getByRole('button', { name: 'Fail 1', exact: true }).click();
+  await nodeTable.getByRole('button', { name: 'Fail 1', exact: true }).click();
   const panel = page.getByRole('complementary', { name: 'Node Fail 1' });
   await expect(panel).toBeVisible();
 
@@ -111,7 +111,7 @@ test('U24 — a failed node names its failure CLASS, and opens a drill-in', asyn
   expect(seen!.buttons).toEqual(['Close']);
 
   // Opening a DIFFERENT node swaps the panel rather than stacking one.
-  await page.getByRole('button', { name: 'Fail 2', exact: true }).click();
+  await nodeTable.getByRole('button', { name: 'Fail 2', exact: true }).click();
   await expect(page.getByRole('complementary', { name: 'Node Fail 2' })).toBeVisible();
   await expect(page.getByRole('complementary', { name: 'Node Fail 1' })).toHaveCount(0);
 
@@ -178,7 +178,13 @@ test('#869 — an oversized output is capped in the DOM, and the rest is one cli
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
 
-  await page.getByRole('button', { name: 'Filter 1', exact: true }).click();
+  /* The Nodes table's drill-in; the activity runs above name the same button
+     and open the run drawer instead (#1484 M2). */
+  await page
+    .locator('table')
+    .filter({ has: page.getByRole('columnheader', { name: 'Node', exact: true }) })
+    .getByRole('button', { name: 'Filter 1', exact: true })
+    .click();
   const panel = page.getByRole('complementary', { name: 'Node Filter 1' });
   await expect(panel).toBeVisible();
 

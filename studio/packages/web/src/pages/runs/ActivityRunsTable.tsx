@@ -226,7 +226,7 @@ export function ActivityRunsTable({
   /** The row the detail drawer shows, if it is open. */
   openKey?: string | null;
   /** Opens the detail drawer on a row; the activity's name is the button. */
-  onOpen?: (key: string) => void;
+  onOpen?: (key: string, opener: HTMLElement) => void;
 }) {
   const selectedRow = useRef<HTMLTableRowElement>(null);
   /** A skip's cause may be an activity or a container. */
@@ -543,7 +543,7 @@ export function ActivityRunsTable({
                           className="activity-runs__open"
                           aria-expanded={row.key === openKey}
                           aria-controls={row.key === openKey ? RUN_DRAWER_ID : undefined}
-                          onClick={() => onOpen(row.key)}
+                          onClick={(event) => onOpen(row.key, event.currentTarget)}
                         >
                           {name ?? <code>{row.nodeId}</code>}
                         </button>

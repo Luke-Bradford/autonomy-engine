@@ -3467,6 +3467,9 @@ describe('RunDetailPage — the activity run detail drawer (#1484 M2)', () => {
 
   it('closes on Escape and hands focus back to the row that opened it', async () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
+    // Swapped from another row first: the last drawer's cleanup must not leave
+    // focus, and so the way back, on the row it was showing.
+    await openRow(1);
     const button = await openRow(0);
     await userEvent.keyboard('{Escape}');
     expect(screen.queryByRole('complementary')).toBeNull();

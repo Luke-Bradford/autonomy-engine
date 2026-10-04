@@ -33,7 +33,18 @@ const RESIZE_STEP = 16;
  * Its width is the operator's (`uiStore.runDrawerWidth`), dragged or set with
  * the arrow keys on its left edge.
  */
-export function RunDrawer({ onClose, children }: { onClose: () => void; children: ReactNode }) {
+export function RunDrawer({
+  onClose,
+  returnFocusTo,
+  children,
+}: {
+  onClose: () => void;
+  /** The button that opened it. Passed in rather than read from focus at mount:
+   * swapping rows unmounts the last drawer first, whose cleanup hands focus to
+   * ITS row, so at mount focus is on the wrong one. */
+  returnFocusTo: HTMLElement | null;
+  children: ReactNode;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const width = useStore(uiStore, (s) => s.runDrawerWidth);
   const setWidth = useStore(uiStore, (s) => s.setRunDrawerWidth);
@@ -46,11 +57,13 @@ export function RunDrawer({ onClose, children }: { onClose: () => void; children
   // Focus in on open; back to the opener on close, if it is still there (a
   // filter or a live re-read can have taken its row away).
   useEffect(() => {
-    const opener = document.activeElement;
+    const opener = returnFocusTo;
     ref.current?.querySelector<HTMLElement>('[data-drawer-focus]')?.focus();
     return () => {
-      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+      if (opener?.isConnected) opener.focus();
     };
+    // Mount-only: the owner keys the drawer by row, so each open mounts anew.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const preview = useCallback(

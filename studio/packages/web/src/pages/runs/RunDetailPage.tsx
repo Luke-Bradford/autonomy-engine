@@ -356,8 +356,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
      so the drawer follows a running attempt and closes if its row goes. Only
      one of the drawer and the Nodes table's inline drill-in is open at a time:
      they show the same panel, which owns one element id. */
-  const [drawerKey, setDrawerKey] = useState<string | null>(null);
-  const drawerRow = activityRuns.rows?.find((r) => r.key === drawerKey) ?? null;
+  const [drawer, setDrawer] = useState<{ key: string; opener: HTMLElement } | null>(null);
+  const drawerRow = activityRuns.rows?.find((r) => r.key === drawer?.key) ?? null;
   const drawerNode = useMemo(
     () => (drawerRow === null ? null : activityOfRow(stream.events, folded, drawerRow)),
     [drawerRow, stream.events, folded],
@@ -636,9 +636,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
         selected={selectedRow}
         live={countingLive}
         openKey={drawerRow?.key ?? null}
-        onOpen={(key) => {
+        onOpen={(key, opener) => {
           setOpenNodeId(null);
-          setDrawerKey(key);
+          setDrawer({ key, opener });
         }}
       />
 
@@ -759,7 +759,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
                       aria-expanded={openNodeId === n.nodeId}
                       aria-controls={openNodeId === n.nodeId ? PANEL_ID : undefined}
                       onClick={() => {
-                        setDrawerKey(null);
+                        setDrawer(null);
                         setOpenNodeId(openNodeId === n.nodeId ? null : n.nodeId);
                       }}
                     >
@@ -904,13 +904,17 @@ export function RunDetailPage({ runId }: { runId: string }) {
         </table>
       )}
       {drawerRow !== null && drawerNode !== null && (
-        <RunDrawer key={drawerRow.key} onClose={() => setDrawerKey(null)}>
+        <RunDrawer
+          key={drawerRow.key}
+          onClose={() => setDrawer(null)}
+          returnFocusTo={drawer?.opener ?? null}
+        >
           <NodeActivityPanel
             node={drawerNode}
             name={nameOf(drawerRow.activityId)}
             runStatus={status}
             live={countingLive}
-            onClose={() => setDrawerKey(null)}
+            onClose={() => setDrawer(null)}
             run={{
               attempt: drawerRow.attempt,
               iteration: drawerIteration,
