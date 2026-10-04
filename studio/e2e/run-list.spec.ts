@@ -821,8 +821,12 @@ test('#1484 — Live shows a new run without Refresh and counts its duration; pa
  * #1529 — a first page that never answers held Refresh shut until the page was
  * reloaded. Once it has gone `PAGE_STALLED_MS` unanswered the list says so, and
  * Refresh retries it. The clock is Playwright's, so the 15s window costs nothing.
+ * Live is on throughout: the hung request a Refresh replaced must not hold its
+ * polls off.
  */
-test('#1529 — a stalled runs list says so and lets Refresh retry it', async ({ page }) => {
+test('#1529 — a stalled runs list says so, lets Refresh retry it, and Live polls after', async ({
+  page,
+}) => {
   const problems = collectPageProblems(page);
   await page.clock.install();
   let served = 0;
@@ -840,6 +844,9 @@ test('#1529 — a stalled runs list says so and lets Refresh retry it', async ({
   await expect(refresh).toBeDisabled();
   const stalled = page.getByRole('status').filter({ hasText: 'No answer in 15s' });
   await expect(stalled).toHaveCount(0);
+  const live = page.getByRole('button', { name: 'Live', exact: true });
+  await live.click();
+  await expect(live).toHaveAttribute('aria-pressed', 'true');
 
   await page.clock.fastForward(15_000);
   await expect(stalled).toHaveText('No answer in 15s — Refresh to try again');
@@ -850,6 +857,10 @@ test('#1529 — a stalled runs list says so and lets Refresh retry it', async ({
   await expect(stalled).toHaveCount(0);
   await expect(page.getByText('Loading runs', { exact: false })).toHaveCount(0);
   await expect(refresh).toBeEnabled();
+  await expect(page.getByRole('status').filter({ hasText: 'Updating every 5s' })).toBeVisible();
+  // The next tick polls: the replaced request no longer counts as in flight.
+  await page.clock.fastForward(5_000);
+  await expect.poll(() => served).toBe(3);
 
   await page.unrouteAll({ behavior: 'ignoreErrors' });
   await expectQuiet(page, problems);
