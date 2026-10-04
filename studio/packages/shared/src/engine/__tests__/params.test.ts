@@ -27,7 +27,8 @@ import {
   validateWholeValue,
 } from '../params.js';
 import type { TriggerContext } from '../../schemas/trigger-context.js';
-import { MAX_PATH_DEPTH } from '../functions.js';
+import { FUNCTIONS, MAX_PATH_DEPTH } from '../functions.js';
+import { INFIX_HINTS, infixOperatorHint } from '../expr.js';
 
 // --- helpers ---------------------------------------------------------------
 
@@ -1322,6 +1323,19 @@ describe('validateRefs — deep `[]`/`.` addressing at SAVE time (#6 E7)', () =>
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatch(/not a declared param/);
     expect(errors[0]).not.toMatch(/operator/);
+  });
+
+  it('#1482 every function an operator hint names is in the catalog', () => {
+    for (const [, , call] of INFIX_HINTS) {
+      for (const name of call.match(/[A-Za-z]+(?=\()/g) ?? []) {
+        expect(FUNCTIONS[name], `${call} names ${name}`).toBeDefined();
+      }
+    }
+  });
+
+  it('#1482 an arrow is not hinted as a comparison', () => {
+    expect(infixOperatorHint('map(rows, x => x.a)')).toBeNull();
+    expect(infixOperatorHint('a -> b')).toBeNull();
   });
 
   it('#1482 a hyphen inside a name is not read as an operator', () => {

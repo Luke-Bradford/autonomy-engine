@@ -152,7 +152,14 @@ describe('#1484 M2 useActivityRuns', () => {
       },
     } as unknown as ActivityRun;
     getMock.mockResolvedValueOnce({ runId: 'r', rows: [going], groups: [] });
-    // Every later read hangs, so each poll tick lands on a read in flight.
+    // The next read hangs until released, so each poll tick lands on a read in flight.
+    let release: (() => void) | undefined;
+    getMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ runId: 'r', rows: [going], groups: [] });
+        }),
+    );
     getMock.mockImplementation(() => new Promise(() => {}));
     // Time in steps, so each tick's render lands before the next one.
     const pass = async (ms: number) => {
@@ -170,5 +177,10 @@ describe('#1484 M2 useActivityRuns', () => {
     await pass(ACTIVITY_RUNS_CHILD_POLL_MS * 3);
     expect(getMock).toHaveBeenCalledTimes(2);
     expect(renders).toBe(settled);
+
+    // The ticks it absorbed still ask for one more read once it lands, not one each.
+    release?.();
+    await pass(ACTIVITY_RUNS_REFRESH_MS);
+    expect(getMock).toHaveBeenCalledTimes(3);
   });
 });

@@ -119,7 +119,7 @@ export const MAX_EXPR_DEPTH = 64;
  * Arithmetic signs count only between spaces: `-`, `/`, `+` and `*` may sit
  * inside a node id or param name (`${nodes.my-node.output.x}`).
  */
-const INFIX_HINTS: readonly (readonly [RegExp, string, string])[] = [
+export const INFIX_HINTS: readonly (readonly [RegExp, string, string])[] = [
   [/>=/, '>=', 'greaterOrEquals(a, b)'],
   [/<=/, '<=', 'lessOrEquals(a, b)'],
   [/==/, '==', 'equals(a, b)'],
@@ -151,6 +151,8 @@ export function infixOperatorHint(body: string): string | null {
     }
     bare += body[i];
   }
+  // An arrow (`x => …`, `->`) is not a comparison: hinting `greater` would mislead.
+  bare = bare.replace(/=>|->/g, ' ');
   const hit = INFIX_HINTS.find(([re]) => re.test(bare));
   if (hit === undefined) return null;
   return `operators aren't supported in expressions; use ${hit[2]} for '${hit[1]}'`;
