@@ -358,7 +358,7 @@ describe('uiStore version history (#1475 OR27)', () => {
 });
 
 describe('uiStore display time zone (#1484)', () => {
-  it('starts on the viewer\'s local zone', () => {
+  it("starts on the viewer's local zone", () => {
     expect(createUiStore(fakeStorage()).getState().displayTimeZone).toBe('local');
   });
 
@@ -371,8 +371,9 @@ describe('uiStore display time zone (#1484)', () => {
 
   it('reads a zone this runtime cannot format in as local, never as itself', () => {
     expect(
-      createUiStore(fakeStorage({ [DISPLAY_TIME_ZONE_STORAGE_KEY]: 'Mars/Olympus_Mons' })).getState()
-        .displayTimeZone,
+      createUiStore(
+        fakeStorage({ [DISPLAY_TIME_ZONE_STORAGE_KEY]: 'Mars/Olympus_Mons' }),
+      ).getState().displayTimeZone,
     ).toBe('local');
   });
 });

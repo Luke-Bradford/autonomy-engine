@@ -19,6 +19,7 @@ import {
 import type { BindingSelection } from '../triggers/binding';
 import { triggersPath } from '../triggers/triggersPath';
 import { nextFireText } from './triggerColumnRules';
+import { useDisplayTimeZone } from '../../lib/When';
 
 /** How long after a shown time passes to re-read it: the clock delivers the
  * tick and arms the next within about a second of it falling due. */
@@ -70,6 +71,7 @@ export function PipelineTriggersColumn({
   onClose: () => void;
   onDirtyChange: (dirty: boolean) => void;
 }) {
+  const zone = useDisplayTimeZone();
   const [triggers, setTriggers] = useState<TriggerPublic[] | null>(null);
   const [bindings, setBindings] = useState<BindingOption[]>([]);
   const [pipelines, setPipelines] = useState<PipelineOption[]>([]);
@@ -167,7 +169,7 @@ export function PipelineTriggersColumn({
     [triggers, pipeline],
   );
   const nextFireLine = (t: TriggerPublic, next: TriggerNextFire | undefined, readAt: number) => {
-    const text = nextFireText(t, next, readAt);
+    const text = nextFireText(t, next, readAt, zone);
     return text === null ? '' : ` · ${text}`;
   };
 

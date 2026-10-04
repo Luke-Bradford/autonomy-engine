@@ -137,18 +137,18 @@ describe('gitState', () => {
   const saved = { version: 3, sourceCommit: null, sourceBranch: null };
 
   it('is hidden with no repo, and while the repo is unread', () => {
-    expect(gitState({ git: null, source: saved })).toBeNull();
-    expect(gitState({ git: undefined, source: saved })).toBeNull();
+    expect(gitState({ zone: 'UTC', git: null, source: saved })).toBeNull();
+    expect(gitState({ zone: 'UTC', git: undefined, source: saved })).toBeNull();
   });
 
   it('says when the repo has never been fetched, rather than printing a dash', () => {
-    expect(gitState({ git: { ...git, lastFetchAt: null }, source: saved })?.detail).toContain(
-      'Never fetched.',
-    );
+    expect(
+      gitState({ zone: 'UTC', git: { ...git, lastFetchAt: null }, source: saved })?.detail,
+    ).toContain('Never fetched.');
   });
 
   it('names the working branch against the collaboration branch', () => {
-    const p = gitState({ git, source: saved });
+    const p = gitState({ zone: 'UTC', git, source: saved });
     expect(p).toMatchObject({ name: 'feature/x → main', label: '', tone: 'neutral' });
     expect(partText(p!)).toBe('feature/x → main');
     expect(p?.detail).toMatch(
@@ -158,6 +158,7 @@ describe('gitState', () => {
 
   it('links the open pull request from the working branch, beside the label', () => {
     const p = gitState({
+      zone: 'UTC',
       git,
       source: saved,
       pullRequest: {
@@ -181,6 +182,7 @@ describe('gitState', () => {
 
     // A reading for the branch this workspace was on before: not this one's.
     const moved = gitState({
+      zone: 'UTC',
       git: { ...git, workingBranch: 'feature/y' },
       source: saved,
       pullRequest: {
@@ -197,6 +199,7 @@ describe('gitState', () => {
 
     // And one for another repo, though the branch name is the same.
     const reconnected = gitState({
+      zone: 'UTC',
       git: { ...git, repoUrl: 'file:///tmp/other.git' },
       source: saved,
       pullRequest: {
@@ -213,6 +216,7 @@ describe('gitState', () => {
 
   it('says there is no pull request only when the host said so', () => {
     const none = gitState({
+      zone: 'UTC',
       git,
       source: saved,
       pullRequest: {
@@ -226,6 +230,7 @@ describe('gitState', () => {
     expect(none?.detail).toMatch(/No pull request is open from feature\/x \(checked .+\)\./);
 
     const failed = gitState({
+      zone: 'UTC',
       git,
       source: saved,
       pullRequest: {
@@ -242,6 +247,7 @@ describe('gitState', () => {
     expect(failed?.tone).toBe('neutral');
 
     const noToken = gitState({
+      zone: 'UTC',
       git,
       source: saved,
       pullRequest: {
@@ -256,6 +262,7 @@ describe('gitState', () => {
 
     // A local or non-GitHub remote has no pull requests studio can see: nothing said.
     const local = gitState({
+      zone: 'UTC',
       git,
       source: saved,
       pullRequest: {
@@ -266,21 +273,23 @@ describe('gitState', () => {
         detail: null,
       },
     });
-    expect(local?.detail).toBe(gitState({ git, source: saved })?.detail);
+    expect(local?.detail).toBe(gitState({ zone: 'UTC', git, source: saved })?.detail);
   });
 
   it('adds the commit the canvas version came from, and only when it has one', () => {
     const p = gitState({
+      zone: 'UTC',
       git,
       source: { version: 2, sourceCommit: 'abcdef1234567890', sourceBranch: 'main' },
     });
     expect(partText(p!)).toBe('feature/x → main · from abcdef1');
     expect(p?.detail).toContain('v2 was imported from commit abcdef1 on main.');
-    expect(gitState({ git, source: null })?.label).toBe('');
+    expect(gitState({ zone: 'UTC', git, source: null })?.label).toBe('');
   });
 
   it('says in words when the last fetch failed, and draws it as danger', () => {
     const p = gitState({
+      zone: 'UTC',
       git: { ...git, state: 'fetch_error', lastFetchError: 'could not resolve host' },
       source: saved,
     });
@@ -293,7 +302,11 @@ describe('gitState', () => {
   });
 
   it('says when the collaboration branch does not exist at the repo yet', () => {
-    const p = gitState({ git: { ...git, state: 'collab_branch_missing' }, source: saved });
+    const p = gitState({
+      zone: 'UTC',
+      git: { ...git, state: 'collab_branch_missing' },
+      source: saved,
+    });
     expect(p).toMatchObject({ label: 'no main yet', tone: 'warning' });
   });
 
@@ -311,7 +324,7 @@ describe('gitState', () => {
       ...over,
     });
     const read = (s: WorkspaceGitSync | null | undefined, g: WorkspaceGitStatus = git) =>
-      gitState({ git: g, source: saved, sync: s, pipelineId: 'p1' });
+      gitState({ zone: 'UTC', git: g, source: saved, sync: s, pipelineId: 'p1' });
 
     it('says in sync when this pipeline matches the branch and main has not moved', () => {
       const p = read(sync());

@@ -338,7 +338,7 @@ describe('<AttemptTimeline>', () => {
     const titles = [...container.querySelectorAll('.timeline-row .timeline-span')].map((b) =>
       b.getAttribute('title'),
     );
-    const at0 = formatClock(0);
+    const at0 = formatClock(0, 'local', 'ms');
 
     expect(titles[0]).toBe(`A · running · started ${at0} · no end on record`);
     expect(titles[1]).toBe(`B · waiting (timer) · started ${at0} · no end on record`);

@@ -13,8 +13,8 @@
  * in `versionHistory.ts`, where a unit test can reach it without React Flow.
  */
 import { DismissRegular } from '@fluentui/react-icons';
-import { formatWhen } from '../runs/format';
 import type { VersionEntry } from './versionHistory';
+import { When } from '../../lib/When';
 
 interface VersionHistoryProps {
   entries: VersionEntry[];
@@ -136,7 +136,9 @@ function VersionList({
             {/* #979 — a THIRD fact, and the only one that describes what is
                deployed: what a new `active`-bound trigger will resolve to. */}
             {e.isActive && <span className="version-history-tag is-active">active</span>}
-            <span className="version-history-when">{formatWhen(e.createdAt)}</span>
+            <span className="version-history-when">
+              <When ms={e.createdAt} />
+            </span>
             <span className="version-history-shape">{shapeSummary(e)}</span>
           </button>
         </li>

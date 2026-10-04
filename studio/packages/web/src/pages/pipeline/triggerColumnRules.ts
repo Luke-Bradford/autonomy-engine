@@ -3,6 +3,7 @@ import {
   type TriggerNextFire,
   type TriggerPublic,
 } from '@autonomy-studio/shared';
+import type { DisplayTimeZone } from '../../lib/displayTime';
 import { formatWhen } from '../runs/format';
 import type { BindingSelection } from '../triggers/binding';
 import type { ActiveVersionState } from './versionHistory';
@@ -98,14 +99,19 @@ export function nextFireText(
   t: Pick<TriggerPublic, 'enabled' | 'mode' | 'runWindows'>,
   next: TriggerNextFire | undefined,
   readAt: number,
+  zone: DisplayTimeZone,
 ): string | null {
   if (!t.enabled || (t.mode !== 'schedule' && t.mode !== 'tumbling')) return null;
   if (next === undefined) return 'nothing scheduled';
   const overdue = next.at <= readAt;
   if (next.source === 'window') {
-    return overdue ? 'a closed window is due now' : `next window closes ${formatWhen(next.at)}`;
+    return overdue
+      ? 'a closed window is due now'
+      : `next window closes ${formatWhen(next.at, zone)}`;
   }
-  const what = overdue ? 'a scheduled tick is due now' : `next scheduled ${formatWhen(next.at)}`;
+  const what = overdue
+    ? 'a scheduled tick is due now'
+    : `next scheduled ${formatWhen(next.at, zone)}`;
   return isWithinRunWindows(t.runWindows, new Date(Math.max(next.at, readAt)))
     ? what
     : `${what}, outside its run windows so skipped`;

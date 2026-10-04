@@ -3,6 +3,7 @@ import type { NodeActivity, AttemptSpan } from './runSummary';
 import { nodeStatusLabel, nodeStatusTone, type StatusTone } from './nodeStatus';
 import { formatClock, formatElapsed } from './format';
 import { placeSpans, timelineWindow, untimedReason } from './attemptSpans';
+import { useDisplayTimeZone } from '../../lib/When';
 
 /**
  * U12a (#1007) — the run's spans drawn against one shared time axis, so an
@@ -86,6 +87,7 @@ export function AttemptTimeline({
   nameOf,
   runStatus,
 }: AttemptTimelineProps): React.ReactElement {
+  const zone = useDisplayTimeZone();
   const timed = nodes.filter((n) => n.spans.length > 0);
   const untimed = nodes.filter((n) => n.spans.length === 0);
   const window = timelineWindow(nodes);
@@ -107,7 +109,7 @@ export function AttemptTimeline({
     <section aria-labelledby="timeline-heading" className="attempt-timeline">
       <h3 id="timeline-heading">Timeline</h3>
       <p className="timeline-axis-note">
-        {formatClock(window.from)} → {formatClock(window.to)} ·{' '}
+        {formatClock(window.from, zone)} → {formatClock(window.to, zone)} ·{' '}
         {formatElapsed(Math.max(0, window.to - window.from))} of measured wall clock. A node that
         ran more than once has one bar per run, and the gap between two bars is time the node was
         not running — a retry hold, or simply waiting its turn.
@@ -147,6 +149,8 @@ export function AttemptTimeline({
                     }}
                     title={`${name ?? node.nodeId} · ${spanLabel(placed.span, runStatus)} · started ${formatClock(
                       placed.span.startedAtMs,
+                      zone,
+                      'ms',
                     )}${
                       placed.width === null
                         ? ` · ${unmeasuredNote(placed.span)}`

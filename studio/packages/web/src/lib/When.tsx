@@ -42,7 +42,9 @@ export function When({ ms, precision = 'second', compact = false, store }: WhenP
   const zone = useDisplayTimeZone(store);
   if (ms === null) return <>—</>;
   const now = Date.now();
-  const text = compact ? formatCompactTimestamp(ms, zone, now) : formatTimestamp(ms, zone, precision);
+  const text = compact
+    ? formatCompactTimestamp(ms, zone, now)
+    : formatTimestamp(ms, zone, precision);
   return (
     <time
       dateTime={new Date(ms).toISOString()}

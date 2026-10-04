@@ -3,8 +3,8 @@ import { Link } from 'react-router';
 import type { RunSummary } from '@autonomy-studio/shared';
 import { listRuns } from '../../api/runs';
 import { useGuardedLoad } from '../../hooks/useGuardedLoad';
-import { formatWhen } from './format';
 import { runDetailPath, runLinkLabel } from './runPath';
+import { When } from '../../lib/When';
 
 /**
  * How many reruns the row lists. A run can be rerun repeatedly (each rerun that
@@ -74,7 +74,9 @@ export function RerunHistory({ runId }: { runId: string }) {
                   <Link to={runDetailPath(r.id)} aria-label={runLinkLabel('Rerun', r.id)}>
                     <code>{r.id}</code>
                   </Link>{' '}
-                  <span className="rerun-history-when">started {formatWhen(r.startedAt)}</span>
+                  <span className="rerun-history-when">
+                    started <When ms={r.startedAt} />
+                  </span>
                 </li>
               ))}
             </ul>

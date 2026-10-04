@@ -9,7 +9,7 @@ import { fetchAccountQuotaDisplay, fetchAiActivity } from '../../api/monitor';
 import { usePolledResource } from '../../hooks/usePolledResource';
 import { costFigure, costHeadline, tokenSummary } from '../runs/costReading';
 import { RUN_SINCE_LABEL, RUN_SINCE_OPTIONS, isRunSince } from '../runs/runFilters';
-import { formatElapsed, formatWhen } from '../runs/format';
+import { formatElapsed } from '../runs/format';
 import { TokenFlowChart } from './TokenFlowChart';
 import { reportedActivitySummary, reportedTokenSummary } from './reportedActivity';
 import {
@@ -21,6 +21,7 @@ import {
   type QuotaWindowReading,
 } from './quotaReading';
 import { LabelledControl } from '../../lib/LabelledControl';
+import { When } from '../../lib/When';
 
 /**
  * #917 — Monitor → AI activity: what the connected AIs are doing, and how much
@@ -119,7 +120,7 @@ function QuotaWindowTable({ windows, now }: { windows: QuotaWindowReading[]; now
                   at runtime, so the relative suffix would be correctly hidden
                   by accident — and a later refactor that coalesced the null to
                   a number would silently restore it against 1970. */}
-              {formatWhen(w.resetsAtMs)}
+              <When ms={w.resetsAtMs} />
               {w.resetsAtMs !== null && w.resetsAtMs > now && (
                 <span className="quota-reset-relative">
                   {' '}
@@ -240,7 +241,9 @@ function QuotaPanel() {
           last-known reading is on screen the two disagree by minutes. One
           freshness claim about the number, and it is the one attached to it. */}
       {lastUpdatedAt !== null && (
-        <p className="page-hint quota-as-of">Last checked {formatWhen(lastUpdatedAt)}.</p>
+        <p className="page-hint quota-as-of">
+          Last checked <When ms={lastUpdatedAt} />.
+        </p>
       )}
     </section>
   );
@@ -301,7 +304,9 @@ function ReportedActivityPanel({ external }: { external: ExternalAgentActivity }
                   <td>{r.invocations}</td>
                   <td>{r.inFlight}</td>
                   <td>{reportedTokenSummary(r.tokens, r.invocations)}</td>
-                  <td>{formatWhen(r.lastAt)}</td>
+                  <td>
+                    <When ms={r.lastAt} />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -424,7 +429,9 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
                       the cell now states each side by name. */}
                   <td>{tokenSummary(m.cost)}</td>
                   <td className="run-cost">{costFigure(costHeadline(m.cost))}</td>
-                  <td>{formatWhen(m.lastAt)}</td>
+                  <td>
+                    <When ms={m.lastAt} />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -441,7 +448,7 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
           <>
             {agentCli.invocations} agent CLI subprocess
             {agentCli.invocations === 1 ? '' : 'es'} — {agentCli.completed} completed,{' '}
-            {agentCli.notCompleted} did not. Last at {formatWhen(agentCli.lastAt)}.
+            {agentCli.notCompleted} did not. Last at <When ms={agentCli.lastAt} />.
           </>
         )}
       </p>
@@ -513,7 +520,9 @@ export function AiActivityPage() {
       {data !== null && <ActivityPanel snapshot={data} />}
 
       {lastUpdatedAt !== null && (
-        <p className="page-hint">Activity as of {formatWhen(lastUpdatedAt)}.</p>
+        <p className="page-hint">
+          Activity as of <When ms={lastUpdatedAt} />.
+        </p>
       )}
 
       <QuotaPanel />

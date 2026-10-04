@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import type { RunDiagnostic } from '@autonomy-studio/shared';
 import { getRunDiagnostics } from '../../api/runs';
 import { usePolledResource } from '../../hooks/usePolledResource';
-import { formatWhen } from './format';
+import { When } from '../../lib/When';
 
 /**
  * #1065 — the reducer's EXPLANATIONS for this run: the WHY beside the what.
@@ -146,7 +146,11 @@ export function RunDiagnostics({ runId, settled }: { runId: string; settled: boo
             </p>
           )}
 
-          {lastUpdatedAt !== null && <p className="page-hint">Read {formatWhen(lastUpdatedAt)}.</p>}
+          {lastUpdatedAt !== null && (
+            <p className="page-hint">
+              Read <When ms={lastUpdatedAt} />.
+            </p>
+          )}
         </>
       )}
     </section>

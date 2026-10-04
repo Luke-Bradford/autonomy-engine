@@ -29,6 +29,7 @@ import {
   type CellContext,
 } from './runGridColumns';
 import type { RunSortState } from './runFilters';
+import { useDisplayTimeZone } from '../../lib/When';
 
 /** A column's drawn width: the operator's, else its default. */
 function widthOf(widths: Partial<Record<RunGridColumnId, number>>, column: RunGridColumnId) {
@@ -139,7 +140,8 @@ function RunRow({
     if (newTab) window.open(href, '_blank', 'noopener');
     else void navigate(path);
   };
-  const ctx: CellContext = { loadedAt, path };
+  const zone = useDisplayTimeZone();
+  const ctx: CellContext = { loadedAt, path, zone };
   return (
     <tr
       className="runs-grid__row"

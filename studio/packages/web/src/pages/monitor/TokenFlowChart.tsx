@@ -4,6 +4,8 @@ import {
   type TokenSeries,
   type TokenSeriesBucket,
 } from '@autonomy-studio/shared';
+import type { DisplayTimeZone } from '../../lib/displayTime';
+import { useDisplayTimeZone, When } from '../../lib/When';
 import { formatWhen } from '../runs/format';
 
 /**
@@ -85,8 +87,8 @@ function isUnmeasured(bucket: TokenSeriesBucket): boolean {
  * Built here rather than inline for the same reason `barSentence` is in
  * `RunTimeline`: a tooltip must never be the only way to reach a value.
  */
-function bucketSentence(bucket: TokenSeriesBucket): string {
-  const when = `${formatWhen(bucket.bucketStart)}–${formatWhen(bucket.bucketEnd)}`;
+function bucketSentence(bucket: TokenSeriesBucket, zone: DisplayTimeZone): string {
+  const when = `${formatWhen(bucket.bucketStart, zone)}–${formatWhen(bucket.bucketEnd, zone)}`;
   const partial = bucket.partial ? ' (period incomplete)' : '';
   if (bucket.cost.responseCount === 0) return `${when}${partial}: no billed exchanges`;
   const exchanges = `${bucket.cost.responseCount} exchange${bucket.cost.responseCount === 1 ? '' : 's'}`;
@@ -112,6 +114,7 @@ export function TokenFlowChart({
   windowStart,
   generatedAt,
 }: TokenFlowChartProps): React.ReactElement {
+  const zone = useDisplayTimeZone();
   const { buckets } = series;
   /*
    * The scale is the tallest STACK, not the tallest single series, because the
@@ -163,7 +166,7 @@ export function TokenFlowChart({
 
       <ol className="token-flow-bars">
         {buckets.map((bucket) => {
-          const sentence = bucketSentence(bucket);
+          const sentence = bucketSentence(bucket, zone);
           const unmeasured = isUnmeasured(bucket);
           return (
             <li className="token-flow-bucket" key={bucket.bucketStart}>
@@ -202,8 +205,12 @@ export function TokenFlowChart({
           "how far back", which these two instants state without implying the
           bars line up with local days. */}
       <div className="token-flow-axis">
-        <span>{formatWhen(windowStart)}</span>
-        <span>{formatWhen(generatedAt)}</span>
+        <span>
+          <When ms={windowStart} />
+        </span>
+        <span>
+          <When ms={generatedAt} />
+        </span>
       </div>
 
       <ul className="token-flow-legend">

@@ -16,6 +16,8 @@ import { costCell } from './costColumn';
 import { formatRunDuration, formatWhen } from './format';
 import { runDetailPath, runLinkLabel } from './runPath';
 import { runStatusLabel } from './runStatus';
+import { When } from '../../lib/When';
+import type { DisplayTimeZone } from '../../lib/displayTime';
 
 /** What a cell needs besides its run. */
 export interface CellContext {
@@ -23,6 +25,8 @@ export interface CellContext {
   loadedAt: number;
   /** The run's detail route, for the Run ID column's real link. */
   path: string;
+  /** The viewer's display time zone (#1484), for timestamps inside a title. */
+  zone: DisplayTimeZone;
 }
 
 /**
@@ -114,15 +118,21 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
   started: {
     label: 'Started',
     sort: 'started',
-    cell: (r) => <td>{formatWhen(r.startedAt)}</td>,
+    /* #1484 — compact (`10-04 13:05:07`) to fit the 124px column; the full
+       form, the zone and the relative time are the hover title. */
+    cell: (r) => (
+      <td>
+        <When ms={r.startedAt} compact />
+      </td>
+    ),
   },
   duration: {
     label: 'Duration',
     sort: 'duration',
     numeric: true,
     /* The finish TIMESTAMP is the cell's title (U10 fixed the column set). */
-    cell: (r, { loadedAt }) => (
-      <td className="num" title={formatWhen(r.finishedAt)}>
+    cell: (r, { loadedAt, zone }) => (
+      <td className="num" title={formatWhen(r.finishedAt, zone)}>
         {formatRunDuration(r, loadedAt)}
       </td>
     ),
