@@ -46,7 +46,7 @@ import { noStore, requireOwned } from './util.js';
 import { decodeRunCursor, resolveRunSort, type RunCursor, type RunSort } from '../repo/run-sort.js';
 import type { ListRunSummariesFilter, RunPageArgs } from '../repo/runs.js';
 import { RUNS_EXPORT_MAX_ROWS } from '../limits.js';
-import { collectRunsForExport, RUN_EXPORT_COLUMNS, runExportRow } from '../run/run-export.js';
+import { collectRunsForExport, RUNS_EXPORT_COLUMNS, runExportRow } from '../run/runs-export.js';
 import { toCsv } from '../util/csv.js';
 
 /**
@@ -263,7 +263,7 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
    *
    * SECURITY — the list's: `ownerId` comes from the principal and is ANDed in by
    * `runFilterFromQuery`, so no query string widens past the caller's runs, and
-   * the columns are the grid's, never `params` (`RUN_EXPORT_COLUMNS`).
+   * the columns are the grid's, never `params` (`RUNS_EXPORT_COLUMNS`).
    *
    * Its OWN activity fold, with no memo. The list's fold remembers the last
    * `ACTIVITY_FOLD_MEMO_LIMIT` runs it was asked about; walking ten thousand
@@ -300,7 +300,7 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
     reply.type('text/csv; charset=utf-8');
     if (truncated) reply.header(RUNS_EXPORT_TRUNCATED_HEADER, String(RUNS_EXPORT_MAX_ROWS));
     return toCsv(
-      RUN_EXPORT_COLUMNS.map((c) => c.header),
+      RUNS_EXPORT_COLUMNS.map((c) => c.header),
       rows.map(runExportRow),
     );
   });

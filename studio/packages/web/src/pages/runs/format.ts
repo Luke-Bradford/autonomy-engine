@@ -1,6 +1,7 @@
 import {
   DatasetAddressSchema,
   describeDatasetAddress,
+  runStartIsReal,
   surrogateSafeCut,
 } from '@autonomy-studio/shared';
 import type { Run, RunEvent } from '@autonomy-studio/shared';
@@ -64,7 +65,7 @@ export function formatRunDuration(
   run: Pick<Run, 'status' | 'startedAt' | 'finishedAt'>,
   now: number,
 ): string {
-  if (run.status === 'queued') return '—';
+  if (!runStartIsReal(run)) return '—';
   if (run.finishedAt !== null) {
     return formatElapsed(Math.max(0, run.finishedAt - run.startedAt));
   }

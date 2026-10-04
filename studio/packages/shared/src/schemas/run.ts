@@ -144,6 +144,16 @@ export type Run = z.infer<typeof RunSchema>;
  *   this kind;
  * - `call`: a child run an Execute Pipeline node spawned.
  */
+/**
+ * Whether a run's `startedAt` is a real start. A `queued` run's is an
+ * ENQUEUE-time placeholder that admission re-stamps (`repo/runs.ts::
+ * admitQueuedRun`), so a duration measured from it would be queue age under the
+ * wrong name. One rule for the grid's Duration and the runs CSV export (#1484).
+ */
+export function runStartIsReal(run: Pick<Run, 'status'>): boolean {
+  return run.status !== 'queued';
+}
+
 export const RUN_TRIGGERED_BY_KINDS = [
   ...TRIGGER_FIRE_KINDS,
   'editor',

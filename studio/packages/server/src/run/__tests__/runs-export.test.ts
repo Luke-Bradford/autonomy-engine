@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RunSummary, RunSummaryPage } from '@autonomy-studio/shared';
-import { collectRunsForExport, runExportRow, RUN_EXPORT_COLUMNS } from '../run-export.js';
+import { collectRunsForExport, runExportRow, RUNS_EXPORT_COLUMNS } from '../runs-export.js';
 
 /** A list of `total` runs read in keyset pages, recording each page's limit. */
 function pagedList(ids: string[]) {
@@ -50,6 +50,11 @@ describe('collectRunsForExport (#1484)', () => {
     expect(out.runs.map((r) => r.id)).toEqual(['a', 'b', 'c']);
   });
 
+  it('refuses a cursor that does not advance rather than looping', async () => {
+    const page: RunSummaryPage = { items: [{ id: 'a' }] as RunSummary[], nextCursor: 'same' };
+    await expect(collectRunsForExport(() => page, 1, 10)).rejects.toThrow(/cursor/);
+  });
+
   it('yields to the event loop between pages', async () => {
     const { readPage } = pagedList(ids(4));
     // A macrotask queued during each page must have run before the next page
@@ -97,7 +102,7 @@ describe('runExportRow', () => {
   } as unknown as RunSummary;
 
   const byHeader = (r: RunSummary) =>
-    Object.fromEntries(RUN_EXPORT_COLUMNS.map((c, i) => [c.header, runExportRow(r)[i]]));
+    Object.fromEntries(RUNS_EXPORT_COLUMNS.map((c, i) => [c.header, runExportRow(r)[i]]));
 
   it('writes machine values: ISO UTC times, ms durations, vocabulary keys', () => {
     expect(byHeader(run)).toMatchObject({

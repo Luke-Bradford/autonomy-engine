@@ -119,6 +119,24 @@ describe('GET /api/runs/export.csv (#1484 OR35 M1)', () => {
     expect(res.headers[RUNS_EXPORT_TRUNCATED_HEADER]).toBeUndefined();
   });
 
+  it('exports only the filtered set: includeChildren does not add descendants', async () => {
+    const parent = seed(2_000);
+    const child = createRun(app.db, {
+      ownerId: 'local',
+      pipelineVersionId: versionId,
+      triggerId: null,
+      parentRunId: parent,
+      params: {},
+    });
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/runs/export.csv?q=${parent}&includeChildren=true`,
+    });
+    // The search matches the parent alone; the run it called is not pulled in.
+    expect(records(res.body).map((r) => r.run_id)).toEqual([parent]);
+    expect(res.body).not.toContain(child.id);
+  });
+
   it('refuses a junk filter with a 400, as the list does', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/runs/export.csv?status=nope' });
     expect(res.statusCode).toBe(400);

@@ -1,4 +1,4 @@
-import type { RunSummary, RunSummaryPage } from '@autonomy-studio/shared';
+import { runStartIsReal, type RunSummary, type RunSummaryPage } from '@autonomy-studio/shared';
 import { yieldToEventLoop } from '../connectors/scheduling.js';
 import type { CsvValue } from '../util/csv.js';
 
@@ -10,12 +10,17 @@ import type { CsvValue } from '../util/csv.js';
  * reader to guess), durations are milliseconds, and the triggered-by kind is its
  * vocabulary key rather than its label.
  *
+ * NOT derived from the grid's `RUN_GRID_COLUMNS` (`web/src/stores/uiStore.ts`),
+ * deliberately: the grid's columns are display text and a viewer's choice, and
+ * a file wants every fact in machine form whatever the viewer hid. A column
+ * added to the grid should be weighed for this list too.
+ *
  * SECURITY — only what the grid already shows. A run's `params` and
  * `triggerContext` are deliberately NOT columns: a param may be bound to a
  * secret, and the list never shows either, so an export must not be the one
  * place they leave the server.
  */
-export const RUN_EXPORT_COLUMNS: readonly {
+export const RUNS_EXPORT_COLUMNS: readonly {
   readonly header: string;
   readonly value: (run: RunSummary) => CsvValue;
 }[] = [
@@ -29,17 +34,13 @@ export const RUN_EXPORT_COLUMNS: readonly {
   { header: 'trigger', value: (r) => r.triggerName },
   { header: 'trigger_id', value: (r) => r.triggerId },
   { header: 'queued_at', value: (r) => isoOrNull(r.queuedAt) },
-  // A queued run's `startedAt` is an ENQUEUE-time placeholder that admission
-  // re-stamps (`format.ts::formatRunDuration`), so it is no start time, and
-  // a duration measured from it would be queue age under the wrong name.
-  { header: 'started_at', value: (r) => (r.status === 'queued' ? null : iso(r.startedAt)) },
+  // A queued run's `startedAt` is a placeholder (`runStartIsReal`).
+  { header: 'started_at', value: (r) => (runStartIsReal(r) ? iso(r.startedAt) : null) },
   { header: 'finished_at', value: (r) => isoOrNull(r.finishedAt) },
   {
     header: 'duration_ms',
     value: (r) =>
-      r.status === 'queued' || r.finishedAt === null
-        ? null
-        : Math.max(0, r.finishedAt - r.startedAt),
+      !runStartIsReal(r) || r.finishedAt === null ? null : Math.max(0, r.finishedAt - r.startedAt),
   },
   { header: 'activities_succeeded', value: (r) => r.activities?.succeeded ?? null },
   { header: 'activities_failed', value: (r) => r.activities?.failed ?? null },
@@ -67,9 +68,9 @@ function isoOrNull(ms: number | null): string | null {
   return ms === null ? null : iso(ms);
 }
 
-/** One CSV row per run, in `RUN_EXPORT_COLUMNS` order. */
+/** One CSV row per run, in `RUNS_EXPORT_COLUMNS` order. */
 export function runExportRow(run: RunSummary): CsvValue[] {
-  return RUN_EXPORT_COLUMNS.map((column) => column.value(run));
+  return RUNS_EXPORT_COLUMNS.map((column) => column.value(run));
 }
 
 /**
@@ -81,7 +82,9 @@ export function runExportRow(run: RunSummary): CsvValue[] {
  *
  * - **Bounded.** Each page asks for at most what is still wanted, so the
  *   one-extra-row probe tells "exactly `max`" from "more than `max`":
- *   `truncated` is true only when a further run really exists.
+ *   `truncated` is true only when the list's probe found a further row. (Under
+ *   a non-default sort that row can be one a page already gave, below — then
+ *   the note over-warns, which is the safe direction.)
  * - **Yields between pages.** `better-sqlite3` is synchronous, so one page is a
  *   stall of the whole server for its duration. Yielding between pages bounds
  *   that stall at a page rather than at the export (`limits.ts`'s §9 note).
@@ -90,6 +93,9 @@ export function runExportRow(run: RunSummary): CsvValue[] {
  *   finishing changes its Duration). The grid drops a repeat by key; this drops
  *   it here. A run skipped the same way is not recoverable without one long
  *   transaction, which is the stall this walk exists to avoid.
+ * - **Refuses a cursor that does not advance**, as `fetchAllPages` does in the
+ *   web package: a page of nothing but repeats under a repeated cursor would
+ *   otherwise loop until the request is abandoned.
  */
 export async function collectRunsForExport(
   readPage: (limit: number, cursor: string | undefined) => RunSummaryPage,
@@ -108,6 +114,9 @@ export async function collectRunsForExport(
     }
     if (page.nextCursor === null) return { runs: out, truncated: false };
     if (out.length >= max) return { runs: out, truncated: true };
+    if (page.nextCursor === cursor) {
+      throw new Error('runs export: the list returned the cursor it was given');
+    }
     cursor = page.nextCursor;
     await yieldToEventLoop();
   }

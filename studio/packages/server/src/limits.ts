@@ -292,7 +292,7 @@ export const LOOKUP_BATCH_ROWS = 100;
 /**
  * #1484 OR35 M1 — the most runs one CSV export of the runs grid holds.
  *
- * The export walks the list's own pages (`run/run-export.ts`) and replies only
+ * The export walks the list's own pages (`run/runs-export.ts`) and replies only
  * when the walk is done, so this bounds both the response and the memory it is
  * built in: at ~400 bytes a row, 10,000 runs is a ~4 MB file. An export that hits
  * it says so in `RUNS_EXPORT_TRUNCATED_HEADER`, whose value is this number, and
