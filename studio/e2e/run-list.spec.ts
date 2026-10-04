@@ -978,7 +978,10 @@ test('#1484 — Export CSV saves every run the filters match, as the list shows 
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toMatch(/^runs-\d{8}-\d{6}Z\.csv$/);
   const chunks: Buffer[] = [];
-  for await (const chunk of await download.createReadStream()) chunks.push(Buffer.from(chunk));
+  // Typed nullable: a failed download must read as this, not a TypeError.
+  const stream = await download.createReadStream();
+  expect(stream, 'the CSV download failed').not.toBeNull();
+  for await (const chunk of stream!) chunks.push(Buffer.from(chunk));
   const text = Buffer.concat(chunks).toString('utf8');
 
   expect(text.startsWith('﻿run_id,pipeline,')).toBe(true);
