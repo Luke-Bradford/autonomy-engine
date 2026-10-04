@@ -139,4 +139,48 @@ describe('#1484 M2 useActivityRuns', () => {
     await pass(ACTIVITY_RUNS_CHILD_POLL_MS * 3);
     expect(getMock.mock.calls.length).toBe(before);
   });
+
+  it('a child-poll tick that a read in flight absorbs does not re-render the page (#1552)', async () => {
+    const going = {
+      key: 'c#0',
+      childRun: {
+        id: 'k',
+        pipelineName: 'Child',
+        status: 'running',
+        startedAt: 1,
+        finishedAt: null,
+      },
+    } as unknown as ActivityRun;
+    getMock.mockResolvedValueOnce({ runId: 'r', rows: [going], groups: [] });
+    // The next read hangs until released, so each poll tick lands on a read in flight.
+    let release: (() => void) | undefined;
+    getMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ runId: 'r', rows: [going], groups: [] });
+        }),
+    );
+    getMock.mockImplementation(() => new Promise(() => {}));
+    // Time in steps, so each tick's render lands before the next one.
+    const pass = async (ms: number) => {
+      for (let t = 0; t < ms; t += 250) await act(async () => vi.advanceTimersByTimeAsync(250));
+    };
+    let renders = 0;
+    renderHook(() => {
+      renders += 1;
+      return useActivityRuns('r', 1, true);
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    await pass(ACTIVITY_RUNS_CHILD_POLL_MS + ACTIVITY_RUNS_REFRESH_MS);
+    expect(getMock).toHaveBeenCalledTimes(2);
+    const settled = renders;
+    await pass(ACTIVITY_RUNS_CHILD_POLL_MS * 3);
+    expect(getMock).toHaveBeenCalledTimes(2);
+    expect(renders).toBe(settled);
+
+    // The ticks it absorbed still ask for one more read once it lands, not one each.
+    release?.();
+    await pass(ACTIVITY_RUNS_REFRESH_MS);
+    expect(getMock).toHaveBeenCalledTimes(3);
+  });
 });

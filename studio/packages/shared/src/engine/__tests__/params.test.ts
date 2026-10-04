@@ -27,7 +27,8 @@ import {
   validateWholeValue,
 } from '../params.js';
 import type { TriggerContext } from '../../schemas/trigger-context.js';
-import { MAX_PATH_DEPTH } from '../functions.js';
+import { FUNCTIONS, MAX_PATH_DEPTH } from '../functions.js';
+import { INFIX_HINTS, infixOperatorHint } from '../expr.js';
 
 // --- helpers ---------------------------------------------------------------
 
@@ -1294,6 +1295,54 @@ describe('validateRefs — deep `[]`/`.` addressing at SAVE time (#6 E7)', () =>
     const errors = validateRefs(doc(nodes, [edge('b', 'a', 'success')]));
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatch(/upstream|not guaranteed/);
+  });
+
+  it.each([
+    ['${1 > 0}', 'greater(a, b)'],
+    ['${params.n >= 2}', 'greaterOrEquals(a, b)'],
+    ['${params.n<2}', 'less(a, b)'],
+    ['${params.a == params.b}', 'equals(a, b)'],
+    ['${params.a != params.b}', 'not(equals(a, b))'],
+    ['${params.a && params.b}', 'and(x, y)'],
+    ['${params.a || params.b}', 'or(x, y)'],
+    ['${params.n + 1}', 'add(a, b)'],
+    ['${params.n - 1}', 'sub(a, b)'],
+    ['${params.n * 2}', 'mul(a, b)'],
+    ['${params.n / 2}', 'div(a, b)'],
+  ])('#1482 an infix operator in %s is refused naming %s at save', (text, fn) => {
+    const errors = validateRefs(doc([node('b', { prompt: text })], []));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/operators aren't supported/);
+    expect(errors[0]).toContain(`use ${fn}`);
+  });
+
+  it('#1482 an operator inside a string literal is not read as one', () => {
+    const errors = validateRefs(
+      doc([node('b', { prompt: "${concat('a > b', params.missing)}" })], []),
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/not a declared param/);
+    expect(errors[0]).not.toMatch(/operator/);
+  });
+
+  it('#1482 every function an operator hint names is in the catalog', () => {
+    for (const [, , call] of INFIX_HINTS) {
+      for (const name of call.match(/[A-Za-z]+(?=\()/g) ?? []) {
+        expect(FUNCTIONS[name], `${call} names ${name}`).toBeDefined();
+      }
+    }
+  });
+
+  it('#1482 an arrow is not hinted as a comparison', () => {
+    expect(infixOperatorHint('map(rows, x => x.a)')).toBeNull();
+    expect(infixOperatorHint('a -> b')).toBeNull();
+  });
+
+  it('#1482 a hyphen inside a name is not read as an operator', () => {
+    const errors = validateRefs(doc([node('b', { prompt: '${my-node}' })], []));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/unresolvable reference/);
+    expect(errors[0]).not.toMatch(/operator/);
   });
 
   it('refuses an index in the ROOT region (a namespace/id/output name is literal)', () => {

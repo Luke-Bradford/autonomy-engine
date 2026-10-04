@@ -70,7 +70,7 @@ describe('#1484 M2 ActivityRunsTable', () => {
       Attempt: '1',
       'Rows read': '49',
       'Rows written': '1,200',
-      Bytes: '4,096 read',
+      Bytes: '4,096 data bytes read',
     });
     expect(cells.Start).toMatch(/^\d\d:\d\d:07\.123$/);
     expect(cells.End).toMatch(/^\d\d:\d\d:08\.357$/);

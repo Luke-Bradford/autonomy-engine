@@ -55,23 +55,30 @@ export function useActivityRuns(
   const flight = useRef<{
     timer: ReturnType<typeof setTimeout> | null;
     inFlight: boolean;
-    /** The `lastSeq` and child-poll tick the newest render saw. */
+    /** The `lastSeq` the newest render saw, and the child-poll tick. */
     wanted: string;
+    /** Child-poll ticks so far. A ref, not state: a tick the flight absorbs renders nothing. */
+    poll: number;
+    /** Asks for a read at the current tick; installed by the read effect. */
+    kick: (() => void) | null;
     /** The `wanted` the last read was issued at; `null` before any read. */
     asked: string | null;
     /** Set on unmount, so a read landing afterwards schedules nothing. */
     gone: boolean;
-  }>({ timer: null, inFlight: false, wanted: '', asked: null, gone: false });
+  }>({ timer: null, inFlight: false, wanted: '', poll: 0, kick: null, asked: null, gone: false });
 
   const childGoing =
     live &&
     (reading.rows ?? []).some(
       (r) => r.childRun !== null && !TERMINAL_RUN_ROW_STATUS.has(r.childRun.status),
     );
-  const [tick, setTick] = useState(0);
   useEffect(() => {
     if (!childGoing) return;
-    const timer = setInterval(() => setTick((t) => t + 1), ACTIVITY_RUNS_CHILD_POLL_MS);
+    const f = flight.current;
+    const timer = setInterval(() => {
+      f.poll += 1;
+      f.kick?.();
+    }, ACTIVITY_RUNS_CHILD_POLL_MS);
     return () => clearInterval(timer);
   }, [childGoing]);
 
@@ -89,7 +96,6 @@ export function useActivityRuns(
 
   useEffect(() => {
     const f = flight.current;
-    f.wanted = `${lastSeq ?? ''}|${tick}`;
     const schedule = (delay: number) => {
       if (f.timer !== null || f.inFlight || f.gone) return;
       f.timer = setTimeout(() => {
@@ -105,8 +111,12 @@ export function useActivityRuns(
         });
       }, delay);
     };
-    schedule(f.asked === null ? 0 : ACTIVITY_RUNS_REFRESH_MS);
-  }, [load, runId, lastSeq, tick]);
+    f.kick = () => {
+      f.wanted = `${lastSeq ?? ''}|${f.poll}`;
+      schedule(f.asked === null ? 0 : ACTIVITY_RUNS_REFRESH_MS);
+    };
+    f.kick();
+  }, [load, runId, lastSeq]);
 
   return reading;
 }

@@ -48,10 +48,14 @@ import { ACTIVITY_RUN_COLUMNS, iterationText } from './activityRunsColumns';
 import { activityRunEntries } from './activityRunsTree';
 import { skipReasonText } from './skipReasonText';
 
-/** Bytes as the activity reported them, saying which way they moved. */
+/**
+ * Bytes as the activity reported them, saying which way they moved. A copy's
+ * `bytesRead` is the size of the values it read (data-movement spec §5), not
+ * the source file's size on disk, so it says "data bytes" (#1482 item 4).
+ */
 function bytesText(row: ActivityRun): string {
   const parts: string[] = [];
-  if (row.bytesRead !== null) parts.push(`${formatCount(row.bytesRead)} read`);
+  if (row.bytesRead !== null) parts.push(`${formatCount(row.bytesRead)} data bytes read`);
   if (row.bytesWritten !== null) parts.push(`${formatCount(row.bytesWritten)} written`);
   return parts.join(' · ');
 }

@@ -20,7 +20,7 @@ import type { OutputContract } from './outputs.js';
 import { containerOutputContract, outputContract } from './outputs.js';
 import { hasSecureOutput } from './secure.js';
 import type { Expr, ExprSegment, TemplateMode } from './expr.js';
-import { interpolationMode, parseExpr, restoreEscapes } from './expr.js';
+import { infixOperatorHint, interpolationMode, parseExpr, restoreEscapes } from './expr.js';
 import { getActivity } from '../catalog/registry.js';
 import type { ActivityCatalog } from '../catalog/types.js';
 import { activityNodeErrors } from './activity-config-check.js';
@@ -4625,6 +4625,7 @@ function scan(
       errors.push(`${where}: unterminated \${ reference`);
     }
     for (const m of mode.matches) {
+      const before = errors.length;
       checkExprStatic(
         parseExprSafe(m.body, where, errors),
         scope,
@@ -4634,6 +4635,11 @@ function scan(
         itemInScope,
         allowedRoots,
       );
+      // #1482 — `${1 > 0}` is refused as a reference; say what to write instead.
+      const hint = errors.length > before ? infixOperatorHint(m.body) : null;
+      if (hint !== null) {
+        for (let i = before; i < errors.length; i += 1) errors[i] = `${errors[i]} (${hint})`;
+      }
     }
     return;
   }
