@@ -141,15 +141,27 @@ check "gate refuses a signature tree that is not a direct child of the temp root
 # --- 4. drivers_under finds a live driver, and ONLY inside its own tree ------
 t4="$(mk_fixture)"
 p4="$(spin "$t4/infra/drive.sh")"
-check "drivers_under finds the driver running out of the tree" "$p4" \
-  "$(drivers_under "$t4" | tr -d ' ')"
+# MEMBERSHIP, not equality (#1543). The fixture driver loops on `sleep`, and a
+# forked `sleep` child carries its parent's argv -- `bash <t4>/infra/drive.sh` --
+# until it execs, so on a loaded runner one snapshot can hold p4 AND that child.
+# The child really is running out of t4, so matching it is correct; an exact
+# `= "$p4"` comparison flaked on it (CI 2026-10-04: expected '2488', got
+# '2488 2491' before t5 even existed). The properties that matter are that p4 is
+# found and that the OTHER tree's driver is not.
+has_pid() { # $1 = pid list, $2 = pid -> yes|no
+  hp_out=no
+  for hp_p in $1; do [ "$hp_p" = "$2" ] && hp_out=yes; done
+  echo "$hp_out"
+}
+check "drivers_under finds the driver running out of the tree" "yes" \
+  "$(has_pid "$(drivers_under "$t4")" "$p4")"
 # The safety pin. A driver with the same FILENAME somewhere else -- which is
 # exactly what the live control plane at ~/Dev/studio-loop/drive.sh is -- must
 # not be matched by another tree's reap.
 t5="$(mk_fixture)"
 p5="$(spin "$t5/infra/drive.sh")"
-check "drivers_under does not match a drive.sh outside the queried tree" "" \
-  "$(drivers_under "$t4" | grep -v "^ *$p4\$" | tr -d ' \n')"
+check "drivers_under does not match a drive.sh outside the queried tree" "no" \
+  "$(has_pid "$(drivers_under "$t4")" "$p5")"
 check "the other tree's driver is still running" "alive" "$(alive "$p5")"
 
 # --- 5. reap_tree kills the driver and removes the tree ---------------------
