@@ -1,0 +1,75 @@
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FocusEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
+
+/**
+ * #1484 M2 — a `?` help: a `<details>` whose note floats over the page
+ * (`.run-header__help`). It dismisses the way a popover does, which native
+ * `<details>` does not: on Escape, when focus moves to an element outside it,
+ * and on a pointer press outside it.
+ *
+ * A blur to NOTHING (`relatedTarget` null) is ignored: the window losing focus,
+ * a click on text, or Safari, which does not focus a `<summary>` on click. A
+ * click outside on something that takes no focus is the pointer listener's. That
+ * listener lives only while the help is open, in an effect, so an unmount while
+ * open removes it too.
+ *
+ * The note is `tabIndex={-1}`: a click on it then moves focus inside the help,
+ * rather than to nothing.
+ */
+export function HelpDisclosure({
+  label,
+  noteId,
+  children,
+}: {
+  /** The `?`'s accessible name, also its hover. */
+  label: string;
+  /** The note's id, for a control's `aria-describedby`. */
+  noteId: string;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const details = ref.current;
+    if (!open || details === null) return;
+    const doc = details.ownerDocument;
+    const onDown = (ev: PointerEvent) => {
+      if (!details.contains(ev.target as Node | null)) details.open = false;
+    };
+    doc.addEventListener('pointerdown', onDown, true);
+    return () => doc.removeEventListener('pointerdown', onDown, true);
+  }, [open]);
+
+  const onKeyDown = (e: KeyboardEvent<HTMLDetailsElement>) => {
+    if (e.key !== 'Escape' || !e.currentTarget.open) return;
+    e.currentTarget.open = false;
+    e.currentTarget.querySelector('summary')?.focus();
+  };
+  const onBlur = (e: FocusEvent<HTMLDetailsElement>) => {
+    const to = e.relatedTarget as Node | null;
+    if (to !== null && !e.currentTarget.contains(to)) e.currentTarget.open = false;
+  };
+
+  return (
+    <details
+      ref={ref}
+      className="run-header__help"
+      onToggle={(e) => setOpen(e.currentTarget.open)}
+      onKeyDown={onKeyDown}
+      onBlur={onBlur}
+    >
+      <summary aria-label={label} title={label}>
+        ?
+      </summary>
+      <span id={noteId} role="note" tabIndex={-1}>
+        {children}
+      </span>
+    </details>
+  );
+}

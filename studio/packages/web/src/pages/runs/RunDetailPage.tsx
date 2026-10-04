@@ -28,7 +28,7 @@ import { ActivityRunsTable } from './ActivityRunsTable';
 import { RunHeader, type RunHeaderNames } from './RunHeader';
 import { RunFailureBanner } from './RunFailureBanner';
 import { runFailure, runFinished, runStartedAt } from './runFailure';
-import { closeOnEscape, closeOnLeave, closeOnOutsidePointer } from './helpDisclosure';
+import { HelpDisclosure } from './HelpDisclosure';
 import { containerLabels } from '../pipeline/containerRules';
 import { useActivityRuns } from './useActivityRuns';
 import { NodeDuration } from './NodeDuration';
@@ -519,19 +519,12 @@ export function RunDetailPage({ runId }: { runId: string }) {
                 >
                   {rerunning ? 'Starting rerun…' : 'Rerun from failed'}
                 </button>
-                <details
-                  className="run-header__help"
-                  onKeyDown={closeOnEscape}
-                  onBlur={closeOnLeave}
-                  onToggle={closeOnOutsidePointer}
+                <HelpDisclosure
+                  label="About rerunning from the failure"
+                  noteId="rerun-cost-warning"
                 >
-                  <summary aria-label="About rerunning from the failure" title="About rerunning">
-                    ?
-                  </summary>
-                  <span id="rerun-cost-warning" role="note" tabIndex={-1}>
-                    {RERUN_COST_WARNING}
-                  </span>
-                </details>
+                  {RERUN_COST_WARNING}
+                </HelpDisclosure>
               </>
             )}
             {/* CX4 (#1320) — the cancel action, on any run that has not ended
