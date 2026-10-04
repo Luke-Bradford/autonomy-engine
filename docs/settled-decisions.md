@@ -564,19 +564,6 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     `PipelineHasRunsError` stands.
     *(Operator ask in #1481; slice 2.)*
 
-- **A skip's reason is reducer STATE, not a `node.skipped` event.**
-    Skips were never logged: the reducer derives them (readiness, a loop
-    timeout, a parallel ForEach's doom), and run state is never persisted, only
-    re-folded from `run_events`. So the reducer records `skipReason` on the
-    node or container at the site that decides the skip, and the activity-runs
-    read model reads it. An event would be a second source of truth for a fact
-    the fold already owns, and only new runs would have it; state gives old
-    logs reasons too. The one event touched is `run.reseeded`, whose
-    `copiedContainers` embeds container state: the field is optional and
-    reseed copies only `success` containers, so old payloads parse unchanged.
-    *(Build decision in #1484 M2, 2026-10-04. It replaces the `node.skipped`
-    event that #1484 M3 and #1482 item 2 proposed, and the operator may
-    override it.)*
 
 ## Adding an entry
 
