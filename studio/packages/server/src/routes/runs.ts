@@ -22,6 +22,8 @@ import {
   type RunCancelAccepted,
   type ApiErrorBody,
   type RunDetail,
+  type ActivityRunChild,
+  type ActivityRunsResponse,
 } from '@autonomy-studio/shared';
 import {
   getPipeline,
@@ -31,12 +33,15 @@ import {
   listRunAnnotations,
   listRunDiagnostics,
   listRunEvents,
+  listRuns,
   listRunSummariesPage,
 } from '../repo/index.js';
 import { getExternalWaitByAttempt, listPendingExternalWaitsByRun } from '../repo/external-waits.js';
 import { deriveExternalWaitToken } from '../webhooks/external-wait-token.js';
 import { makeRunActivityFold } from '../run/activity-counts.js';
-import { makeDocResolver } from '../run/driver.js';
+import { buildEngine, makeDocResolver } from '../run/driver.js';
+import { projectActivityRuns } from '../run/activity-runs.js';
+import { loadEngineLog } from '../run/events.js';
 import { BadRequestError, BusyError, NotFoundError } from '../errors.js';
 import {
   ExternalWaitPayloadError,
@@ -390,6 +395,71 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
     const debug = isDebugVersion(db, run.pipelineVersionId) === true;
     return { run, pipelineVersion, debug, pipelineName, triggerName } satisfies RunDetail;
   });
+
+  /**
+   * #1484 OR35 M2/M3 — the run's activity runs: one row per attempt of each
+   * activity, per iteration (`run/activity-runs.ts` owns the projection).
+   *
+   * SECURITY — the same proof as `/detail`: the run is `requireOwned`, the version
+   * is the one the run is bound to, never a caller-supplied id. Child runs are
+   * read with `ownerId` AND `parentRunId` in the query, so a link to a run this
+   * caller does not own is never resolved; such a child keeps only the id the
+   * parent's own log records. A child's pipeline name passes the owner check per
+   * row, as `/detail`'s names do.
+   *
+   * A version that will not resolve is a 409 through the global handler, as on
+   * `/detail`. A log that will not parse is a 500: `RunLogUnparseableError` is a
+   * server fault, and the page keeps its other sections.
+   */
+  fastify.get<{ Params: { id: string } }>(
+    '/api/runs/:id/activity-runs',
+    async (request): Promise<ActivityRunsResponse> => {
+      const run = requireOwned(
+        getRun(db, request.params.id),
+        request.principal,
+        'run',
+        request.params.id,
+      );
+      const doc = resolveDoc(run.pipelineVersionId);
+      const rows = projectActivityRuns(doc, buildEngine(doc), loadEngineLog(db, run.id));
+      const children =
+        run.ownerId === null
+          ? new Map()
+          : new Map(
+              listRuns(db, { parentRunId: run.id, ownerId: run.ownerId }).map((r) => [r.id, r]),
+            );
+      const names = new Map<string, string | null>();
+      const pipelineNameOf = (versionId: string): string | null => {
+        if (!names.has(versionId)) {
+          let name: string | null = null;
+          try {
+            const pipeline = getPipeline(db, resolveDoc(versionId).pipelineId);
+            name = pipeline !== null && pipeline.ownerId === run.ownerId ? pipeline.name : null;
+          } catch {
+            // A child whose version is gone or unparseable still has a run to
+            // link to; it just has no name to show.
+          }
+          names.set(versionId, name);
+        }
+        return names.get(versionId) ?? null;
+      };
+      return {
+        runId: run.id,
+        rows: rows.map((row) => {
+          const child = row.childRunId === null ? undefined : children.get(row.childRunId);
+          const childRun: ActivityRunChild | null =
+            child === undefined
+              ? null
+              : {
+                  id: child.id,
+                  pipelineName: pipelineNameOf(child.pipelineVersionId),
+                  status: child.status,
+                };
+          return { ...row, childRun };
+        }),
+      };
+    },
+  );
 
   fastify.get<{ Params: { id: string } }>('/api/runs/:id/events', async (request) => {
     const run = requireOwned(

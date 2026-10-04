@@ -154,8 +154,27 @@ export class RunLogUnparseableError extends Error {
  * as the typed {@link RunLogUnparseableError} (#646).
  */
 export function loadEngineEvents(db: Db, runId: string): EngineEvent[] {
+  return loadEngineLog(db, runId).map((entry) => entry.event);
+}
+
+/** One logged event with what the parse drops: when it was appended, and the
+ * payload as stored (a defaulted field reads as stated in `event`). */
+export interface LoggedEngineEvent {
+  readonly event: EngineEvent;
+  /** Epoch ms the server appended it (`run_events.ts`). */
+  readonly ts: number;
+  readonly payload: unknown;
+}
+
+/** {@link loadEngineEvents}, keeping each row's `ts` and raw payload — for a read
+ * model that needs times (#1484's activity runs). Same parse, same errors. */
+export function loadEngineLog(db: Db, runId: string): LoggedEngineEvent[] {
   try {
-    return listRunEvents(db, runId).map((row) => EngineEventSchema.parse(row.payload));
+    return listRunEvents(db, runId).map((row) => ({
+      event: EngineEventSchema.parse(row.payload),
+      ts: row.ts,
+      payload: row.payload,
+    }));
   } catch (err) {
     if (isDeterministicRowCorruption(err)) {
       throw new RunLogUnparseableError(runId, err);
