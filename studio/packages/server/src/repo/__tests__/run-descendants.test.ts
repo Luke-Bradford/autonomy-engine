@@ -81,7 +81,11 @@ describe('listRunSummariesPage includeChildren (#1484)', () => {
   it("returns everything a trigger's run caused, though only the root carries the trigger", () => {
     const { db } = freshDb();
     const c = chain(db);
-    const result = page(db, { ownerId: 'local', triggerId: c.triggerId }, { includeChildren: true });
+    const result = page(
+      db,
+      { ownerId: 'local', triggerId: c.triggerId },
+      { includeChildren: true },
+    );
     expect(result.items.map((r) => r.id)).toEqual([c.root]);
     expect(new Set(result.descendants?.map((r) => r.id))).toEqual(
       new Set([c.child, c.sibling, c.grandchild]),
@@ -164,7 +168,11 @@ describe('RunSummary.childRunCount (#1484)', () => {
   it('counts direct children only, on page rows and descendants alike, filter or no filter', () => {
     const { db } = freshDb();
     const c = chain(db);
-    const result = page(db, { ownerId: 'local', triggerId: c.triggerId }, { includeChildren: true });
+    const result = page(
+      db,
+      { ownerId: 'local', triggerId: c.triggerId },
+      { includeChildren: true },
+    );
     const count = (id: string) =>
       [...result.items, ...(result.descendants ?? [])].find((r) => r.id === id)?.childRunCount;
     expect(count(c.root)).toBe(2);
@@ -172,5 +180,4 @@ describe('RunSummary.childRunCount (#1484)', () => {
     expect(count(c.sibling)).toBe(0);
     expect(count(c.grandchild)).toBe(0);
   });
-
 });

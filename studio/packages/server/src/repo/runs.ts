@@ -479,11 +479,7 @@ export function listRunSummariesPage(
       filter.ownerId,
     );
     const below =
-      order.length === 0
-        ? []
-        : withSummaryColumns(tx, sort)
-            .where(inArray(runs.id, order))
-            .all();
+      order.length === 0 ? [] : withSummaryColumns(tx, sort).where(inArray(runs.id, order)).all();
     const at = new Map(order.map((id, i) => [id, i]));
     below.sort((a, b) => (at.get(a.run.id) ?? 0) - (at.get(b.run.id) ?? 0));
     return { ...page, descendants: toRunSummaries(tx, below, filter.ownerId, foldActivities) };

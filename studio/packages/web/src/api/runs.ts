@@ -19,7 +19,6 @@ import {
   type RunDiagnostic,
   type RunSortDir,
   type RunSortKey,
-  type RunSummary,
   type RunDetail,
   type RunEvent,
   type RunSummaryPage,
@@ -28,7 +27,6 @@ import {
 } from '@autonomy-studio/shared';
 import { apiFetch } from './client';
 import { pageQuery } from './pagination';
-
 
 /**
  * How many runs one page holds unless the caller says otherwise: the smallest

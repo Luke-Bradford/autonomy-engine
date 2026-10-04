@@ -134,7 +134,7 @@ describe('runs routes (read-only)', () => {
    * refuses, and that no axis escapes the owner scope.
    */
   describe('U26 — the Monitor filter axes', () => {
-    it('#1484 — includeChildren returns the page\'s descendants beside it, and only when asked', async () => {
+    it("#1484 — includeChildren returns the page's descendants beside it, and only when asked", async () => {
       const seed = (parentRunId: string | null) =>
         createRun(app.db, {
           ownerId: 'local',

@@ -6,7 +6,9 @@ function r(id: string, parentRunId: string | null, startedAt: number): NestableR
 }
 
 const view = (rows: ReturnType<typeof nestRuns<NestableRun>>) =>
-  rows.map((row) => `${'  '.repeat(row.depth)}${row.run.id}:${row.shown}${row.expanded ? '' : '+'}`);
+  rows.map(
+    (row) => `${'  '.repeat(row.depth)}${row.run.id}:${row.shown}${row.expanded ? '' : '+'}`,
+  );
 
 describe('nestRuns (#1484)', () => {
   it('puts each child under its parent in call order, and keeps the roots in list order', () => {
@@ -28,10 +30,7 @@ describe('nestRuns (#1484)', () => {
   });
 
   it('keeps a child whose parent is not loaded as a root of its own', () => {
-    expect(view(nestRuns([r('c', 'gone', 2), r('x', null, 1)], new Set()))).toEqual([
-      'c:0',
-      'x:0',
-    ]);
+    expect(view(nestRuns([r('c', 'gone', 2), r('x', null, 1)], new Set()))).toEqual(['c:0', 'x:0']);
   });
 
   it('hides the whole subtree of a collapsed parent, but still counts its children', () => {
