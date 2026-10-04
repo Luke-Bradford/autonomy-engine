@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
+import { nodesTable } from './support/panels';
 
 /**
  * U24 (slice 1) — the run monitor says WHY a node failed, and a node OPENS.
@@ -178,13 +179,7 @@ test('#869 — an oversized output is capped in the DOM, and the rest is one cli
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
 
-  /* The Nodes table's drill-in; the activity runs above name the same button
-     and open the run drawer instead (#1484 M2). */
-  await page
-    .locator('table')
-    .filter({ has: page.getByRole('columnheader', { name: 'Node', exact: true }) })
-    .getByRole('button', { name: 'Filter 1', exact: true })
-    .click();
+  await nodesTable(page).getByRole('button', { name: 'Filter 1', exact: true }).click();
   const panel = page.getByRole('complementary', { name: 'Node Filter 1' });
   await expect(panel).toBeVisible();
 

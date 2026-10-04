@@ -7,6 +7,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
 import { seedConnection, seedDataset } from './support/seedResources';
 import { fluentRootReady } from './support/theme';
+import { nodesTable } from './support/panels';
 
 /**
  * A CSV file of `csv` → a sqlite `people` table, as one `copy` node: the two
@@ -145,7 +146,7 @@ test('#1162 — a copy run names both addresses it resolved', async ({ page }) =
 
     await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
     await fluentRootReady(page);
-    await page.getByRole('button', { name: 'Copy Data 1', exact: true }).click();
+    await nodesTable(page).getByRole('button', { name: 'Copy Data 1', exact: true }).click();
     const panel = page.getByRole('complementary', { name: 'Node Copy Data 1' });
     await expect(panel).toBeVisible();
 
@@ -236,7 +237,7 @@ test('#1299 — a copy streams per-batch progress, and the run page shows the la
     /* Settled, so the table names the stream rather than showing a live value. */
     await expect(page.getByRole('cell', { name: `output: ${COPY_PROGRESS_OUTPUT}` })).toBeVisible();
 
-    await page.getByRole('button', { name: 'Copy Data 1', exact: true }).click();
+    await nodesTable(page).getByRole('button', { name: 'Copy Data 1', exact: true }).click();
     const panel = page.getByRole('complementary', { name: 'Node Copy Data 1' });
     await expect(panel).toBeVisible();
     await expect(panel).toContainText(
