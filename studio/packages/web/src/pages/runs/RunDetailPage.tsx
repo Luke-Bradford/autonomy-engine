@@ -24,7 +24,10 @@ import { nodeStatusLabel, nodeStatusPillClass } from './nodeStatus';
 import { runStatusLabel } from './runStatus';
 import { AttemptTimeline } from './AttemptTimeline';
 import { NodeActivityPanel, PANEL_ID } from './NodeActivityPanel';
-import { ActivityRunsTable } from './ActivityRunsTable';
+import { ActivityRunsTable, SkipWhy } from './ActivityRunsTable';
+import { activityOfRow } from './attemptActivity';
+import { iterationText } from './activityRunsColumns';
+import { RunDrawer } from './RunDrawer';
 import { RunHeader, type RunHeaderNames } from './RunHeader';
 import { RunFailureBanner } from './RunFailureBanner';
 import { runFailure, runFinished, runStartedAt } from './runFailure';
@@ -348,6 +351,23 @@ export function RunDetailPage({ runId }: { runId: string }) {
   );
   // #1484 M2 — the row "Show activity" asked for; a new object per ask.
   const [selectedRow, setSelectedRow] = useState<{ key: string } | null>(null);
+  /* #1484 M2 — the activity run the detail drawer shows. Held as the row's key
+     and resolved against the latest read, like the drill-in's node id above,
+     so the drawer follows a running attempt and closes if its row goes. Only
+     one of the drawer and the Nodes table's inline drill-in is open at a time:
+     they show the same panel, which owns one element id. */
+  const [drawerKey, setDrawerKey] = useState<string | null>(null);
+  const drawerRow = activityRuns.rows?.find((r) => r.key === drawerKey) ?? null;
+  const drawerNode = useMemo(
+    () => (drawerRow === null ? null : activityOfRow(stream.events, folded, drawerRow)),
+    [drawerRow, stream.events, folded],
+  );
+  const drawerIteration = (() => {
+    const it = drawerRow?.iteration ?? null;
+    if (it === null) return '';
+    const kind = activityRuns.groups.find((g) => g.containerId === it.containerId)?.kind;
+    return `${kind === 'loop' ? 'round' : 'item'} ${iterationText(it)}`;
+  })();
 
   /* CX4 (#1320) — "Cancelling…": the cancel is FOLDED (the log carries
      `run.cancelRequested`) but the run has not finished, because in-flight work
@@ -615,6 +635,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
         containerNameOf={(id) => containerNames?.get(id) ?? null}
         selected={selectedRow}
         live={countingLive}
+        openKey={drawerRow?.key ?? null}
+        onOpen={(key) => {
+          setOpenNodeId(null);
+          setDrawerKey(key);
+        }}
       />
 
       {/* The run's inputs and its downward rerun lineage (RS6): facts about the
@@ -733,7 +758,10 @@ export function RunDetailPage({ runId }: { runId: string }) {
                       className="node-drill-in"
                       aria-expanded={openNodeId === n.nodeId}
                       aria-controls={openNodeId === n.nodeId ? PANEL_ID : undefined}
-                      onClick={() => setOpenNodeId(openNodeId === n.nodeId ? null : n.nodeId)}
+                      onClick={() => {
+                        setDrawerKey(null);
+                        setOpenNodeId(openNodeId === n.nodeId ? null : n.nodeId);
+                      }}
                     >
                       {name ?? <code>{n.nodeId}</code>}
                     </button>
@@ -874,6 +902,28 @@ export function RunDetailPage({ runId }: { runId: string }) {
             ))}
           </tbody>
         </table>
+      )}
+      {drawerRow !== null && drawerNode !== null && (
+        <RunDrawer key={drawerRow.key} onClose={() => setDrawerKey(null)}>
+          <NodeActivityPanel
+            node={drawerNode}
+            name={nameOf(drawerRow.activityId)}
+            runStatus={status}
+            live={countingLive}
+            onClose={() => setDrawerKey(null)}
+            run={{
+              attempt: drawerRow.attempt,
+              iteration: drawerIteration,
+              skipWhy: (
+                <SkipWhy
+                  status={drawerRow.status}
+                  reason={drawerRow.skipReason}
+                  nameOf={(id) => nameOf(id) ?? containerNames?.get(id) ?? null}
+                />
+              ),
+            }}
+          />
+        </RunDrawer>
       )}
       {confirmDialog}
     </section>

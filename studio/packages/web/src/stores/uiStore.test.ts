@@ -10,6 +10,7 @@ import {
   DOCK_MIN_WIDTH,
   DOCK_POSITION_STORAGE_KEY,
   DOCK_WIDTH_STORAGE_KEY,
+  RUN_DRAWER_WIDTH_STORAGE_KEY,
   dockMaxWidth,
   HISTORY_OPEN_STORAGE_KEY,
   DISPLAY_TIME_ZONE_STORAGE_KEY,
@@ -477,6 +478,29 @@ describe('dockMaxHeight (#1475)', () => {
 
   it('never goes under the dock floor', () => {
     expect(dockMaxHeight(300)).toBe(DOCK_MIN_HEIGHT);
+  });
+});
+
+describe('uiStore run drawer width (#1484 OR35 M2)', () => {
+  it('starts at the default, persists a width, and keeps it apart from the dock', () => {
+    const storage = fakeStorage();
+    const first = createUiStore(storage).getState();
+    expect(first.runDrawerWidth).toBeNull();
+    first.setRunDrawerWidth(612.6);
+    const second = createUiStore(storage).getState();
+    expect(second.runDrawerWidth).toBe(613);
+    expect(second.dockWidth).toBeNull();
+  });
+
+  it('raises a stored width under the floor, and forgets one it cannot read', () => {
+    expect(
+      createUiStore(fakeStorage({ [RUN_DRAWER_WIDTH_STORAGE_KEY]: '90' })).getState()
+        .runDrawerWidth,
+    ).toBe(DOCK_MIN_WIDTH);
+    expect(
+      createUiStore(fakeStorage({ [RUN_DRAWER_WIDTH_STORAGE_KEY]: 'wide' })).getState()
+        .runDrawerWidth,
+    ).toBeNull();
   });
 });
 

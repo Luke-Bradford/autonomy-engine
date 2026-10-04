@@ -55,6 +55,12 @@ export interface UiState {
   setDockPosition: (position: DockPosition) => void;
   dockWidth: number | null;
   setDockWidth: (width: number | null) => void;
+  /**
+   * #1484 OR35 M2 — the run page's detail drawer width, in px; `null` is the
+   * default. Clamped to `DOCK_MIN_WIDTH` like the editor's dock it mirrors.
+   */
+  runDrawerWidth: number | null;
+  setRunDrawerWidth: (width: number | null) => void;
   /** The Problems column inside the dock (#1393). */
   problemsOpen: boolean;
   setProblemsOpen: (open: boolean) => void;
@@ -232,6 +238,7 @@ export const DOCK_HEIGHT_STORAGE_KEY = 'autonomy-studio.dock-height';
 export const DOCK_OPEN_STORAGE_KEY = 'autonomy-studio.dock-open';
 export const DOCK_POSITION_STORAGE_KEY = 'autonomy-studio.dock-position';
 export const DOCK_WIDTH_STORAGE_KEY = 'autonomy-studio.dock-width';
+export const RUN_DRAWER_WIDTH_STORAGE_KEY = 'autonomy-studio.run-drawer-width';
 export const PROBLEMS_OPEN_STORAGE_KEY = 'autonomy-studio.problems-open';
 export const TOOLBOX_WIDTH_STORAGE_KEY = 'autonomy-studio.toolbox-width';
 export const TOOLBOX_COLLAPSED_STORAGE_KEY = 'autonomy-studio.toolbox-collapsed';
@@ -745,6 +752,21 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
         const dockWidth = width === null ? null : clampDockWidth(width);
         writeStored(storage, DOCK_WIDTH_STORAGE_KEY, dockWidth === null ? '' : String(dockWidth));
         set({ dockWidth });
+      },
+      runDrawerWidth: readStored<number | null>(
+        storage,
+        RUN_DRAWER_WIDTH_STORAGE_KEY,
+        parseDockSize(clampDockWidth),
+        null,
+      ),
+      setRunDrawerWidth: (width) => {
+        const runDrawerWidth = width === null ? null : clampDockWidth(width);
+        writeStored(
+          storage,
+          RUN_DRAWER_WIDTH_STORAGE_KEY,
+          runDrawerWidth === null ? '' : String(runDrawerWidth),
+        );
+        set({ runDrawerWidth });
       },
       problemsOpen,
       setProblemsOpen,

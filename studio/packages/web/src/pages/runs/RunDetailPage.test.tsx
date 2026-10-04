@@ -3373,3 +3373,114 @@ describe('RunDetailPage — the failure banner', () => {
     expect(await screen.findByRole('group', { name: 'Failure' })).toHaveTextContent('Run failed');
   });
 });
+
+describe('RunDetailPage — the activity run detail drawer (#1484 M2)', () => {
+  const dispatch = (attemptId: string, file: string) =>
+    envelope({
+      type: 'node.dispatched',
+      runId: 'run_1',
+      nodeId: 'greet',
+      attemptId,
+      idempotent: true,
+      input: { text: `{"file":"${file}"}`, chars: 15 },
+    });
+  const log = [
+    envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+    dispatch('greet#0', 'a.csv'),
+    envelope({
+      type: 'node.succeeded',
+      runId: 'run_1',
+      nodeId: 'greet',
+      attemptId: 'greet#0',
+      outputs: { rows: 49 },
+    }),
+    dispatch('greet#1', 'b.csv'),
+    envelope({
+      type: 'node.succeeded',
+      runId: 'run_1',
+      nodeId: 'greet',
+      attemptId: 'greet#1',
+      outputs: { rows: 43 },
+    }),
+  ];
+  const itemRow = (index: number, item: string) => ({
+    key: `greet#${index}`,
+    nodeId: 'greet',
+    activityId: 'greet',
+    containerId: 'each',
+    attemptId: `greet#${index}`,
+    attempt: 1,
+    status: 'success' as const,
+    reused: false,
+    startedAt: 1_700_000_000_000 + index * 10,
+    finishedAt: 1_700_000_000_005 + index * 10,
+    durationMs: 5,
+    iteration: { containerId: 'each', index, count: 2, item },
+    branch: null,
+    rowsRead: null,
+    rowsWritten: null,
+    bytesRead: null,
+    bytesWritten: null,
+    childRunId: null,
+    childRun: null,
+    skipReason: null,
+    error: null,
+  });
+
+  beforeEach(() => {
+    getRunDetailMock.mockResolvedValue({ ...NAMES, run: run(), pipelineVersion: version() });
+    vi.mocked(runsApi.getRunActivityRuns).mockResolvedValue({
+      runId: 'run_1',
+      rows: [itemRow(0, 'a.csv'), itemRow(1, 'b.csv')],
+      groups: [],
+    });
+    useRunStreamMock.mockReturnValue(stream({ events: log, phase: 'closed' }));
+  });
+
+  const openRow = async (index: number) => {
+    await waitFor(() =>
+      expect(document.querySelectorAll('.activity-runs__open')).toHaveLength(2),
+    );
+    const button = document.querySelectorAll<HTMLButtonElement>('.activity-runs__open')[index]!;
+    await userEvent.click(button);
+    return button;
+  };
+
+  it("shows the item clicked, with that item's own input and outputs", async () => {
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    const second = await openRow(1);
+    const drawer = screen.getByRole('complementary', { name: 'Node HTTP Request 1' });
+    expect(drawer.closest('.run-drawer')).not.toBeNull();
+    expect(drawer).toHaveTextContent('attempt 1 · item 2 of 2 · b.csv');
+    expect(drawer).toHaveTextContent('b.csv');
+    expect(drawer).toHaveTextContent('43');
+    expect(drawer).not.toHaveTextContent('a.csv');
+    expect(second).toHaveAttribute('aria-expanded', 'true');
+    expect(drawer).toHaveFocus();
+
+    await openRow(0);
+    const first = screen.getByRole('complementary', { name: 'Node HTTP Request 1' });
+    expect(first).toHaveTextContent('item 1 of 2 · a.csv');
+    expect(first).not.toHaveTextContent('b.csv');
+    expect(second).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('closes on Escape and hands focus back to the row that opened it', async () => {
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    const button = await openRow(0);
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('complementary')).toBeNull();
+    expect(button).toHaveFocus();
+  });
+
+  it('is one panel with the Nodes table drill-in: opening either closes the other', async () => {
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await openRow(0);
+    await userEvent.click(document.querySelector<HTMLButtonElement>('.node-drill-in')!);
+    expect(screen.getAllByRole('complementary')).toHaveLength(1);
+    expect(document.querySelector('.run-drawer')).toBeNull();
+    await openRow(1);
+    expect(screen.getAllByRole('complementary')).toHaveLength(1);
+    expect(document.querySelector('.run-drawer')).not.toBeNull();
+  });
+});

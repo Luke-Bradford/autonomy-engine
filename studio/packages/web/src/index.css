@@ -5708,6 +5708,75 @@ button.danger {
   background: var(--panel-2);
 }
 
+/* #1484 OR35 M2 — an activity's name opens the detail drawer: a button that
+   reads as the name it is, with the underline a link would have. */
+.activity-runs__open {
+  all: unset;
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.activity-runs__open:hover {
+  text-decoration: underline;
+}
+
+.activity-runs__open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The row the drawer is showing. A fill, not the outline `Show activity` draws,
+   so the two can mark different rows at once and stay told apart. */
+.activity-runs tr[data-open] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+/* #1484 OR35 M2 — the detail drawer: fixed to the right under the command bar,
+   OVER the page rather than in its flow, so opening it moves nothing. */
+.run-drawer {
+  position: fixed;
+  top: 40px;
+  right: 0;
+  bottom: 0;
+  z-index: 15;
+  width: var(--run-drawer-width, min(36rem, 45vw));
+  max-width: 80vw;
+  display: flex;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  box-shadow: -4px 0 16px rgb(0 0 0 / 0.18);
+}
+
+.run-drawer__splitter {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  /* A touch drag must resize the drawer, not scroll the page. */
+  touch-action: none;
+}
+
+.run-drawer__splitter:hover,
+.run-drawer__splitter:focus-visible {
+  background: linear-gradient(var(--accent), var(--accent)) center / 3px 100% no-repeat;
+}
+
+.run-drawer__splitter:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
+}
+
+.run-drawer__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.run-drawer .node-detail-panel {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  min-height: 100%;
+}
+
 .activity-runs__toggle {
   all: unset;
   cursor: pointer;
