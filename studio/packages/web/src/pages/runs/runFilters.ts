@@ -16,6 +16,12 @@ import {
 } from '@autonomy-studio/shared';
 import type { RunSince, RunStatus } from '@autonomy-studio/shared';
 import { pad } from '../triggers/formFields';
+import {
+  isCalendarDay,
+  shiftDay,
+  zonedDayStart,
+  type DisplayTimeZone,
+} from '../../lib/displayTime';
 
 /**
  * U26 + #1484 OR35 M1 — the runs list's filter bar state, and the URL it lives
@@ -157,22 +163,6 @@ export function canonicalKindParam(kinds: readonly string[]): string | undefined
     : picked.join(',');
 }
 
-const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
-
-/** A `YYYY-MM-DD` that names a real calendar day, as a local `Date` at its
- * midnight; `null` for anything else. `2026-02-30` is refused rather than rolled
- * over into March, which is what `new Date(y, m, d)` alone would do. */
-function localMidnight(day: string): Date | null {
-  const m = DAY.exec(day);
-  if (m === null) return null;
-  const [y, mo, d] = [Number(m[1]), Number(m[2]) - 1, Number(m[3])];
-  // `setFullYear`, not `new Date(y, mo, d)`: the constructor reads a year below
-  // 100 as 19xx, and a year typed into a date input passes through `0002-…`.
-  const date = new Date(2000, 0, 1);
-  date.setFullYear(y, mo, d);
-  return date.getFullYear() === y && date.getMonth() === mo && date.getDate() === d ? date : null;
-}
-
 /**
  * The days a URL holds, or `null` when it holds none that makes sense. A valid
  * `on` wins over a range. Either end of a range may be missing (open-ended). A
@@ -184,14 +174,15 @@ function readDays(
   from: string | null,
   to: string | null,
 ): { on: string } | { from?: string; to?: string } | null {
-  if (on !== null && localMidnight(on) !== null) return { on };
-  const fromDay = from === null ? null : localMidnight(from);
-  const toDay = to === null ? null : localMidnight(to);
+  if (on !== null && isCalendarDay(on)) return { on };
+  const fromDay = from !== null && isCalendarDay(from) ? from : null;
+  const toDay = to !== null && isCalendarDay(to) ? to : null;
   if (fromDay === null && toDay === null) return null;
+  // Two valid `YYYY-MM-DD` days compare as strings in calendar order.
   if (fromDay !== null && toDay !== null && fromDay > toDay) return null;
   return {
-    ...(fromDay === null || from === null ? {} : { from }),
-    ...(toDay === null || to === null ? {} : { to }),
+    ...(fromDay === null ? {} : { from: fromDay }),
+    ...(toDay === null ? {} : { to: toDay }),
   };
 }
 
@@ -216,33 +207,30 @@ export function hasRunFilterParams(params: URLSearchParams): boolean {
 
 /**
  * The epoch-ms bounds a day range asks the server for: `from` is the first
- * day's local midnight (inclusive) and `to` the midnight AFTER the last day
- * (exclusive), so "On a day" covers the whole day whatever its length — a
- * daylight-saving day is 23 or 25 hours, which is why this steps by calendar
- * day rather than adding 24 hours.
+ * day's first instant (inclusive) and `to` the first instant of the day AFTER
+ * the last (exclusive), so "On a day" covers the whole day whatever its length
+ * — a daylight-saving day is 23 or 25 hours, which is why this steps by
+ * calendar day rather than adding 24 hours.
  *
- * The VIEWER'S zone, for now: a calendar day is the reader's, not the server's.
- * When #1484's display-timezone setting lands it owns this boundary too.
+ * In the viewer's DISPLAY zone (#1484): a calendar day is the reader's, and it
+ * must be the same day the Started column prints, or "On 4 October" would list
+ * runs the grid dates the 3rd.
  */
-export function dayRangeBounds(days: { on?: string; from?: string; to?: string }): {
+export function dayRangeBounds(
+  days: { on?: string; from?: string; to?: string },
+  zone: DisplayTimeZone,
+): {
   from?: string;
   to?: string;
 } {
   const first = days.on ?? days.from;
   const lastDay = days.on ?? days.to;
-  const start = first === undefined ? null : localMidnight(first);
-  const last = lastDay === undefined ? null : localMidnight(lastDay);
-  const end =
-    last === null ? null : new Date(last.getFullYear(), last.getMonth(), last.getDate() + 1);
+  const start = first === undefined ? null : zonedDayStart(first, zone);
+  const end = lastDay === undefined ? null : zonedDayStart(shiftDay(lastDay, 1), zone);
   return {
-    ...(start === null ? {} : { from: String(start.getTime()) }),
-    ...(end === null ? {} : { to: String(end.getTime()) }),
+    ...(start === null ? {} : { from: String(start) }),
+    ...(end === null ? {} : { to: String(end) }),
   };
-}
-
-/** A local `Date` as the `YYYY-MM-DD` a date input and the URL hold. */
-export function dayOf(date: Date): string {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 /**

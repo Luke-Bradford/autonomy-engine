@@ -69,7 +69,9 @@ interface ZonedParts {
 }
 
 /* Formatters are costly to build and a grid renders hundreds of cells, so one
-   per zone is kept. Bounded by the number of zones a viewer ever picks. */
+   per NAMED zone is kept, bounded by the zones a viewer ever picks. `local` is
+   not cached: a formatter fixes the runtime's zone when it is built, and the
+   machine's zone can change under a long-lived tab. */
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
 function formatterFor(zone: DisplayTimeZone): Intl.DateTimeFormat {
@@ -87,7 +89,7 @@ function formatterFor(zone: DisplayTimeZone): Intl.DateTimeFormat {
       hourCycle: 'h23',
       timeZoneName: 'short',
     });
-    formatters.set(zone, formatter);
+    if (zone !== LOCAL_TIME_ZONE) formatters.set(zone, formatter);
   }
   return formatter;
 }
@@ -200,10 +202,15 @@ export function zonedDayStart(day: string, zone: DisplayTimeZone): number | null
   const match = DAY.exec(day);
   if (match === null) return null;
   const [year, month, date] = [Number(match[1]), Number(match[2]), Number(match[3])];
-  const utcMidnight = Date.UTC(year, month - 1, date);
-  const check = new Date(utcMidnight);
-  if (check.getUTCMonth() !== month - 1 || check.getUTCDate() !== date) return null;
-  if (zone === LOCAL_TIME_ZONE) return new Date(year, month - 1, date).getTime();
+  const utcMidnight = calendarDay(year, month, date);
+  if (utcMidnight === null) return null;
+  if (zone === LOCAL_TIME_ZONE) {
+    // `setFullYear`, as `calendarDay` — the constructor reads a year below 100
+    // as 19xx, and a year typed into a date input passes through `0002-…`.
+    const local = new Date(2000, 0, 1);
+    local.setFullYear(year, month - 1, date);
+    return local.getTime();
+  }
   let guess = utcMidnight - offsetAt(utcMidnight, zone);
   guess = utcMidnight - offsetAt(guess, zone);
   // A midnight skipped by a spring-forward lands on the previous day's 23:00;
@@ -212,12 +219,34 @@ export function zonedDayStart(day: string, zone: DisplayTimeZone): number | null
   return guess;
 }
 
+/** A calendar day's UTC midnight, or `null` when it is not on the calendar —
+ * `2026-02-30` is refused rather than rolled into March. `setUTCFullYear`
+ * rather than `Date.UTC`, which reads a year below 100 as 19xx. */
+function calendarDay(year: number, month: number, date: number): number | null {
+  const day = new Date(0);
+  day.setUTCFullYear(year, month - 1, date);
+  return day.getUTCFullYear() === year &&
+    day.getUTCMonth() === month - 1 &&
+    day.getUTCDate() === date
+    ? day.getTime()
+    : null;
+}
+
+/** Whether a string is a `YYYY-MM-DD` day on the calendar (in any zone). */
+export function isCalendarDay(day: string): boolean {
+  const match = DAY.exec(day);
+  return (
+    match !== null && calendarDay(Number(match[1]), Number(match[2]), Number(match[3])) !== null
+  );
+}
+
 /** A `YYYY-MM-DD` day moved by whole calendar days — calendar arithmetic, so no
  * zone and no 23- or 25-hour day can shift it. An unparseable day comes back as is. */
 export function shiftDay(day: string, days: number): string {
   const match = DAY.exec(day);
   if (match === null) return day;
-  const moved = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + days));
+  const moved = new Date(0);
+  moved.setUTCFullYear(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + days);
   return moved.toISOString().slice(0, 10);
 }
 

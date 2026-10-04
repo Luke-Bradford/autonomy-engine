@@ -96,7 +96,7 @@ describe('dayRangeBounds — #1484', () => {
   it('covers a whole 23-hour day: midnight to the NEXT midnight, not 24 hours on', () => {
     process.env.TZ = 'Europe/London';
     // 2026-03-29 is the UK's spring-forward day.
-    const { from, to } = dayRangeBounds({ on: '2026-03-29' });
+    const { from, to } = dayRangeBounds({ on: '2026-03-29' }, 'local');
     expect(Number(from)).toBe(Date.UTC(2026, 2, 29, 0));
     expect(Number(to)).toBe(Date.UTC(2026, 2, 29, 23));
     expect(Number(to) - Number(from)).toBe(23 * 60 * 60 * 1000);
@@ -104,12 +104,28 @@ describe('dayRangeBounds — #1484', () => {
 
   it("a range runs from the first day's midnight to the midnight after the last", () => {
     process.env.TZ = 'UTC';
-    expect(dayRangeBounds({ from: '2026-01-01', to: '2026-01-02' })).toEqual({
+    expect(dayRangeBounds({ from: '2026-01-01', to: '2026-01-02' }, 'local')).toEqual({
       from: String(Date.UTC(2026, 0, 1)),
       to: String(Date.UTC(2026, 0, 3)),
     });
-    expect(dayRangeBounds({ from: '2026-01-01' })).toEqual({ from: String(Date.UTC(2026, 0, 1)) });
-    expect(dayRangeBounds({})).toEqual({});
+    expect(dayRangeBounds({ from: '2026-01-01' }, 'local')).toEqual({
+      from: String(Date.UTC(2026, 0, 1)),
+    });
+    expect(dayRangeBounds({}, 'local')).toEqual({});
+  });
+
+  it('bounds the day in the DISPLAY zone, not the browser zone', () => {
+    // The browser is in London; the viewer reads New York time, so 4 October
+    // is 04:00Z to 04:00Z next day — and London's day would be off by 5 hours.
+    process.env.TZ = 'Europe/London';
+    expect(dayRangeBounds({ on: '2026-10-04' }, 'America/New_York')).toEqual({
+      from: String(Date.UTC(2026, 9, 4, 4)),
+      to: String(Date.UTC(2026, 9, 5, 4)),
+    });
+    expect(dayRangeBounds({ on: '2026-10-04' }, 'UTC')).toEqual({
+      from: String(Date.UTC(2026, 9, 4)),
+      to: String(Date.UTC(2026, 9, 5)),
+    });
   });
 });
 

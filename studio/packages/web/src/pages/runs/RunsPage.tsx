@@ -36,7 +36,6 @@ import { RunGridColumnsMenu, RunsGrid } from './RunsGrid';
 import { uiStore, type UiStore } from '../../stores/uiStore';
 import {
   canonicalKindParam,
-  dayOf,
   dayRangeBounds,
   hasActiveRunFilters,
   hasRunFilterParams,
@@ -52,7 +51,9 @@ import {
   RUN_SINCE_OPTIONS,
   startedModeOf,
 } from './runFilters';
+import { dayOf, shiftDay } from '../../lib/displayTime';
 import { LabelledControl } from '../../lib/LabelledControl';
+import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import { FilterPicker } from './FilterPicker';
 import { RUN_GROUP_BYS, type RunGroupBy } from './runBars';
 
@@ -147,6 +148,7 @@ export function RunsPage({
   /** #1484 — the grid's per-viewer column preferences; injected by tests. */
   ui?: UiStore;
 } = {}) {
+  const zone = useDisplayTimeZone(ui);
   /**
    * Bumped by "Refresh" so BOTH panels re-fetch from one button. Since #1083
    * the run list itself is refreshed through `usePagedList` rather than by this
@@ -233,20 +235,21 @@ export function RunsPage({
    */
   const startedMode = startedModeOf(searchParams, since);
   function selectStartedMode(mode: string) {
-    const today = new Date();
-    const weekAgo = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 6);
+    // Today and the week before it in the DISPLAY zone, by calendar arithmetic.
+    const today = dayOf(Date.now(), zone);
+    const weekAgo = shiftDay(today, -6);
     const cleared = {
       [RUN_FILTER_PARAMS.since]: '',
       [RUN_FILTER_PARAMS.on]: '',
       [RUN_FILTER_PARAMS.from]: '',
       [RUN_FILTER_PARAMS.to]: '',
     };
-    if (mode === 'on') setFilters({ ...cleared, [RUN_FILTER_PARAMS.on]: dayOf(today) });
+    if (mode === 'on') setFilters({ ...cleared, [RUN_FILTER_PARAMS.on]: today });
     else if (mode === 'range')
       setFilters({
         ...cleared,
-        [RUN_FILTER_PARAMS.from]: dayOf(weekAgo),
-        [RUN_FILTER_PARAMS.to]: dayOf(today),
+        [RUN_FILTER_PARAMS.from]: weekAgo,
+        [RUN_FILTER_PARAMS.to]: today,
       });
     else setFilters({ ...cleared, [RUN_FILTER_PARAMS.since]: mode });
   }
@@ -326,7 +329,7 @@ export function RunsPage({
           annotation,
           kind,
           q,
-          ...dayRangeBounds({ on, from, to }),
+          ...dayRangeBounds({ on, from, to }, zone),
           // The default order is not sent, so the plain list's request is
           // unchanged; any other sort is, with its direction always explicit.
           ...(sortedByDefault ? {} : { sort: sortKey, dir: sortDir }),
@@ -346,6 +349,7 @@ export function RunsPage({
       on,
       from,
       to,
+      zone,
       sortKey,
       sortDir,
       sortedByDefault,
