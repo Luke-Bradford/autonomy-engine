@@ -30,25 +30,33 @@ import type { LoggedEngineEvent } from './events.js';
  *   by the engine, Execute Pipeline starts at `call.started`, a Wait at
  *   `timer.waitScheduled`, and a preflight failure is a bare `node.failed`. An
  *   attempt the reducer minted but nothing ever logged is not a row: it never ran.
- * - A SKIP is a row when a node turns `skipped` without an attempt in flight —
- *   seen as it happens, so a skip inside one ForEach item keeps that item's
- *   index even though the body is reset for the next.
+ * - A SKIP is a row when a node turns `skipped` without an attempt in flight,
+ *   seen as it happens and given the item it happened in. A skip the SAME reduce
+ *   also resets (the event that ends a ForEach item or loop round resets the
+ *   body) or deletes (a parallel item's instances) cannot be seen in any state,
+ *   so it is inferred: when an item ends, every body node is terminal, and one
+ *   with no row in that item was skipped.
  * - What a rerun REUSED from the run it reran is a row, marked `reused`, with no
  *   times: it did not run here.
  * Container-level outcomes (a loop that timed out or hit its cap) are not rows;
  * containers become group rows in a later M2 slice.
  *
- * HOW AN ATTEMPT SETTLES, checked after every event for every open attempt:
- * 1. The attempt's OWN result event settles it (`node.succeeded`, `node.failed`,
- *    `call.returned`, a Wait's `timer.due`, …). The event decides, not the state:
- *    the same reduce can already have reset the node for the next ForEach item,
- *    or deleted a parallel item's state outright.
- * 2. Otherwise, while it is still the node's current attempt, the node's state is
- *    its status. A terminal state settles it — a container timeout or a doomed
- *    ForEach flips an in-flight attempt to `skipped` with no event of its own —
- *    and `retry_pending` reads as the `failure` it is.
- * 3. An attempt that stops being current without either stays at the last
- *    status it had. On a cancelled run the page names that with the run's status.
+ * HOW AN ATTEMPT SETTLES:
+ * 1. An event about the attempt counts only if the attempt was the node's live
+ *    one going in: the reducer ignores a stale result, and so does this.
+ * 2. While the node's state still holds the attempt, the STATE is its status, so
+ *    a success whose outputs broke the contract reads as the failure the engine
+ *    made it. `retry_pending` reads as the `failure` it is.
+ * 3. When the same reduce reset the node for the next item or deleted a parallel
+ *    item's state, the result EVENT is the only record left, and it decides
+ *    (`resultOf`).
+ * 4. An attempt the engine abandoned with no event of its own (a loop's timeout,
+ *    a doomed ForEach) is settled `skipped` when its node turns `skipped`.
+ * 5. Anything else stays at the last status it had. On a cancelled run the page
+ *    names that with the run's status.
+ *
+ * `attempt` counts POLICY retries within the item (`NodeRunState.retries`). An
+ * operator's retry does not spend the policy, so its attempt keeps the number.
  */
 export type ProjectedActivityRun = Omit<ActivityRun, 'childRun'>;
 
@@ -77,13 +85,19 @@ function attemptOf(e: EngineEvent): { nodeId: string; attemptId: string } | null
   }
 }
 
-/** The attempt an event SETTLES, and how. */
+/** The attempt an event SETTLES, and how, for when the state no longer says. */
 function resultOf(
   e: EngineEvent,
 ): { attemptId: string; status: NodeRunStatus; error?: string } | null {
   switch (e.type) {
     case 'node.succeeded':
     case 'call.detached':
+    // The engine settles If, Switch and Set variable on these, with no
+    // `node.succeeded` after them.
+    case 'condition.evaluated':
+    case 'switch.evaluated':
+    case 'variable.set':
+    case 'variable.append':
       return { attemptId: e.attemptId, status: 'success' };
     case 'node.failed':
       return { attemptId: e.attemptId, status: 'failure' };
@@ -196,12 +210,29 @@ export function projectActivityRuns(
   const rows: ProjectedActivityRun[] = [];
   const byAttempt = new Map<string, ProjectedActivityRun>();
   const open = new Set<ProjectedActivityRun>();
+  /** `nodeId|containerId|index` of every row in an iteration. */
+  const inItem = new Set<string>();
+  const itemKey = (nodeId: string, it: ActivityRunIteration) =>
+    `${nodeId}|${it.containerId}|${it.index}`;
+  const push = (row: ProjectedActivityRun) => {
+    rows.push(row);
+    if (row.iteration !== null) inItem.add(itemKey(row.nodeId, row.iteration));
+  };
+  const addSkip = (nodeId: string, iteration: ActivityRunIteration | null) =>
+    push(blank(`skip:${nodeId}:${rows.length}`, nodeId, 'skipped', iteration));
+  const iterating = doc.containers.filter((c) => c.kind !== 'stage');
 
   const settle = (row: ProjectedActivityRun, status: NodeRunStatus, ts: number) => {
     row.status = status;
     row.finishedAt = ts;
     row.durationMs = row.startedAt !== null && ts >= row.startedAt ? ts - row.startedAt : null;
     open.delete(row);
+  };
+  /** Rule 2: the node's state, while it still holds the attempt. */
+  const observe = (row: ProjectedActivityRun, status: NodeRunStatus, ts: number) => {
+    if (status === 'retry_pending') settle(row, 'failure', ts);
+    else if (TERMINAL_NODE.has(status)) settle(row, status, ts);
+    else row.status = status;
   };
 
   let state = engine.seedState();
@@ -223,7 +254,7 @@ export function projectActivityRuns(
         attempt: entry === undefined ? null : entry.retries + 1,
         startedAt: ts,
       };
-      rows.push(row);
+      push(row);
       byAttempt.set(ref.attemptId, row);
       open.add(row);
     }
@@ -260,33 +291,53 @@ export function projectActivityRuns(
     }
 
     const result = resultOf(e);
-    const own = result === null ? undefined : byAttempt.get(result.attemptId);
-    if (result !== null && own !== undefined && open.has(own)) {
-      if (result.error !== undefined && own.error === null) {
+    const subject = result?.attemptId ?? ref?.attemptId;
+    const own = subject === undefined ? undefined : byAttempt.get(subject);
+    if (
+      own !== undefined &&
+      open.has(own) &&
+      before.nodes[own.nodeId]?.currentAttemptId === own.attemptId
+    ) {
+      if (result?.error !== undefined && own.error === null) {
         own.error = { message: result.error, kind: null, code: null, connectionId: null };
       }
-      settle(own, result.status, ts);
-    }
-
-    for (const row of open) {
-      const entry = state.nodes[row.nodeId];
-      if (entry === undefined || entry.currentAttemptId !== row.attemptId) continue;
-      if (entry.status === 'retry_pending') settle(row, 'failure', ts);
-      else if (TERMINAL_NODE.has(entry.status)) settle(row, entry.status, ts);
-      else row.status = entry.status;
+      const entry = state.nodes[own.nodeId];
+      if (entry?.currentAttemptId === own.attemptId) observe(own, entry.status, ts);
+      else if (result !== null) settle(own, result.status, ts);
     }
 
     if (state.nodes !== before.nodes) {
       for (const [nodeId, entry] of Object.entries(state.nodes)) {
         if (entry.status !== 'skipped' || before.nodes[nodeId]?.status === 'skipped') continue;
-        // An attempt that was in flight is already its own row, settled above.
-        if (entry.currentAttemptId !== undefined && byAttempt.has(entry.currentAttemptId)) {
-          continue;
-        }
-        rows.push(
-          blank(`skip:${nodeId}:${rows.length}`, nodeId, 'skipped', iterationOf(nodeId, before)),
-        );
+        // Rule 4: an attempt in flight that the engine abandoned is that row.
+        const live = before.nodes[nodeId]?.currentAttemptId ?? entry.currentAttemptId;
+        const abandoned = live === undefined ? undefined : byAttempt.get(live);
+        if (abandoned !== undefined && open.has(abandoned)) settle(abandoned, 'skipped', ts);
+        else addSkip(nodeId, iterationOf(nodeId, before));
       }
+      // A skip this reduce also reset or deleted: when an item ends, a body node
+      // with no row in it was skipped.
+      const ended: string[] = [];
+      for (const c of iterating) {
+        const was = before.containers[c.id];
+        const now = state.containers[c.id];
+        if (was !== undefined && now !== undefined && now.round > was.round)
+          ended.push(...c.children);
+      }
+      for (const nodeId of Object.keys(before.nodes)) {
+        if (state.nodes[nodeId] === undefined && parseInstanceKey(nodeId) !== null)
+          ended.push(nodeId);
+      }
+      for (const nodeId of ended) {
+        const iteration = iterationOf(nodeId, before);
+        if (iteration !== null && !inItem.has(itemKey(nodeId, iteration)))
+          addSkip(nodeId, iteration);
+      }
+    }
+
+    for (const row of open) {
+      const entry = state.nodes[row.nodeId];
+      if (entry?.currentAttemptId === row.attemptId) observe(row, entry.status, ts);
     }
   }
 

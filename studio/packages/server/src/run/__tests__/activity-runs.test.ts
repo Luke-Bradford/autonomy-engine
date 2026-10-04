@@ -3,6 +3,7 @@ import {
   CATALOG_VERSION,
   type Container,
   type Edge,
+  type EngineEvent,
   type NewPipelineVersion,
   type Node,
 } from '@autonomy-studio/shared';
@@ -261,5 +262,179 @@ describe('#1484 activity runs — one row per attempt', () => {
 
     const [row] = projectActivityRuns(doc, buildEngine(doc), log);
     expect(row?.error).toEqual({ message: 'old', kind: null, code: null, connectionId: null });
+  });
+
+  it('settles an If that ends each ForEach item, and keeps the skip inside every item', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('c', { type: 'if', config: { condition: '${equals(1, 2)}' } }), node('t')],
+      [branchEdge('c', 't', 'true')],
+      [{ id: 'fe', kind: 'foreach', children: ['c', 't'], items: '${params.list}' }],
+      ['x', 'y'],
+    );
+    const runId = await drive(db, pvId, stub());
+
+    // The If's result and the skip both happen in the reduce that resets the
+    // body for the next item; neither may be lost for the first item.
+    expect(
+      project(db, pvId, runId).map((r) => [r.activityId, r.status, r.branch, r.iteration?.item]),
+    ).toEqual([
+      ['c', 'success', 'false', 'x'],
+      ['t', 'skipped', null, 'x'],
+      ['c', 'success', 'false', 'y'],
+      ['t', 'skipped', null, 'y'],
+    ]);
+  });
+
+  it('keeps the skip inside every item of a parallel ForEach', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('c', { type: 'if', config: { condition: '${equals(1, 2)}' } }), node('t')],
+      [branchEdge('c', 't', 'true')],
+      [{ id: 'fe', kind: 'foreach', children: ['c', 't'], items: '${params.list}', batchCount: 2 }],
+      ['x', 'y'],
+    );
+    const runId = await drive(db, pvId, stub());
+
+    const rows = project(db, pvId, runId);
+    expect(rows.map((r) => [r.nodeId, r.status, r.iteration?.index]).sort()).toEqual([
+      ['c@0', 'success', 0],
+      ['c@1', 'success', 1],
+      ['t@0', 'skipped', 0],
+      ['t@1', 'skipped', 1],
+    ]);
+  });
+
+  it('ends a Wait at its timer, not at the moment it was scheduled', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('hold', { type: 'wait', config: { seconds: '${1}' } })]);
+    const executor = stub();
+    const runId = await drive(db, pvId, executor);
+    const [scheduled] = project(db, pvId, runId);
+    expect(scheduled).toMatchObject({ status: 'wait_pending', finishedAt: null });
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    appendEngineEvent(db, {
+      type: 'timer.due',
+      runId,
+      nodeId: 'hold',
+      previousAttemptId: 'hold#0',
+    });
+    await driveRun(deps(db, executor), runId);
+
+    const [row] = project(db, pvId, runId);
+    expect(row).toMatchObject({ status: 'success', startedAt: scheduled!.startedAt });
+    expect(row!.finishedAt).toBeGreaterThan(row!.startedAt!);
+  });
+
+  it('settles an attempt a loop timeout abandoned as that row, not as a second one', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('a')],
+      [],
+      [
+        {
+          id: 'lp',
+          kind: 'loop',
+          children: ['a'],
+          exitWhen: "${equals(nodes.a.status, 'success')}",
+          maxRounds: 3,
+          timeout: 60,
+        },
+      ],
+    );
+    const executor = stub({ a: { hang: true } });
+    const runId = await drive(db, pvId, executor);
+    appendEngineEvent(db, { type: 'container.timedOut', runId, containerId: 'lp' });
+    await driveRun(deps(db, executor), runId);
+
+    expect(project(db, pvId, runId).map((r) => [r.attemptId, r.status])).toEqual([
+      ['a#0', 'skipped'],
+    ]);
+  });
+
+  it('shows what a rerun reused, and the refusal of a called pipeline as its error', () => {
+    const doc = {
+      nodes: [
+        node('a'),
+        node('call', {
+          type: 'call_pipeline',
+          call: { pipelineVersionId: 'pv-child', params: {} },
+        }),
+      ],
+      edges: [edge('a', 'call')],
+      containers: [],
+      variables: [],
+    } as never as Parameters<typeof buildEngine>[0];
+    const at = (ts: number, event: EngineEvent) => ({ ts, event, payload: event });
+    const started: EngineEvent = {
+      type: 'run.started',
+      runId: 'R2',
+      pipelineVersionId: 'pv',
+      params: {},
+      rerunOf: 'R1',
+    };
+    const reseeded: EngineEvent = {
+      type: 'run.reseeded',
+      runId: 'R2',
+      sourceRunId: 'R1',
+      frontier: ['a'],
+      copiedOutputs: { a: {} },
+      copiedContainers: {},
+    };
+    // The child id the engine expects is its own: take it from the command.
+    const engine = buildEngine(doc);
+    const spawn = engine
+      .reduce(engine.reduce(engine.seedState(), started).state, reseeded)
+      .commands.find((c) => c.type === 'startChild');
+    if (spawn?.type !== 'startChild') throw new Error('no startChild');
+    const kid = spawn.childRunId;
+    const log = [
+      at(1, started),
+      at(2, reseeded),
+      at(3, {
+        type: 'call.started',
+        runId: 'R2',
+        callNodeId: 'call',
+        attemptId: spawn.attemptId,
+        childRunId: kid,
+      }),
+      at(9, {
+        type: 'call.returned',
+        runId: 'R2',
+        callNodeId: 'call',
+        attemptId: spawn.attemptId,
+        childRunId: kid,
+        childOutcome: 'failure',
+        outputs: {},
+        reason: 'the called version is archived',
+      }),
+    ];
+
+    expect(projectActivityRuns(doc, buildEngine(doc), log)).toEqual([
+      expect.objectContaining({
+        key: 'reused:a',
+        reused: true,
+        status: 'success',
+        startedAt: null,
+      }),
+      expect.objectContaining({
+        attemptId: spawn.attemptId,
+        status: 'failure',
+        childRunId: kid,
+        startedAt: 3,
+        finishedAt: 9,
+        durationMs: 6,
+        error: {
+          message: 'the called version is archived',
+          kind: null,
+          code: null,
+          connectionId: null,
+        },
+      }),
+    ]);
   });
 });
