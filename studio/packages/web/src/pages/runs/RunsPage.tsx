@@ -25,7 +25,7 @@ import {
 import { useStore } from 'zustand';
 import { useSearchParams } from 'react-router';
 import { listRunAnnotations, listRuns } from '../../api/runs';
-import { usePagedList } from '../../hooks/usePagedList';
+import { PAGE_STALLED_LABEL, usePagedList } from '../../hooks/usePagedList';
 import { getPipelineCost } from '../../api/pipelines';
 import { ApiError, messageOf } from '../../api/client';
 import { pipelineCostSummary, type PipelineCostSummary } from './pipelineCostSummary';
@@ -377,6 +377,7 @@ export function RunsPage({
     error: pageError,
     loading,
     busy,
+    stalled,
     hasMore,
     lastUpdatedAt,
     loadMore,
@@ -534,14 +535,15 @@ export function RunsPage({
             re-fetches the lifetime-spend panel. Disabled while any run-list
             request is in flight, since `usePagedList` is latest-wins rather than
             drop-the-new, so a second click would abort and re-issue a request
-            already on its way. */}
+            already on its way — until that request has STALLED (#1529), when a
+            retry is the only way out short of reloading the page. */}
         <button
           type="button"
           onClick={() => {
             refresh();
             setReloadKey((k) => k + 1);
           }}
-          disabled={busy}
+          disabled={busy && !stalled}
         >
           Refresh
         </button>
@@ -558,14 +560,19 @@ export function RunsPage({
         >
           Live
         </ToggleButton>
+        {/* A stalled load is said whether or not Live is on, and ahead of
+            Live's own state: while the reader's page hangs no poll runs, so
+            "Updating every 5s" would be untrue (#1529). */}
         <span role="status" className="runs-live-status">
-          {!live
-            ? ''
-            : pause !== null
-              ? RUNS_LIVE_PAUSE_LABEL[pause]
-              : liveFailing
-                ? RUNS_LIVE_FAILING_LABEL
-                : RUNS_LIVE_UPDATING_LABEL}
+          {stalled
+            ? PAGE_STALLED_LABEL
+            : !live
+              ? ''
+              : pause !== null
+                ? RUNS_LIVE_PAUSE_LABEL[pause]
+                : liveFailing
+                  ? RUNS_LIVE_FAILING_LABEL
+                  : RUNS_LIVE_UPDATING_LABEL}
         </span>
         {/* #1484 — how many runs a page reads. Keyset "load more" stays the
             paging model (#1083); this sizes each step of it. Per viewer, and on

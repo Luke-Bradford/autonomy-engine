@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { Paginated } from '@autonomy-studio/shared';
-import { POLL_DEADLINE_MS, usePagedList } from './usePagedList';
+import { PAGE_STALLED_MS, POLL_DEADLINE_MS, usePagedList } from './usePagedList';
 
 /**
  * #1076 — the accumulating load shape. What is pinned here is what distinguishes
@@ -376,14 +376,11 @@ describe('usePagedList poll deadline (#1527)', () => {
     const { result } = renderHook(() => usePagedList(fetchPage));
     await act(async () => calls[0]!.resolve(page(['a'])));
 
-    // This poll hangs: no answer, and no settle.
+    // This poll hangs: no answer, and no settle — so the next tick is skipped.
     act(() => result.current.poll());
     expect(calls).toHaveLength(2);
-    // A Refresh supersedes its answer but cannot settle it.
-    act(() => result.current.refresh());
-    await act(async () => calls[2]!.resolve(page(['b'])));
     act(() => result.current.poll());
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(2);
 
     // At the deadline the hung poll is aborted and settles…
     await act(async () => {
@@ -392,7 +389,7 @@ describe('usePagedList poll deadline (#1527)', () => {
     expect(calls[1]!.signal.aborted).toBe(true);
     // …so the next tick polls again.
     act(() => result.current.poll());
-    expect(calls).toHaveLength(4);
+    expect(calls).toHaveLength(3);
   });
 
   it("reports a hung poll as a failed 'live' read, keeping the rows", async () => {
@@ -424,6 +421,99 @@ describe('usePagedList poll deadline (#1527)', () => {
     expect(result.current.loading).toBe(true);
     await act(async () => calls[0]!.resolve(page(['a'])));
     expect(result.current.items).toEqual(['a']);
+  });
+});
+
+describe('usePagedList stalled (#1529)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('calls a first page stalled once it goes unanswered, without aborting it', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { fetchPage, calls } = deferredFetcher();
+    const { result } = renderHook(() => usePagedList(fetchPage));
+    await act(async () => {
+      vi.advanceTimersByTime(PAGE_STALLED_MS - 1);
+    });
+    expect(result.current.stalled).toBe(false);
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(result.current.stalled).toBe(true);
+    expect(result.current.busy).toBe(true);
+    expect(calls[0]!.signal.aborted).toBe(false);
+
+    // A late answer is still taken, and the list is no longer stalled.
+    await act(async () => calls[0]!.resolve(page(['a'])));
+    expect(result.current.items).toEqual(['a']);
+    expect(result.current.stalled).toBe(false);
+  });
+
+  it('aborts the stalled request a refresh replaces, so polling resumes after the retry', async () => {
+    const { fetchPage, calls } = deferredFetcher();
+    const { result } = renderHook(() => usePagedList(fetchPage));
+    await waitFor(() => expect(calls).toHaveLength(1));
+
+    // The first page hangs (the fetcher ignores its signal and never settles);
+    // the reader retries, and the retry is answered.
+    act(() => result.current.refresh());
+    expect(calls[0]!.signal.aborted).toBe(true);
+    await act(async () => calls[1]!.resolve(page(['a'])));
+    expect(result.current.items).toEqual(['a']);
+
+    // The hung request no longer holds polls off.
+    act(() => result.current.poll());
+    expect(calls).toHaveLength(3);
+  });
+
+  it('gives a refresh of a stalled page a fresh window, and takes its answer', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { fetchPage, calls } = deferredFetcher();
+    const { result } = renderHook(() => usePagedList(fetchPage));
+    await act(async () => {
+      vi.advanceTimersByTime(PAGE_STALLED_MS);
+    });
+    expect(result.current.stalled).toBe(true);
+
+    act(() => result.current.refresh());
+    expect(result.current.stalled).toBe(false);
+    expect(calls).toHaveLength(2);
+    await act(async () => {
+      vi.advanceTimersByTime(PAGE_STALLED_MS - 1);
+    });
+    expect(result.current.stalled).toBe(false);
+    await act(async () => calls[1]!.resolve(page(['b'])));
+    expect(result.current.items).toEqual(['b']);
+    expect(result.current.busy).toBe(false);
+  });
+
+  it('stalls only a page the reader asked for — never a quiet list or a poll', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { fetchPage, calls } = deferredFetcher();
+    const { result } = renderHook(() => usePagedList(fetchPage));
+    await act(async () => calls[0]!.resolve(page(['a'], 'c1')));
+    // The answered page's stall timer went with it.
+    expect(vi.getTimerCount()).toBe(0);
+    await act(async () => {
+      vi.advanceTimersByTime(PAGE_STALLED_MS * 2);
+    });
+    expect(result.current.stalled).toBe(false);
+
+    // A hung poll is a failed live read at its deadline, never a stall.
+    act(() => result.current.poll());
+    await act(async () => {
+      vi.advanceTimersByTime(PAGE_STALLED_MS);
+    });
+    expect(result.current.stalled).toBe(false);
+    expect(result.current.error?.scope).toBe('live');
+
+    // An older page that hangs stalls too: it holds `busy` just the same.
+    act(() => result.current.loadMore());
+    await act(async () => {
+      vi.advanceTimersByTime(PAGE_STALLED_MS);
+    });
+    expect(result.current.stalled).toBe(true);
   });
 });
 

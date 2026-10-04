@@ -11,6 +11,31 @@ import { useGuardedLoad } from './useGuardedLoad';
 export const POLL_DEADLINE_MS = 15_000;
 
 /**
+ * #1529 — how long a page the READER asked for may go unanswered before the
+ * list calls it stalled. It is not failed and not aborted (a slow server may
+ * still answer, and the reader is watching it load); it only stops holding the
+ * Refresh button shut, so the reader can retry without reloading the page.
+ */
+export const PAGE_STALLED_MS = 15_000;
+// Not `POLL_DEADLINE_MS`, though equal today: that one ABORTS a request and this
+// one only reports it, so the two may need to move apart.
+
+/** What a list says while `stalled` is true, worded from the threshold it uses. */
+export const PAGE_STALLED_LABEL = `No answer in ${PAGE_STALLED_MS / 1_000}s — Refresh to try again`;
+
+/** A controller that also aborts when `outer` does; `cleanUp` drops the link. */
+function linkedController(outer: AbortSignal): {
+  controller: AbortController;
+  cleanUp: () => void;
+} {
+  const controller = new AbortController();
+  const forward = () => controller.abort(outer.reason);
+  if (outer.aborted) forward();
+  else outer.addEventListener('abort', forward, { once: true });
+  return { controller, cleanUp: () => outer.removeEventListener('abort', forward) };
+}
+
+/**
  * Runs `run` with a signal that also aborts after `ms`, and rejects at that
  * deadline whether or not `run` honours the abort — a fetcher that ignores its
  * signal must not be able to outlive it. `run` is called synchronously, so a
@@ -21,11 +46,7 @@ function withDeadline<R>(
   outer: AbortSignal,
   ms: number,
 ): Promise<R> {
-  const controller = new AbortController();
-  const forward = () => controller.abort(outer.reason);
-  if (outer.aborted) forward();
-  else outer.addEventListener('abort', forward, { once: true });
-  const cleanUp = () => outer.removeEventListener('abort', forward);
+  const { controller, cleanUp } = linkedController(outer);
   let request: Promise<R>;
   try {
     request = run(controller.signal);
@@ -83,9 +104,9 @@ function withDeadline<R>(
  * #1484 — A POLL IS THE QUIET REFRESH. `poll()` re-reads the first page for a
  * caller that keeps a list live, and it differs from `refresh()` in three ways,
  * each of which a 5-second ticker would otherwise turn into a visible fault:
- *  - it LOSES to everything. It is skipped while any request of this list is in
- *    flight (counted until each SETTLES, so a superseded one still counts), and
- *    a later refresh or older page supersedes it. On a server slower than the
+ *  - it LOSES to everything. It is skipped while the list's current request is
+ *    in flight, and a later refresh or older page supersedes it. On a server
+ *    slower than the
  *    tick, polls that superseded each other would never land — the starvation
  *    `usePolledResource`'s #1000 docblock records.
  *  - it is skipped once an older page has been appended (`extended`). Replacing
@@ -95,12 +116,25 @@ function withDeadline<R>(
  *    not disabled on every tick; and a failed poll is its own error scope,
  *    `'live'`, cleared by the next good answer, rather than a first-page failure
  *    shouting over rows that are still true.
- *  - it has a DEADLINE (#1527). Because a poll waits for every request to
- *    settle, one that never did would hold polling off for good — a Refresh
- *    supersedes its answer but cannot settle it. So a poll still unanswered
- *    after `POLL_DEADLINE_MS` is aborted and FAILS, which the `'live'` scope
- *    already reports, and the next tick polls again. Only a poll: a first or
- *    older page is one the reader asked for and is watching load.
+ *  - it has a DEADLINE (#1527). Because a poll waits for the current request
+ *    to settle, a poll that never did would hold the next one off for good. So
+ *    a poll still unanswered after `POLL_DEADLINE_MS` is aborted and FAILS,
+ *    which the `'live'` scope already reports, and the next tick polls again.
+ *    Only a poll: a first or older page is one the reader asked for and is
+ *    watching load.
+ *
+ * A SUPERSEDED REQUEST IS ABORTED (#1529). `useGuardedLoad` drops its answer
+ * but cannot cancel it, so it stops counting as the list's request the moment a
+ * newer one is issued, and its signal is aborted. Without that, a hung request a
+ * Refresh had replaced would hold every poll off for good, and would keep its
+ * connection open.
+ *
+ * #1529 — A READER'S PAGE THAT NEVER ANSWERS IS STALLED, NOT FAILED. It keeps
+ * its request (no deadline, above), but after `PAGE_STALLED_MS` the list says
+ * `stalled`, and a caller re-enables its Refresh on it: `busy` alone would hold
+ * that button shut for as long as the request hangs, and only a page reload
+ * would recover. A refresh then supersedes the hung request, as it supersedes
+ * anything in flight, and starts a fresh stall window of its own.
  *
  * THE FETCHER MUST BE MEMOIZED (`useCallback`) — the same half of the contract
  * `usePolledResource` asks for, and for the same reason: it is a dependency of
@@ -124,6 +158,8 @@ export interface PagedList<T> {
   loading: boolean;
   /** True whenever any request is in flight, including a refresh or an older page. */
   busy: boolean;
+  /** True once the page the reader asked for has gone `PAGE_STALLED_MS` unanswered (#1529). */
+  stalled: boolean;
   /** True when the server said there are older entries to fetch. */
   hasMore: boolean;
   /** When the FIRST page was last requested, epoch ms; `null` before the first success. */
@@ -154,14 +190,21 @@ export function usePagedList<T>(
   const [items, setItems] = useState<T[] | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [error, setError] = useState<PagedListError | null>(null);
-  const [pending, setPending] = useState<'first' | 'more' | null>('first');
+  /* An OBJECT per request the reader asked for, not just its scope, so the stall
+     timer below can tell a retried request from the one that stalled: each
+     `setPending` makes a new identity, which re-arms the timer. */
+  const [pending, setPending] = useState<{ scope: 'first' | 'more' } | null>(() => ({
+    scope: 'first',
+  }));
+  const [stalledRequest, setStalledRequest] = useState<object | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
   const [extended, setExtended] = useState(false);
   /* `poll()`'s two guards, read through refs so its identity stays stable and a
      caller's interval is not re-armed on every answer. Written only outside
      render. A ref that lags its state can only make a poll SKIP (an extended
-     flag not yet cleared), never fire over a request. */
-  const inFlight = useRef(0);
+     flag not yet cleared), never fire over a request. `current` is the
+     request still in flight that no newer one has superseded, if any. */
+  const current = useRef<AbortController | null>(null);
   const extendedRef = useRef(false);
 
   /**
@@ -204,7 +247,7 @@ export function usePagedList<T>(
     setError(null);
     setLastUpdatedAt(null);
     setExtended(false);
-    setPending('first');
+    setPending({ scope: 'first' });
   }
 
   /**
@@ -223,16 +266,24 @@ export function usePagedList<T>(
       // `void`: the runner's promise settles after its handlers have written
       // state, and it rejects only if one of THEM threw — there is nothing here
       // to await and nothing a caller could do with it.
-      inFlight.current += 1;
+      current.current?.abort(new Error('superseded'));
+      current.current = null;
+      let request: AbortController | null = null;
       // A fetcher that THROWS rather than rejecting is read as a rejection, so
       // the request still settles: otherwise `.finally` below would never be
-      // attached and `inFlight` would hold polling off for good.
+      // attached and `current` would hold polling off for good.
       const fetchSettling = (signal: AbortSignal): Promise<Paginated<T>> => {
+        const { controller, cleanUp } = linkedController(signal);
+        request = controller;
+        current.current = controller;
         try {
-          return scope === 'live'
-            ? withDeadline((s) => fetchPage(cursor, s), signal, POLL_DEADLINE_MS)
-            : fetchPage(cursor, signal);
+          return (
+            scope === 'live'
+              ? withDeadline((s) => fetchPage(cursor, s), controller.signal, POLL_DEADLINE_MS)
+              : fetchPage(cursor, controller.signal)
+          ).finally(cleanUp);
         } catch (err: unknown) {
+          cleanUp();
           return Promise.reject(err instanceof Error ? err : new Error(String(err)));
         }
       };
@@ -261,9 +312,9 @@ export function usePagedList<T>(
           setPending(null);
         },
       }).finally(() => {
-        // On EVERY settle, superseded or not: a superseded load runs neither
-        // handler, so clearing this there would leave polling stuck for good.
-        inFlight.current -= 1;
+        // On EVERY settle, not in a handler: a superseded load runs neither.
+        // Only while still current — a newer request has replaced it otherwise.
+        if (current.current !== null && current.current === request) current.current = null;
       });
     },
     [fetchPage, keyOf, runLoad],
@@ -281,7 +332,7 @@ export function usePagedList<T>(
     // No busy guard: a refresh is the load that must WIN, so it supersedes
     // whatever is in flight (`useGuardedLoad`'s counter drops the loser's
     // answer) rather than being dropped by it.
-    setPending('first');
+    setPending({ scope: 'first' });
     load(undefined, 'first');
   }, [load]);
 
@@ -292,20 +343,27 @@ export function usePagedList<T>(
     // the log ended — issuing the request anyway would re-read the newest page
     // and append the head a second time.
     if (pending !== null || nextCursor === null) return;
-    setPending('more');
+    setPending({ scope: 'more' });
     load(nextCursor, 'more');
   }, [load, nextCursor, pending]);
 
+  useEffect(() => {
+    if (pending === null) return;
+    const timer = setTimeout(() => setStalledRequest(pending), PAGE_STALLED_MS);
+    return () => clearTimeout(timer);
+  }, [pending]);
+
   const poll = useCallback(() => {
-    if (inFlight.current > 0 || extendedRef.current) return;
+    if (current.current !== null || extendedRef.current) return;
     load(undefined, 'live');
   }, [load]);
 
   return {
     items,
     error,
-    loading: pending === 'first' && items === null,
+    loading: pending?.scope === 'first' && items === null,
     busy: pending !== null,
+    stalled: pending !== null && stalledRequest === pending,
     hasMore: nextCursor !== null,
     lastUpdatedAt,
     loadMore,
