@@ -16,8 +16,12 @@ import {
   RunLifecyclePatchSchema,
   RunSchema,
   RunStatusSchema,
+  RunSummaryPageSchema,
+  RunSummarySchema,
+  RUN_DESCENDANTS_MAX,
   TERMINAL_RUN_ROW_STATUS,
 } from './run.js';
+import { computeRunCost } from '../pricing/run-cost.js';
 
 describe('RunStatusSchema', () => {
   it.each([
@@ -328,5 +332,41 @@ describe('#1484 — the runs grid sort ranks', () => {
       'asc',
       'asc',
     ]);
+  });
+});
+
+describe('RunSummary.childRunCount and the runs page (#1484)', () => {
+  const summary = {
+    ...run,
+    pipelineId: 'p_1',
+    pipelineName: 'Nightly',
+    pipelineVersion: 1,
+    debug: false,
+    triggerName: null,
+    triggeredByKind: 'manual',
+    parentPipelineName: null,
+    annotations: [],
+    cost: computeRunCost([]),
+    activities: null,
+    rowsWritten: null,
+    childRunCount: 2,
+  };
+
+  it('requires the child count: an absent one is a broken read, never a zero', () => {
+    expect(RunSummarySchema.parse(summary).childRunCount).toBe(2);
+    const without: Record<string, unknown> = { ...summary };
+    delete without.childRunCount;
+    expect(() => RunSummarySchema.parse(without)).toThrow();
+    expect(() => RunSummarySchema.parse({ ...summary, childRunCount: -1 })).toThrow();
+  });
+
+  it('carries descendants only when they were sent, and never more than the cap', () => {
+    const page = { items: [summary], nextCursor: null };
+    expect(RunSummaryPageSchema.parse(page)).not.toHaveProperty('descendants');
+    expect(
+      RunSummaryPageSchema.parse({ ...page, descendants: [summary] }).descendants,
+    ).toHaveLength(1);
+    const over = Array.from({ length: RUN_DESCENDANTS_MAX + 1 }, () => summary);
+    expect(() => RunSummaryPageSchema.parse({ ...page, descendants: over })).toThrow();
   });
 });

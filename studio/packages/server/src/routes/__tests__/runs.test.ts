@@ -134,6 +134,39 @@ describe('runs routes (read-only)', () => {
    * refuses, and that no axis escapes the owner scope.
    */
   describe('U26 — the Monitor filter axes', () => {
+    it("#1484 — includeChildren returns the page's descendants beside it, and only when asked", async () => {
+      const seed = (parentRunId: string | null) =>
+        createRun(app.db, {
+          ownerId: 'local',
+          pipelineVersionId,
+          triggerId: null,
+          parentRunId,
+          params: {},
+        });
+      const parent = seed(null);
+      const child = seed(parent.id);
+      const url = `/api/runs?q=${encodeURIComponent(parent.id)}`;
+
+      const plain = await app.inject({ method: 'GET', url });
+      expect(plain.statusCode).toBe(200);
+      expect(runIdsOf(plain)).toEqual([parent.id]);
+      expect(plain.json()).not.toHaveProperty('descendants');
+      expect((plain.json() as { items: { childRunCount: number }[] }).items[0]?.childRunCount).toBe(
+        1,
+      );
+
+      const nested = await app.inject({ method: 'GET', url: `${url}&includeChildren=true` });
+      expect(nested.statusCode).toBe(200);
+      const body = nested.json() as { items: { id: string }[]; descendants: { id: string }[] };
+      expect(body.items.map((r) => r.id)).toEqual([parent.id]);
+      expect(body.descendants.map((r) => r.id)).toEqual([child.id]);
+
+      const off = await app.inject({ method: 'GET', url: `${url}&includeChildren=false` });
+      expect(off.json()).not.toHaveProperty('descendants');
+      const junk = await app.inject({ method: 'GET', url: `${url}&includeChildren=yes` });
+      expect(junk.statusCode).toBe(400);
+    });
+
     it('filters by status, pipeline and window, all ANDed with the owner scope', async () => {
       const other = createPipeline(app.db, { ownerId: 'local', name: 'Another pipeline' });
       const otherVersion = createPipelineVersion(app.db, {

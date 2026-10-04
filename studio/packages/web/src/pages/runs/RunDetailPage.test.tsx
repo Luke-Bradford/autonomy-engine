@@ -3092,6 +3092,7 @@ describe('RunDetailPage — the reruns of this run', () => {
       cost: computeRunCost([]),
       activities: null,
       rowsWritten: null,
+      childRunCount: 0,
     } as RunSummary;
   }
 

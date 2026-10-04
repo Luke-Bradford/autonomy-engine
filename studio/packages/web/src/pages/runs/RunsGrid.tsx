@@ -1,4 +1,4 @@
-import { Fragment, useRef, type MouseEvent as ReactMouseEvent } from 'react';
+import { Fragment, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import {
   Menu,
   MenuDivider,
@@ -22,11 +22,13 @@ import {
 } from '../../stores/uiStore';
 import { PaneSplitter } from '../../shell/PaneSplitter';
 import { runDetailPath } from './runPath';
+import { nestRuns } from './runTree';
 import {
   isPinnedRunGridColumn,
   RUN_GRID_COLUMN_DEFS,
   visibleRunGridColumns,
   type CellContext,
+  type RunNest,
 } from './runGridColumns';
 import type { RunSortState } from './runFilters';
 import { zoneLabel, type DisplayTimeZone } from '../../lib/displayTime';
@@ -129,11 +131,13 @@ function RunRow({
   columns,
   loadedAt,
   zone,
+  nest,
 }: {
   run: RunSummary;
   columns: readonly RunGridColumnId[];
   loadedAt: number;
   zone: DisplayTimeZone;
+  nest?: RunNest;
 }) {
   const navigate = useNavigate();
   const path = runDetailPath(r.id);
@@ -156,10 +160,14 @@ function RunRow({
     if (newTab) window.open(href, '_blank', 'noopener');
     else void navigate(path);
   };
-  const ctx: CellContext = { loadedAt, path, zone };
+  const ctx: CellContext = { loadedAt, path, zone, ...(nest ? { nest } : {}) };
   return (
     <tr
-      className="runs-grid__row"
+      className={
+        nest !== undefined && nest.depth > 0
+          ? 'runs-grid__row runs-grid__row--child'
+          : 'runs-grid__row'
+      }
       onClick={(e) => open(e, e.metaKey || e.ctrlKey || e.shiftKey)}
       onAuxClick={(e) => {
         if (e.button === 1) open(e, true);
@@ -196,6 +204,7 @@ export function RunsGrid({
   sort,
   onSort,
   ui,
+  nested = false,
 }: {
   runs: readonly RunSummary[];
   loadedAt: number;
@@ -210,7 +219,27 @@ export function RunsGrid({
   sort: RunSortState;
   onSort: (column: RunSortKey) => void;
   ui: UiStore;
+  /**
+   * #1484 — "Include child runs": draw each run a loaded run called under it
+   * (`nestRuns`), with a disclosure to collapse it. Which runs are collapsed is
+   * this grid's own state: a new list (a filter change) starts expanded.
+   */
+  nested?: boolean;
 }) {
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const rows = useMemo(
+    () =>
+      nested
+        ? nestRuns(runs, collapsed)
+        : runs.map((run) => ({ run, depth: 0, shown: 0, expanded: true })),
+    [nested, runs, collapsed],
+  );
+  const toggle = (id: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
   const hidden = useStore(ui, (s) => s.runsGridHidden);
   const widths = useStore(ui, (s) => s.runsGridWidths);
   const setWidth = useStore(ui, (s) => s.setRunsGridWidth);
@@ -269,8 +298,25 @@ export function RunsGrid({
           </tr>
         </thead>
         <tbody>
-          {runs.map((r) => (
-            <RunRow key={r.id} run={r} columns={columns} loadedAt={clock} zone={zone} />
+          {rows.map(({ run: r, depth, shown, expanded }) => (
+            <RunRow
+              key={r.id}
+              run={r}
+              columns={columns}
+              loadedAt={clock}
+              zone={zone}
+              {...(nested
+                ? {
+                    nest: {
+                      depth,
+                      shown,
+                      total: r.childRunCount,
+                      expanded,
+                      onToggle: () => toggle(r.id),
+                    },
+                  }
+                : {})}
+            />
           ))}
         </tbody>
       </table>

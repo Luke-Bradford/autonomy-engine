@@ -148,7 +148,7 @@ export function meteredAggregateColumns() {
  * built binary could be far lower, and the failure mode of guessing high is the
  * whole runs page 500ing rather than one slow query.
  */
-const RUN_ID_BIND_CHUNK = 500;
+export const RUN_ID_BIND_CHUNK = 500;
 
 /**
  * #931 — the per-RUN cost aggregation behind the run list's cost column: the same

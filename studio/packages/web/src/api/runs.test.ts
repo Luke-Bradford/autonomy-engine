@@ -47,6 +47,7 @@ const sampleRunSummary = {
   cost: computeRunCost([]),
   activities: { succeeded: 2, failed: 0, skipped: 1, reused: 0, unfinished: 0 },
   rowsWritten: 92,
+  childRunCount: 0,
 };
 
 const sampleEvent = {
@@ -134,6 +135,26 @@ describe('runs API', () => {
       limit: String(RUNS_PAGE_SIZE),
       cursor: 'cur_1',
     });
+  });
+
+  it('#1484 — asks for the descendants on the wire, and parses them as run summaries', async () => {
+    const child = { ...sampleRunSummary, id: 'run_child', parentRunId: sampleRunSummary.id };
+    const fetchMock = stubFetch(200, {
+      items: [sampleRunSummary],
+      nextCursor: null,
+      descendants: [child],
+    });
+    const out = await listRuns({ includeChildren: 'true' });
+    expect(out.descendants).toEqual([child]);
+    const url = new URL(fetchMock.mock.calls[0]![0] as string, 'http://x');
+    expect(url.searchParams.get('includeChildren')).toBe('true');
+    // A descendant is parsed with the same schema as a page row.
+    stubFetch(200, {
+      items: [],
+      nextCursor: null,
+      descendants: [{ ...child, childRunCount: undefined }],
+    });
+    await expect(listRuns({ includeChildren: 'true' })).rejects.toThrow();
   });
 
   it('asks for a caller-sized page when one is given, not a reader screenful', async () => {

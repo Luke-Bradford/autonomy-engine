@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import { Link } from 'react-router';
 import type { RunSortKey, RunSummary } from '@autonomy-studio/shared';
 import {
@@ -29,6 +30,77 @@ export interface CellContext {
   path: string;
   /** The viewer's display time zone (#1484), for timestamps inside a title. */
   zone: DisplayTimeZone;
+  /** #1484 — where the row sits under "Include child runs"; absent while the
+   *  grid is flat. */
+  nest?: RunNest;
+}
+
+/** #1484 — one row's place in the nested grid (`nestRuns`). */
+export interface RunNest {
+  depth: number;
+  /** The run's children that are loaded, and so drawn under it when expanded. */
+  shown: number;
+  /** Every run it called (`RunSummary.childRunCount`). */
+  total: number;
+  expanded: boolean;
+  onToggle: () => void;
+}
+
+/** "1 child run" / "3 child runs". */
+function childRuns(n: number): string {
+  return `${n} child run${n === 1 ? '' : 's'}`;
+}
+
+/**
+ * #1484 — the Pipeline cell's lead under "Include child runs": an indent per
+ * level, the disclosure on a run whose children are loaded, and how many runs it
+ * called. When fewer are loaded than it called (`RUN_DESCENDANTS_MAX` cut the
+ * walk), the count says "2 of 7" rather than passing 2 off as all of them.
+ *
+ * The disclosure's name is stable ("2 child runs of Nightly") and `aria-expanded`
+ * carries the state, so a screen reader never hears "Show …, expanded". A child
+ * says what called it in words, because the indent alone is invisible to one and
+ * the Parent column may be hidden.
+ */
+function NestLead({ run, nest }: { run: RunSummary; nest: RunNest }) {
+  const cut = nest.shown < nest.total;
+  return (
+    <span className="runs-grid__nest" style={{ paddingInlineStart: `${nest.depth}rem` }}>
+      {nest.shown > 0 ? (
+        <button
+          type="button"
+          className="icon-button runs-grid__disclosure"
+          aria-expanded={nest.expanded}
+          aria-label={`${childRuns(nest.shown)} of ${run.pipelineName}`}
+          onClick={nest.onToggle}
+        >
+          {nest.expanded ? (
+            <ChevronDownRegular aria-hidden="true" />
+          ) : (
+            <ChevronRightRegular aria-hidden="true" />
+          )}
+        </button>
+      ) : (
+        <span className="runs-grid__disclosure" aria-hidden="true" />
+      )}
+      {nest.total > 0 && (
+        <span
+          className="runs-grid__child-count"
+          title={cut ? `${nest.shown} of ${childRuns(nest.total)} loaded` : childRuns(nest.total)}
+        >
+          {cut ? `${nest.shown} of ${nest.total}` : nest.total}
+          {/* The button already names the count; a leaf with calls cut off has
+              no button, so the words are here instead. */}
+          {nest.shown === 0 && <span className="visually-hidden"> child runs</span>}
+        </span>
+      )}
+      {nest.depth > 0 && (
+        <span className="visually-hidden">
+          Called by {run.parentPipelineName ?? run.parentRunId}:{' '}
+        </span>
+      )}
+    </span>
+  );
 }
 
 /**
@@ -81,8 +153,9 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
   pipeline: {
     label: 'Pipeline',
     sort: 'pipeline',
-    cell: (r) => (
+    cell: (r, ctx) => (
       <td className="runs-grid__pipeline">
+        {ctx.nest && <NestLead run={r} nest={ctx.nest} />}
         {/* R2 — the pipeline's NAME, which is the only thing here an operator
             recognises. The version id stays reachable as the cell's title.
             #1484 — it links to the version that RAN, not the latest, and the

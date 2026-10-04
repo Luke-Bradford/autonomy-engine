@@ -6,6 +6,7 @@ import {
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
   pageLimitSchema,
+  paginatedResponseSchema,
   PaginationQuerySchema,
 } from './pagination.js';
 
@@ -323,8 +324,38 @@ export const RunSummarySchema = RunSchema.extend({
    * has succeeded yet. `0` is a copy that succeeded and wrote nothing.
    */
   rowsWritten: z.number().int().nonnegative().nullable(),
+  /**
+   * #1484 OR35 M1 — how many runs this run CALLED directly (`parent_run_id` is
+   * this run), counted whatever the list's filters are. The grid compares it with
+   * the children it has loaded, so a parent whose children were cut off by
+   * `RUN_DESCENDANTS_MAX` says "2 of 7" rather than passing 2 off as all of them.
+   *
+   * No default: a summary without it is a broken read, and `0` would claim a
+   * parent called nothing (#473).
+   */
+  childRunCount: z.number().int().nonnegative(),
 });
 export type RunSummary = z.infer<typeof RunSummarySchema>;
+
+/**
+ * #1484 OR35 M1 — the most runs one `GET /api/runs?includeChildren=true` page
+ * returns BELOW its own rows. A ForEach over a call can fan out without limit, and
+ * this list is polled every few seconds while Live is on, so the walk stops here,
+ * shallowest first. `childRunCount` keeps the cut visible on each parent.
+ */
+export const RUN_DESCENDANTS_MAX = 500;
+
+/**
+ * #1484 OR35 M1 — a page of the runs list. `descendants` is present exactly when
+ * the request asked for `includeChildren`: every run the page's runs called, and
+ * those called in turn, that is not on the page itself. It rides BESIDE the page
+ * and never moves the cursor, so the walk over matching runs is the same with
+ * or without it.
+ */
+export const RunSummaryPageSchema = paginatedResponseSchema(RunSummarySchema).extend({
+  descendants: z.array(RunSummarySchema).max(RUN_DESCENDANTS_MAX).optional(),
+});
+export type RunSummaryPage = z.infer<typeof RunSummaryPageSchema>;
 
 /**
  * Insert shape: server sets `id` + `startedAt`; `leaseUntil`/`heartbeatAt`/

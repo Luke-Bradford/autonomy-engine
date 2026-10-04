@@ -4562,6 +4562,33 @@ button.danger {
   color: var(--muted);
 }
 
+/* #1484 — "Include child runs": a child is indented 1rem per level under its
+   parent. Every nested row reserves the disclosure slot, so names line up whether
+   or not a run called anything. */
+.runs-grid__nest {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  margin-inline-end: 0.25rem;
+  vertical-align: middle;
+}
+
+/* The shared `.icon-button` draws the button; this sizes its slot. 24px is the
+   WCAG 2.2 minimum target, and still inside the grid's 32px row. */
+.runs-grid__disclosure {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  color: inherit;
+}
+
+.runs-grid__child-count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .runs-grid .copyable-id__copy {
   padding: 0 0.4rem;
   font-size: 12px;

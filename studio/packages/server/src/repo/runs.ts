@@ -16,7 +16,9 @@ import {
 import { alias } from 'drizzle-orm/sqlite-core';
 import {
   computeRunCost,
+  MAX_CALL_DEPTH,
   NewRunSchema,
+  RUN_DESCENDANTS_MAX,
   RunLifecyclePatchSchema,
   RunSchema,
   RunSummarySchema,
@@ -27,7 +29,7 @@ import {
   type RunStatus,
   type RunTriggeredByKind,
   type EngineEvent,
-  type Paginated,
+  type RunSummaryPage,
 } from '@autonomy-studio/shared';
 import { pipelines, pipelineVersions, runEvents, runs, triggers } from '../db/schema.js';
 import { newId } from './ids.js';
@@ -42,7 +44,7 @@ import {
 } from './run-sort.js';
 import { isDeterministicRowCorruption } from './row-corruption.js';
 import type { RunActivityFold } from '../run/activity-counts.js';
-import { aggregateRunCosts, listRunLastSeqs } from './run-events.js';
+import { aggregateRunCosts, listRunLastSeqs, RUN_ID_BIND_CHUNK } from './run-events.js';
 import { RUN_TRIGGERED_BY_SQL } from './run-triggered-by.js';
 import type { Db } from './types.js';
 
@@ -50,6 +52,9 @@ import type { Db } from './types.js';
 const parentRuns = alias(runs, 'parent_runs');
 const parentVersions = alias(pipelineVersions, 'parent_versions');
 const parentPipelines = alias(pipelines, 'parent_pipelines');
+/** #1484 — the recursive step's `runs`, in `listRunDescendantIds`. In a raw `sql`
+ * template an alias renders as its name alone, so the step writes `${runs} as ${stepRuns}`. */
+const stepRuns = alias(runs, 'step_runs');
 
 /**
  * #796 (P3b) — `id` is a SEPARATE argument rather than a field on `NewRun`, and
@@ -166,6 +171,12 @@ export interface RunPageArgs {
   /** Absent means `RUN_SORT_DEFAULT`, newest first. */
   sort?: RunSort;
   cursor?: RunCursor;
+  /**
+   * #1484 OR35 M1 — also return `descendants`: the runs this page's runs called,
+   * and so on down, that are not on the page. Not a filter — which runs MATCH,
+   * and therefore the cursor, is the same either way.
+   */
+  includeChildren?: boolean;
 }
 
 /**
@@ -380,7 +391,7 @@ export function listRunSummariesPage(
    * repo module does not import the engine-facing `run/` layer. Required: a
    * caller that forgot it must not get every row's activities as `null`. */
   foldActivities: RunActivityFold,
-): Paginated<RunSummary> {
+): RunSummaryPage {
   const conditions = listRunsConditions(filter);
   const sort = args.sort ?? RUN_SORT_DEFAULT;
   // A cursor is decoded against the sort of the request carrying it
@@ -430,7 +441,76 @@ export function listRunSummariesPage(
      the transaction is purely for snapshot isolation, exactly as
      `aggregatePipelineCost`'s is. */
   return db.transaction((tx) => {
-    const query = tx
+    const fetched = withSummaryColumns(tx, sort)
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .orderBy(...runSortOrderBy(sort))
+      // Fetch one extra to PROBE for a next page, the `toPage` contract — so
+      // `nextCursor` is set only when a real next row exists, never a false
+      // "more" and never an empty trailing page.
+      .limit(args.limit + 1)
+      .all();
+    /* `toPage` itself is not reusable here, for the same reason
+       `listWorkspaceEventsPage` inlined this split: it is `<T extends CursorKey>`
+       and mints the cursor from a row's `.createdAt`, while our ordering scalar
+       is `startedAt` on a NESTED `row.run`. The one-extra-row split is three
+       lines and direction-agnostic; a second generic helper parameterised by key
+       accessor would be more machinery than the thing it abstracts. */
+    const hasMore = fetched.length > args.limit;
+    const rows = hasMore ? fetched.slice(0, args.limit) : fetched;
+    const boundary = rows[rows.length - 1];
+    const page = {
+      items: toRunSummaries(tx, rows, filter.ownerId, foldActivities),
+      // The boundary row's own term values, as SQL computed them for the
+      // `ORDER BY`, so `afterRunCursor` resumes exactly where this page ended.
+      nextCursor:
+        hasMore && boundary
+          ? encodeRunCursor({
+              sort,
+              values: JSON.parse(boundary.sortValues) as (string | number)[],
+              id: boundary.run.id,
+            })
+          : null,
+    };
+    if (args.includeChildren !== true) return page;
+    /* #1484 — the page's descendants, built by the SAME select and mapping as the
+       page, inside the same snapshot. They are not filtered: a trigger's run
+       shows everything it caused, and a child carries no trigger of its own. */
+    const order = listRunDescendantIds(
+      tx,
+      rows.map((row) => row.run.id),
+      filter.ownerId,
+    );
+    // Owner-scoped again here, though the walk already was: the convention of
+    // `aggregateRunCosts` and `countChildRuns`, a second lock on the same door.
+    // `order` is at most `RUN_DESCENDANTS_MAX` ids, within `RUN_ID_BIND_CHUNK`.
+    const read = [inArray(runs.id, order)];
+    if (filter.ownerId !== undefined) read.push(eq(runs.ownerId, filter.ownerId));
+    const byId = new Map(
+      (order.length === 0
+        ? []
+        : withSummaryColumns(tx, sort)
+            .where(and(...read))
+            .all()
+      ).map((row) => [row.run.id, row]),
+    );
+    // In the walk's order. An id the read did not return is not listed, rather
+    // than placed somewhere invented.
+    const below = order.flatMap((id) => {
+      const row = byId.get(id);
+      return row === undefined ? [] : [row];
+    });
+    return { ...page, descendants: toRunSummaries(tx, below, filter.ownerId, foldActivities) };
+  });
+}
+
+/**
+ * The runs list's SELECT: a run plus everything its summary row names, through
+ * the joins below. One builder for the page and its descendants, so a child run
+ * nested under its parent reads exactly as it would on a page of its own.
+ */
+function withSummaryColumns(tx: Db, sort: RunSort) {
+  return (
+    tx
       .select({
         run: runs,
         pipelineId: pipelines.id,
@@ -461,83 +541,141 @@ export function listRunSummariesPage(
           eq(parentPipelines.id, parentVersions.pipelineId),
           sql`${parentPipelines.ownerId} is ${runs.ownerId}`,
         ),
-      );
-    const fetched = (conditions.length > 0 ? query.where(and(...conditions)) : query)
-      .orderBy(...runSortOrderBy(sort))
-      // Fetch one extra to PROBE for a next page, the `toPage` contract — so
-      // `nextCursor` is set only when a real next row exists, never a false
-      // "more" and never an empty trailing page.
-      .limit(args.limit + 1)
+      )
+      .$dynamic()
+  );
+}
+
+type SummaryRow = ReturnType<ReturnType<typeof withSummaryColumns>['all']>[number];
+
+/**
+ * The rows of `withSummaryColumns`, as `RunSummary`s: each with its cost, its
+ * Activities and Rows-written readings and its child count, all read for THESE
+ * rows only and inside the caller's transaction.
+ */
+function toRunSummaries(
+  tx: Db,
+  rows: readonly SummaryRow[],
+  ownerId: string | undefined,
+  foldActivities: RunActivityFold,
+): RunSummary[] {
+  const ids = rows.map((row) => row.run.id);
+  /* Costs are aggregated for THIS PAGE's rows only. That falls out of the
+     paging rather than being a separate optimisation, and it is the larger
+     half of what #1083 bounds: the previous read passed every run id the owner
+     had to `aggregateRunCosts`, so the metered-event aggregation grew with the
+     history exactly as the response body did. */
+  const costs = aggregateRunCosts(tx, ids, ownerId);
+  /* #1484 — the Activities and Rows-written columns, for this page's rows only
+     and inside the same snapshot. An index-only read gives each log's last seq
+     (the fold's memo key); the fold then reads only the logs it has not
+     already read at that seq. */
+  const lastSeqs = listRunLastSeqs(tx, ids, ownerId);
+  const readings = foldActivities(
+    tx,
+    rows.map((row) => ({
+      id: row.run.id,
+      pipelineVersionId: row.run.pipelineVersionId,
+      lastSeq: lastSeqs.get(row.run.id),
+    })),
+  );
+  const children = countChildRuns(tx, ids, ownerId);
+  return rows.map((row) =>
+    RunSummarySchema.parse({
+      ...row.run,
+      pipelineId: row.pipelineId,
+      pipelineName: row.pipelineName,
+      pipelineVersion: row.pipelineVersion,
+      debug: row.debug,
+      annotations: row.annotations,
+      triggerName: row.triggerName,
+      triggeredByKind: row.triggeredByKind,
+      parentPipelineName: row.parentPipelineName,
+      /* A run with no metered events has no aggregate GROUP, and its cost is a
+         genuine zero — nothing was billed. `computeRunCost([])` rather than a
+         hand-written zero object, so the empty value stays the FOLD's own and
+         cannot fall out of step when `RunCost` grows a field. */
+      cost: costs.get(row.run.id) ?? computeRunCost([]),
+      activities: readings.get(row.run.id)?.activities ?? null,
+      rowsWritten: readings.get(row.run.id)?.rowsWritten ?? null,
+      // No GROUP for a run that called nothing — a genuine zero, as cost's is.
+      childRunCount: children.get(row.run.id) ?? 0,
+    }),
+  );
+}
+
+/**
+ * #1484 — how many runs each of `runIds` called directly (`runs_parent_run_id_idx`),
+ * owner-scoped as the list is. Chunked like `aggregateRunCosts`; a call passes at
+ * most a page or the descendants cap, so the chunking is defensive.
+ */
+function countChildRuns(
+  tx: Db,
+  runIds: readonly string[],
+  ownerId: string | undefined,
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (let i = 0; i < runIds.length; i += RUN_ID_BIND_CHUNK) {
+    const chunk = runIds.slice(i, i + RUN_ID_BIND_CHUNK);
+    const conditions = [inArray(runs.parentRunId, chunk)];
+    if (ownerId !== undefined) conditions.push(eq(runs.ownerId, ownerId));
+    const rows = tx
+      .select({ parentRunId: runs.parentRunId, n: count() })
+      .from(runs)
+      .where(and(...conditions))
+      .groupBy(runs.parentRunId)
       .all();
-    /* `toPage` itself is not reusable here, for the same reason
-       `listWorkspaceEventsPage` inlined this split: it is `<T extends CursorKey>`
-       and mints the cursor from a row's `.createdAt`, while our ordering scalar
-       is `startedAt` on a NESTED `row.run`. The one-extra-row split is three
-       lines and direction-agnostic; a second generic helper parameterised by key
-       accessor would be more machinery than the thing it abstracts. */
-    const hasMore = fetched.length > args.limit;
-    const rows = hasMore ? fetched.slice(0, args.limit) : fetched;
-    const boundary = rows[rows.length - 1];
-    /* Costs are aggregated for THIS PAGE's rows only. That falls out of the
-       paging rather than being a separate optimisation, and it is the larger
-       half of what #1083 bounds: the previous read passed every run id the owner
-       had to `aggregateRunCosts`, so the metered-event aggregation grew with the
-       history exactly as the response body did. */
-    const costs = aggregateRunCosts(
-      tx,
-      rows.map((row) => row.run.id),
-      filter.ownerId,
-    );
-    /* #1484 — the Activities and Rows-written columns, for this page's rows only
-       and inside the same snapshot. An index-only read gives each log's last seq
-       (the fold's memo key); the fold then reads only the logs it has not
-       already read at that seq. */
-    const lastSeqs = listRunLastSeqs(
-      tx,
-      rows.map((row) => row.run.id),
-      filter.ownerId,
-    );
-    const readings = foldActivities(
-      tx,
-      rows.map((row) => ({
-        id: row.run.id,
-        pipelineVersionId: row.run.pipelineVersionId,
-        lastSeq: lastSeqs.get(row.run.id),
-      })),
-    );
-    return {
-      items: rows.map((row) =>
-        RunSummarySchema.parse({
-          ...row.run,
-          pipelineId: row.pipelineId,
-          pipelineName: row.pipelineName,
-          pipelineVersion: row.pipelineVersion,
-          debug: row.debug,
-          annotations: row.annotations,
-          triggerName: row.triggerName,
-          triggeredByKind: row.triggeredByKind,
-          parentPipelineName: row.parentPipelineName,
-          /* A run with no metered events has no aggregate GROUP, and its cost is a
-             genuine zero — nothing was billed. `computeRunCost([])` rather than a
-             hand-written zero object, so the empty value stays the FOLD's own and
-             cannot fall out of step when `RunCost` grows a field. */
-          cost: costs.get(row.run.id) ?? computeRunCost([]),
-          activities: readings.get(row.run.id)?.activities ?? null,
-          rowsWritten: readings.get(row.run.id)?.rowsWritten ?? null,
-        }),
-      ),
-      // The boundary row's own term values, as SQL computed them for the
-      // `ORDER BY`, so `afterRunCursor` resumes exactly where this page ended.
-      nextCursor:
-        hasMore && boundary
-          ? encodeRunCursor({
-              sort,
-              values: JSON.parse(boundary.sortValues) as (string | number)[],
-              id: boundary.run.id,
-            })
-          : null,
-    };
-  });
+    for (const row of rows) {
+      if (row.parentRunId !== null) counts.set(row.parentRunId, row.n);
+    }
+  }
+  return counts;
+}
+
+/**
+ * #1484 OR35 M1 — the ids of every run below `pageIds` in the call tree, that is
+ * not itself on the page: shallowest first (then oldest, then by id), and at most
+ * `RUN_DESCENDANTS_MAX` of them.
+ *
+ * One `WITH RECURSIVE` over `parent_run_id` (indexed), seeded with the page.
+ * - The step never re-enters a page run. A run has one parent, so without that a
+ *   page run that is also another page run's child would be walked twice, its
+ *   whole subtree with it; with it, every run below the page is reached once.
+ * - The `LIMIT` is the cap. In a recursive CTE it bounds the rows the walk ever
+ *   ADDS (SQLite's documented semantics, seeds included, hence
+ *   `+ pageIds.length`), so a fan-out of thousands stops at the cap rather than
+ *   being read and then cut. `ORDER BY depth, started_at, id` makes the queue a
+ *   priority queue, so the runs kept are the shallowest, then the oldest calls.
+ * - Depth stops at `MAX_CALL_DEPTH` below a seed: no call chain is taller.
+ * - Every step is owner-scoped as the page is, so a parent link can never lead
+ *   into another owner's runs.
+ * Every id is a bound parameter; a page is at most `RUNS_MAX_PAGE_SIZE` (200)
+ * runs, so the two lists stay far under `RUN_ID_BIND_CHUNK`.
+ */
+function listRunDescendantIds(
+  tx: Db,
+  pageIds: readonly string[],
+  ownerId: string | undefined,
+): string[] {
+  if (pageIds.length === 0) return [];
+  const seeds = sql.join(
+    pageIds.map((id) => sql`${id}`),
+    sql`, `,
+  );
+  const owner = ownerId === undefined ? sql`` : sql` and ${stepRuns.ownerId} = ${ownerId}`;
+  const rows = tx.all<{ id: string }>(sql`
+    with recursive walk(id, depth, started_at) as (
+      select ${runs.id}, 0, ${runs.startedAt} from ${runs} where ${runs.id} in (${seeds})
+      union all
+      select ${stepRuns.id}, walk.depth + 1, ${stepRuns.startedAt}
+        from ${runs} as ${stepRuns} join walk on ${stepRuns.parentRunId} = walk.id
+        where walk.depth < ${MAX_CALL_DEPTH} and ${stepRuns.id} not in (${seeds})${owner}
+        order by 2, 3, 1
+        limit ${RUN_DESCENDANTS_MAX + pageIds.length}
+    )
+    select id from walk where depth > 0 order by depth, started_at, id
+  `);
+  return rows.map((row) => row.id);
 }
 
 /**
