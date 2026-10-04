@@ -25,12 +25,12 @@ test('#1433 — deleting a pipeline with only Debug runs names them and their wi
       version: {
         params: [],
         outputs: [],
-        nodes: [{ id: 'a', type: 'wait', config: { seconds: 0 }, position: { x: 0, y: 0 } }],
+        nodes: [{ id: 'a', type: 'wait', config: { seconds: '${0}' }, position: { x: 0, y: 0 } }],
         edges: [],
       },
     },
   });
-  expect(debug.status()).toBe(202);
+  expect(debug.status(), `debug run: ${await debug.text()}`).toBe(202);
   expect(((await debug.json()) as { outcome: string }).outcome).toBe('started');
 
   await page.goto('/#/author/pipelines');
