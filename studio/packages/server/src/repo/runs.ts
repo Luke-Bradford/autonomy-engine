@@ -628,10 +628,13 @@ function countChildRuns(
  * - The step never re-enters a page run. A run has one parent, so without that a
  *   page run that is also another page run's child would be walked twice, its
  *   whole subtree with it; with it, every run below the page is reached once.
- * - `ORDER BY depth` makes the walk breadth-first, and its `LIMIT` caps the rows
- *   the walk ever ADDS (SQLite's documented recursive-CTE semantics), so a
- *   fan-out of thousands stops at the cap rather than being read and then cut.
- *   The seeds count towards that limit, hence `+ pageIds.length`.
+ * - The walk's `LIMIT` caps the rows it ever ADDS (SQLite's documented
+ *   recursive-CTE semantics), so a fan-out of thousands stops at the cap rather
+ *   than being read and then cut. The seeds count towards it, hence
+ *   `+ pageIds.length`. SQLite's queue is FIFO, so the walk is already
+ *   breadth-first and the cap keeps the shallowest runs; `ORDER BY depth,
+ *   started_at` states that, and makes the oldest calls of the cut depth the
+ *   ones kept.
  * - Depth stops at `MAX_CALL_DEPTH` below a seed: no chain is taller, and it
  *   bounds the walk even over a hand-made cycle.
  * - Every step is owner-scoped as the page is, so a parent link can never lead

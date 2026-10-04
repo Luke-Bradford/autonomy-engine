@@ -3,8 +3,11 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import {
   fireAndSettle,
   fireManualTrigger,
+  fireTrigger,
   mintVersion,
+  seedManualTrigger,
   seedVersion,
+  waitForRunToSettle,
   type SeedDoc,
 } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
@@ -863,5 +866,78 @@ test('#1529 — a stalled runs list says so, lets Refresh retry it, and Live pol
   await expect.poll(() => served).toBe(3);
 
   await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await expectQuiet(page, problems);
+});
+
+/**
+ * #1484 OR35 M1 — "Include child runs" (on by default). A child run carries no
+ * trigger of its own, so a trigger filter used to drop everything the trigger
+ * caused below its first run. Now the run the trigger started is listed with the
+ * run it called nested under it; the disclosure collapses it; and the toggle,
+ * kept in the URL, turns the list back into what matched alone.
+ */
+test('#1484 — a trigger filter shows the runs its run called, nested and collapsible', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  const stamp = `Nested ${Date.now()}`;
+  const { pipelineVersionId: childPv } = await seedVersion(page, `${stamp} child`, {
+    nodes: [{ id: 'w', type: 'wait', config: { seconds: '${0}' }, position: { x: 0, y: 0 } }],
+  });
+  const { pipelineVersionId: parentPv } = await seedVersion(page, `${stamp} parent`, {
+    nodes: [
+      {
+        id: 'callChild',
+        type: 'call_pipeline',
+        config: {},
+        call: { pipelineVersionId: childPv, params: {} },
+        position: { x: 0, y: 0 },
+      },
+    ],
+  });
+  const triggerId = await seedManualTrigger(page, parentPv, `${stamp} trigger`);
+  const parentRunId = await fireTrigger(page, triggerId);
+  await waitForRunToSettle(page, parentRunId);
+  const children = (await (
+    await page.request.get(`/api/runs?parentRunId=${encodeURIComponent(parentRunId)}`)
+  ).json()) as { items: { id: string }[] };
+  expect(children.items).toHaveLength(1);
+  const childRunId = children.items[0]!.id;
+
+  await page.goto(`/#/monitor/runs?trigger=${encodeURIComponent(triggerId)}`);
+  await fluentRootReady(page);
+  const dataRows = page.locator('tbody tr.runs-grid__row');
+  await expect(dataRows).toHaveCount(2);
+  // The child is the row right under its parent, and drawn as a child.
+  await expect(dataRows.nth(0)).toContainText(parentRunId);
+  await expect(dataRows.nth(1)).toContainText(childRunId);
+  await expect(dataRows.nth(1)).toHaveClass(/runs-grid__row--child/);
+  const indent = await dataRows
+    .nth(1)
+    .locator('.runs-grid__nest')
+    .evaluate((el) => getComputedStyle(el).paddingInlineStart);
+  expect(indent).not.toBe('0px');
+
+  // Collapse, then expand: the child row goes and comes back, and the click on
+  // the disclosure never opens the run.
+  const hide = dataRows.nth(0).getByRole('button', { name: 'Hide 1 child run' });
+  await expect(hide).toHaveAttribute('aria-expanded', 'true');
+  await hide.click();
+  await expect(dataRows).toHaveCount(1);
+  await expect(page).toHaveURL(/\/monitor\/runs\?/);
+  await dataRows.nth(0).getByRole('button', { name: 'Show 1 child run' }).click();
+  await expect(dataRows).toHaveCount(2);
+
+  // Off: only what the filter matched, and the choice is in the URL.
+  const toggle = page.getByRole('button', { name: 'Child runs' });
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await toggle.click();
+  await expect(page).toHaveURL(/children=off/);
+  await expect(dataRows).toHaveCount(1);
+  await expect(dataRows.nth(0)).toContainText(parentRunId);
+  // Back is an undo.
+  await page.goBack();
+  await expect(dataRows).toHaveCount(2);
+
   await expectQuiet(page, problems);
 });
