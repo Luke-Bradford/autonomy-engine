@@ -8,6 +8,7 @@ import {
   RUN_PAGE_SIZES,
   RUNS_MAX_PAGE_SIZE,
   paginatedResponseSchema,
+  ActivityRunsResponseSchema,
   RerunAcceptedSchema,
   RunAnnotationsResponseSchema,
   RunDetailSchema,
@@ -891,6 +892,130 @@ describe('runs routes (read-only)', () => {
   it('404 for a missing run', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/runs/run_missing' });
     expect(res.statusCode).toBe(404);
+  });
+
+  describe('#1484 M2 — GET /api/runs/:id/activity-runs', () => {
+    /** A parent whose one Execute Pipeline node called `childId`, as the log
+     * records it. */
+    function seedCaller(childVersionId: string) {
+      const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'Caller' });
+      const version = createPipelineVersion(app.db, {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [
+          {
+            id: 'c',
+            type: 'call_pipeline',
+            position: { x: 0, y: 0 },
+            config: {},
+            call: { pipelineVersionId: childVersionId, params: {} },
+          },
+        ],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+      return createRun(app.db, {
+        ownerId: 'local',
+        pipelineVersionId: version.id,
+        triggerId: null,
+        parentRunId: null,
+        params: {},
+      });
+    }
+    function logCall(runId: string, pipelineVersionId: string, childRunId: string) {
+      appendRunEvent(app.db, {
+        runId,
+        type: 'run.started',
+        payload: { type: 'run.started', runId, pipelineVersionId, params: {} },
+      });
+      appendRunEvent(app.db, {
+        runId,
+        type: 'call.started',
+        payload: { type: 'call.started', runId, callNodeId: 'c', attemptId: 'c#0', childRunId },
+      });
+    }
+
+    it("names the run an Execute Pipeline attempt called, from the caller's own runs", async () => {
+      const childPipeline = createPipeline(app.db, { ownerId: 'local', name: 'Load orders' });
+      const childVersion = createPipelineVersion(app.db, {
+        pipelineId: childPipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+      const parent = seedCaller(childVersion.id);
+      const child = createRun(app.db, {
+        ownerId: 'local',
+        pipelineVersionId: childVersion.id,
+        triggerId: null,
+        parentRunId: parent.id,
+        params: {},
+      });
+      logCall(parent.id, parent.pipelineVersionId, child.id);
+
+      const res = await app.inject({ method: 'GET', url: `/api/runs/${parent.id}/activity-runs` });
+      expect(res.statusCode).toBe(200);
+      const body = ActivityRunsResponseSchema.parse(res.json());
+      expect(body.rows).toHaveLength(1);
+      expect(body.rows[0]).toMatchObject({
+        activityId: 'c',
+        attemptId: 'c#0',
+        status: 'waiting',
+        childRunId: child.id,
+        childRun: { id: child.id, pipelineName: 'Load orders', status: child.status },
+      });
+    });
+
+    it("never resolves a child run the caller does not own; the log's id stays", async () => {
+      const theirs = createPipeline(app.db, { ownerId: 'someone-else', name: 'Secret name' });
+      const theirVersion = createPipelineVersion(app.db, {
+        pipelineId: theirs.id,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+      const parent = seedCaller(theirVersion.id);
+      const child = createRun(app.db, {
+        ownerId: 'someone-else',
+        pipelineVersionId: theirVersion.id,
+        triggerId: null,
+        parentRunId: parent.id,
+        params: {},
+      });
+      logCall(parent.id, parent.pipelineVersionId, child.id);
+
+      const res = await app.inject({ method: 'GET', url: `/api/runs/${parent.id}/activity-runs` });
+      const body = ActivityRunsResponseSchema.parse(res.json());
+      expect(body.rows[0]).toMatchObject({ childRunId: child.id, childRun: null });
+      expect(res.body).not.toContain('Secret name');
+    });
+
+    it("is a 404 for another owner's run", async () => {
+      const pipeline = createPipeline(app.db, { ownerId: 'someone-else', name: 'Not yours' });
+      const version = createPipelineVersion(app.db, {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+      const run = createRun(app.db, {
+        ownerId: 'someone-else',
+        pipelineVersionId: version.id,
+        triggerId: null,
+        parentRunId: null,
+        params: {},
+      });
+
+      const res = await app.inject({ method: 'GET', url: `/api/runs/${run.id}/activity-runs` });
+      expect(res.statusCode).toBe(404);
+    });
   });
 
   describe('R1 — GET /api/runs/:id/detail (the run-detail read-model)', () => {
