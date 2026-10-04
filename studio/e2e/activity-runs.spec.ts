@@ -63,7 +63,7 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
       };
     });
     const top = (el: Element | null) => el?.getBoundingClientRect().top ?? Number.NaN;
-    const firstRow = t.querySelector('tbody tr')!;
+    const firstRow = t.querySelector<HTMLTableRowElement>('tbody tr')!;
     const graph = [...document.querySelectorAll('h3')].find((h) => h.textContent === 'Graph');
     return {
       rows,
@@ -87,7 +87,7 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
     expect(r.status).toBe('success');
     expect(r.start).toMatch(/^\d\d:\d\d:\d\d\.\d{3}$/);
     // A one-second wait, in the one duration format.
-    expect(r.duration).toMatch(/^1\.\d+s$|^1s$|^2(\.\d+)?s$/);
+    expect(r.duration).toMatch(/^[12](\.\d+)?s$/);
   }
   expect(byId('never')).toMatchObject([{ status: 'skipped', start: '—' }]);
   expect(byId('stop')[0]!.status).toBe('failure');

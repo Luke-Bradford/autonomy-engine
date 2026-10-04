@@ -60,6 +60,9 @@ import type { LoggedEngineEvent } from './events.js';
  */
 export type ProjectedActivityRun = Omit<ActivityRun, 'childRun'>;
 
+/** How many runs' projections one server remembers (`routes/runs.ts`). */
+export const ACTIVITY_RUNS_MEMO_LIMIT = 200;
+
 type Doc = Pick<PipelineVersion, 'nodes' | 'containers'>;
 type Container = Doc['containers'][number];
 
@@ -90,10 +93,10 @@ function resultOf(
   e: EngineEvent,
 ): { attemptId: string; status: NodeRunStatus; error?: string } | null {
   switch (e.type) {
+    // The engine settles If, Switch and Set variable on their own events, with
+    // no `node.succeeded` after them.
     case 'node.succeeded':
     case 'call.detached':
-    // The engine settles If, Switch and Set variable on these, with no
-    // `node.succeeded` after them.
     case 'condition.evaluated':
     case 'switch.evaluated':
     case 'variable.set':

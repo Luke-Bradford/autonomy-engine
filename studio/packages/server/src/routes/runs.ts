@@ -24,6 +24,7 @@ import {
   type RunDetail,
   type ActivityRunChild,
   type ActivityRunsResponse,
+  type Run,
 } from '@autonomy-studio/shared';
 import {
   getPipeline,
@@ -32,15 +33,21 @@ import {
   getTrigger,
   listRunAnnotations,
   listRunDiagnostics,
+  getPipelineIdForVersion,
+  listParsedRuns,
   listRunEvents,
-  listRuns,
+  listRunLastSeqs,
   listRunSummariesPage,
 } from '../repo/index.js';
 import { getExternalWaitByAttempt, listPendingExternalWaitsByRun } from '../repo/external-waits.js';
 import { deriveExternalWaitToken } from '../webhooks/external-wait-token.js';
 import { makeRunActivityFold } from '../run/activity-counts.js';
 import { buildEngine, makeDocResolver } from '../run/driver.js';
-import { projectActivityRuns } from '../run/activity-runs.js';
+import {
+  ACTIVITY_RUNS_MEMO_LIMIT,
+  projectActivityRuns,
+  type ProjectedActivityRun,
+} from '../run/activity-runs.js';
 import { loadEngineLog } from '../run/events.js';
 import { BadRequestError, BusyError, NotFoundError } from '../errors.js';
 import {
@@ -185,9 +192,46 @@ function decodeExportCursor(raw: string, sort: RunSort): RunCursor {
  * THIS run). Every other route is read-only. Both mutators are owner-scoped
  * through the run and answer before their downstream drive finishes.
  */
+
+/**
+ * #1392 — a resource's name for a page about `ownerId`'s run, or `null`. The
+ * check is repeated per row although every name reached from an owned run is
+ * its owner's already: a name is the one thing here that is cheap to withhold,
+ * and a leak of it would be silent. A row that is gone, or another owner's, is
+ * `null` — never an id dressed as a name.
+ */
+function ownedName(
+  row: { ownerId: string | null; name: string } | null,
+  ownerId: string | null,
+): string | null {
+  return row !== null && row.ownerId === ownerId ? row.name : null;
+}
+
 export const runsRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
   const resolveDoc = makeDocResolver(db);
+  /* #1484 M2 — the activity-runs projection, memoised per run on its last `seq`
+     (the log is append-only, so an unchanged `seq` is an unchanged log): a page
+     re-reads it as the run's log grows, and a settled run is folded once. The
+     bound keeps a long-lived server from holding every run anyone has opened. */
+  const activityRunsMemo = new Map<string, { lastSeq: number; rows: ProjectedActivityRun[] }>();
+  const projectedActivityRuns = (runId: string, versionId: string): ProjectedActivityRun[] => {
+    const lastSeq = listRunLastSeqs(db, [runId]).get(runId);
+    if (lastSeq === undefined) return [];
+    const hit = activityRunsMemo.get(runId);
+    activityRunsMemo.delete(runId);
+    let rows = hit !== undefined && hit.lastSeq === lastSeq ? hit.rows : undefined;
+    if (rows === undefined) {
+      const doc = resolveDoc(versionId);
+      rows = projectActivityRuns(doc, buildEngine(doc), loadEngineLog(db, runId));
+    }
+    activityRunsMemo.set(runId, { lastSeq, rows });
+    if (activityRunsMemo.size > ACTIVITY_RUNS_MEMO_LIMIT) {
+      const oldest = activityRunsMemo.keys().next().value;
+      if (oldest !== undefined) activityRunsMemo.delete(oldest);
+    }
+    return rows;
+  };
   // #1484 — one per app, so its memo of settled runs' counts outlives a request.
   const foldActivities = makeRunActivityFold(resolveDoc, {
     onUnreadable: (runId, err) =>
@@ -383,15 +427,12 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
     // into a 400 `validation_error` on a GET with no request body.
     const pipelineVersion = resolveDoc(run.pipelineVersionId);
     // #1392 — the names. The pipeline is the version's and the trigger is the
-    // one the run was created from, so by the argument above both are the
-    // run owner's already; the owner check is repeated per row anyway, because
-    // a name is the one thing here that is cheap to withhold and a leak of it
-    // would be silent. A name that fails it, or a row that is gone, is `null`
-    // — never an id dressed as a name.
-    const nameFor = (row: { ownerId: string | null; name: string } | null) =>
-      row && row.ownerId === run.ownerId ? row.name : null;
-    const pipelineName = nameFor(getPipeline(db, pipelineVersion.pipelineId));
-    const triggerName = run.triggerId ? nameFor(getTrigger(db, run.triggerId)) : null;
+    // one the run was created from, so by the argument above both are the run
+    // owner's already; `ownedName` checks anyway.
+    const pipelineName = ownedName(getPipeline(db, pipelineVersion.pipelineId), run.ownerId);
+    const triggerName = run.triggerId
+      ? ownedName(getTrigger(db, run.triggerId), run.ownerId)
+      : null;
     const debug = isDebugVersion(db, run.pipelineVersionId) === true;
     return { run, pipelineVersion, debug, pipelineName, triggerName } satisfies RunDetail;
   });
@@ -420,26 +461,26 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
         'run',
         request.params.id,
       );
-      const doc = resolveDoc(run.pipelineVersionId);
-      const rows = projectActivityRuns(doc, buildEngine(doc), loadEngineLog(db, run.id));
+      const rows = projectedActivityRuns(run.id, run.pipelineVersionId);
+      // Only the children this run's own log names, read leniently so one
+      // corrupt child row costs its link and not the whole table.
       const children =
-        run.ownerId === null
-          ? new Map()
+        run.ownerId === null || !rows.some((r) => r.childRunId !== null)
+          ? new Map<string, Run>()
           : new Map(
-              listRuns(db, { parentRunId: run.id, ownerId: run.ownerId }).map((r) => [r.id, r]),
+              listParsedRuns(db, { parentRunId: run.id, ownerId: run.ownerId }).map((r) => [
+                r.id,
+                r,
+              ]),
             );
       const names = new Map<string, string | null>();
       const pipelineNameOf = (versionId: string): string | null => {
         if (!names.has(versionId)) {
-          let name: string | null = null;
-          try {
-            const pipeline = getPipeline(db, resolveDoc(versionId).pipelineId);
-            name = pipeline !== null && pipeline.ownerId === run.ownerId ? pipeline.name : null;
-          } catch {
-            // A child whose version is gone or unparseable still has a run to
-            // link to; it just has no name to show.
-          }
-          names.set(versionId, name);
+          const pipelineId = getPipelineIdForVersion(db, versionId);
+          names.set(
+            versionId,
+            pipelineId === null ? null : ownedName(getPipeline(db, pipelineId), run.ownerId),
+          );
         }
         return names.get(versionId) ?? null;
       };

@@ -8,9 +8,10 @@ import { ACTIVITY_RUN_COLUMNS, iterationText } from './activityRunsColumns';
 
 /** Bytes as the activity reported them, saying which way they moved. */
 function bytesText(row: ActivityRun): string {
-  if (row.bytesWritten !== null) return `${formatCount(row.bytesWritten)} written`;
-  if (row.bytesRead !== null) return `${formatCount(row.bytesRead)} read`;
-  return '';
+  const parts: string[] = [];
+  if (row.bytesRead !== null) parts.push(`${formatCount(row.bytesRead)} read`);
+  if (row.bytesWritten !== null) parts.push(`${formatCount(row.bytesWritten)} written`);
+  return parts.join(' · ');
 }
 
 const count = (n: number | null) => (n === null ? '' : formatCount(n));

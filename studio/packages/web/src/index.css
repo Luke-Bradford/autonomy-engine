@@ -4564,11 +4564,6 @@ button.danger {
   vertical-align: middle;
 }
 
-.activity-runs__table .num {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
 .activity-runs__error {
   max-width: 32rem;
   overflow: hidden;
@@ -4576,7 +4571,8 @@ button.danger {
 }
 
 .runs-grid .num,
-.runs-grid .run-cost {
+.runs-grid .run-cost,
+.activity-runs__table .num {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
