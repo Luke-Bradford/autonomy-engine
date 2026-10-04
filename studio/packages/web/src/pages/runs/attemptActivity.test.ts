@@ -11,7 +11,14 @@ function envelope(event: EngineEvent, ts = seq + 1000): RunEvent {
 const input = (text: string) => ({ text, chars: text.length });
 const dispatched = (nodeId: string, attemptId: string, text: string, ts?: number) =>
   envelope(
-    { type: 'node.dispatched', runId: 'r1', nodeId, attemptId, idempotent: true, input: input(text) },
+    {
+      type: 'node.dispatched',
+      runId: 'r1',
+      nodeId,
+      attemptId,
+      idempotent: true,
+      input: input(text),
+    },
     ts,
   );
 const succeeded = (nodeId: string, attemptId: string, outputs: Record<string, unknown>) =>
@@ -61,13 +68,27 @@ function twoItems(): RunEvent[] {
 describe('attemptEvents (#1484 M2 drawer)', () => {
   it("keeps one attempt's events, and the node outputs streamed while it ran", () => {
     const log = twoItems();
-    expect(attemptEvents(log, 'c#0').map((e) => e.seq)).toEqual([log[0]!.seq, log[1]!.seq, log[2]!.seq]);
-    expect(attemptEvents(log, 'c#1').map((e) => e.seq)).toEqual([log[3]!.seq, log[4]!.seq, log[5]!.seq]);
+    expect(attemptEvents(log, 'c#0').map((e) => e.seq)).toEqual([
+      log[0]!.seq,
+      log[1]!.seq,
+      log[2]!.seq,
+    ]);
+    expect(attemptEvents(log, 'c#1').map((e) => e.seq)).toEqual([
+      log[3]!.seq,
+      log[4]!.seq,
+      log[5]!.seq,
+    ]);
   });
 
   it('keeps the timer that settles a parked attempt, which names it as the previous one', () => {
     const log = [
-      envelope({ type: 'timer.waitScheduled', runId: 'r1', nodeId: 'w', attemptId: 'w#0', dueAt: 5 }),
+      envelope({
+        type: 'timer.waitScheduled',
+        runId: 'r1',
+        nodeId: 'w',
+        attemptId: 'w#0',
+        dueAt: 5,
+      }),
       envelope({ type: 'timer.due', runId: 'r1', nodeId: 'w', previousAttemptId: 'w#0' }),
     ];
     expect(attemptEvents(log, 'w#0')).toHaveLength(2);
@@ -78,8 +99,16 @@ describe('activityOfRow (#1484 M2 drawer)', () => {
   it("reads each ForEach item's own input and outputs, not the latest item's", () => {
     const log = twoItems();
     const nodes = deriveNodeActivity(log);
-    const first = activityOfRow(log, nodes, row({ attemptId: 'c#0', startedAt: 10, finishedAt: 15 }));
-    const second = activityOfRow(log, nodes, row({ attemptId: 'c#1', startedAt: 20, finishedAt: 29 }));
+    const first = activityOfRow(
+      log,
+      nodes,
+      row({ attemptId: 'c#0', startedAt: 10, finishedAt: 15 }),
+    );
+    const second = activityOfRow(
+      log,
+      nodes,
+      row({ attemptId: 'c#1', startedAt: 20, finishedAt: 29 }),
+    );
     expect(first.input?.text).toBe('{"file":"a.csv"}');
     expect(first.outputValues).toEqual({ rows: 49 });
     expect(first.lastOutputName).toBe('progress');
@@ -101,7 +130,13 @@ describe('activityOfRow (#1484 M2 drawer)', () => {
         error: 'HTTP 503',
         kind: 'transient',
       }),
-      envelope({ type: 'node.retryScheduled', runId: 'r1', nodeId: 'h', attemptId: 'h#0', nextAttemptAt: 9 }),
+      envelope({
+        type: 'node.retryScheduled',
+        runId: 'r1',
+        nodeId: 'h',
+        attemptId: 'h#0',
+        nextAttemptAt: 9,
+      }),
       envelope({ type: 'node.retryDue', runId: 'r1', nodeId: 'h', previousAttemptId: 'h#0' }),
       dispatched('h', 'h#1', 'GET /flaky again'),
       succeeded('h', 'h#1', { status: 200 }),
@@ -133,7 +168,11 @@ describe('activityOfRow (#1484 M2 drawer)', () => {
       succeeded('c@1', 'c@1#0', { n: 2 }),
       succeeded('c@0', 'c@0#0', { n: 1 }),
     ];
-    const got = activityOfRow(log, deriveNodeActivity(log), row({ nodeId: 'c@0', attemptId: 'c@0#0' }));
+    const got = activityOfRow(
+      log,
+      deriveNodeActivity(log),
+      row({ nodeId: 'c@0', attemptId: 'c@0#0' }),
+    );
     expect(got.nodeId).toBe('c');
     expect(got.input?.text).toBe('a');
     expect(got.outputValues).toEqual({ n: 1 });

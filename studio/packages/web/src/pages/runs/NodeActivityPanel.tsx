@@ -210,8 +210,8 @@ export function NodeActivityPanel({
         <strong>
           <NodeDuration node={node} live={live} />
         </strong>{' '}
-        — wall clock for {run === undefined ? 'the latest' : 'this'} attempt, from start to settle, including any wait it parked on
-        and excluding time held between retries.{' '}
+        — wall clock for {run === undefined ? 'the latest' : 'this'} attempt, from start to settle,
+        including any wait it parked on and excluding time held between retries.{' '}
         {node.startedAtMs === undefined &&
           (node.copiedFromRunId !== undefined
             ? /* #918 — a copied node hits the `attempts === 0` arm exactly, and

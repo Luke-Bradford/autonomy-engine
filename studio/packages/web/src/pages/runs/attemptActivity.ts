@@ -28,7 +28,11 @@ import { blankNodeActivity, deriveNodeActivity, type NodeActivity } from './runS
  * input and span — which, over this one attempt's events, would wipe the very
  * failure the drawer was opened to read.
  */
-const SETTLED_BY_PREVIOUS = new Set(['timer.due', 'externalWait.completed', 'externalWait.expired']);
+const SETTLED_BY_PREVIOUS = new Set([
+  'timer.due',
+  'externalWait.completed',
+  'externalWait.expired',
+]);
 
 /** The raw node id (`w` or `w@2`) and attempt an event names, if it names one. */
 function attemptRef(row: RunEvent): { raw: string; attemptId: string } | null {

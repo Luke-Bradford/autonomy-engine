@@ -3438,9 +3438,7 @@ describe('RunDetailPage — the activity run detail drawer (#1484 M2)', () => {
   });
 
   const openRow = async (index: number) => {
-    await waitFor(() =>
-      expect(document.querySelectorAll('.activity-runs__open')).toHaveLength(2),
-    );
+    await waitFor(() => expect(document.querySelectorAll('.activity-runs__open')).toHaveLength(2));
     const button = document.querySelectorAll<HTMLButtonElement>('.activity-runs__open')[index]!;
     await userEvent.click(button);
     return button;
