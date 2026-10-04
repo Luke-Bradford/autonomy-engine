@@ -564,7 +564,6 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     `PipelineHasRunsError` stands.
     *(Operator ask in #1481; slice 2.)*
 
-
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could
