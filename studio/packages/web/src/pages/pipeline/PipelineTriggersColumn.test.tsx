@@ -13,6 +13,7 @@ import * as triggersApi from '../../api/triggers';
 import * as pipelinesApi from '../../api/pipelines';
 import * as workspaceGitApi from '../../api/workspaceGit';
 import { PipelineTriggersColumn } from './PipelineTriggersColumn';
+import { formatTimestamp } from '../../lib/displayTime';
 
 vi.mock('../../api/triggers', async (importActual) => ({
   ...(await importActual<typeof import('../../api/triggers')>()),
@@ -253,7 +254,7 @@ describe('PipelineTriggersColumn (#1476 OR28 slice 3)', () => {
       mount();
       const row = (await screen.findByText('Nightly')).closest('li')!;
       await waitFor(() =>
-        expect(row).toHaveTextContent(`enabled · next scheduled ${new Date(at).toLocaleString()}`),
+        expect(row).toHaveTextContent(`enabled · next scheduled ${formatTimestamp(at, 'local')}`),
       );
     });
 
@@ -268,9 +269,9 @@ describe('PipelineTriggersColumn (#1476 OR28 slice 3)', () => {
           .mockResolvedValue([{ triggerId: 'trg_1', at: later, source: 'schedule' }]);
         mount();
         const row = (await screen.findByText('Nightly')).closest('li')!;
-        await waitFor(() => expect(row).toHaveTextContent(new Date(soon).toLocaleString()));
+        await waitFor(() => expect(row).toHaveTextContent(formatTimestamp(soon, 'local')));
         await act(() => vi.advanceTimersByTimeAsync(16_000));
-        await waitFor(() => expect(row).toHaveTextContent(new Date(later).toLocaleString()));
+        await waitFor(() => expect(row).toHaveTextContent(formatTimestamp(later, 'local')));
       } finally {
         vi.useRealTimers();
       }

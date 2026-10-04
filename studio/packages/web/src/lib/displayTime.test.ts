@@ -23,6 +23,12 @@ describe('displayTime — #1484 principle 4', () => {
     expect(formatTimestamp(Date.UTC(2026, 0, 1), 'UTC')).toBe('2026-01-01 00:00:00 UTC');
   });
 
+  it('says a timestamp that is not an instant is invalid, rather than throwing', () => {
+    expect(formatTimestamp(Number.NaN, 'UTC')).toBe('invalid time');
+    expect(formatTimeOfDay(Number.NaN, 'UTC')).toBe('invalid time');
+    expect(formatCompactTimestamp(Number.NaN, 'UTC', AT)).toBe('invalid time');
+  });
+
   it('formats a time of day alone, for a feed whose day is known', () => {
     expect(formatTimeOfDay(AT, 'UTC')).toBe('12:05:07');
     expect(formatTimeOfDay(AT, 'Europe/London', 'ms')).toBe('13:05:07.123');

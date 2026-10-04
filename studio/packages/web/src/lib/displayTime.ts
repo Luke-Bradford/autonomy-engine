@@ -92,6 +92,11 @@ function formatterFor(zone: DisplayTimeZone): Intl.DateTimeFormat {
   return formatter;
 }
 
+/** What a timestamp that is not an instant renders as — the old
+ * `toLocaleString` said "Invalid Date" and did not throw, and a formatter must
+ * not be the thing that crashes a page over one bad field. */
+export const INVALID_TIME = 'invalid time';
+
 function zonedParts(ms: number, zone: DisplayTimeZone): ZonedParts {
   const parts: Partial<Record<Intl.DateTimeFormatPartTypes, string>> = {};
   for (const part of formatterFor(zone).formatToParts(ms)) parts[part.type] = part.value;
@@ -116,6 +121,7 @@ export function formatTimestamp(
   zone: DisplayTimeZone,
   precision: TimestampPrecision = 'second',
 ): string {
+  if (!Number.isFinite(ms)) return INVALID_TIME;
   const p = zonedParts(ms, zone);
   const fraction = precision === 'ms' ? `.${p.fraction}` : '';
   return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}${fraction} ${p.zoneName}`;
@@ -127,6 +133,7 @@ export function formatTimeOfDay(
   zone: DisplayTimeZone,
   precision: TimestampPrecision = 'second',
 ): string {
+  if (!Number.isFinite(ms)) return INVALID_TIME;
   const p = zonedParts(ms, zone);
   return `${p.hour}:${p.minute}:${p.second}${precision === 'ms' ? `.${p.fraction}` : ''}`;
 }
@@ -138,6 +145,7 @@ export function formatTimeOfDay(
  * text drops nothing that is not one hover away.
  */
 export function formatCompactTimestamp(ms: number, zone: DisplayTimeZone, now: number): string {
+  if (!Number.isFinite(ms)) return INVALID_TIME;
   const p = zonedParts(ms, zone);
   if (p.year === zonedParts(now, zone).year) {
     return `${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;

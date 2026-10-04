@@ -682,7 +682,7 @@ describe('#1394 OR3 — run cards', () => {
     ]);
     const state = settled({ cp: 'success' });
     const run = runFlowNodes(COPY_DOC, state, { activity })[0]!.data as RunNodeData;
-    expect(run.facts).toBe('1s · 1,204 rows');
+    expect(run.facts).toBe('1.5s · 1,204 rows');
     const preview = runFlowNodes(COPY_DOC, state, { activity, showStatus: false })[0]!
       .data as RunNodeData;
     expect(preview.facts).toBeNull();
@@ -720,7 +720,7 @@ describe('#1394 OR3 — run cards', () => {
         .filter((n) => n.type === 'runActivity')
         .map((n) => [n.id, (n.data as RunNodeData).facts]),
     );
-    expect(facts).toEqual({ in: null, deep: null, staged: '10ms · 1 row' });
+    expect(facts).toEqual({ in: null, deep: null, staged: '0.01s · 1 row' });
   });
 
   it('states no facts on a node on a back edge’s cycle, and keeps them off it', () => {
@@ -745,7 +745,7 @@ describe('#1394 OR3 — run cards', () => {
     const facts = Object.fromEntries(
       runFlowNodes(doc, state, { activity }).map((n) => [n.id, (n.data as RunNodeData).facts]),
     );
-    expect(facts).toEqual({ a: '5ms', b: null, c: null, d: '5ms' });
+    expect(facts).toEqual({ a: '0.005s', b: null, c: null, d: '0.005s' });
   });
 
   it('a changed fact replaces the node; an unchanged one keeps it', () => {
@@ -782,7 +782,7 @@ describe('#1394 OR3 — run cards', () => {
 
 describe('runNodeFacts', () => {
   it('states a settled duration', () => {
-    expect(runNodeFacts('wait', measured(0, 250))).toBe('250ms');
+    expect(runNodeFacts('wait', measured(0, 250))).toBe('0.25s');
   });
 
   it('says nothing for an open span or no row at all — never an em-dash or 0', () => {
@@ -802,7 +802,7 @@ describe('runNodeFacts', () => {
 
   it('reads rows off a Copy node only — another node’s `rowsWritten` is a value it was handed', () => {
     for (const type of ['call_pipeline', 'webhook', 'wait']) {
-      expect(runNodeFacts(type, measured(0, 5, { rowsWritten: 3 })), type).toBe('5ms');
+      expect(runNodeFacts(type, measured(0, 5, { rowsWritten: 3 })), type).toBe('0.005s');
     }
   });
 

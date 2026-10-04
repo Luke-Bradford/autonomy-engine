@@ -4,6 +4,7 @@ import {
   formatCompactTimestamp,
   formatRelative,
   formatTimestamp,
+  INVALID_TIME,
   type DisplayTimeZone,
   type TimestampPrecision,
 } from './displayTime';
@@ -41,6 +42,9 @@ interface WhenProps {
 export function When({ ms, precision = 'second', compact = false, store }: WhenProps) {
   const zone = useDisplayTimeZone(store);
   if (ms === null) return <>—</>;
+  // Not an instant (a corrupt or missing field): say so, without a `<time>`
+  // whose `dateTime` would throw.
+  if (!Number.isFinite(ms)) return <>{INVALID_TIME}</>;
   const now = Date.now();
   const text = compact
     ? formatCompactTimestamp(ms, zone, now)

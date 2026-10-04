@@ -122,7 +122,7 @@ describe('U29 RunTimeline', () => {
     const lengths = [...container.querySelectorAll('.run-timeline-length')].map(
       (el) => el.textContent,
     );
-    expect(lengths).toEqual(['5s', '1ms']);
+    expect(lengths).toEqual(['5s', '0.001s']);
   });
 
   /**
