@@ -93,9 +93,9 @@ export function runExportRow(run: RunSummary): CsvValue[] {
  *   finishing changes its Duration). The grid drops a repeat by key; this drops
  *   it here. A run skipped the same way is not recoverable without one long
  *   transaction, which is the stall this walk exists to avoid.
- * - **Refuses a cursor that does not advance**, as `fetchAllPages` does in the
- *   web package: a page of nothing but repeats under a repeated cursor would
- *   otherwise loop until the request is abandoned.
+ * - **Refuses a cursor it has already followed**, as `fetchAllPages` does in
+ *   the web package: pages of nothing but repeats under a cursor that recurs
+ *   (`A`, or `A → B → A`) would otherwise loop until the request is abandoned.
  */
 export async function collectRunsForExport(
   readPage: (limit: number, cursor: string | undefined) => RunSummaryPage,
@@ -104,6 +104,7 @@ export async function collectRunsForExport(
 ): Promise<{ runs: RunSummary[]; truncated: boolean }> {
   const out: RunSummary[] = [];
   const seen = new Set<string>();
+  const followed = new Set<string>();
   let cursor: string | undefined;
   for (;;) {
     const page = readPage(Math.min(pageSize, max - out.length), cursor);
@@ -114,9 +115,10 @@ export async function collectRunsForExport(
     }
     if (page.nextCursor === null) return { runs: out, truncated: false };
     if (out.length >= max) return { runs: out, truncated: true };
-    if (page.nextCursor === cursor) {
-      throw new Error('runs export: the list returned the cursor it was given');
+    if (followed.has(page.nextCursor)) {
+      throw new Error('runs export: the list returned a cursor it had already given');
     }
+    followed.add(page.nextCursor);
     cursor = page.nextCursor;
     await yieldToEventLoop();
   }

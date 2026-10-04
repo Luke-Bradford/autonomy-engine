@@ -55,6 +55,20 @@ describe('collectRunsForExport (#1484)', () => {
     await expect(collectRunsForExport(() => page, 1, 10)).rejects.toThrow(/cursor/);
   });
 
+  it('refuses a cursor that comes round again (A → B → A)', async () => {
+    const next: Record<string, string> = { start: 'A', A: 'B', B: 'A' };
+    await expect(
+      collectRunsForExport(
+        (_limit, cursor) => ({
+          items: [{ id: 'a' }] as RunSummary[],
+          nextCursor: next[cursor ?? 'start']!,
+        }),
+        1,
+        10,
+      ),
+    ).rejects.toThrow(/cursor/);
+  });
+
   it('yields to the event loop between pages', async () => {
     const { readPage } = pagedList(ids(4));
     // A macrotask queued during each page must have run before the next page
