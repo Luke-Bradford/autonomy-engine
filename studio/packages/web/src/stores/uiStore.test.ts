@@ -808,8 +808,8 @@ describe('uiStore runs list live mode and page size (#1484)', () => {
         createUiStore(fakeStorage({ [RUNS_PAGE_SIZE_STORAGE_KEY]: raw })).getState().runsPageSize,
       ).toBe(50);
     }
-    expect(
-      createUiStore(fakeStorage({ [RUNS_LIVE_STORAGE_KEY]: 'yes' })).getState().runsLive,
-    ).toBe(false);
+    expect(createUiStore(fakeStorage({ [RUNS_LIVE_STORAGE_KEY]: 'yes' })).getState().runsLive).toBe(
+      false,
+    );
   });
 });

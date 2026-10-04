@@ -1514,7 +1514,11 @@ describe('#1484 — runs list Live mode and page size', () => {
     });
   };
   const liveUi = () => freshUi({ [RUNS_LIVE_STORAGE_KEY]: 'true' });
-  const tick = (ms: number) => act(() => vi.advanceTimersByTime(ms));
+  const tick = (ms: number) => {
+    act(() => {
+      vi.advanceTimersByTime(ms);
+    });
+  };
   const durationOf = (runId: string) =>
     cellUnder(screen.getByText(runId).closest('tr') as HTMLElement, 'Duration');
 
