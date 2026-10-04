@@ -199,19 +199,24 @@ export async function apiFetchText(
   path: string,
   opts: { signal?: AbortSignal } = {},
 ): Promise<string> {
-  return (await apiFetchFile(path, opts)).text;
+  const res = await fetch(path, { method: 'GET', signal: opts.signal });
+  if (!res.ok) await throwApiError(res);
+  return res.text();
 }
 
 /**
- * `apiFetchText` plus the response headers, for a file whose reply says
- * something about it beside the bytes — the runs export's truncation header
- * (#1484). The same failure mapping; the body is still never parsed.
+ * `apiFetchText`'s rule for a file kept as BYTES, plus the response headers —
+ * the runs export (#1484), whose reply says beside the file whether it was cut.
+ *
+ * A `Blob`, not text, because decoding is not lossless: `Response.text()`
+ * decodes UTF-8 and DROPS a leading byte-order mark, and the CSV's BOM is what
+ * makes Excel read it as UTF-8. Measured: the e2e download arrived without it.
  */
 export async function apiFetchFile(
   path: string,
   opts: { signal?: AbortSignal } = {},
-): Promise<{ text: string; headers: Headers }> {
+): Promise<{ file: Blob; headers: Headers }> {
   const res = await fetch(path, { method: 'GET', signal: opts.signal });
   if (!res.ok) await throwApiError(res);
-  return { text: await res.text(), headers: res.headers };
+  return { file: await res.blob(), headers: res.headers };
 }

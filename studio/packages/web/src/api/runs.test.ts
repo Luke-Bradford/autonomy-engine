@@ -321,7 +321,8 @@ describe('runs API', () => {
 describe('exportRunsCsv (#1484)', () => {
   function stubCsv(headers: Record<string, string> = {}, status = 200) {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(status === 200 ? 'run_id\r\n' : JSON.stringify({ error: 'boom' }), {
+      // The server's bytes start with a BOM, which must reach the file.
+      new Response(status === 200 ? '\uFEFFrun_id\r\n' : JSON.stringify({ error: 'boom' }), {
         status,
         headers,
       }),
@@ -343,7 +344,10 @@ describe('exportRunsCsv (#1484)', () => {
     expect(fetchMock.mock.calls[0]![0]).toBe(
       '/api/runs/export.csv?status=failure&sort=duration&dir=asc',
     );
-    expect(out).toEqual({ csv: 'run_id\r\n', truncated: null });
+    expect(out.truncated).toBeNull();
+    expect(new Uint8Array(await out.file.arrayBuffer())).toEqual(
+      new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode('run_id\r\n')]),
+    );
   });
 
   it('asks for the bare path with no filters', async () => {

@@ -180,7 +180,7 @@ function setAxes(filters: ListRunsQuery): Record<string, string> {
 }
 
 /**
- * #1484 OR35 M1 — every run `filters` match, as the server's CSV
+ * #1484 OR35 M1 — every run `filters` match, as the server's CSV BYTES
  * (`GET /api/runs/export.csv`), in the order `filters.sort`/`dir` ask for.
  *
  * `truncated` is the cap the server stopped at when more runs matched, or
@@ -191,14 +191,14 @@ function setAxes(filters: ListRunsQuery): Record<string, string> {
 export async function exportRunsCsv(
   filters: ListRunsQuery,
   signal?: AbortSignal,
-): Promise<{ csv: string; truncated: number | null }> {
+): Promise<{ file: Blob; truncated: number | null }> {
   const axes: ListRunsQuery = { ...filters };
   delete axes.includeChildren;
   const params = new URLSearchParams(setAxes(axes)).toString();
   const query = params === '' ? '' : `?${params}`;
-  const { text, headers } = await apiFetchFile(`/api/runs/export.csv${query}`, { signal });
+  const { file, headers } = await apiFetchFile(`/api/runs/export.csv${query}`, { signal });
   const cap = Number(headers.get(RUNS_EXPORT_TRUNCATED_HEADER));
-  return { csv: text, truncated: Number.isInteger(cap) && cap > 0 ? cap : null };
+  return { file, truncated: Number.isInteger(cap) && cap > 0 ? cap : null };
 }
 
 /**

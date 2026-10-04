@@ -28,7 +28,14 @@ import type { ImportResult } from '@autonomy-studio/shared';
  * form, and a silent one.
  */
 export function downloadTextFile(filename: string, text: string, mime = 'application/json'): void {
-  const url = URL.createObjectURL(new Blob([text], { type: mime }));
+  downloadBlob(filename, new Blob([text], { type: mime }));
+}
+
+/** Hand `file`'s bytes to the browser as a downloaded file named `filename`,
+ * untouched — for a file that must not pass through a text decode (#1484's
+ * CSV, whose byte-order mark `Response.text()` would drop). */
+export function downloadBlob(filename: string, file: Blob): void {
+  const url = URL.createObjectURL(file);
   try {
     const anchor = document.createElement('a');
     anchor.href = url;

@@ -12,11 +12,11 @@ vi.mock('../../api/runs', async (importActual) => ({
 }));
 vi.mock('../../api/download', async (importActual) => ({
   ...(await importActual<typeof import('../../api/download')>()),
-  downloadTextFile: vi.fn(),
+  downloadBlob: vi.fn(),
 }));
 
 const exportMock = vi.mocked(runsApi.exportRunsCsv);
-const downloadMock = vi.mocked(download.downloadTextFile);
+const downloadMock = vi.mocked(download.downloadBlob);
 
 afterEach(() => {
   cleanup();
@@ -25,21 +25,22 @@ afterEach(() => {
 
 describe('RunsExportButton (#1484)', () => {
   it('exports the query it is given and saves the CSV', async () => {
-    exportMock.mockResolvedValue({ csv: 'run_id\r\n', truncated: null });
+    const file = new Blob(['run_id\r\n'], { type: 'text/csv' });
+    exportMock.mockResolvedValue({ file, truncated: null });
     const query = { status: 'failure' as const, q: 'orders' };
     render(<RunsExportButton query={query} />);
     fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
     await waitFor(() => expect(downloadMock).toHaveBeenCalledTimes(1));
     expect(exportMock).toHaveBeenCalledWith(query, expect.any(AbortSignal));
-    const [name, text, mime] = downloadMock.mock.calls[0]!;
+    const [name, saved] = downloadMock.mock.calls[0]!;
     expect(name).toMatch(/^runs-\d{8}-\d{6}Z\.csv$/);
-    expect([text, mime]).toEqual(['run_id\r\n', 'text/csv']);
+    expect(saved).toBe(file);
     expect(screen.queryByRole('status')).toBeNull();
     expect(screen.getByRole('button', { name: 'Export CSV' })).toBeEnabled();
   });
 
   it('says when the server cut the file at its cap', async () => {
-    exportMock.mockResolvedValue({ csv: 'x', truncated: 10000 });
+    exportMock.mockResolvedValue({ file: new Blob(['x']), truncated: 10000 });
     render(<RunsExportButton query={{}} />);
     fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
     expect(await screen.findByRole('status')).toHaveTextContent(
@@ -48,12 +49,12 @@ describe('RunsExportButton (#1484)', () => {
   });
 
   it('is disabled while an export is in flight', async () => {
-    let finish: (v: { csv: string; truncated: null }) => void = () => undefined;
+    let finish: (v: { file: Blob; truncated: null }) => void = () => undefined;
     exportMock.mockReturnValue(new Promise((resolve) => (finish = resolve)));
     render(<RunsExportButton query={{}} />);
     fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
     expect(screen.getByRole('button', { name: 'Exporting…' })).toBeDisabled();
-    finish({ csv: 'x', truncated: null });
+    finish({ file: new Blob(['x']), truncated: null });
     expect(await screen.findByRole('button', { name: 'Export CSV' })).toBeEnabled();
   });
 
@@ -66,7 +67,7 @@ describe('RunsExportButton (#1484)', () => {
   });
 
   it('drops a note about the last export when the filters change', async () => {
-    exportMock.mockResolvedValue({ csv: 'x', truncated: 10000 });
+    exportMock.mockResolvedValue({ file: new Blob(['x']), truncated: 10000 });
     const { rerender } = render(<RunsExportButton query={{}} />);
     fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
     await screen.findByRole('status');

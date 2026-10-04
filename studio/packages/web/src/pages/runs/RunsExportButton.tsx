@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { exportRunsCsv, type ListRunsQuery } from '../../api/runs';
-import { downloadTextFile } from '../../api/download';
+import { downloadBlob } from '../../api/download';
 import { messageOf } from '../../api/client';
 import { runsExportFileName, runsExportTruncatedLabel } from './runsExport';
 
@@ -45,8 +45,8 @@ export function RunsExportButton({ query }: { query: ListRunsQuery }) {
     // list it does not describe.
     const askedFor = query;
     try {
-      const { csv, truncated: cap } = await exportRunsCsv(askedFor, abort.signal);
-      downloadTextFile(runsExportFileName(Date.now()), csv, 'text/csv');
+      const { file, truncated: cap } = await exportRunsCsv(askedFor, abort.signal);
+      downloadBlob(runsExportFileName(Date.now()), file);
       if (current.current === askedFor) setTruncated(cap);
     } catch (err) {
       if (!abort.signal.aborted && current.current === askedFor) {
