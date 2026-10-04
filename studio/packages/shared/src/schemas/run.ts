@@ -644,6 +644,13 @@ export type RunPageSize = (typeof RUN_PAGE_SIZES)[number];
 export const RUNS_MAX_PAGE_SIZE: number = Math.max(...RUN_PAGE_SIZES);
 
 /**
+ * #1484 OR35 M1 — set on `GET /api/runs/export.csv` when the export stopped at
+ * its cap with more runs matching. The value is the cap, so the page can say how
+ * many it holds without a second copy of the number.
+ */
+export const RUNS_EXPORT_TRUNCATED_HEADER = 'x-runs-export-truncated';
+
+/**
  * `PaginationQuerySchema` with the runs list's ceiling. Out of range is still a
  * 400, never a clamp — an accepted request means what it says.
  */

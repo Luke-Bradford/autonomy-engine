@@ -3,6 +3,8 @@ import type { FastifyPluginAsync } from 'fastify';
 import {
   computeRunCost,
   RunsPaginationQuerySchema,
+  RUNS_EXPORT_TRUNCATED_HEADER,
+  RUNS_MAX_PAGE_SIZE,
   CompleteExternalWaitBodySchema,
   RUN_SINCE_MS,
   RunAnnotationFilterSchema,
@@ -41,8 +43,16 @@ import {
   ExternalWaitSettledError,
 } from '../run/external-wait-service.js';
 import { noStore, requireOwned } from './util.js';
-import { decodeRunCursor, resolveRunSort, type RunSort } from '../repo/run-sort.js';
-import type { RunPageArgs } from '../repo/runs.js';
+import {
+  decodeRunCursor,
+  resolveRunSort,
+  type RunCursor,
+  type RunSort,
+} from '../repo/run-sort.js';
+import type { ListRunSummariesFilter, RunPageArgs } from '../repo/runs.js';
+import { RUNS_EXPORT_MAX_ROWS } from '../limits.js';
+import { collectRunsForExport, RUN_EXPORT_COLUMNS, runExportRow } from '../run/run-export.js';
+import { toCsv } from '../util/csv.js';
 
 /**
  * `pipelineVersionId`/`triggerId`/`parentRunId` are opaque ids, not
@@ -126,6 +136,42 @@ function runPageArgsFromQuery(query: unknown, sort: RunSort): RunPageArgs {
 }
 
 /**
+ * The list's filter axes from its query, with the caller's `ownerId` ANDed in.
+ * One mapping for `GET /api/runs` and its CSV export, so the two can never
+ * match different runs for the same query string.
+ */
+function runFilterFromQuery(
+  query: z.infer<typeof ListRunsQuerystringSchema>,
+  ownerId: string,
+): ListRunSummariesFilter {
+  const { since, from, to, kind, q } = query;
+  const sinceBound = since === undefined ? undefined : Date.now() - RUN_SINCE_MS[since];
+  return {
+    pipelineVersionId: query.pipelineVersionId,
+    triggerId: query.triggerId,
+    parentRunId: query.parentRunId,
+    rerunOf: query.rerunOf,
+    status: query.status,
+    pipelineId: query.pipelineId,
+    annotation: query.annotation,
+    kinds: kind,
+    search: q,
+    // The later of two lower bounds is the one that narrows.
+    startedAfter:
+      sinceBound === undefined ? from : from === undefined ? sinceBound : Math.max(from, sinceBound),
+    startedBefore: to,
+    ownerId,
+  };
+}
+
+/** A cursor the export's own walk minted, decoded under the walk's sort. */
+function decodeExportCursor(raw: string, sort: RunSort): RunCursor {
+  const decoded = decodeRunCursor(raw, sort);
+  if (!decoded) throw new Error('runs export: the walk minted a cursor it cannot read back');
+  return decoded;
+}
+
+/**
  * Runs are created by the engine/scheduler (P2-P4), so there is deliberately no
  * `POST /api/runs` create route. TWO state-mutating actions live here, both of
  * them resuming an existing run rather than starting one: RS2's
@@ -141,6 +187,12 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
   const foldActivities = makeRunActivityFold(resolveDoc, {
     onUnreadable: (runId, err) =>
       fastify.log.warn({ err, runId }, 'runs list: cannot count the activities of this run'),
+  });
+  // #1484 — the CSV export's, memo-less (see the export route).
+  const exportActivities = makeRunActivityFold(resolveDoc, {
+    memoLimit: 0,
+    onUnreadable: (runId, err) =>
+      fastify.log.warn({ err, runId }, 'runs export: cannot count the activities of this run'),
   });
 
   /**
@@ -186,53 +238,72 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
    * indistinguishable: both match none of the caller's runs.
    */
   fastify.get('/api/runs', async (request) => {
-    const {
-      pipelineVersionId,
-      triggerId,
-      parentRunId,
-      rerunOf,
-      status,
-      pipelineId,
-      since,
-      annotation,
-      kind,
-      q,
-      from,
-      to,
-      sort,
-      dir,
-      includeChildren,
-    } = ListRunsQuerystringSchema.parse(request.query);
-    const sinceBound = since === undefined ? undefined : Date.now() - RUN_SINCE_MS[since];
+    const query = ListRunsQuerystringSchema.parse(request.query);
     const page = listRunSummariesPage(
       db,
+      runFilterFromQuery(query, request.principal.ownerId),
       {
-        pipelineVersionId,
-        triggerId,
-        parentRunId,
-        rerunOf,
-        status,
-        pipelineId,
-        annotation,
-        kinds: kind,
-        search: q,
-        // The later of two lower bounds is the one that narrows.
-        startedAfter:
-          sinceBound === undefined
-            ? from
-            : from === undefined
-              ? sinceBound
-              : Math.max(from, sinceBound),
-        startedBefore: to,
-        ownerId: request.principal.ownerId,
-      },
-      {
-        ...runPageArgsFromQuery(request.query, resolveRunSort(sort, dir)),
-        includeChildren: includeChildren === 'true',
+        ...runPageArgsFromQuery(request.query, resolveRunSort(query.sort, query.dir)),
+        includeChildren: query.includeChildren === 'true',
       },
       foldActivities,
     );
     return page;
+  });
+
+  /**
+   * #1484 OR35 M1 — the runs grid's "CSV export of the filtered set": every run
+   * the SAME filters and sort match, as `text/csv`, up to `RUNS_EXPORT_MAX_ROWS`.
+   *
+   * It walks `GET /api/runs`'s own pages server-side (`collectRunsForExport`)
+   * rather than having the browser do it: one request instead of fifty, and one
+   * query, so the file and the grid cannot disagree about which runs match.
+   * Exactly the filtered set — `includeChildren` is the grid's display mode, not
+   * a filter, and each row's `parent_run_id` already says what called it.
+   * `limit`/`cursor` are not read: an export starts at the top.
+   *
+   * SECURITY — the list's: `ownerId` comes from the principal and is ANDed in by
+   * `runFilterFromQuery`, so no query string widens past the caller's runs, and
+   * the columns are the grid's, never `params` (`RUN_EXPORT_COLUMNS`).
+   *
+   * Its OWN activity fold, with no memo. The list's fold remembers the last
+   * `ACTIVITY_FOLD_MEMO_LIMIT` runs it was asked about; walking ten thousand
+   * through it would evict every run the live grid is polling, and each poll
+   * would then replay those logs from cold.
+   *
+   * A static path, so it wins over `/api/runs/:id` for this exact URL. The whole
+   * walk completes before the reply, so a failure part-way is a clean error and
+   * never a file that stops mid-list.
+   */
+  fastify.get('/api/runs/export.csv', async (request, reply) => {
+    const query = ListRunsQuerystringSchema.parse(request.query);
+    const sort = resolveRunSort(query.sort, query.dir);
+    // Resolved ONCE, so a relative window does not slide between pages.
+    const filter = runFilterFromQuery(query, request.principal.ownerId);
+    const { runs: rows, truncated } = await collectRunsForExport(
+      (limit, cursor) =>
+        listRunSummariesPage(
+          db,
+          filter,
+          {
+            limit,
+            sort,
+            // Minted by the walk's previous page under this same sort, so a
+            // refusal here is a bug in the walk, not a caller's 400.
+            ...(cursor === undefined ? {} : { cursor: decodeExportCursor(cursor, sort) }),
+          },
+          exportActivities,
+        ),
+      RUNS_MAX_PAGE_SIZE,
+      RUNS_EXPORT_MAX_ROWS,
+    );
+    noStore(reply);
+    reply.type('text/csv; charset=utf-8');
+    if (truncated) reply.header(RUNS_EXPORT_TRUNCATED_HEADER, String(RUNS_EXPORT_MAX_ROWS));
+    return toCsv(
+      RUN_EXPORT_COLUMNS.map((c) => c.header),
+      rows.map(runExportRow),
+    );
   });
 
   // U26 — the annotation filter's options, scoped by `runs.owner_id` like the
