@@ -22,7 +22,8 @@ export const DEFAULT_PAGE_SIZE = 50;
 
 /** Hard ceiling on `?limit`. A larger request is a 400 at the boundary
  * (loud), never silently clamped — an accepted request must mean what it
- * says. SSOT. */
+ * says. SSOT. The one deliberate exception is the runs list, whose ceiling is
+ * `RUNS_MAX_PAGE_SIZE` (`run.ts`, #1484). */
 export const MAX_PAGE_SIZE = 100;
 
 /**

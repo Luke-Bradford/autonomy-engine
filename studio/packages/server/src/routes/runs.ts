@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { FastifyPluginAsync } from 'fastify';
 import {
   computeRunCost,
-  PaginationQuerySchema,
+  RunsPaginationQuerySchema,
   CompleteExternalWaitBodySchema,
   RUN_SINCE_MS,
   RunAnnotationFilterSchema,
@@ -111,7 +111,7 @@ const ListRunsQuerystringSchema = z.object({
  * would answer a coherent but different slice, and nothing downstream could tell.
  */
 function runPageArgsFromQuery(query: unknown, sort: RunSort): RunPageArgs {
-  const { limit, cursor } = PaginationQuerySchema.parse(query);
+  const { limit, cursor } = RunsPaginationQuerySchema.parse(query);
   if (cursor === undefined) return { limit, sort };
   const decoded = decodeRunCursor(cursor, sort);
   if (!decoded) throw new BadRequestError('invalid cursor, or one minted under another sort');
