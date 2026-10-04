@@ -514,8 +514,16 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
    * published one is live and on its latest version, but not yet on the
    * working branch; the committed one has never been published.
    */
+  // The git part draws from the list's own sync read, chained after the
+  // connection read and queued behind any git work for this owner, so it can
+  // land well after the live part (#1514). Wait for the read itself; a request
+  // registered before the navigation cannot be the editor's earlier one.
+  const listSync = page.waitForRequest(
+    (r) => r.method() === 'POST' && r.url().endsWith('/api/workspace/git/sync'),
+  );
   await page.goto('/#/author/pipelines');
   await fluentRootReady(page);
+  expect((await (await listSync).response())?.ok()).toBe(true);
   const listRow = (n: string) => page.getByRole('group', { name: `${n} state` });
   const rowPart = (n: string, p: string) => listRow(n).locator(`[data-part="${p}"]`);
   await expect(rowPart(publishName, 'editing')).toHaveText(/^v1 \(latest\)/);
