@@ -480,7 +480,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
   );
 
   return (
-    <section aria-labelledby="run-heading">
+    <section aria-labelledby="run-heading" className="run-page">
       <RunHeader
         runId={runId}
         run={run}
@@ -506,8 +506,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
         actions={
           <>
             {/* RS2 — the rerun action, offered only on a run that FAILED. The
-                spec's cost warning stays visible beside the button: it is the
-                fact an operator needs BEFORE deciding. */}
+                spec's cost warning is the button's accessible description and
+                its `?` help (#1484 principle 1: explanations live in help, not
+                in prose on the page), so the header stays one band. */}
             {canRerunFromFailed(status) && (
               <>
                 <button
@@ -518,9 +519,12 @@ export function RunDetailPage({ runId }: { runId: string }) {
                 >
                   {rerunning ? 'Starting rerun…' : 'Rerun from failed'}
                 </button>
-                <span id="rerun-cost-warning" className="run-header__hint">
-                  {RERUN_COST_WARNING}
-                </span>
+                <details className="run-header__help">
+                  <summary aria-label="About rerunning from the failure">?</summary>
+                  <span id="rerun-cost-warning" role="note">
+                    {RERUN_COST_WARNING}
+                  </span>
+                </details>
               </>
             )}
             {/* CX4 (#1320) — the cancel action, on any run that has not ended

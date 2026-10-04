@@ -312,7 +312,8 @@ test("RS4 — a rerun reuses a copied call node's child, and links to it", async
      does not exist. */
   await panel.getByRole('link', { name: `Reused child run ${childRunId}` }).click();
   await expect(page).toHaveURL(new RegExp(`/monitor/runs/${childRunId}$`));
-  await expect(page.getByRole('link', { name: `Parent run ${sourceRunId}` })).toBeVisible();
+  // #1484 M2 — the header's Parent link, named by its pipeline; the id is its hover.
+  await expect(page.locator('.run-header').getByTitle(sourceRunId, { exact: true })).toBeVisible();
 
   await expectQuiet(page, problems);
 });

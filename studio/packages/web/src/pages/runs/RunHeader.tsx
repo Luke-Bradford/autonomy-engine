@@ -5,6 +5,8 @@ import { CopyableId } from '../../lib/CopyableId';
 import { RunTriggeredByName } from '../../lib/KindName';
 import { shortId } from '../../lib/ids';
 import { useTickingNow } from '../../hooks/useTickingNow';
+import { formatTimestamp } from '../../lib/displayTime';
+import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import { versionLabel } from '../../lib/versionLabel';
 import { When } from '../../lib/When';
 import { runVersionPath } from '../author/pipelinePath';
@@ -79,7 +81,14 @@ export function RunHeader({
   counting: boolean;
   actions: ReactNode;
 }) {
+  const zone = useDisplayTimeZone();
   const named = names?.pipeline != null && doc !== null;
+  // Ended reads as a time of day when it is on Started's date in the display
+  // zone: the date is beside it already. The full form is the hover, as always.
+  const endedSameDay =
+    run !== null &&
+    endedAt !== null &&
+    formatTimestamp(run.startedAt, zone).slice(0, 10) === formatTimestamp(endedAt, zone).slice(0, 10);
   const scheduledTime = run?.triggerContext?.scheduledTime ?? null;
   return (
     <header className="run-header">
@@ -101,6 +110,13 @@ export function RunHeader({
           </>
         )}
       </h2>
+      <div className="run-header__actions">
+        {actions}
+        {/* #1239 — an anchor: going somewhere is what an anchor is for. */}
+        <Link className="page-back" to="/monitor/runs">
+          ← All runs
+        </Link>
+      </div>
       <dl className="run-header__facts">
         <div>
           <dt>Status</dt>
@@ -152,7 +168,7 @@ export function RunHeader({
             <div>
               <dt>Ended</dt>
               <dd>
-                <When ms={endedAt} precision="ms" />
+                <When ms={endedAt} precision="ms" timeOfDay={endedSameDay} />
               </dd>
             </div>
             <div>
@@ -220,13 +236,6 @@ export function RunHeader({
           </>
         )}
       </dl>
-      <div className="run-header__actions">
-        {actions}
-        {/* #1239 — an anchor: going somewhere is what an anchor is for. */}
-        <Link className="page-back" to="/monitor/runs">
-          ← All runs
-        </Link>
-      </div>
     </header>
   );
 }

@@ -4544,36 +4544,48 @@ button.danger {
   color: var(--colorNeutralForeground3);
 }
 
+/* #1484 OR35 M2 — the run page is a Monitor page too, so it drops the 900px
+   reading width as the runs list does (principle 1: data, not decoration). */
+.content:has(.run-page) {
+  max-width: none;
+}
+
 /* #1484 OR35 M2 — the run's header: ONE band of facts (`dt` muted beside its
    `dd`), wrapping as a whole on a narrow screen, with the actions at its end. It
    replaces a heading, a status line and a tall two-column list, so the activity
    runs begin near the top. */
 .run-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.25rem 1rem;
   margin-bottom: 0.5rem;
+  line-height: 1.75;
 }
 
+.run-header::after {
+  content: '';
+  display: block;
+  clear: both;
+}
+
+/* INLINE flow, not flex: the heading and the facts wrap as one paragraph of
+   facts, so a long band takes two lines and not one line per group. Measured
+   at 1440x900 with flex groups: three lines, the first activity row at 278. */
 .run-header > h2 {
-  margin: 0;
+  display: inline;
+  margin: 0 1rem 0 0;
   font-size: 1.15rem;
 }
 
 .run-header__facts {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.25rem 1rem;
+  display: inline;
   margin: 0;
   font-size: 13px;
 }
 
 .run-header__facts > div {
-  display: flex;
+  display: inline-flex;
   align-items: baseline;
   gap: 0.35rem;
+  margin-right: 1rem;
+  white-space: nowrap;
 }
 
 .run-header__facts dt {
@@ -4582,7 +4594,6 @@ button.danger {
 
 .run-header__facts dd {
   margin: 0;
-  white-space: nowrap;
 }
 
 .run-header__facts .num {
@@ -4590,18 +4601,43 @@ button.danger {
 }
 
 .run-header__actions {
+  float: right;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
-  margin-left: auto;
+  margin-left: 1rem;
 }
 
-/* The rerun's cost warning (RS2): beside the button it qualifies, small. */
-.run-header__hint {
-  max-width: 26rem;
+/* The rerun's cost warning (RS2) as `?` help beside the button it qualifies:
+   open, it floats under the header rather than pushing the page down. */
+.run-header__help {
+  position: relative;
+}
+
+.run-header__help > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 0 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 50%;
   color: var(--muted);
   font-size: 12px;
+}
+
+.run-header__help > summary::-webkit-details-marker {
+  display: none;
+}
+
+.run-header__help > span {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  z-index: 10;
+  width: 22rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 13px;
 }
 
 /* #1484 OR35 M2 — a failed run's banner: one line under the header. */
@@ -4611,9 +4647,15 @@ button.danger {
   align-items: baseline;
   gap: 0.25rem 0.75rem;
   margin-bottom: 0.5rem;
-  padding: 0.35rem 0.75rem;
+  padding: 0.25rem 0.75rem;
   border-left: 3px solid var(--error);
   background: var(--panel-2);
+  font-size: 13px;
+}
+
+/* Compact controls, so the banner stays one 13px line. */
+.run-failure button {
+  padding: 0.1rem 0.6rem;
   font-size: 13px;
 }
 
@@ -4656,7 +4698,13 @@ button.danger {
   overflow-x: auto;
 }
 
+/* The table's label, close to it: the first row is what the page is for. */
+.activity-runs > h3 {
+  margin: 0.25rem 0;
+}
+
 .activity-runs__table {
+  margin: 0;
   font-size: 13px;
   width: 100%;
 }
