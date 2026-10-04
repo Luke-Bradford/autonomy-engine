@@ -113,6 +113,50 @@ export function isQuote(ch: string | undefined): boolean {
 export const MAX_EXPR_DEPTH = 64;
 
 /**
+ * #1482 — infix operators and the function each one is written as. The grammar
+ * has none (`${1 > 0}` reads as a reference path), so the error a save gives
+ * for one names the function instead. Longest first, so `>=` is not read as `>`.
+ * Arithmetic signs count only between spaces: `-`, `/`, `+` and `*` may sit
+ * inside a node id or param name (`${nodes.my-node.output.x}`).
+ */
+const INFIX_HINTS: readonly (readonly [RegExp, string, string])[] = [
+  [/>=/, '>=', 'greaterOrEquals(a, b)'],
+  [/<=/, '<=', 'lessOrEquals(a, b)'],
+  [/==/, '==', 'equals(a, b)'],
+  [/!=/, '!=', 'not(equals(a, b))'],
+  [/&&/, '&&', 'and(x, y)'],
+  [/\|\|/, '||', 'or(x, y)'],
+  [/>/, '>', 'greater(a, b)'],
+  [/</, '<', 'less(a, b)'],
+  [/\s\+\s/, '+', 'add(a, b)'],
+  [/\s-\s/, '-', 'sub(a, b)'],
+  [/\s\*\s/, '*', 'mul(a, b)'],
+  [/\s\/\s/, '/', 'div(a, b)'],
+];
+
+/**
+ * The hint for a `${...}` body that holds an infix operator outside its string
+ * literals, or `null` when it holds none. Only ever appended to an error the
+ * body already raised: it explains a refusal, it never causes one.
+ */
+export function infixOperatorHint(body: string): string | null {
+  let bare = '';
+  for (let i = 0; i < body.length; i += 1) {
+    if (isQuote(body[i])) {
+      const close = quotedSpanEnd(body, i);
+      if (close === -1) break;
+      bare += ' ';
+      i = close;
+      continue;
+    }
+    bare += body[i];
+  }
+  const hit = INFIX_HINTS.find(([re]) => re.test(bare));
+  if (hit === undefined) return null;
+  return `operators aren't supported in expressions; use ${hit[2]} for '${hit[1]}'`;
+}
+
+/**
  * Parse ONE expression (a `${...}` body, a function argument, or an index) —
  * the single entry point for the whole grammar. Whitespace inside the braces is
  * insignificant. Throws `SubstituteError` on any malformed body (including one

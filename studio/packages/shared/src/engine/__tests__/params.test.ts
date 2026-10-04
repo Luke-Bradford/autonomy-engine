@@ -1296,6 +1296,41 @@ describe('validateRefs — deep `[]`/`.` addressing at SAVE time (#6 E7)', () =>
     expect(errors[0]).toMatch(/upstream|not guaranteed/);
   });
 
+  it.each([
+    ['${1 > 0}', 'greater(a, b)'],
+    ['${params.n >= 2}', 'greaterOrEquals(a, b)'],
+    ['${params.n<2}', 'less(a, b)'],
+    ['${params.a == params.b}', 'equals(a, b)'],
+    ['${params.a != params.b}', 'not(equals(a, b))'],
+    ['${params.a && params.b}', 'and(x, y)'],
+    ['${params.a || params.b}', 'or(x, y)'],
+    ['${params.n + 1}', 'add(a, b)'],
+    ['${params.n - 1}', 'sub(a, b)'],
+    ['${params.n * 2}', 'mul(a, b)'],
+    ['${params.n / 2}', 'div(a, b)'],
+  ])('#1482 an infix operator in %s is refused naming %s at save', (text, fn) => {
+    const errors = validateRefs(doc([node('b', { prompt: text })], []));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/operators aren't supported/);
+    expect(errors[0]).toContain(`use ${fn}`);
+  });
+
+  it('#1482 an operator inside a string literal is not read as one', () => {
+    const errors = validateRefs(
+      doc([node('b', { prompt: "${concat('a > b', params.missing)}" })], []),
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/not a declared param/);
+    expect(errors[0]).not.toMatch(/operator/);
+  });
+
+  it('#1482 a hyphen inside a name is not read as an operator', () => {
+    const errors = validateRefs(doc([node('b', { prompt: '${my-node}' })], []));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/unresolvable reference/);
+    expect(errors[0]).not.toMatch(/operator/);
+  });
+
   it('refuses an index in the ROOT region (a namespace/id/output name is literal)', () => {
     // A dynamic output name would defeat the declared-name check, so the root is
     // FIELDS ONLY; `leadingFields` stops at the first index and nothing matches.

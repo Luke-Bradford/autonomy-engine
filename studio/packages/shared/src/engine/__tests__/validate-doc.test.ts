@@ -1255,6 +1255,13 @@ describe('validateDoc — branch edges route against the declared-branch rule (#
     expect(errors).toMatch(/does not declare branch 'maybe'/);
   });
 
+  it('#1482 an if condition written with an infix operator names the function to use', () => {
+    const errors = validatePipelineDoc(doc([ifNode('if_1', '${1 > 0}')]));
+    const about = errors.filter((e) => e.includes('if_1'));
+    expect(about.length).toBeGreaterThan(0);
+    expect(about.some((e) => e.includes('use greater(a, b)'))).toBe(true);
+  });
+
   it('rejects an if whose condition is missing or an embedded (non-whole-value) expression', () => {
     const missing = validateDoc(doc([node('if_1', {}, { type: 'if' })])).join(' ');
     expect(missing).toMatch(/node\.if_1\.condition: an if needs a boolean condition/);
