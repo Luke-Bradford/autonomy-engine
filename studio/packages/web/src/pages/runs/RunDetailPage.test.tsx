@@ -3330,6 +3330,7 @@ describe('RunDetailPage — the failure banner', () => {
     bytesWritten: null,
     childRunId: null,
     childRun: null,
+    skipReason: null,
     error: { message: 'boom', kind: 'permanent' as const, code: null, connectionId: null },
   };
 

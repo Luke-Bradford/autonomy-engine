@@ -23,6 +23,7 @@ const row = (key: string, extra: Partial<ActivityRun> = {}): ActivityRun => ({
   childRunId: null,
   childRun: null,
   error: null,
+  skipReason: null,
   ...extra,
 });
 const inItem = (key: string, index: number): ActivityRun =>
@@ -36,6 +37,7 @@ const group = (extra: Partial<ActivityRunGroup> = {}): ActivityRunGroup => ({
   kind: 'foreach',
   status: 'success',
   reason: null,
+  skipReason: null,
   reused: false,
   startedAt: null,
   finishedAt: null,

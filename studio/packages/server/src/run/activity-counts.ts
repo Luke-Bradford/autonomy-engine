@@ -21,7 +21,7 @@ import { loadEngineEvents, RunLogUnparseableError } from './events.js';
  * event records a skip, so a SQL count over `run_events` cannot produce one. The
  * honest source is the one the driver and the run page already use,
  * `buildEngine(version).projectRunState(events)`, and this module is that call
- * plus a count. When M3 lands a `node.skipped` event the count could move to SQL.
+ * plus a count. Skips, and their reasons, are reducer state, not events.
  *
  * WHAT IS COUNTED, stated once because several shapes make it a choice:
  * - The version's nodes and containers, each once, read from the DOC rather

@@ -605,6 +605,9 @@ describe('parallel foreach — doom-truncated items keep their null holes', () =
     s = eng.reduce(s, failed('a@1', 'a@1#0')).state;
     expect(s.containers.fe!.doomed).toEqual({ blame: 'a@1', flipped: ['b@0'] });
     expect(s.nodes['b@0']!.status).toBe('skipped');
+    // #1484 M2 — each skip says why: b@1 by its own failed upstream, b@0 by the doom.
+    expect(s.nodes['b@1']!.skipReason).toEqual({ kind: 'upstream', from: 'a', outcome: 'failure' });
+    expect(s.nodes['b@0']!.skipReason).toEqual({ kind: 'doomed', containerId: 'fe', blame: 'a@1' });
     // a@0 drains SUCCESSFULLY → item 0 is outcome-clean but truncated.
     const done = eng.reduce(s, succeeded('a@0', 'a@0#0', { va: 1 }));
     expect(done.state.containers.fe!.status).toBe('failure');

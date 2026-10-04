@@ -139,6 +139,7 @@ const failedRow = (over: Partial<ActivityRun> = {}): ActivityRun => ({
   bytesWritten: null,
   childRunId: null,
   childRun: null,
+  skipReason: null,
   error: {
     message: 'database is locked\nat sqlite',
     kind: 'transient',

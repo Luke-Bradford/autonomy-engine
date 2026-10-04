@@ -23,6 +23,7 @@ const row = (over: Partial<ActivityRun>): ActivityRun => ({
   childRunId: null,
   childRun: null,
   error: null,
+  skipReason: null,
   ...over,
 });
 
