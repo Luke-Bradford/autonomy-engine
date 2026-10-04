@@ -43,6 +43,12 @@ export const ActivityRunChildSchema = z.object({
   id: z.string(),
   pipelineName: z.string().nullable(),
   status: RunStatusSchema,
+  /** The child's own row stamps, so the page can say how long it took. Not a
+   * `durationMs`: the row's stamps already fix it, and a running child's would
+   * be stale the moment it was sent (`RunSchema`'s duration rule). A `queued`
+   * child's `startedAt` is its enqueue placeholder (`runStartIsReal`). */
+  startedAt: z.number().int(),
+  finishedAt: z.number().int().nullable(),
 });
 export type ActivityRunChild = z.infer<typeof ActivityRunChildSchema>;
 

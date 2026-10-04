@@ -509,6 +509,8 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
                   id: child.id,
                   pipelineName: pipelineNameOf(child.pipelineVersionId),
                   status: child.status,
+                  startedAt: child.startedAt,
+                  finishedAt: child.finishedAt,
                 };
           return { ...row, childRun };
         }),

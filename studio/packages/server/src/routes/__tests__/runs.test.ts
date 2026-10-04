@@ -968,7 +968,14 @@ describe('runs routes (read-only)', () => {
         attemptId: 'c#0',
         status: 'waiting',
         childRunId: child.id,
-        childRun: { id: child.id, pipelineName: 'Load orders', status: child.status },
+        childRun: {
+          id: child.id,
+          pipelineName: 'Load orders',
+          status: child.status,
+          // The child's own stamps, so the page can time it (#1484 M2).
+          startedAt: child.startedAt,
+          finishedAt: child.finishedAt,
+        },
       });
     });
 

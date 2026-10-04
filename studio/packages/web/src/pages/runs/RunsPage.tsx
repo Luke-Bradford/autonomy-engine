@@ -71,6 +71,7 @@ import {
 import { dayOf, shiftDay } from '../../lib/displayTime';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
+import { withParams } from '../../lib/withParams';
 import { FilterPicker } from './FilterPicker';
 import { RUN_GROUP_BYS, type RunGroupBy } from './runBars';
 import {
@@ -148,16 +149,6 @@ function PipelineSpend({ summary }: { summary: PipelineCostSummary }) {
 
 /** A run's identity, for `usePagedList` to drop a row a sorted walk repeats. */
 const runKey = (run: RunSummary) => run.id;
-
-/** `prev` with each of `next` set, or deleted where its value is `''`. */
-function withParams(prev: URLSearchParams, next: Record<string, string>): URLSearchParams {
-  const params = new URLSearchParams(prev);
-  for (const [param, value] of Object.entries(next)) {
-    if (value === '') params.delete(param);
-    else params.set(param, value);
-  }
-  return params;
-}
 
 /**
  * The Runs list — the entry to the P6 live monitor. Runs are created elsewhere
