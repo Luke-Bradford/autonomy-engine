@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { PipelineVersionSchema } from './pipeline.js';
-import { RunSchema } from './run.js';
+import { RunSchema, RunTriggeredByKindSchema } from './run.js';
 
 /**
  * R1 — the run-detail READ-MODEL: a run plus the immutable pipeline version it
@@ -51,5 +51,13 @@ export const RunDetailSchema = z.object({
    */
   pipelineName: z.string().nullable(),
   triggerName: z.string().nullable(),
+  /**
+   * #1484 OR35 M2 — the run header's Triggered by and Parent, with the meaning
+   * `RunSummarySchema`'s fields of the same names have: the server reads both
+   * through the runs list's own query, so the header and the grid cannot
+   * disagree about a run.
+   */
+  triggeredByKind: RunTriggeredByKindSchema,
+  parentPipelineName: z.string().nullable(),
 });
 export type RunDetail = z.infer<typeof RunDetailSchema>;

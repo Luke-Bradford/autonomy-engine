@@ -546,6 +546,22 @@ function withSummaryColumns(tx: Db, sort: RunSort) {
   );
 }
 
+/**
+ * #1484 OR35 M2 — one run's Triggered by and Parent name, for the run page's
+ * header. Read through `withSummaryColumns`, so the classifier and the parent's
+ * owner rule are the runs list's own and the two pages cannot disagree. `null`
+ * for a run that is gone.
+ */
+export function getRunSummaryNames(
+  db: Db,
+  id: string,
+): { triggeredByKind: RunTriggeredByKind; parentPipelineName: string | null } | null {
+  const row = withSummaryColumns(db, RUN_SORT_DEFAULT).where(eq(runs.id, id)).get();
+  return row === undefined
+    ? null
+    : { triggeredByKind: row.triggeredByKind, parentPipelineName: row.parentPipelineName };
+}
+
 type SummaryRow = ReturnType<ReturnType<typeof withSummaryColumns>['all']>[number];
 
 /**
