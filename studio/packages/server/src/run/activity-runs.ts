@@ -418,19 +418,18 @@ export function projectActivityRuns(
       const reasonOf = (nodeId: string) =>
         cleared !== undefined && Object.hasOwn(cleared, nodeId) ? cleared[nodeId]! : null;
       const ended: string[] = [];
-      // A rerun's reseed COPIES its containers' rounds: none ended here (#1549).
-      if (e.type !== 'run.reseeded') {
-        for (const c of iterating) {
-          const was = before.containers[c.id];
-          const now = state.containers[c.id];
-          if (was !== undefined && now !== undefined && now.round > was.round)
-            ended.push(...c.children);
-        }
+      for (const c of iterating) {
+        // A rerun's reseed COPIES a container's round: none of it ended here (#1549).
+        if (e.type === 'run.reseeded' && Object.hasOwn(e.copiedContainers, c.id)) continue;
+        const was = before.containers[c.id];
+        const now = state.containers[c.id];
+        if (was !== undefined && now !== undefined && now.round > was.round)
+          ended.push(...c.children);
       }
       for (const [nodeId, was] of Object.entries(before.nodes)) {
         if (state.nodes[nodeId] !== undefined || parseInstanceKey(nodeId) === null) continue;
         ended.push(nodeId);
-        // Rule 4 for a deleted instance: an attempt still in flight when the
+        // Rule 4 for a deleted instance: an attempt row still open when the
         // reduce deleted its item (a doom that skipped it, then ended the item)
         // is that row (#1548).
         const abandoned =

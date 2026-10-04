@@ -646,6 +646,35 @@ describe('#1484 activity runs — containers are groups', () => {
     ]);
   });
 
+  it('keeps a Wait that ends its parallel item a success, not an abandoned skip', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('hold', { type: 'wait', config: { seconds: '${1}' } })],
+      [],
+      [foreach({ children: ['hold'], batchCount: 2 })],
+      [1],
+    );
+    const executor = stub();
+    const runId = await drive(db, pvId, executor);
+    const [parked] = project(db, pvId, runId);
+    expect(parked).toMatchObject({ nodeId: 'hold@0', status: 'wait_pending' });
+    // The timer settles the Wait, which ends the item and deletes its instance
+    // in the same reduce: the result event decides, not the deletion (#1548).
+    appendEngineEvent(db, {
+      type: 'timer.due',
+      runId,
+      nodeId: 'hold@0',
+      previousAttemptId: parked!.attemptId!,
+    });
+    await driveRun(deps(db, executor), runId);
+
+    const rows = project(db, pvId, runId);
+    expect(rows.map((r) => [r.nodeId, r.status, r.skipReason])).toEqual([
+      ['hold@0', 'success', null],
+    ]);
+  });
+
   it('says why a doom skipped an item that it also ended in the same reduce', async () => {
     // Item 1 is parked on its Wait when item 0 fails: the doom flips item 1's
     // body to `skipped` and, nothing being in flight, deletes the item in that
@@ -878,12 +907,13 @@ describe('#1484 activity runs — containers are groups', () => {
     ]);
   });
 
-  it('adds no skipped rows for a loop a rerun copied past its first round (#1549)', () => {
+  it('adds no skipped rows for a loop or ForEach a rerun copied past its first round (#1549)', () => {
     const doc = {
-      nodes: [node('a'), node('b')],
-      edges: [edge('lp', 'b')],
+      nodes: [node('a'), node('f'), node('b')],
+      edges: [edge('lp', 'fe'), edge('fe', 'b')],
       containers: [
         { id: 'lp', kind: 'loop', children: ['a'], exitWhen: '${equals(1, 2)}', maxRounds: 5 },
+        { id: 'fe', kind: 'foreach', children: ['f'], items: '${createArray(1, 2)}' },
       ],
       variables: [],
     } as never as Parameters<typeof buildEngine>[0];
@@ -900,15 +930,18 @@ describe('#1484 activity runs — containers are groups', () => {
         type: 'run.reseeded',
         runId: 'R2',
         sourceRunId: 'R1',
-        frontier: ['a'],
-        copiedOutputs: { a: {} },
-        copiedContainers: { lp: { status: 'success', round: 2, outputs: {} } },
+        frontier: ['a', 'f'],
+        copiedOutputs: { a: {}, f: {} },
+        copiedContainers: {
+          lp: { status: 'success', round: 2, outputs: {} },
+          fe: { status: 'success', round: 1, items: [1, 2], results: [{}, {}], outputs: {} },
+        },
       }),
     ];
 
     const { rows } = projectActivityRuns(doc, buildEngine(doc), log);
     expect(rows.filter((r) => r.status === 'skipped')).toEqual([]);
-    expect(rows[0]).toMatchObject({ key: 'reused:a', reused: true });
+    expect(rows.map((r) => r.key)).toEqual(['reused:a', 'reused:f']);
   });
 
   it('places a group a rerun started after the rows it carried', () => {
