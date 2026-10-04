@@ -117,15 +117,17 @@ export const DEBUG_TITLE = 'Run what is on the canvas now, without saving it as 
 export const VALIDATE_TITLE =
   'Run the save check on the canvas now, without saving: Problems lists what it finds.';
 
+/** How long a Debug run is kept, for a window of `retentionDays` (> 0). */
+export function debugKeptFor(retentionDays: number): string {
+  return `kept for ${String(retentionDays)} day${retentionDays === 1 ? '' : 's'}`;
+}
+
 /**
  * The status line after a Debug starts: that it ran the draft, and how long the
  * run is kept (`DEBUG_RETENTION_DAYS`, reported by the server; `null` = forever).
  */
 export function debugStartedText(retentionDays: number | null): string {
-  const kept =
-    retentionDays === null
-      ? 'kept until deleted'
-      : `kept for ${String(retentionDays)} day${retentionDays === 1 ? '' : 's'}`;
+  const kept = retentionDays === null ? 'kept until deleted' : debugKeptFor(retentionDays);
   return `Debug run started from the unsaved draft (not added to the versions; ${kept}).`;
 }
 

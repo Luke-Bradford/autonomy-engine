@@ -20,6 +20,7 @@ import {
   type ActivePipelineVersion,
   type DebugRunResult,
   type FireResult,
+  type PipelineDependentsResponse,
   type PipelineVersion,
 } from '@autonomy-studio/shared';
 import { deleteUnrunDebugVersion } from '../repo/debug-versions.js';
@@ -180,7 +181,10 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
       'pipeline',
       request.params.id,
     );
-    return pipelineDependents(db, request.principal.ownerId, pipeline.id);
+    return {
+      ...pipelineDependents(db, request.principal.ownerId, pipeline.id),
+      debugRetentionDays: fastify.debugRetentionDays,
+    } satisfies PipelineDependentsResponse;
   });
 
   fastify.delete<{ Params: { id: string } }>('/api/pipelines/:id', async (request, reply) => {

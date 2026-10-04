@@ -4,6 +4,8 @@ import { pipelineDeletePlan } from './pipelineDeleteConfirm';
 
 const none: PipelineDependentsResponse = {
   hasRuns: false,
+  debugRunsOnly: false,
+  debugRetentionDays: 7,
   triggers: [],
   callers: [],
   dynamicCallers: [],
@@ -91,5 +93,30 @@ describe('pipelineDeletePlan', () => {
         /Cannot delete “Busy”: it has run history\. Archive it instead/,
       ),
     });
+  });
+
+  it('only Debug runs: the refusal says they expire and when, not just "archive it" (#1433)', () => {
+    const plan = pipelineDeletePlan('Draft', {
+      state: 'known',
+      value: { ...none, hasRuns: true, debugRunsOnly: true, debugRetentionDays: 1 },
+    });
+    expect(plan).toEqual({
+      kind: 'refused',
+      message:
+        'Cannot delete “Draft”: its only runs are Debug runs, kept for 1 day after each Debug ' +
+        'starts. Once that time has passed and they have finished, they are cleared and it can ' +
+        "be deleted. To hide it now, archive it from the Pipelines list or the editor's ⋯ menu.",
+    });
+  });
+
+  it('only Debug runs on a server that keeps them forever: archive is the way out (#1433)', () => {
+    const plan = pipelineDeletePlan('Draft', {
+      state: 'known',
+      value: { ...none, hasRuns: true, debugRunsOnly: true, debugRetentionDays: null },
+    });
+    expect(plan.kind).toBe('refused');
+    expect(plan.message).toMatch(
+      /its only runs are Debug runs, and this server keeps those indefinitely \(its debug-run retention is turned off\)\. Archive it instead/,
+    );
   });
 });

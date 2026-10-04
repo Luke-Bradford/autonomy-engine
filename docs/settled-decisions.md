@@ -543,7 +543,10 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     audit history, never swept" (`PipelineHasRunsError`): runs reference their
     version ON DELETE RESTRICT, so a debug version cannot be retired without its
     runs. Saved versions stay undeletable (the 0045 trigger refuses any other
-    row). Until swept, debug runs block deleting their pipeline like any run.
+    row). Until swept, debug runs block deleting their pipeline like any run;
+    the refusal says so, naming Debug runs and the window that clears them
+    (#1433), rather than sending the user to archive a pipeline that only has
+    to wait.
     *(Operator 2026-09-30 via CONFIG OVER DECISIONS; #1395 slice 3.)*
 
 - **Removing the demo deletes the demo's own run history — the second sanctioned run deletion.**

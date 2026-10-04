@@ -76,6 +76,7 @@ describe('GET /api/pipelines/:id/dependents', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.hasRuns).toBe(false);
+    expect(body.debugRunsOnly).toBe(false);
     expect(body.triggers).toEqual(
       expect.arrayContaining([
         { id: nightly.id, name: 'Nightly' },
@@ -136,9 +137,33 @@ describe('GET /api/pipelines/:id/dependents', () => {
       params: {},
     });
 
-    expect((await read(target.id)).json().hasRuns).toBe(true);
+    const body = (await read(target.id)).json();
+    expect(body.hasRuns).toBe(true);
+    // #1433 — and says so, with the window that will clear them, so the refusal
+    // can tell the user to wait rather than to archive.
+    expect(body.debugRunsOnly).toBe(true);
+    expect(body.debugRetentionDays).toBe(app.debugRetentionDays);
+    expect(body.debugRetentionDays).toBe(7);
     const del = await app.inject({ method: 'DELETE', url: `/api/pipelines/${target.id}` });
     expect(del.statusCode).toBe(409);
+  });
+
+  it('debugRunsOnly is false once any run is of a SAVED version (#1433)', async () => {
+    const target = createPipeline(app.db, { ownerId: 'local', name: 'Mixed' });
+    const run = (pipelineVersionId: string) =>
+      createRun(app.db, {
+        ownerId: 'local',
+        pipelineVersionId,
+        triggerId: null,
+        parentRunId: null,
+        params: {},
+      });
+    run(version(target.id, [], true).id);
+    run(version(target.id).id);
+
+    const body = (await read(target.id)).json();
+    expect(body.hasRuns).toBe(true);
+    expect(body.debugRunsOnly).toBe(false);
   });
 
   it('is owner-scoped: another owner’s pipeline is a 404', async () => {

@@ -101,6 +101,8 @@ beforeEach(() => {
   deleteMock.mockResolvedValue(undefined);
   vi.mocked(pipelinesApi.listPipelineDependents).mockResolvedValue({
     hasRuns: false,
+    debugRunsOnly: false,
+    debugRetentionDays: 7,
     triggers: [],
     callers: [],
     dynamicCallers: [],
@@ -618,6 +620,8 @@ describe('FactoryResources — row actions', () => {
     const user = userEvent.setup();
     vi.mocked(pipelinesApi.listPipelineDependents).mockResolvedValueOnce({
       hasRuns: true,
+      debugRunsOnly: false,
+      debugRetentionDays: 7,
       triggers: [],
       callers: [],
       dynamicCallers: [],
@@ -639,6 +643,8 @@ describe('FactoryResources — row actions', () => {
     const user = userEvent.setup();
     vi.mocked(pipelinesApi.listPipelineDependents).mockResolvedValueOnce({
       hasRuns: false,
+      debugRunsOnly: false,
+      debugRetentionDays: 7,
       triggers: [{ id: 't1', name: 'At 2am' }],
       callers: [],
       dynamicCallers: [],

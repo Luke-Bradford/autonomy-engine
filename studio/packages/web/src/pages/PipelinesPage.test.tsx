@@ -60,7 +60,14 @@ const listMock = vi.mocked(pipelinesApi.listPipelines);
 const createMock = vi.mocked(pipelinesApi.createPipeline);
 const deleteMock = vi.mocked(pipelinesApi.deletePipeline);
 const dependentsMock = vi.mocked(pipelinesApi.listPipelineDependents);
-const NO_DEPENDENTS = { hasRuns: false, triggers: [], callers: [], dynamicCallers: [] };
+const NO_DEPENDENTS = {
+  hasRuns: false,
+  debugRunsOnly: false,
+  debugRetentionDays: 7,
+  triggers: [],
+  callers: [],
+  dynamicCallers: [],
+};
 const archiveMock = vi.mocked(pipelinesApi.archivePipeline);
 const restoreMock = vi.mocked(pipelinesApi.restorePipeline);
 const listArchivedMock = vi.mocked(pipelinesApi.listArchivedPipelines);
