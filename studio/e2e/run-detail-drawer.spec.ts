@@ -82,7 +82,7 @@ test('#1484 M2 — an activity run opens in a drawer, with its own item’s inpu
         splitter: d.querySelector('[role="separator"]')?.getAttribute('aria-label') ?? null,
       };
     });
-    expect(second.text).toContain('item 2 of 2');
+    expect(second.text).toContain('Item 2 of 2');
     expect(second.text).toContain('folder-b');
     expect(second.text).not.toContain('folder-a');
     // Over the page, on its right edge, and the table did not move.
@@ -96,7 +96,7 @@ test('#1484 M2 — an activity run opens in a drawer, with its own item’s inpu
 
     // Another row swaps the record in place.
     await opens.nth(0).click();
-    await expect(panel).toContainText('item 1 of 2');
+    await expect(panel).toContainText('Item 1 of 2');
     await expect(panel).toContainText('folder-a');
     await expect(panel).not.toContainText('folder-b');
 
@@ -114,6 +114,14 @@ test('#1484 M2 — an activity run opens in a drawer, with its own item’s inpu
     await page.keyboard.press('Escape');
     await expect(drawer).toHaveCount(0);
     await expect(opens.nth(0)).toBeFocused();
+
+    // Remembered: after a reload the drawer opens at the width it was left at.
+    await page.reload();
+    await fluentRootReady(page);
+    await opens.nth(0).click();
+    await expect
+      .poll(async () => Math.round((await drawer.boundingBox())!.width))
+      .toBe(second.width + 32);
 
     await expectQuiet(page, problems);
   } finally {
