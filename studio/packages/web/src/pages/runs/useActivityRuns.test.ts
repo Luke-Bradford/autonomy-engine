@@ -39,4 +39,33 @@ describe('#1484 M2 useActivityRuns', () => {
     await act(async () => vi.advanceTimersByTimeAsync(ACTIVITY_RUNS_REFRESH_MS));
     expect(getMock.mock.calls.length).toBe(before + 1);
   });
+
+  it('never has two reads in flight, and re-reads once when the stream moved on meanwhile', async () => {
+    let answer!: (v: { runId: string; rows: [] }) => void;
+    getMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const { rerender } = renderHook(({ seq }) => useActivityRuns('r', seq), {
+      initialProps: { seq: 1 as number | undefined },
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(getMock).toHaveBeenCalledTimes(1);
+
+    // The first read hangs while frames keep arriving: nothing new is sent.
+    for (let seq = 2; seq <= 10; seq += 1) {
+      rerender({ seq });
+      await act(async () => vi.advanceTimersByTimeAsync(ACTIVITY_RUNS_REFRESH_MS));
+    }
+    expect(getMock).toHaveBeenCalledTimes(1);
+
+    // It lands; the stream moved on, so exactly one more read follows.
+    await act(async () => {
+      answer({ runId: 'r', rows: [] });
+      await vi.advanceTimersByTimeAsync(ACTIVITY_RUNS_REFRESH_MS * 4);
+    });
+    expect(getMock).toHaveBeenCalledTimes(2);
+  });
 });
