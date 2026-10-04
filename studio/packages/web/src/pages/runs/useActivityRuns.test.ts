@@ -68,4 +68,28 @@ describe('#1484 M2 useActivityRuns', () => {
     });
     expect(getMock).toHaveBeenCalledTimes(2);
   });
+
+  it('schedules nothing once unmounted, even when a read lands afterwards', async () => {
+    let answer!: (v: { runId: string; rows: [] }) => void;
+    getMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const { rerender, unmount } = renderHook(({ seq }) => useActivityRuns('r', seq), {
+      initialProps: { seq: 1 as number | undefined },
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    rerender({ seq: 2 });
+    unmount();
+
+    await act(async () => {
+      answer({ runId: 'r', rows: [] });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // `useGuardedLoad` would refuse the read anyway; no timer is left either.
+    expect(vi.getTimerCount()).toBe(0);
+    expect(getMock).toHaveBeenCalledTimes(1);
+  });
 });

@@ -37,13 +37,15 @@ export function useActivityRuns(runId: string, lastSeq: number | undefined): Act
     wanted: number | undefined;
     /** The `lastSeq` the last read was issued at; `null` before any read. */
     asked: number | undefined | null;
-  }>({ timer: null, inFlight: false, wanted: lastSeq, asked: null });
+    /** Set on unmount, so a read landing afterwards schedules nothing. */
+    gone: boolean;
+  }>({ timer: null, inFlight: false, wanted: lastSeq, asked: null, gone: false });
 
   useEffect(() => {
     const f = flight.current;
     f.wanted = lastSeq;
     const schedule = (delay: number) => {
-      if (f.timer !== null || f.inFlight) return;
+      if (f.timer !== null || f.inFlight || f.gone) return;
       f.timer = setTimeout(() => {
         f.timer = null;
         f.inFlight = true;
@@ -62,7 +64,9 @@ export function useActivityRuns(runId: string, lastSeq: number | undefined): Act
 
   useEffect(() => {
     const f = flight.current;
+    f.gone = false;
     return () => {
+      f.gone = true;
       if (f.timer !== null) clearTimeout(f.timer);
       f.timer = null;
     };
