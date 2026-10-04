@@ -50,6 +50,8 @@ vi.mock('../../api/runs', async (importActual) => ({
      explain" hint and adds no `role="alert"` for their error assertions to trip
      over. */
   getRunDiagnostics: vi.fn().mockResolvedValue([]),
+  // #1484 M2 — read from a mount effect, like `getRunDiagnostics`.
+  getRunActivityRuns: vi.fn().mockResolvedValue({ runId: 'r', rows: [] }),
   /* Mocked so an un-mocked write cannot reach `fetch`. NOT for the mount-effect
      reason above, which is specific to a member called from a MOUNT EFFECT:
      this one is only reachable from a click, so no other test in this file can

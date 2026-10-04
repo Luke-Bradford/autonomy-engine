@@ -73,6 +73,8 @@ vi.mock('../api/runs', async (importActual) => ({
   // the page falls back to `getRun` — the routing assertion is unchanged.
   getRunDetail: vi.fn().mockRejectedValue(new Error('run detail not stubbed')),
   getRunDiagnostics: vi.fn().mockResolvedValue([]),
+  // #1484 M2 — read from a mount effect, like `getRunDiagnostics`.
+  getRunActivityRuns: vi.fn().mockResolvedValue({ runId: 'r', rows: [] }),
   // #1083 — the paged envelope, not a bare array. `usePagedList` spreads
   // `page.items`, so a stale `[]` here throws inside the hook rather than
   // rendering an empty list.
