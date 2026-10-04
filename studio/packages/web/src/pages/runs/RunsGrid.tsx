@@ -31,6 +31,8 @@ import {
 import type { RunSortState } from './runFilters';
 import { zoneLabel, type DisplayTimeZone } from '../../lib/displayTime';
 import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
+import { useTickingNow } from '../../hooks/useTickingNow';
+import { DURATION_TICK_MS } from './format';
 
 /** A column's drawn width: the operator's, else its default. */
 function widthOf(widths: Partial<Record<RunGridColumnId, number>>, column: RunGridColumnId) {
@@ -126,13 +128,11 @@ function RunRow({
   run: r,
   columns,
   loadedAt,
-  ticking,
   zone,
 }: {
   run: RunSummary;
   columns: readonly RunGridColumnId[];
   loadedAt: number;
-  ticking: boolean;
   zone: DisplayTimeZone;
 }) {
   const navigate = useNavigate();
@@ -156,7 +156,7 @@ function RunRow({
     if (newTab) window.open(href, '_blank', 'noopener');
     else void navigate(path);
   };
-  const ctx: CellContext = { loadedAt, ticking, path, zone };
+  const ctx: CellContext = { loadedAt, path, zone };
   return (
     <tr
       className="runs-grid__row"
@@ -199,7 +199,13 @@ export function RunsGrid({
 }: {
   runs: readonly RunSummary[];
   loadedAt: number;
-  /** #1484 — unfinished durations count (`CellContext.ticking`). */
+  /**
+   * #1484 — the list is live and polling, so an unfinished run's duration may
+   * COUNT. Only then: a count is honest only while the page would hear the run
+   * finish. ONE clock for the grid rather than one per cell, running only while
+   * something is unfinished; paused, it HOLDS its reading, so a duration stops
+   * where it was instead of rewinding to `loadedAt`.
+   */
   ticking?: boolean;
   sort: RunSortState;
   onSort: (column: RunSortKey) => void;
@@ -209,6 +215,13 @@ export function RunsGrid({
   const widths = useStore(ui, (s) => s.runsGridWidths);
   const setWidth = useStore(ui, (s) => s.setRunsGridWidth);
   const zone = useDisplayTimeZone(ui);
+  const counting = useTickingNow(
+    DURATION_TICK_MS,
+    ticking && runs.some((r) => r.finishedAt === null),
+  );
+  /* Never behind the read: a static list measures against `loadedAt` exactly as
+     before, and a fresh poll moves a held clock forward. */
+  const clock = Math.max(counting, loadedAt);
   const columns = visibleRunGridColumns(hidden, sort.key);
   const total = columns.reduce((sum, column) => sum + widthOf(widths, column), 0);
   const tableRef = useRef<HTMLTableElement>(null);
@@ -257,14 +270,7 @@ export function RunsGrid({
         </thead>
         <tbody>
           {runs.map((r) => (
-            <RunRow
-              key={r.id}
-              run={r}
-              columns={columns}
-              loadedAt={loadedAt}
-              ticking={ticking}
-              zone={zone}
-            />
+            <RunRow key={r.id} run={r} columns={columns} loadedAt={clock} zone={zone} />
           ))}
         </tbody>
       </table>

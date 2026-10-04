@@ -18,7 +18,11 @@ import { RunsPage } from './RunsPage';
 import { runStatusLabel } from './runStatus';
 import * as runsApi from '../../api/runs';
 import { RUNS_PAGE_SIZE } from '../../api/runs';
-import { RUNS_LIVE_POLL_MS } from './useRunsLive';
+import {
+  RUNS_LIVE_FAILING_LABEL,
+  RUNS_LIVE_POLL_MS,
+  RUNS_LIVE_UPDATING_LABEL,
+} from './useRunsLive';
 import * as pipelinesApi from '../../api/pipelines';
 import * as triggersApi from '../../api/triggers';
 import { ApiError } from '../../api/client';
@@ -1536,14 +1540,14 @@ describe('#1484 — runs list Live mode and page size', () => {
     await screen.findByText('run_old00001');
     tick(15_000);
     expect(listMock).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText('Updating')).not.toBeInTheDocument();
+    expect(screen.queryByText(RUNS_LIVE_UPDATING_LABEL)).not.toBeInTheDocument();
   });
 
   it('shows a new run without Refresh while Live is on, and says it is updating', async () => {
     listMock.mockResolvedValue(pageOf([run({ id: 'run_old00001', status: 'success' })]));
     renderWithRouter(<RunsPage ui={liveUi()} />);
     await screen.findByText('run_old00001');
-    expect(screen.getByText('Updating')).toBeInTheDocument();
+    expect(screen.getByText(RUNS_LIVE_UPDATING_LABEL)).toBeInTheDocument();
 
     listMock.mockResolvedValue(
       pageOf([run({ id: 'run_new00002' }), run({ id: 'run_old00001', status: 'success' })]),
@@ -1582,10 +1586,11 @@ describe('#1484 — runs list Live mode and page size', () => {
       document.dispatchEvent(new Event('selectionchange'));
     });
     expect(screen.getByText('paused while text is selected')).toBeInTheDocument();
-    const frozen = durationOf('run_live0001').textContent;
+    // Held where it was — not rewound to when the list was read (1m 05s).
+    expect(durationOf('run_live0001')).toHaveTextContent('1m 07s so far');
     const calls = listMock.mock.calls.length;
     tick(RUNS_LIVE_POLL_MS * 2);
-    expect(durationOf('run_live0001').textContent).toBe(frozen);
+    expect(durationOf('run_live0001')).toHaveTextContent('1m 07s so far');
     expect(listMock).toHaveBeenCalledTimes(calls);
   });
 
@@ -1603,19 +1608,59 @@ describe('#1484 — runs list Live mode and page size', () => {
 
     Object.defineProperty(container, 'scrollTop', { value: 0, configurable: true });
     fireEvent.scroll(container);
-    expect(screen.getByText('Updating')).toBeInTheDocument();
+    expect(screen.getByText(RUNS_LIVE_UPDATING_LABEL)).toBeInTheDocument();
     // Resuming reads at once rather than a whole interval later.
     expect(listMock).toHaveBeenCalledTimes(calls + 1);
   });
 
-  it('a failed live read keeps the rows and says so', async () => {
-    listMock.mockResolvedValueOnce(pageOf([run({ id: 'run_old00001', status: 'success' })]));
+  it('a failed live read keeps the rows, says so, and stops the count', async () => {
+    listMock.mockResolvedValueOnce(pageOf([run({ id: 'run_live0001', startedAt: NOW - 65_000 })]));
     renderWithRouter(<RunsPage ui={liveUi()} />);
-    await screen.findByText('run_old00001');
+    await screen.findByText('run_live0001');
     listMock.mockRejectedValueOnce(new Error('server down'));
     tick(RUNS_LIVE_POLL_MS);
     expect(await screen.findByRole('alert')).toHaveTextContent('Live update failed: server down');
-    expect(screen.getByText('run_old00001')).toBeInTheDocument();
+    expect(screen.getByText(RUNS_LIVE_FAILING_LABEL)).toBeInTheDocument();
+    // The page cannot hear this run finish now, so its duration stops counting.
+    const held = durationOf('run_live0001').textContent;
+    tick(3_000);
+    expect(durationOf('run_live0001').textContent).toBe(held);
+  });
+
+  it('pauses while the tab is hidden', async () => {
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_old00001', status: 'success' })]));
+    renderWithRouter(<RunsPage ui={liveUi()} />);
+    await screen.findByText('run_old00001');
+    const calls = listMock.mock.calls.length;
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    tick(RUNS_LIVE_POLL_MS * 2);
+    expect(listMock).toHaveBeenCalledTimes(calls);
+    visibility.mockReturnValue('visible');
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    // Waking reads at once.
+    expect(listMock).toHaveBeenCalledTimes(calls + 1);
+  });
+
+  it('pauses for a selection that starts above the rows and ends in them', async () => {
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_old00001', status: 'success' })]));
+    renderWithRouter(<RunsPage ui={liveUi()} />);
+    await screen.findByText('run_old00001');
+    const selection = document.getSelection()!;
+    act(() => {
+      selection.setBaseAndExtent(
+        screen.getByRole('heading', { name: 'Runs' }),
+        0,
+        screen.getByText('run_old00001'),
+        0,
+      );
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+    expect(screen.getByText('paused while text is selected')).toBeInTheDocument();
   });
 
   it('reads the chosen page size, and remembers it for this viewer', async () => {

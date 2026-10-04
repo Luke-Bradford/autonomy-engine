@@ -2,7 +2,12 @@ import { z } from 'zod';
 import { RunCostSchema } from '../pricing/run-cost.js';
 import { TRIGGER_FIRE_KINDS, TriggerContextSchema } from './trigger-context.js';
 import { ANNOTATION_MAX_CHARS } from './pipeline.js';
-import { DEFAULT_PAGE_SIZE, PaginationQuerySchema } from './pagination.js';
+import {
+  DEFAULT_PAGE_SIZE,
+  MAX_PAGE_SIZE,
+  pageLimitSchema,
+  PaginationQuerySchema,
+} from './pagination.js';
 
 export const RunStatusSchema = z.enum([
   'pending',
@@ -603,7 +608,7 @@ export const RunSearchSchema = z.string().trim().min(1).max(RUN_SEARCH_MAX_CHARS
  * morning" asks for a screenful of history. Its ceiling is the largest size
  * offered, derived rather than written twice.
  */
-export const RUN_PAGE_SIZES = [DEFAULT_PAGE_SIZE, 100, 200] as const;
+export const RUN_PAGE_SIZES = [DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, 200] as const;
 export type RunPageSize = (typeof RUN_PAGE_SIZES)[number];
 export const RUNS_MAX_PAGE_SIZE: number = Math.max(...RUN_PAGE_SIZES);
 
@@ -612,7 +617,7 @@ export const RUNS_MAX_PAGE_SIZE: number = Math.max(...RUN_PAGE_SIZES);
  * 400, never a clamp — an accepted request means what it says.
  */
 export const RunsPaginationQuerySchema = PaginationQuerySchema.extend({
-  limit: z.coerce.number().int().min(1).max(RUNS_MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE),
+  limit: pageLimitSchema(RUNS_MAX_PAGE_SIZE),
 });
 
 /**

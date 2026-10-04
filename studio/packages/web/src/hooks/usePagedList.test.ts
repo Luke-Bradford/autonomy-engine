@@ -364,3 +364,55 @@ describe('usePagedList poll (#1484 live mode)', () => {
     expect(result.current.error).toBeNull();
   });
 });
+
+describe('usePagedList poll — regressions (#1484 review)', () => {
+  it('polls again after a NEW list whose first page failed, even if the old one was extended', async () => {
+    const first = deferredFetcher();
+    const { result, rerender } = renderHook(({ f }: { f: Fetcher }) => usePagedList(f), {
+      initialProps: { f: first.fetchPage as Fetcher },
+    });
+    await act(async () => first.calls[0]!.resolve(page(['a'], 'cur_1')));
+    act(() => result.current.loadMore());
+    await act(async () => first.calls[1]!.resolve(page(['b'])));
+    expect(result.current.extended).toBe(true);
+
+    // A filter change: a new list, whose first page fails.
+    const second = deferredFetcher();
+    rerender({ f: second.fetchPage as Fetcher });
+    await act(async () => second.calls[0]!.reject(new Error('down')));
+    expect(result.current.extended).toBe(false);
+
+    act(() => result.current.poll());
+    expect(second.calls).toHaveLength(2);
+  });
+
+  it('a fetcher that throws synchronously still settles, so polling is not held off', async () => {
+    let throwNext = false;
+    const fetchPage = vi.fn((): Promise<Page> => {
+      if (throwNext) throw new Error('sync');
+      return Promise.resolve(page(['a']));
+    });
+    const { result } = renderHook(() => usePagedList(fetchPage));
+    await waitFor(() => expect(result.current.items).toEqual(['a']));
+
+    throwNext = true;
+    act(() => result.current.poll());
+    await waitFor(() => expect(result.current.error?.scope).toBe('live'));
+    throwNext = false;
+    act(() => result.current.poll());
+    expect(fetchPage).toHaveBeenCalledTimes(3);
+  });
+
+  it('a good poll does not clear a failed older page', async () => {
+    const { fetchPage, calls } = deferredFetcher();
+    const { result } = renderHook(() => usePagedList(fetchPage));
+    await act(async () => calls[0]!.resolve(page(['a'], 'cur_1')));
+    act(() => result.current.loadMore());
+    await act(async () => calls[1]!.reject(new Error('older failed')));
+    expect(result.current.error?.scope).toBe('more');
+
+    act(() => result.current.poll());
+    await act(async () => calls[2]!.resolve(page(['a'], 'cur_1')));
+    expect(result.current.error).toEqual({ message: 'older failed', scope: 'more' });
+  });
+});

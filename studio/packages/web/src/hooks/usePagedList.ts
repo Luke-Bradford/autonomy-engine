@@ -174,7 +174,17 @@ export function usePagedList<T>(
       // state, and it rejects only if one of THEM threw — there is nothing here
       // to await and nothing a caller could do with it.
       inFlight.current += 1;
-      void runLoad<Paginated<T>>((signal) => fetchPage(cursor, signal), {
+      // A fetcher that THROWS rather than rejecting is read as a rejection, so
+      // the request still settles: otherwise `.finally` below would never be
+      // attached and `inFlight` would hold polling off for good.
+      const fetchSettling = (signal: AbortSignal): Promise<Paginated<T>> => {
+        try {
+          return fetchPage(cursor, signal);
+        } catch (err: unknown) {
+          return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      };
+      void runLoad<Paginated<T>>(fetchSettling, {
         onData: (page) => {
           extendedRef.current = scope === 'more';
           setExtended(scope === 'more');
@@ -186,7 +196,9 @@ export function usePagedList<T>(
             return [...held, ...page.items.filter((item) => !seen.has(keyOf(item)))];
           });
           setNextCursor(page.nextCursor);
-          setError(null);
+          // A good POLL leaves "could not load older runs" up: the head is
+          // fresh, but the older page the reader asked for still never came.
+          setError((prev) => (scope === 'live' && prev?.scope === 'more' ? prev : null));
           setPending(null);
           if (scope !== 'more') setLastUpdatedAt(issuedAt);
         },
@@ -206,6 +218,10 @@ export function usePagedList<T>(
   );
 
   useEffect(() => {
+    // A new list holds no older page. Cleared HERE, not only on an answer: if
+    // this first load fails, or is superseded, no answer ever clears it, and a
+    // flag left over from the previous list would hold `poll()` off for good.
+    extendedRef.current = false;
     load(undefined, 'first');
   }, [load]);
 

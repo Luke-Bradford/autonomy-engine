@@ -57,9 +57,8 @@ export function formatElapsed(ms: number): string {
  *
  * An unfinished run is measured against `now` and marked "so far". `now` is the
  * CALLER's, captured once per load, and taking the clock as an argument is also
- * what keeps this pure and testable. A LIVE list (#1484) ticks the cell with
- * `LiveElapsed` instead, and only while it is polling; a paused or static list
- * shows this frozen figure.
+ * what keeps this pure and testable. A LIVE runs grid (#1484) passes its own
+ * one-second clock instead, and only while it is polling (`RunsGrid`).
  */
 export function formatRunDuration(
   run: Pick<Run, 'status' | 'startedAt' | 'finishedAt'>,
@@ -157,6 +156,10 @@ export function liveSpanStart(
   if (node.spans[node.spans.length - 1]?.instanceId !== undefined) return undefined;
   return node.startedAtMs;
 }
+
+/** Once a second: `formatLiveElapsed` shows whole seconds below an hour, so a slower
+ * tick would visibly skip, and a faster one would change nothing it prints. */
+export const DURATION_TICK_MS = 1_000;
 
 /**
  * #890 — how long an unsettled attempt has been running, against the caller's

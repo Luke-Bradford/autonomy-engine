@@ -57,7 +57,12 @@ import { LabelledControl } from '../../lib/LabelledControl';
 import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import { FilterPicker } from './FilterPicker';
 import { RUN_GROUP_BYS, type RunGroupBy } from './runBars';
-import { RUNS_LIVE_PAUSE_LABEL, useRunsLive } from './useRunsLive';
+import {
+  RUNS_LIVE_FAILING_LABEL,
+  RUNS_LIVE_PAUSE_LABEL,
+  RUNS_LIVE_UPDATING_LABEL,
+  useRunsLive,
+} from './useRunsLive';
 
 /**
  * U29 (#1015) — which rendering of the SAME filtered rows is on screen. A view,
@@ -381,7 +386,14 @@ export function RunsPage({
   } = usePagedList(fetchPage, runKey);
   /* Live re-reads the run list only; the lifetime-spend panel is all-time and
      stays on Refresh, so a tick never re-aggregates a pipeline's whole history. */
-  const { pause, ticking } = useRunsLive({ live, extended, poll, listRef });
+  const liveFailing = pageError?.scope === 'live';
+  const { pause, ticking } = useRunsLive({
+    live,
+    extended,
+    failing: liveFailing,
+    poll,
+    listRef,
+  });
   /* The clock an UNFINISHED row's duration is measured against — captured when
      the first page was requested rather than read per render, so every row's "so
      far" is as-of the same instant and rendering stays pure. `0` before the
@@ -535,15 +547,47 @@ export function RunsPage({
         </button>
         {/* #1484 — keeps the list current (`useRunsLive`). The status beside it
             says why it is not updating when it is not, so a paused list is
-            never mistaken for a quiet workspace. */}
-        <ToggleButton size="small" checked={live} onClick={() => setLive(!live)}>
+            never mistaken for a quiet workspace. The live region is always
+            mounted and only its text changes: a region inserted already
+            populated is often not announced. */}
+        <ToggleButton
+          size="small"
+          checked={live}
+          onClick={() => setLive(!live)}
+          title="Re-read the list every few seconds, pausing while you scroll or select"
+        >
           Live
         </ToggleButton>
-        {live && (
-          <span role="status" className="runs-live-status">
-            {pause === null ? 'Updating' : RUNS_LIVE_PAUSE_LABEL[pause]}
-          </span>
-        )}
+        <span role="status" className="runs-live-status">
+          {!live
+            ? ''
+            : pause !== null
+              ? RUNS_LIVE_PAUSE_LABEL[pause]
+              : liveFailing
+                ? RUNS_LIVE_FAILING_LABEL
+                : RUNS_LIVE_UPDATING_LABEL}
+        </span>
+        {/* #1484 — how many runs a page reads. Keyset "load more" stays the
+            paging model (#1083); this sizes each step of it. Per viewer, and on
+            the title row so it never unmounts while the list reloads under it. */}
+        <LabelledControl label={<span className="visually-hidden">Runs per page</span>}>
+          {(id) => (
+            <select
+              id={id}
+              value={pageSize}
+              onChange={(e) => {
+                const size = RUN_PAGE_SIZES.find((n) => String(n) === e.target.value);
+                if (size !== undefined) setPageSize(size);
+              }}
+            >
+              {RUN_PAGE_SIZES.map((n) => (
+                <option key={n} value={n}>
+                  {n} per page
+                </option>
+              ))}
+            </select>
+          )}
+        </LabelledControl>
       </div>
 
       {/* Worded apart because they are different news: a failed FIRST page
@@ -757,35 +801,11 @@ export function RunsPage({
           the history indistinguishable from a list that had stopped loading —
           and where the history ends is exactly what a reader is checking.
           OUTSIDE the "are there rows" guard above, like the filter bar. */}
-      <div className="runs-foot">
-        {hasMore && (
-          <button type="button" onClick={loadMore} disabled={busy}>
-            {sortedByDefault ? 'Load older runs' : 'Load more runs'}
-          </button>
-        )}
-        {/* #1484 — how many runs a page reads. Keyset "load more" stays the
-            paging model (#1083); this sizes each step of it. Per viewer. */}
-        {runs !== null && runs.length > 0 && (
-          <LabelledControl label="Runs per page">
-            {(id) => (
-              <select
-                id={id}
-                value={pageSize}
-                onChange={(e) => {
-                  const size = RUN_PAGE_SIZES.find((n) => String(n) === e.target.value);
-                  if (size !== undefined) setPageSize(size);
-                }}
-              >
-                {RUN_PAGE_SIZES.map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </select>
-            )}
-          </LabelledControl>
-        )}
-      </div>
+      {hasMore && (
+        <button type="button" onClick={loadMore} disabled={busy}>
+          {sortedByDefault ? 'Load older runs' : 'Load more runs'}
+        </button>
+      )}
     </section>
   );
 }

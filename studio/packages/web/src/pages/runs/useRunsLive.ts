@@ -17,8 +17,13 @@ export const RUNS_LIVE_PAUSE_LABEL: Record<RunsLivePause, string> = {
   hidden: 'paused while this tab is hidden',
   selecting: 'paused while text is selected',
   scrolled: 'paused while scrolled down',
-  extended: 'paused while older runs are loaded',
+  extended: 'paused while older runs are loaded — Refresh to resume',
 };
+
+/** The status while nothing pauses it, worded from the interval it actually uses. */
+export const RUNS_LIVE_UPDATING_LABEL = `Updating every ${RUNS_LIVE_POLL_MS / 1_000}s`;
+/** The status after a failed read: still polling, but not current. */
+export const RUNS_LIVE_FAILING_LABEL = 'Last update failed — retrying';
 
 /** True when `node` is inside `within` — a `Node` check, so a text node counts. */
 function inside(within: Element | null, node: Node | null): boolean {
@@ -47,17 +52,21 @@ function inside(within: Element | null, node: Node | null): boolean {
  * reason turning Live on does.
  *
  * `ticking` is the other half of the contract: an unfinished run's duration may
- * count only while this is polling, because a count is honest only while the
- * page would hear the run finish (`NodeDuration`'s rule). Paused, it freezes.
+ * count only while this is polling AND the last read succeeded, because a count
+ * is honest only while the page would hear the run finish (`NodeDuration`'s
+ * rule). A failed read keeps polling (the next may succeed) but stops the count.
  */
 export function useRunsLive({
   live,
   extended,
+  failing,
   poll,
   listRef,
 }: {
   live: boolean;
   extended: boolean;
+  /** The last live read failed (`usePagedList`'s `'live'` error scope). */
+  failing: boolean;
   /** Must be stable (`usePagedList.poll` is), or the interval re-arms every render. */
   poll: () => void;
   listRef: RefObject<Element | null>;
@@ -72,10 +81,13 @@ export function useRunsLive({
     const onVisibility = () => setHidden(document.visibilityState === 'hidden');
     const onSelection = () => {
       const selection = document.getSelection();
+      // Either end: a drag that starts above the rows and ends in them is still
+      // a selection the next poll would re-render under.
       setSelecting(
         selection !== null &&
           !selection.isCollapsed &&
-          inside(listRef.current, selection.anchorNode),
+          (inside(listRef.current, selection.anchorNode) ||
+            inside(listRef.current, selection.focusNode)),
       );
     };
     const onScroll = (event: Event) => {
@@ -111,10 +123,12 @@ export function useRunsLive({
 
   useEffect(() => {
     if (!polling) return;
+    // Usually skipped on mount: the list's own first load is in flight, and a
+    // poll never supersedes a request (`usePagedList.poll`).
     poll();
     const timer = setInterval(poll, RUNS_LIVE_POLL_MS);
     return () => clearInterval(timer);
   }, [polling, poll]);
 
-  return { pause, ticking: polling };
+  return { pause, ticking: polling && !failing };
 }

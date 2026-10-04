@@ -1,10 +1,6 @@
 import { useTickingNow } from '../../hooks/useTickingNow';
-import { formatLiveElapsed, formatNodeDuration, liveSpanStart } from './format';
+import { DURATION_TICK_MS, formatLiveElapsed, formatNodeDuration, liveSpanStart } from './format';
 import type { NodeActivity } from './runSummary';
-
-/** Once a second: `formatLiveElapsed` shows whole seconds below an hour, so a slower
- * tick would visibly skip, and a faster one would change nothing it prints. */
-const TICK_MS = 1_000;
 
 /**
  * #890 — a node's Duration, counting up while its attempt is still running.
@@ -30,9 +26,7 @@ export function NodeDuration({
   return start === undefined ? formatNodeDuration(node) : <LiveElapsed startedAtMs={start} />;
 }
 
-/** A count from `startedAtMs`, re-rendered once a second by its own clock. Also
- *  the runs grid's Duration cell while the list is live (#1484). */
-export function LiveElapsed({ startedAtMs }: { startedAtMs: number }) {
-  const now = useTickingNow(TICK_MS);
+function LiveElapsed({ startedAtMs }: { startedAtMs: number }) {
+  const now = useTickingNow(DURATION_TICK_MS);
   return formatLiveElapsed(startedAtMs, now);
 }

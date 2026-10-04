@@ -33,14 +33,13 @@ import { pageQuery } from './pagination';
 const RunPageSchema = paginatedResponseSchema(RunSummarySchema);
 
 /**
- * How many runs one page holds. Deliberately NOT `DEFAULT_PAGE_SIZE` or
- * `MAX_PAGE_SIZE` — the same distinction `AUDIT_PAGE_SIZE` draws: those size a
- * TRANSPORT chunk for a caller reconstructing a whole list, where bigger is
- * strictly better, while this is how many runs a reader is shown before asking
- * for more. Larger than the audit page because a run row is scanned rather than
- * read — an operator looking for "the failure this morning" wants a screenful of
- * history, not a paragraph. Exported so the tests and the e2e spec assert
- * against the real value instead of re-literalling it.
+ * How many runs one page holds unless the caller says otherwise: the smallest
+ * of the grid's sizes (`RUN_PAGE_SIZES`). The runs grid passes the viewer's own
+ * choice (#1484, `uiStore.runsPageSize`, whose default is this same entry);
+ * this is the default for `listRuns`' other callers. A run row is scanned
+ * rather than read — an operator looking for "the failure this morning" wants a
+ * screenful of history, not a paragraph. Exported so the tests and the e2e spec
+ * assert against the real value instead of re-literalling it.
  */
 export const RUNS_PAGE_SIZE: RunPageSize = RUN_PAGE_SIZES[0];
 const RunEventListSchema = z.array(RunEventSchema);
@@ -147,8 +146,8 @@ export interface ListRunsQuery {
  * runs asks for fewer, rather than fetching a reader's screenful and slicing
  * (#1085, the Home hub's five). That is not a per-caller preference: the server
  * aggregates metered-event costs for the rows it returns
- * (`repo/runs.ts::listRunSummariesPage`), so an over-fetch costs a 50-row join
- * plus a 50-run cost aggregation to render five — and Home is the router's
+ * (`repo/runs.ts::listRunSummariesPage`), so an over-fetch costs a page-sized
+ * join plus a page-sized cost aggregation to render five — and Home is the router's
  * CATCH-ALL, so every stray URL would pay it. One reader, parameterised; a
  * second runs reader is what #1083 exists to prevent.
  */
