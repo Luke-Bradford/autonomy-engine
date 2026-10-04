@@ -295,7 +295,7 @@ describe('#1484 activity runs — one row per attempt', () => {
     ]);
     // KNOWN GAP: item x's skip is reset in the same reduce that ends the item
     // (a loop round's end does the same), so it is only inferred here, after
-    // the reducer dropped its reason. The LAST item is not reset, so it keeps it.
+    // the reducer dropped its reason (#1546). The LAST item is not reset, so it keeps it.
     expect(
       project(db, pvId, runId)
         .filter((r) => r.activityId === 't')
