@@ -1,7 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { Paginated } from '@autonomy-studio/shared';
-import { usePagedList } from './usePagedList';
+import { POLL_DEADLINE_MS, usePagedList } from './usePagedList';
 
 /**
  * #1076 — the accumulating load shape. What is pinned here is what distinguishes
@@ -362,6 +362,68 @@ describe('usePagedList poll (#1484 live mode)', () => {
     act(() => result.current.poll());
     await act(async () => calls[2]!.resolve(page(['a'])));
     expect(result.current.error).toBeNull();
+  });
+});
+
+describe('usePagedList poll deadline (#1527)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('fails a poll that never answers, so polling is not held off for good', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { fetchPage, calls } = deferredFetcher();
+    const { result } = renderHook(() => usePagedList(fetchPage));
+    await act(async () => calls[0]!.resolve(page(['a'])));
+
+    // This poll hangs: no answer, and no settle.
+    act(() => result.current.poll());
+    expect(calls).toHaveLength(2);
+    // A Refresh supersedes its answer but cannot settle it.
+    act(() => result.current.refresh());
+    await act(async () => calls[2]!.resolve(page(['b'])));
+    act(() => result.current.poll());
+    expect(calls).toHaveLength(3);
+
+    // At the deadline the hung poll is aborted and settles…
+    await act(async () => {
+      vi.advanceTimersByTime(POLL_DEADLINE_MS);
+    });
+    expect(calls[1]!.signal.aborted).toBe(true);
+    // …so the next tick polls again.
+    act(() => result.current.poll());
+    expect(calls).toHaveLength(4);
+  });
+
+  it("reports a hung poll as a failed 'live' read, keeping the rows", async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { fetchPage, calls } = deferredFetcher();
+    const { result } = renderHook(() => usePagedList(fetchPage));
+    await act(async () => calls[0]!.resolve(page(['a'])));
+
+    act(() => result.current.poll());
+    await act(async () => {
+      vi.advanceTimersByTime(POLL_DEADLINE_MS - 1);
+    });
+    expect(result.current.error).toBeNull();
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(result.current.error).toEqual({ message: 'no answer in 15s', scope: 'live' });
+    expect(result.current.items).toEqual(['a']);
+  });
+
+  it('gives a page the reader asked for no deadline', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { fetchPage, calls } = deferredFetcher();
+    const { result } = renderHook(() => usePagedList(fetchPage));
+    await act(async () => {
+      vi.advanceTimersByTime(POLL_DEADLINE_MS * 4);
+    });
+    expect(calls[0]!.signal.aborted).toBe(false);
+    expect(result.current.loading).toBe(true);
+    await act(async () => calls[0]!.resolve(page(['a'])));
+    expect(result.current.items).toEqual(['a']);
   });
 });
 

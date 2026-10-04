@@ -1613,6 +1613,23 @@ describe('#1484 — runs list Live mode and page size', () => {
     expect(listMock).toHaveBeenCalledTimes(calls + 1);
   });
 
+  it('is paused from the start when it mounts already scrolled down (#1527)', async () => {
+    // Something holding the list kept its scroll across the mount; no scroll
+    // event will arrive to say so.
+    Object.defineProperty(document.body, 'scrollTop', { value: 240, configurable: true });
+    try {
+      listMock.mockResolvedValue(pageOf([run({ id: 'run_old00001', status: 'success' })]));
+      renderWithRouter(<RunsPage ui={liveUi()} />);
+      await screen.findByText('run_old00001');
+      expect(screen.getByText('paused while scrolled down')).toBeInTheDocument();
+      tick(RUNS_LIVE_POLL_MS * 2);
+      expect(listMock).toHaveBeenCalledTimes(1);
+    } finally {
+      // The prototype's getter answers again once the own property is gone.
+      delete (document.body as { scrollTop?: number }).scrollTop;
+    }
+  });
+
   it('a failed live read keeps the rows, says so, and stops the count', async () => {
     listMock.mockResolvedValueOnce(pageOf([run({ id: 'run_live0001', startedAt: NOW - 65_000 })]));
     renderWithRouter(<RunsPage ui={liveUi()} />);
