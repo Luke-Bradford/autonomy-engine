@@ -1,6 +1,12 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { fireAndSettle, mintVersion, seedVersion, type SeedDoc } from './support/seedDoc';
+import {
+  fireAndSettle,
+  fireManualTrigger,
+  mintVersion,
+  seedVersion,
+  type SeedDoc,
+} from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 
 /**
@@ -752,6 +758,61 @@ test('#1484 — the runs grid links the version that ran, a child names its pare
   expect(annotationsAt).toBeGreaterThan(0);
   await expect(rowOf(childRunId).getByRole('cell').nth(annotationsAt)).toHaveText(tag);
   await expect(rowOf(parentRunId).getByRole('cell').nth(annotationsAt)).toHaveText('—');
+
+  await expectQuiet(page, problems);
+});
+
+/**
+ * #1484 OR35 M1 — Live mode and the page size. A run fired AFTER the page has
+ * loaded must appear with no Refresh, and its duration must count while it
+ * runs: a `wait` node holds it open, and it is cancelled at the end so it does
+ * not idle in the shared database. Both preferences survive a reload.
+ */
+test('#1484 — Live shows a new run without Refresh and counts its duration; page size persists', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  const stamp = `Live ${Date.now()}`;
+  const { pipelineVersionId } = await seedVersion(page, stamp, {
+    nodes: [{ id: 'n1', type: 'wait', config: { seconds: '${30}' }, position: { x: 0, y: 0 } }],
+  });
+
+  await page.goto(`/#/monitor/runs?q=${encodeURIComponent(stamp)}`);
+  await fluentRootReady(page);
+  await expect(page.getByText('No runs match these filters', { exact: false })).toBeVisible();
+  const live = page.getByRole('button', { name: 'Live', exact: true });
+  await live.click();
+  await expect(live).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('status').filter({ hasText: 'Updating' })).toBeVisible();
+
+  const runId = await fireManualTrigger(page, pipelineVersionId, 'e2e live');
+  try {
+    // No Refresh click anywhere: the poll brings it in.
+    const row = page.getByRole('row').filter({ hasText: runId });
+    await expect(row).toHaveCount(1, { timeout: 15_000 });
+    const duration = row.getByRole('cell').filter({ hasText: /so far$/ });
+    await expect(duration).toHaveCount(1);
+    const first = await duration.textContent();
+    await expect.poll(() => duration.textContent(), { timeout: 5_000 }).not.toBe(first);
+
+    // ── page size: one step of "load more", per viewer ────────────────────────
+    const sized = page.waitForRequest(
+      (r) => r.url().includes('/api/runs?') && r.url().includes('limit=100'),
+    );
+    await page.getByLabel('Runs per page').selectOption('100');
+    await sized;
+
+    await page.reload();
+    await fluentRootReady(page);
+    await expect(page.getByRole('button', { name: 'Live', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await expect(page.getByLabel('Runs per page')).toHaveValue('100');
+  } finally {
+    const cancelled = await page.request.post(`/api/runs/${encodeURIComponent(runId)}/cancel`);
+    expect(cancelled.status(), `cancelling: ${await cancelled.text()}`).toBeLessThan(300);
+  }
 
   await expectQuiet(page, problems);
 });
