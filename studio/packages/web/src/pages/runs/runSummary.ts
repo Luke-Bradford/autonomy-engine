@@ -1547,8 +1547,7 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
     if (seen.has(nodeId)) continue;
     if (parseInstanceKey(nodeId) !== null) continue;
     reconciled.push({
-      nodeId,
-      status: engine.status,
+      ...blankNodeActivity(nodeId, engine.status),
       /* ZERO, and deliberately NOT `engine.attempts` — except for the one
          status where the engine is right and the zero would be the lie.
 
@@ -1574,53 +1573,66 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
          false. It is also the state a live tail passes through, and it FREEZES
          there if the server dies between the command and the append. */
       attempts: engine.status === 'waiting' ? engine.attempts : 0,
-      outputs: 0,
-      lastOutputName: undefined,
-      lastOutput: undefined,
-      error: undefined,
-      failureKind: undefined,
-      failureCode: undefined,
-      /* #1162 — a row reaches here because NO event named this node, so no
-         dispatch resolved a dataset and there is no address. The same refusal
-         the fields below make: an absent fact is rendered absent, never
-         manufactured. */
-      datasetAddresses: undefined,
-      input: undefined,
-      params: undefined,
-      inputInstanceId: undefined,
-      outputValues: undefined,
-      /* A row reached here because NO event named this node, and a copied
-         frontier node is named by `run.reseeded` — so this branch is by
-         construction never a copied one, and claiming a source run here would
-         be inventing provenance. Since #918 a rerun's copied nodes arrive from
-         the fold instead, which is what fixed them showing no Outputs. */
-      copiedFromRunId: undefined,
-      copiedChildRunId: undefined,
-      variableWrite: undefined,
-      instanceId: undefined,
-      /* No event, so no stamp — the row exists BECAUSE the fold never saw one.
-         Same rule as the fields above: an absent fact is rendered as absent,
-         never manufactured (#867). */
-      startedAtMs: undefined,
-      endedAtMs: undefined,
-      spans: [],
-      /* #932 — empty for the same reason, and it is a REFUSAL rather than an
-         omission. This row exists because no event named the node, so no
-         `call.started` announced a child; the id could technically be re-derived
-         (`deterministicChildRunId` is pure), and must not be. Naming a child run
-         the log never announced would assert a run exists — the same invented
-         provenance the `copiedFromRunId` refusal above declines to make. */
-      childRunIds: [],
-      /* #866 — likewise. A row reached here because NO event named this node, so
-         nothing billed under it and no tool ran: an empty cost and an empty list
-         are the MEASURED answer here, not a placeholder standing in for one. */
-      cost: emptyNodeCost(),
-      costSpansInstances: false,
-      toolCalls: [],
-      captures: [],
     });
   }
   return reconciled;
+}
+
+/**
+ * #1484 OR35 M2 — a node with NO event: zero attempts and nothing recorded. The
+ * engine-only rows `reconcileNodeActivity` adds start from it, and so does the
+ * run drawer's record of a skip, which no event logs either.
+ */
+export function blankNodeActivity(nodeId: string, status: NodeRunStatus): NodeActivity {
+  return {
+    nodeId,
+    status,
+    attempts: 0,
+    outputs: 0,
+    lastOutputName: undefined,
+    lastOutput: undefined,
+    error: undefined,
+    failureKind: undefined,
+    failureCode: undefined,
+    /* #1162 — a row reaches here because NO event named this node, so no
+       dispatch resolved a dataset and there is no address. The same refusal
+       the fields below make: an absent fact is rendered absent, never
+       manufactured. */
+    datasetAddresses: undefined,
+    input: undefined,
+    params: undefined,
+    inputInstanceId: undefined,
+    outputValues: undefined,
+    /* A row reached here because NO event named this node, and a copied
+       frontier node is named by `run.reseeded` — so this branch is by
+       construction never a copied one, and claiming a source run here would
+       be inventing provenance. Since #918 a rerun's copied nodes arrive from
+       the fold instead, which is what fixed them showing no Outputs. */
+    copiedFromRunId: undefined,
+    copiedChildRunId: undefined,
+    variableWrite: undefined,
+    instanceId: undefined,
+    /* No event, so no stamp — the row exists BECAUSE the fold never saw one.
+       Same rule as the fields above: an absent fact is rendered as absent,
+       never manufactured (#867). */
+    startedAtMs: undefined,
+    endedAtMs: undefined,
+    spans: [],
+    /* #932 — empty for the same reason, and it is a REFUSAL rather than an
+       omission. This row exists because no event named the node, so no
+       `call.started` announced a child; the id could technically be re-derived
+       (`deterministicChildRunId` is pure), and must not be. Naming a child run
+       the log never announced would assert a run exists — the same invented
+       provenance the `copiedFromRunId` refusal above declines to make. */
+    childRunIds: [],
+    /* #866 — likewise. A row reached here because NO event named this node, so
+       nothing billed under it and no tool ran: an empty cost and an empty list
+       are the MEASURED answer here, not a placeholder standing in for one. */
+    cost: emptyNodeCost(),
+    costSpansInstances: false,
+    toolCalls: [],
+    captures: [],
+  };
 }
 
 /**
