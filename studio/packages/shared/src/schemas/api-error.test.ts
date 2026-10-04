@@ -60,6 +60,7 @@ describe('ApiErrorBodySchema', () => {
       'invalid_pipeline_doc',
       'bad_request',
       'internal_error',
+      'busy',
     ]) {
       expect(ApiErrorBodySchema.parse({ error }).error).toBe(error);
     }

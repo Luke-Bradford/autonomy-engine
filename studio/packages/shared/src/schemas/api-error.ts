@@ -31,6 +31,10 @@ export const ApiErrorCodeSchema = z.enum([
   'invalid_pipeline_doc',
   'bad_request',
   'internal_error',
+  // #1534 — the same work is already running for this caller (429). Its own
+  // code because its status is its own: nothing about the request is wrong,
+  // and the same request succeeds once the first one finishes.
+  'busy',
   // #3 G2 — a git operation against the connected repo failed (502: the
   // failure is in the upstream repo/transport, not this request's shape).
   'git_error',

@@ -12,6 +12,47 @@ vi.mock('../../limits.js', async (importOriginal) => ({
   RUNS_EXPORT_MAX_ROWS: 3,
 }));
 
+/**
+ * #1534 — a hold on the walk, so a test can keep one export in flight while it
+ * asks for another. Disarmed, the real walk runs untouched.
+ */
+const walk = vi.hoisted(() => ({
+  hold: null as null | { entered: () => void; release: Promise<void> },
+  /** Unparks the held export; `afterEach` calls it so `close()` never waits on one. */
+  open: null as null | (() => void),
+  fail: false,
+}));
+vi.mock('../../run/runs-export.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../run/runs-export.js')>();
+  return {
+    ...real,
+    collectRunsForExport: async (...args: Parameters<typeof real.collectRunsForExport>) => {
+      const hold = walk.hold;
+      walk.hold = null;
+      if (hold) {
+        hold.entered();
+        await hold.release;
+      }
+      if (walk.fail) {
+        walk.fail = false;
+        throw new Error('the walk failed');
+      }
+      return real.collectRunsForExport(...args);
+    },
+  };
+});
+
+/** Arm the hold for the next export; resolves once that export is in the walk. */
+function holdNextWalk(): { entered: Promise<void>; release: () => void } {
+  let entered!: () => void;
+  let release!: () => void;
+  const enteredP = new Promise<void>((r) => (entered = r));
+  const releaseP = new Promise<void>((r) => (release = r));
+  walk.hold = { entered, release: releaseP };
+  walk.open = release;
+  return { entered: enteredP, release };
+}
+
 /** The body's records as header-keyed objects. The fixtures hold no commas or
  * quotes, so a plain split is a faithful reader of them. */
 function records(body: string): Record<string, string>[] {
@@ -40,6 +81,11 @@ describe('GET /api/runs/export.csv (#1484 OR35 M1)', () => {
   });
 
   afterEach(async () => {
+    // A failed assertion must not leave an export parked, or close() waits on it.
+    walk.open?.();
+    walk.open = null;
+    walk.hold = null;
+    walk.fail = false;
     await app.close();
   });
 
@@ -140,5 +186,36 @@ describe('GET /api/runs/export.csv (#1484 OR35 M1)', () => {
   it('refuses a junk filter with a 400, as the list does', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/runs/export.csv?status=nope' });
     expect(res.statusCode).toBe(400);
+  });
+
+  it('refuses a second export while the first is running, then serves the next (#1534)', async () => {
+    seed(1_000);
+    const held = holdNextWalk();
+    const first = app.inject({ method: 'GET', url: '/api/runs/export.csv' });
+    await held.entered;
+
+    const second = await app.inject({ method: 'GET', url: '/api/runs/export.csv' });
+    expect(second.statusCode).toBe(429);
+    expect(second.json()).toEqual({
+      error: 'busy',
+      message: 'A CSV export of your runs is already running. Try again when it finishes.',
+    });
+    // A refused filter is still the caller's 400, not a busy.
+    const junk = await app.inject({ method: 'GET', url: '/api/runs/export.csv?status=nope' });
+    expect(junk.statusCode).toBe(400);
+
+    held.release();
+    expect((await first).statusCode).toBe(200);
+    const third = await app.inject({ method: 'GET', url: '/api/runs/export.csv' });
+    expect(third.statusCode).toBe(200);
+    expect(records(third.body)).toHaveLength(1);
+  });
+
+  it('frees the slot when an export fails part-way (#1534)', async () => {
+    walk.fail = true;
+    const failed = await app.inject({ method: 'GET', url: '/api/runs/export.csv' });
+    expect(failed.statusCode).toBe(500);
+    const next = await app.inject({ method: 'GET', url: '/api/runs/export.csv' });
+    expect(next.statusCode).toBe(200);
   });
 });
