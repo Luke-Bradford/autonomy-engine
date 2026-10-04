@@ -12,6 +12,7 @@ import {
   DOCK_WIDTH_STORAGE_KEY,
   dockMaxWidth,
   HISTORY_OPEN_STORAGE_KEY,
+  DISPLAY_TIME_ZONE_STORAGE_KEY,
   MINIMAP_STORAGE_KEY,
   PROBLEMS_OPEN_STORAGE_KEY,
   DOCK_NODE_TAB_STORAGE_KEY,
@@ -353,6 +354,26 @@ describe('uiStore version history (#1475 OR27)', () => {
     expect(
       createUiStore(fakeStorage({ [HISTORY_OPEN_STORAGE_KEY]: 'yes' })).getState().historyOpen,
     ).toBe(false);
+  });
+});
+
+describe('uiStore display time zone (#1484)', () => {
+  it('starts on the viewer\'s local zone', () => {
+    expect(createUiStore(fakeStorage()).getState().displayTimeZone).toBe('local');
+  });
+
+  it('persists a chosen zone across a new store on the same storage', () => {
+    const storage = fakeStorage();
+    createUiStore(storage).getState().setDisplayTimeZone('Europe/London');
+    expect(storage.data.get(DISPLAY_TIME_ZONE_STORAGE_KEY)).toBe('Europe/London');
+    expect(createUiStore(storage).getState().displayTimeZone).toBe('Europe/London');
+  });
+
+  it('reads a zone this runtime cannot format in as local, never as itself', () => {
+    expect(
+      createUiStore(fakeStorage({ [DISPLAY_TIME_ZONE_STORAGE_KEY]: 'Mars/Olympus_Mons' })).getState()
+        .displayTimeZone,
+    ).toBe('local');
   });
 });
 

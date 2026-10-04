@@ -1,4 +1,9 @@
 import { createStore, type StoreApi } from 'zustand/vanilla';
+import {
+  DEFAULT_DISPLAY_TIME_ZONE,
+  parseDisplayTimeZone,
+  type DisplayTimeZone,
+} from '../lib/displayTime';
 import { DEFAULT_THEME_MODE, type ThemeMode } from '../theme/fluentTheme';
 
 /**
@@ -87,6 +92,14 @@ export interface UiState {
    */
   historyOpen: boolean;
   setHistoryOpen: (open: boolean) => void;
+  /**
+   * #1484 OR35 principle 4 — the zone every timestamp is shown in: `local` (the
+   * default) or an IANA zone. Per viewer, because the instant is the same for
+   * everyone and the wall clock is the reader's. A stored zone this browser
+   * cannot format in reads as the default (`parseDisplayTimeZone`).
+   */
+  displayTimeZone: DisplayTimeZone;
+  setDisplayTimeZone: (zone: DisplayTimeZone) => void;
   /**
    * #1484 OR35 M1 — the runs grid's column choice and widths, per viewer.
    * `runsGridHidden` names the columns the operator turned OFF, in column
@@ -205,6 +218,7 @@ export const PROBLEMS_WIDTH_STORAGE_KEY = 'autonomy-studio.problems-width';
 export const DOCK_NODE_TAB_STORAGE_KEY = 'autonomy-studio.dock-node-tab';
 export const DOCK_PIPELINE_TAB_STORAGE_KEY = 'autonomy-studio.dock-pipeline-tab';
 export const HISTORY_OPEN_STORAGE_KEY = 'autonomy-studio.history-open';
+export const DISPLAY_TIME_ZONE_STORAGE_KEY = 'autonomy-studio.display-time-zone';
 /* Two keys, not one record, for the dock keys' reason above. */
 export const RUN_GRID_HIDDEN_STORAGE_KEY = 'autonomy-studio.runs-grid-hidden';
 export const RUN_GRID_WIDTHS_STORAGE_KEY = 'autonomy-studio.runs-grid-widths';
@@ -464,7 +478,8 @@ type StoredAsIs =
   | 'toolboxCollapsed'
   | 'dockNodeTab'
   | 'dockPipelineTab'
-  | 'historyOpen';
+  | 'historyOpen'
+  | 'displayTimeZone';
 
 /** The pane preference as it is persisted — one record, written atomically. */
 interface StoredPane {
@@ -608,6 +623,13 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       'params',
     );
 
+    const [displayTimeZone, setDisplayTimeZone] = pref(
+      'displayTimeZone',
+      DISPLAY_TIME_ZONE_STORAGE_KEY,
+      parseDisplayTimeZone,
+      DEFAULT_DISPLAY_TIME_ZONE,
+    );
+
     const [historyOpen, setHistoryOpen] = pref(
       'historyOpen',
       HISTORY_OPEN_STORAGE_KEY,
@@ -707,6 +729,8 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       setToolboxCollapsed,
       historyOpen,
       setHistoryOpen,
+      displayTimeZone,
+      setDisplayTimeZone,
 
       runsGridHidden: readStored(
         storage,
