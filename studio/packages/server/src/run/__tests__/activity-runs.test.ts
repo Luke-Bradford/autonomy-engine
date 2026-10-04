@@ -293,14 +293,16 @@ describe('#1484 activity runs — one row per attempt', () => {
       ['c', 'success', 'false', 'y'],
       ['t', 'skipped', null, 'y'],
     ]);
-    // KNOWN GAP: item x's skip is reset in the same reduce that ends the item
-    // (a loop round's end does the same), so it is only inferred here, after
-    // the reducer dropped its reason (#1546). The LAST item is not reset, so it keeps it.
+    // #1546 — item x's skip is reset in the same reduce that ends the item, so
+    // its reason comes from the reducer's `resetSkips`, not the state.
     expect(
       project(db, pvId, runId)
         .filter((r) => r.activityId === 't')
         .map((r) => r.skipReason),
-    ).toEqual([null, { kind: 'branch', from: 'c', taken: 'false' }]);
+    ).toEqual([
+      { kind: 'branch', from: 'c', taken: 'false' },
+      { kind: 'branch', from: 'c', taken: 'false' },
+    ]);
   });
 
   it('keeps the skip inside every item of a parallel ForEach', async () => {
@@ -321,6 +323,27 @@ describe('#1484 activity runs — one row per attempt', () => {
       ['t@0', 'skipped', 0],
       ['t@1', 'skipped', 1],
     ]);
+    // #1546 — each item's body is deleted in the reduce that skipped `t`.
+    expect(rows.filter((r) => r.activityId === 't').map((r) => r.skipReason)).toEqual([
+      { kind: 'branch', from: 'c', taken: 'false' },
+      { kind: 'branch', from: 'c', taken: 'false' },
+    ]);
+  });
+
+  it('says why a loop body handler was skipped in every round, not only the last', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('x'), node('h')],
+      [{ id: 'x->h', from: 'x', to: 'h', on: 'failure' }],
+      [{ id: 'lp', kind: 'loop', children: ['x', 'h'], exitWhen: '${equals(1, 2)}', maxRounds: 3 }],
+    );
+    const runId = await drive(db, pvId, stub());
+
+    const skips = project(db, pvId, runId).filter((r) => r.activityId === 'h');
+    expect(skips.map((r) => [r.status, r.iteration?.index, r.skipReason])).toEqual(
+      [0, 1, 2].map((i) => ['skipped', i, { kind: 'upstream', from: 'x', outcome: 'success' }]),
+    );
   });
 
   it('ends a Wait at its timer, not at the moment it was scheduled', async () => {
@@ -623,6 +646,65 @@ describe('#1484 activity runs — containers are groups', () => {
     ]);
   });
 
+  it('keeps a Wait that ends its parallel item a success, not an abandoned skip', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('hold', { type: 'wait', config: { seconds: '${1}' } })],
+      [],
+      [foreach({ children: ['hold'], batchCount: 2 })],
+      [1],
+    );
+    const executor = stub();
+    const runId = await drive(db, pvId, executor);
+    const [parked] = project(db, pvId, runId);
+    expect(parked).toMatchObject({ nodeId: 'hold@0', status: 'wait_pending' });
+    // The timer settles the Wait, which ends the item and deletes its instance
+    // in the same reduce: the result event decides, not the deletion (#1548).
+    appendEngineEvent(db, {
+      type: 'timer.due',
+      runId,
+      nodeId: 'hold@0',
+      previousAttemptId: parked!.attemptId!,
+    });
+    await driveRun(deps(db, executor), runId);
+
+    const rows = project(db, pvId, runId);
+    expect(rows.map((r) => [r.nodeId, r.status, r.skipReason])).toEqual([
+      ['hold@0', 'success', null],
+    ]);
+  });
+
+  it('says why a doom skipped an item that it also ended in the same reduce', async () => {
+    // Item 1 is parked on its Wait when item 0 fails: the doom flips item 1's
+    // body to `skipped` and, nothing being in flight, deletes the item in that
+    // same reduce, so the reason is read from `resetSkips` (#1546).
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('x'), node('hold', { type: 'wait', config: { seconds: '${1}' } }), node('y')],
+      [edge('x', 'hold'), edge('hold', 'y')],
+      [foreach({ children: ['x', 'hold', 'y'], batchCount: 2 })],
+      [1, 2],
+    );
+    const runId = await drive(db, pvId, stub({ 'x@0': { outcome: 'failure', delayMs: 30 } }));
+
+    const doomed = { kind: 'doomed', containerId: 'fe', blame: 'x@0' };
+    const rows = project(db, pvId, runId);
+    expect(rows.find((r) => r.nodeId === 'y@1')).toMatchObject({
+      status: 'skipped',
+      skipReason: doomed,
+    });
+    // #1548 — the Wait the doom abandoned is that row, settled, not left waiting
+    // on a finished run, and the item it was in has ended.
+    const hold = rows.filter((r) => r.nodeId === 'hold@1');
+    expect(hold).toHaveLength(1);
+    expect(hold[0]).toMatchObject({ status: 'skipped', skipReason: doomed });
+    expect(hold[0]!.finishedAt).not.toBeNull();
+    const [g] = groupsOf(db, pvId, runId);
+    expect(g!.iterations.find((i) => i.index === 1)?.finishedAt).not.toBeNull();
+  });
+
   it('keeps an item that completed a success when another item failed the ForEach', async () => {
     const { db } = freshDb();
     const pvId = seedVersion(db, [node('inner')], [], [foreach({ batchCount: 2 })], [1, 2]);
@@ -823,6 +905,43 @@ describe('#1484 activity runs — containers are groups', () => {
         position: 0,
       }),
     ]);
+  });
+
+  it('adds no skipped rows for a loop or ForEach a rerun copied past its first round (#1549)', () => {
+    const doc = {
+      nodes: [node('a'), node('f'), node('b')],
+      edges: [edge('lp', 'fe'), edge('fe', 'b')],
+      containers: [
+        { id: 'lp', kind: 'loop', children: ['a'], exitWhen: '${equals(1, 2)}', maxRounds: 5 },
+        { id: 'fe', kind: 'foreach', children: ['f'], items: '${createArray(1, 2)}' },
+      ],
+      variables: [],
+    } as never as Parameters<typeof buildEngine>[0];
+    const at = (ts: number, event: EngineEvent) => ({ ts, event, payload: event });
+    const log = [
+      at(1, {
+        type: 'run.started',
+        runId: 'R2',
+        pipelineVersionId: 'pv',
+        params: {},
+        rerunOf: 'R1',
+      }),
+      at(2, {
+        type: 'run.reseeded',
+        runId: 'R2',
+        sourceRunId: 'R1',
+        frontier: ['a', 'f'],
+        copiedOutputs: { a: {}, f: {} },
+        copiedContainers: {
+          lp: { status: 'success', round: 2, outputs: {} },
+          fe: { status: 'success', round: 1, items: [1, 2], results: [{}, {}], outputs: {} },
+        },
+      }),
+    ];
+
+    const { rows } = projectActivityRuns(doc, buildEngine(doc), log);
+    expect(rows.filter((r) => r.status === 'skipped')).toEqual([]);
+    expect(rows.map((r) => r.key)).toEqual(['reused:a', 'reused:f']);
   });
 
   it('places a group a rerun started after the rows it carried', () => {

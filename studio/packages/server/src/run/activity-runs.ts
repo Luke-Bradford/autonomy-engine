@@ -40,7 +40,8 @@ import type { LoggedEngineEvent } from './events.js';
  *   also resets (the event that ends a ForEach item or loop round resets the
  *   body) or deletes (a parallel item's instances) cannot be seen in any state,
  *   so it is inferred: when an item ends, every body node is terminal, and one
- *   with no row in that item was skipped.
+ *   with no row in that item was skipped. Its reason is the one the reducer
+ *   returns beside the state, in `resetSkips` (#1546).
  * - What a rerun REUSED from the run it reran is a row, marked `reused`, with no
  *   times: it did not run here.
  * Containers are not rows. Each one the run reached is a GROUP (`projectGroups`
@@ -56,7 +57,8 @@ import type { LoggedEngineEvent } from './events.js';
  *    item's state, the result EVENT is the only record left, and it decides
  *    (`resultOf`).
  * 4. An attempt the engine abandoned with no event of its own (a loop's timeout,
- *    a doomed ForEach) is settled `skipped` when its node turns `skipped`.
+ *    a doomed ForEach) is settled `skipped` when its node turns `skipped`, or
+ *    when the reduce that skipped it also deleted its item (#1548).
  * 5. Anything else stays at the last status it had. On a cancelled run the page
  *    names that with the run's status.
  *
@@ -318,7 +320,8 @@ export function projectActivityRuns(
   let state = engine.seedState();
   for (const { event: e, ts, payload } of log) {
     const before = state;
-    state = engine.reduce(before, e).state;
+    const reduced = engine.reduce(before, e);
+    state = reduced.state;
 
     if (state.containers !== before.containers) trackGroups(e, ts, before, state);
 
@@ -410,22 +413,36 @@ export function projectActivityRuns(
         } else addSkip(nodeId, iterationOf(nodeId, before), entry.skipReason ?? null);
       }
       // A skip this reduce also reset or deleted: when an item ends, a body node
-      // with no row in it was skipped.
+      // with no row in it was skipped, for the reason the reset cleared.
+      const cleared = reduced.resetSkips;
+      const reasonOf = (nodeId: string) =>
+        cleared !== undefined && Object.hasOwn(cleared, nodeId) ? cleared[nodeId]! : null;
       const ended: string[] = [];
       for (const c of iterating) {
+        // A rerun's reseed COPIES a container's round: none of it ended here (#1549).
+        if (e.type === 'run.reseeded' && Object.hasOwn(e.copiedContainers, c.id)) continue;
         const was = before.containers[c.id];
         const now = state.containers[c.id];
         if (was !== undefined && now !== undefined && now.round > was.round)
           ended.push(...c.children);
       }
-      for (const nodeId of Object.keys(before.nodes)) {
-        if (state.nodes[nodeId] === undefined && parseInstanceKey(nodeId) !== null)
-          ended.push(nodeId);
+      for (const [nodeId, was] of Object.entries(before.nodes)) {
+        if (state.nodes[nodeId] !== undefined || parseInstanceKey(nodeId) === null) continue;
+        ended.push(nodeId);
+        // Rule 4 for a deleted instance: an attempt row still open when the
+        // reduce deleted its item (a doom that skipped it, then ended the item)
+        // is that row (#1548).
+        const abandoned =
+          was.currentAttemptId === undefined ? undefined : byAttempt.get(was.currentAttemptId);
+        if (abandoned !== undefined && open.has(abandoned)) {
+          settle(abandoned, 'skipped', ts);
+          abandoned.skipReason = reasonOf(nodeId);
+        }
       }
       for (const nodeId of ended) {
         const iteration = iterationOf(nodeId, before);
         if (iteration !== null && !inItem.has(itemKey(nodeId, iteration)))
-          addSkip(nodeId, iteration, null);
+          addSkip(nodeId, iteration, reasonOf(nodeId));
       }
     }
 

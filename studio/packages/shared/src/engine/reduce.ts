@@ -512,6 +512,14 @@ const NOW_CEILING_MS = 1e15;
 // the SAME value before computing `dueAt` — one constant, never a redeclared copy.
 export const MAX_WAIT_SECONDS = Math.floor((Number.MAX_SAFE_INTEGER - NOW_CEILING_MS) / 1000);
 
+/** #1546 — the skip reasons a settle's resets cleared, by state node id. */
+type ClearedSkips = Record<string, SkipReason>;
+
+/** Record the reason of a skipped node a reset is about to clear. */
+function noteResetSkip(cleared: ClearedSkips, id: string, ns: NodeRunState | undefined): void {
+  if (ns?.status === 'skipped' && ns.skipReason !== undefined) cleared[id] = ns.skipReason;
+}
+
 /**
  * Bind a pipeline's graph and return the pure engine. All graph analysis
  * (incoming/outgoing edges, the implicit success-chain, container membership,
@@ -1974,7 +1982,11 @@ export function createEngine(doc: EngineDoc): Engine {
    * and clear their outputs — a fresh round recomputes them. Back-edges are
    * considered in STABLE edgeKey order.
    */
-  function fireBackEdges(state: RunState, diagnostics: string[]): Step & { suppressed?: true } {
+  function fireBackEdges(
+    state: RunState,
+    diagnostics: string[],
+    cleared: ClearedSkips,
+  ): Step & { suppressed?: true } {
     let suppressed = false;
     for (const be of [...backEdges].sort((a, b) => cmp(stableEdgeKey(a), stableEdgeKey(b)))) {
       if (edgeState(be, state) !== 'satisfied') continue;
@@ -2026,7 +2038,7 @@ export function createEngine(doc: EngineDoc): Engine {
         suppressed = true;
         continue;
       }
-      return { state: resetNodes(withBounce, body), changed: true };
+      return { state: resetNodes(withBounce, body, cleared), changed: true };
     }
     return suppressed ? { state, changed: false, suppressed: true } : { state, changed: false };
   }
@@ -2042,7 +2054,7 @@ export function createEngine(doc: EngineDoc): Engine {
    *     (`no_exit_condition`) — FAILS after its mandatory first round.
    * Containers are considered in STABLE id order.
    */
-  function stepContainers(state: RunState, diagnostics: string[]): Step {
+  function stepContainers(state: RunState, diagnostics: string[], cleared: ClearedSkips): Step {
     for (const cid of [...containerIds].sort()) {
       const c = containerById.get(cid)!;
       // #4 A4b — a PARALLEL foreach is advanced by `stepForeachParallel`, never
@@ -2087,7 +2099,7 @@ export function createEngine(doc: EngineDoc): Engine {
           // return: the container stays `active` (so the run reads `cancelled`)
           // and later containers still get their pure exit.
           if (state.cancelRequested !== null) continue;
-          return { state: resetContainerRound(withResults, c), changed: true };
+          return { state: resetContainerRound(withResults, c, cleared), changed: true };
         }
         return { state: exitContainer(withResults, c, 'success'), changed: true };
       }
@@ -2164,7 +2176,7 @@ export function createEngine(doc: EngineDoc): Engine {
       }
       // CX1 (#1320) D4 — no next round under a cancel (see the foreach arm).
       if (state.cancelRequested !== null) continue;
-      return { state: resetContainerRound(state, c), changed: true };
+      return { state: resetContainerRound(state, c, cleared), changed: true };
     }
     return { state, changed: false };
   }
@@ -2631,9 +2643,9 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /** Reset a loop container's children for a new round (attempts kept monotonic). */
-  function resetContainerRound(state: RunState, c: Container): RunState {
+  function resetContainerRound(state: RunState, c: Container, cleared: ClearedSkips): RunState {
     const cs = state.containers[c.id]!;
-    let next = resetNodes(state, c.children);
+    let next = resetNodes(state, c.children, cleared);
     next = {
       ...next,
       containers: { ...next.containers, [c.id]: { ...cs, round: cs.round + 1 } },
@@ -2794,7 +2806,11 @@ export function createEngine(doc: EngineDoc): Engine {
    * Item STARTS live in `settle`'s own loop (they emit dispatch commands, which
    * this Step-shaped walker has no channel for).
    */
-  function stepForeachParallel(state: RunState, diagnostics: string[]): Step {
+  function stepForeachParallel(
+    state: RunState,
+    diagnostics: string[],
+    cleared: ClearedSkips,
+  ): Step {
     for (const cid of [...containerIds].sort()) {
       const c = containerById.get(cid)!;
       if (!isParallelForeach(c)) continue;
@@ -2820,6 +2836,7 @@ export function createEngine(doc: EngineDoc): Engine {
           const branches = { ...state.branches };
           for (const ch of children) {
             const k = instanceKey(ch, i);
+            noteResetSkip(cleared, k, nodes[k]);
             delete nodes[k];
             delete outputs[k];
             delete branches[k];
@@ -2959,13 +2976,14 @@ export function createEngine(doc: EngineDoc): Engine {
    * armed alarm then fires against a node that is no longer held, and both the
    * clock's freshness check and `onRetryDue`'s own guard drop it.
    */
-  function resetNodes(state: RunState, ids: string[]): RunState {
+  function resetNodes(state: RunState, ids: string[], cleared: ClearedSkips): RunState {
     let nodes = state.nodes;
     let outputs = state.outputs;
     let touched = false;
     for (const id of ids) {
       const ns = nodes[id];
       if (ns === undefined) continue;
+      noteResetSkip(cleared, id, ns);
       if (nodes === state.nodes) nodes = { ...nodes };
       // The skip's reason is REMOVED, not set undefined, so no key lingers on a
       // node that is no longer skipped.
@@ -3017,15 +3035,30 @@ export function createEngine(doc: EngineDoc): Engine {
    * settled predicate the outcome DEPENDS on draining, so an eager exit would
    * change the answer, not just the cost. An operator seeing spend on a doomed
    * run should find this paragraph.
+   *
+   * It also returns, beside the state, the skip reasons the walk's resets
+   * cleared (`ReduceResult.resetSkips`, #1546). Every reset runs inside this
+   * walk, and each one takes `cleared` as a REQUIRED argument, so a new reset
+   * site cannot forget to report what it clears.
    */
   function settle(startState: RunState, diagnostics: string[]): ReduceResult {
+    const cleared: ClearedSkips = {};
+    const result = settleWalk(startState, diagnostics, cleared);
+    return Object.keys(cleared).length === 0 ? result : { ...result, resetSkips: cleared };
+  }
+
+  function settleWalk(
+    startState: RunState,
+    diagnostics: string[],
+    cleared: ClearedSkips,
+  ): ReduceResult {
     let state = startState;
     const commands: EngineCommand[] = [];
     // CX1 (#1320) — a back-edge bounce cancel mode refused (see `fireBackEdges`).
     let preventedBounce = false;
 
     for (;;) {
-      const fired = fireBackEdges(state, diagnostics);
+      const fired = fireBackEdges(state, diagnostics, cleared);
       if (fired.suppressed) preventedBounce = true;
       if (fired.finish) {
         // CX1 D3 — under a cancel that already stopped work (a node, a retry, or
@@ -3041,7 +3074,7 @@ export function createEngine(doc: EngineDoc): Engine {
         continue;
       }
 
-      const stepped = stepContainers(state, diagnostics);
+      const stepped = stepContainers(state, diagnostics, cleared);
       if (stepped.finish) return { state: stepped.state, commands: [stepped.finish], diagnostics };
       if (stepped.changed) {
         state = stepped.state;
@@ -3050,7 +3083,7 @@ export function createEngine(doc: EngineDoc): Engine {
 
       // #4 A4b — the parallel foreach's OWN advance (item completion, doom,
       // exit); the sequential `stepContainers` above skips parallel containers.
-      const pstepped = stepForeachParallel(state, diagnostics);
+      const pstepped = stepForeachParallel(state, diagnostics, cleared);
       if (pstepped.changed) {
         state = pstepped.state;
         continue;
@@ -4745,7 +4778,7 @@ export function createEngine(doc: EngineDoc): Engine {
       }
     }
     const settled = settle(state, diagnostics);
-    return { state: settled.state, commands: [...commands, ...settled.commands], diagnostics };
+    return { ...settled, commands: [...commands, ...settled.commands] };
   }
 
   // --- the pure reducer (the exact 2-arg contract) --------------------------
