@@ -80,6 +80,14 @@ describe('displayTime — #1484 principle 4', () => {
     expect(zonedDayStart('2026-10-04', 'America/New_York')).toBe(Date.UTC(2026, 9, 4, 4));
   });
 
+  it('lands a day whose offset at UTC midnight is not the offset at its own midnight', () => {
+    // Sydney leaves daylight time at 03:00 on 2026-04-05 (16:00Z on the 4th).
+    // UTC midnight of the 5th is already standard time (+10), but the 5th's own
+    // midnight was still daylight time (+11): 13:00Z on the 4th. One offset
+    // reading lands an hour late; the second, taken at that guess, corrects it.
+    expect(zonedDayStart('2026-04-05', 'Australia/Sydney')).toBe(Date.UTC(2026, 3, 4, 13));
+  });
+
   it('starts a day whose midnight does not exist at its first real instant', () => {
     // Santiago springs forward AT midnight on 2026-09-06: 00:00 becomes 01:00.
     const start = zonedDayStart('2026-09-06', 'America/Santiago')!;
