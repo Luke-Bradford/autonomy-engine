@@ -12,9 +12,10 @@ import {
   runSortParams,
   hasRunsListParams,
   rememberedRunsQuery,
+  readRunGridHiddenParam,
+  runGridHiddenParam,
   RUN_GRID_HIDDEN_PARAM,
 } from './runFilters';
-import { readRunGridHiddenParam, runGridHiddenParam } from './runGridColumns';
 
 describe('readRunFilters — U26 annotation', () => {
   it('keeps an annotation, decoded, exactly as written', () => {

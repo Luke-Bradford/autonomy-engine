@@ -3,7 +3,6 @@ import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import { Link } from 'react-router';
 import type { RunSortKey, RunSummary } from '@autonomy-studio/shared';
 import {
-  canonicalHidden,
   RUN_GRID_COLUMNS,
   RUN_GRID_REQUIRED_COLUMNS,
   type RunGridColumnId,
@@ -17,7 +16,6 @@ import { activitiesCell, rowsWrittenCell } from './activitiesColumn';
 import { costCell } from './costColumn';
 import { formatRunDuration, formatWhen } from './format';
 import { runDetailPath, runLinkLabel } from './runPath';
-import { RUN_GRID_HIDDEN_PARAM } from './runFilters';
 import { runStatusLabel } from './runStatus';
 import { When } from '../../lib/When';
 import type { DisplayTimeZone } from '../../lib/displayTime';
@@ -311,26 +309,4 @@ export function visibleRunGridColumns(
   return RUN_GRID_COLUMNS.filter(
     (column) => !hidden.includes(column) || isSortColumn(column, sortKey),
   );
-}
-
-/** `hide`'s spelling of "no column hidden". */
-const RUN_GRID_HIDDEN_NONE = 'none';
-
-/**
- * #1484 principle 5 — the hidden set a link carries in `hide`, or `undefined`
- * when it carries none (absent, empty, or no known column), so the viewer's
- * own stored choice applies. Read through the store's `canonicalHidden`, so a
- * link can never hide a required column or hold a set the picker could not.
- */
-export function readRunGridHiddenParam(params: URLSearchParams): RunGridColumnId[] | undefined {
-  const raw = params.get(RUN_GRID_HIDDEN_PARAM);
-  if (raw === null || raw === '') return undefined;
-  if (raw === RUN_GRID_HIDDEN_NONE) return [];
-  const hidden = canonicalHidden(raw.split(','));
-  return hidden.length === 0 ? undefined : hidden;
-}
-
-/** The `hide` value for a hidden set: `none` for the empty one. */
-export function runGridHiddenParam(hidden: readonly RunGridColumnId[]): string {
-  return hidden.length === 0 ? RUN_GRID_HIDDEN_NONE : canonicalHidden(hidden).join(',');
 }

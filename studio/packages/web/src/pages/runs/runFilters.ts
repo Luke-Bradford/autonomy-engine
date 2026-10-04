@@ -21,6 +21,7 @@ import {
   zonedDayStart,
   type DisplayTimeZone,
 } from '../../lib/displayTime';
+import { canonicalHidden, type RunGridColumnId } from '../../stores/uiStore';
 
 /**
  * U26 + #1484 OR35 M1 — the runs list's filter bar state, and the URL it lives
@@ -221,6 +222,28 @@ export const RUN_CHILDREN_PARAM = 'children';
  * an old link too; `none` spells the empty set, which a bare `hide=` cannot.
  */
 export const RUN_GRID_HIDDEN_PARAM = 'hide';
+
+/** `hide`'s spelling of "no column hidden". */
+const RUN_GRID_HIDDEN_NONE = 'none';
+
+/**
+ * #1484 principle 5 — the hidden set a link carries in `hide`, or `undefined`
+ * when it carries none (absent, empty, or no known column), so the viewer's
+ * own stored choice applies. Read through the store's `canonicalHidden`, so a
+ * link can never hide a required column or hold a set the picker could not.
+ */
+export function readRunGridHiddenParam(params: URLSearchParams): RunGridColumnId[] | undefined {
+  const raw = params.get(RUN_GRID_HIDDEN_PARAM);
+  if (raw === null || raw === '') return undefined;
+  if (raw === RUN_GRID_HIDDEN_NONE) return [];
+  const hidden = canonicalHidden(raw.split(','));
+  return hidden.length === 0 ? undefined : hidden;
+}
+
+/** The `hide` value for a hidden set: `none` for the empty one. */
+export function runGridHiddenParam(hidden: readonly RunGridColumnId[]): string {
+  return hidden.length === 0 ? RUN_GRID_HIDDEN_NONE : canonicalHidden(hidden).join(',');
+}
 
 /**
  * Whether the URL names any of the list's state — a filter, the sort, the

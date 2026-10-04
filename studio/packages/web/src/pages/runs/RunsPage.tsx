@@ -38,7 +38,6 @@ import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore
 import { runStatusLabel } from './runStatus';
 import { RunTimeline } from './RunTimeline';
 import { RunGridColumnsMenu, RunsGrid } from './RunsGrid';
-import { readRunGridHiddenParam, runGridHiddenParam } from './runGridColumns';
 import { uiStore, type RunGridColumnId, type UiStore } from '../../stores/uiStore';
 import {
   canonicalKindParam,
@@ -50,9 +49,11 @@ import {
   NO_RUNS_YET,
   readKinds,
   readRunFilters,
+  readRunGridHiddenParam,
   hasRunsListParams,
   readRunSort,
   rememberedRunsQuery,
+  runGridHiddenParam,
   runSortParams,
   RUN_CHILDREN_PARAM,
   RUN_FILTER_PARAMS,
