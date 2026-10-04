@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react';
 import type { AppSettings, MasterKeySource } from '@autonomy-studio/shared';
 import { getSettings } from '../api/settings';
+import { useStore } from 'zustand';
+import { displayTimeZoneOptions, formatTimestamp, LOCAL_TIME_ZONE } from '../lib/displayTime';
+import { LabelledControl } from '../lib/LabelledControl';
+import { uiStore, type UiStore } from '../stores/uiStore';
 import { ThemeToggle } from '../theme/ThemeToggle';
 
 /**
@@ -41,6 +45,47 @@ const MASTER_KEY_SOURCE_LABEL: Record<MasterKeySource, string> = {
  * would have a screen reader narrate it on every visit as though it had just
  * happened. `VersionBadge` made the same call for the same reason.
  */
+/**
+ * #1484 OR35 principle 4 — the zone every timestamp in the app is shown in, per
+ * viewer (`uiStore.displayTimeZone`). A native `<select>` like the runs page's
+ * pickers: ~400 zones is a long list, and a native select is type-to-jump.
+ *
+ * A stored zone this runtime does not LIST (a different ICU build) but can
+ * still format in stays selectable, so opening Settings never silently changes
+ * the viewer's choice. The hint under it shows a time in the chosen zone,
+ * which is the quickest proof the choice is the one meant.
+ */
+function DisplayTimeZonePicker({ store = uiStore }: { store?: UiStore }) {
+  const zone = useStore(store, (s) => s.displayTimeZone);
+  const setZone = useStore(store, (s) => s.setDisplayTimeZone);
+  // An example instant, taken once: render stays pure, and the hint is a
+  // sample of the format, not a clock.
+  const [sample] = useState(Date.now);
+  const options = displayTimeZoneOptions();
+  const shown = options.includes(zone) ? options : [...options, zone];
+  return (
+    <LabelledControl
+      label="Display time zone"
+      hint={`Times read like ${formatTimestamp(sample, zone)}`}
+    >
+      {(id, hintId) => (
+        <select
+          id={id}
+          aria-describedby={hintId}
+          value={zone}
+          onChange={(e) => setZone(e.target.value)}
+        >
+          {shown.map((option) => (
+            <option key={option} value={option}>
+              {option === LOCAL_TIME_ZONE ? 'Local (this browser)' : option}
+            </option>
+          ))}
+        </select>
+      )}
+    </LabelledControl>
+  );
+}
+
 export function SettingsPage() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [error, setError] = useState<Error | null>(null);
@@ -85,6 +130,9 @@ export function SettingsPage() {
               reader would announce "Dark mode, switch" and then "Dark mode"
               again. */}
           <span aria-hidden="true">Dark mode</span>
+        </div>
+        <div className="settings-row">
+          <DisplayTimeZonePicker />
         </div>
       </section>
 
