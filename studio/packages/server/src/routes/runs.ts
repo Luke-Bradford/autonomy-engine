@@ -37,7 +37,7 @@ import { getExternalWaitByAttempt, listPendingExternalWaitsByRun } from '../repo
 import { deriveExternalWaitToken } from '../webhooks/external-wait-token.js';
 import { makeRunActivityFold } from '../run/activity-counts.js';
 import { makeDocResolver } from '../run/driver.js';
-import { BadRequestError, NotFoundError } from '../errors.js';
+import { BadRequestError, BusyError, NotFoundError } from '../errors.js';
 import {
   ExternalWaitPayloadError,
   ExternalWaitSettledError,
@@ -48,6 +48,7 @@ import type { ListRunSummariesFilter, RunPageArgs } from '../repo/runs.js';
 import { RUNS_EXPORT_MAX_ROWS } from '../limits.js';
 import { collectRunsForExport, RUNS_EXPORT_COLUMNS, runExportRow } from '../run/runs-export.js';
 import { toCsv } from '../util/csv.js';
+import { KeyedSlots } from '../util/keyed-slots.js';
 
 /**
  * `pipelineVersionId`/`triggerId`/`parentRunId` are opaque ids, not
@@ -193,6 +194,8 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
     onUnreadable: (runId, err) =>
       fastify.log.warn({ err, runId }, 'runs export: cannot count the activities of this run'),
   });
+  // #1534 — one export per owner at a time (see the export route).
+  const exportingOwners = new KeyedSlots();
 
   /**
    * R2 — the Monitor's list read-model. Each item is a `RunSummary`: every field
@@ -273,29 +276,46 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
    * A static path, so it wins over `/api/runs/:id` for this exact URL. The whole
    * walk completes before the reply, so a failure part-way is a clean error and
    * never a file that stops mid-list.
+   *
+   * #1534 — ONE export per owner at a time: a second while the first is walking
+   * is a 429 `busy`, not queued. The row cap bounds one export; this bounds how
+   * many replay their runs' logs at once. The slot is held until the walk ends,
+   * even if the browser has gone, because the walk is the work being bounded.
    */
   fastify.get('/api/runs/export.csv', async (request, reply) => {
     const query = ListRunsQuerystringSchema.parse(request.query);
     const sort = resolveRunSort(query.sort, query.dir);
     // Resolved ONCE, so a relative window does not slide between pages.
     const filter = runFilterFromQuery(query, request.principal.ownerId);
-    const { runs: rows, truncated } = await collectRunsForExport(
-      (limit, cursor) =>
-        listRunSummariesPage(
-          db,
-          filter,
-          {
-            limit,
-            sort,
-            // Minted by the walk's previous page under this same sort, so a
-            // refusal here is a bug in the walk, not a caller's 400.
-            ...(cursor === undefined ? {} : { cursor: decodeExportCursor(cursor, sort) }),
-          },
-          exportActivities,
-        ),
-      RUNS_MAX_PAGE_SIZE,
-      RUNS_EXPORT_MAX_ROWS,
-    );
+    const release = exportingOwners.tryAcquire(request.principal.ownerId);
+    if (!release) {
+      throw new BusyError(
+        'A CSV export of your runs is already running. Try again when it finishes.',
+      );
+    }
+    let exported: Awaited<ReturnType<typeof collectRunsForExport>>;
+    try {
+      exported = await collectRunsForExport(
+        (limit, cursor) =>
+          listRunSummariesPage(
+            db,
+            filter,
+            {
+              limit,
+              sort,
+              // Minted by the walk's previous page under this same sort, so a
+              // refusal here is a bug in the walk, not a caller's 400.
+              ...(cursor === undefined ? {} : { cursor: decodeExportCursor(cursor, sort) }),
+            },
+            exportActivities,
+          ),
+        RUNS_MAX_PAGE_SIZE,
+        RUNS_EXPORT_MAX_ROWS,
+      );
+    } finally {
+      release();
+    }
+    const { runs: rows, truncated } = exported;
     noStore(reply);
     reply.type('text/csv; charset=utf-8');
     if (truncated) reply.header(RUNS_EXPORT_TRUNCATED_HEADER, String(RUNS_EXPORT_MAX_ROWS));
