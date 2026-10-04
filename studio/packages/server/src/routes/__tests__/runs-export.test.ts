@@ -18,6 +18,8 @@ vi.mock('../../limits.js', async (importOriginal) => ({
  */
 const walk = vi.hoisted(() => ({
   hold: null as null | { entered: () => void; release: Promise<void> },
+  /** Unparks the held export; `afterEach` calls it so `close()` never waits on one. */
+  open: null as null | (() => void),
   fail: false,
 }));
 vi.mock('../../run/runs-export.js', async (importOriginal) => {
@@ -47,10 +49,9 @@ function holdNextWalk(): { entered: Promise<void>; release: () => void } {
   const enteredP = new Promise<void>((r) => (entered = r));
   const releaseP = new Promise<void>((r) => (release = r));
   walk.hold = { entered, release: releaseP };
-  heldRelease = release;
+  walk.open = release;
   return { entered: enteredP, release };
 }
-let heldRelease: (() => void) | null = null;
 
 /** The body's records as header-keyed objects. The fixtures hold no commas or
  * quotes, so a plain split is a faithful reader of them. */
@@ -81,8 +82,8 @@ describe('GET /api/runs/export.csv (#1484 OR35 M1)', () => {
 
   afterEach(async () => {
     // A failed assertion must not leave an export parked, or close() waits on it.
-    heldRelease?.();
-    heldRelease = null;
+    walk.open?.();
+    walk.open = null;
     walk.hold = null;
     walk.fail = false;
     await app.close();
