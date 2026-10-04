@@ -313,10 +313,16 @@ export function ActivityRunsTable({
      afterwards stands, even one that hides that row. */
   const askedShown = askedFor !== null && shown.some((e) => e.key === askedFor.key);
   const answeredAsk = useRef<{ key: string } | null>(null);
+  /* The reset happens at most once per ask, so an ask whose row a later read
+     no longer has can never keep wiping the viewer's view. */
+  const resetFor = useRef<{ key: string } | null>(null);
   useEffect(() => {
     if (askedFor === null || askedFor === answeredAsk.current) return;
     if (!askedShown) {
-      setSearchParams((prev) => withParams(prev, PLAIN_VIEW), { replace: true });
+      if (resetFor.current !== askedFor) {
+        resetFor.current = askedFor;
+        setSearchParams((prev) => withParams(prev, PLAIN_VIEW), { replace: true });
+      }
       return;
     }
     answeredAsk.current = askedFor;

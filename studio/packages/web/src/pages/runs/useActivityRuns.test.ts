@@ -104,6 +104,7 @@ describe('#1484 M2 useActivityRuns', () => {
     await act(async () => vi.advanceTimersByTimeAsync(0));
     expect(getMock).toHaveBeenCalled();
   });
+
   it('re-reads while a called run is going and the page is live, and stops when it ends', async () => {
     const caller = (status: RunStatus) =>
       ({
