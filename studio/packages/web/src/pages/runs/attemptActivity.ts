@@ -117,6 +117,19 @@ export function activityOfRow(
           // closes, reads settled and does not count up.
           startedAtMs: row.startedAt ?? undefined,
           endedAtMs: row.finishedAt ?? undefined,
+          // One attempt is one span, of one item. The fold marks a parallel
+          // item's span with its instance key so a node-wide reading never
+          // counts up across items, and leaves an abandoned attempt's open;
+          // neither holds for a single attempt the row has settled.
+          spans: node.spans.map((s) => ({
+            ...s,
+            instanceId: undefined,
+            endedAtMs: s.endedAtMs ?? row.finishedAt ?? undefined,
+          })),
+          // The fold's "this sums every item" and "the item dispatched most
+          // recently" readings are about a node; this is one item's attempt.
+          costSpansInstances: false,
+          inputInstanceId: undefined,
           error: row.error?.message,
           failureKind: row.error?.kind ?? undefined,
           failureCode: row.error?.code ?? undefined,

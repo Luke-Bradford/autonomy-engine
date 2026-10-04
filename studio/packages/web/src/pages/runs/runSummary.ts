@@ -1594,7 +1594,7 @@ export function blankNodeActivity(nodeId: string, status: NodeRunStatus): NodeAc
     error: undefined,
     failureKind: undefined,
     failureCode: undefined,
-    /* #1162 — a row reaches here because NO event named this node, so no
+    /* #1162 — NO event named this node, so no
        dispatch resolved a dataset and there is no address. The same refusal
        the fields below make: an absent fact is rendered absent, never
        manufactured. */
@@ -1603,11 +1603,11 @@ export function blankNodeActivity(nodeId: string, status: NodeRunStatus): NodeAc
     params: undefined,
     inputInstanceId: undefined,
     outputValues: undefined,
-    /* A row reached here because NO event named this node, and a copied
-       frontier node is named by `run.reseeded` — so this branch is by
-       construction never a copied one, and claiming a source run here would
-       be inventing provenance. Since #918 a rerun's copied nodes arrive from
-       the fold instead, which is what fixed them showing no Outputs. */
+    /* NO event named this node, and a copied frontier node is named by
+       `run.reseeded`, so a blank record is by construction never a copied one,
+       and claiming a source run here would be inventing provenance. Since #918
+       a rerun's copied nodes arrive from the fold instead, which is what fixed
+       them showing no Outputs. */
     copiedFromRunId: undefined,
     copiedChildRunId: undefined,
     variableWrite: undefined,
@@ -1619,13 +1619,13 @@ export function blankNodeActivity(nodeId: string, status: NodeRunStatus): NodeAc
     endedAtMs: undefined,
     spans: [],
     /* #932 — empty for the same reason, and it is a REFUSAL rather than an
-       omission. This row exists because no event named the node, so no
+       omission. No event named the node, so no
        `call.started` announced a child; the id could technically be re-derived
        (`deterministicChildRunId` is pure), and must not be. Naming a child run
        the log never announced would assert a run exists — the same invented
        provenance the `copiedFromRunId` refusal above declines to make. */
     childRunIds: [],
-    /* #866 — likewise. A row reached here because NO event named this node, so
+    /* #866 — likewise. NO event named this node, so
        nothing billed under it and no tool ran: an empty cost and an empty list
        are the MEASURED answer here, not a placeholder standing in for one. */
     cost: emptyNodeCost(),

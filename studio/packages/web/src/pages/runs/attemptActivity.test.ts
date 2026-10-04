@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ActivityRun, EngineEvent, RunEvent } from '@autonomy-studio/shared';
 import { activityOfRow, attemptEvents } from './attemptActivity';
 import { deriveNodeActivity } from './runSummary';
+import { liveSpanStart } from './format';
 
 let seq = 0;
 function envelope(event: EngineEvent, ts = seq + 1000): RunEvent {
@@ -207,5 +208,34 @@ describe('activityOfRow (#1484 M2 drawer)', () => {
     ];
     const got = activityOfRow(log, [], row({ reused: true, attempt: null, status: 'success' }));
     expect(got).toMatchObject({ status: 'success', copiedFromRunId: 'r0' });
+  });
+});
+
+describe('activityOfRow — one parallel item is not the node (#1484 M2 drawer)', () => {
+  it('drops the node-wide instance readings and lets a running item count up', () => {
+    const log = [
+      dispatched('c@1', 'c@1#0', 'b', 50),
+      envelope({
+        type: 'activity.metered',
+        runId: 'r1',
+        nodeId: 'c@1',
+        attemptId: 'c@1#0',
+        provider: 'anthropic_api',
+        model: 'claude-opus-4-8',
+        meteringStatus: 'metered',
+        inputTokens: 10,
+        outputTokens: 2,
+      } as EngineEvent),
+    ];
+    // The node-wide fold says its cost spans items.
+    expect(deriveNodeActivity(log)[0]!.costSpansInstances).toBe(true);
+    const got = activityOfRow(
+      log,
+      deriveNodeActivity(log),
+      row({ nodeId: 'c@1', attemptId: 'c@1#0', status: 'dispatched', startedAt: 50 }),
+    );
+    expect(got.costSpansInstances).toBe(false);
+    expect(got.inputInstanceId).toBeUndefined();
+    expect(liveSpanStart(got)).toBe(50);
   });
 });

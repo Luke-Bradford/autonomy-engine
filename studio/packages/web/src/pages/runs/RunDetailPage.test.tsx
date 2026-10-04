@@ -3449,16 +3449,18 @@ describe('RunDetailPage — the activity run detail drawer (#1484 M2)', () => {
     const second = await openRow(1);
     const drawer = screen.getByRole('complementary', { name: 'Node HTTP Request 1' });
     expect(drawer.closest('.run-drawer')).not.toBeNull();
-    expect(drawer).toHaveTextContent('attempt 1 · item 2 of 2 · b.csv');
+    expect(drawer).toHaveTextContent('attempt 1 · Item 2 of 2 · b.csv');
     expect(drawer).toHaveTextContent('b.csv');
-    expect(drawer).toHaveTextContent('43');
+    expect(
+      within(drawer).getByRole('heading', { name: 'Outputs' }).closest('section'),
+    ).toHaveTextContent(/rows.*43/);
     expect(drawer).not.toHaveTextContent('a.csv');
     expect(second).toHaveAttribute('aria-expanded', 'true');
     expect(drawer).toHaveFocus();
 
     await openRow(0);
     const first = screen.getByRole('complementary', { name: 'Node HTTP Request 1' });
-    expect(first).toHaveTextContent('item 1 of 2 · a.csv');
+    expect(first).toHaveTextContent('Item 1 of 2 · a.csv');
     expect(first).not.toHaveTextContent('b.csv');
     expect(second).toHaveAttribute('aria-expanded', 'false');
   });
@@ -3477,7 +3479,10 @@ describe('RunDetailPage — the activity run detail drawer (#1484 M2)', () => {
   it('is one panel with the Nodes table drill-in: opening either closes the other', async () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
     await openRow(0);
-    await userEvent.click(document.querySelector<HTMLButtonElement>('.node-drill-in')!);
+    const drillIn = document.querySelector<HTMLButtonElement>('.node-drill-in')!;
+    await userEvent.click(drillIn);
+    // Closed from outside, the drawer leaves focus where the operator put it.
+    expect(drillIn).toHaveFocus();
     expect(screen.getAllByRole('complementary')).toHaveLength(1);
     expect(document.querySelector('.run-drawer')).toBeNull();
     await openRow(1);

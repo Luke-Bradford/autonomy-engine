@@ -26,7 +26,7 @@ import { AttemptTimeline } from './AttemptTimeline';
 import { NodeActivityPanel, PANEL_ID } from './NodeActivityPanel';
 import { ActivityRunsTable, SkipWhy } from './ActivityRunsTable';
 import { activityOfRow } from './attemptActivity';
-import { iterationText } from './activityRunsColumns';
+import { iterationLabel } from './activityRunsColumns';
 import { RunDrawer } from './RunDrawer';
 import { RunHeader, type RunHeaderNames } from './RunHeader';
 import { RunFailureBanner } from './RunFailureBanner';
@@ -365,8 +365,10 @@ export function RunDetailPage({ runId }: { runId: string }) {
   const drawerIteration = (() => {
     const it = drawerRow?.iteration ?? null;
     if (it === null) return '';
-    const kind = activityRuns.groups.find((g) => g.containerId === it.containerId)?.kind;
-    return `${kind === 'loop' ? 'round' : 'item'} ${iterationText(it)}`;
+    return iterationLabel(
+      activityRuns.groups.find((g) => g.containerId === it.containerId)?.kind,
+      it,
+    );
   })();
 
   /* CX4 (#1320) — "Cancelling…": the cancel is FOLDED (the log carries

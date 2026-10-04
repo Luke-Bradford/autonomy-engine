@@ -27,7 +27,8 @@ const RESIZE_STEP = 16;
  * Not a modal: the table behind stays live and clickable, so opening another
  * row just swaps the record. Escape closes it while focus is inside it, as the
  * form drawer does (`FormDrawer`), and focus goes back to the row that opened
- * it. The owner keys the drawer by row, so each row's open is a fresh mount and
+ * it. Only while focus is inside: the page behind has its own Escapes (a search
+ * box, a confirm), and a page-wide one would close the drawer under them. The owner keys the drawer by row, so each row's open is a fresh mount and
  * hands focus in again.
  *
  * Its width is the operator's (`uiStore.runDrawerWidth`), dragged or set with
@@ -50,17 +51,30 @@ export function RunDrawer({
   const setWidth = useStore(uiStore, (s) => s.setRunDrawerWidth);
   const [rendered, setRendered] = useState(0);
 
+  // Re-measured on a window resize too: the default width and the cap are
+  // both shares of the window.
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
   useLayoutEffect(() => {
     if (ref.current) setRendered(Math.round(ref.current.getBoundingClientRect().width));
-  }, [width]);
+  }, [width, windowWidth]);
 
   // Focus in on open; back to the opener on close, if it is still there (a
-  // filter or a live re-read can have taken its row away).
+  // filter or a live re-read can have taken its row away) and focus was in the
+  // drawer. A close that came from elsewhere (the Nodes table's drill-in) leaves
+  // focus where the operator put it.
   useEffect(() => {
     const opener = returnFocusTo;
-    ref.current?.querySelector<HTMLElement>('[data-drawer-focus]')?.focus();
+    const drawer = ref.current;
+    drawer?.querySelector<HTMLElement>('[data-drawer-focus]')?.focus();
     return () => {
-      if (opener?.isConnected) opener.focus();
+      const at = document.activeElement;
+      const focusWasHere = at === null || at === document.body || drawer?.contains(at) === true;
+      if (focusWasHere && opener?.isConnected) opener.focus();
     };
     // Mount-only: the owner keys the drawer by row, so each open mounts anew.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -71,7 +85,7 @@ export function RunDrawer({
     [],
   );
 
-  const max = Math.max(DOCK_MIN_WIDTH, Math.floor(window.innerWidth * MAX_SHARE));
+  const max = Math.max(DOCK_MIN_WIDTH, Math.floor(windowWidth * MAX_SHARE));
   return (
     <div
       ref={ref}

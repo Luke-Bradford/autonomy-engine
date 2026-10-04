@@ -125,8 +125,7 @@ export function NodeActivityPanel({
       id={PANEL_ID}
       className="property-panel node-detail-panel"
       aria-label={`Node ${name ?? node.nodeId}`}
-      tabIndex={-1}
-      data-drawer-focus
+      {...(run === undefined ? {} : { tabIndex: -1, 'data-drawer-focus': true })}
     >
       {/* `.page-header` is the existing title-plus-action row. The sibling
           property panels have no action in their heading, so none of them uses

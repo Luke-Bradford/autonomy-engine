@@ -5736,6 +5736,7 @@ button.danger {
    OVER the page rather than in its flow, so opening it moves nothing. */
 .run-drawer {
   position: fixed;
+  /* Under the command bar (`.command-bar`, 40px), which stays reachable. */
   top: 40px;
   right: 0;
   bottom: 0;

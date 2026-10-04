@@ -8,7 +8,6 @@ import {
   type ActivityRun,
   type ActivityRunChild,
   type ActivityRunGroup,
-  type ActivityRunIterationGroup,
   type RunStatus,
   type SkipReason,
 } from '@autonomy-studio/shared';
@@ -44,7 +43,7 @@ import {
   nodeStatusPillClass,
 } from './nodeStatus';
 import { runDetailPath } from './runPath';
-import { ACTIVITY_RUN_COLUMNS, iterationText } from './activityRunsColumns';
+import { ACTIVITY_RUN_COLUMNS, iterationLabel, iterationText } from './activityRunsColumns';
 import { RUN_DRAWER_ID } from './RunDrawer';
 import { activityRunEntries } from './activityRunsTree';
 import { skipReasonText } from './skipReasonText';
@@ -68,13 +67,6 @@ function groupIterations(group: ActivityRunGroup): string {
   if (group.itemCount !== null) return countOf(group.itemCount, 'item');
   if (group.kind === 'loop') return countOf(group.iterations.length, 'round');
   return '';
-}
-
-/** An iteration line's label: `Item 2 of 2 · orders_b.csv`, or `Round 3`. */
-function iterationLabel(group: ActivityRunGroup, it: ActivityRunIterationGroup): string {
-  const { index, count, item } = it;
-  const text = iterationText({ containerId: group.containerId, index, count, item });
-  return group.kind === 'loop' ? `Round ${text}` : `Item ${text}`;
 }
 
 /** A skip's reason after its status pill: `skipped · upstream failed: Copy 1`. */
@@ -490,7 +482,10 @@ export function ActivityRunsTable({
                     >
                       <td>
                         <Toggle open={open} onToggle={() => toggle(entry.key)}>
-                          {iterationLabel(group, iteration)}
+                          {iterationLabel(group.kind, {
+                            ...iteration,
+                            containerId: group.containerId,
+                          })}
                         </Toggle>
                       </td>
                       <td />
