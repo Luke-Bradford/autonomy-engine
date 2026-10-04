@@ -205,7 +205,9 @@ describe('the runs list query remembered per viewer — #1484', () => {
 
   it('drops one-off questions, view settings and the columns', () => {
     expect(
-      remembered('q=abc&on=2026-10-01&from=2026-09-01&to=2026-09-02&view=timeline&group=trigger&hide=cost'),
+      remembered(
+        'q=abc&on=2026-10-01&from=2026-09-01&to=2026-09-02&view=timeline&group=trigger&hide=cost',
+      ),
     ).toBe('');
   });
 
@@ -218,7 +220,14 @@ describe('the runs list query remembered per viewer — #1484', () => {
   it('says whether a URL names any of the list state, so a bare one can be restored', () => {
     expect(hasRunsListParams(new URLSearchParams(''))).toBe(false);
     expect(hasRunsListParams(new URLSearchParams('view=timeline&group=trigger'))).toBe(false);
-    for (const query of ['status=bogus', 'on=', 'q=x', 'sort=status', 'children=off', 'hide=cost']) {
+    for (const query of [
+      'status=bogus',
+      'on=',
+      'q=x',
+      'sort=status',
+      'children=off',
+      'hide=cost',
+    ]) {
       expect(hasRunsListParams(new URLSearchParams(query))).toBe(true);
     }
   });
@@ -240,8 +249,9 @@ describe('the runs grid column choice in the URL — #1484', () => {
   });
 
   it('never hides a required column, and keeps column order', () => {
-    expect(readRunGridHiddenParam(new URLSearchParams('hide=runId,cost,pipeline,status'))).toEqual(
-      ['status', 'cost'],
-    );
+    expect(readRunGridHiddenParam(new URLSearchParams('hide=runId,cost,pipeline,status'))).toEqual([
+      'status',
+      'cost',
+    ]);
   });
 });

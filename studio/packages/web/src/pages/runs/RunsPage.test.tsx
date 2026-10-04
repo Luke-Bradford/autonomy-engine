@@ -1953,7 +1953,8 @@ describe('#1484 principle 5 — the last-used query is remembered, the columns a
     expect(new URLSearchParams(router.state.location.search).get('sort')).toBe('duration');
     expect(router.state.historyAction).toBe('REPLACE');
     expect(asked().length).toBeGreaterThan(0);
-    for (const query of asked()) expect(query).toMatchObject({ status: 'failure', sort: 'duration' });
+    for (const query of asked())
+      expect(query).toMatchObject({ status: 'failure', sort: 'duration' });
   });
 
   it('honours a link that names anything exactly, and remembers it as the last-used query', async () => {
@@ -2018,7 +2019,9 @@ describe('#1484 principle 5 — the last-used query is remembered, the columns a
     await userEvent.click(screen.getByRole('button', { name: /Columns/ }));
     await userEvent.click(await screen.findByRole('menuitemcheckbox', { name: 'Cost' }));
     await waitFor(() =>
-      expect(new URLSearchParams(router.state.location.search).get('hide')).toBe('cost,annotations'),
+      expect(new URLSearchParams(router.state.location.search).get('hide')).toBe(
+        'cost,annotations',
+      ),
     );
     expect(router.state.historyAction).toBe('REPLACE');
     expect(ui.getState().runsGridHidden).toEqual(['cost', 'annotations']);

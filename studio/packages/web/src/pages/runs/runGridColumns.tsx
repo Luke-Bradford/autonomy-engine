@@ -322,9 +322,7 @@ const RUN_GRID_HIDDEN_NONE = 'none';
  * own stored choice applies. Read through the store's `canonicalHidden`, so a
  * link can never hide a required column or hold a set the picker could not.
  */
-export function readRunGridHiddenParam(
-  params: URLSearchParams,
-): RunGridColumnId[] | undefined {
+export function readRunGridHiddenParam(params: URLSearchParams): RunGridColumnId[] | undefined {
   const raw = params.get(RUN_GRID_HIDDEN_PARAM);
   if (raw === null || raw === '') return undefined;
   if (raw === RUN_GRID_HIDDEN_NONE) return [];
