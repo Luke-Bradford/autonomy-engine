@@ -5728,7 +5728,8 @@ button.danger {
 /* The row the drawer is showing. A fill, not the outline `Show activity` draws,
    so the two can mark different rows at once and stay told apart. */
 .activity-runs tr[data-open] {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  background: var(--panel-2);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 /* #1484 OR35 M2 — the detail drawer: fixed to the right under the command bar,
