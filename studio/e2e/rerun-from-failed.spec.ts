@@ -75,10 +75,13 @@ test('#895 — a failed run reruns from the monitor, and the new run says where 
   await page.goto(`/#/monitor/runs/${encodeURIComponent(sourceRunId)}`);
   await fluentRootReady(page);
 
-  // The action is offered, and the spec's cost warning is on screen beside it —
-  // a rerun re-executes from the failure onward, so it is not free.
+  // The action is offered, and the spec's cost warning qualifies it — a rerun
+  // re-executes from the failure onward, so it is not free. Since #1484 M2 it is
+  // the button's description and its `?` help rather than prose in the header.
   const action = page.getByRole('button', { name: 'Rerun from failed' });
   await expect(action).toBeVisible();
+  await expect(action).toHaveAccessibleDescription(/may incur additional cost/);
+  await page.getByLabel('About rerunning from the failure').click();
   await expect(page.getByText(/may incur additional cost/)).toBeVisible();
 
   // A run that is not a rerun says nothing about lineage, rather than "—".

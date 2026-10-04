@@ -2030,6 +2030,10 @@ describe('RunDetailPage — the rerun-from-failed action (RS2)', () => {
   it('warns that the rerun may cost money, beside the button', async () => {
     await mountWithStatus('failure');
     expect(screen.getByText(/may incur additional cost/)).toBeInTheDocument();
+    // #1484 M2 — the warning is the button's description, so it is read with it.
+    expect(screen.getByRole('button', { name: 'Rerun from failed' })).toHaveAccessibleDescription(
+      /may incur additional cost/,
+    );
   });
 
   it('asks the server to rerun THIS run when clicked', async () => {
