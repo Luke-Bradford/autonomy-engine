@@ -73,7 +73,13 @@ vi.mock('./useRunStream', async (importActual) => ({
 
 const getRunDetailMock = vi.mocked(runsApi.getRunDetail);
 /** #1392 — the names R1 resolves beside the doc; most cases do not read them. */
-const NAMES = { pipelineName: 'Test pipeline', triggerName: null, debug: false } as const;
+const NAMES = {
+  pipelineName: 'Test pipeline',
+  triggerName: null,
+  debug: false,
+  triggeredByKind: 'editor',
+  parentPipelineName: null,
+} as const;
 const rerunFromFailedMock = vi.mocked(runsApi.rerunFromFailed);
 const cancelRunMock = vi.mocked(runsApi.cancelRun);
 const listExternalWaitsMock = vi.mocked(runsApi.listExternalWaits);
@@ -192,6 +198,8 @@ describe('RunDetailPage', () => {
       debug: false,
       pipelineName: 'Nightly load',
       triggerName: 'Every night',
+      triggeredByKind: 'schedule',
+      parentPipelineName: null,
     });
     // `setup()` before render: it installs the clipboard jsdom lacks, and the
     // copy control is feature-detected at render.
@@ -204,10 +212,12 @@ describe('RunDetailPage', () => {
       // #1484 — the version this run is bound to, not the latest.
       '/author/pipelines/pl_1?version=1',
     );
+    // #1484 M2 — the trigger's own runs, filtered.
     expect(screen.getByRole('link', { name: 'Every night' })).toHaveAttribute(
       'href',
-      '/manage/triggers',
+      '/monitor/runs?trigger=trg_1',
     );
+    expect(screen.getByText('Schedule')).toBeInTheDocument();
     expect(screen.queryByText('pv_1')).not.toBeInTheDocument();
     expect(screen.queryByText('trg_1')).not.toBeInTheDocument();
     // The run id: short on screen, whole in the tooltip and on the clipboard.
@@ -225,6 +235,8 @@ describe('RunDetailPage', () => {
       debug: false,
       pipelineName: null,
       triggerName: null,
+      triggeredByKind: 'editor',
+      parentPipelineName: null,
     });
     renderWithRouter(<RunDetailPage runId="run_1" />);
     expect(await screen.findByText('pv_1')).toBeInTheDocument();
@@ -238,6 +250,8 @@ describe('RunDetailPage', () => {
       debug: false,
       pipelineName: 'Nightly load',
       triggerName: null,
+      triggeredByKind: 'schedule',
+      parentPipelineName: null,
     });
     renderWithRouter(<RunDetailPage runId="run_1" />);
     await screen.findByRole('heading', { name: 'Nightly load v1' });
@@ -406,7 +420,7 @@ describe('RunDetailPage', () => {
 
     // The run's derived lifecycle overrides the (running) REST status.
     expect(screen.getByRole('heading', { level: 2, name: 'Test pipeline v1' })).toBeInTheDocument();
-    const hint = screen.getByText('● live').closest('p')!;
+    const hint = screen.getByText('● live').closest('dd')!;
     expect(within(hint).getByText('success')).toBeInTheDocument();
 
     // Event feed lists each event type.
@@ -567,7 +581,7 @@ describe('RunDetailPage', () => {
        regression test below passed against the very defect it pins. */
     const headerPill = (text: string) =>
       screen.findByText((content) => content.includes(text), {
-        selector: '.page-hint .run-status',
+        selector: '.run-header .run-status',
       });
 
     const parked = (reason: 'waiting_timer' | 'waiting_external') => [
@@ -762,7 +776,7 @@ describe('RunDetailPage', () => {
 
         renderWithRouter(<RunDetailPage runId="run_1" />);
 
-        expect(document.querySelector('.page-hint .run-status')?.textContent).toBe('running');
+        expect(document.querySelector('.run-header .run-status')?.textContent).toBe('running');
         expect(await headerPill('waiting (timer)')).toHaveTextContent('waiting (timer)');
       });
 
@@ -2175,7 +2189,7 @@ describe('RunDetailPage — the cancel-run action (CX4)', () => {
     await userEvent.click(screen.getByRole('button', { name: ACTION }));
     await answerConfirm(userEvent, 'accept');
     expect(
-      await screen.findByText('cancelled', { selector: '.page-hint .run-status' }),
+      await screen.findByText('cancelled', { selector: '.run-header .run-status' }),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: ACTION })).not.toBeInTheDocument();
   });
@@ -2187,7 +2201,7 @@ describe('RunDetailPage — the cancel-run action (CX4)', () => {
     await userEvent.click(screen.getByRole('button', { name: ACTION }));
     await answerConfirm(userEvent, 'accept');
     expect(
-      await screen.findByText('cancelled', { selector: '.page-hint .run-status' }),
+      await screen.findByText('cancelled', { selector: '.run-header .run-status' }),
     ).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: ACTION })).not.toBeInTheDocument();
@@ -2241,7 +2255,7 @@ describe('RunDetailPage — the cancel-run action (CX4)', () => {
     );
     await mountWithStatus('running');
     expect(
-      await screen.findByText('cancelled', { selector: '.page-hint .run-status' }),
+      await screen.findByText('cancelled', { selector: '.run-header .run-status' }),
     ).toBeInTheDocument();
     expect(screen.queryByText('Cancelling…')).not.toBeInTheDocument();
     // `never` hangs off greet's failure edge: the cancel kept it from starting.
@@ -2945,11 +2959,27 @@ describe('RunDetailPage — the parent a child run was called by', () => {
 
   it('links up to the run that called this one', async () => {
     await mountRun({ parentRunId: 'run_parent', triggerId: null });
-    expect(screen.getByText('Called by')).toBeInTheDocument();
+    expect(screen.getByText('Parent', { selector: 'dt' })).toBeInTheDocument();
     const link = screen.getByRole('link', { name: 'Parent run run_parent' });
     expect(link).toHaveAttribute('href', '/monitor/runs/run_parent');
     expect(link.textContent).toBe('run_parent');
     expectAccessibleNameContainsText(link);
+  });
+
+  // #1484 M2 — named by the parent's pipeline when `/detail` can name it.
+  it("names the parent by its pipeline when it can", async () => {
+    getRunDetailMock.mockResolvedValue({
+      ...NAMES,
+      triggeredByKind: 'call',
+      parentPipelineName: 'Caller pipe',
+      run: run({ status: 'success', parentRunId: 'run_parent', triggerId: null }),
+      pipelineVersion: version(),
+    });
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    const link = await screen.findByRole('link', { name: 'Caller pipe' });
+    expect(link).toHaveAttribute('href', '/monitor/runs/run_parent');
+    expect(link).toHaveAttribute('title', 'run_parent');
+    expect(screen.getByText('Execute Pipeline', { exact: false })).toBeInTheDocument();
   });
 
   /* The ABSENCE of the row is what "not a child" looks like — the same rule the
@@ -2957,7 +2987,7 @@ describe('RunDetailPage — the parent a child run was called by', () => {
      run would be noise on the one surface every run shares. */
   it('shows no lineage row on a run nothing called', async () => {
     await mountRun();
-    expect(screen.queryByText('Called by')).not.toBeInTheDocument();
+    expect(screen.queryByText('Parent', { selector: 'dt' })).not.toBeInTheDocument();
   });
 
   /* The `run-meta` list is gated on the run ROW alone, independently of the

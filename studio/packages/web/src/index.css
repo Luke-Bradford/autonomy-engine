@@ -4544,6 +4544,111 @@ button.danger {
   color: var(--colorNeutralForeground3);
 }
 
+/* #1484 OR35 M2 — the run's header: ONE band of facts (`dt` muted beside its
+   `dd`), wrapping as a whole on a narrow screen, with the actions at its end. It
+   replaces a heading, a status line and a tall two-column list, so the activity
+   runs begin near the top. */
+.run-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.run-header > h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.run-header__facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 1rem;
+  margin: 0;
+  font-size: 13px;
+}
+
+.run-header__facts > div {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+}
+
+.run-header__facts dt {
+  color: var(--muted);
+}
+
+.run-header__facts dd {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.run-header__facts .num {
+  font-variant-numeric: tabular-nums;
+}
+
+.run-header__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+/* The rerun's cost warning (RS2): beside the button it qualifies, small. */
+.run-header__hint {
+  max-width: 26rem;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* #1484 OR35 M2 — a failed run's banner: one line under the header. */
+.run-failure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  margin-bottom: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  border-left: 3px solid var(--error);
+  background: var(--panel-2);
+  font-size: 13px;
+}
+
+.run-failure strong {
+  color: var(--error);
+}
+
+.run-failure__kind {
+  color: var(--muted);
+}
+
+.run-failure__message {
+  min-width: 0;
+  max-width: 48rem;
+  overflow-wrap: anywhere;
+}
+
+.run-failure__message pre {
+  margin: 0.25rem 0 0;
+  white-space: pre-wrap;
+}
+
+.run-failure__actions {
+  display: inline-flex;
+  gap: 0.75rem;
+  align-items: center;
+  margin-left: auto;
+}
+
+/* The row the banner's "Show activity" asked for. */
+.activity-runs__selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 /* #1484 OR35 M2 — the run's activity runs: the runs grid's density (32px rows,
    13px text, tabular right-aligned numbers), with columns sized by content and
    a sideways scroll of its own so the page never scrolls sideways. */
