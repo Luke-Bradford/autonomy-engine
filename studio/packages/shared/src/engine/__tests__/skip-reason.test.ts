@@ -116,10 +116,11 @@ describe('skipReason — the reducer records why it skipped (#1484 M2)', () => {
     });
   });
 
-  it('a loop round reset drops the reason with the skip', () => {
+  it('a loop round reset drops the reason with the skip, and returns it beside the state', () => {
     // Round 1: x succeeds, so its failure handler h skips. The round ends in
     // that same reduce and resets both to `pending` for round 2: a reason left
-    // behind would describe a skip that no longer exists.
+    // behind would describe a skip that no longer exists. The reason the reset
+    // cleared comes back in `resetSkips` instead (#1546).
     const e = eng(
       [node('x'), node('h')],
       [edge('x', 'h', 'failure')],
@@ -132,22 +133,27 @@ describe('skipReason — the reducer records why it skipped (#1484 M2)', () => {
       params: {},
     };
     let s = e.reduce(e.seedState(), started).state;
-    s = e.reduce(s, {
+    const dispatched = e.reduce(s, {
       type: 'node.dispatched',
       runId: 'r1',
       nodeId: 'x',
       attemptId: 'x#0',
       idempotent: true,
-    }).state;
-    s = e.reduce(s, {
+    });
+    expect('resetSkips' in dispatched).toBe(false);
+    const ended = e.reduce(dispatched.state, {
       type: 'node.succeeded',
       runId: 'r1',
       nodeId: 'x',
       attemptId: 'x#0',
       outputs: {},
-    }).state;
+    });
+    s = ended.state;
     expect(s.containers.lp!.round).toBe(1);
     expect(s.nodes.h!.status).toBe('pending');
     expect('skipReason' in s.nodes.h!).toBe(false);
+    expect(ended.resetSkips).toEqual({ h: { kind: 'upstream', from: 'x', outcome: 'success' } });
+    // Scoped to the call that cleared it: the next call starts empty.
+    expect('resetSkips' in e.resume(s)).toBe(false);
   });
 });

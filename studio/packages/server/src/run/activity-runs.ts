@@ -40,7 +40,8 @@ import type { LoggedEngineEvent } from './events.js';
  *   also resets (the event that ends a ForEach item or loop round resets the
  *   body) or deletes (a parallel item's instances) cannot be seen in any state,
  *   so it is inferred: when an item ends, every body node is terminal, and one
- *   with no row in that item was skipped.
+ *   with no row in that item was skipped. Its reason is the one the reducer
+ *   returns beside the state, in `resetSkips` (#1546).
  * - What a rerun REUSED from the run it reran is a row, marked `reused`, with no
  *   times: it did not run here.
  * Containers are not rows. Each one the run reached is a GROUP (`projectGroups`
@@ -411,7 +412,8 @@ export function projectActivityRuns(
         } else addSkip(nodeId, iterationOf(nodeId, before), entry.skipReason ?? null);
       }
       // A skip this reduce also reset or deleted: when an item ends, a body node
-      // with no row in it was skipped.
+      // with no row in it was skipped, for the reason the reset cleared.
+      const cleared = reduced.resetSkips;
       const ended: string[] = [];
       for (const c of iterating) {
         const was = before.containers[c.id];
@@ -426,7 +428,11 @@ export function projectActivityRuns(
       for (const nodeId of ended) {
         const iteration = iterationOf(nodeId, before);
         if (iteration !== null && !inItem.has(itemKey(nodeId, iteration)))
-          addSkip(nodeId, iteration, reduced.resetSkips?.[nodeId] ?? null);
+          addSkip(
+            nodeId,
+            iteration,
+            cleared !== undefined && Object.hasOwn(cleared, nodeId) ? cleared[nodeId]! : null,
+          );
       }
     }
 

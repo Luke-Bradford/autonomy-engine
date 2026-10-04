@@ -2537,11 +2537,14 @@ export interface ReduceResult {
   commands: EngineCommand[];
   diagnostics: string[];
   /**
-   * #1546 — the skip reasons this reduce CLEARED, keyed by state node id (a doc
-   * id, or a ForEach item's instance key). A loop round or ForEach item that
-   * ends in the reduce that skipped one of its nodes resets or deletes that node
-   * before the state is returned, so its reason survives only here. Present only
-   * when non-empty. Not state: nothing persists or re-folds it.
+   * #1546 — the reasons on every skipped node this reduce reset or deleted,
+   * keyed by state node id (a doc id, or a ForEach item's instance key). A loop
+   * round or ForEach item that ends in the reduce that skipped one of its nodes
+   * resets or deletes that node before the state is returned, so its reason
+   * survives only here. A node skipped in an EARLIER reduce is included too; its
+   * reason was readable then. One id reset twice in one reduce keeps the later
+   * reason. Present only when non-empty. Not state: nothing persists or
+   * re-folds it.
    */
   resetSkips?: Record<string, SkipReason>;
 }

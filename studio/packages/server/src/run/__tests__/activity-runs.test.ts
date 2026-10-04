@@ -646,6 +646,27 @@ describe('#1484 activity runs — containers are groups', () => {
     ]);
   });
 
+  it('says why a doom skipped an item that it also ended in the same reduce', async () => {
+    // Item 1 is parked on its Wait when item 0 fails: the doom flips item 1's
+    // body to `skipped` and, nothing being in flight, deletes the item in that
+    // same reduce, so the reason is read from `resetSkips` (#1546).
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('x'), node('hold', { type: 'wait', config: { seconds: '${1}' } }), node('y')],
+      [edge('x', 'hold'), edge('hold', 'y')],
+      [foreach({ children: ['x', 'hold', 'y'], batchCount: 2 })],
+      [1, 2],
+    );
+    const runId = await drive(db, pvId, stub({ 'x@0': { outcome: 'failure', delayMs: 30 } }));
+
+    const y1 = project(db, pvId, runId).find((r) => r.nodeId === 'y@1');
+    expect(y1).toMatchObject({
+      status: 'skipped',
+      skipReason: { kind: 'doomed', containerId: 'fe', blame: 'x@0' },
+    });
+  });
+
   it('keeps an item that completed a success when another item failed the ForEach', async () => {
     const { db } = freshDb();
     const pvId = seedVersion(db, [node('inner')], [], [foreach({ batchCount: 2 })], [1, 2]);
