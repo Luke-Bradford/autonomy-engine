@@ -1434,7 +1434,7 @@ describe('RunDetailPage — how long a node took (#867)', () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
     const row = (await screen.findByRole('button', { name: 'HTTP Request 1' })).closest('tr')!;
-    expect(within(row).getByText('3s')).toBeInTheDocument();
+    expect(within(row).getByText('3.2s')).toBeInTheDocument();
 
     const skippedRow = screen.getByText('never').closest('tr')!;
     expect(within(skippedRow).getByText('—')).toBeInTheDocument();

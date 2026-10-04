@@ -6,9 +6,9 @@ import { usePagedList } from '../hooks/usePagedList';
 import { runStatusLabel } from './runs/runStatus';
 import { NO_RUNS_YET } from './runs/runFilters';
 import { runDetailPath } from './runs/runPath';
-import { formatWhen } from './runs/format';
 import { versionLabel } from '../lib/versionLabel';
 import { DemoPanel } from './DemoPanel';
+import { When } from '../lib/When';
 
 /**
  * How many recent runs Home shows.
@@ -102,7 +102,9 @@ export function HomePage() {
                       relative "3m ago": a queued run's `startedAt` is an
                       enqueue placeholder that admission re-stamps, so a
                       relative string would print queue age as a start time. */}
-                  <span className="recent-runs-when">{formatWhen(r.startedAt)}</span>
+                  <span className="recent-runs-when">
+                    <When ms={r.startedAt} />
+                  </span>
                 </Link>
               </li>
             ))}

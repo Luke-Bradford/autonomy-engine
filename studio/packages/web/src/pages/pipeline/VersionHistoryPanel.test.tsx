@@ -3,6 +3,7 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { VersionHistoryPanel, VersionPreviewBar } from './VersionHistoryPanel';
 import type { VersionEntry } from './versionHistory';
+import { formatTimestamp } from '../../lib/displayTime';
 
 function entry(overrides: Partial<VersionEntry> = {}): VersionEntry {
   return {
@@ -81,7 +82,7 @@ describe('VersionHistoryPanel', () => {
       />,
     );
     expect(within(screen.getByRole('list')).getByRole('button').textContent).toContain(
-      new Date(createdAt).toLocaleString(),
+      formatTimestamp(createdAt, 'local'),
     );
   });
 

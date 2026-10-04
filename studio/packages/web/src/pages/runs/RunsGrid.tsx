@@ -29,6 +29,8 @@ import {
   type CellContext,
 } from './runGridColumns';
 import type { RunSortState } from './runFilters';
+import { zoneLabel, type DisplayTimeZone } from '../../lib/displayTime';
+import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 
 /** A column's drawn width: the operator's, else its default. */
 function widthOf(widths: Partial<Record<RunGridColumnId, number>>, column: RunGridColumnId) {
@@ -50,15 +52,22 @@ function ColumnHeader({
   width,
   onPreviewWidth,
   onCommitWidth,
+  zoneNote,
 }: {
   column: RunGridColumnId;
+  /** The display zone's short name, shown after a `zoned` column's label. */
+  zoneNote: string;
   sort: RunSortState;
   onSort: (column: RunSortKey) => void;
   width: number;
   onPreviewWidth: (width: number) => void;
   onCommitWidth: (width: number | null) => void;
 }) {
-  const { label, sort: sortKey, numeric = false } = RUN_GRID_COLUMN_DEFS[column];
+  const { label, sort: sortKey, numeric = false, zoned = false } = RUN_GRID_COLUMN_DEFS[column];
+  /* #1484 — a compact time column names its zone in the header, so the zone is
+     visible without a hover. Outside the `aria-label`, which stays the name. */
+  const note =
+    zoned && zoneNote !== '' ? <span className="runs-grid__zone"> {zoneNote}</span> : null;
   const active = sortKey !== undefined && sort.key === sortKey;
   const id = `runs-grid-col-${column}`;
   return (
@@ -70,10 +79,14 @@ function ColumnHeader({
       {...(active ? { 'aria-sort': sort.dir === 'asc' ? 'ascending' : 'descending' } : {})}
     >
       {sortKey === undefined ? (
-        label
+        <>
+          {label}
+          {note}
+        </>
       ) : (
         <button type="button" className="runs-grid__sort" onClick={() => onSort(sortKey)}>
           {label}
+          {note}
           {/* The arrow's box is always there, so sorting never moves a label. */}
           <span className="runs-grid__sort-arrow" aria-hidden="true">
             {active ? (sort.dir === 'asc' ? '▲' : '▼') : ''}
@@ -113,10 +126,12 @@ function RunRow({
   run: r,
   columns,
   loadedAt,
+  zone,
 }: {
   run: RunSummary;
   columns: readonly RunGridColumnId[];
   loadedAt: number;
+  zone: DisplayTimeZone;
 }) {
   const navigate = useNavigate();
   const path = runDetailPath(r.id);
@@ -139,7 +154,7 @@ function RunRow({
     if (newTab) window.open(href, '_blank', 'noopener');
     else void navigate(path);
   };
-  const ctx: CellContext = { loadedAt, path };
+  const ctx: CellContext = { loadedAt, path, zone };
   return (
     <tr
       className="runs-grid__row"
@@ -188,6 +203,7 @@ export function RunsGrid({
   const hidden = useStore(ui, (s) => s.runsGridHidden);
   const widths = useStore(ui, (s) => s.runsGridWidths);
   const setWidth = useStore(ui, (s) => s.setRunsGridWidth);
+  const zone = useDisplayTimeZone(ui);
   const columns = visibleRunGridColumns(hidden, sort.key);
   const total = columns.reduce((sum, column) => sum + widthOf(widths, column), 0);
   const tableRef = useRef<HTMLTableElement>(null);
@@ -228,6 +244,7 @@ export function RunsGrid({
                 width={widthOf(widths, column)}
                 onPreviewWidth={(width) => preview(column, width)}
                 onCommitWidth={(width) => setWidth(column, width)}
+                zoneNote={zoneLabel(loadedAt, zone)}
               />
             ))}
             <th className="runs-grid__filler" aria-hidden="true" />
@@ -235,7 +252,7 @@ export function RunsGrid({
         </thead>
         <tbody>
           {runs.map((r) => (
-            <RunRow key={r.id} run={r} columns={columns} loadedAt={loadedAt} />
+            <RunRow key={r.id} run={r} columns={columns} loadedAt={loadedAt} zone={zone} />
           ))}
         </tbody>
       </table>

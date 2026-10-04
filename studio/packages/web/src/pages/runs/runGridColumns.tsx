@@ -16,6 +16,8 @@ import { costCell } from './costColumn';
 import { formatRunDuration, formatWhen } from './format';
 import { runDetailPath, runLinkLabel } from './runPath';
 import { runStatusLabel } from './runStatus';
+import { When } from '../../lib/When';
+import type { DisplayTimeZone } from '../../lib/displayTime';
 
 /** What a cell needs besides its run. */
 export interface CellContext {
@@ -23,18 +25,22 @@ export interface CellContext {
   loadedAt: number;
   /** The run's detail route, for the Run ID column's real link. */
   path: string;
+  /** The viewer's display time zone (#1484), for timestamps inside a title. */
+  zone: DisplayTimeZone;
 }
 
 /**
  * #1484 OR35 M1 — one column of the runs grid. Keyed by the store's
  * `RunGridColumnId` (`RUN_GRID_COLUMNS` owns the order), so a column added
  * there without a definition here fails the typecheck. `sort` names the
- * server's sort key where the column has one; `numeric` right-aligns it.
+ * server's sort key where the column has one; `numeric` right-aligns it;
+ * `zoned` names the display zone in the header, for a time without one.
  */
 interface RunGridColumn {
   label: string;
   sort?: RunSortKey;
   numeric?: boolean;
+  zoned?: boolean;
   cell: (run: RunSummary, ctx: CellContext) => ReactNode;
 }
 
@@ -114,15 +120,22 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
   started: {
     label: 'Started',
     sort: 'started',
-    cell: (r) => <td>{formatWhen(r.startedAt)}</td>,
+    /* #1484 — compact (`10-04 13:05:07`) to fit the 124px column; the full
+       form, the zone and the relative time are the hover title. */
+    zoned: true,
+    cell: (r, { zone, loadedAt }) => (
+      <td>
+        <When ms={r.startedAt} compact zone={zone} asOf={loadedAt} />
+      </td>
+    ),
   },
   duration: {
     label: 'Duration',
     sort: 'duration',
     numeric: true,
     /* The finish TIMESTAMP is the cell's title (U10 fixed the column set). */
-    cell: (r, { loadedAt }) => (
-      <td className="num" title={formatWhen(r.finishedAt)}>
+    cell: (r, { loadedAt, zone }) => (
+      <td className="num" title={formatWhen(r.finishedAt, zone)}>
         {formatRunDuration(r, loadedAt)}
       </td>
     ),

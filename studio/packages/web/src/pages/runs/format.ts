@@ -4,11 +4,18 @@ import {
   surrogateSafeCut,
 } from '@autonomy-studio/shared';
 import type { Run, RunEvent } from '@autonomy-studio/shared';
+import { formatTimestamp, type DisplayTimeZone } from '../../lib/displayTime';
 import type { NodeActivity } from './runSummary';
 
-/** Epoch-ms → a human date+time, or an em-dash for a null (not-yet) timestamp. */
-export function formatWhen(ms: number | null): string {
-  return ms === null ? '—' : new Date(ms).toLocaleString();
+/**
+ * Epoch-ms → a date and time in the viewer's display zone (#1484), or an
+ * em-dash for a null (not-yet) timestamp. For a time inside a SENTENCE; a time
+ * that stands alone in the page renders as `<When>`, which adds the relative
+ * time on hover. The zone is required so no caller can quietly show the
+ * browser's zone instead of the one the viewer chose.
+ */
+export function formatWhen(ms: number | null, zone: DisplayTimeZone): string {
+  return ms === null ? '—' : formatTimestamp(ms, zone);
 }
 
 /** #1394 OR3 — a count, thousands-grouped in one fixed locale so a card reads
@@ -17,13 +24,20 @@ export function formatCount(n: number): string {
   return n.toLocaleString('en-US');
 }
 
-/** A span in ms → the two most significant units, e.g. `1h 04m`, `3m 07s`, `820ms`. */
+/**
+ * A span in ms, in the ONE duration format (#1484 principle 4): under a minute
+ * it is seconds to the millisecond with trailing zeros dropped (`1.234s`,
+ * `0.82s`, `30s`, `0s`); then the two most significant units (`2m 03s`,
+ * `1h 04m`). One unit below a minute, rather than switching to `820ms`, so a
+ * column of durations compares by eye.
+ */
 export function formatElapsed(ms: number): string {
-  if (ms < 1_000) return `${ms}ms`;
-  const totalSeconds = Math.floor(ms / 1_000);
+  if (!Number.isFinite(ms)) return '—';
+  const whole = Math.round(ms);
+  if (whole < 60_000) return `${(whole / 1_000).toFixed(3).replace(/\.?0+$/, '')}s`;
+  const totalSeconds = Math.floor(whole / 1_000);
   const seconds = totalSeconds % 60;
   const totalMinutes = Math.floor(totalSeconds / 60);
-  if (totalMinutes === 0) return `${seconds}s`;
   const minutes = totalMinutes % 60;
   const hours = Math.floor(totalMinutes / 60);
   if (hours === 0) return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
@@ -54,7 +68,7 @@ export function formatRunDuration(
   if (run.finishedAt !== null) {
     return formatElapsed(Math.max(0, run.finishedAt - run.startedAt));
   }
-  return `${formatElapsed(Math.max(0, now - run.startedAt))} so far`;
+  return formatLiveElapsed(run.startedAt, now);
 }
 
 /**
@@ -165,12 +179,17 @@ export function liveSpanStart(
  */
 export function formatLiveElapsed(startedAtMs: number, now: number): string {
   const ms = Math.max(0, now - startedAtMs);
-  return `${ms < 1_000 ? '<1s' : formatElapsed(ms)} so far`;
+  return `${ms < 1_000 ? '<1s' : formatAge(ms)} so far`;
 }
 
-/** Epoch-ms → a compact time-of-day, for the dense event feed. */
-export function formatClock(ms: number): string {
-  return new Date(ms).toLocaleTimeString();
+/**
+ * A span measured against a CLOCK — an age, a countdown, a live counter — in
+ * the duration format but to the whole second. Its other end is `Date.now()`
+ * at the last render, so milliseconds would be precision the figure does not
+ * have, and would change on every render.
+ */
+export function formatAge(ms: number): string {
+  return formatElapsed(Math.floor(Math.max(0, ms) / 1_000) * 1_000);
 }
 
 /**

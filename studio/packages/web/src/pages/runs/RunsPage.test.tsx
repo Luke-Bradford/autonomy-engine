@@ -3,7 +3,8 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
 import { renderWithDataRouter, renderWithRouter } from '../../testing/renderWithRouter';
-import { dayOf, dayRangeBounds } from './runFilters';
+import { dayOf } from '../../lib/displayTime';
+import { dayRangeBounds } from './runFilters';
 import { ROUTES } from '../../routes';
 import userEvent from '@testing-library/user-event';
 import {
@@ -1092,13 +1093,13 @@ describe('RunsPage — U26 filter pane', () => {
       const started = () => screen.getByLabelText('Started');
 
       await userEvent.selectOptions(started(), 'on');
-      const today = dayOf(new Date());
+      const today = dayOf(Date.now(), 'local');
       expect(new URLSearchParams(router.state.location.search).get('on')).toBe(today);
       expect(router.state.location.search).not.toContain('since');
       // A calendar pick is one change event carrying the whole day.
       fireEvent.change(await screen.findByLabelText('Day'), { target: { value: '2026-01-15' } });
       expect(router.state.location.search).toBe('?on=2026-01-15');
-      const bounds = dayRangeBounds({ on: '2026-01-15' });
+      const bounds = dayRangeBounds({ on: '2026-01-15' }, 'local');
       await vi.waitFor(() =>
         expect(listMock).toHaveBeenLastCalledWith(bounds, undefined, expect.anything()),
       );
@@ -1134,9 +1135,33 @@ describe('RunsPage — U26 filter pane', () => {
       // the one the picker shows.
       expect(screen.getByLabelText('Started')).toHaveValue('range');
       expect(listMock).toHaveBeenCalledWith(
-        dayRangeBounds({ from: '2026-01-01', to: '2026-01-31' }),
+        dayRangeBounds({ from: '2026-01-01', to: '2026-01-31' }, 'local'),
         undefined,
         expect.anything(),
+      );
+    });
+
+    it('bounds the day in the viewer’s display zone, and asks again when it changes', async () => {
+      const data = new Map<string, string>();
+      const ui = createUiStore({
+        getItem: (key) => data.get(key) ?? null,
+        setItem: (key, value) => void data.set(key, value),
+      });
+      ui.getState().setDisplayTimeZone('America/New_York');
+      renderWithRouter(<RunsPage store={storeWith()} ui={ui} />, '/monitor/runs?on=2026-10-04');
+      await screen.findByText(/No runs match these filters/i);
+      expect(listMock).toHaveBeenLastCalledWith(
+        { from: String(Date.UTC(2026, 9, 4, 4)), to: String(Date.UTC(2026, 9, 5, 4)) },
+        undefined,
+        expect.anything(),
+      );
+      act(() => ui.getState().setDisplayTimeZone('UTC'));
+      await vi.waitFor(() =>
+        expect(listMock).toHaveBeenLastCalledWith(
+          { from: String(Date.UTC(2026, 9, 4)), to: String(Date.UTC(2026, 9, 5)) },
+          undefined,
+          expect.anything(),
+        ),
       );
     });
   });

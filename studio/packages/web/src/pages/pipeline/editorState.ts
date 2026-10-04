@@ -6,6 +6,7 @@ import type {
   WorkspaceGitSync,
 } from '@autonomy-studio/shared';
 import { describeDivergence, describePipelineDrift, shortSha } from '../../api/workspaceGit';
+import type { DisplayTimeZone } from '../../lib/displayTime';
 import { formatWhen } from '../runs/format';
 import { activePhrase, type ActiveVersionLabel } from './versionHistory';
 
@@ -200,6 +201,8 @@ export interface VersionSource {
 }
 
 export interface GitInput {
+  /** The viewer's display time zone (#1484), for the "fetched …" sentences. */
+  zone: DisplayTimeZone;
   /** The workspace's repo, `null` when none is connected, `undefined` while unread. */
   git: WorkspaceGitStatus | null | undefined;
   /**
@@ -256,6 +259,7 @@ export function gitState({
   sync,
   pipelineId,
   pullRequest,
+  zone,
 }: GitInput): BadgePart | null {
   if (git === null || git === undefined) return null;
   const commit = source?.sourceCommit ?? null;
@@ -321,10 +325,12 @@ export function gitState({
       describeDivergence(divergence, git.collabBranch) +
         shasOf(divergence.state, divergence.importBase, divergence.collabHead),
     );
-    sentences.push(`Compared with the repo as fetched ${formatWhen(sync.fetchedAt)}.`);
+    sentences.push(`Compared with the repo as fetched ${formatWhen(sync.fetchedAt, zone)}.`);
   } else {
     sentences.push(
-      git.lastFetchAt === null ? 'Never fetched.' : `Last fetched ${formatWhen(git.lastFetchAt)}.`,
+      git.lastFetchAt === null
+        ? 'Never fetched.'
+        : `Last fetched ${formatWhen(git.lastFetchAt, zone)}.`,
     );
   }
   // A reading for another repo or branch (either changed while it was in
@@ -334,7 +340,7 @@ export function gitState({
     pullRequest?.repoUrl === git.repoUrl && pullRequest.workingBranch === git.workingBranch
       ? pullRequest
       : undefined;
-  sentences.push(...pullRequestSentence(pr));
+  sentences.push(...pullRequestSentence(pr, zone));
   return {
     name: `${git.workingBranch} → ${git.collabBranch}`,
     label: parts.join(' · '),
@@ -423,17 +429,20 @@ export function listRowBadge({ state, gitConnected, sync }: ListRowInput): {
  * GitHub) says nothing — absent, not wrong. Never a tone: a PR is neither good
  * nor bad news.
  */
-function pullRequestSentence(pr: WorkspaceGitPullRequestReading | undefined): string[] {
+function pullRequestSentence(
+  pr: WorkspaceGitPullRequestReading | undefined,
+  zone: DisplayTimeZone,
+): string[] {
   if (pr === undefined) return [];
   // When the host answered: the server reuses one answer for a while.
   if (pr.state === 'open') {
     return [
-      `Pull request #${String(pr.number)} is open from ${pr.workingBranch} (checked ${formatWhen(pr.checkedAt)}).`,
+      `Pull request #${String(pr.number)} is open from ${pr.workingBranch} (checked ${formatWhen(pr.checkedAt, zone)}).`,
     ];
   }
   if (pr.state === 'none') {
     return [
-      `No pull request is open from ${pr.workingBranch} (checked ${formatWhen(pr.checkedAt)}).`,
+      `No pull request is open from ${pr.workingBranch} (checked ${formatWhen(pr.checkedAt, zone)}).`,
     ];
   }
   if (pr.reason === 'no_token') return ['Pull requests are not checked: no GitHub token is set.'];

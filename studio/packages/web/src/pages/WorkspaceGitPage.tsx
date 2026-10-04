@@ -35,9 +35,9 @@ import {
   shortSha,
 } from '../api/workspaceGit';
 import { ApiError, messageOf } from '../api/client';
-import { formatWhen } from './runs/format';
 import { countOf } from '../lib/countOf';
 import { useConfirm } from '../lib/confirm/useConfirm';
+import { When } from '../lib/When';
 
 /**
  * #3 G10 / U18 slices 1-2 — Manage → Git (#956, #962).
@@ -373,7 +373,9 @@ function GitStatusPanel({
         <dt>State</dt>
         <dd>{describeState(status)}</dd>
         <dt>Last checked</dt>
-        <dd>{formatWhen(status.lastFetchAt)}</dd>
+        <dd>
+          <When ms={status.lastFetchAt} />
+        </dd>
         <dt>Collaboration branch head</dt>
         <dd>{shortSha(status.observedCollabHead)}</dd>
         <dt>Imported from</dt>

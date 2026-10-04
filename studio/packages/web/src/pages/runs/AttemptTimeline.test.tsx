@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { AttemptTimeline } from './AttemptTimeline';
 import { placeSpans, timelineWindow, untimedReason } from './attemptSpans';
-import { formatClock } from './format';
 import { emptyNodeCost, type AttemptSpan, type NodeActivity } from './runSummary';
+import { formatTimeOfDay } from '../../lib/displayTime';
 
 const span = (over: Partial<AttemptSpan> & { startedAtMs: number }): AttemptSpan => ({
   endedAtMs: undefined,
@@ -193,6 +193,28 @@ describe('untimedReason', () => {
 });
 
 describe('<AttemptTimeline>', () => {
+  it('dates both ends of the axis when the run crosses a day, and only the start when not', () => {
+    const axis = (endedAtMs: number) => {
+      const { container, unmount } = render(
+        <AttemptTimeline
+          nodes={[
+            node({
+              nodeId: 'a',
+              spans: [span({ startedAtMs: 0, endedAtMs, endedAs: 'success' })],
+            }),
+          ]}
+          nameOf={noNames}
+        />,
+      );
+      const text = container.querySelector('.timeline-axis-note')?.textContent ?? '';
+      unmount();
+      return text.match(/\d{4}-\d{2}-\d{2}/g)?.length ?? 0;
+    };
+    // Two days later is another day in every zone; 4 seconds stays on one.
+    expect(axis(2 * 86_400_000)).toBe(2);
+    expect(axis(4_000)).toBe(1);
+  });
+
   it('draws one bar per span, keeping the Nodes table order', () => {
     render(
       <AttemptTimeline
@@ -338,7 +360,7 @@ describe('<AttemptTimeline>', () => {
     const titles = [...container.querySelectorAll('.timeline-row .timeline-span')].map((b) =>
       b.getAttribute('title'),
     );
-    const at0 = formatClock(0);
+    const at0 = formatTimeOfDay(0, 'local', 'ms');
 
     expect(titles[0]).toBe(`A · running · started ${at0} · no end on record`);
     expect(titles[1]).toBe(`B · waiting (timer) · started ${at0} · no end on record`);

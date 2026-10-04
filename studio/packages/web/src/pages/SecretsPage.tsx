@@ -30,11 +30,11 @@ import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { SecretInput } from '../lib/form/SecretInput';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { payloadSignature } from './pipeline/configForm';
-import { formatWhen } from './runs/format';
 import { useConfirm } from '../lib/confirm/useConfirm';
 import { useBusyAction } from '../hooks/useBusyAction';
 import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
+import { When } from '../lib/When';
 
 /** `id === null` means creating; otherwise this form REPLACES that secret's
  *  value (#1061). The `id: string | null` discriminator is the shape
@@ -216,7 +216,9 @@ export function SecretsPage() {
                     <td>
                       <code>{secret.name}</code>
                     </td>
-                    <td>{formatWhen(secret.createdAt)}</td>
+                    <td>
+                      <When ms={secret.createdAt} />
+                    </td>
                     <td>
                       {/* No confirmation dialog on Replace, deliberately. The form
                       IS the confirmation — it names its target in the heading,

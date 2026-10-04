@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import type { AppSettings, MasterKeySource } from '@autonomy-studio/shared';
 import { SettingsPage } from './SettingsPage';
 import { getSettings } from '../api/settings';
+import { uiStore } from '../stores/uiStore';
 
 vi.mock('../api/settings', async (importActual) => ({
   ...(await importActual<typeof import('../api/settings')>()),
@@ -92,5 +93,30 @@ describe('SettingsPage — appearance', () => {
     const before = toggle.checked;
     await userEvent.click(toggle);
     expect(toggle.checked).toBe(!before);
+  });
+});
+
+describe('SettingsPage — display time zone (#1484)', () => {
+  afterEach(() => uiStore.getState().setDisplayTimeZone('local'));
+
+  it('starts on local, and a chosen zone is the store’s and shows in the hint', async () => {
+    getSettingsMock.mockResolvedValue(settings('env', null));
+    render(<SettingsPage />);
+    const picker = screen.getByLabelText<HTMLSelectElement>('Display time zone');
+    expect(picker.value).toBe('local');
+    expect(picker).toHaveAccessibleDescription(/^Times read like \d{4}-\d{2}-\d{2} /);
+
+    await userEvent.selectOptions(picker, 'UTC');
+    expect(uiStore.getState().displayTimeZone).toBe('UTC');
+    expect(picker.value).toBe('UTC');
+    expect(picker).toHaveAccessibleDescription(/^Times read like .* UTC$/);
+  });
+
+  it('keeps a stored zone the runtime does not list selectable, rather than dropping it', () => {
+    getSettingsMock.mockResolvedValue(settings('env', null));
+    // `Etc/GMT+5` formats but is not in `Intl.supportedValuesOf`'s list.
+    uiStore.getState().setDisplayTimeZone('Etc/GMT+5');
+    render(<SettingsPage />);
+    expect(screen.getByLabelText<HTMLSelectElement>('Display time zone').value).toBe('Etc/GMT+5');
   });
 });

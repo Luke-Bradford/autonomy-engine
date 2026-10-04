@@ -19,7 +19,7 @@ import {
   runLifecycleView,
   streamStillLive,
 } from './runSummary';
-import { eventGloss, failureClass, formatClock, formatOutputValue, formatWhen } from './format';
+import { eventGloss, failureClass, formatOutputValue } from './format';
 import { activityLabels } from '../pipeline/activityLabel';
 import { nodeStatusLabel, nodeStatusPillClass } from './nodeStatus';
 import { runStatusLabel } from './runStatus';
@@ -39,6 +39,9 @@ import { useConfirm } from '../../lib/confirm/useConfirm';
 import { shortId } from '../../lib/ids';
 import { useShellLabel } from '../../shell/shellLabel';
 import { versionLabel } from '../../lib/versionLabel';
+import { When } from '../../lib/When';
+import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
+import { formatTimeOfDay, zoneLabel } from '../../lib/displayTime';
 
 /* The local `message(err)` this file used to declare was one of the twenty-odd
    inline copies `messageOf` was named to replace; `api/client.ts` asks each to
@@ -76,6 +79,7 @@ function phaseLabel(phase: StreamPhase): string {
  *   - a raw event feed shows every append in order.
  */
 export function RunDetailPage({ runId }: { runId: string }) {
+  const zone = useDisplayTimeZone();
   const navigate = useNavigate();
   const [run, setRun] = useState<Run | null>(null);
   const [doc, setDoc] = useState<PipelineVersion | null>(null);
@@ -637,9 +641,13 @@ export function RunDetailPage({ runId }: { runId: string }) {
             </>
           )}
           <dt>Started</dt>
-          <dd>{formatWhen(run.startedAt)}</dd>
+          <dd>
+            <When ms={run.startedAt} precision="ms" />
+          </dd>
           <dt>Finished</dt>
-          <dd>{formatWhen(run.finishedAt)}</dd>
+          <dd>
+            <When ms={run.finishedAt} precision="ms" />
+          </dd>
           <dt>Params</dt>
           <dd>
             <code>{JSON.stringify(run.params)}</code>
@@ -888,7 +896,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
           <thead>
             <tr>
               <th scope="col">Seq</th>
-              <th scope="col">Time</th>
+              {/* Clock times only, so the zone is named once, here. */}
+              <th scope="col">Time{feed.length > 0 ? ` (${zoneLabel(feed[0]!.ts, zone)})` : ''}</th>
               <th scope="col">Type</th>
               <th scope="col">Detail</th>
             </tr>
@@ -904,7 +913,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
             {feed.map((e) => (
               <tr key={e.seq}>
                 <td>{e.seq}</td>
-                <td>{formatClock(e.ts)}</td>
+                <td>{formatTimeOfDay(e.ts, zone, 'ms')}</td>
                 <td>
                   <code>{e.type}</code>
                 </td>

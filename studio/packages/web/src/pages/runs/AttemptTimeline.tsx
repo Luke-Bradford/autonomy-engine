@@ -1,8 +1,10 @@
 import type { RunStatus } from '@autonomy-studio/shared';
 import type { NodeActivity, AttemptSpan } from './runSummary';
 import { nodeStatusLabel, nodeStatusTone, type StatusTone } from './nodeStatus';
-import { formatClock, formatElapsed } from './format';
+import { formatElapsed } from './format';
 import { placeSpans, timelineWindow, untimedReason } from './attemptSpans';
+import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
+import { dayOf, formatTimeOfDay, formatTimestamp, zoneLabel } from '../../lib/displayTime';
 
 /**
  * U12a (#1007) — the run's spans drawn against one shared time axis, so an
@@ -86,6 +88,7 @@ export function AttemptTimeline({
   nameOf,
   runStatus,
 }: AttemptTimelineProps): React.ReactElement {
+  const zone = useDisplayTimeZone();
   const timed = nodes.filter((n) => n.spans.length > 0);
   const untimed = nodes.filter((n) => n.spans.length === 0);
   const window = timelineWindow(nodes);
@@ -107,8 +110,15 @@ export function AttemptTimeline({
     <section aria-labelledby="timeline-heading" className="attempt-timeline">
       <h3 id="timeline-heading">Timeline</h3>
       <p className="timeline-axis-note">
-        {formatClock(window.from)} → {formatClock(window.to)} ·{' '}
-        {formatElapsed(Math.max(0, window.to - window.from))} of measured wall clock. A node that
+        {formatTimestamp(window.from, zone, 'ms')} →{' '}
+        {/* The end in full when its day or zone offset differs from the start's:
+            a run across midnight or a DST change must not read as one that ran
+            backwards. */}
+        {dayOf(window.from, zone) === dayOf(window.to, zone) &&
+        zoneLabel(window.from, zone) === zoneLabel(window.to, zone)
+          ? formatTimeOfDay(window.to, zone, 'ms')
+          : formatTimestamp(window.to, zone, 'ms')}{' '}
+        · {formatElapsed(Math.max(0, window.to - window.from))} of measured wall clock. A node that
         ran more than once has one bar per run, and the gap between two bars is time the node was
         not running — a retry hold, or simply waiting its turn.
       </p>
@@ -145,8 +155,10 @@ export function AttemptTimeline({
                          to jsdom and quietly voided the test asserting it. */
                       ...(placed.width === null ? { right: '0' } : { width: `${placed.width}%` }),
                     }}
-                    title={`${name ?? node.nodeId} · ${spanLabel(placed.span, runStatus)} · started ${formatClock(
+                    title={`${name ?? node.nodeId} · ${spanLabel(placed.span, runStatus)} · started ${formatTimeOfDay(
                       placed.span.startedAtMs,
+                      zone,
+                      'ms',
                     )}${
                       placed.width === null
                         ? ` · ${unmeasuredNote(placed.span)}`

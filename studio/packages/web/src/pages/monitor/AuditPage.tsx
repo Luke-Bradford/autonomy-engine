@@ -2,8 +2,8 @@ import { useCallback } from 'react';
 import type { WorkspaceEventRow } from '@autonomy-studio/shared';
 import { fetchWorkspaceAuditPage } from '../../api/workspaceAudit';
 import { usePagedList } from '../../hooks/usePagedList';
-import { formatWhen } from '../runs/format';
 import { describeWorkspaceEvent } from './describeWorkspaceEvent';
+import { When } from '../../lib/When';
 
 /**
  * #1075 — Monitor › Audit: the workspace's own history.
@@ -127,7 +127,9 @@ export function AuditPage() {
       )}
 
       {lastUpdatedAt !== null && (
-        <p className="page-hint">Audit log as of {formatWhen(lastUpdatedAt)}.</p>
+        <p className="page-hint">
+          Audit log as of <When ms={lastUpdatedAt} />.
+        </p>
       )}
     </section>
   );
@@ -137,7 +139,9 @@ function AuditRow({ row }: { row: WorkspaceEventRow }) {
   const { summary, detail } = describeWorkspaceEvent(row.payload);
   return (
     <tr>
-      <td>{formatWhen(row.createdAt)}</td>
+      <td>
+        <When ms={row.createdAt} />
+      </td>
       {/* The actor is a single local principal today, so this column reads the
           same on every row. It stays because the field is half the log's reason
           to exist ("who?") and a column added later would leave the history

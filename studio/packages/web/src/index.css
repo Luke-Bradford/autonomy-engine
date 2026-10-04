@@ -4538,6 +4538,12 @@ button.danger {
   font-size: 0.75em;
 }
 
+/* #1484 — the display zone after a time column's label: quieter than the label. */
+.runs-grid__zone {
+  font-weight: normal;
+  color: var(--colorNeutralForeground3);
+}
+
 .runs-grid .num,
 .runs-grid .run-cost {
   text-align: right;

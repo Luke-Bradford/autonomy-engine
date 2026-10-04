@@ -217,6 +217,7 @@ import { EditorStateBadge } from './EditorStateBadge';
 import { canvasVersion, editingState, gitState, liveState, partText } from './editorState';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { useConfirm } from '../../lib/confirm/useConfirm';
+import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 
 /**
  * How long a canvas-gesture notice stays up — copy/paste/duplicate, and U9's
@@ -329,6 +330,7 @@ export function PipelineCanvas({
   onArchived,
   openVersion,
 }: PipelineCanvasProps) {
+  const displayZone = useDisplayTimeZone();
   const [requestedVersion] = useState(openVersion);
   const store = useState(() => createCanvasStore())[0];
   const [connections, setConnections] = useState<ConnectionPublic[]>([]);
@@ -1025,6 +1027,7 @@ export function PipelineCanvas({
     sync: gitSync,
     pipelineId,
     pullRequest: gitConnected === true ? gitPr : undefined,
+    zone: displayZone,
   });
 
   // U16 — `loaded` LEAVES the dep list: `params` moved into the store, and it

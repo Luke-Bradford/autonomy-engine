@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import type { PendingExternalWait, PipelineVersion } from '@autonomy-studio/shared';
 import { completeExternalWait, listExternalWaits } from '../../api/runs';
 import { messageOf } from '../../api/client';
-import { formatWhen } from './format';
 import { describeCallbackBody, parkedDocNode, waitKey } from './externalWaits';
 import { JsonEditor } from '../../lib/form/JsonEditor';
 import { notValidJson } from '../../lib/json/jsonText';
+import { When } from '../../lib/When';
 
 /**
  * #900 — the run monitor's pending inbound callbacks.
@@ -275,7 +275,7 @@ export function PendingCallbacks({
                     </>
                   )}
                   {' · expires '}
-                  {formatWhen(wait.expiresAt)}
+                  <When ms={wait.expiresAt} />
                 </p>
                 {bodyHint !== null && (
                   <p className="page-hint" id={hintId}>

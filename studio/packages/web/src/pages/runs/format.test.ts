@@ -3,6 +3,7 @@ import type { RunEvent } from '@autonomy-studio/shared';
 import {
   eventGloss,
   failureClass,
+  formatElapsed,
   formatLiveElapsed,
   formatNodeDuration,
   formatOutputValue,
@@ -179,17 +180,29 @@ describe('formatRunDuration', () => {
     expect(formatRunDuration(run({ status: 'queued' }), 999_999)).toBe('—');
   });
 
-  it('scales the units from milliseconds to hours', () => {
+  it('scales the units from seconds to hours, in one format (#1484)', () => {
     const span = (ms: number) => formatRunDuration(run({ startedAt: 0, finishedAt: ms }), 0);
-    expect(span(820)).toBe('820ms');
+    expect(span(0)).toBe('0s');
+    expect(span(820)).toBe('0.82s');
+    expect(span(1_234)).toBe('1.234s');
     expect(span(7_000)).toBe('7s');
+    expect(span(10_500)).toBe('10.5s');
+    expect(span(59_999)).toBe('59.999s');
+    expect(span(60_000)).toBe('1m 00s');
+    expect(formatElapsed(Number.NaN)).toBe('—');
     expect(span(3 * 60_000 + 7_000)).toBe('3m 07s');
     expect(span(60 * 60_000 + 4 * 60_000)).toBe('1h 04m');
   });
 
   it('never renders a negative duration from a clock that ran backwards', () => {
-    expect(formatRunDuration(run({ status: 'running', finishedAt: null }), 0)).toBe('0ms so far');
-    expect(formatRunDuration(run({ startedAt: 8_000, finishedAt: 1_000 }), 0)).toBe('0ms');
+    expect(formatRunDuration(run({ status: 'running', finishedAt: null }), 0)).toBe('<1s so far');
+    expect(formatRunDuration(run({ startedAt: 8_000, finishedAt: 1_000 }), 0)).toBe('0s');
+  });
+
+  it('times an unfinished run to the whole second — its other end is a clock', () => {
+    expect(
+      formatRunDuration(run({ status: 'running', startedAt: 0, finishedAt: null }), 12_345),
+    ).toBe('12s so far');
   });
 });
 
@@ -201,11 +214,11 @@ describe('formatNodeDuration (#867)', () => {
   });
 
   it('is the span between the attempt start and its settle', () => {
-    expect(formatNodeDuration(node({ startedAtMs: 1_000, endedAtMs: 4_200 }))).toBe('3s');
+    expect(formatNodeDuration(node({ startedAtMs: 1_000, endedAtMs: 4_200 }))).toBe('3.2s');
   });
 
   it('renders sub-second spans in ms rather than rounding them to 0s', () => {
-    expect(formatNodeDuration(node({ startedAtMs: 1_000, endedAtMs: 1_820 }))).toBe('820ms');
+    expect(formatNodeDuration(node({ startedAtMs: 1_000, endedAtMs: 1_820 }))).toBe('0.82s');
   });
 
   it('says NOTHING for a node with no start stamp — never 0ms', () => {
