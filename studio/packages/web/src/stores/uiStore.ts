@@ -106,7 +106,10 @@ export interface UiState {
    * `runsGridHidden` names the columns the operator turned OFF, in column
    * order; storing the hidden set rather than the shown one means a column a
    * later release adds appears by default. With no stored choice it is
-   * `RUN_GRID_DEFAULT_HIDDEN`. A required column is never in it.
+   * `RUN_GRID_DEFAULT_HIDDEN`. A required column is never in it. A link's
+   * `hide` param overrides it for that visit without changing it (`RunsPage`);
+   * a choice made in the picker writes both. `resetRunsGridColumns` resets the
+   * widths as well.
    * `runsGridWidths` holds only the columns the operator resized, in px; an
    * absent column draws at its default.
    */
@@ -125,6 +128,14 @@ export interface UiState {
   setRunsLive: (live: boolean) => void;
   runsPageSize: RunPageSize;
   setRunsPageSize: (size: RunPageSize) => void;
+  /**
+   * #1484 OR35 M1 principle 5 — the runs list's last-used query, as the page's
+   * `rememberedRunsQuery` spells it ('' for none). `RunsPage` restores it into a
+   * bare visit to the list. Per viewer, and opaque here: the page owns which
+   * params it holds and re-reads every value through the URL's own parsers.
+   */
+  runsLastQuery: string;
+  setRunsLastQuery: (query: string) => void;
 }
 
 export type UiStore = StoreApi<UiState>;
@@ -234,6 +245,10 @@ export const RUN_GRID_HIDDEN_STORAGE_KEY = 'autonomy-studio.runs-grid-hidden';
 export const RUN_GRID_WIDTHS_STORAGE_KEY = 'autonomy-studio.runs-grid-widths';
 export const RUNS_LIVE_STORAGE_KEY = 'autonomy-studio.runs-live';
 export const RUNS_PAGE_SIZE_STORAGE_KEY = 'autonomy-studio.runs-page-size';
+export const RUNS_LAST_QUERY_STORAGE_KEY = 'autonomy-studio.runs-last-query';
+/** Far above any query the list writes (ids, a kind list, a sort); a stored
+ * value past it is not one the page wrote, so it reads as none. */
+export const RUNS_LAST_QUERY_MAX_CHARS = 2048;
 
 /**
  * Pane width bounds. The minimum is a readable list width; the maximum keeps
@@ -499,7 +514,8 @@ type StoredAsIs =
   | 'historyOpen'
   | 'displayTimeZone'
   | 'runsLive'
-  | 'runsPageSize';
+  | 'runsPageSize'
+  | 'runsLastQuery';
 
 /** The pane preference as it is persisted — one record, written atomically. */
 interface StoredPane {
@@ -536,7 +552,7 @@ function isRunGridColumn(value: unknown): value is RunGridColumnId {
  * in column order. Applied on write as well as on read, so the store can never
  * hold a set the picker could not have produced.
  */
-function canonicalHidden(ids: readonly unknown[]): RunGridColumnId[] {
+export function canonicalHidden(ids: readonly unknown[]): RunGridColumnId[] {
   return RUN_GRID_COLUMNS.filter(
     (column) => ids.includes(column) && !RUN_GRID_REQUIRED_COLUMNS.includes(column),
   );
@@ -664,6 +680,12 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       parseRunPageSize,
       RUN_PAGE_SIZES[0],
     );
+    const [runsLastQuery, setRunsLastQuery] = pref(
+      'runsLastQuery',
+      RUNS_LAST_QUERY_STORAGE_KEY,
+      (raw) => (raw.length <= RUNS_LAST_QUERY_MAX_CHARS ? raw : undefined),
+      '',
+    );
 
     /* Both pane setters persist the WHOLE record, so the two fields can never
        drift apart in storage — a width that survived a write the collapse flag
@@ -762,6 +784,8 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       setRunsLive,
       runsPageSize,
       setRunsPageSize,
+      runsLastQuery,
+      setRunsLastQuery,
       /* Validated on the way IN as well as out: a zone the runtime cannot
          format in would make every timestamp on every page throw. */
       setDisplayTimeZone: (zone) => {

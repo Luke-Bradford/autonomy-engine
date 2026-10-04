@@ -10,6 +10,11 @@ import {
   readRunFilters,
   readRunSort,
   runSortParams,
+  hasRunsListParams,
+  rememberedRunsQuery,
+  readRunGridHiddenParam,
+  runGridHiddenParam,
+  RUN_GRID_HIDDEN_PARAM,
 } from './runFilters';
 
 describe('readRunFilters — U26 annotation', () => {
@@ -183,5 +188,71 @@ describe('the runs grid sort in the URL — #1484', () => {
     expect(hasRunFilterParams(new URLSearchParams('sort=status&dir=desc'))).toBe(false);
     expect(isDefaultRunSort(read('sort=status'))).toBe(false);
     expect(isDefaultRunSort(read(''))).toBe(true);
+  });
+});
+
+describe('the runs list query remembered per viewer — #1484', () => {
+  const remembered = (query: string) => rememberedRunsQuery(new URLSearchParams(query));
+
+  it('keeps the filters, the window, the sort and the children toggle', () => {
+    expect(
+      remembered(
+        'status=failure&pipeline=p_1&trigger=t_1&since=7d&annotation=nightly&kind=schedule&sort=status&dir=desc&children=off',
+      ),
+    ).toBe(
+      'status=failure&pipeline=p_1&trigger=t_1&since=7d&annotation=nightly&kind=schedule&sort=status&dir=desc&children=off',
+    );
+  });
+
+  it('drops one-off questions, view settings and the columns', () => {
+    expect(
+      remembered(
+        'q=abc&on=2026-10-01&from=2026-09-01&to=2026-09-02&view=timeline&group=trigger&hide=cost',
+      ),
+    ).toBe('');
+  });
+
+  it('drops what narrows nothing: junk, an empty value, the default sort, children on', () => {
+    expect(
+      remembered('status=bogus&pipeline=&since=1y&kind=&sort=started&dir=desc&children=on'),
+    ).toBe('');
+  });
+
+  it('says whether a URL names any of the list state, so a bare one can be restored', () => {
+    expect(hasRunsListParams(new URLSearchParams(''))).toBe(false);
+    expect(hasRunsListParams(new URLSearchParams('view=timeline&group=trigger'))).toBe(false);
+    for (const query of [
+      'status=bogus',
+      'on=',
+      'q=x',
+      'sort=status',
+      'children=off',
+      'hide=cost',
+    ]) {
+      expect(hasRunsListParams(new URLSearchParams(query))).toBe(true);
+    }
+  });
+});
+
+describe('the runs grid column choice in the URL — #1484', () => {
+  it('round-trips a hidden set, the empty one included', () => {
+    for (const hidden of [[], ['annotations'], ['status', 'cost']] as const) {
+      const params = new URLSearchParams({ [RUN_GRID_HIDDEN_PARAM]: runGridHiddenParam(hidden) });
+      expect(readRunGridHiddenParam(params)).toEqual(hidden);
+    }
+    expect(runGridHiddenParam([])).toBe('none');
+  });
+
+  it('is absent, so the viewer’s own choice applies, when the param is missing or junk', () => {
+    expect(readRunGridHiddenParam(new URLSearchParams(''))).toBeUndefined();
+    expect(readRunGridHiddenParam(new URLSearchParams('hide='))).toBeUndefined();
+    expect(readRunGridHiddenParam(new URLSearchParams('hide=bogus'))).toBeUndefined();
+  });
+
+  it('never hides a required column, and keeps column order', () => {
+    expect(readRunGridHiddenParam(new URLSearchParams('hide=runId,cost,pipeline,status'))).toEqual([
+      'status',
+      'cost',
+    ]);
   });
 });

@@ -34,6 +34,7 @@ import {
   RUN_GRID_HIDDEN_STORAGE_KEY,
   RUN_GRID_RESIZE_STEP,
   RUNS_LIVE_STORAGE_KEY,
+  uiStore,
 } from '../../stores/uiStore';
 
 // Mock the whole api/runs network surface (matching the ConnectionsPage test
@@ -204,6 +205,10 @@ function pageOf(
 }
 
 beforeEach(() => {
+  /* #1484 — the singleton's last-used query is written by every render that
+     does not inject a `ui`; left set, it would be restored into the next
+     case's bare URL. */
+  uiStore.getState().setRunsLastQuery('');
   listMock.mockResolvedValue(pageOf([]));
   vi.mocked(runsApi.listRunAnnotations).mockResolvedValue([]);
   triggersMock.mockResolvedValue([]);
@@ -1908,5 +1913,143 @@ describe('#1484 — runs list Live mode and page size', () => {
     await userEvent.selectOptions(screen.getByLabelText('Runs per page'), '100');
     expect(listMock).toHaveBeenLastCalledWith({ ...CHILDREN }, undefined, expect.anything(), 100);
     expect(ui.getState().runsPageSize).toBe(100);
+  });
+});
+
+describe('#1484 principle 5 — the last-used query is remembered, the columns are in the URL', () => {
+  const freshUi = (lastQuery = '') => {
+    const data = new Map<string, string>();
+    const ui = createUiStore({
+      getItem: (key) => data.get(key) ?? null,
+      setItem: (key, value) => {
+        data.set(key, value);
+      },
+    });
+    ui.getState().setRunsLastQuery(lastQuery);
+    return ui;
+  };
+  /** The list and one other page, so a test can leave the list and come back. */
+  function renderRoutes(ui: ReturnType<typeof createUiStore>, path: string) {
+    const router = createMemoryRouter(
+      [
+        { path: '/runs', element: <RunsPage ui={ui} /> },
+        { path: '/elsewhere', element: <p>Elsewhere</p> },
+      ],
+      { initialEntries: [path] },
+    );
+    render(<RouterProvider router={router} />);
+    return router;
+  }
+  const asked = () => listMock.mock.calls.map((call) => call[0]!);
+  beforeEach(() => {
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_abc', status: 'failure' })]));
+  });
+
+  it('restores the last-used query into a bare visit, as a replace, and never asks for the bare list', async () => {
+    const ui = freshUi('status=failure&sort=duration');
+    const router = renderRoutes(ui, '/runs');
+    await screen.findAllByText(/Nightly report/);
+    expect(new URLSearchParams(router.state.location.search).get('status')).toBe('failure');
+    expect(new URLSearchParams(router.state.location.search).get('sort')).toBe('duration');
+    expect(router.state.historyAction).toBe('REPLACE');
+    expect(asked().length).toBeGreaterThan(0);
+    for (const query of asked())
+      expect(query).toMatchObject({ status: 'failure', sort: 'duration' });
+  });
+
+  it('honours a link that names anything exactly, and does not remember it until the viewer changes it', async () => {
+    const ui = freshUi('status=failure');
+    const router = renderRoutes(ui, '/runs?pipeline=pipe_9');
+    await screen.findAllByText(/Nightly report/);
+    expect(router.state.location.search).toBe('?pipeline=pipe_9');
+    expect(asked().length).toBeGreaterThan(0);
+    for (const query of asked()) expect(query.status).toBeUndefined();
+    expect(ui.getState().runsLastQuery).toBe('status=failure');
+    // A change made here is the viewer's own: from then on, it is remembered.
+    await act(() => router.navigate('/runs?pipeline=pipe_9&since=7d'));
+    await waitFor(() => expect(ui.getState().runsLastQuery).toBe('pipeline=pipe_9&since=7d'));
+  });
+
+  it('keeps the view through a restore, and carries a custom column choice into a bare visit', async () => {
+    const ui = freshUi('status=failure');
+    ui.getState().setRunsGridHidden(['cost', 'annotations']);
+    const router = renderRoutes(ui, '/runs?view=timeline');
+    await screen.findAllByText(/Nightly report/);
+    const params = new URLSearchParams(router.state.location.search);
+    expect(params.get('view')).toBe('timeline');
+    expect(params.get('status')).toBe('failure');
+    expect(params.get('hide')).toBe('cost,annotations');
+  });
+
+  it('leaves the default column choice out of a bare visit', async () => {
+    const router = renderRoutes(freshUi(), '/runs');
+    await screen.findAllByText(/Nightly report/);
+    expect(router.state.location.search).toBe('');
+  });
+
+  it('drops a stored value the page would not have written', async () => {
+    const ui = freshUi('status=bogus&q=abc&on=2026-10-01&evil=1');
+    const router = renderRoutes(ui, '/runs');
+    await screen.findAllByText(/Nightly report/);
+    expect(router.state.location.search).toBe('');
+  });
+
+  it('never fills a cleared list back in, and Back to a bare entry stays bare', async () => {
+    const ui = freshUi('status=failure');
+    const router = renderRoutes(ui, '/runs');
+    await screen.findAllByText(/Nightly report/);
+    await userEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    await waitFor(() => expect(router.state.location.search).toBe(''));
+    await waitFor(() => expect(ui.getState().runsLastQuery).toBe(''));
+    await act(() => router.navigate('/runs?status=success'));
+    await waitFor(() => expect(ui.getState().runsLastQuery).toBe('status=success'));
+    await act(() => router.navigate(-1));
+    await waitFor(() => expect(router.state.location.search).toBe(''));
+    await screen.findAllByText(/Nightly report/);
+    expect(router.state.location.search).toBe('');
+  });
+
+  it('restores on coming back to the list from another page', async () => {
+    const ui = freshUi();
+    const router = renderRoutes(ui, '/runs');
+    await screen.findAllByText(/Nightly report/);
+    await act(() => router.navigate('/runs?status=failure&children=off'));
+    await waitFor(() => expect(ui.getState().runsLastQuery).toBe('status=failure&children=off'));
+    await act(() => router.navigate('/elsewhere'));
+    await screen.findByText('Elsewhere');
+    await act(() => router.navigate('/runs'));
+    await screen.findAllByText(/Nightly report/);
+    expect(router.state.location.search).toBe('?status=failure&children=off');
+  });
+
+  it('draws the columns a link hides, without making them the viewer’s own choice', async () => {
+    const ui = freshUi();
+    renderRoutes(ui, '/runs?hide=status,cost');
+    await screen.findAllByText(/Nightly report/);
+    const headers = within(screen.getByRole('table'))
+      .getAllByRole('columnheader')
+      .map((h) => h.getAttribute('aria-label'));
+    expect(headers).not.toContain('Status');
+    expect(headers).not.toContain('Cost');
+    expect(headers).toContain('Annotations');
+    expect(ui.getState().runsGridHidden).toEqual(['annotations']);
+  });
+
+  it('writes a column choice to the URL (a replace) and the viewer’s store; Reset takes it out', async () => {
+    const ui = freshUi();
+    const router = renderRoutes(ui, '/runs');
+    await screen.findAllByText(/Nightly report/);
+    await userEvent.click(screen.getByRole('button', { name: /Columns/ }));
+    await userEvent.click(await screen.findByRole('menuitemcheckbox', { name: 'Cost' }));
+    await waitFor(() =>
+      expect(new URLSearchParams(router.state.location.search).get('hide')).toBe(
+        'cost,annotations',
+      ),
+    );
+    expect(router.state.historyAction).toBe('REPLACE');
+    expect(ui.getState().runsGridHidden).toEqual(['cost', 'annotations']);
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Reset columns' }));
+    await waitFor(() => expect(router.state.location.search).toBe(''));
+    expect(ui.getState().runsGridHidden).toEqual(['annotations']);
   });
 });

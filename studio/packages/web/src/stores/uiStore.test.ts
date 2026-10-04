@@ -44,6 +44,8 @@ import {
   ambientStorage,
   createUiStore,
   type PreferenceStorage,
+  RUNS_LAST_QUERY_MAX_CHARS,
+  RUNS_LAST_QUERY_STORAGE_KEY,
 } from './uiStore';
 
 /**
@@ -811,5 +813,23 @@ describe('uiStore runs list live mode and page size (#1484)', () => {
     expect(createUiStore(fakeStorage({ [RUNS_LIVE_STORAGE_KEY]: 'yes' })).getState().runsLive).toBe(
       false,
     );
+  });
+});
+
+describe('uiStore runs list last-used query (#1484)', () => {
+  it('starts empty and persists across a new store on the same storage', () => {
+    const storage = fakeStorage();
+    const store = createUiStore(storage);
+    expect(store.getState().runsLastQuery).toBe('');
+    store.getState().setRunsLastQuery('status=failed&since=7d');
+    expect(storage.data.get(RUNS_LAST_QUERY_STORAGE_KEY)).toBe('status=failed&since=7d');
+    expect(createUiStore(storage).getState().runsLastQuery).toBe('status=failed&since=7d');
+  });
+
+  it('reads an over-long stored query as none', () => {
+    const raw = `pipeline=${'p'.repeat(RUNS_LAST_QUERY_MAX_CHARS)}`;
+    expect(
+      createUiStore(fakeStorage({ [RUNS_LAST_QUERY_STORAGE_KEY]: raw })).getState().runsLastQuery,
+    ).toBe('');
   });
 });

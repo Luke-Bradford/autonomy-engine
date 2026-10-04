@@ -25,7 +25,7 @@ import {
   type TriggerPublic,
 } from '@autonomy-studio/shared';
 import { useStore } from 'zustand';
-import { useSearchParams } from 'react-router';
+import { Navigate, useSearchParams } from 'react-router';
 import { listRunAnnotations, listRuns, type ListRunsQuery } from '../../api/runs';
 import { RunsExportButton, RunsExportNote } from './RunsExportButton';
 import { useRunsExport } from './useRunsExport';
@@ -38,7 +38,12 @@ import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore
 import { runStatusLabel } from './runStatus';
 import { RunTimeline } from './RunTimeline';
 import { RunGridColumnsMenu, RunsGrid } from './RunsGrid';
-import { uiStore, type UiStore } from '../../stores/uiStore';
+import {
+  RUN_GRID_DEFAULT_HIDDEN,
+  uiStore,
+  type RunGridColumnId,
+  type UiStore,
+} from '../../stores/uiStore';
 import {
   canonicalKindParam,
   dayRangeBounds,
@@ -49,9 +54,16 @@ import {
   NO_RUNS_YET,
   readKinds,
   readRunFilters,
+  readRunGridHiddenParam,
+  hasRunsListParams,
   readRunSort,
+  rememberedRunsQuery,
+  runGridHiddenParam,
   runSortParams,
+  RUN_CHILDREN_OFF,
+  RUN_CHILDREN_PARAM,
   RUN_FILTER_PARAMS,
+  RUN_GRID_HIDDEN_PARAM,
   RUN_SINCE_LABEL,
   RUN_SINCE_OPTIONS,
   startedModeOf,
@@ -82,17 +94,6 @@ type RunView = 'list' | 'timeline';
  * and it survives a switch to List, so returning to the timeline restores it.
  */
 const GROUP_PARAM = 'group';
-
-/**
- * #1484 OR35 M1 — "Include child runs", ON unless the URL says `children=off`.
- * When on, the list asks the server for each page's `descendants` (the runs its
- * runs called, which carry no trigger of their own, so a trigger filter alone
- * drops them) and the grid draws each under the run that called it. A view
- * setting like `group`, not a filter: "Clear filters" keeps it, and it does not
- * make an empty list "filtered". List view only — the Timeline lays runs out by
- * time and does not nest, so it gets exactly the runs that matched.
- */
-const CHILDREN_PARAM = 'children';
 
 /**
  * A page with its `descendants` folded into `items`, so the paged list holds one
@@ -183,9 +184,53 @@ export function RunsPage({
   ui = uiStore,
 }: {
   store?: PipelinesStore;
-  /** #1484 — the grid's per-viewer column preferences; injected by tests. */
+  /** #1484 — the list's per-viewer preferences (columns, Live, page size,
+   * the last-used query); injected by tests. */
   ui?: UiStore;
 } = {}) {
+  const [searchParams] = useSearchParams();
+  /*
+   * #1484 OR35 M1 principle 5 — the viewer's last-used query, restored into a
+   * BARE visit to the list (one whose URL names no list state at all,
+   * `hasRunsListParams`). Decided once, when the page MOUNTS: a URL that turns
+   * bare while the page is open — Clear, or Back to an entry before the first
+   * filter — is the viewer's own doing and is never filled back in, so Back is
+   * never trapped. A link that names anything (`?pipeline=` from Triggers, a
+   * shared URL) is honoured exactly, with nothing stored merged into it.
+   *
+   * A `replace`, so the restored URL is the visit's one history entry, and the
+   * list never mounts on the bare URL, so it never fetches the unfiltered page
+   * only to throw it away. The stored text is re-read through
+   * `rememberedRunsQuery`, so a value the page would not have written is
+   * dropped before it reaches the URL.
+   *
+   * The viewer's own column choice rides along as `hide` when it is not the
+   * default, so the address of what is on screen is a link that shows it.
+   */
+  const [restore, setRestore] = useState(() => {
+    if (hasRunsListParams(searchParams)) return '';
+    const { runsLastQuery, runsGridHidden } = ui.getState();
+    const params = new URLSearchParams(rememberedRunsQuery(new URLSearchParams(runsLastQuery)));
+    const hide = runGridHiddenParam(runsGridHidden);
+    if (hide !== runGridHiddenParam(RUN_GRID_DEFAULT_HIDDEN)) {
+      params.set(RUN_GRID_HIDDEN_PARAM, hide);
+    }
+    return params.toString();
+  });
+  const bare = !hasRunsListParams(searchParams);
+  // Spent once the URL holds it — adjusted during render, as `syncedQ` is, so a
+  // later bare URL can never see it.
+  if (restore !== '' && !bare) setRestore('');
+  if (restore !== '' && bare) {
+    const params = new URLSearchParams(searchParams);
+    for (const [param, value] of new URLSearchParams(restore)) params.set(param, value);
+    return <Navigate replace to={{ search: `?${params.toString()}` }} />;
+  }
+  return <RunsList store={store} ui={ui} />;
+}
+
+/** `RunsPage` once any restore has happened: the list itself. */
+function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
   const zone = useDisplayTimeZone(ui);
   const live = useStore(ui, (s) => s.runsLive);
   const setLive = useStore(ui, (s) => s.setRunsLive);
@@ -215,7 +260,52 @@ export function RunsPage({
    */
   const view: RunView = searchParams.get('view') === 'timeline' ? 'timeline' : 'list';
   const groupBy = readGroupBy(searchParams);
-  const includeChildren = view === 'list' && searchParams.get(CHILDREN_PARAM) !== 'off';
+  const includeChildren =
+    view === 'list' && searchParams.get(RUN_CHILDREN_PARAM) !== RUN_CHILDREN_OFF;
+
+  /*
+   * #1484 principle 5 — the columns: a link's `hide` when it carries one, else
+   * the viewer's stored choice. A choice made here writes BOTH, so the viewer's
+   * default follows it and the URL shows it; visiting a shared link writes
+   * neither. A `replace`: a column is not a place to go Back to.
+   */
+  const storedHidden = useStore(ui, (s) => s.runsGridHidden);
+  const setStoredHidden = useStore(ui, (s) => s.setRunsGridHidden);
+  const resetColumns = useStore(ui, (s) => s.resetRunsGridColumns);
+  const hidden = useMemo(
+    () => readRunGridHiddenParam(searchParams) ?? storedHidden,
+    [searchParams, storedHidden],
+  );
+  function setHidden(next: readonly RunGridColumnId[]) {
+    setStoredHidden(next);
+    setSearchParams(
+      (prev) => withParams(prev, { [RUN_GRID_HIDDEN_PARAM]: runGridHiddenParam(next) }),
+      { replace: true },
+    );
+  }
+  function resetHidden() {
+    resetColumns();
+    setSearchParams((prev) => withParams(prev, { [RUN_GRID_HIDDEN_PARAM]: '' }), {
+      replace: true,
+    });
+  }
+
+  /* #1484 principle 5 — what `RunsPage` restores next time: the list as the
+     VIEWER has made it. Arriving changes nothing — a link from Triggers or a
+     shared URL is somebody else's question, and visiting it must not replace
+     the viewer's standing view. From the first change made here on, every
+     change is remembered, '' included (a cleared list is remembered as
+     cleared). Compared with the arrival rather than skipping the first effect,
+     which StrictMode runs twice. */
+  const lastQuery = rememberedRunsQuery(searchParams);
+  const setLastQuery = useStore(ui, (s) => s.setRunsLastQuery);
+  const arrivedWith = useRef(lastQuery);
+  const moved = useRef(false);
+  useEffect(() => {
+    if (!moved.current && lastQuery === arrivedWith.current) return;
+    moved.current = true;
+    setLastQuery(lastQuery);
+  }, [lastQuery, setLastQuery]);
 
   function selectView(next: RunView) {
     const params = new URLSearchParams(searchParams);
@@ -552,13 +642,20 @@ export function RunsPage({
         </div>
         {/* #1484 — which columns the grid draws. The Timeline has no columns,
             so it has no picker either. */}
-        {view === 'list' && <RunGridColumnsMenu ui={ui} sortKey={urlSort.key} />}
-        {/* #1484 — `CHILDREN_PARAM`. In the URL (a push), so Back undoes it. */}
+        {view === 'list' && (
+          <RunGridColumnsMenu
+            hidden={hidden}
+            sortKey={urlSort.key}
+            onHiddenChange={setHidden}
+            onReset={resetHidden}
+          />
+        )}
+        {/* #1484 — `RUN_CHILDREN_PARAM`. In the URL (a push), so Back undoes it. */}
         {view === 'list' && (
           <ToggleButton
             size="small"
             checked={includeChildren}
-            onClick={() => setFilter(CHILDREN_PARAM, includeChildren ? 'off' : '')}
+            onClick={() => setFilter(RUN_CHILDREN_PARAM, includeChildren ? RUN_CHILDREN_OFF : '')}
             title="Show the runs each run called, nested under it"
           >
             Include child runs
@@ -851,6 +948,7 @@ export function RunsPage({
               ticking={ticking}
               sort={urlSort}
               onSort={sortBy}
+              hidden={hidden}
               ui={ui}
               nested={includeChildren}
             />

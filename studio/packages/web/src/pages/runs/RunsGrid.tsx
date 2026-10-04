@@ -203,6 +203,7 @@ export function RunsGrid({
   ticking = false,
   sort,
   onSort,
+  hidden,
   ui,
   nested = false,
 }: {
@@ -218,6 +219,9 @@ export function RunsGrid({
   ticking?: boolean;
   sort: RunSortState;
   onSort: (column: RunSortKey) => void;
+  /** #1484 — the columns turned off: the URL's `hide` when a link carries one,
+   * else the viewer's stored choice (`RunsPage` decides which). */
+  hidden: readonly RunGridColumnId[];
   ui: UiStore;
   /**
    * #1484 — "Include child runs": draw each run a loaded run called under it
@@ -240,7 +244,6 @@ export function RunsGrid({
       if (!next.delete(id)) next.add(id);
       return next;
     });
-  const hidden = useStore(ui, (s) => s.runsGridHidden);
   const widths = useStore(ui, (s) => s.runsGridWidths);
   const setWidth = useStore(ui, (s) => s.setRunsGridWidth);
   const zone = useDisplayTimeZone(ui);
@@ -330,10 +333,18 @@ export function RunsGrid({
  * listed checked and disabled, so the operator can see why it cannot go; so is
  * the column the grid is sorted by, for `visibleRunGridColumns`' reason.
  */
-export function RunGridColumnsMenu({ ui, sortKey }: { ui: UiStore; sortKey: RunSortKey }) {
-  const hidden = useStore(ui, (s) => s.runsGridHidden);
-  const setHidden = useStore(ui, (s) => s.setRunsGridHidden);
-  const reset = useStore(ui, (s) => s.resetRunsGridColumns);
+export function RunGridColumnsMenu({
+  hidden,
+  sortKey,
+  onHiddenChange: setHidden,
+  onReset: reset,
+}: {
+  /** As `RunsGrid`'s `hidden`: the set the grid is drawing. */
+  hidden: readonly RunGridColumnId[];
+  sortKey: RunSortKey;
+  onHiddenChange: (hidden: readonly RunGridColumnId[]) => void;
+  onReset: () => void;
+}) {
   const shown = visibleRunGridColumns(hidden, sortKey);
   const locked = (column: RunGridColumnId) => isPinnedRunGridColumn(column, sortKey);
   return (

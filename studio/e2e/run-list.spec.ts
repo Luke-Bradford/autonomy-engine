@@ -1000,3 +1000,81 @@ test('#1484 — Export CSV saves every run the filters match, as the list shows 
 
   await expectQuiet(page, problems);
 });
+
+test('#1484 — the list remembers the last-used query per viewer, and a link carries its columns', async ({
+  page,
+  browser,
+}) => {
+  const problems = collectPageProblems(page);
+  const stamp = `Remembered ${Date.now()}`;
+  const { pipelineVersionId } = await seedVersion(page, stamp, {
+    nodes: [{ id: 'n1', type: 'fail', config: { message: 'x' }, position: { x: 0, y: 0 } }],
+  });
+  const runId = await fireAndSettle(page, pipelineVersionId, 'e2e remembered');
+  const header = (name: string) => page.getByRole('columnheader', { name, exact: true });
+  const query = () => new URLSearchParams(new URL(page.url()).hash.split('?')[1] ?? '');
+
+  // Arrive by a link (failed runs, sorted by status): a link alone is not
+  // remembered. Turning child runs off here makes it the viewer's own view.
+  await page.goto('/#/monitor/runs?status=failure&sort=status');
+  await fluentRootReady(page);
+  await expect(page.getByRole('row').filter({ hasText: runId })).toHaveCount(1);
+  await page.getByRole('button', { name: 'Include child runs' }).click();
+  await expect.poll(() => query().get('children')).toBe('off');
+  await page.getByRole('button', { name: /^Columns/ }).click();
+  await page.getByRole('menuitemcheckbox', { name: 'Cost' }).click();
+  await page.keyboard.press('Escape');
+  await expect(header('Cost')).toHaveCount(0);
+  await expect.poll(() => query().get('hide')).toBe('cost,annotations');
+
+  // Leave for another hub, then come back to the BARE list address.
+  await page.goto('/#/author/pipelines');
+  await fluentRootReady(page);
+  const listRequests: string[] = [];
+  page.on('request', (r) => {
+    if (r.url().includes('/api/runs?')) listRequests.push(r.url());
+  });
+  await page.goto('/#/monitor/runs');
+  await expect(page.getByRole('row').filter({ hasText: runId })).toHaveCount(1);
+  // The query comes back, and the viewer's own column choice rides along as
+  // `hide`, so the address of this screen is a link that shows it.
+  await expect
+    .poll(() => query().toString())
+    .toBe('status=failure&sort=status&children=off&hide=cost%2Cannotations');
+  await expect(header('Cost')).toHaveCount(0);
+  // The list never asked for the unfiltered page on the way.
+  expect(listRequests.length).toBeGreaterThan(0);
+  for (const url of listRequests) expect(url).toContain('status=failure');
+
+  // Clear is remembered too: a later bare visit stays unfiltered.
+  await page.getByRole('button', { name: 'Clear filters' }).click();
+  await expect.poll(() => query().has('status')).toBe(false);
+  // The hash moves before React commits the cleared list (a router navigation
+  // is a transition), so wait for what the list REMEMBERED, not the address:
+  // leaving within the same frame would supersede the render that writes it.
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem('autonomy-studio.runs-last-query')))
+    .toBe('sort=status&children=off');
+  await page.goto('/#/author/pipelines');
+  await fluentRootReady(page);
+  await page.goto('/#/monitor/runs');
+  await expect(page.getByRole('row').filter({ hasText: runId })).toHaveCount(1);
+  expect(query().has('status')).toBe(false);
+  expect(query().get('sort')).toBe('status');
+
+  // A link's `hide` draws for a viewer who has never chosen columns, without
+  // becoming their choice.
+  const other = await browser.newContext({ baseURL: test.info().project.use.baseURL });
+  const shared = await other.newPage();
+  await shared.goto('/#/monitor/runs?hide=status');
+  await fluentRootReady(shared);
+  await expect(shared.getByRole('row').filter({ hasText: runId })).toHaveCount(1);
+  await expect(shared.getByRole('columnheader', { name: 'Status', exact: true })).toHaveCount(0);
+  await expect(shared.getByRole('columnheader', { name: 'Cost', exact: true })).toHaveCount(1);
+  expect(
+    await shared.evaluate(() => localStorage.getItem('autonomy-studio.runs-grid-hidden')),
+  ).toBeNull();
+  await other.close();
+
+  await expectQuiet(page, problems);
+});
