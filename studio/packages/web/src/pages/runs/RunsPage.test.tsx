@@ -62,6 +62,8 @@ vi.mock('../../api/runs', async (importActual) => ({
   // above, the path these tests have always exercised.
   getRunDetail: vi.fn().mockRejectedValue(new Error('run detail not stubbed')),
   getRunDiagnostics: vi.fn().mockResolvedValue([]),
+  // #1484 M2 — read from a mount effect, like `getRunDiagnostics`.
+  getRunActivityRuns: vi.fn().mockResolvedValue({ runId: 'r', rows: [] }),
 }));
 
 // U26's pickers each reach the network. Triggers get the same whole-module stub

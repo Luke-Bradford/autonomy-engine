@@ -77,6 +77,8 @@ vi.mock('./api/runs', async (importActual) => {
     // needs a resolved default here for the same reason as the rest of this
     // factory: unmocked it reaches a real `fetch` in jsdom.
     getRunDiagnostics: vi.fn().mockResolvedValue([]),
+    // #1484 M2 — read from a mount effect, like `getRunDiagnostics`.
+    getRunActivityRuns: vi.fn().mockResolvedValue({ runId: 'r', rows: [] }),
     // The run detail page reads R1 (`getRunDetail`), which resolves the run AND
     // the version doc its node overlay needs.
     getRunDetail: vi.fn((runId: string) =>

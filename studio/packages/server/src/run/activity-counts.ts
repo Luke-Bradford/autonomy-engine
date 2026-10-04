@@ -72,7 +72,7 @@ export function activityCountsFromState(
  * and everything inside those containers. The LAST `run.reseeded` wins, matching
  * the fold.
  */
-function reusedIds(
+export function reusedIds(
   doc: Pick<PipelineVersion, 'containers'>,
   events: readonly EngineEvent[],
 ): Set<string> {
@@ -112,12 +112,19 @@ export function rowsWrittenFromLog(events: readonly EngineEvent[]): number | nul
   let total: number | null = null;
   for (const e of events) {
     if (e.type !== 'node.succeeded' || seen.has(e.attemptId)) continue;
-    const rows = e.outputs.rowsWritten;
-    if (typeof rows !== 'number' || !Number.isSafeInteger(rows) || rows < 0) continue;
+    const rows = loggedCount(e.outputs.rowsWritten);
+    if (rows === null) continue;
     seen.add(e.attemptId);
     total = Math.min((total ?? 0) + rows, Number.MAX_SAFE_INTEGER);
   }
   return total;
+}
+
+/** An output an activity reports as a count (`rowsWritten`, `bytesRead`), or
+ * `null` when it is not a non-negative safe integer — the one validity rule for
+ * a logged count, so one odd payload cannot fail a response's parse. */
+export function loggedCount(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 /** What the runs list reads off one run's log. */

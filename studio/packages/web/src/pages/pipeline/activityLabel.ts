@@ -6,12 +6,12 @@ import { getActivity, type Node } from '@autonomy-studio/shared';
  * This names a TYPE, not an instance — three `http_request` nodes all answer
  * "HTTP Request". To name a PARTICULAR one, use `activityLabels` below.
  *
- * It stays exported for exactly two uses, and neither is a surface: it is the
- * ingredient `activityLabels` is built from, and it is the total fallback at the
- * two map lookups that feed a canvas (`FlowCanvas`, `runFlow`). Those fallbacks
- * are unreachable by construction — each map is built from the very array being
- * mapped over — so they are there to keep the type total, not to run. No surface
- * names an activity with this any more.
+ * It is the ingredient `activityLabels` is built from, and the total fallback at
+ * the two map lookups that feed a canvas (`FlowCanvas`, `runFlow`). Those
+ * fallbacks are unreachable by construction — each map is built from the very
+ * array being mapped over — so they are there to keep the type total, not to run.
+ * No surface NAMES an activity with this any more; the one surface that shows it
+ * shows it as what it is, a type (the activity runs' Type column, #1484).
  *
  * One function rather than the expression, because the canvas had grown three
  * hand-rolled copies of it — the node's own label (`FlowCanvas`), a connection

@@ -3,6 +3,7 @@ import type { UiStore } from '../stores/uiStore';
 import {
   formatCompactTimestamp,
   formatRelative,
+  formatTimeOfDay,
   formatTimestamp,
   INVALID_TIME,
   isInstant,
@@ -18,6 +19,9 @@ interface WhenProps {
   precision?: TimestampPrecision;
   /** The runs grid's narrow cell: `10-04 13:05:07`, the full form on hover. */
   compact?: boolean;
+  /** A table whose rows share a day (one run's activities): `13:05:07.123`,
+   * the full form on hover. */
+  timeOfDay?: boolean;
   /** Injectable for tests; the app uses the singleton. */
   store?: UiStore;
   /** The zone, when the caller already holds it from an injected store. */
@@ -45,6 +49,7 @@ export function When({
   ms,
   precision = 'second',
   compact = false,
+  timeOfDay = false,
   store,
   zone: given,
   asOf,
@@ -59,7 +64,9 @@ export function When({
   const refresh = () => setNow(Date.now());
   const text = compact
     ? formatCompactTimestamp(ms, zone, asOf ?? now)
-    : formatTimestamp(ms, zone, precision);
+    : timeOfDay
+      ? formatTimeOfDay(ms, zone, precision)
+      : formatTimestamp(ms, zone, precision);
   return (
     <time
       dateTime={new Date(ms).toISOString()}
