@@ -5662,3 +5662,37 @@ button.danger {
   white-space: nowrap;
   vertical-align: bottom;
 }
+
+/* #1484 OR35 M2 — container groups in the activity runs: a group line, an
+   item or round line under it, and the activities under those, indented by
+   depth on the Activity cell only so every other column stays aligned. */
+.activity-runs__table tr[data-depth='1'] > td:first-child {
+  padding-left: 1.6rem;
+}
+
+.activity-runs__table tr[data-depth='2'] > td:first-child {
+  padding-left: 2.6rem;
+}
+
+.activity-runs__group > td {
+  font-weight: 600;
+  background: var(--panel-2);
+}
+
+.activity-runs__toggle {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.activity-runs__toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.activity-runs__chevron {
+  display: inline-block;
+  width: 0.8rem;
+}

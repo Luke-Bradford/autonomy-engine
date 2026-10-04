@@ -88,10 +88,12 @@ async function drive(db: Db, pvId: string, executor: Executor) {
   return run.id;
 }
 
-function project(db: Db, pvId: string, runId: string) {
+function projectAll(db: Db, pvId: string, runId: string) {
   const doc = makeDocResolver(db)(pvId);
   return projectActivityRuns(doc, buildEngine(doc), loadEngineLog(db, runId));
 }
+const project = (db: Db, pvId: string, runId: string) => projectAll(db, pvId, runId).rows;
+const groupsOf = (db: Db, pvId: string, runId: string) => projectAll(db, pvId, runId).groups;
 
 const stub = (nodes: StubExecutorOptions['nodes'] = {}) => makeStubExecutor({ nodes });
 
@@ -260,7 +262,7 @@ describe('#1484 activity runs — one row per attempt', () => {
       return { ...l, payload };
     });
 
-    const [row] = projectActivityRuns(doc, buildEngine(doc), log);
+    const [row] = projectActivityRuns(doc, buildEngine(doc), log).rows;
     expect(row?.error).toEqual({ message: 'old', kind: null, code: null, connectionId: null });
   });
 
@@ -414,7 +416,7 @@ describe('#1484 activity runs — one row per attempt', () => {
       }),
     ];
 
-    expect(projectActivityRuns(doc, buildEngine(doc), log)).toEqual([
+    expect(projectActivityRuns(doc, buildEngine(doc), log).rows).toEqual([
       expect.objectContaining({
         key: 'reused:a',
         reused: true,
@@ -456,5 +458,379 @@ describe('#1484 activity runs — one row per attempt', () => {
       message: 'boom',
       kind: 'permanent',
     });
+  });
+});
+
+describe('#1484 activity runs — containers are groups', () => {
+  const foreach = (extra: Partial<Container> = {}): Container => ({
+    id: 'fe',
+    kind: 'foreach',
+    children: ['inner'],
+    items: '${params.list}',
+    ...extra,
+  });
+
+  it('makes a ForEach a group with one iteration per item, and says which container each row is in', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('inner')], [], [foreach()], [10, { name: 'b.csv' }]);
+    const runId = await drive(db, pvId, stub());
+
+    const { rows, groups } = projectAll(db, pvId, runId);
+    for (const r of rows) {
+      expect(r.containerId).toBe('fe');
+      expect(r.containerId).toBe(r.iteration?.containerId);
+    }
+    expect(groups).toEqual([
+      expect.objectContaining({
+        containerId: 'fe',
+        kind: 'foreach',
+        status: 'success',
+        reason: null,
+        reused: false,
+        itemCount: 2,
+        position: 0,
+      }),
+    ]);
+    const [g] = groups;
+    expect(g!.finishedAt).toBeGreaterThanOrEqual(g!.startedAt!);
+    expect(g!.durationMs).toBe(g!.finishedAt! - g!.startedAt!);
+    expect(g!.iterations.map((i) => [i.index, i.count, i.item, i.status])).toEqual([
+      [0, 2, '10', 'success'],
+      [1, 2, 'b.csv', 'success'],
+    ]);
+    const [first, second] = g!.iterations;
+    expect(first!.startedAt).toBe(rows[0]!.startedAt);
+    expect(first!.finishedAt).toBe(rows[0]!.finishedAt);
+    expect(second!.startedAt).toBeGreaterThanOrEqual(first!.finishedAt!);
+  });
+
+  it('places a group where it started among the rows, and leaves a row outside any container ungrouped', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('a'), node('inner'), node('z')],
+      [edge('a', 'fe'), edge('fe', 'z')],
+      [foreach()],
+      [1],
+    );
+    const runId = await drive(db, pvId, stub());
+
+    const { rows, groups } = projectAll(db, pvId, runId);
+    expect(rows.map((r) => [r.activityId, r.containerId])).toEqual([
+      ['a', null],
+      ['inner', 'fe'],
+      ['z', null],
+    ]);
+    expect(groups.map((g) => [g.containerId, g.position])).toEqual([['fe', 1]]);
+  });
+
+  it('ends a ForEach with no items as it enters: a group with times and no iterations', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('inner')], [], [foreach()], []);
+    const runId = await drive(db, pvId, stub());
+
+    const [g] = groupsOf(db, pvId, runId);
+    expect(g).toMatchObject({ status: 'success', itemCount: 0, iterations: [], durationMs: 0 });
+    expect(g!.startedAt).not.toBeNull();
+  });
+
+  it('fails the item a body failure ended, and gives the group the engine’s reason', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('inner')], [], [foreach()], [1, 2]);
+    const runId = await drive(db, pvId, stub({ inner: { outcome: 'failure' } }));
+
+    const [g] = groupsOf(db, pvId, runId);
+    expect(g).toMatchObject({ status: 'failure', itemCount: 2 });
+    expect(g!.reason).toMatch(/^child_failed/);
+    expect(g!.iterations.map((i) => [i.index, i.status])).toEqual([[0, 'failure']]);
+  });
+
+  it('reads an item whose failure the body handled as complete, though one of its rows failed', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('inner'), node('h')],
+      [{ id: 'inner->h', from: 'inner', to: 'h', on: 'failure' }],
+      [foreach({ children: ['inner', 'h'] })],
+      [1, 2],
+    );
+    const runId = await drive(db, pvId, stub({ inner: { outcome: 'failure' } }));
+
+    const { rows, groups } = projectAll(db, pvId, runId);
+    expect(rows.filter((r) => r.status === 'failure')).toHaveLength(2);
+    expect(groups[0]!.status).toBe('success');
+    expect(groups[0]!.iterations.map((i) => i.status)).toEqual(['success', 'success']);
+  });
+
+  it('fails an item the doom cut short when its own attempt failed as it drained', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('x'), node('y')],
+      [edge('x', 'y')],
+      [foreach({ children: ['x', 'y'], batchCount: 2 })],
+      [1, 2, 3],
+    );
+    const failing = { outcome: 'failure' as const };
+    const runId = await drive(db, pvId, stub({ 'x@0': failing, 'x@1': failing }));
+
+    const [g] = groupsOf(db, pvId, runId);
+    expect(g!.iterations.map((i) => [i.index, i.status])).toEqual([
+      [0, 'failure'],
+      [1, 'failure'],
+    ]);
+  });
+
+  it('makes a parallel ForEach doom fail the blamed item and skip the one it cut short', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('x'), node('y')],
+      [edge('x', 'y')],
+      [foreach({ children: ['x', 'y'], batchCount: 2 })],
+      [1, 2, 3],
+    );
+    const runId = await drive(db, pvId, stub({ 'x@0': { outcome: 'failure' } }));
+
+    const [g] = groupsOf(db, pvId, runId);
+    expect(g).toMatchObject({ status: 'failure', reason: 'child_failed:x@0', itemCount: 3 });
+    expect(g!.iterations.map((i) => [i.index, i.status])).toEqual([
+      [0, 'failure'],
+      [1, 'skipped'],
+    ]);
+  });
+
+  it('keeps an item that completed a success when another item failed the ForEach', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('inner')], [], [foreach({ batchCount: 2 })], [1, 2]);
+    const runId = await drive(db, pvId, stub({ 'inner@1': { outcome: 'failure' } }));
+
+    const [g] = groupsOf(db, pvId, runId);
+    expect(g!.status).toBe('failure');
+    expect(g!.iterations.map((i) => [i.index, i.status])).toEqual([
+      [0, 'success'],
+      [1, 'failure'],
+    ]);
+  });
+
+  it('ends an item whose last row is a skip, which has no time of its own', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('c', { type: 'if', config: { condition: '${equals(1, 2)}' } }), node('t')],
+      [branchEdge('c', 't', 'true')],
+      [foreach({ children: ['c', 't'] })],
+      ['x'],
+    );
+    const runId = await drive(db, pvId, stub());
+
+    const [g] = groupsOf(db, pvId, runId);
+    const [item] = g!.iterations;
+    expect(item).toMatchObject({ status: 'success' });
+    expect(item!.finishedAt).not.toBeNull();
+  });
+
+  it('marks every item of a clean parallel ForEach a success', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('inner')], [], [foreach({ batchCount: 2 })], [1, 2, 3]);
+    const runId = await drive(db, pvId, stub());
+
+    const [g] = groupsOf(db, pvId, runId);
+    expect(g!.iterations.map((i) => [i.index, i.status])).toEqual([
+      [0, 'success'],
+      [1, 'success'],
+      [2, 'success'],
+    ]);
+  });
+
+  it('keeps a container live while its body is: no end, and the item running', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('inner')], [], [foreach()], [1]);
+    const runId = await drive(db, pvId, stub({ inner: { hang: true } }));
+
+    const [g] = groupsOf(db, pvId, runId);
+    expect(g).toMatchObject({ status: 'active', finishedAt: null, durationMs: null });
+    expect(g!.iterations).toEqual([
+      expect.objectContaining({ index: 0, status: 'active', finishedAt: null }),
+    ]);
+  });
+
+  it('gives a loop a timeout reason and fails the round the timeout cut short', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('a')],
+      [],
+      [
+        {
+          id: 'lp',
+          kind: 'loop',
+          children: ['a'],
+          exitWhen: "${equals(nodes.a.status, 'success')}",
+          maxRounds: 3,
+          timeout: 60,
+        },
+      ],
+    );
+    const executor = stub({ a: { hang: true } });
+    const runId = await drive(db, pvId, executor);
+    appendEngineEvent(db, { type: 'container.timedOut', runId, containerId: 'lp' });
+    await driveRun(deps(db, executor), runId);
+
+    const [g] = groupsOf(db, pvId, runId);
+    expect(g).toMatchObject({
+      kind: 'loop',
+      status: 'failure',
+      reason: 'timeout',
+      itemCount: null,
+    });
+    expect(g!.iterations).toEqual([
+      expect.objectContaining({ index: 0, count: null, status: 'failure' }),
+    ]);
+    // Its one row was skipped, yet the round has ended: it has an end time.
+    expect(g!.iterations[0]!.finishedAt).not.toBeNull();
+  });
+
+  it('reads the rounds a capped loop finished as successes, and the last as its failure', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('a')],
+      [],
+      [{ id: 'lp', kind: 'loop', children: ['a'], exitWhen: '${equals(1, 2)}', maxRounds: 2 }],
+    );
+    const runId = await drive(db, pvId, stub());
+
+    const [g] = groupsOf(db, pvId, runId);
+    expect(g).toMatchObject({ status: 'failure', reason: 'capped' });
+    expect(g!.iterations.map((i) => [i.index, i.status])).toEqual([
+      [0, 'success'],
+      [1, 'failure'],
+    ]);
+  });
+
+  it('makes a Stage a group with no iterations', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('a'), node('b')],
+      [edge('a', 'b')],
+      [{ id: 'stg', kind: 'stage', children: ['a', 'b'] }],
+    );
+    const runId = await drive(db, pvId, stub());
+
+    const { rows, groups } = projectAll(db, pvId, runId);
+    expect(rows.map((r) => [r.activityId, r.containerId, r.iteration])).toEqual([
+      ['a', 'stg', null],
+      ['b', 'stg', null],
+    ]);
+    expect(groups).toEqual([
+      expect.objectContaining({
+        containerId: 'stg',
+        kind: 'stage',
+        status: 'success',
+        iterations: [],
+      }),
+    ]);
+  });
+
+  it('makes a skipped container a group with no times, in its place', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a'), node('inner')], [edge('a', 'fe')], [foreach()], [1]);
+    const runId = await drive(db, pvId, stub({ a: { outcome: 'failure' } }));
+
+    const { rows, groups } = projectAll(db, pvId, runId);
+    expect(rows.map((r) => r.activityId)).toEqual(['a']);
+    expect(groups).toEqual([
+      expect.objectContaining({
+        containerId: 'fe',
+        status: 'skipped',
+        startedAt: null,
+        finishedAt: null,
+        iterations: [],
+        position: 1,
+      }),
+    ]);
+  });
+
+  it('makes no group of a container the run never reached', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a'), node('inner')], [edge('a', 'fe')], [foreach()], [1]);
+    const runId = await drive(db, pvId, stub({ a: { hang: true } }));
+
+    expect(groupsOf(db, pvId, runId)).toEqual([]);
+  });
+
+  it('shows a container a rerun copied as reused, with no times, leading the rows', () => {
+    const doc = {
+      nodes: [node('a'), node('b')],
+      edges: [edge('stg', 'b')],
+      containers: [{ id: 'stg', kind: 'stage', children: ['a'] }],
+      variables: [],
+    } as never as Parameters<typeof buildEngine>[0];
+    const at = (ts: number, event: EngineEvent) => ({ ts, event, payload: event });
+    const log = [
+      at(1, {
+        type: 'run.started',
+        runId: 'R2',
+        pipelineVersionId: 'pv',
+        params: {},
+        rerunOf: 'R1',
+      }),
+      at(2, {
+        type: 'run.reseeded',
+        runId: 'R2',
+        sourceRunId: 'R1',
+        frontier: ['a'],
+        copiedOutputs: { a: {} },
+        copiedContainers: { stg: { status: 'success', round: 0, outputs: {} } },
+      }),
+    ];
+
+    const { rows, groups } = projectActivityRuns(doc, buildEngine(doc), log);
+    expect(rows[0]).toMatchObject({ key: 'reused:a', containerId: 'stg', reused: true });
+    expect(groups).toEqual([
+      expect.objectContaining({
+        containerId: 'stg',
+        status: 'success',
+        reused: true,
+        startedAt: null,
+        finishedAt: null,
+        position: 0,
+      }),
+    ]);
+  });
+
+  it('places a group a rerun started after the rows it carried', () => {
+    const doc = {
+      nodes: [node('a'), node('b')],
+      edges: [edge('a', 'stg')],
+      containers: [{ id: 'stg', kind: 'stage', children: ['b'] }],
+      variables: [],
+    } as never as Parameters<typeof buildEngine>[0];
+    const at = (ts: number, event: EngineEvent) => ({ ts, event, payload: event });
+    const log = [
+      at(1, {
+        type: 'run.started',
+        runId: 'R2',
+        pipelineVersionId: 'pv',
+        params: {},
+        rerunOf: 'R1',
+      }),
+      at(2, {
+        type: 'run.reseeded',
+        runId: 'R2',
+        sourceRunId: 'R1',
+        frontier: ['a'],
+        copiedOutputs: { a: {} },
+        copiedContainers: {},
+      }),
+    ];
+
+    const { rows, groups } = projectActivityRuns(doc, buildEngine(doc), log);
+    expect(rows.map((r) => r.key)).toEqual(['reused:a']);
+    expect(groups).toEqual([
+      expect.objectContaining({ containerId: 'stg', reused: false, startedAt: 2, position: 1 }),
+    ]);
   });
 });

@@ -960,13 +960,58 @@ describe('runs routes (read-only)', () => {
       expect(res.statusCode).toBe(200);
       const body = ActivityRunsResponseSchema.parse(res.json());
       expect(body.rows).toHaveLength(1);
+      // The caller is not in a container, so there is no group to sit under.
+      expect(body.groups).toEqual([]);
       expect(body.rows[0]).toMatchObject({
+        containerId: null,
         activityId: 'c',
         attemptId: 'c#0',
         status: 'waiting',
         childRunId: child.id,
         childRun: { id: child.id, pipelineName: 'Load orders', status: child.status },
       });
+    });
+
+    it('carries the containers the rows sit in, as groups', async () => {
+      const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'Staged' });
+      const version = createPipelineVersion(app.db, {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [
+          {
+            id: 'c',
+            type: 'call_pipeline',
+            position: { x: 0, y: 0 },
+            config: {},
+            call: { pipelineVersionId: 'pv-elsewhere', params: {} },
+          },
+        ],
+        edges: [],
+        containers: [{ id: 'stg', kind: 'stage', children: ['c'] }],
+        catalogVersion: CATALOG_VERSION,
+      });
+      const run = createRun(app.db, {
+        ownerId: 'local',
+        pipelineVersionId: version.id,
+        triggerId: null,
+        parentRunId: null,
+        params: {},
+      });
+      logCall(run.id, version.id, 'child-run');
+
+      const res = await app.inject({ method: 'GET', url: `/api/runs/${run.id}/activity-runs` });
+      const body = ActivityRunsResponseSchema.parse(res.json());
+      expect(body.rows.map((r) => [r.activityId, r.containerId])).toEqual([['c', 'stg']]);
+      expect(body.groups).toEqual([
+        expect.objectContaining({
+          containerId: 'stg',
+          kind: 'stage',
+          status: 'active',
+          iterations: [],
+          position: 0,
+        }),
+      ]);
     });
 
     it("never resolves a child run the caller does not own; the log's id stays", async () => {

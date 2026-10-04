@@ -6,6 +6,7 @@ const row = (over: Partial<ActivityRun>): ActivityRun => ({
   key: 'k',
   nodeId: 'a',
   activityId: 'a',
+  containerId: null,
   attemptId: null,
   attempt: 1,
   status: 'failure',

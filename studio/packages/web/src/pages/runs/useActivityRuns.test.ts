@@ -14,7 +14,7 @@ describe('#1484 M2 useActivityRuns', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     getMock.mockReset();
-    getMock.mockResolvedValue({ runId: 'r', rows: [] });
+    getMock.mockResolvedValue({ runId: 'r', rows: [], groups: [] });
   });
   afterEach(() => vi.useRealTimers());
 
@@ -42,7 +42,7 @@ describe('#1484 M2 useActivityRuns', () => {
   });
 
   it('never has two reads in flight, and re-reads once when the stream moved on meanwhile', async () => {
-    let answer!: (v: { runId: string; rows: [] }) => void;
+    let answer!: (v: { runId: string; rows: []; groups: [] }) => void;
     getMock.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -64,14 +64,14 @@ describe('#1484 M2 useActivityRuns', () => {
 
     // It lands; the stream moved on, so exactly one more read follows.
     await act(async () => {
-      answer({ runId: 'r', rows: [] });
+      answer({ runId: 'r', rows: [], groups: [] });
       await vi.advanceTimersByTimeAsync(ACTIVITY_RUNS_REFRESH_MS * 4);
     });
     expect(getMock).toHaveBeenCalledTimes(2);
   });
 
   it('schedules nothing once unmounted, even when a read lands afterwards', async () => {
-    let answer!: (v: { runId: string; rows: [] }) => void;
+    let answer!: (v: { runId: string; rows: []; groups: [] }) => void;
     getMock.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -86,7 +86,7 @@ describe('#1484 M2 useActivityRuns', () => {
     unmount();
 
     await act(async () => {
-      answer({ runId: 'r', rows: [] });
+      answer({ runId: 'r', rows: [], groups: [] });
       await vi.advanceTimersByTimeAsync(0);
     });
     // `useGuardedLoad` would refuse the read anyway; no timer is left either.
