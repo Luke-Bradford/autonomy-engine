@@ -199,7 +199,19 @@ export async function apiFetchText(
   path: string,
   opts: { signal?: AbortSignal } = {},
 ): Promise<string> {
+  return (await apiFetchFile(path, opts)).text;
+}
+
+/**
+ * `apiFetchText` plus the response headers, for a file whose reply says
+ * something about it beside the bytes — the runs export's truncation header
+ * (#1484). The same failure mapping; the body is still never parsed.
+ */
+export async function apiFetchFile(
+  path: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<{ text: string; headers: Headers }> {
   const res = await fetch(path, { method: 'GET', signal: opts.signal });
   if (!res.ok) await throwApiError(res);
-  return res.text();
+  return { text: await res.text(), headers: res.headers };
 }

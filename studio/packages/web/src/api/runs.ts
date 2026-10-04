@@ -10,6 +10,7 @@ import {
   RunDiagnosticSchema,
   RunSchema,
   RunSummaryPageSchema,
+  RUNS_EXPORT_TRUNCATED_HEADER,
   RunEventSchema,
   type CompleteExternalWaitBody,
   type PendingExternalWait,
@@ -25,7 +26,7 @@ import {
   type RunSince,
   type RunStatus,
 } from '@autonomy-studio/shared';
-import { apiFetch } from './client';
+import { apiFetch, apiFetchFile } from './client';
 import { pageQuery } from './pagination';
 
 /**
@@ -163,14 +164,41 @@ export function listRuns(
   // directly: `extra` is `Record<string, string>` and these fields are optional,
   // so handing it `filters` would both fail to typecheck and put `?pipelineId=`
   // back on the wire.
+  return apiFetch(`/api/runs${pageQuery(cursor, setAxes(filters), pageSize)}`, {
+    schema: RunSummaryPageSchema,
+    signal,
+  });
+}
+
+/** The axes of `filters` that are SET, as query params — `listRuns`'s rule. */
+function setAxes(filters: ListRunsQuery): Record<string, string> {
   const extra: Record<string, string> = {};
   for (const [key, value] of Object.entries(filters)) {
     if (value !== undefined && value !== '') extra[key] = value;
   }
-  return apiFetch(`/api/runs${pageQuery(cursor, extra, pageSize)}`, {
-    schema: RunSummaryPageSchema,
-    signal,
-  });
+  return extra;
+}
+
+/**
+ * #1484 OR35 M1 — every run `filters` match, as the server's CSV
+ * (`GET /api/runs/export.csv`), in the order `filters.sort`/`dir` ask for.
+ *
+ * `truncated` is the cap the server stopped at when more runs matched, or
+ * `null` when the file holds them all — read from
+ * `RUNS_EXPORT_TRUNCATED_HEADER`, so the page never states a cap of its own.
+ * `includeChildren` is not sent: it is how the grid draws, not which runs match.
+ */
+export async function exportRunsCsv(
+  filters: ListRunsQuery,
+  signal?: AbortSignal,
+): Promise<{ csv: string; truncated: number | null }> {
+  const axes: ListRunsQuery = { ...filters };
+  delete axes.includeChildren;
+  const params = new URLSearchParams(setAxes(axes)).toString();
+  const query = params === '' ? '' : `?${params}`;
+  const { text, headers } = await apiFetchFile(`/api/runs/export.csv${query}`, { signal });
+  const cap = Number(headers.get(RUNS_EXPORT_TRUNCATED_HEADER));
+  return { csv: text, truncated: Number.isInteger(cap) && cap > 0 ? cap : null };
 }
 
 /**

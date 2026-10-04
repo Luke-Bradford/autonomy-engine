@@ -26,7 +26,8 @@ import {
 } from '@autonomy-studio/shared';
 import { useStore } from 'zustand';
 import { useSearchParams } from 'react-router';
-import { listRunAnnotations, listRuns } from '../../api/runs';
+import { listRunAnnotations, listRuns, type ListRunsQuery } from '../../api/runs';
+import { RunsExportButton } from './RunsExportButton';
 import { PAGE_STALLED_LABEL, usePagedList } from '../../hooks/usePagedList';
 import { getPipelineCost } from '../../api/pipelines';
 import { ApiError, messageOf } from '../../api/client';
@@ -360,29 +361,23 @@ export function RunsPage({
    * `latestLoad` counter this replaced is gone with it; `useGuardedLoad`, which
    * the hook wraps, is that counter with its rules written down and tested.
    */
-  const fetchPage = useCallback(
-    (cursor: string | undefined, signal: AbortSignal) =>
-      listRuns(
-        {
-          status: statusFilter,
-          pipelineId,
-          triggerId,
-          since,
-          annotation,
-          kind,
-          q,
-          ...dayRangeBounds({ on, from, to }, zone),
-          // The default order is not sent, so the plain list's request is
-          // unchanged; any other sort is, with its direction always explicit.
-          ...(sortedByDefault ? {} : { sort: sortKey, dir: sortDir }),
-          ...(includeChildren ? { includeChildren: 'true' as const } : {}),
-        },
-        cursor,
-        signal,
-        // A new size is a new list: the cursor of a 50-row walk names nothing
-        // in a 200-row one, so the fetcher changes and the list reloads.
-        pageSize,
-      ).then((page) => (includeChildren ? withDescendants(page) : page)),
+  /* #1484 — the request's axes, memoised on the PRIMITIVES above, so its
+     identity changes exactly when a filter does. One object for the paged list
+     and the CSV export, so the file is always the list on screen. */
+  const listQuery = useMemo<ListRunsQuery>(
+    () => ({
+      status: statusFilter,
+      pipelineId,
+      triggerId,
+      since,
+      annotation,
+      kind,
+      q,
+      ...dayRangeBounds({ on, from, to }, zone),
+      // The default order is not sent, so the plain list's request is
+      // unchanged; any other sort is, with its direction always explicit.
+      ...(sortedByDefault ? {} : { sort: sortKey, dir: sortDir }),
+    }),
     // Primitives only — see above. `kind` is the canonical joined string.
     [
       statusFilter,
@@ -399,9 +394,19 @@ export function RunsPage({
       sortKey,
       sortDir,
       sortedByDefault,
-      pageSize,
-      includeChildren,
     ],
+  );
+  const fetchPage = useCallback(
+    (cursor: string | undefined, signal: AbortSignal) =>
+      listRuns(
+        includeChildren ? { ...listQuery, includeChildren: 'true' } : listQuery,
+        cursor,
+        signal,
+        // A new size is a new list: the cursor of a 50-row walk names nothing
+        // in a 200-row one, so the fetcher changes and the list reloads.
+        pageSize,
+      ).then((page) => (includeChildren ? withDescendants(page) : page)),
+    [listQuery, pageSize, includeChildren],
   );
   const {
     items: runs,
@@ -589,6 +594,8 @@ export function RunsPage({
         >
           Refresh
         </button>
+        {/* #1484 — every run the filters match, not just the loaded pages. */}
+        <RunsExportButton query={listQuery} />
         {/* #1484 — keeps the list current (`useRunsLive`). The status beside it
             says why it is not updating when it is not, so a paused list is
             never mistaken for a quiet workspace. The live region is always
