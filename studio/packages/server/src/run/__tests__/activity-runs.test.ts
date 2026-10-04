@@ -126,6 +126,9 @@ describe('#1484 activity runs — one row per attempt', () => {
     });
     // A skip never ran: no attempt, no times.
     expect(c).toMatchObject({ attemptId: null, startedAt: null, finishedAt: null, error: null });
+    // …and says why, as the engine decided it.
+    expect(c!.skipReason).toEqual({ kind: 'upstream', from: 'b', outcome: 'failure' });
+    expect(a!.skipReason).toBeNull();
   });
 
   it('records the branch an If took, and the branch it did not take as a skip', async () => {
@@ -144,7 +147,10 @@ describe('#1484 activity runs — one row per attempt', () => {
       branch: 'true',
     });
     expect(rows.find((r) => r.activityId === 't')?.status).toBe('success');
-    expect(rows.find((r) => r.activityId === 'f')?.status).toBe('skipped');
+    expect(rows.find((r) => r.activityId === 'f')).toMatchObject({
+      status: 'skipped',
+      skipReason: { kind: 'branch', from: 'c', taken: 'true' },
+    });
   });
 
   it("reads rows and bytes off the attempt's own success, and drops a figure that is not a count", async () => {
@@ -287,6 +293,14 @@ describe('#1484 activity runs — one row per attempt', () => {
       ['c', 'success', 'false', 'y'],
       ['t', 'skipped', null, 'y'],
     ]);
+    // KNOWN GAP: item x's skip is reset in the same reduce that ends the item,
+    // so it is only inferred here, after the reducer dropped its reason. The
+    // LAST item is not reset, so its skip keeps the reason.
+    expect(
+      project(db, pvId, runId)
+        .filter((r) => r.activityId === 't')
+        .map((r) => r.skipReason),
+    ).toEqual([null, { kind: 'branch', from: 'c', taken: 'false' }]);
   });
 
   it('keeps the skip inside every item of a parallel ForEach', async () => {
@@ -353,8 +367,8 @@ describe('#1484 activity runs — one row per attempt', () => {
     appendEngineEvent(db, { type: 'container.timedOut', runId, containerId: 'lp' });
     await driveRun(deps(db, executor), runId);
 
-    expect(project(db, pvId, runId).map((r) => [r.attemptId, r.status])).toEqual([
-      ['a#0', 'skipped'],
+    expect(project(db, pvId, runId).map((r) => [r.attemptId, r.status, r.skipReason])).toEqual([
+      ['a#0', 'skipped', { kind: 'timeout', containerId: 'lp' }],
     ]);
   });
 
@@ -745,6 +759,7 @@ describe('#1484 activity runs — containers are groups', () => {
       expect.objectContaining({
         containerId: 'fe',
         status: 'skipped',
+        skipReason: { kind: 'upstream', from: 'a', outcome: 'failure' },
         startedAt: null,
         finishedAt: null,
         iterations: [],

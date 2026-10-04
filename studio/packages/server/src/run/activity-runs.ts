@@ -13,7 +13,7 @@ import {
   type PipelineVersion,
   type RunState,
 } from '@autonomy-studio/shared';
-import type { Engine } from '@autonomy-studio/shared';
+import type { Engine, SkipReason } from '@autonomy-studio/shared';
 import { loggedCount, reusedIds } from './activity-counts.js';
 import type { LoggedEngineEvent } from './events.js';
 
@@ -222,6 +222,7 @@ export function projectActivityRuns(
     bytesWritten: null,
     childRunId: null,
     error: null,
+    skipReason: null,
   });
 
   const rows: ProjectedActivityRun[] = [];
@@ -235,8 +236,11 @@ export function projectActivityRuns(
     rows.push(row);
     if (row.iteration !== null) inItem.add(itemKey(row.nodeId, row.iteration));
   };
-  const addSkip = (nodeId: string, iteration: ActivityRunIteration | null) =>
-    push(blank(`skip:${nodeId}:${rows.length}`, nodeId, 'skipped', iteration));
+  const addSkip = (
+    nodeId: string,
+    iteration: ActivityRunIteration | null,
+    skipReason: SkipReason | null,
+  ) => push({ ...blank(`skip:${nodeId}:${rows.length}`, nodeId, 'skipped', iteration), skipReason });
   const iterating = doc.containers.filter((c) => c.kind !== 'stage');
   const reused = reusedIds(
     doc,
@@ -284,6 +288,7 @@ export function projectActivityRuns(
           kind: c.kind,
           status: now.status,
           reason: null,
+          skipReason: null,
           reused: copied,
           startedAt: unstarted ? null : ts,
           finishedAt: null,
@@ -296,6 +301,7 @@ export function projectActivityRuns(
       }
       group.status = now.status;
       group.reason = now.reason ?? null;
+      group.skipReason = now.skipReason ?? null;
       if (c.kind === 'foreach') group.itemCount = now.items?.length ?? null;
       if (
         group.startedAt !== null &&
@@ -397,8 +403,10 @@ export function projectActivityRuns(
         // Rule 4: an attempt in flight that the engine abandoned is that row.
         const live = before.nodes[nodeId]?.currentAttemptId ?? entry.currentAttemptId;
         const abandoned = live === undefined ? undefined : byAttempt.get(live);
-        if (abandoned !== undefined && open.has(abandoned)) settle(abandoned, 'skipped', ts);
-        else addSkip(nodeId, iterationOf(nodeId, before));
+        if (abandoned !== undefined && open.has(abandoned)) {
+          settle(abandoned, 'skipped', ts);
+          abandoned.skipReason = entry.skipReason ?? null;
+        } else addSkip(nodeId, iterationOf(nodeId, before), entry.skipReason ?? null);
       }
       // A skip this reduce also reset or deleted: when an item ends, a body node
       // with no row in it was skipped.
@@ -416,7 +424,7 @@ export function projectActivityRuns(
       for (const nodeId of ended) {
         const iteration = iterationOf(nodeId, before);
         if (iteration !== null && !inItem.has(itemKey(nodeId, iteration)))
-          addSkip(nodeId, iteration);
+          addSkip(nodeId, iteration, null);
       }
     }
 

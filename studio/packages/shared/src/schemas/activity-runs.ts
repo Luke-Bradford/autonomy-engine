@@ -3,6 +3,7 @@ import {
   ContainerRunStatusSchema,
   FailureKindSchema,
   NodeRunStatusSchema,
+  SkipReasonSchema,
 } from '../engine/types.js';
 import { ContainerKindSchema } from './pipeline.js';
 import { RunStatusSchema } from './run.js';
@@ -91,6 +92,10 @@ export const ActivityRunSchema = z.object({
   childRunId: z.string().nullable(),
   childRun: ActivityRunChildSchema.nullable(),
   error: ActivityRunErrorSchema.nullable(),
+  /** Why it was skipped, as the reducer recorded it; `null` on every other
+   * status, and on a skip only inferred when an item ended (the reset that ends
+   * the item drops the reason before it can be read). */
+  skipReason: SkipReasonSchema.nullable(),
 });
 export type ActivityRun = z.infer<typeof ActivityRunSchema>;
 
@@ -126,6 +131,8 @@ export const ActivityRunGroupSchema = z.object({
   status: ContainerRunStatusSchema,
   /** Why it ended (`timeout`, `child_failed:w@2`, …), as the engine said. */
   reason: z.string().nullable(),
+  /** Why it was skipped (by its outer edges); `null` unless it was. */
+  skipReason: SkipReasonSchema.nullable(),
   /** Carried over from the run this one reran, not executed here. */
   reused: z.boolean(),
   /** Epoch ms of the event that started it; `null` when it never started (it

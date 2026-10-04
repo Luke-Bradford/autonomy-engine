@@ -118,7 +118,13 @@ describe('skipReason — the reducer records why it skipped (#1484 M2)', () => {
       params: {},
     };
     let s = e.reduce(e.seedState(), started).state;
-    s = e.reduce(s, { type: 'node.dispatched', runId: 'r1', nodeId: 'x', attemptId: 'x#0', idempotent: true }).state;
+    s = e.reduce(s, {
+      type: 'node.dispatched',
+      runId: 'r1',
+      nodeId: 'x',
+      attemptId: 'x#0',
+      idempotent: true,
+    }).state;
     s = e.reduce(s, {
       type: 'node.succeeded',
       runId: 'r1',
