@@ -367,7 +367,9 @@ test('#1083 — the runs list is served a page at a time, and extends on demand'
      rows, re-served one at a time so the boundary lands after row one. The
      intercept deliberately does NOT forward to the server: the second request
      carries a cursor this test invented, and the server would (correctly) 400
-     it, which is the very fail-closed behaviour asserted three lines up. */
+     it, which is the very fail-closed behaviour asserted three lines up. Each
+     page carries `descendants`, as the server's does when the list asks for
+     them (#1484, "Include child runs" is on by default). */
   const newerRow = firstPage.items[0]!;
   const olderRow = secondPage.items[0]!;
   let served = 0;
@@ -376,8 +378,8 @@ test('#1083 — the runs list is served a page at a time, and extends on demand'
     await route.fulfill({
       json:
         served === 1
-          ? { items: [newerRow], nextCursor: 'e2e_cursor' }
-          : { items: [olderRow], nextCursor: null },
+          ? { items: [newerRow], nextCursor: 'e2e_cursor', descendants: [] }
+          : { items: [olderRow], nextCursor: null, descendants: [] },
     });
   });
 
