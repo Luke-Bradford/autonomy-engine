@@ -30,8 +30,8 @@ export * from './catalog/index.js';
 // P4b — the pure run-window evaluator (scheduler's automatic-fire gate).
 export * from './triggers/run-window.js';
 
-// #1525 — a time zone's local calendar: the one day-start implementation the
-// scheduler and the web app's display-zone day filter share.
+// #1525 — a time zone's local calendar: the day-start implementation the
+// scheduler and the web app's display-zone day filter both use.
 export * from './time/zoned-calendar.js';
 
 // #2 L5 — the model price table + cost-estimate math (SSOT for the price fields

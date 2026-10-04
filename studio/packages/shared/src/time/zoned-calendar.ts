@@ -2,10 +2,9 @@
  * #1525 — a time zone's LOCAL CALENDAR, the one implementation of "which local
  * day is this instant on" and "at which instant does a local day begin".
  *
- * Two callers used to answer the second question two ways: the scheduler's
- * zone-aware period model (`scheduler/recurrence.ts`, a bisection) and the web
- * app's display-zone day filter (`lib/displayTime.ts`, an offset correction
- * plus a 15-minute walk). This is the scheduler's, lifted here so both share it.
+ * Both places that ask use this one: the scheduler's zone-aware period model
+ * (`scheduler/recurrence.ts`) and the web app's display-zone day filter
+ * (`lib/displayTime.ts`), so the two cannot disagree about where a day begins.
  *
  * ## Why bisection, not an offset inverse
  *

@@ -1617,6 +1617,9 @@ describe('#1484 — runs list Live mode and page size', () => {
     // Something holding the list kept its scroll across the mount; no scroll
     // event will arrive to say so.
     Object.defineProperty(document.body, 'scrollTop', { value: 240, configurable: true });
+    // The body is an ANCESTOR of the rows here, not the document's scrolling
+    // element, so this exercises the walk up from the list.
+    expect(document.scrollingElement).not.toBe(document.body);
     try {
       listMock.mockResolvedValue(pageOf([run({ id: 'run_old00001', status: 'success' })]));
       renderWithRouter(<RunsPage ui={liveUi()} />);
