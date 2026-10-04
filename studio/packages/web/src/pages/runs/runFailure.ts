@@ -78,6 +78,8 @@ export function runFinished(
 ): { reason: string | null; ts: number } | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i];
+    // A start AFTER the end means the run was picked up again: it has not ended.
+    if (e?.type === 'run.started') return null;
     if (e?.type === 'run.interrupted') return { reason: null, ts: e.ts };
     if (e?.type !== 'run.finished') continue;
     const reason = (e.payload as { reason?: unknown } | null)?.reason;

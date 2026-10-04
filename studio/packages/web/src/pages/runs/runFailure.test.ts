@@ -140,3 +140,14 @@ describe('runStartedAt', () => {
     ).toBe(Date.UTC(2026, 9, 4, 12, 0, 5, 250));
   });
 });
+
+describe('runFinished — a run picked up again after an interrupt', () => {
+  it('has not ended', () => {
+    expect(
+      runFinished([
+        { type: 'run.interrupted', payload: { reason: 'lease_reclaim' }, ts: 5 },
+        { type: 'run.started', payload: {}, ts: 6 },
+      ]),
+    ).toBeNull();
+  });
+});

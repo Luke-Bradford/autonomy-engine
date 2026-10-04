@@ -534,7 +534,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
                   <summary aria-label="About rerunning from the failure" title="About rerunning">
                     ?
                   </summary>
-                  <span id="rerun-cost-warning" role="note">
+                  <span id="rerun-cost-warning" role="note" tabIndex={-1}>
                     {RERUN_COST_WARNING}
                   </span>
                 </details>

@@ -7,7 +7,7 @@ function help() {
     <>
       <details open onKeyDown={closeOnEscape} onBlur={closeOnLeave} data-testid="help">
         <summary>?</summary>
-        <a href="#in">inside</a>
+        <span tabIndex={-1}>inside</span>
       </details>
       <button type="button">outside</button>
     </>,
