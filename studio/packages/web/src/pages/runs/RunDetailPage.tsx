@@ -286,7 +286,6 @@ export function RunDetailPage({ runId }: { runId: string }) {
     [doc],
   );
   const typeOf = (nodeId: string) => nodeTypes?.get(nodeId) ?? null;
-  // #1484 M2 — re-read as the stream grows; see `useActivityRuns`.
 
   // U24 — which node's drill-in is open. Held as an ID and RESOLVED against the
   // live fold rather than storing the row itself, so the panel tracks a running

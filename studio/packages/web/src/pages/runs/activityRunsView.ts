@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { NodeRunStatusSchema, RunSearchSchema, type ActivityRun } from '@autonomy-studio/shared';
+import {
+  NodeRunStatusSchema,
+  RunSearchSchema,
+  type ActivityRun,
+  type RunStatus,
+} from '@autonomy-studio/shared';
+import { nodeStatusLabel } from './nodeStatus';
 import type { ActivityRunEntry } from './activityRunsTree';
 import type { ACTIVITY_RUN_COLUMNS } from './activityRunsColumns';
 
@@ -21,8 +27,23 @@ export const ACTIVITY_RUNS_PARAMS = {
 export const ActivityRunStatusKeySchema = z.union([NodeRunStatusSchema, z.literal('reused')]);
 export type ActivityRunStatusKey = z.infer<typeof ActivityRunStatusKeySchema>;
 
+export const REUSED_STATUS = 'reused' satisfies ActivityRunStatusKey;
+
 export const statusKeyOf = (row: ActivityRun): ActivityRunStatusKey =>
-  row.reused ? 'reused' : row.status;
+  row.reused ? REUSED_STATUS : row.status;
+
+/** A status key as the table's pill words it. Two keys can read alike (under a
+ * cancel, `pending` and `ready` both say the node did not run), and the filter
+ * goes by what the operator SEES, so it matches on this. */
+export const statusKeyLabel = (key: ActivityRunStatusKey, runStatus: RunStatus): string =>
+  key === REUSED_STATUS ? REUSED_STATUS : nodeStatusLabel(key, runStatus);
+
+/** A status filter's value from a picker, or `null` for "All" or a value the
+ * page does not know. */
+export function parseStatusKey(value: string): ActivityRunStatusKey | null {
+  const parsed = ActivityRunStatusKeySchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
 
 export const ActivityRunSortKeySchema = z.enum([
   'activity',
@@ -104,16 +125,24 @@ export function readActivityRunsView(params: URLSearchParams): ActivityRunsView 
   };
 }
 
-/** The params a view writes, `''` deleting one (`withParams`). No `dir` when it
+/** The params a sort writes, `''` deleting one (`withParams`). No `dir` when it
  * is the column's natural one, so a plain sort keeps a plain URL. */
+export function activityRunSortParams(sort: ActivityRunSort | null): Record<string, string> {
+  return {
+    [ACTIVITY_RUNS_PARAMS.sort]: sort?.key ?? '',
+    [ACTIVITY_RUNS_PARAMS.dir]: sort === null || sort.dir === NATURAL_DIR[sort.key] ? '' : sort.dir,
+  };
+}
+
+/** The params a whole view writes. A control writes only its OWN params
+ * (`activityRunSortParams`, or one key), so two quick changes cannot undo each
+ * other; this is for Clear and the round trip. */
 export function activityRunsViewParams(view: ActivityRunsView): Record<string, string> {
   return {
     [ACTIVITY_RUNS_PARAMS.status]: view.status ?? '',
     [ACTIVITY_RUNS_PARAMS.type]: view.type ?? '',
     [ACTIVITY_RUNS_PARAMS.q]: view.q ?? '',
-    [ACTIVITY_RUNS_PARAMS.sort]: view.sort?.key ?? '',
-    [ACTIVITY_RUNS_PARAMS.dir]:
-      view.sort === null || view.sort.dir === NATURAL_DIR[view.sort.key] ? '' : view.sort.dir,
+    ...activityRunSortParams(view.sort),
   };
 }
 
@@ -139,6 +168,7 @@ export function nextActivityRunSort(
 export interface RowFacts {
   name: string | null;
   type: string | null;
+  /** `statusKeyLabel` of the row's key. */
   statusLabel: string;
   /** Everything a search may match, lowercased. */
   text: string;
@@ -189,15 +219,17 @@ export function viewEntries(
   entries: readonly ActivityRunEntry[],
   view: ActivityRunsView,
   factsOf: (row: ActivityRun) => RowFacts,
+  labelOf: (key: ActivityRunStatusKey) => string,
 ): readonly ActivityRunEntry[] {
   if (!isViewChanged(view)) return entries;
   const q = view.q?.toLowerCase() ?? null;
+  const statusLabel = view.status === null ? null : labelOf(view.status);
   const facts = new Map<string, RowFacts>();
   const matches = (e: RowEntry): boolean => {
     const f = factsOf(e.row);
     facts.set(e.key, f);
     return (
-      (view.status === null || statusKeyOf(e.row) === view.status) &&
+      (statusLabel === null || f.statusLabel === statusLabel) &&
       (view.type === null || f.type === view.type) &&
       (q === null || f.text.includes(q))
     );

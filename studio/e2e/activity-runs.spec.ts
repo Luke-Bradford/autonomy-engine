@@ -191,6 +191,14 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
   await page.reload();
   await fluentRootReady(page);
   await expect(table.locator('tbody tr')).toHaveCount(1);
+  // Back steps out of the filter, as on the runs list.
+  await page.goBack();
+  await expect(table.locator('tbody tr')).toHaveCount(10);
+  expect(page.url()).not.toContain('arStatus');
+
+  // By type: the two waits after the Fail, and the ForEach's own wait per item.
+  await page.getByRole('combobox', { name: 'Type' }).selectOption('Wait');
+  await expect(table.locator('tbody tr[data-activity-id]')).toHaveCount(4);
   await page.getByRole('button', { name: 'Clear' }).click();
   await expect(table.locator('tbody tr')).toHaveCount(10);
 

@@ -282,7 +282,7 @@ describe('#1484 M2 ActivityRunsTable — filter and sort', () => {
 
   it('says when nothing matches, and Clear brings the rows back', () => {
     show(ROWS, null, '/?arQ=nothing-like-this');
-    expect(screen.getByText(/No activity run matches/)).toBeInTheDocument();
+    expect(screen.getByText('No matches.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
     expect(bodyKeys()).toHaveLength(3);
   });
@@ -507,12 +507,33 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
 
   it('drops a filter that hides the row the banner asked for', () => {
     const view = render(table(null, GROUP, '/?arStatus=failure'));
-    expect(screen.getByText(/No activity run matches/)).toBeInTheDocument();
+    expect(screen.getByText('No matches.')).toBeInTheDocument();
     view.rerender(table({ key: 'w#1' }, GROUP, '/?arStatus=failure'));
     const current = bodyRows().find((tr) => tr.getAttribute('aria-current') === 'true');
     expect(current?.dataset.activityId).toBe('w');
     expect(current).toHaveFocus();
     expect(screen.getByRole('combobox', { name: 'Status' })).toHaveValue('');
+  });
+
+  it('answers an ask once: a filter set afterwards stands, even one that hides the row', async () => {
+    vi.useFakeTimers();
+    try {
+      // One ask, as the page holds it across renders; a new object is a new ask.
+      const ask = { key: 'w#1' };
+      const view = render(table(ask));
+      expect(bodyRows().find((tr) => tr.getAttribute('aria-current') === 'true')).toHaveFocus();
+      fireEvent.change(screen.getByRole('searchbox', { name: 'Search activity runs' }), {
+        target: { value: 'a.csv' },
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(300));
+      view.rerender(table(ask));
+      await act(async () => vi.advanceTimersByTimeAsync(300));
+      // Item 1 (`a.csv`) is shown; the asked-for row, in item 2, stays filtered out.
+      expect(bodyRows().some((tr) => tr.getAttribute('aria-current') === 'true')).toBe(false);
+      expect(screen.getByRole('searchbox', { name: 'Search activity runs' })).toHaveValue('a.csv');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shows a group whose activities never ran', () => {

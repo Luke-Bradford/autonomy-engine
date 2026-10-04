@@ -22,6 +22,7 @@ import {
 } from '../../stores/uiStore';
 import { PaneSplitter } from '../../shell/PaneSplitter';
 import { runDetailPath } from './runPath';
+import { SortButton } from './SortButton';
 import { nestRuns } from './runTree';
 import {
   isPinnedRunGridColumn,
@@ -88,14 +89,10 @@ function ColumnHeader({
           {note}
         </>
       ) : (
-        <button type="button" className="runs-grid__sort" onClick={() => onSort(sortKey)}>
+        <SortButton dir={active ? sort.dir : null} onClick={() => onSort(sortKey)}>
           {label}
           {note}
-          {/* The arrow's box is always there, so sorting never moves a label. */}
-          <span className="runs-grid__sort-arrow" aria-hidden="true">
-            {active ? (sort.dir === 'asc' ? '▲' : '▼') : ''}
-          </span>
-        </button>
+        </SortButton>
       )}
       {/* A sibling of the sort button, never inside it, so a drag never sorts.
           Arrow keys step it; a double-click returns the column to its default. */}

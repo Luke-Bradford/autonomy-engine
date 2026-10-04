@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router';
 import {
   CONTAINER_KIND_LABELS,
   RUN_SEARCH_MAX_CHARS,
-  RunSearchSchema,
+  TERMINAL_RUN_ROW_STATUS,
   runStartIsReal,
   type ActivityRun,
   type ActivityRunChild,
@@ -16,19 +16,24 @@ import { When } from '../../lib/When';
 import { countOf } from '../../lib/countOf';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { withParams } from '../../lib/withParams';
+import { useSearchBox } from '../../lib/useSearchBox';
 import { FilterPicker, type FilterOption } from './FilterPicker';
+import { SortButton } from './SortButton';
 import { RunDuration } from './RunHeader';
 import { runStatusLabel } from './runStatus';
 import {
   ACTIVITY_RUN_SORT_COLUMNS,
   ACTIVITY_RUNS_PARAMS,
+  activityRunSortParams,
   activityRunsViewParams,
   isViewChanged,
   nextActivityRunSort,
+  parseStatusKey,
   readActivityRunsView,
+  statusKeyLabel,
   statusKeyOf,
   viewEntries,
-  type ActivityRunsView,
+  type ActivityRunStatusKey,
   type RowFacts,
 } from './activityRunsView';
 import { failureClass, formatCount, formatElapsed } from './format';
@@ -111,8 +116,8 @@ const PLAIN_VIEW = activityRunsViewParams({ status: null, type: null, q: null, s
 /**
  * #1484 M2 — an Execute Pipeline row's called run: its pipeline, how it stands
  * and how long it took (the child's own row, read with the activity runs). The
- * clock counts only while the page is live, as the run header's does, so an
- * interrupted child never ticks forever.
+ * clock counts only while the page is live and the child unfinished, as the run
+ * header's does, so an interrupted child never ticks forever.
  */
 function ChildRunCell({ child, live }: { child: ActivityRunChild; live: boolean }) {
   return (
@@ -129,7 +134,9 @@ function ChildRunCell({ child, live }: { child: ActivityRunChild; live: boolean 
             status={child.status}
             startedAt={child.startedAt}
             endedAt={child.finishedAt}
-            counting={live && child.finishedAt === null}
+            counting={
+              live && child.finishedAt === null && !TERMINAL_RUN_ROW_STATUS.has(child.status)
+            }
           />
         </>
       )}
@@ -220,36 +227,25 @@ export function ActivityRunsTable({
   );
   const [searchParams, setSearchParams] = useSearchParams();
   const view = readActivityRunsView(searchParams);
-  const setView = (next: ActivityRunsView) =>
-    setSearchParams((prev) => withParams(prev, activityRunsViewParams(next)), { replace: true });
-  const clearView = () =>
-    setSearchParams((prev) => withParams(prev, PLAIN_VIEW), { replace: true });
-
-  /* The search box: what is TYPED is local, what is SEARCHED is the URL's,
-     written 300ms after typing stops — the runs list's pattern (RunsPage). A
-     change from outside (Clear, Back) is followed by the box. */
-  const [searchText, setSearchText] = useState(view.q ?? '');
-  const [syncedQ, setSyncedQ] = useState(view.q);
-  if (syncedQ !== view.q) {
-    setSyncedQ(view.q);
-    if (searchText.trim() !== (view.q ?? '')) setSearchText(view.q ?? '');
-  }
-  useEffect(() => {
-    const parsed = RunSearchSchema.safeParse(searchText);
-    const next = parsed.success ? parsed.data : '';
-    if (next === (view.q ?? '')) return;
-    const timer = window.setTimeout(() => {
-      setSearchParams((prev) => withParams(prev, { [ACTIVITY_RUNS_PARAMS.q]: next }), {
-        replace: true,
-      });
-    }, 300);
-    return () => window.clearTimeout(timer);
-  }, [searchText, view.q, setSearchParams]);
+  /* Each control writes only its OWN params, so two quick changes cannot undo
+     each other, and pushes a history entry, so Back steps out of a filter as
+     it does on the runs list. */
+  const setParams = (next: Record<string, string>) =>
+    setSearchParams((prev) => withParams(prev, next));
+  const [searchText, setSearchText] = useSearchBox(view.q, (next, replace) =>
+    setSearchParams((prev) => withParams(prev, { [ACTIVITY_RUNS_PARAMS.q]: next }), { replace }),
+  );
+  // Clear drops text typed but not yet searched, too.
+  const clearView = () => {
+    setSearchText('');
+    setParams(PLAIN_VIEW);
+  };
+  const labelOf = (key: ActivityRunStatusKey) => statusKeyLabel(key, runStatus);
 
   const factsOf = (row: ActivityRun): RowFacts => {
     const name = nameOf(row.activityId);
     const type = typeOf(row.activityId);
-    const statusLabel = row.reused ? 'reused' : nodeStatusLabel(row.status, runStatus);
+    const statusLabel = labelOf(statusKeyOf(row));
     const text = [
       name,
       row.nodeId,
@@ -268,24 +264,27 @@ export function ActivityRunsTable({
       .toLowerCase();
     return { name, type, statusLabel, text };
   };
-  const shown = viewEntries(entries, view, factsOf);
+  const shown = viewEntries(entries, view, factsOf, labelOf);
   /* The filter's choices are what the WHOLE run has, not what the filter left,
-     so a chosen status never drops out of its own list as the rows change. */
+     so a chosen status never drops out of its own list as the rows change. One
+     choice per WORDING: keys that read alike are one status to the reader. */
   const statusOptions: FilterOption[] = [];
   const typeOptions: FilterOption[] = [];
   for (const row of rows ?? []) {
     const key = statusKeyOf(row);
-    if (!statusOptions.some((o) => o.value === key))
-      statusOptions.push({
-        value: key,
-        label: row.reused ? 'reused' : nodeStatusLabel(row.status, runStatus),
-      });
+    const label = labelOf(key);
+    if (!statusOptions.some((o) => o.label === label)) statusOptions.push({ value: key, label });
     const type = typeOf(row.activityId);
     if (type !== null && !typeOptions.some((o) => o.value === type))
       typeOptions.push({ value: type, label: type });
   }
   typeOptions.sort((a, b) => a.label.localeCompare(b.label));
-  const changed = isViewChanged(view);
+  // A linked key that reads like an offered one shows as that one.
+  const pickedStatus =
+    view.status === null
+      ? undefined
+      : (statusOptions.find((o) => o.label === labelOf(view.status!))?.value ?? view.status);
+  const changed = isViewChanged(view) || searchText.trim() !== '';
 
   const toggle = (key: string) =>
     setCollapsed((prev) => {
@@ -308,19 +307,24 @@ export function ActivityRunsTable({
       }
     }
   }
-  /* An asked-for row the view hides: the view goes back to plain run order, so
-     "Show activity" always lands on the row rather than on nothing. */
-  const askedShown = askedFor === null || shown.some((e) => e.key === askedFor.key);
+  /* Each ask is answered ONCE. A new ask for a row the view hides puts the view
+     back to plain run order, so "Show activity" lands on the row rather than on
+     nothing; once the row is on screen it takes focus. A filter the viewer sets
+     afterwards stands, even one that hides that row. */
+  const askedShown = askedFor !== null && shown.some((e) => e.key === askedFor.key);
+  const answeredAsk = useRef<{ key: string } | null>(null);
   useEffect(() => {
-    if (!askedShown) setSearchParams((prev) => withParams(prev, PLAIN_VIEW), { replace: true });
-  }, [askedShown, setSearchParams]);
-  useEffect(() => {
-    if (askedFor === null || !askedShown) return;
+    if (askedFor === null || askedFor === answeredAsk.current) return;
+    if (!askedShown) {
+      setSearchParams((prev) => withParams(prev, PLAIN_VIEW), { replace: true });
+      return;
+    }
+    answeredAsk.current = askedFor;
     const tr = selectedRow.current;
     // jsdom has no `scrollIntoView`.
     tr?.scrollIntoView?.({ block: 'center' });
     tr?.focus({ preventScroll: true });
-  }, [askedFor, askedShown]);
+  }, [askedFor, askedShown, setSearchParams]);
   return (
     <section className="activity-runs" aria-labelledby="activity-runs-heading">
       <div className="activity-runs__bar">
@@ -330,10 +334,10 @@ export function ActivityRunsTable({
             <FilterPicker
               label={<span className="visually-hidden">Status</span>}
               allLabel="All statuses"
-              value={view.status ?? undefined}
+              value={pickedStatus}
               options={statusOptions}
               onChange={(v) =>
-                setView({ ...view, status: v === '' ? null : (v as ActivityRunsView['status']) })
+                setParams({ [ACTIVITY_RUNS_PARAMS.status]: parseStatusKey(v) ?? '' })
               }
             />
             <FilterPicker
@@ -341,7 +345,7 @@ export function ActivityRunsTable({
               allLabel="All types"
               value={view.type ?? undefined}
               options={typeOptions}
-              onChange={(v) => setView({ ...view, type: v === '' ? null : v })}
+              onChange={(v) => setParams({ [ACTIVITY_RUNS_PARAMS.type]: v })}
             />
             <div role="search" className="activity-runs__search">
               <LabelledControl
@@ -377,7 +381,7 @@ export function ActivityRunsTable({
       ) : entries.length === 0 ? (
         <p>No activity has run yet.</p>
       ) : shown.length === 0 ? (
-        <p>No activity run matches. Clear the filter to see every row.</p>
+        <p>No matches.</p>
       ) : (
         <div className="activity-runs__scroll">
           <table className="activity-runs__table">
@@ -397,19 +401,14 @@ export function ActivityRunsTable({
                       {key === undefined ? (
                         c
                       ) : (
-                        <button
-                          type="button"
-                          className="activity-runs__sort"
+                        <SortButton
+                          dir={active ? view.sort!.dir : null}
                           onClick={() =>
-                            setView({ ...view, sort: nextActivityRunSort(view.sort, key) })
+                            setParams(activityRunSortParams(nextActivityRunSort(view.sort, key)))
                           }
                         >
                           {c}
-                          {/* The arrow's box is always there, so sorting never moves a label. */}
-                          <span className="activity-runs__sort-arrow" aria-hidden="true">
-                            {active ? (view.sort?.dir === 'asc' ? '▲' : '▼') : ''}
-                          </span>
-                        </button>
+                        </SortButton>
                       )}
                     </th>
                   );

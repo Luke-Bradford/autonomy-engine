@@ -49,13 +49,13 @@ const TYPES: Record<string, string> = { a: 'Copy', b: 'Lookup', c: 'Copy', d: 'W
 const facts = (r: ActivityRun): RowFacts => ({
   name: NAMES[r.activityId] ?? null,
   type: TYPES[r.activityId] ?? null,
-  statusLabel: r.status,
+  statusLabel: r.reused ? 'reused' : r.status,
   text: [NAMES[r.activityId], r.nodeId, r.error?.message].join(' ').toLowerCase(),
 });
 
 const NONE: ActivityRunsView = { status: null, type: null, q: null, sort: null };
 const keys = (view: ActivityRunsView, rows: ActivityRun[], groups: ActivityRunGroup[] = []) =>
-  viewEntries(activityRunEntries(rows, groups), view, facts).map((e) => e.key);
+  viewEntries(activityRunEntries(rows, groups), view, facts, String).map((e) => e.key);
 
 const GROUP: ActivityRunGroup = {
   containerId: 'fe',
@@ -142,7 +142,7 @@ describe('#1484 M2 viewEntries', () => {
   it('passes the tree through untouched when nothing is filtered', () => {
     const rows = [row('a'), row('b', { containerId: 'fe' })];
     const entries = activityRunEntries(rows, [{ ...GROUP, iterations: [] }]);
-    expect(viewEntries(entries, NONE, facts)).toBe(entries);
+    expect(viewEntries(entries, NONE, facts, String)).toBe(entries);
   });
 
   it('keeps a matching row with the group and item it sits in, and drops the rest', () => {
@@ -178,6 +178,16 @@ describe('#1484 M2 viewEntries', () => {
     expect(keys({ ...NONE, type: 'Copy', q: 'copy 1' }, rows)).toEqual(['a']);
   });
 
+  it('matches a status by its wording, so keys that read alike filter together', () => {
+    const rows = [row('a', { status: 'pending' }), row('b', { status: 'ready' }), row('c')];
+    const alike = (k: string) => (k === 'pending' || k === 'ready' ? 'not run' : k);
+    const entries = activityRunEntries(rows, []);
+    const byWording = (r: ActivityRun): RowFacts => ({ ...facts(r), statusLabel: alike(r.status) });
+    expect(
+      viewEntries(entries, { ...NONE, status: 'ready' }, byWording, alike).map((e) => e.key),
+    ).toEqual(['a', 'b']);
+  });
+
   it('tells a reused row from one that ran', () => {
     const rows = [row('a', { reused: true }), row('b')];
     expect(keys({ ...NONE, status: 'reused' }, rows)).toEqual(['a']);
@@ -196,6 +206,7 @@ describe('#1484 M2 viewEntries', () => {
       activityRunEntries(rows, groups),
       { ...NONE, sort: { key: 'duration', dir: 'desc' } },
       facts,
+      String,
     );
     expect(desc.map((e) => e.key)).toEqual(['c', 'a', 'd', 'b']);
     expect(desc.every((e) => e.kind === 'row' && e.depth === 0 && e.parents.length === 0)).toBe(

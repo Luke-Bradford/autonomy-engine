@@ -4501,10 +4501,10 @@ button.danger {
   outline-offset: -2px;
 }
 
-/* #1484 — a sortable header is a button that looks like the header text. The
-   arrow's box is always there, so sorting never moves a label. */
-.runs-grid__sort,
-.activity-runs__sort {
+/* #1484 — a sortable header is a button that looks like the header text
+   (`SortButton`). The arrow's box is always there, so sorting never moves a
+   label. */
+.sort-button {
   display: inline-flex;
   align-items: center;
   gap: 0.2rem;
@@ -4517,13 +4517,11 @@ button.danger {
   cursor: pointer;
 }
 
-.runs-grid__sort:hover,
-.activity-runs__sort:hover {
+.sort-button:hover {
   text-decoration: underline;
 }
 
-.runs-grid__sort-arrow,
-.activity-runs__sort-arrow {
+.sort-button__arrow {
   display: inline-block;
   width: 0.8em;
   font-size: 0.75em;
