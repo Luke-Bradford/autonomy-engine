@@ -127,7 +127,8 @@ export function nextActivityRunSort(
   current: ActivityRunSort | null,
   clicked: ActivityRunSortKey,
 ): ActivityRunSort | null {
-  if (current === null || current.key !== clicked) return { key: clicked, dir: NATURAL_DIR[clicked] };
+  if (current === null || current.key !== clicked)
+    return { key: clicked, dir: NATURAL_DIR[clicked] };
   return current.dir === NATURAL_DIR[clicked]
     ? { key: clicked, dir: current.dir === 'asc' ? 'desc' : 'asc' }
     : null;
@@ -145,11 +146,7 @@ export interface RowFacts {
 
 type RowEntry = Extract<ActivityRunEntry, { kind: 'row' }>;
 
-function sortValue(
-  row: ActivityRun,
-  f: RowFacts,
-  key: ActivityRunSortKey,
-): string | number | null {
+function sortValue(row: ActivityRun, f: RowFacts, key: ActivityRunSortKey): string | number | null {
   switch (key) {
     case 'activity':
       return f.name ?? row.nodeId;

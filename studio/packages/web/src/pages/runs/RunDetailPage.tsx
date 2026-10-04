@@ -287,7 +287,6 @@ export function RunDetailPage({ runId }: { runId: string }) {
   );
   const typeOf = (nodeId: string) => nodeTypes?.get(nodeId) ?? null;
   // #1484 M2 — re-read as the stream grows; see `useActivityRuns`.
-  const activityRuns = useActivityRuns(runId, stream.events.at(-1)?.seq);
 
   // U24 — which node's drill-in is open. Held as an ID and RESOLVED against the
   // live fold rather than storing the row itself, so the panel tracks a running
@@ -315,6 +314,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
      set, as `RunCostSummary`'s `settled` below, because `status` can fall back
      to the REST row's `queued`/`skipped`. */
   const countingLive = streamStillLive(stream.phase, status);
+  /* #1484 M2 — the activity runs, re-read as the log grows, and while a run
+     this one called is still going and the page would hear this run settle. */
+  const activityRuns = useActivityRuns(runId, stream.events.at(-1)?.seq, countingLive);
   /* #1484 M2 — when the run ended and why. The `run.finished` event as well as
      the row's stamp, because the row was read once and the run may have ended
      since. */
@@ -613,6 +615,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
         typeOf={typeOf}
         containerNameOf={(id) => containerNames?.get(id) ?? null}
         selected={selectedRow}
+        live={countingLive}
       />
 
       {/* The run's inputs and its downward rerun lineage (RS6): facts about the

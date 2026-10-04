@@ -69,8 +69,24 @@ const GROUP: ActivityRunGroup = {
   durationMs: 2_000,
   itemCount: 2,
   iterations: [
-    { index: 0, count: 2, item: 'x.csv', status: 'success', startedAt: 1, finishedAt: 2, durationMs: 1 },
-    { index: 1, count: 2, item: 'y.csv', status: 'failure', startedAt: 2, finishedAt: 3, durationMs: 1 },
+    {
+      index: 0,
+      count: 2,
+      item: 'x.csv',
+      status: 'success',
+      startedAt: 1,
+      finishedAt: 2,
+      durationMs: 1,
+    },
+    {
+      index: 1,
+      count: 2,
+      item: 'y.csv',
+      status: 'failure',
+      startedAt: 2,
+      finishedAt: 3,
+      durationMs: 1,
+    },
   ],
   position: 1,
 };
@@ -132,7 +148,10 @@ describe('#1484 M2 viewEntries', () => {
   it('keeps a matching row with the group and item it sits in, and drops the rest', () => {
     const rows = [
       row('a'),
-      row('b', { containerId: 'fe', iteration: { containerId: 'fe', index: 0, count: 2, item: 'x.csv' } }),
+      row('b', {
+        containerId: 'fe',
+        iteration: { containerId: 'fe', index: 0, count: 2, item: 'x.csv' },
+      }),
       row('c', {
         containerId: 'fe',
         status: 'failure',
@@ -147,7 +166,13 @@ describe('#1484 M2 viewEntries', () => {
   });
 
   it('filters by type and by search text, case-blind', () => {
-    const rows = [row('a'), row('b'), row('c', { error: { message: 'Database is LOCKED', kind: null, code: null, connectionId: null } })];
+    const rows = [
+      row('a'),
+      row('b'),
+      row('c', {
+        error: { message: 'Database is LOCKED', kind: null, code: null, connectionId: null },
+      }),
+    ];
     expect(keys({ ...NONE, type: 'Copy' }, rows)).toEqual(['a', 'c']);
     expect(keys({ ...NONE, q: 'locked' }, rows)).toEqual(['c']);
     expect(keys({ ...NONE, type: 'Copy', q: 'copy 1' }, rows)).toEqual(['a']);
@@ -167,9 +192,15 @@ describe('#1484 M2 viewEntries', () => {
       row('d', { durationMs: 50 }),
     ];
     const groups = [{ ...GROUP, iterations: [] }];
-    const desc = viewEntries(activityRunEntries(rows, groups), { ...NONE, sort: { key: 'duration', dir: 'desc' } }, facts);
+    const desc = viewEntries(
+      activityRunEntries(rows, groups),
+      { ...NONE, sort: { key: 'duration', dir: 'desc' } },
+      facts,
+    );
     expect(desc.map((e) => e.key)).toEqual(['c', 'a', 'd', 'b']);
-    expect(desc.every((e) => e.kind === 'row' && e.depth === 0 && e.parents.length === 0)).toBe(true);
+    expect(desc.every((e) => e.kind === 'row' && e.depth === 0 && e.parents.length === 0)).toBe(
+      true,
+    );
     expect(keys({ ...NONE, sort: { key: 'duration', dir: 'asc' } }, rows, groups)).toEqual([
       'a',
       'd',
@@ -191,11 +222,20 @@ describe('#1484 M2 viewEntries', () => {
       'b',
       'zz',
     ]);
-    expect(keys({ ...NONE, sort: { key: 'bytes', dir: 'desc' } }, rows)).toEqual(['a', 'b', 'c', 'zz']);
+    expect(keys({ ...NONE, sort: { key: 'bytes', dir: 'desc' } }, rows)).toEqual([
+      'a',
+      'b',
+      'c',
+      'zz',
+    ]);
   });
 
   it('filters before it sorts', () => {
-    const rows = [row('a', { durationMs: 1 }), row('b', { durationMs: 9 }), row('c', { durationMs: 5 })];
+    const rows = [
+      row('a', { durationMs: 1 }),
+      row('b', { durationMs: 9 }),
+      row('c', { durationMs: 5 }),
+    ];
     expect(keys({ ...NONE, type: 'Copy', sort: { key: 'duration', dir: 'desc' } }, rows)).toEqual([
       'c',
       'a',
