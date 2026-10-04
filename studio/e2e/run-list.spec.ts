@@ -992,7 +992,7 @@ test('#1484 — Export CSV saves every run the filters match, as the list shows 
   // Times are ISO UTC to the millisecond.
   expect(record).toMatch(/,\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z,/);
   // Nothing was cut, so nothing says so.
-  await expect(page.getByText(/Exported the first/)).toHaveCount(0);
+  await expect(page.getByText(/The CSV holds the first/)).toHaveCount(0);
   await expect(exportButton).toBeEnabled();
 
   await expectQuiet(page, problems);

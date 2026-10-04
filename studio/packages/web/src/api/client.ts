@@ -186,8 +186,9 @@ export async function apiFetch<T = unknown>(path: string, opts: ApiRequest<T> = 
  * `apiFetch`'s sibling for a response whose BYTES are the payload: the same
  * failure mapping, but the 2xx body is returned as raw text and never parsed.
  *
- * This is the one response in the app that is not validated against a shared
- * Zod schema, and that is the deliberate point of it. The portability export
+ * This and its sibling `apiFetchFile` are the only responses in the app not
+ * validated against a shared Zod schema, and that is the deliberate point of
+ * them. The portability export
  * routes send canonical JSON (#3 G1 — sorted keys, stable bytes) and the
  * operator's artifact must be the server's exact bytes. Round-tripping it
  * through `ExportEnvelopeSchema.parse` + a re-serialize would make the client

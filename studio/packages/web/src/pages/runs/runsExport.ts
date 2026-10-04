@@ -11,5 +11,5 @@ export function runsExportFileName(now: number): string {
 
 /** What the page says when an export stopped at the server's cap. */
 export function runsExportTruncatedLabel(cap: number): string {
-  return `Exported the first ${cap.toLocaleString('en')} runs. Narrow the filters for the rest.`;
+  return `The CSV holds the first ${cap.toLocaleString('en')} runs. Narrow the filters for the rest.`;
 }

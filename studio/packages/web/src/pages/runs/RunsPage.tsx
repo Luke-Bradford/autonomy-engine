@@ -27,7 +27,8 @@ import {
 import { useStore } from 'zustand';
 import { useSearchParams } from 'react-router';
 import { listRunAnnotations, listRuns, type ListRunsQuery } from '../../api/runs';
-import { RunsExportButton } from './RunsExportButton';
+import { RunsExportButton, RunsExportNote } from './RunsExportButton';
+import { useRunsExport } from './useRunsExport';
 import { PAGE_STALLED_LABEL, usePagedList } from '../../hooks/usePagedList';
 import { getPipelineCost } from '../../api/pipelines';
 import { ApiError, messageOf } from '../../api/client';
@@ -350,17 +351,6 @@ export function RunsPage({
    * axes. One authority instead of a key and a fetcher that could disagree.
    */
 
-  /**
-   * #1083 — ONE page of runs, extended on demand, instead of every run the
-   * filters matched. The fetcher is memoized on the filter PRIMITIVES (never the
-   * `filters` object, which is a fresh literal every render), and that identity
-   * is load-bearing twice over: it is the dependency of the hook's first-page
-   * effect, and it is what tells `usePagedList` the list has CHANGED rather than
-   * merely needing a refresh — so a filter change blanks the rows and drops the
-   * cursor, where a Refresh keeps the rows on screen. The hand-rolled
-   * `latestLoad` counter this replaced is gone with it; `useGuardedLoad`, which
-   * the hook wraps, is that counter with its rules written down and tested.
-   */
   /* #1484 — the request's axes, memoised on the PRIMITIVES above, so its
      identity changes exactly when a filter does. One object for the paged list
      and the CSV export, so the file is always the list on screen. */
@@ -396,6 +386,18 @@ export function RunsPage({
       sortedByDefault,
     ],
   );
+  const exporter = useRunsExport(listQuery);
+  /**
+   * #1083 — ONE page of runs, extended on demand, instead of every run the
+   * filters matched. The fetcher is memoized on the filter PRIMITIVES (never the
+   * `filters` object, which is a fresh literal every render), and that identity
+   * is load-bearing twice over: it is the dependency of the hook's first-page
+   * effect, and it is what tells `usePagedList` the list has CHANGED rather than
+   * merely needing a refresh — so a filter change blanks the rows and drops the
+   * cursor, where a Refresh keeps the rows on screen. The hand-rolled
+   * `latestLoad` counter this replaced is gone with it; `useGuardedLoad`, which
+   * the hook wraps, is that counter with its rules written down and tested.
+   */
   const fetchPage = useCallback(
     (cursor: string | undefined, signal: AbortSignal) =>
       listRuns(
@@ -595,7 +597,7 @@ export function RunsPage({
           Refresh
         </button>
         {/* #1484 — every run the filters match, not just the loaded pages. */}
-        <RunsExportButton query={listQuery} />
+        <RunsExportButton exporter={exporter} />
         {/* #1484 — keeps the list current (`useRunsLive`). The status beside it
             says why it is not updating when it is not, so a paused list is
             never mistaken for a quiet workspace. The live region is always
@@ -659,6 +661,8 @@ export function RunsPage({
               : pageError.message}
         </p>
       )}
+
+      <RunsExportNote exporter={exporter} />
 
       {/* U26 — OUTSIDE the "are there rows" guard below, and that placement is
           the point: under a filter an empty result is the ordinary case, so a

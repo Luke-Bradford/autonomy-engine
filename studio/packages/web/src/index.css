@@ -4650,6 +4650,12 @@ button.danger {
   white-space: nowrap;
 }
 
+/* #1484 — what the last CSV export has to say, under the title row. */
+.runs-export-note {
+  margin: 0 0 0.375rem;
+  font-size: 13px;
+}
+
 .runs-search input {
   width: 100%;
   font-size: 13px;

@@ -1,78 +1,38 @@
-import { useEffect, useRef, useState } from 'react';
-import { exportRunsCsv, type ListRunsQuery } from '../../api/runs';
-import { downloadBlob } from '../../api/download';
-import { messageOf } from '../../api/client';
-import { runsExportFileName, runsExportTruncatedLabel } from './runsExport';
+import type { RunsExport } from './useRunsExport';
 
 /**
- * #1484 OR35 M1 — "CSV export of the filtered set". Saves every run `query`
- * matches, in its order, through `GET /api/runs/export.csv` — the whole set, not
- * the pages the grid has loaded.
- *
- * A file the server cut at its cap says so beside the button; a failure is an
- * alert and nothing reaches the disk (`download.ts`). Disabled while one is in
- * flight, so a second click cannot start a second walk of the same list.
+ * #1484 OR35 M1 — the runs list's Export CSV (`useRunsExport`). On the title
+ * row; disabled while an export is in flight, so a second click cannot start a
+ * second walk of the same list.
  */
-export function RunsExportButton({ query }: { query: ListRunsQuery }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [truncated, setTruncated] = useState<number | null>(null);
-  const controller = useRef<AbortController | null>(null);
-  useEffect(() => () => controller.current?.abort(), []);
-  // The query on screen NOW, for an export that answers after a filter changed.
-  const current = useRef(query);
-  useEffect(() => {
-    current.current = query;
-  }, [query]);
-
-  // A note about the LAST export is about the filters it was taken under, so a
-  // filter change clears it rather than leaving it under a different list.
-  const [shownFor, setShownFor] = useState(query);
-  if (shownFor !== query) {
-    setShownFor(query);
-    setError(null);
-    setTruncated(null);
-  }
-
-  async function exportCsv() {
-    const abort = new AbortController();
-    controller.current = abort;
-    setBusy(true);
-    setError(null);
-    setTruncated(null);
-    // The file is still saved if the filters change while it is on its way —
-    // it is the export that was asked for — but its note is not shown under a
-    // list it does not describe.
-    const askedFor = query;
-    try {
-      const { file, truncated: cap } = await exportRunsCsv(askedFor, abort.signal);
-      downloadBlob(runsExportFileName(Date.now()), file);
-      if (current.current === askedFor) setTruncated(cap);
-    } catch (err) {
-      if (!abort.signal.aborted && current.current === askedFor) {
-        setError(`Export failed: ${messageOf(err)}`);
-      }
-    } finally {
-      if (!abort.signal.aborted) setBusy(false);
-    }
-  }
-
+export function RunsExportButton({ exporter }: { exporter: RunsExport }) {
   return (
-    <>
-      <button
-        type="button"
-        onClick={() => void exportCsv()}
-        disabled={busy}
-        title="Save every run these filters match as a CSV file"
-      >
-        {busy ? 'Exporting…' : 'Export CSV'}
-      </button>
-      {error !== null && (
-        <span role="alert" className="error">
-          {error}
-        </span>
-      )}
-      {truncated !== null && <span role="status">{runsExportTruncatedLabel(truncated)}</span>}
-    </>
+    <button
+      type="button"
+      onClick={exporter.start}
+      disabled={exporter.busy}
+      title="Save every run these filters match as a CSV file"
+    >
+      {exporter.busy ? 'Exporting…' : 'Export CSV'}
+    </button>
+  );
+}
+
+/**
+ * What the last export has to say. BELOW the title row, never on it: the row
+ * does not wrap (`index.css`, `.runs-page > .page-header`), and a server's error
+ * message is as long as it likes.
+ */
+export function RunsExportNote({ exporter }: { exporter: RunsExport }) {
+  const { note } = exporter;
+  if (note === null) return null;
+  return note.kind === 'error' ? (
+    <p role="alert" className="error">
+      {note.text}
+    </p>
+  ) : (
+    <p role="status" className="runs-export-note">
+      {note.text}
+    </p>
   );
 }
