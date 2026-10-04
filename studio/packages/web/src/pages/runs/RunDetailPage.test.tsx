@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, screen, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
@@ -2083,7 +2083,7 @@ describe('RunDetailPage — the rerun-from-failed action (RS2)', () => {
     /* #1232 — an ANCHOR, and pinned by role so a regression to
        `navigate`-on-a-button reds here rather than silently taking away
        hover/copy/middle-click/new-tab. Named `Source run …` rather than by the
-       bare id, the same treatment `Called by` and `RunsPage`'s Run ID link get:
+       bare id, the same treatment an unnamed `Parent` and `RunsPage`'s Run ID link get:
        "run_0" alone tells a screen-reader user nothing about where it goes.
 
        Containment (2.5.3) is asserted through the shared helper rather than by
@@ -2994,7 +2994,7 @@ describe('RunDetailPage — the parent a child run was called by', () => {
     expect(screen.queryByText('Parent', { selector: 'dt' })).not.toBeInTheDocument();
   });
 
-  /* The `run-meta` list is gated on the run ROW alone, independently of the
+  /* The header's Parent fact is gated on the run ROW alone, independently of the
      stream and the projection — so the way up still renders on the page's
      doc-resolution fallback, which is exactly when a failed run most needs
      reading. This pins that: the pipeline version fails to load and the link
@@ -3151,7 +3151,7 @@ describe('RunDetailPage — the reruns of this run', () => {
   });
 
   /* The ABSENCE of the row is what "never rerun" looks like — the rule the
-     `Rerun of` and `Called by` rows already set. */
+     `Rerun of` and `Parent` facts already set. */
   it('shows no row on a run nothing has rerun', async () => {
     listRunsMock.mockResolvedValue({ items: [], nextCursor: null });
     await mountRun();
@@ -3280,5 +3280,90 @@ describe('RunDetailPage — the run’s variables (#844 V7)', () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
     await screen.findByRole('region', { name: 'Cost & usage' });
     expect(screen.queryByRole('region', { name: 'Variables' })).toBeNull();
+  });
+});
+
+/* #1484 OR35 M2 — the failure banner, wired through the page: what the log
+   blames, its row from the activity runs, and the way to that row. */
+describe('RunDetailPage — the failure banner', () => {
+  const failedLog = [
+    envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+    envelope({
+      type: 'node.dispatched',
+      runId: 'run_1',
+      nodeId: 'greet',
+      attemptId: 'greet#0',
+      idempotent: true,
+    }),
+    envelope({
+      type: 'node.failed',
+      runId: 'run_1',
+      nodeId: 'greet',
+      attemptId: 'greet#0',
+      error: 'boom',
+      kind: 'permanent',
+    }),
+    envelope({
+      type: 'run.finished',
+      runId: 'run_1',
+      outcome: 'failure',
+      reason: 'node_failed:greet',
+    }),
+  ];
+  const failedRow = {
+    key: 'greet#0',
+    nodeId: 'greet',
+    activityId: 'greet',
+    attemptId: 'greet#0',
+    attempt: 1,
+    status: 'failure' as const,
+    reused: false,
+    startedAt: null,
+    finishedAt: null,
+    durationMs: null,
+    iteration: null,
+    branch: null,
+    rowsRead: null,
+    rowsWritten: null,
+    bytesRead: null,
+    bytesWritten: null,
+    childRunId: null,
+    childRun: null,
+    error: { message: 'boom', kind: 'permanent' as const, code: null, connectionId: null },
+  };
+
+  beforeEach(() => {
+    getRunDetailMock.mockResolvedValue({
+      ...NAMES,
+      run: run({ status: 'failure', finishedAt: 1_700_000_001_000 }),
+      pipelineVersion: version(),
+    });
+    vi.mocked(runsApi.getRunActivityRuns).mockResolvedValue({ runId: 'run_1', rows: [failedRow] });
+  });
+
+  it('names the blamed activity and its error, and Show activity selects its row', async () => {
+    useRunStreamMock.mockReturnValue(stream({ events: failedLog, phase: 'closed' }));
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    const banner = await screen.findByRole('group', { name: 'Failure' });
+    expect(banner).toHaveTextContent('Failed: HTTP Request 1');
+    await waitFor(() => expect(banner).toHaveTextContent('boom'));
+    await userEvent.click(within(banner).getByRole('button', { name: 'Show activity' }));
+    const current = document.querySelector('.activity-runs__table tr[aria-current="true"]');
+    expect(current?.getAttribute('data-activity-id')).toBe('greet');
+  });
+
+  it('waits for the replay before naming anything', async () => {
+    useRunStreamMock.mockReturnValue(
+      stream({ events: failedLog, phase: 'live', replayComplete: false }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await screen.findByRole('heading', { level: 2, name: 'Test pipeline v1' });
+    expect(screen.queryByRole('group', { name: 'Failure' })).toBeNull();
+  });
+
+  it('a failed run whose log never says why still says it failed', async () => {
+    useRunStreamMock.mockReturnValue(stream({ events: [], phase: 'closed' }));
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    expect(await screen.findByRole('group', { name: 'Failure' })).toHaveTextContent('Run failed');
   });
 });

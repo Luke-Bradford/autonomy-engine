@@ -27,7 +27,9 @@ import { NodeActivityPanel, PANEL_ID } from './NodeActivityPanel';
 import { ActivityRunsTable } from './ActivityRunsTable';
 import { RunHeader } from './RunHeader';
 import { RunFailureBanner } from './RunFailureBanner';
-import { runFailure, runFinished } from './runFailure';
+import { runFailure, runFinished, runStartedAt } from './runFailure';
+import { closeOnEscape, closeOnLeave } from './helpDisclosure';
+import { containerLabels } from '../pipeline/containerRules';
 import { useActivityRuns } from './useActivityRuns';
 import { NodeDuration } from './NodeDuration';
 import { RunCostSummary } from './RunCostSummary';
@@ -325,19 +327,30 @@ export function RunDetailPage({ runId }: { runId: string }) {
      since. */
   const finished = useMemo(() => runFinished(stream.events), [stream.events]);
   const endedAt = run?.finishedAt ?? finished?.ts ?? null;
-  /* The failure banner, on a FAILED run only, once its log says why: before the
-     replay reaches `run.finished` there is nothing to name. The container walk
-     needs the projected state, so it waits for the overlay rather than guess. */
-  const failure = useMemo(
-    () =>
-      status === 'failure' && finished !== null
-        ? runFailure(
-            finished.reason,
-            overlay.ready ? overlay.state.containers : null,
-            activityRuns.rows,
-          )
-        : null,
-    [status, finished, overlay, activityRuns.rows],
+  // The log's start, which a run admitted from the queue since the row was read
+  // has and the row does not (its `startedAt` was the enqueue placeholder).
+  const loggedStart = useMemo(() => runStartedAt(stream.events), [stream.events]);
+  const streamEnded = stream.phase === 'closed' || stream.phase === 'error';
+  /* The failure banner, on a FAILED run only. It names what the log blames, so
+     it waits for the projected state the container walk needs, unless that
+     will never come (the stream has ended, or the version will not resolve).
+     A failed run whose log never says why (a truncated log, or the REST
+     fallback) still gets a banner, saying only that it failed. */
+  const failure = useMemo(() => {
+    if (status !== 'failure') return null;
+    if (finished === null) return streamEnded ? runFailure(null, null, null) : null;
+    if (!overlay.ready && !streamEnded && loadError === null) return null;
+    return runFailure(
+      finished.reason,
+      overlay.ready ? overlay.state.containers : null,
+      activityRuns.rows,
+    );
+  }, [status, finished, streamEnded, overlay, loadError, activityRuns.rows]);
+  /* A container has no node label, so the banner names one by its container
+     label, as the editor does. */
+  const containerNames = useMemo(
+    () => (doc === null ? null : containerLabels(doc.containers)),
+    [doc],
   );
   // #1484 M2 — the row "Show activity" asked for; a new object per ask.
   const [selectedRow, setSelectedRow] = useState<{ key: string } | null>(null);
@@ -480,6 +493,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
         doc={doc}
         names={names}
         status={status}
+        startedAt={loggedStart ?? run?.startedAt ?? 0}
         statusPill={
           <>
             {cancelling ? (
@@ -512,8 +526,14 @@ export function RunDetailPage({ runId }: { runId: string }) {
                 >
                   {rerunning ? 'Starting rerun…' : 'Rerun from failed'}
                 </button>
-                <details className="run-header__help">
-                  <summary aria-label="About rerunning from the failure">?</summary>
+                <details
+                  className="run-header__help"
+                  onKeyDown={closeOnEscape}
+                  onBlur={closeOnLeave}
+                >
+                  <summary aria-label="About rerunning from the failure" title="About rerunning">
+                    ?
+                  </summary>
                   <span id="rerun-cost-warning" role="note">
                     {RERUN_COST_WARNING}
                   </span>
@@ -534,7 +554,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
       {failure !== null && (
         <RunFailureBanner
           failure={failure}
-          nameOf={nameOf}
+          nameOf={(id) => nameOf(id) ?? containerNames?.get(id) ?? null}
           versionHref={
             doc === null || names === null
               ? null

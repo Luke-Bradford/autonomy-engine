@@ -63,6 +63,7 @@ function header(run: Run, over: Record<string, unknown> = {}) {
         doc={doc(over)}
         names={NAMES}
         status={run.status}
+        startedAt={run.startedAt}
         statusPill={<span>success</span>}
         endedAt={run.finishedAt}
         counting={false}
@@ -104,6 +105,12 @@ describe('RunHeader (#1484 OR35 M2)', () => {
     header({ ...RUN, triggerContext }, { sourceCommit: '0123456789abcdef', sourceBranch: 'main' });
     expect(fact('Scheduled')?.textContent).toMatch(/:59:59\.500/);
     expect(fact('Source')?.textContent).toBe('main @ 0123456');
+  });
+
+  it('a trigger deleted since the run leaves its kind and no link', () => {
+    header({ ...RUN, triggerId: null });
+    expect(fact('Triggered by')?.textContent).toBe('Schedule');
+    expect(screen.queryByRole('link', { name: 'Every night' })).toBeNull();
   });
 
   it('counts an unfinished run as "so far"', () => {

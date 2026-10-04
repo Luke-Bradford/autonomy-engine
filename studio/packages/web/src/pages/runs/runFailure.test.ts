@@ -1,6 +1,6 @@
 import type { ActivityRun, RunState } from '@autonomy-studio/shared';
 import { describe, expect, it } from 'vitest';
-import { runFailure, runFinished } from './runFailure';
+import { runFailure, runFinished, runStartedAt } from './runFailure';
 
 const row = (over: Partial<ActivityRun>): ActivityRun => ({
   key: 'k',
@@ -114,5 +114,29 @@ describe('runFinished', () => {
         ts: 9,
       },
     );
+  });
+});
+
+describe('runFinished — an interrupted run ended too', () => {
+  it('takes the run.interrupted stamp, with no outcome reason', () => {
+    expect(
+      runFinished([{ type: 'run.interrupted', payload: { reason: 'lease_reclaim' }, ts: 5 }]),
+    ).toEqual({
+      reason: null,
+      ts: 5,
+    });
+  });
+});
+
+describe('runStartedAt', () => {
+  it('reads the last run.started stamp, and null without one', () => {
+    expect(runStartedAt([])).toBeNull();
+    expect(runStartedAt([{ type: 'run.started', payload: {} }])).toBeNull();
+    expect(
+      runStartedAt([
+        { type: 'run.started', payload: { startedAt: '2026-10-04T12:00:00.000Z' } },
+        { type: 'run.started', payload: { startedAt: '2026-10-04T12:00:05.250Z' } },
+      ]),
+    ).toBe(Date.UTC(2026, 9, 4, 12, 0, 5, 250));
   });
 });

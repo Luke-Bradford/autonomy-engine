@@ -36,8 +36,9 @@ const CHILD_FAILED = 'child_failed:';
 
 /**
  * `reason` is the run's terminal reason; `containers` is the projected state's,
- * or `null` when the version doc did not resolve (the page then cannot follow a
- * container's blame, and says which container rather than guessing a child).
+ * or `null` when the version doc did not resolve. The page then cannot follow a
+ * container's blame, so it names the blamed id (container or activity) and
+ * attaches the row only when one is that exact node, never a guessed child.
  */
 export function runFailure(
   reason: string | null,
@@ -66,18 +67,38 @@ export function runFailure(
 }
 
 /**
- * The run's `run.finished` event: its reason (`null` when it states none) and
- * when it was appended. `null` before the run finishes. The page reads the end
- * time here as well as from the row, because the row it loaded may predate it.
+ * How the run's log says it ENDED: its `run.finished` event (the reason, `null`
+ * when it states none) or its `run.interrupted` event (no outcome reason; the
+ * banner never reads one for an interrupted run), and when it was appended.
+ * `null` before either. The page reads the end time here as well as from the
+ * row, because the row it loaded may predate the end.
  */
 export function runFinished(
   events: readonly { type: string; payload: unknown; ts: number }[],
 ): { reason: string | null; ts: number } | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i];
+    if (e?.type === 'run.interrupted') return { reason: null, ts: e.ts };
     if (e?.type !== 'run.finished') continue;
     const reason = (e.payload as { reason?: unknown } | null)?.reason;
     return { reason: typeof reason === 'string' ? reason : null, ts: e.ts };
+  }
+  return null;
+}
+
+/**
+ * When the run started, by its log: the LAST `run.started`'s `startedAt` (the
+ * driver stamps it from the row at admission, so a run queued while the page
+ * loaded gets its real start, not the enqueue placeholder the row held). `null`
+ * when the log has none, or one written before the stamp existed.
+ */
+export function runStartedAt(events: readonly { type: string; payload: unknown }[]): number | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e?.type !== 'run.started') continue;
+    const at = (e.payload as { startedAt?: unknown } | null)?.startedAt;
+    const ms = typeof at === 'string' ? Date.parse(at) : Number.NaN;
+    return Number.isNaN(ms) ? null : ms;
   }
   return null;
 }

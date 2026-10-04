@@ -5,7 +5,7 @@ import { CopyableId } from '../../lib/CopyableId';
 import { RunTriggeredByName } from '../../lib/KindName';
 import { shortId } from '../../lib/ids';
 import { useTickingNow } from '../../hooks/useTickingNow';
-import { formatTimestamp } from '../../lib/displayTime';
+import { dayOf } from '../../lib/displayTime';
 import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import { versionLabel } from '../../lib/versionLabel';
 import { When } from '../../lib/When';
@@ -26,18 +26,18 @@ export interface RunHeaderNames {
 /** The ticking half, in a leaf so the page's folds do not re-run every second
  * (`useTickingNow`'s docblock). The clock runs only while the run is counting. */
 function RunDuration({
-  run,
   status,
+  startedAt,
   endedAt,
   counting,
 }: {
-  run: Run;
   status: RunStatus;
+  startedAt: number;
   endedAt: number | null;
   counting: boolean;
 }) {
   const now = useTickingNow(1000, counting);
-  return <>{formatRunDuration({ status, startedAt: run.startedAt, finishedAt: endedAt }, now)}</>;
+  return <>{formatRunDuration({ status, startedAt, finishedAt: endedAt }, now)}</>;
 }
 
 /** An ISO occurrence time from the trigger context; the raw text if it will not parse. */
@@ -63,6 +63,7 @@ export function RunHeader({
   doc,
   names,
   status,
+  startedAt,
   statusPill,
   endedAt,
   counting,
@@ -73,6 +74,8 @@ export function RunHeader({
   doc: PipelineVersion | null;
   names: RunHeaderNames | null;
   status: RunStatus;
+  /** When the run started: its log's `run.started` stamp, else the row's. */
+  startedAt: number;
   /** The page's status pill and stream phase, which it already words. */
   statusPill: ReactNode;
   /** When the run ended: the row's stamp, or its `run.finished` event's. */
@@ -86,10 +89,7 @@ export function RunHeader({
   // Ended reads as a time of day when it is on Started's date in the display
   // zone: the date is beside it already. The full form is the hover, as always.
   const endedSameDay =
-    run !== null &&
-    endedAt !== null &&
-    formatTimestamp(run.startedAt, zone).slice(0, 10) ===
-      formatTimestamp(endedAt, zone).slice(0, 10);
+    run !== null && endedAt !== null && dayOf(startedAt, zone) === dayOf(endedAt, zone);
   const scheduledTime = run?.triggerContext?.scheduledTime ?? null;
   // Bound with `?? null`, as the page bound it before this header: a row read
   // before RS6 added the column has no `rerunOf` key at all.
@@ -166,7 +166,7 @@ export function RunHeader({
             <div>
               <dt>Started</dt>
               <dd>
-                <When ms={run.startedAt} precision="ms" />
+                <When ms={startedAt} precision="ms" />
               </dd>
             </div>
             <div>
@@ -178,7 +178,12 @@ export function RunHeader({
             <div>
               <dt>Duration</dt>
               <dd className="num">
-                <RunDuration run={run} status={status} endedAt={endedAt} counting={counting} />
+                <RunDuration
+                  status={status}
+                  startedAt={startedAt}
+                  endedAt={endedAt}
+                  counting={counting}
+                />
               </dd>
             </div>
             <div>

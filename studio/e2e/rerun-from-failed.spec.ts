@@ -24,7 +24,7 @@ import { fluentRootReady } from './support/theme';
 /**
  * Which run a detail page is showing. Since #1392 the heading names the
  * PIPELINE (a source run and its rerun share one), so the run is identified by
- * its id in the metadata: shown short, carried whole in the tooltip.
+ * its id in the header (#1484 M2): shown short, carried whole in the tooltip.
  */
 function runIdShown(page: Page, runId: string): Locator {
   return page.locator('.run-header').getByTitle(runId, { exact: true });

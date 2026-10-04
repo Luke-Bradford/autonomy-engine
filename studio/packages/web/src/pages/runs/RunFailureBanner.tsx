@@ -22,6 +22,11 @@ export function RunFailureBanner({
   versionHref: string | null;
   onShowActivity: (rowKey: string) => void;
 }) {
+  const openVersion = versionHref !== null && (
+    <Link to={versionHref} title="The version this run ran">
+      Open in editor
+    </Link>
+  );
   if (failure.kind === 'run') {
     return (
       <div className="run-failure" role="group" aria-label="Failure">
@@ -32,6 +37,7 @@ export function RunFailureBanner({
             <code>{failure.reason}</code>
           </>
         )}
+        <span className="run-failure__actions">{openVersion}</span>
       </div>
     );
   }
@@ -71,11 +77,7 @@ export function RunFailureBanner({
             Show activity
           </button>
         )}
-        {versionHref !== null && (
-          <Link to={versionHref} title="The version this run ran">
-            Open in editor
-          </Link>
-        )}
+        {openVersion}
       </span>
     </div>
   );
