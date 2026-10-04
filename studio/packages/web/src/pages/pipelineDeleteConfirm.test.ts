@@ -104,8 +104,8 @@ describe('pipelineDeletePlan', () => {
       kind: 'refused',
       message:
         'Cannot delete “Draft”: its only runs are Debug runs, kept for 1 day after each Debug ' +
-        'starts — it can be deleted once they are gone. To hide it now, archive it from the ' +
-        "Pipelines list or the editor's ⋯ menu.",
+        'starts. Once that time has passed and they have finished, they are cleared and it can ' +
+        "be deleted. To hide it now, archive it from the Pipelines list or the editor's ⋯ menu.",
     });
   });
 
@@ -116,7 +116,7 @@ describe('pipelineDeletePlan', () => {
     });
     expect(plan.kind).toBe('refused');
     expect(plan.message).toMatch(
-      /its only runs are Debug runs, and this server keeps those until they are deleted \(DEBUG_RETENTION_DAYS is 0\)\. Archive it instead/,
+      /its only runs are Debug runs, and this server keeps those indefinitely \(its debug-run retention is turned off\)\. Archive it instead/,
     );
   });
 });

@@ -1,6 +1,7 @@
 import type { PipelineDependentsResponse } from '@autonomy-studio/shared';
 import {
   ARCHIVE_INSTEAD,
+  ARCHIVE_WHERE,
   GIT_COMMIT_DELETES_FILES_NOTE,
   listPipelineDependents,
   pipelineHasRunsMessage,
@@ -100,20 +101,21 @@ export function pipelineDeletePlan(name: string, read: PipelineDependentsRead): 
 /**
  * #1433 — the refusal when the only runs are DEBUG runs. Those are not kept
  * forever like a saved version's: they go with their debug version after the
- * server's window (`DEBUG_RETENTION_DAYS`, aged from when the Debug started),
- * and the pipeline can be deleted then — so say that, rather than send the user
- * to archive a pipeline that merely has to wait.
+ * server's window (`DEBUG_RETENTION_DAYS`, aged from when the Debug started;
+ * a run still in flight holds its version back until it finishes), and the
+ * pipeline can be deleted then — so say that, rather than send the user to
+ * archive a pipeline that merely has to wait.
  */
 export function debugRunsOnlyMessage(name: string, retentionDays: number | null): string {
   if (retentionDays === null) {
     return (
-      `Cannot delete “${name}”: its only runs are Debug runs, and this server keeps ` +
-      `those until they are deleted (DEBUG_RETENTION_DAYS is 0). ${ARCHIVE_INSTEAD}`
+      `Cannot delete “${name}”: its only runs are Debug runs, and this server keeps those ` +
+      `indefinitely (its debug-run retention is turned off). ${ARCHIVE_INSTEAD}`
     );
   }
   return (
     `Cannot delete “${name}”: its only runs are Debug runs, ${debugKeptFor(retentionDays)} ` +
-    'after each Debug starts — it can be deleted once they are gone. To hide it now, archive it ' +
-    "from the Pipelines list or the editor's ⋯ menu."
+    'after each Debug starts. Once that time has passed and they have finished, they are ' +
+    `cleared and it can be deleted. To hide it now, archive it ${ARCHIVE_WHERE}.`
   );
 }
