@@ -215,6 +215,8 @@ export function hasRunFilterParams(params: URLSearchParams): boolean {
  * time and does not nest, so it gets exactly the runs that matched.
  */
 export const RUN_CHILDREN_PARAM = 'children';
+/** `RUN_CHILDREN_PARAM`'s one value: child runs left out. */
+export const RUN_CHILDREN_OFF = 'off';
 
 /**
  * #1484 — the grid's column choice (`readRunGridHiddenParam`). The HIDDEN set,
@@ -275,8 +277,8 @@ export function hasRunsListParams(params: URLSearchParams): boolean {
  *   one-off question, and landing on last Tuesday's list a week later reads as
  *   a broken page rather than a remembered one;
  * - the columns: the viewer's stored choice (`runsGridHidden`) already is the
- *   remembered one, and a shared link's `hide` must not become it by being
- *   visited;
+ *   remembered one (`RunsPage` mirrors it into a bare visit's URL), and a
+ *   shared link's `hide` must not become it by being visited;
  * - `view` and `group`, which are not filters.
  */
 export function rememberedRunsQuery(params: URLSearchParams): string {
@@ -294,7 +296,9 @@ export function rememberedRunsQuery(params: URLSearchParams): string {
   for (const [param, value] of Object.entries(runSortParams(readRunSort(params)))) {
     keep(param, value);
   }
-  if (params.get(RUN_CHILDREN_PARAM) === 'off') remembered.set(RUN_CHILDREN_PARAM, 'off');
+  if (params.get(RUN_CHILDREN_PARAM) === RUN_CHILDREN_OFF) {
+    remembered.set(RUN_CHILDREN_PARAM, RUN_CHILDREN_OFF);
+  }
   return remembered.toString();
 }
 

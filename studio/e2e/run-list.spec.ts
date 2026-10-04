@@ -1014,10 +1014,13 @@ test('#1484 — the list remembers the last-used query per viewer, and a link ca
   const header = (name: string) => page.getByRole('columnheader', { name, exact: true });
   const query = () => new URLSearchParams(new URL(page.url()).hash.split('?')[1] ?? '');
 
-  // Set a standing view: failed runs, sorted by status, children off — and hide Cost.
-  await page.goto('/#/monitor/runs?status=failure&sort=status&children=off');
+  // Arrive by a link (failed runs, sorted by status): a link alone is not
+  // remembered. Turning child runs off here makes it the viewer's own view.
+  await page.goto('/#/monitor/runs?status=failure&sort=status');
   await fluentRootReady(page);
   await expect(page.getByRole('row').filter({ hasText: runId })).toHaveCount(1);
+  await page.getByRole('button', { name: 'Include child runs' }).click();
+  await expect.poll(() => query().get('children')).toBe('off');
   await page.getByRole('button', { name: /^Columns/ }).click();
   await page.getByRole('menuitemcheckbox', { name: 'Cost' }).click();
   await page.keyboard.press('Escape');
@@ -1033,8 +1036,11 @@ test('#1484 — the list remembers the last-used query per viewer, and a link ca
   });
   await page.goto('/#/monitor/runs');
   await expect(page.getByRole('row').filter({ hasText: runId })).toHaveCount(1);
-  await expect.poll(() => query().toString()).toBe('status=failure&sort=status&children=off');
-  // The columns come back from the viewer's own choice, not the query.
+  // The query comes back, and the viewer's own column choice rides along as
+  // `hide`, so the address of this screen is a link that shows it.
+  await expect
+    .poll(() => query().toString())
+    .toBe('status=failure&sort=status&children=off&hide=cost%2Cannotations');
   await expect(header('Cost')).toHaveCount(0);
   // The list never asked for the unfiltered page on the way.
   expect(listRequests.length).toBeGreaterThan(0);

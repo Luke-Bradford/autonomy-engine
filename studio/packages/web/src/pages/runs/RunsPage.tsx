@@ -38,7 +38,12 @@ import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore
 import { runStatusLabel } from './runStatus';
 import { RunTimeline } from './RunTimeline';
 import { RunGridColumnsMenu, RunsGrid } from './RunsGrid';
-import { uiStore, type RunGridColumnId, type UiStore } from '../../stores/uiStore';
+import {
+  RUN_GRID_DEFAULT_HIDDEN,
+  uiStore,
+  type RunGridColumnId,
+  type UiStore,
+} from '../../stores/uiStore';
 import {
   canonicalKindParam,
   dayRangeBounds,
@@ -55,6 +60,7 @@ import {
   rememberedRunsQuery,
   runGridHiddenParam,
   runSortParams,
+  RUN_CHILDREN_OFF,
   RUN_CHILDREN_PARAM,
   RUN_FILTER_PARAMS,
   RUN_GRID_HIDDEN_PARAM,
@@ -178,7 +184,8 @@ export function RunsPage({
   ui = uiStore,
 }: {
   store?: PipelinesStore;
-  /** #1484 — the grid's per-viewer column preferences; injected by tests. */
+  /** #1484 — the list's per-viewer preferences (columns, Live, page size,
+   * the last-used query); injected by tests. */
   ui?: UiStore;
 } = {}) {
   const [searchParams] = useSearchParams();
@@ -196,12 +203,20 @@ export function RunsPage({
    * only to throw it away. The stored text is re-read through
    * `rememberedRunsQuery`, so a value the page would not have written is
    * dropped before it reaches the URL.
+   *
+   * The viewer's own column choice rides along as `hide` when it is not the
+   * default, so the address of what is on screen is a link that shows it.
    */
-  const [restore, setRestore] = useState(() =>
-    hasRunsListParams(searchParams)
-      ? ''
-      : rememberedRunsQuery(new URLSearchParams(ui.getState().runsLastQuery)),
-  );
+  const [restore, setRestore] = useState(() => {
+    if (hasRunsListParams(searchParams)) return '';
+    const { runsLastQuery, runsGridHidden } = ui.getState();
+    const params = new URLSearchParams(rememberedRunsQuery(new URLSearchParams(runsLastQuery)));
+    const hide = runGridHiddenParam(runsGridHidden);
+    if (hide !== runGridHiddenParam(RUN_GRID_DEFAULT_HIDDEN)) {
+      params.set(RUN_GRID_HIDDEN_PARAM, hide);
+    }
+    return params.toString();
+  });
   const bare = !hasRunsListParams(searchParams);
   // Spent once the URL holds it — adjusted during render, as `syncedQ` is, so a
   // later bare URL can never see it.
@@ -245,7 +260,8 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
    */
   const view: RunView = searchParams.get('view') === 'timeline' ? 'timeline' : 'list';
   const groupBy = readGroupBy(searchParams);
-  const includeChildren = view === 'list' && searchParams.get(RUN_CHILDREN_PARAM) !== 'off';
+  const includeChildren =
+    view === 'list' && searchParams.get(RUN_CHILDREN_PARAM) !== RUN_CHILDREN_OFF;
 
   /*
    * #1484 principle 5 — the columns: a link's `hide` when it carries one, else
@@ -274,12 +290,22 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
     });
   }
 
-  /* #1484 principle 5 — what `RunsPage` restores next time: the list as it is
-     now, every time it changes, '' included (a cleared list is remembered as
-     cleared). */
+  /* #1484 principle 5 — what `RunsPage` restores next time: the list as the
+     VIEWER has made it. Arriving changes nothing — a link from Triggers or a
+     shared URL is somebody else's question, and visiting it must not replace
+     the viewer's standing view. From the first change made here on, every
+     change is remembered, '' included (a cleared list is remembered as
+     cleared). Compared with the arrival rather than skipping the first effect,
+     which StrictMode runs twice. */
   const lastQuery = rememberedRunsQuery(searchParams);
   const setLastQuery = useStore(ui, (s) => s.setRunsLastQuery);
-  useEffect(() => setLastQuery(lastQuery), [lastQuery, setLastQuery]);
+  const arrivedWith = useRef(lastQuery);
+  const moved = useRef(false);
+  useEffect(() => {
+    if (!moved.current && lastQuery === arrivedWith.current) return;
+    moved.current = true;
+    setLastQuery(lastQuery);
+  }, [lastQuery, setLastQuery]);
 
   function selectView(next: RunView) {
     const params = new URLSearchParams(searchParams);
@@ -629,7 +655,7 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
           <ToggleButton
             size="small"
             checked={includeChildren}
-            onClick={() => setFilter(RUN_CHILDREN_PARAM, includeChildren ? 'off' : '')}
+            onClick={() => setFilter(RUN_CHILDREN_PARAM, includeChildren ? RUN_CHILDREN_OFF : '')}
             title="Show the runs each run called, nested under it"
           >
             Include child runs

@@ -106,7 +106,10 @@ export interface UiState {
    * `runsGridHidden` names the columns the operator turned OFF, in column
    * order; storing the hidden set rather than the shown one means a column a
    * later release adds appears by default. With no stored choice it is
-   * `RUN_GRID_DEFAULT_HIDDEN`. A required column is never in it.
+   * `RUN_GRID_DEFAULT_HIDDEN`. A required column is never in it. A link's
+   * `hide` param overrides it for that visit without changing it (`RunsPage`);
+   * a choice made in the picker writes both. `resetRunsGridColumns` resets the
+   * widths as well.
    * `runsGridWidths` holds only the columns the operator resized, in px; an
    * absent column draws at its default.
    */

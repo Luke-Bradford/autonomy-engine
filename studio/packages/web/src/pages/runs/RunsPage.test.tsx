@@ -1957,13 +1957,34 @@ describe('#1484 principle 5 — the last-used query is remembered, the columns a
       expect(query).toMatchObject({ status: 'failure', sort: 'duration' });
   });
 
-  it('honours a link that names anything exactly, and remembers it as the last-used query', async () => {
+  it('honours a link that names anything exactly, and does not remember it until the viewer changes it', async () => {
     const ui = freshUi('status=failure');
     const router = renderRoutes(ui, '/runs?pipeline=pipe_9');
     await screen.findAllByText(/Nightly report/);
     expect(router.state.location.search).toBe('?pipeline=pipe_9');
+    expect(asked().length).toBeGreaterThan(0);
     for (const query of asked()) expect(query.status).toBeUndefined();
-    await waitFor(() => expect(ui.getState().runsLastQuery).toBe('pipeline=pipe_9'));
+    expect(ui.getState().runsLastQuery).toBe('status=failure');
+    // A change made here is the viewer's own: from then on, it is remembered.
+    await act(() => router.navigate('/runs?pipeline=pipe_9&since=7d'));
+    await waitFor(() => expect(ui.getState().runsLastQuery).toBe('pipeline=pipe_9&since=7d'));
+  });
+
+  it('keeps the view through a restore, and carries a custom column choice into a bare visit', async () => {
+    const ui = freshUi('status=failure');
+    ui.getState().setRunsGridHidden(['cost', 'annotations']);
+    const router = renderRoutes(ui, '/runs?view=timeline');
+    await screen.findAllByText(/Nightly report/);
+    const params = new URLSearchParams(router.state.location.search);
+    expect(params.get('view')).toBe('timeline');
+    expect(params.get('status')).toBe('failure');
+    expect(params.get('hide')).toBe('cost,annotations');
+  });
+
+  it('leaves the default column choice out of a bare visit', async () => {
+    const router = renderRoutes(freshUi(), '/runs');
+    await screen.findAllByText(/Nightly report/);
+    expect(router.state.location.search).toBe('');
   });
 
   it('drops a stored value the page would not have written', async () => {
@@ -1990,8 +2011,10 @@ describe('#1484 principle 5 — the last-used query is remembered, the columns a
 
   it('restores on coming back to the list from another page', async () => {
     const ui = freshUi();
-    const router = renderRoutes(ui, '/runs?status=failure&children=off');
+    const router = renderRoutes(ui, '/runs');
     await screen.findAllByText(/Nightly report/);
+    await act(() => router.navigate('/runs?status=failure&children=off'));
+    await waitFor(() => expect(ui.getState().runsLastQuery).toBe('status=failure&children=off'));
     await act(() => router.navigate('/elsewhere'));
     await screen.findByText('Elsewhere');
     await act(() => router.navigate('/runs'));
