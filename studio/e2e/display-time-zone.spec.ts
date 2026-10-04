@@ -53,9 +53,13 @@ test('#1484 — a display time zone chosen in Settings dates the runs grid and t
   // Compact in the grid: month-day and the UTC clock to the second.
   await expect(startedTime).toHaveText(`${utc.slice(5, 10)} ${utc.slice(11, 19)}`);
   // The full form on hover: the date, the clock to the ms, the zone, and how long ago.
-  const title = await startedTime.getAttribute('title');
-  expect(title?.startsWith(`${utc.slice(0, 10)} ${utc.slice(11, 23)} UTC · `)).toBe(true);
-  expect(title).toMatch(/ · (now|\d+ seconds? ago|\d+ minutes? ago)$/);
+  const escaped = `${utc.slice(0, 10)} ${utc.slice(11, 23)}`.replace(/[.]/g, '\\.');
+  await expect(startedTime).toHaveAttribute(
+    'title',
+    new RegExp(`^${escaped} UTC · (now|\\d+ seconds? ago|\\d+ minutes? ago)$`),
+  );
+  // The compact cell carries no zone, so the header names it.
+  await expect(page.getByRole('columnheader', { name: 'Started' })).toContainText('Started UTC');
 
   // The compact form fits the 124px column without clipping.
   const fits = await started.evaluate((td) => td.scrollWidth <= td.clientWidth);
