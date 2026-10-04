@@ -5163,6 +5163,22 @@ button.danger {
   gap: 0.5rem;
 }
 
+/* #1484 — Live's one-line status beside the toggle: quiet, and never wrapping
+   the title row. */
+.runs-live-status {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* #1484 — "Load older runs" and the page size on one line under the grid. */
+.runs-foot {
+  display: flex;
+  align-items: flex-end;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
 /* #967 — the token-flow chart. Hand-rolled bars; see TokenFlowChart.tsx for why
    there is no charting library. Every colour here is a palette custom property,
    so the chart themes with everything else rather than carrying its own. */

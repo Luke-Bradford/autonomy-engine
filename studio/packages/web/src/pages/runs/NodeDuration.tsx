@@ -30,7 +30,9 @@ export function NodeDuration({
   return start === undefined ? formatNodeDuration(node) : <LiveElapsed startedAtMs={start} />;
 }
 
-function LiveElapsed({ startedAtMs }: { startedAtMs: number }) {
+/** A count from `startedAtMs`, re-rendered once a second by its own clock. Also
+ *  the runs grid's Duration cell while the list is live (#1484). */
+export function LiveElapsed({ startedAtMs }: { startedAtMs: number }) {
   const now = useTickingNow(TICK_MS);
   return formatLiveElapsed(startedAtMs, now);
 }

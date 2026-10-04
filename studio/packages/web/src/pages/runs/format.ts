@@ -56,9 +56,10 @@ export function formatElapsed(ms: number): string {
  * column labelled Duration — a wrong number, not a missing one.
  *
  * An unfinished run is measured against `now` and marked "so far". `now` is the
- * CALLER's, captured once per load: this list is a documented point-in-time
- * snapshot refreshed on demand, not a ticking clock, and taking the clock as an
- * argument is also what keeps this pure and testable.
+ * CALLER's, captured once per load, and taking the clock as an argument is also
+ * what keeps this pure and testable. A LIVE list (#1484) ticks the cell with
+ * `LiveElapsed` instead, and only while it is polling; a paused or static list
+ * shows this frozen figure.
  */
 export function formatRunDuration(
   run: Pick<Run, 'status' | 'startedAt' | 'finishedAt'>,

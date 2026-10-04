@@ -126,11 +126,13 @@ function RunRow({
   run: r,
   columns,
   loadedAt,
+  ticking,
   zone,
 }: {
   run: RunSummary;
   columns: readonly RunGridColumnId[];
   loadedAt: number;
+  ticking: boolean;
   zone: DisplayTimeZone;
 }) {
   const navigate = useNavigate();
@@ -154,7 +156,7 @@ function RunRow({
     if (newTab) window.open(href, '_blank', 'noopener');
     else void navigate(path);
   };
-  const ctx: CellContext = { loadedAt, path, zone };
+  const ctx: CellContext = { loadedAt, ticking, path, zone };
   return (
     <tr
       className="runs-grid__row"
@@ -190,12 +192,15 @@ function RunRow({
 export function RunsGrid({
   runs,
   loadedAt,
+  ticking = false,
   sort,
   onSort,
   ui,
 }: {
   runs: readonly RunSummary[];
   loadedAt: number;
+  /** #1484 — unfinished durations count (`CellContext.ticking`). */
+  ticking?: boolean;
   sort: RunSortState;
   onSort: (column: RunSortKey) => void;
   ui: UiStore;
@@ -252,7 +257,14 @@ export function RunsGrid({
         </thead>
         <tbody>
           {runs.map((r) => (
-            <RunRow key={r.id} run={r} columns={columns} loadedAt={loadedAt} zone={zone} />
+            <RunRow
+              key={r.id}
+              run={r}
+              columns={columns}
+              loadedAt={loadedAt}
+              ticking={ticking}
+              zone={zone}
+            />
           ))}
         </tbody>
       </table>

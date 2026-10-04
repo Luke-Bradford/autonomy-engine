@@ -17,12 +17,19 @@ import { formatRunDuration, formatWhen } from './format';
 import { runDetailPath, runLinkLabel } from './runPath';
 import { runStatusLabel } from './runStatus';
 import { When } from '../../lib/When';
+import { LiveElapsed } from './NodeDuration';
 import type { DisplayTimeZone } from '../../lib/displayTime';
 
 /** What a cell needs besides its run. */
 export interface CellContext {
   /** When the list was read, for an unfinished run's duration "so far". */
   loadedAt: number;
+  /**
+   * #1484 — the list is live and polling, so an unfinished run's duration may
+   * COUNT. Only then: a count is honest only while the page would hear the run
+   * finish, so a paused or static list stays frozen at `loadedAt`.
+   */
+  ticking: boolean;
   /** The run's detail route, for the Run ID column's real link. */
   path: string;
   /** The viewer's display time zone (#1484), for timestamps inside a title. */
@@ -134,9 +141,13 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
     sort: 'duration',
     numeric: true,
     /* The finish TIMESTAMP is the cell's title (U10 fixed the column set). */
-    cell: (r, { loadedAt, zone }) => (
+    cell: (r, { loadedAt, ticking, zone }) => (
       <td className="num" title={formatWhen(r.finishedAt, zone)}>
-        {formatRunDuration(r, loadedAt)}
+        {ticking && r.finishedAt === null && r.status !== 'queued' ? (
+          <LiveElapsed startedAtMs={r.startedAt} />
+        ) : (
+          formatRunDuration(r, loadedAt)
+        )}
       </td>
     ),
   },
