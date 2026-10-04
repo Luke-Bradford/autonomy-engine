@@ -2820,6 +2820,7 @@ export function createEngine(doc: EngineDoc): Engine {
           const branches = { ...state.branches };
           for (const ch of children) {
             const k = instanceKey(ch, i);
+            noteResetSkip(k, nodes[k]);
             delete nodes[k];
             delete outputs[k];
             delete branches[k];
@@ -2966,6 +2967,7 @@ export function createEngine(doc: EngineDoc): Engine {
     for (const id of ids) {
       const ns = nodes[id];
       if (ns === undefined) continue;
+      noteResetSkip(id, ns);
       if (nodes === state.nodes) nodes = { ...nodes };
       // The skip's reason is REMOVED, not set undefined, so no key lingers on a
       // node that is no longer skipped.
@@ -4775,7 +4777,34 @@ export function createEngine(doc: EngineDoc): Engine {
     return settle(next, diagnostics);
   }
 
+  /**
+   * #1546 — the skip reasons the reduce in progress has cleared (see
+   * `ReduceResult.resetSkips`). Scoped to one public call by `collectResetSkips`,
+   * which restores the outer value, so a nested call cannot leak into its
+   * caller's result; `null` outside one, where noting is a no-op.
+   */
+  let resetSkips: Record<string, SkipReason> | null = null;
+  function noteResetSkip(id: string, ns: NodeRunState | undefined): void {
+    if (resetSkips !== null && ns?.status === 'skipped' && ns.skipReason !== undefined)
+      resetSkips[id] = ns.skipReason;
+  }
+  function collectResetSkips(run: () => ReduceResult): ReduceResult {
+    const outer = resetSkips;
+    const mine: Record<string, SkipReason> = {};
+    resetSkips = mine;
+    try {
+      const result = run();
+      return Object.keys(mine).length === 0 ? result : { ...result, resetSkips: mine };
+    } finally {
+      resetSkips = outer;
+    }
+  }
+
   function reduce(state: RunState, event: EngineEvent): ReduceResult {
+    return collectResetSkips(() => reduceEvent(state, event));
+  }
+
+  function reduceEvent(state: RunState, event: EngineEvent): ReduceResult {
     const diagnostics: string[] = [];
 
     if (event.type === 'run.started') return onRunStarted(state, event, diagnostics);
@@ -5142,7 +5171,7 @@ export function createEngine(doc: EngineDoc): Engine {
     projectRunState,
     // The SAME function `run.resumed` folds to — one derivation, two entry
     // points, so the boot path and the drive path cannot drift apart.
-    resume: (state) => onResumed(state, []),
+    resume: (state) => collectResetSkips(() => onResumed(state, [])),
     reseedFrontier,
     redact: (event) => {
       const id = secureEventNodeId(event);

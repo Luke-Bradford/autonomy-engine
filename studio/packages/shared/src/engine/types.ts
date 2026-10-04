@@ -2536,4 +2536,12 @@ export interface ReduceResult {
   state: RunState;
   commands: EngineCommand[];
   diagnostics: string[];
+  /**
+   * #1546 — the skip reasons this reduce CLEARED, keyed by state node id (a doc
+   * id, or a ForEach item's instance key). A loop round or ForEach item that
+   * ends in the reduce that skipped one of its nodes resets or deletes that node
+   * before the state is returned, so its reason survives only here. Present only
+   * when non-empty. Not state: nothing persists or re-folds it.
+   */
+  resetSkips?: Record<string, SkipReason>;
 }

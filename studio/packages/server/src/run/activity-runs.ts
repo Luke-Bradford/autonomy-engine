@@ -318,7 +318,8 @@ export function projectActivityRuns(
   let state = engine.seedState();
   for (const { event: e, ts, payload } of log) {
     const before = state;
-    state = engine.reduce(before, e).state;
+    const reduced = engine.reduce(before, e);
+    state = reduced.state;
 
     if (state.containers !== before.containers) trackGroups(e, ts, before, state);
 
@@ -425,7 +426,7 @@ export function projectActivityRuns(
       for (const nodeId of ended) {
         const iteration = iterationOf(nodeId, before);
         if (iteration !== null && !inItem.has(itemKey(nodeId, iteration)))
-          addSkip(nodeId, iteration, null);
+          addSkip(nodeId, iteration, reduced.resetSkips?.[nodeId] ?? null);
       }
     }
 
