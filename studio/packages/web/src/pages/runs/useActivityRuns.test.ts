@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as runsApi from '../../api/runs';
@@ -91,5 +92,11 @@ describe('#1484 M2 useActivityRuns', () => {
     // `useGuardedLoad` would refuse the read anyway; no timer is left either.
     expect(vi.getTimerCount()).toBe(0);
     expect(getMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads at once under StrictMode, whose simulated remount runs every cleanup first', async () => {
+    renderHook(() => useActivityRuns('r', 1), { wrapper: StrictMode });
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(getMock).toHaveBeenCalled();
   });
 });

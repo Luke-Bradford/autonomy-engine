@@ -262,19 +262,29 @@ export function projectActivityRuns(
       open.add(row);
     }
 
-    // What the event says about its attempt, settled or not.
+    // What the event says about its attempt — only while it is the node's live
+    // attempt and unsettled (rule 1), so a late or duplicate result the reducer
+    // ignores cannot rewrite a settled row's error, counts or branch.
+    const detail = (attemptId: string): ProjectedActivityRun | undefined => {
+      const row = byAttempt.get(attemptId);
+      return row !== undefined &&
+        open.has(row) &&
+        before.nodes[row.nodeId]?.currentAttemptId === attemptId
+        ? row
+        : undefined;
+    };
     if (e.type === 'condition.evaluated' || e.type === 'switch.evaluated') {
-      const row = byAttempt.get(e.attemptId);
+      const row = detail(e.attemptId);
       if (row !== undefined) row.branch = e.branch;
     } else if (
       e.type === 'call.started' ||
       e.type === 'call.detached' ||
       e.type === 'call.returned'
     ) {
-      const row = byAttempt.get(e.attemptId);
+      const row = detail(e.attemptId);
       if (row !== undefined) row.childRunId ??= e.childRunId;
     } else if (e.type === 'node.succeeded') {
-      const row = byAttempt.get(e.attemptId);
+      const row = detail(e.attemptId);
       if (row !== undefined) {
         row.rowsRead = loggedCount(e.outputs.rowsRead);
         row.rowsWritten = loggedCount(e.outputs.rowsWritten);
@@ -282,7 +292,7 @@ export function projectActivityRuns(
         row.bytesWritten = loggedCount(e.outputs.bytesWritten);
       }
     } else if (e.type === 'node.failed') {
-      const row = byAttempt.get(e.attemptId);
+      const row = detail(e.attemptId);
       if (row !== undefined) {
         row.error = {
           message: e.error,

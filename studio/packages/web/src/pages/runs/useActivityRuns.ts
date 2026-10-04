@@ -41,6 +41,18 @@ export function useActivityRuns(runId: string, lastSeq: number | undefined): Act
     gone: boolean;
   }>({ timer: null, inFlight: false, wanted: lastSeq, asked: null, gone: false });
 
+  // Declared FIRST, so StrictMode's simulated remount clears `gone` before the
+  // read below is scheduled.
+  useEffect(() => {
+    const f = flight.current;
+    f.gone = false;
+    return () => {
+      f.gone = true;
+      if (f.timer !== null) clearTimeout(f.timer);
+      f.timer = null;
+    };
+  }, []);
+
   useEffect(() => {
     const f = flight.current;
     f.wanted = lastSeq;
@@ -61,16 +73,6 @@ export function useActivityRuns(runId: string, lastSeq: number | undefined): Act
     };
     schedule(f.asked === null ? 0 : ACTIVITY_RUNS_REFRESH_MS);
   }, [load, runId, lastSeq]);
-
-  useEffect(() => {
-    const f = flight.current;
-    f.gone = false;
-    return () => {
-      f.gone = true;
-      if (f.timer !== null) clearTimeout(f.timer);
-      f.timer = null;
-    };
-  }, []);
 
   return reading;
 }

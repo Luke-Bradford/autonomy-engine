@@ -184,16 +184,6 @@ function decodeExportCursor(raw: string, sort: RunSort): RunCursor {
 }
 
 /**
- * Runs are created by the engine/scheduler (P2-P4), so there is deliberately no
- * `POST /api/runs` create route. TWO state-mutating actions live here, both of
- * them resuming an existing run rather than starting one: RS2's
- * `POST /api/runs/:id/rerun-from-failed` (a new run resuming a FAILED one) and
- * #901's `POST /api/runs/:id/external-waits/complete` (settle a parked wait on
- * THIS run). Every other route is read-only. Both mutators are owner-scoped
- * through the run and answer before their downstream drive finishes.
- */
-
-/**
  * #1392 — a resource's name for a page about `ownerId`'s run, or `null`. The
  * check is repeated per row although every name reached from an owned run is
  * its owner's already: a name is the one thing here that is cheap to withhold,
@@ -206,6 +196,16 @@ function ownedName(
 ): string | null {
   return row !== null && row.ownerId === ownerId ? row.name : null;
 }
+
+/**
+ * Runs are created by the engine/scheduler (P2-P4), so there is deliberately no
+ * `POST /api/runs` create route. TWO state-mutating actions live here, both of
+ * them resuming an existing run rather than starting one: RS2's
+ * `POST /api/runs/:id/rerun-from-failed` (a new run resuming a FAILED one) and
+ * #901's `POST /api/runs/:id/external-waits/complete` (settle a parked wait on
+ * THIS run). Every other route is read-only. Both mutators are owner-scoped
+ * through the run and answer before their downstream drive finishes.
+ */
 
 export const runsRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;

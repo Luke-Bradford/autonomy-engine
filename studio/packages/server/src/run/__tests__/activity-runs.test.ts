@@ -437,4 +437,24 @@ describe('#1484 activity runs — one row per attempt', () => {
       }),
     ]);
   });
+
+  it('lets no late duplicate result rewrite a settled row', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a')]);
+    const runId = await drive(db, pvId, stub({ a: { outcome: 'failure', error: 'boom' } }));
+    // Redelivered after the run ended: the reducer ignores it, and so must this.
+    appendEngineEvent(db, {
+      type: 'node.failed',
+      runId,
+      nodeId: 'a',
+      attemptId: 'a#0',
+      error: 'late',
+      kind: 'transient',
+    });
+
+    expect(project(db, pvId, runId)[0]?.error).toMatchObject({
+      message: 'boom',
+      kind: 'permanent',
+    });
+  });
 });
