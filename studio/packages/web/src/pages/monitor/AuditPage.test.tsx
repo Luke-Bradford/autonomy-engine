@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { WorkspaceEventRowSchema, type WorkspaceEventRow } from '@autonomy-studio/shared';
 import { AuditPage } from './AuditPage';
 import * as api from '../../api/workspaceAudit';
 import { renderWithRouter } from '../../testing/renderWithRouter';
+import { PAGE_STALLED_LABEL, PAGE_STALLED_MS } from '../../hooks/usePagedList';
 
 // Only the network call is mocked. `describeWorkspaceEvent` and
 // `WorkspaceEventRowSchema` stay REAL, so what these tests read is the wording
@@ -181,6 +182,28 @@ describe('AuditPage (#1075)', () => {
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('Could not load the audit log');
     expect(screen.queryByText(/Nothing has happened to this workspace yet/)).toBeNull();
+  });
+
+  /** #1529 — a first page that never answers must not hold Refresh shut for good. */
+  it('lets the reader retry once a load has stalled', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    pageMock.mockReturnValueOnce(new Promise(() => {}));
+    renderWithRouter(<AuditPage />);
+    const button = screen.getByRole('button', { name: 'Refresh audit log' });
+    expect(button).toBeDisabled();
+    expect(screen.queryByText(PAGE_STALLED_LABEL)).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(PAGE_STALLED_MS);
+    });
+    expect(button).toBeEnabled();
+    expect(screen.getByText(PAGE_STALLED_LABEL)).toBeInTheDocument();
+
+    vi.useRealTimers();
+    pageMock.mockResolvedValue(page([row(0, 1_000, CONNECT)]));
+    await userEvent.click(button);
+    await waitFor(() => expect(bodyRows()).toHaveLength(1));
+    expect(screen.queryByText(PAGE_STALLED_LABEL)).toBeNull();
   });
 
   it('reloads on demand', async () => {

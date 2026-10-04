@@ -11,6 +11,17 @@ import { useGuardedLoad } from './useGuardedLoad';
 export const POLL_DEADLINE_MS = 15_000;
 
 /**
+ * #1529 — how long a page the READER asked for may go unanswered before the
+ * list calls it stalled. It is not failed and not aborted (a slow server may
+ * still answer, and the reader is watching it load); it only stops holding the
+ * Refresh button shut, so the reader can retry without reloading the page.
+ */
+export const PAGE_STALLED_MS = 15_000;
+
+/** What a list says while `stalled` is true, worded from the threshold it uses. */
+export const PAGE_STALLED_LABEL = `No answer in ${PAGE_STALLED_MS / 1_000}s — Refresh to try again`;
+
+/**
  * Runs `run` with a signal that also aborts after `ms`, and rejects at that
  * deadline whether or not `run` honours the abort — a fetcher that ignores its
  * signal must not be able to outlive it. `run` is called synchronously, so a
@@ -102,6 +113,13 @@ function withDeadline<R>(
  *    already reports, and the next tick polls again. Only a poll: a first or
  *    older page is one the reader asked for and is watching load.
  *
+ * #1529 — A READER'S PAGE THAT NEVER ANSWERS IS STALLED, NOT FAILED. It keeps
+ * its request (no deadline, above), but after `PAGE_STALLED_MS` the list says
+ * `stalled`, and a caller re-enables its Refresh on it: `busy` alone would hold
+ * that button shut for as long as the request hangs, and only a page reload
+ * would recover. A refresh then supersedes the hung request, as it supersedes
+ * anything in flight, and starts a fresh stall window of its own.
+ *
  * THE FETCHER MUST BE MEMOIZED (`useCallback`) — the same half of the contract
  * `usePolledResource` asks for, and for the same reason: it is a dependency of
  * the mount effect, so an inline arrow would re-issue the first page on every
@@ -124,6 +142,8 @@ export interface PagedList<T> {
   loading: boolean;
   /** True whenever any request is in flight, including a refresh or an older page. */
   busy: boolean;
+  /** True once the page the reader asked for has gone `PAGE_STALLED_MS` unanswered (#1529). */
+  stalled: boolean;
   /** True when the server said there are older entries to fetch. */
   hasMore: boolean;
   /** When the FIRST page was last requested, epoch ms; `null` before the first success. */
@@ -154,7 +174,13 @@ export function usePagedList<T>(
   const [items, setItems] = useState<T[] | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [error, setError] = useState<PagedListError | null>(null);
-  const [pending, setPending] = useState<'first' | 'more' | null>('first');
+  /* An OBJECT per request the reader asked for, not just its scope, so the stall
+     timer below can tell a retried request from the one that stalled: each
+     `setPending` makes a new identity, which re-arms the timer. */
+  const [pending, setPending] = useState<{ scope: 'first' | 'more' } | null>(() => ({
+    scope: 'first',
+  }));
+  const [stalledRequest, setStalledRequest] = useState<object | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
   const [extended, setExtended] = useState(false);
   /* `poll()`'s two guards, read through refs so its identity stays stable and a
@@ -204,7 +230,7 @@ export function usePagedList<T>(
     setError(null);
     setLastUpdatedAt(null);
     setExtended(false);
-    setPending('first');
+    setPending({ scope: 'first' });
   }
 
   /**
@@ -281,7 +307,7 @@ export function usePagedList<T>(
     // No busy guard: a refresh is the load that must WIN, so it supersedes
     // whatever is in flight (`useGuardedLoad`'s counter drops the loser's
     // answer) rather than being dropped by it.
-    setPending('first');
+    setPending({ scope: 'first' });
     load(undefined, 'first');
   }, [load]);
 
@@ -292,9 +318,15 @@ export function usePagedList<T>(
     // the log ended — issuing the request anyway would re-read the newest page
     // and append the head a second time.
     if (pending !== null || nextCursor === null) return;
-    setPending('more');
+    setPending({ scope: 'more' });
     load(nextCursor, 'more');
   }, [load, nextCursor, pending]);
+
+  useEffect(() => {
+    if (pending === null) return;
+    const timer = setTimeout(() => setStalledRequest(pending), PAGE_STALLED_MS);
+    return () => clearTimeout(timer);
+  }, [pending]);
 
   const poll = useCallback(() => {
     if (inFlight.current > 0 || extendedRef.current) return;
@@ -304,8 +336,9 @@ export function usePagedList<T>(
   return {
     items,
     error,
-    loading: pending === 'first' && items === null,
+    loading: pending?.scope === 'first' && items === null,
     busy: pending !== null,
+    stalled: pending !== null && stalledRequest === pending,
     hasMore: nextCursor !== null,
     lastUpdatedAt,
     loadMore,

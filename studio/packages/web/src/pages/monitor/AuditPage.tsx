@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import type { WorkspaceEventRow } from '@autonomy-studio/shared';
 import { fetchWorkspaceAuditPage } from '../../api/workspaceAudit';
-import { usePagedList } from '../../hooks/usePagedList';
+import { PAGE_STALLED_LABEL, usePagedList } from '../../hooks/usePagedList';
 import { describeWorkspaceEvent } from './describeWorkspaceEvent';
 import { When } from '../../lib/When';
 
@@ -46,7 +46,7 @@ export function AuditPage() {
     (cursor: string | undefined, signal: AbortSignal) => fetchWorkspaceAuditPage(cursor, signal),
     [],
   );
-  const { items, error, loading, busy, hasMore, lastUpdatedAt, loadMore, refresh } =
+  const { items, error, loading, busy, stalled, hasMore, lastUpdatedAt, loadMore, refresh } =
     usePagedList(fetchPage);
 
   return (
@@ -58,10 +58,14 @@ export function AuditPage() {
             infer the target. Disabled while ANY request is in flight, which
             since #1076 includes a refresh and an older page: `usePagedList` is
             latest-wins rather than drop-the-new, so a second click would abort
-            and re-issue a request that was already on its way. */}
-        <button type="button" onClick={refresh} disabled={busy}>
+            and re-issue a request that was already on its way — until that
+            request has STALLED (#1529), when a retry is the only way out short
+            of reloading the page. The status is always mounted so its text is
+            announced when it appears. */}
+        <button type="button" onClick={refresh} disabled={busy && !stalled}>
           Refresh audit log
         </button>
+        <span role="status">{stalled ? PAGE_STALLED_LABEL : ''}</span>
       </div>
 
       <p className="page-hint">

@@ -15,6 +15,7 @@ import {
   type RunSummary,
 } from '@autonomy-studio/shared';
 import { RunsPage } from './RunsPage';
+import { PAGE_STALLED_LABEL, PAGE_STALLED_MS } from '../../hooks/usePagedList';
 import { runStatusLabel } from './runStatus';
 import * as runsApi from '../../api/runs';
 import { RUNS_PAGE_SIZE } from '../../api/runs';
@@ -1572,7 +1573,14 @@ describe('#1484 — runs list Live mode and page size', () => {
   it('counts an unfinished run up while live, and freezes it while paused', async () => {
     listMock.mockResolvedValue(pageOf([run({ id: 'run_live0001', startedAt: NOW - 65_000 })]));
     renderWithRouter(<RunsPage ui={liveUi()} />);
+    // Live's own interval is armed by now; the grid's clock is not, as nothing
+    // is unfinished yet.
+    const intervalsBeforeRows = vi.getTimerCount();
     await screen.findByText('run_live0001');
+    // #1531 — the rows can be on screen before React has run the effect that
+    // arms the grid's clock, and a tick then advances nothing. Wait for that
+    // interval to exist, so a clock that never arms fails here, by name.
+    await vi.waitFor(() => expect(vi.getTimerCount()).toBe(intervalsBeforeRows + 1));
     expect(durationOf('run_live0001')).toHaveTextContent('1m 05s so far');
     tick(2_000);
     expect(durationOf('run_live0001')).toHaveTextContent('1m 07s so far');
@@ -1592,6 +1600,33 @@ describe('#1484 — runs list Live mode and page size', () => {
     tick(RUNS_LIVE_POLL_MS * 2);
     expect(durationOf('run_live0001')).toHaveTextContent('1m 07s so far');
     expect(listMock).toHaveBeenCalledTimes(calls);
+  });
+
+  /**
+   * #1529 — a first page that never answers held Refresh shut until a page
+   * reload, while Live claimed to be updating though no poll could run.
+   */
+  it('lets the reader retry a stalled load, and says it has stalled rather than updating', () => {
+    vi.useFakeTimers({
+      toFake: ['Date', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'],
+      now: NOW,
+    });
+    listMock.mockReturnValue(new Promise(() => {}));
+    renderWithRouter(<RunsPage ui={liveUi()} />);
+    const refresh = screen.getByRole('button', { name: 'Refresh' });
+    expect(refresh).toBeDisabled();
+
+    tick(PAGE_STALLED_MS);
+    expect(refresh).toBeEnabled();
+    expect(screen.getByText(PAGE_STALLED_LABEL)).toBeInTheDocument();
+    expect(screen.queryByText(RUNS_LIVE_UPDATING_LABEL)).not.toBeInTheDocument();
+    // Still no poll over the reader's own request.
+    expect(listMock).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(refresh);
+    expect(listMock).toHaveBeenCalledTimes(2);
+    expect(refresh).toBeDisabled();
+    expect(screen.queryByText(PAGE_STALLED_LABEL)).not.toBeInTheDocument();
   });
 
   it('pauses while the container holding the rows is scrolled down, and resumes at the top', async () => {
