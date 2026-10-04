@@ -7,7 +7,8 @@ import { fluentRootReady } from './support/theme';
  * #1484 OR35 M2 — the run page's activity runs, read from the server's
  * projection of a REAL run: an If that takes `true` into a two-item ForEach,
  * and a Fail on the `false` branch that is therefore skipped. Then a Fail after
- * the ForEach, so the run ends failed with a reason on its row.
+ * the ForEach, so the run ends failed with a reason on its row, and two waits
+ * after that Fail, skipped because it failed.
  */
 const DOC = {
   nodes: [
@@ -15,11 +16,15 @@ const DOC = {
     { id: 'hold', type: 'wait', config: { seconds: '${1}' }, position: { x: 260, y: 0 } },
     { id: 'never', type: 'fail', config: { message: 'not taken' }, position: { x: 260, y: 200 } },
     { id: 'stop', type: 'fail', config: { message: 'planned stop' }, position: { x: 520, y: 0 } },
+    { id: 'after1', type: 'wait', config: { seconds: '${1}' }, position: { x: 780, y: 0 } },
+    { id: 'after2', type: 'wait', config: { seconds: '${1}' }, position: { x: 1040, y: 0 } },
   ],
   edges: [
     { from: 'pick', to: 'fe', on: 'branch' as const, branch: 'true' },
     { from: 'pick', to: 'never', on: 'branch' as const, branch: 'false' },
     { from: 'fe', to: 'stop', on: 'success' as const },
+    { from: 'stop', to: 'after1', on: 'success' as const },
+    { from: 'after1', to: 'after2', on: 'success' as const },
   ],
   containers: [
     {
@@ -42,8 +47,8 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
   const table = page.locator('.activity-runs__table');
-  // 5 activity rows, plus the ForEach's group line and a line per item.
-  await expect(table.locator('tbody tr')).toHaveCount(8);
+  // 7 activity rows, plus the ForEach's group line and a line per item.
+  await expect(table.locator('tbody tr')).toHaveCount(10);
 
   // Every reading in one evaluate: a round trip per assertion is what costs.
   const seen = await page.evaluate(() => {
@@ -62,6 +67,7 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
           .filter((n) => !(n instanceof Element && n.getAttribute('aria-hidden') === 'true'))
           .map((n) => n.textContent)
           .join(''),
+        name: cells[col('Activity')],
         type: cells[col('Type')],
         status: cells[col('Status')],
         start: cells[col('Start')],
@@ -130,7 +136,13 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
     // A one-second wait, in the one duration format.
     expect(r.duration).toMatch(/^[12](\.\d+)?s$/);
   }
-  expect(byId('never')).toMatchObject([{ status: 'skipped', start: '—' }]);
+  // #1484 M2 — a skip says why: the arm the If did not take, and two activities
+  // after a failure, the second of which names the failure, not the skip between.
+  expect(byId('never')).toMatchObject([{ status: 'skipped · branch not taken', start: '—' }]);
+  const stopName = byId('stop')[0]!.name;
+  expect(stopName).not.toBe('');
+  for (const id of ['after1', 'after2'])
+    expect(byId(id)).toMatchObject([{ status: `skipped · upstream failed: ${stopName}` }]);
   expect(byId('stop')[0]!.status).toBe('failure');
   expect(byId('stop')[0]!.error).toContain('planned stop');
 
@@ -166,9 +178,9 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
   const toggle = table.locator('tr.activity-runs__group button');
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-  await expect(table.locator('tbody tr')).toHaveCount(4);
+  await expect(table.locator('tbody tr')).toHaveCount(6);
   await toggle.click();
-  await expect(table.locator('tbody tr')).toHaveCount(8);
+  await expect(table.locator('tbody tr')).toHaveCount(10);
 
   await expectQuiet(page, problems);
 });

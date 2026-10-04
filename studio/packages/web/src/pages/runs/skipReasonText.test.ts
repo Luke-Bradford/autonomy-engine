@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { skipReasonText } from './skipReasonText';
 
-const NAMES: Record<string, string> = { a: 'Copy Data 1', c: 'If 1', lp: 'Until 1', fe: 'ForEach 1' };
+const NAMES: Record<string, string> = {
+  a: 'Copy Data 1',
+  c: 'If 1',
+  lp: 'Until 1',
+  fe: 'ForEach 1',
+};
 const nameOf = (id: string) => NAMES[id] ?? null;
 
 describe('#1484 M2 skipReasonText', () => {

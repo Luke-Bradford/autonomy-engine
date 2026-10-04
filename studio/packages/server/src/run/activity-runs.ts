@@ -240,7 +240,8 @@ export function projectActivityRuns(
     nodeId: string,
     iteration: ActivityRunIteration | null,
     skipReason: SkipReason | null,
-  ) => push({ ...blank(`skip:${nodeId}:${rows.length}`, nodeId, 'skipped', iteration), skipReason });
+  ) =>
+    push({ ...blank(`skip:${nodeId}:${rows.length}`, nodeId, 'skipped', iteration), skipReason });
   const iterating = doc.containers.filter((c) => c.kind !== 'stage');
   const reused = reusedIds(
     doc,
