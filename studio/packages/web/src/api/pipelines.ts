@@ -580,11 +580,12 @@ export function validatePipelineDraft(
  * pane that also shows this has no Archive of its own.
  */
 export function pipelineHasRunsMessage(name: string): string {
-  return (
-    `Cannot delete “${name}”: it has run history. Archive it instead, from the ` +
-    "Pipelines list or the editor's ⋯ menu — archiving keeps every version and run."
-  );
+  return `Cannot delete “${name}”: it has run history. ${ARCHIVE_INSTEAD}`;
 }
+
+/** The way out of a refused pipeline delete, shared by every refusal's wording. */
+export const ARCHIVE_INSTEAD =
+  "Archive it instead, from the Pipelines list or the editor's ⋯ menu — archiving keeps every version and run.";
 
 /**
  * What to tell the user about a failed pipeline delete.

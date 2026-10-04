@@ -1,5 +1,6 @@
 import type { PipelineDependentsResponse } from '@autonomy-studio/shared';
 import {
+  ARCHIVE_INSTEAD,
   GIT_COMMIT_DELETES_FILES_NOTE,
   listPipelineDependents,
   pipelineHasRunsMessage,
@@ -7,6 +8,7 @@ import {
 import { advisoryDetail, messageOf } from '../api/client';
 import { formatNameList } from './connections/dependencyCheck';
 import { nodeLabels, nodePhrase } from './connections/dependentNodes';
+import { debugKeptFor } from './pipeline/runNowRules';
 
 /** The dependents read, settled: a failure is carried, never thrown. */
 export type PipelineDependentsRead =
@@ -47,7 +49,10 @@ export async function readPipelineDependents(id: string): Promise<PipelineDepend
  */
 export function pipelineDeletePlan(name: string, read: PipelineDependentsRead): PipelineDeletePlan {
   if (read.state === 'known' && read.value.hasRuns) {
-    return { kind: 'refused', message: pipelineHasRunsMessage(name) };
+    const message = read.value.debugRunsOnly
+      ? debugRunsOnlyMessage(name, read.value.debugRetentionDays)
+      : pipelineHasRunsMessage(name);
+    return { kind: 'refused', message };
   }
   const parts = [
     `Delete pipeline "${name}"?`,
@@ -90,4 +95,25 @@ export function pipelineDeletePlan(name: string, read: PipelineDependentsRead): 
     message: parts.join('\n\n'),
     ...(hasDependants ? { typeToConfirm: name } : {}),
   };
+}
+
+/**
+ * #1433 — the refusal when the only runs are DEBUG runs. Those are not kept
+ * forever like a saved version's: they go with their debug version after the
+ * server's window (`DEBUG_RETENTION_DAYS`, aged from when the Debug started),
+ * and the pipeline can be deleted then — so say that, rather than send the user
+ * to archive a pipeline that merely has to wait.
+ */
+export function debugRunsOnlyMessage(name: string, retentionDays: number | null): string {
+  if (retentionDays === null) {
+    return (
+      `Cannot delete “${name}”: its only runs are Debug runs, and this server keeps ` +
+      `those until they are deleted (DEBUG_RETENTION_DAYS is 0). ${ARCHIVE_INSTEAD}`
+    );
+  }
+  return (
+    `Cannot delete “${name}”: its only runs are Debug runs, ${debugKeptFor(retentionDays)} ` +
+    "after each Debug starts — it can be deleted once they are gone. To hide it now, archive it " +
+    "from the Pipelines list or the editor's ⋯ menu."
+  );
 }

@@ -13,21 +13,23 @@ import type { Db } from './types.js';
  * `listPipelineVersions`, which hides DEBUG versions: a debug version's runs are
  * kept for the retention window and block the delete exactly like any other
  * run, so `hasRuns` must see them or the dialog asks a question the server then
- * refuses.
+ * refuses. The retention window is not the repo's to know: the route adds it.
  */
 export function pipelineDependents(
   db: Db,
   ownerId: string,
   pipelineId: string,
-): PipelineDependentsResponse {
-  const hasRuns =
-    db
-      .select({ id: runs.id })
-      .from(runs)
-      .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
-      .where(eq(pipelineVersions.pipelineId, pipelineId))
-      .limit(1)
-      .all().length > 0;
+): Omit<PipelineDependentsResponse, 'debugRetentionDays'> {
+  // One row per KIND of version that has runs (debug or saved), so the same
+  // read answers both "any runs?" and "only debug runs?" (#1433).
+  const runVersionKinds = db
+    .selectDistinct({ debug: pipelineVersions.debug })
+    .from(runs)
+    .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
+    .where(eq(pipelineVersions.pipelineId, pipelineId))
+    .all();
+  const hasRuns = runVersionKinds.length > 0;
+  const debugRunsOnly = hasRuns && runVersionKinds.every((row) => row.debug);
 
   const versionIds = new Set(
     db
@@ -63,5 +65,5 @@ export function pipelineDependents(
       }
     }
   }
-  return { hasRuns, triggers, callers, dynamicCallers };
+  return { hasRuns, debugRunsOnly, triggers, callers, dynamicCallers };
 }
