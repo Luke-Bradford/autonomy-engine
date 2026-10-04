@@ -123,9 +123,9 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
     /* #1484 — compact (`10-04 13:05:07`) to fit the 124px column; the full
        form, the zone and the relative time are the hover title. */
     zoned: true,
-    cell: (r, { zone }) => (
+    cell: (r, { zone, loadedAt }) => (
       <td>
-        <When ms={r.startedAt} compact zone={zone} />
+        <When ms={r.startedAt} compact zone={zone} asOf={loadedAt} />
       </td>
     ),
   },

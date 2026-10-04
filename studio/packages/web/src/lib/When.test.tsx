@@ -41,6 +41,13 @@ describe('When — #1484 principle 4', () => {
     expect(container.querySelector('time')!.getAttribute('title')).toMatch(/ UTC · /);
   });
 
+  it('judges the compact form’s year against the caller’s clock when given one', () => {
+    const store = createUiStore(memoryStorage());
+    const nextYear = Date.UTC(2027, 0, 2);
+    const { container } = render(<When ms={AT} compact zone="UTC" asOf={nextYear} store={store} />);
+    expect(container.textContent).toBe('2026-10-04 12:05');
+  });
+
   it('says a timestamp that is not an instant is invalid, and renders no <time>', () => {
     const { container } = render(<When ms={1e16} store={createUiStore(memoryStorage())} />);
     expect(container.textContent).toBe('invalid time');

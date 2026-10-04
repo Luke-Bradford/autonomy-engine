@@ -22,6 +22,12 @@ interface WhenProps {
   store?: UiStore;
   /** The zone, when the caller already holds it from an injected store. */
   zone?: DisplayTimeZone;
+  /**
+   * The caller's clock for the compact form's "same year?" — the runs grid's
+   * `loadedAt`, so a list re-read after New Year shows last year's rows with
+   * their year. Without it, the component's own mount-time clock.
+   */
+  asOf?: number;
 }
 
 /**
@@ -35,7 +41,14 @@ interface WhenProps {
  * to be read — so it is fresh when shown and costs no timer per cell (and
  * render stays pure).
  */
-export function When({ ms, precision = 'second', compact = false, store, zone: given }: WhenProps) {
+export function When({
+  ms,
+  precision = 'second',
+  compact = false,
+  store,
+  zone: given,
+  asOf,
+}: WhenProps) {
   const stored = useDisplayTimeZone(store);
   const zone = given ?? stored;
   const [now, setNow] = useState(Date.now);
@@ -45,7 +58,7 @@ export function When({ ms, precision = 'second', compact = false, store, zone: g
   if (!isInstant(ms)) return <>{INVALID_TIME}</>;
   const refresh = () => setNow(Date.now());
   const text = compact
-    ? formatCompactTimestamp(ms, zone, now)
+    ? formatCompactTimestamp(ms, zone, asOf ?? now)
     : formatTimestamp(ms, zone, precision);
   return (
     <time
