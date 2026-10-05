@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
-import { nodesTable } from './support/panels';
+import { activityRowById, openActivity } from './support/panels';
 
 /**
  * U11 — the run monitor draws the AUTHORED GRAPH with the run's state on it.
@@ -152,27 +152,28 @@ test('U25 — the node table and the graph give every node the same word, includ
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
 
-  /* Wait on the RECONCILED table rather than the canvas: the reconciliation is
-     gated on a complete WebSocket replay, so a row for `neverRan` existing at
-     all is proof the projection landed AND that the table read it. Before U25
-     this row could never appear, no matter how long the wait. */
-  const skippedRow = page.getByRole('row').filter({ hasText: 'neverRan' });
+  /* Wait on the TABLE rather than the canvas: a row for `neverRan` existing at
+     all is proof the activity runs read the reducer's skip. Before U25 the old
+     node table could never show it, no matter how long the wait. */
+  const skippedRow = activityRowById(page, 'neverRan');
   await expect(skippedRow).toHaveCount(1);
   await expect(skippedRow.getByText('skipped', { exact: true })).toBeVisible();
 
   // The drill-in panel is the third surface that renders a status, so it reads
   // from the same map — a node routed around says so there too.
-  await nodesTable(page).getByRole('button', { name: 'Fail 3', exact: true }).click();
-  await expect(
-    page.getByRole('complementary', { name: 'Node Fail 3' }).getByText('skipped', {
-      exact: true,
-    }),
-  ).toBeVisible();
+  const drawer = await openActivity(page, 'Fail 3');
+  await expect(drawer.getByText('skipped', { exact: true })).toBeVisible();
 
   /* ONE evaluate for the whole comparison — a per-node round trip is what makes
      a browser-driven check expensive. Pairs each node's graph word with its
      table word, keyed by the doc id React Flow puts on the wrapper and by the
-     row's own node-id cell. */
+     row's `data-activity-id`.
+
+     #1484 M2 — the table is the activity runs: one row per attempt or item, so
+     a node's word there is its LATEST row's (table order is run order), which
+     is the attempt the graph's word describes. A node that never started has
+     no activity run at all, by design; every node in this fixture either ran or
+     was routed around (a skip IS a row), so here the two key sets still match. */
   const words = await page.evaluate(() => {
     const graph: Record<string, string> = {};
     /* #882 — the NAMES the two surfaces show for one node, harvested in this
@@ -190,26 +191,25 @@ test('U25 — the node table and the graph give every node the same word, includ
     }
     const tableNames: Record<string, string> = {};
     const table: Record<string, string> = {};
-    for (const row of document.querySelectorAll('tbody tr')) {
-      /* The row's node-id cell, NOT the drill-in button — since #882 the button
-         holds the activity NAME ('Fail 3') while the graph wrapper is keyed on
-         the doc id, so keying off the button would compare two different things
-         and report a difference that is not one. The button is still the
-         fallback, because it is what holds the id when the pipeline version will
-         not resolve and there is no name to show. */
-      const id =
-        row.querySelector('.node-id')?.textContent?.trim() ??
-        row.querySelector('.node-drill-in')?.textContent?.trim();
+    for (const row of document.querySelectorAll<HTMLElement>(
+      '.activity-runs tbody tr[data-activity-id]',
+    )) {
+      /* The row's doc id, NOT the open button — since #882 the button holds
+         the activity NAME ('Fail 3') while the graph wrapper is keyed on the doc
+         id, so keying off the button would compare two different things and
+         report a difference that is not one. Later rows overwrite earlier
+         ones, so each node keeps its latest. */
+      const id = row.dataset.activityId!;
       const status = row.querySelector('.node-status')?.textContent?.trim();
-      if (id !== undefined && status !== undefined) table[id] = status;
-      const name = row.querySelector('.node-drill-in')?.textContent?.trim();
-      if (id !== undefined && name !== undefined) tableNames[id] = name;
+      if (status !== undefined) table[id] = status;
+      const name = row.querySelector('.activity-runs__open')?.textContent?.trim();
+      if (name !== undefined) tableNames[id] = name;
     }
     return { graph, table, graphNames, tableNames };
   });
 
-  // Every node the graph draws has a table row — that equivalence is new, and
-  // it is what "the table stops omitting nodes" means concretely.
+  // Every node the graph draws has a table row HERE, because every node in the
+  // fixture settled (a never-started node would have none, by design).
   expect(Object.keys(words.table).sort()).toEqual(Object.keys(words.graph).sort());
   // …and neither surface has a word the other does not.
   expect(words.table).toEqual(words.graph);

@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, fireManualTrigger, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
+import { activityRowById, activityRuns } from './support/panels';
 
 /**
  * #867 — the run log can now answer "how long did this node take".
@@ -51,41 +52,41 @@ test('#867 — a node row states how long it took, and says nothing where nothin
      per-assertion round trip is what makes a browser-driven check expensive,
      and every fact here is readable from one pass over the table.
 
-     Rows are keyed by the raw node id in the row's `<code>`, not by position
-     and not by the activity NAME. #882 put the name in the row's button and
-     left the id beside it precisely so a row stays identifiable — and keying on
-     the name would make this spec pass or fail on labelling work it is not
-     about. */
-  const cells = await page.evaluate(() => {
-    const read = (nodeId: string): string | null => {
-      /* Any `<code>` in a body cell holding the id, rather than `code.node-id`
-         specifically: #882 renders the id in the sibling `<code class="node-id">`
-         when the node HAS a name and inside the button's own `<code>` when it
-         does not, and this spec is about neither. */
-      const code = Array.from(document.querySelectorAll('tbody td code')).find(
-        (el) => el.textContent?.trim() === nodeId,
+     #1484 M2 — read off the activity runs (the Nodes table is gone), one row
+     per attempt; each node here runs once. Rows are keyed by the raw node id
+     the row carries (`data-activity-id`), not by position and not by the
+     activity NAME, which #882 numbers by kind — keying on it would make this
+     spec pass or fail on labelling work it is not about. The cell is found by
+     its column's header, so a column added before it moves nothing. */
+  const cells = await activityRuns(page).evaluate((table) => {
+    const col = [...table.querySelectorAll('thead th')].findIndex(
+      (th) => th.textContent?.trim() === 'Duration',
+    );
+    const read = (nodeId: string): string[] =>
+      [...table.querySelectorAll(`tbody tr[data-activity-id="${nodeId}"]`)].map(
+        (row) => row.children[col]?.textContent?.trim() ?? '',
       );
-      const row = code?.closest('tr');
-      return row?.querySelector('.node-duration')?.textContent?.trim() ?? null;
-    };
-    return { hold: read('hold'), stop: read('stop') };
+    return { col, hold: read('hold'), stop: read('stop') };
   });
+  expect(cells.col).toBeGreaterThan(-1);
+  expect(cells.hold).toHaveLength(1);
+  expect(cells.stop).toHaveLength(1);
 
   /* A duration, asserted by SHAPE not by value: the span is a real elapsed
      measurement of a one-second timer, so pinning "1s" would make the spec
      flake on the alarm poll's granularity. What must hold is that a number was
      rendered at all — a settled node rendering the em-dash would mean the park's
      terminal never closed its span. */
-  expect(cells.hold).toMatch(/\d/);
-  expect(cells.hold).not.toBe('—');
+  expect(cells.hold[0]).toMatch(/\d/);
+  expect(cells.hold[0]).not.toBe('—');
 
-  // The unmeasurable case, and the reason the em-dash exists.
-  expect(cells.stop).toBe('—');
+  /* The unmeasurable case: an empty cell, which is how the activity runs say
+     "not reported" (never a zero nobody observed). */
+  expect(cells.stop[0]).toBe('');
 
   // The drill-in is the one surface with room to say what the number MEANS.
-  const holdRow = page.locator('tr', { has: page.locator('td code', { hasText: /^hold$/ }) });
-  await holdRow.locator('button.node-drill-in').click();
-  const panel = page.getByRole('complementary');
+  await activityRowById(page, 'hold').getByRole('button').first().click();
+  const panel = page.locator('.run-drawer').getByRole('complementary');
   await expect(panel).toContainText('wall clock for the latest attempt');
   await expect(panel).toContainText('including any wait it parked on');
 
@@ -134,9 +135,17 @@ test("#890 — a running node's duration counts up while the page is live", asyn
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
 
-  const cell = page
-    .locator('tr', { has: page.locator('td code', { hasText: /^hold$/ }) })
-    .locator('.node-duration');
+  /* #1484 M2 — the Duration cell of the running attempt's activity run, found
+     by its column's header. */
+  const holdRow = activityRowById(page, 'hold');
+  await expect(holdRow).toHaveCount(1);
+  const col = await activityRuns(page).evaluate((table) =>
+    [...table.querySelectorAll('thead th')].findIndex(
+      (th) => th.textContent?.trim() === 'Duration',
+    ),
+  );
+  expect(col).toBeGreaterThan(-1);
+  const cell = holdRow.locator('td').nth(col);
   await expect(cell).toHaveText(/ so far$/);
 
   /* Seconds, parsed from the two formats a sub-hour figure can take ("<1s",

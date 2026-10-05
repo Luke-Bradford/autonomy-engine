@@ -4,7 +4,7 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
-import { nodesTable } from './support/panels';
+import { openActivity } from './support/panels';
 
 /**
  * #605 L9b — an `llm_call` with `capture: 'full'` shows the prompt it sent and
@@ -128,8 +128,7 @@ async function runCaptured(
 async function openDrillIn(page: import('@playwright/test').Page, runId: string) {
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
-  await nodesTable(page).getByRole('button', { name: 'LLM Call 1' }).click();
-  return page.getByRole('complementary', { name: /Node LLM Call 1/ });
+  return openActivity(page, 'LLM Call 1');
 }
 
 test('#605 — a full-capture LLM node shows the prompt it sent and the answer it got', async ({

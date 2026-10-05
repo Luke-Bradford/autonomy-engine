@@ -2,7 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion, type SeedDoc } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
-import { nodesTable } from './support/panels';
+import { activityRow, activityRowById, openActivity } from './support/panels';
 
 /**
  * #895 — the rerun-from-failed action.
@@ -219,12 +219,11 @@ test('#918 — a rerun says which of its nodes it REUSED, and shows what they pr
      `pick` really succeeded and `stop` really failed. A fixture that ended some
      other way would satisfy the rest while the title claimed otherwise. */
   await expect(page.locator('.run-header .run-status')).toHaveText('failure');
-  const sourceRow = nodesTable(page)
-    .getByRole('button', { name: 'Filter 1' })
-    .locator('xpath=ancestor::tr');
-  await expect(sourceRow.getByText('success')).toBeVisible();
+  const sourceRow = activityRow(page, 'Filter 1');
+  await expect(sourceRow).toHaveCount(1);
+  await expect(sourceRow.getByText('success', { exact: true })).toBeVisible();
   // In R1 the node EXECUTED, so it must make no claim about being reused.
-  await expect(sourceRow.getByText(/reused from run/)).toHaveCount(0);
+  await expect(sourceRow.getByText(/reused/)).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Rerun from failed' }).click();
   await expect(page.getByText('Rerun of')).toBeVisible();
@@ -232,14 +231,15 @@ test('#918 — a rerun says which of its nodes it REUSED, and shows what they pr
   /* THE DEFECT, at the level that proves the whole path: the copied node's
      result is carried by `run.reseeded` alone — no `node.succeeded` is appended
      for it in R2 — so before #918 this row had no Outputs section at all, while
-     `${nodes.pick.output.result}` resolved for it downstream. */
-  const copiedRow = nodesTable(page)
-    .getByRole('button', { name: 'Filter 1' })
-    .locator('xpath=ancestor::tr');
-  await expect(copiedRow.getByText(`reused from run ${sourceRunId}`)).toBeVisible();
+     `${nodes.pick.output.result}` resolved for it downstream.
 
-  await nodesTable(page).getByRole('button', { name: 'Filter 1' }).click();
-  const panel = page.getByRole('complementary', { name: 'Node Filter 1' });
+     #1484 M2 — the activity run's pill says `reused`; WHICH run it came from is
+     the drawer's to say (asserted below with the id). */
+  const copiedRow = activityRow(page, 'Filter 1');
+  await expect(copiedRow).toHaveCount(1);
+  await expect(copiedRow.getByText('reused', { exact: true })).toBeVisible();
+
+  const panel = await openActivity(page, 'Filter 1');
   /* The HEADING role, not the bare text: the provenance hint above it says
      "the outputs below were computed there", so a text match resolves to two
      elements. */
@@ -249,6 +249,7 @@ test('#918 — a rerun says which of its nodes it REUSED, and shows what they pr
   // presence is what makes this more than a "something rendered" check.
   await expect(panel.getByText('{"result":[4,5]}')).toBeVisible();
   await expect(panel.getByText(/reused its result from run/)).toBeVisible();
+  await expect(panel.getByText(sourceRunId, { exact: true })).toBeVisible();
   await expect(panel.getByText(/not executed in this run/)).toBeVisible();
 
   await expectQuiet(page, problems);
@@ -313,10 +314,12 @@ test("RS4 — a rerun reuses a copied call node's child, and links to it", async
   /* The call node was COPIED, so the rerun started no child of its own. */
   expect(await childrenOf(rerunId)).toHaveLength(0);
 
-  const callRow = page.getByRole('row').filter({ hasText: 'callChild' });
+  // #1484 M2 — the copied call node's activity run, by its raw id.
+  const callRow = activityRowById(page, 'callChild');
   await callRow.getByRole('button').first().click();
   const panel = page.getByRole('complementary', { name: /^Node / });
   await expect(panel.getByText(/reused its result from run/)).toBeVisible();
+  await expect(panel.getByText(sourceRunId, { exact: true })).toBeVisible();
   await expect(panel.getByText(/this rerun did not start another/)).toBeVisible();
 
   /* Followed for real: an href assertion alone would pass against a run that

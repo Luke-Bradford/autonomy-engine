@@ -1,5 +1,7 @@
 import type { NodeActivity, AttemptSpan } from './runSummary';
 import { isMeasurableSpan } from './format';
+import type { RunStatus } from '@autonomy-studio/shared';
+import { nodeStatusLabel, nodeStoppedByCancel } from './nodeStatus';
 
 /**
  * U12a (#1007) — the pure arithmetic and classification behind `AttemptTimeline`.
@@ -119,7 +121,7 @@ export function timelineWindow(nodes: NodeActivity[]): { from: number; to: numbe
  * standalone sentences — so there is nothing to extract, only a reason to keep
  * both in step when either changes.
  */
-export function untimedReason(node: NodeActivity): string {
+export function untimedReason(node: NodeActivity, runStatus?: RunStatus): string {
   if (node.copiedFromRunId !== undefined) {
     return 'copied from an earlier run — it did not run again here';
   }
@@ -135,6 +137,10 @@ export function untimedReason(node: NodeActivity): string {
      reason (see the docblock above). */
   if (node.status === 'skipped' && node.attempts === 0) {
     return 'skipped — the engine appends no event for a node it routes around';
+  }
+  // CX4 — under a cancel, "has not started" would say it may yet start.
+  if (node.attempts === 0 && nodeStoppedByCancel(node.status, runStatus)) {
+    return nodeStatusLabel(node.status, runStatus);
   }
   if (node.attempts === 0) return 'has not started';
   return 'ran, but the log holds no start-and-terminal pair to measure it by';

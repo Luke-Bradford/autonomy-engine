@@ -205,7 +205,7 @@ function UntimedList({
             <span className="timeline-untimed-name" title={node.nodeId}>
               {nameOf(node.nodeId) ?? node.nodeId}
             </span>{' '}
-            — {untimedReason(node)}
+            — {untimedReason(node, runStatus)}
           </li>
         ))}
       </ul>

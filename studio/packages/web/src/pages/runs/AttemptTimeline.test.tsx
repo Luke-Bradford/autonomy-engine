@@ -160,6 +160,15 @@ describe('untimedReason', () => {
     );
   });
 
+  it('says a node a cancel kept from starting was not run, not that it may yet start (CX4)', () => {
+    expect(untimedReason(node({ nodeId: 'a', status: 'pending', attempts: 0 }), 'cancelled')).toBe(
+      'not run (cancelled)',
+    );
+    expect(untimedReason(node({ nodeId: 'a', status: 'pending', attempts: 0 }), 'running')).toBe(
+      'has not started',
+    );
+  });
+
   it('says a node has not started when nothing started it', () => {
     expect(untimedReason(node({ nodeId: 'a', status: 'pending', attempts: 0 }))).toBe(
       'has not started',

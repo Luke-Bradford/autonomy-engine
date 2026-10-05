@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireManualTrigger, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
+import { activityRowById } from './support/panels';
 
 /**
  * #900 — the run monitor's "waiting on a callback" surface.
@@ -189,7 +190,7 @@ test('#901 — an operator completes the wait from the app, sending no token', a
      `.node-drill-in`: a class is styling, and a rename would break this spec
      without changing a thing an operator can do. The scope is what makes the
      name usable — unscoped it also matches the graph and, once open, the panel. */
-  const approveRow = page.locator('tr', { has: page.locator('td code', { hasText: /^approve$/ }) });
+  const approveRow = activityRowById(page, 'approve');
   await approveRow.getByRole('button', { name: 'Webhook (external wait) 1' }).click();
   const panel = page.getByRole('complementary', { name: /Node Webhook \(external wait\) 1/ });
   await expect(panel.getByRole('heading', { name: 'Outputs' })).toBeVisible();

@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion, type SeedDoc } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
+import { activityRowById } from './support/panels';
 
 /**
  * #1231 (U20 slice 1) — a composed run is readable in BOTH directions.
@@ -84,9 +85,9 @@ test('#1231 — a call node names its child run, and the child names its caller'
 
   /* Open the drill-in by ROW rather than by the button's label: the button is
      named by the activity's ordinal label (`Execute Pipeline 1`), which is a
-     presentation fact this spec has no stake in, while the raw node id beside it
-     is what the doc and the event feed are keyed on. */
-  const callRow = page.getByRole('row').filter({ hasText: 'callChild' });
+     presentation fact this spec has no stake in, while the raw node id the row
+     carries is what the doc and the event feed are keyed on. */
+  const callRow = activityRowById(page, 'callChild');
   await callRow.getByRole('button').first().click();
 
   const panel = page.getByRole('region', { name: 'Child runs' });
@@ -110,7 +111,7 @@ test('#1231 — a call node names its child run, and the child names its caller'
   /* Back where we started, and the parent is NOT itself a child: the absence of
      the row is what "nothing called this" looks like, so a row that rendered
      unconditionally would pass every assertion above and still be wrong. */
-  await expect(page.getByRole('heading', { name: 'Nodes' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Activity runs' })).toBeVisible();
   await expect(page.locator('.run-header dt', { hasText: /^Parent$/ })).toHaveCount(0);
 
   await expectQuiet(page, problems);
@@ -158,7 +159,7 @@ test('#796 — a refused call node names its refusal reason on the run page', as
 
   await page.goto(`/#/monitor/runs/${encodeURIComponent(parentRunId)}`);
   await fluentRootReady(page);
-  const callRow = page.getByRole('row').filter({ hasText: 'callRefused' });
+  const callRow = activityRowById(page, 'callRefused');
   await callRow.getByRole('button').first().click();
 
   const panel = page.getByRole('complementary', { name: /^Node / });

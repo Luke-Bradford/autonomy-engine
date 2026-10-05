@@ -7,7 +7,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
 import { seedConnection, seedDataset } from './support/seedResources';
 import { fluentRootReady } from './support/theme';
-import { nodesTable } from './support/panels';
+import { activityRow, openActivity } from './support/panels';
 
 /**
  * A CSV file of `csv` → a sqlite `people` table, as one `copy` node: the two
@@ -146,8 +146,7 @@ test('#1162 — a copy run names both addresses it resolved', async ({ page }) =
 
     await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
     await fluentRootReady(page);
-    await nodesTable(page).getByRole('button', { name: 'Copy Data 1', exact: true }).click();
-    const panel = page.getByRole('complementary', { name: 'Node Copy Data 1' });
+    const panel = await openActivity(page, 'Copy Data 1');
     await expect(panel).toBeVisible();
 
     const movement = panel.getByRole('heading', { name: 'Data movement' });
@@ -234,11 +233,15 @@ test('#1299 — a copy streams per-batch progress, and the run page shows the la
 
     await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
     await fluentRootReady(page);
-    /* Settled, so the table names the stream rather than showing a live value. */
-    await expect(page.getByRole('cell', { name: `output: ${COPY_PROGRESS_OUTPUT}` })).toBeVisible();
+    /* Settled, so the row shows no live value: the streamed reading follows the
+       status pill only while the attempt runs (#1484 M2), and once it settles
+       the drawer holds the truth. */
+    const row = activityRow(page, 'Copy Data 1');
+    await expect(row).toHaveCount(1);
+    await expect(row).toContainText('success');
+    await expect(row).not.toContainText(`${COPY_PROGRESS_OUTPUT}:`);
 
-    await nodesTable(page).getByRole('button', { name: 'Copy Data 1', exact: true }).click();
-    const panel = page.getByRole('complementary', { name: 'Node Copy Data 1' });
+    const panel = await openActivity(page, 'Copy Data 1');
     await expect(panel).toBeVisible();
     await expect(panel).toContainText(
       `2 events (latest: ${COPY_PROGRESS_OUTPUT} = {"rowsRead":1500,"rowsInFlight":1500,"rowsFailed":0})`,
