@@ -1373,7 +1373,7 @@ describe('validateRefs — deep `[]`/`.` addressing at SAVE time (#6 E7)', () =>
       expect(errors[0]).toContain(`use ${fn}`);
     });
 
-    it('a foreach body\'s ${item.score > 5} is refused too', () => {
+    it("a foreach body's ${item.score > 5} is refused too", () => {
       const body = node('b', { prompt: '${item.score > 5}' });
       const errors = validateRefs(
         doc(
