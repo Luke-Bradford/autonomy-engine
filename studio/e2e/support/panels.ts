@@ -22,13 +22,65 @@ export function triggerForm(page: Page): Locator {
 }
 
 /**
- * The run page's Nodes table: each node's latest record, and its inline
- * drill-in. The activity runs above it name the same activities with buttons of
- * their own, which open the run drawer instead (#1484 M2), so a node's drill-in
- * is found inside this table.
+ * The run page's activity runs (#1484 OR35 M2): one row per attempt of each
+ * activity, per ForEach item or Until round, plus its skipped and reused rows.
+ * It replaced the Nodes table, so there is no node-wide "latest" row any more,
+ * and a node that never started has no row at all.
  */
-export function nodesTable(page: Page): Locator {
-  return page
-    .locator('table')
-    .filter({ has: page.getByRole('columnheader', { name: 'Node', exact: true }) });
+export function activityRuns(page: Page): Locator {
+  return page.locator('.activity-runs__table');
+}
+
+/**
+ * A row's cell under the column headed `column`, found by the header rather
+ * than by position, so a column added before it moves nothing.
+ */
+export async function activityCell(page: Page, row: Locator, column: string): Promise<Locator> {
+  const col = await activityRuns(page).evaluate(
+    (table, name) =>
+      [...table.querySelectorAll('thead th')].findIndex((th) => th.textContent?.trim() === name),
+    column,
+  );
+  if (col === -1) throw new Error(`the activity runs have no "${column}" column`);
+  return row.locator('td').nth(col);
+}
+
+/**
+ * An activity's row, found by its accessible name (`HTTP Request 1`), the
+ * button that opens it. `nth` picks among its attempts and items in table
+ * order; `-1` is the last. Without it the locator matches every row of that
+ * activity, so a strict action on a retried or iterated one fails loudly
+ * rather than picking one.
+ */
+export function activityRow(page: Page, name: string, nth?: number): Locator {
+  const rows = activityRuns(page)
+    .locator('tbody tr')
+    .filter({ has: page.getByRole('button', { name, exact: true }) });
+  if (nth === undefined) return rows;
+  return nth === -1 ? rows.last() : rows.nth(nth);
+}
+
+/** An activity's rows by its RAW doc node id (`data-activity-id`), for a doc
+ *  whose nodes the spec names by id rather than by label. */
+export function activityRowById(page: Page, id: string): Locator {
+  return activityRuns(page).locator(`tbody tr[data-activity-id="${id}"]`);
+}
+
+/**
+ * Opens an activity run in the run drawer and returns what it shows: the
+ * `complementary` named `Node <name>`, holding that ONE attempt or item (ADF
+ * parity), not the node's latest across items. `nth` as `activityRow`.
+ */
+export async function openActivity(
+  page: Page,
+  name: string,
+  { nth }: { nth?: number } = {},
+): Promise<Locator> {
+  await activityRow(page, name, nth).getByRole('button', { name, exact: true }).click();
+  return drawerPanel(page, name);
+}
+
+/** The run drawer's record, named as the row that opened it. */
+export function drawerPanel(page: Page, name: string): Locator {
+  return page.locator('.run-drawer').getByRole('complementary', { name: `Node ${name}` });
 }

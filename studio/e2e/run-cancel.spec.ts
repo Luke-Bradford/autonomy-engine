@@ -3,7 +3,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireManualTrigger, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 import { answerConfirm } from './support/confirmDialog';
-import { nodesTable } from './support/panels';
+import { activityRowById, activityRuns } from './support/panels';
 
 /**
  * CX4 (#1320) — an operator can stop a run from its page.
@@ -57,10 +57,11 @@ async function cancelFromPage(
   return { prompt, clickedAt };
 }
 
-/** The status word in the node table's row for the node whose name contains `name`. */
+/** The status word on the activity run of the node whose name contains `name`
+ *  (#1484 M2; each node here runs at most once, so it has at most one row). */
 const nodeRowStatus = (page: Page, name: string) =>
-  nodesTable(page)
-    .locator('tr', { has: page.getByRole('button', { name }) })
+  activityRuns(page)
+    .locator('tbody tr', { has: page.getByRole('button', { name }) })
     .locator('.node-status');
 
 const headerPill = (page: Page) => page.locator('.run-header .run-status');
@@ -135,7 +136,12 @@ test('CX4 — cancelling a run with work IN FLIGHT stops it, and the page says c
   await expect(page.getByRole('button', { name: 'Cancel run' })).toHaveCount(0);
   // The in-flight node failed under the cancel; its successor never started.
   await expect(nodeRowStatus(page, 'Agent')).toHaveText('failure');
-  await expect(nodeRowStatus(page, 'Wait')).toHaveText('not run (cancelled)');
+  /* #1484 M2 — a node that never started has no activity run by design, so its
+     word is read off the graph, the surface that draws every node. */
+  await expect(activityRowById(page, 'after')).toHaveCount(0);
+  await expect(page.locator('.react-flow__node[data-id="after"] .run-node-status')).toHaveText(
+    'not run (cancelled)',
+  );
 
   // D9 — NEUTRAL, not red: the operator stopped it, nothing went wrong.
   const colours = await pillColours(page);
@@ -171,7 +177,7 @@ test('CX4 — cancelling a PARKED run finishes it at once, and the page says can
      of a park still due: the table pill, the graph node and the open span on
      the attempt timeline. One read, every assertion. */
   const stopped = await page.evaluate(() => {
-    const pill = [...document.querySelectorAll<HTMLElement>('tr .node-status')].find(
+    const pill = [...document.querySelectorAll<HTMLElement>('.activity-runs tr .node-status')].find(
       (el) => el.textContent?.trim() === 'stopped (cancelled)',
     );
     const probe = document.createElement('span');

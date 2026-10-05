@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion, type SeedDoc } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
-import { nodesTable } from './support/panels';
+import { openActivity } from './support/panels';
 
 /**
  * #844 V7 (spec V-D9) — the run page shows the run's variable values, and the
@@ -89,8 +89,7 @@ test('#844 V7 — a run shows its variables, and a writer’s drill-in shows its
     ['label', 'String', '""'],
   ]);
 
-  await nodesTable(page).getByRole('button', { name: 'Append variable 1', exact: true }).click();
-  const panel = page.getByRole('complementary', { name: 'Node Append variable 1' });
+  const panel = await openActivity(page, 'Append variable 1');
   await expect(panel.getByRole('heading', { name: 'Variable write' })).toBeVisible();
   await expect(panel.getByText('Appended to rows:')).toBeVisible();
   await expect(panel.locator('#node-detail-variable-write')).toHaveText('"x"');

@@ -120,7 +120,7 @@ export function containerStatusTone(
 }
 
 /**
- * #1329 — the node table's and drill-in's pill class. Keyed by the raw status
+ * #1329 — the activity runs' and drawer's pill class. Keyed by the raw status
  * (#483: a retry backoff and a routine park must not share a hue there), EXCEPT
  * where the cancel stopped the node: then every live status takes one muted
  * `node-status-cancelled` pill, for the reason `nodeStatusTone` gives.

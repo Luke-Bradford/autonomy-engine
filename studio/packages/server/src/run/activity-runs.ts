@@ -251,10 +251,17 @@ export function projectActivityRuns(
   );
   const groups = new Map<string, ActivityRunGroup>();
 
+  /** Rows the event being projected opened. One it also settles (an If, a
+   * `fail`, a variable write) has a time but no measured span: #867's "nothing
+   * timed it" is no duration, never a zero. */
+  const openedNow = new Set<ProjectedActivityRun>();
   const settle = (row: ProjectedActivityRun, status: NodeRunStatus, ts: number) => {
     row.status = status;
     row.finishedAt = ts;
-    row.durationMs = row.startedAt !== null && ts >= row.startedAt ? ts - row.startedAt : null;
+    row.durationMs =
+      !openedNow.has(row) && row.startedAt !== null && ts >= row.startedAt
+        ? ts - row.startedAt
+        : null;
     open.delete(row);
   };
   /** Rule 2: the node's state, while it still holds the attempt. */
@@ -319,6 +326,7 @@ export function projectActivityRuns(
 
   let state = engine.seedState();
   for (const { event: e, ts, payload } of log) {
+    openedNow.clear();
     const before = state;
     const reduced = engine.reduce(before, e);
     state = reduced.state;
@@ -342,6 +350,7 @@ export function projectActivityRuns(
       push(row);
       byAttempt.set(ref.attemptId, row);
       open.add(row);
+      openedNow.add(row);
     }
 
     // What the event says about its attempt — only while it is the node's live

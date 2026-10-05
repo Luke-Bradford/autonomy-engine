@@ -6,7 +6,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
 import { seedConnection } from './support/seedResources';
 import { fluentRootReady } from './support/theme';
-import { nodesTable } from './support/panels';
+import { openActivity } from './support/panels';
 
 /**
  * #890 — the drill-in's Input section shows the config a node was DISPATCHED
@@ -88,8 +88,7 @@ test('#890 — a node shows the input it ran with; a secure node withholds it', 
     await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
     await fluentRootReady(page);
 
-    await nodesTable(page).getByRole('button', { name: 'List Directory 1', exact: true }).click();
-    const shown = page.getByRole('complementary', { name: 'Node List Directory 1' });
+    const shown = await openActivity(page, 'List Directory 1');
     const shownInput = shown.locator('section', {
       has: page.getByRole('heading', { name: 'Input' }),
     });
@@ -99,8 +98,7 @@ test('#890 — a node shows the input it ran with; a secure node withholds it', 
     ]);
     await expect(shownInput.getByRole('heading', { name: 'Parameters' })).toBeVisible();
 
-    await nodesTable(page).getByRole('button', { name: 'List Directory 2', exact: true }).click();
-    const secure = page.getByRole('complementary', { name: 'Node List Directory 2' });
+    const secure = await openActivity(page, 'List Directory 2');
     const secureInput = secure.locator('section', {
       has: page.getByRole('heading', { name: 'Input' }),
     });

@@ -20,9 +20,9 @@ const RESIZE_STEP = 16;
 
 /**
  * #1484 OR35 M2 — the run page's detail drawer: what one activity run did, on
- * the right, OVER the page rather than in it. The Nodes table's inline
- * drill-in pushed everything below it down; this leaves the activity runs where
- * they are, so the operator can step from row to row and read each one.
+ * the right, OVER the page rather than in it. The inline drill-in it replaced
+ * pushed everything below it down; this leaves the activity runs where they
+ * are, so the operator can step from row to row and read each one.
  *
  * Not a modal: the table behind stays live and clickable, so opening another
  * row just swaps the record. Escape closes it while focus is inside it, as the
@@ -66,8 +66,8 @@ export function RunDrawer({
 
   // Focus in on open; back to the opener on close, if it is still there (a
   // filter or a live re-read can have taken its row away) and focus was in the
-  // drawer. A close that came from elsewhere (the Nodes table's drill-in) leaves
-  // focus where the operator put it.
+  // drawer. A close that came from elsewhere leaves focus where the operator
+  // put it.
   useEffect(() => {
     const opener = returnFocusTo;
     const drawer = ref.current;

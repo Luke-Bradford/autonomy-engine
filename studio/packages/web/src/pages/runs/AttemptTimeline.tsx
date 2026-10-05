@@ -33,7 +33,7 @@ import { dayOf, formatTimeOfDay, formatTimestamp, zoneLabel } from '../../lib/di
  *     list beneath the chart is the ticket's "documented limits", on screen.
  */
 export interface AttemptTimelineProps {
-  /** The reconciled rows, in the same order the Nodes table renders them. */
+  /** The reconciled per-node rows, in the page's node order. */
   nodes: NodeActivity[];
   /** The node's authored name, when the doc resolved. */
   nameOf: (nodeId: string) => string | null;
@@ -101,7 +101,7 @@ export function AttemptTimeline({
           Nothing measurable yet — no node has both started and finished. Every node is listed below
           with the reason it has no span.
         </p>
-        <UntimedList nodes={untimed} nameOf={nameOf} />
+        <UntimedList nodes={untimed} nameOf={nameOf} runStatus={runStatus} />
       </section>
     );
   }
@@ -178,7 +178,7 @@ export function AttemptTimeline({
           );
         })}
       </ol>
-      <UntimedList nodes={untimed} nameOf={nameOf} />
+      <UntimedList nodes={untimed} nameOf={nameOf} runStatus={runStatus} />
     </section>
   );
 }
@@ -186,9 +186,11 @@ export function AttemptTimeline({
 function UntimedList({
   nodes,
   nameOf,
+  runStatus,
 }: {
   nodes: NodeActivity[];
   nameOf: (nodeId: string) => string | null;
+  runStatus: RunStatus | undefined;
 }): React.ReactElement | null {
   if (nodes.length === 0) return null;
   return (
@@ -200,14 +202,12 @@ function UntimedList({
             {/* The id on `title`, exactly as the timeline row label carries it,
                 rather than as a visible `<code>`. `activityLabels` numbers by
                 kind ("Wait 1"), so the name alone does not identify the authored
-                node and the id has to be reachable — but rendering it here puts
-                a SECOND copy of every node id on a page whose Nodes table
-                already shows one, which makes `getByText(nodeId)` ambiguous for
-                every existing test of that table. One convention, one copy. */}
+                node and the id has to be reachable. The activity runs carry it
+                on `title` the same way. One convention. */}
             <span className="timeline-untimed-name" title={node.nodeId}>
               {nameOf(node.nodeId) ?? node.nodeId}
             </span>{' '}
-            — {untimedReason(node)}
+            — {untimedReason(node, runStatus)}
           </li>
         ))}
       </ul>

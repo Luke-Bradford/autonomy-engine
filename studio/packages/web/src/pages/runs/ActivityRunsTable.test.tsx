@@ -5,30 +5,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { ActivityRunsTable } from './ActivityRunsTable';
 import { ACTIVITY_RUN_COLUMNS, iterationText } from './activityRunsColumns';
 import { nodeStatusLabel } from './nodeStatus';
+import { activityRun } from '../../testing/activityRun';
 
-const BASE: ActivityRun = {
+const BASE: ActivityRun = activityRun({
   key: 'a#0',
-  nodeId: 'a',
-  activityId: 'a',
-  containerId: null,
   attemptId: 'a#0',
   attempt: 1,
-  status: 'success',
-  reused: false,
   startedAt: Date.UTC(2026, 9, 4, 13, 5, 7, 123),
   finishedAt: Date.UTC(2026, 9, 4, 13, 5, 8, 357),
   durationMs: 1234,
-  iteration: null,
-  branch: null,
-  rowsRead: null,
-  rowsWritten: null,
-  bytesRead: null,
-  bytesWritten: null,
-  childRunId: null,
-  childRun: null,
-  error: null,
-  skipReason: null,
-};
+});
 
 function show(rows: ActivityRun[] | null, error: string | null = null, url = '/') {
   render(
@@ -610,5 +596,82 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
     expect(cellsOf(bodyRows()[0]!)).toMatchObject({ Type: 'Until', Iteration: '2 rounds' });
     expect(screen.getByRole('button', { name: 'Round 1' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Round 2' })).toBeVisible();
+  });
+});
+
+describe('#1484 M2 ActivityRunsTable — a running row says how it is going', () => {
+  const runningRow: ActivityRun = {
+    ...BASE,
+    status: 'dispatched',
+    finishedAt: null,
+    durationMs: null,
+  };
+
+  function showRunning(
+    rows: ActivityRun[],
+    latestOutputs: ReadonlyMap<string, { name: string; value: unknown }>,
+    live = false,
+  ) {
+    return (
+      <MemoryRouter>
+        <ActivityRunsTable
+          rows={rows}
+          groups={[]}
+          error={null}
+          runStatus="running"
+          nameOf={() => null}
+          typeOf={() => null}
+          containerNameOf={() => null}
+          live={live}
+          latestOutputs={latestOutputs}
+        />
+      </MemoryRouter>
+    );
+  }
+
+  it("shows a running attempt's latest streamed value, and only that attempt's (#1299)", () => {
+    render(
+      showRunning(
+        [runningRow, { ...runningRow, key: 'a#1', attemptId: 'a#1' }],
+        new Map([['a#1', { name: 'rowsWritten', value: 1200 }]]),
+      ),
+    );
+    const [first, second] = screen.getAllByRole('row').slice(1);
+    expect(cellsOf(first!).Status).not.toContain('rowsWritten');
+    expect(cellsOf(second!).Status).toContain('rowsWritten: 1200');
+  });
+
+  it('says a secure attempt’s output is withheld rather than printing the marker (#1312)', () => {
+    render(
+      showRunning(
+        [runningRow],
+        new Map([['a#0', { name: '[redacted: secure]', value: '[redacted: secure]' }]]),
+      ),
+    );
+    const status = cellsOf(screen.getAllByRole('row')[1]!).Status;
+    expect(status).toContain('output withheld: this node is secure');
+    expect(status).not.toContain('[redacted: secure]');
+  });
+
+  it('says nothing streamed once the attempt has settled — its outputs are the truth', () => {
+    render(showRunning([BASE], new Map([['a#0', { name: 'rowsWritten', value: 1200 }]])));
+    expect(cellsOf(screen.getAllByRole('row')[1]!).Status).not.toContain('rowsWritten');
+  });
+
+  it("counts a running attempt's duration up only while the page is live (#890)", async () => {
+    vi.useFakeTimers();
+    try {
+      const rows = [{ ...runningRow, startedAt: Date.now() - 2_000 }];
+      const duration = () => cellsOf(screen.getAllByRole('row')[1]!).Duration;
+      const view = render(showRunning(rows, new Map()));
+      expect(duration()).toBe('');
+      view.rerender(showRunning(rows, new Map(), true));
+      const before = duration();
+      expect(before).toMatch(/so far/);
+      await act(async () => vi.advanceTimersByTimeAsync(3_000));
+      expect(duration()).not.toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireManualTrigger, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
+import { activityRowById } from './support/panels';
 
 /**
  * #900 — the run monitor's "waiting on a callback" surface.
@@ -53,7 +54,7 @@ const TIMER_DOC = {
   nodes: [{ id: 'hold', type: 'wait', config: { seconds: '${600}' }, position: { x: 0, y: 0 } }],
 };
 
-/** The header pill, scoped so it cannot match the node table's own status word. */
+/** The header pill, scoped so it cannot match the activity runs' own status word. */
 const headerStatus = '.run-header .run-status';
 
 test('#900 — a parked run says where its callback goes, and the URL it reveals resumes it', async ({
@@ -186,10 +187,10 @@ test('#901 — an operator completes the wait from the app, sending no token', a
      than #901. Reading the log proved the value was STORED; only this proves it
      is legible. */
   /* Scoped to the ROW, then selected by accessible name rather than by
-     `.node-drill-in`: a class is styling, and a rename would break this spec
+     `.activity-runs__open`: a class is styling, and a rename would break this spec
      without changing a thing an operator can do. The scope is what makes the
      name usable — unscoped it also matches the graph and, once open, the panel. */
-  const approveRow = page.locator('tr', { has: page.locator('td code', { hasText: /^approve$/ }) });
+  const approveRow = activityRowById(page, 'approve');
   await approveRow.getByRole('button', { name: 'Webhook (external wait) 1' }).click();
   const panel = page.getByRole('complementary', { name: /Node Webhook \(external wait\) 1/ });
   await expect(panel.getByRole('heading', { name: 'Outputs' })).toBeVisible();

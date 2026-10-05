@@ -153,6 +153,26 @@ describe('#1484 activity runs — one row per attempt', () => {
     });
   });
 
+  it('gives a row the event that started it also settled no duration: nothing timed it (#867)', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('c', { type: 'if', config: { condition: '${equals(1, 1)}' } }), node('t')],
+      [branchEdge('c', 't', 'true')],
+    );
+    const runId = await drive(db, pvId, stub());
+
+    const rows = project(db, pvId, runId);
+    const c = rows.find((r) => r.activityId === 'c')!;
+    // When it happened is known; how long it took was never measured, so it
+    // is not reported, rather than reported as 0.
+    expect(c.startedAt).not.toBeNull();
+    expect(c.finishedAt).toBe(c.startedAt);
+    expect(c.durationMs).toBeNull();
+    const t = rows.find((r) => r.activityId === 't')!;
+    expect(t.durationMs).toBe(t.finishedAt! - t.startedAt!);
+  });
+
   it("reads rows and bytes off the attempt's own success, and drops a figure that is not a count", async () => {
     const { db } = freshDb();
     const pvId = seedVersion(db, [node('copy')]);

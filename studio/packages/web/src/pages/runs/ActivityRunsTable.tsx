@@ -35,7 +35,9 @@ import {
   type ActivityRunStatusKey,
   type RowFacts,
 } from './activityRunsView';
-import { failureClass, formatCount, formatElapsed } from './format';
+import { failureClass, formatCount, formatElapsed, formatOutputValue } from './format';
+import { LiveElapsed } from './NodeDuration';
+import { isSecureMarker } from './secureMarker';
 import {
   containerStatusLabel,
   containerStatusPillClass,
@@ -84,6 +86,26 @@ export function SkipWhy({
     <span className="activity-runs__why">
       {' · '}
       {skipReasonText(reason, nameOf)}
+    </span>
+  );
+}
+
+/**
+ * #1299 — a running attempt's latest streamed value, after its status, so a
+ * long copy's per-batch progress reads as progress rather than a hang. Once the
+ * attempt settles its outputs are the truth, and the drawer shows them.
+ *
+ * #1312 — a secure node's stream is redacted name AND value; say so rather than
+ * print the marker twice. The drawer explains the setting.
+ */
+function StreamedSoFar({ output }: { output: { name: string; value: unknown } | undefined }) {
+  if (output === undefined) return null;
+  return (
+    <span className="activity-runs__why">
+      {' · '}
+      {isSecureMarker(output.name)
+        ? 'output withheld: this node is secure'
+        : `${output.name}: ${formatOutputValue(output.value)}`}
     </span>
   );
 }
@@ -197,6 +219,7 @@ export function ActivityRunsTable({
   live = false,
   openKey = null,
   onOpen,
+  latestOutputs,
 }: {
   rows: readonly ActivityRun[] | null;
   groups: readonly ActivityRunGroup[];
@@ -219,6 +242,9 @@ export function ActivityRunsTable({
   openKey?: string | null;
   /** Opens the detail drawer on a row; the activity's name is the button. */
   onOpen?: (key: string, opener: HTMLElement) => void;
+  /** Each attempt's latest streamed value (`latestOutputByAttempt`), shown on
+   * its row while it runs. */
+  latestOutputs?: ReadonlyMap<string, { name: string; value: unknown }>;
 }) {
   const selectedRow = useRef<HTMLTableRowElement>(null);
   /** A skip's cause may be an activity or a container. */
@@ -507,7 +533,7 @@ export function ActivityRunsTable({
                 const { row } = entry;
                 const name = nameOf(row.activityId);
                 const errorLine = row.error?.message.split('\n')[0] ?? '';
-                // The class beside the message, as the node table words it.
+                // The class beside the message, as the drawer's Failure section names it.
                 const cls =
                   row.error === null
                     ? ''
@@ -531,8 +557,8 @@ export function ActivityRunsTable({
                       {onOpen === undefined ? (
                         (name ?? <code>{row.nodeId}</code>)
                       ) : (
-                        /* A real button, as the Nodes table's drill-in is: named
-                           by its own text and keyboard-operable for free. */
+                        /* A real button: named by its own text and
+                           keyboard-operable for free. */
                         <button
                           type="button"
                           className="activity-runs__open"
@@ -561,6 +587,9 @@ export function ActivityRunsTable({
                         </span>
                       )}
                       <SkipWhy status={row.status} reason={row.skipReason} nameOf={anyNameOf} />
+                      {row.status === 'dispatched' && row.attemptId !== null && (
+                        <StreamedSoFar output={latestOutputs?.get(row.attemptId)} />
+                      )}
                     </td>
                     <td>
                       <When ms={row.startedAt} precision="ms" timeOfDay />
@@ -569,7 +598,16 @@ export function ActivityRunsTable({
                       <When ms={row.finishedAt} precision="ms" timeOfDay />
                     </td>
                     <td className="num">
-                      {row.durationMs === null ? '' : formatElapsed(row.durationMs)}
+                      {row.durationMs !== null ? (
+                        formatElapsed(row.durationMs)
+                      ) : row.startedAt !== null && row.finishedAt === null && live ? (
+                        /* #890 — an open attempt counts up while the page would
+                           hear it settle; otherwise the cell waits for the
+                           read model's figure. */
+                        <LiveElapsed startedAtMs={row.startedAt} />
+                      ) : (
+                        ''
+                      )}
                     </td>
                     <td className="num">{row.attempt ?? ''}</td>
                     <td>{iterationText(row.iteration)}</td>

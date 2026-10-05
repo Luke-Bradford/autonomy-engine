@@ -160,6 +160,15 @@ describe('untimedReason', () => {
     );
   });
 
+  it('says a node a cancel kept from starting was not run, not that it may yet start (CX4)', () => {
+    expect(untimedReason(node({ nodeId: 'a', status: 'pending', attempts: 0 }), 'cancelled')).toBe(
+      'not run (cancelled)',
+    );
+    expect(untimedReason(node({ nodeId: 'a', status: 'pending', attempts: 0 }), 'running')).toBe(
+      'has not started',
+    );
+  });
+
   it('says a node has not started when nothing started it', () => {
     expect(untimedReason(node({ nodeId: 'a', status: 'pending', attempts: 0 }))).toBe(
       'has not started',
@@ -215,7 +224,7 @@ describe('<AttemptTimeline>', () => {
     expect(axis(4_000)).toBe(1);
   });
 
-  it('draws one bar per span, keeping the Nodes table order', () => {
+  it('draws one bar per span, keeping the page’s node order', () => {
     render(
       <AttemptTimeline
         nodes={[

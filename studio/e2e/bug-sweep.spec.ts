@@ -4,6 +4,7 @@ import { contrastRatio, fluentRootReady, isOpaque, setTheme, surfaceBehind } fro
 import { openCanvas } from './support/canvas';
 import { openRowMenu } from './support/authorPane';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
+import { activityRowById } from './support/panels';
 
 /**
  * Regression net for the browser-observable half of the first bug sweep:
@@ -258,24 +259,22 @@ test.describe('#483 held/parked node pills', () => {
       await setTheme(page, theme);
 
       /* The pills render on TWO surfaces, and both are asserted because a
-         regression in either is a real one. In the Nodes table nothing between
+         regression in either is a real one. In the activity runs nothing between
          the pill and the FluentProvider root paints, so the Fluent token is the
          backdrop; in the drill-in panel `.property-panel` paints `--panel` over
          it. Found by walking up from a REAL pill in each, never named — the
          answer for the table is not a colour this app's palette contains at
          all, which is precisely why naming it was wrong. */
-      await page.locator('table .node-status').first().waitFor();
-      const tableSurface = await surfaceBehind(page, 'table .node-status');
-      await page
-        .locator('tr', { has: page.locator('td code', { hasText: /^hold$/ }) })
-        .locator('button.node-drill-in')
-        .click();
+      await page.locator('.activity-runs__table .node-status').first().waitFor();
+      const tableSurface = await surfaceBehind(page, '.activity-runs__table .node-status');
+      // #1484 M2 — the drill-in is the run drawer, opened from the row.
+      await activityRowById(page, 'hold').getByRole('button').first().click();
       /* Keyed on the panel's CLASS, not `[role="complementary"]`: the panel is
          an `<aside>`, whose `complementary` role is IMPLICIT, so no `role`
          attribute exists for a CSS selector to match. `getByRole` computes the
          ARIA role and finds it; `surfaceBehind` takes a CSS selector and cannot.
-         The wait is for the click's re-render, not for an async mount: the panel
-         is local `useState` over nodes already fetched, so nothing is in flight.
+         The wait is for the click's re-render, not for an async mount: the drawer
+         is local `useState` over rows already fetched, so nothing is in flight.
          Without it the walk can still run before that render commits, and
          `surfaceBehind` then reports "no element matched" — which reads like a
          markup change rather than a timing one. */
@@ -406,11 +405,12 @@ test.describe('#1008 the skipped node', () => {
     await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
     await fluentRootReady(page);
 
-    /* Keyed on the raw node id in the row's `<code>`, not the activity's display
+    /* Keyed on the raw node id the row carries, not the activity's display
        name: #882 numbers names by kind, so keying on one would make this spec
-       fail on labelling work it is not about (`node-duration.spec.ts`'s rule). */
-    const stopRow = page.locator('tr', { has: page.locator('td code', { hasText: /^stop$/ }) });
-    await stopRow.locator('button.node-drill-in').click();
+       fail on labelling work it is not about (`node-duration.spec.ts`'s rule).
+       #1484 M2 — a routed-around node has a skipped activity run, and that row
+       opens the drawer. */
+    await activityRowById(page, 'stop').getByRole('button').first().click();
 
     const panel = page.getByRole('complementary');
     await expect(panel).toContainText('routed around, so it was never going to run');

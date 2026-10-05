@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { ActivityRun, EngineEvent, RunEvent } from '@autonomy-studio/shared';
-import { activityOfRow, attemptEvents } from './attemptActivity';
+import { activityOfRow, attemptEvents, latestOutputByAttempt } from './attemptActivity';
 import { deriveNodeActivity } from './runSummary';
 import { liveSpanStart } from './format';
+import { activityRun } from '../../testing/activityRun';
 
 let seq = 0;
 function envelope(event: EngineEvent, ts = seq + 1000): RunEvent {
@@ -28,30 +29,13 @@ const output = (nodeId: string, name: string, value: unknown) =>
   envelope({ type: 'node.output', runId: 'r1', nodeId, name, value });
 
 function row(over: Partial<ActivityRun>): ActivityRun {
-  return {
+  return activityRun({
     key: over.attemptId ?? 'k',
     nodeId: 'c',
     activityId: 'c',
-    containerId: null,
-    attemptId: null,
     attempt: 1,
-    status: 'success',
-    reused: false,
-    startedAt: null,
-    finishedAt: null,
-    durationMs: null,
-    iteration: null,
-    branch: null,
-    rowsRead: null,
-    rowsWritten: null,
-    bytesRead: null,
-    bytesWritten: null,
-    childRunId: null,
-    childRun: null,
-    error: null,
-    skipReason: null,
     ...over,
-  };
+  });
 }
 
 /** A sequential ForEach over two files: one body node, two attempts. */
@@ -237,5 +221,73 @@ describe('activityOfRow — one parallel item is not the node (#1484 M2 drawer)'
     expect(got.costSpansInstances).toBe(false);
     expect(got.inputInstanceId).toBeUndefined();
     expect(liveSpanStart(got)).toBe(50);
+  });
+});
+
+describe('latestOutputByAttempt (#1299 on the activity runs)', () => {
+  it("gives each attempt its own latest streamed value, a parallel item's included", () => {
+    const latest = latestOutputByAttempt([
+      dispatched('w@0', 'w@0#0', '{}'),
+      dispatched('w@1', 'w@1#0', '{}'),
+      output('w@0', 'rows', 10),
+      output('w@1', 'rows', 7),
+      output('w@0', 'rows', 20),
+    ]);
+    expect(latest.get('w@0#0')).toEqual({ name: 'rows', value: 20 });
+    expect(latest.get('w@1#0')).toEqual({ name: 'rows', value: 7 });
+  });
+
+  it('starts a retry with nothing: the failed attempt keeps its own last value', () => {
+    const latest = latestOutputByAttempt([
+      dispatched('c', 'c#0', '{}'),
+      output('c', 'rows', 5),
+      dispatched('c', 'c#1', '{}'),
+    ]);
+    expect(latest.get('c#0')).toEqual({ name: 'rows', value: 5 });
+    expect(latest.has('c#1')).toBe(false);
+  });
+});
+
+describe('a late duplicate result does not move an attempt’s streamed value', () => {
+  it('keeps a stream on the attempt that is running, not on one a stale result names', () => {
+    const late = envelope({
+      type: 'node.failed',
+      runId: 'r1',
+      nodeId: 'c',
+      attemptId: 'c#0',
+      error: 'late',
+      kind: 'transient',
+    } as EngineEvent);
+    const log = [
+      dispatched('c', 'c#0', '{}'),
+      dispatched('c', 'c#1', '{}'),
+      late,
+      output('c', 'rows', 9),
+    ];
+    expect(latestOutputByAttempt(log).get('c#1')).toEqual({ name: 'rows', value: 9 });
+    expect(attemptEvents(log, 'c#0')).toEqual([log[0], late]);
+  });
+
+  it('gives a parked attempt the callback that settles it, and later output to the next', () => {
+    const log = [
+      dispatched('c', 'c#0', '{}'),
+      envelope({
+        type: 'externalWait.created',
+        runId: 'r1',
+        nodeId: 'c',
+        attemptId: 'c#0',
+        dueAt: 1,
+      }),
+      envelope({
+        type: 'externalWait.completed',
+        runId: 'r1',
+        nodeId: 'c',
+        previousAttemptId: 'c#0',
+      } as EngineEvent),
+      dispatched('c', 'c#1', '{}'),
+      output('c', 'rows', 3),
+    ];
+    expect(attemptEvents(log, 'c#0')).toHaveLength(3);
+    expect(latestOutputByAttempt(log).get('c#1')).toEqual({ name: 'rows', value: 3 });
   });
 });

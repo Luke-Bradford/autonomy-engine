@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
-import { nodesTable } from './support/panels';
+import { activityRow, activityRuns, openActivity } from './support/panels';
 
 /**
  * U24 (slice 1) — the run monitor says WHY a node failed, and a node OPENS.
@@ -47,16 +47,14 @@ test('U24 — a failed node names its failure CLASS, and opens a drill-in', asyn
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
 
-  /* Scoped to the Nodes table: since #1484 M2 the activity runs above it show
-     the same failure, and this spec is about the node table and its drill-in. */
-  const nodeTable = page
-    .getByRole('table')
-    .filter({ has: page.getByRole('columnheader', { name: 'Node', exact: true }) });
+  /* #1484 M2 — the Nodes table is gone; a node's failure and its drill-in are
+     read off its activity run, whose row opens the run drawer. */
+  const table = activityRuns(page);
 
-  // The node table's Detail column now carries the class beside the message.
-  // Retrying assertion: it can only hold once the stream has replayed.
+  // The Error column carries the class beside the message.
+  // Retrying assertion: it can only hold once the activity runs are read.
   await expect(
-    nodeTable.getByRole('cell', { name: 'planned (permanent · forced_fail)', exact: true }),
+    table.getByRole('cell', { name: 'planned (permanent · forced_fail)', exact: true }),
   ).toBeVisible();
 
   /* #882 — the table names a node the way the GRAPH beside it does, and keeps
@@ -68,21 +66,21 @@ test('U24 — a failed node names its failure CLASS, and opens a drill-in', asyn
      make every row announce `Fail 1 start`.
 
      `getByRole('button', { name: 'Fail 1', exact: true })` is therefore already
-     the load-bearing assertion for the naming half; this adds the id's survival,
-     which nothing else here would notice the loss of. */
-  const nodeCell = nodeTable
-    .getByRole('row')
-    .filter({ hasText: 'Fail 1' })
-    .getByRole('cell')
-    .first();
-  await expect(nodeCell).toContainText('start');
+     the load-bearing assertion for the naming half; this adds the id's survival
+     (the activity cell's hover), which nothing else here would notice the loss
+     of. */
+  const failOne = activityRow(page, 'Fail 1');
+  await expect(failOne).toHaveCount(1);
+  await expect(failOne).toHaveAttribute('data-activity-id', 'start');
+  await expect(failOne.getByRole('cell').first()).toHaveAttribute('title', 'start');
 
   // No drill-in until one is asked for.
   await expect(page.getByRole('complementary', { name: 'Node Fail 1' })).toHaveCount(0);
 
-  await nodeTable.getByRole('button', { name: 'Fail 1', exact: true }).click();
-  const panel = page.getByRole('complementary', { name: 'Node Fail 1' });
+  const panel = await openActivity(page, 'Fail 1');
   await expect(panel).toBeVisible();
+  // The drawer keeps the raw id too.
+  await expect(panel.locator('code', { hasText: /^start$/ })).toBeVisible();
 
   /* One evaluate, every assertion — a per-assertion round trip is what makes a
      browser-driven verification expensive. Reads the panel's rendered text plus
@@ -111,16 +109,26 @@ test('U24 — a failed node names its failure CLASS, and opens a drill-in', asyn
   expect(seen!.pillColor).toMatch(/^rgb/);
   expect(seen!.buttons).toEqual(['Close']);
 
-  // Opening a DIFFERENT node swaps the panel rather than stacking one.
-  await nodeTable.getByRole('button', { name: 'Fail 2', exact: true }).click();
-  await expect(page.getByRole('complementary', { name: 'Node Fail 2' })).toBeVisible();
+  // Opening a DIFFERENT row swaps the drawer's record rather than stacking one.
+  const failTwo = await openActivity(page, 'Fail 2');
+  await expect(failTwo).toBeVisible();
   await expect(page.getByRole('complementary', { name: 'Node Fail 1' })).toHaveCount(0);
+  await expect(page.locator('.run-drawer')).toHaveCount(1);
+  await expect(failTwo).toContainText('downstream');
+  await expect(failTwo).not.toContainText('planned');
 
-  await page
-    .getByRole('complementary', { name: 'Node Fail 2' })
-    .getByRole('button', { name: 'Close' })
-    .click();
+  // Close shuts the drawer…
+  await failTwo.getByRole('button', { name: 'Close' }).click();
   await expect(page.getByRole('complementary', { name: 'Node Fail 2' })).toHaveCount(0);
+  await expect(page.locator('.run-drawer')).toHaveCount(0);
+
+  /* …and so does Escape from inside it, handing focus back to the row that
+     opened it (`RunDrawer`). */
+  const reopened = await openActivity(page, 'Fail 1');
+  await expect(reopened).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.run-drawer')).toHaveCount(0);
+  await expect(failOne.getByRole('button', { name: 'Fail 1', exact: true })).toBeFocused();
 
   await expectQuiet(page, problems);
 });
@@ -179,8 +187,7 @@ test('#869 — an oversized output is capped in the DOM, and the rest is one cli
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
 
-  await nodesTable(page).getByRole('button', { name: 'Filter 1', exact: true }).click();
-  const panel = page.getByRole('complementary', { name: 'Node Filter 1' });
+  const panel = await openActivity(page, 'Filter 1');
   await expect(panel).toBeVisible();
 
   /* ONE evaluate for every collapsed-state assertion — a per-assertion round

@@ -8,7 +8,7 @@ import { When } from '../../lib/When';
  * #1065 — the reducer's EXPLANATIONS for this run: the WHY beside the what.
  *
  * Everything else on this page reports the run's DECISIONS — the event feed is
- * the durable log of them, the node table is their per-node roll-up, the graph
+ * the durable log of them, the activity runs are their per-attempt record, the graph
  * paints them onto the doc. None of it says why a decision was reached. #497
  * built the whole channel for that (the `run_diagnostics` table, the fold-site
  * writer, the truncation marker, `GET /api/runs/:id/diagnostics`) and stopped
