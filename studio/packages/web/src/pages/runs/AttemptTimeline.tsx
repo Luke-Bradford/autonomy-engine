@@ -101,7 +101,7 @@ export function AttemptTimeline({
           Nothing measurable yet — no node has both started and finished. Every node is listed below
           with the reason it has no span.
         </p>
-        <UntimedList nodes={untimed} nameOf={nameOf} />
+        <UntimedList nodes={untimed} nameOf={nameOf} runStatus={runStatus} />
       </section>
     );
   }
@@ -178,7 +178,7 @@ export function AttemptTimeline({
           );
         })}
       </ol>
-      <UntimedList nodes={untimed} nameOf={nameOf} />
+      <UntimedList nodes={untimed} nameOf={nameOf} runStatus={runStatus} />
     </section>
   );
 }
@@ -186,9 +186,11 @@ export function AttemptTimeline({
 function UntimedList({
   nodes,
   nameOf,
+  runStatus,
 }: {
   nodes: NodeActivity[];
   nameOf: (nodeId: string) => string | null;
+  runStatus: RunStatus | undefined;
 }): React.ReactElement | null {
   if (nodes.length === 0) return null;
   return (

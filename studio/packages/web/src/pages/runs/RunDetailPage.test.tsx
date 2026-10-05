@@ -2406,10 +2406,9 @@ describe('RunDetailPage — the cancel-run action (CX4)', () => {
     expect(screen.queryByRole('button', { name: ACTION })).not.toBeInTheDocument();
   });
 
-  /* #1484 M2 — the half that named `never` "not run (cancelled)" is gone with the
-     Nodes table: a node the cancel kept from starting never ran, so it has no
-     activity run, and the graph that still names it is culled in jsdom. */
-  it('shows a cancelled run once the cancel has drained', async () => {
+  /* #1484 M2 — a node the cancel kept from starting never ran, so it has no
+     activity run; the timeline's untimed list names it (CX4 wording). */
+  it('shows a cancelled run, and names the node the cancel kept from starting', async () => {
     useRunStreamMock.mockReturnValue(
       stream({
         events: [
@@ -2439,6 +2438,8 @@ describe('RunDetailPage — the cancel-run action (CX4)', () => {
       await screen.findByText('cancelled', { selector: '.run-header .run-status' }),
     ).toBeInTheDocument();
     expect(screen.queryByText('Cancelling…')).not.toBeInTheDocument();
+    expect(timelineSection()).toHaveTextContent("not run (cancelled)");
+    expect(timelineSection()).not.toHaveTextContent('has not started');
   });
 });
 
