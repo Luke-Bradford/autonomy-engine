@@ -87,12 +87,18 @@ function walkAttempts(
   visit: (row: RunEvent, attemptId: string) => void,
 ): void {
   const latest = new Map<string, string>();
+  const started = new Set<string>();
   for (const row of events) {
     const ref = attemptRef(row);
     if (ref !== null) {
-      // A timer or callback settling an attempt does not start one, so only
-      // the events that carry their own `attemptId` move the latest.
-      if (!SETTLED_BY_PREVIOUS.has(row.type)) latest.set(ref.raw, ref.attemptId);
+      // An attempt's FIRST event starts it and makes it its node's latest. A
+      // timer or callback settling an attempt does not start one, and a late
+      // or duplicate result for an earlier attempt does not take the stream
+      // back from the one now running.
+      if (!SETTLED_BY_PREVIOUS.has(row.type) && !started.has(ref.attemptId)) {
+        started.add(ref.attemptId);
+        latest.set(ref.raw, ref.attemptId);
+      }
       visit(row, ref.attemptId);
       continue;
     }

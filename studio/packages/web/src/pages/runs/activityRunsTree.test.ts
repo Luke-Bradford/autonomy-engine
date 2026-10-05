@@ -1,31 +1,10 @@
 import type { ActivityRun, ActivityRunGroup } from '@autonomy-studio/shared';
 import { describe, expect, it } from 'vitest';
 import { activityRunEntries } from './activityRunsTree';
+import { activityRun } from '../../testing/activityRun';
 
-const row = (key: string, extra: Partial<ActivityRun> = {}): ActivityRun => ({
-  key,
-  nodeId: key,
-  activityId: key,
-  containerId: null,
-  attemptId: null,
-  attempt: null,
-  status: 'success',
-  reused: false,
-  startedAt: null,
-  finishedAt: null,
-  durationMs: null,
-  iteration: null,
-  branch: null,
-  rowsRead: null,
-  rowsWritten: null,
-  bytesRead: null,
-  bytesWritten: null,
-  childRunId: null,
-  childRun: null,
-  error: null,
-  skipReason: null,
-  ...extra,
-});
+const row = (key: string, extra: Partial<ActivityRun> = {}): ActivityRun =>
+  activityRun({ key, nodeId: key, activityId: key, ...extra });
 const inItem = (key: string, index: number): ActivityRun =>
   row(key, {
     activityId: 'w',

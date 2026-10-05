@@ -36,7 +36,7 @@ import {
   type RowFacts,
 } from './activityRunsView';
 import { failureClass, formatCount, formatElapsed, formatOutputValue } from './format';
-import { NodeDuration } from './NodeDuration';
+import { LiveElapsed } from './NodeDuration';
 import { isSecureMarker } from './secureMarker';
 import {
   containerStatusLabel,
@@ -604,10 +604,7 @@ export function ActivityRunsTable({
                         /* #890 — an open attempt counts up while the page would
                            hear it settle; otherwise the cell waits for the
                            read model's figure. */
-                        <NodeDuration
-                          node={{ startedAtMs: row.startedAt, endedAtMs: undefined, spans: [] }}
-                          live
-                        />
+                        <LiveElapsed startedAtMs={row.startedAt} />
                       ) : (
                         ''
                       )}

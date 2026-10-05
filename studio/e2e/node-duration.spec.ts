@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, fireManualTrigger, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
-import { activityRowById, activityRuns } from './support/panels';
+import { activityCell, activityRowById } from './support/panels';
 
 /**
  * #867 — the run log can now answer "how long did this node take".
@@ -58,19 +58,14 @@ test('#867 — a node row states how long it took, and says nothing where nothin
      activity NAME, which #882 numbers by kind — keying on it would make this
      spec pass or fail on labelling work it is not about. The cell is found by
      its column's header, so a column added before it moves nothing. */
-  const cells = await activityRuns(page).evaluate((table) => {
-    const col = [...table.querySelectorAll('thead th')].findIndex(
-      (th) => th.textContent?.trim() === 'Duration',
-    );
-    const read = (nodeId: string): string[] =>
-      [...table.querySelectorAll(`tbody tr[data-activity-id="${nodeId}"]`)].map(
-        (row) => row.children[col]?.textContent?.trim() ?? '',
-      );
-    return { col, hold: read('hold'), stop: read('stop') };
-  });
-  expect(cells.col).toBeGreaterThan(-1);
-  expect(cells.hold).toHaveLength(1);
-  expect(cells.stop).toHaveLength(1);
+  const hold = activityRowById(page, 'hold');
+  const stop = activityRowById(page, 'stop');
+  await expect(hold).toHaveCount(1);
+  await expect(stop).toHaveCount(1);
+  const cells = {
+    hold: [(await (await activityCell(page, hold, 'Duration')).textContent())?.trim() ?? ''],
+    stop: [(await (await activityCell(page, stop, 'Duration')).textContent())?.trim() ?? ''],
+  };
 
   /* A duration, asserted by SHAPE not by value: the span is a real elapsed
      measurement of a one-second timer, so pinning "1s" would make the spec
@@ -139,13 +134,7 @@ test("#890 — a running node's duration counts up while the page is live", asyn
      by its column's header. */
   const holdRow = activityRowById(page, 'hold');
   await expect(holdRow).toHaveCount(1);
-  const col = await activityRuns(page).evaluate((table) =>
-    [...table.querySelectorAll('thead th')].findIndex(
-      (th) => th.textContent?.trim() === 'Duration',
-    ),
-  );
-  expect(col).toBeGreaterThan(-1);
-  const cell = holdRow.locator('td').nth(col);
+  const cell = await activityCell(page, holdRow, 'Duration');
   await expect(cell).toHaveText(/ so far$/);
 
   /* Seconds, parsed from the two formats a sub-hour figure can take ("<1s",

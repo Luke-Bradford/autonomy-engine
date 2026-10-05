@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { RunHeader, type RunHeaderNames } from './RunHeader';
 import { RunFailureBanner } from './RunFailureBanner';
 import { ActivityRunsTable } from './ActivityRunsTable';
+import { activityRun } from '../../testing/activityRun';
 
 const RUN: Run = {
   id: 'run_1',
@@ -119,35 +120,22 @@ describe('RunHeader (#1484 OR35 M2)', () => {
   });
 });
 
-const failedRow = (over: Partial<ActivityRun> = {}): ActivityRun => ({
-  key: 'copy#2',
-  nodeId: 'copy',
-  activityId: 'copy',
-  containerId: null,
-  attemptId: 'copy#2',
-  attempt: 2,
-  status: 'failure',
-  reused: false,
-  startedAt: null,
-  finishedAt: null,
-  durationMs: null,
-  iteration: null,
-  branch: null,
-  rowsRead: null,
-  rowsWritten: null,
-  bytesRead: null,
-  bytesWritten: null,
-  childRunId: null,
-  childRun: null,
-  skipReason: null,
-  error: {
-    message: 'database is locked\nat sqlite',
-    kind: 'transient',
-    code: null,
-    connectionId: null,
-  },
-  ...over,
-});
+const failedRow = (over: Partial<ActivityRun> = {}): ActivityRun =>
+  activityRun({
+    key: 'copy#2',
+    nodeId: 'copy',
+    activityId: 'copy',
+    attemptId: 'copy#2',
+    attempt: 2,
+    status: 'failure',
+    error: {
+      message: 'database is locked\nat sqlite',
+      kind: 'transient',
+      code: null,
+      connectionId: null,
+    },
+    ...over,
+  });
 
 describe('RunFailureBanner (#1484 OR35 M2)', () => {
   const banner = (failure: Parameters<typeof RunFailureBanner>[0]['failure']) => {

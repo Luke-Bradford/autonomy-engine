@@ -224,7 +224,7 @@ describe('<AttemptTimeline>', () => {
     expect(axis(4_000)).toBe(1);
   });
 
-  it('draws one bar per span, keeping the Nodes table order', () => {
+  it('draws one bar per span, keeping the page’s node order', () => {
     render(
       <AttemptTimeline
         nodes={[

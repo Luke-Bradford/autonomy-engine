@@ -147,8 +147,8 @@ function sameCard(a: RunCard, b: RunCard): boolean {
  * #1394 OR3 — the numbers a run card shows under its status: the settled
  * duration and, for a Copy Data node, the rows it wrote.
  *
- * Only what THIS run measured. An open span has no duration yet (the node table
- * counts that one up live), and `formatNodeDuration`'s em-dash is the table's
+ * Only what THIS run measured. An open span has no duration yet (the activity
+ * runs count that one up live), and `formatNodeDuration`'s em-dash is the table's
  * way of saying so in a cell — on a card the absence is simply nothing. A node a
  * rerun COPIED ran in the source run, so its recorded rows are that run's and it
  * says nothing here. Rows are read only off a Copy node, whose catalog entry
@@ -180,7 +180,7 @@ function isCount(v: unknown): v is number {
  * activity row holds only the LATEST attempt's span and outputs, so a card would
  * state one iteration's `1 row` for a copy that wrote three. Its card says
  * nothing measured instead; a box already states its progress (`3 of 3 items`),
- * and the node table has the per-attempt detail. Cached per doc, like the cards.
+ * and the activity runs have the per-attempt detail. Cached per doc, like the cards.
  */
 const repeatedCache = new WeakMap<RunDoc, Set<string>>();
 function repeatedNodeIds(doc: RunDoc): Set<string> {
@@ -333,7 +333,7 @@ export function runFlowNodes(
      would otherwise be two boxes reading "HTTP Request", in the view whose job
      is to say WHICH node failed.
 
-     The node table and the drill-in panel on this same page read the same
+     The activity runs and the drawer on this same page read the same
      `activityLabels` map since #882, so one node has one name across the whole
      view. They resolve it against the RUN's rows rather than the doc's, so they
      also carry the fallback this branch has no need of: a row the doc does not

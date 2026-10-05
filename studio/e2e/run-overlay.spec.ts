@@ -120,7 +120,7 @@ test('U11 — the run canvas shows the engine’s own status for every node, inc
 });
 
 /**
- * U25 — the graph and the node table are ONE vocabulary, and the table stops
+ * U25 — the graph and the activity runs are ONE vocabulary, and the table stops
  * omitting the nodes only the doc can account for.
  *
  * Reuses the fixture above deliberately: `neverRan` is routed around, and the
@@ -141,7 +141,7 @@ test('U11 — the run canvas shows the engine’s own status for every node, inc
  * real node on a timer would fold those together, and needs a `wait` fixture
  * that settles deterministically — worth doing, not worth blocking on.
  */
-test('U25 — the node table and the graph give every node the same word, including a skipped one', async ({
+test('U25 — the activity runs and the graph give every node the same word, including a skipped one', async ({
   page,
 }) => {
   const problems = collectPageProblems(page);

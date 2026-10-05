@@ -15,7 +15,7 @@ import { nodeById, openSeededCanvas } from './support/seedDoc';
  * #1476 OR28 moved Run into the header's Trigger ▾ menu, as ADF's Trigger now.
  */
 
-/** The run page's header pill, scoped off the node table's own status words. */
+/** The run page's header pill, scoped off the activity runs' own status words. */
 const headerStatus = '.run-header .run-status';
 
 test('#1395 — Run in the editor starts the saved version with the params typed, and no trigger', async ({

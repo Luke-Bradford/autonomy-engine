@@ -14,9 +14,9 @@ import type { Overlay } from './useRunProjection';
  * it out of.
  *
  * The PROJECTION used to be computed here too, and U25 moved it up to the page
- * (`useRunProjection`): the node table reconciles against the same state, and
- * this component being lazy is precisely why it could not own a value the
- * eagerly-rendered table needs. The lazy boundary still does its job —
+ * (`useRunProjection`): the page's per-node record reconciles against the same
+ * state, and this component being lazy is precisely why it could not own a
+ * value the eagerly-rendered page needs. The lazy boundary still does its job —
  * `@xyflow/react` is reachable only through `RunCanvas` below, and the reducer
  * was already in the entry chunk either way (`vite.config.ts` has the
  * measurement).

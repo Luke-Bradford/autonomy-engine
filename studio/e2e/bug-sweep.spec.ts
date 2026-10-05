@@ -265,8 +265,8 @@ test.describe('#483 held/parked node pills', () => {
          it. Found by walking up from a REAL pill in each, never named — the
          answer for the table is not a colour this app's palette contains at
          all, which is precisely why naming it was wrong. */
-      await page.locator('.activity-runs table .node-status').first().waitFor();
-      const tableSurface = await surfaceBehind(page, '.activity-runs table .node-status');
+      await page.locator('.activity-runs__table .node-status').first().waitFor();
+      const tableSurface = await surfaceBehind(page, '.activity-runs__table .node-status');
       // #1484 M2 — the drill-in is the run drawer, opened from the row.
       await activityRowById(page, 'hold').getByRole('button').first().click();
       /* Keyed on the panel's CLASS, not `[role="complementary"]`: the panel is

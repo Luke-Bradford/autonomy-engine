@@ -10,30 +10,16 @@ import {
   type ActivityRunsView,
   type RowFacts,
 } from './activityRunsView';
+import { activityRun } from '../../testing/activityRun';
 
-const ROW: ActivityRun = {
+const ROW: ActivityRun = activityRun({
   key: 'a#0',
-  nodeId: 'a',
-  activityId: 'a',
-  containerId: null,
   attemptId: 'a#0',
   attempt: 1,
-  status: 'success',
-  reused: false,
   startedAt: 1_000,
   finishedAt: 2_000,
   durationMs: 1_000,
-  iteration: null,
-  branch: null,
-  rowsRead: null,
-  rowsWritten: null,
-  bytesRead: null,
-  bytesWritten: null,
-  childRunId: null,
-  childRun: null,
-  error: null,
-  skipReason: null,
-};
+});
 
 const row = (key: string, over: Partial<ActivityRun> = {}): ActivityRun => ({
   ...ROW,

@@ -78,7 +78,7 @@ function phaseLabel(phase: StreamPhase): string {
  * and a running run's live feed identically:
  *   - the run's lifecycle status comes from the log (`deriveRunLifecycle`),
  *     falling back to the REST row until the first lifecycle event lands;
- *   - a per-node activity table lights up as nodes dispatch and settle;
+ *   - the activity runs light up as nodes dispatch and settle;
  *   - a raw event feed shows every append in order.
  */
 export function RunDetailPage({ runId }: { runId: string }) {

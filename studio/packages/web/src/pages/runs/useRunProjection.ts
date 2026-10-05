@@ -7,7 +7,7 @@ import type { RunStreamState } from './useRunStream';
  * The ENGINE's node state for this run, or the reason there is none.
  *
  * U25 moved this out of `RunGraph`, which is behind a lazy boundary, because
- * the graph is no longer the only consumer: the node table reconciles against
+ * the graph is no longer the only consumer: the per-node record reconciles against
  * the same projection (`reconcileNodeActivity`), and two callers folding the
  * log separately is how the page grew two answers in the first place. The page
  * now projects ONCE and hands the result to both.

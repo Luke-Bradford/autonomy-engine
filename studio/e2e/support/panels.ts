@@ -28,7 +28,21 @@ export function triggerForm(page: Page): Locator {
  * and a node that never started has no row at all.
  */
 export function activityRuns(page: Page): Locator {
-  return page.locator('section.activity-runs table');
+  return page.locator('.activity-runs__table');
+}
+
+/**
+ * A row's cell under the column headed `column`, found by the header rather
+ * than by position, so a column added before it moves nothing.
+ */
+export async function activityCell(page: Page, row: Locator, column: string): Promise<Locator> {
+  const col = await activityRuns(page).evaluate(
+    (table, name) =>
+      [...table.querySelectorAll('thead th')].findIndex((th) => th.textContent?.trim() === name),
+    column,
+  );
+  if (col === -1) throw new Error(`the activity runs have no "${column}" column`);
+  return row.locator('td').nth(col);
 }
 
 /**

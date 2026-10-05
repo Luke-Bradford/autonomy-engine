@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
 import { renderWithRouter } from '../../testing/renderWithRouter';
+import { activityRun } from '../../testing/activityRun';
 import { answerConfirm } from '../../testing/confirmDialog';
 import type {
   ActivityRun,
@@ -180,29 +181,7 @@ function stream(overrides: Partial<RunStreamState> = {}): RunStreamState {
 
 /** An activity run with nothing reported, as the read model writes one. */
 function blankRow(key: string, nodeId: string, status: NodeRunStatus): ActivityRun {
-  return {
-    key,
-    nodeId,
-    activityId: docNodeIdOf(nodeId),
-    containerId: null,
-    attemptId: null,
-    attempt: null,
-    status,
-    reused: false,
-    startedAt: null,
-    finishedAt: null,
-    durationMs: null,
-    iteration: null,
-    branch: null,
-    rowsRead: null,
-    rowsWritten: null,
-    bytesRead: null,
-    bytesWritten: null,
-    childRunId: null,
-    childRun: null,
-    error: null,
-    skipReason: null,
-  };
+  return activityRun({ key, nodeId, activityId: docNodeIdOf(nodeId), status });
 }
 
 /** The events that open an attempt's row: the server's `attemptOf` list. */
@@ -3495,29 +3474,15 @@ describe('RunDetailPage — the failure banner', () => {
       reason: 'node_failed:greet',
     }),
   ];
-  const failedRow = {
+  const failedRow = activityRun({
     key: 'greet#0',
     nodeId: 'greet',
     activityId: 'greet',
-    containerId: null,
     attemptId: 'greet#0',
     attempt: 1,
-    status: 'failure' as const,
-    reused: false,
-    startedAt: null,
-    finishedAt: null,
-    durationMs: null,
-    iteration: null,
-    branch: null,
-    rowsRead: null,
-    rowsWritten: null,
-    bytesRead: null,
-    bytesWritten: null,
-    childRunId: null,
-    childRun: null,
-    skipReason: null,
-    error: { message: 'boom', kind: 'permanent' as const, code: null, connectionId: null },
-  };
+    status: 'failure',
+    error: { message: 'boom', kind: 'permanent', code: null, connectionId: null },
+  });
 
   beforeEach(() => {
     getRunDetailMock.mockResolvedValue({
@@ -3588,29 +3553,19 @@ describe('RunDetailPage — the activity run detail drawer (#1484 M2)', () => {
       outputs: { rows: 43 },
     }),
   ];
-  const itemRow = (index: number, item: string) => ({
-    key: `greet#${index}`,
-    nodeId: 'greet',
-    activityId: 'greet',
-    containerId: 'each',
-    attemptId: `greet#${index}`,
-    attempt: 1,
-    status: 'success' as const,
-    reused: false,
-    startedAt: 1_700_000_000_000 + index * 10,
-    finishedAt: 1_700_000_000_005 + index * 10,
-    durationMs: 5,
-    iteration: { containerId: 'each', index, count: 2, item },
-    branch: null,
-    rowsRead: null,
-    rowsWritten: null,
-    bytesRead: null,
-    bytesWritten: null,
-    childRunId: null,
-    childRun: null,
-    skipReason: null,
-    error: null,
-  });
+  const itemRow = (index: number, item: string) =>
+    activityRun({
+      key: `greet#${index}`,
+      nodeId: 'greet',
+      activityId: 'greet',
+      containerId: 'each',
+      attemptId: `greet#${index}`,
+      attempt: 1,
+      startedAt: 1_700_000_000_000 + index * 10,
+      finishedAt: 1_700_000_000_005 + index * 10,
+      durationMs: 5,
+      iteration: { containerId: 'each', index, count: 2, item },
+    });
 
   beforeEach(() => {
     getRunDetailMock.mockResolvedValue({ ...NAMES, run: run(), pipelineVersion: version() });

@@ -26,7 +26,8 @@ export function NodeDuration({
   return start === undefined ? formatNodeDuration(node) : <LiveElapsed startedAtMs={start} />;
 }
 
-function LiveElapsed({ startedAtMs }: { startedAtMs: number }) {
+/** A count up from `startedAtMs`, ticking once a second while mounted. */
+export function LiveElapsed({ startedAtMs }: { startedAtMs: number }) {
   const now = useTickingNow(DURATION_TICK_MS);
   return formatLiveElapsed(startedAtMs, now);
 }

@@ -14,7 +14,7 @@ import { RunStatusSchema } from './run.js';
  * from the run's event log (`server/src/run/activity-runs.ts`).
  *
  * The status is the REDUCER's vocabulary (`NodeRunStatus`), so the page names it
- * with the same words the graph and the node table use (`nodeStatus.ts`). An
+ * with the same words the graph uses (`nodeStatus.ts`). An
  * attempt that failed and is being retried reads `failure`: that attempt did
  * fail, and the retry is its own row.
  *

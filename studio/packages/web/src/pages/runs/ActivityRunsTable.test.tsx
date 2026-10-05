@@ -5,30 +5,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { ActivityRunsTable } from './ActivityRunsTable';
 import { ACTIVITY_RUN_COLUMNS, iterationText } from './activityRunsColumns';
 import { nodeStatusLabel } from './nodeStatus';
+import { activityRun } from '../../testing/activityRun';
 
-const BASE: ActivityRun = {
+const BASE: ActivityRun = activityRun({
   key: 'a#0',
-  nodeId: 'a',
-  activityId: 'a',
-  containerId: null,
   attemptId: 'a#0',
   attempt: 1,
-  status: 'success',
-  reused: false,
   startedAt: Date.UTC(2026, 9, 4, 13, 5, 7, 123),
   finishedAt: Date.UTC(2026, 9, 4, 13, 5, 8, 357),
   durationMs: 1234,
-  iteration: null,
-  branch: null,
-  rowsRead: null,
-  rowsWritten: null,
-  bytesRead: null,
-  bytesWritten: null,
-  childRunId: null,
-  childRun: null,
-  error: null,
-  skipReason: null,
-};
+});
 
 function show(rows: ActivityRun[] | null, error: string | null = null, url = '/') {
   render(

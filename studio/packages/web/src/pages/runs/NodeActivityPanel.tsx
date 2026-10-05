@@ -83,8 +83,8 @@ import { CappedValue } from './CappedValue';
  * a LIVE counter for an attempt in flight, which needs a clock this page does
  * not have (#890).
  */
-/** The panel's DOM id, so the button that opened it can `aria-controls` it. */
-export const PANEL_ID = 'node-activity-panel';
+/** The panel's DOM id. */
+const PANEL_ID = 'node-activity-panel';
 
 /**
  * `name` is what the graph and the activity runs call this node — the

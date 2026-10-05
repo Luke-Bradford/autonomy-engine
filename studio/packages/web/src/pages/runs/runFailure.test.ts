@@ -1,31 +1,10 @@
 import type { ActivityRun, RunState } from '@autonomy-studio/shared';
 import { describe, expect, it } from 'vitest';
 import { runFailure, runFinished, runStartedAt } from './runFailure';
+import { activityRun } from '../../testing/activityRun';
 
-const row = (over: Partial<ActivityRun>): ActivityRun => ({
-  key: 'k',
-  nodeId: 'a',
-  activityId: 'a',
-  containerId: null,
-  attemptId: null,
-  attempt: 1,
-  status: 'failure',
-  reused: false,
-  startedAt: null,
-  finishedAt: null,
-  durationMs: null,
-  iteration: null,
-  branch: null,
-  rowsRead: null,
-  rowsWritten: null,
-  bytesRead: null,
-  bytesWritten: null,
-  childRunId: null,
-  childRun: null,
-  error: null,
-  skipReason: null,
-  ...over,
-});
+const row = (over: Partial<ActivityRun>): ActivityRun =>
+  activityRun({ attempt: 1, status: 'failure', ...over });
 
 const container = (reason?: string): RunState['containers'][string] => ({
   status: 'failure',

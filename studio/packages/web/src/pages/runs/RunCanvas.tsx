@@ -106,7 +106,7 @@ const RunActivityNode = memo(function RunActivityNode({ data }: NodeProps) {
           <span className="flow-node-sub run-node-status">{d.status ?? NO_STATUS_LABEL}</span>
           {/* #1394 OR3 — the duration and rows this run measured, beside the
               word rather than inside it: the status span's text is the U25
-              vocabulary the node table shares, and stays exactly that. */}
+              vocabulary the activity runs share, and stays exactly that. */}
           {d.facts !== null && (
             <span className="run-node-facts" title={d.facts}>
               {d.facts}
