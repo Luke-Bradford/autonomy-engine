@@ -614,7 +614,12 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
 });
 
 describe('#1484 M2 ActivityRunsTable — a running row says how it is going', () => {
-  const runningRow: ActivityRun = { ...BASE, status: 'dispatched', finishedAt: null, durationMs: null };
+  const runningRow: ActivityRun = {
+    ...BASE,
+    status: 'dispatched',
+    finishedAt: null,
+    durationMs: null,
+  };
 
   function showRunning(
     rows: ActivityRun[],

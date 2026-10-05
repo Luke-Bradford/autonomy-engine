@@ -2438,7 +2438,7 @@ describe('RunDetailPage — the cancel-run action (CX4)', () => {
       await screen.findByText('cancelled', { selector: '.run-header .run-status' }),
     ).toBeInTheDocument();
     expect(screen.queryByText('Cancelling…')).not.toBeInTheDocument();
-    expect(timelineSection()).toHaveTextContent("not run (cancelled)");
+    expect(timelineSection()).toHaveTextContent('not run (cancelled)');
     expect(timelineSection()).not.toHaveTextContent('has not started');
   });
 });
