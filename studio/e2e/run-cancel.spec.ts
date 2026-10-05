@@ -3,6 +3,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireManualTrigger, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 import { answerConfirm } from './support/confirmDialog';
+import { nodesTable } from './support/panels';
 
 /**
  * CX4 (#1320) — an operator can stop a run from its page.
@@ -58,7 +59,9 @@ async function cancelFromPage(
 
 /** The status word in the node table's row for the node whose name contains `name`. */
 const nodeRowStatus = (page: Page, name: string) =>
-  page.locator('tr', { has: page.getByRole('button', { name }) }).locator('.node-status');
+  nodesTable(page)
+    .locator('tr', { has: page.getByRole('button', { name }) })
+    .locator('.node-status');
 
 const headerPill = (page: Page) => page.locator('.run-header .run-status');
 

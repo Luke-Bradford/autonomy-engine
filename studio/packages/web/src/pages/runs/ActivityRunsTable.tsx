@@ -8,7 +8,6 @@ import {
   type ActivityRun,
   type ActivityRunChild,
   type ActivityRunGroup,
-  type ActivityRunIterationGroup,
   type RunStatus,
   type SkipReason,
 } from '@autonomy-studio/shared';
@@ -44,7 +43,8 @@ import {
   nodeStatusPillClass,
 } from './nodeStatus';
 import { runDetailPath } from './runPath';
-import { ACTIVITY_RUN_COLUMNS, iterationText } from './activityRunsColumns';
+import { ACTIVITY_RUN_COLUMNS, iterationLabel, iterationText } from './activityRunsColumns';
+import { RUN_DRAWER_ID } from './RunDrawer';
 import { activityRunEntries } from './activityRunsTree';
 import { skipReasonText } from './skipReasonText';
 
@@ -69,15 +69,8 @@ function groupIterations(group: ActivityRunGroup): string {
   return '';
 }
 
-/** An iteration line's label: `Item 2 of 2 · orders_b.csv`, or `Round 3`. */
-function iterationLabel(group: ActivityRunGroup, it: ActivityRunIterationGroup): string {
-  const { index, count, item } = it;
-  const text = iterationText({ containerId: group.containerId, index, count, item });
-  return group.kind === 'loop' ? `Round ${text}` : `Item ${text}`;
-}
-
 /** A skip's reason after its status pill: `skipped · upstream failed: Copy 1`. */
-function SkipWhy({
+export function SkipWhy({
   status,
   reason,
   nameOf,
@@ -202,6 +195,8 @@ export function ActivityRunsTable({
   containerNameOf,
   selected = null,
   live = false,
+  openKey = null,
+  onOpen,
 }: {
   rows: readonly ActivityRun[] | null;
   groups: readonly ActivityRunGroup[];
@@ -220,6 +215,10 @@ export function ActivityRunsTable({
   /** Whether the page would hear the run settle; a called run's duration
    * counts up only then (`streamStillLive`). */
   live?: boolean;
+  /** The row the detail drawer shows, if it is open. */
+  openKey?: string | null;
+  /** Opens the detail drawer on a row; the activity's name is the button. */
+  onOpen?: (key: string, opener: HTMLElement) => void;
 }) {
   const selectedRow = useRef<HTMLTableRowElement>(null);
   /** A skip's cause may be an activity or a container. */
@@ -483,7 +482,10 @@ export function ActivityRunsTable({
                     >
                       <td>
                         <Toggle open={open} onToggle={() => toggle(entry.key)}>
-                          {iterationLabel(group, iteration)}
+                          {iterationLabel(group.kind, {
+                            ...iteration,
+                            containerId: group.containerId,
+                          })}
                         </Toggle>
                       </td>
                       <td />
@@ -515,6 +517,7 @@ export function ActivityRunsTable({
                     key={row.key}
                     data-activity-id={row.activityId}
                     data-depth={entry.depth}
+                    data-open={row.key === openKey ? true : undefined}
                     {...(row.key === selected?.key
                       ? {
                           ref: selectedRow,
@@ -525,7 +528,21 @@ export function ActivityRunsTable({
                       : {})}
                   >
                     <td title={row.nodeId}>
-                      {name ?? <code>{row.nodeId}</code>}
+                      {onOpen === undefined ? (
+                        (name ?? <code>{row.nodeId}</code>)
+                      ) : (
+                        /* A real button, as the Nodes table's drill-in is: named
+                           by its own text and keyboard-operable for free. */
+                        <button
+                          type="button"
+                          className="activity-runs__open"
+                          aria-expanded={row.key === openKey}
+                          aria-controls={row.key === openKey ? RUN_DRAWER_ID : undefined}
+                          onClick={(event) => onOpen(row.key, event.currentTarget)}
+                        >
+                          {name ?? <code>{row.nodeId}</code>}
+                        </button>
+                      )}
                       {/* A sorted list has no group lines, so a row says where it ran. */}
                       {view.sort !== null && row.containerId !== null && (
                         <span className="activity-runs__why">

@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
+import { nodesTable } from './support/panels';
 
 /**
  * #866 — the run monitor's drill-in says what a node SPENT.
@@ -66,7 +67,7 @@ test('#866 — a node drill-in states its spend, and never invents a figure', as
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
 
-  await page.getByRole('button', { name: 'Agent Task 1' }).click();
+  await nodesTable(page).getByRole('button', { name: 'Agent Task 1' }).click();
   const panel = page.getByRole('complementary', { name: /Node Agent Task 1/ });
 
   await expect(panel.getByRole('heading', { name: 'Cost & usage' })).toBeVisible();

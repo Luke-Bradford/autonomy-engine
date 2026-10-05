@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { describeDatasetAddress, SECURE_REDACTED, TERMINAL_NODE } from '@autonomy-studio/shared';
 import type { DatasetAddress, DispatchInput, RunStatus } from '@autonomy-studio/shared';
@@ -103,6 +104,7 @@ export function NodeActivityPanel({
   runStatus,
   live,
   onClose,
+  run,
 }: {
   node: NodeActivity;
   name: string | null;
@@ -111,12 +113,19 @@ export function NodeActivityPanel({
   /** #890 — whether the page would hear this node settle, so its Duration may count up. */
   live: boolean;
   onClose: () => void;
+  /**
+   * #1484 OR35 M2 — set when the panel shows ONE activity run (the run drawer)
+   * rather than the node's latest: which attempt, which item or round, and why
+   * it was skipped. `node` is then that attempt's record (`activityOfRow`).
+   */
+  run?: { attempt: number | null; iteration: string; skipWhy: ReactNode };
 }) {
   return (
     <aside
       id={PANEL_ID}
       className="property-panel node-detail-panel"
       aria-label={`Node ${name ?? node.nodeId}`}
+      {...(run === undefined ? {} : { tabIndex: -1, 'data-drawer-focus': true })}
     >
       {/* `.page-header` is the existing title-plus-action row. The sibling
           property panels have no action in their heading, so none of them uses
@@ -137,7 +146,18 @@ export function NodeActivityPanel({
         <span className={nodeStatusPillClass(node.status, runStatus)}>
           {nodeStatusLabel(node.status, runStatus)}
         </span>{' '}
-        {node.attempts} attempt{node.attempts === 1 ? '' : 's'}
+        {run === undefined ? (
+          <>
+            {node.attempts} attempt{node.attempts === 1 ? '' : 's'}
+          </>
+        ) : (
+          /* One attempt's record counts one attempt, so the panel names WHICH
+             one instead, and where it ran. */
+          [run.attempt === null ? '' : `attempt ${run.attempt}`, run.iteration]
+            .filter((part) => part !== '')
+            .join(' · ')
+        )}
+        {run?.skipWhy}
       </p>
 
       {/* #918 / RS6 — ABOVE the duration and the outputs, because it is what
@@ -189,8 +209,8 @@ export function NodeActivityPanel({
         <strong>
           <NodeDuration node={node} live={live} />
         </strong>{' '}
-        — wall clock for the latest attempt, from start to settle, including any wait it parked on
-        and excluding time held between retries.{' '}
+        — wall clock for {run === undefined ? 'the latest' : 'this'} attempt, from start to settle,
+        including any wait it parked on and excluding time held between retries.{' '}
         {node.startedAtMs === undefined &&
           (node.copiedFromRunId !== undefined
             ? /* #918 — a copied node hits the `attempts === 0` arm exactly, and
@@ -255,7 +275,9 @@ export function NodeActivityPanel({
           'The recorded end precedes the start, so the log’s clock is inconsistent and no span can be stated.'}
       </p>
 
-      {node.instanceId !== undefined && (
+      {/* One activity run is already one item's record, so the fold's
+          most-recent-wins caveat does not apply to it. */}
+      {run === undefined && node.instanceId !== undefined && (
         <p className="page-hint">
           Showing the result recorded under <code>{node.instanceId}</code>. Results keyed{' '}
           <code>id@n</code> — how a parallel foreach writes its items — fold onto the one node you

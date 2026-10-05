@@ -20,3 +20,15 @@ export function properties(page: Page): Locator {
 export function triggerForm(page: Page): Locator {
   return page.getByRole('form', { name: 'Trigger form' });
 }
+
+/**
+ * The run page's Nodes table: each node's latest record, and its inline
+ * drill-in. The activity runs above it name the same activities with buttons of
+ * their own, which open the run drawer instead (#1484 M2), so a node's drill-in
+ * is found inside this table.
+ */
+export function nodesTable(page: Page): Locator {
+  return page
+    .locator('table')
+    .filter({ has: page.getByRole('columnheader', { name: 'Node', exact: true }) });
+}

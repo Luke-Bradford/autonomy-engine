@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion, type SeedDoc } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
+import { nodesTable } from './support/panels';
 
 /**
  * #895 — the rerun-from-failed action.
@@ -218,7 +219,9 @@ test('#918 — a rerun says which of its nodes it REUSED, and shows what they pr
      `pick` really succeeded and `stop` really failed. A fixture that ended some
      other way would satisfy the rest while the title claimed otherwise. */
   await expect(page.locator('.run-header .run-status')).toHaveText('failure');
-  const sourceRow = page.getByRole('button', { name: 'Filter 1' }).locator('xpath=ancestor::tr');
+  const sourceRow = nodesTable(page)
+    .getByRole('button', { name: 'Filter 1' })
+    .locator('xpath=ancestor::tr');
   await expect(sourceRow.getByText('success')).toBeVisible();
   // In R1 the node EXECUTED, so it must make no claim about being reused.
   await expect(sourceRow.getByText(/reused from run/)).toHaveCount(0);
@@ -230,10 +233,12 @@ test('#918 — a rerun says which of its nodes it REUSED, and shows what they pr
      result is carried by `run.reseeded` alone — no `node.succeeded` is appended
      for it in R2 — so before #918 this row had no Outputs section at all, while
      `${nodes.pick.output.result}` resolved for it downstream. */
-  const copiedRow = page.getByRole('button', { name: 'Filter 1' }).locator('xpath=ancestor::tr');
+  const copiedRow = nodesTable(page)
+    .getByRole('button', { name: 'Filter 1' })
+    .locator('xpath=ancestor::tr');
   await expect(copiedRow.getByText(`reused from run ${sourceRunId}`)).toBeVisible();
 
-  await page.getByRole('button', { name: 'Filter 1' }).click();
+  await nodesTable(page).getByRole('button', { name: 'Filter 1' }).click();
   const panel = page.getByRole('complementary', { name: 'Node Filter 1' });
   /* The HEADING role, not the bare text: the provenance hint above it says
      "the outputs below were computed there", so a text match resolves to two

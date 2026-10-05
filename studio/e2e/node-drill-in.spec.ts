@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
+import { nodesTable } from './support/panels';
 
 /**
  * U24 (slice 1) — the run monitor says WHY a node failed, and a node OPENS.
@@ -79,7 +80,7 @@ test('U24 — a failed node names its failure CLASS, and opens a drill-in', asyn
   // No drill-in until one is asked for.
   await expect(page.getByRole('complementary', { name: 'Node Fail 1' })).toHaveCount(0);
 
-  await page.getByRole('button', { name: 'Fail 1', exact: true }).click();
+  await nodeTable.getByRole('button', { name: 'Fail 1', exact: true }).click();
   const panel = page.getByRole('complementary', { name: 'Node Fail 1' });
   await expect(panel).toBeVisible();
 
@@ -111,7 +112,7 @@ test('U24 — a failed node names its failure CLASS, and opens a drill-in', asyn
   expect(seen!.buttons).toEqual(['Close']);
 
   // Opening a DIFFERENT node swaps the panel rather than stacking one.
-  await page.getByRole('button', { name: 'Fail 2', exact: true }).click();
+  await nodeTable.getByRole('button', { name: 'Fail 2', exact: true }).click();
   await expect(page.getByRole('complementary', { name: 'Node Fail 2' })).toBeVisible();
   await expect(page.getByRole('complementary', { name: 'Node Fail 1' })).toHaveCount(0);
 
@@ -178,7 +179,7 @@ test('#869 — an oversized output is capped in the DOM, and the rest is one cli
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
 
-  await page.getByRole('button', { name: 'Filter 1', exact: true }).click();
+  await nodesTable(page).getByRole('button', { name: 'Filter 1', exact: true }).click();
   const panel = page.getByRole('complementary', { name: 'Node Filter 1' });
   await expect(panel).toBeVisible();
 
