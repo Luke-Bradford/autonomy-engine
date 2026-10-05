@@ -18,14 +18,13 @@ import {
   runLifecycleView,
   streamStillLive,
 } from './runSummary';
-import { eventGloss, failureClass, formatOutputValue } from './format';
+import { eventGloss } from './format';
 import { activityLabel, activityLabels } from '../pipeline/activityLabel';
-import { nodeStatusLabel, nodeStatusPillClass } from './nodeStatus';
 import { runStatusLabel } from './runStatus';
 import { AttemptTimeline } from './AttemptTimeline';
-import { NodeActivityPanel, PANEL_ID } from './NodeActivityPanel';
+import { NodeActivityPanel } from './NodeActivityPanel';
 import { ActivityRunsTable, SkipWhy } from './ActivityRunsTable';
-import { activityOfRow } from './attemptActivity';
+import { activityOfRow, latestOutputByAttempt } from './attemptActivity';
 import { iterationLabel } from './activityRunsColumns';
 import { RunDrawer } from './RunDrawer';
 import { RunHeader, type RunHeaderNames } from './RunHeader';
@@ -34,14 +33,12 @@ import { runFailure, runFinished, runStartedAt } from './runFailure';
 import { HelpDisclosure } from './HelpDisclosure';
 import { containerLabels } from '../pipeline/containerRules';
 import { useActivityRuns } from './useActivityRuns';
-import { NodeDuration } from './NodeDuration';
 import { RunCostSummary } from './RunCostSummary';
 import { RunGlobals } from './RunGlobals';
 import { RunVariables } from './RunVariables';
 import { RunDiagnostics } from './RunDiagnostics';
 import { RunGraph } from './RunGraph.lazy';
 import { useRunProjection } from './useRunProjection';
-import { isSecureMarker } from './secureMarker';
 import { runVersionPath } from '../author/pipelinePath';
 import { useConfirm } from '../../lib/confirm/useConfirm';
 import { shortId } from '../../lib/ids';
@@ -185,7 +182,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
         if (ac.signal.aborted) return;
         /* R1 resolves the run AND its doc together, so a doc that will not
            resolve (409 — deleted, or present but no longer parsing) would
-           otherwise cost the operator the run's metadata, the node table and the
+           otherwise cost the operator the run's metadata, the activity runs and the
            event feed as well. None of those need the doc, and a run whose graph
            is gone is exactly when they matter most — `terminalFactFromLog`
            records the same preference on the server. So fall back to the plain
@@ -210,7 +207,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
 
   /* U25 — ONE projection for the whole page. The graph below takes this same
      overlay rather than folding the log a second time inside its lazy chunk,
-     and the node table reconciles against it, so neither surface can invent a
+     and the per-node record (the timeline, the run's spend, the cancel
+     confirmation) reconciles against it, so neither surface can invent a
      status the other does not have: they read one value.
 
      They can still SAY different amounts about one node, and the honest
@@ -290,15 +288,6 @@ export function RunDetailPage({ runId }: { runId: string }) {
   );
   const typeOf = (nodeId: string) => nodeTypes?.get(nodeId) ?? null;
 
-  // U24 — which node's drill-in is open. Held as an ID and RESOLVED against the
-  // live fold rather than storing the row itself, so the panel tracks a running
-  // node's state as frames arrive, and a node that leaves the table (a different
-  // run's log replacing this one) closes the panel by simply not resolving.
-  const [openNodeId, setOpenNodeId] = useState<string | null>(null);
-  const openNode = useMemo(
-    () => nodes.find((n) => n.nodeId === openNodeId) ?? null,
-    [nodes, openNodeId],
-  );
   /* #870 — the RUN's status and, when it is parked, WHY. The precedence is
      `runLifecycleView`'s, shared with the editor's run overlay (#1395). */
   const view = useMemo(() => runLifecycleView(lifecycle, overlay), [lifecycle, overlay]);
@@ -352,16 +341,15 @@ export function RunDetailPage({ runId }: { runId: string }) {
   // #1484 M2 — the row "Show activity" asked for; a new object per ask.
   const [selectedRow, setSelectedRow] = useState<{ key: string } | null>(null);
   /* #1484 M2 — the activity run the detail drawer shows. Held as the row's key
-     and resolved against the latest read, like the drill-in's node id above,
-     so the drawer follows a running attempt and closes if its row goes. Only
-     one of the drawer and the Nodes table's inline drill-in is open at a time:
-     they show the same panel, which owns one element id. */
+     and resolved against the latest read, so the drawer follows a running
+     attempt and closes if its row goes. */
   const [drawer, setDrawer] = useState<{ key: string; opener: HTMLElement } | null>(null);
   const drawerRow = activityRuns.rows?.find((r) => r.key === drawer?.key) ?? null;
   const drawerNode = useMemo(
     () => (drawerRow === null ? null : activityOfRow(stream.events, folded, drawerRow)),
     [drawerRow, stream.events, folded],
   );
+  const latestOutputs = useMemo(() => latestOutputByAttempt(stream.events), [stream.events]);
   const drawerIteration = (() => {
     const it = drawerRow?.iteration ?? null;
     if (it === null) return '';
@@ -387,8 +375,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
    * CX4 (#1320) — cancel THIS run, after a confirmation that names what stops.
    *
    * Confirmed like every other destructive action in the app, through
-   * `useConfirm` (#1397). The text is built from the node table's own rows, so
-   * it names exactly what the operator sees in progress, in the table's words.
+   * `useConfirm` (#1397). The text is built from the page's per-node record, so
+   * it names what is in progress in the words the page's status pills use.
    * The dismiss button says "Keep running": [Cancel] beside [Cancel run] would
    * not say which one leaves the run alone.
    *
@@ -625,8 +613,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
 
       {/* #1484 OR35 M2 — the activity runs, directly under the run's header and
           any action the operator has to take, so the first thing below the run
-          is what each activity did. The Nodes table further down stays until
-          the M2 drawer slice replaces its drill-in. */}
+          is what each activity did. A row opens the detail drawer. */}
       <ActivityRunsTable
         rows={activityRuns.rows}
         groups={activityRuns.groups}
@@ -638,10 +625,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
         selected={selectedRow}
         live={countingLive}
         openKey={drawerRow?.key ?? null}
-        onOpen={(key, opener) => {
-          setOpenNodeId(null);
-          setDrawer({ key, opener });
-        }}
+        onOpen={(key, opener) => setDrawer({ key, opener })}
+        latestOutputs={latestOutputs}
       />
 
       {/* The run's inputs and its downward rerun lineage (RS6): facts about the
@@ -675,7 +660,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
       />
 
       {/* #844 V7 — the run's variables, from the same one projection the graph
-          and table read, so they update live and agree with the drill-in's
+          and timeline read, so they update live and agree with the drawer's
           writes. Beside the run-level spend and before the graph: both are
           facts about the whole run. Renders nothing for a pipeline that
           declares no variables, or while the version doc is unavailable. */}
@@ -697,8 +682,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
             : 'The pipeline graph is unavailable, so there is no node overlay. The event feed below is unaffected.'}
         </p>
       ) : (
-        /* #698 — React Flow loads on demand, so the run metadata, node table
-           and event feed below paint without waiting on it. The boundary is
+        /* #698 — React Flow loads on demand, so the run metadata, activity
+           runs and event feed paint without waiting on it. The boundary is
            HERE rather than at the route for that reason: all of that is useful
            without the graph. The engine reducer used to sit behind this
            boundary too and no longer does (U25 lifted the projection to the
@@ -710,138 +695,10 @@ export function RunDetailPage({ runId }: { runId: string }) {
         </Suspense>
       )}
 
-      <h3>Nodes</h3>
-      {nodes.length === 0 ? (
-        <p>No node activity yet.</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Node</th>
-              <th scope="col">Status</th>
-              <th scope="col">Attempts</th>
-              {/* #867 — wall clock for the node's LATEST attempt. The full
-                  sentence lives in the drill-in panel, where there is room to
-                  say what it includes; a header cannot carry it, and a `title`
-                  on a `th` is not reliably announced. */}
-              <th scope="col">Duration</th>
-              <th scope="col">Outputs</th>
-              <th scope="col">Detail</th>
-            </tr>
-          </thead>
-          <tbody>
-            {nodes.map((n) => {
-              /* U24 — the failure CLASS beside the message. `""` when the
-                 failure carries none, which is a real state (an expired
-                 external wait), so it renders as nothing rather than a guess. */
-              const cls = failureClass(n.failureKind, n.failureCode);
-              /* One lookup per row, read twice below: the button renders the
-                 name, and the sibling `<code>` exists only when there IS one. */
-              const name = nameOf(n.nodeId);
-              return (
-                <tr key={n.nodeId}>
-                  <td>
-                    {/* A real <button> rather than a clickable/aria-ified <tr>:
-                        it takes its accessible name from its own content for
-                        free and is keyboard-operable without inventing key
-                        handling.
-
-                        #882 — the button's content is the NAME, and the raw id
-                        sits beside it rather than inside it. Text inside a button
-                        joins its accessible name, so an id in here would make
-                        every row announce "HTTP Request 1 n_7c44a16f-98f1-…".
-                        Outside, the visible label and the accessible name are one
-                        string, and the id is still on screen — which it must be,
-                        because it is the only thing
-                        that matches the `${nodes.<id>.output.…}` expressions in
-                        the doc and the ids in the event feed below. */}
-                    <button
-                      type="button"
-                      className="node-drill-in"
-                      aria-expanded={openNodeId === n.nodeId}
-                      aria-controls={openNodeId === n.nodeId ? PANEL_ID : undefined}
-                      onClick={() => {
-                        setDrawer(null);
-                        setOpenNodeId(openNodeId === n.nodeId ? null : n.nodeId);
-                      }}
-                    >
-                      {name ?? <code>{n.nodeId}</code>}
-                    </button>
-                    {name !== null && <code className="node-id">{n.nodeId}</code>}
-                  </td>
-                  <td>
-                    {/* U25 — the word comes from `nodeStatus.ts`, which the
-                        graph reads too, so the two surfaces cannot describe one
-                        node differently. The CLASS stays keyed on the raw
-                        status: the graph's six tones put a retry backoff and a
-                        routine park in one `holding` hue, and #483 established
-                        that those must not share a colour here. Except under a
-                        cancel (#1329 — `nodeStatusPillClass`). */}
-                    <span className={nodeStatusPillClass(n.status, status)}>
-                      {nodeStatusLabel(n.status, status)}
-                    </span>
-                  </td>
-                  <td>{n.attempts}</td>
-                  <td className="node-duration">
-                    <NodeDuration node={n} live={countingLive} />
-                  </td>
-                  <td>{n.outputs}</td>
-                  <td>
-                    {/* #918 / RS6 — the copied-frontier reading goes FIRST, and
-                        in this cell rather than only in the drill-in, because
-                        RS6's requirement is that the monitor distinguish a
-                        copied node from an executed one; a distinction you have
-                        to click to find does not meet it. The cell is otherwise
-                        empty for a copied row (no error, no streamed output), so
-                        this costs no layout and displaces nothing: a copied node
-                        cannot carry an `error`, and it emitted no `node.output`
-                        in THIS run because it did not run in it. */}
-                    {n.copiedFromRunId !== undefined
-                      ? `reused from run ${n.copiedFromRunId}`
-                      : n.error !== undefined
-                        ? cls === ''
-                          ? n.error
-                          : `${n.error} (${cls})`
-                        : isSecureMarker(n.lastOutputName)
-                          ? /* #1312 — a secure node's stream is redacted name
-                               AND value; say so rather than print the marker
-                               twice. The drill-in explains the setting. */
-                            'output withheld: this node is secure'
-                          : n.status === 'dispatched' && n.lastOutput !== undefined
-                            ? /* #1299 — a RUNNING node shows its latest streamed
-                               value, so a long copy's per-batch progress reads
-                               as progress rather than a hang. Once it settles the
-                               outputs are the truth, and the cell goes back to
-                               naming the stream. */
-                              `${n.lastOutput.name}: ${formatOutputValue(n.lastOutput.value)}`
-                            : n.lastOutputName
-                              ? `output: ${n.lastOutputName}`
-                              : ''}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
-
-      {openNode !== null && (
-        <NodeActivityPanel
-          node={openNode}
-          name={nameOf(openNode.nodeId)}
-          runStatus={status}
-          live={countingLive}
-          onClose={() => setOpenNodeId(null)}
-        />
-      )}
-
-      {/* U12a (#1007) — the same rows the table above lists, placed on a shared
-          time axis. It sits after the table deliberately: the table is the
-          per-node record and the timeline is the run's shape, so the reader
-          meets the nodes before the chart that arranges them. Rendered only once
-          there is a row to arrange, since an empty chart with an empty caveat
-          list beneath it says nothing the "No node activity yet." above has not
-          already said. */}
+      {/* U12a (#1007) — each node's attempts on a shared time axis: the run's
+          shape, after the activity runs that list what each one did. Rendered
+          only once there is a node to arrange, since an empty chart with an
+          empty caveat list beneath it says nothing. */}
       {nodes.length > 0 && <AttemptTimeline nodes={nodes} nameOf={nameOf} runStatus={status} />}
 
       {/* #1065 — the reducer's explanations, between the run's SHAPE and its raw
@@ -851,8 +708,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
           who has just seen a node do something surprising in the table meets the
           reason before the log they would otherwise go hunting through.
 
-          Not placed ABOVE the node table, though that is where the question is
-          first asked. A diagnostic names nodes and containers by id, so it is
+          Not placed ABOVE the activity runs, though that is where the question
+          is first asked. A diagnostic names nodes and containers by id, so it is
           only legible once the table has established what those are — and on the
           overwhelmingly common healthy run this section says "nothing to
           explain", which must not be the first thing on the page.

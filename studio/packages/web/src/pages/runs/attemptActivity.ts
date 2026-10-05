@@ -56,23 +56,52 @@ function attemptRef(row: RunEvent): { raw: string; attemptId: string } | null {
  * belong to and is dropped; the stream never sends one.
  */
 export function attemptEvents(events: readonly RunEvent[], attemptId: string): RunEvent[] {
-  const latest = new Map<string, string>();
   const out: RunEvent[] = [];
+  walkAttempts(events, (row, owner) => {
+    if (owner === attemptId) out.push(row);
+  });
+  return out;
+}
+
+/**
+ * #1299 on the activity runs: each attempt's latest streamed value, by attempt
+ * id. A running row shows it, so a long copy's per-batch progress reads as
+ * progress rather than a hang. One pass, attributing each `node.output` the way
+ * `attemptEvents` does, so a parallel item's tick lands on that item's row and a
+ * retry starts with nothing.
+ */
+export function latestOutputByAttempt(
+  events: readonly RunEvent[],
+): Map<string, { name: string; value: unknown }> {
+  const latest = new Map<string, { name: string; value: unknown }>();
+  walkAttempts(events, (row, owner) => {
+    const e = parseEngineEvent(row);
+    if (e?.type === 'node.output') latest.set(owner, { name: e.name, value: e.value });
+  });
+  return latest;
+}
+
+/** Calls `visit` with each event that belongs to an attempt, and that attempt. */
+function walkAttempts(
+  events: readonly RunEvent[],
+  visit: (row: RunEvent, attemptId: string) => void,
+): void {
+  const latest = new Map<string, string>();
   for (const row of events) {
     const ref = attemptRef(row);
     if (ref !== null) {
       // A timer or callback settling an attempt does not start one, so only
       // the events that carry their own `attemptId` move the latest.
       if (!SETTLED_BY_PREVIOUS.has(row.type)) latest.set(ref.raw, ref.attemptId);
-      if (ref.attemptId === attemptId) out.push(row);
+      visit(row, ref.attemptId);
       continue;
     }
     if (row.type === 'node.output') {
       const e = parseEngineEvent(row);
-      if (e?.type === 'node.output' && latest.get(e.nodeId) === attemptId) out.push(row);
+      const owner = e?.type === 'node.output' ? latest.get(e.nodeId) : undefined;
+      if (owner !== undefined) visit(row, owner);
     }
   }
-  return out;
 }
 
 /**

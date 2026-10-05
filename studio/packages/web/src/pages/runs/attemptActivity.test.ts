@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ActivityRun, EngineEvent, RunEvent } from '@autonomy-studio/shared';
-import { activityOfRow, attemptEvents } from './attemptActivity';
+import { activityOfRow, attemptEvents, latestOutputByAttempt } from './attemptActivity';
 import { deriveNodeActivity } from './runSummary';
 import { liveSpanStart } from './format';
 
@@ -237,5 +237,29 @@ describe('activityOfRow — one parallel item is not the node (#1484 M2 drawer)'
     expect(got.costSpansInstances).toBe(false);
     expect(got.inputInstanceId).toBeUndefined();
     expect(liveSpanStart(got)).toBe(50);
+  });
+});
+
+describe('latestOutputByAttempt (#1299 on the activity runs)', () => {
+  it("gives each attempt its own latest streamed value, a parallel item's included", () => {
+    const latest = latestOutputByAttempt([
+      dispatched('w@0', 'w@0#0', '{}'),
+      dispatched('w@1', 'w@1#0', '{}'),
+      output('w@0', 'rows', 10),
+      output('w@1', 'rows', 7),
+      output('w@0', 'rows', 20),
+    ]);
+    expect(latest.get('w@0#0')).toEqual({ name: 'rows', value: 20 });
+    expect(latest.get('w@1#0')).toEqual({ name: 'rows', value: 7 });
+  });
+
+  it('starts a retry with nothing: the failed attempt keeps its own last value', () => {
+    const latest = latestOutputByAttempt([
+      dispatched('c', 'c#0', '{}'),
+      output('c', 'rows', 5),
+      dispatched('c', 'c#1', '{}'),
+    ]);
+    expect(latest.get('c#0')).toEqual({ name: 'rows', value: 5 });
+    expect(latest.has('c#1')).toBe(false);
   });
 });

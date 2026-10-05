@@ -24,7 +24,7 @@ import { CappedValue } from './CappedValue';
  * Everything here is folded from the run's event log by `deriveNodeActivity`, so
  * a finished run's history and a live run's frames render identically, and the
  * panel adds no fourth walk over the log (see #849 — the page already folds it
- * three times, and this reuses the fold the node table already ran).
+ * three times, and this reuses the page's fold).
  *
  * The declared outputs are ALSO in the reducer's own `RunState.outputs`, which
  * `projectRun` folds on this same page — and where the two disagree the engine
@@ -83,11 +83,11 @@ import { CappedValue } from './CappedValue';
  * a LIVE counter for an attempt in flight, which needs a clock this page does
  * not have (#890).
  */
-/** The panel's DOM id, so the table's disclosure button can `aria-controls` it. */
+/** The panel's DOM id, so the button that opened it can `aria-controls` it. */
 export const PANEL_ID = 'node-activity-panel';
 
 /**
- * `name` is what the graph and the node table call this node — the
+ * `name` is what the graph and the activity runs call this node — the
  * `activityLabels` ordinal, e.g. `HTTP Request 1` (#882). It is `null`, and only
  * `null`, when the bound doc does not name this node: the pipeline version will
  * not resolve, or the run carries a row the doc no longer has. The panel then
@@ -341,10 +341,8 @@ export function NodeActivityPanel({
       )}
 
       {/* KEYED on the node's identity, which is load-bearing rather than tidy.
-          `RunDetailPage` swaps this panel IN PLACE when a different node is
-          opened — it is not remounted (`node-drill-in.spec.ts` asserts exactly
-          that: opening a second node swaps the panel rather than stacking one).
-          So without a key, an Outputs section expanded on node A would carry
+          A host can swap this panel IN PLACE when a different node is shown
+          rather than remount it (the editor's run drawer does). So without a key, an Outputs section expanded on node A would carry
           `expanded` into node B and put B's whole un-requested payload into the
           DOM: the very thing the cap exists to prevent, reintroduced by the
           control that relieves it. A foreach folds every item onto ONE

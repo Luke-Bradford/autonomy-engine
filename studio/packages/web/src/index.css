@@ -3771,62 +3771,24 @@ button.danger {
 
 /* ── P6 live run monitor ─────────────────────────────────────────────────── */
 
-/* U24 — the node table's drill-in trigger. A real <button> (so it takes its
-   accessible name from its own content and is keyboard-operable without
-   inventing key handling), stripped back to read as the NAME it opens rather
-   than as a chunky form control — otherwise the Node column stops scanning as a
-   column of names. Since #882 that content is the activity name (`HTTP Request
-   1`); the raw id is a sibling below it, not inside the button. */
-/* #867 — the per-node Duration cell. Tabular figures so a column of spans
-   lines up on the digit rather than jittering per row, which is the whole
-   reason a numeric column gets its own class. */
-.node-duration {
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.node-drill-in {
-  background: none;
-  border: 1px solid transparent;
-  padding: 0.1rem 0.25rem;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-}
-
-/* `:focus-visible` alongside `:hover`, matching `.expression-picker-list li
-   button` — without it the keyboard gets the UA outline while the mouse gets the
-   house style. (No `:not(:disabled)`: this button is never disabled, and the
-   global `button:hover` rule already carries that guard.) */
-.node-drill-in:hover,
-.node-drill-in:focus-visible,
-.node-drill-in[aria-expanded='true'] {
-  border-color: var(--accent);
-}
-
 /* #882 — the raw node id, SECONDARY to the name beside it. It has to stay on
    screen (it is what the doc's `${nodes.<id>…}` expressions and the ids in the
    event feed below are keyed on) without competing with the name for the eye, so
    it is dimmed and set smaller rather than dropped.
 
    `display: block` puts it on its own line under the name: a minted id is
-   `n_7c44a16f-98f1-4958-…`, which inline would set the table's first column wider
-   than every other column combined.
+   `n_7c44a16f-98f1-4958-…`, too long to sit inline beside it.
 
-   `em`, not `rem` — the only relative font-size in this file, and deliberately
-   so. The rule is used in two places at two type sizes (a table cell, and the
-   drill-in panel's <h3>), and what it has to be is SMALLER THAN WHATEVER NAMES
-   IT in each. A fixed `rem` would be correct in the cell and nearly the heading's
-   own size in the panel. */
+   `em`, not `rem`: what it has to be is SMALLER THAN WHATEVER NAMES IT, here the
+   activity panel's <h3>. */
 .node-id {
   display: block;
   font-size: 0.8em;
   color: var(--muted);
 }
 
-/* The drill-in panel opens beneath the node table, not inside the row — a
-   <tr>-nested panel would have to be a full-width <td>, and the table is already
-   the page's densest region. */
+/* The activity panel's gap from what sits above it in the editor's run drawer;
+   the run page's drawer resets it below. */
 .node-detail-panel {
   margin-top: 0.75rem;
 }
