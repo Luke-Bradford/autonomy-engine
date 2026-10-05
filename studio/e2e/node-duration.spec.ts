@@ -82,7 +82,7 @@ test('#867 — a node row states how long it took, and says nothing where nothin
   // The drill-in is the one surface with room to say what the number MEANS.
   await activityRowById(page, 'hold').getByRole('button').first().click();
   const panel = page.locator('.run-drawer').getByRole('complementary');
-  await expect(panel).toContainText('wall clock for the latest attempt');
+  await expect(panel).toContainText('wall clock for this attempt');
   await expect(panel).toContainText('including any wait it parked on');
 
   await expectQuiet(page, problems);
