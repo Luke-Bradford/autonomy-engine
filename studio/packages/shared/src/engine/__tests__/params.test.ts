@@ -1403,6 +1403,22 @@ describe('validateRefs — deep `[]`/`.` addressing at SAVE time (#6 E7)', () =>
       );
     });
 
+    it('is refused inside default() too, as ONE error with ONE hint', () => {
+      const nodes = [json, node('b', { prompt: '${default(nodes.ghost.output.v.n > 1, 0)}' })];
+      const errors = validateRefs(doc(nodes, [edge('a', 'b', 'success')]));
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toMatch(/holds an operator/);
+      expect(errors[0]?.match(/operators aren't supported/g)).toHaveLength(1);
+    });
+
+    it('the run-time hint rides every field-step error, not only a missing key', () => {
+      const c = ctx({ nodeOutputs: { a: { data: null } } });
+      expect(() => substitute('${nodes.a.output.data.n > 1}', c)).toThrow(
+        /the value before it is null.*use greater\(a, b\)/,
+      );
+      expect(() => substitute("${default(nodes.a.output.data.n > 1, 'fb')}", c)).not.toThrow();
+    });
+
     it('a key that really holds an operator still resolves at run', () => {
       const c = ctx({ nodeOutputs: { a: { data: { 'a>b': 1 } } } });
       expect(substitute('${nodes.a.output.data.a>b}', c)).toBe(1);

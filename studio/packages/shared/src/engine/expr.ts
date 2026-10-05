@@ -136,8 +136,9 @@ export const INFIX_HINTS: readonly (readonly [RegExp, string, string])[] = [
 
 /**
  * The hint for a `${...}` body that holds an infix operator outside its string
- * literals, or `null` when it holds none. Only ever appended to an error the
- * body already raised: it explains a refusal, it never causes one.
+ * literals, or `null` when it holds none. Appended to an error the body already
+ * raised. It also serves as the detector for a ref's tail FIELD (#1553): a field
+ * it flags is refused at save, because nothing else would catch it.
  */
 export function infixOperatorHint(body: string): string | null {
   let bare = '';

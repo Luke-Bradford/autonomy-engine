@@ -5140,6 +5140,9 @@ function checkExprStatic(
   // stays reachable through a quoted index (`['score > 5']`), which is an
   // `index` segment and never reaches this rule. The ROOT region needs no rule:
   // a param, variable, global or output name holding one is already undeclared.
+  // Returning early keeps this to ONE error, like the root-restriction and depth
+  // branches above: the root and index rules below run again once the
+  // expression is rewritten.
   for (const seg of tail) {
     if (seg.kind === 'field' && infixOperatorHint(seg.name) !== null) {
       errors.push(`${where}: \${${expr.source}} — the field '${seg.name}' holds an operator`);
