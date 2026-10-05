@@ -1345,6 +1345,86 @@ describe('validateRefs — deep `[]`/`.` addressing at SAVE time (#6 E7)', () =>
     expect(errors[0]).not.toMatch(/operator/);
   });
 
+  // #1553 — the grammar has no infix operators and a field's charset is
+  // permissive, so `${item.score > 5}` reads as a ref whose last FIELD is
+  // `score > 5`. A ref's tail is otherwise never checked at save, so these saved
+  // clean and then failed (or read null) at run.
+  describe('#1553 an operator in a reference tail field', () => {
+    const json = node('a', { outputs: [{ name: 'data', type: 'json' }] });
+    const withVars = (nodes: Node[], edges: Edge[]) => ({
+      ...doc(nodes, edges),
+      variables: [{ name: 'rows', type: 'array' as const, default: [] }],
+    });
+
+    it.each([
+      ['a filter predicate', '${filter(params.xs, item.score > 5)}', 'greater(a, b)'],
+      ['a json output tail', '${nodes.a.output.data.a >= 1}', 'greaterOrEquals(a, b)'],
+      ['a json param tail', '${params.xs.total - 1}', 'sub(a, b)'],
+      ['an indexed variable tail', '${vars.rows[0].n == 1}', 'equals(a, b)'],
+      ['a field with no spaces', '${nodes.a.output.data.n<2}', 'less(a, b)'],
+    ])('%s (%s) is refused at save naming %s', (_label, text, fn) => {
+      const nodes = [json, node('b', { prompt: text })];
+      const errors = validateRefs({
+        ...withVars(nodes, [edge('a', 'b', 'success')]),
+        params: [{ name: 'xs', type: 'json', required: true }],
+      });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toMatch(/holds an operator/);
+      expect(errors[0]).toContain(`use ${fn}`);
+    });
+
+    it("a foreach body's ${item.score > 5} is refused too", () => {
+      const body = node('b', { prompt: '${item.score > 5}' });
+      const errors = validateRefs(
+        doc(
+          [body],
+          [],
+          [{ name: 'xs', type: 'json', required: true }],
+          [{ id: 'fe', kind: 'foreach', children: ['b'], items: '${params.xs}' }],
+        ),
+      );
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toMatch(/holds an operator.*use greater\(a, b\)/);
+    });
+
+    it.each([
+      ['a quoted index', "${nodes.a.output.data['score > 5']}"],
+      ['a hyphen inside a key', '${nodes.a.output.data.first-name}'],
+      ['a space inside a key', '${nodes.a.output.data.first name}'],
+    ])('%s still saves (%s)', (_label, text) => {
+      const nodes = [json, node('b', { prompt: text })];
+      expect(validateRefs(doc(nodes, [edge('a', 'b', 'success')]))).toEqual([]);
+    });
+
+    it('the run-time error for a version saved before the rule names the function', () => {
+      const c = ctx({ nodeOutputs: { a: { data: { score: 9 } } } });
+      expect(() => substitute('${nodes.a.output.data.score > 5}', c)).toThrow(
+        /has no field 'score > 5'.*use greater\(a, b\) for '>'/,
+      );
+    });
+
+    it('is refused inside default() too, as ONE error with ONE hint', () => {
+      const nodes = [json, node('b', { prompt: '${default(nodes.ghost.output.v.n > 1, 0)}' })];
+      const errors = validateRefs(doc(nodes, [edge('a', 'b', 'success')]));
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toMatch(/holds an operator/);
+      expect(errors[0]?.match(/operators aren't supported/g)).toHaveLength(1);
+    });
+
+    it('the run-time hint rides every field-step error, not only a missing key', () => {
+      const c = ctx({ nodeOutputs: { a: { data: null } } });
+      expect(() => substitute('${nodes.a.output.data.n > 1}', c)).toThrow(
+        /the value before it is null.*use greater\(a, b\)/,
+      );
+      expect(() => substitute("${default(nodes.a.output.data.n > 1, 'fb')}", c)).not.toThrow();
+    });
+
+    it('a key that really holds an operator still resolves at run', () => {
+      const c = ctx({ nodeOutputs: { a: { data: { 'a>b': 1 } } } });
+      expect(substitute('${nodes.a.output.data.a>b}', c)).toBe(1);
+    });
+  });
+
   it('refuses an index in the ROOT region (a namespace/id/output name is literal)', () => {
     // A dynamic output name would defeat the declared-name check, so the root is
     // FIELDS ONLY; `leadingFields` stops at the first index and nothing matches.

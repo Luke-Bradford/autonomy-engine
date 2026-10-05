@@ -516,27 +516,48 @@ function walkPath(start: unknown, tail: ExprSegment[], env: Env, source: string)
 function stepField(cur: unknown, name: string, source: string): unknown {
   if (cur === null || cur === undefined) {
     throw new MissingValueError(
-      `\${${source}}: has no field '${name}' — the value before it is ${
-        cur === null ? 'null' : 'absent'
-      }`,
+      withFieldHint(
+        `\${${source}}: has no field '${name}' — the value before it is ${
+          cur === null ? 'null' : 'absent'
+        }`,
+        name,
+      ),
     );
   }
   if (Array.isArray(cur)) {
     throw new SubstituteError(
-      `\${${source}}: cannot read field '${name}' on an array — index it with ` +
-        `[] (or use length()/first()/last())`,
+      withFieldHint(
+        `\${${source}}: cannot read field '${name}' on an array — index it with ` +
+          `[] (or use length()/first()/last())`,
+        name,
+      ),
     );
   }
   if (typeof cur !== 'object') {
     throw new SubstituteError(
-      `\${${source}}: cannot read field '${name}' — the value before it is a ` +
-        `${typeof cur}, not an object`,
+      withFieldHint(
+        `\${${source}}: cannot read field '${name}' — the value before it is a ` +
+          `${typeof cur}, not an object`,
+        name,
+      ),
     );
   }
   if (!Object.prototype.hasOwnProperty.call(cur, name)) {
-    throw new MissingValueError(`\${${source}}: has no field '${name}'`);
+    throw new MissingValueError(withFieldHint(`\${${source}}: has no field '${name}'`, name));
   }
   return (cur as Record<string, unknown>)[name];
+}
+
+/**
+ * #1553 — the run-time half of the tail-field operator rule. A version saved
+ * before save refused `${item.score > 5}` still runs, and its field step fails
+ * on the literal key `score > 5`; say what was meant. Only the message changes:
+ * the error class (and so whether `default()` rescues it) is untouched, and a
+ * key that really holds an operator still resolves above.
+ */
+function withFieldHint(message: string, name: string): string {
+  const hint = infixOperatorHint(name);
+  return hint === null ? message : `${message} (${hint})`;
 }
 
 /**
@@ -5109,6 +5130,25 @@ function checkExprStatic(
     return;
   }
   const tail = expr.segments.slice(root.arity);
+
+  // #1553 — an OPERATOR IN A TAIL FIELD. The grammar has no infix operators and
+  // a field's charset is permissive, so `${item.score > 5}` is a ref whose last
+  // field is literally `score > 5`. That key is legal JSON, but an author who
+  // writes it means a comparison, and nothing past the root was ever checked, so
+  // it saved clean and failed (or read nothing) at run. Refused here; `scan`
+  // appends the hint naming the function. A key that truly holds an operator
+  // stays reachable through a quoted index (`['score > 5']`), which is an
+  // `index` segment and never reaches this rule. The ROOT region needs no rule:
+  // a param, variable, global or output name holding one is already undeclared.
+  // Returning early keeps this to ONE error, like the root-restriction and depth
+  // branches above: the root and index rules below run again once the
+  // expression is rewritten.
+  for (const seg of tail) {
+    if (seg.kind === 'field' && infixOperatorHint(seg.name) !== null) {
+      errors.push(`${where}: \${${expr.source}} — the field '${seg.name}' holds an operator`);
+      return;
+    }
+  }
 
   // #6 E7 — WALK EVERY TAIL INDEX EXPR. Pre-E7 this branch returned before
   // reaching an index's own sub-expression, which was sound only while the ref
