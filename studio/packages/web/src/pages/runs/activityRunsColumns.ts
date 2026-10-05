@@ -18,7 +18,6 @@ export const ACTIVITY_RUN_COLUMNS = [
   'Error',
 ] as const;
 
-/** `2 of 5 · orders.csv`, 1-based; a loop has no count. */
 /** An iteration named by its container's kind: `Item 2 of 2 · orders_b.csv`,
  * or `Round 3`. */
 export function iterationLabel(
@@ -28,6 +27,7 @@ export function iterationLabel(
   return `${kind === 'loop' ? 'Round' : 'Item'} ${iterationText(it)}`;
 }
 
+/** `2 of 5 · orders.csv`, 1-based; a loop has no count. */
 export function iterationText(it: ActivityRun['iteration']): string {
   if (it === null) return '';
   const n = it.count === null ? `${it.index + 1}` : `${it.index + 1} of ${it.count}`;

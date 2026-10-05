@@ -28,8 +28,9 @@ const RESIZE_STEP = 16;
  * row just swaps the record. Escape closes it while focus is inside it, as the
  * form drawer does (`FormDrawer`), and focus goes back to the row that opened
  * it. Only while focus is inside: the page behind has its own Escapes (a search
- * box, a confirm), and a page-wide one would close the drawer under them. The owner keys the drawer by row, so each row's open is a fresh mount and
- * hands focus in again.
+ * box, a confirm), and a page-wide one would close the drawer under them. The
+ * owner keys the drawer by row, so each row's open is a fresh mount and hands
+ * focus in again.
  *
  * Its width is the operator's (`uiStore.runDrawerWidth`), dragged or set with
  * the arrow keys on its left edge.
