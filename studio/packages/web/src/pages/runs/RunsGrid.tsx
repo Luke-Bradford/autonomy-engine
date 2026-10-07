@@ -117,8 +117,8 @@ function ColumnHeader({
  * the run. The Run ID cell holds the REAL link to it (keyboard focus, Enter, the
  * browser's own middle-click and context menu); the row's click handlers only
  * extend that target to the rest of the row for a mouse. They stand down when
- * the click landed on a control of its own (any link — Pipeline and Parent go
- * elsewhere — or the copy button)
+ * the click landed on a control of its own (any link — Parent and the editor
+ * icon go elsewhere — the copy button, or the Pipeline cell's ⋯ menu)
  * or ended a text selection, so copying a pipeline name never navigates. A
  * middle click or a modified click opens the run in a new tab, as the link
  * would.
@@ -144,6 +144,10 @@ function RunRow({
     if (e.target instanceof Element && e.target.closest('a, button, input, select, textarea')) {
       return;
     }
+    // #1566 — React bubbles a click through a PORTAL to this row too: the
+    // Pipeline cell's ⋯ menu renders in the body, so a click on one of its
+    // items is not in the row's DOM and must not also open the run.
+    if (!(e.target instanceof Node) || !e.currentTarget.contains(e.target)) return;
     // Only a selection INSIDE this row means "I was selecting text"; a stale one
     // elsewhere on the page must not make every row click do nothing.
     const selection = window.getSelection();
