@@ -163,6 +163,8 @@ describe('PipelinesPage', () => {
       nextFireAt: null,
       activities: null,
       modifiedAt: 1,
+      description: '',
+      annotations: [],
       ...over,
     });
     const rowNames = () =>
@@ -231,7 +233,8 @@ describe('PipelinesPage', () => {
       renderPage();
       await screen.findAllByText('success');
       expect(rowNames()).toEqual(['Alpha', 'Beta', 'Gamma']);
-      fireEvent.click(screen.getByRole('button', { name: /Last run/ }));
+      // The header's button, not the filter bar's "Last run: All" menu.
+      fireEvent.click(within(screen.getByRole('table')).getByRole('button', { name: /Last run/ }));
       expect(rowNames()).toEqual(['Gamma', 'Alpha', 'Beta']);
       expect(screen.getByRole('columnheader', { name: /Last run/ })).toHaveAttribute(
         'aria-sort',
@@ -446,7 +449,7 @@ describe('PipelinesPage', () => {
       await screen.findByText(/No pipelines yet/i);
       expect(listArchivedMock).not.toHaveBeenCalled();
 
-      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
       expect(await screen.findByText('Retired')).toBeInTheDocument();
       expect(listArchivedMock).toHaveBeenCalledTimes(1);
     });
@@ -456,9 +459,9 @@ describe('PipelinesPage', () => {
       listArchivedMock.mockResolvedValue([pipeline({ id: 'pl_9', name: 'Retired' })]);
       renderPage();
       await screen.findByText(/No pipelines yet/i);
-      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
 
-      await user.click(await screen.findByRole('button', { name: 'Unarchive Retired' }));
+      await chooseRowAction(user, 'Retired', 'Unarchive');
 
       await waitFor(() => expect(restoreMock).toHaveBeenCalledWith('pl_9'));
       // The row leaves the archived list and rejoins the live one, so both are
@@ -473,7 +476,7 @@ describe('PipelinesPage', () => {
       renderPage();
       await screen.findByText(/No pipelines yet/i);
 
-      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
 
       // The lie this guards against: "No archived pipelines" over a load that
       // never answered tells the operator their pipeline is gone, on the ONE
@@ -500,14 +503,14 @@ describe('PipelinesPage', () => {
       renderPage();
 
       // 1. Open — load #1 starts, carrying a view from BEFORE the archive below.
-      await user.click(await screen.findByRole('button', { name: /Show archived/i }));
+      await user.click(await screen.findByRole('button', { name: 'Archived' }));
       // 2. Close before it answers, 3. archive (invalidating the cache),
       //    4. reopen — load #2 starts and is the only correct answer.
-      await user.click(screen.getByRole('button', { name: /Hide archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
       await chooseRowAction(user, 'Nightly digest', 'Archive');
       await answerConfirm(user, 'accept');
       await waitFor(() => expect(archiveMock).toHaveBeenCalled());
-      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
 
       // 5. The fresher load lands first and is right.
       second.resolve([pipeline({ id: 'pl_9', name: 'Retired' })]);
@@ -536,9 +539,9 @@ describe('PipelinesPage', () => {
       listArchivedMock.mockReturnValueOnce(inFlight.promise);
       renderPage();
 
-      await user.click(await screen.findByRole('button', { name: /Show archived/i }));
+      await user.click(await screen.findByRole('button', { name: 'Archived' }));
       await waitFor(() => expect(listArchivedMock).toHaveBeenCalledTimes(1));
-      await user.click(screen.getByRole('button', { name: /Hide archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
 
       await chooseRowAction(user, 'Nightly digest', 'Archive');
       await answerConfirm(user, 'accept');
@@ -552,9 +555,10 @@ describe('PipelinesPage', () => {
       inFlight.resolve([]);
       listArchivedMock.mockResolvedValue([pipeline({ name: 'Nightly digest', archived: true })]);
 
-      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
+      // In the archived view, a row's menu is the archived row's.
       expect(
-        await screen.findByRole('button', { name: 'Unarchive Nightly digest' }),
+        await screen.findByRole('button', { name: 'Actions for Nightly digest' }),
       ).toBeInTheDocument();
       expect(listArchivedMock).toHaveBeenCalledTimes(2);
     });
@@ -571,15 +575,15 @@ describe('PipelinesPage', () => {
 
       // Open (load A starts), close, then archive — which reads `showArchived`
       // as false at CLICK time and holds that value across its awaits.
-      await user.click(await screen.findByRole('button', { name: /Show archived/i }));
+      await user.click(await screen.findByRole('button', { name: 'Archived' }));
       await waitFor(() => expect(listArchivedMock).toHaveBeenCalledTimes(1));
-      await user.click(screen.getByRole('button', { name: /Hide archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
       await chooseRowAction(user, 'Nightly digest', 'Archive');
       await answerConfirm(user, 'accept');
 
       // Reopen while the archive is still in flight. Load A is still 'loading',
       // so an open that only fetches on the CLICK cannot fetch here.
-      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
 
       listArchivedMock.mockResolvedValue([pipeline({ name: 'Nightly digest', archived: true })]);
       archiving.resolve(pipeline({ archived: true }));
@@ -589,8 +593,9 @@ describe('PipelinesPage', () => {
       // then, so it has to load: otherwise it sits at `idle` while open, which
       // renders no rows, no error and no "Loading…" — a blank section that
       // nothing refetches, hiding the pipeline just archived.
+      // In the archived view, a row's menu is the archived row's.
       expect(
-        await screen.findByRole('button', { name: 'Unarchive Nightly digest' }),
+        await screen.findByRole('button', { name: 'Actions for Nightly digest' }),
       ).toBeInTheDocument();
     });
 
@@ -601,9 +606,9 @@ describe('PipelinesPage', () => {
 
       // Open, then close — so a naive "fetch once" would now be holding a list
       // that predates the archive below.
-      await user.click(await screen.findByRole('button', { name: /Show archived/i }));
+      await user.click(await screen.findByRole('button', { name: 'Archived' }));
       await waitFor(() => expect(listArchivedMock).toHaveBeenCalledTimes(1));
-      await user.click(screen.getByRole('button', { name: /Hide archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
 
       await chooseRowAction(user, 'Nightly digest', 'Archive');
       await answerConfirm(user, 'accept');
@@ -612,10 +617,11 @@ describe('PipelinesPage', () => {
       expect(listArchivedMock).toHaveBeenCalledTimes(1);
 
       listArchivedMock.mockResolvedValue([pipeline({ name: 'Nightly digest', archived: true })]);
-      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
       // The row just archived is THERE, because opening refetched.
+      // In the archived view, a row's menu is the archived row's.
       expect(
-        await screen.findByRole('button', { name: 'Unarchive Nightly digest' }),
+        await screen.findByRole('button', { name: 'Actions for Nightly digest' }),
       ).toBeInTheDocument();
     });
 
@@ -634,20 +640,25 @@ describe('PipelinesPage', () => {
     it('reports a follow-up READ failure as itself, not as a failed archive', async () => {
       const user = userEvent.setup();
       listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
+      const archiving = deferred<Pipeline>();
+      archiveMock.mockReturnValueOnce(archiving.promise);
       renderPage();
 
-      // Section OPEN, so the archive's follow-up takes the `loadArchived` branch.
-      await user.click(await screen.findByRole('button', { name: /Show archived/i }));
+      await chooseRowAction(user, 'Nightly digest', 'Archive');
+      await answerConfirm(user, 'accept');
+      await waitFor(() => expect(archiveMock).toHaveBeenCalledWith('pl_1'));
+
+      // The archived view OPEN by the time the archive lands (it replaces the
+      // live list, so it cannot be open when the archive starts), so the
+      // archive's follow-up takes the `loadArchived` branch.
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
       await waitFor(() => expect(listArchivedMock).toHaveBeenCalledTimes(1));
 
       // Both follow-up reads fail: the live refresh AND the archived reload.
       listMock.mockRejectedValue(new Error('live list down'));
       listArchivedMock.mockRejectedValue(new Error('archived list down'));
+      archiving.resolve(pipeline({ archived: true }));
 
-      await chooseRowAction(user, 'Nightly digest', 'Archive');
-      await answerConfirm(user, 'accept');
-
-      await waitFor(() => expect(archiveMock).toHaveBeenCalledWith('pl_1'));
       expect(await screen.findByText(/Could not load archived pipelines/i)).toBeInTheDocument();
       expect(screen.getByText(/live list down/i)).toBeInTheDocument();
       // The archive itself SUCCEEDED, so nothing may say otherwise.
@@ -659,12 +670,12 @@ describe('PipelinesPage', () => {
       listArchivedMock.mockResolvedValue([pipeline({ id: 'pl_9', name: 'Retired' })]);
       renderPage();
       await screen.findByText(/No pipelines yet/i);
-      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
 
       listMock.mockRejectedValue(new Error('live list down'));
       listArchivedMock.mockRejectedValue(new Error('archived list down'));
 
-      await user.click(await screen.findByRole('button', { name: 'Unarchive Retired' }));
+      await chooseRowAction(user, 'Retired', 'Unarchive');
 
       await waitFor(() => expect(restoreMock).toHaveBeenCalledWith('pl_9'));
       expect(await screen.findByText(/Could not load archived pipelines/i)).toBeInTheDocument();

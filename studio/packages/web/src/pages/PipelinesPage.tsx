@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
+import {
+  Menu,
+  MenuItemCheckbox,
+  MenuList,
+  MenuPopover,
+  MenuTrigger,
+  ToggleButton,
+} from '@fluentui/react-components';
 import { useStore } from 'zustand';
 import type {
   Pipeline,
@@ -25,7 +33,12 @@ import {
 } from '../api/pipelines';
 import { getWorkspaceGit, readWorkspaceGitSync } from '../api/workspaceGit';
 import { RowStateBadge } from './pipeline/EditorStateBadge';
-import { listRowBadge } from './pipeline/editorState';
+import {
+  LIVE_STATE_KEYS,
+  LIVE_STATE_LABELS,
+  listRowBadge,
+  liveStateKeys,
+} from './pipeline/editorState';
 import { pipelinesStore, type PipelinesStore } from '../stores/pipelinesStore';
 import { ImportPanel } from './ImportPanel';
 import { DemoPanel } from './DemoPanel';
@@ -37,6 +50,25 @@ import {
   sortPipelines,
   type PipelineSortKey,
 } from './author/pipelinesGridSort';
+import {
+  CLEARED_PIPELINE_FILTERS,
+  filterPipelines,
+  filtersAwaitFacts,
+  hasPipelineFilters,
+  LAST_RUN_FILTERS,
+  lastRunParam,
+  liveFactsLoaded,
+  NO_FOLDER,
+  PIPELINE_FILTER_PARAMS,
+  readPipelineFilters,
+  TRIGGERS_FILTER_LABELS,
+  TRIGGERS_FILTERS,
+  type LastRunFilter,
+} from './author/pipelinesGridFilter';
+import { FilterPicker } from './runs/FilterPicker';
+import { runStatusLabel } from './runs/runStatus';
+import { LabelledControl } from '../lib/LabelledControl';
+import { useSearchBox } from '../lib/useSearchBox';
 import { withParams } from '../lib/withParams';
 import { useConfirm } from '../lib/confirm/useConfirm';
 import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
@@ -165,9 +197,20 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
     [setSearchParams],
   );
   const { key: sortKey, dir: sortDir } = sort;
-  const sorted = useMemo(
-    () => sortPipelines(pipelines, summaries?.byId, { key: sortKey, dir: sortDir }),
-    [pipelines, summaries, sortKey, sortDir],
+
+  // #1569 slice 2 — the filters and the Archived view, in the URL with the sort.
+  const filters = readPipelineFilters(searchParams);
+  const showArchived = filters.archived;
+  const setFilter = useCallback(
+    (param: string, next: string) => setSearchParams((prev) => withParams(prev, { [param]: next })),
+    [setSearchParams],
+  );
+  const [searchText, setSearchText] = useSearchBox(
+    searchParams.get(PIPELINE_FILTER_PARAMS.q),
+    (next, replace) =>
+      setSearchParams((prev) => withParams(prev, { [PIPELINE_FILTER_PARAMS.q]: next }), {
+        replace,
+      }),
   );
 
   const [actionMsg, setActionMsg] = useState<string | null>(null);
@@ -191,7 +234,6 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
    * so opening next refetches rather than showing a list missing the row that
    * was just archived. Nothing is fetched while it is closed.
    */
-  const [showArchived, setShowArchived] = useState(false);
   const [archivedStatus, setArchivedStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>(
     'idle',
   );
@@ -362,14 +404,81 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
     showArchivedRef.current = showArchived;
   }, [showArchived]);
 
-  const onToggleArchived = useCallback(() => {
-    const next = !showArchived;
-    setShowArchived(next);
-    // Fetch on OPEN, and only when there is nothing fresh to show — `idle` is
-    // both "never loaded" and "invalidated by an archive". A closed section
-    // never fetches.
-    if (next && archivedStatus === 'idle') void loadArchived();
+  // #1569 slice 2 — a push, so Back returns to the live list. Turning it on
+  // drops the run, trigger and live-state filters: archived pipelines have none
+  // of those facts, and the bar does not draw their controls there.
+  const onToggleArchived = useCallback(
+    () =>
+      setSearchParams((prev) =>
+        withParams(
+          prev,
+          readPipelineFilters(prev).archived
+            ? { [PIPELINE_FILTER_PARAMS.archived]: '' }
+            : {
+                [PIPELINE_FILTER_PARAMS.archived]: '1',
+                [PIPELINE_FILTER_PARAMS.last]: '',
+                [PIPELINE_FILTER_PARAMS.triggers]: '',
+                [PIPELINE_FILTER_PARAMS.live]: '',
+              },
+        ),
+      ),
+    [setSearchParams],
+  );
+
+  // Fetch on OPEN — a click, Back, or a link with `?archived=1` — and only when
+  // there is nothing fresh to show: `idle` is both "never loaded" and
+  // "invalidated by an archive". A closed view never fetches. `loadArchived`
+  // leaves `idle` synchronously, so this runs once per opening.
+  useEffect(() => {
+    if (showArchived && archivedStatus === 'idle') void loadArchived();
   }, [showArchived, archivedStatus, loadArchived]);
+
+  const base = showArchived ? archived : pipelines;
+  // Each render, not memoised: `filters` is re-read from the URL every render,
+  // and sorting and filtering a page of pipelines costs less than the diff.
+  const rows = filterPipelines(
+    sortPipelines(base, summaries?.byId, { key: sortKey, dir: sortDir }),
+    (p) => {
+      const state = versionStates?.get(p.id);
+      return {
+        summary: summaries?.byId.get(p.id),
+        liveKeys:
+          state === undefined ? undefined : liveStateKeys({ state, gitConnected, sync: gitSync }),
+      };
+    },
+    filters,
+  );
+  const filtering = hasPipelineFilters(filters);
+  const awaitingFacts = filtersAwaitFacts(filters, {
+    summaries: summaries !== undefined,
+    liveStates:
+      filters.live === undefined ||
+      liveFactsLoaded(filters.live, {
+        states: versionStates !== undefined,
+        gitConnected,
+        sync: gitSync,
+      }),
+  });
+  const folderOptions = useMemo(() => {
+    const names = [...new Set(base.flatMap((p) => (p.folder === null ? [] : [p.folder])))].sort(
+      (a, b) => a.localeCompare(b, 'en'),
+    );
+    const options = names.map((f) => ({ value: f, label: f }));
+    return base.some((p) => p.folder === null)
+      ? [...options, { value: NO_FOLDER, label: '(no folder)' }]
+      : options;
+  }, [base]);
+  const lastSummary =
+    filters.last.length === 0
+      ? 'All'
+      : filters.last.length === 1
+        ? lastRunFilterLabel(filters.last[0]!)
+        : `${String(filters.last.length)} statuses`;
+
+  function clearFilters() {
+    setSearchText('');
+    setSearchParams((prev) => withParams(prev, CLEARED_PIPELINE_FILTERS));
+  }
 
   /**
    * Archive: the soft-delete, and the ONLY way to retire a pipeline that has
@@ -457,17 +566,158 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
         </p>
       )}
 
+      {/* #1569 slice 2 — ONE row, the runs bar's conventions: each control
+          keeps its label for assistive tech but draws none. Drawn whenever the
+          list has loaded or the archived view is open — never only when there
+          are live rows, or a workspace whose every pipeline is archived would
+          have no way to reach them. */}
+      {(status === 'ready' || showArchived) && (
+        <div className="run-filters pipelines-filters" role="group" aria-label="Filter pipelines">
+          <div role="search" className="pipelines-filters__search">
+            <LabelledControl label={<span className="visually-hidden">Search pipelines</span>}>
+              {(id) => (
+                <input
+                  id={id}
+                  type="search"
+                  placeholder={
+                    showArchived ? 'Search name, folder…' : 'Search name, description, annotations…'
+                  }
+                  value={searchText}
+                  onChange={(e) => setSearchText(e.target.value)}
+                />
+              )}
+            </LabelledControl>
+          </div>
+          <FilterPicker
+            label={<span className="visually-hidden">Folder</span>}
+            allLabel="All folders"
+            value={filters.folder}
+            options={folderOptions}
+            onChange={(next) => setFilter(PIPELINE_FILTER_PARAMS.folder, next)}
+          />
+          {!showArchived && (
+            <>
+              {/* Several at once: Fluent's checkbox menu, as the runs bar's
+                  "Triggered by". The button says the selection. */}
+              <Menu
+                checkedValues={{ last: filters.last }}
+                onCheckedValueChange={(_, data) =>
+                  setFilter(PIPELINE_FILTER_PARAMS.last, lastRunParam(data.checkedItems))
+                }
+              >
+                <MenuTrigger disableButtonEnhancement>
+                  <button type="button" className="run-filters__menu">
+                    Last run: {lastSummary} <span aria-hidden="true">▾</span>
+                  </button>
+                </MenuTrigger>
+                <MenuPopover>
+                  <MenuList>
+                    {LAST_RUN_FILTERS.map((v) => (
+                      <MenuItemCheckbox key={v} name="last" value={v}>
+                        {lastRunFilterLabel(v)}
+                      </MenuItemCheckbox>
+                    ))}
+                  </MenuList>
+                </MenuPopover>
+              </Menu>
+              <LabelledControl label={<span className="visually-hidden">Triggers</span>}>
+                {(id) => (
+                  <select
+                    id={id}
+                    value={filters.triggers ?? ''}
+                    onChange={(e) => setFilter(PIPELINE_FILTER_PARAMS.triggers, e.target.value)}
+                  >
+                    <option value="">All triggers</option>
+                    {TRIGGERS_FILTERS.map((t) => (
+                      <option key={t} value={t}>
+                        {TRIGGERS_FILTER_LABELS[t]}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </LabelledControl>
+              <LabelledControl label={<span className="visually-hidden">Live state</span>}>
+                {(id) => (
+                  <select
+                    id={id}
+                    value={filters.live ?? ''}
+                    onChange={(e) => setFilter(PIPELINE_FILTER_PARAMS.live, e.target.value)}
+                  >
+                    <option value="">All live states</option>
+                    {LIVE_STATE_KEYS.map((k) => (
+                      <option key={k} value={k}>
+                        {LIVE_STATE_LABELS[k]}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </LabelledControl>
+            </>
+          )}
+          {/* #1058 — the way back out of archive, and out of an archive this
+              page did NOT perform: a git import soft-archives every resource
+              absent from the branch. "A refusal is safe exactly when the way
+              back is reachable by the same person" (#907). */}
+          <ToggleButton size="small" checked={showArchived} onClick={onToggleArchived}>
+            Archived
+          </ToggleButton>
+          {/* "Clear" on screen to keep the bar one row; the accessible name
+              keeps the whole phrase, and starts with the visible word. */}
+          {filtering && (
+            <button type="button" onClick={clearFilters} aria-label="Clear filters">
+              Clear
+            </button>
+          )}
+        </div>
+      )}
+
+      {showArchived && (
+        <>
+          {archivedError && (
+            <p className="error" role="alert">
+              {archivedError}
+            </p>
+          )}
+          {/* Its own Retry, for the same reason the live list has one: this
+              view is the only in-app route back out of archive, so a failed
+              load must not be a dead end. */}
+          {archivedStatus === 'error' && (
+            <p>
+              <button type="button" onClick={() => void loadArchived()}>
+                Retry loading archived
+              </button>
+            </p>
+          )}
+          {archivedStatus === 'loading' && <p>Loading archived pipelines…</p>}
+          {/* Gated on a load having SUCCEEDED — an empty list and a failed
+              load are different facts, and this is the view where confusing
+              them tells the operator their pipeline is gone. */}
+          {archivedStatus === 'ready' && archived.length === 0 && <p>No archived pipelines.</p>}
+        </>
+      )}
+
       {/* Gated on a load having SUCCEEDED: an empty list and a failed load are
           different facts, and "no pipelines yet" is a lie about the second. */}
-      {status === 'ready' && pipelines.length === 0 && <p>No pipelines yet — create one below.</p>}
+      {!showArchived && status === 'ready' && pipelines.length === 0 && (
+        <p>No pipelines yet — create one below.</p>
+      )}
 
-      {pipelines.length > 0 && (
+      {/* Under a filter whose facts have not been read, every row is held back
+          (a row never matches a fact nobody has) — so say that, rather than
+          "no match", which would be a claim about the facts. */}
+      {awaitingFacts && <p className="page-hint">Waiting for run and state facts to filter by…</p>}
+      {!awaitingFacts && filtering && base.length > 0 && rows.length === 0 && (
+        <p>No pipelines match the filters.</p>
+      )}
+
+      {rows.length > 0 && (
         <PipelinesGrid
-          pipelines={sorted}
-          summaries={summaries?.byId}
+          pipelines={rows}
+          summaries={showArchived ? undefined : summaries?.byId}
           loadedAt={summaries?.loadedAt}
           sort={sort}
           onSort={onSort}
+          {...(showArchived ? { columns: ARCHIVED_COLUMNS } : {})}
           liveState={(p) => {
             const state = versionStates?.get(p.id);
             return state === undefined ? null : (
@@ -477,15 +727,19 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
               />
             );
           }}
-          actions={(p) => (
-            <>
-              {/* #1397 — the name is the row's one inline action; the rest are
-                  in its menu. #1058: Archive stays in the same menu as
-                  Delete on purpose. Delete is refused with a 409 the
-                  moment the pipeline has run history, and
-                  `pipelineHasRunsMessage` (shared with the Factory
-                  Resources pane, which has no Archive) names where
-                  Archive is. Here it is the item above Delete. */}
+          actions={(p) =>
+            showArchived ? (
+              <RowMoreMenu
+                name={p.name}
+                actions={[{ label: 'Unarchive', onSelect: () => void onUnarchive(p) }]}
+              />
+            ) : (
+              /* #1397 — the name is the row's one inline action; the rest are
+                 in its menu. #1058: Archive stays in the same menu as Delete on
+                 purpose. Delete is refused with a 409 the moment the pipeline
+                 has run history, and `pipelineHasRunsMessage` (shared with the
+                 Factory Resources pane, which has no Archive) names where
+                 Archive is. Here it is the item above Delete. */
               <RowMoreMenu
                 name={p.name}
                 actions={[
@@ -501,76 +755,10 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
                   onSelect: (origin) => void onDelete(p, origin),
                 }}
               />
-            </>
-          )}
+            )
+          }
         />
       )}
-
-      {/* #1058 — the ARCHIVED set. Behind a toggle rather than always on
-          screen: it is a recovery surface, not part of the day-to-day list, and
-          leaving it closed costs no request. Archiving is only safe to offer
-          because this exists — "a refusal is safe exactly when the way back is
-          reachable by the same person" (#907). It is also the way back from an
-          archive this page did NOT perform: a git import soft-archives every
-          resource absent from the branch. */}
-      <section aria-labelledby="archived-heading">
-        <h3 id="archived-heading">Archived</h3>
-        <button type="button" onClick={onToggleArchived} aria-expanded={showArchived}>
-          {showArchived ? 'Hide archived' : 'Show archived'}
-        </button>
-
-        {showArchived && (
-          <>
-            {archivedError && (
-              <p className="error" role="alert">
-                {archivedError}
-              </p>
-            )}
-            {/* Its own Retry, for the same reason the live list has one: this
-                section is the only in-app route back out of archive, so a
-                failed load must not be a dead end. */}
-            {archivedStatus === 'error' && (
-              <p>
-                <button type="button" onClick={() => void loadArchived()}>
-                  Retry loading archived
-                </button>
-              </p>
-            )}
-            {archivedStatus === 'loading' && <p>Loading archived pipelines…</p>}
-            {/* Gated on a load having SUCCEEDED — an empty list and a failed
-                load are different facts, and this is the section where
-                confusing them tells the operator their pipeline is gone. */}
-            {archivedStatus === 'ready' && archived.length === 0 && <p>No archived pipelines.</p>}
-
-            {archived.length > 0 && (
-              <table>
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th aria-label="actions" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {archived.map((p) => (
-                    <tr key={p.id}>
-                      <td>{p.name}</td>
-                      <td>
-                        <button
-                          type="button"
-                          onClick={() => void onUnarchive(p)}
-                          aria-label={`Unarchive ${p.name}`}
-                        >
-                          Unarchive
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </>
-        )}
-      </section>
 
       <form
         className="connection-form"
@@ -606,4 +794,11 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
       {confirmDialog}
     </section>
   );
+}
+
+/** The archived view draws only the columns it has facts for. */
+const ARCHIVED_COLUMNS = ['name', 'modified'] as const;
+
+function lastRunFilterLabel(v: LastRunFilter): string {
+  return v === 'never' ? 'Never run' : runStatusLabel(v);
 }

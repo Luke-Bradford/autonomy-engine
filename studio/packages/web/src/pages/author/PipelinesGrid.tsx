@@ -18,8 +18,10 @@ import type { PipelineSort, PipelineSortKey } from './pipelinesGridSort';
 
 const DAYS = String(PIPELINE_SUMMARY_WINDOW_DAYS);
 
+export type ColumnId = 'name' | 'lastRun' | 'successRate' | 'nextRun' | 'triggers' | 'live' | 'modified';
+
 interface Column {
-  id: string;
+  id: ColumnId;
   label: string;
   /** The `<col>` width; the last column before the menu takes what is left. */
   width: number;
@@ -105,6 +107,7 @@ export function PipelinesGrid({
   liveState,
   actions,
   loadedAt,
+  columns,
 }: {
   /** Already in display order. */
   pipelines: readonly Pipeline[];
@@ -115,19 +118,68 @@ export function PipelinesGrid({
   actions: (p: Pipeline) => ReactNode;
   /** When the summaries were read: the compact timestamps' "same year?". */
   loadedAt: number | undefined;
+  /** The columns to draw, by id; every column when absent. The archived view
+   * draws only the ones it has facts for. */
+  columns?: readonly ColumnId[];
 }) {
+  const shown = columns === undefined ? COLUMNS : COLUMNS.filter((c) => columns.includes(c.id));
+  const cellOf = (id: ColumnId, p: Pipeline, s: PipelineSummary | undefined): ReactNode => {
+    switch (id) {
+      case 'name':
+        return (
+          <td
+            key={id}
+            className="pipelines-grid__name"
+            title={p.folder === null ? p.name : `${p.folder} / ${p.name}`}
+          >
+            {p.folder !== null && <span className="pipelines-grid__folder">{p.folder} / </span>}
+            {/* A link, so it can be middle-clicked, copied and bookmarked
+                (U2's navigation idiom). Its name keeps the "Open …" verb the
+                row has always had. */}
+            <Link to={pipelinePath(p.id)} aria-label={`Open ${p.name}`}>
+              {p.name}
+            </Link>
+          </td>
+        );
+      case 'lastRun':
+        return <td key={id}>{lastRunCell(s, loadedAt)}</td>;
+      case 'successRate':
+        return (
+          <td key={id} className="num">
+            {successCell(s)}
+          </td>
+        );
+      case 'nextRun':
+        return (
+          <td key={id}>
+            {s?.nextFireAt == null ? '—' : <When ms={s.nextFireAt} compact asOf={loadedAt} />}
+          </td>
+        );
+      case 'triggers':
+        return <td key={id}>{triggersCell(s)}</td>;
+      case 'live':
+        return <td key={id}>{liveState(p)}</td>;
+      case 'modified':
+        // Until the summaries answer, the row's own last change.
+        return (
+          <td key={id}>
+            <When ms={s?.modifiedAt ?? p.updatedAt} compact asOf={loadedAt} />
+          </td>
+        );
+    }
+  };
   return (
     <div className="runs-grid-scroll">
       <table className="runs-grid pipelines-grid">
         <colgroup>
-          {COLUMNS.map((c) => (
+          {shown.map((c) => (
             <col key={c.id} style={{ width: `${String(c.width)}px` }} />
           ))}
           <col className="pipelines-grid__actions-col" />
         </colgroup>
         <thead>
           <tr>
-            {COLUMNS.map((c) => {
+            {shown.map((c) => {
               const dir = c.sort !== undefined && sort.key === c.sort ? sort.dir : null;
               return (
                 <th
@@ -155,31 +207,7 @@ export function PipelinesGrid({
             const s = summaries?.get(p.id);
             return (
               <tr key={p.id}>
-                <td
-                  className="pipelines-grid__name"
-                  title={p.folder === null ? p.name : `${p.folder} / ${p.name}`}
-                >
-                  {p.folder !== null && (
-                    <span className="pipelines-grid__folder">{p.folder} / </span>
-                  )}
-                  {/* A link, so it can be middle-clicked, copied and bookmarked
-                      (U2's navigation idiom). Its name keeps the "Open …" verb
-                      the row has always had. */}
-                  <Link to={pipelinePath(p.id)} aria-label={`Open ${p.name}`}>
-                    {p.name}
-                  </Link>
-                </td>
-                <td>{lastRunCell(s, loadedAt)}</td>
-                <td className="num">{successCell(s)}</td>
-                <td>
-                  {s?.nextFireAt == null ? '—' : <When ms={s.nextFireAt} compact asOf={loadedAt} />}
-                </td>
-                <td>{triggersCell(s)}</td>
-                <td>{liveState(p)}</td>
-                {/* Until the summaries answer, the row's own last change. */}
-                <td>
-                  <When ms={s?.modifiedAt ?? p.updatedAt} compact asOf={loadedAt} />
-                </td>
+                {shown.map((c) => cellOf(c.id, p, s))}
                 <td className="pipelines-grid__actions">{actions(p)}</td>
               </tr>
             );
