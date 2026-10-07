@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { percentOf } from './PipelinesGrid';
+import { percentOf } from './successPercent';
 
 describe('percentOf (#1569)', () => {
   it('rounds, but never a failure up to 100% or a success down to 0%', () => {
