@@ -7,8 +7,14 @@ import {
   type FormEvent,
   type RefObject,
 } from 'react';
-import { PipelineFolderSchema, type Pipeline } from '@autonomy-studio/shared';
-import { createPipeline } from '../api/pipelines';
+import {
+  PIPELINE_DESCRIPTION_MAX_CHARS,
+  PipelineFolderSchema,
+  type Pipeline,
+} from '@autonomy-studio/shared';
+import { newPipeline } from '../api/pipelines';
+import { LabelledControl } from '../lib/LabelledControl';
+import { AutoGrowTextarea } from '../lib/form/AutoGrowTextarea';
 import { FormDrawer } from '../lib/form/FormDrawer';
 import { FormSection } from '../lib/form/FormSection';
 import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
@@ -25,6 +31,7 @@ export interface NewPipelineForm {
   kind: 'new';
   name: string;
   folder: string;
+  description: string;
 }
 
 const FIELD_LABELS: ReadonlyMap<string, string> = new Map([
@@ -51,9 +58,9 @@ function newPipelineChecks(form: NewPipelineForm): FieldErrors {
 }
 
 /**
- * #1569 OR37 — the Pipelines toolbar's "New pipeline", in the shared drawer.
- * Name and folder: a pipeline's description lives on its VERSION, and a new
- * pipeline has none until its first save, so it is edited in the editor.
+ * #1569 OR37 — the Pipelines toolbar's "New pipeline", in the shared drawer:
+ * name, folder and description. A description lives on the pipeline's VERSION,
+ * so one typed here is written as an empty first version (`newPipeline`).
  */
 export function NewPipelineDrawer({
   form,
@@ -95,10 +102,13 @@ export function NewPipelineDrawer({
     const folder = form.folder.trim();
     setSaving(true);
     try {
-      const created = await createPipeline({
-        name: form.name.trim(),
-        folder: folder === '' ? null : existingFolderSpelling(folderNames, folder),
-      });
+      const created = await newPipeline(
+        {
+          name: form.name.trim(),
+          folder: folder === '' ? null : existingFolderSpelling(folderNames, folder),
+        },
+        form.description,
+      );
       await onCreated(created);
     } catch (err) {
       setError(saveRefusal(err, validation));
@@ -166,6 +176,17 @@ export function NewPipelineDrawer({
           ))}
         </datalist>
         <FieldError id={errorIds.folder} message={validation.errorFor('folder')} />
+        <LabelledControl label="Description">
+          {(id) => (
+            <AutoGrowTextarea
+              id={id}
+              maxLength={PIPELINE_DESCRIPTION_MAX_CHARS}
+              value={form.description}
+              onChange={(e) => onChange({ ...form, description: e.target.value })}
+              placeholder="None"
+            />
+          )}
+        </LabelledControl>
       </FormSection>
     </FormDrawer>
   );

@@ -88,7 +88,9 @@ type PipelinesDrawer = NewPipelineForm | { kind: 'import' };
 /** What the open drawer would write, for its unsaved-changes check: an import
  * holds nothing typed, so it is never dirty. */
 function drawerSignature(drawer: PipelinesDrawer): string {
-  return drawer.kind === 'import' ? 'import' : JSON.stringify([drawer.name, drawer.folder]);
+  return drawer.kind === 'import'
+    ? 'import'
+    : JSON.stringify([drawer.name, drawer.folder, drawer.description]);
 }
 
 /** The archived view draws only the columns it has facts for. */
@@ -647,7 +649,14 @@ export function PipelinesPage({
             type="button"
             className="primary"
             aria-disabled={drawerBusy}
-            onClick={(e) => openFromToolbar(e.currentTarget, { kind: 'new', name: '', folder: '' })}
+            onClick={(e) =>
+              openFromToolbar(e.currentTarget, {
+                kind: 'new',
+                name: '',
+                folder: '',
+                description: '',
+              })
+            }
           >
             + New pipeline
           </button>

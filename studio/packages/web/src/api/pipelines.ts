@@ -395,6 +395,75 @@ export function latestVersion(versions: readonly PipelineVersion[]): PipelineVer
   );
 }
 
+/** The first version `createPipelineWithFirstVersion` writes; it supplies the CAS basis. */
+type FirstVersion = Omit<PipelineVersionWrite, 'basedOnVersionId'>;
+
+/**
+ * Create a pipeline and write its first version, as ONE act to the caller.
+ *
+ * `firstVersion` is asked AFTER the create, with the new pipeline, and may
+ * answer `null` for "no version" — Duplicate only learns whether its source has
+ * one by reading it. The body's CAS basis is supplied here: the pipeline was
+ * minted moments ago and has no versions, so `null` ("I expect none yet") is
+ * the literal truth rather than an opt-out. A 409 would mean something else
+ * wrote to a pipeline this call had just minted.
+ *
+ * NOT ATOMIC — there is no transaction across two HTTP requests. So the failure
+ * path ROLLS BACK: a pipeline whose version write fails is deleted again (it is
+ * seconds old and has no run history, so `DELETE` cannot 409 on it) and the
+ * ORIGINAL error is what the caller sees. Leaving the empty husk behind would be
+ * an unexplained pipeline appearing in the tree at the exact moment the user was
+ * told the operation failed. If the rollback itself fails, the original error
+ * still wins — a rollback error names the wrong problem.
+ */
+async function createPipelineWithFirstVersion(
+  body: PipelineWrite,
+  firstVersion: () => FirstVersion | null | Promise<FirstVersion | null>,
+): Promise<Pipeline> {
+  let created: Pipeline | undefined;
+  try {
+    /* Inside the `try`, not before it. The POST can COMMIT (201) and still
+       throw here if its response body fails `PipelineSchema` — and a pipeline
+       created outside the try would then never be rolled back, which is
+       precisely the husk this function exists to avoid. `created` is only
+       bound after a successful parse, so the rollback below is a no-op in the
+       case where nothing was created. */
+    created = await createPipeline(body);
+    const version = await firstVersion();
+    if (version) await createPipelineVersion(created.id, { ...version, basedOnVersionId: null });
+    return created;
+  } catch (err) {
+    if (created) await deletePipeline(created.id).catch(() => undefined);
+    throw err;
+  }
+}
+
+/**
+ * #1569 OR37 — the toolbar's New pipeline. A description lives on the VERSION
+ * (#1 F8a, so a change to it is an edit like any other), so a pipeline created
+ * with one is created with a first version: an empty graph carrying it. Without
+ * one nothing is written but the pipeline, as before. A description of only
+ * spaces is no description, and writes no version.
+ */
+export function newPipeline(body: PipelineWrite, description: string): Promise<Pipeline> {
+  return createPipelineWithFirstVersion(body, () =>
+    description.trim() === ''
+      ? null
+      : {
+          // No `catalogVersion`: a graph authored now takes today's, the write
+          // schema's default — unlike Duplicate, which carries its source's.
+          params: [],
+          outputs: [],
+          nodes: [],
+          edges: [],
+          containers: [],
+          variables: [],
+          description,
+          annotations: [],
+        },
+  );
+}
+
 /**
  * Duplicate a pipeline under a new name (U4).
  *
@@ -402,31 +471,17 @@ export function latestVersion(versions: readonly PipelineVersion[]): PipelineVer
  * write it as the copy's first version — rather than added as a server route,
  * because the UI epic's stated non-goal is that its ONLY backend work is
  * read-only read-models. A source that has never been saved has no version to
- * copy, and the result is simply an empty pipeline.
+ * copy, and the result is simply an empty pipeline. A failed copy rolls back
+ * (`createPipelineWithFirstVersion`).
  *
  * The copy carries the SOURCE's `catalogVersion` rather than defaulting to
  * today's. Duplicating is a copy, not a re-authoring: the graph is byte-identical
  * to one that was validated against that catalog, so stamping it with a newer
  * one would assert a compatibility nobody checked.
- *
- * NOT ATOMIC — there is no transaction across two HTTP requests. So the failure
- * path ROLLS BACK: a copy whose version write fails is deleted again (it is
- * seconds old and has no run history, so `DELETE` cannot 409 on it) and the
- * ORIGINAL error is what the caller sees. Leaving the empty husk behind would be
- * an unexplained pipeline appearing in the tree at the exact moment the user was
- * told the operation failed. If the rollback itself fails, the original error
- * still wins — a rollback error names the wrong problem.
  */
-export async function duplicatePipeline(source: Pipeline, name: string): Promise<Pipeline> {
-  let copy: Pipeline | undefined;
-  try {
-    /* Inside the `try`, not before it. The POST can COMMIT (201) and still
-       throw here if its response body fails `PipelineSchema` — and a copy
-       created outside the try would then never be rolled back, which is
-       precisely the husk this function exists to avoid. `copy` is only bound
-       after a successful parse, so the rollback below is a no-op in the case
-       where nothing was created. */
-    copy = await createPipeline({
+export function duplicatePipeline(source: Pipeline, name: string): Promise<Pipeline> {
+  return createPipelineWithFirstVersion(
+    {
       name: name.trim(),
       // A copy, not a re-authoring: `concurrency` and `folder` (#1380) are the
       // other user-settable fields on a pipeline, and letting the write
@@ -435,34 +490,26 @@ export async function duplicatePipeline(source: Pipeline, name: string): Promise
       // manufactured-absence the project bans elsewhere (#473).
       concurrency: source.concurrency,
       folder: source.folder,
-    });
-    const latest = latestVersion(await listPipelineVersions(source.id));
-    if (latest) {
-      await createPipelineVersion(copy.id, {
-        params: latest.params,
-        outputs: latest.outputs,
-        nodes: latest.nodes,
-        edges: latest.edges,
-        containers: latest.containers,
-        // #844 V1 — hand-listed like every field here, so a forgotten one is
-        // silently defaulted away by the write schema.
-        variables: latest.variables,
-        description: latest.description,
-        annotations: latest.annotations,
-        catalogVersion: latest.catalogVersion,
-        // #904 — the CAS basis. The copy was created moments ago by the line
-        // above and has no versions, so `null` ("I expect none yet") is the
-        // literal truth rather than an opt-out. A 409 here would mean something
-        // else wrote to a pipeline this call had just minted; it lands inside
-        // the `try`, so the husk rollback below still fires.
-        basedOnVersionId: null,
-      });
-    }
-    return copy;
-  } catch (err) {
-    if (copy) await deletePipeline(copy.id).catch(() => undefined);
-    throw err;
-  }
+    },
+    async () => {
+      const latest = latestVersion(await listPipelineVersions(source.id));
+      return latest
+        ? {
+            params: latest.params,
+            outputs: latest.outputs,
+            nodes: latest.nodes,
+            edges: latest.edges,
+            containers: latest.containers,
+            // #844 V1 — hand-listed like every field here, so a forgotten one is
+            // silently defaulted away by the write schema.
+            variables: latest.variables,
+            description: latest.description,
+            annotations: latest.annotations,
+            catalogVersion: latest.catalogVersion,
+          }
+        : null;
+    },
+  );
 }
 
 /**

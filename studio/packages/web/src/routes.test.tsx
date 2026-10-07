@@ -90,6 +90,8 @@ vi.mock('./api/runs', async (importActual) => {
           nodes: [],
           edges: [],
           containers: [],
+          // What the real read's schema defaults it to (#1569 reads it).
+          description: '',
         },
         run: runRow(runId),
         // #1392 — the names the page publishes to the breadcrumb and title.
@@ -579,7 +581,14 @@ describe('route tree', () => {
         ? Promise.reject(new Error('run_a exploded'))
         : Promise.resolve({
             run: { id: runId },
-            pipelineVersion: { id: 'pv_1', version: 1, nodes: [], edges: [], containers: [] },
+            pipelineVersion: {
+              id: 'pv_1',
+              version: 1,
+              nodes: [],
+              edges: [],
+              containers: [],
+              description: '',
+            },
             pipelineName: 'B pipe',
             triggerName: null,
             triggeredByKind: 'editor',

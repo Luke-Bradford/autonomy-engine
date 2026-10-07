@@ -258,6 +258,53 @@ test('#1569 slice 3 — New pipeline and Import are toolbar drawers beside the g
   await expectQuiet(page, problems);
 });
 
+test('#1569 slice 5 — a description typed in New pipeline is its first version, and the grid finds it', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  const tag = `e2e 1569 described ${String(Date.now())}`;
+  const name = `${tag} pipeline`;
+  const description = `Loads the ${tag} extract`;
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/#/author/pipelines');
+  await page.getByRole('heading', { name: 'Pipelines' }).waitFor();
+  await fluentRootReady(page);
+
+  await newPipelineButton(page).click();
+  const form = page.getByRole('form', { name: 'New pipeline' });
+  await form.getByRole('textbox', { name: 'Name', exact: true }).fill(name);
+  await form.getByRole('textbox', { name: 'Description' }).fill(description);
+  await form.getByRole('button', { name: 'Create pipeline' }).click();
+  await expect(form).toBeHidden();
+
+  // Searching by the description finds it: the summaries read carries it.
+  await page.getByRole('searchbox', { name: 'Search pipelines' }).fill(`Loads the ${tag}`);
+  const open = page.getByRole('link', { name: `Open ${name}`, exact: true });
+  await expect(open).toHaveCount(1);
+  const id = decodeURIComponent((await open.getAttribute('href'))!.split('/').pop()!);
+
+  // Stored on a first version: an empty graph carrying it, as typed.
+  const versions = await page.request.get(`/api/pipelines/${encodeURIComponent(id)}/versions`);
+  expect(versions.status()).toBe(200);
+  const items = (await versions.json()) as {
+    version: number;
+    description: string;
+    nodes: unknown[];
+  }[];
+  expect(items.map((v) => [v.version, v.description, v.nodes.length])).toEqual([
+    [1, description, 0],
+  ]);
+
+  // And the editor's General tab opens on it.
+  await open.click();
+  await page.locator('.react-flow__renderer').waitFor();
+  await page.getByRole('tab', { name: 'General' }).click();
+  await expect(page.getByLabel('pipeline description')).toHaveValue(description);
+
+  await expectQuiet(page, problems);
+});
+
 test('#1569 slice 4 — pipelines grid columns resize, can be chosen, persist per viewer, and reset', async ({
   page,
 }) => {

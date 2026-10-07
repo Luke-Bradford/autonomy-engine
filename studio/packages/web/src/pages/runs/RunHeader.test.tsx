@@ -109,6 +109,21 @@ describe('RunHeader (#1484 OR35 M2)', () => {
       expect(screen.queryByText(absent, { selector: 'dt' })).toBeNull();
   });
 
+  it("#1569 — the pipeline's name hovers with the bound version's description", () => {
+    header(RUN, { description: 'Loads the nightly extract' });
+    expect(screen.getByText('Nightly load', { selector: 'span' })).toHaveAttribute(
+      'title',
+      'Loads the nightly extract',
+    );
+    // The heading's name is still the pipeline and version, not the hover.
+    expect(screen.getByRole('heading', { level: 2, name: 'Nightly load v3' })).toBeInTheDocument();
+  });
+
+  it('#1569 — no description, no hover', () => {
+    header(RUN);
+    expect(screen.getByText('Nightly load', { selector: 'span' })).not.toHaveAttribute('title');
+  });
+
   it('shows the scheduled occurrence and the git source when the run has them', () => {
     const triggerContext: TriggerContext = {
       triggerId: 'trg_1',

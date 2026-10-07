@@ -47,7 +47,7 @@ export const FORM_SECTION_HINTS = {
       'How this activity retries a transient failure, and what of it is kept out of the run log.',
   },
   pipeline: {
-    basics: 'What the pipeline is called, and the folder it is filed under.',
+    basics: 'What the pipeline is called, the folder it is filed under, and what it is for.',
     importFile:
       'A pipeline, connection, trigger, dataset or global parameter export; what it needs rebound is listed after.',
     demo: 'Five sample pipelines in folder “Demo” with their own connections and datasets, ready to run.',

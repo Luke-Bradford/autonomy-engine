@@ -24,7 +24,7 @@ vi.mock('../api/pipelines', async (importActual) => {
   return {
     ...actual,
     listPipelines: vi.fn(),
-    createPipeline: vi.fn(),
+    newPipeline: vi.fn(),
     deletePipeline: vi.fn(),
     listPipelineDependents: vi.fn(),
     // #1058 — the archive half. `archiveConfirmMessage` is deliberately NOT
@@ -59,7 +59,7 @@ vi.mock('../api/portability', async (importActual) => ({
 }));
 
 const listMock = vi.mocked(pipelinesApi.listPipelines);
-const createMock = vi.mocked(pipelinesApi.createPipeline);
+const createMock = vi.mocked(pipelinesApi.newPipeline);
 const deleteMock = vi.mocked(pipelinesApi.deletePipeline);
 const dependentsMock = vi.mocked(pipelinesApi.listPipelineDependents);
 const NO_DEPENDENTS = {
@@ -533,7 +533,9 @@ describe('PipelinesPage', () => {
     await user.type(form.getByLabelText(/^Name/), '  Fresh ');
     await user.click(form.getByRole('button', { name: 'Create pipeline' }));
 
-    await waitFor(() => expect(createMock).toHaveBeenCalledWith({ name: 'Fresh', folder: null }));
+    await waitFor(() =>
+      expect(createMock).toHaveBeenCalledWith({ name: 'Fresh', folder: null }, ''),
+    );
     // Refresh after create: listPipelines called again (mount + post-create).
     // That refresh is also what keeps the Factory Resources pane — mounted
     // beside this page over the same store — from showing a stale tree.
@@ -553,7 +555,29 @@ describe('PipelinesPage', () => {
     await user.type(form.getByLabelText(/^Name/), 'Hourly');
     await user.type(form.getByLabelText('Folder'), ' ops ');
     await user.click(form.getByRole('button', { name: 'Create pipeline' }));
-    await waitFor(() => expect(createMock).toHaveBeenCalledWith({ name: 'Hourly', folder: 'Ops' }));
+    await waitFor(() =>
+      expect(createMock).toHaveBeenCalledWith({ name: 'Hourly', folder: 'Ops' }, ''),
+    );
+  });
+
+  it('#1569 — sends the description as typed, and asks before dropping it', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText(/No pipelines yet/i);
+    const form = await openNewDrawer(user);
+    await user.type(form.getByLabelText('Description'), ' Loads the extract');
+    // Typed into, the drawer is dirty: Cancel asks rather than discarding.
+    await user.click(form.getByRole('button', { name: 'Cancel' }));
+    expect(await screen.findByRole('alertdialog')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /keep editing/i }));
+    await user.type(form.getByLabelText(/^Name/), 'Fresh');
+    await user.click(form.getByRole('button', { name: 'Create pipeline' }));
+    await waitFor(() =>
+      expect(createMock).toHaveBeenCalledWith(
+        { name: 'Fresh', folder: null },
+        ' Loads the extract',
+      ),
+    );
   });
 
   it('refuses a blank name and a bad folder beside their fields, without a request', async () => {
