@@ -485,22 +485,28 @@ test('#1569 slice 7 — the row opens the editor; ⋯ triggers it now, opens its
 
   await page.setViewportSize({ width: 1440, height: 900 });
   const gridUrl = `/#/author/pipelines?q=${encodeURIComponent(name)}`;
-  const open = async () => {
-    const summariesRead = page.waitForResponse((r) => r.url().endsWith('/api/pipelines/summaries'));
-    await page.goto(gridUrl);
-    await fluentRootReady(page);
-    await summariesRead;
-  };
   const row = () =>
     page.getByRole('row').filter({ has: page.getByRole('link', { name: `Open ${name}` }) });
+  // Ready once the row's facts are drawn. Waited on the cell, not the
+  // summaries response: coming back from the Monitor is a hash change, and the
+  // read may already have answered.
+  const triggersLink = () => row().getByRole('link', { name: '2 active / 2' });
+  const open = async () => {
+    await page.goto(gridUrl);
+    await fluentRootReady(page);
+    await expect(triggersLink()).toBeVisible();
+  };
   const choose = async (item: string) => {
-    await page.getByRole('button', { name: `Actions for ${name}` }).click();
+    // The row's own ⋯: the Factory Resources pane has one for it too.
+    await row()
+      .getByRole('button', { name: `Actions for ${name}` })
+      .click();
     await page.getByRole('menuitem', { name: item }).click();
   };
   await open();
 
   // The Triggers count lists this pipeline's triggers.
-  await expect(row().getByRole('link', { name: '1 active / 1' })).toHaveAttribute(
+  await expect(triggersLink()).toHaveAttribute(
     'href',
     `#/manage/triggers?pipeline=${seeded.pipelineId}`,
   );
