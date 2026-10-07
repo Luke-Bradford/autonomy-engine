@@ -445,6 +445,11 @@ test('#1569 slice 4 — pipelines grid columns resize, can be chosen, persist pe
  */
 test('#1581 — two sort clicks before the router re-renders both count', async ({ page }) => {
   const problems = collectPageProblems(page);
+  // A grid has a header only once there is a row to put under it.
+  const res = await page.request.post('/api/pipelines', {
+    data: { name: `e2e 1581 ${String(Date.now())}` },
+  });
+  expect(res.status(), await res.text()).toBe(201);
   await page.goto('/#/author/pipelines');
   await fluentRootReady(page);
   const lastRun = page.getByRole('columnheader', { name: /Last run/ });
