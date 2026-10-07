@@ -435,3 +435,35 @@ test('#1569 slice 4 — pipelines grid columns resize, can be chosen, persist pe
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * #1581 — the router commits a navigation in a transition, so the URL moves
+ * before the page re-renders with it. A sort written from the RENDERED params
+ * in that gap overwrote the one just written. Both clicks run in ONE task, so
+ * the gap is certain rather than a matter of load: the second click must flip
+ * the first one's order, not repeat it.
+ */
+test('#1581 — two sort clicks before the router re-renders both count', async ({ page }) => {
+  const problems = collectPageProblems(page);
+  await page.goto('/#/author/pipelines');
+  await fluentRootReady(page);
+  const lastRun = page.getByRole('columnheader', { name: /Last run/ });
+  await expect(lastRun).toHaveCount(1);
+
+  const clicked = await page.evaluate(async () => {
+    const button = [...document.querySelectorAll('th')]
+      .find((th) => th.textContent?.includes('Last run'))
+      ?.querySelector('button');
+    button?.click();
+    // Long enough for the URL to move, too short for the router's render.
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    const urlInGap = window.location.hash;
+    button?.click();
+    return { urlInGap, found: button !== undefined && button !== null };
+  });
+  expect(clicked).toEqual({ urlInGap: expect.stringMatching(/sort=lastRun/), found: true });
+
+  await expect(lastRun).toHaveAttribute('aria-sort', 'ascending');
+  await expect(page).toHaveURL(/[?&]dir=asc(&|$)/);
+  await expectQuiet(page, problems);
+});
