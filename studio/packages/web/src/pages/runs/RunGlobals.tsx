@@ -19,8 +19,8 @@ import { InlineJsonValue } from './CappedValue';
  * nothing to say whether the run read any, so any message would be a guess. For
  * a run that read none it renders `empty`, which the run page's Variables tab
  * uses to say so. The snapshot is taken at `run.started`, so a run past that
- * which read none never will — but a queued run has no snapshot yet, and the
- * page passes no `empty` for one.
+ * which read none never will — but a run with no `run.started` (queued, or
+ * skipped) has no snapshot, and the page passes no `empty` for one.
  */
 export function RunGlobals({
   overlay,

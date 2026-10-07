@@ -911,13 +911,15 @@ export function RunDetailPage({ runId }: { runId: string }) {
                       </p>
                     }
                   />
-                  {/* A queued run has no globals snapshot yet, so "none" waits. */}
+                  {/* The snapshot is taken at `run.started`, so "none" waits for
+                      it: a queued run has not got there yet, and a skipped one
+                      never will. */}
                   <RunGlobals
                     overlay={overlay}
                     empty={
-                      status === 'queued' ? null : (
+                      stream.events.some((e) => e.type === 'run.started') ? (
                         <p className="page-hint">This run read no global parameters.</p>
-                      )
+                      ) : null
                     }
                   />
                 </>

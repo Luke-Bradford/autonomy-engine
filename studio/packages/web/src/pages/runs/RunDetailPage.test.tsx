@@ -3841,8 +3841,27 @@ describe('RunDetailPage — the run views as tabs (#1484 M2)', () => {
     expect(screen.queryByTestId('run-canvas')).toBeNull();
   });
 
-  it('says the run read no globals, once the projection can tell', async () => {
+  it('says the run read no globals, once it has started', async () => {
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+        ],
+      }),
+    );
     renderWithRouter(<RunDetailPage runId="run_1" />, '/?rdTab=variables');
     expect(await screen.findByText('This run read no global parameters.')).toBeVisible();
+  });
+
+  it('says nothing about globals for a run that never started: it has no snapshot', async () => {
+    // A skipped run: settled, its projection ready, and no `run.started`.
+    getRunDetailMock.mockResolvedValue({
+      ...NAMES,
+      run: run({ status: 'skipped', finishedAt: 1_700_000_001_000 }),
+      pipelineVersion: version(),
+    });
+    renderWithRouter(<RunDetailPage runId="run_1" />, '/?rdTab=variables');
+    expect(await screen.findByText('This pipeline declares no variables.')).toBeVisible();
+    expect(screen.queryByText('This run read no global parameters.')).toBeNull();
   });
 });
