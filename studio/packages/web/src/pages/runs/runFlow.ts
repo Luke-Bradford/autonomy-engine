@@ -324,6 +324,18 @@ const selectedSuffix = (id: string, options: RunFlowOptions): string =>
 /** What a node says when the run has no state for it. */
 export const NO_STATUS_LABEL = 'not projected';
 
+/** An activity node's accessible name: its name, its status when the view has a
+ * run behind it, and whether it is the selected one. The node says it, and so
+ * does the button that opens its activity run (#1484 M2), so the two agree. */
+export function activityNodeName(
+  d: Pick<RunNodeData, 'title' | 'status' | 'showStatus' | 'selected'>,
+): string {
+  return (
+    (d.showStatus ? `${d.title}, ${d.status ?? NO_STATUS_LABEL}` : d.title) +
+    (d.selected ? ', selected' : '')
+  );
+}
+
 export function toneClass(prefix: 'run-node' | 'run-container', tone: StatusTone | null): string {
   return tone === null ? '' : ` ${prefix}-${tone}`;
 }
@@ -384,6 +396,22 @@ export function runFlowNodes(
        comes off the raw engine status, except where a cancel stopped the node
        (#1329, see `nodeStatusTone`); only what an operator reads is worded. */
     const label = status === null ? null : nodeStatusLabel(status, state?.status);
+    const data = {
+      title: name,
+      status: label,
+      tone: status === null ? null : nodeStatusTone(status, state?.status),
+      showStatus,
+      selected: n.id === options.selectedId,
+      portIds: portIdsOf(portsOf(n.id, n)),
+      // Unreachable fallback: `runCards` is built from this very array.
+      card: cards.get(n.id) ?? { type: n.type, summary: null, badges: [] },
+      /* Only on a SETTLED node: a held, re-opened or skipped node's row can
+           still carry an earlier attempt's span, which is not this state's. */
+      facts:
+        (status === 'success' || status === 'failure') && !repeated.has(n.id)
+          ? runNodeFacts(n.type, options.activity?.get(n.id))
+          : null,
+    } satisfies RunNodeData;
     return {
       id: n.id,
       type: 'runActivity',
@@ -391,25 +419,8 @@ export function runFlowNodes(
       draggable: false,
       selectable: false,
       connectable: false,
-      data: {
-        title: name,
-        status: label,
-        tone: status === null ? null : nodeStatusTone(status, state?.status),
-        showStatus,
-        selected: n.id === options.selectedId,
-        portIds: portIdsOf(portsOf(n.id, n)),
-        // Unreachable fallback: `runCards` is built from this very array.
-        card: cards.get(n.id) ?? { type: n.type, summary: null, badges: [] },
-        /* Only on a SETTLED node: a held, re-opened or skipped node's row can
-           still carry an earlier attempt's span, which is not this state's. */
-        facts:
-          (status === 'success' || status === 'failure') && !repeated.has(n.id)
-            ? runNodeFacts(n.type, options.activity?.get(n.id))
-            : null,
-      } satisfies RunNodeData,
-      ariaLabel:
-        (showStatus ? `${name}, ${label ?? NO_STATUS_LABEL}` : name) +
-        selectedSuffix(n.id, options),
+      data,
+      ariaLabel: activityNodeName(data),
     };
   });
 

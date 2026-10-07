@@ -1,4 +1,12 @@
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { computeRunUsage, TERMINAL_RUN_ROW_STATUS } from '@autonomy-studio/shared';
 import type { PipelineVersion, Run, RunStatus } from '@autonomy-studio/shared';
 import { useNavigate } from 'react-router';
@@ -27,6 +35,7 @@ import { drawerFileStem, type DrawerTab } from './drawerTab';
 import { ActivityRunsTable, SkipWhy } from './ActivityRunsTable';
 import { activityOfRow, attemptOutputLines, latestOutputByAttempt } from './attemptActivity';
 import { iterationLabel } from './activityRunsColumns';
+import { activityRunOfNode } from './activityRunsTree';
 import { RunDrawer } from './RunDrawer';
 import { RunHeader, type RunHeaderNames } from './RunHeader';
 import { RunFailureBanner } from './RunFailureBanner';
@@ -404,6 +413,33 @@ export function RunDetailPage({ runId }: { runId: string }) {
     () => (drawerAttemptId === null ? [] : attemptOutputLines(stream.events, drawerAttemptId)),
     [drawerAttemptId, stream.events],
   );
+  /* #1484 M2 — a graph node opens its activity run in the same drawer, and the
+     open record's node is marked on the graph whichever way it was opened. The
+     row is chosen at the click from the latest read and projection, held in a
+     ref so the open callback, and so every node's context, keeps one identity
+     across events. A graph open does not touch the table: the open row says
+     so itself (`data-open`), and expanding or scrolling a table the operator is
+     not looking at would move the page out from under the graph. */
+  const latest = useRef({ rows: activityRuns.rows, overlay });
+  useLayoutEffect(() => {
+    latest.current = { rows: activityRuns.rows, overlay };
+  });
+  const openNode = useCallback((nodeId: string, opener: HTMLElement) => {
+    const { rows, overlay: o } = latest.current;
+    const failed = o.ready && o.state.nodes[nodeId]?.status === 'failure';
+    const row = activityRunOfNode(rows ?? [], nodeId, failed);
+    if (row === null) return;
+    setSelectedRow(null);
+    setDrawer({ key: row.key, opener });
+  }, []);
+  const closeDrawer = () => {
+    setDrawer(null);
+    setSelectedRow(null);
+  };
+  const openableNodeIds = useMemo(
+    () => new Set((activityRuns.rows ?? []).map((r) => r.activityId)),
+    [activityRuns.rows],
+  );
   /* The drawer tab the operator picked, held here so stepping from row to row
      keeps it; `null` until they pick one, so each row opens on its error or its
      output (`defaultDrawerTab`). Close keeps it too. */
@@ -622,7 +658,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
                   failure.kind === 'run' ? undefined : failedNodeId(failure),
                 )
           }
-          onShowActivity={(key) => setSelectedRow({ key })}
+          onShowActivity={(key, opener) => {
+            // Takes the reader to the row, and opens it.
+            setSelectedRow({ key });
+            setDrawer({ key, opener });
+          }}
         />
       )}
       {cancelWaitsOnChild && (
@@ -689,7 +729,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
         selected={selectedRow}
         live={countingLive}
         openKey={drawerRow?.key ?? null}
-        onOpen={(key, opener) => setDrawer({ key, opener })}
+        onOpen={(key, opener) => {
+          // The row opened is the one marked; an earlier ask's outline goes.
+          setSelectedRow(null);
+          setDrawer({ key, opener });
+        }}
         latestOutputs={latestOutputs}
       />
 
@@ -755,7 +799,14 @@ export function RunDetailPage({ runId }: { runId: string }) {
            bytes, because eager code already imported the engine barrel and
            `reduce.js` was placed in the entry chunk regardless. */
         <Suspense fallback={<p className="page-hint">Loading the graph…</p>}>
-          <RunGraph doc={doc} overlay={overlay} activity={nodes} />
+          <RunGraph
+            doc={doc}
+            overlay={overlay}
+            activity={nodes}
+            selectedNodeId={drawerRow?.activityId}
+            onOpenNode={openNode}
+            openableNodeIds={openableNodeIds}
+          />
         </Suspense>
       )}
 
@@ -827,17 +878,13 @@ export function RunDetailPage({ runId }: { runId: string }) {
         </table>
       )}
       {drawerRow !== null && drawerNode !== null && (
-        <RunDrawer
-          key={drawerRow.key}
-          onClose={() => setDrawer(null)}
-          returnFocusTo={drawer?.opener ?? null}
-        >
+        <RunDrawer key={drawerRow.key} onClose={closeDrawer} returnFocusTo={drawer?.opener ?? null}>
           <NodeActivityPanel
             node={drawerNode}
             name={nameOf(drawerRow.activityId)}
             runStatus={status}
             live={countingLive}
-            onClose={() => setDrawer(null)}
+            onClose={closeDrawer}
             tab={drawerTab}
             onTab={setDrawerTab}
             fileStem={drawerFileStem([

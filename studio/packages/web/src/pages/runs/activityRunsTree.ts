@@ -77,3 +77,25 @@ export function activityRunEntries(
   while (next < sorted.length) emitGroup(sorted[next++]!);
   return out;
 }
+
+/**
+ * #1484 M2 — the activity run a graph node opens. A node is one box however
+ * many attempts and items it ran, so the box opens the run that explains its
+ * colour: the last FAILED run when the node ended failed (the banner's rule,
+ * `runFailure`), otherwise its last run, so a node that recovered opens the
+ * attempt that succeeded rather than the one it got past.
+ *
+ * Matched on `activityId`, the canvas node, so a parallel item (`w@2`) is found
+ * by the box it is drawn as. `null` for a node with no run, which then offers
+ * nothing to open.
+ */
+export function activityRunOfNode(
+  rows: readonly ActivityRun[],
+  activityId: string,
+  nodeFailed: boolean,
+): ActivityRun | null {
+  const own = rows.filter((r) => r.activityId === activityId);
+  return (
+    (nodeFailed ? own.findLast((r) => r.status === 'failure') : undefined) ?? own.at(-1) ?? null
+  );
+}

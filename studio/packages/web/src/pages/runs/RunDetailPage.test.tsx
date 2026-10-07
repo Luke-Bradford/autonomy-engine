@@ -3588,6 +3588,12 @@ describe('RunDetailPage — the failure banner', () => {
     await userEvent.click(within(banner).getByRole('button', { name: 'Show activity' }));
     const current = document.querySelector('.activity-runs__table tr[aria-current="true"]');
     expect(current?.getAttribute('data-activity-id')).toBe('greet');
+    // #1484 M2 — and opens it: the drawer, on that row, at its error.
+    const drawer = document.getElementById('run-detail-drawer');
+    expect(drawer).not.toBeNull();
+    expect(current).toHaveAttribute('data-open', 'true');
+    expect(within(drawer!).getByRole('tab', { name: 'Error', selected: true })).toBeVisible();
+    expect(drawer).toHaveTextContent('boom');
   });
 
   /* #1541 — the rows are read after the stream, throttled, so for a moment

@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import type { ActivityRun, ActivityRunGroup } from '@autonomy-studio/shared';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActivityRunsTable } from './ActivityRunsTable';
 import { ACTIVITY_RUN_COLUMNS, iterationText } from './activityRunsColumns';
 import { nodeStatusLabel } from './nodeStatus';
@@ -311,6 +311,18 @@ describe('iterationText', () => {
 });
 
 describe('#1484 M2 ActivityRunsTable — container groups', () => {
+  /* jsdom has no `scrollIntoView`; record the rows an ask scrolled to. */
+  let scrolled: Element[] = [];
+  const scrolledTo = () => scrolled;
+  beforeEach(() => {
+    scrolled = [];
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+  });
+  afterEach(() => {
+    delete (Element.prototype as Partial<Element>).scrollIntoView;
+  });
   const GROUP: ActivityRunGroup = {
     containerId: 'fe',
     kind: 'foreach',
@@ -462,7 +474,7 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
     expect(bodyRows()).toHaveLength(4);
   });
 
-  it('opens the group and item an asked-for row is in, and focuses it', () => {
+  it('opens the group and item an asked-for row is in, and scrolls to it', () => {
     const view = showGroups();
     fireEvent.click(screen.getByRole('button', { name: /ForEach 1/ }));
     expect(bodyRows()).toHaveLength(1);
@@ -471,7 +483,9 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
     expect(bodyRows()).toHaveLength(5);
     const current = bodyRows().find((tr) => tr.getAttribute('aria-current') === 'true');
     expect(current?.dataset.activityId).toBe('w');
-    expect(current).toHaveFocus();
+    expect(scrolledTo()).toEqual([current]);
+    // Focus stays with the asker: the drawer the ask opens takes it.
+    expect(current).not.toHaveFocus();
   });
 
   it('keeps the group and item lines a matching row sits under', () => {
@@ -497,7 +511,7 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
     view.rerender(table({ key: 'w#1' }, GROUP, '/?arStatus=failure'));
     const current = bodyRows().find((tr) => tr.getAttribute('aria-current') === 'true');
     expect(current?.dataset.activityId).toBe('w');
-    expect(current).toHaveFocus();
+    expect(scrolledTo()).toEqual([current]);
     expect(screen.getByRole('combobox', { name: 'Status' })).toHaveValue('');
   });
 
@@ -507,7 +521,9 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
       // One ask, as the page holds it across renders; a new object is a new ask.
       const ask = { key: 'w#1' };
       const view = render(table(ask));
-      expect(bodyRows().find((tr) => tr.getAttribute('aria-current') === 'true')).toHaveFocus();
+      expect(scrolledTo()).toEqual([
+        bodyRows().find((tr) => tr.getAttribute('aria-current') === 'true'),
+      ]);
       fireEvent.change(screen.getByRole('searchbox', { name: 'Search activity runs' }), {
         target: { value: 'a.csv' },
       });
@@ -583,7 +599,8 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
       </MemoryRouter>,
     );
     const current = bodyRows().find((tr) => tr.getAttribute('aria-current') === 'true');
-    expect(current).toHaveFocus();
+    expect(current).toBeDefined();
+    expect(scrolledTo()).toEqual([current]);
   });
 
   it('labels an Until by its rounds', () => {

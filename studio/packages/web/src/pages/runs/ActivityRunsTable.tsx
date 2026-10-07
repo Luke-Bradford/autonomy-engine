@@ -338,8 +338,10 @@ export function ActivityRunsTable({
   }
   /* Each ask is answered ONCE. A new ask for a row the view hides puts the view
      back to plain run order, so "Show activity" lands on the row rather than on
-     nothing; once the row is on screen it takes focus. A filter the viewer sets
-     afterwards stands, even one that hides that row. */
+     nothing; once the row is on screen it is scrolled to. Focus stays where the
+     asker put it: "Show activity" opens the row's drawer too, which takes focus
+     and hands it back to that button. A filter the viewer sets afterwards
+     stands, even one that hides that row. */
   const askedShown = askedFor !== null && shown.some((e) => e.key === askedFor.key);
   const answeredAsk = useRef<{ key: string } | null>(null);
   /* The reset happens at most once per ask, so an ask whose row a later read
@@ -355,10 +357,8 @@ export function ActivityRunsTable({
       return;
     }
     answeredAsk.current = askedFor;
-    const tr = selectedRow.current;
     // jsdom has no `scrollIntoView`.
-    tr?.scrollIntoView?.({ block: 'center' });
-    tr?.focus({ preventScroll: true });
+    selectedRow.current?.scrollIntoView?.({ block: 'center' });
   }, [askedFor, askedShown, setSearchParams]);
   return (
     <section className="activity-runs" aria-labelledby="activity-runs-heading">
@@ -547,7 +547,6 @@ export function ActivityRunsTable({
                     {...(row.key === selected?.key
                       ? {
                           ref: selectedRow,
-                          tabIndex: -1,
                           'aria-current': true,
                           className: 'activity-runs__selected',
                         }

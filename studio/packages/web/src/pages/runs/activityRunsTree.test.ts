@@ -1,6 +1,6 @@
 import type { ActivityRun, ActivityRunGroup } from '@autonomy-studio/shared';
 import { describe, expect, it } from 'vitest';
-import { activityRunEntries } from './activityRunsTree';
+import { activityRunEntries, activityRunOfNode } from './activityRunsTree';
 import { activityRun } from '../../testing/activityRun';
 
 const row = (key: string, extra: Partial<ActivityRun> = {}): ActivityRun =>
@@ -77,5 +77,35 @@ describe('#1484 M2 activityRunEntries', () => {
 
   it('drops no row: one naming a container that is not a group stays in place', () => {
     expect(shape([row('a', { containerId: 'gone' })], [])).toEqual([['a', 0, '']]);
+  });
+});
+
+describe('#1484 M2 activityRunOfNode — the activity run a graph node opens', () => {
+  const failed = (key: string, index: number) => ({
+    ...inItem(key, index),
+    status: 'failure' as const,
+  });
+
+  it('a node that ended failed opens its last failed run, not a later item that succeeded', () => {
+    const rows = [inItem('w#0', 0), failed('w#1', 1), inItem('w#2', 0), row('other')];
+    expect(activityRunOfNode(rows, 'w', true)?.key).toBe('w#1');
+  });
+
+  it('a node that recovered opens its last run, not the attempt that failed', () => {
+    const rows = [failed('w#0', 0), inItem('w#1', 0), row('other')];
+    expect(activityRunOfNode(rows, 'w', false)?.key).toBe('w#1');
+  });
+
+  it('a failed node with no failed row still opens its last run', () => {
+    expect(activityRunOfNode([inItem('w#0', 0), inItem('w#1', 1)], 'w', true)?.key).toBe('w#1');
+  });
+
+  it('a parallel item is found by its canvas node, not its instance key', () => {
+    const rows = [{ ...inItem('w#3', 1), nodeId: 'w@1' }];
+    expect(activityRunOfNode(rows, 'w', false)?.key).toBe('w#3');
+  });
+
+  it('a node with no run opens nothing', () => {
+    expect(activityRunOfNode([row('other')], 'w', false)).toBeNull();
   });
 });

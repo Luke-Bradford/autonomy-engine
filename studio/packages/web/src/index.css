@@ -4122,6 +4122,8 @@ button.danger {
  * ROW again; the status and what the run measured sit under it in one
  * fixed-height foot, so a duration arriving on settle never resizes the box. */
 .run-node {
+  /* Places the open button (#1484 M2) over the whole card. */
+  position: relative;
   outline: 2px solid transparent;
   outline-offset: 2px;
   flex-direction: column;
@@ -4167,6 +4169,29 @@ button.danger {
    because the outline is the status tone's (above); the inset ring thickens it
    without moving the box. A container's dashed border turns solid, as
    `.flow-container--selected` does. */
+/* #1484 M2 — the button that opens a node's activity run: the whole card, so
+   it adds nothing to the card's layout and draws nothing but a pointer, a hover
+   edge and a focus ring. It sits over the facts' `title`, which the card's own
+   text already says. */
+.run-node-open {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: inherit;
+  background: transparent;
+}
+
+.run-node-open:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.run-node-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .run-node--selected,
 .run-container--selected {
   border-color: var(--accent);
