@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLatestSearchParams } from '../lib/useLatestSearchParams';
-import { Link, useNavigate } from 'react-router';
+import { useNavigate } from 'react-router';
 import { ToggleButton } from '@fluentui/react-components';
 import { useStore } from 'zustand';
 import type {
@@ -316,13 +316,6 @@ export function PipelinesPage({
   );
 
   const [actionMsg, setActionMsg] = useState<string | null>(null);
-  // #1569 slice 7 — the last run Trigger now started from this page: a success,
-  // so a status beside the failures' alert, replaced by the next one.
-  const [runStarted, setRunStarted] = useState<{
-    name: string;
-    version: number;
-    runId: string;
-  } | null>(null);
   const navigate = useNavigate();
 
   /**
@@ -740,12 +733,6 @@ export function PipelinesPage({
               {actionMsg}
             </p>
           )}
-          {runStarted !== null && (
-            <p className="notice" role="status">
-              {`Run started from ${runStarted.name} v${String(runStarted.version)}. `}
-              <Link to={runDetailPath(runStarted.runId)}>Open run</Link>
-            </p>
-          )}
 
           {/* #1569 slice 2 — ONE row, the runs bar's conventions: each control
           keeps its label for assistive tech but draws none. Always drawn: not
@@ -993,12 +980,8 @@ export function PipelinesPage({
             returnFocusTo={openerRef}
             onClose={drawer.requestClose}
             onBusyChange={setDrawerBusy}
-            onStarted={({ runId, version }) => {
-              setRunStarted({ name: drawerForm.name, version, runId });
-              closeIfLatest(drawerSeq);
-              // The row's Last run, success % and runs count all just moved.
-              refreshRowStates();
-            }}
+            // The row's Last run, success % and runs count all just moved.
+            onStarted={refreshRowStates}
           />
         )}
         {drawerForm?.kind === 'import' && (

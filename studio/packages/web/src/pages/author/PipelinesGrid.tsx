@@ -119,6 +119,7 @@ function triggersCell(s: PipelineSummary | undefined): ReactNode {
     <Link
       to={triggersPath(s.pipelineId)}
       title={names}
+      aria-label={`${String(s.triggers.enabled)} active / ${String(s.triggers.total)} triggers`}
     >{`${String(s.triggers.enabled)} active / ${String(s.triggers.total)}`}</Link>
   );
 }
@@ -349,7 +350,7 @@ export function PipelinesGrid({
 function PipelineGridRow({ pipelineId, children }: { pipelineId: string; children: ReactNode }) {
   const { onClick, onAuxClick } = useRowOpen(pipelinePath(pipelineId));
   return (
-    <tr className="runs-grid__row" onClick={onClick} onAuxClick={onAuxClick}>
+    <tr className="pipelines-grid__row" onClick={onClick} onAuxClick={onAuxClick}>
       {children}
     </tr>
   );

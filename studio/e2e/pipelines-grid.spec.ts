@@ -490,7 +490,7 @@ test('#1569 slice 7 — the row opens the editor; ⋯ triggers it now, opens its
   // Ready once the row's facts are drawn. Waited on the cell, not the
   // summaries response: coming back from the Monitor is a hash change, and the
   // read may already have answered.
-  const triggersLink = () => row().getByRole('link', { name: '2 active / 2' });
+  const triggersLink = () => row().getByRole('link', { name: '2 active / 2 triggers' });
   const open = async () => {
     await page.goto(gridUrl);
     await fluentRootReady(page);
@@ -524,14 +524,15 @@ test('#1569 slice 7 — the row opens the editor; ⋯ triggers it now, opens its
   await open();
   await choose('Trigger now…');
   const drawer = page.getByRole('dialog', { name: `Trigger now — ${name}` });
-  await expect(drawer.getByText('Runs v1, the latest saved version.')).toBeVisible();
+  await expect(drawer.getByText('v1 · latest')).toBeVisible();
   await drawer.getByRole('button', { name: 'Start run' }).click();
-  const notice = page.getByRole('status').filter({ hasText: `Run started from ${name} v1.` });
-  await expect(notice).toBeVisible();
-  await expect(drawer).toHaveCount(0);
+  const notice = drawer.getByRole('status');
+  await expect(notice).toHaveText('Started v1 · Open run');
   const runHref = await notice.getByRole('link', { name: 'Open run' }).getAttribute('href');
   expect(runHref).toMatch(/^#\/monitor\/runs\/[^/]+$/);
   expect(runHref).not.toBe(`#/monitor/runs/${firstRun}`);
+  await drawer.getByRole('button', { name: 'Done' }).click();
+  await expect(drawer).toHaveCount(0);
 
   // A click on a plain cell is a click on the row: the editor opens.
   await row().locator('td').nth(2).click();

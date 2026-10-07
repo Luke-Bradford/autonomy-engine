@@ -385,13 +385,16 @@ export function isDefaultRunSort(sort: RunSortState): boolean {
 /** #1569 OR37 — the runs list filtered to one pipeline's runs, under the
  * list's own `?pipeline=` param (the pipelines grid's ⋯ → Runs). */
 export function pipelineRunsPath(pipelineId: string): string {
-  const query = new URLSearchParams({ [RUN_FILTER_PARAMS.pipelineId]: pipelineId });
-  return `/monitor/runs?${query.toString()}`;
+  return runsListPath(RUN_FILTER_PARAMS.pipelineId, pipelineId);
 }
 
 /** #1484 OR35 M2 — the runs list filtered to one trigger's runs, under the
  * list's own `?trigger=` param. */
 export function triggerRunsPath(triggerId: string): string {
-  const query = new URLSearchParams({ [RUN_FILTER_PARAMS.triggerId]: triggerId });
-  return `/monitor/runs?${query.toString()}`;
+  return runsListPath(RUN_FILTER_PARAMS.triggerId, triggerId);
+}
+
+/** The runs list under one of its own filter params. */
+function runsListPath(param: string, value: string): string {
+  return `/monitor/runs?${new URLSearchParams({ [param]: value }).toString()}`;
 }

@@ -21,7 +21,8 @@ export function useRunParams<R extends FireResult>({
   /** The typed values, by param name — held by the caller, so a page can tell
    * typed input from the defaults (`runNowRows`) for its unsaved-changes guard. */
   rows: Readonly<Record<string, string>>;
-  onRowsChange: (next: Record<string, string>) => void;
+  /** An updater, as `setState` takes: two edits in one tick both land. */
+  onRowsChange: (update: (prev: Record<string, string>) => Record<string, string>) => void;
   start: (params: Record<string, unknown>) => Promise<R>;
   onStarted: (result: R & { runId: string }) => void;
 }): {
@@ -62,6 +63,6 @@ export function useRunParams<R extends FireResult>({
     }
   }
 
-  const set = (name: string, value: string) => onRowsChange({ ...rows, [name]: value });
+  const set = (name: string, value: string) => onRowsChange((r) => ({ ...r, [name]: value }));
   return { set, error, starting, submit };
 }

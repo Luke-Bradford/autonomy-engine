@@ -96,13 +96,10 @@ export function RunParamsFields({
   params,
   rows,
   onChange,
-  autoFocus,
 }: {
   params: readonly Param[];
   rows: Readonly<Record<string, string>>;
   onChange: (name: string, value: string) => void;
-  /** Focus the first param on mount: the floating panel does, a drawer focuses its own. */
-  autoFocus: boolean;
 }) {
   if (params.length === 0) return <p className="page-hint">This pipeline takes no parameters.</p>;
   return (
@@ -117,7 +114,9 @@ export function RunParamsFields({
                 param={p}
                 value={rows[p.name] ?? ''}
                 onChange={(v) => onChange(p.name, v)}
-                autoFocus={autoFocus && i === 0}
+                // The fields mount once their version is known, so the first
+                // one is where typing goes, in the panel and in a drawer.
+                autoFocus={i === 0}
               />
               <span id={`${id}-hint`} className="page-hint">
                 {VALUE_TYPE_TITLES[p.type]}
@@ -171,7 +170,7 @@ function RunParamsForm<R extends FireResult>({
     >
       <h3>{heading}</h3>
       {note !== undefined && <p className="page-hint">{note}</p>}
-      <RunParamsFields params={params} rows={rows} onChange={set} autoFocus />
+      <RunParamsFields params={params} rows={rows} onChange={set} />
       {error !== null && (
         <p className="form-error" role="alert">
           {error}

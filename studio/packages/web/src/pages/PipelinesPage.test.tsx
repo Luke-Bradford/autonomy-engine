@@ -437,10 +437,20 @@ describe('PipelinesPage', () => {
         expect(path(router)).toBe('/author/pipelines/pl_1');
       });
 
+      it("a link in the row goes where it says, and the row's click does not follow it", async () => {
+        seedRan();
+        const user = userEvent.setup();
+        const { router } = renderPage();
+        await user.click(await screen.findByRole('link', { name: '1 active / 1 triggers' }));
+        await waitFor(() => expect(path(router)).toBe('/manage/triggers?pipeline=pl_1'));
+        await new Promise((r) => setTimeout(r, 30));
+        expect(path(router)).toBe('/manage/triggers?pipeline=pl_1');
+      });
+
       it("links the Triggers count to the pipeline's triggers", async () => {
         seedRan();
         renderPage();
-        expect(await screen.findByRole('link', { name: '1 active / 1' })).toHaveAttribute(
+        expect(await screen.findByRole('link', { name: '1 active / 1 triggers' })).toHaveAttribute(
           'href',
           '/manage/triggers?pipeline=pl_1',
         );
@@ -453,6 +463,9 @@ describe('PipelinesPage', () => {
         await screen.findByText('1 active / 1');
         await chooseRowAction(user, 'Nightly', 'Runs');
         await waitFor(() => expect(path(router)).toBe('/monitor/runs?pipeline=pl_1'));
+        // …and stays there: the menu item's click is not also the row's.
+        await new Promise((r) => setTimeout(r, 30));
+        expect(path(router)).toBe('/monitor/runs?pipeline=pl_1');
         await act(() => router.navigate('/author/pipelines'));
         await screen.findByText('1 active / 1');
         await chooseRowAction(user, 'Nightly', 'Open last run');
@@ -472,7 +485,8 @@ describe('PipelinesPage', () => {
 
       it('Trigger now runs the LATEST version with the typed params, then says so', async () => {
         seedRan();
-        versionsMock.mockResolvedValue([v2, v1]);
+        // Oldest first: the latest is picked by number, not by position.
+        versionsMock.mockResolvedValue([v1, v2]);
         runMock.mockResolvedValue({ outcome: 'started', runId: 'run_10' } as never);
         const user = userEvent.setup();
         renderPage();
@@ -480,7 +494,7 @@ describe('PipelinesPage', () => {
         const before = summariesMock.mock.calls.length;
         await chooseRowAction(user, 'Nightly', 'Trigger now…');
         const drawer = within(await screen.findByRole('dialog', { name: /Trigger now/ }));
-        expect(await drawer.findByText(/Runs v2, the latest saved version/)).toBeInTheDocument();
+        expect(await drawer.findByText('v2 · latest')).toBeInTheDocument();
         const region = drawer.getByLabelText('region');
         expect(region).toHaveValue('eu');
         await user.clear(region);
@@ -492,15 +506,34 @@ describe('PipelinesPage', () => {
             params: { region: 'us' },
           }),
         );
-        const notice = await screen.findByRole('status');
-        expect(notice).toHaveTextContent('Run started from Nightly v2.');
+        // Said in the drawer, which stays open: the grid beside it does not move.
+        const notice = drawer.getByRole('status');
+        await waitFor(() => expect(notice).toHaveTextContent('Started v2 · Open run'));
         expect(within(notice).getByRole('link', { name: 'Open run' })).toHaveAttribute(
           'href',
           '/monitor/runs/run_10',
         );
-        expect(screen.queryByRole('dialog', { name: /Trigger now/ })).not.toBeInTheDocument();
+        // What was typed has been used: Done does not ask.
+        await user.click(drawer.getByRole('button', { name: 'Done' }));
+        await waitFor(() =>
+          expect(screen.queryByRole('dialog', { name: /Trigger now/ })).not.toBeInTheDocument(),
+        );
         // The row's facts are read again: its last run just changed.
         await waitFor(() => expect(summariesMock.mock.calls.length).toBeGreaterThan(before));
+      });
+
+      it('Trigger now puts focus on Start for a pipeline with no params', async () => {
+        seedRan();
+        versionsMock.mockResolvedValue([v1]);
+        const user = userEvent.setup();
+        renderPage();
+        await screen.findByText('1 active / 1');
+        await chooseRowAction(user, 'Nightly', 'Trigger now…');
+        const drawer = within(await screen.findByRole('dialog', { name: /Trigger now/ }));
+        await drawer.findByText('v1 · latest');
+        await waitFor(() =>
+          expect(drawer.getByRole('button', { name: 'Start run' })).toHaveFocus(),
+        );
       });
 
       it('Trigger now says why a never-saved pipeline cannot run, and starts nothing', async () => {

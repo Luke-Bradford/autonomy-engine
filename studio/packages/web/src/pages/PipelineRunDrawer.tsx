@@ -1,4 +1,5 @@
-import { useEffect, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
+import { Link } from 'react-router';
 import type { PipelineVersion } from '@autonomy-studio/shared';
 import { messageOf } from '../api/client';
 import { latestVersion, listPipelineVersions, runPipelineVersion } from '../api/pipelines';
@@ -7,6 +8,7 @@ import type { UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { RunParamsFields } from './pipeline/RunNowPanel';
 import { useRunParams } from './pipeline/useRunParams';
 import type { PipelineRunForm } from './pipelineRunForm';
+import { runDetailPath } from './runs/runPath';
 import { runDisabledReason, runNowRows } from './pipeline/runNowRules';
 
 type Load =
@@ -19,6 +21,9 @@ type Load =
  * editor's Run form (#1395) over the pipeline's LATEST saved version, read when
  * the drawer opens and named in it, so what starts is what it says. A trigger-
  * less run of exactly that version (`runPipelineVersion`), the editor's own.
+ *
+ * It stays open once a run starts and says so in its footer, with a link to
+ * the run: the grid beside it does not move, and Start can be pressed again.
  */
 export function PipelineRunDrawer({
   form,
@@ -34,11 +39,20 @@ export function PipelineRunDrawer({
   guard: UnsavedChangesGuard;
   returnFocusTo: RefObject<HTMLElement | null>;
   onClose: () => void;
-  onStarted: (started: { runId: string; version: number }) => void;
+  onStarted: () => void;
   onBusyChange: (busy: boolean) => void;
 }) {
   const [load, setLoad] = useState<Load>({ status: 'loading' });
   const [attempt, setAttempt] = useState(0);
+  const [started, setStarted] = useState<{ runId: string; version: number } | null>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const startRef = useRef<HTMLButtonElement>(null);
+  const retryRef = useRef<HTMLButtonElement>(null);
+  // Opened from a menu item that is gone by now, and with no field until the
+  // version is read: Cancel holds focus (and so Escape) meanwhile.
+  useEffect(() => {
+    cancelRef.current?.focus();
+  }, []);
   const { pipelineId } = form;
   useEffect(() => {
     const ctrl = new AbortController();
@@ -60,6 +74,11 @@ export function PipelineRunDrawer({
   }, [pipelineId, attempt]);
 
   const version = load.status === 'ready' ? load.version : null;
+  // With params, the first one takes focus as it mounts; without, Start does.
+  useEffect(() => {
+    if (load.status === 'error') retryRef.current?.focus();
+    else if (version !== null && version.params.length === 0) startRef.current?.focus();
+  }, [load.status, version]);
   const reason =
     load.status === 'ready'
       ? runDisabledReason({
@@ -72,13 +91,18 @@ export function PipelineRunDrawer({
   const { set, error, starting, submit } = useRunParams({
     params: version?.params ?? [],
     rows: form.rows,
-    onRowsChange: (rows) => onChange({ ...form, rows }),
+    onRowsChange: (update) => onChange({ ...form, rows: update(form.rows) }),
     start: (params) => {
       if (version === null) return Promise.reject(new Error('No saved version to run.'));
+      setStarted(null);
       return runPipelineVersion(pipelineId, { pipelineVersionId: version.id, params });
     },
     onStarted: (result) => {
-      if (version !== null) onStarted({ runId: result.runId, version: version.version });
+      if (version === null) return;
+      setStarted({ runId: result.runId, version: version.version });
+      // What was typed has been used: closing now loses nothing.
+      onChange({ ...form, defaults: form.rows });
+      onStarted();
     },
   });
   useEffect(() => {
@@ -100,29 +124,40 @@ export function PipelineRunDrawer({
       busy={starting}
       returnFocusTo={returnFocusTo}
       status={
-        error !== null && (
-          <p className="form-error" role="alert">
-            {error}
+        <>
+          {error !== null && (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          )}
+          {/* Mounted from the start, so a run started is announced as it lands. */}
+          <p role="status" className="run-drawer__started">
+            {started !== null && (
+              <>
+                {`Started v${String(started.version)} · `}
+                <Link to={runDetailPath(started.runId)}>Open run</Link>
+              </>
+            )}
           </p>
-        )
+        </>
       }
       actions={
         <>
-          <button type="button" onClick={onClose} disabled={starting}>
-            Cancel
+          <button type="button" ref={cancelRef} onClick={onClose} disabled={starting}>
+            {started === null ? 'Cancel' : 'Done'}
           </button>
           <button
             type="submit"
+            ref={startRef}
             className="primary"
             disabled={starting || version === null}
-            autoFocus={version !== null && version.params.length === 0}
           >
             {starting ? 'Starting…' : 'Start run'}
           </button>
         </>
       }
     >
-      {load.status === 'loading' && <p className="page-hint">Loading the latest version…</p>}
+      {load.status === 'loading' && <p className="page-hint">Loading…</p>}
       {load.status === 'error' && (
         <>
           <p className="form-error" role="alert">
@@ -130,6 +165,7 @@ export function PipelineRunDrawer({
           </p>
           <button
             type="button"
+            ref={retryRef}
             onClick={() => {
               setLoad({ status: 'loading' });
               setAttempt((n) => n + 1);
@@ -142,8 +178,8 @@ export function PipelineRunDrawer({
       {reason !== null && <p className="page-hint">{reason}</p>}
       {version !== null && (
         <>
-          <p className="page-hint">{`Runs v${String(version.version)}, the latest saved version.`}</p>
-          <RunParamsFields params={version.params} rows={form.rows} onChange={set} autoFocus />
+          <p className="run-drawer__version">{`v${String(version.version)} · latest`}</p>
+          <RunParamsFields params={version.params} rows={form.rows} onChange={set} />
         </>
       )}
     </FormDrawer>
