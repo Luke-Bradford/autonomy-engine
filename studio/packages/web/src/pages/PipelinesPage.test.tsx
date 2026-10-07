@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Pipeline, PipelineSummary } from '@autonomy-studio/shared';
 import { PipelinesPage } from './PipelinesPage';
@@ -163,6 +163,8 @@ describe('PipelinesPage', () => {
       nextFireAt: null,
       activities: null,
       modifiedAt: 1,
+      description: '',
+      annotations: [],
       ...over,
     });
     const rowNames = () =>
@@ -231,12 +233,155 @@ describe('PipelinesPage', () => {
       renderPage();
       await screen.findAllByText('success');
       expect(rowNames()).toEqual(['Alpha', 'Beta', 'Gamma']);
-      fireEvent.click(screen.getByRole('button', { name: /Last run/ }));
+      // The header's button, not the filter bar's "Last run: All" menu.
+      fireEvent.click(within(screen.getByRole('table')).getByRole('button', { name: /Last run/ }));
       expect(rowNames()).toEqual(['Gamma', 'Alpha', 'Beta']);
       expect(screen.getByRole('columnheader', { name: /Last run/ })).toHaveAttribute(
         'aria-sort',
         'descending',
       );
+    });
+
+    /** #1569 OR37 slice 2 — the filter bar. */
+    describe('filter bar', () => {
+      const failed = { runId: 'rf', status: 'failure' as const, startedAt: 5, finishedAt: 6 };
+      const ok = { runId: 'ro', status: 'success' as const, startedAt: 5, finishedAt: 6 };
+      const seed = () => {
+        listMock.mockResolvedValue([
+          pipeline({ id: 'pl_1', name: 'Alpha', folder: 'ETL' }),
+          pipeline({ id: 'pl_2', resourceId: 'res_2', name: 'Beta' }),
+          pipeline({ id: 'pl_3', resourceId: 'res_3', name: 'Gamma' }),
+        ]);
+        summariesMock.mockResolvedValue([
+          summary('pl_1', { lastRun: ok, description: 'Loads the orders feed' }),
+          summary('pl_2', { lastRun: failed, annotations: ['finance'] }),
+          summary('pl_3'),
+        ]);
+      };
+      const renderAt = (query: string) =>
+        renderWithRouter(
+          <PipelinesPage store={createPipelinesStore()} />,
+          `/author/pipelines${query}`,
+        );
+
+      it('filters by last run from the URL, and Clear brings every row back', async () => {
+        seed();
+        const user = userEvent.setup();
+        renderAt('?last=failure');
+        await screen.findByRole('button', { name: /^Last run: failure/ });
+        await waitFor(() => expect(rowNames()).toEqual(['Beta']));
+        await user.click(screen.getByRole('button', { name: 'Clear filters' }));
+        await waitFor(() => expect(rowNames()).toEqual(['Alpha', 'Beta', 'Gamma']));
+      });
+
+      it('picks several last-run statuses from the menu, never-run included', async () => {
+        seed();
+        const user = userEvent.setup();
+        renderAt('');
+        await screen.findAllByText('failure');
+        await user.click(screen.getByRole('button', { name: /^Last run: All/ }));
+        await user.click(await screen.findByRole('menuitemcheckbox', { name: 'failure' }));
+        await user.click(await screen.findByRole('menuitemcheckbox', { name: 'Never run' }));
+        await waitFor(() => expect(rowNames()).toEqual(['Beta', 'Gamma']));
+      });
+
+      it('searches description and annotations, and narrows by folder', async () => {
+        seed();
+        renderAt('?q=orders');
+        await waitFor(() => expect(rowNames()).toEqual(['Alpha']));
+        cleanup();
+        seed();
+        renderAt('?q=FINANCE');
+        await waitFor(() => expect(rowNames()).toEqual(['Beta']));
+        cleanup();
+        seed();
+        renderAt(`?folder=${encodeURIComponent('/')}`);
+        await waitFor(() => expect(rowNames()).toEqual(['Beta', 'Gamma']));
+      });
+
+      it('says a filter is loading its facts — not "no match" — while the summaries are unread', async () => {
+        seed();
+        const pending = deferred<PipelineSummary[]>();
+        summariesMock.mockReturnValue(pending.promise);
+        renderAt('?last=failure');
+        expect(await screen.findByText('Loading run facts…')).toBeInTheDocument();
+        expect(screen.queryByText(/No pipelines match/)).not.toBeInTheDocument();
+        expect(screen.queryByRole('table')).not.toBeInTheDocument();
+        pending.resolve([summary('pl_2', { lastRun: failed })]);
+        await waitFor(() => expect(rowNames()).toEqual(['Beta']));
+        expect(screen.queryByText('Loading run facts…')).not.toBeInTheDocument();
+      });
+
+      it('holds a search back while the descriptions are unread, showing the name matches', async () => {
+        seed();
+        const pending = deferred<PipelineSummary[]>();
+        summariesMock.mockReturnValue(pending.promise);
+        renderAt('?q=orders');
+        // "orders" is only in Alpha's description: no claim of "no match" yet.
+        expect(await screen.findByText('Loading run facts…')).toBeInTheDocument();
+        expect(screen.queryByText(/No pipelines match/)).not.toBeInTheDocument();
+        pending.resolve([summary('pl_1', { description: 'Loads the orders feed' })]);
+        await waitFor(() => expect(rowNames()).toEqual(['Alpha']));
+      });
+
+      it('says a failed facts read failed, rather than loading for ever', async () => {
+        seed();
+        summariesMock.mockRejectedValue(new Error('down'));
+        renderAt('?last=failure');
+        expect(await screen.findByRole('alert')).toHaveTextContent(
+          'Could not read the run facts these filters need.',
+        );
+        expect(screen.queryByText('Loading run facts…')).not.toBeInTheDocument();
+        expect(screen.queryByText(/No pipelines match/)).not.toBeInTheDocument();
+      });
+
+      it('keeps the bar, and its Clear, while the list reloads', async () => {
+        seed();
+        const store = createPipelinesStore();
+        renderWithRouter(<PipelinesPage store={store} />, '/author/pipelines?q=alpha');
+        await waitFor(() => expect(rowNames()).toEqual(['Alpha']));
+        const reload = deferred<Pipeline[]>();
+        listMock.mockReturnValueOnce(reload.promise);
+        void store.getState().refresh();
+        await waitFor(() => expect(store.getState().status).toBe('loading'));
+        expect(screen.getByRole('button', { name: 'Clear filters' })).toBeInTheDocument();
+        reload.resolve([pipeline({ id: 'pl_1', name: 'Alpha', folder: 'ETL' })]);
+      });
+
+      it('says no pipeline matches once the facts are read', async () => {
+        seed();
+        renderAt('?last=cancelled');
+        expect(await screen.findByText('No pipelines match the filters.')).toBeInTheDocument();
+      });
+
+      it('keeps Archived reachable when every pipeline is archived, and draws only Name and Modified there', async () => {
+        const user = userEvent.setup();
+        listArchivedMock.mockResolvedValue([pipeline({ id: 'pl_9', name: 'Retired' })]);
+        renderAt('');
+        await screen.findByText(/No pipelines yet/i);
+        await user.click(screen.getByRole('button', { name: 'Archived' }));
+        expect(await screen.findByText('Retired')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Archived' })).toHaveAttribute(
+          'aria-pressed',
+          'true',
+        );
+        expect(
+          // (Name carries the sort arrow.)
+          screen
+            .getAllByRole('columnheader')
+            .map((h) => h.textContent?.replace(/[▲▼]/g, '').trim()),
+        ).toEqual(['Name', 'Modified', '']);
+        // The run filters are not drawn where there are no run facts.
+        expect(screen.queryByRole('button', { name: /^Last run:/ })).not.toBeInTheDocument();
+        expect(screen.queryByText(/No pipelines yet/i)).not.toBeInTheDocument();
+      });
+
+      it('opens the archived view from a link', async () => {
+        listArchivedMock.mockResolvedValue([pipeline({ id: 'pl_9', name: 'Retired' })]);
+        renderAt('?archived=1');
+        expect(await screen.findByText('Retired')).toBeInTheDocument();
+        expect(listArchivedMock).toHaveBeenCalledTimes(1);
+      });
     });
   });
 
@@ -385,8 +530,8 @@ describe('PipelinesPage', () => {
 
   /**
    * #1058 — archive is the only way to retire a pipeline that has ever run, and
-   * the archived section is the only way back. Both halves, plus the load-status
-   * honesty the section needs to be a real recovery surface.
+   * the archived view is the only way back. Both halves, plus the load-status
+   * honesty the view needs to be a real recovery surface.
    */
   describe('#1058 archive and the way back', () => {
     it('archives after confirmation, naming the consequences in the confirm', async () => {
@@ -436,7 +581,7 @@ describe('PipelinesPage', () => {
       ).toBeInTheDocument();
     });
 
-    it('fetches the archived set only when the section is opened', async () => {
+    it('fetches the archived set only when the view is opened', async () => {
       const user = userEvent.setup();
       listArchivedMock.mockResolvedValue([pipeline({ id: 'pl_9', name: 'Retired' })]);
       renderPage();
@@ -446,7 +591,7 @@ describe('PipelinesPage', () => {
       await screen.findByText(/No pipelines yet/i);
       expect(listArchivedMock).not.toHaveBeenCalled();
 
-      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
       expect(await screen.findByText('Retired')).toBeInTheDocument();
       expect(listArchivedMock).toHaveBeenCalledTimes(1);
     });
@@ -456,9 +601,9 @@ describe('PipelinesPage', () => {
       listArchivedMock.mockResolvedValue([pipeline({ id: 'pl_9', name: 'Retired' })]);
       renderPage();
       await screen.findByText(/No pipelines yet/i);
-      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
 
-      await user.click(await screen.findByRole('button', { name: 'Unarchive Retired' }));
+      await chooseRowAction(user, 'Retired', 'Unarchive');
 
       await waitFor(() => expect(restoreMock).toHaveBeenCalledWith('pl_9'));
       // The row leaves the archived list and rejoins the live one, so both are
@@ -473,7 +618,7 @@ describe('PipelinesPage', () => {
       renderPage();
       await screen.findByText(/No pipelines yet/i);
 
-      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
 
       // The lie this guards against: "No archived pipelines" over a load that
       // never answered tells the operator their pipeline is gone, on the ONE
@@ -500,14 +645,14 @@ describe('PipelinesPage', () => {
       renderPage();
 
       // 1. Open — load #1 starts, carrying a view from BEFORE the archive below.
-      await user.click(await screen.findByRole('button', { name: /Show archived/i }));
+      await user.click(await screen.findByRole('button', { name: 'Archived' }));
       // 2. Close before it answers, 3. archive (invalidating the cache),
       //    4. reopen — load #2 starts and is the only correct answer.
-      await user.click(screen.getByRole('button', { name: /Hide archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
       await chooseRowAction(user, 'Nightly digest', 'Archive');
       await answerConfirm(user, 'accept');
       await waitFor(() => expect(archiveMock).toHaveBeenCalled());
-      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
 
       // 5. The fresher load lands first and is right.
       second.resolve([pipeline({ id: 'pl_9', name: 'Retired' })]);
@@ -516,7 +661,7 @@ describe('PipelinesPage', () => {
       // 6. The STALE load finally answers, with a list from before the archive.
       first.resolve([]);
 
-      // It must be dropped. Without the guard the section overwrites itself
+      // It must be dropped. Without the guard the view overwrites itself
       // with "No archived pipelines" — the exact lie the status triple exists
       // to prevent, on the ONE surface that is the way back out of archive, and
       // nothing refetches to self-correct.
@@ -525,20 +670,20 @@ describe('PipelinesPage', () => {
       expect(screen.getByText('Retired')).toBeInTheDocument();
     });
 
-    it('supersedes an in-flight load when an archive invalidates the CLOSED section', async () => {
+    it('supersedes an in-flight load when an archive invalidates the CLOSED view', async () => {
       const user = userEvent.setup();
       listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
 
-      // The load is still in flight when the section is closed, and nothing
+      // The load is still in flight when the view is closed, and nothing
       // reopens it before it answers — so unlike the case above, no SECOND
       // load exists to move the counter past it.
       const inFlight = deferred<Pipeline[]>();
       listArchivedMock.mockReturnValueOnce(inFlight.promise);
       renderPage();
 
-      await user.click(await screen.findByRole('button', { name: /Show archived/i }));
+      await user.click(await screen.findByRole('button', { name: 'Archived' }));
       await waitFor(() => expect(listArchivedMock).toHaveBeenCalledTimes(1));
-      await user.click(screen.getByRole('button', { name: /Hide archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
 
       await chooseRowAction(user, 'Nightly digest', 'Archive');
       await answerConfirm(user, 'accept');
@@ -552,9 +697,10 @@ describe('PipelinesPage', () => {
       inFlight.resolve([]);
       listArchivedMock.mockResolvedValue([pipeline({ name: 'Nightly digest', archived: true })]);
 
-      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
+      // In the archived view, a row's menu is the archived row's.
       expect(
-        await screen.findByRole('button', { name: 'Unarchive Nightly digest' }),
+        await screen.findByRole('button', { name: 'Actions for Nightly digest' }),
       ).toBeInTheDocument();
       expect(listArchivedMock).toHaveBeenCalledTimes(2);
     });
@@ -571,26 +717,27 @@ describe('PipelinesPage', () => {
 
       // Open (load A starts), close, then archive — which reads `showArchived`
       // as false at CLICK time and holds that value across its awaits.
-      await user.click(await screen.findByRole('button', { name: /Show archived/i }));
+      await user.click(await screen.findByRole('button', { name: 'Archived' }));
       await waitFor(() => expect(listArchivedMock).toHaveBeenCalledTimes(1));
-      await user.click(screen.getByRole('button', { name: /Hide archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
       await chooseRowAction(user, 'Nightly digest', 'Archive');
       await answerConfirm(user, 'accept');
 
       // Reopen while the archive is still in flight. Load A is still 'loading',
       // so an open that only fetches on the CLICK cannot fetch here.
-      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
 
       listArchivedMock.mockResolvedValue([pipeline({ name: 'Nightly digest', archived: true })]);
       archiving.resolve(pipeline({ archived: true }));
       firstLoad.resolve([]);
 
-      // The archive lands last and invalidates the set. The section is OPEN by
+      // The archive lands last and invalidates the set. The view is OPEN by
       // then, so it has to load: otherwise it sits at `idle` while open, which
-      // renders no rows, no error and no "Loading…" — a blank section that
+      // renders no rows, no error and no "Loading…" — a blank view that
       // nothing refetches, hiding the pipeline just archived.
+      // In the archived view, a row's menu is the archived row's.
       expect(
-        await screen.findByRole('button', { name: 'Unarchive Nightly digest' }),
+        await screen.findByRole('button', { name: 'Actions for Nightly digest' }),
       ).toBeInTheDocument();
     });
 
@@ -601,9 +748,9 @@ describe('PipelinesPage', () => {
 
       // Open, then close — so a naive "fetch once" would now be holding a list
       // that predates the archive below.
-      await user.click(await screen.findByRole('button', { name: /Show archived/i }));
+      await user.click(await screen.findByRole('button', { name: 'Archived' }));
       await waitFor(() => expect(listArchivedMock).toHaveBeenCalledTimes(1));
-      await user.click(screen.getByRole('button', { name: /Hide archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
 
       await chooseRowAction(user, 'Nightly digest', 'Archive');
       await answerConfirm(user, 'accept');
@@ -612,10 +759,11 @@ describe('PipelinesPage', () => {
       expect(listArchivedMock).toHaveBeenCalledTimes(1);
 
       listArchivedMock.mockResolvedValue([pipeline({ name: 'Nightly digest', archived: true })]);
-      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
       // The row just archived is THERE, because opening refetched.
+      // In the archived view, a row's menu is the archived row's.
       expect(
-        await screen.findByRole('button', { name: 'Unarchive Nightly digest' }),
+        await screen.findByRole('button', { name: 'Actions for Nightly digest' }),
       ).toBeInTheDocument();
     });
 
@@ -624,7 +772,7 @@ describe('PipelinesPage', () => {
      * wraps its follow-up reads in the same try/catch as the mutation, so the
      * only thing keeping "Could not archive" honest is that neither follow-up
      * can reject: `pipelinesStore.refresh` says so in its contract, and
-     * `loadArchived` reports its own failure into the section's status.
+     * `loadArchived` reports its own failure into the view's status.
      *
      * Both are non-local to the handler, which is exactly why they are pinned
      * here — the day either starts rejecting, the operator is told their
@@ -634,20 +782,25 @@ describe('PipelinesPage', () => {
     it('reports a follow-up READ failure as itself, not as a failed archive', async () => {
       const user = userEvent.setup();
       listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
+      const archiving = deferred<Pipeline>();
+      archiveMock.mockReturnValueOnce(archiving.promise);
       renderPage();
 
-      // Section OPEN, so the archive's follow-up takes the `loadArchived` branch.
-      await user.click(await screen.findByRole('button', { name: /Show archived/i }));
+      await chooseRowAction(user, 'Nightly digest', 'Archive');
+      await answerConfirm(user, 'accept');
+      await waitFor(() => expect(archiveMock).toHaveBeenCalledWith('pl_1'));
+
+      // The archived view OPEN by the time the archive lands (it replaces the
+      // live list, so it cannot be open when the archive starts), so the
+      // archive's follow-up takes the `loadArchived` branch.
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
       await waitFor(() => expect(listArchivedMock).toHaveBeenCalledTimes(1));
 
       // Both follow-up reads fail: the live refresh AND the archived reload.
       listMock.mockRejectedValue(new Error('live list down'));
       listArchivedMock.mockRejectedValue(new Error('archived list down'));
+      archiving.resolve(pipeline({ archived: true }));
 
-      await chooseRowAction(user, 'Nightly digest', 'Archive');
-      await answerConfirm(user, 'accept');
-
-      await waitFor(() => expect(archiveMock).toHaveBeenCalledWith('pl_1'));
       expect(await screen.findByText(/Could not load archived pipelines/i)).toBeInTheDocument();
       expect(screen.getByText(/live list down/i)).toBeInTheDocument();
       // The archive itself SUCCEEDED, so nothing may say otherwise.
@@ -659,12 +812,12 @@ describe('PipelinesPage', () => {
       listArchivedMock.mockResolvedValue([pipeline({ id: 'pl_9', name: 'Retired' })]);
       renderPage();
       await screen.findByText(/No pipelines yet/i);
-      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
 
       listMock.mockRejectedValue(new Error('live list down'));
       listArchivedMock.mockRejectedValue(new Error('archived list down'));
 
-      await user.click(await screen.findByRole('button', { name: 'Unarchive Retired' }));
+      await chooseRowAction(user, 'Retired', 'Unarchive');
 
       await waitFor(() => expect(restoreMock).toHaveBeenCalledWith('pl_9'));
       expect(await screen.findByText(/Could not load archived pipelines/i)).toBeInTheDocument();

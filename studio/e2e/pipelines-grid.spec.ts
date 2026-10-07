@@ -122,6 +122,10 @@ test('#1569 — the pipelines grid: last run, success %, next run, triggers; sor
       rowHeight: Math.round(rects[0]?.height ?? -1),
       inViewport: rects.filter((r) => r.bottom <= window.innerHeight).length,
       fontSize: getComputedStyle(rows[0]?.querySelector('td') ?? document.body).fontSize,
+      // #1569 slice 2 — the filter bar is ONE row (two would be ~56px).
+      barHeight: Math.round(
+        document.querySelector('.pipelines-filters')?.getBoundingClientRect().height ?? -1,
+      ),
     };
   });
   expect(measured.firstTop).toBeGreaterThan(0);
@@ -129,10 +133,16 @@ test('#1569 — the pipelines grid: last run, success %, next run, triggers; sor
   expect(measured.rowHeight).toBe(32);
   expect(measured.fontSize).toBe('13px');
   expect(measured.inViewport).toBeGreaterThanOrEqual(20);
+  expect(measured.barHeight).toBeGreaterThan(0);
+  expect(measured.barHeight).toBeLessThanOrEqual(40);
 
   // Sort by Last run: newest first, so the broken pipeline (run second) sits
   // directly above the ok one, and every never-run filler after both.
-  await page.getByRole('button', { name: /Last run/ }).click();
+  // The header's button — the filter bar has a "Last run: All" menu too.
+  await page
+    .getByRole('columnheader', { name: /Last run/ })
+    .getByRole('button')
+    .click();
   await expect(page).toHaveURL(/[?&]sort=lastRun(&|$)/);
   const order = async () =>
     (await page.locator('.pipelines-grid tbody tr td:first-child a').allTextContents()).filter(
@@ -148,6 +158,25 @@ test('#1569 — the pipelines grid: last run, success %, next run, triggers; sor
     'aria-sort',
     'descending',
   );
+  await expect.poll(async () => (await order()).slice(0, 2)).toEqual(sortedOrder);
+
+  // #1569 slice 2 — filter by last run: in the URL beside the sort, and it
+  // survives a reload.
+  await page.getByRole('button', { name: /^Last run: All/ }).click();
+  await page.getByRole('menuitemcheckbox', { name: 'failure' }).click();
+  await page.keyboard.press('Escape');
+  await expect(page).toHaveURL(/[?&]last=failure(&|$)/);
+  await expect.poll(order).toEqual([brokenName]);
+  await page.reload();
+  await fluentRootReady(page);
+  await expect(page.getByRole('button', { name: /^Last run: failure/ })).toBeVisible();
+  await expect.poll(order).toEqual([brokenName]);
+  // A search on top of it that matches nothing says so; Clear brings every row
+  // back, in the sorted order.
+  await page.getByRole('searchbox', { name: 'Search pipelines' }).fill(okName);
+  await expect(page.getByText('No pipelines match the filters.')).toBeVisible();
+  await page.getByRole('button', { name: 'Clear filters' }).click();
+  await expect(page).not.toHaveURL(/[?&](last|q)=/);
   await expect.poll(async () => (await order()).slice(0, 2)).toEqual(sortedOrder);
 
   // The last run's link lands on that run.
