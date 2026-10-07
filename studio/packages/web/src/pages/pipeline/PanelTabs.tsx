@@ -8,20 +8,20 @@ export interface PanelTab<K extends string> {
 }
 
 /**
- * #852 / #844 — the property dock's tab strip (U7 "bottom dock, tabbed").
+ * #852 / #844 — the property dock's tab strip (U7 "bottom dock, tabbed"), and
+ * since #1484 OR35 M2 the run drawer's Input / Output / Error / Logs.
  *
  * EVERY panel stays MOUNTED and the inactive ones are `hidden`, deliberately.
  * The panels hold drafts — `ConfigEditor`'s unapplied form, a half-typed param
  * name — and a strip that unmounted the panel it left would silently discard
- * them on a tab switch. `RunsPage` renders one `tabpanel` whose contents change,
- * which is right for a filter over one list and wrong here.
+ * them on a tab switch.
  *
- * Fluent's `TabList` for the same reason `RunsPage` uses it: it brings the
- * roving tabindex and arrow-key movement the `tab` role advertises.
+ * Fluent's `TabList`, because it brings the roving tabindex and arrow-key
+ * movement the `tab` role advertises.
  *
- * Controlled when `selected`/`onSelect` are given — `PropertyPanel` lifts the
- * choice so selecting another node keeps the tab the operator was on, as ADF
- * does — and self-managed otherwise, so a panel rendered on its own (a unit
+ * Controlled when `selected`/`onSelect` are given — `PropertyPanel` and the run
+ * drawer lift the choice so selecting another node keeps the tab the operator
+ * was on, as ADF does — and self-managed otherwise, so a panel rendered on its own (a unit
  * test, or a future host) still works.
  */
 export function PanelTabs<K extends string>({

@@ -3803,8 +3803,36 @@ button.danger {
    the DOCUMENT. Neither substitutes for the other. */
 .node-detail-outputs {
   display: block;
+  /* #1484 M2 — the drawer's JSON is indented; keep its line breaks. */
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 12rem;
+  overflow-y: auto;
+}
+
+/* #1484 M2 — a JSON block's Copy and Download, side by side. */
+.capped-value-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* #1484 M2 — an error verbatim: its own line breaks, wrapped, and scrolled
+   rather than taking over the drawer. */
+.node-error-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 14rem;
+  overflow-y: auto;
+  font-size: 0.85rem;
+}
+
+/* #1484 M2 — the Logs tab's lines, bounded like the tool calls, but on a
+   wrapper, so the table stays a table to assistive tech. */
+.node-logs {
+  font-size: 0.8rem;
+  max-height: 20rem;
   overflow-y: auto;
 }
 

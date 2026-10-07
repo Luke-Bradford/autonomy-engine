@@ -1,16 +1,22 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { describeDatasetAddress, SECURE_REDACTED, TERMINAL_NODE } from '@autonomy-studio/shared';
 import type { DatasetAddress, DispatchInput, RunStatus } from '@autonomy-studio/shared';
 import { nodeStatusLabel, nodeStatusPillClass, nodeStoppedByCancel } from './nodeStatus';
 import { runDetailPath, runLinkLabel } from './runPath';
-import { formatOutputValue, jsonText, liveSpanStart } from './format';
+import { formatOutputValue, jsonText, liveSpanStart, prettyStoredJson } from './format';
 import { NodeDuration } from './NodeDuration';
 import { costFigure, costSentence, readCost, tokenSummary, unsettledSentence } from './costReading';
 import type { NodeActivity, NodeToolCall } from './runSummary';
 import { SecureMarkerHint } from './SecureMarkerHint';
 import { CaptureSection } from './CaptureSection';
 import { CappedValue } from './CappedValue';
+import { PanelTabs } from '../pipeline/PanelTabs';
+import { downloadTextFile } from '../../api/download';
+import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
+import { formatTimeOfDay, zoneLabel } from '../../lib/displayTime';
+import type { StreamedLine } from './attemptActivity';
+import { defaultDrawerTab, drawerFileStem, type DrawerTab } from './drawerTab';
 
 /**
  * U24 (slice 1) — the per-node drill-in on the run monitor.
@@ -82,6 +88,12 @@ import { CappedValue } from './CappedValue';
  * unmeasured rather than given a manufactured `0ms`. What is still deferred is
  * a LIVE counter for an attempt in flight, which needs a clock this page does
  * not have (#890).
+ *
+ * #1484 OR35 M2 laid it out as ADF does: the record's identity, status, duration
+ * and child runs on top, then four tabs — Input, Output, Error, Logs. Each JSON
+ * block is indented and offers Copy and Download of the whole value. The tab
+ * opens on the error when one is recorded and on the output otherwise, until
+ * the operator picks one; the run page then keeps that pick from row to row.
  */
 /** The panel's DOM id. */
 const PANEL_ID = 'node-activity-panel';
@@ -105,6 +117,9 @@ export function NodeActivityPanel({
   live,
   onClose,
   run,
+  tab,
+  onTab,
+  fileStem,
 }: {
   node: NodeActivity;
   name: string | null;
@@ -118,8 +133,27 @@ export function NodeActivityPanel({
    * rather than the node's latest: which attempt, which item or round, and why
    * it was skipped. `node` is then that attempt's record (`activityOfRow`).
    */
-  run?: { attempt: number | null; iteration: string; skipWhy: ReactNode };
+  run?: {
+    attempt: number | null;
+    iteration: string;
+    skipWhy: ReactNode;
+    /** Everything this attempt streamed (`attemptOutputLines`), for Logs. */
+    lines?: readonly StreamedLine[];
+  };
+  /**
+   * #1484 OR35 M2 — the tab, when the host holds the choice (the run page does,
+   * so stepping from row to row keeps the operator's tab). `null` is "not chosen
+   * yet": `defaultDrawerTab`. Without `onTab` the panel holds it itself.
+   */
+  tab?: DrawerTab | null;
+  onTab?: (tab: DrawerTab) => void;
+  /** What a downloaded block's file name starts with; the node's name else. */
+  fileStem?: string;
 }) {
+  const [ownTab, setOwnTab] = useState<DrawerTab | null>(null);
+  const chosen = onTab === undefined ? ownTab : (tab ?? null);
+  const stem = fileStem ?? drawerFileStem([name ?? node.nodeId]);
+  const lines = run?.lines;
   return (
     <aside
       id={PANEL_ID}
@@ -168,7 +202,7 @@ export function NodeActivityPanel({
       {node.copiedFromRunId !== undefined && (
         <p className="page-hint">
           This node did not run in this run. The rerun reused its result from run{' '}
-          <code>{node.copiedFromRunId}</code>, so the outputs below were computed there.
+          <code>{node.copiedFromRunId}</code>, so its outputs were computed there.
           {/* RS4 — a copied call node did not start a child either; say which
               child it is standing on, and give the way down to it. Worded to
               stay true in two cases: after a rerun OF a rerun the child's parent
@@ -285,68 +319,112 @@ export function NodeActivityPanel({
         </p>
       )}
 
+      {/* #1231 / U20 — the drill DOWN, ABOVE the tabs. A failed call node's
+          failure came from the child, so the link is the next thing wanted
+          whichever tab is open: under Output it would hide exactly when the
+          drawer opens on Error. */}
+      <ChildRuns node={node} />
+
+      {/* #1484 OR35 M2 — ADF's four tabs. Every panel stays mounted (see
+          `PanelTabs`), so a disclosure opened on Output survives a look at
+          Input. */}
+      <PanelTabs<DrawerTab>
+        label="Activity run details"
+        selected={chosen ?? defaultDrawerTab(node)}
+        onSelect={onTab ?? setOwnTab}
+        tabs={[
+          {
+            key: 'input',
+            label: 'Input',
+            content:
+              node.input !== undefined || node.params !== undefined ? (
+                /* Keyed like Outputs, below, and for the same reason: its
+                   blocks are `CappedValue` disclosures too. */
+                <InputSection
+                  key={`${node.nodeId}#${node.instanceId ?? ''}`}
+                  input={node.input}
+                  params={node.params}
+                  instanceId={node.inputInstanceId}
+                  stem={stem}
+                />
+              ) : (
+                <p className="page-hint">No input was recorded for this activity run.</p>
+              ),
+          },
+          { key: 'output', label: 'Output', content: <OutputTab node={node} stem={stem} /> },
+          {
+            key: 'error',
+            label: 'Error',
+            content: <ErrorTab node={node} attempt={run?.attempt ?? null} />,
+          },
+          {
+            key: 'logs',
+            label: 'Logs',
+            content: (
+              <>
+                <section className="contract-section">
+                  <h4>Streamed output</h4>
+                  <p>
+                    {node.outputs} event{node.outputs === 1 ? '' : 's'}
+                    {/* #1299 — the value only for the CURRENT attempt (`lastOutput` is
+                        cleared on dispatch); the name alone otherwise, as before. */}
+                    {node.lastOutput !== undefined ? (
+                      <>
+                        {' '}
+                        (latest: {node.lastOutput.name} = {formatOutputValue(node.lastOutput.value)}
+                        )
+                      </>
+                    ) : (
+                      node.lastOutputName !== undefined && <> (latest: {node.lastOutputName})</>
+                    )}
+                  </p>
+                  {/* A secure node's stream is redacted name AND value (`redactSecureEvent`). */}
+                  <SecureMarkerHint
+                    values={[node.lastOutputName, node.lastOutput?.name, node.lastOutput?.value]}
+                  />
+                </section>
+                {lines !== undefined && lines.length > 0 && (
+                  <StreamedLines lines={lines} stem={stem} />
+                )}
+              </>
+            ),
+          },
+        ]}
+      />
+    </aside>
+  );
+}
+
+/**
+ * #1484 OR35 M2 — the Output tab: what this activity run produced. The data it
+ * moved, a variable it wrote, its declared outputs, and an LLM node's cost, tool
+ * calls and captures. Outputs and a variable write are JSON blocks with Copy and
+ * Download; tool calls and captures are not JSON and get neither.
+ */
+function OutputTab({ node, stem }: { node: NodeActivity; stem: string }) {
+  const hasCost = node.cost.responseCount > 0 || node.toolCalls.length > 0;
+  const empty =
+    node.datasetAddresses === undefined &&
+    node.variableWrite === undefined &&
+    node.outputValues === undefined &&
+    !hasCost &&
+    node.captures.length === 0;
+  if (empty) return <p className="page-hint">No output was recorded for this activity run.</p>;
+  return (
+    <>
       {node.datasetAddresses !== undefined && (
         <DataMovementSection addresses={node.datasetAddresses} instanceId={node.inputInstanceId} />
       )}
 
-      {node.status === 'failure' && (
-        <section className="contract-section">
-          <h4>Failure</h4>
-          {/* Gated on the STATUS, not on the message: a `call.returned` whose
-              child RAN and failed sets the row red with no message of its own
-              (only a refused spawn carries a `reason`, #796), and gating on
-              `error` hid the whole section for it. */}
-          {node.error === undefined ? (
-            <p className="page-hint">
-              No message was recorded — this node reports another run&apos;s outcome.
-            </p>
-          ) : (
-            <p>{node.error}</p>
-          )}
-          {node.failureKind === undefined ? (
-            /* Not a gap — `externalWait.expired` fails a node straight off its
-               expiry alarm, with no `node.failed` to classify it. Say so rather
-               than leave the section looking truncated, and never guess a kind:
-               how the reducer treats an expired wait is the reducer's fact. */
-            <p className="page-hint">This failure was recorded without a machine-readable class.</p>
-          ) : (
-            <dl className="run-meta">
-              <dt>Kind</dt>
-              <dd>
-                <code>{node.failureKind}</code>
-              </dd>
-              {node.failureCode !== undefined && (
-                <>
-                  <dt>Code</dt>
-                  <dd>
-                    <code>{node.failureCode}</code>
-                  </dd>
-                </>
-              )}
-            </dl>
-          )}
-        </section>
-      )}
-
-      {/* #1231 / U20 — the drill DOWN. Placed between Failure and Outputs
-          deliberately: a failed call node's failure came from the child, so the
-          link is the next thing wanted; and it must sit above Outputs because a
-          call node's outputs ARE the child's projection (`lower.ts` skips call
-          nodes for exactly that reason), so the link explains the section under
-          it rather than trailing after it. */}
-      <ChildRuns node={node} />
-
-      {(node.input !== undefined || node.params !== undefined) && (
-        <InputSection input={node.input} params={node.params} instanceId={node.inputInstanceId} />
-      )}
-
       {/* KEYED on the node's identity, which is load-bearing rather than tidy.
           A host can swap this panel IN PLACE when a different node is shown
-          rather than remount it (the editor's run drawer does). So without a key, an Outputs section expanded on node A would carry
-          `expanded` into node B and put B's whole un-requested payload into the
-          DOM: the very thing the cap exists to prevent, reintroduced by the
-          control that relieves it. A foreach folds every item onto ONE
-          `nodeId`, so `instanceId` is part of the identity too. */}
+          rather than remount it (the editor's run drawer does). So without a
+          key, an Outputs section expanded on node A would carry `expanded` into
+          node B and put B's whole un-requested payload into the DOM: the very
+          thing the cap exists to prevent, reintroduced by the control that
+          relieves it. A foreach folds every item onto ONE `nodeId`, so
+          `instanceId` is part of the identity too. The Input tab's section is
+          keyed the same way. */}
       {/* #844 V7 — before Outputs, which for a writer only says that nothing
           was recorded: the write IS this node's result. Keyed like Outputs for
           the same reason, since both hold a `CappedValue` disclosure. */}
@@ -354,10 +432,11 @@ export function NodeActivityPanel({
         <VariableWriteSection
           key={`${node.nodeId}#${node.instanceId ?? ''}`}
           write={node.variableWrite}
+          stem={stem}
         />
       )}
 
-      <OutputsSection key={`${node.nodeId}#${node.instanceId ?? ''}`} node={node} />
+      <OutputsSection key={`${node.nodeId}#${node.instanceId ?? ''}`} node={node} stem={stem} />
 
       {/* The `||` is DEFENCE, not a live path: the tool loop yields its `metered`
           event before its `toolCalled` ones in the same round, so tool calls today
@@ -365,33 +444,138 @@ export function NodeActivityPanel({
           behind it — so that a future producer of tool calls without metering
           renders "no billed exchange" rather than silently dropping the section,
           which would read as "this panel does not do cost". */}
-      {(node.cost.responseCount > 0 || node.toolCalls.length > 0) && <CostSection node={node} />}
+      {hasCost && <CostSection node={node} />}
 
       {node.toolCalls.length > 0 && <ToolCallSection calls={node.toolCalls} />}
 
       {node.captures.length > 0 && <CaptureSection captures={node.captures} />}
+    </>
+  );
+}
 
-      <section className="contract-section">
-        <h4>Streamed output</h4>
-        <p>
-          {node.outputs} event{node.outputs === 1 ? '' : 's'}
-          {/* #1299 — the value only for the CURRENT attempt (`lastOutput` is
-              cleared on dispatch); the name alone otherwise, as before. */}
-          {node.lastOutput !== undefined ? (
-            <>
-              {' '}
-              (latest: {node.lastOutput.name} = {formatOutputValue(node.lastOutput.value)})
-            </>
-          ) : (
-            node.lastOutputName !== undefined && <> (latest: {node.lastOutputName})</>
-          )}
+/**
+ * #1484 OR35 M2 — the Error tab: the error verbatim (its line breaks kept), its
+ * class and code, and which attempt it was.
+ */
+function ErrorTab({ node, attempt }: { node: NodeActivity; attempt: number | null }) {
+  if (node.status !== 'failure' && node.error === undefined) {
+    return <p className="page-hint">This activity run did not fail.</p>;
+  }
+  return (
+    <section className="contract-section">
+      <h4>Failure</h4>
+      {/* Gated on the STATUS, not on the message: a `call.returned` whose
+          child RAN and failed sets the row red with no message of its own
+          (only a refused spawn carries a `reason`, #796), and gating on
+          `error` hid the whole section for it. */}
+      {node.error === undefined ? (
+        <p className="page-hint">
+          No message was recorded — this node reports another run&apos;s outcome.
         </p>
-        {/* A secure node's stream is redacted name AND value (`redactSecureEvent`). */}
-        <SecureMarkerHint
-          values={[node.lastOutputName, node.lastOutput?.name, node.lastOutput?.value]}
-        />
-      </section>
-    </aside>
+      ) : (
+        <pre className="node-error-text">{node.error}</pre>
+      )}
+      {node.failureKind === undefined && (
+        /* Not a gap — `externalWait.expired` fails a node straight off its
+           expiry alarm, with no `node.failed` to classify it. Say so rather
+           than leave the section looking truncated, and never guess a kind:
+           how the reducer treats an expired wait is the reducer's fact. */
+        <p className="page-hint">This failure was recorded without a machine-readable class.</p>
+      )}
+      {(node.failureKind !== undefined || attempt !== null) && (
+        <dl className="run-meta">
+          {node.failureKind !== undefined && (
+            <>
+              <dt>Kind</dt>
+              <dd>
+                <code>{node.failureKind}</code>
+              </dd>
+            </>
+          )}
+          {node.failureCode !== undefined && (
+            <>
+              <dt>Code</dt>
+              <dd>
+                <code>{node.failureCode}</code>
+              </dd>
+            </>
+          )}
+          {attempt !== null && (
+            <>
+              <dt>Attempt</dt>
+              <dd>{attempt}</dd>
+            </>
+          )}
+        </dl>
+      )}
+    </section>
+  );
+}
+
+/**
+ * The most lines the Logs tab renders. A copy streams a progress line per batch
+ * with no bound, so the list keeps the most RECENT and says what it cut — the
+ * `MAX_TOOL_ROWS` rule. The download holds every line.
+ */
+const MAX_LOG_ROWS = 200;
+
+/**
+ * #1484 OR35 M2 — the Logs tab's lines: everything this attempt streamed, to
+ * the millisecond in the display zone, and all of it as NDJSON on Download.
+ * A secure node's lines arrive redacted from the server (`redactSecureEvent`),
+ * so what is shown and saved is what the log holds.
+ */
+function StreamedLines({ lines, stem }: { lines: readonly StreamedLine[]; stem: string }) {
+  const zone = useDisplayTimeZone();
+  const shown = lines.slice(-MAX_LOG_ROWS);
+  return (
+    <section className="contract-section">
+      <div className="capped-value-actions">
+        <button
+          type="button"
+          onClick={() =>
+            downloadTextFile(
+              `${stem}-logs.ndjson`,
+              lines.map((l) => JSON.stringify(l)).join('\n') + '\n',
+              'application/x-ndjson',
+            )
+          }
+        >
+          Download {lines.length} line{lines.length === 1 ? '' : 's'}
+        </button>
+      </div>
+      {lines.length > shown.length && (
+        <p className="page-hint">
+          … showing the most recent {shown.length} of {lines.length} lines.
+        </p>
+      )}
+      {/* The scroll is on a wrapper so the table keeps its table semantics. */}
+      <div className="node-logs">
+        <table aria-label="Streamed lines">
+          <thead>
+            <tr>
+              <th scope="col">Time ({zoneLabel(shown[0]!.ts, zone)})</th>
+              <th scope="col">Name</th>
+              <th scope="col">Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((l) => (
+              <tr key={l.seq}>
+                <td>{formatTimeOfDay(l.ts, zone, 'ms')}</td>
+                <td>
+                  <code>{l.name}</code>
+                </td>
+                <td>
+                  <code>{formatOutputValue(l.value)}</code>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <SecureMarkerHint values={shown.flatMap((l) => [l.name, l.value])} />
+    </section>
   );
 }
 
@@ -458,7 +642,7 @@ function ChildRuns({ node }: { node: NodeActivity }) {
       <p className="page-hint">
         {node.childRunIds.length === 1 ? 'The run' : 'The runs'} this node spawned.{' '}
         {node.childRunIds.length === 1 ? 'It has' : 'Each has'} its own log, its own outputs and its
-        own spend, so this node&apos;s duration and cost above are not{' '}
+        own spend, so this node&apos;s duration and cost are not{' '}
         {node.childRunIds.length === 1 ? 'its' : 'theirs'}.
         {node.childRunIds.length > 1 && (
           <>
@@ -678,11 +862,12 @@ function CostSection({ node }: { node: NodeActivity }) {
  * marker (the secret's NAME), because that is what the node was configured
  * with; the value was resolved after this was recorded.
  *
- * No disclosure, unlike `OutputsSection`: the server already stores at most
- * `DISPATCH_INPUT_MAX_CHARS` (4k units, `MAX_OUTPUT_CHARS`'s size), so the whole
- * stored text is mounted and can be selected and copied as it stands.
- * What a cut withholds is not in the log at all, and the hint says so rather
- * than offering a "show all" that has nothing more to show.
+ * The server stores at most `DISPATCH_INPUT_MAX_CHARS` (4k units,
+ * `MAX_OUTPUT_CHARS`'s size). Indenting it (#1484 M2) can take it past
+ * `CappedValue`'s cap, and then the same disclosure as Outputs reveals the rest
+ * of the STORED text. What a cut withholds is not in the log at all, and the
+ * hint says so; a cut text is shown as stored, unindented, since it no longer
+ * parses.
  *
  * The PARAMETERS the dispatch applied over its connection's and datasets'
  * stored settings (`node.dispatched.params`) sit under their own heading: the
@@ -693,10 +878,12 @@ function InputSection({
   input,
   params,
   instanceId,
+  stem,
 }: {
   input: DispatchInput | undefined;
   params: DispatchInput | undefined;
   instanceId: string | undefined;
+  stem: string;
 }) {
   return (
     <section className="contract-section">
@@ -708,7 +895,7 @@ function InputSection({
         </p>
       )}
       {input !== undefined ? (
-        <RecordedText record={input} />
+        <RecordedText record={input} id={INPUT_CONFIG_ID} file={`${stem}-input`} what="input" />
       ) : (
         // Only a config JSON cannot represent gets here: everything else that
         // withholds the config withholds the parameters too.
@@ -720,15 +907,40 @@ function InputSection({
           <p className="page-hint">
             The connection and dataset parameters this dispatch applied over their stored settings.
           </p>
-          <RecordedText record={params} />
+          <RecordedText
+            record={params}
+            id={INPUT_PARAMS_ID}
+            file={`${stem}-parameters`}
+            what="parameters"
+          />
         </>
       )}
     </section>
   );
 }
 
-/** One `DispatchInput` as stored: the text, a cut hint, or the secure withholding. */
-function RecordedText({ record }: { record: DispatchInput }) {
+const INPUT_CONFIG_ID = 'node-detail-input-config';
+const INPUT_PARAMS_ID = 'node-detail-input-params';
+
+/**
+ * One `DispatchInput` as stored: the text, a cut hint, or the secure withholding.
+ *
+ * Indented when it parses, as stored when it does not — which is what a text
+ * the run log cut short does. A cut one downloads as `…-truncated.txt`, so the
+ * file never passes for the whole config. A withheld one offers neither copy
+ * nor download: there is nothing behind the marker to hand over.
+ */
+function RecordedText({
+  record,
+  id,
+  file,
+  what,
+}: {
+  record: DispatchInput;
+  id: string;
+  file: string;
+  what: string;
+}) {
   if (record.text === SECURE_REDACTED) {
     return (
       <p className="page-hint">
@@ -737,9 +949,21 @@ function RecordedText({ record }: { record: DispatchInput }) {
       </p>
     );
   }
+  const pretty = record.truncated === true ? null : prettyStoredJson(record.text);
   return (
     <>
-      <code className="node-detail-outputs">{record.text}</code>
+      <CappedValue
+        id={id}
+        text={pretty ?? record.text}
+        what={what}
+        download={
+          record.truncated === true
+            ? `${file}-truncated.txt`
+            : pretty === null
+              ? `${file}.txt`
+              : `${file}.json`
+        }
+      />
       {record.truncated === true && (
         <p className="page-hint">
           … the run log stored the first {record.text.length} of {record.chars} characters.
@@ -759,7 +983,13 @@ const VARIABLE_WRITE_ID = 'node-detail-variable-write';
  * from its own event. An `append` shows the ELEMENT it added, not the array:
  * the array is the run's, and the run page's Variables section shows it.
  */
-function VariableWriteSection({ write }: { write: NonNullable<NodeActivity['variableWrite']> }) {
+function VariableWriteSection({
+  write,
+  stem,
+}: {
+  write: NonNullable<NodeActivity['variableWrite']>;
+  stem: string;
+}) {
   return (
     <section className="contract-section">
       <h4>Variable write</h4>
@@ -774,12 +1004,17 @@ function VariableWriteSection({ write }: { write: NonNullable<NodeActivity['vari
           </>
         )}
       </p>
-      <CappedValue id={VARIABLE_WRITE_ID} text={jsonText(write.value)} />
+      <CappedValue
+        id={VARIABLE_WRITE_ID}
+        text={jsonText(write.value, 2)}
+        what="variable write"
+        download={`${stem}-variable-write.json`}
+      />
     </section>
   );
 }
 
-function OutputsSection({ node }: { node: NodeActivity }) {
+function OutputsSection({ node, stem }: { node: NodeActivity; stem: string }) {
   if (node.outputValues === undefined) return null;
   const names = Object.keys(node.outputValues);
   return (
@@ -798,10 +1033,15 @@ function OutputsSection({ node }: { node: NodeActivity }) {
            more, so it may only say that much. */
         <p className="page-hint">No output values were recorded.</p>
       ) : (
-        /* `JSON.stringify` emits no spaces, so a long value is one unbreakable
+        /* Indented (#1484 M2), but one value can still be one long unbroken
            token; `.node-detail-outputs` wraps and scrolls it rather than letting
            it push the panel sideways. */
-        <CappedValue id={OUTPUTS_ID} text={JSON.stringify(node.outputValues)} />
+        <CappedValue
+          id={OUTPUTS_ID}
+          text={jsonText(node.outputValues, 2)}
+          what="outputs"
+          download={`${stem}-output.json`}
+        />
       )}
       <SecureMarkerHint values={Object.values(node.outputValues)} />
     </section>

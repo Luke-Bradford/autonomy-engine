@@ -81,6 +81,30 @@ export function latestOutputByAttempt(
   return latest;
 }
 
+/** One line of an activity run's streamed output, for the drawer's Logs tab. */
+export interface StreamedLine {
+  seq: number;
+  ts: RunEvent['ts'];
+  name: string;
+  value: unknown;
+}
+
+/**
+ * #1484 OR35 M2 — everything one attempt streamed, in log order: the drawer's
+ * Logs. Attributed the way `attemptEvents` attributes them, so a parallel
+ * ForEach item's lines are that item's and a retry starts with none.
+ */
+export function attemptOutputLines(events: readonly RunEvent[], attemptId: string): StreamedLine[] {
+  const out: StreamedLine[] = [];
+  walkAttempts(events, (row, owner) => {
+    if (owner !== attemptId) return;
+    const e = parseEngineEvent(row);
+    if (e?.type === 'node.output')
+      out.push({ seq: row.seq, ts: row.ts, name: e.name, value: e.value });
+  });
+  return out;
+}
+
 /** Calls `visit` with each event that belongs to an attempt, and that attempt. */
 function walkAttempts(
   events: readonly RunEvent[],

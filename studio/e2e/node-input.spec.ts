@@ -89,16 +89,23 @@ test('#890 — a node shows the input it ran with; a secure node withholds it', 
     await fluentRootReady(page);
 
     const shown = await openActivity(page, 'List Directory 1');
+    // #1484 M2 — the input is the drawer's Input tab, indented.
+    await shown.getByRole('tab', { name: 'Input' }).click();
     const shownInput = shown.locator('section', {
       has: page.getByRole('heading', { name: 'Input' }),
     });
     await expect(shownInput.locator('code.node-detail-outputs')).toHaveText([
-      JSON.stringify({ path: visible }),
-      JSON.stringify({ connectionParams: { maxEntries: 50 } }),
+      JSON.stringify({ path: visible }, null, 2),
+      JSON.stringify({ connectionParams: { maxEntries: 50 } }, null, 2),
     ]);
     await expect(shownInput.getByRole('heading', { name: 'Parameters' })).toBeVisible();
 
     const secure = await openActivity(page, 'List Directory 2');
+    // The tab chosen above stays chosen from row to row.
+    await expect(secure.getByRole('tab', { name: 'Input' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
     const secureInput = secure.locator('section', {
       has: page.getByRole('heading', { name: 'Input' }),
     });

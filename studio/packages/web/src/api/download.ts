@@ -51,6 +51,12 @@ export function downloadBlob(filename: string, file: Blob): void {
   }
 }
 
+/** `text` as a file-name fragment: lower case, every run of anything outside
+ * `[a-z0-9]` one hyphen, none at either end. Empty when nothing survives. */
+export function fileSlug(text: string): string {
+  return text.toLowerCase().replace(NON_SLUG, '-').replace(/^-|-$/g, '');
+}
+
 /** Everything outside this set collapses to a single hyphen. */
 const NON_SLUG = /[^a-z0-9]+/g;
 
@@ -70,6 +76,6 @@ export function exportFileName(
   name: string,
   id: string,
 ): string {
-  const slug = name.toLowerCase().replace(NON_SLUG, '-').replace(/^-|-$/g, '');
+  const slug = fileSlug(name);
   return slug === '' ? `${kind}-${id}.json` : `${kind}-${slug}-${id}.json`;
 }
