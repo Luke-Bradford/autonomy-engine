@@ -54,7 +54,16 @@ test.describe('#1397 row ⋯ menus, by keyboard', () => {
 
     await page.keyboard.press('Enter');
     await expect(page.getByRole('menu')).toBeVisible();
-    expect(await menuShape(page)).toEqual(['Export', 'Archive', '—', 'Delete']);
+    // #1569 slice 7 — Trigger now, Open last run and Runs lead the menu.
+    expect(await menuShape(page)).toEqual([
+      'Trigger now…',
+      'Open last run',
+      'Runs',
+      'Export',
+      'Archive',
+      '—',
+      'Delete',
+    ]);
     const del = page.getByRole('menuitem', { name: 'Delete' });
     const exp = page.getByRole('menuitem', { name: 'Export' });
     const error = await resolvedPaletteColor(page, '--error');
