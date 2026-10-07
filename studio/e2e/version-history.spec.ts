@@ -302,7 +302,7 @@ test.describe('pipeline version history', () => {
    */
   test('locks every route out of the preview while a restore is in flight', async ({ page }) => {
     const problems = collectPageProblems(page);
-    await seedThreeVersions(page, 'history-inflight');
+    const pipelineId = await seedThreeVersions(page, 'history-inflight');
 
     // Hold the POST open so the in-flight window is observable at all. Only the
     // POST — the GET that lists versions must still answer, or the page never
@@ -335,6 +335,10 @@ test.describe('pipeline version history', () => {
     // A row toggles the preview: off entirely, or across to another version.
     await expect(rows(page)).toHaveCount(3);
     for (let i = 0; i < 3; i++) await expect(rows(page).nth(i)).toBeDisabled();
+    // #1521 — and the URL is a fifth: one naming another version is put back.
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}?version=2`);
+    await expect(page).toHaveURL(/\?version=1$/);
+    await expect(page.getByTestId('version-preview-bar')).toContainText('Viewing v1');
 
     /* The property all four exist to hold: the editor is still not mounted, so
        there is no canvas holding edits for the response to overwrite. */
@@ -712,6 +716,8 @@ test.describe('version history column (#1475 OR27)', () => {
     await addActivity(page, 'Wait');
     await expect(page.locator('.react-flow__node')).toHaveCount(4);
 
+    const entries = () => page.evaluate(() => window.history.length);
+    const before = await entries();
     await (await historyItem(page)).click();
     await rows(page).nth(2).click();
     await expect(bar).toContainText('Viewing v1');
@@ -721,6 +727,8 @@ test.describe('version history column (#1475 OR27)', () => {
     await expect(page.locator('.canvas-grid')).toHaveCount(1);
     await expect(page).toHaveURL(new RegExp(`${encodeURIComponent(pipelineId)}$`));
     await expect(page.locator('.react-flow__node')).toHaveCount(4);
+    // Replaced, not pushed: opening and leaving a preview added no history.
+    expect(await entries()).toBe(before);
 
     // A ?version the page did not write: the view follows, and Back returns.
     await page.goto(`${editor}?version=2`);

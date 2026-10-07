@@ -289,7 +289,6 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
                       [RUN_FILTER_PARAMS.annotation]: tag,
                     }).toString(),
                   }}
-                  title={`Show only runs tagged ${tag}`}
                 >
                   {tag}
                 </Link>
