@@ -98,7 +98,10 @@ function pipeline(overrides: Partial<Pipeline> = {}): Pipeline {
 /** The page under a router (its Open control is a `<Link>`), on a fresh store. */
 function renderPage() {
   // A data router: an open drawer with typed input holds route changes (#1396).
-  return renderWithDataRouter(<PipelinesPage store={createPipelinesStore()} />, '/author/pipelines');
+  return renderWithDataRouter(
+    <PipelinesPage store={createPipelinesStore()} />,
+    '/author/pipelines',
+  );
 }
 
 beforeEach(() => {
@@ -1092,7 +1095,7 @@ describe('PipelinesPage', () => {
   it('holds the Import drawer open while the demo loads, then refreshes the list', async () => {
     const user = userEvent.setup();
     const load = deferred<void>();
-    vi.mocked(demoApi.loadDemo).mockReturnValue(load.promise);
+    vi.mocked(demoApi.loadDemo).mockReturnValue(load.promise as never);
     renderPage();
     await screen.findByText('No pipelines yet.');
     await user.click(screen.getByRole('button', { name: 'Import' }));

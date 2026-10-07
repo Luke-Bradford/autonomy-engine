@@ -82,11 +82,8 @@ test.describe('#1397 row ⋯ menus, by keyboard', () => {
     await expect(opener).toBeVisible();
 
     // #1470 — accepted, the row and its ⋯ are gone: focus moves to the next row.
-    await deleteRowAndExpectFocus(
-      page,
-      row,
-      newPipelineButton(page),
-      (p) => answerConfirm(p, 'accept'),
+    await deleteRowAndExpectFocus(page, row, newPipelineButton(page), (p) =>
+      answerConfirm(p, 'accept'),
     );
 
     await expectQuiet(page, problems);
