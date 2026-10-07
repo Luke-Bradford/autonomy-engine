@@ -184,10 +184,10 @@ test('a version saved elsewhere reaches the badge and the history on focus', asy
 
 /**
  * #1476 OR28 slice 8 — the same badge, compact, on the pipelines list: the
- * saved head per row, read in one request for the whole list. DB-only here, so
+ * saved head per row (#1569: named on hover, never in the label), read in one request for the whole list. DB-only here, so
  * no row has a live or git part; `workspace-git.spec.ts` covers both.
  */
-test('the pipelines list names each row’s saved head', async ({ page }) => {
+test('the pipelines list says each row is saved, its version only on hover', async ({ page }) => {
   const problems = collectPageProblems(page);
   await page.setViewportSize({ width: 1280, height: 720 });
   const name = `e2e 1476 list ${String(Date.now())}`;
@@ -199,7 +199,8 @@ test('the pipelines list names each row’s saved head', async ({ page }) => {
   await fluentRootReady(page);
   await statesRead;
   const row = page.getByRole('group', { name: `${name} state` });
-  await expect(row.locator('[data-part="editing"]')).toHaveText(/^v2 \(latest\)/);
+  // #1569 — no version number in the list; the number is the hover detail's.
+  await expect(row.locator('[data-part="editing"]')).toHaveText(/^Saved\./);
   await expect(row.locator('[data-part="editing"]')).toHaveAttribute(
     'title',
     'v2, the latest saved version.',
@@ -210,6 +211,9 @@ test('the pipelines list names each row’s saved head', async ({ page }) => {
   // A save elsewhere reaches the row on focus.
   await mintVersion(page, pipelineId, V1, v2, name);
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect(row.locator('[data-part="editing"]')).toHaveText(/^v3 \(latest\)/);
+  await expect(row.locator('[data-part="editing"]')).toHaveAttribute(
+    'title',
+    'v3, the latest saved version.',
+  );
   await expectQuiet(page, problems);
 });

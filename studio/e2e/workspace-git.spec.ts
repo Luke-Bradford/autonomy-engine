@@ -526,8 +526,14 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   expect((await (await listSync).response())?.ok()).toBe(true);
   const listRow = (n: string) => page.getByRole('group', { name: `${n} state` });
   const rowPart = (n: string, p: string) => listRow(n).locator(`[data-part="${p}"]`);
-  await expect(rowPart(publishName, 'editing')).toHaveText(/^v1 \(latest\)/);
-  await expect(rowPart(publishName, 'live')).toHaveText(/^Live: v1 ✓ \(the latest version\)/);
+  // #1569 — no version number on the list, and in git mode the live part says
+  // it all: the editing part is gone.
+  await expect(rowPart(publishName, 'editing')).toHaveCount(0);
+  await expect(rowPart(publishName, 'live')).toHaveText(/^Live ✓ \(the latest version\)/);
+  await expect(rowPart(publishName, 'live')).toHaveAttribute(
+    'title',
+    'v1 is the active (published) version, and is the latest saved version.',
+  );
   await expect(rowPart(publishName, 'live')).toHaveAttribute('data-tone', 'success');
   await expect(rowPart(publishName, 'git')).toHaveText(/^uncommitted\./);
   await expect(rowPart(publishName, 'git')).toHaveAttribute(
