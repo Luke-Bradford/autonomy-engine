@@ -709,10 +709,12 @@ test('#1245 — form controls take the app font family, and keep the UA control 
   await page.getByRole('heading', { name: 'Pipelines' }).waitFor();
   await newPipelineButton(page).click();
   const newForm = page.getByRole('form', { name: 'New pipeline' });
-  const input = await newForm.getByRole('textbox', { name: 'Name', exact: true }).evaluate((el) => ({
-    family: getComputedStyle(el).fontFamily,
-    parent: getComputedStyle(el.parentElement ?? document.body).fontFamily,
-  }));
+  const input = await newForm
+    .getByRole('textbox', { name: 'Name', exact: true })
+    .evaluate((el) => ({
+      family: getComputedStyle(el).fontFamily,
+      parent: getComputedStyle(el.parentElement ?? document.body).fontFamily,
+    }));
   expect(input.family, 'the Name input is in the app font').toBe(input.parent);
 
   await expectQuiet(page, problems);

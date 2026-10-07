@@ -229,18 +229,28 @@ test('#1569 slice 3 — New pipeline and Import are toolbar drawers beside the g
     .filter({ has: page.getByRole('link', { name: `Open ${name}`, exact: true }) });
   await expect(created.locator('.pipelines-grid__folder')).toHaveText(new RegExp(`^${folder}`));
 
-  // Import opens BESIDE the grid, a column rather than an overlay: the grid's
-  // rows stay in view and to its left.
+  // Import opens BESIDE the grid, a column rather than an overlay: the list's
+  // column (which scrolls the grid sideways if it must) ends where the drawer
+  // starts, and the drawer is wholly on screen.
   const drawer = await openImportDrawer(page);
   await expect(drawer.getByLabel('Export file')).toBeFocused();
   await expect(drawer.getByRole('group', { name: 'Demo workspace' })).toBeVisible();
   const layout = await page.evaluate(() => {
-    const grid = document.querySelector('.pipelines-grid')?.getBoundingClientRect();
+    const list = document.querySelector('.drawer-layout-open > :first-child');
+    const rows = list?.querySelectorAll('.pipelines-grid tbody tr').length ?? 0;
+    const column = list?.getBoundingClientRect();
     const side = document.querySelector('.form-drawer')?.getBoundingClientRect();
-    return { gridRight: grid?.right ?? -1, drawerLeft: side?.left ?? -1 };
+    return {
+      rows,
+      listRight: column?.right ?? -1,
+      drawerLeft: side?.left ?? -1,
+      drawerRight: side?.right ?? Infinity,
+    };
   });
-  expect(layout.gridRight).toBeGreaterThan(0);
-  expect(layout.drawerLeft).toBeGreaterThanOrEqual(layout.gridRight);
+  expect(layout.rows).toBeGreaterThan(0);
+  expect(layout.listRight).toBeGreaterThan(0);
+  expect(layout.drawerLeft).toBeGreaterThanOrEqual(layout.listRight);
+  expect(layout.drawerRight).toBeLessThanOrEqual(1440);
   await page.keyboard.press('Escape');
   await expect(drawer).toBeHidden();
   await expect(page.getByRole('button', { name: 'Import', exact: true })).toBeFocused();
