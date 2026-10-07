@@ -110,6 +110,22 @@ export default tseslint.config(
         },
         ...HOOK_RETURNS_TEARDOWN,
       ],
+      // #1581 — react-router's `useSearchParams` builds a functional update's
+      // `prev` from the RENDERED params, which lag the URL while the router
+      // commits in a transition, so two quick writes undo each other.
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'react-router',
+              importNames: ['useSearchParams'],
+              message:
+                'Use useLatestSearchParams (src/lib/useLatestSearchParams.ts): it writes from the latest URL, not the last render (#1581).',
+            },
+          ],
+        },
+      ],
       // #1397 OR6 — every confirmation is the one dialog (`useConfirm`, in
       // src/lib/confirm/). A native confirm cannot name its dangerous button,
       // ask for a typed name, or be styled, and it blocks the whole tab.
