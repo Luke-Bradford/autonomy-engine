@@ -73,6 +73,10 @@ export const PipelineSummarySchema = z.object({
   activities: z.number().int().nonnegative().nullable(),
   /** The later of the pipeline row's last change and its latest saved version. */
   modifiedAt: z.number().int(),
+  /** The latest saved version's description, `''` when nothing is saved. */
+  description: z.string(),
+  /** The latest saved version's annotations, `[]` when nothing is saved. */
+  annotations: z.array(z.string()),
 });
 export type PipelineSummary = z.infer<typeof PipelineSummarySchema>;
 

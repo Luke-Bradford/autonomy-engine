@@ -59,20 +59,28 @@ export function listPipelineSummaries(
   const days = PIPELINE_SUMMARY_WINDOW_DAYS;
   const since = now - days * DAY_MS;
 
+  // The latest saved version joined ONCE (by its id), so its node count,
+  // description and annotations come from one row rather than one subselect each.
   const heads = db.all<{
     id: string;
     updatedAt: number;
     headCreatedAt: number | null;
     activities: number | null;
+    description: string | null;
+    annotations: string | null;
   }>(sql`
     select ${pipelines.id} as id,
            ${pipelines.updatedAt} as updatedAt,
            (select max(pv.created_at) from ${pipelineVersions} pv
              where pv.pipeline_id = ${pipelines.id} and pv.debug = 0) as headCreatedAt,
-           (select json_array_length(pv.nodes) from ${pipelineVersions} pv
-             where pv.pipeline_id = ${pipelines.id} and pv.debug = 0
-             order by pv.version desc limit 1) as activities
+           json_array_length(lv.nodes) as activities,
+           lv.description as description,
+           lv.annotations as annotations
       from ${pipelines}
+      left join ${pipelineVersions} lv
+        on lv.id = (select pv.id from ${pipelineVersions} pv
+                     where pv.pipeline_id = ${pipelines.id} and pv.debug = 0
+                     order by pv.version desc limit 1)
      where ${pipelines.ownerId} = ${ownerId} and ${pipelines.archived} = 0`);
 
   // The runs this owner may see of their live pipelines' saved versions; every
@@ -213,7 +221,24 @@ export function listPipelineSummaries(
       },
       nextFireAt: nextFireOf.get(h.id) ?? null,
       activities: h.activities,
+      description: h.description ?? '',
+      annotations: annotationsOf(h.annotations),
       modifiedAt: Math.max(h.updatedAt, h.headCreatedAt ?? h.updatedAt),
     };
   });
+}
+
+/**
+ * A version's annotations column (JSON text the repo wrote). Nothing saved is
+ * no annotations; so is text that is not a string array, which only a damaged
+ * row could hold — the grid searches these, it does not act on them.
+ */
+function annotationsOf(raw: string | null): string[] {
+  if (raw === null) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.every((a) => typeof a === 'string') ? parsed : [];
+  } catch {
+    return [];
+  }
 }

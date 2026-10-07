@@ -34,7 +34,10 @@ describe('GET /api/pipelines/summaries (#1569 OR37)', () => {
     config: { seconds: '${1}' },
     position: { x: 0, y: 0 },
   });
-  const version = (pipelineId: string, opts: { nodes?: number; debug?: boolean } = {}) =>
+  const version = (
+    pipelineId: string,
+    opts: { nodes?: number; debug?: boolean; description?: string; annotations?: string[] } = {},
+  ) =>
     createPipelineVersion(
       app.db,
       {
@@ -44,6 +47,8 @@ describe('GET /api/pipelines/summaries (#1569 OR37)', () => {
         nodes: Array.from({ length: opts.nodes ?? 0 }, (_, i) => node(`n${String(i)}`)),
         edges: [],
         catalogVersion: CATALOG_VERSION,
+        ...(opts.description !== undefined ? { description: opts.description } : {}),
+        ...(opts.annotations !== undefined ? { annotations: opts.annotations } : {}),
       } as never,
       { debug: opts.debug ?? false },
     );
@@ -139,6 +144,19 @@ describe('GET /api/pipelines/summaries (#1569 OR37)', () => {
       triggers: { total: 0, enabled: 0, items: [] },
       nextFireAt: null,
       activities: null,
+      description: '',
+      annotations: [],
+    });
+  });
+
+  it('carries the latest saved version’s description and annotations, not a Debug draft’s', async () => {
+    const p = createPipeline(app.db, { ownerId: 'local', name: 'P' });
+    version(p.id, { description: 'old', annotations: ['stale'] });
+    version(p.id, { description: 'Loads the orders feed', annotations: ['finance', 'nightly'] });
+    version(p.id, { description: 'draft', annotations: ['debug'], debug: true });
+    expect(await summaryOf(p.id)).toMatchObject({
+      description: 'Loads the orders feed',
+      annotations: ['finance', 'nightly'],
     });
   });
 
