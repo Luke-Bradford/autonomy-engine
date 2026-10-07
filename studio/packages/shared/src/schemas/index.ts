@@ -8,6 +8,7 @@ export * from './connection-dependents.js';
 export * from './pipeline-dependents.js';
 export * from './dataset.js';
 export * from './pipeline.js';
+export * from './pipeline-summary.js';
 export * from './recurrence.js';
 export * from './window.js';
 export * from './window-event.js';
