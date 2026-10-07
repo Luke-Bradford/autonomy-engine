@@ -80,22 +80,29 @@ export function activityRunEntries(
 
 /**
  * #1484 M2 — the activity run a graph node opens. A node is one box however
- * many attempts and items it ran, so the box opens the run that explains its
- * colour: the last FAILED run when the node ended failed (the banner's rule,
- * `runFailure`), otherwise its last run, so a node that recovered opens the
- * attempt that succeeded rather than the one it got past.
+ * many attempts and items it ran, so the box opens the run that explains how
+ * it ended: the last run of any instance (an item, a round, the node itself)
+ * whose LAST attempt failed, otherwise the node's last run. So a ForEach item
+ * that failed is opened over a later item that succeeded, and a node that
+ * recovered on a retry opens the attempt that succeeded rather than the one it
+ * got past.
  *
- * Matched on `activityId`, the canvas node, so a parallel item (`w@2`) is found
- * by the box it is drawn as. `null` for a node with no run, which then offers
- * nothing to open.
+ * Read off the rows alone, not the projected state: a parallel ForEach's items
+ * are projected under their instance keys (`w@2`) and never under the box's
+ * id, so the box has no state of its own to ask. Matched on `activityId`, the
+ * canvas node, so a parallel item is found by the box it is drawn as. `null`
+ * for a node with no run, which then offers nothing to open.
  */
 export function activityRunOfNode(
   rows: readonly ActivityRun[],
   activityId: string,
-  nodeFailed: boolean,
 ): ActivityRun | null {
   const own = rows.filter((r) => r.activityId === activityId);
-  return (
-    (nodeFailed ? own.findLast((r) => r.status === 'failure') : undefined) ?? own.at(-1) ?? null
-  );
+  // Each instance's last attempt, in run order: a retry supersedes its failure.
+  const lastOf = new Map<string, ActivityRun>();
+  for (const r of own) {
+    lastOf.set(`${r.nodeId}\n${r.iteration?.containerId ?? ''}\n${r.iteration?.index ?? ''}`, r);
+  }
+  const failed = [...lastOf.values()].filter((r) => r.status === 'failure');
+  return failed.at(-1) ?? own.at(-1) ?? null;
 }

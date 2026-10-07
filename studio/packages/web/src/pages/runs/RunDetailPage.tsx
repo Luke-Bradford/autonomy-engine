@@ -402,7 +402,19 @@ export function RunDetailPage({ runId }: { runId: string }) {
   /* #1484 M2 — the activity run the detail drawer shows. Held as the row's key
      and resolved against the latest read, so the drawer follows a running
      attempt and closes if its row goes. */
-  const [drawer, setDrawer] = useState<{ key: string; opener: HTMLElement } | null>(null);
+  const [drawer, setDrawer] = useState<{
+    key: string;
+    opener: HTMLElement;
+    /** Which open this is: every open mounts the drawer afresh, so it takes
+     * focus and hands it back to THIS opener, even when the row was already
+     * open from somewhere else (its graph node, then "Show activity"). */
+    n: number;
+  } | null>(null);
+  const opens = useRef(0);
+  const openDrawer = useCallback((key: string, opener: HTMLElement) => {
+    opens.current += 1;
+    setDrawer({ key, opener, n: opens.current });
+  }, []);
   const drawerRow = activityRuns.rows?.find((r) => r.key === drawer?.key) ?? null;
   const drawerNode = useMemo(
     () => (drawerRow === null ? null : activityOfRow(stream.events, folded, drawerRow)),
@@ -415,30 +427,38 @@ export function RunDetailPage({ runId }: { runId: string }) {
   );
   /* #1484 M2 — a graph node opens its activity run in the same drawer, and the
      open record's node is marked on the graph whichever way it was opened. The
-     row is chosen at the click from the latest read and projection, held in a
-     ref so the open callback, and so every node's context, keeps one identity
-     across events. A graph open does not touch the table: the open row says
-     so itself (`data-open`), and expanding or scrolling a table the operator is
-     not looking at would move the page out from under the graph. */
-  const latest = useRef({ rows: activityRuns.rows, overlay });
+     row is chosen at the click from the latest read (`activityRunOfNode`), held
+     in a ref so the open callback keeps one identity across reads. A graph open
+     does not touch the table: the open row says so itself (`data-open`), and
+     expanding or scrolling a table the operator is not looking at would move
+     the page out from under the graph. */
+  const latestRows = useRef(activityRuns.rows);
   useLayoutEffect(() => {
-    latest.current = { rows: activityRuns.rows, overlay };
+    latestRows.current = activityRuns.rows;
   });
-  const openNode = useCallback((nodeId: string, opener: HTMLElement) => {
-    const { rows, overlay: o } = latest.current;
-    const failed = o.ready && o.state.nodes[nodeId]?.status === 'failure';
-    const row = activityRunOfNode(rows ?? [], nodeId, failed);
-    if (row === null) return;
-    setSelectedRow(null);
-    setDrawer({ key: row.key, opener });
-  }, []);
+  const openNode = useCallback(
+    (nodeId: string, opener: HTMLElement) => {
+      const row = activityRunOfNode(latestRows.current ?? [], nodeId);
+      if (row === null) return;
+      setSelectedRow(null);
+      openDrawer(row.key, opener);
+    },
+    [openDrawer],
+  );
   const closeDrawer = () => {
     setDrawer(null);
     setSelectedRow(null);
   };
-  const openableNodeIds = useMemo(
-    () => new Set((activityRuns.rows ?? []).map((r) => r.activityId)),
+  /* The nodes with a run to open. Every read is a new array, so the set is
+     keyed on its contents: the canvas hands it to every node through context,
+     and a new set per read would re-render each one. */
+  const openableKey = useMemo(
+    () => [...new Set((activityRuns.rows ?? []).map((r) => r.activityId))].sort().join('\n'),
     [activityRuns.rows],
+  );
+  const openableNodeIds = useMemo(
+    () => new Set(openableKey === '' ? [] : openableKey.split('\n')),
+    [openableKey],
   );
   /* The drawer tab the operator picked, held here so stepping from row to row
      keeps it; `null` until they pick one, so each row opens on its error or its
@@ -661,7 +681,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
           onShowActivity={(key, opener) => {
             // Takes the reader to the row, and opens it.
             setSelectedRow({ key });
-            setDrawer({ key, opener });
+            openDrawer(key, opener);
           }}
         />
       )}
@@ -732,7 +752,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
         onOpen={(key, opener) => {
           // The row opened is the one marked; an earlier ask's outline goes.
           setSelectedRow(null);
-          setDrawer({ key, opener });
+          openDrawer(key, opener);
         }}
         latestOutputs={latestOutputs}
       />
@@ -878,7 +898,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
         </table>
       )}
       {drawerRow !== null && drawerNode !== null && (
-        <RunDrawer key={drawerRow.key} onClose={closeDrawer} returnFocusTo={drawer?.opener ?? null}>
+        <RunDrawer
+          key={`${drawerRow.key}:${drawer?.n}`}
+          onClose={closeDrawer}
+          returnFocusTo={drawer?.opener ?? null}
+        >
           <NodeActivityPanel
             node={drawerNode}
             name={nameOf(drawerRow.activityId)}

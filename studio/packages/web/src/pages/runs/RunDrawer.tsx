@@ -29,8 +29,8 @@ const RESIZE_STEP = 16;
  * form drawer does (`FormDrawer`), and focus goes back to the row that opened
  * it. Only while focus is inside: the page behind has its own Escapes (a search
  * box, a confirm), and a page-wide one would close the drawer under them. The
- * owner keys the drawer by row, so each row's open is a fresh mount and hands
- * focus in again.
+ * owner keys the drawer by each open, so every open, even of the row already
+ * shown, is a fresh mount and hands focus in again.
  *
  * Its width is the operator's (`uiStore.runDrawerWidth`), dragged or set with
  * the arrow keys on its left edge.
@@ -77,7 +77,7 @@ export function RunDrawer({
       const focusWasHere = at === null || at === document.body || drawer?.contains(at) === true;
       if (focusWasHere && opener?.isConnected) opener.focus();
     };
-    // Mount-only: the owner keys the drawer by row, so each open mounts anew.
+    // Mount-only: the owner keys the drawer by each open, so each mounts anew.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

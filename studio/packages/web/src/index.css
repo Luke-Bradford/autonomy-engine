@@ -4169,10 +4169,11 @@ button.danger {
    because the outline is the status tone's (above); the inset ring thickens it
    without moving the box. A container's dashed border turns solid, as
    `.flow-container--selected` does. */
-/* #1484 M2 — the button that opens a node's activity run: the whole card, so
-   it adds nothing to the card's layout and draws nothing but a pointer, a hover
-   edge and a focus ring. It sits over the facts' `title`, which the card's own
-   text already says. */
+/* #1484 M2 — the button that opens a node's activity run: the whole card,
+   inside its border, so it adds nothing to the card's layout. It draws nothing
+   of its own; the global `button` rules give it the pointer and the accent
+   edge on hover. Nothing under it loses a tooltip: React Flow already gives
+   this canvas's nodes no pointer events (see `pointer-events` below). */
 .run-node-open {
   position: absolute;
   inset: 0;
@@ -4187,13 +4188,10 @@ button.danger {
   pointer-events: auto;
 }
 
-.run-node-open:hover:not(:disabled) {
-  border-color: var(--accent);
-}
-
+/* Inside the card, clear of the status outline `.run-node` draws outside it. */
 .run-node-open:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 
 .run-node--selected,

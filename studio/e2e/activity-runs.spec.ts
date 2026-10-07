@@ -184,6 +184,16 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
   await expect(page.locator('#run-detail-drawer')).toHaveCount(0);
   await expect(showActivity).toBeFocused();
 
+  /* Opened from its graph node and then from Show activity, the drawer takes
+     focus each time, and Escape goes back to the last button that asked. */
+  const stopNode = page.locator('.react-flow__node[data-id="stop"] .run-node-open');
+  await stopNode.click();
+  await expect(drawerPanel).toBeFocused();
+  await showActivity.click();
+  await expect(drawerPanel).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(showActivity).toBeFocused();
+
   // Collapsing the ForEach leaves its own line; opening it brings the items back.
   const toggle = table.locator('tr.activity-runs__group button');
   await toggle.click();
