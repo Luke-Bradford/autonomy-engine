@@ -771,6 +771,29 @@ describe('RunsPage', () => {
       expect(router.state.location.search).toBe('?version=3');
     });
 
+    it("the ⋯ menu opens the run's trigger's runs, and offers none without a trigger", async () => {
+      listMock.mockResolvedValue(
+        pageOf([
+          run({ id: 'run_abc', triggerId: 'trg_1', triggerName: 'Every night' }),
+          run({ id: 'run_def', triggerId: null, triggerName: null }),
+        ]),
+      );
+      const router = createMemoryRouter(ROUTES, { initialEntries: ['/monitor/runs'] });
+      render(<RouterProvider router={router} />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Actions for run run_def' }));
+      expect(
+        await screen.findByRole('menuitem', { name: 'Open pipeline in editor' }),
+      ).toBeVisible();
+      expect(screen.queryByRole('menuitem', { name: "Show this trigger's runs" })).toBeNull();
+      await userEvent.keyboard('{Escape}');
+      await userEvent.click(screen.getByRole('button', { name: 'Actions for run run_abc' }));
+      await userEvent.click(
+        await screen.findByRole('menuitem', { name: "Show this trigger's runs" }),
+      );
+      expect(router.state.location.pathname).toBe('/monitor/runs');
+      expect(router.state.location.search).toBe('?trigger=trg_1');
+    });
+
     it('a click on the copy button does not navigate', async () => {
       Object.defineProperty(navigator, 'clipboard', {
         value: { writeText: vi.fn().mockResolvedValue(undefined) },

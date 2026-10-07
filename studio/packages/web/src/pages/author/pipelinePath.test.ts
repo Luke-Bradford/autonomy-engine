@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   pipelinePath,
-  runEditorLabel,
   readOpenNode,
   readOpenVersion,
   runVersionPath,
@@ -67,17 +66,5 @@ describe('withOpenVersion (#1521)', () => {
   it('writes the node it is given, and removes one it is not', () => {
     expect(at('', 2, 'n_a')).toBe('version=2&node=n_a');
     expect(at('version=2&node=n_a', 1)).toBe('version=1');
-  });
-});
-
-describe('runEditorLabel (#1566)', () => {
-  it('names the version that ran, and the pipeline where several runs share a screen', () => {
-    expect(runEditorLabel(3, false)).toBe('Open v3 in the editor');
-    expect(runEditorLabel(3, false, 'Nightly')).toBe('Open Nightly v3 in the editor');
-  });
-
-  it('a debug run opens the pipeline, so its label promises no version', () => {
-    expect(runEditorLabel(2, true)).toBe('Open the pipeline in the editor');
-    expect(runEditorLabel(2, true, 'Nightly')).toBe('Open Nightly in the editor');
   });
 });

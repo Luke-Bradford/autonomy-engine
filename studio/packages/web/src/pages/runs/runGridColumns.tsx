@@ -8,10 +8,10 @@ import {
   type RunGridColumnId,
 } from '../../stores/uiStore';
 import { CopyableId } from '../../lib/CopyableId';
+import { RowMoreMenu } from '../../lib/RowMoreMenu';
 import { shortId } from '../../lib/ids';
 import { RunTriggeredByName } from '../../lib/KindName';
 import { versionLabel } from '../../lib/versionLabel';
-import { RowMoreMenu } from '../../lib/RowMoreMenu';
 import { runVersionPath } from '../author/pipelinePath';
 import { RunEditorLink } from './RunEditorLink';
 import { activitiesCell, rowsWrittenCell } from './activitiesColumn';
@@ -190,7 +190,7 @@ function PipelineCell({ run: r, ctx }: { run: RunSummary; ctx: CellContext }) {
           ...(triggerId !== null && r.triggerName !== null
             ? [
                 {
-                  label: 'Open trigger runs',
+                  label: "Show this trigger's runs",
                   onSelect: () => void navigate(triggerRunsPath(triggerId)),
                 },
               ]

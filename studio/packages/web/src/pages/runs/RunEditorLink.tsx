@@ -1,6 +1,7 @@
 import { OpenRegular } from '@fluentui/react-icons';
 import { Link } from 'react-router';
-import { runEditorLabel, runVersionPath } from '../author/pipelinePath';
+import { runVersionPath } from '../author/pipelinePath';
+import { runEditorLabel } from './runPath';
 
 /**
  * #1566 — a run's SECONDARY way into the editor: a small labelled icon beside

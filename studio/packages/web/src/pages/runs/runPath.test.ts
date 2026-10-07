@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runDetailPath, runLinkLabel } from './runPath';
+import { runDetailPath, runEditorLabel, runLinkLabel } from './runPath';
 
 describe('runDetailPath', () => {
   it('encodes the id exactly once, for the route that decodes exactly once', () => {
@@ -46,5 +46,17 @@ describe('runLinkLabel', () => {
       expect(name.includes(lead)).toBe(true);
       expect(name.includes('run_x')).toBe(true);
     }
+  });
+});
+
+describe('runEditorLabel (#1566)', () => {
+  it('names the version that ran, and the pipeline where several runs share a screen', () => {
+    expect(runEditorLabel(3, false)).toBe('Open v3 in the editor');
+    expect(runEditorLabel(3, false, 'Nightly')).toBe('Open Nightly v3 in the editor');
+  });
+
+  it('a debug run opens the pipeline, so its label promises no version', () => {
+    expect(runEditorLabel(2, true)).toBe('Open the pipeline in the editor');
+    expect(runEditorLabel(2, true, 'Nightly')).toBe('Open Nightly in the editor');
   });
 });

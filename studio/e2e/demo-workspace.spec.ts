@@ -182,11 +182,8 @@ test.describe('#1481 the demo workspace', () => {
     await row3.getByRole('link', { name: new RegExp(`^${demo3} v\\d+$`) }).click();
     await expectDemo3RunPage(page, run3);
 
-    // From the run's trigger (its header links to that trigger's runs).
-    await page
-      .locator('.run-header')
-      .getByRole('link', { name: demo3.replace('Demo — ', 'Demo — run '), exact: true })
-      .click();
+    // From the run's trigger: its header links to that trigger's runs.
+    await page.locator('.run-header a[href*="/monitor/runs?trigger="]').click();
     await expect(page).toHaveURL(/#\/monitor\/runs\?trigger=/);
     await page
       .getByRole('row')
