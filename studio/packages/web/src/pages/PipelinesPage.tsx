@@ -35,6 +35,7 @@ import { pipelinesStore, type PipelinesStore } from '../stores/pipelinesStore';
 import { NewPipelineDrawer, type NewPipelineForm } from './NewPipelineDrawer';
 import { PipelineImportDrawer } from './PipelineImportDrawer';
 import { useDrawerForm } from '../lib/form/useDrawerForm';
+import { leavesPath } from '../lib/form/leavesPath';
 import { PipelinesGrid } from './author/PipelinesGrid';
 import { folderNamesOf } from './author/pipelineFolders';
 import {
@@ -131,7 +132,19 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
     guard,
     openerRef,
     ...drawer
-  } = useDrawerForm(drawerSignature);
+    // Only a change of PAGE is walking away from typed input: the sort, the
+    // filters and the Archived toggle are this page's own URL.
+  } = useDrawerForm(drawerSignature, { holdRoute: leavesPath });
+  /* A create, an import or a demo load/remove in flight: the toolbar waits, as
+     the drawer's Close does, so pressing it cannot swap out the drawer whose
+     answer is still coming (an import's outcome is shown only in its drawer).
+     `aria-disabled`, not `disabled`: these buttons are where focus returns when
+     the drawer closes and when a last row is removed, and a disabled element
+     cannot take focus — the drawer closes in the same commit that ends busy. */
+  const [drawerBusy, setDrawerBusy] = useState(false);
+  const openFromToolbar = (opener: HTMLElement, next: PipelinesDrawer) => {
+    if (!drawerBusy) drawer.openFrom(opener, () => openDrawer(next));
+  };
   const liveFolderNames = useMemo(() => folderNamesOf(pipelines), [pipelines]);
   /* One removal per row at a time, spanning the dialog and the request: with
      the delete in flight the row's ⋯ still works, and a second Delete would
@@ -624,22 +637,20 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
       <div className="page-header">
         <h2 id="pipelines-heading">Pipelines</h2>
         {/* #1569 slice 3 — the toolbar: each opens the drawer beside the list. */}
-        <div className="page-header-actions">
+        <div className="pipelines-page__toolbar">
           <button
             ref={newButtonRef}
             type="button"
             className="primary"
-            onClick={(e) =>
-              drawer.openFrom(e.currentTarget, () =>
-                openDrawer({ kind: 'new', name: '', folder: '' }),
-              )
-            }
+            aria-disabled={drawerBusy}
+            onClick={(e) => openFromToolbar(e.currentTarget, { kind: 'new', name: '', folder: '' })}
           >
             + New pipeline
           </button>
           <button
             type="button"
-            onClick={(e) => drawer.openFrom(e.currentTarget, () => openDrawer({ kind: 'import' }))}
+            aria-disabled={drawerBusy}
+            onClick={(e) => openFromToolbar(e.currentTarget, { kind: 'import' })}
           >
             Import
           </button>
@@ -880,8 +891,11 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
             guard={guard}
             returnFocusTo={openerRef}
             onClose={drawer.requestClose}
+            onBusyChange={setDrawerBusy}
             onCreated={async () => {
-              leaveArchivedRef.current = showArchivedRef.current;
+              // Only when it is THIS drawer that closes: armed for a drawer
+              // already replaced, the flag would fire on some later close.
+              if (drawer.isLatest(drawerSeq)) leaveArchivedRef.current = showArchivedRef.current;
               drawer.closeIfLatest(drawerSeq);
               await refresh();
             }}
@@ -894,6 +908,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
             returnFocusTo={openerRef}
             onClose={drawer.requestClose}
             onChanged={refresh}
+            onBusyChange={setDrawerBusy}
           />
         )}
       </div>

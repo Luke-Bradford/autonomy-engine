@@ -1,4 +1,4 @@
-import { useState, type RefObject } from 'react';
+import { useEffect, useState, type RefObject } from 'react';
 import { FormDrawer } from '../lib/form/FormDrawer';
 import { FormSection } from '../lib/form/FormSection';
 import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
@@ -18,16 +18,23 @@ export function PipelineImportDrawer({
   returnFocusTo,
   onClose,
   onChanged,
+  onBusyChange,
 }: {
   guard: UnsavedChangesGuard;
   returnFocusTo: RefObject<HTMLElement | null>;
   onClose: () => void;
   /** Reload the list after an import, a demo load or a demo remove. */
   onChanged: () => Promise<void>;
+  /** Told when either section's act starts and ends, and `false` when the drawer goes. */
+  onBusyChange: (busy: boolean) => void;
 }) {
   const [importing, setImporting] = useState(false);
   const [demoBusy, setDemoBusy] = useState(false);
   const busy = importing || demoBusy;
+  useEffect(() => {
+    onBusyChange(busy);
+    return () => onBusyChange(false);
+  }, [busy, onBusyChange]);
   return (
     <FormDrawer
       title="Import"

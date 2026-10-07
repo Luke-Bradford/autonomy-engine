@@ -570,6 +570,19 @@ describe('PipelinesPage', () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
+  it('lets the sort and filters change under a drawer with typed input, without asking', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([pipeline({ name: 'Nightly', folder: 'Ops' })]);
+    const { router } = renderPage();
+    await screen.findByText('Nightly');
+    const form = await openNewDrawer(user);
+    await user.type(form.getByLabelText(/^Name/), 'Half typed');
+    await user.selectOptions(screen.getByLabelText('Filter by folder'), 'Ops');
+    await waitFor(() => expect(router.state.location.search).toContain('folder=Ops'));
+    expect(form.queryByText(/unsaved changes/i)).not.toBeInTheDocument();
+    expect(form.getByLabelText(/^Name/)).toHaveValue('Half typed');
+  });
+
   it('shows the live list after creating from the Archived view', async () => {
     const user = userEvent.setup();
     const { router } = renderWithDataRouter(
@@ -1102,11 +1115,22 @@ describe('PipelinesPage', () => {
     const drawer = within(screen.getByRole('form', { name: 'Import' }));
     await user.click(await drawer.findByRole('button', { name: 'Load demo' }));
     expect(drawer.getByRole('button', { name: 'Close' })).toBeDisabled();
-    await user.keyboard('{Escape}');
+    // Escape on the drawer itself, not on the now-disabled Load demo button.
+    const dialog = screen.getByRole('dialog', { name: 'Import' });
+    fireEvent.keyDown(dialog, { key: 'Escape' });
     expect(screen.getByRole('form', { name: 'Import' })).toBeInTheDocument();
+    // …and the toolbar cannot swap the drawer out from under the load.
+    const newButton = screen.getByRole('button', { name: '+ New pipeline' });
+    expect(newButton).toHaveAttribute('aria-disabled', 'true');
+    await user.click(newButton);
+    expect(screen.queryByRole('form', { name: 'New pipeline' })).not.toBeInTheDocument();
     load.resolve();
     await waitFor(() => expect(drawer.getByRole('button', { name: 'Close' })).toBeEnabled());
     expect(listMock).toHaveBeenCalledTimes(2);
+    expect(newButton).toHaveAttribute('aria-disabled', 'false');
+    // Idle, the same Escape closes it.
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Import' }), { key: 'Escape' });
+    expect(screen.queryByRole('form', { name: 'Import' })).not.toBeInTheDocument();
   });
 
   it('surfaces a load error', async () => {

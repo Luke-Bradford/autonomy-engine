@@ -22,7 +22,7 @@ import { downloadPipelineExport } from '../../api/pipelineExport';
 import { RowMoreMenu } from '../../lib/RowMoreMenu';
 import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore';
 import { pipelinePath } from './pipelinePath';
-import { existingFolderSpelling } from './pipelineFolders';
+import { existingFolderSpelling, folderNamesOf } from './pipelineFolders';
 import type { Hub } from '../../shell/hubs';
 import { useConfirm } from '../../lib/confirm/useConfirm';
 import { useBusyAction } from '../../hooks/useBusyAction';
@@ -268,10 +268,7 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
 
   const grouped = useMemo(() => groupByFolder(visible), [visible]);
   /* Every folder in use, filter or not — what the move row offers to pick from. */
-  const folderNames = useMemo(
-    () => groupByFolder(pipelines).folders.map((f) => f.name),
-    [pipelines],
-  );
+  const folderNames = useMemo(() => folderNamesOf(pipelines), [pipelines]);
 
   /* Focus lives INSIDE the row being unmounted, so closing the draft — or
      deleting the row a menu was anchored to — would otherwise strand it on a

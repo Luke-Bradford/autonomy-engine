@@ -1059,7 +1059,8 @@ button:hover:not(:disabled) {
   border-color: var(--accent);
 }
 
-button:disabled {
+button:disabled,
+button[aria-disabled='true'] {
   opacity: 0.6;
   cursor: not-allowed;
 }
@@ -5914,7 +5915,7 @@ button.danger {
 
 /* #1569 OR37 slice 3 — the pipelines toolbar, right of the title; and the
    import and demo panels inside the Import drawer, which supplies their frame. */
-.page-header-actions {
+.pipelines-page__toolbar {
   display: flex;
   gap: 8px;
 }

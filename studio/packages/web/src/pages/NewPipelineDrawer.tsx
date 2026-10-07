@@ -1,4 +1,12 @@
-import { useCallback, useId, useMemo, useState, type FormEvent, type RefObject } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type FormEvent,
+  type RefObject,
+} from 'react';
 import { PipelineFolderSchema, type Pipeline } from '@autonomy-studio/shared';
 import { createPipeline } from '../api/pipelines';
 import { FormDrawer } from '../lib/form/FormDrawer';
@@ -25,7 +33,9 @@ const FIELD_LABELS: ReadonlyMap<string, string> = new Map([
 ]);
 
 /**
- * Both checked TRIMMED, as they are sent: a name of spaces is no name, and the
+ * Both checked TRIMMED, as they are sent — unlike `nameCheck`'s own no-trim rule,
+ * as the card this replaced and the pane's create both trimmed: a name of
+ * spaces is no name, and the
  * folder rule refuses an edge space the operator never meant to type. The
  * folder is checked here, beside its field, because `createPipeline` parses its
  * body in the browser and would otherwise throw the same refusal as a bare
@@ -54,6 +64,7 @@ export function NewPipelineDrawer({
   returnFocusTo,
   onClose,
   onCreated,
+  onBusyChange,
 }: {
   form: NewPipelineForm;
   onChange: (next: NewPipelineForm) => void;
@@ -63,9 +74,15 @@ export function NewPipelineDrawer({
   returnFocusTo: RefObject<HTMLElement | null>;
   onClose: () => void;
   onCreated: (created: Pipeline) => Promise<void>;
+  /** Told when a create starts and ends, and `false` when the drawer goes. */
+  onBusyChange: (busy: boolean) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    onBusyChange(saving);
+    return () => onBusyChange(false);
+  }, [saving, onBusyChange]);
   const checks = useMemo(() => newPipelineChecks(form), [form]);
   const labelOf = useCallback((key: string) => FIELD_LABELS.get(key), []);
   const validation = useFieldValidation(checks, labelOf);

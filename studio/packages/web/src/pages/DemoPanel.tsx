@@ -147,7 +147,10 @@ export function DemoPanel({
       {status?.loaded === true &&
         (allowRemove ? (
           <>
-            <p className="page-hint">The demo is loaded: its pipelines are in folder “Demo”.</p>
+            {/* Embedded, the section's hint already names the folder. */}
+            {!embedded && (
+              <p className="page-hint">The demo is loaded: its pipelines are in folder “Demo”.</p>
+            )}
             <button type="button" className="danger" onClick={onRemove} disabled={busy}>
               Remove demo
             </button>
