@@ -494,13 +494,10 @@ export function PipelineCanvas({
   /* What the writer below reads, through refs so it is ONE function for the
      page's life: the load effect calls it, and a re-run of that effect reloads
      the head over the draft.
-     #1579 — the router commits a navigation in a TRANSITION, so the rendered
-     `location` lags the URL the writer has just written, and an urgent render
-     in between (the preview itself) still carries the old one. The writer
-     records what it wrote, and only a NEW location from the router replaces
-     that; otherwise leaving a preview before the router re-renders computes
-     "no change" against the stale URL, leaves `?version=N` behind, and the
-     follower below then reopens the preview that was just left. */
+     #1579 — the router commits in a TRANSITION, so the rendered `location`
+     lags what the writer just wrote. The writer records its write, and only a
+     NEW router location replaces it; else leaving a preview in that gap kept
+     `?version=N` and the follower below reopened the preview. */
   const urlRefs = useRef({ location, navigate });
   useLayoutEffect(() => {
     urlRefs.current = { location, navigate };

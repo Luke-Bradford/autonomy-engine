@@ -700,12 +700,6 @@ test.describe('version history column (#1475 OR27)', () => {
   });
 
   /**
-   * #1521 — the previewed version is in the URL both ways: a preview writes
-   * `?version=N` (replacing, not pushing), a reload reopens it, Back to editing
-   * removes it, and a `?version` the page did not write moves the view, all
-   * without remounting the editor or throwing its draft away.
-   */
-  /**
    * #1579 — the router commits a navigation in a transition, so a preview's
    * `?version=N` can be in the URL before the page has re-rendered with it.
    * Leaving the preview in that gap used to compute "no change" against the
@@ -738,6 +732,12 @@ test.describe('version history column (#1475 OR27)', () => {
     await expectQuiet(page, problems);
   });
 
+  /**
+   * #1521 — the previewed version is in the URL both ways: a preview writes
+   * `?version=N` (replacing, not pushing), a reload reopens it, Back to editing
+   * removes it, and a `?version` the page did not write moves the view, all
+   * without remounting the editor or throwing its draft away.
+   */
   test('keeps the previewed version in the URL, and follows the URL back', async ({ page }) => {
     const problems = collectPageProblems(page);
     const pipelineId = await seedThreeVersions(page, 'history-url');
