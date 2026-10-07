@@ -171,11 +171,18 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
   expect(seen.banner).toContain('planned stop');
   expect(seen.bannerAboveTable).toBe(true);
 
-  // Show activity takes the reader to that activity's row.
-  await page.getByRole('button', { name: 'Show activity' }).click();
+  /* Show activity takes the reader to that activity's row and opens it: the
+     drawer takes focus, and Escape hands it back to the button. */
+  const showActivity = page.getByRole('button', { name: 'Show activity' });
+  await showActivity.click();
   const current = table.locator('tbody tr[aria-current="true"]');
   await expect(current).toHaveAttribute('data-activity-id', 'stop');
-  await expect(current).toBeFocused();
+  await expect(current).toHaveAttribute('data-open', 'true');
+  const drawerPanel = page.locator('#run-detail-drawer').getByRole('complementary');
+  await expect(drawerPanel).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#run-detail-drawer')).toHaveCount(0);
+  await expect(showActivity).toBeFocused();
 
   // Collapsing the ForEach leaves its own line; opening it brings the items back.
   const toggle = table.locator('tr.activity-runs__group button');

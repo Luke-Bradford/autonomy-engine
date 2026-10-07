@@ -4181,6 +4181,10 @@ button.danger {
   border: 1px solid transparent;
   border-radius: inherit;
   background: transparent;
+  /* React Flow sets `pointer-events: none` on a node nothing can select, drag
+     or click, as on this canvas, and the property inherits: without this the
+     pane under the node takes the click. */
+  pointer-events: auto;
 }
 
 .run-node-open:hover:not(:disabled) {

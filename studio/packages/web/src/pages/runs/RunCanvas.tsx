@@ -138,7 +138,7 @@ const RunActivityNode = memo(function RunActivityNode({ id, data }: NodeProps) {
         <button
           type="button"
           className="run-node-open nopan"
-          aria-label={`Show activity run: ${activityNodeName(d)}`}
+          aria-label={`Open activity run: ${activityNodeName(d)}`}
           onClick={(event) => opener.open(id, event.currentTarget)}
         />
       )}
