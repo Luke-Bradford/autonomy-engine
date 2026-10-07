@@ -72,7 +72,7 @@ export function RecurrenceEditor({
     set({ weekDays: next });
   };
 
-  /** The absolute instants the bounds resolve to, echoed so the browser-local
+  /** The absolute instants the bounds resolve to, echoed so the display-zone
    * anchoring of the controls is visible rather than implied. Resolved through
    * the same path the write uses, so an untouched sub-second bound is echoed as
    * the instant that will actually be submitted rather than as the truncated

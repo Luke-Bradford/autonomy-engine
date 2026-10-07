@@ -139,7 +139,7 @@ test.describe('#854 tumbling mode', () => {
     const created = await storedTrigger(page, 'Two-hourly windows');
     expect(created.mode).toBe('tumbling');
     expect(created.concurrency).toEqual({ policy: 'queue' });
-    // The epoch is anchored in the BROWSER's zone, so assert the shape and the
+    // The epoch is anchored in the display zone, the browser's by default, so assert the shape and the
     // geometry here and prove the instant survives via the round trip below.
     expect(created.window).toMatchObject({ frequency: 'hour', interval: 2 });
     expect(typeof (created.window as { startTime: unknown }).startTime).toBe('string');

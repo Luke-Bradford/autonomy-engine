@@ -205,7 +205,7 @@ test.describe('#1396 inline validation', () => {
 
     // A bad Hours entry shows on leaving the field, in a slot that moves nothing.
     const hours = form.getByLabel(/^Hours/);
-    const below = form.getByLabel('End time', { exact: true });
+    const below = form.getByLabel(/^End time/);
     const before = await below.boundingBox();
     await hours.fill('9, x');
     await expect(hours).toHaveAttribute('aria-invalid', 'false');

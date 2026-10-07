@@ -16,7 +16,7 @@ import {
   utcIsoToLocalInput,
   WHOLE_NUMBER,
 } from './formFields';
-import { LOCAL_TIME_ZONE, type DisplayTimeZone } from '../../lib/displayTime';
+import type { DisplayTimeZone } from '../../lib/displayTime';
 
 /**
  * #439 U14b — the PURE half of the recurrence builder: converting between the
@@ -93,9 +93,7 @@ export interface RecurrenceFormState {
   boundsZone: DisplayTimeZone;
 }
 
-export function blankRecurrenceForm(
-  boundsZone: DisplayTimeZone = LOCAL_TIME_ZONE,
-): RecurrenceFormState {
+export function blankRecurrenceForm(boundsZone: DisplayTimeZone): RecurrenceFormState {
   return {
     frequency: 'day',
     interval: '1',
@@ -247,7 +245,7 @@ export function formToRecurrence(form: RecurrenceFormState): RecurrenceConversio
  * `formToRecurrence` for any recurrence that form could have produced. */
 export function recurrenceToForm(
   recurrence: Recurrence,
-  boundsZone: DisplayTimeZone = LOCAL_TIME_ZONE,
+  boundsZone: DisplayTimeZone,
 ): RecurrenceFormState {
   return {
     frequency: recurrence.frequency,

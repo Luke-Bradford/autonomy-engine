@@ -11,7 +11,7 @@ import {
   utcIsoToLocalInput,
   type Refusal,
 } from './formFields';
-import { LOCAL_TIME_ZONE, type DisplayTimeZone } from '../../lib/displayTime';
+import type { DisplayTimeZone } from '../../lib/displayTime';
 
 /**
  * #439 U14b remainder (#854) — the PURE half of the tumbling-window builder:
@@ -73,7 +73,7 @@ export interface WindowFormState {
   dependencySizeSeconds: string;
 }
 
-export function blankWindowForm(boundsZone: DisplayTimeZone = LOCAL_TIME_ZONE): WindowFormState {
+export function blankWindowForm(boundsZone: DisplayTimeZone): WindowFormState {
   return {
     frequency: 'hour',
     interval: '',
@@ -226,10 +226,7 @@ export function formToWindow(form: WindowFormState): WindowConversion {
 }
 
 /** Load a stored window back into the editor — the inverse of `formToWindow`. */
-export function windowToForm(
-  window: WindowConfig,
-  boundsZone: DisplayTimeZone = LOCAL_TIME_ZONE,
-): WindowFormState {
+export function windowToForm(window: WindowConfig, boundsZone: DisplayTimeZone): WindowFormState {
   return {
     frequency: window.frequency,
     interval: String(window.interval),

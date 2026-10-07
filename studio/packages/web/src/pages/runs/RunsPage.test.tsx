@@ -1706,11 +1706,13 @@ describe('#1484 — runs grid columns', () => {
 
   it('resizes a column from the keyboard, and a double-click returns it to its default', async () => {
     const ui = await renderGrid();
-    /* #1570 — the handle is looked up afresh at every step rather than held:
+    // The grid's own cell: `renderGrid` resolves on a name both views draw.
+    await screen.findByText('run_abc');
+    /* #1570 — the handle is looked up afresh at every step rather than held.
        CI once read the old value off a captured element after the store had
-       taken the new one, and only a replaced (detached) element can do that,
-       because the rendered value comes straight from the store. A held element
-       proves nothing about what is on screen; the one in the document does. */
+       taken the new one. The rendered value comes straight from the store, so
+       a replaced element is the likely cause (unreproduced: 8 concurrent local
+       runs passed). The handle in the document is what is on screen. */
     const handle = () => screen.getByRole('separator', { name: 'Resize Status column' });
     fireEvent.keyDown(handle(), { key: 'ArrowRight' });
     const widened = RUN_GRID_COLUMN_WIDTHS.status.default + RUN_GRID_RESIZE_STEP;

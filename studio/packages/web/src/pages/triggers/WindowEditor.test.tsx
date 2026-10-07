@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { LOCAL_TIME_ZONE } from '../../lib/displayTime';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { NO_FIELD_SLOTS } from '../../testing/noFieldSlots';
 import { WindowEditor } from './WindowEditor';
@@ -24,7 +25,7 @@ describe('#855 WindowEditor names a bound the DST gap will move', () => {
     const { rerender } = render(
       <WindowEditor
         validation={NO_FIELD_SLOTS}
-        value={{ ...blankWindowForm(), startTime: '2026-03-29T01:30' }}
+        value={{ ...blankWindowForm(LOCAL_TIME_ZONE), startTime: '2026-03-29T01:30' }}
         onChange={noop}
       />,
     );
@@ -35,7 +36,7 @@ describe('#855 WindowEditor names a bound the DST gap will move', () => {
     rerender(
       <WindowEditor
         validation={NO_FIELD_SLOTS}
-        value={{ ...blankWindowForm(), startTime: '2026-03-29T03:30' }}
+        value={{ ...blankWindowForm(LOCAL_TIME_ZONE), startTime: '2026-03-29T03:30' }}
         onChange={noop}
       />,
     );
@@ -49,13 +50,16 @@ describe('#855 WindowEditor names a bound the DST gap will move', () => {
  */
 describe('#861 WindowEditor retry + self-dependency', () => {
   const loaded = () =>
-    windowToForm({
-      frequency: 'hour',
-      interval: 1,
-      startTime: '2026-08-01T08:00:00.000Z',
-      retry: { count: 3, intervalInSeconds: 60 },
-      selfDependency: { offsetInSeconds: -7200 },
-    });
+    windowToForm(
+      {
+        frequency: 'hour',
+        interval: 1,
+        startTime: '2026-08-01T08:00:00.000Z',
+        retry: { count: 3, intervalInSeconds: 60 },
+        selfDependency: { offsetInSeconds: -7200 },
+      },
+      LOCAL_TIME_ZONE,
+    );
 
   it('shows the loaded values in their controls and states what they do', () => {
     render(<WindowEditor validation={NO_FIELD_SLOTS} value={loaded()} onChange={() => {}} />);
@@ -76,7 +80,11 @@ describe('#861 WindowEditor retry + self-dependency', () => {
   it('reports each typed field through onChange as text', () => {
     const onChange = vi.fn();
     render(
-      <WindowEditor validation={NO_FIELD_SLOTS} value={blankWindowForm()} onChange={onChange} />,
+      <WindowEditor
+        validation={NO_FIELD_SLOTS}
+        value={blankWindowForm(LOCAL_TIME_ZONE)}
+        onChange={onChange}
+      />,
     );
     fireEvent.change(screen.getByLabelText(/offset in seconds/), { target: { value: '-60' } });
     expect(onChange).toHaveBeenLastCalledWith(

@@ -59,18 +59,16 @@ export function parseWholeNumber(raw: string): WholeNumberParse {
  * bounds as absolute instants. `local` keeps reading through `Date`, which
  * follows the runtime's zone live; a named zone resolves through
  * `zonedWallClockInstant`, which settles a daylight-saving gap or overlap the
- * way `Date` does. The editor labels
- * the control and echoes the resolved instant rather than silently
+ * way `Date` does. Two paths rather than one: the cached `local` formatter
+ * keeps the zone it was built in, and `Date` does not. The editor labels the
+ * control with its zone and echoes the resolved instant rather than silently
  * reinterpreting it — and where that zone has no such wall clock (a
  * daylight-saving gap), `boundShift` names the one it will read back as.
  *
  * Returns `null` for anything that is not a well-formed local date-time, so a
  * caller never propagates an `Invalid Date`.
  */
-export function localInputToUtcIso(
-  local: string,
-  zone: DisplayTimeZone = LOCAL_TIME_ZONE,
-): string | null {
+export function localInputToUtcIso(local: string, zone: DisplayTimeZone): string | null {
   const trimmed = local.trim();
   // Pin the accepted shape rather than trusting `Date`'s lenient fallback
   // parsing, which would accept (and mis-anchor) an offset-bearing string.
@@ -93,7 +91,7 @@ export const pad = (n: number): string => String(n).padStart(2, '0');
  * the string from the local getters (rather than slicing `toISOString`, which
  * is UTC) is what keeps the round trip stable in a non-UTC browser.
  */
-export function utcIsoToLocalInput(iso: string, zone: DisplayTimeZone = LOCAL_TIME_ZONE): string {
+export function utcIsoToLocalInput(iso: string, zone: DisplayTimeZone): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
   if (zone !== LOCAL_TIME_ZONE) return wallClockInput(d.getTime(), zone);
@@ -139,13 +137,13 @@ export interface BoundFields {
 }
 
 /**
- * The local wall clock a bound will actually READ BACK as, when that differs
+ * The wall clock (in `zone`) a bound will actually READ BACK as, when that differs
  * from what the operator typed — `null` otherwise, and for a blank or
  * unreadable control (#855).
  *
  * The case it exists for is a daylight-saving GAP: under `Europe/London`,
- * `2026-03-29T01:30` does not exist (01:00 jumps to 02:00), so `Date` resolves
- * it with the pre-transition offset and the stored instant reloads as `02:30`.
+ * `2026-03-29T01:30` does not exist (01:00 jumps to 02:00), so `Date` (or
+ * `zonedWallClockInstant`, for a named zone) resolves it with the pre-transition offset and the stored instant reloads as `02:30`.
  * That instant is well-defined and stable, so the editors WARN rather than
  * refuse — what they must not do is let the typed value change with nothing
  * said. It reports ANY read-back mismatch, not only a gap — `Date` also rolls a

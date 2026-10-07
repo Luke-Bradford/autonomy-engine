@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { LOCAL_TIME_ZONE } from '../../lib/displayTime';
 import type { WindowConfig } from '@autonomy-studio/shared';
 import { localInputToUtcIso } from './formFields';
 import { blankWindowForm, formToWindow, windowToForm, type WindowFormState } from './windowForm';
 
 function form(over: Partial<WindowFormState> = {}): WindowFormState {
-  return { ...blankWindowForm(), ...over };
+  return { ...blankWindowForm(LOCAL_TIME_ZONE), ...over };
 }
 
 /** The window a valid conversion produced, or a thrown reason. */
@@ -32,7 +33,7 @@ function reasonOf(state: WindowFormState): string {
  * branch in CI's UTC, where it failed.
  */
 function isoOf(local: string): string {
-  const iso = localInputToUtcIso(local);
+  const iso = localInputToUtcIso(local, LOCAL_TIME_ZONE);
   if (iso === null) throw new Error(`fixture is not a local date-time: ${local}`);
   return iso;
 }
@@ -47,7 +48,7 @@ describe('formToWindow — the absent/present boundary', () => {
     // A tumbling trigger may legally be stored with `window: null` while it is
     // disabled (`assertWindowConsistent` only requires one when ENABLED), so an
     // untouched builder must round-trip to null rather than invent a window.
-    expect(windowOf(blankWindowForm())).toBeNull();
+    expect(windowOf(blankWindowForm(LOCAL_TIME_ZONE))).toBeNull();
   });
 
   it('refuses a form that was filled in but has no start time', () => {
@@ -137,26 +138,32 @@ describe('#861 retry + self-dependency — edited as text, validated by the writ
   };
   /** A valid window with nothing but the geometry — the base the sub-objects are typed into. */
   const base = (): WindowFormState =>
-    windowToForm({
-      frequency: 'hour',
-      interval: 2,
-      startTime: '2026-08-01T08:00:00.000Z',
-    });
+    windowToForm(
+      {
+        frequency: 'hour',
+        interval: 2,
+        startTime: '2026-08-01T08:00:00.000Z',
+      },
+      LOCAL_TIME_ZONE,
+    );
 
   it('round-trips a fully-populated window byte for byte', () => {
-    expect(windowOf(windowToForm(stored))).toEqual(stored);
+    expect(windowOf(windowToForm(stored, LOCAL_TIME_ZONE))).toEqual(stored);
     expect(
       windowOf(
-        windowToForm({
-          ...stored,
-          selfDependency: { offsetInSeconds: -14400, sizeInSeconds: 3600 },
-        }),
+        windowToForm(
+          {
+            ...stored,
+            selfDependency: { offsetInSeconds: -14400, sizeInSeconds: 3600 },
+          },
+          LOCAL_TIME_ZONE,
+        ),
       ),
     ).toEqual({ ...stored, selfDependency: { offsetInSeconds: -14400, sizeInSeconds: 3600 } });
   });
 
   it('loads each sub-object field into its own text control', () => {
-    const loaded = windowToForm(stored);
+    const loaded = windowToForm(stored, LOCAL_TIME_ZONE);
     expect(loaded.retryCount).toBe('2');
     expect(loaded.retryIntervalSeconds).toBe('60');
     expect(loaded.dependencyOffsetSeconds).toBe('-7200');
@@ -165,7 +172,7 @@ describe('#861 retry + self-dependency — edited as text, validated by the writ
   });
 
   it('keeps retry and selfDependency when an unrelated field is changed', () => {
-    const edited = { ...windowToForm(stored), maxBackfillWindows: '9' };
+    const edited = { ...windowToForm(stored, LOCAL_TIME_ZONE), maxBackfillWindows: '9' };
     expect(windowOf(edited)).toEqual({ ...stored, maxBackfillWindows: 9 });
   });
 
@@ -188,7 +195,11 @@ describe('#861 retry + self-dependency — edited as text, validated by the writ
     expect(w).not.toHaveProperty('retry');
     expect(w).not.toHaveProperty('selfDependency');
     // Clearing a loaded policy removes it — that is how an operator turns retry off.
-    const cleared = { ...windowToForm(stored), retryCount: '', retryIntervalSeconds: '' };
+    const cleared = {
+      ...windowToForm(stored, LOCAL_TIME_ZONE),
+      retryCount: '',
+      retryIntervalSeconds: '',
+    };
     expect(windowOf(cleared)).not.toHaveProperty('retry');
   });
 
@@ -243,7 +254,9 @@ describe('#861 retry + self-dependency — edited as text, validated by the writ
       interval: 15,
       startTime: '2026-08-01T08:00:30.500Z',
     };
-    expect(windowOf(windowToForm(subSecond))?.startTime).toBe('2026-08-01T08:00:30.500Z');
+    expect(windowOf(windowToForm(subSecond, LOCAL_TIME_ZONE))?.startTime).toBe(
+      '2026-08-01T08:00:30.500Z',
+    );
   });
 });
 

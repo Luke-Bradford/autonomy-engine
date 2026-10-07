@@ -22,7 +22,7 @@ import {
 
 /** A form in the state the editor would be in after the operator filled it. */
 function form(over: Partial<RecurrenceFormState> = {}): RecurrenceFormState {
-  return { ...blankRecurrenceForm(), ...over };
+  return { ...blankRecurrenceForm(LOCAL_TIME_ZONE), ...over };
 }
 
 /** Unwrap a successful conversion, failing loudly with the reason otherwise. */
@@ -127,7 +127,7 @@ describe('formToRecurrence — interval, timeZone and bounds', () => {
       }),
     );
     expect(r.interval).toBe(2);
-    expect(r.startTime).toBe(localInputToUtcIso('2026-08-01T09:00'));
+    expect(r.startTime).toBe(localInputToUtcIso('2026-08-01T09:00', LOCAL_TIME_ZONE));
   });
 
   it('refuses interval > 1 with no startTime anchor (#550 write rule)', () => {
@@ -196,7 +196,7 @@ describe('formToRecurrence — interval, timeZone and bounds', () => {
 describe('formToRecurrence — an untouched bound is written back unchanged', () => {
   /** A form as loaded from a stored recurrence, with nothing edited. */
   function loaded(recurrence: Recurrence): RecurrenceFormState {
-    return recurrenceToForm(recurrence);
+    return recurrenceToForm(recurrence, LOCAL_TIME_ZONE);
   }
 
   it('preserves sub-second precision the control cannot hold', () => {
@@ -233,7 +233,9 @@ describe('formToRecurrence — an untouched bound is written back unchanged', ()
       startTime: '2026-01-01T09:15:45.500Z',
     });
     const edited = { ...asLoaded, startTime: '2026-02-02T10:00' };
-    expect(recurrenceOf(edited).startTime).toBe(localInputToUtcIso('2026-02-02T10:00'));
+    expect(recurrenceOf(edited).startTime).toBe(
+      localInputToUtcIso('2026-02-02T10:00', LOCAL_TIME_ZONE),
+    );
   });
 });
 
@@ -264,13 +266,19 @@ describe('resolveBound — the editor echoes exactly what the write path submits
     // `.000Z` while the value actually submitted kept its true milliseconds —
     // an echo that contradicted the write.
     const stored = '2026-01-01T09:15:45.500Z';
-    const asLoaded = recurrenceToForm({ frequency: 'day', interval: 1, startTime: stored });
+    const asLoaded = recurrenceToForm(
+      { frequency: 'day', interval: 1, startTime: stored },
+      LOCAL_TIME_ZONE,
+    );
     expect(resolveBound(asLoaded.startTime, asLoaded.startTimeIso, LOCAL_TIME_ZONE)).toBe(stored);
   });
 
   it('agrees with formToRecurrence for both an untouched and an edited bound', () => {
     const stored = '2026-01-01T09:15:45.500Z';
-    const asLoaded = recurrenceToForm({ frequency: 'day', interval: 1, startTime: stored });
+    const asLoaded = recurrenceToForm(
+      { frequency: 'day', interval: 1, startTime: stored },
+      LOCAL_TIME_ZONE,
+    );
     const edited = { ...asLoaded, startTime: '2026-02-02T10:00' };
     for (const form of [asLoaded, edited]) {
       expect(resolveBound(form.startTime, form.startTimeIso, LOCAL_TIME_ZONE)).toBe(
@@ -281,7 +289,7 @@ describe('resolveBound — the editor echoes exactly what the write path submits
 
   it('re-derives when there is no preserved instant to preserve', () => {
     expect(resolveBound('2026-02-02T10:00', '', LOCAL_TIME_ZONE)).toBe(
-      localInputToUtcIso('2026-02-02T10:00'),
+      localInputToUtcIso('2026-02-02T10:00', LOCAL_TIME_ZONE),
     );
   });
 
@@ -308,7 +316,7 @@ describe('recurrenceToForm — round trip', () => {
 
   it('re-derives the same recurrence after a trip through the form', () => {
     for (const original of cases) {
-      expect(recurrenceOf(recurrenceToForm(original))).toEqual(original);
+      expect(recurrenceOf(recurrenceToForm(original, LOCAL_TIME_ZONE))).toEqual(original);
     }
   });
 });
@@ -326,27 +334,33 @@ describe('localInputToUtcIso / utcIsoToLocalInput', () => {
     // in the browser's zone — asserted here against a PINNED zone, or this test
     // would pass vacuously in a UTC CI box.
     process.env.TZ = 'America/New_York';
-    expect(localInputToUtcIso('2026-08-01T09:00')).toBe('2026-08-01T13:00:00.000Z');
+    expect(localInputToUtcIso('2026-08-01T09:00', LOCAL_TIME_ZONE)).toBe(
+      '2026-08-01T13:00:00.000Z',
+    );
     process.env.TZ = 'UTC';
-    expect(localInputToUtcIso('2026-08-01T09:00')).toBe('2026-08-01T09:00:00.000Z');
+    expect(localInputToUtcIso('2026-08-01T09:00', LOCAL_TIME_ZONE)).toBe(
+      '2026-08-01T09:00:00.000Z',
+    );
   });
 
   it('renders a stored UTC instant back in local wall clock, not UTC', () => {
     process.env.TZ = 'America/New_York';
-    expect(utcIsoToLocalInput('2026-08-01T13:00:00.000Z')).toBe('2026-08-01T09:00');
+    expect(utcIsoToLocalInput('2026-08-01T13:00:00.000Z', LOCAL_TIME_ZONE)).toBe(
+      '2026-08-01T09:00',
+    );
   });
 
   it('round-trips through the control in a non-UTC zone', () => {
     process.env.TZ = 'Australia/Sydney';
     const local = '2026-12-25T18:30';
-    const iso = localInputToUtcIso(local);
+    const iso = localInputToUtcIso(local, LOCAL_TIME_ZONE);
     expect(iso).not.toBeNull();
-    expect(utcIsoToLocalInput(iso as string)).toBe(local);
+    expect(utcIsoToLocalInput(iso as string, LOCAL_TIME_ZONE)).toBe(local);
   });
 
   it('returns null for an unparseable value rather than an Invalid Date', () => {
-    expect(localInputToUtcIso('not-a-date')).toBeNull();
-    expect(localInputToUtcIso('')).toBeNull();
+    expect(localInputToUtcIso('not-a-date', LOCAL_TIME_ZONE)).toBeNull();
+    expect(localInputToUtcIso('', LOCAL_TIME_ZONE)).toBeNull();
   });
 });
 
@@ -383,7 +397,9 @@ describe('boundShift — a wall clock the browser zone does not have (#855)', ()
   it('is silent for an UNTOUCHED bound, which is written back exactly as loaded', () => {
     process.env.TZ = 'Europe/London';
     const stored = '2026-03-29T01:30:00.000Z';
-    expect(boundShift(utcIsoToLocalInput(stored), stored, LOCAL_TIME_ZONE)).toBeNull();
+    expect(
+      boundShift(utcIsoToLocalInput(stored, LOCAL_TIME_ZONE), stored, LOCAL_TIME_ZONE),
+    ).toBeNull();
   });
 
   it('also names a day past the end of its month, which Date rolls forward', () => {

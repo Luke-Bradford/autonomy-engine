@@ -284,14 +284,10 @@ export function displayTimeZoneName(zone: DisplayTimeZone): string {
 const WALL_DAY_MS = 86_400_000;
 
 /** A civil date and time read as if it were UTC, as epoch ms — the wall clock
- * as a number, so two wall clocks compare and subtract. `setUTCFullYear`, not
- * `Date.UTC`, which reads a year below 100 as 19xx. A day past the end of its
- * month rolls over, as `Date` does. */
+ * as a number, so two wall clocks compare and subtract. A day past the end of
+ * its month rolls over, as `Date` (and `civilDayNumber`) does. */
 function civilMs(y: number, mo: number, d: number, h: number, mi: number, s: number): number {
-  const at = new Date(0);
-  at.setUTCFullYear(y, mo - 1, d);
-  at.setUTCHours(h, mi, s, 0);
-  return at.getTime();
+  return civilDayNumber(y, mo, d) * WALL_DAY_MS + ((h * 60 + mi) * 60 + s) * 1000;
 }
 
 /** The zone's offset at `ms`: how far its wall clock is ahead of UTC there. */
@@ -332,6 +328,14 @@ const WALL_CLOCK = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/;
  * The offset either side of the wall clock (a day away, past any transition
  * that could be in play) gives at most two candidates; a candidate is the
  * answer when the zone's offset AT it is the one it was built from.
+ *
+ * Not `zonedCalendar`'s bisection, whose header warns off an offset inverse:
+ * that warning is about where a DAY begins, where the inverse lands on the
+ * wrong side of a midnight gap. Here a wall clock in a gap is SUPPOSED to land
+ * past it, by the pre-jump offset, because that is what `Date` does and so what
+ * the `local` path and `boundShift`'s warning already mean. `24:00` is refused,
+ * which `Date` would read as the next midnight; a `datetime-local` never
+ * produces it.
  */
 export function zonedWallClockInstant(local: string, zone: DisplayTimeZone): number | null {
   const match = WALL_CLOCK.exec(local.trim());
