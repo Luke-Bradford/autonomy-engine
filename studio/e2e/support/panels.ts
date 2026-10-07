@@ -7,7 +7,8 @@ import { expect, type Locator, type Page } from '@playwright/test';
  * needed it: `properties` in thirteen files (under two names), `triggerForm` in
  * six. The locator itself never differed. That changes the day the dock's or
  * the form's accessible name changes, and at that point the fix belongs in one
- * file, not nineteen.
+ * file, not nineteen. The run page's surfaces (its activity runs, its views)
+ * live here for the same reason.
  */
 
 /** The canvas's right-hand Properties dock: the selected node's inspector,
