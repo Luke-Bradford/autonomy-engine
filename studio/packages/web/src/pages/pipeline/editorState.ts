@@ -437,6 +437,53 @@ export function listRowBadge({ state, gitConnected, sync }: ListRowInput): {
 }
 
 /**
+ * #1569 OR37 — the pipelines bar's "Live state" filter: what a row's badge
+ * says, as keys. Derived FROM `listRowBadge`, so the filter can never match a
+ * row whose badge says something else. A row may carry several (live and
+ * behind and uncommitted); a row whose badge is unread carries none.
+ */
+export const LIVE_STATE_KEYS = [
+  'unsaved',
+  'saved',
+  'unpublished',
+  'live',
+  'behind',
+  'uncommitted',
+] as const;
+export type LiveStateKey = (typeof LIVE_STATE_KEYS)[number];
+
+export const LIVE_STATE_LABELS: Record<LiveStateKey, string> = {
+  unsaved: 'Not saved',
+  saved: 'Saved',
+  unpublished: 'Not published',
+  live: 'Live',
+  behind: 'Live (behind)',
+  uncommitted: 'Uncommitted',
+};
+
+export function liveStateKeys(input: ListRowInput): LiveStateKey[] {
+  const { state } = input;
+  const { live, git } = listRowBadge(input);
+  const keys: LiveStateKey[] = [];
+  const head = state.latestVersion;
+  if (head === null) keys.push('unsaved');
+  else if (live === null) keys.push('saved');
+  if (live !== null) {
+    if (state.active === null) keys.push('unpublished');
+    else {
+      keys.push('live');
+      // Exactly the badge's "Live (behind)": a numbered live version that is
+      // not the saved head. "Not listed yet" is live, not behind.
+      if (state.active.version !== null && head !== null && live.current !== true) {
+        keys.push('behind');
+      }
+    }
+  }
+  if (git !== null) keys.push('uncommitted');
+  return keys;
+}
+
+/**
  * The pull request's sentence. `none` only when the host said so; a failed
  * lookup says it could not check, and a remote studio cannot ask (local, not
  * GitHub) says nothing — absent, not wrong. Never a tone: a PR is neither good

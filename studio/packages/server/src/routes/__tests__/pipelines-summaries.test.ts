@@ -153,7 +153,11 @@ describe('GET /api/pipelines/summaries (#1569 OR37)', () => {
     const p = createPipeline(app.db, { ownerId: 'local', name: 'P' });
     version(p.id, { description: 'old', annotations: ['stale'] });
     version(p.id, { description: 'Loads the orders feed', annotations: ['finance', 'nightly'] });
-    version(p.id, { description: 'draft', annotations: ['debug'], debug: true });
+    // Debug versions number on their own, so three of them reach v3 — past the
+    // saved head (v2) — which a join that forgot `debug = 0` would pick.
+    for (let i = 0; i < 3; i++) {
+      version(p.id, { description: 'draft', annotations: ['debug'], debug: true });
+    }
     expect(await summaryOf(p.id)).toMatchObject({
       description: 'Loads the orders feed',
       annotations: ['finance', 'nightly'],

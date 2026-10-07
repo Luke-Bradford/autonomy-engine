@@ -6,6 +6,7 @@ import {
   gitState,
   listRowBadge,
   liveState,
+  liveStateKeys,
   partText,
   type EditingInput,
 } from './editorState';
@@ -495,5 +496,67 @@ describe('listRowBadge (#1476 slice 8)', () => {
     expect(row(2, null, { sync: undefined }).git).toBeNull();
     expect(row(2, null, { sync: null }).git).toBeNull();
     expect(row(2, null, { gitConnected: false, sync: listed }).git).toBeNull();
+  });
+});
+
+describe('liveStateKeys (#1569 OR37 slice 2)', () => {
+  const sha = 'abc1234000000000000000000000000000000000';
+  const drifted: WorkspaceGitSync = {
+    fetchedAt: 2,
+    fetched: false,
+    workingBranch: 'feature/x',
+    base: sha,
+    baseBranch: 'feature/x',
+    hasUncommittedChanges: true,
+    pipelines: [{ pipelineId: 'p1', change: 'modified' }],
+    divergence: { state: 'current', importBase: sha, collabHead: sha },
+  };
+  const input = (
+    latestVersion: number | null,
+    active: { versionId: string; version: number | null } | null,
+    gitConnected: boolean | undefined,
+    sync?: WorkspaceGitSync | null,
+  ) => ({ state: { pipelineId: 'p1', latestVersion, active }, gitConnected, sync });
+
+  it.each([
+    // DB-only: no live part, whatever the publish pointer says.
+    [input(null, null, false), ['unsaved']],
+    [input(3, null, false), ['saved']],
+    [input(3, { versionId: 'v3', version: 3 }, false), ['saved']],
+    // Publish state unread: no live part, so nothing about live is claimed.
+    [input(3, { versionId: 'v1', version: 1 }, undefined), ['saved']],
+    // Git mode.
+    [input(3, null, true), ['unpublished']],
+    [input(null, null, true), ['unsaved', 'unpublished']],
+    [input(2, { versionId: 'v2', version: 2 }, true), ['live']],
+    [input(3, { versionId: 'v1', version: 1 }, true), ['live', 'behind']],
+    // "Not listed yet" is live, not behind; no saved head is nothing to be behind.
+    [input(3, { versionId: 'vx', version: null }, true), ['live']],
+    [input(null, { versionId: 'v1', version: 1 }, true), ['unsaved', 'live']],
+    [input(2, { versionId: 'v2', version: 2 }, true, drifted), ['live', 'uncommitted']],
+  ] as const)('%#: the keys the badge implies', (row, keys) => {
+    expect(liveStateKeys(row)).toEqual(keys);
+  });
+
+  it('agrees with the badge it is derived from, label for label', () => {
+    const rows = [
+      input(null, null, false),
+      input(3, null, false),
+      input(3, null, true),
+      input(null, null, true),
+      input(2, { versionId: 'v2', version: 2 }, true),
+      input(3, { versionId: 'v1', version: 1 }, true),
+      input(3, { versionId: 'vx', version: null }, true),
+      input(null, { versionId: 'v1', version: 1 }, true, drifted),
+    ];
+    for (const r of rows) {
+      const keys = liveStateKeys(r);
+      const { editing, live, git } = listRowBadge(r);
+      expect(keys.includes('unsaved'), JSON.stringify(r)).toBe(editing?.label === 'Not saved');
+      expect(keys.includes('saved'), JSON.stringify(r)).toBe(editing?.label === 'Saved');
+      expect(keys.includes('unpublished'), JSON.stringify(r)).toBe(live?.label === 'Not published');
+      expect(keys.includes('behind'), JSON.stringify(r)).toBe(live?.label === 'Live (behind)');
+      expect(keys.includes('uncommitted'), JSON.stringify(r)).toBe(git !== null);
+    }
   });
 });

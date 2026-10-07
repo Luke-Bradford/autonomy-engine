@@ -22,6 +22,7 @@ import {
 } from '../../lib/displayTime';
 import { canonicalHidden, type RunGridColumnId } from '../../stores/uiStore';
 import { nextUrlSort, readUrlSort, urlSortParams, type UrlSortSpec } from '../../lib/urlSort';
+import { canonicalSetParam } from '../../lib/canonicalSetParam';
 
 /**
  * U26 + #1484 OR35 M1 — the runs list's filter bar state, and the URL it lives
@@ -157,10 +158,7 @@ export function readKinds(raw: string | null | undefined): RunTriggeredByKind[] 
  * are the param's absence.
  */
 export function canonicalKindParam(kinds: readonly string[]): string | undefined {
-  const picked = RUN_TRIGGERED_BY_KINDS.filter((k) => kinds.includes(k));
-  return picked.length === 0 || picked.length === RUN_TRIGGERED_BY_KINDS.length
-    ? undefined
-    : picked.join(',');
+  return canonicalSetParam(RUN_TRIGGERED_BY_KINDS, kinds);
 }
 
 /**
