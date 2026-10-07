@@ -1,4 +1,5 @@
-import { boundShiftWarnings, type BoundFields } from './formFields';
+import type { DisplayTimeZone } from '../../lib/displayTime';
+import { boundShiftWarnings, boundZoneLabel, type BoundFields } from './formFields';
 
 /**
  * #855 — the bounds a daylight-saving gap will move, said where they were
@@ -11,4 +12,13 @@ export function BoundShiftNotices({ bounds }: { bounds: BoundFields }) {
       {warning}
     </p>
   ));
+}
+
+/**
+ * #1524 — the zone a start/end control is written in, said beside it, so the
+ * operator never has to guess which wall clock the input means. Part of the
+ * control's label, and so of its accessible name.
+ */
+export function BoundZoneNote({ zone }: { zone: DisplayTimeZone }) {
+  return <> ({boundZoneLabel(zone)})</>;
 }

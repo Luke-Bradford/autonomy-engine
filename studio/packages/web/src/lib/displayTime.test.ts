@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   dayOf,
+  wallClockInput,
+  zonedWallClockInstant,
   displayTimeZoneOptions,
   formatCompactTimestamp,
   formatRelative,
@@ -144,5 +146,63 @@ describe('displayTime — #1484 principle 4', () => {
     expect(shiftDay('2026-12-31', 1)).toBe('2027-01-01');
     expect(shiftDay('2028-02-28', 1)).toBe('2028-02-29');
     expect(shiftDay('2026-03-02', -6)).toBe('2026-02-24');
+  });
+});
+
+describe('#1524 — a datetime-local wall clock in a named display zone', () => {
+  const at = (iso: string) => new Date(iso).getTime();
+  const originalTz = process.env.TZ;
+  afterEach(() => {
+    if (originalTz === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTz;
+  });
+
+  it('reads the wall clock in the named zone, whatever the runtime zone is', () => {
+    // The runtime zone is pinned AWAY from the named one, or a UTC CI box would
+    // pass a resolver that ignored its zone.
+    process.env.TZ = 'Asia/Tokyo';
+    expect(zonedWallClockInstant('2026-08-01T09:00', 'America/New_York')).toBe(
+      at('2026-08-01T13:00:00Z'),
+    );
+    expect(zonedWallClockInstant('2026-01-15T09:00:30', 'Europe/London')).toBe(
+      at('2026-01-15T09:00:30Z'),
+    );
+    expect(wallClockInput(at('2026-08-01T13:00:00Z'), 'America/New_York')).toBe('2026-08-01T09:00');
+    expect(wallClockInput(at('2026-08-01T13:00:07Z'), 'America/New_York')).toBe(
+      '2026-08-01T09:00:07',
+    );
+  });
+
+  it('round-trips through the control in a zone east of UTC, across midnight', () => {
+    const iso = zonedWallClockInstant('2026-12-25T08:30', 'Australia/Sydney');
+    expect(iso).toBe(at('2026-12-24T21:30:00Z'));
+    expect(wallClockInput(iso as number, 'Australia/Sydney')).toBe('2026-12-25T08:30');
+  });
+
+  it('settles a spring-forward GAP as Date does: with the offset from before the jump', () => {
+    // London jumps 01:00 -> 02:00 GMT->BST on 2026-03-29; 01:30 never happens.
+    const gap = zonedWallClockInstant('2026-03-29T01:30', 'Europe/London');
+    expect(gap).toBe(at('2026-03-29T01:30:00Z'));
+    expect(wallClockInput(gap as number, 'Europe/London')).toBe('2026-03-29T02:30');
+  });
+
+  it('reads an AMBIGUOUS fall-back wall clock as the EARLIER instant, as Date does', () => {
+    // 01:30 happens twice in London on 2026-10-25: 00:30Z (BST), then 01:30Z (GMT).
+    expect(zonedWallClockInstant('2026-10-25T01:30', 'Europe/London')).toBe(
+      at('2026-10-25T00:30:00Z'),
+    );
+  });
+
+  it('agrees with Date in the runtime zone, gap and overlap included', () => {
+    process.env.TZ = 'Europe/London';
+    for (const wall of ['2026-03-29T01:30', '2026-10-25T01:30', '2026-07-01T12:00']) {
+      expect(zonedWallClockInstant(wall, 'Europe/London')).toBe(new Date(wall).getTime());
+    }
+  });
+
+  it('refuses what is not a wall clock, rather than inventing an instant', () => {
+    for (const bad of ['', 'not a date', '2026-08-01', '2026-08-01T24:00', '2026-13-01T09:00']) {
+      expect(zonedWallClockInstant(bad, 'UTC')).toBeNull();
+    }
   });
 });

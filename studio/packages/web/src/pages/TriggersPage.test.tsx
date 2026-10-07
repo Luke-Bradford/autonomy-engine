@@ -20,6 +20,7 @@ import * as runsApi from '../api/runs';
 import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
 import { ROUTES } from '../routes';
+import { uiStore } from '../stores/uiStore';
 import { ApiError } from '../api/client';
 
 // Mock only the network layers; keep TriggerWriteSchema real so the form's
@@ -915,6 +916,35 @@ describe('#854 — the trigger modes that had no config UI', () => {
       interval: 2,
       startTime: new Date('2026-08-01T09:00').toISOString(),
     });
+  });
+
+  it('#1524 — the start time is typed in the DISPLAY zone, says so, and saves that instant', async () => {
+    // A display zone that differs from CI's UTC browser, or this passes vacuously.
+    const before = uiStore.getState().displayTimeZone;
+    uiStore.getState().setDisplayTimeZone('America/New_York');
+    try {
+      const user = userEvent.setup();
+      renderWithDataRouter(<TriggersPage />);
+      await user.click(await screen.findByRole('button', { name: /New trigger/i }));
+      const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+      await user.type(form.getByLabelText('Name'), 'Hourly windows');
+      await user.selectOptions(form.getByLabelText('Pipeline version'), 'plv_1');
+      await user.selectOptions(form.getByLabelText('Mode'), 'tumbling');
+      await user.type(form.getByLabelText(/Each window covers/i), '2');
+      const start = form.getByLabelText(/^Start time/i);
+      expect(start).toHaveAccessibleName(/\(America\/New_York\)/);
+      fireEvent.change(start, { target: { value: '2026-08-01T09:00' } });
+      expect(form.getByTestId('window-bounds-utc')).toHaveTextContent(
+        'Windows are keyed from 2026-08-01T13:00:00.000Z, entered in the America/New_York time zone',
+      );
+      await user.click(form.getByRole('checkbox', { name: /Enabled/i }));
+      await user.click(form.getByRole('button', { name: /Create trigger/i }));
+
+      await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+      expect(createMock.mock.calls[0]![0].window?.startTime).toBe('2026-08-01T13:00:00.000Z');
+    } finally {
+      uiStore.getState().setDisplayTimeZone(before);
+    }
   });
 
   it('refuses to enable a tumbling trigger that has no window', async () => {

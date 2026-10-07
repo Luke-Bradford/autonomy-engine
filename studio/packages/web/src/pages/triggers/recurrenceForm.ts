@@ -16,6 +16,7 @@ import {
   utcIsoToLocalInput,
   WHOLE_NUMBER,
 } from './formFields';
+import type { DisplayTimeZone } from '../../lib/displayTime';
 
 /**
  * #439 U14b — the PURE half of the recurrence builder: converting between the
@@ -69,7 +70,7 @@ export interface RecurrenceFormState {
   monthDays: string;
   /** IANA zone; `''` = absent, which the schema reads as UTC. */
   timeZone: string;
-  /** `datetime-local` values (naive, browser-local wall clock); `''` = absent. */
+  /** `datetime-local` values (naive, wall clock in `boundsZone`); `''` = absent. */
   startTime: string;
   endTime: string;
   /**
@@ -88,9 +89,11 @@ export interface RecurrenceFormState {
    */
   startTimeIso: string;
   endTimeIso: string;
+  /** #1524 — the zone `startTime`/`endTime` are written in (`BoundFields`). */
+  boundsZone: DisplayTimeZone;
 }
 
-export function blankRecurrenceForm(): RecurrenceFormState {
+export function blankRecurrenceForm(boundsZone: DisplayTimeZone): RecurrenceFormState {
   return {
     frequency: 'day',
     interval: '1',
@@ -103,6 +106,7 @@ export function blankRecurrenceForm(): RecurrenceFormState {
     endTime: '',
     startTimeIso: '',
     endTimeIso: '',
+    boundsZone,
   };
 }
 
@@ -239,7 +243,10 @@ export function formToRecurrence(form: RecurrenceFormState): RecurrenceConversio
 
 /** Load a stored recurrence back into the editor. The inverse of
  * `formToRecurrence` for any recurrence that form could have produced. */
-export function recurrenceToForm(recurrence: Recurrence): RecurrenceFormState {
+export function recurrenceToForm(
+  recurrence: Recurrence,
+  boundsZone: DisplayTimeZone,
+): RecurrenceFormState {
   return {
     frequency: recurrence.frequency,
     interval: String(recurrence.interval),
@@ -248,10 +255,15 @@ export function recurrenceToForm(recurrence: Recurrence): RecurrenceFormState {
     weekDays: recurrence.schedule?.weekDays ? [...recurrence.schedule.weekDays] : [],
     monthDays: formatNumberList(recurrence.schedule?.monthDays),
     timeZone: recurrence.timeZone ?? '',
-    startTime: recurrence.startTime === undefined ? '' : utcIsoToLocalInput(recurrence.startTime),
-    endTime: recurrence.endTime === undefined ? '' : utcIsoToLocalInput(recurrence.endTime),
+    startTime:
+      recurrence.startTime === undefined
+        ? ''
+        : utcIsoToLocalInput(recurrence.startTime, boundsZone),
+    endTime:
+      recurrence.endTime === undefined ? '' : utcIsoToLocalInput(recurrence.endTime, boundsZone),
     startTimeIso: recurrence.startTime ?? '',
     endTimeIso: recurrence.endTime ?? '',
+    boundsZone,
   };
 }
 
@@ -306,8 +318,8 @@ export function cronPreview(recurrence: Recurrence): CronPreview {
   if (s?.minutes) parts.push(`minute ${s.minutes.join(', ')}`);
   // Named even when absent. An unzoned recurrence only reaches this summary when
   // it is bounded — `interval > 1` requires a `startTime` anchor — so it always
-  // sits beside bounds "entered in your browser's local time", where a bare
-  // `at 09:00` would read as local rather than as the UTC it means.
+  // sits beside bounds entered in the display zone (#1524), where a bare
+  // `at 09:00` would read as that zone rather than as the UTC it means.
   parts.push(recurrence.timeZone ?? 'UTC');
   if (recurrence.startTime !== undefined) parts.push(`from ${recurrence.startTime}`);
   if (recurrence.endTime !== undefined) parts.push(`until ${recurrence.endTime}`);

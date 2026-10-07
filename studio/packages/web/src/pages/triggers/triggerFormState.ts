@@ -6,6 +6,7 @@ import {
   type PipelineVersion,
   type TriggerPublic,
 } from '@autonomy-studio/shared';
+import type { DisplayTimeZone } from '../../lib/displayTime';
 import { blankEventForm, eventToForm, formToEvent, type EventFormState } from './eventForm';
 import {
   blankWindowForm,
@@ -184,8 +185,12 @@ export function savePayloadSignature(form: FormState): string {
 }
 
 /** A new trigger's form. #1476 — the editor opens it already bound to the
- * pipeline it is editing; the Triggers page opens it unbound. */
-export function blankForm(binding: BindingSelection = { kind: 'unbound' }): FormState {
+ * pipeline it is editing; the Triggers page opens it unbound. #1524 — `zone` is
+ * the viewer's display zone, which the start/end controls are written in. */
+export function blankForm(
+  zone: DisplayTimeZone,
+  binding: BindingSelection = { kind: 'unbound' },
+): FormState {
   return {
     id: null,
     name: '',
@@ -193,9 +198,9 @@ export function blankForm(binding: BindingSelection = { kind: 'unbound' }): Form
     mode: 'manual',
     scheduleKind: 'recurrence',
     schedule: '',
-    recurrence: blankRecurrenceForm(),
+    recurrence: blankRecurrenceForm(zone),
     event: blankEventForm(),
-    window: blankWindowForm(),
+    window: blankWindowForm(zone),
     concurrencyPolicy: 'skip_if_running',
     concurrencyMax: '',
     enabled: false,
@@ -204,7 +209,7 @@ export function blankForm(binding: BindingSelection = { kind: 'unbound' }): Form
   };
 }
 
-export function formForEdit(t: TriggerPublic): FormState {
+export function formForEdit(t: TriggerPublic, zone: DisplayTimeZone): FormState {
   // A recurrence-backed trigger also carries a `schedule` — the cron DERIVED
   // from it. Loading that into the raw-cron field would make every save author
   // both, which the server refuses; so the recurrence, when present, wins and
@@ -237,9 +242,10 @@ export function formForEdit(t: TriggerPublic): FormState {
       mode: t.mode,
       scheduleKind: hasRecurrence ? 'recurrence' : 'cron',
       schedule: hasRecurrence ? '' : (t.schedule ?? ''),
-      recurrence: t.recurrence !== null ? recurrenceToForm(t.recurrence) : blankRecurrenceForm(),
+      recurrence:
+        t.recurrence !== null ? recurrenceToForm(t.recurrence, zone) : blankRecurrenceForm(zone),
       event: t.event !== null ? eventToForm(t.event) : blankEventForm(),
-      window: t.window !== null ? windowToForm(t.window) : blankWindowForm(),
+      window: t.window !== null ? windowToForm(t.window, zone) : blankWindowForm(zone),
       concurrencyPolicy: t.concurrency.policy,
       concurrencyMax: t.concurrency.max !== undefined ? String(t.concurrency.max) : '',
       enabled: t.enabled,

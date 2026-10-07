@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
+import { triggerForm } from './support/panels';
 import { fluentRootReady } from './support/theme';
 
 /**
@@ -75,6 +76,31 @@ test('#1484 — a display time zone chosen in Settings dates the runs grid and t
   await expect(page).toHaveURL(new RegExp(`/monitor/runs/${runId}$`));
   const detailStarted = page.locator('dt', { hasText: /^Started$/ }).locator('+ dd time');
   await expect(detailStarted).toHaveText(`${utc.slice(0, 10)} ${utc.slice(11, 23)} UTC`);
+
+  await expectQuiet(page, problems);
+});
+
+test('#1524 — a trigger window start is typed in the display time zone, and says so', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  await page.goto('/#/settings');
+  await fluentRootReady(page);
+  await page.getByLabel('Display time zone', { exact: true }).selectOption('UTC');
+
+  await page.goto('/#/manage/triggers');
+  await fluentRootReady(page);
+  await page.getByRole('button', { name: /New trigger/i }).click();
+  const form = triggerForm(page);
+  await form.getByLabel(/^Mode/).selectOption('tumbling');
+  const start = form.getByLabel(/^Start time/);
+  await expect(start).toHaveAccessibleName(/\(UTC\)/);
+  await start.fill('2026-08-01T09:00');
+  // The browser is in New York (UTC-4 in August): read in ITS zone, 09:00 is
+  // 13:00Z. Read in the chosen UTC, it is 09:00Z.
+  await expect(form.getByTestId('window-bounds-utc')).toHaveText(
+    /^Windows are keyed from 2026-08-01T09:00:00\.000Z, entered in the UTC time zone/,
+  );
 
   await expectQuiet(page, problems);
 });

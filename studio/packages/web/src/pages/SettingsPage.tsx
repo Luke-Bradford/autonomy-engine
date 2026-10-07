@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { AppSettings, MasterKeySource } from '@autonomy-studio/shared';
 import { useStore } from 'zustand';
 import { getSettings } from '../api/settings';
-import { displayTimeZoneOptions, formatTimestamp, LOCAL_TIME_ZONE } from '../lib/displayTime';
+import { displayTimeZoneName, displayTimeZoneOptions, formatTimestamp } from '../lib/displayTime';
 import { LabelledControl } from '../lib/LabelledControl';
 import { uiStore, type UiStore } from '../stores/uiStore';
 import { ThemeToggle } from '../theme/ThemeToggle';
@@ -53,7 +53,7 @@ function DisplayTimeZonePicker({ store = uiStore }: { store?: UiStore }) {
         >
           {shown.map((option) => (
             <option key={option} value={option}>
-              {option === LOCAL_TIME_ZONE ? 'Local (this browser)' : option}
+              {displayTimeZoneName(option)}
             </option>
           ))}
         </select>

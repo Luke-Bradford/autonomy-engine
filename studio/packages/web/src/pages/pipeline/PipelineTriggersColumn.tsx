@@ -155,7 +155,7 @@ export function PipelineTriggersColumn({
     answeredRequest.current = newRequest;
     if (newBinding === null || newReason !== null) return;
     const opener = returnFocusTo.current;
-    const open = () => openForm(blankForm(newBinding));
+    const open = () => openForm(blankForm(zone, newBinding));
     if (opener === null) guard.request(open);
     else openFrom(opener, open);
     // Only a NEW request opens a form; the binding changing under an open one
@@ -250,7 +250,7 @@ export function PipelineTriggersColumn({
                 <button
                   type="button"
                   aria-label={`Edit: ${t.name}`}
-                  onClick={(e) => openFrom(e.currentTarget, () => openForm(formForEdit(t)))}
+                  onClick={(e) => openFrom(e.currentTarget, () => openForm(formForEdit(t, zone)))}
                 >
                   Edit
                 </button>
@@ -266,7 +266,7 @@ export function PipelineTriggersColumn({
             title={newReason ?? undefined}
             onClick={(e) => {
               if (newBinding !== null) {
-                openFrom(e.currentTarget, () => openForm(blankForm(newBinding)));
+                openFrom(e.currentTarget, () => openForm(blankForm(zone, newBinding)));
               }
             }}
           >

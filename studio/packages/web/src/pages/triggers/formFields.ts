@@ -12,6 +12,13 @@
 import { formatZodIssues } from '@autonomy-studio/shared';
 import type { z } from 'zod';
 import { splitIssues } from '../../lib/form/fieldValidation';
+import {
+  LOCAL_TIME_ZONE,
+  WALL_CLOCK,
+  wallClockInput,
+  zonedWallClockInstant,
+  type DisplayTimeZone,
+} from '../../lib/displayTime';
 
 /**
  * The only accepted shape for a whole number typed into a trigger form.
@@ -47,20 +54,30 @@ export function parseWholeNumber(raw: string): WholeNumberParse {
 /**
  * Read a `datetime-local` value (naive, no zone) as an absolute UTC instant.
  *
- * The anchoring zone is the BROWSER's, because both `RecurrenceSchema` and
- * `WindowConfigSchema` pin their bounds as absolute instants. The editor labels
- * the control and echoes the resolved instant rather than silently
- * reinterpreting it — and where the browser's zone has no such wall clock (a
+ * The anchoring zone is the viewer's DISPLAY zone (#1524), the one every
+ * timestamp around the form is shown in — the browser's own for the default
+ * `local` — because both `RecurrenceSchema` and `WindowConfigSchema` pin their
+ * bounds as absolute instants. `local` keeps reading through `Date`, which
+ * follows the runtime's zone live; a named zone resolves through
+ * `zonedWallClockInstant`, which settles a daylight-saving gap or overlap the
+ * way `Date` does. Two paths rather than one: the cached `local` formatter
+ * keeps the zone it was built in, and `Date` does not. The editor labels the
+ * control with its zone and echoes the resolved instant rather than silently
+ * reinterpreting it — and where that zone has no such wall clock (a
  * daylight-saving gap), `boundShift` names the one it will read back as.
  *
  * Returns `null` for anything that is not a well-formed local date-time, so a
  * caller never propagates an `Invalid Date`.
  */
-export function localInputToUtcIso(local: string): string | null {
+export function localInputToUtcIso(local: string, zone: DisplayTimeZone): string | null {
   const trimmed = local.trim();
   // Pin the accepted shape rather than trusting `Date`'s lenient fallback
   // parsing, which would accept (and mis-anchor) an offset-bearing string.
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(trimmed)) return null;
+  if (!WALL_CLOCK.test(trimmed)) return null;
+  if (zone !== LOCAL_TIME_ZONE) {
+    const ms = zonedWallClockInstant(trimmed, zone);
+    return ms === null ? null : new Date(ms).toISOString();
+  }
   const parsed = new Date(trimmed);
   if (Number.isNaN(parsed.getTime())) return null;
   return parsed.toISOString();
@@ -71,13 +88,14 @@ export const pad = (n: number): string => String(n).padStart(2, '0');
 
 /**
  * Render an absolute UTC instant back into a `datetime-local` value, in the
- * browser's LOCAL wall clock — the inverse of `localInputToUtcIso`. Building
+ * display zone's wall clock — the inverse of `localInputToUtcIso`. For `local`, building
  * the string from the local getters (rather than slicing `toISOString`, which
  * is UTC) is what keeps the round trip stable in a non-UTC browser.
  */
-export function utcIsoToLocalInput(iso: string): string {
+export function utcIsoToLocalInput(iso: string, zone: DisplayTimeZone): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
+  if (zone !== LOCAL_TIME_ZONE) return wallClockInput(d.getTime(), zone);
   const base =
     `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
     `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
@@ -97,9 +115,13 @@ export function utcIsoToLocalInput(iso: string): string {
  * (see `startTimeIso`). Returns `null` when `local` is not a well-formed local
  * date-time — including when it is empty.
  */
-export function resolveBound(local: string, originalIso: string): string | null {
-  if (originalIso !== '' && utcIsoToLocalInput(originalIso) === local) return originalIso;
-  return localInputToUtcIso(local);
+export function resolveBound(
+  local: string,
+  originalIso: string,
+  zone: DisplayTimeZone,
+): string | null {
+  if (originalIso !== '' && utcIsoToLocalInput(originalIso, zone) === local) return originalIso;
+  return localInputToUtcIso(local, zone);
 }
 
 /** The two `datetime-local` bound controls every builder shares. */
@@ -108,16 +130,22 @@ export interface BoundFields {
   endTime: string;
   startTimeIso: string;
   endTimeIso: string;
+  /** #1524 — the zone the two wall clocks are WRITTEN in: the display zone
+   * when the form was opened. Held with them, because a wall clock means
+   * nothing without its zone, and a zone changed mid-edit must not re-read
+   * what was already typed. */
+  boundsZone: DisplayTimeZone;
 }
 
 /**
- * The local wall clock a bound will actually READ BACK as, when that differs
+ * The wall clock (in `zone`) a bound will actually READ BACK as, when that differs
  * from what the operator typed — `null` otherwise, and for a blank or
  * unreadable control (#855).
  *
  * The case it exists for is a daylight-saving GAP: under `Europe/London`,
- * `2026-03-29T01:30` does not exist (01:00 jumps to 02:00), so `Date` resolves
- * it with the pre-transition offset and the stored instant reloads as `02:30`.
+ * `2026-03-29T01:30` does not exist (01:00 jumps to 02:00), so `Date` (or
+ * `zonedWallClockInstant`, for a named zone) resolves it with the
+ * pre-transition offset and the stored instant reloads as `02:30`.
  * That instant is well-defined and stable, so the editors WARN rather than
  * refuse — what they must not do is let the typed value change with nothing
  * said. It reports ANY read-back mismatch, not only a gap — `Date` also rolls a
@@ -127,10 +155,14 @@ export interface BoundFields {
  * reported. An untouched bound cannot shift: `resolveBound` hands back the
  * loaded instant, whose read-back is by definition the control's value.
  */
-export function boundShift(local: string, originalIso: string): string | null {
-  const iso = resolveBound(local, originalIso);
+export function boundShift(
+  local: string,
+  originalIso: string,
+  zone: DisplayTimeZone,
+): string | null {
+  const iso = resolveBound(local, originalIso, zone);
   if (iso === null) return null;
-  const readBack = utcIsoToLocalInput(iso);
+  const readBack = utcIsoToLocalInput(iso, zone);
   // `utcIsoToLocalInput` omits zero seconds, so compare against the typed value
   // in that same shape rather than report `09:00:00` as having moved to `09:00`.
   const typed = local.trim().replace(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}):00$/, '$1');
@@ -148,10 +180,10 @@ export function boundShiftWarnings(form: BoundFields): string[] {
     ['startTime', 'Start time'],
     ['endTime', 'End time'],
   ] as const) {
-    const shifted = boundShift(form[bound], form[`${bound}Iso`]);
+    const shifted = boundShift(form[bound], form[`${bound}Iso`], form.boundsZone);
     if (shifted === null) continue;
     warnings.push(
-      `${label} ${form[bound].trim()} does not exist in your browser's time zone ` +
+      `${label} ${form[bound].trim()} does not exist in ${boundZoneName(form.boundsZone)} ` +
         `(a daylight-saving jump, or a day past the end of its month) — it will be saved as ${shifted}.`,
     );
   }
@@ -171,7 +203,7 @@ export function resolveBoundsInto(
 ): Refusal<'startTime' | 'endTime'> | null {
   for (const bound of ['startTime', 'endTime'] as const) {
     if (form[bound].trim() === '') continue;
-    const iso = resolveBound(form[bound], form[`${bound}Iso`]);
+    const iso = resolveBound(form[bound], form[`${bound}Iso`], form.boundsZone);
     if (iso === null) return refuseAt(bound, `'${form[bound]}' is not a valid date and time`);
     candidate[bound] = iso;
   }
@@ -183,8 +215,23 @@ export function resolveBoundsInto(
  * `null` when the control is blank. Thin, but shared so what the two editors
  * display is resolved the same way the write path resolves it.
  */
-export function boundEcho(local: string, originalIso: string): string | null {
-  return local.trim() === '' ? null : resolveBound(local, originalIso);
+export function boundEcho(
+  local: string,
+  originalIso: string,
+  zone: DisplayTimeZone,
+): string | null {
+  return local.trim() === '' ? null : resolveBound(local, originalIso, zone);
+}
+
+/** #1524 — the zone a bound control is written in, as both editors say it in
+ * a sentence: "does not exist in …", "entered in …". */
+export function boundZoneName(zone: DisplayTimeZone): string {
+  return zone === LOCAL_TIME_ZONE ? "your browser's time zone" : `the ${zone} time zone`;
+}
+
+/** #1524 — the same zone, short enough to sit in a control's label. */
+export function boundZoneLabel(zone: DisplayTimeZone): string {
+  return zone === LOCAL_TIME_ZONE ? 'local time' : zone;
 }
 
 /**

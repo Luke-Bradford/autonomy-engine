@@ -15,8 +15,8 @@ import {
   WEEK_DAY_NAMES,
   type RecurrenceFormState,
 } from './recurrenceForm';
-import { boundEcho } from './formFields';
-import { BoundShiftNotices } from './BoundShiftNotices';
+import { boundEcho, boundZoneName } from './formFields';
+import { BoundShiftNotices, BoundZoneNote } from './BoundShiftNotices';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { RequiredMark } from '../../lib/form/RequiredMark';
 
@@ -72,13 +72,13 @@ export function RecurrenceEditor({
     set({ weekDays: next });
   };
 
-  /** The absolute instants the bounds resolve to, echoed so the browser-local
+  /** The absolute instants the bounds resolve to, echoed so the display-zone
    * anchoring of the controls is visible rather than implied. Resolved through
    * the same path the write uses, so an untouched sub-second bound is echoed as
    * the instant that will actually be submitted rather than as the truncated
    * re-derivation. */
-  const startUtc = boundEcho(value.startTime, value.startTimeIso);
-  const endUtc = boundEcho(value.endTime, value.endTimeIso);
+  const startUtc = boundEcho(value.startTime, value.startTimeIso, value.boundsZone);
+  const endUtc = boundEcho(value.endTime, value.endTimeIso, value.boundsZone);
 
   return (
     <fieldset className="recurrence-editor">
@@ -209,6 +209,7 @@ export function RecurrenceEditor({
           shown and re-entered rather than silently rounded to the minute. */}
       <label>
         Start time
+        <BoundZoneNote zone={value.boundsZone} />
         <input
           type="datetime-local"
           step={1}
@@ -221,6 +222,7 @@ export function RecurrenceEditor({
 
       <label>
         End time
+        <BoundZoneNote zone={value.boundsZone} />
         <input
           type="datetime-local"
           step={1}
@@ -232,11 +234,11 @@ export function RecurrenceEditor({
       <FieldError {...f.errorProps('endTime')} />
 
       {/* The bounds are absolute instants that the time zone above does NOT
-          shift, so the control is anchored in the browser's zone. Echo the
+          shift, so the control is anchored in the display zone (#1524). Echo the
           resolved instant rather than leaving that anchoring to be guessed. */}
       {(startUtc || endUtc) && (
         <p className="page-hint" data-testid="recurrence-bounds-utc">
-          {`Bounds are absolute instants, entered in your browser's local time — `}
+          {`Bounds are absolute instants, entered in ${boundZoneName(value.boundsZone)} — `}
           {startUtc ? `from ${startUtc}` : 'open start'}
           {endUtc ? ` until ${endUtc}` : ', open end'}
         </p>

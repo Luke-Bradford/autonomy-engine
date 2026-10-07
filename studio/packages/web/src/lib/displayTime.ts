@@ -275,3 +275,92 @@ export function shiftDay(day: string, days: number): string {
   moved.setUTCFullYear(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + days);
   return moved.toISOString().slice(0, 10);
 }
+
+/** How a display zone is named to a person — the Settings picker's wording. */
+export function displayTimeZoneName(zone: DisplayTimeZone): string {
+  return zone === LOCAL_TIME_ZONE ? 'Local (this browser)' : zone;
+}
+
+const WALL_DAY_MS = 86_400_000;
+
+/** A civil date and time read as if it were UTC, as epoch ms — the wall clock
+ * as a number, so two wall clocks compare and subtract. A day past the end of
+ * its month rolls over, as `Date` (and `civilDayNumber`) does. */
+function civilMs(y: number, mo: number, d: number, h: number, mi: number, s: number): number {
+  return civilDayNumber(y, mo, d) * WALL_DAY_MS + ((h * 60 + mi) * 60 + s) * 1000;
+}
+
+/** The zone's offset at `ms`: how far its wall clock is ahead of UTC there. */
+function offsetAt(ms: number, zone: DisplayTimeZone): number {
+  const p = zonedParts(ms, zone);
+  const wall = civilMs(+p.year, +p.month, +p.day, +p.hour, +p.minute, +p.second);
+  return wall - (ms - (((ms % 1000) + 1000) % 1000));
+}
+
+/**
+ * #1524 — an instant's wall clock in `zone` as a `datetime-local` value:
+ * `YYYY-MM-DDTHH:MM`, with `:SS` only when the instant has seconds, so a
+ * minute-aligned bound stays a clean `HH:MM`. `''` for a non-instant.
+ */
+export function wallClockInput(ms: number, zone: DisplayTimeZone): string {
+  if (!isInstant(ms)) return '';
+  const p = zonedParts(ms, zone);
+  const base = `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;
+  return p.second === '00' ? base : `${base}:${p.second}`;
+}
+
+/** The `datetime-local` value shape: `YYYY-MM-DDTHH:MM`, optionally `:SS`. */
+export const WALL_CLOCK = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/;
+
+/**
+ * #1524 — the instant a `datetime-local` wall clock names in `zone`, the
+ * inverse of `wallClockInput`; `null` for anything that is not one.
+ *
+ * It resolves the two daylight-saving cases exactly as the browser's `Date`
+ * does for its own zone, so a bound means the same thing whichever zone the
+ * form is in:
+ * - an AMBIGUOUS wall clock (a fall-back hour happens twice) is the EARLIER
+ *   instant;
+ * - a wall clock in a GAP (a spring-forward hour that never happens) is read
+ *   with the offset from before the jump, so it lands that far past it —
+ *   London's `01:30` on a spring-forward day is `02:30` BST. `boundShift` is
+ *   what tells the operator.
+ *
+ * The offset either side of the wall clock (a day away, past any transition
+ * that could be in play), and the one at the wall clock itself (for a zone that
+ * changes offset twice inside those two days), give at most three candidates;
+ * a candidate is the answer when the zone's offset AT it is the one it was
+ * built from. None confirming is a gap, which has no instant of its own.
+ *
+ * Not `zonedCalendar`'s bisection, whose header warns off an offset inverse:
+ * that warning is about where a DAY begins, where the inverse lands on the
+ * wrong side of a midnight gap. Here a wall clock in a gap is SUPPOSED to land
+ * past it, by the pre-jump offset, because that is what `Date` does and so what
+ * the `local` path and `boundShift`'s warning already mean. `24:00` is refused,
+ * which `Date` would read as the next midnight; a `datetime-local` never
+ * produces it.
+ */
+export function zonedWallClockInstant(local: string, zone: DisplayTimeZone): number | null {
+  const match = WALL_CLOCK.exec(local.trim());
+  if (match === null) return null;
+  const [y, mo, d, h, mi] = [1, 2, 3, 4, 5].map((i) => Number(match[i])) as [
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  const s = match[6] === undefined ? 0 : Number(match[6]);
+  // The ranges `Date` refuses outright; a day past its month's end it rolls.
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || s > 59) return null;
+  const wall = civilMs(y, mo, d, h, mi, s);
+  const before = offsetAt(wall - WALL_DAY_MS, zone);
+  const after = offsetAt(wall + WALL_DAY_MS, zone);
+  // The larger offset reaches the wall clock SOONER, so it is tried first.
+  const offsets = [...new Set([before, offsetAt(wall, zone), after])].sort((a, b) => b - a);
+  for (const offset of offsets) {
+    if (offsetAt(wall - offset, zone) === offset) return wall - offset;
+  }
+  const shifted = wall - before;
+  return isInstant(shifted) ? shifted : null;
+}
