@@ -2,16 +2,7 @@
   "mcpServers": {
     "playwright": {
       "command": "npx",
-      "args": [
-        "-y",
-        "@playwright/mcp@0.0.78",
-        "--headless",
-        "--isolated"
-      ]
-    },
-    "microsoft-learn": {
-      "type": "http",
-      "url": "https://learn.microsoft.com/api/mcp"
+      "args": ["-y", "@playwright/mcp@0.0.78", "--headless", "--isolated"]
     }
   }
 }

@@ -1,5 +1,5 @@
 {
-  "enabledMcpjsonServers": ["playwright", "microsoft-learn"],
+  "enabledMcpjsonServers": ["playwright"],
   "hooks": {
     "PreToolUse": [
       {
