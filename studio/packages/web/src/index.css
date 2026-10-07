@@ -5889,3 +5889,22 @@ button.danger {
   display: inline-block;
   width: 0.8rem;
 }
+
+/* #1569 OR37 — the pipelines list is the runs grid's dense table (the
+   `.runs-grid` density classes), full width like the Monitor. The folder is a
+   muted prefix to the name, and the ⋯ column takes what the others leave. */
+.content:has(.pipelines-page) {
+  max-width: none;
+}
+
+.pipelines-grid__folder {
+  color: var(--muted);
+}
+
+.pipelines-grid__actions {
+  text-align: right;
+}
+
+.pipelines-grid__run {
+  color: inherit;
+}

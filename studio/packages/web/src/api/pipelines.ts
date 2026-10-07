@@ -6,6 +6,7 @@ import {
   PipelineCostRollupSchema,
   PipelineSchema,
   PipelineVersionSchema,
+  PipelineSummariesResponseSchema,
   PipelineVersionStatesResponseSchema,
   PublishPipelineBodySchema,
   PublishPipelineResultSchema,
@@ -29,6 +30,7 @@ import {
   type FireResult,
   type ManualRunRequest,
   PipelineDependentsResponseSchema,
+  type PipelineSummary,
   type PipelineVersionState,
   type PipelineDependentsResponse,
 } from '@autonomy-studio/shared';
@@ -490,6 +492,17 @@ export function getActivePipelineVersion(
 export function listPipelineVersionStates(signal?: AbortSignal): Promise<PipelineVersionState[]> {
   return apiFetch('/api/pipelines/version-states', {
     schema: PipelineVersionStatesResponseSchema,
+    signal,
+  }).then((res) => res.items);
+}
+
+/**
+ * #1569 OR37 — every live pipeline's row facts for the pipelines grid (last
+ * run, the run window, triggers, next fire), one batched read.
+ */
+export function listPipelineSummaries(signal?: AbortSignal): Promise<PipelineSummary[]> {
+  return apiFetch('/api/pipelines/summaries', {
+    schema: PipelineSummariesResponseSchema,
     signal,
   }).then((res) => res.items);
 }

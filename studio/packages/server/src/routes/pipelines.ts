@@ -10,6 +10,7 @@ import {
   ManualRunRequestSchema,
   NewPipelineSchema,
   PipelineFolderSchema,
+  PipelineSummariesResponseSchema,
   PipelineVersionStatesResponseSchema,
   PublishPipelineBodySchema,
   PublishPipelineResultSchema,
@@ -44,7 +45,9 @@ import {
   listPipelinesPage,
   restorePipeline,
   updatePipeline,
+  listPipelineSummaries,
 } from '../repo/index.js';
+import { listTriggerNextFires } from '../scheduler/next-fire.js';
 import { BadRequestError, NotFoundError, PublishRefusedError, StaleWriteError } from '../errors.js';
 import { GlobalStartError, resolveRunGlobals } from '../run/globals.js';
 import { ArchivedPipelineError } from '../run/launcher.js';
@@ -145,6 +148,20 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get('/api/pipelines/version-states', async (request) =>
     PipelineVersionStatesResponseSchema.parse({
       items: listPipelineVersionStates(db, request.principal.ownerId),
+    }),
+  );
+
+  /**
+   * #1569 OR37 — the pipelines grid's row facts (last run, the run window's
+   * rate and durations, triggers, next fire, node count, modified) for every
+   * live pipeline, in one owner-scoped batched read (`listPipelineSummaries`).
+   */
+  fastify.get('/api/pipelines/summaries', async (request) =>
+    PipelineSummariesResponseSchema.parse({
+      items: listPipelineSummaries(db, request.principal.ownerId, {
+        now: Date.now(),
+        nextFires: (triggers) => listTriggerNextFires(db, triggers),
+      }),
     }),
   );
 

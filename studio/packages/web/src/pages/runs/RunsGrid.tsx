@@ -20,6 +20,7 @@ import {
   type RunGridColumnId,
   type UiStore,
 } from '../../stores/uiStore';
+import { ariaSortOf } from '../../lib/urlSort';
 import { PaneSplitter } from '../../shell/PaneSplitter';
 import { runDetailPath } from './runPath';
 import { SortButton } from './SortButton';
@@ -81,7 +82,7 @@ function ColumnHeader({
       scope="col"
       aria-label={label}
       {...(numeric ? { className: 'num' } : {})}
-      {...(active ? { 'aria-sort': sort.dir === 'asc' ? 'ascending' : 'descending' } : {})}
+      aria-sort={ariaSortOf(active ? sort.dir : null)}
     >
       {sortKey === undefined ? (
         <>

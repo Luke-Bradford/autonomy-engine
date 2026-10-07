@@ -393,22 +393,35 @@ export interface ListRowInput {
  * for a pipeline the sync reading lists; a clean row says nothing, so the rows
  * that differ are the ones that stand out. Without a reading — unread, or the
  * server's fetch failed — nothing is claimed either way.
+ *
+ * #1569 OR37 — and WITHOUT version numbers in any label: versions live in the
+ * editor's badge and its history, not on the list. The numbers stay in each
+ * part's hover detail. The editing part says only what the live part cannot:
+ * `Not saved`, or `Saved` where there is no live part (a DB-only workspace,
+ * whose triggers bind the latest saved version, or an unread publish state).
  */
 export function listRowBadge({ state, gitConnected, sync }: ListRowInput): {
-  editing: BadgePart;
+  editing: BadgePart | null;
   live: BadgePart | null;
   git: BadgePart | null;
 } {
   const head = state.latestVersion;
-  const editing = editingState({
+  const active = state.active === null ? null : (state.active.version ?? 'unnamed');
+  const lived = liveState({ gitConnected, active, canvas: head, subject: 'latest' });
+  // A numbered live version is either the latest saved one (✓) or behind it.
+  // (With no saved head there is nothing to be behind; the part keeps its words.)
+  const live =
+    lived === null || typeof active !== 'number' || head === null
+      ? lived
+      : { ...lived, label: lived.current === true ? 'Live' : 'Live (behind)' };
+  const opened = editingState({
     dirty: false,
     loadedVersion: head,
     headVersion: head,
     previewedVersion: null,
     archived: false,
   });
-  const active = state.active === null ? null : (state.active.version ?? 'unnamed');
-  const live = liveState({ gitConnected, active, canvas: head, subject: 'latest' });
+  const editing = head === null ? opened : live === null ? { ...opened, label: 'Saved' } : null;
   let git: BadgePart | null = null;
   if (gitConnected === true && sync != null) {
     const { change, against } = pipelineDrift(sync, state.pipelineId);

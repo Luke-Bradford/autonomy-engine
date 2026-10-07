@@ -1,7 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router';
 import { useStore } from 'zustand';
-import type { Pipeline, PipelineVersionState, WorkspaceGitSync } from '@autonomy-studio/shared';
+import type {
+  Pipeline,
+  PipelineSummary,
+  PipelineVersionState,
+  WorkspaceGitSync,
+} from '@autonomy-studio/shared';
 import { useBusyAction } from '../hooks/useBusyAction';
 import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus';
@@ -14,6 +19,7 @@ import {
   deletePipeline,
   describeDeleteFailure,
   listArchivedPipelines,
+  listPipelineSummaries,
   listPipelineVersionStates,
   restorePipeline,
 } from '../api/pipelines';
@@ -23,7 +29,15 @@ import { listRowBadge } from './pipeline/editorState';
 import { pipelinesStore, type PipelinesStore } from '../stores/pipelinesStore';
 import { ImportPanel } from './ImportPanel';
 import { DemoPanel } from './DemoPanel';
-import { pipelinePath } from './author/pipelinePath';
+import { PipelinesGrid } from './author/PipelinesGrid';
+import {
+  nextPipelineSort,
+  pipelineSortParams,
+  readPipelineSort,
+  sortPipelines,
+  type PipelineSortKey,
+} from './author/pipelinesGridSort';
+import { withParams } from '../lib/withParams';
 import { useConfirm } from '../lib/confirm/useConfirm';
 import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
@@ -81,7 +95,13 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
   >(undefined);
   const [gitConnected, setGitConnected] = useState<boolean | undefined>(undefined);
   const [gitSync, setGitSync] = useState<WorkspaceGitSync | null | undefined>(undefined);
+  // #1569 OR37 — the grid's row facts, read with the row states and refreshed
+  // with them. A failed read shows em-dashes (absent), never zeros.
+  const [summaries, setSummaries] = useState<
+    { byId: ReadonlyMap<string, PipelineSummary>; loadedAt: number } | undefined
+  >(undefined);
   const guardedStatesLoad = useGuardedLoad();
+  const guardedSummariesLoad = useGuardedLoad();
   const guardedGitLoad = useGuardedLoad();
   const guardedSyncLoad = useGuardedLoad();
   // Through the sync guard, so a sync still in flight from before the repo
@@ -96,6 +116,14 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
     void guardedStatesLoad((signal) => listPipelineVersionStates(signal), {
       onData: (items) => setVersionStates(new Map(items.map((st) => [st.pipelineId, st]))),
       onError: () => setVersionStates(undefined),
+    });
+    void guardedSummariesLoad((signal) => listPipelineSummaries(signal), {
+      onData: (items) =>
+        setSummaries({
+          byId: new Map(items.map((it) => [it.pipelineId, it])),
+          loadedAt: Date.now(),
+        }),
+      onError: () => setSummaries(undefined),
     });
     void guardedGitLoad((signal) => getWorkspaceGit(signal), {
       onData: (git) => {
@@ -114,7 +142,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
         clearGitSync();
       },
     });
-  }, [guardedStatesLoad, guardedGitLoad, guardedSyncLoad, clearGitSync]);
+  }, [guardedStatesLoad, guardedSummariesLoad, guardedGitLoad, guardedSyncLoad, clearGitSync]);
   // On the ids, not the array: a refresh hands back a new array whose rows may
   // be the same, and an empty list has no row to badge.
   const pipelineIds = pipelines.map((p) => p.id).join('\n');
@@ -122,6 +150,25 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
     if (pipelineIds !== '') refreshRowStates();
   }, [pipelineIds, refreshRowStates]);
   useRefreshOnFocus(refreshRowStates);
+
+  // #1569 — the sort lives in the URL, so a sorted list survives a reload.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const sort = readPipelineSort(searchParams);
+  // From `prev`, not the render's `sort`, so two quick clicks both count.
+  const onSort = useCallback(
+    (key: PipelineSortKey) =>
+      setSearchParams(
+        (prev) =>
+          withParams(prev, pipelineSortParams(nextPipelineSort(readPipelineSort(prev), key))),
+        { replace: true },
+      ),
+    [setSearchParams],
+  );
+  const { key: sortKey, dir: sortDir } = sort;
+  const sorted = useMemo(
+    () => sortPipelines(pipelines, summaries?.byId, { key: sortKey, dir: sortDir }),
+    [pipelines, summaries, sortKey, sortDir],
+  );
 
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [name, setName] = useState('');
@@ -378,14 +425,10 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
   );
 
   return (
-    <section aria-labelledby="pipelines-heading">
+    <section aria-labelledby="pipelines-heading" className="pipelines-page">
       <div className="page-header">
         <h2 id="pipelines-heading">Pipelines</h2>
       </div>
-      <p className="page-hint">
-        A pipeline is a graph of activities. Open one to build it on the canvas; saving creates a
-        new immutable version that a trigger can bind to.
-      </p>
 
       {loadError && (
         <p className="error" role="alert">
@@ -419,65 +462,48 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
       {status === 'ready' && pipelines.length === 0 && <p>No pipelines yet — create one below.</p>}
 
       {pipelines.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>State</th>
-              <th aria-label="actions" />
-            </tr>
-          </thead>
-          <tbody>
-            {pipelines.map((p) => {
-              const state = versionStates?.get(p.id);
-              return (
-                <tr key={p.id}>
-                  <td>{p.name}</td>
-                  <td>
-                    {state !== undefined && (
-                      <RowStateBadge
-                        pipelineName={p.name}
-                        {...listRowBadge({ state, gitConnected, sync: gitSync })}
-                      />
-                    )}
-                  </td>
-                  <td>
-                    <div className="row-actions">
-                      {/* A link, so it can be middle-clicked, copied and bookmarked
-                        — the navigation idiom U2 settled: `useNavigate` on a
-                        button is only for navigating as the RESULT of an action. */}
-                      <Link to={pipelinePath(p.id)} aria-label={`Open ${p.name}`}>
-                        Open
-                      </Link>
-                      {/* #1397 — Open is the row's one inline action; the rest are
-                        in its menu. #1058: Archive stays in the same menu as
-                        Delete on purpose. Delete is refused with a 409 the
-                        moment the pipeline has run history, and
-                        `pipelineHasRunsMessage` (shared with the Factory
-                        Resources pane, which has no Archive) names where
-                        Archive is. Here it is the item above Delete. */}
-                      <RowMoreMenu
-                        name={p.name}
-                        actions={[
-                          {
-                            label: 'Export',
-                            onSelect: () => void onExport(p),
-                            disabled: exporting.has(p.id),
-                          },
-                          { label: 'Archive', onSelect: (origin) => void onArchive(p, origin) },
-                        ]}
-                        destructive={{
-                          label: 'Delete',
-                          onSelect: (origin) => void onDelete(p, origin),
-                        }}
-                      />
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <PipelinesGrid
+          pipelines={sorted}
+          summaries={summaries?.byId}
+          loadedAt={summaries?.loadedAt}
+          sort={sort}
+          onSort={onSort}
+          liveState={(p) => {
+            const state = versionStates?.get(p.id);
+            return state === undefined ? null : (
+              <RowStateBadge
+                pipelineName={p.name}
+                {...listRowBadge({ state, gitConnected, sync: gitSync })}
+              />
+            );
+          }}
+          actions={(p) => (
+            <>
+              {/* #1397 — the name is the row's one inline action; the rest are
+                  in its menu. #1058: Archive stays in the same menu as
+                  Delete on purpose. Delete is refused with a 409 the
+                  moment the pipeline has run history, and
+                  `pipelineHasRunsMessage` (shared with the Factory
+                  Resources pane, which has no Archive) names where
+                  Archive is. Here it is the item above Delete. */}
+              <RowMoreMenu
+                name={p.name}
+                actions={[
+                  {
+                    label: 'Export',
+                    onSelect: () => void onExport(p),
+                    disabled: exporting.has(p.id),
+                  },
+                  { label: 'Archive', onSelect: (origin) => void onArchive(p, origin) },
+                ]}
+                destructive={{
+                  label: 'Delete',
+                  onSelect: (origin) => void onDelete(p, origin),
+                }}
+              />
+            </>
+          )}
+        />
       )}
 
       {/* #1058 — the ARCHIVED set. Behind a toggle rather than always on

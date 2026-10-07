@@ -11,6 +11,7 @@ import {
   type RunStatus,
   type SkipReason,
 } from '@autonomy-studio/shared';
+import { ariaSortOf } from '../../lib/urlSort';
 import { When } from '../../lib/When';
 import { countOf } from '../../lib/countOf';
 import { LabelledControl } from '../../lib/LabelledControl';
@@ -429,9 +430,7 @@ export function ActivityRunsTable({
                     <th
                       key={c}
                       scope="col"
-                      {...(active
-                        ? { 'aria-sort': view.sort?.dir === 'asc' ? 'ascending' : 'descending' }
-                        : {})}
+                      aria-sort={ariaSortOf(active ? (view.sort?.dir ?? null) : null)}
                     >
                       {key === undefined ? (
                         c

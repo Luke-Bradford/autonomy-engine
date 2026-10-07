@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { Pipeline } from '@autonomy-studio/shared';
+import type { Pipeline, PipelineSummary } from '@autonomy-studio/shared';
 import { PipelinesPage } from './PipelinesPage';
 import { ApiError } from '../api/client';
 import { createPipelinesStore } from '../stores/pipelinesStore';
@@ -33,6 +33,7 @@ vi.mock('../api/pipelines', async (importActual) => {
     restorePipeline: vi.fn(),
     listArchivedPipelines: vi.fn(),
     listPipelineVersionStates: vi.fn(),
+    listPipelineSummaries: vi.fn(),
   };
 });
 vi.mock('../api/workspaceGit', async (importActual) => ({
@@ -74,6 +75,7 @@ const listArchivedMock = vi.mocked(pipelinesApi.listArchivedPipelines);
 const downloadMock = vi.mocked(downloadApi.downloadTextFile);
 const exportMock = vi.mocked(portabilityApi.exportPipeline);
 const statesMock = vi.mocked(pipelinesApi.listPipelineVersionStates);
+const summariesMock = vi.mocked(pipelinesApi.listPipelineSummaries);
 const gitMock = vi.mocked(workspaceGitApi.getWorkspaceGit);
 const syncMock = vi.mocked(workspaceGitApi.readWorkspaceGitSync);
 
@@ -109,6 +111,7 @@ beforeEach(() => {
   exportMock.mockReset();
   exportMock.mockResolvedValue('{"kind":"pipeline"}');
   statesMock.mockResolvedValue([]);
+  summariesMock.mockResolvedValue([]);
   gitMock.mockResolvedValue(null);
   syncMock.mockResolvedValue(null);
 });
@@ -142,6 +145,101 @@ describe('PipelinesPage', () => {
     expect(await screen.findByText('Nightly digest')).toBeInTheDocument();
   });
 
+  /** #1569 OR37 — the grid's row facts and its URL sort. */
+  describe('grid', () => {
+    const summary = (pipelineId: string, over: Partial<PipelineSummary> = {}): PipelineSummary => ({
+      pipelineId,
+      lastRun: null,
+      window: {
+        days: 7,
+        runs: 0,
+        succeeded: 0,
+        failed: 0,
+        successRate: null,
+        p50Ms: null,
+        p95Ms: null,
+      },
+      triggers: { total: 0, enabled: 0, items: [] },
+      nextFireAt: null,
+      activities: null,
+      modifiedAt: 1,
+      ...over,
+    });
+    const rowNames = () =>
+      screen
+        .getAllByRole('row')
+        .slice(1)
+        .map((r) => within(r).getAllByRole('link')[0]!.textContent);
+
+    it('shows last run, success %, triggers and the folder — and no Version column', async () => {
+      listMock.mockResolvedValue([pipeline({ name: 'Nightly', folder: 'ETL' })]);
+      summariesMock.mockResolvedValue([
+        summary('pl_1', {
+          lastRun: { runId: 'run_9', status: 'failure', startedAt: 5, finishedAt: 9 },
+          window: {
+            days: 7,
+            runs: 5,
+            succeeded: 3,
+            failed: 1,
+            successRate: 0.75,
+            p50Ms: 1,
+            p95Ms: 2,
+          },
+          triggers: {
+            total: 2,
+            enabled: 1,
+            items: [
+              { id: 't1', name: 'Hourly', mode: 'schedule', enabled: true },
+              { id: 't2', name: 'Spare', mode: 'manual', enabled: false },
+            ],
+          },
+        }),
+      ]);
+      renderPage();
+      const row = await screen.findByRole('row', { name: /Nightly/ });
+      await within(row).findByText('75%');
+      expect(within(row).getByText('ETL /')).toBeInTheDocument();
+      expect(within(row).getByRole('link', { name: /failure/ })).toHaveAttribute(
+        'href',
+        expect.stringContaining('run_9'),
+      );
+      expect(within(row).getByText('1 active / 2')).toHaveAttribute(
+        'title',
+        'Hourly · Schedule\nSpare · Manual (off)',
+      );
+      const headers = screen.getAllByRole('columnheader').map((h) => h.textContent);
+      expect(headers.some((h) => /version/i.test(h ?? ''))).toBe(false);
+    });
+
+    it('sorts by a header, newest last run first, never-run rows last', async () => {
+      listMock.mockResolvedValue([
+        pipeline({ id: 'pl_1', name: 'Alpha' }),
+        pipeline({ id: 'pl_2', resourceId: 'res_2', name: 'Beta' }),
+        pipeline({ id: 'pl_3', resourceId: 'res_3', name: 'Gamma' }),
+      ]);
+      const run = (startedAt: number) => ({
+        runId: `r${String(startedAt)}`,
+        status: 'success' as const,
+        startedAt,
+        finishedAt: startedAt,
+      });
+      summariesMock.mockResolvedValue([
+        summary('pl_1', { lastRun: run(10) }),
+        summary('pl_2'),
+        summary('pl_3', { lastRun: run(20) }),
+      ]);
+      renderPage();
+      await screen.findAllByText('success');
+      expect(rowNames()).toEqual(['Alpha', 'Beta', 'Gamma']);
+      fireEvent.click(screen.getByRole('button', { name: /Last run/ }));
+      expect(rowNames()).toEqual(['Gamma', 'Alpha', 'Beta']);
+      expect(screen.getByRole('columnheader', { name: /Last run/ })).toHaveAttribute(
+        'aria-sort',
+        'descending',
+      );
+    });
+  });
+
   /** #1476 OR28 slice 8 — each row's state badge. */
   describe('state column', () => {
     const repo = {
@@ -161,12 +259,14 @@ describe('PipelinesPage', () => {
     };
     const badge = (name: string) => screen.findByRole('group', { name: `${name} state` });
 
-    it('names the saved head, and no live part in a DB-only workspace', async () => {
+    it('says Saved, with no version number and no live part, in a DB-only workspace', async () => {
       listMock.mockResolvedValue([pipeline({ name: 'Nightly' })]);
       statesMock.mockResolvedValue([{ pipelineId: 'pl_1', latestVersion: 2, active: null }]);
       renderPage();
       const group = await badge('Nightly');
-      expect(group).toHaveTextContent(/^v2 \(latest\)\./);
+      // #1569 — no version number on the list; it is the hover detail's.
+      expect(group).toHaveTextContent(/^Saved\./);
+      expect(group).not.toHaveTextContent(/v2 \(latest\)/);
       expect(group.querySelector('[data-part="live"]')).toBeNull();
       expect(syncMock).not.toHaveBeenCalled();
     });
@@ -197,10 +297,10 @@ describe('PipelinesPage', () => {
         expect(behind.querySelector('[data-part="git"]')).toHaveTextContent(/^uncommitted\./),
       );
       expect(behind.querySelector('[data-part="live"]')).toHaveAttribute('data-tone', 'warning');
-      expect(behind.querySelector('[data-part="live"]')).toHaveTextContent(/^Live: v1\./);
+      expect(behind.querySelector('[data-part="live"]')).toHaveTextContent(/^Live \(behind\)\./);
       const current = await badge('Current');
       expect(current.querySelector('[data-part="live"]')).toHaveTextContent(
-        /^Live: v1 ✓ \(the latest version\)/,
+        /^Live ✓ \(the latest version\)/,
       );
       expect(current.querySelector('[data-part="git"]')).toBeNull();
     });
@@ -247,12 +347,15 @@ describe('PipelinesPage', () => {
 
     it('re-reads on focus, where a save in another tab shows up', async () => {
       listMock.mockResolvedValue([pipeline({ name: 'Nightly' })]);
-      statesMock.mockResolvedValue([{ pipelineId: 'pl_1', latestVersion: 1, active: null }]);
+      statesMock.mockResolvedValue([{ pipelineId: 'pl_1', latestVersion: null, active: null }]);
       renderPage();
-      expect(await badge('Nightly')).toHaveTextContent(/^v1 /);
-      statesMock.mockResolvedValue([{ pipelineId: 'pl_1', latestVersion: 2, active: null }]);
+      expect(await badge('Nightly')).toHaveTextContent(/^Not saved/);
+      statesMock.mockResolvedValue([{ pipelineId: 'pl_1', latestVersion: 1, active: null }]);
+      const summaryReads = summariesMock.mock.calls.length;
       window.dispatchEvent(new Event('focus'));
-      await waitFor(async () => expect(await badge('Nightly')).toHaveTextContent(/^v2 /));
+      await waitFor(async () => expect(await badge('Nightly')).toHaveTextContent(/^Saved/));
+      // The grid's row facts are re-read with the row states (#1569).
+      expect(summariesMock.mock.calls.length).toBeGreaterThan(summaryReads);
     });
   });
 

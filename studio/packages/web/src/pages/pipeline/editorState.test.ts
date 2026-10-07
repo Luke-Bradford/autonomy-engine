@@ -426,14 +426,22 @@ describe('listRowBadge (#1476 slice 8)', () => {
       sync: over.sync,
     });
 
-  it('names the saved head as the editor does on a clean open', () => {
-    expect(row(3, null).editing).toEqual(editingState(base));
+  it('says Not saved, or Saved where no live part says more — never a version number', () => {
     expect(row(null, null).editing).toMatchObject({ label: 'Not saved', tone: 'neutral' });
+    // DB-only: no live part, so the row says the head is saved; the number is
+    // the hover detail's (#1569).
+    expect(row(3, null, { gitConnected: false }).editing).toEqual({
+      ...editingState(base),
+      label: 'Saved',
+    });
+    // Git mode: the live part carries the state, so the editing part is gone.
+    expect(row(3, null).editing).toBeNull();
+    expect(row(3, { versionId: 'v3', version: 3 }).editing).toBeNull();
   });
 
   it('is green with ✓ when live IS the latest saved version, in list words', () => {
     expect(row(2, { versionId: 'v2', version: 2 }).live).toEqual({
-      label: 'Live: v2',
+      label: 'Live',
       detail: 'v2 is the active (published) version, and is the latest saved version.',
       tone: 'success',
       current: true,
@@ -442,7 +450,7 @@ describe('listRowBadge (#1476 slice 8)', () => {
 
   it('is amber when live is behind the latest saved version, and says which', () => {
     const live = row(3, { versionId: 'v1', version: 1 }).live;
-    expect(live).toMatchObject({ label: 'Live: v1', tone: 'warning' });
+    expect(live).toMatchObject({ label: 'Live (behind)', tone: 'warning' });
     expect(live?.current).toBeUndefined();
     expect(live?.detail).toBe(
       'v1 is the active (published) version; the latest saved version is v3.',
