@@ -23,8 +23,9 @@ import { activityLabel, activityLabels } from '../pipeline/activityLabel';
 import { runStatusLabel } from './runStatus';
 import { AttemptTimeline } from './AttemptTimeline';
 import { NodeActivityPanel } from './NodeActivityPanel';
+import { drawerFileStem, type DrawerTab } from './drawerTab';
 import { ActivityRunsTable, SkipWhy } from './ActivityRunsTable';
-import { activityOfRow, latestOutputByAttempt } from './attemptActivity';
+import { activityOfRow, attemptOutputLines, latestOutputByAttempt } from './attemptActivity';
 import { iterationLabel } from './activityRunsColumns';
 import { RunDrawer } from './RunDrawer';
 import { RunHeader, type RunHeaderNames } from './RunHeader';
@@ -349,6 +350,15 @@ export function RunDetailPage({ runId }: { runId: string }) {
     () => (drawerRow === null ? null : activityOfRow(stream.events, folded, drawerRow)),
     [drawerRow, stream.events, folded],
   );
+  const drawerAttemptId = drawerRow?.attemptId ?? null;
+  const drawerLines = useMemo(
+    () => (drawerAttemptId === null ? [] : attemptOutputLines(stream.events, drawerAttemptId)),
+    [drawerAttemptId, stream.events],
+  );
+  /* The drawer tab the operator picked, held here so stepping from row to row
+     keeps it; `null` until they pick one, so each row opens on its error or its
+     output (`defaultDrawerTab`). Close keeps it too. */
+  const [drawerTab, setDrawerTab] = useState<DrawerTab | null>(null);
   const latestOutputs = useMemo(() => latestOutputByAttempt(stream.events), [stream.events]);
   const drawerIteration = (() => {
     const it = drawerRow?.iteration ?? null;
@@ -774,9 +784,19 @@ export function RunDetailPage({ runId }: { runId: string }) {
             runStatus={status}
             live={countingLive}
             onClose={() => setDrawer(null)}
+            tab={drawerTab}
+            onTab={setDrawerTab}
+            fileStem={drawerFileStem([
+              'run',
+              shortId(runId),
+              nameOf(drawerRow.activityId) ?? drawerRow.activityId,
+              drawerRow.attempt === null ? '' : `attempt ${drawerRow.attempt}`,
+              drawerIteration,
+            ])}
             run={{
               attempt: drawerRow.attempt,
               iteration: drawerIteration,
+              lines: drawerLines,
               skipWhy: (
                 <SkipWhy
                   status={drawerRow.status}

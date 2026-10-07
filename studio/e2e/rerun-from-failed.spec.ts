@@ -247,7 +247,10 @@ test('#918 — a rerun says which of its nodes it REUSED, and shows what they pr
   // The REAL copied value, computed in R1 by the real engine: [1,4,2,5] filtered
   // by `greater(item, 2)`. Asserting the value rather than the section's mere
   // presence is what makes this more than a "something rendered" check.
-  await expect(panel.getByText('{"result":[4,5]}')).toBeVisible();
+  // Indented in the drawer since #1484 M2.
+  await expect(panel.locator('#node-detail-output-values')).toHaveText(
+    JSON.stringify({ result: [4, 5] }, null, 2),
+  );
   await expect(panel.getByText(/reused its result from run/)).toBeVisible();
   await expect(panel.getByText(sourceRunId, { exact: true })).toBeVisible();
   await expect(panel.getByText(/not executed in this run/)).toBeVisible();

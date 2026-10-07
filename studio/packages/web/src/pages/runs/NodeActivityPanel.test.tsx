@@ -1,10 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
-import { cleanup, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import { NodeActivityPanel } from './NodeActivityPanel';
+import type { DrawerTab } from './drawerTab';
+import { downloadTextFile } from '../../api/download';
+
+vi.mock('../../api/download', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../api/download')>()),
+  downloadTextFile: vi.fn(),
+}));
 import { emptyNodeCost } from './runSummary';
 import { SECURE_REDACTED, type DatasetAddress, type RunStatus } from '@autonomy-studio/shared';
 import type { NodeActivity } from './runSummary';
@@ -420,8 +427,9 @@ describe('NodeActivityPanel — the outputs payload is bounded in the DOM', () =
   const TAIL = 'THE_TAIL_MARKER';
   /** A single output value whose serialization overshoots the cap by `over`. */
   function bigRow(over: number) {
-    // `{"text":"…"}` — 11 characters of envelope around the padded value.
-    const pad = 'x'.repeat(CAP + over - 11 - TAIL.length);
+    // `{\n  "text": "…"\n}` — 16 characters of envelope around the padded
+    // value, since the drawer indents its JSON (#1484 M2).
+    const pad = 'x'.repeat(CAP + over - 16 - TAIL.length);
     return row({
       nodeId: 'a',
       status: 'success',
@@ -441,7 +449,7 @@ describe('NodeActivityPanel — the outputs payload is bounded in the DOM', () =
     const panel = renderPanel(
       row({ nodeId: 'a', status: 'success', attempts: 1, outputValues: { text: 'short' } }),
     );
-    expect(outputsCode(panel).textContent).toBe('{"text":"short"}');
+    expect(outputsCode(panel).textContent).toBe('{\n  "text": "short"\n}');
     expect(toggle(panel)).toBeNull();
     expect(panel.textContent).not.toMatch(/showing the first/);
   });
@@ -471,9 +479,9 @@ describe('NodeActivityPanel — the outputs payload is bounded in the DOM', () =
    * end in a replacement glyph rather than ending where it was cut.
    */
   it('does not cut an astral character in half at the boundary', () => {
-    // 9 chars of `{"text":"` envelope, so a value offset of 3990 puts the
-    // emoji's HIGH half at index 3999 — the last unit a nominal cut keeps.
-    const value = 'x'.repeat(CAP - 10) + '\u{1F680}' + 'y'.repeat(2000);
+    // 13 chars of `{\n  "text": "` envelope, so a value offset of 3986 puts
+    // the emoji's HIGH half at index 3999 — the last unit a nominal cut keeps.
+    const value = 'x'.repeat(CAP - 14) + '\u{1F680}' + 'y'.repeat(2000);
     const panel = renderPanel(
       row({ nodeId: 'a', status: 'success', attempts: 1, outputValues: { text: value } }),
     );
@@ -519,7 +527,7 @@ describe('NodeActivityPanel — the outputs payload is bounded in the DOM', () =
     expect(outputsCode(panel).textContent).toHaveLength(CAP);
 
     await user.click(within(panel).getByRole('button', { name: /^Copy all / }));
-    expect(await navigator.clipboard.readText()).toBe(JSON.stringify(node.outputValues));
+    expect(await navigator.clipboard.readText()).toBe(JSON.stringify(node.outputValues, null, 2));
     expect(panel.textContent).toContain('Copied the full value');
   });
 
@@ -744,13 +752,25 @@ describe('NodeActivityPanel — the secure marker is explained (#1312)', () => {
 });
 
 describe('NodeActivityPanel — the dispatched input (#890)', () => {
-  const inputSection = () => screen.queryByRole('heading', { name: 'Input' })?.closest('section');
+  /** The Input tab's section, after selecting that tab (#1484 M2): a hidden
+   * tab's heading has no role to find, so a negative check without the click
+   * would pass whatever the panel rendered. */
+  const inputSection = () => {
+    fireEvent.click(screen.getByRole('tab', { name: 'Input' }));
+    return screen.queryByRole('heading', { name: 'Input' })?.closest('section');
+  };
+  /** A recorded text as the drawer shows it: indented when it parses. */
+  const shown = (section: HTMLElement, id: string) =>
+    section.querySelector(`#${id}`)?.textContent ?? null;
+  const pretty = (text: string) => JSON.stringify(JSON.parse(text), null, 2);
 
   it('shows the recorded input text', () => {
     renderPanel(row({ nodeId: 'a', input: { text: '{"url":"https://x/alice"}', chars: 25 } }));
     const section = inputSection();
     expect(section).toBeTruthy();
-    expect(within(section as HTMLElement).getByText('{"url":"https://x/alice"}')).toBeTruthy();
+    expect(shown(section as HTMLElement, 'node-detail-input-config')).toBe(
+      pretty('{"url":"https://x/alice"}'),
+    );
     expect(within(section as HTMLElement).queryByText(/stored the first/)).toBeNull();
   });
 
@@ -790,12 +810,13 @@ describe('NodeActivityPanel — the dispatched input (#890)', () => {
     );
     const section = inputSection() as HTMLElement;
     expect(within(section).getByRole('heading', { name: 'Parameters' })).toBeTruthy();
-    expect(within(section).getByText(params)).toBeTruthy();
-    expect(within(section).getByText('{"path":"/tmp"}')).toBeTruthy();
+    expect(shown(section, 'node-detail-input-params')).toBe(pretty(params));
+    expect(shown(section, 'node-detail-input-config')).toBe(pretty('{"path":"/tmp"}'));
   });
 
   it('has no Parameters heading for a dispatch that bound none', () => {
     renderPanel(row({ nodeId: 'a', input: { text: '{}', chars: 2 } }));
+    expect(inputSection()).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Parameters' })).toBeNull();
   });
 
@@ -803,7 +824,7 @@ describe('NodeActivityPanel — the dispatched input (#890)', () => {
     renderPanel(row({ nodeId: 'a', params: { text: '{"connectionParams":{"m":1}}', chars: 28 } }));
     const section = inputSection() as HTMLElement;
     expect(within(section).getByText(/config was not recorded/)).toBeTruthy();
-    expect(within(section).getByText('{"connectionParams":{"m":1}}')).toBeTruthy();
+    expect(shown(section, 'node-detail-input-params')).toBe(pretty('{"connectionParams":{"m":1}}'));
   });
 
   it('withholds secure parameters with the same wording as the input', () => {
@@ -870,5 +891,187 @@ describe('NodeActivityPanel — the variable a writer wrote (#844 V7)', () => {
     const panel = renderPanel(row({ nodeId: 'n', status: 'success', outputValues: {} }));
     expect(writeSection(panel)).toBeNull();
     cleanup();
+  });
+});
+
+describe('NodeActivityPanel — the drawer tabs (#1484 OR35 M2)', () => {
+  /** The selected tab's name. By role and name rather than `textContent`:
+   * Fluent renders an unselected tab's label twice, to reserve its bold width. */
+  const selected = () =>
+    ['Input', 'Output', 'Error', 'Logs'].find(
+      (name) => screen.getByRole('tab', { name }).getAttribute('aria-selected') === 'true',
+    );
+  const tab = (name: string) => screen.getByRole('tab', { name });
+  const visiblePanel = () => screen.getByRole('tabpanel');
+  const downloads = () => vi.mocked(downloadTextFile).mock.calls;
+
+  it('offers Input, Output, Error and Logs, and a record opens on its output', () => {
+    renderPanel(row({ nodeId: 'a', status: 'success', attempts: 1, outputValues: { n: 1 } }));
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs).toHaveLength(4);
+    ['Input', 'Output', 'Error', 'Logs'].forEach((name, i) => expect(tabs[i]).toBe(tab(name)));
+    expect(selected()).toBe('Output');
+    expect(within(visiblePanel()).getByRole('heading', { name: 'Outputs' })).toBeTruthy();
+  });
+
+  it('opens a failed record on its Error, verbatim with its line breaks', () => {
+    renderPanel(
+      row({
+        nodeId: 'a',
+        status: 'failure',
+        attempts: 1,
+        error: 'line one\n  line two',
+        failureKind: 'transient',
+      }),
+    );
+    expect(selected()).toBe('Error');
+    const pre = visiblePanel().querySelector('pre.node-error-text');
+    expect(pre?.textContent).toBe('line one\n  line two');
+    expect(within(visiblePanel()).getByText('transient')).toBeTruthy();
+  });
+
+  it('opens a record whose error awaits a retry on Error too, not only a failed one', () => {
+    renderPanel(row({ nodeId: 'a', status: 'retry_pending', attempts: 1, error: 'flaky' }));
+    expect(selected()).toBe('Error');
+    expect(visiblePanel().querySelector('pre.node-error-text')?.textContent).toBe('flaky');
+  });
+
+  it('names the attempt on the Error tab when the drawer shows one', () => {
+    renderWithRouter(
+      <NodeActivityPanel
+        node={row({ nodeId: 'a', status: 'failure', attempts: 1, error: 'boom' })}
+        name="Copy Data 1"
+        runStatus="failure"
+        live={false}
+        onClose={vi.fn()}
+        run={{ attempt: 2, iteration: '', skipWhy: null }}
+      />,
+    );
+    const meta = visiblePanel().querySelector('dl.run-meta');
+    expect(meta).toHaveTextContent('Attempt2');
+  });
+
+  it('says so on each tab that has nothing, rather than showing a blank panel', async () => {
+    const user = userEvent.setup();
+    renderPanel(row({ nodeId: 'a', status: 'skipped' }));
+    expect(visiblePanel()).toHaveTextContent('No output was recorded for this activity run.');
+    await user.click(tab('Input'));
+    expect(visiblePanel()).toHaveTextContent('No input was recorded for this activity run.');
+    await user.click(tab('Error'));
+    expect(visiblePanel()).toHaveTextContent('This activity run did not fail.');
+  });
+
+  it('keeps the child-run link above the tabs, so a failed call opens with it in view', () => {
+    renderPanel(
+      row({ nodeId: 'call', status: 'failure', attempts: 1, childRunIds: ['run_child'] }),
+    );
+    expect(selected()).toBe('Error');
+    const link = screen.getByRole('link', { name: /run_child/ });
+    expect(link.closest('[role="tabpanel"]')).toBeNull();
+  });
+
+  it('follows the host when it holds the choice, and reports a pick', async () => {
+    const user = userEvent.setup();
+    function Host() {
+      const [t, setT] = useState<DrawerTab | null>('logs');
+      return (
+        <NodeActivityPanel
+          node={row({ nodeId: 'a', status: 'failure', attempts: 1, error: 'boom' })}
+          name={null}
+          runStatus="failure"
+          live={false}
+          onClose={vi.fn()}
+          tab={t}
+          onTab={setT}
+        />
+      );
+    }
+    renderWithRouter(<Host />);
+    expect(selected()).toBe('Logs');
+    await user.click(tab('Input'));
+    expect(selected()).toBe('Input');
+  });
+
+  it('offers Copy and Download on a short output, and downloads the whole indented value', async () => {
+    const user = userEvent.setup();
+    vi.mocked(downloadTextFile).mockClear();
+    renderWithRouter(
+      <NodeActivityPanel
+        node={row({ nodeId: 'a', status: 'success', attempts: 1, outputValues: { n: 1 } })}
+        name={null}
+        runStatus="success"
+        live={false}
+        onClose={vi.fn()}
+        fileStem="run-abc-copy-data-1"
+      />,
+    );
+    expect(
+      within(visiblePanel()).getByRole('button', { name: 'Copy all 12 characters of outputs' }),
+    ).toBeTruthy();
+    await user.click(within(visiblePanel()).getByRole('button', { name: 'Download outputs' }));
+    expect(downloads()).toEqual([
+      ['run-abc-copy-data-1-output.json', '{\n  "n": 1\n}', 'application/json'],
+    ]);
+  });
+
+  it('downloads a cut input as a truncated text file, and offers nothing for a withheld one', async () => {
+    const user = userEvent.setup();
+    vi.mocked(downloadTextFile).mockClear();
+    renderPanel(
+      row({
+        nodeId: 'a',
+        input: { text: SECURE_REDACTED, chars: 7 },
+        params: { text: '{"connectionParams"', chars: 9000, truncated: true },
+      }),
+    );
+    await user.click(tab('Input'));
+    const buttons = within(visiblePanel()).getAllByRole('button', { name: /^Download / });
+    expect(buttons).toHaveLength(1);
+    await user.click(buttons[0]!);
+    expect(downloads()).toEqual([
+      ['a-parameters-truncated.txt', '{"connectionParams"', 'text/plain'],
+    ]);
+  });
+
+  it("lists the attempt's streamed lines on Logs, and downloads every one as NDJSON", async () => {
+    const user = userEvent.setup();
+    vi.mocked(downloadTextFile).mockClear();
+    const lines = Array.from({ length: 205 }, (_, i) => ({
+      seq: i,
+      ts: Date.UTC(2026, 9, 7, 12, 0, 0, i),
+      name: 'rows',
+      value: i,
+    }));
+    renderWithRouter(
+      <NodeActivityPanel
+        node={row({ nodeId: 'a', status: 'success', attempts: 1, outputs: 205 })}
+        name={null}
+        runStatus="success"
+        live={false}
+        onClose={vi.fn()}
+        run={{ attempt: 1, iteration: '', skipWhy: null, lines }}
+      />,
+    );
+    await user.click(tab('Logs'));
+    const table = visiblePanel().querySelector('.node-logs table') as HTMLElement;
+    const rows = table.querySelectorAll<HTMLTableRowElement>('tbody tr');
+    // The most recent 200, and the cut said.
+    expect(rows).toHaveLength(200);
+    expect(rows[0]).toHaveTextContent('rows5');
+    expect(rows[199]).toHaveTextContent('rows204');
+    expect(visiblePanel()).toHaveTextContent('showing the most recent 200 of 205 lines');
+    // To the millisecond.
+    expect(rows[199]!.cells[0]!.textContent).toMatch(/\.204$/);
+
+    await user.click(within(visiblePanel()).getByRole('button', { name: 'Download 205 lines' }));
+    const [[name, text, mime]] = downloads() as [[string, string, string]];
+    expect(name).toBe('a-logs.ndjson');
+    expect(mime).toBe('application/x-ndjson');
+    const parsed = text
+      .trimEnd()
+      .split('\n')
+      .map((l) => JSON.parse(l) as { value: number });
+    expect(parsed).toHaveLength(205);
+    expect(parsed[0]!.value).toBe(0);
   });
 });

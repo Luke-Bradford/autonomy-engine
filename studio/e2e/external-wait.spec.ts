@@ -194,7 +194,10 @@ test('#901 — an operator completes the wait from the app, sending no token', a
   await approveRow.getByRole('button', { name: 'Webhook (external wait) 1' }).click();
   const panel = page.getByRole('complementary', { name: /Node Webhook \(external wait\) 1/ });
   await expect(panel.getByRole('heading', { name: 'Outputs' })).toBeVisible();
-  await expect(panel).toContainText('{"decision":"approved in-app"}');
+  // Indented in the drawer since #1484 M2.
+  await expect(panel.locator('#node-detail-output-values')).toHaveText(
+    JSON.stringify({ decision: 'approved in-app' }, null, 2),
+  );
 
   /* The one allowed console line is the browser's own network entry for the 422
      this spec PROVOKES — the contract refusal above is the behaviour under test,

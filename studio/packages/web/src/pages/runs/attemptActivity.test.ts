@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { ActivityRun, EngineEvent, RunEvent } from '@autonomy-studio/shared';
-import { activityOfRow, attemptEvents, latestOutputByAttempt } from './attemptActivity';
+import {
+  activityOfRow,
+  attemptEvents,
+  attemptOutputLines,
+  latestOutputByAttempt,
+} from './attemptActivity';
 import { deriveNodeActivity } from './runSummary';
 import { liveSpanStart } from './format';
 import { activityRun } from '../../testing/activityRun';
@@ -221,6 +226,35 @@ describe('activityOfRow — one parallel item is not the node (#1484 M2 drawer)'
     expect(got.costSpansInstances).toBe(false);
     expect(got.inputInstanceId).toBeUndefined();
     expect(liveSpanStart(got)).toBe(50);
+  });
+});
+
+describe('attemptOutputLines (#1484 M2 drawer Logs)', () => {
+  it("lists every line an attempt streamed, in log order, and none of another item's", () => {
+    const events = [
+      dispatched('w@0', 'w@0#0', '{}'),
+      dispatched('w@1', 'w@1#0', '{}'),
+      output('w@0', 'rows', 10),
+      output('w@1', 'rows', 7),
+      output('w@0', 'rows', 20),
+    ];
+    const lines = attemptOutputLines(events, 'w@0#0');
+    expect(lines.map((l) => [l.name, l.value])).toEqual([
+      ['rows', 10],
+      ['rows', 20],
+    ]);
+    expect(lines.map((l) => l.seq)).toEqual([events[2]!.seq, events[4]!.seq]);
+    expect(lines[0]!.ts).toBe(events[2]!.ts);
+  });
+
+  it('gives a sequential ForEach item, and a retry, only its own lines', () => {
+    expect(attemptOutputLines(twoItems(), 'c#1').map((l) => l.value)).toEqual(['batch b']);
+    expect(
+      attemptOutputLines(
+        [dispatched('c', 'c#0', '{}'), output('c', 'rows', 5), dispatched('c', 'c#1', '{}')],
+        'c#1',
+      ),
+    ).toEqual([]);
   });
 });
 

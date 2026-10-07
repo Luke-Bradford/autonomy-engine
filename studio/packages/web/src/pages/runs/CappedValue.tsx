@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useBusyAction } from '../../hooks/useBusyAction';
 import { surrogateSafeCut } from '@autonomy-studio/shared';
+import { downloadTextFile } from '../../api/download';
 import { jsonText, MAX_INLINE_OUTPUT_CHARS } from './format';
 
 /**
@@ -33,7 +34,27 @@ const COPY_KEY = 'copy';
  * the #869 notes above still say "output", which is where it began). The caller keys it by node identity, so its disclosure state never
  * carries from one node to the next.
  */
-export function CappedValue({ id, text }: { id: string; text: string }) {
+export function CappedValue({
+  id,
+  text,
+  download,
+  what,
+}: {
+  id: string;
+  text: string;
+  /** What the block holds ("outputs"), for its buttons' accessible names: one
+   * drawer tab can hold two blocks, and two buttons both named "Download"
+   * would leave a screen reader guessing which. */
+  what?: string;
+  /**
+   * #1484 OR35 M2 — the file name a Download of the whole value saves as. Given,
+   * the block offers Copy and Download whatever its length (the run drawer's
+   * "copy and download on every JSON block"); absent, Copy appears only once the
+   * cap has cut something, as it always has, so a short value in the Variables
+   * table does not grow two buttons.
+   */
+  download?: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   /* `null` until a copy is attempted; then the OUTCOME, because a copy that
      silently did nothing is the same class of lie the cap exists to prevent —
@@ -95,6 +116,10 @@ export function CappedValue({ id, text }: { id: string; text: string }) {
           >
             {expanded ? `Show first ${cut} characters` : `Show all ${text.length} characters`}
           </button>
+        </>
+      )}
+      {(truncated || download !== undefined) && (
+        <div className="capped-value-actions">
           {/* Copies the WHOLE value, and deliberately does not depend on
               `expanded`.
 
@@ -116,6 +141,9 @@ export function CappedValue({ id, text }: { id: string; text: string }) {
           {canCopy && (
             <button
               type="button"
+              aria-label={
+                what === undefined ? undefined : `Copy all ${text.length} characters of ${what}`
+              }
               disabled={copy.active.has(COPY_KEY)}
               onClick={() => {
                 void copy.run(COPY_KEY, () =>
@@ -132,14 +160,31 @@ export function CappedValue({ id, text }: { id: string; text: string }) {
               Copy all {text.length} characters
             </button>
           )}
-          {copyFailed !== null && (
-            <p className="page-hint" role="status">
-              {copyFailed
-                ? 'Could not copy — show all, then select and copy.'
-                : 'Copied the full value.'}
-            </p>
+          {download !== undefined && (
+            <button
+              type="button"
+              aria-label={what === undefined ? undefined : `Download ${what}`}
+              onClick={() =>
+                downloadTextFile(
+                  download,
+                  text,
+                  download.endsWith('.json') ? 'application/json' : 'text/plain',
+                )
+              }
+            >
+              Download
+            </button>
           )}
-        </>
+        </div>
+      )}
+      {copyFailed !== null && (
+        <p className="page-hint" role="status">
+          {copyFailed
+            ? truncated
+              ? 'Could not copy — show all, then select and copy.'
+              : 'Could not copy — select the value and copy it.'
+            : 'Copied the full value.'}
+        </p>
       )}
     </>
   );

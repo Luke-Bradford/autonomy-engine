@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
@@ -95,8 +96,18 @@ test('U24 — a failed node names its failure CLASS, and opens a drill-in', asyn
       pill: pill?.textContent?.trim() ?? '',
       pillColor: pill === null ? '' : getComputedStyle(pill).color,
       // The drill-in must not smuggle in a control-plane WRITE (U28 keeps the
-      // monitor read-only): the only button in the panel is Close.
-      buttons: [...el.querySelectorAll('button')].map((b) => b.textContent?.trim() ?? ''),
+      // monitor read-only): beside its tabs, the only button is Close.
+      buttons: [...el.querySelectorAll('button:not([role="tab"])')].map(
+        (b) => b.textContent?.trim() ?? '',
+      ),
+      // #1484 M2 — four tabs, and a failed record opens on its Error, kept
+      // verbatim: line breaks survive, as `pre-wrap` resolved on the live page.
+      tabs: el.querySelectorAll('[role="tab"]').length,
+      selectedTab: el.querySelector('[role="tab"][aria-selected="true"]')?.textContent ?? '',
+      errorWhiteSpace: (() => {
+        const pre = el.querySelector('[role="tabpanel"]:not([hidden]) pre.node-error-text');
+        return pre === null ? '' : getComputedStyle(pre).whiteSpace;
+      })(),
     };
   });
 
@@ -108,6 +119,9 @@ test('U24 — a failed node names its failure CLASS, and opens a drill-in', asyn
   expect(seen!.pill).toBe('failure');
   expect(seen!.pillColor).toMatch(/^rgb/);
   expect(seen!.buttons).toEqual(['Close']);
+  expect(seen!.tabs).toBe(4);
+  expect(seen!.selectedTab).toBe('Error');
+  expect(seen!.errorWhiteSpace).toBe('pre-wrap');
 
   // Opening a DIFFERENT row swaps the drawer's record rather than stacking one.
   const failTwo = await openActivity(page, 'Fail 2');
@@ -194,7 +208,7 @@ test('#869 — an oversized output is capped in the DOM, and the rest is one cli
      trip is what makes a browser-driven verification expensive. */
   const collapsed = await page.evaluate(() => {
     const el = document.querySelector('aside.node-detail-panel');
-    const code = el?.querySelector('.node-detail-outputs');
+    const code = el?.querySelector('#node-detail-output-values');
     const button = [...(el?.querySelectorAll('button') ?? [])].find((b) =>
       /^Show all /.test(b.textContent ?? ''),
     );
@@ -231,17 +245,32 @@ test('#869 — an oversized output is capped in the DOM, and the rest is one cli
      clipboard-read permission this suite does not otherwise need. */
   expect(collapsed.copy).toBe(true);
 
+  /* #1484 M2 — Download saves the WHOLE value, not the capped view, under a
+     name that says which run, activity and attempt it came from. */
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    panel
+      .getByRole('tabpanel')
+      .getByRole('button', { name: 'Download outputs', exact: true })
+      .click(),
+  ]);
+  expect(download.suggestedFilename()).toMatch(/^run-[a-z0-9-]+-filter-1-attempt-1-output\.json$/);
+  const saved = await download.path().then((p) => readFileSync(p, 'utf8'));
+  expect(saved.length).toBeGreaterThan(OUTPUT_CAP);
+  expect(saved.replace(/\s+/g, '').slice(-6)).toBe('2000]}');
+
   await panel.getByRole('button', { name: /^Show all / }).click();
 
   const opened = await page.evaluate(() => {
     const el = document.querySelector('aside.node-detail-panel');
-    const code = el?.querySelector('.node-detail-outputs');
+    const code = el?.querySelector('#node-detail-output-values');
     const button = [...(el?.querySelectorAll('button') ?? [])].find((b) =>
       /^Show first /.test(b.textContent ?? ''),
     );
     return {
       chars: code?.textContent?.length ?? -1,
-      tail: (code?.textContent ?? '').slice(-6),
+      // Indented JSON (#1484 M2), so compared without its whitespace.
+      tail: (code?.textContent ?? '').replace(/\s+/g, '').slice(-6),
       expanded: button?.getAttribute('aria-expanded') ?? null,
     };
   });

@@ -1015,6 +1015,18 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
     );
   });
 
+  it("opens a failed activity run on its Error, with that attempt's streamed lines under Logs", async () => {
+    useRunStreamMock.mockReturnValue(failedStream());
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await openDrawer('HTTP Request 1');
+    expect(screen.getByRole('tab', { name: 'Error' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('boom');
+    await userEvent.click(screen.getByRole('tab', { name: 'Logs' }));
+    const lines = screen.getByRole('tabpanel').querySelectorAll('.node-logs tbody tr');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toHaveTextContent('chunk1');
+  });
+
   it('opens the drawer for the activity run clicked, and closes it again', async () => {
     useRunStreamMock.mockReturnValue(failedStream());
     const user = userEvent.setup();
@@ -1180,7 +1192,9 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
     );
     renderWithRouter(<RunDetailPage runId="run_1" />);
     const panel = await openDrawer('HTTP Request 1');
-    expect(within(panel).getByText('{"body":"hello","status":200}')).toBeInTheDocument();
+    expect(panel.querySelector('#node-detail-output-values')?.textContent).toBe(
+      JSON.stringify(JSON.parse('{"body":"hello","status":200}'), null, 2),
+    );
   });
 
   it('states the ABSENCE of a class rather than inventing one', async () => {
@@ -1239,7 +1253,9 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
     const row = await activityRow('HTTP Request 1');
     expect(cellOf(row, 'Activity')).toHaveAttribute('title', 'greet@1');
     const panel = await openDrawer('HTTP Request 1');
-    expect(within(panel).getByText('{"body":"one item"}')).toBeInTheDocument();
+    expect(panel.querySelector('#node-detail-output-values')?.textContent).toBe(
+      JSON.stringify(JSON.parse('{"body":"one item"}'), null, 2),
+    );
     expect(within(panel).queryByText(/fold onto the one node you drew/i)).not.toBeInTheDocument();
   });
 
@@ -1306,7 +1322,9 @@ describe('RunDetailPage — a parked node’s outputs reach the drawer (#911)', 
 
     const panel = await openPanel();
     expect(within(panel).getByRole('heading', { name: 'Outputs' })).toBeInTheDocument();
-    expect(within(panel).getByText('{"decision":"approved in-app"}')).toBeInTheDocument();
+    expect(panel.querySelector('#node-detail-output-values')?.textContent).toBe(
+      JSON.stringify(JSON.parse('{"decision":"approved in-app"}'), null, 2),
+    );
   });
 
   it('says a completion carrying nothing RECORDED nothing — without claiming the node declared nothing', async () => {
@@ -1328,7 +1346,10 @@ describe('RunDetailPage — a parked node’s outputs reach the drawer (#911)', 
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
     const panel = await openPanel();
-    expect(within(panel).queryByRole('heading', { name: 'Outputs' })).not.toBeInTheDocument();
+    // `hidden`: absent from EVERY tab, not merely from the one open (#1484 M2).
+    expect(
+      within(panel).queryByRole('heading', { name: 'Outputs', hidden: true }),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -1391,7 +1412,9 @@ describe('RunDetailPage — a rerun’s COPIED frontier is named as copied (#918
     // The defect itself: before #918 there was no Outputs section at all here,
     // over a value `${nodes.greet.output.status}` resolves against downstream.
     expect(within(panel).getByText('Outputs')).toBeInTheDocument();
-    expect(within(panel).getByText('{"status":200}')).toBeInTheDocument();
+    expect(panel.querySelector('#node-detail-output-values')?.textContent).toBe(
+      JSON.stringify(JSON.parse('{"status":200}'), null, 2),
+    );
     expect(within(panel).getByText(/reused its result from run/)).toBeInTheDocument();
     expect(within(panel).getByText('run_source')).toBeInTheDocument();
 
@@ -1932,7 +1955,9 @@ describe('RunDetailPage — #866 the drawer says what an attempt SPENT and which
         outputs: {},
       },
     ]);
-    expect(within(panel).queryByRole('heading', { name: 'Cost & usage' })).not.toBeInTheDocument();
+    expect(
+      within(panel).queryByRole('heading', { name: 'Cost & usage', hidden: true }),
+    ).not.toBeInTheDocument();
   });
 
   it('lists the tools the node ran, flagging the ones that errored', async () => {
@@ -2126,7 +2151,9 @@ describe('RunDetailPage — #866 the drawer says what an attempt SPENT and which
       dispatched('greet', 'greet#0'),
       metered({ inputTokens: 1, outputTokens: 1, costEstimate: 0.5 }),
     ]);
-    expect(within(panel).queryByRole('heading', { name: 'Tool calls' })).not.toBeInTheDocument();
+    expect(
+      within(panel).queryByRole('heading', { name: 'Tool calls', hidden: true }),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -3603,6 +3630,20 @@ describe('RunDetailPage — the activity run detail drawer (#1484 M2)', () => {
     expect(first).toHaveTextContent('Item 1 of 2 · a.csv');
     expect(first).not.toHaveTextContent('b.csv');
     expect(second).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it("keeps the operator's tab from row to row, and through a close", async () => {
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await openRow(1);
+    const inputTab = () => screen.getByRole('tab', { name: 'Input' });
+    expect(inputTab()).toHaveAttribute('aria-selected', 'false');
+    await userEvent.click(inputTab());
+    await openRow(0);
+    expect(inputTab()).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('a.csv');
+    await userEvent.keyboard('{Escape}');
+    await openRow(1);
+    expect(inputTab()).toHaveAttribute('aria-selected', 'true');
   });
 
   it('closes on Escape and hands focus back to the row that opened it', async () => {

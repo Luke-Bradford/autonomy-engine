@@ -268,14 +268,32 @@ export function failureClass(kind: string | undefined, code: string | undefined)
  * QUOTED, and a value JSON cannot express falls back to `String`. The whole
  * text, uncapped; a caller bounds it (`formatOutputValue`, `CappedValue`).
  */
-export function jsonText(value: unknown): string {
+export function jsonText(value: unknown, indent?: number): string {
   try {
     // `undefined` (and a function) stringify to `undefined`, not a string.
-    return JSON.stringify(value) ?? String(value);
+    return JSON.stringify(value, null, indent) ?? String(value);
   } catch {
     // A `bigint`, or a cycle — neither reaches here through a parsed event,
     // but a formatter must not be the thing that crashes the run page.
     return String(value);
+  }
+}
+
+/**
+ * #1484 OR35 M2 — a recorded JSON text, indented, or `null` when it does not
+ * parse, which is what a text the run log cut short does. The caller then shows
+ * it as stored.
+ *
+ * Parsing and re-serialising changes only the whitespace here, because what is
+ * recorded is `JSON.stringify`'s own output (`boundedJson` in shared
+ * `dispatch-input.ts`). It cannot hold a number past 2^53, a `1.0` or a
+ * duplicate key, and its key order is already the order a re-parse gives.
+ */
+export function prettyStoredJson(text: string): string | null {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return null;
   }
 }
 
