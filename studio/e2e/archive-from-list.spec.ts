@@ -26,7 +26,7 @@ import { chooseRowAction, rowMenuButton } from './support/rowMenu';
 const NAME = 'e2e 1058 retire me';
 
 test.describe('#1058 archive from the pipelines list, and unarchive back', () => {
-  test('archives, disappears from the list, and comes back from Show archived', async ({
+  test('archives, disappears from the list, and comes back from the Archived view', async ({
     page,
   }) => {
     const problems = collectPageProblems(page);
@@ -55,17 +55,22 @@ test.describe('#1058 archive from the pipelines list, and unarchive back', () =>
     expect(confirmText).toContain('triggers stay disabled');
     expect(confirmText).toMatch(/Commit will delete its file/);
 
-    // The way back. Closed by default, so nothing was fetched until now.
-    await page.getByRole('button', { name: 'Show archived' }).click();
-    const unarchiveButton = page.getByRole('button', { name: `Unarchive ${NAME}`, exact: true });
-    await expect(unarchiveButton).toBeVisible();
-
-    await unarchiveButton.click();
-
-    // Back in the live list, and out of the archived one — which is what makes
-    // the round trip mean something rather than just rendering two tables.
+    // The way back: the bar's Archived toggle (#1569), kept in the URL. Off by
+    // default, so nothing was fetched until now.
+    const archivedToggle = page.getByRole('button', { name: 'Archived', exact: true });
+    await archivedToggle.click();
+    await expect(page).toHaveURL(/[?&]archived=1(&|$)/);
+    await expect(archivedToggle).toHaveAttribute('aria-pressed', 'true');
+    // In the archived view the row's menu is the archived row's, holding Unarchive.
     await expect(rowMenu).toBeVisible();
-    await expect(unarchiveButton).toHaveCount(0);
+    await chooseRowAction(page, 'Unarchive', NAME);
+
+    // Out of the archived view, and back in the live list — which is what
+    // makes the round trip mean something rather than just rendering two tables.
+    await expect(rowMenu).toHaveCount(0);
+    await archivedToggle.click();
+    await expect(page).not.toHaveURL(/[?&]archived=/);
+    await expect(rowMenu).toBeVisible();
 
     await expectQuiet(page, problems);
   });

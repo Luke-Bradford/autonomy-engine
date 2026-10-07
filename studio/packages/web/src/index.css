@@ -5908,3 +5908,16 @@ button.danger {
 .pipelines-grid__run {
   color: inherit;
 }
+
+/* #1569 OR37 slice 2 — the pipelines bar is the runs bar (`.run-filters`): one
+   row, data-sized controls. The search box leads it and is the one control
+   that gives way. */
+.pipelines-filters__search {
+  flex: 0 1 18rem;
+  min-width: 10rem;
+}
+
+.pipelines-filters__search input {
+  width: 100%;
+  font-size: 13px;
+}

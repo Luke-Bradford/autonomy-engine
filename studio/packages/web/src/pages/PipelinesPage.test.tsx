@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Pipeline, PipelineSummary } from '@autonomy-studio/shared';
 import { PipelinesPage } from './PipelinesPage';
@@ -240,6 +240,110 @@ describe('PipelinesPage', () => {
         'aria-sort',
         'descending',
       );
+    });
+
+    /** #1569 OR37 slice 2 — the filter bar. */
+    describe('filter bar', () => {
+      const failed = { runId: 'rf', status: 'failure' as const, startedAt: 5, finishedAt: 6 };
+      const ok = { runId: 'ro', status: 'success' as const, startedAt: 5, finishedAt: 6 };
+      const seed = () => {
+        listMock.mockResolvedValue([
+          pipeline({ id: 'pl_1', name: 'Alpha', folder: 'ETL' }),
+          pipeline({ id: 'pl_2', resourceId: 'res_2', name: 'Beta' }),
+          pipeline({ id: 'pl_3', resourceId: 'res_3', name: 'Gamma' }),
+        ]);
+        summariesMock.mockResolvedValue([
+          summary('pl_1', { lastRun: ok, description: 'Loads the orders feed' }),
+          summary('pl_2', { lastRun: failed, annotations: ['finance'] }),
+          summary('pl_3'),
+        ]);
+      };
+      const renderAt = (query: string) =>
+        renderWithRouter(
+          <PipelinesPage store={createPipelinesStore()} />,
+          `/author/pipelines${query}`,
+        );
+
+      it('filters by last run from the URL, and Clear brings every row back', async () => {
+        seed();
+        const user = userEvent.setup();
+        renderAt('?last=failure');
+        await screen.findByRole('button', { name: /^Last run: failure/ });
+        await waitFor(() => expect(rowNames()).toEqual(['Beta']));
+        await user.click(screen.getByRole('button', { name: 'Clear filters' }));
+        await waitFor(() => expect(rowNames()).toEqual(['Alpha', 'Beta', 'Gamma']));
+      });
+
+      it('picks several last-run statuses from the menu, never-run included', async () => {
+        seed();
+        const user = userEvent.setup();
+        renderAt('');
+        await screen.findAllByText('failure');
+        await user.click(screen.getByRole('button', { name: /^Last run: All/ }));
+        await user.click(await screen.findByRole('menuitemcheckbox', { name: 'failure' }));
+        await user.click(await screen.findByRole('menuitemcheckbox', { name: 'Never run' }));
+        await waitFor(() => expect(rowNames()).toEqual(['Beta', 'Gamma']));
+      });
+
+      it('searches description and annotations, and narrows by folder', async () => {
+        seed();
+        renderAt('?q=orders');
+        await waitFor(() => expect(rowNames()).toEqual(['Alpha']));
+        cleanup();
+        seed();
+        renderAt('?q=FINANCE');
+        await waitFor(() => expect(rowNames()).toEqual(['Beta']));
+        cleanup();
+        seed();
+        renderAt(`?folder=${encodeURIComponent('/')}`);
+        await waitFor(() => expect(rowNames()).toEqual(['Beta', 'Gamma']));
+      });
+
+      it('says a filter is waiting for facts — not "no match" — while the summaries are unread', async () => {
+        seed();
+        const pending = deferred<PipelineSummary[]>();
+        summariesMock.mockReturnValue(pending.promise);
+        renderAt('?last=failure');
+        expect(await screen.findByText(/Waiting for run and state facts/)).toBeInTheDocument();
+        expect(screen.queryByText(/No pipelines match/)).not.toBeInTheDocument();
+        expect(screen.queryByRole('table')).not.toBeInTheDocument();
+        pending.resolve([summary('pl_2', { lastRun: failed })]);
+        await waitFor(() => expect(rowNames()).toEqual(['Beta']));
+        expect(screen.queryByText(/Waiting for run and state facts/)).not.toBeInTheDocument();
+      });
+
+      it('says no pipeline matches once the facts are read', async () => {
+        seed();
+        renderAt('?last=cancelled');
+        expect(await screen.findByText('No pipelines match the filters.')).toBeInTheDocument();
+      });
+
+      it('keeps Archived reachable when every pipeline is archived, and draws only Name and Modified there', async () => {
+        const user = userEvent.setup();
+        listArchivedMock.mockResolvedValue([pipeline({ id: 'pl_9', name: 'Retired' })]);
+        renderAt('');
+        await screen.findByText(/No pipelines yet/i);
+        await user.click(screen.getByRole('button', { name: 'Archived' }));
+        expect(await screen.findByText('Retired')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Archived' })).toHaveAttribute(
+          'aria-pressed',
+          'true',
+        );
+        expect(
+          // (Name carries the sort arrow.)
+          screen.getAllByRole('columnheader').map((h) => h.textContent?.replace(/[▲▼]/g, '').trim()),
+        ).toEqual(['Name', 'Modified', '']);
+        // The run filters are not drawn where there are no run facts.
+        expect(screen.queryByRole('button', { name: /^Last run:/ })).not.toBeInTheDocument();
+        expect(screen.queryByText(/No pipelines yet/i)).not.toBeInTheDocument();
+      });
+
+      it('opens the archived view from a link', async () => {
+        listArchivedMock.mockResolvedValue([pipeline({ id: 'pl_9', name: 'Retired' })]);
+        renderAt('?archived=1');
+        expect(await screen.findByText('Retired')).toBeInTheDocument();
+        expect(listArchivedMock).toHaveBeenCalledTimes(1);
+      });
     });
   });
 
