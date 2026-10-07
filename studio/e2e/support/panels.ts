@@ -1,4 +1,4 @@
-import type { Locator, Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 
 /**
  * The two form surfaces an authoring spec fills, located ONE way.
@@ -83,4 +83,20 @@ export async function openActivity(
 /** The run drawer's record, named as the row that opened it. */
 export function drawerPanel(page: Page, name: string): Locator {
   return page.locator('.run-drawer').getByRole('complementary', { name: `Node ${name}` });
+}
+
+/**
+ * Opens one of the run page's views below its activity runs (#1484 OR35 M2),
+ * by its tab. A spec that loads a run straight onto a view can instead name it
+ * in the URL (`?rdTab=graph`), which is what a shared link does.
+ */
+export async function openRunView(
+  page: Page,
+  name: 'Gantt' | 'Graph' | 'Events' | 'Variables' | 'Cost',
+): Promise<void> {
+  const tab = page
+    .getByRole('tablist', { name: 'Run views' })
+    .getByRole('tab', { name, exact: true });
+  await tab.click();
+  await expect(tab).toHaveAttribute('aria-selected', 'true');
 }

@@ -50,7 +50,7 @@ test('U11 — the run canvas shows the engine’s own status for every node, inc
   const { pipelineVersionId } = await seedVersion(page, 'U11 overlay', DOC);
   const runId = await fireAndSettle(page, pipelineVersionId);
 
-  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}?rdTab=graph`);
   await fluentRootReady(page);
   const canvas = page.getByTestId('run-canvas');
   await expect(canvas).toBeVisible();
@@ -149,7 +149,7 @@ test('U25 — the activity runs and the graph give every node the same word, inc
   const { pipelineVersionId } = await seedVersion(page, 'U25 vocabulary', DOC);
   const runId = await fireAndSettle(page, pipelineVersionId);
 
-  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}?rdTab=graph`);
   await fluentRootReady(page);
 
   /* Wait on the TABLE rather than the canvas: a row for `neverRan` existing at

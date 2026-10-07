@@ -34,7 +34,7 @@ test('a run card says what the step does and what the run measured, inside its b
   const { pipelineVersionId } = await seedVersion(page, 'OR3 run cards', DOC);
   const runId = await fireAndSettle(page, pipelineVersionId, 'OR3 run cards');
 
-  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}?rdTab=graph`);
   await fluentRootReady(page);
   const canvas = page.getByTestId('run-canvas');
   // Retrying waits for the OVERLAY (the graph draws before the replay lands).

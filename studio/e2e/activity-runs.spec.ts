@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, mintVersion, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
+import { openRunView } from './support/panels';
 
 /**
  * #1484 OR35 M2 — the run page's activity runs, read from the server's
@@ -83,13 +84,13 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
     });
     const top = (el: Element | null) => el?.getBoundingClientRect().top ?? Number.NaN;
     const firstRow = t.querySelector<HTMLTableRowElement>('tbody tr')!;
-    const graph = [...document.querySelectorAll('h3')].find((h) => h.textContent === 'Graph');
+    const views = document.querySelector('[role="tablist"][aria-label="Run views"]');
     return {
       rows,
       fontSize: getComputedStyle(firstRow.querySelector('td')!).fontSize,
       durationAlign: getComputedStyle(firstRow.cells[col('Duration')]!).textAlign,
       firstRowTop: top(firstRow),
-      graphTop: top(graph ?? null),
+      viewsTop: top(views),
       pageScrollsSideways: document.documentElement.scrollWidth > window.innerWidth,
       // #1484 M2 slice 2 — the header band and the failure banner.
       facts: Object.fromEntries(
@@ -149,11 +150,11 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
   expect(byId('stop')[0]!.status).toBe('failure');
   expect(byId('stop')[0]!.error).toContain('planned stop');
 
-  // Dense, numbers right-aligned, and above the graph rather than below it.
+  // Dense, numbers right-aligned, and above the run's other views rather than below them.
   expect(seen.fontSize).toBe('13px');
   expect(seen.durationAlign).toBe('right');
   for (const r of seen.rows) expect(r.height).toBeLessThanOrEqual(33);
-  expect(seen.firstRowTop).toBeLessThan(seen.graphTop);
+  expect(seen.firstRowTop).toBeLessThan(seen.viewsTop);
   expect(seen.pageScrollsSideways).toBe(false);
   test.info().annotations.push({
     type: 'first activity row y at 1440x900',
@@ -188,6 +189,9 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
      focus each time, and Escape goes back to the last button that asked. The
      open drawer lies over the banner's button, so the second ask is the
      keyboard's. */
+  await openRunView(page, 'Graph');
+  // The open view is in the URL, so a shared link opens on it.
+  await expect(page).toHaveURL(/[?&]rdTab=graph(&|$)/);
   const stopNode = page.locator('.react-flow__node[data-id="stop"] .run-node-open');
   await stopNode.click();
   await expect(drawerPanel).toBeFocused();

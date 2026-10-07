@@ -6,6 +6,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
 import { seedConnection } from './support/seedResources';
 import { fluentRootReady } from './support/theme';
+import { openRunView } from './support/panels';
 
 /**
  * #1484 OR35 M2 — the run page's detail drawer. A two-item ForEach lists a
@@ -130,6 +131,7 @@ test('#1484 M2 — an activity run opens in a drawer, with its own item’s inpu
     await drawer.getByRole('complementary').focus();
     await page.keyboard.press('Escape');
     await expect(drawer).toHaveCount(0);
+    await openRunView(page, 'Graph');
     const nodeOpen = page.locator('.run-canvas .run-node-open');
     await expect(nodeOpen).toHaveCount(1);
     await nodeOpen.scrollIntoViewIfNeeded();
