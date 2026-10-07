@@ -705,6 +705,39 @@ test.describe('version history column (#1475 OR27)', () => {
    * removes it, and a `?version` the page did not write moves the view, all
    * without remounting the editor or throwing its draft away.
    */
+  /**
+   * #1579 — the router commits a navigation in a transition, so a preview's
+   * `?version=N` can be in the URL before the page has re-rendered with it.
+   * Leaving the preview in that gap used to compute "no change" against the
+   * stale location, leave `?version=1` behind, and reopen the preview that was
+   * just left. Both clicks run in ONE task here, so the gap is certain rather
+   * than a matter of load.
+   */
+  test('leaving a preview before the router re-renders leaves it for good', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    const pipelineId = await seedThreeVersions(page, 'history-race');
+    await (await historyItem(page)).click();
+    await expect(rows(page)).toHaveCount(3);
+
+    const left = await page.evaluate(async () => {
+      document.querySelectorAll<HTMLButtonElement>('.version-history-row')[2]?.click();
+      // Long enough for the preview's urgent render, too short for the router's.
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      const urlInGap = window.location.hash;
+      const back = [...document.querySelectorAll('button')].find(
+        (b) => b.textContent?.trim() === 'Back to editing',
+      );
+      back?.click();
+      return { urlInGap, clicked: back !== undefined };
+    });
+    expect(left).toEqual({ urlInGap: expect.stringMatching(/\?version=1$/), clicked: true });
+
+    await expect(page).toHaveURL(new RegExp(`${encodeURIComponent(pipelineId)}$`));
+    await expect(page.getByTestId('version-preview-bar')).toHaveCount(0);
+    await expect(page.locator('.canvas-grid')).toHaveCount(1);
+    await expectQuiet(page, problems);
+  });
+
   test('keeps the previewed version in the URL, and follows the URL back', async ({ page }) => {
     const problems = collectPageProblems(page);
     const pipelineId = await seedThreeVersions(page, 'history-url');

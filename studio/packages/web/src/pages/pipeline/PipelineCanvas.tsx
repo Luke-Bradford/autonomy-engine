@@ -493,11 +493,18 @@ export function PipelineCanvas({
   const urlSynced = useRef(requestedVersion);
   /* What the writer below reads, through refs so it is ONE function for the
      page's life: the load effect calls it, and a re-run of that effect reloads
-     the head over the draft. */
+     the head over the draft.
+     #1579 — the router commits a navigation in a TRANSITION, so the rendered
+     `location` lags the URL the writer has just written, and an urgent render
+     in between (the preview itself) still carries the old one. The writer
+     records what it wrote, and only a NEW location from the router replaces
+     that; otherwise leaving a preview before the router re-renders computes
+     "no change" against the stale URL, leaves `?version=N` behind, and the
+     follower below then reopens the preview that was just left. */
   const urlRefs = useRef({ location, navigate });
   useLayoutEffect(() => {
     urlRefs.current = { location, navigate };
-  });
+  }, [location, navigate]);
   const setPreviewing = useCallback(
     (version: number | null) => {
       setPreviewingState(version);
@@ -508,8 +515,10 @@ export function PipelineCanvas({
       const node = version !== null && version === requestedVersion ? requestedNode : undefined;
       const next = withOpenVersion(params, version, node);
       if (next.toString() === params.toString()) return;
+      const written = { ...here, search: next.size > 0 ? `?${next}` : '' };
+      urlRefs.current = { location: written, navigate: go };
       void go(
-        { pathname: here.pathname, search: next.size > 0 ? `?${next}` : '', hash: here.hash },
+        { pathname: written.pathname, search: written.search, hash: written.hash },
         { replace: true },
       );
     },
