@@ -71,4 +71,14 @@ describe('AutoGrowTextarea', () => {
     fireEvent.change(box, { target: { value: 'a' } });
     expect(box.style.height).toBe('30px');
   });
+
+  it('hidden, with nothing to measure, keeps its natural row rather than a height of nothing', () => {
+    const box = mount('a\nb');
+    Object.defineProperty(HTMLTextAreaElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get: () => 0,
+    });
+    fireEvent.change(box, { target: { value: 'a\nb\nc' } });
+    expect(box.style.height).toBe('auto');
+  });
 });

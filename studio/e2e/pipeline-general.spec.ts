@@ -136,23 +136,24 @@ test.describe('#1 F8a — pipeline description + annotations', () => {
         };
       });
 
+    // Measured as soon as it is shown: never sized to nothing while hidden.
     const empty = await measure();
     expect(empty.lines).toBeCloseTo(1, 1);
     expect(empty.scrolls).toBe(false);
 
     await box.fill('one\ntwo\nthree');
+    await expect.poll(async () => (await measure()).lines).toBeCloseTo(3, 1);
     const three = await measure();
-    expect(three.lines).toBeCloseTo(3, 1);
     expect(three.scrolls).toBe(false);
 
     await box.fill('1\n2\n3\n4\n5\n6\n7');
+    await expect.poll(async () => (await measure()).lines).toBeCloseTo(4, 1);
     const capped = await measure();
-    expect(capped.lines).toBeCloseTo(4, 1);
     expect(capped.scrolls).toBe(true);
 
     // And back: it shrinks with what is removed.
     await box.fill('one');
-    expect((await measure()).lines).toBeCloseTo(1, 1);
+    await expect.poll(async () => (await measure()).lines).toBeCloseTo(1, 1);
 
     // Growing happens inside the dock; the canvas holds still throughout.
     for (const state of [three, capped]) expect(state.canvas).toEqual(empty.canvas);
