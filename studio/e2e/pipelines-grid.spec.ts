@@ -472,3 +472,64 @@ test('#1581 — two sort clicks before the router re-renders both count', async 
   await expect(page).toHaveURL(/[?&]dir=asc(&|$)/);
   await expectQuiet(page, problems);
 });
+
+test('#1569 slice 7 — the row opens the editor; ⋯ triggers it now, opens its last run and its runs', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const problems = collectPageProblems(page);
+  const name = `e2e 1569s7 ${String(Date.now())}`;
+  const seeded = await seedVersion(page, name, OK);
+  const firstRun = await fireAndSettle(page, seeded.pipelineVersionId, 'e2e 1569s7 manual');
+  await createScheduleTrigger(page, seeded.pipelineVersionId);
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const gridUrl = `/#/author/pipelines?q=${encodeURIComponent(name)}`;
+  const open = async () => {
+    const summariesRead = page.waitForResponse((r) => r.url().endsWith('/api/pipelines/summaries'));
+    await page.goto(gridUrl);
+    await fluentRootReady(page);
+    await summariesRead;
+  };
+  const row = () =>
+    page.getByRole('row').filter({ has: page.getByRole('link', { name: `Open ${name}` }) });
+  const choose = async (item: string) => {
+    await page.getByRole('button', { name: `Actions for ${name}` }).click();
+    await page.getByRole('menuitem', { name: item }).click();
+  };
+  await open();
+
+  // The Triggers count lists this pipeline's triggers.
+  await expect(row().getByRole('link', { name: '1 active / 1' })).toHaveAttribute(
+    'href',
+    `#/manage/triggers?pipeline=${seeded.pipelineId}`,
+  );
+
+  // ⋯ → Runs: the Monitor, filtered to the pipeline.
+  await choose('Runs');
+  await expect(page).toHaveURL(new RegExp(`#/monitor/runs\\?pipeline=${seeded.pipelineId}$`));
+
+  // ⋯ → Open last run: that run.
+  await open();
+  await choose('Open last run');
+  await expect(page).toHaveURL(new RegExp(`#/monitor/runs/${firstRun}$`));
+
+  // ⋯ → Trigger now…: the latest version starts, and the notice links to it.
+  await open();
+  await choose('Trigger now…');
+  const drawer = page.getByRole('dialog', { name: `Trigger now — ${name}` });
+  await expect(drawer.getByText('Runs v1, the latest saved version.')).toBeVisible();
+  await drawer.getByRole('button', { name: 'Start run' }).click();
+  const notice = page.getByRole('status').filter({ hasText: `Run started from ${name} v1.` });
+  await expect(notice).toBeVisible();
+  await expect(drawer).toHaveCount(0);
+  const runHref = await notice.getByRole('link', { name: 'Open run' }).getAttribute('href');
+  expect(runHref).toMatch(/^#\/monitor\/runs\/[^/]+$/);
+  expect(runHref).not.toBe(`#/monitor/runs/${firstRun}`);
+
+  // A click on a plain cell is a click on the row: the editor opens.
+  await row().locator('td').nth(2).click();
+  await expect(page).toHaveURL(new RegExp(`#/author/pipelines/${seeded.pipelineId}$`));
+
+  await expectQuiet(page, problems);
+});
