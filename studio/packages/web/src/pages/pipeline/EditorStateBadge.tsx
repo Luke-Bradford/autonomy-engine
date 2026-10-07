@@ -43,7 +43,7 @@ export function RowStateBadge({
   git,
 }: {
   pipelineName: string;
-  editing: BadgePart;
+  editing: BadgePart | null;
   live: BadgePart | null;
   git: BadgePart | null;
 }): React.JSX.Element {
@@ -54,7 +54,7 @@ export function RowStateBadge({
       role="group"
       aria-label={`${pipelineName} state`}
     >
-      <Part part={editing} name="editing" current={current} />
+      {editing !== null && <Part part={editing} name="editing" current={current} />}
       {live !== null && <Part part={live} name="live" current={current} />}
       {git !== null && <Part part={git} name="git" current={current} />}
     </div>
