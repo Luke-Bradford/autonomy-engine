@@ -1,10 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Menu,
-  MenuItemCheckbox,
-  MenuList,
-  MenuPopover,
-  MenuTrigger,
   ToggleButton,
   Tooltip,
 } from '@fluentui/react-components';
@@ -72,6 +67,7 @@ import { LabelledControl } from '../../lib/LabelledControl';
 import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import { withParams } from '../../lib/withParams';
 import { useSearchBox } from '../../lib/useSearchBox';
+import { FilterMenu } from './FilterMenu';
 import { FilterPicker } from './FilterPicker';
 import { RUN_GROUP_BYS, type RunGroupBy } from './runBars';
 import {
@@ -385,12 +381,6 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
   );
 
   const kinds = readKinds(kind);
-  const kindSummary =
-    kinds.length === 0
-      ? 'All'
-      : kinds.length === 1
-        ? RUN_TRIGGERED_BY_LABELS[kinds[0]!]
-        : `${kinds.length} kinds`;
 
   function clearFilters() {
     const params = new URLSearchParams(searchParams);
@@ -751,32 +741,16 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
           )}
         </LabelledControl>
 
-        {/* What started the run, several at once. Fluent's checkbox menu: it
-            brings the `menuitemcheckbox` roles and arrow-key movement a
-            multi-select needs, which a native `<select multiple>` draws as a
-            tall list box. The button says the selection, so the label is the
-            button's own text. */}
-        <Menu
-          checkedValues={{ kind: kinds }}
-          onCheckedValueChange={(_, data) =>
-            setFilter(RUN_FILTER_PARAMS.kind, canonicalKindParam(data.checkedItems) ?? '')
-          }
-        >
-          <MenuTrigger disableButtonEnhancement>
-            <button type="button" className="run-filters__menu">
-              Triggered by: {kindSummary} <span aria-hidden="true">▾</span>
-            </button>
-          </MenuTrigger>
-          <MenuPopover>
-            <MenuList>
-              {RUN_TRIGGERED_BY_KINDS.map((k) => (
-                <MenuItemCheckbox key={k} name="kind" value={k}>
-                  {RUN_TRIGGERED_BY_LABELS[k]}
-                </MenuItemCheckbox>
-              ))}
-            </MenuList>
-          </MenuPopover>
-        </Menu>
+        {/* What started the run, several at once (`FilterMenu`). */}
+        <FilterMenu
+          label="Triggered by"
+          name="kind"
+          values={RUN_TRIGGERED_BY_KINDS}
+          checked={kinds}
+          labelOf={(k) => RUN_TRIGGERED_BY_LABELS[k]}
+          countNoun="kinds"
+          onChange={(items) => setFilter(RUN_FILTER_PARAMS.kind, canonicalKindParam(items) ?? '')}
+        />
 
         <FilterPicker
           label={<span className="visually-hidden">Pipeline</span>}

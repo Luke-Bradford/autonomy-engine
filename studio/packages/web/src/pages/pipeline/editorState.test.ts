@@ -555,6 +555,9 @@ describe('liveStateKeys (#1569 OR37 slice 2)', () => {
       expect(keys.includes('unsaved'), JSON.stringify(r)).toBe(editing?.label === 'Not saved');
       expect(keys.includes('saved'), JSON.stringify(r)).toBe(editing?.label === 'Saved');
       expect(keys.includes('unpublished'), JSON.stringify(r)).toBe(live?.label === 'Not published');
+      expect(keys.includes('live'), JSON.stringify(r)).toBe(
+        live !== null && live.label !== 'Not published',
+      );
       expect(keys.includes('behind'), JSON.stringify(r)).toBe(live?.label === 'Live (behind)');
       expect(keys.includes('uncommitted'), JSON.stringify(r)).toBe(git !== null);
     }

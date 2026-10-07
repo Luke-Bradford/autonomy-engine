@@ -3,13 +3,14 @@ import type { Pipeline, PipelineSummary } from '@autonomy-studio/shared';
 import type { LiveStateKey } from '../pipeline/editorState';
 import {
   filterPipelines,
-  filtersAwaitFacts,
+  filterFactsStatus,
   hasPipelineFilters,
   LAST_RUN_FILTERS,
   lastRunParam,
-  liveFactsLoaded,
+  liveFactsRead,
   NO_FOLDER,
   readPipelineFilters,
+  type FactsRead,
   type RowFacts,
 } from './pipelinesGridFilter';
 
@@ -161,28 +162,61 @@ describe('pipelines grid filters (#1569 OR37 slice 2)', () => {
     expect(filter('q=digest', unread)).toEqual(['c']);
   });
 
-  it('says when a filter is waiting on facts that have not been read', () => {
-    const loaded = { summaries: true, liveStates: true };
-    expect(filtersAwaitFacts(read('last=failure'), { ...loaded, summaries: false })).toBe(true);
-    expect(filtersAwaitFacts(read('triggers=any'), { ...loaded, summaries: false })).toBe(true);
-    expect(filtersAwaitFacts(read('live=live'), { ...loaded, liveStates: false })).toBe(true);
-    expect(filtersAwaitFacts(read('live=live'), { ...loaded, summaries: false })).toBe(false);
-    expect(filtersAwaitFacts(read('q=x'), { summaries: false, liveStates: false })).toBe(false);
-    expect(filtersAwaitFacts(read('last=failure'), loaded)).toBe(false);
+  it('holds rows back while a fact a filter reads is unread, and says when a read failed', () => {
+    const ready = { summaries: 'ready', liveStates: 'ready' } as const;
+    expect(filterFactsStatus(read('last=failure'), { ...ready, summaries: 'loading' })).toBe(
+      'loading',
+    );
+    expect(filterFactsStatus(read('triggers=any'), { ...ready, summaries: 'failed' })).toBe(
+      'failed',
+    );
+    // Search reads the summaries too: they carry the description and annotations.
+    expect(filterFactsStatus(read('q=x'), { ...ready, summaries: 'loading' })).toBe('loading');
+    expect(filterFactsStatus(read('live=live'), { ...ready, liveStates: 'loading' })).toBe(
+      'loading',
+    );
+    // A source no filter reads does not hold anything back.
+    expect(filterFactsStatus(read('live=live'), { ...ready, summaries: 'failed' })).toBe('ready');
+    expect(filterFactsStatus(read('folder=etl'), { summaries: 'failed', liveStates: 'failed' })).toBe(
+      'ready',
+    );
+    // Failed wins over loading.
+    expect(
+      filterFactsStatus(read('last=failure&live=live'), {
+        summaries: 'loading',
+        liveStates: 'failed',
+      }),
+    ).toBe('failed');
+    expect(filterFactsStatus(read('last=failure'), ready)).toBe('ready');
   });
 
-  it('judges the live-state facts loaded per key', () => {
-    const at = (live: LiveStateKey, gitConnected: boolean | undefined, sync: unknown) =>
-      liveFactsLoaded(live, { states: true, gitConnected, sync });
-    expect(liveFactsLoaded('unsaved', { states: false, gitConnected: true, sync: {} })).toBe(false);
-    expect(at('unsaved', undefined, undefined)).toBe(true);
+  it('reads all eight last-run values as the whole list, as the writer spells it', () => {
+    expect(read(`last=${LAST_RUN_FILTERS.join(',')}`).last).toEqual([]);
+  });
+
+  it('judges the live-state facts per key', () => {
+    const at = (
+      live: LiveStateKey,
+      gitConnected: boolean | undefined,
+      over: Partial<{ states: FactsRead; git: FactsRead; sync: FactsRead }> = {},
+    ) =>
+      liveFactsRead(live, {
+        states: 'ready',
+        git: 'ready',
+        sync: 'ready',
+        gitConnected,
+        ...over,
+      });
+    expect(at('unsaved', true, { states: 'loading' })).toBe('loading');
+    expect(at('live', true, { states: 'failed' })).toBe('failed');
+    expect(at('unsaved', undefined, { git: 'failed' })).toBe('ready');
     // Whether git is connected decides what every other key means.
-    expect(at('saved', undefined, undefined)).toBe(false);
-    expect(at('live', true, undefined)).toBe(true);
+    expect(at('saved', undefined, { git: 'loading' })).toBe('loading');
+    expect(at('saved', undefined, { git: 'failed' })).toBe('failed');
+    expect(at('live', true)).toBe('ready');
     // Drift needs the sync reading, in a git workspace only.
-    expect(at('uncommitted', true, undefined)).toBe(false);
-    expect(at('uncommitted', true, null)).toBe(false);
-    expect(at('uncommitted', true, {})).toBe(true);
-    expect(at('uncommitted', false, undefined)).toBe(true);
+    expect(at('uncommitted', true, { sync: 'loading' })).toBe('loading');
+    expect(at('uncommitted', true, { sync: 'failed' })).toBe('failed');
+    expect(at('uncommitted', false, { sync: 'failed' })).toBe('ready');
   });
 });

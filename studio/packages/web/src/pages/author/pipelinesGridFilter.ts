@@ -61,13 +61,19 @@ export function readPipelineFilters(params: URLSearchParams): PipelineFilters {
   return {
     q: q === undefined || q === '' ? undefined : q,
     folder: folder === null || folder === '' ? undefined : folder,
-    last: archived ? [] : readSetParam(LAST_RUN_FILTERS, params.get(PIPELINE_FILTER_PARAMS.last)),
+    last: archived ? [] : readLastRun(params.get(PIPELINE_FILTER_PARAMS.last)),
     triggers: archived
       ? undefined
       : oneOf(TRIGGERS_FILTERS, params.get(PIPELINE_FILTER_PARAMS.triggers)),
     live: archived ? undefined : oneOf(LIVE_STATE_KEYS, params.get(PIPELINE_FILTER_PARAMS.live)),
     archived,
   };
+}
+
+/** Every value picked is the whole list, as the writer spells it (no param). */
+function readLastRun(raw: string | null): LastRunFilter[] {
+  const picked = readSetParam(LAST_RUN_FILTERS, raw);
+  return picked.length === LAST_RUN_FILTERS.length ? [] : picked;
 }
 
 /** Is the Archived view open? (`?archived=1`) */
@@ -104,37 +110,49 @@ export const CLEARED_PIPELINE_FILTERS: Record<string, string> = {
 /**
  * What a row's facts are, for filtering. Each is `undefined` when its source has
  * not been read (or failed): a row is never shown as matching a fact nobody
- * has, and the page says those filters are waiting rather than "no match".
+ * has, and the page says the list is held back rather than "no match".
  */
 export interface RowFacts {
   summary: PipelineSummary | undefined;
   liveKeys: readonly LiveStateKey[] | undefined;
 }
 
-/** Is a filter set waiting on a fact source that has not answered? */
-export function filtersAwaitFacts(
+/** A fact source: answered, still being read, or failed. */
+export type FactsRead = 'ready' | 'loading' | 'failed';
+
+/**
+ * Are the rows on screen everything the filters would keep? `ready` when every
+ * source a filter reads has answered; otherwise rows are held back, and the
+ * page says why — `failed` (a read failed) wins over `loading`. Search reads
+ * the summaries too: they carry the description and annotations.
+ */
+export function filterFactsStatus(
   f: PipelineFilters,
-  loaded: { summaries: boolean; liveStates: boolean },
-): boolean {
-  const needSummaries = f.last.length > 0 || f.triggers !== undefined;
-  return (needSummaries && !loaded.summaries) || (f.live !== undefined && !loaded.liveStates);
+  reads: { summaries: FactsRead; liveStates: FactsRead },
+): FactsRead {
+  const needed: FactsRead[] = [];
+  if (f.q !== undefined || f.last.length > 0 || f.triggers !== undefined) {
+    needed.push(reads.summaries);
+  }
+  if (f.live !== undefined) needed.push(reads.liveStates);
+  if (needed.includes('failed')) return 'failed';
+  return needed.includes('loading') ? 'loading' : 'ready';
 }
 
 /**
- * Has everything a Live state filter reads answered? The row states always;
- * whether a repo is connected for every key the git mode changes; and, for
- * Uncommitted in a git workspace, the sync reading (`null` is a failed fetch,
- * which says nothing about drift).
+ * Where a Live state filter's facts stand. The row states always; whether a
+ * repo is connected for every key the git mode changes; and, for Uncommitted
+ * in a git workspace, the sync reading.
  */
-export function liveFactsLoaded(
+export function liveFactsRead(
   live: LiveStateKey,
-  read: { states: boolean; gitConnected: boolean | undefined; sync: unknown },
-): boolean {
-  if (!read.states) return false;
-  if (live === 'unsaved') return true;
-  if (read.gitConnected === undefined) return false;
-  if (live === 'uncommitted') return read.gitConnected === false || read.sync != null;
-  return true;
+  read: { states: FactsRead; git: FactsRead; gitConnected: boolean | undefined; sync: FactsRead },
+): FactsRead {
+  if (read.states !== 'ready') return read.states;
+  if (live === 'unsaved') return 'ready';
+  if (read.gitConnected === undefined) return read.git === 'failed' ? 'failed' : 'loading';
+  if (live === 'uncommitted' && read.gitConnected) return read.sync;
+  return 'ready';
 }
 
 function matchesSearch(p: Pipeline, s: PipelineSummary | undefined, q: string): boolean {

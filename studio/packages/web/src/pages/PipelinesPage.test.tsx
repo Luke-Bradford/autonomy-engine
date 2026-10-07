@@ -299,17 +299,53 @@ describe('PipelinesPage', () => {
         await waitFor(() => expect(rowNames()).toEqual(['Beta', 'Gamma']));
       });
 
-      it('says a filter is waiting for facts — not "no match" — while the summaries are unread', async () => {
+      it('says a filter is loading its facts — not "no match" — while the summaries are unread', async () => {
         seed();
         const pending = deferred<PipelineSummary[]>();
         summariesMock.mockReturnValue(pending.promise);
         renderAt('?last=failure');
-        expect(await screen.findByText(/Waiting for run and state facts/)).toBeInTheDocument();
+        expect(await screen.findByText('Loading run facts…')).toBeInTheDocument();
         expect(screen.queryByText(/No pipelines match/)).not.toBeInTheDocument();
         expect(screen.queryByRole('table')).not.toBeInTheDocument();
         pending.resolve([summary('pl_2', { lastRun: failed })]);
         await waitFor(() => expect(rowNames()).toEqual(['Beta']));
-        expect(screen.queryByText(/Waiting for run and state facts/)).not.toBeInTheDocument();
+        expect(screen.queryByText('Loading run facts…')).not.toBeInTheDocument();
+      });
+
+      it('holds a search back while the descriptions are unread, showing the name matches', async () => {
+        seed();
+        const pending = deferred<PipelineSummary[]>();
+        summariesMock.mockReturnValue(pending.promise);
+        renderAt('?q=orders');
+        // "orders" is only in Alpha's description: no claim of "no match" yet.
+        expect(await screen.findByText('Loading run facts…')).toBeInTheDocument();
+        expect(screen.queryByText(/No pipelines match/)).not.toBeInTheDocument();
+        pending.resolve([summary('pl_1', { description: 'Loads the orders feed' })]);
+        await waitFor(() => expect(rowNames()).toEqual(['Alpha']));
+      });
+
+      it('says a failed facts read failed, rather than loading for ever', async () => {
+        seed();
+        summariesMock.mockRejectedValue(new Error('down'));
+        renderAt('?last=failure');
+        expect(await screen.findByRole('alert')).toHaveTextContent(
+          'Could not read the run facts these filters need.',
+        );
+        expect(screen.queryByText('Loading run facts…')).not.toBeInTheDocument();
+        expect(screen.queryByText(/No pipelines match/)).not.toBeInTheDocument();
+      });
+
+      it('keeps the bar, and its Clear, while the list reloads', async () => {
+        seed();
+        const store = createPipelinesStore();
+        renderWithRouter(<PipelinesPage store={store} />, '/author/pipelines?q=alpha');
+        await waitFor(() => expect(rowNames()).toEqual(['Alpha']));
+        const reload = deferred<Pipeline[]>();
+        listMock.mockReturnValueOnce(reload.promise);
+        void store.getState().refresh();
+        await waitFor(() => expect(store.getState().status).toBe('loading'));
+        expect(screen.getByRole('button', { name: 'Clear filters' })).toBeInTheDocument();
+        reload.resolve([pipeline({ id: 'pl_1', name: 'Alpha', folder: 'ETL' })]);
       });
 
       it('says no pipeline matches once the facts are read', async () => {
@@ -494,8 +530,8 @@ describe('PipelinesPage', () => {
 
   /**
    * #1058 — archive is the only way to retire a pipeline that has ever run, and
-   * the archived section is the only way back. Both halves, plus the load-status
-   * honesty the section needs to be a real recovery surface.
+   * the archived view is the only way back. Both halves, plus the load-status
+   * honesty the view needs to be a real recovery surface.
    */
   describe('#1058 archive and the way back', () => {
     it('archives after confirmation, naming the consequences in the confirm', async () => {
@@ -545,7 +581,7 @@ describe('PipelinesPage', () => {
       ).toBeInTheDocument();
     });
 
-    it('fetches the archived set only when the section is opened', async () => {
+    it('fetches the archived set only when the view is opened', async () => {
       const user = userEvent.setup();
       listArchivedMock.mockResolvedValue([pipeline({ id: 'pl_9', name: 'Retired' })]);
       renderPage();
@@ -625,7 +661,7 @@ describe('PipelinesPage', () => {
       // 6. The STALE load finally answers, with a list from before the archive.
       first.resolve([]);
 
-      // It must be dropped. Without the guard the section overwrites itself
+      // It must be dropped. Without the guard the view overwrites itself
       // with "No archived pipelines" — the exact lie the status triple exists
       // to prevent, on the ONE surface that is the way back out of archive, and
       // nothing refetches to self-correct.
@@ -634,11 +670,11 @@ describe('PipelinesPage', () => {
       expect(screen.getByText('Retired')).toBeInTheDocument();
     });
 
-    it('supersedes an in-flight load when an archive invalidates the CLOSED section', async () => {
+    it('supersedes an in-flight load when an archive invalidates the CLOSED view', async () => {
       const user = userEvent.setup();
       listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
 
-      // The load is still in flight when the section is closed, and nothing
+      // The load is still in flight when the view is closed, and nothing
       // reopens it before it answers — so unlike the case above, no SECOND
       // load exists to move the counter past it.
       const inFlight = deferred<Pipeline[]>();
@@ -695,9 +731,9 @@ describe('PipelinesPage', () => {
       archiving.resolve(pipeline({ archived: true }));
       firstLoad.resolve([]);
 
-      // The archive lands last and invalidates the set. The section is OPEN by
+      // The archive lands last and invalidates the set. The view is OPEN by
       // then, so it has to load: otherwise it sits at `idle` while open, which
-      // renders no rows, no error and no "Loading…" — a blank section that
+      // renders no rows, no error and no "Loading…" — a blank view that
       // nothing refetches, hiding the pipeline just archived.
       // In the archived view, a row's menu is the archived row's.
       expect(
@@ -736,7 +772,7 @@ describe('PipelinesPage', () => {
      * wraps its follow-up reads in the same try/catch as the mutation, so the
      * only thing keeping "Could not archive" honest is that neither follow-up
      * can reject: `pipelinesStore.refresh` says so in its contract, and
-     * `loadArchived` reports its own failure into the section's status.
+     * `loadArchived` reports its own failure into the view's status.
      *
      * Both are non-local to the handler, which is exactly why they are pinned
      * here — the day either starts rejecting, the operator is told their
