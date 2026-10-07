@@ -18,7 +18,7 @@ import { LabelledControl } from '../../lib/LabelledControl';
 import { withParams } from '../../lib/withParams';
 import { useSearchBox } from '../../lib/useSearchBox';
 import { FilterPicker, type FilterOption } from './FilterPicker';
-import { SortButton } from './SortButton';
+import { SortButton } from '../../lib/SortButton';
 import { RunDuration } from './RunHeader';
 import { runStatusLabel } from './runStatus';
 import {

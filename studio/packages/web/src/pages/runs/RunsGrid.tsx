@@ -1,29 +1,11 @@
-import { Fragment, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
-import {
-  Menu,
-  MenuDivider,
-  MenuItem,
-  MenuItemCheckbox,
-  MenuList,
-  MenuPopover,
-  MenuTrigger,
-} from '@fluentui/react-components';
+import { Fragment, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { useStore } from 'zustand';
 import { useHref, useLocation, useNavigate } from 'react-router';
 import type { RunSortKey, RunSummary } from '@autonomy-studio/shared';
-import {
-  RUN_GRID_COLUMNS,
-  RUN_GRID_COLUMN_MAX_WIDTH,
-  RUN_GRID_COLUMN_WIDTHS,
-  RUN_GRID_REQUIRED_COLUMNS,
-  RUN_GRID_RESIZE_STEP,
-  type RunGridColumnId,
-  type UiStore,
-} from '../../stores/uiStore';
-import { ariaSortOf } from '../../lib/urlSort';
-import { PaneSplitter } from '../../shell/PaneSplitter';
+import { RUN_GRID_SPEC, type RunGridColumnId, type UiStore } from '../../stores/uiStore';
+import { GridColumnHeader, GridColumnsMenu } from '../../lib/GridColumns';
+import { useGridColumnWidths } from '../../lib/useGridColumnWidths';
 import { runDetailPath } from './runPath';
-import { SortButton } from './SortButton';
 import { nestRuns } from './runTree';
 import {
   isPinnedRunGridColumn,
@@ -38,17 +20,8 @@ import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import { useTickingNow } from '../../hooks/useTickingNow';
 import { DURATION_TICK_MS } from './format';
 
-/** A column's drawn width: the operator's, else its default. */
-function widthOf(widths: Partial<Record<RunGridColumnId, number>>, column: RunGridColumnId) {
-  return widths[column] ?? RUN_GRID_COLUMN_WIDTHS[column].default;
-}
-
 /**
- * A column header. The `<th>`'s `aria-label` is its name, so the resize handle
- * inside it does not become part of the header every cell is announced under.
- * A sortable header's button is the control, so a keyboard reaches it and a
- * screen reader announces the column's name and its order; `aria-sort` is set
- * only on the sorted column, as ARIA asks. The order is the SERVER's
+ * A runs grid column header (`GridColumnHeader`). The order is the SERVER's
  * (`?sort=`), so it holds across every page rather than only the rows loaded.
  */
 function ColumnHeader({
@@ -74,42 +47,25 @@ function ColumnHeader({
      visible without a hover. Outside the `aria-label`, which stays the name. */
   const note =
     zoned && zoneNote !== '' ? <span className="runs-grid__zone"> {zoneNote}</span> : null;
-  const active = sortKey !== undefined && sort.key === sortKey;
-  const id = `runs-grid-col-${column}`;
   return (
-    <th
-      id={id}
-      scope="col"
-      aria-label={label}
-      {...(numeric ? { className: 'num' } : {})}
-      aria-sort={ariaSortOf(active ? sort.dir : null)}
-    >
-      {sortKey === undefined ? (
-        <>
-          {label}
-          {note}
-        </>
-      ) : (
-        <SortButton dir={active ? sort.dir : null} onClick={() => onSort(sortKey)}>
-          {label}
-          {note}
-        </SortButton>
-      )}
-      {/* A sibling of the sort button, never inside it, so a drag never sorts.
-          Arrow keys step it; a double-click returns the column to its default. */}
-      <PaneSplitter
-        value={width}
-        min={RUN_GRID_COLUMN_WIDTHS[column].min}
-        max={RUN_GRID_COLUMN_MAX_WIDTH}
-        step={RUN_GRID_RESIZE_STEP}
-        label={`Resize ${label} column`}
-        className="runs-grid__resizer"
-        onPreview={onPreviewWidth}
-        onCommit={onCommitWidth}
-        onDoubleClick={() => onCommitWidth(null)}
-        controls={id}
-      />
-    </th>
+    <GridColumnHeader
+      id={`runs-grid-col-${column}`}
+      label={label}
+      note={note}
+      numeric={numeric}
+      {...(sortKey === undefined
+        ? {}
+        : {
+            sortDir: sort.key === sortKey ? sort.dir : null,
+            onSort: () => onSort(sortKey),
+          })}
+      width={width}
+      min={RUN_GRID_SPEC.widths[column].min}
+      max={RUN_GRID_SPEC.maxWidth}
+      step={RUN_GRID_SPEC.step}
+      onPreviewWidth={onPreviewWidth}
+      onCommitWidth={onCommitWidth}
+    />
   );
 }
 
@@ -258,17 +214,11 @@ export function RunsGrid({
      before, and a fresh poll moves a held clock forward. */
   const clock = Math.max(counting, loadedAt);
   const columns = visibleRunGridColumns(hidden, sort.key);
-  const total = columns.reduce((sum, column) => sum + widthOf(widths, column), 0);
-  const tableRef = useRef<HTMLTableElement>(null);
-  const colRefs = useRef<Partial<Record<RunGridColumnId, HTMLTableColElement | null>>>({});
-
-  function preview(column: RunGridColumnId, width: number) {
-    const col = colRefs.current[column];
-    if (col) col.style.width = `${width}px`;
-    if (tableRef.current) {
-      tableRef.current.style.minWidth = `${total - widthOf(widths, column) + width}px`;
-    }
-  }
+  const { widthOf, total, tableRef, colRef, preview } = useGridColumnWidths(
+    RUN_GRID_SPEC,
+    widths,
+    columns,
+  );
 
   return (
     <div className="runs-grid-scroll">
@@ -277,11 +227,9 @@ export function RunsGrid({
           {columns.map((column) => (
             <col
               key={column}
-              ref={(el) => {
-                colRefs.current[column] = el;
-              }}
+              ref={colRef(column)}
               className={`runs-grid__col--${column}`}
-              style={{ width: `${widthOf(widths, column)}px` }}
+              style={{ width: `${widthOf(column)}px` }}
             />
           ))}
           <col className="runs-grid__col--filler" />
@@ -294,7 +242,7 @@ export function RunsGrid({
                 column={column}
                 sort={sort}
                 onSort={onSort}
-                width={widthOf(widths, column)}
+                width={widthOf(column)}
                 onPreviewWidth={(width) => preview(column, width)}
                 onCommitWidth={(width) => setWidth(column, width)}
                 zoneNote={zoneLabel(loadedAt, zone)}
@@ -339,8 +287,8 @@ export function RunsGrid({
 export function RunGridColumnsMenu({
   hidden,
   sortKey,
-  onHiddenChange: setHidden,
-  onReset: reset,
+  onHiddenChange,
+  onReset,
 }: {
   /** As `RunsGrid`'s `hidden`: the set the grid is drawing. */
   hidden: readonly RunGridColumnId[];
@@ -348,51 +296,14 @@ export function RunGridColumnsMenu({
   onHiddenChange: (hidden: readonly RunGridColumnId[]) => void;
   onReset: () => void;
 }) {
-  const shown = visibleRunGridColumns(hidden, sortKey);
-  const locked = (column: RunGridColumnId) => isPinnedRunGridColumn(column, sortKey);
   return (
-    <Menu
-      checkedValues={{ columns: shown }}
-      onCheckedValueChange={(_, data) =>
-        setHidden(
-          RUN_GRID_COLUMNS.filter(
-            // A locked column's box cannot change, so its stored choice is kept
-            // as it was: a column hidden before the grid was sorted by it hides
-            // again once the sort moves on.
-            (column) =>
-              locked(column) ? hidden.includes(column) : !data.checkedItems.includes(column),
-          ),
-        )
-      }
-    >
-      <MenuTrigger disableButtonEnhancement>
-        <button type="button">
-          Columns <span aria-hidden="true">▾</span>
-        </button>
-      </MenuTrigger>
-      <MenuPopover>
-        <MenuList>
-          {RUN_GRID_COLUMNS.map((column) => (
-            <MenuItemCheckbox
-              key={column}
-              name="columns"
-              value={column}
-              disabled={locked(column)}
-              {...(locked(column)
-                ? {
-                    title: RUN_GRID_REQUIRED_COLUMNS.includes(column)
-                      ? 'Always shown'
-                      : 'Shown while the grid is sorted by it',
-                  }
-                : {})}
-            >
-              {RUN_GRID_COLUMN_DEFS[column].label}
-            </MenuItemCheckbox>
-          ))}
-          <MenuDivider />
-          <MenuItem onClick={reset}>Reset columns</MenuItem>
-        </MenuList>
-      </MenuPopover>
-    </Menu>
+    <GridColumnsMenu
+      spec={RUN_GRID_SPEC}
+      hidden={hidden}
+      pinned={(column) => isPinnedRunGridColumn(column, sortKey)}
+      labelOf={(column) => RUN_GRID_COLUMN_DEFS[column].label}
+      onHiddenChange={onHiddenChange}
+      onReset={onReset}
+    />
   );
 }

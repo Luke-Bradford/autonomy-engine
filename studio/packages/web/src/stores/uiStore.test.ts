@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_THEME_MODE } from '../theme/fluentTheme';
+import { GRID_COLUMN_MAX_WIDTH } from './gridColumns';
 import {
   CANVAS_MIN_HEIGHT,
   DOCK_HEIGHT_STORAGE_KEY,
@@ -30,8 +31,12 @@ import {
   PANE_MAX_WIDTH,
   PANE_MIN_WIDTH,
   PANE_STORAGE_KEY,
+  PIPELINE_GRID_COLUMNS,
+  PIPELINE_GRID_COLUMN_WIDTHS,
+  PIPELINE_GRID_DEFAULT_HIDDEN,
+  PIPELINE_GRID_HIDDEN_STORAGE_KEY,
+  PIPELINE_GRID_WIDTHS_STORAGE_KEY,
   RUN_GRID_COLUMNS,
-  RUN_GRID_COLUMN_MAX_WIDTH,
   RUN_GRID_COLUMN_WIDTHS,
   RUN_GRID_DEFAULT_HIDDEN,
   RUN_GRID_HIDDEN_STORAGE_KEY,
@@ -688,6 +693,62 @@ describe('uiStore dock tabs (#1475 OR27)', () => {
   });
 });
 
+describe('uiStore pipelines grid columns (#1569 OR37)', () => {
+  it('starts with the optional columns off and every width at its default', () => {
+    const state = createUiStore(fakeStorage()).getState();
+    expect(state.pipelinesGridHidden).toEqual(PIPELINE_GRID_DEFAULT_HIDDEN);
+    expect(state.pipelinesGridHidden).toEqual([
+      'description',
+      'runs',
+      'duration',
+      'activities',
+      'annotations',
+      'concurrency',
+    ]);
+    expect(state.pipelinesGridWidths).toEqual({});
+  });
+
+  it('the default columns and the 48px ⋯ fit the 1083px grid at 1440×900', () => {
+    const shown = PIPELINE_GRID_COLUMNS.filter((c) => !PIPELINE_GRID_DEFAULT_HIDDEN.includes(c));
+    const total = shown.reduce((sum, c) => sum + PIPELINE_GRID_COLUMN_WIDTHS[c].default, 48);
+    expect(total).toBeLessThanOrEqual(1083);
+  });
+
+  it('persists its own choice and widths under its own keys, never the runs grid', () => {
+    const storage = fakeStorage();
+    const store = createUiStore(storage);
+    store.getState().setPipelinesGridHidden(['runs', 'name', 'runs', 'lastRun']);
+    store.getState().setPipelinesGridWidth('name', 5);
+    store.getState().setPipelinesGridWidth('description', 300.4);
+    expect(storage.data.get(PIPELINE_GRID_HIDDEN_STORAGE_KEY)).toBe('["lastRun","runs"]');
+    expect(storage.data.get(PIPELINE_GRID_WIDTHS_STORAGE_KEY)).toBe(
+      `{"name":${String(PIPELINE_GRID_COLUMN_WIDTHS.name.min)},"description":300}`,
+    );
+    expect(storage.data.has(RUN_GRID_HIDDEN_STORAGE_KEY)).toBe(false);
+    expect(storage.data.has(RUN_GRID_WIDTHS_STORAGE_KEY)).toBe(false);
+    const read = createUiStore(storage).getState();
+    expect(read.pipelinesGridHidden).toEqual(['lastRun', 'runs']);
+    expect(read.pipelinesGridWidths).toEqual({
+      name: PIPELINE_GRID_COLUMN_WIDTHS.name.min,
+      description: 300,
+    });
+    expect(read.runsGridHidden).toEqual(RUN_GRID_DEFAULT_HIDDEN);
+  });
+
+  it('Reset columns brings back the default set and widths, and stores them', () => {
+    const storage = fakeStorage();
+    const store = createUiStore(storage);
+    store.getState().setPipelinesGridHidden([]);
+    store.getState().setPipelinesGridWidth('lastRun', 300);
+    store.getState().resetPipelinesGridColumns();
+    expect(store.getState().pipelinesGridHidden).toEqual(PIPELINE_GRID_DEFAULT_HIDDEN);
+    expect(store.getState().pipelinesGridWidths).toEqual({});
+    const read = createUiStore(storage).getState();
+    expect(read.pipelinesGridHidden).toEqual(PIPELINE_GRID_DEFAULT_HIDDEN);
+    expect(read.pipelinesGridWidths).toEqual({});
+  });
+});
+
 describe('uiStore runs grid columns (#1484 OR35 M1)', () => {
   it('starts with only the default-hidden columns off, every column at its default width', () => {
     const state = createUiStore(fakeStorage()).getState();
@@ -747,7 +808,7 @@ describe('uiStore runs grid columns (#1484 OR35 M1)', () => {
     expect(store.getState().runsGridWidths).toEqual({
       status: 121,
       runId: RUN_GRID_COLUMN_WIDTHS.runId.min,
-      pipeline: RUN_GRID_COLUMN_MAX_WIDTH,
+      pipeline: GRID_COLUMN_MAX_WIDTH,
     });
     expect(createUiStore(storage).getState().runsGridWidths).toEqual(
       store.getState().runsGridWidths,
@@ -777,7 +838,7 @@ describe('uiStore runs grid columns (#1484 OR35 M1)', () => {
     ).getState();
     expect(state.runsGridWidths).toEqual({
       status: 130,
-      started: RUN_GRID_COLUMN_MAX_WIDTH,
+      started: GRID_COLUMN_MAX_WIDTH,
       duration: RUN_GRID_COLUMN_WIDTHS.duration.min,
     });
     for (const raw of ['', '[]', 'null', '120', '{']) {
@@ -804,7 +865,7 @@ describe('uiStore runs grid columns (#1484 OR35 M1)', () => {
   it('gives every column a default inside its own bounds', () => {
     for (const { min, default: width } of Object.values(RUN_GRID_COLUMN_WIDTHS)) {
       expect(width).toBeGreaterThanOrEqual(min);
-      expect(width).toBeLessThanOrEqual(RUN_GRID_COLUMN_MAX_WIDTH);
+      expect(width).toBeLessThanOrEqual(GRID_COLUMN_MAX_WIDTH);
     }
   });
 });

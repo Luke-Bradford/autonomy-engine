@@ -36,7 +36,8 @@ import { NewPipelineDrawer, type NewPipelineForm } from './NewPipelineDrawer';
 import { PipelineImportDrawer } from './PipelineImportDrawer';
 import { useDrawerForm } from '../lib/form/useDrawerForm';
 import { leavesPath } from '../lib/form/leavesPath';
-import { PipelinesGrid } from './author/PipelinesGrid';
+import { PipelineGridColumnsMenu, PipelinesGrid } from './author/PipelinesGrid';
+import { uiStore, type UiStore } from '../stores/uiStore';
 import { folderNamesOf } from './author/pipelineFolders';
 import {
   nextPipelineSort,
@@ -114,7 +115,10 @@ function lastRunFilterLabel(v: LastRunFilter): string {
  * preference persists), and Author would then have no way to reach or create a
  * pipeline at all.
  */
-export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesStore } = {}) {
+export function PipelinesPage({
+  store = pipelinesStore,
+  ui = uiStore,
+}: { store?: PipelinesStore; ui?: UiStore } = {}) {
   const [confirm, confirmDialog] = useConfirm();
   const status = useStore(store, (s) => s.status);
   const pipelines = useStore(store, (s) => s.pipelines);
@@ -779,6 +783,9 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
                 Clear
               </button>
             )}
+            {/* #1569 OR37 — the viewer's columns. The Archived view draws a fixed
+              pair, so it has no picker. */}
+            {!showArchived && <PipelineGridColumnsMenu sortKey={sort.key} ui={ui} />}
           </div>
 
           {showArchived && (
@@ -839,6 +846,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
               sort={sort}
               onSort={onSort}
               {...(showArchived ? { columns: ARCHIVED_COLUMNS } : {})}
+              ui={ui}
               liveState={(p) => {
                 const state = versionStates?.get(p.id);
                 return state === undefined ? null : (

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useStore } from 'zustand';
 import { Link } from 'react-router';
 import {
   PIPELINE_SUMMARY_WINDOW_DAYS,
@@ -7,9 +8,12 @@ import {
   type Pipeline,
   type PipelineSummary,
 } from '@autonomy-studio/shared';
-import { ariaSortOf } from '../../lib/urlSort';
 import { When } from '../../lib/When';
-import { SortButton } from '../runs/SortButton';
+import { GridColumnHeader, GridColumnsMenu } from '../../lib/GridColumns';
+import { useGridColumnWidths } from '../../lib/useGridColumnWidths';
+import { visibleGridColumns } from '../../stores/gridColumns';
+import { PIPELINE_GRID_SPEC, type PipelineGridColumnId, type UiStore } from '../../stores/uiStore';
+import { formatElapsed } from '../runs/format';
 import { runDetailPath } from '../runs/runPath';
 import { runStatusLabel } from '../runs/runStatus';
 import { pipelinePath } from './pipelinePath';
@@ -18,14 +22,8 @@ import type { PipelineSort, PipelineSortKey } from './pipelinesGridSort';
 
 const DAYS = String(PIPELINE_SUMMARY_WINDOW_DAYS);
 
-export type ColumnId =
-  'name' | 'lastRun' | 'successRate' | 'nextRun' | 'triggers' | 'live' | 'modified';
-
 interface Column {
-  id: ColumnId;
   label: string;
-  /** The `<col>` width; the last column before the menu takes what is left. */
-  width: number;
   sort?: PipelineSortKey;
   numeric?: boolean;
   /** The header's hover text, where the label alone is terse. */
@@ -33,25 +31,52 @@ interface Column {
 }
 
 /**
- * #1569 OR37 — the issue's default columns. There is no Version column on
- * purpose: versions live in the editor's badge and its history.
+ * #1569 OR37 — each column's header, keyed by the store's ids
+ * (`PIPELINE_GRID_COLUMNS` owns the order and the widths), so a column added
+ * there without a definition here fails the typecheck.
  */
-const COLUMNS: readonly Column[] = [
-  { id: 'name', label: 'Name', width: 280, sort: 'name' },
-  { id: 'lastRun', label: 'Last run', width: 200, sort: 'lastRun' },
-  {
-    id: 'successRate',
+const PIPELINE_GRID_COLUMN_DEFS: Record<PipelineGridColumnId, Column> = {
+  name: { label: 'Name', sort: 'name' },
+  description: { label: 'Description' },
+  lastRun: { label: 'Last run', sort: 'lastRun' },
+  successRate: {
     label: `Success % (${DAYS}d)`,
-    width: 128,
     sort: 'successRate',
     numeric: true,
     title: `Succeeded ÷ (succeeded + failed) over the runs started in the last ${DAYS} days. Cancelled and skipped runs are not counted; Debug runs are not included.`,
   },
-  { id: 'nextRun', label: 'Next run', width: 150, sort: 'nextRun' },
-  { id: 'triggers', label: 'Triggers', width: 116, sort: 'triggers' },
-  { id: 'live', label: 'Live state', width: 180 },
-  { id: 'modified', label: 'Modified', width: 150, sort: 'modified' },
-];
+  runs: {
+    label: `Runs (${DAYS}d)`,
+    sort: 'runs',
+    numeric: true,
+    title: `Runs started in the last ${DAYS} days, finished or not. Debug runs are not included.`,
+  },
+  duration: {
+    label: 'p50 / p95',
+    sort: 'duration',
+    numeric: true,
+    title: `Median and 95th-percentile duration of the runs that succeeded or failed in the last ${DAYS} days. Sorts by the median.`,
+  },
+  nextRun: { label: 'Next run', sort: 'nextRun' },
+  triggers: { label: 'Triggers', sort: 'triggers' },
+  live: { label: 'Live state' },
+  activities: {
+    label: 'Activities',
+    sort: 'activities',
+    numeric: true,
+    title: 'Activities in the latest saved version.',
+  },
+  modified: { label: 'Modified', sort: 'modified' },
+  annotations: { label: 'Annotations' },
+  concurrency: {
+    label: 'Concurrency',
+    numeric: true,
+    title: "The pipeline's cap on runs at once, across all its triggers.",
+  },
+};
+
+/** The ⋯ column's floor: outside the spec, not resizable, and never squeezed out. */
+const ACTIONS_WIDTH = 48;
 
 /** `75%`, from a rate; an em-dash when nothing finished in the window. */
 function successCell(s: PipelineSummary | undefined): ReactNode {
@@ -93,12 +118,29 @@ function triggersCell(s: PipelineSummary | undefined): ReactNode {
   );
 }
 
+/** `1.2s / 4.5s`; an em-dash when nothing finished in the window. */
+function durationCell(s: PipelineSummary | undefined): ReactNode {
+  const w = s?.window;
+  if (w === undefined || w.p50Ms === null || w.p95Ms === null) return '—';
+  return `${formatElapsed(w.p50Ms)} / ${formatElapsed(w.p95Ms)}`;
+}
+
+/** One line with the full text on hover; newlines fold under `nowrap`. */
+function textCell(text: string | undefined): { content: ReactNode; title?: string } {
+  return text === undefined || text === '' ? { content: '—' } : { content: text, title: text };
+}
+
 /**
  * #1569 OR37 — the pipelines list as an engineer's grid: dense 32px rows of
  * 13px data (the runs grid's density classes), sortable headers whose order
  * lives in the URL. The row facts come from one batched read
  * (`GET /api/pipelines/summaries`); a cell whose fact is not loaded yet reads
  * as an em-dash, the same as a fact that is absent.
+ *
+ * Slice 4: the columns are the viewer's (`PipelineGridColumnsMenu`), at the
+ * widths they drag or step each header's edge to, both kept per viewer in `ui`;
+ * the column the grid is sorted by is always drawn. The Archived view passes
+ * fixed `columns` instead.
  */
 export function PipelinesGrid({
   pipelines,
@@ -109,6 +151,7 @@ export function PipelinesGrid({
   actions,
   loadedAt,
   columns,
+  ui,
 }: {
   /** Already in display order. */
   pipelines: readonly Pipeline[];
@@ -119,12 +162,30 @@ export function PipelinesGrid({
   actions: (p: Pipeline) => ReactNode;
   /** When the summaries were read: the compact timestamps' "same year?". */
   loadedAt: number | undefined;
-  /** The columns to draw, by id; every column when absent. The archived view
+  /** Fixed columns, by id, in place of the viewer's choice: the archived view
    * draws only the ones it has facts for. */
-  columns?: readonly ColumnId[];
+  columns?: readonly PipelineGridColumnId[];
+  /** The viewer's column choice and widths live here. */
+  ui: UiStore;
 }) {
-  const shown = columns === undefined ? COLUMNS : COLUMNS.filter((c) => columns.includes(c.id));
-  const cellOf = (id: ColumnId, p: Pipeline, s: PipelineSummary | undefined): ReactNode => {
+  const hidden = useStore(ui, (st) => st.pipelinesGridHidden);
+  const widths = useStore(ui, (st) => st.pipelinesGridWidths);
+  const setWidth = useStore(ui, (st) => st.setPipelinesGridWidth);
+  const shown =
+    columns === undefined
+      ? visibleGridColumns(PIPELINE_GRID_SPEC, hidden, (c) => isSortedColumn(c, sort.key))
+      : PIPELINE_GRID_SPEC.columns.filter((c) => columns.includes(c));
+  const { widthOf, total, tableRef, colRef, preview } = useGridColumnWidths(
+    PIPELINE_GRID_SPEC,
+    widths,
+    shown,
+    ACTIONS_WIDTH,
+  );
+  const cellOf = (
+    id: PipelineGridColumnId,
+    p: Pipeline,
+    s: PipelineSummary | undefined,
+  ): ReactNode => {
     switch (id) {
       case 'name':
         return (
@@ -167,37 +228,93 @@ export function PipelinesGrid({
             <When ms={s?.modifiedAt ?? p.updatedAt} compact asOf={loadedAt} />
           </td>
         );
+      case 'description': {
+        const { content, title } = textCell(s?.description);
+        return (
+          <td key={id} {...(title === undefined ? {} : { title })}>
+            {content}
+          </td>
+        );
+      }
+      case 'runs':
+        return (
+          <td key={id} className="num">
+            {s === undefined ? '—' : String(s.window.runs)}
+          </td>
+        );
+      case 'duration':
+        return (
+          <td key={id} className="num">
+            {durationCell(s)}
+          </td>
+        );
+      case 'activities':
+        return (
+          <td key={id} className="num">
+            {s?.activities == null ? '—' : String(s.activities)}
+          </td>
+        );
+      case 'annotations': {
+        const { content, title } = textCell(s?.annotations.join(', '));
+        return (
+          <td key={id} {...(title === undefined ? {} : { title })}>
+            {content}
+          </td>
+        );
+      }
+      case 'concurrency':
+        // The row's own fact; `null` is uncapped, not unknown.
+        return p.concurrency === null ? (
+          <td key={id} className="num" title="No cap">
+            —
+          </td>
+        ) : (
+          <td key={id} className="num">
+            {String(p.concurrency)}
+          </td>
+        );
     }
   };
   return (
     <div className="runs-grid-scroll">
-      <table className="runs-grid pipelines-grid">
+      <table
+        ref={tableRef}
+        className="runs-grid pipelines-grid"
+        style={{ minWidth: `${String(total)}px` }}
+      >
         <colgroup>
           {shown.map((c) => (
-            <col key={c.id} style={{ width: `${String(c.width)}px` }} />
+            <col key={c} ref={colRef(c)} style={{ width: `${String(widthOf(c))}px` }} />
           ))}
-          <col className="pipelines-grid__actions-col" />
+          {/* Takes what the columns leave, so the ⋯ sits at the right edge;
+              never under `ACTIONS_WIDTH`, which the table's min-width holds. */}
+          <col />
         </colgroup>
         <thead>
           <tr>
             {shown.map((c) => {
-              const dir = c.sort !== undefined && sort.key === c.sort ? sort.dir : null;
+              const def = PIPELINE_GRID_COLUMN_DEFS[c];
+              const sortKey = def.sort;
               return (
-                <th
-                  key={c.id}
-                  scope="col"
-                  className={c.numeric === true ? 'num' : undefined}
-                  title={c.title}
-                  aria-sort={ariaSortOf(dir)}
-                >
-                  {c.sort === undefined ? (
-                    c.label
-                  ) : (
-                    <SortButton dir={dir} onClick={() => onSort(c.sort!)}>
-                      {c.label}
-                    </SortButton>
-                  )}
-                </th>
+                <GridColumnHeader
+                  key={c}
+                  id={`pipelines-grid-col-${c}`}
+                  label={def.label}
+                  {...(def.title === undefined ? {} : { title: def.title })}
+                  numeric={def.numeric === true}
+                  {...(sortKey === undefined
+                    ? {}
+                    : {
+                        sortDir: sort.key === sortKey ? sort.dir : null,
+                        onSort: () => onSort(sortKey),
+                      })}
+                  width={widthOf(c)}
+                  min={PIPELINE_GRID_SPEC.widths[c].min}
+                  max={PIPELINE_GRID_SPEC.maxWidth}
+                  step={PIPELINE_GRID_SPEC.step}
+                  onPreviewWidth={(width) => preview(c, width)}
+                  onCommitWidth={(width) => setWidth(c, width)}
+                />
               );
             })}
             <th scope="col" aria-label="actions" />
@@ -208,7 +325,7 @@ export function PipelinesGrid({
             const s = summaries?.get(p.id);
             return (
               <tr key={p.id}>
-                {shown.map((c) => cellOf(c.id, p, s))}
+                {shown.map((c) => cellOf(c, p, s))}
                 <td className="pipelines-grid__actions">{actions(p)}</td>
               </tr>
             );
@@ -216,5 +333,37 @@ export function PipelinesGrid({
         </tbody>
       </table>
     </div>
+  );
+}
+
+/** The column the grid is sorted by: drawn, whatever the viewer hid. */
+function isSortedColumn(column: PipelineGridColumnId, sortKey: PipelineSortKey): boolean {
+  return PIPELINE_GRID_COLUMN_DEFS[column].sort === sortKey;
+}
+
+/**
+ * #1569 OR37 — the pipelines grid's column picker (`GridColumnsMenu`). The
+ * choice and Reset are the viewer's own, in `ui`; not in the URL, which holds
+ * the sort and the filters.
+ */
+export function PipelineGridColumnsMenu({
+  sortKey,
+  ui,
+}: {
+  sortKey: PipelineSortKey;
+  ui: UiStore;
+}) {
+  const hidden = useStore(ui, (st) => st.pipelinesGridHidden);
+  const setHidden = useStore(ui, (st) => st.setPipelinesGridHidden);
+  const reset = useStore(ui, (st) => st.resetPipelinesGridColumns);
+  return (
+    <GridColumnsMenu
+      spec={PIPELINE_GRID_SPEC}
+      hidden={hidden}
+      pinned={(column) => isSortedColumn(column, sortKey)}
+      labelOf={(column) => PIPELINE_GRID_COLUMN_DEFS[column].label}
+      onHiddenChange={setHidden}
+      onReset={reset}
+    />
   );
 }

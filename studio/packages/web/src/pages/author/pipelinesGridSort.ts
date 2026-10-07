@@ -16,8 +16,11 @@ export const PIPELINE_SORT_KEYS = [
   'name',
   'lastRun',
   'successRate',
+  'runs',
+  'duration',
   'nextRun',
   'triggers',
+  'activities',
   'modified',
 ] as const;
 export type PipelineSortKey = (typeof PIPELINE_SORT_KEYS)[number];
@@ -33,8 +36,11 @@ const PIPELINE_URL_SORT: UrlSortSpec<PipelineSortKey> = {
     name: 'asc',
     lastRun: 'desc',
     successRate: 'asc',
+    runs: 'desc',
+    duration: 'desc',
     nextRun: 'asc',
     triggers: 'desc',
+    activities: 'desc',
     modified: 'desc',
   },
   defaultKey: 'name',
@@ -67,10 +73,18 @@ function valueOf(
       return s?.lastRun?.startedAt ?? null;
     case 'successRate':
       return s?.window.successRate ?? null;
+    case 'runs':
+      // 0 is a count, not an absence: only an unread summary is no value.
+      return s?.window.runs ?? null;
+    case 'duration':
+      // The median; nothing finished in the window is no value.
+      return s?.window.p50Ms ?? null;
     case 'nextRun':
       return s?.nextFireAt ?? null;
     case 'triggers':
       return s === undefined || s.triggers.total === 0 ? null : s.triggers.enabled;
+    case 'activities':
+      return s?.activities ?? null;
     case 'modified':
       return s?.modifiedAt ?? p.updatedAt;
   }
