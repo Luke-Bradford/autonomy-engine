@@ -487,7 +487,9 @@ export function TriggersPage() {
                             {
                               label: 'Edit',
                               onSelect: (origin) =>
-                                drawer.openFrom(origin.element, () => openForm(formForEdit(t, zone))),
+                                drawer.openFrom(origin.element, () =>
+                                  openForm(formForEdit(t, zone)),
+                                ),
                             },
                             {
                               label: 'Export',

@@ -273,12 +273,16 @@ describe('resolveBound — the editor echoes exactly what the write path submits
     const asLoaded = recurrenceToForm({ frequency: 'day', interval: 1, startTime: stored });
     const edited = { ...asLoaded, startTime: '2026-02-02T10:00' };
     for (const form of [asLoaded, edited]) {
-      expect(resolveBound(form.startTime, form.startTimeIso, LOCAL_TIME_ZONE)).toBe(recurrenceOf(form).startTime);
+      expect(resolveBound(form.startTime, form.startTimeIso, LOCAL_TIME_ZONE)).toBe(
+        recurrenceOf(form).startTime,
+      );
     }
   });
 
   it('re-derives when there is no preserved instant to preserve', () => {
-    expect(resolveBound('2026-02-02T10:00', '', LOCAL_TIME_ZONE)).toBe(localInputToUtcIso('2026-02-02T10:00'));
+    expect(resolveBound('2026-02-02T10:00', '', LOCAL_TIME_ZONE)).toBe(
+      localInputToUtcIso('2026-02-02T10:00'),
+    );
   });
 
   it('returns null for a malformed local value rather than an Invalid Date', () => {
@@ -578,7 +582,7 @@ describe('#1524 — the bounds are written in the display zone', () => {
     else process.env.TZ = originalTz;
   });
 
-  it('loads a stored bound as the display zone\'s wall clock, not the browser\'s', () => {
+  it("loads a stored bound as the display zone's wall clock, not the browser's", () => {
     process.env.TZ = 'UTC';
     const form = recurrenceToForm(
       { frequency: 'day', interval: 1, startTime: '2026-08-01T13:00:00.000Z' },
@@ -588,7 +592,7 @@ describe('#1524 — the bounds are written in the display zone', () => {
     expect(form.boundsZone).toBe(zone);
   });
 
-  it('writes a typed bound back as the display zone\'s instant', () => {
+  it("writes a typed bound back as the display zone's instant", () => {
     process.env.TZ = 'UTC';
     const form = { ...blankRecurrenceForm(zone), startTime: '2026-08-01T09:00' };
     expect(recurrenceOf(form).startTime).toBe('2026-08-01T13:00:00.000Z');
@@ -614,7 +618,9 @@ describe('#1524 — the bounds are written in the display zone', () => {
       boundsZone: zone,
     });
     expect(warnings).toEqual([
-      expect.stringMatching(/^Start time 2026-03-08T02:30 does not exist in America\/New_York time .* saved as 2026-03-08T03:30/),
+      expect.stringMatching(
+        /^Start time 2026-03-08T02:30 does not exist in America\/New_York time .* saved as 2026-03-08T03:30/,
+      ),
     ]);
   });
 });

@@ -93,7 +93,9 @@ export interface RecurrenceFormState {
   boundsZone: DisplayTimeZone;
 }
 
-export function blankRecurrenceForm(boundsZone: DisplayTimeZone = LOCAL_TIME_ZONE): RecurrenceFormState {
+export function blankRecurrenceForm(
+  boundsZone: DisplayTimeZone = LOCAL_TIME_ZONE,
+): RecurrenceFormState {
   return {
     frequency: 'day',
     interval: '1',
@@ -255,8 +257,12 @@ export function recurrenceToForm(
     weekDays: recurrence.schedule?.weekDays ? [...recurrence.schedule.weekDays] : [],
     monthDays: formatNumberList(recurrence.schedule?.monthDays),
     timeZone: recurrence.timeZone ?? '',
-    startTime: recurrence.startTime === undefined ? '' : utcIsoToLocalInput(recurrence.startTime, boundsZone),
-    endTime: recurrence.endTime === undefined ? '' : utcIsoToLocalInput(recurrence.endTime, boundsZone),
+    startTime:
+      recurrence.startTime === undefined
+        ? ''
+        : utcIsoToLocalInput(recurrence.startTime, boundsZone),
+    endTime:
+      recurrence.endTime === undefined ? '' : utcIsoToLocalInput(recurrence.endTime, boundsZone),
     startTimeIso: recurrence.startTime ?? '',
     endTimeIso: recurrence.endTime ?? '',
     boundsZone,
