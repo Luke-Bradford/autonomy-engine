@@ -746,9 +746,25 @@ describe('RunsPage', () => {
       expect(router.state.location.pathname).toBe('/monitor/runs/run_abc');
     });
 
-    it("the pipeline's name opens the version that ran, not the run", async () => {
+    it("the pipeline's name opens the run, as the rest of the row does (#1566)", async () => {
       const router = mountList();
       await userEvent.click(await screen.findByRole('link', { name: 'Nightly v3' }));
+      expect(router.state.location.pathname).toBe('/monitor/runs/run_abc');
+    });
+
+    it('the editor, at the version that ran, is the labelled icon beside the name', async () => {
+      const router = mountList();
+      await userEvent.click(
+        await screen.findByRole('link', { name: 'Open Nightly v3 in the editor' }),
+      );
+      expect(router.state.location.pathname).toBe('/author/pipelines/pipe_1');
+      expect(router.state.location.search).toBe('?version=3');
+    });
+
+    it("the row's ⋯ menu opens the pipeline in the editor without opening the run", async () => {
+      const router = mountList();
+      await userEvent.click(await screen.findByRole('button', { name: 'Actions for run run_abc' }));
+      await userEvent.click(await screen.findByRole('menuitem', { name: 'Open pipeline in editor' }));
       expect(router.state.location.pathname).toBe('/author/pipelines/pipe_1');
       expect(router.state.location.search).toBe('?version=3');
     });

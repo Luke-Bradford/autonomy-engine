@@ -351,7 +351,7 @@ describe('RunDetailPage', () => {
     renderWithRouter(<RunDetailPage runId="run_V1StGXR8_Z5jdHi6B-myT" />);
 
     expect(await screen.findByRole('heading', { name: 'Nightly load v1' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Nightly load' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Open v1 in the editor' })).toHaveAttribute(
       'href',
       // #1484 — the version this run is bound to, not the latest.
       '/author/pipelines/pl_1?version=1',

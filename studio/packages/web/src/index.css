@@ -4051,6 +4051,26 @@ button.danger {
   font-weight: normal;
 }
 
+/* #1566 — a run's secondary way into the editor: a small muted icon with a
+   24px target, beside a name that opens the run. */
+.run-editor-link {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  vertical-align: middle;
+  font-size: 16px;
+  color: var(--muted);
+  border-radius: 4px;
+}
+
+.run-editor-link:hover,
+.run-editor-link:focus-visible {
+  color: var(--accent);
+}
+
 /* #1392 — a short id, its copy button and the copy result on one line. The
    status is always mounted (it is a live region) and simply empty until used. */
 .copyable-id {
@@ -4602,6 +4622,16 @@ button.danger {
   font-size: 1.15rem;
 }
 
+/* #1566 — the heading sits tight against its editor icon, and the icon takes
+   the gap to the facts that the heading would otherwise have. */
+.run-header > h2:has(+ .run-editor-link) {
+  margin-right: 0.25rem;
+}
+
+.run-header > .run-editor-link {
+  margin-right: 1rem;
+}
+
 .run-header__facts {
   display: inline;
   margin: 0;
@@ -4784,6 +4814,30 @@ button.danger {
 .activity-runs__table .num {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+/* #1566 — the Pipeline cell: the name (which opens the run) takes the room
+   and ellipsises; the editor icon and the row's ⋯ menu always stay visible. A
+   wrapper, not a flex TD, so the cell keeps its table height and alignment. */
+.runs-grid__pipeline-line {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.runs-grid__pipeline-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.runs-grid__pipeline-line .row-menu__trigger {
+  width: 24px;
+  height: 24px;
+  font-size: 16px;
+  color: var(--muted);
 }
 
 .runs-grid__row {

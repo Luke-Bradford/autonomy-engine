@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import type { RunSortKey, RunSummary } from '@autonomy-studio/shared';
 import {
   RUN_GRID_COLUMNS,
@@ -11,7 +11,9 @@ import { CopyableId } from '../../lib/CopyableId';
 import { shortId } from '../../lib/ids';
 import { RunTriggeredByName } from '../../lib/KindName';
 import { versionLabel } from '../../lib/versionLabel';
+import { RowMoreMenu } from '../../lib/RowMoreMenu';
 import { runVersionPath } from '../author/pipelinePath';
+import { RunEditorLink } from './RunEditorLink';
 import { activitiesCell, rowsWrittenCell } from './activitiesColumn';
 import { costCell } from './costColumn';
 import { formatRunDuration, formatWhen } from './format';
@@ -19,7 +21,7 @@ import { runDetailPath, runLinkLabel } from './runPath';
 import { runStatusLabel } from './runStatus';
 import { When } from '../../lib/When';
 import { withParams } from '../../lib/withParams';
-import { RUN_FILTER_PARAMS } from './runFilters';
+import { RUN_FILTER_PARAMS, triggerRunsPath } from './runFilters';
 import type { DisplayTimeZone } from '../../lib/displayTime';
 
 /** What a cell needs besides its run. */
@@ -154,23 +156,53 @@ function activitiesTd(run: RunSummary): ReactNode {
   );
 }
 
+/**
+ * The Pipeline cell. R2 — the pipeline's NAME, the only thing here an operator
+ * recognises; the version id stays reachable as its title.
+ *
+ * #1566 — the name opens the RUN, as the rest of the row does: in the Monitor
+ * the run is the primary destination (ADF's behaviour), and the name is the
+ * most natural thing to click. The editor, at the version that ran, is the
+ * labelled icon beside it and the row's ⋯ menu, never the name.
+ */
+function PipelineCell({ run: r, ctx }: { run: RunSummary; ctx: CellContext }) {
+  const navigate = useNavigate();
+  const editor = runVersionPath(r.pipelineId, r.pipelineVersion, r.debug);
+  const triggerId = r.triggerId;
+  return (
+    <span className="runs-grid__pipeline-line">
+      {ctx.nest && <NestLead run={r} nest={ctx.nest} />}
+      <Link className="runs-grid__pipeline-name" to={ctx.path} title={r.pipelineVersionId}>
+        {r.pipelineName}{' '}
+        <span className="run-version">{versionLabel(r.pipelineVersion, r.debug)}</span>
+      </Link>
+      <RunEditorLink
+        pipelineId={r.pipelineId}
+        version={r.pipelineVersion}
+        debug={r.debug}
+        pipelineName={r.pipelineName}
+      />
+      <RowMoreMenu
+        name={r.pipelineName}
+        label={`Actions for run ${r.id}`}
+        actions={[
+          { label: 'Open pipeline in editor', onSelect: () => void navigate(editor) },
+          ...(triggerId !== null && r.triggerName !== null
+            ? [{ label: 'Open trigger runs', onSelect: () => void navigate(triggerRunsPath(triggerId)) }]
+            : []),
+        ]}
+      />
+    </span>
+  );
+}
+
 export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
   pipeline: {
     label: 'Pipeline',
     sort: 'pipeline',
     cell: (r, ctx) => (
       <td className="runs-grid__pipeline">
-        {ctx.nest && <NestLead run={r} nest={ctx.nest} />}
-        {/* R2 — the pipeline's NAME, which is the only thing here an operator
-            recognises. The version id stays reachable as the cell's title.
-            #1484 — it links to the version that RAN, not the latest, and the
-            version chip is inside the link so its name says which one. */}
-        <span title={r.pipelineVersionId}>
-          <Link to={runVersionPath(r.pipelineId, r.pipelineVersion, r.debug)}>
-            {r.pipelineName}{' '}
-            <span className="run-version">{versionLabel(r.pipelineVersion, r.debug)}</span>
-          </Link>
-        </span>
+        <PipelineCell run={r} ctx={ctx} />
       </td>
     ),
   },

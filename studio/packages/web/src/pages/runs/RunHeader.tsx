@@ -9,8 +9,8 @@ import { dayOf } from '../../lib/displayTime';
 import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import { versionLabel } from '../../lib/versionLabel';
 import { When } from '../../lib/When';
-import { runVersionPath } from '../author/pipelinePath';
 import { formatRunDuration } from './format';
+import { RunEditorLink } from './RunEditorLink';
 import { triggerRunsPath } from './runFilters';
 import { runDetailPath, runLinkLabel } from './runPath';
 
@@ -103,14 +103,14 @@ export function RunHeader({
     <header className="run-header">
       {/* #1392 — the heading names the pipeline and the version this run is
           bound to; until the names load (or on the doc-less fallback) it is the
-          run's short id, as the breadcrumb is. The name opens that exact
-          version: a read-only preview, or the editor when it is the latest. */}
+          run's short id, as the breadcrumb is.
+          #1566 — plain text: this page IS the run, so the name goes nowhere.
+          The editor, at that exact version, is the labelled icon after the
+          heading (outside it, so its label never joins the heading's name). */}
       <h2 id="run-heading">
         {named ? (
           <>
-            <Link to={runVersionPath(doc.pipelineId, doc.version, names.debug)}>
-              {names.pipeline}
-            </Link>{' '}
+            {names.pipeline}{' '}
             <span className="run-heading__version">{versionLabel(doc.version, names.debug)}</span>
           </>
         ) : (
@@ -119,6 +119,9 @@ export function RunHeader({
           </>
         )}
       </h2>
+      {named && (
+        <RunEditorLink pipelineId={doc.pipelineId} version={doc.version} debug={names.debug} />
+      )}
       <div className="run-header__actions">
         {actions}
         {/* #1239 — an anchor: going somewhere is what an anchor is for. */}
