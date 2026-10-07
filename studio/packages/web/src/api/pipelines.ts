@@ -395,6 +395,9 @@ export function latestVersion(versions: readonly PipelineVersion[]): PipelineVer
   );
 }
 
+/** The first version `createPipelineWithFirstVersion` writes; it supplies the CAS basis. */
+type FirstVersion = Omit<PipelineVersionWrite, 'basedOnVersionId'>;
+
 /**
  * Create a pipeline and write its first version, as ONE act to the caller.
  *
@@ -413,8 +416,6 @@ export function latestVersion(versions: readonly PipelineVersion[]): PipelineVer
  * told the operation failed. If the rollback itself fails, the original error
  * still wins — a rollback error names the wrong problem.
  */
-type FirstVersion = Omit<PipelineVersionWrite, 'basedOnVersionId'>;
-
 async function createPipelineWithFirstVersion(
   body: PipelineWrite,
   firstVersion: () => FirstVersion | null | Promise<FirstVersion | null>,

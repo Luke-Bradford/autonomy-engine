@@ -9,8 +9,10 @@ import { AutoGrowTextarea } from './AutoGrowTextarea';
  * padding and a 1px border, border-box. What is under test is the sizing rule.
  */
 const LINE = 20;
+const proto = HTMLTextAreaElement.prototype;
+
 function stubLayout() {
-  Object.defineProperty(HTMLTextAreaElement.prototype, 'scrollHeight', {
+  Object.defineProperty(proto, 'scrollHeight', {
     configurable: true,
     get(this: HTMLTextAreaElement) {
       return this.value.split('\n').length * LINE + 8;
@@ -35,6 +37,10 @@ describe('AutoGrowTextarea', () => {
     cleanup();
     document.head.querySelectorAll('style[data-grow]').forEach((el) => el.remove());
     vi.unstubAllGlobals();
+    // The layout stubs are own properties of the textarea prototype; deleting
+    // them puts back jsdom's own (inherited from Element).
+    delete (proto as { scrollHeight?: number }).scrollHeight;
+    delete (proto as { clientWidth?: number }).clientWidth;
   });
 
   function mount(initial?: string) {
@@ -79,7 +85,7 @@ describe('AutoGrowTextarea', () => {
 
   it('hidden, with nothing to measure, keeps its natural row rather than a height of nothing', () => {
     const box = mount('a\nb');
-    Object.defineProperty(HTMLTextAreaElement.prototype, 'scrollHeight', {
+    Object.defineProperty(proto, 'scrollHeight', {
       configurable: true,
       get: () => 0,
     });
@@ -100,13 +106,13 @@ describe('AutoGrowTextarea', () => {
       },
     );
     let width = 0;
-    Object.defineProperty(HTMLTextAreaElement.prototype, 'clientWidth', {
+    Object.defineProperty(proto, 'clientWidth', {
       configurable: true,
       get: () => width,
     });
     const box = mount('a\nb');
     // Hidden at mount: nothing to measure.
-    Object.defineProperty(HTMLTextAreaElement.prototype, 'scrollHeight', {
+    Object.defineProperty(proto, 'scrollHeight', {
       configurable: true,
       get: () => 0,
     });
