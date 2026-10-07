@@ -975,7 +975,11 @@ export function PipelinesPage({
           <PipelineRunDrawer
             key={drawerSeq}
             form={drawerForm}
-            onChange={setDrawerForm}
+            update={(fn) => {
+              // Only into THIS drawer: one replaced since is not its to change.
+              if (!drawer.isLatest(drawerSeq)) return;
+              setDrawerForm((prev) => (prev?.kind === 'run' ? fn(prev) : prev));
+            }}
             guard={guard}
             returnFocusTo={openerRef}
             onClose={drawer.requestClose}

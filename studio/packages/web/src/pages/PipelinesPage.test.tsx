@@ -522,6 +522,31 @@ describe('PipelinesPage', () => {
         await waitFor(() => expect(summariesMock.mock.calls.length).toBeGreaterThan(before));
       });
 
+      it('keeps a value typed while the start is in flight, and still asks for it', async () => {
+        seedRan();
+        versionsMock.mockResolvedValue([v2]);
+        const pending = deferred<Awaited<ReturnType<typeof pipelinesApi.runPipelineVersion>>>();
+        runMock.mockReturnValue(pending.promise);
+        const user = userEvent.setup();
+        renderPage();
+        await screen.findByText('1 active / 1');
+        await chooseRowAction(user, 'Nightly', 'Trigger now…');
+        const drawer = within(await screen.findByRole('dialog', { name: /Trigger now/ }));
+        const region = await drawer.findByLabelText('region');
+        await user.click(drawer.getByRole('button', { name: 'Start run' }));
+        await waitFor(() => expect(runMock).toHaveBeenCalled());
+        await user.type(region, '-2');
+        await act(async () => {
+          pending.resolve({ outcome: 'started', runId: 'run_11' } as never);
+          await pending.promise;
+        });
+        await waitFor(() => expect(drawer.getByRole('status')).toHaveTextContent('Started v2'));
+        // The start used `eu`; `eu-2` was typed after it, so it is kept, and unsaved.
+        expect(region).toHaveValue('eu-2');
+        await user.click(drawer.getByRole('button', { name: 'Done' }));
+        expect(await screen.findByRole('alertdialog')).toBeInTheDocument();
+      });
+
       it('Trigger now puts focus on Start for a pipeline with no params', async () => {
         seedRan();
         versionsMock.mockResolvedValue([v1]);

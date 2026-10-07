@@ -27,7 +27,7 @@ type Load =
  */
 export function PipelineRunDrawer({
   form,
-  onChange,
+  update,
   guard,
   returnFocusTo,
   onClose,
@@ -35,7 +35,9 @@ export function PipelineRunDrawer({
   onBusyChange,
 }: {
   form: PipelineRunForm;
-  onChange: (next: PipelineRunForm) => void;
+  /** An updater, applied to the form as it is when it lands: a start or a load
+   * answering after an await must not write back the form it began with. */
+  update: (fn: (prev: PipelineRunForm) => PipelineRunForm) => void;
   guard: UnsavedChangesGuard;
   returnFocusTo: RefObject<HTMLElement | null>;
   onClose: () => void;
@@ -62,14 +64,14 @@ export function PipelineRunDrawer({
         const version = latestVersion(versions);
         setLoad({ status: 'ready', version });
         const seeded = runNowRows(version?.params ?? []);
-        onChange({ ...form, rows: seeded, defaults: seeded });
+        update((prev) => ({ ...prev, rows: seeded, defaults: seeded }));
       },
       (err: unknown) => {
         if (!ctrl.signal.aborted) setLoad({ status: 'error', message: messageOf(err) });
       },
     );
     return () => ctrl.abort();
-    // Read once per pipeline and per Retry; `form`/`onChange` are this open's.
+    // Read once per pipeline and per Retry; `update` is this open's.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pipelineId, attempt]);
 
@@ -88,20 +90,24 @@ export function PipelineRunDrawer({
           previewing: false,
         })
       : null;
+  // The values the start in flight was given: once it lands they are used, and
+  // only what was typed since is unsaved.
+  const submitted = useRef(form.rows);
   const { set, error, starting, submit } = useRunParams({
     params: version?.params ?? [],
     rows: form.rows,
-    onRowsChange: (update) => onChange({ ...form, rows: update(form.rows) }),
+    onRowsChange: (fn) => update((prev) => ({ ...prev, rows: fn(prev.rows) })),
     start: (params) => {
       if (version === null) return Promise.reject(new Error('No saved version to run.'));
       setStarted(null);
+      submitted.current = form.rows;
       return runPipelineVersion(pipelineId, { pipelineVersionId: version.id, params });
     },
     onStarted: (result) => {
       if (version === null) return;
       setStarted({ runId: result.runId, version: version.version });
-      // What was typed has been used: closing now loses nothing.
-      onChange({ ...form, defaults: form.rows });
+      const used = submitted.current;
+      update((prev) => ({ ...prev, defaults: used }));
       onStarted();
     },
   });
