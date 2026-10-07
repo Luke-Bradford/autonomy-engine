@@ -3,7 +3,7 @@ import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
-import { renderWithRouter } from '../../testing/renderWithRouter';
+import { renderWithDataRouter, renderWithRouter } from '../../testing/renderWithRouter';
 import { activityRun } from '../../testing/activityRun';
 import { answerConfirm } from '../../testing/confirmDialog';
 import type {
@@ -605,7 +605,7 @@ describe('RunDetailPage', () => {
         ],
       }),
     );
-    renderWithRouter(<RunDetailPage runId="run_1" />);
+    renderWithRouter(<RunDetailPage runId="run_1" />, '/?rdTab=graph');
 
     expect(await screen.findByTestId('run-canvas')).toBeInTheDocument();
     // Projected: no "why not" line is shown.
@@ -618,7 +618,7 @@ describe('RunDetailPage', () => {
     useRunStreamMock.mockReturnValue(
       stream({ phase: 'replaying', events: [], replayComplete: false }),
     );
-    renderWithRouter(<RunDetailPage runId="run_1" />);
+    renderWithRouter(<RunDetailPage runId="run_1" />, '/?rdTab=graph');
 
     expect(await screen.findByTestId('run-canvas')).toBeInTheDocument();
     expect(screen.getByText(/Loading this run’s history/i)).toBeInTheDocument();
@@ -638,7 +638,7 @@ describe('RunDetailPage', () => {
         ],
       }),
     );
-    renderWithRouter(<RunDetailPage runId="run_1" />);
+    renderWithRouter(<RunDetailPage runId="run_1" />, '/?rdTab=graph');
 
     expect(await screen.findByTestId('run-canvas')).toBeInTheDocument();
     expect(
@@ -661,7 +661,7 @@ describe('RunDetailPage', () => {
         ],
       }),
     );
-    renderWithRouter(<RunDetailPage runId="run_1" />);
+    renderWithRouter(<RunDetailPage runId="run_1" />, '/?rdTab=graph');
 
     expect(await screen.findByTestId('run-canvas')).toBeInTheDocument();
     expect(screen.queryByText(/cannot be projected/i)).not.toBeInTheDocument();
@@ -675,7 +675,7 @@ describe('RunDetailPage', () => {
     useRunStreamMock.mockReturnValue(
       stream({ phase: 'error', error: 'socket closed', replayComplete: false }),
     );
-    renderWithRouter(<RunDetailPage runId="run_1" />);
+    renderWithRouter(<RunDetailPage runId="run_1" />, '/?rdTab=graph');
 
     expect(await screen.findByTestId('run-canvas')).toBeInTheDocument();
     expect(screen.getByText(/event stream is unavailable/i)).toBeInTheDocument();
@@ -689,7 +689,7 @@ describe('RunDetailPage', () => {
     const getRunMock = vi.mocked(runsApi.getRun);
     getRunMock.mockResolvedValue(run());
 
-    renderWithRouter(<RunDetailPage runId="run_1" />);
+    renderWithRouter(<RunDetailPage runId="run_1" />, '/?rdTab=graph');
 
     expect(await screen.findByText('pv_1')).toBeInTheDocument();
     expect(screen.getByText('{"greeting":"hi"}')).toBeInTheDocument();
@@ -1025,9 +1025,13 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
     renderWithRouter(<RunDetailPage runId="run_1" />);
     await openDrawer('HTTP Request 1');
     expect(screen.getByRole('tab', { name: 'Error' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('tabpanel')).toHaveTextContent('boom');
+    expect(within(screen.getByRole('complementary')).getByRole('tabpanel')).toHaveTextContent(
+      'boom',
+    );
     await userEvent.click(screen.getByRole('tab', { name: 'Logs' }));
-    const lines = screen.getByRole('tabpanel').querySelectorAll('.node-logs tbody tr');
+    const lines = within(screen.getByRole('complementary'))
+      .getByRole('tabpanel')
+      .querySelectorAll('.node-logs tbody tr');
     expect(lines).toHaveLength(1);
     expect(lines[0]).toHaveTextContent('chunk1');
   });
@@ -2908,7 +2912,7 @@ describe('RunDetailPage — U27 the run says what it SPENT (#930)', () => {
       pipelineVersion: version(),
     });
     useRunStreamMock.mockReturnValue(stream(over));
-    renderWithRouter(<RunDetailPage runId="run_1" />);
+    renderWithRouter(<RunDetailPage runId="run_1" />, '/?rdTab=cost');
     await screen.findByRole('region', { name: 'Cost & usage' });
   }
 
@@ -3481,7 +3485,7 @@ describe('RunDetailPage — the run’s variables (#844 V7)', () => {
       pipelineVersion: withVariables(),
     });
     useRunStreamMock.mockReturnValue(stream({ events: writtenLog() }));
-    renderWithRouter(<RunDetailPage runId="run_1" />);
+    renderWithRouter(<RunDetailPage runId="run_1" />, '/?rdTab=variables');
     await screen.findByRole('region', { name: 'Variables' });
     expect(
       within(section()).getByText('Current values, updated as the run writes them.'),
@@ -3504,7 +3508,7 @@ describe('RunDetailPage — the run’s variables (#844 V7)', () => {
         phase: 'closed',
       }),
     );
-    renderWithRouter(<RunDetailPage runId="run_1" />);
+    renderWithRouter(<RunDetailPage runId="run_1" />, '/?rdTab=variables');
     await screen.findByRole('region', { name: 'Variables' });
     expect(within(section()).getByText('Final values.')).toBeInTheDocument();
   });
@@ -3516,15 +3520,15 @@ describe('RunDetailPage — the run’s variables (#844 V7)', () => {
       pipelineVersion: withVariables(),
     });
     useRunStreamMock.mockReturnValue(stream({ events: writtenLog(), replayComplete: false }));
-    renderWithRouter(<RunDetailPage runId="run_1" />);
+    renderWithRouter(<RunDetailPage runId="run_1" />, '/?rdTab=variables');
     await screen.findByRole('region', { name: 'Variables' });
     expect(section().textContent).toContain('Variable values are unavailable.');
     expect(within(section()).queryByRole('table')).toBeNull();
   });
 
-  it('has no Variables section for a pipeline that declares none', async () => {
-    renderWithRouter(<RunDetailPage runId="run_1" />);
-    await screen.findByRole('region', { name: 'Cost & usage' });
+  it('says a pipeline that declares none has none, in place of the section', async () => {
+    renderWithRouter(<RunDetailPage runId="run_1" />, '/?rdTab=variables');
+    await screen.findByText('This pipeline declares no variables.');
     expect(screen.queryByRole('region', { name: 'Variables' })).toBeNull();
   });
 });
@@ -3750,7 +3754,9 @@ describe('RunDetailPage — the activity run detail drawer (#1484 M2)', () => {
     await userEvent.click(inputTab());
     await openRow(0);
     expect(inputTab()).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('tabpanel')).toHaveTextContent('a.csv');
+    expect(within(screen.getByRole('complementary')).getByRole('tabpanel')).toHaveTextContent(
+      'a.csv',
+    );
     await userEvent.keyboard('{Escape}');
     await openRow(1);
     expect(inputTab()).toHaveAttribute('aria-selected', 'true');
@@ -3776,5 +3782,56 @@ describe('RunDetailPage — the activity run detail drawer (#1484 M2)', () => {
     expect(document.querySelector('.run-drawer')).not.toBeNull();
     expect(screen.queryByRole('heading', { name: 'Nodes' })).toBeNull();
     expect(document.querySelector('.node-drill-in')).toBeNull();
+  });
+});
+
+/* #1484 OR35 M2 — the run's views below the activity runs are tabs, with the
+   open one in the URL. */
+describe('RunDetailPage — the run views as tabs (#1484 M2)', () => {
+  const tabs = () => screen.getByRole('tablist', { name: 'Run views' });
+  const VIEWS = ['Gantt', 'Graph', 'Events', 'Variables', 'Cost'];
+  /** The open tab's name. (Fluent repeats a tab's label in a hidden sizer, so
+   * names are matched, not read off `textContent`.) */
+  const selectedTab = () =>
+    VIEWS.filter(
+      (name) => within(tabs()).getByRole('tab', { name }).getAttribute('aria-selected') === 'true',
+    );
+
+  it('lists the views in the ticket’s order and opens on the Gantt', async () => {
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await screen.findByRole('tablist', { name: 'Run views' });
+    expect(within(tabs()).getAllByRole('tab')).toEqual(
+      VIEWS.map((name) => within(tabs()).getByRole('tab', { name })),
+    );
+    expect(selectedTab()).toEqual(['Gantt']);
+    expect(screen.getByText('No activity has started.')).toBeVisible();
+  });
+
+  it('opens on the tab the URL names, and writes the one chosen back to it', async () => {
+    const { router } = renderWithDataRouter(<RunDetailPage runId="run_1" />, '/?rdTab=cost');
+    await screen.findByRole('tablist', { name: 'Run views' });
+    expect(selectedTab()).toEqual(['Cost']);
+    expect(screen.getByRole('region', { name: 'Cost & usage' })).toBeVisible();
+
+    await userEvent.click(within(tabs()).getByRole('tab', { name: 'Events' }));
+    expect(new URLSearchParams(router.state.location.search).get('rdTab')).toBe('events');
+    expect(screen.queryByRole('region', { name: 'Cost & usage' })).toBeNull();
+    expect(screen.getByText('No events yet.')).toBeVisible();
+
+    // The default is not written, so the plain run link comes back.
+    await userEvent.click(within(tabs()).getByRole('tab', { name: 'Gantt' }));
+    expect(router.state.location.search).toBe('');
+  });
+
+  it('mounts the graph only while its tab is open', async () => {
+    renderWithRouter(<RunDetailPage runId="run_1" />, '/?rdTab=graph');
+    expect(await screen.findByTestId('run-canvas')).toBeVisible();
+    await userEvent.click(within(tabs()).getByRole('tab', { name: 'Gantt' }));
+    expect(screen.queryByTestId('run-canvas')).toBeNull();
+  });
+
+  it('says the run read no globals, once the projection can tell', async () => {
+    renderWithRouter(<RunDetailPage runId="run_1" />, '/?rdTab=variables');
+    expect(await screen.findByText('This run read no global parameters.')).toBeVisible();
   });
 });
