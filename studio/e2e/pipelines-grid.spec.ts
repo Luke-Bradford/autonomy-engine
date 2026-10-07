@@ -88,7 +88,10 @@ test('#1569 — the pipelines grid: last run, success %, next run, triggers; sor
   await expect(brokenRow.getByText('1 active / 1')).toBeVisible();
 
   // No Version column, no prose intro.
-  const headers = (await page.getByRole('columnheader').allTextContents()).map((h) => h.trim());
+  // The sort arrow (▲▼) is part of a sorted header's text; drop it.
+  const headers = (await page.getByRole('columnheader').allTextContents()).map((h) =>
+    h.replace(/[▲▼]/g, '').trim(),
+  );
   expect(headers.slice(0, 7)).toEqual([
     'Name',
     'Last run',
@@ -99,7 +102,15 @@ test('#1569 — the pipelines grid: last run, success %, next run, triggers; sor
     'Modified',
   ]);
   expect(headers.some((h) => /version/i.test(h))).toBe(false);
-  await expect(page.locator('.pipelines-page .page-hint')).toHaveCount(0);
+  // No prose between the heading and the grid. (The import and demo panels
+  // below it keep their hints until a later slice moves them into drawers.)
+  const proseAbove = await page.evaluate(() => {
+    const grid = document.querySelector('.pipelines-grid');
+    return [...document.querySelectorAll('.pipelines-page .page-hint')].filter(
+      (h) => grid !== null && h.compareDocumentPosition(grid) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).length;
+  });
+  expect(proseAbove).toBe(0);
 
   // Density at 1440×900: 32px rows, the first data row high on the page, and
   // at least 20 rows inside the viewport.
