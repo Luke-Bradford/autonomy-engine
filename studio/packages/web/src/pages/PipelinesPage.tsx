@@ -477,6 +477,19 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
     showArchivedRef.current = showArchived;
   }, [showArchived]);
 
+  /**
+   * #1569 slice 3 — a pipeline created from the archived view is LIVE, and would
+   * land out of sight, so the live list is shown. Only once the drawer has
+   * CLOSED: until then its typed form is still holding route changes, and the
+   * guard would block this one as though the operator were walking away.
+   */
+  const leaveArchivedRef = useRef(false);
+  useEffect(() => {
+    if (drawerForm !== null || !leaveArchivedRef.current) return;
+    leaveArchivedRef.current = false;
+    setSearchParams((prev) => withParams(prev, { [PIPELINE_FILTER_PARAMS.archived]: '' }));
+  }, [drawerForm, setSearchParams]);
+
   // #1569 slice 2 — a push, so Back returns to the live list. Turning it on
   // drops the run, trigger and live-state filters: archived pipelines have none
   // of those facts, and the bar does not draw their controls there.
@@ -868,14 +881,8 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
             returnFocusTo={openerRef}
             onClose={drawer.requestClose}
             onCreated={async () => {
+              leaveArchivedRef.current = showArchivedRef.current;
               drawer.closeIfLatest(drawerSeq);
-              // The new pipeline is LIVE: from the archived view it would land
-              // out of sight, so the list it went into is the one shown.
-              if (showArchivedRef.current) {
-                setSearchParams((prev) =>
-                  withParams(prev, { [PIPELINE_FILTER_PARAMS.archived]: '' }),
-                );
-              }
               await refresh();
             }}
           />

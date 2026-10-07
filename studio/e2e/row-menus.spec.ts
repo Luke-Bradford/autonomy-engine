@@ -4,6 +4,7 @@ import { fluentRootReady, resolvedPaletteColor } from './support/theme';
 import { arrowToItem, deleteRowAndExpectFocus, rowMenuButton } from './support/rowMenu';
 import { answerConfirm } from './support/confirmDialog';
 import { seedConnection, seedDataset } from './support/seedResources';
+import { newPipelineButton } from './support/pipelinesPage';
 
 /**
  * #1397 OR6 — list rows keep ONE action inline (Open, Fire now) and put the
@@ -84,7 +85,7 @@ test.describe('#1397 row ⋯ menus, by keyboard', () => {
     await deleteRowAndExpectFocus(
       page,
       row,
-      page.getByRole('form', { name: 'New pipeline' }).getByLabel('Name'),
+      newPipelineButton(page),
       (p) => answerConfirm(p, 'accept'),
     );
 

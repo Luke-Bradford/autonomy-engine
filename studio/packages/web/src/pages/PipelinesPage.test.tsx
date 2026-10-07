@@ -5,13 +5,14 @@ import type { Pipeline, PipelineSummary } from '@autonomy-studio/shared';
 import { PipelinesPage } from './PipelinesPage';
 import { ApiError } from '../api/client';
 import { createPipelinesStore } from '../stores/pipelinesStore';
-import { renderWithRouter } from '../testing/renderWithRouter';
+import { renderWithDataRouter, renderWithRouter } from '../testing/renderWithRouter';
 import { chooseRowAction, closeRowMenu } from '../testing/rowActions';
 import { answerConfirm, pressInConfirm, setConfirmName } from '../testing/confirmDialog';
 import * as pipelinesApi from '../api/pipelines';
 import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
 import * as workspaceGitApi from '../api/workspaceGit';
+import * as demoApi from '../api/demo';
 
 // Mock only the network layer. Since U4 the LIST lives in `pipelinesStore`, so
 // each case gets its own store — the app's singleton is shared with the Factory
@@ -96,7 +97,8 @@ function pipeline(overrides: Partial<Pipeline> = {}): Pipeline {
 
 /** The page under a router (its Open control is a `<Link>`), on a fresh store. */
 function renderPage() {
-  return renderWithRouter(<PipelinesPage store={createPipelinesStore()} />, '/author/pipelines');
+  // A data router: an open drawer with typed input holds route changes (#1396).
+  return renderWithDataRouter(<PipelinesPage store={createPipelinesStore()} />, '/author/pipelines');
 }
 
 beforeEach(() => {
@@ -504,28 +506,79 @@ describe('PipelinesPage', () => {
     });
   });
 
-  it('creates a pipeline with the entered name and refreshes', async () => {
+  /** #1569 slice 3 — the toolbar's New pipeline opens the drawer form. */
+  async function openNewDrawer(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole('button', { name: '+ New pipeline' }));
+    return within(screen.getByRole('form', { name: 'New pipeline' }));
+  }
+
+  it('has no create card on the page: New pipeline is a toolbar button that opens a drawer', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('No pipelines yet.');
+    expect(screen.queryByRole('form', { name: 'New pipeline' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Export file')).not.toBeInTheDocument();
+    const form = await openNewDrawer(user);
+    expect(form.getByLabelText(/^Name/)).toHaveFocus();
+  });
+
+  it('creates a pipeline with the entered name, closes the drawer and refreshes', async () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByText(/No pipelines yet/i);
-    const form = within(screen.getByRole('form', { name: /New pipeline/i }));
-    await user.type(form.getByLabelText('Name'), 'Fresh');
-    await user.click(form.getByRole('button', { name: /Create pipeline/i }));
+    const form = await openNewDrawer(user);
+    await user.type(form.getByLabelText(/^Name/), '  Fresh ');
+    await user.click(form.getByRole('button', { name: 'Create pipeline' }));
 
-    await waitFor(() => expect(createMock).toHaveBeenCalledWith({ name: 'Fresh' }));
+    await waitFor(() => expect(createMock).toHaveBeenCalledWith({ name: 'Fresh', folder: null }));
     // Refresh after create: listPipelines called again (mount + post-create).
     // That refresh is also what keeps the Factory Resources pane — mounted
     // beside this page over the same store — from showing a stale tree.
     await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.queryByRole('form', { name: 'New pipeline' })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole('button', { name: '+ New pipeline' })).toHaveFocus();
   });
 
-  it('does not create when the name is blank', async () => {
+  it("files a new pipeline under an existing folder's own spelling", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([pipeline({ name: 'Nightly', folder: 'Ops' })]);
+    renderPage();
+    await screen.findByText('Nightly');
+    const form = await openNewDrawer(user);
+    await user.type(form.getByLabelText(/^Name/), 'Hourly');
+    await user.type(form.getByLabelText('Folder'), ' ops ');
+    await user.click(form.getByRole('button', { name: 'Create pipeline' }));
+    await waitFor(() => expect(createMock).toHaveBeenCalledWith({ name: 'Hourly', folder: 'Ops' }));
+  });
+
+  it('refuses a blank name and a bad folder beside their fields, without a request', async () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByText(/No pipelines yet/i);
-    const form = within(screen.getByRole('form', { name: /New pipeline/i }));
-    await user.click(form.getByRole('button', { name: /Create pipeline/i }));
+    const form = await openNewDrawer(user);
+    await user.type(form.getByLabelText(/^Name/), '   ');
+    await user.type(form.getByLabelText('Folder'), 'a/b');
+    await user.click(form.getByRole('button', { name: 'Create pipeline' }));
+    expect(await form.findByText('Enter a name.')).toBeInTheDocument();
+    expect(form.getByText("A folder name cannot contain '/' (folders do not nest)")).toBeVisible();
+    expect(form.getByLabelText(/^Name/)).toHaveAttribute('aria-invalid', 'true');
     expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('shows the live list after creating from the Archived view', async () => {
+    const user = userEvent.setup();
+    const { router } = renderWithDataRouter(
+      <PipelinesPage store={createPipelinesStore()} />,
+      '/author/pipelines?archived=1',
+    );
+    await screen.findByText('No archived pipelines.');
+    const form = await openNewDrawer(user);
+    await user.type(form.getByLabelText(/^Name/), 'Fresh');
+    await user.click(form.getByRole('button', { name: 'Create pipeline' }));
+    await waitFor(() => expect(createMock).toHaveBeenCalled());
+    await waitFor(() => expect(router.state.location.search).not.toContain('archived'));
   });
 
   /**
@@ -851,7 +904,7 @@ describe('PipelinesPage', () => {
     );
   });
 
-  it('hands focus to the New pipeline name after archiving the last pipeline', async () => {
+  it('hands focus to the New pipeline button after archiving the last pipeline', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([pipeline({ name: 'Only' })]);
     renderPage();
@@ -859,8 +912,9 @@ describe('PipelinesPage', () => {
     listMock.mockResolvedValue([]);
     await chooseRowAction(user, 'Only', 'Archive');
     await answerConfirm(user, 'accept');
-    const form = screen.getByRole('form', { name: 'New pipeline' });
-    await waitFor(() => expect(within(form).getByLabelText('Name')).toHaveFocus());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '+ New pipeline' })).toHaveFocus(),
+    );
   });
 
   // #1470 — the row's ⋯ still works while its delete is in flight; Delete
@@ -1022,9 +1076,34 @@ describe('PipelinesPage', () => {
     expect(downloadMock).not.toHaveBeenCalled();
   });
 
-  it('offers the import surface', async () => {
+  it('offers the import surface and the demo in the Import drawer', async () => {
+    const user = userEvent.setup();
     renderPage();
-    expect(await screen.findByLabelText('Export file')).toBeInTheDocument();
+    await screen.findByText('No pipelines yet.');
+    await user.click(screen.getByRole('button', { name: 'Import' }));
+    const drawer = within(screen.getByRole('form', { name: 'Import' }));
+    expect(drawer.getByLabelText('Export file')).toHaveFocus();
+    expect(await drawer.findByRole('button', { name: 'Load demo' })).toBeInTheDocument();
+    await user.click(drawer.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('form', { name: 'Import' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Import' })).toHaveFocus();
+  });
+
+  it('holds the Import drawer open while the demo loads, then refreshes the list', async () => {
+    const user = userEvent.setup();
+    const load = deferred<void>();
+    vi.mocked(demoApi.loadDemo).mockReturnValue(load.promise);
+    renderPage();
+    await screen.findByText('No pipelines yet.');
+    await user.click(screen.getByRole('button', { name: 'Import' }));
+    const drawer = within(screen.getByRole('form', { name: 'Import' }));
+    await user.click(await drawer.findByRole('button', { name: 'Load demo' }));
+    expect(drawer.getByRole('button', { name: 'Close' })).toBeDisabled();
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('form', { name: 'Import' })).toBeInTheDocument();
+    load.resolve();
+    await waitFor(() => expect(drawer.getByRole('button', { name: 'Close' })).toBeEnabled());
+    expect(listMock).toHaveBeenCalledTimes(2);
   });
 
   it('surfaces a load error', async () => {

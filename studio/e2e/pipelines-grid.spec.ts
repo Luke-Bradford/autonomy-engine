@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 import { fireAndSettle, seedVersion, type SeedDoc } from './support/seedDoc';
+import { newPipelineButton, openImportDrawer } from './support/pipelinesPage';
 
 /**
  * #1569 OR37 slice 1 — the pipelines list as an engineer's grid: last run,
@@ -102,15 +103,9 @@ test('#1569 — the pipelines grid: last run, success %, next run, triggers; sor
     'Modified',
   ]);
   expect(headers.some((h) => /version/i.test(h))).toBe(false);
-  // No prose between the heading and the grid. (The import and demo panels
-  // below it keep their hints until a later slice moves them into drawers.)
-  const proseAbove = await page.evaluate(() => {
-    const grid = document.querySelector('.pipelines-grid');
-    return [...document.querySelectorAll('.pipelines-page .page-hint')].filter(
-      (h) => grid !== null && h.compareDocumentPosition(grid) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).length;
-  });
-  expect(proseAbove).toBe(0);
+  // No prose anywhere on the page: since #1569 slice 3 the create card and the
+  // import and demo panels are drawers, opened from the toolbar.
+  expect(await page.locator('.pipelines-page .page-hint').count()).toBe(0);
 
   // Density at 1440×900: 32px rows, the first data row high on the page, and
   // at least 20 rows inside the viewport.
@@ -184,6 +179,65 @@ test('#1569 — the pipelines grid: last run, success %, next run, triggers; sor
     .getByRole('link', { name: /success/ })
     .click();
   await expect(page).toHaveURL(new RegExp(`#/monitor/runs/${okRun}$`));
+
+  await expectQuiet(page, problems);
+});
+
+test('#1569 slice 3 — New pipeline and Import are toolbar drawers beside the grid', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  const tag = `e2e 1569 drawers ${String(Date.now())}`;
+  const folder = `Ops ${tag}`;
+  // An existing folder, so a different case of it can be typed below.
+  const seeded = await page.request.post('/api/pipelines', {
+    data: { name: `${tag} seeded`, folder },
+  });
+  expect(seeded.status()).toBe(201);
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/#/author/pipelines');
+  await page.getByRole('heading', { name: 'Pipelines' }).waitFor();
+  await fluentRootReady(page);
+
+  // Nothing to create or import with until the toolbar asks for it, and the
+  // toolbar shares the title's row.
+  await expect(page.getByRole('form', { name: 'New pipeline' })).toHaveCount(0);
+  await expect(page.getByLabel('Export file')).toHaveCount(0);
+  const header = await page
+    .locator('.pipelines-page > .page-header')
+    .evaluate((el) => Math.round(el.getBoundingClientRect().height));
+  expect(header).toBeLessThanOrEqual(40);
+
+  // Create in a folder typed in another case: it is filed under the existing one.
+  const name = `${tag} created`;
+  await newPipelineButton(page).click();
+  const form = page.getByRole('form', { name: 'New pipeline' });
+  await form.getByRole('textbox', { name: 'Name', exact: true }).fill(name);
+  await form.getByRole('combobox', { name: 'Folder' }).fill(folder.toLowerCase());
+  await form.getByRole('button', { name: 'Create pipeline' }).click();
+  await expect(form).toBeHidden();
+  await expect(newPipelineButton(page)).toBeFocused();
+  const created = page
+    .getByRole('row')
+    .filter({ has: page.getByRole('link', { name: `Open ${name}`, exact: true }) });
+  await expect(created.locator('.pipelines-grid__folder')).toHaveText(new RegExp(`^${folder}`));
+
+  // Import opens BESIDE the grid, a column rather than an overlay: the grid's
+  // rows stay in view and to its left.
+  const drawer = await openImportDrawer(page);
+  await expect(drawer.getByLabel('Export file')).toBeFocused();
+  await expect(drawer.getByRole('group', { name: 'Demo workspace' })).toBeVisible();
+  const layout = await page.evaluate(() => {
+    const grid = document.querySelector('.pipelines-grid')?.getBoundingClientRect();
+    const side = document.querySelector('.form-drawer')?.getBoundingClientRect();
+    return { gridRight: grid?.right ?? -1, drawerLeft: side?.left ?? -1 };
+  });
+  expect(layout.gridRight).toBeGreaterThan(0);
+  expect(layout.drawerLeft).toBeGreaterThanOrEqual(layout.gridRight);
+  await page.keyboard.press('Escape');
+  await expect(drawer).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Import', exact: true })).toBeFocused();
 
   await expectQuiet(page, problems);
 });

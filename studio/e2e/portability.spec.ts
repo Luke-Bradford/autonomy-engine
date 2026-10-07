@@ -3,6 +3,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 import { seedConnection, seedDataset } from './support/seedResources';
 import { chooseRowAction, rowMenuButton } from './support/rowMenu';
+import { createPipelineFromList, openImportDrawer } from './support/pipelinesPage';
 
 /**
  * #959 — export and import, end to end through a real browser.
@@ -27,9 +28,7 @@ async function gotoPipelines(page: Page): Promise<void> {
 }
 
 async function createPipeline(page: Page, name: string): Promise<void> {
-  const form = page.getByRole('form', { name: 'New pipeline' });
-  await form.getByLabel('Name').fill(name);
-  await form.getByRole('button', { name: 'Create pipeline' }).click();
+  await createPipelineFromList(page, name);
   await expect(page.getByRole('link', { name: `Open ${name}`, exact: true })).toBeVisible();
 }
 
@@ -75,7 +74,7 @@ test.describe('#959 portability', () => {
     expect(stable(text)).toBe(stable(await raw.text()));
 
     // …and now back in through the picker.
-    await page.getByLabel('Export file').setInputFiles(file as string);
+    await (await openImportDrawer(page)).getByLabel('Export file').setInputFiles(file as string);
 
     const outcome = page.getByRole('status');
     await expect(outcome).toContainText(`Imported pipeline “${name}”`);
@@ -97,7 +96,7 @@ test.describe('#959 portability', () => {
     await gotoPipelines(page);
     const before = await rowMenuButton(page).count();
 
-    await page.getByLabel('Export file').setInputFiles({
+    await (await openImportDrawer(page)).getByLabel('Export file').setInputFiles({
       name: 'notes.txt',
       mimeType: 'text/plain',
       buffer: Buffer.from('this is not an export'),

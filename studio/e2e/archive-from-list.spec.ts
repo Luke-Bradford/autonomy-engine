@@ -3,6 +3,7 @@ import { answerConfirm } from './support/confirmDialog';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 import { chooseRowAction, rowMenuButton } from './support/rowMenu';
+import { createPipelineFromList } from './support/pipelinesPage';
 
 /**
  * #1058 — a pipeline can be RETIRED from the app, and brought back.
@@ -35,8 +36,7 @@ test.describe('#1058 archive from the pipelines list, and unarchive back', () =>
     await page.getByRole('heading', { name: 'Pipelines' }).waitFor();
     await fluentRootReady(page);
 
-    await page.getByRole('textbox', { name: 'Name', exact: true }).fill(NAME);
-    await page.getByRole('button', { name: 'Create pipeline' }).click();
+    await createPipelineFromList(page, NAME);
 
     // #1397 — Archive is in the row's ⋯ menu; the menu button stands for the row.
     const rowMenu = rowMenuButton(page, NAME);

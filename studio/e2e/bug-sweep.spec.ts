@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { contrastRatio, fluentRootReady, isOpaque, setTheme, surfaceBehind } from './support/theme';
 import { openCanvas } from './support/canvas';
+import { createPipelineFromList } from './support/pipelinesPage';
 import { openRowMenu } from './support/authorPane';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
 import { activityRowById } from './support/panels';
@@ -121,8 +122,7 @@ test.describe('#698 route-level code-splitting', () => {
 
     // Author a pipeline through the page so the route has a real id to open.
     const name = `sweep-canvas-${Date.now()}`;
-    await page.getByRole('textbox', { name: 'Name' }).fill(name);
-    await page.getByRole('button', { name: 'Create pipeline' }).click();
+    await createPipelineFromList(page, name);
     await page.getByRole('link', { name: `Open ${name}`, exact: true }).click();
 
     // The lazily-loaded canvas actually arrives.

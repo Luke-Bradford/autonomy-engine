@@ -3,6 +3,7 @@ import { answerConfirm } from './support/confirmDialog';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 import { fireTrigger, waitForRunToSettle } from './support/seedDoc';
+import { openImportDrawer } from './support/pipelinesPage';
 
 /**
  * #1481 OR32 — the demo ETL pack, IN MOTION: loaded from the pipelines list,
@@ -107,9 +108,13 @@ test.describe('#1481 the demo workspace', () => {
     await page.getByRole('heading', { name: 'Pipelines' }).waitFor();
     await fluentRootReady(page);
 
-    await page.getByRole('button', { name: 'Load demo' }).click();
+    // #1569 slice 3 — the demo is loaded from the toolbar's Import drawer.
+    const drawer = await openImportDrawer(page);
+    await drawer.getByRole('button', { name: 'Load demo' }).click();
     for (const name of NAMES) await expect(rowFor(page, name)).toHaveCount(1);
-    await expect(page.getByRole('button', { name: 'Remove demo' })).toBeVisible();
+    await expect(drawer.getByRole('button', { name: 'Remove demo' })).toBeVisible();
+    await drawer.getByRole('button', { name: 'Close' }).click();
+    await expect(drawer).toBeHidden();
 
     // A second load is idempotent and names every trigger the first one made.
     const again = await page.request.post('/api/demo/seed');
@@ -198,9 +203,10 @@ test.describe('#1481 the demo workspace', () => {
     await expectDemo3RunPage(page, run3);
 
     await page.goto('/#/author/pipelines');
-    await page.getByRole('button', { name: 'Remove demo' }).click();
+    const removeFrom = await openImportDrawer(page);
+    await removeFrom.getByRole('button', { name: 'Remove demo' }).click();
     expect(await answerConfirm(page, 'accept')).toContain('all of their runs');
-    await expect(page.getByRole('button', { name: 'Load demo' })).toBeVisible();
+    await expect(removeFrom.getByRole('button', { name: 'Load demo' })).toBeVisible();
     for (const name of NAMES) await expect(rowFor(page, name)).toHaveCount(0);
     const status = await page.request.get('/api/demo');
     expect(await status.json()).toEqual({ loaded: false });
