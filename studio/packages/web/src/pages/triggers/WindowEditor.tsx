@@ -12,8 +12,8 @@ import {
   type WindowFrequency,
 } from '@autonomy-studio/shared';
 import { formToWindow, type WindowFormState } from './windowForm';
-import { boundEcho } from './formFields';
-import { BoundShiftNotices } from './BoundShiftNotices';
+import { boundEcho, boundZoneName } from './formFields';
+import { BoundShiftNotices, BoundZoneNote } from './BoundShiftNotices';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { RequiredMark } from '../../lib/form/RequiredMark';
 
@@ -60,8 +60,8 @@ export function WindowEditor({
   /** The instants the bound controls will actually SUBMIT — resolved through the
    * same path the write uses, so an untouched sub-second bound is echoed as what
    * will be written rather than as a truncated re-derivation. */
-  const startUtc = boundEcho(value.startTime, value.startTimeIso);
-  const endUtc = boundEcho(value.endTime, value.endTimeIso);
+  const startUtc = boundEcho(value.startTime, value.startTimeIso, value.boundsZone);
+  const endUtc = boundEcho(value.endTime, value.endTimeIso, value.boundsZone);
 
   return (
     <fieldset className="window-editor">
@@ -103,6 +103,7 @@ export function WindowEditor({
       <label>
         <span>
           Start time (the window epoch)
+          <BoundZoneNote zone={value.boundsZone} />
           <RequiredMark />
         </span>
         <input
@@ -121,6 +122,7 @@ export function WindowEditor({
 
       <label>
         End time
+        <BoundZoneNote zone={value.boundsZone} />
         <input
           type="datetime-local"
           step={1}
@@ -217,11 +219,11 @@ export function WindowEditor({
       <FieldError {...f.errorProps('selfDependency.sizeInSeconds')} />
 
       {/* The epoch is an absolute instant; the control is anchored in the
-          browser's zone, so echo what will actually be stored. Every window
+          display zone (#1524), so echo what will actually be stored. Every window
           boundary the trigger ever computes is keyed off this instant. */}
       {startUtc && (
         <p className="page-hint" data-testid="window-bounds-utc">
-          {`Windows are keyed from ${startUtc}, entered in your browser's local time`}
+          {`Windows are keyed from ${startUtc}, entered in ${boundZoneName(value.boundsZone)}`}
           {endUtc ? `, until ${endUtc}` : ', with no end'}
         </p>
       )}

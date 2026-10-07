@@ -11,6 +11,7 @@ import {
   utcIsoToLocalInput,
   type Refusal,
 } from './formFields';
+import { LOCAL_TIME_ZONE, type DisplayTimeZone } from '../../lib/displayTime';
 
 /**
  * #439 U14b remainder (#854) — the PURE half of the tumbling-window builder:
@@ -48,7 +49,7 @@ export interface WindowFormState {
   interval: string;
   maxBackfillWindows: string;
   maxConcurrentWindows: string;
-  /** `datetime-local` values (naive, browser-local wall clock); `''` = absent. */
+  /** `datetime-local` values (naive, wall clock in `boundsZone`); `''` = absent. */
   startTime: string;
   endTime: string;
   /**
@@ -59,6 +60,8 @@ export interface WindowFormState {
    */
   startTimeIso: string;
   endTimeIso: string;
+  /** #1524 — the zone `startTime`/`endTime` are written in (`BoundFields`). */
+  boundsZone: DisplayTimeZone;
   /** #861 — `retry.count` / `retry.intervalInSeconds`, as typed. */
   retryCount: string;
   retryIntervalSeconds: string;
@@ -70,7 +73,7 @@ export interface WindowFormState {
   dependencySizeSeconds: string;
 }
 
-export function blankWindowForm(): WindowFormState {
+export function blankWindowForm(boundsZone: DisplayTimeZone = LOCAL_TIME_ZONE): WindowFormState {
   return {
     frequency: 'hour',
     interval: '',
@@ -80,6 +83,7 @@ export function blankWindowForm(): WindowFormState {
     endTime: '',
     startTimeIso: '',
     endTimeIso: '',
+    boundsZone,
     retryCount: '',
     retryIntervalSeconds: '',
     dependencyOffsetSeconds: '',
@@ -222,16 +226,20 @@ export function formToWindow(form: WindowFormState): WindowConversion {
 }
 
 /** Load a stored window back into the editor — the inverse of `formToWindow`. */
-export function windowToForm(window: WindowConfig): WindowFormState {
+export function windowToForm(
+  window: WindowConfig,
+  boundsZone: DisplayTimeZone = LOCAL_TIME_ZONE,
+): WindowFormState {
   return {
     frequency: window.frequency,
     interval: String(window.interval),
     maxBackfillWindows: optionalText(window.maxBackfillWindows),
     maxConcurrentWindows: optionalText(window.maxConcurrentWindows),
-    startTime: utcIsoToLocalInput(window.startTime),
-    endTime: window.endTime === undefined ? '' : utcIsoToLocalInput(window.endTime),
+    startTime: utcIsoToLocalInput(window.startTime, boundsZone),
+    endTime: window.endTime === undefined ? '' : utcIsoToLocalInput(window.endTime, boundsZone),
     startTimeIso: window.startTime,
     endTimeIso: window.endTime ?? '',
+    boundsZone,
     retryCount: optionalText(window.retry?.count),
     retryIntervalSeconds: optionalText(window.retry?.intervalInSeconds),
     dependencyOffsetSeconds: optionalText(window.selfDependency?.offsetInSeconds),

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDisplayTimeZone } from '../lib/useDisplayTimeZone';
 import { type TriggerPublic } from '@autonomy-studio/shared';
 import { Link, useSearchParams } from 'react-router';
 import { triggersPath } from './triggers/triggersPath';
@@ -61,6 +62,9 @@ interface FireOutcome {
  */
 export function TriggersPage() {
   const [confirm, confirmDialog] = useConfirm();
+  /* #1524 — the display zone a new or opened form's start/end controls are
+     written in, like every timestamp around them. */
+  const zone = useDisplayTimeZone();
   const [triggers, setTriggers] = useState<TriggerPublic[] | null>(null);
   // #1470 — a removed row hands focus to its neighbour's ⋯, else to this.
   const createRef = useRef<HTMLButtonElement>(null);
@@ -323,7 +327,7 @@ export function TriggersPage() {
         <button
           ref={createRef}
           type="button"
-          onClick={(e) => drawer.openFrom(e.currentTarget, () => openForm(blankForm()))}
+          onClick={(e) => drawer.openFrom(e.currentTarget, () => openForm(blankForm(zone)))}
         >
           New trigger
         </button>
@@ -483,7 +487,7 @@ export function TriggersPage() {
                             {
                               label: 'Edit',
                               onSelect: (origin) =>
-                                drawer.openFrom(origin.element, () => openForm(formForEdit(t))),
+                                drawer.openFrom(origin.element, () => openForm(formForEdit(t, zone))),
                             },
                             {
                               label: 'Export',
