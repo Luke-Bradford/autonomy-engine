@@ -7,7 +7,7 @@ import { getPipeline } from '../../api/pipelines';
 import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore';
 import { PipelineCanvas } from '../pipeline/PipelineCanvas';
 import { useShellLabel } from '../../shell/shellLabel';
-import { readOpenVersion } from './pipelinePath';
+import { readOpenNode, readOpenVersion } from './pipelinePath';
 
 /** Where "back" goes, and where a missing pipeline sends you. */
 const PIPELINES_PATH = '/author/pipelines';
@@ -44,6 +44,7 @@ export function PipelineCanvasRoute({ store = pipelinesStore }: { store?: Pipeli
       key={pipelineId}
       pipelineId={pipelineId}
       openVersion={readOpenVersion(searchParams)}
+      openNode={readOpenNode(searchParams)}
       store={store}
     />
   );
@@ -52,10 +53,12 @@ export function PipelineCanvasRoute({ store = pipelinesStore }: { store?: Pipeli
 function CanvasFor({
   pipelineId,
   openVersion,
+  openNode,
   store,
 }: {
   pipelineId: string;
   openVersion: number | undefined;
+  openNode: string | undefined;
   store: PipelinesStore;
 }) {
   const [pipeline, setPipeline] = useState<Pipeline | null>(null);
@@ -127,6 +130,7 @@ function CanvasFor({
       pipelineId={pipeline.id}
       pipelineName={liveName ?? pipeline.name}
       openVersion={openVersion}
+      openNode={openNode}
       /* #907 — the canvas warns on an archived pipeline (every save is
          refused). The fetched row is the authority: unlike the NAME, `archived`
          has no live overlay, because `pipelinesStore` lists only un-archived

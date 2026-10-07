@@ -37,6 +37,7 @@ const NAMES: RunHeaderNames = {
   debug: false,
   triggeredByKind: 'schedule',
   parentPipelineName: null,
+  parentActivity: null,
 };
 
 const doc = (over: Record<string, unknown> = {}) =>
@@ -55,14 +56,14 @@ const doc = (over: Record<string, unknown> = {}) =>
     ...over,
   });
 
-function header(run: Run, over: Record<string, unknown> = {}) {
+function header(run: Run, over: Record<string, unknown> = {}, names: RunHeaderNames = NAMES) {
   render(
     <MemoryRouter>
       <RunHeader
         runId={run.id}
         run={run}
         doc={doc(over)}
-        names={NAMES}
+        names={names}
         status={run.status}
         startedAt={run.startedAt}
         statusPill={<span>success</span>}
@@ -106,6 +107,39 @@ describe('RunHeader (#1484 OR35 M2)', () => {
     header({ ...RUN, triggerContext }, { sourceCommit: '0123456789abcdef', sourceBranch: 'main' });
     expect(fact('Scheduled')?.textContent).toMatch(/:59:59\.500/);
     expect(fact('Source')?.textContent).toBe('main @ 0123456');
+  });
+
+  it('#1541 — a called run names its parent pipeline and the activity that called it', () => {
+    header(
+      { ...RUN, parentRunId: 'run_parent_1' },
+      {},
+      {
+        ...NAMES,
+        triggeredByKind: 'call',
+        parentPipelineName: 'Orchestrate',
+        parentActivity: 'Execute Pipeline 2',
+      },
+    );
+    expect(fact('Parent')).toHaveTextContent(/^Orchestrate · Execute Pipeline 2$/);
+    expect(screen.getByRole('link', { name: 'Orchestrate' })).toHaveAttribute(
+      'href',
+      '/monitor/runs/run_parent_1',
+    );
+  });
+
+  it('#1541 — a parent whose caller is not known is named by its pipeline alone', () => {
+    header(
+      { ...RUN, parentRunId: 'run_parent_1' },
+      {},
+      { ...NAMES, parentPipelineName: 'Orchestrate' },
+    );
+    expect(fact('Parent')).toHaveTextContent(/^Orchestrate$/);
+  });
+
+  it("#1541 — Rerun of names the source run's pipeline beside its id", () => {
+    header({ ...RUN, rerunOf: 'run_source_12345678' });
+    expect(fact('Rerun of')).toHaveTextContent(/^Nightly load · 12345678$/);
+    expect(screen.getByRole('link', { name: 'Source run run_source_12345678' })).toBeVisible();
   });
 
   it('a trigger deleted since the run leaves its kind and no link', () => {

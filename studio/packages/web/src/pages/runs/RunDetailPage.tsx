@@ -30,7 +30,13 @@ import { iterationLabel } from './activityRunsColumns';
 import { RunDrawer } from './RunDrawer';
 import { RunHeader, type RunHeaderNames } from './RunHeader';
 import { RunFailureBanner } from './RunFailureBanner';
-import { runFailure, runFinished, runStartedAt } from './runFailure';
+import {
+  FAILURE_BANNER_HOLD_MS,
+  failedNodeId,
+  runFailure,
+  runFinished,
+  runStartedAt,
+} from './runFailure';
 import { HelpDisclosure } from './HelpDisclosure';
 import { containerLabels } from '../pipeline/containerRules';
 import { useActivityRuns } from './useActivityRuns';
@@ -177,7 +183,22 @@ export function RunDetailPage({ runId }: { runId: string }) {
           debug: d.debug,
           triggeredByKind: d.triggeredByKind,
           parentPipelineName: d.parentPipelineName,
+          parentActivity: null,
         });
+        /* #1541 — the activity that called this run, named as the PARENT's
+           editor names it, so against the parent's version: `/detail` gives
+           its id, and naming is this layer's (`activityLabels`). A parent that
+           will not read leaves the id itself, never a blank. */
+        const callerId = d.parentActivityId;
+        if (d.run.parentRunId === null || callerId === null) return;
+        const named = (parentActivity: string) =>
+          setNames((prev) => (prev === null ? prev : { ...prev, parentActivity }));
+        void getRunDetail(d.run.parentRunId, ac.signal)
+          .then((p) => activityLabels(p.pipelineVersion.nodes).get(callerId) ?? callerId)
+          .catch(() => callerId)
+          .then((name) => {
+            if (!ac.signal.aborted) named(name);
+          });
       })
       .catch((detailErr: unknown) => {
         if (ac.signal.aborted) return;
@@ -308,7 +329,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
   const countingLive = streamStillLive(stream.phase, status);
   /* #1484 M2 — the activity runs, re-read as the log grows, and while a run
      this one called is still going and the page would hear this run settle. */
-  const activityRuns = useActivityRuns(runId, stream.events.at(-1)?.seq, countingLive);
+  const lastSeq = stream.events.at(-1)?.seq;
+  const activityRuns = useActivityRuns(runId, lastSeq, countingLive);
   /* #1484 M2 — when the run ended and why. The `run.finished` event as well as
      the row's stamp, because the row was read once and the run may have ended
      since. */
@@ -318,6 +340,23 @@ export function RunDetailPage({ runId }: { runId: string }) {
   // has and the row does not (its `startedAt` was the enqueue placeholder).
   const loggedStart = useMemo(() => runStartedAt(stream.events), [stream.events]);
   const streamEnded = stream.phase === 'closed' || stream.phase === 'error';
+  /* #1541 — a FAILED run's activity runs are read after its log, throttled, so
+     for a read cycle they can be older than it: the banner would name no row
+     (no Show activity) or an earlier attempt's error. It waits for rows read at
+     the log's newest event, for at most `FAILURE_BANNER_HOLD_MS` once the run
+     has finished. A failed read releases it at once. */
+  const rowsBehind =
+    status === 'failure' &&
+    finished !== null &&
+    lastSeq !== undefined &&
+    activityRuns.error === null &&
+    (activityRuns.readAt === null || activityRuns.readAt < lastSeq);
+  const [holdLapsed, setHoldLapsed] = useState(false);
+  useEffect(() => {
+    if (!rowsBehind || holdLapsed) return;
+    const timer = setTimeout(() => setHoldLapsed(true), FAILURE_BANNER_HOLD_MS);
+    return () => clearTimeout(timer);
+  }, [rowsBehind, holdLapsed]);
   /* The failure banner, on a FAILED run only. It names what the log blames, so
      it waits for the projected state the container walk needs, unless that
      will never come (the stream has ended, or the version will not resolve).
@@ -327,12 +366,22 @@ export function RunDetailPage({ runId }: { runId: string }) {
     if (status !== 'failure') return null;
     if (finished === null) return streamEnded ? runFailure(null, null, null) : null;
     if (!overlay.ready && !streamEnded && loadError === null) return null;
+    if (rowsBehind && !holdLapsed) return null;
     return runFailure(
       finished.reason,
       overlay.ready ? overlay.state.containers : null,
       activityRuns.rows,
     );
-  }, [status, finished, streamEnded, overlay, loadError, activityRuns.rows]);
+  }, [
+    status,
+    finished,
+    streamEnded,
+    overlay,
+    loadError,
+    rowsBehind,
+    holdLapsed,
+    activityRuns.rows,
+  ]);
   /* A container has no node label, so the banner names one by its container
      label, as the editor does. */
   const containerNames = useMemo(
@@ -566,7 +615,12 @@ export function RunDetailPage({ runId }: { runId: string }) {
           versionHref={
             doc === null || names === null
               ? null
-              : runVersionPath(doc.pipelineId, doc.version, names.debug)
+              : runVersionPath(
+                  doc.pipelineId,
+                  doc.version,
+                  names.debug,
+                  failure.kind === 'run' ? undefined : failedNodeId(failure),
+                )
           }
           onShowActivity={(key) => setSelectedRow({ key })}
         />

@@ -77,6 +77,9 @@ export interface RunNodeData extends Record<string, unknown> {
    * cannot tell them which of the two absences they are looking at.
    */
   showStatus: boolean;
+  /** #1541 — the node a link asked to see (`RunFlowOptions.selectedId`).
+   * Always a boolean, so `sameRenderedData`'s key count stays stable. */
+  selected: boolean;
   /**
    * #1394 OR3 — the authoring card's content: type (for the glyph), what the
    * step does, and its policy badges. A fact of the VERSION, so it is built once
@@ -275,6 +278,8 @@ export interface RunContainerData extends Record<string, unknown> {
   items: string | null;
   /** U19 — a container is a legal edge SOURCE too. Same encoding, same reason. */
   portIds: string;
+  /** #1541 — as `RunNodeData.selected`. */
+  selected: boolean;
   /*
    * Deliberately NO `showStatus` twin of `RunNodeData`'s. The box has only ONE
    * absence to render: it already drops the whole ` · <status>` fragment when
@@ -303,7 +308,18 @@ export interface RunFlowOptions {
   /** #1394 OR3 — the page's per-node activity rows, keyed by doc node id, for
    * `runNodeFacts`. Absent on a view with no run behind it. */
   activity?: ReadonlyMap<string, RunNodeMeasure>;
+  /**
+   * #1541 — the id of the ONE node or container to mark selected: the failed
+   * activity "Open in editor" names. A visual mark, not React Flow's
+   * selection — this canvas selects nothing (`elementsSelectable={false}`).
+   * An id the doc does not hold marks nothing.
+   */
+  selectedId?: string;
 }
+
+/** #1541 — what an accessible name adds for the node `selectedId` names. */
+const selectedSuffix = (id: string, options: RunFlowOptions): string =>
+  id === options.selectedId ? ', selected' : '';
 
 /** What a node says when the run has no state for it. */
 export const NO_STATUS_LABEL = 'not projected';
@@ -380,6 +396,7 @@ export function runFlowNodes(
         status: label,
         tone: status === null ? null : nodeStatusTone(status, state?.status),
         showStatus,
+        selected: n.id === options.selectedId,
         portIds: portIdsOf(portsOf(n.id, n)),
         // Unreachable fallback: `runCards` is built from this very array.
         card: cards.get(n.id) ?? { type: n.type, summary: null, badges: [] },
@@ -390,7 +407,9 @@ export function runFlowNodes(
             ? runNodeFacts(n.type, options.activity?.get(n.id))
             : null,
       } satisfies RunNodeData,
-      ariaLabel: showStatus ? `${name}, ${label ?? NO_STATUS_LABEL}` : name,
+      ariaLabel:
+        (showStatus ? `${name}, ${label ?? NO_STATUS_LABEL}` : name) +
+        selectedSuffix(n.id, options),
     };
   });
 
@@ -480,15 +499,17 @@ export function runFlowNodes(
         round: c.kind === 'foreach' ? null : (cs?.round ?? null),
         items,
         portIds: portIdsOf(portsOf(c.id, undefined)),
+        selected: c.id === options.selectedId,
       } satisfies RunContainerData,
       ariaRole: 'group',
       // The box below draws this same `name`, which is the whole contract
       // `containerAriaLabel` documents — announcing an ordinal the picture does
       // not show would move the mismatch rather than close it.
-      ariaLabel: showStatus
-        ? `${containerAriaLabel(name, rect.childCount)}, ${label ?? NO_STATUS_LABEL}` +
-          (items === null ? '' : `, ${items}`)
-        : containerAriaLabel(name, rect.childCount),
+      ariaLabel:
+        (showStatus
+          ? `${containerAriaLabel(name, rect.childCount)}, ${label ?? NO_STATUS_LABEL}` +
+            (items === null ? '' : `, ${items}`)
+          : containerAriaLabel(name, rect.childCount)) + selectedSuffix(c.id, options),
     };
   });
 

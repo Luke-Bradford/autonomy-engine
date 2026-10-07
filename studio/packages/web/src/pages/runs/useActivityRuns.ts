@@ -21,6 +21,14 @@ export interface ActivityRunsReading {
   readonly groups: readonly ActivityRunGroup[];
   /** The last read's failure; the rows before it stay on screen. */
   readonly error: string | null;
+  /**
+   * #1541 — the stream's `lastSeq` the rows on screen were asked at, or `null`
+   * before the first read lands. The server appends before it streams, so rows
+   * asked at N reflect at least the log up to N. A failed read keeps the last.
+   * A read asked before the stream's first frame is `null`, so a finished run's
+   * page has a `readAt` once the read after its replay lands.
+   */
+  readonly readAt: number | null;
 }
 
 /**
@@ -51,6 +59,7 @@ export function useActivityRuns(
     rows: null,
     groups: [],
     error: null,
+    readAt: null,
   });
   const flight = useRef<{
     timer: ReturnType<typeof setTimeout> | null;
@@ -63,9 +72,20 @@ export function useActivityRuns(
     kick: (() => void) | null;
     /** The `wanted` the last read was issued at; `null` before any read. */
     asked: string | null;
+    /** The `lastSeq` the newest render saw, for `readAt`. */
+    wantedSeq: number | undefined;
     /** Set on unmount, so a read landing afterwards schedules nothing. */
     gone: boolean;
-  }>({ timer: null, inFlight: false, wanted: '', poll: 0, kick: null, asked: null, gone: false });
+  }>({
+    timer: null,
+    inFlight: false,
+    wanted: '',
+    poll: 0,
+    kick: null,
+    asked: null,
+    wantedSeq: undefined,
+    gone: false,
+  });
 
   const childGoing =
     live &&
@@ -102,8 +122,10 @@ export function useActivityRuns(
         f.timer = null;
         f.inFlight = true;
         f.asked = f.wanted;
+        const askedAt = f.wantedSeq ?? null;
         void load((signal) => getRunActivityRuns(runId, signal), {
-          onData: (res) => setReading({ rows: res.rows, groups: res.groups, error: null }),
+          onData: (res) =>
+            setReading({ rows: res.rows, groups: res.groups, error: null, readAt: askedAt }),
           onError: (err) => setReading((prev) => ({ ...prev, error: messageOf(err) })),
         }).finally(() => {
           f.inFlight = false;
@@ -113,6 +135,7 @@ export function useActivityRuns(
     };
     f.kick = () => {
       f.wanted = `${lastSeq ?? ''}|${f.poll}`;
+      f.wantedSeq = lastSeq;
       schedule(f.asked === null ? 0 : ACTIVITY_RUNS_REFRESH_MS);
     };
     f.kick();

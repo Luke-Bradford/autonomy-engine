@@ -75,6 +75,37 @@ describe('#1484 M2 useActivityRuns', () => {
     expect(getMock).toHaveBeenCalledTimes(2);
   });
 
+  it('#1541 — says which frame each landed read was asked at, and keeps it through a failure', async () => {
+    let answer!: (v: { runId: string; rows: []; groups: [] }) => void;
+    getMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const { result, rerender } = renderHook(({ seq }) => useActivityRuns('r', seq, true), {
+      initialProps: { seq: 3 as number | undefined },
+    });
+    expect(result.current.readAt).toBeNull();
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    // Frames arrive while the read asked at 3 is in flight: it is still 3's.
+    rerender({ seq: 7 });
+    await act(async () => {
+      answer({ runId: 'r', rows: [], groups: [] });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.readAt).toBe(3);
+    // The follow-up read is asked at 7.
+    await act(async () => vi.advanceTimersByTimeAsync(ACTIVITY_RUNS_REFRESH_MS));
+    expect(result.current.readAt).toBe(7);
+
+    getMock.mockRejectedValueOnce(new Error('boom'));
+    rerender({ seq: 9 });
+    await act(async () => vi.advanceTimersByTimeAsync(ACTIVITY_RUNS_REFRESH_MS));
+    expect(result.current.error).toMatch(/boom/);
+    expect(result.current.readAt).toBe(7);
+  });
+
   it('schedules nothing once unmounted, even when a read lands afterwards', async () => {
     let answer!: (v: { runId: string; rows: []; groups: [] }) => void;
     getMock.mockImplementationOnce(

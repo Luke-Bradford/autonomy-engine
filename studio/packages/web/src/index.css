@@ -4162,6 +4162,21 @@ button.danger {
   outline-color: var(--muted);
 }
 
+/* #1541 — the node a link asked to see: the failed activity, from a failed
+   run's "Open in editor". Marked on the BORDER, as the editor's selection is,
+   because the outline is the status tone's (above); the inset ring thickens it
+   without moving the box. A container's dashed border turns solid, as
+   `.flow-container--selected` does. */
+.run-node--selected,
+.run-container--selected {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.run-container--selected {
+  border-style: solid;
+}
+
 .run-node-running {
   outline-color: var(--accent);
 }

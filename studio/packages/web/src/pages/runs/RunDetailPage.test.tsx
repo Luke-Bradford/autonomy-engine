@@ -23,6 +23,7 @@ import {
   PipelineVersionSchema,
 } from '@autonomy-studio/shared';
 import { RunDetailPage } from './RunDetailPage';
+import { FAILURE_BANNER_HOLD_MS } from './runFailure';
 import { ACTIVITY_RUN_COLUMNS } from './activityRunsColumns';
 import { attemptEvents } from './attemptActivity';
 import { RERUN_HISTORY_LIMIT } from './RerunHistory';
@@ -89,6 +90,7 @@ const NAMES = {
   debug: false,
   triggeredByKind: 'editor',
   parentPipelineName: null,
+  parentActivityId: null,
 } as const;
 const rerunFromFailedMock = vi.mocked(runsApi.rerunFromFailed);
 const cancelRunMock = vi.mocked(runsApi.cancelRun);
@@ -337,6 +339,7 @@ describe('RunDetailPage', () => {
       triggerName: 'Every night',
       triggeredByKind: 'schedule',
       parentPipelineName: null,
+      parentActivityId: null,
     });
     // `setup()` before render: it installs the clipboard jsdom lacks, and the
     // copy control is feature-detected at render.
@@ -374,6 +377,7 @@ describe('RunDetailPage', () => {
       triggerName: null,
       triggeredByKind: 'editor',
       parentPipelineName: null,
+      parentActivityId: null,
     });
     renderWithRouter(<RunDetailPage runId="run_1" />);
     expect(await screen.findByText('pv_1')).toBeInTheDocument();
@@ -389,6 +393,7 @@ describe('RunDetailPage', () => {
       triggerName: null,
       triggeredByKind: 'schedule',
       parentPipelineName: null,
+      parentActivityId: null,
     });
     renderWithRouter(<RunDetailPage runId="run_1" />);
     await screen.findByRole('heading', { name: 'Nightly load v1' });
@@ -3167,6 +3172,55 @@ describe('RunDetailPage — the parent a child run was called by', () => {
     expect(screen.getByText('Execute Pipeline', { exact: false })).toBeInTheDocument();
   });
 
+  /* #1541 — and by the activity that called it, named as the PARENT's editor
+     names it: against the parent's own version, not this run's. */
+  it('names the activity in the parent that called this run', async () => {
+    const child = {
+      ...NAMES,
+      triggeredByKind: 'call' as const,
+      parentPipelineName: 'Caller pipe',
+      parentActivityId: 'second',
+      run: run({ status: 'success', parentRunId: 'run_parent', triggerId: null }),
+      pipelineVersion: version(),
+    };
+    const parent = {
+      ...NAMES,
+      run: run({ id: 'run_parent', status: 'success' }),
+      pipelineVersion: version({
+        id: 'pv_parent',
+        nodes: [
+          { id: 'first', type: 'http_request', position: { x: 0, y: 0 }, config: {} },
+          { id: 'second', type: 'http_request', position: { x: 240, y: 0 }, config: {} },
+        ],
+        edges: [],
+      }),
+    };
+    getRunDetailMock.mockImplementation(async (id) => (id === 'run_parent' ? parent : child));
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await screen.findByRole('link', { name: 'Caller pipe' });
+    const parentFact = screen.getByText('Parent', { selector: 'dt' }).nextElementSibling;
+    await waitFor(() => expect(parentFact).toHaveTextContent(/^Caller pipe · HTTP Request 2$/));
+  });
+
+  it("names the calling activity by its id when the parent's version will not read", async () => {
+    const child = {
+      ...NAMES,
+      triggeredByKind: 'call' as const,
+      parentPipelineName: 'Caller pipe',
+      parentActivityId: 'second',
+      run: run({ status: 'success', parentRunId: 'run_parent', triggerId: null }),
+      pipelineVersion: version(),
+    };
+    getRunDetailMock.mockImplementation(async (id) => {
+      if (id === 'run_parent') throw new Error('409');
+      return child;
+    });
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await screen.findByRole('link', { name: 'Caller pipe' });
+    const parentFact = screen.getByText('Parent', { selector: 'dt' }).nextElementSibling;
+    await waitFor(() => expect(parentFact).toHaveTextContent(/^Caller pipe · second$/));
+  });
+
   /* The ABSENCE of the row is what "not a child" looks like — the same rule the
      `Rerun of` row above it already sets. A row reading "—" on every ordinary
      run would be noise on the one surface every run shares. */
@@ -3316,6 +3370,7 @@ describe('RunDetailPage — the reruns of this run', () => {
       triggerName: null,
       triggeredByKind: 'rerun',
       parentPipelineName: null,
+      parentActivityId: null,
       cost: computeRunCost([]),
       activities: null,
       rowsWritten: null,
@@ -3533,6 +3588,55 @@ describe('RunDetailPage — the failure banner', () => {
     await userEvent.click(within(banner).getByRole('button', { name: 'Show activity' }));
     const current = document.querySelector('.activity-runs__table tr[aria-current="true"]');
     expect(current?.getAttribute('data-activity-id')).toBe('greet');
+  });
+
+  /* #1541 — the rows are read after the stream, throttled, so for a moment
+     they are older than the log. The banner waits for them rather than show a
+     banner with no row (no Show activity) or an earlier attempt's error. */
+  it('waits for the activity runs read at the newest event, then names the row', async () => {
+    let answer!: (v: { runId: string; rows: ActivityRun[]; groups: [] }) => void;
+    vi.mocked(runsApi.getRunActivityRuns).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    useRunStreamMock.mockReturnValue(stream({ events: failedLog, phase: 'closed' }));
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await screen.findByRole('heading', { level: 2, name: 'Test pipeline v1' });
+    await waitFor(() => expect(runsApi.getRunActivityRuns).toHaveBeenCalled());
+    expect(screen.queryByRole('group', { name: 'Failure' })).toBeNull();
+
+    await act(async () => answer({ runId: 'run_1', rows: [failedRow], groups: [] }));
+    const banner = await screen.findByRole('group', { name: 'Failure' });
+    expect(within(banner).getByRole('button', { name: 'Show activity' })).toBeVisible();
+    // #1541 — and the way to the version that ran selects what failed in it.
+    expect(within(banner).getByRole('link', { name: 'Open in editor' })).toHaveAttribute(
+      'href',
+      '/author/pipelines/pl_1?version=1&node=greet',
+    );
+  });
+
+  it('says what failed without the rows once a hung read has held it long enough', async () => {
+    vi.mocked(runsApi.getRunActivityRuns).mockImplementation(() => new Promise(() => {}));
+    useRunStreamMock.mockReturnValue(stream({ events: failedLog, phase: 'closed' }));
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await screen.findByRole('heading', { level: 2, name: 'Test pipeline v1' });
+    expect(screen.queryByRole('group', { name: 'Failure' })).toBeNull();
+    const banner = await screen.findByRole(
+      'group',
+      { name: 'Failure' },
+      { timeout: FAILURE_BANNER_HOLD_MS + 2_000 },
+    );
+    expect(banner).toHaveTextContent('Failed: HTTP Request 1');
+  });
+
+  it('still names what failed when the activity runs will not read', async () => {
+    vi.mocked(runsApi.getRunActivityRuns).mockRejectedValue(new Error('409'));
+    useRunStreamMock.mockReturnValue(stream({ events: failedLog, phase: 'closed' }));
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    const banner = await screen.findByRole('group', { name: 'Failure' });
+    expect(banner).toHaveTextContent('Failed: HTTP Request 1');
   });
 
   it('waits for the replay before naming anything', async () => {

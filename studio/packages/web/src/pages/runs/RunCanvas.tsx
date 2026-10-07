@@ -85,7 +85,7 @@ const RunActivityNode = memo(function RunActivityNode({ data }: NodeProps) {
   const ports = useMemo(() => portsFromIds(d.portIds), [d.portIds]);
   return (
     <div
-      className={`flow-node run-node${toneClass('run-node', d.tone)}`}
+      className={`flow-node run-node${toneClass('run-node', d.tone)}${d.selected ? ' run-node--selected' : ''}`}
       style={{ height: runNodeHeight(ports.length) }}
     >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
@@ -127,7 +127,9 @@ const RunContainerNode = memo(function RunContainerNode({ data }: NodeProps) {
   const d = data as RunContainerData;
   const ports = useMemo(() => portsFromIds(d.portIds), [d.portIds]);
   return (
-    <div className={`flow-container run-container${toneClass('run-container', d.tone)}`}>
+    <div
+      className={`flow-container run-container${toneClass('run-container', d.tone)}${d.selected ? ' run-container--selected' : ''}`}
+    >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
       <span className="flow-container-label">
         {d.name}
@@ -171,6 +173,8 @@ export interface RunCanvasProps {
   /** #1394 OR3 — the workspace's datasets, so a Copy card can name its source
    * and sink rather than reading "a dataset". */
   datasets?: readonly Dataset[];
+  /** #1541 — the node or container to mark selected (`RunFlowOptions.selectedId`). */
+  selectedNodeId?: string;
 }
 
 /**
@@ -187,7 +191,14 @@ export interface RunCanvasProps {
  * read-only version preview makes too, and `loadVersion` dropping edges is
  * exactly what a version preview must not do.
  */
-export function RunCanvas({ doc, state, showStatus = true, activity, datasets }: RunCanvasProps) {
+export function RunCanvas({
+  doc,
+  state,
+  showStatus = true,
+  activity,
+  datasets,
+  selectedNodeId,
+}: RunCanvasProps) {
   /* React Flow owns the VIEW array so it can attach and KEEP each node's
      measured dimensions across renders — the author canvas holds them the same
      way, and for the same reason. `onNodesChange` is wired for that alone: with
@@ -206,9 +217,17 @@ export function RunCanvas({ doc, state, showStatus = true, activity, datasets }:
 
   useEffect(() => {
     setNodes((prev) =>
-      mergeRunNodes(prev, runFlowNodes(doc, state, { showStatus, cards, activity: activityById })),
+      mergeRunNodes(
+        prev,
+        runFlowNodes(doc, state, {
+          showStatus,
+          cards,
+          activity: activityById,
+          selectedId: selectedNodeId,
+        }),
+      ),
     );
-  }, [doc, state, showStatus, cards, activityById, setNodes]);
+  }, [doc, state, showStatus, cards, activityById, selectedNodeId, setNodes]);
 
   return (
     <div className="run-canvas" data-testid="run-canvas">

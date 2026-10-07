@@ -11,9 +11,12 @@
  * Its own module rather than a second export from `FactoryResources.tsx`, so
  * that file exports components only (`react-refresh/only-export-components`).
  */
-export function pipelinePath(pipelineId: string, version?: number): string {
+export function pipelinePath(pipelineId: string, version?: number, nodeId?: string): string {
   const path = `/author/pipelines/${encodeURIComponent(pipelineId)}`;
-  return version === undefined ? path : `${path}?${OPEN_VERSION_PARAM}=${version}`;
+  if (version === undefined) return path;
+  const query = new URLSearchParams({ [OPEN_VERSION_PARAM]: String(version) });
+  if (nodeId !== undefined) query.set(OPEN_NODE_PARAM, nodeId);
+  return `${path}?${query.toString()}`;
 }
 
 /**
@@ -25,15 +28,40 @@ export function pipelinePath(pipelineId: string, version?: number): string {
 const OPEN_VERSION_PARAM = 'version';
 
 /**
+ * #1541 — `&node=<id>` marks one activity or container as selected in that
+ * read-only version, so a failed run's "Open in editor" lands on what failed.
+ * Only beside `version`: the node is the version-that-ran's, and the editor's
+ * working copy may have moved on.
+ */
+const OPEN_NODE_PARAM = 'node';
+
+/**
  * The editor path for the version a RUN bound: that saved version, or for a
  * debug run (whose version is not in the history) the pipeline itself.
+ *
+ * `nodeId` selects that node in the version. A debug run drops it with the
+ * version (#1541): it has no read-only preview to select in, and selecting the
+ * id in the working copy would point at a node the operator may have changed
+ * or deleted since the debug run started.
  */
-export function runVersionPath(pipelineId: string, version: number, debug: boolean): string {
-  return pipelinePath(pipelineId, debug ? undefined : version);
+export function runVersionPath(
+  pipelineId: string,
+  version: number,
+  debug: boolean,
+  nodeId?: string,
+): string {
+  return debug ? pipelinePath(pipelineId) : pipelinePath(pipelineId, version, nodeId);
 }
 
 /** The version `pipelinePath` asked to open, or `undefined` for none or a malformed one. */
 export function readOpenVersion(params: URLSearchParams): number | undefined {
   const raw = params.get(OPEN_VERSION_PARAM);
   return raw !== null && /^[1-9]\d*$/.test(raw) ? Number(raw) : undefined;
+}
+
+/** The node `pipelinePath` asked to select, or `undefined` for none. Any
+ * non-empty id: an id the version does not hold selects nothing. */
+export function readOpenNode(params: URLSearchParams): string | undefined {
+  const raw = params.get(OPEN_NODE_PARAM);
+  return raw === null || raw === '' ? undefined : raw;
 }
