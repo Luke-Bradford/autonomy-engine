@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { GRID_COLUMN_RESIZE_STEP } from '../../stores/gridColumns';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
@@ -32,7 +33,6 @@ import {
   createUiStore,
   RUN_GRID_COLUMN_WIDTHS,
   RUN_GRID_HIDDEN_STORAGE_KEY,
-  RUN_GRID_RESIZE_STEP,
   RUNS_LIVE_STORAGE_KEY,
   uiStore,
 } from '../../stores/uiStore';
@@ -1715,7 +1715,7 @@ describe('#1484 — runs grid columns', () => {
        runs passed). The handle in the document is what is on screen. */
     const handle = () => screen.getByRole('separator', { name: 'Resize Status column' });
     fireEvent.keyDown(handle(), { key: 'ArrowRight' });
-    const widened = RUN_GRID_COLUMN_WIDTHS.status.default + RUN_GRID_RESIZE_STEP;
+    const widened = RUN_GRID_COLUMN_WIDTHS.status.default + GRID_COLUMN_RESIZE_STEP;
     expect(ui.getState().runsGridWidths).toEqual({ status: widened });
     expect(handle()).toHaveAttribute('aria-valuenow', String(widened));
     fireEvent.doubleClick(handle());

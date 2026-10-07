@@ -3,10 +3,11 @@ import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import { Link, useNavigate } from 'react-router';
 import type { RunSortKey, RunSummary } from '@autonomy-studio/shared';
 import {
-  RUN_GRID_COLUMNS,
   RUN_GRID_REQUIRED_COLUMNS,
+  RUN_GRID_SPEC,
   type RunGridColumnId,
 } from '../../stores/uiStore';
+import { visibleGridColumns } from '../../stores/gridColumns';
 import { CopyableId } from '../../lib/CopyableId';
 import { RowMoreMenu } from '../../lib/RowMoreMenu';
 import { shortId } from '../../lib/ids';
@@ -363,7 +364,5 @@ export function visibleRunGridColumns(
   hidden: readonly RunGridColumnId[],
   sortKey: RunSortKey,
 ): RunGridColumnId[] {
-  return RUN_GRID_COLUMNS.filter(
-    (column) => !hidden.includes(column) || isSortColumn(column, sortKey),
-  );
+  return visibleGridColumns(RUN_GRID_SPEC, hidden, (column) => isSortColumn(column, sortKey));
 }

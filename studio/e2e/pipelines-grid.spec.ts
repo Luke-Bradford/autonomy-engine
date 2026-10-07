@@ -257,3 +257,134 @@ test('#1569 slice 3 — New pipeline and Import are toolbar drawers beside the g
 
   await expectQuiet(page, problems);
 });
+
+test('#1569 slice 4 — pipelines grid columns resize, can be chosen, persist per viewer, and reset', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const problems = collectPageProblems(page);
+  const tag = `e2e 1569 columns ${String(Date.now())}`;
+  const ok = await seedVersion(page, tag, OK);
+  await fireAndSettle(page, ok.pipelineVersionId, 'e2e 1569 columns');
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const summariesRead = page.waitForResponse((r) => r.url().endsWith('/api/pipelines/summaries'));
+  await page.goto(`/#/author/pipelines?q=${encodeURIComponent(tag)}`);
+  await fluentRootReady(page);
+  await summariesRead;
+  const row = page
+    .getByRole('row')
+    .filter({ has: page.getByRole('link', { name: `Open ${tag}` }) });
+  await expect(row).toHaveCount(1);
+  const header = (name: string) => page.getByRole('columnheader', { name, exact: true });
+  const measure = () =>
+    page.evaluate(() => {
+      const box = (sel: string) => document.querySelector(sel)?.getBoundingClientRect();
+      const scroll = document.querySelector('.runs-grid-scroll');
+      const content = document.querySelector('.content');
+      const ths = [...document.querySelectorAll('.pipelines-grid thead th')];
+      return {
+        name: box('#pipelines-grid-col-name')?.width ?? 0,
+        nameRight: box('#pipelines-grid-col-name')?.right ?? 0,
+        lastRun: box('#pipelines-grid-col-lastRun')?.width ?? 0,
+        actions: ths.at(-1)?.getBoundingClientRect().width ?? -1,
+        gridScrolls: (scroll?.scrollWidth ?? 0) > (scroll?.clientWidth ?? 0) + 1,
+        pageScrolls: (content?.scrollWidth ?? 0) > (content?.clientWidth ?? 0) + 1,
+      };
+    });
+
+  // Defaults: the default columns fit at 1440×900 with the ⋯ column whole.
+  const start = await measure();
+  expect(start.name).toBeCloseTo(240, 0);
+  expect(start.actions).toBeGreaterThanOrEqual(48);
+  expect(start.gridScrolls).toBe(false);
+  expect(start.pageScrolls).toBe(false);
+
+  // A pointer drag of 40px moves the Name edge 40px, and does not sort.
+  const handle = page.getByRole('separator', { name: 'Resize Name column' });
+  const hb = await handle.boundingBox();
+  if (hb === null) throw new Error('no Name resize handle');
+  await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(hb.x + hb.width / 2 + 20, hb.y + hb.height / 2);
+  await page.mouse.move(hb.x + hb.width / 2 + 40, hb.y + hb.height / 2);
+  await page.mouse.up();
+  const dragged = await measure();
+  expect(dragged.name).toBeCloseTo(280, 0);
+  expect(dragged.nameRight - start.nameRight).toBeCloseTo(40, 0);
+  expect(new URL(page.url()).hash).not.toContain('sort=');
+
+  // The keyboard path: one 16px step on Last run.
+  await page.getByRole('separator', { name: 'Resize Last run column' }).press('ArrowRight');
+  await expect.poll(async () => Math.round((await measure()).lastRun)).toBe(168 + 16);
+
+  // Turn on Runs (7d) and Activities, turn off Next run.
+  await page.getByRole('button', { name: /^Columns/ }).click();
+  await page.getByRole('menuitemcheckbox', { name: 'Runs (7d)' }).click();
+  await page.getByRole('menuitemcheckbox', { name: 'Activities' }).click();
+  await page.getByRole('menuitemcheckbox', { name: 'Next run' }).click();
+  await page.getByRole('menuitemcheckbox', { name: 'p50 / p95' }).click();
+  await page.getByRole('menuitemcheckbox', { name: 'Description' }).click();
+  await page.getByRole('menuitemcheckbox', { name: 'Concurrency' }).click();
+  // Name holds the row's link: it cannot be turned off.
+  await expect(page.getByRole('menuitemcheckbox', { name: 'Name' })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(header('Next run')).toHaveCount(0);
+  const cellUnder = async (name: string) => {
+    const names = await page
+      .getByRole('columnheader')
+      .evaluateAll((ths) => ths.map((th) => th.getAttribute('aria-label')));
+    return row.getByRole('cell').nth(names.indexOf(name));
+  };
+  // One run in the window, one activity in the saved version.
+  await expect(await cellUnder('Runs (7d)')).toHaveText('1');
+  await expect(await cellUnder('Activities')).toHaveText('1');
+  // Both durations of the one finished run; no description saved; no cap.
+  await expect(await cellUnder('p50 / p95')).toHaveText(/^[\d.]+s \/ [\d.]+s$/);
+  await expect(await cellUnder('Description')).toHaveText('—');
+  const cap = await cellUnder('Concurrency');
+  await expect(cap).toHaveText('—');
+  await expect(cap).toHaveAttribute('title', 'No cap');
+
+  // Sorted by Runs (7d), that column is drawn whatever the choice, so its box
+  // cannot be unticked.
+  await header('Runs (7d)').getByRole('button').click();
+  await expect(page).toHaveURL(/[?&]sort=runs(&|$)/);
+  await page.getByRole('button', { name: /^Columns/ }).click();
+  await expect(page.getByRole('menuitemcheckbox', { name: 'Runs (7d)' })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await page.goto(`/#/author/pipelines?q=${encodeURIComponent(tag)}`);
+
+  // A reload keeps the widths and the choice: they are the viewer's.
+  await page.reload();
+  await fluentRootReady(page);
+  await expect(row).toHaveCount(1);
+  await expect(header('Next run')).toHaveCount(0);
+  await expect(header('Runs (7d)')).toHaveCount(1);
+  const reloaded = await measure();
+  expect(reloaded.name).toBeCloseTo(280, 0);
+  expect(reloaded.lastRun).toBeCloseTo(184, 0);
+
+  // Wider than the page: the GRID scrolls sideways, the page does not, and the
+  // ⋯ column keeps its width.
+  await page.getByRole('separator', { name: 'Resize Name column' }).press('End');
+  await page.getByRole('separator', { name: 'Resize Last run column' }).press('End');
+  await expect.poll(async () => (await measure()).gridScrolls).toBe(true);
+  const wide = await measure();
+  expect(wide.pageScrolls).toBe(false);
+  expect(wide.actions).toBeGreaterThanOrEqual(48);
+
+  // Reset brings every column back at its default width.
+  await page.getByRole('button', { name: /^Columns/ }).click();
+  await page.getByRole('menuitem', { name: 'Reset columns' }).click();
+  await expect(header('Next run')).toHaveCount(1);
+  await expect(header('Runs (7d)')).toHaveCount(0);
+  await expect.poll(async () => Math.round((await measure()).name)).toBe(240);
+  expect((await measure()).gridScrolls).toBe(false);
+
+  // The Archived view draws a fixed pair of columns, so it has no picker.
+  await page.getByRole('button', { name: 'Archived', exact: true }).click();
+  await expect(page.getByRole('button', { name: /^Columns/ })).toHaveCount(0);
+
+  await expectQuiet(page, problems);
+});

@@ -1,4 +1,15 @@
 import { createStore, type StoreApi } from 'zustand/vanilla';
+import {
+  canonicalGridHidden,
+  GRID_COLUMN_MAX_WIDTH,
+  GRID_COLUMN_RESIZE_STEP,
+  parseGridHidden,
+  parseJson,
+  parseGridWidths,
+  withGridWidth,
+  type GridColumnSpec,
+  type GridWidths,
+} from './gridColumns';
 import { RUN_PAGE_SIZES, type RunPageSize } from '@autonomy-studio/shared';
 import {
   DEFAULT_DISPLAY_TIME_ZONE,
@@ -125,6 +136,12 @@ export interface UiState {
   /** `null`, or a non-finite width, returns the column to its default. */
   setRunsGridWidth: (column: RunGridColumnId, width: number | null) => void;
   resetRunsGridColumns: () => void;
+  /** #1569 OR37 — the pipelines grid's, under the same rules (`gridColumns.ts`). */
+  pipelinesGridHidden: readonly PipelineGridColumnId[];
+  setPipelinesGridHidden: (hidden: readonly PipelineGridColumnId[]) => void;
+  pipelinesGridWidths: GridWidths<PipelineGridColumnId>;
+  setPipelinesGridWidth: (column: PipelineGridColumnId, width: number | null) => void;
+  resetPipelinesGridColumns: () => void;
   /**
    * #1484 OR35 M1 — whether the runs list keeps itself current (`RunsPage`'s
    * Live toggle), and how many runs it reads per page. Per viewer, not in the
@@ -219,14 +236,84 @@ export const RUN_GRID_COLUMN_WIDTHS: Record<RunGridColumnId, { min: number; defa
   parent: { min: 72, default: 100 },
   annotations: { min: 72, default: 120 },
 };
-export const RUN_GRID_COLUMN_MAX_WIDTH = 640;
-export const RUN_GRID_RESIZE_STEP = 16;
 
-/** A column width within that column's bounds; non-finite → its default (`clampWidth`'s rule). */
-export function clampRunGridWidth(column: RunGridColumnId, width: number): number {
-  const { min, default: fallback } = RUN_GRID_COLUMN_WIDTHS[column];
-  return clampWidth(width, min, RUN_GRID_COLUMN_MAX_WIDTH, fallback);
-}
+export const RUN_GRID_SPEC: GridColumnSpec<RunGridColumnId> = {
+  columns: RUN_GRID_COLUMNS,
+  required: RUN_GRID_REQUIRED_COLUMNS,
+  defaultHidden: RUN_GRID_DEFAULT_HIDDEN,
+  widths: RUN_GRID_COLUMN_WIDTHS,
+  maxWidth: GRID_COLUMN_MAX_WIDTH,
+  step: GRID_COLUMN_RESIZE_STEP,
+};
+
+/**
+ * #1569 OR37 — the pipelines grid's columns, in the order they are drawn, and
+ * the same per-viewer choice and widths as the runs grid's (`gridColumns.ts`).
+ * The labels and cells are the page's (`pages/author/PipelinesGrid.tsx`), keyed
+ * by these ids. There is no Version column on purpose: versions live in the
+ * editor's badge and its history.
+ */
+export const PIPELINE_GRID_COLUMNS = [
+  'name',
+  'description',
+  'lastRun',
+  'successRate',
+  'runs',
+  'duration',
+  'nextRun',
+  'triggers',
+  'live',
+  'activities',
+  'modified',
+  'annotations',
+  'concurrency',
+] as const;
+export type PipelineGridColumnId = (typeof PIPELINE_GRID_COLUMNS)[number];
+
+/** Name holds the row's link to the pipeline, so a grid without it could not be entered. */
+export const PIPELINE_GRID_REQUIRED_COLUMNS: readonly PipelineGridColumnId[] = ['name'];
+
+/** The issue's default columns are the rest; these are in the picker. */
+export const PIPELINE_GRID_DEFAULT_HIDDEN: readonly PipelineGridColumnId[] = [
+  'description',
+  'runs',
+  'duration',
+  'activities',
+  'annotations',
+  'concurrency',
+];
+
+/**
+ * Floors and defaults, in px. The default columns plus the ⋯ column fit the
+ * width the page has at 1440×900 beside the hub nav and the Author pane.
+ */
+export const PIPELINE_GRID_COLUMN_WIDTHS: Record<
+  PipelineGridColumnId,
+  { min: number; default: number }
+> = {
+  name: { min: 120, default: 240 },
+  description: { min: 96, default: 240 },
+  lastRun: { min: 110, default: 168 },
+  successRate: { min: 80, default: 112 },
+  runs: { min: 56, default: 88 },
+  duration: { min: 88, default: 128 },
+  nextRun: { min: 96, default: 128 },
+  triggers: { min: 80, default: 104 },
+  live: { min: 110, default: 150 },
+  activities: { min: 64, default: 88 },
+  modified: { min: 96, default: 128 },
+  annotations: { min: 72, default: 140 },
+  concurrency: { min: 72, default: 104 },
+};
+
+export const PIPELINE_GRID_SPEC: GridColumnSpec<PipelineGridColumnId> = {
+  columns: PIPELINE_GRID_COLUMNS,
+  required: PIPELINE_GRID_REQUIRED_COLUMNS,
+  defaultHidden: PIPELINE_GRID_DEFAULT_HIDDEN,
+  widths: PIPELINE_GRID_COLUMN_WIDTHS,
+  maxWidth: GRID_COLUMN_MAX_WIDTH,
+  step: GRID_COLUMN_RESIZE_STEP,
+};
 
 export const THEME_STORAGE_KEY = 'autonomy-studio.theme';
 export const PANE_STORAGE_KEY = 'autonomy-studio.pane';
@@ -250,6 +337,8 @@ export const DISPLAY_TIME_ZONE_STORAGE_KEY = 'autonomy-studio.display-time-zone'
 /* Two keys, not one record, for the dock keys' reason above. */
 export const RUN_GRID_HIDDEN_STORAGE_KEY = 'autonomy-studio.runs-grid-hidden';
 export const RUN_GRID_WIDTHS_STORAGE_KEY = 'autonomy-studio.runs-grid-widths';
+export const PIPELINE_GRID_HIDDEN_STORAGE_KEY = 'autonomy-studio.pipelines-grid-hidden';
+export const PIPELINE_GRID_WIDTHS_STORAGE_KEY = 'autonomy-studio.pipelines-grid-widths';
 export const RUNS_LIVE_STORAGE_KEY = 'autonomy-studio.runs-live';
 export const RUNS_PAGE_SIZE_STORAGE_KEY = 'autonomy-studio.runs-page-size';
 export const RUNS_LAST_QUERY_STORAGE_KEY = 'autonomy-studio.runs-last-query';
@@ -549,52 +638,9 @@ function parsePane(raw: string): StoredPane | undefined {
   return { width: clampPaneWidth(width), collapsed };
 }
 
-function isRunGridColumn(value: unknown): value is RunGridColumnId {
-  return RUN_GRID_COLUMNS.some((column) => column === value);
-}
-
-/**
- * The hidden set as it is kept: known ids only (a column a later release
- * renamed or removed is dropped, not trusted), never a required one, each once,
- * in column order. Applied on write as well as on read, so the store can never
- * hold a set the picker could not have produced.
- */
+/** The runs grid's hidden set as it is kept (`canonicalGridHidden`). */
 export function canonicalHidden(ids: readonly unknown[]): RunGridColumnId[] {
-  return RUN_GRID_COLUMNS.filter(
-    (column) => ids.includes(column) && !RUN_GRID_REQUIRED_COLUMNS.includes(column),
-  );
-}
-
-/** `JSON.parse`, or `undefined` for text that is not JSON. */
-function parseJson(raw: string): unknown {
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    return undefined;
-  }
-}
-
-function parseRunGridHidden(raw: string): RunGridColumnId[] | undefined {
-  const value = parseJson(raw);
-  return Array.isArray(value) ? canonicalHidden(value) : undefined;
-}
-
-/**
- * Each entry is judged on its own, so one column a later release dropped, or
- * one bad value, does not cost the operator every other width they set. A
- * width is clamped to its column's CURRENT bounds on the way in, for
- * `parsePane`'s reason.
- */
-function parseRunGridWidths(raw: string): Partial<Record<RunGridColumnId, number>> | undefined {
-  const value = parseJson(raw);
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-  const widths: Partial<Record<RunGridColumnId, number>> = {};
-  for (const [column, width] of Object.entries(value as Record<string, unknown>)) {
-    if (isRunGridColumn(column) && typeof width === 'number' && Number.isFinite(width)) {
-      widths[column] = clampRunGridWidth(column, width);
-    }
-  }
-  return widths;
+  return canonicalGridHidden(RUN_GRID_SPEC, ids);
 }
 
 /**
@@ -700,6 +746,63 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
     const persistPane = (next: StoredPane) =>
       writeStored(storage, PANE_STORAGE_KEY, JSON.stringify(next));
 
+    /* #1569 OR37 — a grid's column choice and widths: read once, and every
+       setter writes through, under the one set of rules every grid shares
+       (`gridColumns.ts`). `apply` names the state fields the grid's are kept in. */
+    const gridPrefs = <Id extends string>(
+      spec: GridColumnSpec<Id>,
+      keys: { hidden: string; widths: string },
+      widthsNow: () => GridWidths<Id>,
+      apply: (patch: { hidden?: readonly Id[]; widths?: GridWidths<Id> }) => void,
+    ) => ({
+      hidden: readStored(
+        storage,
+        keys.hidden,
+        (raw) => parseGridHidden(spec, raw),
+        spec.defaultHidden,
+      ),
+      widths: readStored<GridWidths<Id>>(
+        storage,
+        keys.widths,
+        (raw) => parseGridWidths(spec, raw),
+        {},
+      ),
+      setHidden: (hidden: readonly Id[]) => {
+        const next = canonicalGridHidden(spec, hidden);
+        writeStored(storage, keys.hidden, JSON.stringify(next));
+        apply({ hidden: next });
+      },
+      setWidth: (column: Id, width: number | null) => {
+        const next = withGridWidth(spec, widthsNow(), column, width);
+        writeStored(storage, keys.widths, JSON.stringify(next));
+        apply({ widths: next });
+      },
+      reset: () => {
+        writeStored(storage, keys.hidden, JSON.stringify(spec.defaultHidden));
+        writeStored(storage, keys.widths, '{}');
+        apply({ hidden: spec.defaultHidden, widths: {} });
+      },
+    });
+    const runsGrid = gridPrefs(
+      RUN_GRID_SPEC,
+      { hidden: RUN_GRID_HIDDEN_STORAGE_KEY, widths: RUN_GRID_WIDTHS_STORAGE_KEY },
+      () => get().runsGridWidths,
+      ({ hidden, widths }) =>
+        set({
+          ...(hidden === undefined ? {} : { runsGridHidden: hidden }),
+          ...(widths === undefined ? {} : { runsGridWidths: widths }),
+        }),
+    );
+    const pipelinesGrid = gridPrefs(
+      PIPELINE_GRID_SPEC,
+      { hidden: PIPELINE_GRID_HIDDEN_STORAGE_KEY, widths: PIPELINE_GRID_WIDTHS_STORAGE_KEY },
+      () => get().pipelinesGridWidths,
+      ({ hidden, widths }) =>
+        set({
+          ...(hidden === undefined ? {} : { pipelinesGridHidden: hidden }),
+          ...(widths === undefined ? {} : { pipelinesGridWidths: widths }),
+        }),
+    );
     return {
       themeMode: readStored(storage, THEME_STORAGE_KEY, parseThemeMode, DEFAULT_THEME_MODE),
       setThemeMode: (mode) => {
@@ -814,30 +917,16 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
         if (parseDisplayTimeZone(zone) !== undefined) setDisplayTimeZone(zone);
       },
 
-      runsGridHidden: readStored(
-        storage,
-        RUN_GRID_HIDDEN_STORAGE_KEY,
-        parseRunGridHidden,
-        RUN_GRID_DEFAULT_HIDDEN,
-      ),
-      setRunsGridHidden: (hidden) => {
-        const runsGridHidden = canonicalHidden(hidden);
-        writeStored(storage, RUN_GRID_HIDDEN_STORAGE_KEY, JSON.stringify(runsGridHidden));
-        set({ runsGridHidden });
-      },
-      runsGridWidths: readStored(storage, RUN_GRID_WIDTHS_STORAGE_KEY, parseRunGridWidths, {}),
-      setRunsGridWidth: (column, width) => {
-        const runsGridWidths = { ...get().runsGridWidths };
-        if (width === null || !Number.isFinite(width)) delete runsGridWidths[column];
-        else runsGridWidths[column] = clampRunGridWidth(column, width);
-        writeStored(storage, RUN_GRID_WIDTHS_STORAGE_KEY, JSON.stringify(runsGridWidths));
-        set({ runsGridWidths });
-      },
-      resetRunsGridColumns: () => {
-        writeStored(storage, RUN_GRID_HIDDEN_STORAGE_KEY, JSON.stringify(RUN_GRID_DEFAULT_HIDDEN));
-        writeStored(storage, RUN_GRID_WIDTHS_STORAGE_KEY, '{}');
-        set({ runsGridHidden: RUN_GRID_DEFAULT_HIDDEN, runsGridWidths: {} });
-      },
+      runsGridHidden: runsGrid.hidden,
+      setRunsGridHidden: runsGrid.setHidden,
+      runsGridWidths: runsGrid.widths,
+      setRunsGridWidth: runsGrid.setWidth,
+      resetRunsGridColumns: runsGrid.reset,
+      pipelinesGridHidden: pipelinesGrid.hidden,
+      setPipelinesGridHidden: pipelinesGrid.setHidden,
+      pipelinesGridWidths: pipelinesGrid.widths,
+      setPipelinesGridWidth: pipelinesGrid.setWidth,
+      resetPipelinesGridColumns: pipelinesGrid.reset,
     };
   });
 }

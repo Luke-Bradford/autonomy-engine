@@ -129,4 +129,23 @@ describe('pipelines grid sort (#1569 OR37)', () => {
     expect(ids('modified')).toEqual(['b', 'c', 'a']);
     expect(ids('name')).toEqual(['a', 'b', 'c']);
   });
+
+  it('sorts by runs, median duration and activities, most first; a 0-run count is a value', () => {
+    const list = [pipe('a', 'a'), pipe('b', 'b'), pipe('c', 'c'), pipe('d', '0')];
+    const win = summary('x').window;
+    const summaries = new Map([
+      ['a', summary('a', { window: { ...win, runs: 0 }, activities: 2 })],
+      ['b', summary('b', { window: { ...win, runs: 5, p50Ms: 900 }, activities: 7 })],
+      ['c', summary('c', { window: { ...win, runs: 2, p50Ms: 4000 }, activities: null })],
+    ]);
+    const ids = (key: Parameters<typeof nextPipelineSort>[1]) =>
+      sortPipelines(list, summaries, readPipelineSort(new URLSearchParams(`sort=${key}`))).map(
+        (p) => p.id,
+      );
+    // `d` has no summary: no value, last, though its name ('0') sorts first.
+    // `a`'s 0 runs is a count, so it sorts ahead of `d`.
+    expect(ids('runs')).toEqual(['b', 'c', 'a', 'd']);
+    expect(ids('duration')).toEqual(['c', 'b', 'd', 'a']);
+    expect(ids('activities')).toEqual(['b', 'a', 'd', 'c']);
+  });
 });

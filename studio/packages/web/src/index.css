@@ -4500,7 +4500,7 @@ button.danger {
 }
 
 /* #1484 — column widths are the `<col>`s' own, set inline from the column
-   definitions and the operator's resizes (`RunsGrid`), no longer positional
+   definitions and the viewer's resizes (`useGridColumnWidths`), no longer positional
    shares here. The grid scrolls sideways in its own box once the columns
    outgrow the page, so the page itself never does. The table sits flush under
    the filter bar inside it (`.runs-page > .runs-list > .runs-grid-scroll > table`, below). */
