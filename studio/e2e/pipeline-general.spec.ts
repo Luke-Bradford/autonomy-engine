@@ -110,4 +110,53 @@ test.describe('#1 F8a — pipeline description + annotations', () => {
 
     await expectQuiet(page, problems);
   });
+
+  test('#1569 — the description is one line that grows to four, then scrolls; the canvas never moves', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openSeededCanvas(page, '1569 grow', { nodes: [{ id: 'a', position: { x: 0, y: 0 } }] });
+    await openGeneral(page);
+    const box = page.getByLabel('pipeline description');
+
+    const measure = () =>
+      page.evaluate(() => {
+        const el = document.querySelector<HTMLTextAreaElement>(
+          'textarea[aria-label="pipeline description"]',
+        )!;
+        const cs = getComputedStyle(el);
+        const canvas = document.querySelector('.react-flow')!.getBoundingClientRect();
+        return {
+          lines:
+            (el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)) /
+            parseFloat(cs.lineHeight),
+          scrolls: el.scrollHeight > el.clientHeight,
+          canvas: [canvas.top, canvas.left, canvas.width, canvas.height].map(Math.round),
+        };
+      });
+
+    const empty = await measure();
+    expect(empty.lines).toBeCloseTo(1, 1);
+    expect(empty.scrolls).toBe(false);
+
+    await box.fill('one\ntwo\nthree');
+    const three = await measure();
+    expect(three.lines).toBeCloseTo(3, 1);
+    expect(three.scrolls).toBe(false);
+
+    await box.fill('1\n2\n3\n4\n5\n6\n7');
+    const capped = await measure();
+    expect(capped.lines).toBeCloseTo(4, 1);
+    expect(capped.scrolls).toBe(true);
+
+    // And back: it shrinks with what is removed.
+    await box.fill('one');
+    expect((await measure()).lines).toBeCloseTo(1, 1);
+
+    // Growing happens inside the dock; the canvas holds still throughout.
+    for (const state of [three, capped]) expect(state.canvas).toEqual(empty.canvas);
+
+    await expectQuiet(page, problems);
+  });
 });

@@ -24,7 +24,8 @@ export function AutoGrowTextarea({
     const px = (v: string) => parseFloat(v) || 0;
     const line = px(cs.lineHeight) || px(cs.fontSize) * 1.2;
     const padding = px(cs.paddingTop) + px(cs.paddingBottom);
-    const border = cs.boxSizing === 'border-box' ? px(cs.borderTopWidth) + px(cs.borderBottomWidth) : 0;
+    const border =
+      cs.boxSizing === 'border-box' ? px(cs.borderTopWidth) + px(cs.borderBottomWidth) : 0;
     // `scrollHeight` counts padding but never the border.
     const content = el.scrollHeight + border - (cs.boxSizing === 'border-box' ? 0 : padding);
     const cap = line * maxRows + border + (cs.boxSizing === 'border-box' ? padding : 0);

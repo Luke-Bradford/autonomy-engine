@@ -533,7 +533,9 @@ describe('PipelinesPage', () => {
     await user.type(form.getByLabelText(/^Name/), '  Fresh ');
     await user.click(form.getByRole('button', { name: 'Create pipeline' }));
 
-    await waitFor(() => expect(createMock).toHaveBeenCalledWith({ name: 'Fresh', folder: null }, ''));
+    await waitFor(() =>
+      expect(createMock).toHaveBeenCalledWith({ name: 'Fresh', folder: null }, ''),
+    );
     // Refresh after create: listPipelines called again (mount + post-create).
     // That refresh is also what keeps the Factory Resources pane — mounted
     // beside this page over the same store — from showing a stale tree.
@@ -553,7 +555,9 @@ describe('PipelinesPage', () => {
     await user.type(form.getByLabelText(/^Name/), 'Hourly');
     await user.type(form.getByLabelText('Folder'), ' ops ');
     await user.click(form.getByRole('button', { name: 'Create pipeline' }));
-    await waitFor(() => expect(createMock).toHaveBeenCalledWith({ name: 'Hourly', folder: 'Ops' }, ''));
+    await waitFor(() =>
+      expect(createMock).toHaveBeenCalledWith({ name: 'Hourly', folder: 'Ops' }, ''),
+    );
   });
 
   it('#1569 — sends the description as typed, and asks before dropping it', async () => {
@@ -569,7 +573,10 @@ describe('PipelinesPage', () => {
     await user.type(form.getByLabelText(/^Name/), 'Fresh');
     await user.click(form.getByRole('button', { name: 'Create pipeline' }));
     await waitFor(() =>
-      expect(createMock).toHaveBeenCalledWith({ name: 'Fresh', folder: null }, ' Loads the extract'),
+      expect(createMock).toHaveBeenCalledWith(
+        { name: 'Fresh', folder: null },
+        ' Loads the extract',
+      ),
     );
   });
 
