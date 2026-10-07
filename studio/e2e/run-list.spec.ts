@@ -743,10 +743,18 @@ test('#1484 — the runs grid links the version that ran, a child names its pare
   await parentLink.click();
   await expect(page).toHaveURL(new RegExp(`/monitor/runs/${parentRunId}$`));
 
-  // The version that ran: v1, read-only, although v2 is the latest.
+  // #1566 — the pipeline's name opens the RUN, like the rest of the row.
   await page.goBack();
   await rowOf(parentRunId)
     .getByRole('link', { name: `${parentName} v1`, exact: true })
+    .click();
+  await expect(page).toHaveURL(new RegExp(`/monitor/runs/${parentRunId}$`));
+
+  // The editor is the labelled icon: the version that ran, v1, read-only,
+  // although v2 is the latest.
+  await page.goBack();
+  await rowOf(parentRunId)
+    .getByRole('link', { name: `Open ${parentName} v1 in the editor`, exact: true })
     .click();
   await expect(page).toHaveURL(
     new RegExp(`/author/pipelines/${encodeURIComponent(pipelineId)}\\?version=1$`),

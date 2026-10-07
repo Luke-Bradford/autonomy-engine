@@ -764,7 +764,9 @@ describe('RunsPage', () => {
     it("the row's ⋯ menu opens the pipeline in the editor without opening the run", async () => {
       const router = mountList();
       await userEvent.click(await screen.findByRole('button', { name: 'Actions for run run_abc' }));
-      await userEvent.click(await screen.findByRole('menuitem', { name: 'Open pipeline in editor' }));
+      await userEvent.click(
+        await screen.findByRole('menuitem', { name: 'Open pipeline in editor' }),
+      );
       expect(router.state.location.pathname).toBe('/author/pipelines/pipe_1');
       expect(router.state.location.search).toBe('?version=3');
     });

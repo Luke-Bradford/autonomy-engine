@@ -188,7 +188,12 @@ function PipelineCell({ run: r, ctx }: { run: RunSummary; ctx: CellContext }) {
         actions={[
           { label: 'Open pipeline in editor', onSelect: () => void navigate(editor) },
           ...(triggerId !== null && r.triggerName !== null
-            ? [{ label: 'Open trigger runs', onSelect: () => void navigate(triggerRunsPath(triggerId)) }]
+            ? [
+                {
+                  label: 'Open trigger runs',
+                  onSelect: () => void navigate(triggerRunsPath(triggerId)),
+                },
+              ]
             : []),
         ]}
       />

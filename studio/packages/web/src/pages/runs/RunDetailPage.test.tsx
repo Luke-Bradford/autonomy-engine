@@ -325,7 +325,9 @@ afterEach(() => vi.restoreAllMocks());
 describe('RunDetailPage', () => {
   it('renders run metadata from the R1 read-model fetch', async () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    expect(await screen.findByRole('heading', { level: 2, name: /^Test pipeline / })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { level: 2, name: /^Test pipeline / }),
+    ).toBeInTheDocument();
     expect(screen.getByText('{"greeting":"hi"}')).toBeInTheDocument();
   });
 
