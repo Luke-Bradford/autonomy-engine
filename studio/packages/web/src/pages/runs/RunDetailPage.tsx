@@ -9,7 +9,7 @@ import {
 } from 'react';
 import { computeRunUsage, TERMINAL_RUN_ROW_STATUS } from '@autonomy-studio/shared';
 import type { PipelineVersion, Run, RunStatus } from '@autonomy-studio/shared';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { cancelRun, getRun, getRunDetail, rerunFromFailed } from '../../api/runs';
 import { messageOf } from '../../api/client';
 import { owesCallback } from './externalWaits';
@@ -52,6 +52,10 @@ import { useActivityRuns } from './useActivityRuns';
 import { RunCostSummary } from './RunCostSummary';
 import { RunGlobals } from './RunGlobals';
 import { RunVariables } from './RunVariables';
+import { globalNames, showsVariables } from './runValues';
+import { PanelTabs } from '../pipeline/PanelTabs';
+import { withParams } from '../../lib/withParams';
+import { readRunDetailTab, runDetailTabParams, type RunDetailTab } from './runDetailTabs';
 import { RunDiagnostics } from './RunDiagnostics';
 import { RunGraph } from './RunGraph.lazy';
 import { useRunProjection } from './useRunProjection';
@@ -100,6 +104,8 @@ function phaseLabel(phase: StreamPhase): string {
 export function RunDetailPage({ runId }: { runId: string }) {
   const zone = useDisplayTimeZone();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const detailTab = readRunDetailTab(searchParams);
   const [run, setRun] = useState<Run | null>(null);
   const [doc, setDoc] = useState<PipelineVersion | null>(null);
   // #1392 — the names R1 resolves alongside the doc. A `null` name (none the
@@ -769,134 +775,159 @@ export function RunDetailPage({ runId }: { runId: string }) {
         </dl>
       )}
 
-      {/* U27 (#930) — the run-level spend. Placed AFTER the parked-callback block
-          and before the Graph: a pending callback is an ACTION the operator has
-          to take, and a read-only money figure must not sit above it. Rendered
-          unconditionally — see `RunCostSummary`, which owns every "should this
-          say anything" decision so the page cannot make a second one. */}
-      <RunCostSummary
-        usage={runUsage}
-        nodes={nodes}
-        /* The ROW-status set, not the lifecycle one: `status` here falls back to
-           `run.status`, which can be `queued` or `skipped` — neither of which the
-           lifecycle set knows about. See `TERMINAL_RUN_ROW_STATUS`. */
-        settled={TERMINAL_RUN_ROW_STATUS.has(status)}
-        replayComplete={stream.replayComplete}
-        logTruncated={
-          (stream.phase === 'closed' || stream.phase === 'error') && !stream.replayComplete
-        }
+      {/* #1484 OR35 M2 — the run's secondary views, as tabs below the activity
+          runs (principle 2: the table is the primary view). The tab is in the
+          URL, so a link to a run's events opens on them. `PanelTabs` keeps every
+          panel mounted, so the diagnostics read and the cost figures do not
+          restart on a tab switch — except the graph, which mounts only while
+          its tab is open: React Flow measures its container to fit the view,
+          and a hidden panel measures zero. */}
+      <PanelTabs<RunDetailTab>
+        label="Run views"
+        selected={detailTab}
+        onSelect={(next) => setSearchParams((prev) => withParams(prev, runDetailTabParams(next)))}
+        tabs={[
+          {
+            key: 'gantt',
+            label: 'Gantt',
+            /* U12a (#1007) — each node's attempts on a shared time axis. */
+            content:
+              nodes.length > 0 ? (
+                <AttemptTimeline nodes={nodes} nameOf={nameOf} runStatus={status} />
+              ) : (
+                <p className="page-hint">No activity has started.</p>
+              ),
+          },
+          {
+            key: 'graph',
+            label: 'Graph',
+            content:
+              detailTab !== 'graph' ? null : doc === null ? (
+                <p>
+                  {loadError === null
+                    ? 'Loading the pipeline graph…'
+                    : 'The pipeline graph is unavailable, so there is no node overlay. The event feed is unaffected.'}
+                </p>
+              ) : (
+                /* #698 — React Flow loads on demand, so the run metadata,
+                   activity runs and event feed paint without waiting on it.
+                   The boundary is HERE rather than at the route for that
+                   reason: all of that is useful without the graph. */
+                <Suspense fallback={<p className="page-hint">Loading the graph…</p>}>
+                  <RunGraph
+                    doc={doc}
+                    overlay={overlay}
+                    activity={nodes}
+                    selectedNodeId={drawerRow?.activityId}
+                    onOpenNode={openNode}
+                    openableNodeIds={openableNodeIds}
+                  />
+                </Suspense>
+              ),
+          },
+          {
+            key: 'events',
+            label: 'Events',
+            content: (
+              <>
+                {/* #1065 — the reducer's explanations, above the raw decision
+                    log they explain: the only section that answers "why".
+                    Rendered unconditionally — "the reducer neutralized nothing"
+                    is itself a fact worth stating. The settled set is the ROW
+                    one, as for the cost: `status` falls back to `run.status`,
+                    which can be `queued` or `skipped`. */}
+                <RunDiagnostics runId={runId} settled={TERMINAL_RUN_ROW_STATUS.has(status)} />
+                {totalEvents === 0 ? (
+                  <p>No events yet.</p>
+                ) : (
+                  <table className="event-feed">
+                    <thead>
+                      <tr>
+                        <th scope="col">Seq</th>
+                        {/* Clock times only, so the zone is named once, here. */}
+                        <th scope="col">
+                          Time{feed.length > 0 ? ` (${zoneLabel(feed[0]!.ts, zone)})` : ''}
+                        </th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Detail</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {totalEvents > MAX_FEED_ROWS && (
+                        <tr>
+                          <td colSpan={4}>
+                            … showing the most recent {MAX_FEED_ROWS} of {totalEvents} events
+                          </td>
+                        </tr>
+                      )}
+                      {feed.map((e) => (
+                        <tr key={e.seq}>
+                          <td>{e.seq}</td>
+                          <td>{formatTimeOfDay(e.ts, zone, 'ms')}</td>
+                          <td>
+                            <code>{e.type}</code>
+                          </td>
+                          <td>{eventGloss(e)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </>
+            ),
+          },
+          {
+            key: 'variables',
+            label: 'Variables',
+            /* #844 V7 / GL5 — the run's variables and the globals it read, from
+               the same one projection the graph and the drawer read. Each says
+               why it is absent, since the reader opened this tab to look. */
+            content: (
+              <>
+                {showsVariables(doc?.variables) ? (
+                  <RunVariables
+                    declared={doc?.variables}
+                    overlay={overlay}
+                    settled={TERMINAL_RUN_ROW_STATUS.has(status)}
+                  />
+                ) : (
+                  <p className="page-hint">
+                    {doc === null
+                      ? 'The pipeline version is not loaded, so its variables are not shown.'
+                      : 'This pipeline declares no variables.'}
+                  </p>
+                )}
+                {globalNames(overlay).length > 0 ? (
+                  <RunGlobals overlay={overlay} />
+                ) : (
+                  overlay.ready && <p className="page-hint">This run read no global parameters.</p>
+                )}
+              </>
+            ),
+          },
+          {
+            key: 'cost',
+            label: 'Cost',
+            /* U27 (#930) — the run-level spend. Rendered unconditionally — see
+               `RunCostSummary`, which owns every "should this say anything"
+               decision so the page cannot make a second one. The settled set is
+               the ROW-status one: `status` falls back to `run.status`, which
+               can be `queued` or `skipped` — neither of which the lifecycle set
+               knows about. See `TERMINAL_RUN_ROW_STATUS`. */
+            content: (
+              <RunCostSummary
+                usage={runUsage}
+                nodes={nodes}
+                settled={TERMINAL_RUN_ROW_STATUS.has(status)}
+                replayComplete={stream.replayComplete}
+                logTruncated={
+                  (stream.phase === 'closed' || stream.phase === 'error') && !stream.replayComplete
+                }
+              />
+            ),
+          },
+        ]}
       />
-
-      {/* #844 V7 — the run's variables, from the same one projection the graph
-          and timeline read, so they update live and agree with the drawer's
-          writes. Beside the run-level spend and before the graph: both are
-          facts about the whole run. Renders nothing for a pipeline that
-          declares no variables, or while the version doc is unavailable. */}
-      <RunVariables
-        declared={doc?.variables}
-        overlay={overlay}
-        settled={TERMINAL_RUN_ROW_STATUS.has(status)}
-      />
-
-      {/* #844 GL5 — the workspace globals the run read, from the same one
-          projection. Renders nothing for a run that read none. */}
-      <RunGlobals overlay={overlay} />
-
-      <h3>Graph</h3>
-      {doc === null ? (
-        <p>
-          {loadError === null
-            ? 'Loading the pipeline graph…'
-            : 'The pipeline graph is unavailable, so there is no node overlay. The event feed below is unaffected.'}
-        </p>
-      ) : (
-        /* #698 — React Flow loads on demand, so the run metadata, activity
-           runs and event feed paint without waiting on it. The boundary is
-           HERE rather than at the route for that reason: all of that is useful
-           without the graph. The engine reducer used to sit behind this
-           boundary too and no longer does (U25 lifted the projection to the
-           page so the table could reconcile against it) — which changed no
-           bytes, because eager code already imported the engine barrel and
-           `reduce.js` was placed in the entry chunk regardless. */
-        <Suspense fallback={<p className="page-hint">Loading the graph…</p>}>
-          <RunGraph
-            doc={doc}
-            overlay={overlay}
-            activity={nodes}
-            selectedNodeId={drawerRow?.activityId}
-            onOpenNode={openNode}
-            openableNodeIds={openableNodeIds}
-          />
-        </Suspense>
-      )}
-
-      {/* U12a (#1007) — each node's attempts on a shared time axis: the run's
-          shape, after the activity runs that list what each one did. Rendered
-          only once there is a node to arrange, since an empty chart with an
-          empty caveat list beneath it says nothing. */}
-      {nodes.length > 0 && <AttemptTimeline nodes={nodes} nameOf={nameOf} runStatus={status} />}
-
-      {/* #1065 — the reducer's explanations, between the run's SHAPE and its raw
-          decision log. Everything above answers "what happened"; the event feed
-          below is the same answer at full resolution. This is the only section
-          that answers "why", so it reads as the bridge between them: an operator
-          who has just seen a node do something surprising in the table meets the
-          reason before the log they would otherwise go hunting through.
-
-          Not placed ABOVE the activity runs, though that is where the question
-          is first asked. A diagnostic names nodes and containers by id, so it is
-          only legible once the table has established what those are — and on the
-          overwhelmingly common healthy run this section says "nothing to
-          explain", which must not be the first thing on the page.
-
-          Rendered unconditionally, like `RunCostSummary` and unlike
-          `AttemptTimeline`: a section that appears only when there are
-          diagnostics is indistinguishable from an app that has no diagnostics
-          surface, and "the reducer neutralized nothing" is itself a fact worth
-          stating on a run that misbehaved for some other reason. */}
-      <RunDiagnostics
-        runId={runId}
-        /* The same ROW-status set `RunCostSummary` uses one section up — `status`
-           falls back to `run.status`, which can be `queued` or `skipped`, neither
-           of which the lifecycle set knows about. */
-        settled={TERMINAL_RUN_ROW_STATUS.has(status)}
-      />
-
-      <h3>Events</h3>
-      {totalEvents === 0 ? (
-        <p>No events yet.</p>
-      ) : (
-        <table className="event-feed">
-          <thead>
-            <tr>
-              <th scope="col">Seq</th>
-              {/* Clock times only, so the zone is named once, here. */}
-              <th scope="col">Time{feed.length > 0 ? ` (${zoneLabel(feed[0]!.ts, zone)})` : ''}</th>
-              <th scope="col">Type</th>
-              <th scope="col">Detail</th>
-            </tr>
-          </thead>
-          <tbody>
-            {totalEvents > MAX_FEED_ROWS && (
-              <tr>
-                <td colSpan={4}>
-                  … showing the most recent {MAX_FEED_ROWS} of {totalEvents} events
-                </td>
-              </tr>
-            )}
-            {feed.map((e) => (
-              <tr key={e.seq}>
-                <td>{e.seq}</td>
-                <td>{formatTimeOfDay(e.ts, zone, 'ms')}</td>
-                <td>
-                  <code>{e.type}</code>
-                </td>
-                <td>{eventGloss(e)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
       {drawerRow !== null && drawerNode !== null && (
         <RunDrawer
           key={`${drawerRow.key}:${drawer?.n}`}

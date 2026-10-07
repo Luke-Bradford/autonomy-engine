@@ -1,6 +1,7 @@
 import { VALUE_TYPE_TITLES } from '@autonomy-studio/shared';
 import type { RunState, VariableDef } from '@autonomy-studio/shared';
 import { InlineJsonValue } from './CappedValue';
+import { showsVariables } from './runValues';
 
 /**
  * #844 V7 (spec V-D9) — the run's pipeline variables, as the ENGINE holds them.
@@ -16,10 +17,10 @@ import { InlineJsonValue } from './CappedValue';
  * Only the TYPE comes from the declaration, and the ORDER: rows follow the
  * Variables tab rather than the object's key order.
  *
- * Omitted entirely when there is nothing it could say: no version doc (the page
- * already states that above the graph) or a pipeline that declares no
- * variables. Unlike the cost section, "no variables" is a fact about the
- * pipeline, not about the run, and saying it on every run would be noise.
+ * Omitted entirely when there is nothing it could say: no version doc or a
+ * pipeline that declares no variables (`showsVariables`). The run page's
+ * Variables tab says which in its place, since a tab the reader opened must not
+ * be blank.
  */
 export function RunVariables({
   declared,
@@ -31,7 +32,7 @@ export function RunVariables({
   overlay: { ready: true; state: Pick<RunState, 'variables'> } | { ready: false; reason: string };
   settled: boolean;
 }) {
-  if (declared === undefined || declared.length === 0) return null;
+  if (!showsVariables(declared)) return null;
   return (
     <section aria-labelledby="run-variables-heading">
       <h3 id="run-variables-heading">Variables</h3>

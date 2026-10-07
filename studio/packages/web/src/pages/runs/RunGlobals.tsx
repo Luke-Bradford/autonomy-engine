@@ -1,5 +1,5 @@
-import type { RunState } from '@autonomy-studio/shared';
 import { InlineJsonValue } from './CappedValue';
+import { globalNames, type GlobalsOverlay } from './runValues';
 
 /**
  * #844 GL5 — the workspace globals this run read, as the ENGINE holds them.
@@ -15,17 +15,13 @@ import { InlineJsonValue } from './CappedValue';
  * read types never reach the web.
  *
  * Omitted entirely for a run that read none, and while the projection is
- * unavailable. Without it there is nothing to say whether the run read any, so
- * any message would be a guess; the page already says why the projection is
- * missing, above the graph.
+ * unavailable (`globalNames` is empty for both). Without the projection there is
+ * nothing to say whether the run read any, so any message would be a guess; the
+ * run page's Variables tab says "read none" only once the projection is ready.
  */
-export function RunGlobals({
-  overlay,
-}: {
-  overlay: { ready: true; state: Pick<RunState, 'globals'> } | { ready: false; reason: string };
-}) {
+export function RunGlobals({ overlay }: { overlay: GlobalsOverlay }) {
   if (!overlay.ready) return null;
-  const names = Object.keys(overlay.state.globals).sort((a, b) => a.localeCompare(b, 'en'));
+  const names = globalNames(overlay);
   if (names.length === 0) return null;
   return (
     <section aria-labelledby="run-globals-heading">
