@@ -204,10 +204,16 @@ test('#1569 slice 3 — New pipeline and Import are toolbar drawers beside the g
   // toolbar shares the title's row.
   await expect(page.getByRole('form', { name: 'New pipeline' })).toHaveCount(0);
   await expect(page.getByLabel('Export file')).toHaveCount(0);
-  const header = await page
-    .locator('.pipelines-page > .page-header')
-    .evaluate((el) => Math.round(el.getBoundingClientRect().height));
-  expect(header).toBeLessThanOrEqual(40);
+  const header = await page.locator('.pipelines-page > .page-header').evaluate((el) => {
+    const title = el.querySelector('h2')?.getBoundingClientRect();
+    const button = el.querySelector('button')?.getBoundingClientRect();
+    return {
+      height: Math.round(el.getBoundingClientRect().height),
+      sameRow: title !== undefined && button !== undefined && button.top < title.bottom,
+    };
+  });
+  expect(header.sameRow).toBe(true);
+  expect(header.height).toBeLessThanOrEqual(40);
 
   // Create in a folder typed in another case: it is filed under the existing one.
   const name = `${tag} created`;

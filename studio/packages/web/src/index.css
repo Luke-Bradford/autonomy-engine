@@ -4910,12 +4910,15 @@ button.danger {
 /* #1484 — the density target is the first run at y ≤ 200 at 1440×900. Measured
    before this rule: a 55px title row (an h2's default margins), then the bar,
    the spend line and the table's own top margin put it at 226. The title row
-   is one control high, and the gaps between the bands are the bar's own. */
-.runs-page > .page-header {
+   is one control high, and the gaps between the bands are the bar's own.
+   #1569 — the Pipelines page's title row is the same, toolbar beside it. */
+.runs-page > .page-header,
+.pipelines-page > .page-header {
   margin-bottom: 0.375rem;
 }
 
-.runs-page > .page-header h2 {
+.runs-page > .page-header h2,
+.pipelines-page > .page-header h2 {
   margin: 0;
   font-size: 1.15rem;
 }

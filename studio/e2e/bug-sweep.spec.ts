@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { contrastRatio, fluentRootReady, isOpaque, setTheme, surfaceBehind } from './support/theme';
 import { openCanvas } from './support/canvas';
-import { createPipelineFromList } from './support/pipelinesPage';
+import { createPipelineFromList, newPipelineButton } from './support/pipelinesPage';
 import { openRowMenu } from './support/authorPane';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
 import { activityRowById } from './support/panels';
@@ -701,13 +701,15 @@ test('#1245 — form controls take the app font family, and keep the UA control 
   );
   expect(read.saveSize, 'Save version keeps the UA control size').toBe(read.probeSize);
 
-  /* An input, on the list page the helper walked through. */
+  /* An input, in the list page's New pipeline drawer (#1569). */
   await page
     .getByRole('navigation', { name: 'Breadcrumb' })
     .getByRole('link', { name: 'Pipelines' })
     .click();
   await page.getByRole('heading', { name: 'Pipelines' }).waitFor();
-  const input = await page.getByRole('textbox', { name: 'Name', exact: true }).evaluate((el) => ({
+  await newPipelineButton(page).click();
+  const newForm = page.getByRole('form', { name: 'New pipeline' });
+  const input = await newForm.getByRole('textbox', { name: 'Name', exact: true }).evaluate((el) => ({
     family: getComputedStyle(el).fontFamily,
     parent: getComputedStyle(el.parentElement ?? document.body).fontFamily,
   }));
