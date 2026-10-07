@@ -33,10 +33,10 @@ const FIELD_LABELS: ReadonlyMap<string, string> = new Map([
 ]);
 
 /**
- * Both checked TRIMMED, as they are sent — unlike `nameCheck`'s own no-trim rule,
- * as the card this replaced and the pane's create both trimmed: a name of
- * spaces is no name, and the
- * folder rule refuses an edge space the operator never meant to type. The
+ * Both are checked TRIMMED, as they are sent. A name of spaces is no name, and
+ * the folder rule refuses an edge space the operator never meant to type. That
+ * departs from `nameCheck`'s own no-trim rule on purpose: the card this replaced
+ * and the pane's create both trimmed. The
  * folder is checked here, beside its field, because `createPipeline` parses its
  * body in the browser and would otherwise throw the same refusal as a bare
  * schema error.

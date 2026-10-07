@@ -1127,7 +1127,8 @@ describe('PipelinesPage', () => {
     load.resolve();
     await waitFor(() => expect(drawer.getByRole('button', { name: 'Close' })).toBeEnabled());
     expect(listMock).toHaveBeenCalledTimes(2);
-    expect(newButton).toHaveAttribute('aria-disabled', 'false');
+    // The page hears of it from the drawer's effect, a commit after Close.
+    await waitFor(() => expect(newButton).toHaveAttribute('aria-disabled', 'false'));
     // Idle, the same Escape closes it.
     fireEvent.keyDown(screen.getByRole('dialog', { name: 'Import' }), { key: 'Escape' });
     expect(screen.queryByRole('form', { name: 'Import' })).not.toBeInTheDocument();
