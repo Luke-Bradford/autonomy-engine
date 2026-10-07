@@ -60,6 +60,7 @@ import {
   liveFactsLoaded,
   NO_FOLDER,
   PIPELINE_FILTER_PARAMS,
+  readArchivedView,
   readPipelineFilters,
   TRIGGERS_FILTER_LABELS,
   TRIGGERS_FILTERS,
@@ -74,6 +75,24 @@ import { useConfirm } from '../lib/confirm/useConfirm';
 import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 import { pipelineDeletePlan, readPipelineDependents } from './pipelineDeleteConfirm';
+
+/** The folder picker's options: each folder in the list, then "no folder". */
+function folderOptionsOf(pipelines: readonly Pipeline[]): { value: string; label: string }[] {
+  const names = [...new Set(pipelines.flatMap((p) => (p.folder === null ? [] : [p.folder])))].sort(
+    (a, b) => a.localeCompare(b, 'en'),
+  );
+  const options = names.map((f) => ({ value: f, label: f }));
+  return pipelines.some((p) => p.folder === null)
+    ? [...options, { value: NO_FOLDER, label: '(no folder)' }]
+    : options;
+}
+
+/** The archived view draws only the columns it has facts for. */
+const ARCHIVED_COLUMNS = ['name', 'modified'] as const;
+
+function lastRunFilterLabel(v: LastRunFilter): string {
+  return v === 'never' ? 'Never run' : runStatusLabel(v);
+}
 
 /**
  * Pipelines: list / create / delete, and open one on the authoring canvas.
@@ -199,14 +218,18 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
   const { key: sortKey, dir: sortDir } = sort;
 
   // #1569 slice 2 — the filters and the Archived view, in the URL with the sort.
-  const filters = readPipelineFilters(searchParams);
+  // Memoised, so the React Compiler treats it as frozen: a plain object read
+  // here and passed to calls below the later hooks counts as live (mutable)
+  // across them, and costs it every `useCallback` in this component.
+  const filters = useMemo(() => readPipelineFilters(searchParams), [searchParams]);
   const showArchived = filters.archived;
+  const qParam = searchParams.get(PIPELINE_FILTER_PARAMS.q);
   const setFilter = useCallback(
     (param: string, next: string) => setSearchParams((prev) => withParams(prev, { [param]: next })),
     [setSearchParams],
   );
   const [searchText, setSearchText] = useSearchBox(
-    searchParams.get(PIPELINE_FILTER_PARAMS.q),
+    qParam,
     (next, replace) =>
       setSearchParams((prev) => withParams(prev, { [PIPELINE_FILTER_PARAMS.q]: next }), {
         replace,
@@ -368,27 +391,41 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
     setArchivedStatus('idle');
   }, []);
 
-  /** Load the archived set, reporting a failure AS a failure (never as empty). */
-  const loadArchived = useCallback(async () => {
+  /**
+   * Fetch the archived set, reporting a failure AS a failure (never as empty).
+   * Every setState is in a promise callback, so the opening effect below can
+   * call it (the `set-state-in-effect` rule, as `useGuardedLoad`). Never
+   * rejects.
+   */
+  const fetchArchived = useCallback(() => {
     const id = (latestArchivedLoad.current += 1);
+    return listArchivedPipelines().then(
+      (items) => {
+        if (id !== latestArchivedLoad.current) return;
+        setArchived(items);
+        setArchivedStatus('ready');
+        setArchivedError(null);
+      },
+      (err: unknown) => {
+        // A superseded load's FAILURE is dropped too, not just its success: a
+        // late rejection from an abandoned request must not bury the fresher
+        // answer that replaced it under an error banner.
+        if (id !== latestArchivedLoad.current) return;
+        // The previous list is left in place: a refresh failure is not "we
+        // know nothing", the same contract `pipelinesStore` holds for the live
+        // list.
+        setArchivedStatus('error');
+        setArchivedError(`Could not load archived pipelines: ${messageOf(err)}`);
+      },
+    );
+  }, []);
+
+  /** Load the archived set from an event: says `loading` at once. */
+  const loadArchived = useCallback(() => {
     setArchivedStatus('loading');
     setArchivedError(null);
-    try {
-      const items = await listArchivedPipelines();
-      if (id !== latestArchivedLoad.current) return;
-      setArchived(items);
-      setArchivedStatus('ready');
-    } catch (err) {
-      // A superseded load's FAILURE is dropped too, not just its success: a late
-      // rejection from an abandoned request must not bury the fresher answer
-      // that replaced it under an error banner.
-      if (id !== latestArchivedLoad.current) return;
-      // The previous list is left in place: a refresh failure is not "we know
-      // nothing", the same contract `pipelinesStore` holds for the live list.
-      setArchivedStatus('error');
-      setArchivedError(`Could not load archived pipelines: ${messageOf(err)}`);
-    }
-  }, []);
+    return fetchArchived();
+  }, [fetchArchived]);
 
   /**
    * Whether the section is open, readable from an ASYNC callback. `onArchive`
@@ -412,7 +449,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
       setSearchParams((prev) =>
         withParams(
           prev,
-          readPipelineFilters(prev).archived
+          readArchivedView(prev)
             ? { [PIPELINE_FILTER_PARAMS.archived]: '' }
             : {
                 [PIPELINE_FILTER_PARAMS.archived]: '1',
@@ -427,58 +464,14 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
 
   // Fetch on OPEN — a click, Back, or a link with `?archived=1` — and only when
   // there is nothing fresh to show: `idle` is both "never loaded" and
-  // "invalidated by an archive". A closed view never fetches. `loadArchived`
-  // leaves `idle` synchronously, so this runs once per opening.
+  // "invalidated by an archive". A closed view never fetches. Open and `idle`
+  // renders as loading (`archivedLoading`), so the status need not move here.
   useEffect(() => {
-    if (showArchived && archivedStatus === 'idle') void loadArchived();
-  }, [showArchived, archivedStatus, loadArchived]);
+    if (showArchived && archivedStatus === 'idle') void fetchArchived();
+  }, [showArchived, archivedStatus, fetchArchived]);
+  const archivedLoading =
+    archivedStatus === 'loading' || (showArchived && archivedStatus === 'idle');
 
-  const base = showArchived ? archived : pipelines;
-  // Each render, not memoised: `filters` is re-read from the URL every render,
-  // and sorting and filtering a page of pipelines costs less than the diff.
-  const rows = filterPipelines(
-    sortPipelines(base, summaries?.byId, { key: sortKey, dir: sortDir }),
-    (p) => {
-      const state = versionStates?.get(p.id);
-      return {
-        summary: summaries?.byId.get(p.id),
-        liveKeys:
-          state === undefined ? undefined : liveStateKeys({ state, gitConnected, sync: gitSync }),
-      };
-    },
-    filters,
-  );
-  const filtering = hasPipelineFilters(filters);
-  const awaitingFacts = filtersAwaitFacts(filters, {
-    summaries: summaries !== undefined,
-    liveStates:
-      filters.live === undefined ||
-      liveFactsLoaded(filters.live, {
-        states: versionStates !== undefined,
-        gitConnected,
-        sync: gitSync,
-      }),
-  });
-  const folderOptions = useMemo(() => {
-    const names = [...new Set(base.flatMap((p) => (p.folder === null ? [] : [p.folder])))].sort(
-      (a, b) => a.localeCompare(b, 'en'),
-    );
-    const options = names.map((f) => ({ value: f, label: f }));
-    return base.some((p) => p.folder === null)
-      ? [...options, { value: NO_FOLDER, label: '(no folder)' }]
-      : options;
-  }, [base]);
-  const lastSummary =
-    filters.last.length === 0
-      ? 'All'
-      : filters.last.length === 1
-        ? lastRunFilterLabel(filters.last[0]!)
-        : `${String(filters.last.length)} statuses`;
-
-  function clearFilters() {
-    setSearchText('');
-    setSearchParams((prev) => withParams(prev, CLEARED_PIPELINE_FILTERS));
-  }
 
   /**
    * Archive: the soft-delete, and the ONLY way to retire a pipeline that has
@@ -532,6 +525,49 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
     },
     [loadArchived, refresh],
   );
+
+  const base = showArchived ? archived : pipelines;
+  const rows = useMemo(
+    () =>
+      filterPipelines(
+        sortPipelines(base, summaries?.byId, { key: sortKey, dir: sortDir }),
+        (p) => {
+          const state = versionStates?.get(p.id);
+          return {
+            summary: summaries?.byId.get(p.id),
+            liveKeys:
+              state === undefined
+                ? undefined
+                : liveStateKeys({ state, gitConnected, sync: gitSync }),
+          };
+        },
+        filters,
+      ),
+    [base, summaries, sortKey, sortDir, versionStates, gitConnected, gitSync, filters],
+  );
+  const filtering = hasPipelineFilters(filters);
+  const awaitingFacts = filtersAwaitFacts(filters, {
+    summaries: summaries !== undefined,
+    liveStates:
+      filters.live === undefined ||
+      liveFactsLoaded(filters.live, {
+        states: versionStates !== undefined,
+        gitConnected,
+        sync: gitSync,
+      }),
+  });
+  const folderOptions = useMemo(() => folderOptionsOf(base), [base]);
+  const lastSummary =
+    filters.last.length === 0
+      ? 'All'
+      : filters.last.length === 1
+        ? lastRunFilterLabel(filters.last[0]!)
+        : `${String(filters.last.length)} statuses`;
+
+  const clearFilters = () => {
+    setSearchText('');
+    setSearchParams((prev) => withParams(prev, CLEARED_PIPELINE_FILTERS));
+  };
 
   return (
     <section aria-labelledby="pipelines-heading" className="pipelines-page">
@@ -688,7 +724,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
               </button>
             </p>
           )}
-          {archivedStatus === 'loading' && <p>Loading archived pipelines…</p>}
+          {archivedLoading && <p>Loading archived pipelines…</p>}
           {/* Gated on a load having SUCCEEDED — an empty list and a failed
               load are different facts, and this is the view where confusing
               them tells the operator their pipeline is gone. */}
@@ -794,11 +830,4 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
       {confirmDialog}
     </section>
   );
-}
-
-/** The archived view draws only the columns it has facts for. */
-const ARCHIVED_COLUMNS = ['name', 'modified'] as const;
-
-function lastRunFilterLabel(v: LastRunFilter): string {
-  return v === 'never' ? 'Never run' : runStatusLabel(v);
 }

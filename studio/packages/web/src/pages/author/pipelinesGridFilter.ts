@@ -55,7 +55,7 @@ function oneOf<V extends string>(vocabulary: readonly V[], raw: string | null): 
  * the list.
  */
 export function readPipelineFilters(params: URLSearchParams): PipelineFilters {
-  const archived = params.get(PIPELINE_FILTER_PARAMS.archived) === '1';
+  const archived = readArchivedView(params);
   const q = params.get(PIPELINE_FILTER_PARAMS.q)?.trim().toLowerCase();
   const folder = params.get(PIPELINE_FILTER_PARAMS.folder);
   return {
@@ -68,6 +68,11 @@ export function readPipelineFilters(params: URLSearchParams): PipelineFilters {
     live: archived ? undefined : oneOf(LIVE_STATE_KEYS, params.get(PIPELINE_FILTER_PARAMS.live)),
     archived,
   };
+}
+
+/** Is the Archived view open? (`?archived=1`) */
+export function readArchivedView(params: URLSearchParams): boolean {
+  return params.get(PIPELINE_FILTER_PARAMS.archived) === '1';
 }
 
 /** The `last` param for a selection (`''` deletes it, `withParams`). */

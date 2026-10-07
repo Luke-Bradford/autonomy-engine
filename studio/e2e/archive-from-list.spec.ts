@@ -13,7 +13,7 @@ import { chooseRowAction, rowMenuButton } from './support/rowMenu';
  * but every API function is mocked there, so nothing in vitest checks that the
  * archived list the page renders is the one the server actually answers with.
  * The failure this guards against is exactly that: an Archive button whose row
- * never reappears under Show archived would pass every unit run in the repo,
+ * never reappears under the Archived view would pass every unit run in the repo,
  * and would be a one-way trap in the product.
  *
  * The CANVAS side of archive (a save refused, the banner, its own Unarchive) is
