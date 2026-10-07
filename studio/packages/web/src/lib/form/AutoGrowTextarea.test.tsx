@@ -1,5 +1,5 @@
-import { describe, expect, it, afterEach } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, afterEach, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
 import { AutoGrowTextarea } from './AutoGrowTextarea';
 
@@ -31,11 +31,16 @@ function Controlled({ initial = '' }: { initial?: string }) {
 }
 
 describe('AutoGrowTextarea', () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    document.head.querySelectorAll('style[data-grow]').forEach((el) => el.remove());
+    vi.unstubAllGlobals();
+  });
 
   function mount(initial?: string) {
     stubLayout();
     const style = document.createElement('style');
+    style.dataset.grow = '';
     style.textContent =
       '.grow-under-test { line-height: 20px; padding: 4px 0; border: 1px solid; box-sizing: border-box; }';
     document.head.appendChild(style);
@@ -80,5 +85,82 @@ describe('AutoGrowTextarea', () => {
     });
     fireEvent.change(box, { target: { value: 'a\nb\nc' } });
     expect(box.style.height).toBe('auto');
+  });
+
+  it('measures again when its width changes — a box shown after mounting hidden', () => {
+    let observed: (() => void) | undefined;
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: () => void) {
+          observed = cb;
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    let width = 0;
+    Object.defineProperty(HTMLTextAreaElement.prototype, 'clientWidth', {
+      configurable: true,
+      get: () => width,
+    });
+    const box = mount('a\nb');
+    // Hidden at mount: nothing to measure.
+    Object.defineProperty(HTMLTextAreaElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get: () => 0,
+    });
+    fireEvent.change(box, { target: { value: 'a\nb\nc' } });
+    expect(box.style.height).toBe('auto');
+    // Shown: it has a width now, and is sized to what it holds.
+    stubLayout();
+    width = 300;
+    act(() => observed?.());
+    expect(box.style.height).toBe('70px');
+  });
+
+  it('puts back the scroll of an ancestor the measure collapsed', () => {
+    const box = mount('a');
+    const pane = box.parentElement!;
+    pane.scrollTop = 120;
+    let collapsedAt: number | undefined;
+    // jsdom does not clamp, so the browser's clamp is played here: the moment
+    // the box collapses, its pane's scroll is lost.
+    const style = box.style;
+    const orig = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(style), 'height')!;
+    Object.defineProperty(style, 'height', {
+      configurable: true,
+      get: () => orig.get!.call(style) as string,
+      set: (v: string) => {
+        orig.set!.call(style, v);
+        if (v === 'auto') {
+          collapsedAt = pane.scrollTop;
+          pane.scrollTop = 0;
+        }
+      },
+    });
+    fireEvent.change(box, { target: { value: 'a\nb' } });
+    expect(collapsedAt).toBe(120);
+    expect(pane.scrollTop).toBe(120);
+  });
+
+  it('caps at the rows it is given', () => {
+    stubLayout();
+    const style = document.createElement('style');
+    style.dataset.grow = '';
+    style.textContent =
+      '.grow-two { line-height: 20px; padding: 4px 0; border: 1px solid; box-sizing: content-box; }';
+    document.head.appendChild(style);
+    render(
+      <AutoGrowTextarea
+        aria-label="two"
+        className="grow-two"
+        maxRows={2}
+        value={'a\nb\nc'}
+        readOnly
+      />,
+    );
+    // content-box: the height is the lines alone, padding and border outside it.
+    expect((screen.getByLabelText('two') as HTMLTextAreaElement).style.height).toBe('40px');
   });
 });

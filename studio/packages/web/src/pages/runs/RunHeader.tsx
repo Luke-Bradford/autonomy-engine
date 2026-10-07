@@ -112,7 +112,7 @@ export function RunHeader({
           <>
             {/* #1569 OR37 — the hover is what the pipeline is for, as of
                 the version this run is bound to. */}
-            <span title={doc.description === '' ? undefined : doc.description}>
+            <span title={doc.description.trim() === '' ? undefined : doc.description}>
               {names.pipeline}
             </span>{' '}
             <span className="run-heading__version">{versionLabel(doc.version, names.debug)}</span>

@@ -413,9 +413,11 @@ export function latestVersion(versions: readonly PipelineVersion[]): PipelineVer
  * told the operation failed. If the rollback itself fails, the original error
  * still wins — a rollback error names the wrong problem.
  */
+type FirstVersion = Omit<PipelineVersionWrite, 'basedOnVersionId'>;
+
 async function createPipelineWithFirstVersion(
   body: PipelineWrite,
-  firstVersion: () => Promise<Omit<PipelineVersionWrite, 'basedOnVersionId'> | null>,
+  firstVersion: () => FirstVersion | null | Promise<FirstVersion | null>,
 ): Promise<Pipeline> {
   let created: Pipeline | undefined;
   try {
@@ -444,20 +446,20 @@ async function createPipelineWithFirstVersion(
  */
 export function newPipeline(body: PipelineWrite, description: string): Promise<Pipeline> {
   return createPipelineWithFirstVersion(body, () =>
-    Promise.resolve(
-      description.trim() === ''
-        ? null
-        : {
-            params: [],
-            outputs: [],
-            nodes: [],
-            edges: [],
-            containers: [],
-            variables: [],
-            description,
-            annotations: [],
-          },
-    ),
+    description.trim() === ''
+      ? null
+      : {
+          // No `catalogVersion`: a graph authored now takes today's, the write
+          // schema's default — unlike Duplicate, which carries its source's.
+          params: [],
+          outputs: [],
+          nodes: [],
+          edges: [],
+          containers: [],
+          variables: [],
+          description,
+          annotations: [],
+        },
   );
 }
 

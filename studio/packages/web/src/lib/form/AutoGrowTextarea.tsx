@@ -15,6 +15,10 @@ import { useEffect, useLayoutEffect, useRef, useState, type TextareaHTMLAttribut
  * lines, and a box mounted hidden (a dock tab not yet chosen) has no layout to
  * measure at all — it would size itself to nothing — until it is shown, which
  * is also a change of width, from 0.
+ *
+ * CONTROLLED only: it measures when `value` changes, so a `defaultValue` use
+ * would never grow. Measuring collapses the box for an instant, which can clamp
+ * a scrolled ancestor near its end — so every ancestor's scroll is put back.
  */
 export function AutoGrowTextarea({
   maxRows = 4,
@@ -33,6 +37,9 @@ export function AutoGrowTextarea({
   useLayoutEffect(() => {
     const el = ref.current;
     if (el === null) return;
+    const scrolled: [Element, number][] = [];
+    for (let p = el.parentElement; p !== null; p = p.parentElement)
+      if (p.scrollTop !== 0) scrolled.push([p, p.scrollTop]);
     el.style.height = 'auto';
     // Hidden, there is nothing to measure: left at its one natural row rather
     // than sized to nothing, and measured when shown.
@@ -48,6 +55,7 @@ export function AutoGrowTextarea({
     const cap = line * maxRows + border + (cs.boxSizing === 'border-box' ? padding : 0);
     el.style.height = `${String(Math.min(content, cap))}px`;
     el.style.overflowY = content > cap ? 'auto' : 'hidden';
+    for (const [p, top] of scrolled) p.scrollTop = top;
   }, [props.value, maxRows, width]);
-  return <textarea ref={ref} rows={1} {...props} />;
+  return <textarea {...props} ref={ref} rows={1} />;
 }

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { openSeededCanvas } from './support/seedDoc';
+import { fireAndSettle, openSeededCanvas, seedVersion } from './support/seedDoc';
 
 /**
  * #1 F8a — a pipeline's description and annotations, authored on the dock's
@@ -127,12 +127,14 @@ test.describe('#1 F8a — pipeline description + annotations', () => {
         )!;
         const cs = getComputedStyle(el);
         const canvas = document.querySelector('.react-flow')!.getBoundingClientRect();
+        const dock = document.querySelector('.property-panel')!.getBoundingClientRect();
         return {
           lines:
             (el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)) /
             parseFloat(cs.lineHeight),
           scrolls: el.scrollHeight > el.clientHeight,
           canvas: [canvas.top, canvas.left, canvas.width, canvas.height].map(Math.round),
+          dock: [dock.top, dock.left, dock.width, dock.height].map(Math.round),
         };
       });
 
@@ -155,9 +157,26 @@ test.describe('#1 F8a — pipeline description + annotations', () => {
     await box.fill('one');
     await expect.poll(async () => (await measure()).lines).toBeCloseTo(1, 1);
 
-    // Growing happens inside the dock; the canvas holds still throughout.
-    for (const state of [three, capped]) expect(state.canvas).toEqual(empty.canvas);
+    // Growing happens inside the dock: the dock and the canvas hold still.
+    for (const state of [three, capped]) {
+      expect(state.canvas).toEqual(empty.canvas);
+      expect(state.dock).toEqual(empty.dock);
+    }
 
+    await expectQuiet(page, problems);
+  });
+
+  test("#1569 — a run's header hovers with its version's description", async ({ page }) => {
+    const problems = collectPageProblems(page);
+    const { pipelineVersionId } = await seedVersion(page, `1569 run header ${String(Date.now())}`, {
+      nodes: [],
+      description: 'Loads the nightly batch',
+    });
+    const runId = await fireAndSettle(page, pipelineVersionId, 'e2e 1569 header');
+    await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+    const name = page.locator('#run-heading [title]');
+    await expect(name).toHaveAttribute('title', 'Loads the nightly batch');
+    await expect(name).toHaveText(/^1569 run header /);
     await expectQuiet(page, problems);
   });
 });
