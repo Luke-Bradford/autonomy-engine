@@ -64,12 +64,14 @@ test('a run is named by its pipeline, with the run id short and copyable', async
   await expectNamed(page, `${name} · run ${short}`, 'Monitor', runId);
   await expect(page.locator('#run-heading')).toHaveText(`${name} v1`);
 
-  // The header (#1484 M2) links by NAME, and holds the run id short with the
+  // The header (#1484 M2) names by NAME, and holds the run id short with the
   // full one in its tooltip — never the pipeline-version or trigger ids.
+  // #1566 — the name is plain text on the run's own page; the editor is the
+  // labelled icon, at the version this run is bound to.
   const meta = page.locator('.run-header');
-  await expect(meta.getByRole('link', { name, exact: true })).toHaveAttribute(
+  await expect(meta.getByRole('link', { name, exact: true })).toHaveCount(0);
+  await expect(meta.getByRole('link', { name: 'Open v1 in the editor' })).toHaveAttribute(
     'href',
-    // #1484 — the version this run is bound to.
     `#/author/pipelines/${pipelineId}?version=1`,
   );
   await expect(meta.getByRole('link', { name: trigger })).toBeVisible();

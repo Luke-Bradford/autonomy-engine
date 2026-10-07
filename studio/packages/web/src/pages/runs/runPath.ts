@@ -1,3 +1,5 @@
+import { versionLabel } from '../../lib/versionLabel';
+
 /**
  * The ONE place a run link's PATH and its ACCESSIBLE NAME are built.
  *
@@ -60,4 +62,17 @@ export function runDetailPath(runId: string): string {
  */
 export function runLinkLabel(lead: string, runId: string): string {
   return `${lead} run ${runId}`;
+}
+
+/**
+ * #1566 — the accessible name of a run's SECONDARY way to the editor, beside
+ * a pipeline name that opens the run itself. It says which version opens: the
+ * one that ran, or for a debug run (which `runVersionPath` sends to the
+ * working copy) the pipeline. `pipelineName` is given where several runs share
+ * a screen (the runs grid), so each row's link is told apart.
+ */
+export function runEditorLabel(version: number, debug: boolean, pipelineName?: string): string {
+  if (debug) return `Open ${pipelineName ?? 'the pipeline'} in the editor`;
+  const which = versionLabel(version, false);
+  return `Open ${pipelineName === undefined ? which : `${pipelineName} ${which}`} in the editor`;
 }

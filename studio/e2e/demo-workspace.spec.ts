@@ -57,6 +57,38 @@ async function eventsOf(page: Page, runId: string): Promise<LoggedEvent[]> {
 const rowFor = (page: Page, name: string) =>
   page.getByRole('row').filter({ has: page.getByText(name, { exact: true }) });
 
+/**
+ * #1566 — Demo 3's own run page, which is the ADF view the operator asked to
+ * land on: its three copies write 66 / 6 / 20 rows, and an activity's row opens
+ * that attempt's drawer with its Output.
+ */
+async function expectDemo3RunPage(page: Page, runId: string): Promise<void> {
+  await expect(page).toHaveURL(new RegExp(`#/monitor/runs/${runId}$`));
+  const table = page.locator('.activity-runs__table');
+  await expect(table.getByRole('columnheader', { name: /Rows written/ })).toBeVisible();
+  const headers = (await table.getByRole('columnheader').allTextContents()).map((h) => h.trim());
+  const rowsWrittenAt = headers.findIndex((h) => h.startsWith('Rows written'));
+  expect(rowsWrittenAt).toBeGreaterThan(0);
+  const row = (id: string) => table.locator(`tbody tr[data-activity-id="${id}"]`);
+  for (const [id, rows] of [
+    ['clean', '66'],
+    ['aggregate', '6'],
+    ['rejects', '20'],
+  ] as const) {
+    await expect(row(id).getByRole('cell').nth(rowsWrittenAt)).toHaveText(rows);
+  }
+  await row('clean').locator('button.activity-runs__open').click();
+  const drawer = page.locator('#run-detail-drawer');
+  await drawer.getByRole('tab', { name: 'Output' }).click();
+  await expect(drawer.getByRole('tab', { name: 'Output' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await expect(drawer).toContainText('66');
+  await page.keyboard.press('Escape');
+  await expect(drawer).toHaveCount(0);
+}
+
 test.describe('#1481 the demo workspace', () => {
   test.afterAll(async ({ request }) => {
     // Asserted, not fire-and-forget: a refused clean-up would leave the demo
@@ -137,6 +169,33 @@ test.describe('#1481 the demo workspace', () => {
     await expect(cell(runIds['2']!, 'Rows written')).toHaveText('92');
     await expect(cell(broken, 'Activities')).toContainText('0 ✓ · 1 ✗');
     await expect(cell(broken, 'Rows written')).toHaveText('—');
+
+    /* #1566 — every primary click in the Monitor lands on the RUN, as in ADF.
+       The editor is only the labelled icon beside the name, at the version
+       that ran. From the runs grid: */
+    const demo3 = NAMES[2]!;
+    const run3 = runIds['3']!;
+    const row3 = page.getByRole('row').filter({ hasText: run3 });
+    await expect(
+      row3.getByRole('link', { name: new RegExp(`^Open ${demo3} v\\d+ in the editor$`) }),
+    ).toHaveAttribute('href', /\?version=\d+$/);
+    await row3.getByRole('link', { name: new RegExp(`^${demo3} v\\d+$`) }).click();
+    await expectDemo3RunPage(page, run3);
+
+    // From the run's trigger: its header links to that trigger's runs.
+    await page.locator('.run-header a[href*="/monitor/runs?trigger="]').click();
+    await expect(page).toHaveURL(/#\/monitor\/runs\?trigger=/);
+    await page
+      .getByRole('row')
+      .filter({ hasText: run3 })
+      .getByRole('link', { name: new RegExp(`^${demo3} v\\d+$`) })
+      .click();
+    await expectDemo3RunPage(page, run3);
+
+    // From Home's recent runs.
+    await page.goto('/#/');
+    await page.locator(`.recent-runs a[href$="/monitor/runs/${run3}"]`).click();
+    await expectDemo3RunPage(page, run3);
 
     await page.goto('/#/author/pipelines');
     await page.getByRole('button', { name: 'Remove demo' }).click();

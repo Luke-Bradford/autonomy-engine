@@ -78,10 +78,21 @@ function header(run: Run, over: Record<string, unknown> = {}, names: RunHeaderNa
 const fact = (label: string) => screen.getByText(label, { selector: 'dt' }).nextElementSibling;
 
 describe('RunHeader (#1484 OR35 M2)', () => {
+  it("a debug run's editor icon opens the pipeline, with no version to preview (#1566)", () => {
+    header(RUN, {}, { ...NAMES, debug: true });
+    expect(screen.getByRole('link', { name: 'Open the pipeline in the editor' })).toHaveAttribute(
+      'href',
+      '/author/pipelines/pl_1',
+    );
+  });
+
   it('names the exact version, what triggered the run, its timing and its id in one band', () => {
     header(RUN);
     expect(screen.getByRole('heading', { level: 2, name: 'Nightly load v3' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Nightly load' })).toHaveAttribute(
+    // #1566 — the name is this page's subject, not a way out of it; the editor
+    // is the labelled icon, at the version that ran.
+    expect(screen.queryByRole('link', { name: 'Nightly load' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Open v3 in the editor' })).toHaveAttribute(
       'href',
       '/author/pipelines/pl_1?version=3',
     );

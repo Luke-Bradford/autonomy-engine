@@ -325,7 +325,9 @@ afterEach(() => vi.restoreAllMocks());
 describe('RunDetailPage', () => {
   it('renders run metadata from the R1 read-model fetch', async () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    expect(await screen.findByRole('link', { name: 'Test pipeline' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { level: 2, name: /^Test pipeline / }),
+    ).toBeInTheDocument();
     expect(screen.getByText('{"greeting":"hi"}')).toBeInTheDocument();
   });
 
@@ -351,7 +353,7 @@ describe('RunDetailPage', () => {
     renderWithRouter(<RunDetailPage runId="run_V1StGXR8_Z5jdHi6B-myT" />);
 
     expect(await screen.findByRole('heading', { name: 'Nightly load v1' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Nightly load' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Open v1 in the editor' })).toHaveAttribute(
       'href',
       // #1484 — the version this run is bound to, not the latest.
       '/author/pipelines/pl_1?version=1',
@@ -471,7 +473,7 @@ describe('RunDetailPage', () => {
     );
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
-    await screen.findByRole('link', { name: 'Test pipeline' });
+    await screen.findByRole('heading', { level: 2, name: /^Test pipeline / });
     const skipped = (await within(timelineSection()).findByText('HTTP Request 2')).closest('li')!;
     expect(skipped).toHaveTextContent(/— skipped/);
   });
@@ -528,7 +530,7 @@ describe('RunDetailPage', () => {
     );
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
-    await screen.findByRole('link', { name: 'Test pipeline' });
+    await screen.findByRole('heading', { level: 2, name: /^Test pipeline / });
     const timeline = await screen.findByRole('region', { name: 'Timeline' });
     // The parked node is the fold's, and it says WHICH alarm — one word
     // ("waiting") could not tell a timer from an awaited inbound callback…
@@ -966,7 +968,7 @@ describe('RunDetailPage', () => {
         useRunStreamMock.mockReturnValue(stream({ events }));
         renderWithRouter(<RunDetailPage runId="run_1" />);
 
-        await screen.findByRole('link', { name: 'Test pipeline' });
+        await screen.findByRole('heading', { level: 2, name: /^Test pipeline / });
         expect(await headerPill('running')).toHaveTextContent('running');
       });
     });
@@ -1164,7 +1166,7 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
       );
 
       renderWithRouter(<RunDetailPage runId="run_1" />);
-      await screen.findByRole('link', { name: 'Test pipeline' });
+      await screen.findByRole('heading', { level: 2, name: /^Test pipeline / });
       // The FOLD key, not the doc id — `x@2`'s events land on row `x`, which
       // `activityLabels` (keyed on `x@2`) cannot name.
       const timeline = await screen.findByRole('region', { name: 'Timeline' });
@@ -2194,7 +2196,7 @@ describe('RunDetailPage — the rerun-from-failed action (RS2)', () => {
       pipelineVersion: version(),
     });
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await screen.findByRole('link', { name: 'Test pipeline' });
+    await screen.findByRole('heading', { level: 2, name: /^Test pipeline / });
   }
 
   /* A BLOCK body, not `() => mock.mockResolvedValue(…)`: that returns the mock,
@@ -2322,7 +2324,7 @@ describe('RunDetailPage — the cancel-run action (CX4)', () => {
       pipelineVersion: version(),
     });
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await screen.findByRole('link', { name: 'Test pipeline' });
+    await screen.findByRole('heading', { level: 2, name: /^Test pipeline / });
   }
 
   beforeEach(() => {
@@ -3152,7 +3154,7 @@ describe('RunDetailPage — the parent a child run was called by', () => {
       pipelineVersion: version(),
     });
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await screen.findByRole('link', { name: 'Test pipeline' });
+    await screen.findByRole('heading', { level: 2, name: /^Test pipeline / });
   }
 
   it('links up to the run that called this one', async () => {
@@ -3364,7 +3366,7 @@ describe('RunDetailPage — the reruns of this run', () => {
       pipelineVersion: version(),
     });
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await screen.findByRole('link', { name: 'Test pipeline' });
+    await screen.findByRole('heading', { level: 2, name: /^Test pipeline / });
   }
 
   function rerun(id: string): RunSummary {
