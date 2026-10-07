@@ -65,8 +65,9 @@ const rowFor = (page: Page, name: string) =>
 async function expectDemo3RunPage(page: Page, runId: string): Promise<void> {
   await expect(page).toHaveURL(new RegExp(`#/monitor/runs/${runId}$`));
   const table = page.locator('.activity-runs__table');
+  await expect(table.getByRole('columnheader', { name: /Rows written/ })).toBeVisible();
   const headers = (await table.getByRole('columnheader').allTextContents()).map((h) => h.trim());
-  const rowsWrittenAt = headers.indexOf('Rows written');
+  const rowsWrittenAt = headers.findIndex((h) => h.startsWith('Rows written'));
   expect(rowsWrittenAt).toBeGreaterThan(0);
   const row = (id: string) => table.locator(`tbody tr[data-activity-id="${id}"]`);
   for (const [id, rows] of [
