@@ -19,10 +19,15 @@ import { useLocation, useNavigate, type Location, type NavigateOptions } from 'r
  * builds on the record. The router's next commit makes it stale by itself, so a
  * Back press or a link is followed, never overwritten.
  *
- * One limit, stated rather than handled: a write the router HOLDS (a
- * `useBlocker` that blocks it) leaves its record standing until the page next
- * moves. No writer is exposed to that today: every route hold that shares a
- * page with a writer holds path changes only (`leavesPath`).
+ * Limits, stated rather than handled:
+ *  - a write the router never commits (a `useBlocker` that holds it, a loader
+ *    redirect) leaves its record standing until the page next moves. No writer
+ *    is exposed to that today: every route hold that shares a page with a
+ *    writer holds path changes only (`leavesPath`), and these routes have no
+ *    loaders.
+ *  - `set` reads the location from the host's layout effect, so a CHILD's
+ *    layout effect writing in the same commit as a navigation sees the page
+ *    before it. Every writer today writes from an event or a passive effect.
  */
 export type SetLatestSearchParams = (
   next: URLSearchParams | ((prev: URLSearchParams) => URLSearchParams),
@@ -64,7 +69,8 @@ export function useLatestSearchParams(): readonly [
     if (params.toString() === prev.toString()) return;
     written = { from: here, search: params.size > 0 ? `?${params}` : '' };
     // Relative, as react-router's own setter writes it: resolved against the
-    // router's location, so a link already on its way keeps its path.
+    // router's location, so a link already on its way keeps its path (and, as
+    // before, takes these params with it).
     void go(`?${params}`, options);
   }, []);
   return [searchParams, set, latest] as const;
