@@ -14,6 +14,11 @@ import type { Db } from './types.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** The runs whose span is a real duration. An `interrupted` run counts as a
+ * failure, but its `finished_at` is when the boot reconciler swept it, not when
+ * it stopped, so its span would inflate p95. */
+const DURATION_STATUSES = ['success', 'failure'] as const satisfies readonly RunStatus[];
+
 /** A bound `in (…)` list — values, never interpolated text. */
 function boundList(statuses: readonly string[]): SQL {
   return sql.join(
@@ -129,7 +134,7 @@ export function listPipelineSummaries(
                    max(0, ${runs.finishedAt} - ${runs.startedAt}) as dur
             ${ownedRuns} and ${runs.startedAt} >= ${since}
               and ${runs.finishedAt} is not null
-              and ${runs.status} in (${succeeded}, ${failed})
+              and ${runs.status} in (${boundList(DURATION_STATUSES)})
           )
       )
      group by pipelineId`);

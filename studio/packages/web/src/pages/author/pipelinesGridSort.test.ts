@@ -94,4 +94,39 @@ describe('pipelines grid sort (#1569 OR37)', () => {
       sortPipelines(list, undefined, { key: 'successRate', dir: 'asc' }).map((p) => p.id),
     ).toEqual(['a', 'b']);
   });
+
+  it('sorts each column by its own fact, empties last', () => {
+    const list = [pipe('a', 'Alpha'), pipe('b', 'Beta'), pipe('c', 'Gamma')];
+    const summaries = new Map([
+      [
+        'a',
+        summary('a', {
+          window: { ...summary('a').window, successRate: 0.5 },
+          nextFireAt: 300,
+          triggers: { total: 2, enabled: 2, items: [] },
+          modifiedAt: 10,
+        }),
+      ],
+      [
+        'b',
+        summary('b', {
+          window: { ...summary('b').window, successRate: 0.9 },
+          nextFireAt: 100,
+          triggers: { total: 3, enabled: 1, items: [] },
+          modifiedAt: 30,
+        }),
+      ],
+      ['c', summary('c', { modifiedAt: 20 })],
+    ]);
+    const ids = (key: Parameters<typeof nextPipelineSort>[1]) =>
+      sortPipelines(list, summaries, readPipelineSort(new URLSearchParams(`sort=${key}`))).map(
+        (p) => p.id,
+      );
+    // Worst rate first; soonest fire first; most active triggers first; newest first.
+    expect(ids('successRate')).toEqual(['a', 'b', 'c']);
+    expect(ids('nextRun')).toEqual(['b', 'a', 'c']);
+    expect(ids('triggers')).toEqual(['a', 'b', 'c']);
+    expect(ids('modified')).toEqual(['b', 'c', 'a']);
+    expect(ids('name')).toEqual(['a', 'b', 'c']);
+  });
 });

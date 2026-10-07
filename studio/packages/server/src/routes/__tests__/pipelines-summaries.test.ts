@@ -124,10 +124,10 @@ describe('GET /api/pipelines/summaries (#1569 OR37)', () => {
       succeeded: 3,
       failed: 1,
       successRate: 0.75,
-      // Durations of the 4 counted runs: 100, 200, 300, 400.
-      // Nearest rank: p50 = 2nd (200), p95 = 4th (400).
+      // Durations of the succeeded runs: 100, 200, 300 (the interrupted run's
+      // span is its sweep, not a duration). Nearest rank: p50 = 2nd, p95 = 3rd.
       p50Ms: 200,
-      p95Ms: 400,
+      p95Ms: 300,
     });
   });
 
@@ -190,6 +190,55 @@ describe('GET /api/pipelines/summaries (#1569 OR37)', () => {
     ]);
     // The hourly tick is always the earlier of the two armed schedules.
     expect(s?.nextFireAt).toBe(pendingTicks(app.db, hourly)[0]!.dueAt);
+  });
+
+  it('keeps each pipeline’s facts its own: runs, rate, durations and next fire', async () => {
+    const a = createPipeline(app.db, { ownerId: 'local', name: 'A' });
+    const b = createPipeline(app.db, { ownerId: 'local', name: 'B' });
+    const va = version(a.id);
+    const vb = version(b.id);
+    const now = Date.now();
+    const aLast = run(va.id, 'success', now - 2000, 100);
+    run(vb.id, 'failure', now - 5000, 900);
+    run(vb.id, 'failure', now - 6000, 700);
+    const bLast = run(vb.id, 'success', now - 1000, 300);
+    // An interrupted run fails the rate but has no real span (swept at boot).
+    run(vb.id, 'interrupted', now - 7000, 99_000);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/triggers',
+      payload: {
+        name: 'Hourly B',
+        pipelineVersionId: vb.id,
+        params: {},
+        mode: 'schedule',
+        schedule: '17 * * * *',
+        webhook: null,
+        concurrency: { policy: 'skip_if_running' },
+        runWindows: null,
+        enabled: true,
+      },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+
+    const sa = await summaryOf(a.id);
+    const sb = await summaryOf(b.id);
+    expect(sa?.lastRun?.runId).toBe(aLast);
+    expect(sa?.window).toMatchObject({ runs: 1, succeeded: 1, failed: 0, p50Ms: 100, p95Ms: 100 });
+    expect(sa?.nextFireAt).toBeNull();
+    expect(sa?.triggers.total).toBe(0);
+    expect(sb?.lastRun?.runId).toBe(bLast);
+    // Durations 300, 700, 900: p50 = 2nd (700), p95 = 3rd (900); never 99s.
+    expect(sb?.window).toMatchObject({ runs: 4, succeeded: 1, failed: 3, p50Ms: 700, p95Ms: 900 });
+    expect(sb?.nextFireAt).not.toBeNull();
+    expect(sb?.triggers).toMatchObject({ total: 1, enabled: 1 });
+  });
+
+  it('modified is the later of the pipeline row and its latest saved version', async () => {
+    const p = createPipeline(app.db, { ownerId: 'local', name: 'P' });
+    expect((await summaryOf(p.id))?.modifiedAt).toBe(p.updatedAt);
+    const v = version(p.id);
+    expect((await summaryOf(p.id))?.modifiedAt).toBe(Math.max(p.updatedAt, v.createdAt));
   });
 
   it('is owner-scoped and leaves archived pipelines out', async () => {

@@ -409,8 +409,9 @@ export function listRowBadge({ state, gitConnected, sync }: ListRowInput): {
   const active = state.active === null ? null : (state.active.version ?? 'unnamed');
   const lived = liveState({ gitConnected, active, canvas: head, subject: 'latest' });
   // A numbered live version is either the latest saved one (✓) or behind it.
+  // (With no saved head there is nothing to be behind; the part keeps its words.)
   const live =
-    lived === null || typeof active !== 'number'
+    lived === null || typeof active !== 'number' || head === null
       ? lived
       : { ...lived, label: lived.current === true ? 'Live' : 'Live (behind)' };
   const opened = editingState({

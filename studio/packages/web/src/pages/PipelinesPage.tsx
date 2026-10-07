@@ -154,16 +154,20 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
   // #1569 — the sort lives in the URL, so a sorted list survives a reload.
   const [searchParams, setSearchParams] = useSearchParams();
   const sort = readPipelineSort(searchParams);
+  // From `prev`, not the render's `sort`, so two quick clicks both count.
   const onSort = useCallback(
     (key: PipelineSortKey) =>
-      setSearchParams((prev) => withParams(prev, pipelineSortParams(nextPipelineSort(sort, key))), {
-        replace: true,
-      }),
-    [setSearchParams, sort],
+      setSearchParams(
+        (prev) =>
+          withParams(prev, pipelineSortParams(nextPipelineSort(readPipelineSort(prev), key))),
+        { replace: true },
+      ),
+    [setSearchParams],
   );
+  const { key: sortKey, dir: sortDir } = sort;
   const sorted = useMemo(
-    () => sortPipelines(pipelines, summaries?.byId, sort),
-    [pipelines, summaries, sort],
+    () => sortPipelines(pipelines, summaries?.byId, { key: sortKey, dir: sortDir }),
+    [pipelines, summaries, sortKey, sortDir],
   );
 
   const [actionMsg, setActionMsg] = useState<string | null>(null);

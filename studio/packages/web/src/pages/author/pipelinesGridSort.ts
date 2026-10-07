@@ -1,11 +1,16 @@
 import type { Pipeline, PipelineSummary } from '@autonomy-studio/shared';
+import {
+  nextUrlSort,
+  readUrlSort,
+  urlSortParams,
+  type UrlSort,
+  type UrlSortSpec,
+} from '../../lib/urlSort';
 
 /**
  * #1569 OR37 — the pipelines grid's sort, kept in the URL (`?sort=&dir=`) so a
- * sorted list survives a reload and can be linked. The same shape as the runs
- * grid's (`runFilters.ts`): a junk key falls back to the default, a junk or
- * absent `dir` to the column's natural direction, and the default writes no
- * params at all.
+ * sorted list survives a reload and can be linked. The rules are `lib/urlSort`'s,
+ * shared with the runs grid and a run's activity runs.
  */
 export const PIPELINE_SORT_KEYS = [
   'name',
@@ -16,50 +21,37 @@ export const PIPELINE_SORT_KEYS = [
   'modified',
 ] as const;
 export type PipelineSortKey = (typeof PIPELINE_SORT_KEYS)[number];
-export type SortDir = 'asc' | 'desc';
-export interface PipelineSort {
-  key: PipelineSortKey;
-  dir: SortDir;
-}
+export type PipelineSort = UrlSort<PipelineSortKey>;
 
 export const PIPELINE_SORT_PARAMS = { sort: 'sort', dir: 'dir' } as const;
-const DEFAULT_KEY: PipelineSortKey = 'name';
 
-/** The direction a column opens in: newest, soonest and most first; the worst
- * success rate first, since that is the one to look at. */
-const NATURAL_DIR: Record<PipelineSortKey, SortDir> = {
-  name: 'asc',
-  lastRun: 'desc',
-  successRate: 'asc',
-  nextRun: 'asc',
-  triggers: 'desc',
-  modified: 'desc',
+const PIPELINE_URL_SORT: UrlSortSpec<PipelineSortKey> = {
+  keys: PIPELINE_SORT_KEYS,
+  /** The direction a column opens in: newest, soonest and most first; the
+   * worst success rate first, since that is the one to look at. */
+  natural: {
+    name: 'asc',
+    lastRun: 'desc',
+    successRate: 'asc',
+    nextRun: 'asc',
+    triggers: 'desc',
+    modified: 'desc',
+  },
+  defaultKey: 'name',
+  params: PIPELINE_SORT_PARAMS,
 };
 
-function isSortKey(v: string | null): v is PipelineSortKey {
-  return (PIPELINE_SORT_KEYS as readonly (string | null)[]).includes(v);
-}
-
 export function readPipelineSort(params: URLSearchParams): PipelineSort {
-  const raw = params.get(PIPELINE_SORT_PARAMS.sort);
-  const key = isSortKey(raw) ? raw : DEFAULT_KEY;
-  const dir = params.get(PIPELINE_SORT_PARAMS.dir);
-  return { key, dir: dir === 'asc' || dir === 'desc' ? dir : NATURAL_DIR[key] };
+  // Never null: the spec has a default key.
+  return readUrlSort(PIPELINE_URL_SORT, params)!;
 }
 
-/** `''` deletes a param (`withParams`), so the default order keeps a plain URL. */
 export function pipelineSortParams(sort: PipelineSort): Record<string, string> {
-  const natural = sort.dir === NATURAL_DIR[sort.key];
-  return {
-    [PIPELINE_SORT_PARAMS.sort]: sort.key === DEFAULT_KEY && natural ? '' : sort.key,
-    [PIPELINE_SORT_PARAMS.dir]: natural ? '' : sort.dir,
-  };
+  return urlSortParams(PIPELINE_URL_SORT, sort);
 }
 
-/** A header click: the sorted column flips, any other opens in its natural direction. */
 export function nextPipelineSort(current: PipelineSort, clicked: PipelineSortKey): PipelineSort {
-  if (current.key === clicked) return { key: clicked, dir: current.dir === 'asc' ? 'desc' : 'asc' };
-  return { key: clicked, dir: NATURAL_DIR[clicked] };
+  return nextUrlSort(PIPELINE_URL_SORT, current, clicked)!;
 }
 
 /** A row's value under a key; `null` is "no value", which always sorts last. */
@@ -80,7 +72,7 @@ function valueOf(
     case 'triggers':
       return s === undefined || s.triggers.total === 0 ? null : s.triggers.enabled;
     case 'modified':
-      return s?.modifiedAt ?? null;
+      return s?.modifiedAt ?? p.updatedAt;
   }
 }
 

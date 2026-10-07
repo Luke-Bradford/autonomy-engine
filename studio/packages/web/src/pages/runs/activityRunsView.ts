@@ -8,6 +8,14 @@ import {
 import { nodeStatusLabel } from './nodeStatus';
 import type { ActivityRunEntry } from './activityRunsTree';
 import type { ACTIVITY_RUN_COLUMNS } from './activityRunsColumns';
+import {
+  nextUrlSort,
+  readUrlSort,
+  urlSortParams,
+  type SortDir,
+  type UrlSort,
+  type UrlSortSpec,
+} from '../../lib/urlSort';
 
 /**
  * #1484 OR35 M2 — what the run page's activity-runs table is filtered and sorted
@@ -58,16 +66,12 @@ export const ActivityRunSortKeySchema = z.enum([
   'bytes',
 ]);
 export type ActivityRunSortKey = z.infer<typeof ActivityRunSortKeySchema>;
-const SortDirSchema = z.enum(['asc', 'desc']);
-export interface ActivityRunSort {
-  key: ActivityRunSortKey;
-  dir: 'asc' | 'desc';
-}
+export type ActivityRunSort = UrlSort<ActivityRunSortKey>;
 
 /** The direction a column opens in: names A–Z, times in the order they
  * happened, and the measures biggest first — "what took longest", "what
  * moved most". */
-const NATURAL_DIR: Record<ActivityRunSortKey, 'asc' | 'desc'> = {
+const NATURAL_DIR: Record<ActivityRunSortKey, SortDir> = {
   activity: 'asc',
   type: 'asc',
   status: 'asc',
@@ -78,6 +82,15 @@ const NATURAL_DIR: Record<ActivityRunSortKey, 'asc' | 'desc'> = {
   rowsRead: 'desc',
   rowsWritten: 'desc',
   bytes: 'desc',
+};
+
+/** No default key: with no sort the table is in RUN ORDER, the tree as the
+ * log has it, and a second flip returns there (`lib/urlSort`). */
+const ACTIVITY_RUN_URL_SORT: UrlSortSpec<ActivityRunSortKey> = {
+  keys: ActivityRunSortKeySchema.options,
+  natural: NATURAL_DIR,
+  defaultKey: null,
+  params: ACTIVITY_RUNS_PARAMS,
 };
 
 /** The columns a header click sorts; the rest (Iteration, Branch, Child run,
@@ -113,25 +126,18 @@ export function readActivityRunsView(params: URLSearchParams): ActivityRunsView 
   const status = ActivityRunStatusKeySchema.safeParse(params.get(ACTIVITY_RUNS_PARAMS.status));
   const type = params.get(ACTIVITY_RUNS_PARAMS.type);
   const q = RunSearchSchema.safeParse(params.get(ACTIVITY_RUNS_PARAMS.q) ?? '');
-  const key = ActivityRunSortKeySchema.safeParse(params.get(ACTIVITY_RUNS_PARAMS.sort));
-  const dir = SortDirSchema.safeParse(params.get(ACTIVITY_RUNS_PARAMS.dir));
   return {
     status: status.success ? status.data : null,
     type: type === null || type === '' ? null : type,
     q: q.success ? q.data : null,
-    sort: key.success
-      ? { key: key.data, dir: dir.success ? dir.data : NATURAL_DIR[key.data] }
-      : null,
+    sort: readUrlSort(ACTIVITY_RUN_URL_SORT, params),
   };
 }
 
 /** The params a sort writes, `''` deleting one (`withParams`). No `dir` when it
  * is the column's natural one, so a plain sort keeps a plain URL. */
 export function activityRunSortParams(sort: ActivityRunSort | null): Record<string, string> {
-  return {
-    [ACTIVITY_RUNS_PARAMS.sort]: sort?.key ?? '',
-    [ACTIVITY_RUNS_PARAMS.dir]: sort === null || sort.dir === NATURAL_DIR[sort.key] ? '' : sort.dir,
-  };
+  return urlSortParams(ACTIVITY_RUN_URL_SORT, sort);
 }
 
 /** The params a whole view writes. A control writes only its OWN params
@@ -156,11 +162,7 @@ export function nextActivityRunSort(
   current: ActivityRunSort | null,
   clicked: ActivityRunSortKey,
 ): ActivityRunSort | null {
-  if (current === null || current.key !== clicked)
-    return { key: clicked, dir: NATURAL_DIR[clicked] };
-  return current.dir === NATURAL_DIR[clicked]
-    ? { key: clicked, dir: current.dir === 'asc' ? 'desc' : 'asc' }
-    : null;
+  return nextUrlSort(ACTIVITY_RUN_URL_SORT, current, clicked);
 }
 
 /** What the table shows of a row, for the filter and the sort to read. The

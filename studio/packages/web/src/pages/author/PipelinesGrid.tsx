@@ -7,6 +7,7 @@ import {
   type Pipeline,
   type PipelineSummary,
 } from '@autonomy-studio/shared';
+import { ariaSortOf } from '../../lib/urlSort';
 import { When } from '../../lib/When';
 import { SortButton } from '../runs/SortButton';
 import { runDetailPath } from '../runs/runPath';
@@ -48,6 +49,15 @@ const COLUMNS: readonly Column[] = [
   { id: 'modified', label: 'Modified', width: 150, sort: 'modified' },
 ];
 
+/** A rate as a whole percent that never rounds a failure away (249 of 250 is
+ * 99%, not 100%) nor a success (1 of 250 is 1%, not 0%). */
+export function percentOf(succeeded: number, failed: number, rate: number): number {
+  const pct = Math.round(rate * 100);
+  if (failed > 0 && pct === 100) return 99;
+  if (succeeded > 0 && pct === 0) return 1;
+  return pct;
+}
+
 /** `75%`, from a rate; an em-dash when nothing finished in the window. */
 function successCell(s: PipelineSummary | undefined): ReactNode {
   const w = s?.window;
@@ -56,7 +66,7 @@ function successCell(s: PipelineSummary | undefined): ReactNode {
     <span
       title={`${String(w.succeeded)} succeeded, ${String(w.failed)} failed — ${String(w.runs)} runs in the last ${DAYS} days`}
     >
-      {`${String(Math.round(w.successRate * 100))}%`}
+      {`${String(percentOf(w.succeeded, w.failed, w.successRate))}%`}
     </span>
   );
 }
@@ -133,15 +143,7 @@ export function PipelinesGrid({
                   scope="col"
                   className={c.numeric === true ? 'num' : undefined}
                   title={c.title}
-                  aria-sort={
-                    c.sort === undefined
-                      ? undefined
-                      : dir === null
-                        ? 'none'
-                        : dir === 'asc'
-                          ? 'ascending'
-                          : 'descending'
-                  }
+                  aria-sort={ariaSortOf(dir)}
                 >
                   {c.sort === undefined ? (
                     c.label
@@ -182,8 +184,9 @@ export function PipelinesGrid({
                 </td>
                 <td>{triggersCell(s)}</td>
                 <td>{liveState(p)}</td>
+                {/* Until the summaries answer, the row's own last change. */}
                 <td>
-                  {s === undefined ? '—' : <When ms={s.modifiedAt} compact asOf={loadedAt} />}
+                  <When ms={s?.modifiedAt ?? p.updatedAt} compact asOf={loadedAt} />
                 </td>
                 <td className="pipelines-grid__actions">{actions(p)}</td>
               </tr>

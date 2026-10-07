@@ -1,3 +1,4 @@
+import { ariaSortOf } from '../../lib/urlSort';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import {
@@ -429,9 +430,7 @@ export function ActivityRunsTable({
                     <th
                       key={c}
                       scope="col"
-                      {...(active
-                        ? { 'aria-sort': view.sort?.dir === 'asc' ? 'ascending' : 'descending' }
-                        : {})}
+                      aria-sort={ariaSortOf(active ? (view.sort?.dir ?? null) : null)}
                     >
                       {key === undefined ? (
                         c

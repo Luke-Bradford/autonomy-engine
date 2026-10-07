@@ -1,3 +1,4 @@
+import { ariaSortOf } from '../../lib/urlSort';
 import { Fragment, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import {
   Menu,
@@ -81,7 +82,7 @@ function ColumnHeader({
       scope="col"
       aria-label={label}
       {...(numeric ? { className: 'num' } : {})}
-      {...(active ? { 'aria-sort': sort.dir === 'asc' ? 'ascending' : 'descending' } : {})}
+      aria-sort={ariaSortOf(active ? sort.dir : null)}
     >
       {sortKey === undefined ? (
         <>

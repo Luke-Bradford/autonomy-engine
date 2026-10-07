@@ -45,8 +45,8 @@ import {
   listPipelinesPage,
   restorePipeline,
   updatePipeline,
+  listPipelineSummaries,
 } from '../repo/index.js';
-import { listPipelineSummaries } from '../repo/pipeline-summaries.js';
 import { listTriggerNextFires } from '../scheduler/next-fire.js';
 import { BadRequestError, NotFoundError, PublishRefusedError, StaleWriteError } from '../errors.js';
 import { GlobalStartError, resolveRunGlobals } from '../run/globals.js';

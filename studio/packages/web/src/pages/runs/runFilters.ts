@@ -8,7 +8,6 @@ import {
   RunTriggeredByKindListSchema,
   RUN_SORT_DEFAULT_KEY,
   RUN_SORT_NATURAL_DIR,
-  RunSortDirSchema,
   RunSortKeySchema,
   type RunSort,
   type RunSortKey,
@@ -22,6 +21,7 @@ import {
   type DisplayTimeZone,
 } from '../../lib/displayTime';
 import { canonicalHidden, type RunGridColumnId } from '../../stores/uiStore';
+import { nextUrlSort, readUrlSort, urlSortParams, type UrlSortSpec } from '../../lib/urlSort';
 
 /**
  * U26 + #1484 OR35 M1 — the runs list's filter bar state, and the URL it lives
@@ -353,33 +353,28 @@ export const RUN_SORT_PARAMS = { sort: 'sort', dir: 'dir' } as const;
 
 export type RunSortState = RunSort;
 
-/** The sort the URL asks for. A junk key falls back to the default and a junk
- * or absent `dir` to the column's natural direction — the server's own reading
- * of the same params (`resolveRunSort`), so the header and the rows agree. */
+/** The runs grid's order in the URL (`lib/urlSort`). A junk key falls back to
+ * the default and a junk or absent `dir` to the column's natural direction —
+ * the server's own reading of the same params (`resolveRunSort`), so the header
+ * and the rows agree. */
+const RUN_URL_SORT: UrlSortSpec<RunSortKey> = {
+  keys: RunSortKeySchema.options,
+  natural: RUN_SORT_NATURAL_DIR,
+  defaultKey: RUN_SORT_DEFAULT_KEY,
+  params: RUN_SORT_PARAMS,
+};
+
 export function readRunSort(params: URLSearchParams): RunSortState {
-  const key = RunSortKeySchema.safeParse(params.get(RUN_SORT_PARAMS.sort));
-  const dir = RunSortDirSchema.safeParse(params.get(RUN_SORT_PARAMS.dir));
-  const k = key.success ? key.data : RUN_SORT_DEFAULT_KEY;
-  return { key: k, dir: dir.success ? dir.data : RUN_SORT_NATURAL_DIR[k] };
+  // Never null: the spec has a default key.
+  return readUrlSort(RUN_URL_SORT, params)!;
 }
 
-/** The params a sort writes: nothing for the default column, and no `dir` when
- * it is the column's natural one, so the plain list keeps a plain URL. `''`
- * deletes a param (`withParams`). */
 export function runSortParams(sort: RunSortState): Record<string, string> {
-  const isDefaultKey = sort.key === RUN_SORT_DEFAULT_KEY;
-  const isNatural = sort.dir === RUN_SORT_NATURAL_DIR[sort.key];
-  return {
-    [RUN_SORT_PARAMS.sort]: isDefaultKey && isNatural ? '' : sort.key,
-    [RUN_SORT_PARAMS.dir]: isNatural ? '' : sort.dir,
-  };
+  return urlSortParams(RUN_URL_SORT, sort);
 }
 
-/** A header click: the sorted column flips, any other opens in its natural
- * direction. */
 export function nextRunSort(current: RunSortState, clicked: RunSortKey): RunSortState {
-  if (current.key === clicked) return { key: clicked, dir: current.dir === 'asc' ? 'desc' : 'asc' };
-  return { key: clicked, dir: RUN_SORT_NATURAL_DIR[clicked] };
+  return nextUrlSort(RUN_URL_SORT, current, clicked)!;
 }
 
 /** Whether the list is in its default order, newest first. */
