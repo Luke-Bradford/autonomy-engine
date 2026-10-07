@@ -56,16 +56,20 @@ describe('pipelines grid filters (#1569 OR37 slice 2)', () => {
       live: undefined,
       archived: false,
     });
-    expect(read('q=%20Orders%20&folder=etl&last=never,failure,bogus&triggers=active&live=behind'))
-      .toEqual({
-        q: 'orders',
-        folder: 'etl',
-        last: ['failure', 'never'],
-        triggers: 'active',
-        live: 'behind',
-        archived: false,
-      });
-    expect(read('triggers=some&live=green')).toMatchObject({ triggers: undefined, live: undefined });
+    expect(
+      read('q=%20Orders%20&folder=etl&last=never,failure,bogus&triggers=active&live=behind'),
+    ).toEqual({
+      q: 'orders',
+      folder: 'etl',
+      last: ['failure', 'never'],
+      triggers: 'active',
+      live: 'behind',
+      archived: false,
+    });
+    expect(read('triggers=some&live=green')).toMatchObject({
+      triggers: undefined,
+      live: undefined,
+    });
   });
 
   it('ignores the fact filters in the archived view, which has no facts', () => {

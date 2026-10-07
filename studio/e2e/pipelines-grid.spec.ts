@@ -139,7 +139,10 @@ test('#1569 — the pipelines grid: last run, success %, next run, triggers; sor
   // Sort by Last run: newest first, so the broken pipeline (run second) sits
   // directly above the ok one, and every never-run filler after both.
   // The header's button — the filter bar has a "Last run: All" menu too.
-  await page.getByRole('columnheader', { name: /Last run/ }).getByRole('button').click();
+  await page
+    .getByRole('columnheader', { name: /Last run/ })
+    .getByRole('button')
+    .click();
   await expect(page).toHaveURL(/[?&]sort=lastRun(&|$)/);
   const order = async () =>
     (await page.locator('.pipelines-grid tbody tr td:first-child a').allTextContents()).filter(

@@ -228,12 +228,10 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
     (param: string, next: string) => setSearchParams((prev) => withParams(prev, { [param]: next })),
     [setSearchParams],
   );
-  const [searchText, setSearchText] = useSearchBox(
-    qParam,
-    (next, replace) =>
-      setSearchParams((prev) => withParams(prev, { [PIPELINE_FILTER_PARAMS.q]: next }), {
-        replace,
-      }),
+  const [searchText, setSearchText] = useSearchBox(qParam, (next, replace) =>
+    setSearchParams((prev) => withParams(prev, { [PIPELINE_FILTER_PARAMS.q]: next }), {
+      replace,
+    }),
   );
 
   const [actionMsg, setActionMsg] = useState<string | null>(null);
@@ -471,7 +469,6 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
   }, [showArchived, archivedStatus, fetchArchived]);
   const archivedLoading =
     archivedStatus === 'loading' || (showArchived && archivedStatus === 'idle');
-
 
   /**
    * Archive: the soft-delete, and the ONLY way to retire a pipeline that has

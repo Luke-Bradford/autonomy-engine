@@ -18,7 +18,8 @@ import type { PipelineSort, PipelineSortKey } from './pipelinesGridSort';
 
 const DAYS = String(PIPELINE_SUMMARY_WINDOW_DAYS);
 
-export type ColumnId = 'name' | 'lastRun' | 'successRate' | 'nextRun' | 'triggers' | 'live' | 'modified';
+export type ColumnId =
+  'name' | 'lastRun' | 'successRate' | 'nextRun' | 'triggers' | 'live' | 'modified';
 
 interface Column {
   id: ColumnId;

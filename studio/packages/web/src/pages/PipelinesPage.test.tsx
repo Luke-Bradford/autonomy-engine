@@ -331,7 +331,9 @@ describe('PipelinesPage', () => {
         );
         expect(
           // (Name carries the sort arrow.)
-          screen.getAllByRole('columnheader').map((h) => h.textContent?.replace(/[▲▼]/g, '').trim()),
+          screen
+            .getAllByRole('columnheader')
+            .map((h) => h.textContent?.replace(/[▲▼]/g, '').trim()),
         ).toEqual(['Name', 'Modified', '']);
         // The run filters are not drawn where there are no run facts.
         expect(screen.queryByRole('button', { name: /^Last run:/ })).not.toBeInTheDocument();

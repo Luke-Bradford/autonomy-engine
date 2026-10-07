@@ -169,9 +169,13 @@ export function filterPipelines(
       const last: LastRunFilter = summary.lastRun === null ? 'never' : summary.lastRun.status;
       if (!f.last.includes(last)) return false;
     }
-    if (f.triggers !== undefined && (summary === undefined || !matchesTriggers(summary, f.triggers)))
+    if (
+      f.triggers !== undefined &&
+      (summary === undefined || !matchesTriggers(summary, f.triggers))
+    )
       return false;
-    if (f.live !== undefined && (liveKeys === undefined || !liveKeys.includes(f.live))) return false;
+    if (f.live !== undefined && (liveKeys === undefined || !liveKeys.includes(f.live)))
+      return false;
     return true;
   });
 }
