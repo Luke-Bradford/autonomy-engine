@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion, type SeedDoc } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
+import { openRunView } from './support/panels';
 
 /**
  * U27 slice 1 (#930) — the run monitor says what the RUN cost.
@@ -72,7 +73,7 @@ test('#930 — the run monitor totals a run’s spend, and never invents a figur
     );
   }
 
-  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}?rdTab=cost`);
   await fluentRootReady(page);
 
   /* The RUN-level section, addressed by its landmark rather than by position, so
@@ -288,7 +289,7 @@ test('#932 — the run total says which child runs it leaves out, and links them
   expect((await costOf(runId)).responseCount).toBe(1);
   expect((await costOf(childRunId)).responseCount).toBe(1);
 
-  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}?rdTab=cost`);
   await fluentRootReady(page);
 
   const section = page.getByRole('region', { name: 'Cost & usage' });
@@ -301,6 +302,7 @@ test('#932 — the run total says which child runs it leaves out, and links them
      real rather than asserted on its href, so a route that 404s fails here. */
   await section.getByRole('link', { name: childRunId }).click();
   await expect(page).toHaveURL(new RegExp(`/monitor/runs/${childRunId}$`));
+  await openRunView(page, 'Cost');
   const childSection = page.getByRole('region', { name: 'Cost & usage' });
   await expect(childSection.getByRole('heading', { name: 'Cost & usage' })).toBeVisible();
   // The child's own page makes no exclusion claim: it called nothing.

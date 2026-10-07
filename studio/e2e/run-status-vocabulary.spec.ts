@@ -154,7 +154,7 @@ test('#873 — a live container says "running", the same word its node and its r
   );
   const runId = await fireManualTrigger(page, pipelineVersionId, '#873 container park');
 
-  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}?rdTab=graph`);
   await fluentRootReady(page);
   const canvas = page.getByTestId('run-canvas');
   await expect(canvas).toBeVisible();

@@ -95,7 +95,7 @@ test('#844 GL3/GL5 — a run reads a global, logs the value, and shows it after 
   });
   expect(patched.ok()).toBe(true);
 
-  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}?rdTab=variables`);
   await fluentRootReady(page);
   expect(await variableRows(page)).toEqual([['label', 'String', '"prod"']]);
 

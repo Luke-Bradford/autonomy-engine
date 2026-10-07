@@ -64,7 +64,7 @@ test('#1065 — the run monitor explains why a container failed, and says which 
   expect(rows.some((r) => r.phase === 'cap')).toBe(false);
   const seq = rows[0]!.seq;
 
-  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}?rdTab=events`);
   await fluentRootReady(page);
 
   /* Addressed by its landmark rather than by position. */
@@ -129,7 +129,7 @@ test('#1065 — a run the reducer had nothing to explain says so, rather than hi
   expect(res.status()).toBe(200);
   expect(await res.json()).toEqual([]);
 
-  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}?rdTab=events`);
   await fluentRootReady(page);
 
   const section = page.getByRole('region', { name: 'Why this run behaved as it did' });
@@ -183,7 +183,7 @@ test('#1367 — a run refused at start shows the refusal reason on the run page'
     ((await res.json()) as { phase: string; message: string }[]).map((d) => [d.phase, d.message]),
   ).toEqual([['start', reason]]);
 
-  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}?rdTab=events`);
   await fluentRootReady(page);
 
   const section = page.getByRole('region', { name: 'Why this run behaved as it did' });

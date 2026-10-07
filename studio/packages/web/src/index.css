@@ -2486,6 +2486,13 @@ button.danger {
   gap: 0.6rem;
 }
 
+/* #1484 OR35 M2 — the run page's views (Gantt · Graph · Events · …) are a page's
+   width of data, not a form: the graph and the event table take the full width
+   the activity runs above them do. */
+.run-views .panel-tab > * {
+  max-width: none;
+}
+
 /* A node is an ICON beside a BODY: the name, then one line saying what this step
  * does (#1394 OR3).
  *

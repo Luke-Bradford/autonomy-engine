@@ -72,7 +72,7 @@ test('#844 V7 — a run shows its variables, and a writer’s drill-in shows its
     'variable.append',
   ]);
 
-  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}?rdTab=variables`);
   await fluentRootReady(page);
 
   const section = page.getByRole('region', { name: 'Variables', exact: true });

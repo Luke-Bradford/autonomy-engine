@@ -1,4 +1,4 @@
-import type { Locator, Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 
 /**
  * The two form surfaces an authoring spec fills, located ONE way.
@@ -7,7 +7,8 @@ import type { Locator, Page } from '@playwright/test';
  * needed it: `properties` in thirteen files (under two names), `triggerForm` in
  * six. The locator itself never differed. That changes the day the dock's or
  * the form's accessible name changes, and at that point the fix belongs in one
- * file, not nineteen.
+ * file, not nineteen. The run page's surfaces (its activity runs, its views)
+ * live here for the same reason.
  */
 
 /** The canvas's right-hand Properties dock: the selected node's inspector,
@@ -83,4 +84,20 @@ export async function openActivity(
 /** The run drawer's record, named as the row that opened it. */
 export function drawerPanel(page: Page, name: string): Locator {
   return page.locator('.run-drawer').getByRole('complementary', { name: `Node ${name}` });
+}
+
+/**
+ * Opens one of the run page's views below its activity runs (#1484 OR35 M2),
+ * by its tab. A spec that loads a run straight onto a view can instead name it
+ * in the URL (`?rdTab=graph`), which is what a shared link does.
+ */
+export async function openRunView(
+  page: Page,
+  name: 'Gantt' | 'Graph' | 'Events' | 'Variables' | 'Cost',
+): Promise<void> {
+  const tab = page
+    .getByRole('tablist', { name: 'Run views' })
+    .getByRole('tab', { name, exact: true });
+  await tab.click();
+  await expect(tab).toHaveAttribute('aria-selected', 'true');
 }
