@@ -9,7 +9,8 @@ import {
 } from 'react';
 import { computeRunUsage, TERMINAL_RUN_ROW_STATUS } from '@autonomy-studio/shared';
 import type { PipelineVersion, Run, RunStatus } from '@autonomy-studio/shared';
-import { useNavigate, useSearchParams } from 'react-router';
+import { useNavigate } from 'react-router';
+import { useLatestSearchParams } from '../../lib/useLatestSearchParams';
 import { cancelRun, getRun, getRunDetail, rerunFromFailed } from '../../api/runs';
 import { messageOf } from '../../api/client';
 import { owesCallback } from './externalWaits';
@@ -108,7 +109,7 @@ function phaseLabel(phase: StreamPhase): string {
 export function RunDetailPage({ runId }: { runId: string }) {
   const zone = useDisplayTimeZone();
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useLatestSearchParams();
   const detailTab = readRunDetailTab(searchParams);
   const [run, setRun] = useState<Run | null>(null);
   const [doc, setDoc] = useState<PipelineVersion | null>(null);

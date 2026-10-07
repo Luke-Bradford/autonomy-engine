@@ -16,7 +16,8 @@ import {
   type TriggerPublic,
 } from '@autonomy-studio/shared';
 import { useStore } from 'zustand';
-import { Navigate, useSearchParams } from 'react-router';
+import { Navigate } from 'react-router';
+import { useLatestSearchParams } from '../../lib/useLatestSearchParams';
 import { listRunAnnotations, listRuns, type ListRunsQuery } from '../../api/runs';
 import { RunsExportButton, RunsExportNote } from './RunsExportButton';
 import { useRunsExport } from './useRunsExport';
@@ -172,7 +173,7 @@ export function RunsPage({
    * the last-used query); injected by tests. */
   ui?: UiStore;
 } = {}) {
-  const [searchParams] = useSearchParams();
+  const [searchParams] = useLatestSearchParams();
   /*
    * #1484 OR35 M1 principle 5 — the viewer's last-used query, restored into a
    * BARE visit to the list (one whose URL names no list state at all,
@@ -230,7 +231,7 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
    */
   const [reloadKey, setReloadKey] = useState(0);
 
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useLatestSearchParams();
 
   /**
    * U29 (#1015) — List or Timeline, under exactly the rules every filter follows: the
@@ -292,10 +293,7 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
   }, [lastQuery, setLastQuery]);
 
   function selectView(next: RunView) {
-    const params = new URLSearchParams(searchParams);
-    if (next === 'list') params.delete('view');
-    else params.set('view', next);
-    setSearchParams(params);
+    setSearchParams((prev) => withParams(prev, { view: next === 'list' ? '' : next }));
   }
 
   const filters = useMemo(() => readRunFilters(searchParams), [searchParams]);
@@ -380,9 +378,9 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
   const kinds = readKinds(kind);
 
   function clearFilters() {
-    const params = new URLSearchParams(searchParams);
-    for (const param of Object.values(RUN_FILTER_PARAMS)) params.delete(param);
-    setSearchParams(params);
+    setSearchParams((prev) =>
+      withParams(prev, Object.fromEntries(Object.values(RUN_FILTER_PARAMS).map((p) => [p, '']))),
+    );
   }
 
   /**

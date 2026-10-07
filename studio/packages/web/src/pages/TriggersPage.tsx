@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type TriggerPublic } from '@autonomy-studio/shared';
-import { Link, useSearchParams } from 'react-router';
+import { Link } from 'react-router';
+import { useLatestSearchParams } from '../lib/useLatestSearchParams';
 import { useDisplayTimeZone } from '../lib/useDisplayTimeZone';
 import { triggersPath } from './triggers/triggersPath';
 import { RUN_FILTER_PARAMS } from './runs/runFilters';
@@ -298,7 +299,7 @@ export function TriggersPage() {
      editor's Trigger ▾ → View triggers). A stored trigger names a VERSION, so
      the match is on that pipeline's versions — the ones this page already
      loads. `null` = unfiltered. The URL is the only authority, as on Runs. */
-  const [searchParams] = useSearchParams();
+  const [searchParams] = useLatestSearchParams();
   const pipelineFilter = searchParams.get(RUN_FILTER_PARAMS.pipelineId);
   const filterPipeline =
     pipelineFilter === null

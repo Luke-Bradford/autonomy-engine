@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link, useSearchParams } from 'react-router';
+import { Link } from 'react-router';
+import { useLatestSearchParams } from '../../lib/useLatestSearchParams';
 import {
   CONTAINER_KIND_LABELS,
   RUN_SEARCH_MAX_CHARS,
@@ -255,7 +256,7 @@ export function ActivityRunsTable({
     () => (rows === null ? [] : activityRunEntries(rows, groups)),
     [rows, groups],
   );
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useLatestSearchParams();
   const view = readActivityRunsView(searchParams);
   /* Each control writes only its OWN params, so two quick changes cannot undo
      each other, and pushes a history entry, so Back steps out of a filter as

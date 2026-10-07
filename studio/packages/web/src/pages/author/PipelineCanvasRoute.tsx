@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Link, Navigate, useParams, useSearchParams } from 'react-router';
+import { Link, Navigate, useParams } from 'react-router';
+import { useLatestSearchParams } from '../../lib/useLatestSearchParams';
 import { useStore } from 'zustand';
 import type { Pipeline } from '@autonomy-studio/shared';
 import { ApiError } from '../../api/client';
@@ -36,7 +37,7 @@ const PIPELINES_PATH = '/author/pipelines';
  */
 export function PipelineCanvasRoute({ store = pipelinesStore }: { store?: PipelinesStore } = {}) {
   const { pipelineId } = useParams();
-  const [searchParams] = useSearchParams();
+  const [searchParams] = useLatestSearchParams();
   // The route only matches with a non-empty `:pipelineId`, so this is defensive.
   if (!pipelineId) return <Navigate to={PIPELINES_PATH} replace />;
   return (

@@ -26,7 +26,8 @@ import {
   ChevronDownRegular,
   MoreHorizontalRegular,
 } from '@fluentui/react-icons';
-import { useLocation, useNavigate } from 'react-router';
+import { useNavigate } from 'react-router';
+import { useLatestSearchParams } from '../../lib/useLatestSearchParams';
 import { readOpenVersion, withOpenVersion } from '../author/pipelinePath';
 import { ZodError } from 'zod';
 import { triggersPath } from '../triggers/triggersPath';
@@ -488,38 +489,23 @@ export function PipelineCanvas({
    * so the draft is never thrown away. `urlSynced` is the version this page last
    * wrote or followed: a URL change it did not make is one to follow.
    */
-  const location = useLocation();
-  const urlVersion = readOpenVersion(new URLSearchParams(location.search));
+  /* `setUrlParams` and `urlNow` are stable, so the writer below is ONE function
+     for the page's life: the load effect calls it, and a re-run of that effect
+     reloads the head over the draft. Both read the URL as last WRITTEN, not as
+     last rendered (#1579, #1581): leaving a preview before the router re-renders
+     must not keep `?version=N` for the follower below to reopen. */
+  const [urlParams, setUrlParams, urlNow] = useLatestSearchParams();
+  const urlVersion = readOpenVersion(urlParams);
   const urlSynced = useRef(requestedVersion);
-  /* What the writer below reads, through refs so it is ONE function for the
-     page's life: the load effect calls it, and a re-run of that effect reloads
-     the head over the draft.
-     #1579 — the router commits in a TRANSITION, so the rendered `location`
-     lags what the writer just wrote. The writer records its write, and only a
-     NEW router location replaces it; else leaving a preview in that gap kept
-     `?version=N` and the follower below reopened the preview. */
-  const urlRefs = useRef({ location, navigate });
-  useLayoutEffect(() => {
-    urlRefs.current = { location, navigate };
-  }, [location, navigate]);
   const setPreviewing = useCallback(
     (version: number | null) => {
       setPreviewingState(version);
       urlSynced.current = version ?? undefined;
-      const { location: here, navigate: go } = urlRefs.current;
-      const params = new URLSearchParams(here.search);
       // The link's node, while the version it named is the one shown.
       const node = version !== null && version === requestedVersion ? requestedNode : undefined;
-      const next = withOpenVersion(params, version, node);
-      if (next.toString() === params.toString()) return;
-      const written = { ...here, search: next.size > 0 ? `?${next}` : '' };
-      urlRefs.current = { location: written, navigate: go };
-      void go(
-        { pathname: written.pathname, search: written.search, hash: written.hash },
-        { replace: true },
-      );
+      setUrlParams((prev) => withOpenVersion(prev, version, node), { replace: true });
     },
-    [requestedVersion, requestedNode],
+    [requestedVersion, requestedNode, setUrlParams],
   );
   const [restoring, setRestoring] = useState(false);
   const [confirm, confirmDialog] = useConfirm();
@@ -856,7 +842,7 @@ export function PipelineCanvas({
         setVersions(loadedVersions);
         /* #1521 — the URL as it stands, not as it was at mount: a Back or a
            link while the versions loaded is the one to open. */
-        const asked = readOpenVersion(new URLSearchParams(urlRefs.current.location.search));
+        const asked = readOpenVersion(urlNow());
         const preview = initialPreview(asked, loadedVersions);
         setPreviewing(preview);
         /* #1541 — a link that asked for the LATEST version opens the editor,
@@ -875,7 +861,7 @@ export function PipelineCanvas({
         setLoadError(err instanceof Error ? err.message : String(err));
       });
     return () => ctrl.abort();
-  }, [pipelineId, store, requestedVersion, requestedNode, setPreviewing]);
+  }, [pipelineId, store, requestedVersion, requestedNode, setPreviewing, urlNow]);
 
   /**
    * #844 GL3 (spec GL-D8) — the globals change in ANOTHER page (Manage → Global

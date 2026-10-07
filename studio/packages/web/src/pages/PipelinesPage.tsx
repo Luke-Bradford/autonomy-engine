@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router';
+import { useLatestSearchParams } from '../lib/useLatestSearchParams';
 import { ToggleButton } from '@fluentui/react-components';
 import { useStore } from 'zustand';
 import type {
@@ -277,9 +277,10 @@ export function PipelinesPage({
   useRefreshOnFocus(refreshRowStates);
 
   // #1569 — the sort lives in the URL, so a sorted list survives a reload.
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useLatestSearchParams();
   const sort = readPipelineSort(searchParams);
-  // From `prev`, not the render's `sort`, so two quick clicks both count.
+  // From `prev`, which is the URL's latest write rather than the render's
+  // `sort` (#1581), so two quick clicks both count.
   const onSort = useCallback(
     (key: PipelineSortKey) =>
       setSearchParams(
