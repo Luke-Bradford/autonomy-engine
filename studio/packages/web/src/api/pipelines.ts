@@ -33,6 +33,9 @@ import {
   type PipelineSummary,
   type PipelineVersionState,
   type PipelineDependentsResponse,
+  ANNOTATION_MAX_CHARS,
+  LABEL_REFUSED_CHARS,
+  MAX_ANNOTATIONS,
 } from '@autonomy-studio/shared';
 import { ApiError, apiFetch, messageOf } from './client';
 import { fetchAllPages, pageQuery } from './pagination';
@@ -464,8 +467,62 @@ export function newPipeline(body: PipelineWrite, description: string): Promise<P
   );
 }
 
+/** The doc a copy carries, hand-listed: a field forgotten here is silently
+ * defaulted away by the write schema (#844 V1, #1 F8a). */
+function copyBody(v: PipelineVersion, annotations: string[]): FirstVersion {
+  return {
+    params: v.params,
+    outputs: v.outputs,
+    nodes: v.nodes,
+    edges: v.edges,
+    containers: v.containers,
+    variables: v.variables,
+    description: v.description,
+    annotations,
+    catalogVersion: v.catalogVersion,
+  };
+}
+
 /**
- * Duplicate a pipeline under a new name (U4).
+ * #1569 OR37 — the source's annotations plus `cloned from <name> v<n>`, which
+ * records where a clone of a chosen version came from. An annotation, not a
+ * line of description: the description is the author's prose, and the
+ * annotation is searchable from the pipelines grid.
+ *
+ * Shaped to pass `AnnotationSchema` rather than be refused by it: characters an
+ * annotation may not hold become one space, and a long name is cut (by code
+ * point, so no lone surrogate) with `…` to keep the whole within
+ * `ANNOTATION_MAX_CHARS`. Nothing is added when the source already carries the
+ * same text (duplicates are refused ignoring case) or is at `MAX_ANNOTATIONS`
+ * — the clone is worth more than its label.
+ */
+export function cloneProvenance(
+  annotations: readonly string[],
+  sourceName: string,
+  version: number,
+): string[] {
+  const refused = new RegExp(LABEL_REFUSED_CHARS.source, 'gu');
+  const name = sourceName.replace(refused, ' ').replace(/ +/g, ' ').trim();
+  const head = 'cloned from ';
+  const tail = ` v${String(version)}`;
+  const room = ANNOTATION_MAX_CHARS - head.length - tail.length;
+  // `room` is in UTF-16 units, the unit the schema's `.max` counts; the cut
+  // walks whole code points so it never leaves half a surrogate pair.
+  let cut = '';
+  for (const point of name) {
+    if (cut.length + point.length > room - 1) break;
+    cut += point;
+  }
+  const fitted = name.length <= room ? name : `${cut.trimEnd()}…`;
+  const text = name === '' ? `cloned from v${String(version)}` : `${head}${fitted}${tail}`;
+  const taken = annotations.some((a) => a.toLowerCase() === text.toLowerCase());
+  return taken || annotations.length >= MAX_ANNOTATIONS ? [...annotations] : [...annotations, text];
+}
+
+/**
+ * Duplicate a pipeline under a new name (U4), from its latest version or —
+ * #1569 OR37 "Clone vN as new pipeline" — from the version `from` the caller
+ * already holds.
  *
  * COMPOSED from existing endpoints — create, read the source's latest version,
  * write it as the copy's first version — rather than added as a server route,
@@ -474,12 +531,21 @@ export function newPipeline(body: PipelineWrite, description: string): Promise<P
  * copy, and the result is simply an empty pipeline. A failed copy rolls back
  * (`createPipelineWithFirstVersion`).
  *
+ * `from` is copied as given, with no re-read: the operator picked THAT
+ * version, and a save landing in between must not swap another one in. Only a
+ * chosen version records `cloneProvenance` — a plain Duplicate of the latest
+ * adds no label, as before.
+ *
  * The copy carries the SOURCE's `catalogVersion` rather than defaulting to
  * today's. Duplicating is a copy, not a re-authoring: the graph is byte-identical
  * to one that was validated against that catalog, so stamping it with a newer
  * one would assert a compatibility nobody checked.
  */
-export function duplicatePipeline(source: Pipeline, name: string): Promise<Pipeline> {
+export function duplicatePipeline(
+  source: Pipeline,
+  name: string,
+  from?: PipelineVersion,
+): Promise<Pipeline> {
   return createPipelineWithFirstVersion(
     {
       name: name.trim(),
@@ -492,22 +558,9 @@ export function duplicatePipeline(source: Pipeline, name: string): Promise<Pipel
       folder: source.folder,
     },
     async () => {
+      if (from) return copyBody(from, cloneProvenance(from.annotations, source.name, from.version));
       const latest = latestVersion(await listPipelineVersions(source.id));
-      return latest
-        ? {
-            params: latest.params,
-            outputs: latest.outputs,
-            nodes: latest.nodes,
-            edges: latest.edges,
-            containers: latest.containers,
-            // #844 V1 — hand-listed like every field here, so a forgotten one is
-            // silently defaulted away by the write schema.
-            variables: latest.variables,
-            description: latest.description,
-            annotations: latest.annotations,
-            catalogVersion: latest.catalogVersion,
-          }
-        : null;
+      return latest ? copyBody(latest, latest.annotations) : null;
     },
   );
 }

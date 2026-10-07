@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
+import type { Pipeline } from '@autonomy-studio/shared';
 import userEvent from '@testing-library/user-event';
 import { VersionHistoryPanel, VersionPreviewBar } from './VersionHistoryPanel';
 import type { VersionEntry } from './versionHistory';
 import { formatTimestamp } from '../../lib/displayTime';
+import { chooseRowAction } from '../../testing/rowActions';
 
 function entry(overrides: Partial<VersionEntry> = {}): VersionEntry {
   return {
@@ -22,8 +25,11 @@ function entry(overrides: Partial<VersionEntry> = {}): VersionEntry {
   };
 }
 
-/** The version rows — the list's buttons, not the column's Close button. */
-const rowButtons = () => within(screen.getByRole('list')).getAllByRole('button');
+/** The version rows — the list's toggles, not the column's Close or a row's ⋯. */
+const rowButtons = () =>
+  within(screen.getByRole('list'))
+    .getAllByRole('button')
+    .filter((b) => b.hasAttribute('aria-pressed'));
 
 describe('VersionHistoryPanel', () => {
   it('renders the entries in the order it is given, marking the latest and the canvas one', () => {
@@ -37,6 +43,8 @@ describe('VersionHistoryPanel', () => {
         previewing={null}
         locked={null}
         onPreview={vi.fn()}
+        pipelineName="Demo"
+        onClone={vi.fn()}
         onClose={vi.fn()}
       />,
     );
@@ -56,10 +64,12 @@ describe('VersionHistoryPanel', () => {
         previewing={null}
         locked={null}
         onPreview={vi.fn()}
+        pipelineName="Demo"
+        onClone={vi.fn()}
         onClose={vi.fn()}
       />,
     );
-    const row = within(screen.getByRole('list')).getByRole('button');
+    const row = rowButtons()[0]!;
     expect(row.textContent).toContain('4 nodes');
     expect(row.textContent).toContain('3 edges');
     expect(row.textContent).toContain('1 container');
@@ -78,12 +88,12 @@ describe('VersionHistoryPanel', () => {
         previewing={null}
         locked={null}
         onPreview={vi.fn()}
+        pipelineName="Demo"
+        onClone={vi.fn()}
         onClose={vi.fn()}
       />,
     );
-    expect(within(screen.getByRole('list')).getByRole('button').textContent).toContain(
-      formatTimestamp(createdAt, 'local'),
-    );
+    expect(rowButtons()[0]!.textContent).toContain(formatTimestamp(createdAt, 'local'));
   });
 
   it('reports which row is being previewed as pressed', () => {
@@ -93,6 +103,8 @@ describe('VersionHistoryPanel', () => {
         previewing={1}
         locked={null}
         onPreview={vi.fn()}
+        pipelineName="Demo"
+        onClone={vi.fn()}
         onClose={vi.fn()}
       />,
     );
@@ -109,10 +121,12 @@ describe('VersionHistoryPanel', () => {
         previewing={null}
         locked={null}
         onPreview={onPreview}
+        pipelineName="Demo"
+        onClone={vi.fn()}
         onClose={vi.fn()}
       />,
     );
-    await userEvent.click(within(screen.getByRole('list')).getByRole('button'));
+    await userEvent.click(rowButtons()[0]!);
     expect(onPreview).toHaveBeenCalledWith(7);
   });
 
@@ -128,6 +142,8 @@ describe('VersionHistoryPanel', () => {
         previewing={1}
         locked="Saving — wait for it to finish."
         onPreview={onPreview}
+        pipelineName="Demo"
+        onClone={vi.fn()}
         onClose={vi.fn()}
       />,
     );
@@ -145,6 +161,8 @@ describe('VersionHistoryPanel', () => {
         previewing={null}
         locked={null}
         onPreview={vi.fn()}
+        pipelineName="Demo"
+        onClone={vi.fn()}
         onClose={vi.fn()}
       />,
     );
@@ -162,6 +180,8 @@ describe('VersionHistoryPanel — the column (#1475 OR27)', () => {
         previewing={null}
         locked={null}
         onPreview={vi.fn()}
+        pipelineName="Demo"
+        onClone={vi.fn()}
         onClose={onClose}
       />,
     );
@@ -175,6 +195,8 @@ describe('VersionHistoryPanel — the column (#1475 OR27)', () => {
         previewing={1}
         locked="Saving — wait for it to finish."
         onPreview={vi.fn()}
+        pipelineName="Demo"
+        onClone={vi.fn()}
         onClose={onClose}
       />,
     );
@@ -193,6 +215,8 @@ describe('VersionHistoryPanel — the column (#1475 OR27)', () => {
         previewing={null}
         locked={null}
         onPreview={vi.fn()}
+        pipelineName="Demo"
+        onClone={vi.fn()}
         onClose={vi.fn()}
       />,
     );
@@ -211,6 +235,8 @@ describe('VersionHistoryPanel — the active tag (#979)', () => {
         previewing={null}
         locked={null}
         onPreview={vi.fn()}
+        pipelineName="Demo"
+        onClone={vi.fn()}
         onClose={vi.fn()}
       />,
     );
@@ -227,6 +253,8 @@ describe('VersionHistoryPanel — the active tag (#979)', () => {
         previewing={null}
         locked={null}
         onPreview={vi.fn()}
+        pipelineName="Demo"
+        onClone={vi.fn()}
         onClose={vi.fn()}
       />,
     );
@@ -437,5 +465,107 @@ describe('VersionPreviewBar', () => {
     // canvas under a CAS whose result has not landed.
     expect(screen.getByRole('button', { name: /restore v2/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /back to editing/i })).toBeDisabled();
+  });
+});
+
+describe('VersionHistoryPanel — Clone vN as new pipeline (#1569 OR37)', () => {
+  const clone: Pipeline = {
+    id: 'pl_9',
+    resourceId: 'res_9',
+    ownerId: 'local',
+    name: 'Demo v1 (copy)',
+    concurrency: null,
+    folder: null,
+    archived: false,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+
+  function renderPanel(
+    onClone: (version: number, name: string) => Promise<Pipeline>,
+    locked: string | null = null,
+  ) {
+    render(
+      <MemoryRouter>
+        <VersionHistoryPanel
+          entries={[
+            entry({ id: 'plv_2', version: 2, isHead: true }),
+            entry({ id: 'plv_1', version: 1 }),
+          ]}
+          previewing={null}
+          locked={locked}
+          onPreview={vi.fn()}
+          pipelineName="Demo"
+          onClone={onClone}
+          onClose={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+  }
+
+  it('names the clone from the pipeline and version, clones THAT version, and links to it', async () => {
+    const user = userEvent.setup();
+    const onClone = vi.fn().mockResolvedValue(clone);
+    renderPanel(onClone);
+
+    await chooseRowAction(user, 'v1', 'Clone v1 as new pipeline…');
+    const name = screen.getByRole('textbox', { name: 'New pipeline name' });
+    expect(name).toHaveValue('Demo v1 (copy)');
+    await user.click(screen.getByRole('button', { name: 'Clone' }));
+
+    expect(onClone).toHaveBeenCalledWith(1, 'Demo v1 (copy)');
+    const status = await screen.findByRole('status');
+    expect(within(status).getByRole('link', { name: 'Demo v1 (copy)' })).toHaveAttribute(
+      'href',
+      '/author/pipelines/pl_9',
+    );
+    expect(screen.queryByRole('textbox', { name: 'New pipeline name' })).not.toBeInTheDocument();
+    // Focus goes back to the ⋯ the clone was started from, not to <body>.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Actions for v1' })).toHaveFocus(),
+    );
+  });
+
+  it('keeps the name as typed and says why when the clone is refused', async () => {
+    const user = userEvent.setup();
+    renderPanel(vi.fn().mockRejectedValue(new Error('nodes: unknown activity type')));
+
+    await chooseRowAction(user, 'v2', 'Clone v2 as new pipeline…');
+    const name = screen.getByRole('textbox', { name: 'New pipeline name' });
+    await user.clear(name);
+    await user.type(name, 'Mine');
+    await user.click(screen.getByRole('button', { name: 'Clone' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not clone v2: nodes: unknown activity type',
+    );
+    const input = screen.getByRole('textbox', { name: 'New pipeline name' });
+    expect(input).toHaveValue('Mine');
+    // Focus stays in the row, so the name can be corrected from the keyboard.
+    expect(input).toHaveFocus();
+    // Cancel takes the refusal with it.
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('refuses an empty name, and Escape cancels', async () => {
+    const user = userEvent.setup();
+    const onClone = vi.fn();
+    renderPanel(onClone);
+
+    await chooseRowAction(user, 'v1', 'Clone v1 as new pipeline…');
+    await user.clear(screen.getByRole('textbox', { name: 'New pipeline name' }));
+    expect(screen.getByRole('button', { name: 'Clone' })).toBeDisabled();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('textbox', { name: 'New pipeline name' })).not.toBeInTheDocument();
+    expect(onClone).not.toHaveBeenCalled();
+  });
+
+  it('stays available while a save or restore holds the rows', async () => {
+    const user = userEvent.setup();
+    renderPanel(vi.fn().mockResolvedValue(clone), 'Saving…');
+    const item = await chooseRowAction(user, 'v1', 'Clone v1 as new pipeline…');
+    expect(item).not.toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('textbox', { name: 'New pipeline name' })).toBeInTheDocument();
   });
 });

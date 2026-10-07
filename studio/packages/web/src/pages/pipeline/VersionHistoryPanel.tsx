@@ -12,9 +12,16 @@
  * marks, whether a restore is allowed and what the confirmation says) is made
  * in `versionHistory.ts`, where a unit test can reach it without React Flow.
  */
+import { useRef, useState } from 'react';
+import { Link } from 'react-router';
 import { DismissRegular } from '@fluentui/react-icons';
+import type { Pipeline } from '@autonomy-studio/shared';
 import type { VersionEntry } from './versionHistory';
+import { messageOf } from '../../api/client';
 import { When } from '../../lib/When';
+import { RowMoreMenu, type RowMenuOrigin } from '../../lib/RowMoreMenu';
+import { InlineNameForm } from '../../lib/form/InlineNameForm';
+import { pipelinePath } from '../author/pipelinePath';
 
 interface VersionHistoryProps {
   entries: VersionEntry[];
@@ -33,6 +40,15 @@ interface VersionHistoryProps {
    */
   locked: string | null;
   onPreview: (version: number) => void;
+  /** The pipeline's name — a clone's default name starts from it. */
+  pipelineName: string;
+  /**
+   * #1569 OR37 — "Clone vN as new pipeline": create a pipeline named `name`
+   * whose first version is a copy of `version`, and resolve with it. NOT gated
+   * on `locked`: it only reads a stored, immutable version and writes nothing
+   * the editor holds.
+   */
+  onClone: (version: number, name: string) => Promise<Pipeline>;
   /** Close the column — the same act as the ⋯ menu's "Hide version history". */
   onClose: () => void;
 }
@@ -62,6 +78,8 @@ export function VersionHistoryPanel({
   previewing,
   locked,
   onPreview,
+  pipelineName,
+  onClone,
   onClose,
 }: VersionHistoryProps) {
   /* #1475 OR27 — a column beside the editor, so it carries its own name and
@@ -100,47 +118,150 @@ export function VersionHistoryPanel({
           previewing={previewing}
           locked={locked}
           onPreview={onPreview}
+          pipelineName={pipelineName}
+          onClone={onClone}
         />
       )}
     </aside>
   );
 }
 
+/** The clone being named: which version, the name typed so far, and the ⋯ to return focus to. */
+interface CloneDraft {
+  version: number;
+  name: string;
+  menu: RowMenuOrigin;
+}
+
+/** What the last clone did, shown under its row until the next clone or a Cancel. */
+type CloneOutcome =
+  | { version: number; ok: true; pipeline: Pipeline }
+  | { version: number; ok: false; message: string };
+
 function VersionList({
   entries,
   previewing,
   locked,
   onPreview,
+  pipelineName,
+  onClone,
 }: Omit<VersionHistoryProps, 'onClose'>) {
+  const [draft, setDraft] = useState<CloneDraft | null>(null);
+  const [cloning, setCloning] = useState(false);
+  const [outcome, setOutcome] = useState<CloneOutcome | null>(null);
+  /* The in-flight guard a second click can read before React re-renders: a
+     double submit would make two pipelines. */
+  const inFlight = useRef(false);
+  const nameInput = useRef<HTMLInputElement>(null);
+
+  const cancel = () => {
+    draft?.menu.find()?.focus();
+    setDraft(null);
+    setOutcome(null);
+  };
+
+  const submit = async () => {
+    if (draft === null || inFlight.current || draft.name.trim() === '') return;
+    const { version, name, menu } = draft;
+    inFlight.current = true;
+    setCloning(true);
+    setOutcome(null);
+    try {
+      const pipeline = await onClone(version, name.trim());
+      setOutcome({ version, ok: true, pipeline });
+      setDraft(null);
+      menu.find()?.focus();
+    } catch (err) {
+      /* The form stays open with the name as typed, so a refused name can be
+         corrected rather than retyped. */
+      setOutcome({
+        version,
+        ok: false,
+        message: `Could not clone v${String(version)}: ${messageOf(err)}`,
+      });
+      nameInput.current?.focus();
+    } finally {
+      inFlight.current = false;
+      setCloning(false);
+    }
+  };
+
   return (
     <ul className="version-history-list">
       {entries.map((e) => (
         <li key={e.id}>
-          <button
-            type="button"
-            className={`version-history-row${e.version === previewing ? ' is-previewing' : ''}`}
-            /* The pressed state is the honest role here: the row is a toggle
-               into a preview, not a navigation. */
-            aria-pressed={e.version === previewing}
-            disabled={locked !== null}
-            title={locked ?? undefined}
-            onClick={() => {
-              onPreview(e.version);
-            }}
-          >
-            <strong>v{e.version}</strong>
-            {e.isHead && <span className="version-history-tag">latest</span>}
-            {/* Two different facts, and they part company the moment a
-               preview is open: `current` is what the EDITOR is based on. */}
-            {e.isCurrent && <span className="version-history-tag">on the canvas</span>}
-            {/* #979 — a THIRD fact, and the only one that describes what is
-               deployed: what a new `active`-bound trigger will resolve to. */}
-            {e.isActive && <span className="version-history-tag is-active">active</span>}
-            <span className="version-history-when">
-              <When ms={e.createdAt} />
-            </span>
-            <span className="version-history-shape">{shapeSummary(e)}</span>
-          </button>
+          <div className="version-history-item__line">
+            <button
+              type="button"
+              className={`version-history-row${e.version === previewing ? ' is-previewing' : ''}`}
+              /* The pressed state is the honest role here: the row is a toggle
+                 into a preview, not a navigation. */
+              aria-pressed={e.version === previewing}
+              disabled={locked !== null}
+              title={locked ?? undefined}
+              onClick={() => {
+                onPreview(e.version);
+              }}
+            >
+              <strong>v{e.version}</strong>
+              {e.isHead && <span className="version-history-tag">latest</span>}
+              {/* Two different facts, and they part company the moment a
+                 preview is open: `current` is what the EDITOR is based on. */}
+              {e.isCurrent && <span className="version-history-tag">on the canvas</span>}
+              {/* #979 — a THIRD fact, and the only one that describes what is
+                 deployed: what a new `active`-bound trigger will resolve to. */}
+              {e.isActive && <span className="version-history-tag is-active">active</span>}
+              <span className="version-history-when">
+                <When ms={e.createdAt} />
+              </span>
+              <span className="version-history-shape">{shapeSummary(e)}</span>
+            </button>
+            {/* A sibling of the row, never inside it: a button cannot hold a button. */}
+            <RowMoreMenu
+              name={`v${String(e.version)}`}
+              label={`Actions for v${String(e.version)}`}
+              actions={[
+                {
+                  label: `Clone v${String(e.version)} as new pipeline…`,
+                  disabled: cloning,
+                  onSelect: (menu) => {
+                    setOutcome(null);
+                    setDraft({
+                      version: e.version,
+                      name: `${pipelineName} v${String(e.version)} (copy)`,
+                      menu,
+                    });
+                  },
+                },
+              ]}
+            />
+          </div>
+          {draft?.version === e.version && (
+            <InlineNameForm
+              className="version-history-clone"
+              label="New pipeline name"
+              value={draft.name}
+              busy={cloning}
+              submitLabel="Clone"
+              inputRef={nameInput}
+              onChange={(name) => {
+                setDraft({ ...draft, name });
+              }}
+              onSubmit={() => void submit()}
+              onCancel={cancel}
+            />
+          )}
+          {outcome?.version === e.version &&
+            (outcome.ok ? (
+              <p role="status" className="version-history-clone-status">
+                Cloned as{' '}
+                <Link to={pipelinePath(outcome.pipeline.id)}>{outcome.pipeline.name}</Link>
+              </p>
+            ) : (
+              <p role="alert" className="version-history-clone-status error">
+                {outcome.message}
+              </p>
+            ))}
         </li>
       ))}
     </ul>

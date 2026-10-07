@@ -779,7 +779,7 @@ body {
   padding: 0.2rem 0.5rem 0.2rem 0;
 }
 
-.factory-resources__name-row input {
+.inline-name-form input {
   flex: 1 1 auto;
   min-width: 0;
   font: inherit;
@@ -791,7 +791,7 @@ body {
   border-radius: 4px;
 }
 
-.factory-resources__name-row button {
+.inline-name-form button {
   flex: 0 0 auto;
   padding: 0.2rem 0.4rem;
   font-size: 0.75rem;
@@ -5199,6 +5199,49 @@ button.danger {
    dates stay in scannable columns. */
 .version-history-shape {
   margin-left: auto;
+}
+
+/* #1569 OR37 — a row and its ⋯ side by side; the row keeps every pixel the
+   ⋯ does not need. */
+.version-history-item__line {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.15rem;
+}
+
+.version-history-item__line .version-history-row {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.version-history-item__line .row-menu__trigger {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  /* Level with the row's first line, which has 0.4rem of padding above it. */
+  margin-top: 0.15rem;
+  font-size: 16px;
+  color: var(--text);
+}
+
+/* "Clone vN as new pipeline" — the name on its own line under the row, so the
+   input has the column's width rather than what is left beside the tags. */
+.version-history-clone {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+}
+
+.version-history-clone input {
+  flex-basis: 100%;
+}
+
+.version-history-clone-status {
+  margin: 0.15rem 0.5rem 0.25rem;
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .canvas-preview {

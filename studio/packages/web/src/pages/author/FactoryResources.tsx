@@ -19,6 +19,7 @@ import {
   renamePipeline,
 } from '../../api/pipelines';
 import { downloadPipelineExport } from '../../api/pipelineExport';
+import { InlineNameForm } from '../../lib/form/InlineNameForm';
 import { RowMoreMenu } from '../../lib/RowMoreMenu';
 import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore';
 import { pipelinePath } from './pipelinePath';
@@ -740,55 +741,27 @@ interface NameRowProps {
   onCancel: () => void;
 }
 
-/**
- * The inline name row shared by create / duplicate / rename.
- *
- * A row rather than a Fluent `Dialog`: the shell has deliberately hand-rolled
- * over Fluent's heavier surfaces where capability was not the blocker (U3's
- * breadcrumb, U2's rail), the U0 spike set a bundle budget a `Dialog` import
- * spends (#1397 has since paid it for confirmations, +6.35 kB gzip, where a
- * modal question IS the interaction), and renaming in place is what a resources
- * tree does — a modal to type six characters into is a worse interaction, not a
- * better one.
- *
- * `autoFocus` is correct here and not the usual anti-pattern: the row only
- * exists because the user just asked for it, and its whole purpose is to be
- * typed into.
- */
+/** The tree's inline name row, for create / duplicate / rename / move. */
 function NameRow({ draft, busy, folderNames, onChange, onSubmit, onCancel }: NameRowProps) {
   const suggestions = useId();
   const moving = draft.kind === 'move';
-  const label = moving ? 'Folder' : 'Pipeline name';
   return (
-    <form
+    <InlineNameForm
       className="factory-resources__name-row"
-      onSubmit={(e) => {
-        e.preventDefault();
-        onSubmit();
-      }}
+      label={moving ? 'Folder' : 'Pipeline name'}
+      placeholder={moving ? 'Folder (empty for none)' : undefined}
+      value={draft.name}
+      busy={busy}
+      submitLabel={DRAFT_ACTION[draft.kind]}
+      /* An empty folder means "no folder", so only a NAME must be non-empty. */
+      allowEmpty={moving}
+      /* Picking an existing folder beats retyping it: two spellings of one
+         folder would split it in two. */
+      listId={moving ? suggestions : undefined}
+      onChange={onChange}
+      onSubmit={onSubmit}
+      onCancel={onCancel}
     >
-      <input
-        type="text"
-        aria-label={label}
-        placeholder={moving ? 'Folder (empty for none)' : label}
-        /* Picking an existing folder beats retyping it: two spellings of one
-           folder would split it in two. */
-        list={moving ? suggestions : undefined}
-        value={draft.name}
-        disabled={busy}
-        autoFocus
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => {
-          /* Escape cancels. `stopPropagation` so it does not also travel up to
-             any ancestor that treats Escape as "close me" — the pane sits
-             inside no such surface today, but the row is portable and the cost
-             is one call. */
-          if (e.key === 'Escape') {
-            e.stopPropagation();
-            onCancel();
-          }
-        }}
-      />
       {moving && (
         <datalist id={suggestions}>
           {folderNames.map((name) => (
@@ -796,13 +769,6 @@ function NameRow({ draft, busy, folderNames, onChange, onSubmit, onCancel }: Nam
           ))}
         </datalist>
       )}
-      {/* An empty folder means "no folder", so only a NAME must be non-empty. */}
-      <button type="submit" disabled={busy || (!moving && draft.name.trim() === '')}>
-        {DRAFT_ACTION[draft.kind]}
-      </button>
-      <button type="button" onClick={onCancel} disabled={busy}>
-        Cancel
-      </button>
-    </form>
+    </InlineNameForm>
   );
 }

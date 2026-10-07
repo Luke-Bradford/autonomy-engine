@@ -202,6 +202,8 @@ describe('call-site picker positions (#1012)', () => {
 const listAllPipelineVersions = vi.fn();
 vi.mock('../../api/pipelines', () => ({
   listAllPipelineVersions: (signal?: AbortSignal) => listAllPipelineVersions(signal) as unknown,
+  // The editor's module graph builds the shared pipelines store (#1569 clone).
+  listPipelines: () => Promise.resolve([]),
 }));
 
 function version(id: string, n: number, params: Param[]): PipelineVersion {

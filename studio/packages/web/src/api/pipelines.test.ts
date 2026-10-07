@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ANNOTATION_MAX_CHARS, AnnotationSchema, MAX_ANNOTATIONS } from '@autonomy-studio/shared';
 import { ApiError } from './client';
 import {
   archiveConfirmMessage,
@@ -7,6 +8,7 @@ import {
   createPipelineVersion,
   deletePipeline,
   describeDeleteFailure,
+  cloneProvenance,
   duplicatePipeline,
   newPipeline,
   getPipeline,
@@ -421,6 +423,97 @@ describe('pipelines API', () => {
 
       await expect(duplicatePipeline(pipeline, 'Copy')).rejects.toThrow(/nodes: invalid/);
       expect(fetchMock).toHaveBeenCalledTimes(4);
+    });
+  });
+
+  describe('duplicatePipeline from a chosen version (#1569 OR37 clone)', () => {
+    it('copies THAT version, reads no version list, and records where it came from', async () => {
+      const v1 = {
+        ...version,
+        id: 'plv_v1',
+        version: 1,
+        catalogVersion: 2,
+        description: 'first cut',
+        annotations: ['prod'],
+      };
+      const clone = { ...pipeline, id: 'pl_2', name: 'Copy of v1' };
+      const fetchMock = stubFetchSequence([
+        { status: 201, body: clone },
+        { status: 201, body: { ...v1, id: 'plv_2', pipelineId: 'pl_2' } },
+      ]);
+
+      await expect(duplicatePipeline(pipeline, 'Copy of v1', v1)).resolves.toEqual(clone);
+      // No GET of the source's versions: the caller already holds the doc, and
+      // re-reading would let a save in between swap in a different version.
+      expect(urls(fetchMock)).toEqual(['/api/pipelines', '/api/pipelines/pl_2/versions']);
+      const copied = JSON.parse(initOf(fetchMock, 1).body as string) as Record<string, unknown>;
+      expect(copied).toMatchObject({
+        catalogVersion: 2,
+        description: 'first cut',
+        annotations: ['prod', 'cloned from My pipeline v1'],
+        basedOnVersionId: null,
+      });
+    });
+
+    it('a plain Duplicate (latest) records no provenance', async () => {
+      const fetchMock = stubFetchSequence([
+        { status: 201, body: { ...pipeline, id: 'pl_2' } },
+        { status: 200, body: [{ ...version, annotations: ['prod'] }] },
+        { status: 201, body: { ...version, id: 'plv_2', pipelineId: 'pl_2', version: 1 } },
+      ]);
+      await duplicatePipeline(pipeline, 'Copy');
+      const copied = JSON.parse(initOf(fetchMock, 2).body as string) as Record<string, unknown>;
+      expect(copied.annotations).toEqual(['prod']);
+    });
+
+    it('rolls the copy back when the chosen version is refused', async () => {
+      const fetchMock = stubFetchSequence([
+        { status: 201, body: { ...pipeline, id: 'pl_2' } },
+        { status: 400, body: { error: 'nodes: unknown activity type' } },
+        { status: 204, body: null },
+      ]);
+      await expect(duplicatePipeline(pipeline, 'Copy', version)).rejects.toThrow();
+      expect(urls(fetchMock)).toEqual([
+        '/api/pipelines',
+        '/api/pipelines/pl_2/versions',
+        '/api/pipelines/pl_2',
+      ]);
+    });
+  });
+
+  describe('cloneProvenance', () => {
+    it('names the source and the version', () => {
+      expect(cloneProvenance([], 'Demo — 3', 1)).toEqual(['cloned from Demo — 3 v1']);
+    });
+
+    it('fits a long name inside the annotation bound, cut by code point', () => {
+      // The emoji straddles the cut: a UTF-16 slice would leave half of it.
+      const name = `${'x'.repeat(82)}😀${'y'.repeat(40)}`;
+      const [out] = cloneProvenance([], name, 12);
+      // 100 UTF-16 units is the schema's bound; the emoji would end at unit 101,
+      // so it goes whole rather than leaving its high surrogate behind.
+      expect(out).toBe(`cloned from ${'x'.repeat(82)}… v12`);
+      expect(out!.length).toBeLessThanOrEqual(ANNOTATION_MAX_CHARS);
+    });
+
+    it('turns characters an annotation refuses into a single space', () => {
+      expect(cloneProvenance([], ' Nightly\n\tload\u200b ', 2)).toEqual([
+        'cloned from Nightly load v2',
+      ]);
+    });
+
+    it('adds nothing the source already carries (ignoring case) or past the cap', () => {
+      expect(cloneProvenance(['Cloned From A v1'], 'A', 1)).toEqual(['Cloned From A v1']);
+      const full = Array.from({ length: MAX_ANNOTATIONS }, (_, i) => `t${String(i)}`);
+      expect(cloneProvenance(full, 'A', 1)).toEqual(full);
+    });
+
+    it('every provenance it writes passes the write schema', () => {
+      for (const name of ['A', ' x ', '\u2028', `${'é'.repeat(120)}`, 'Demo — 3']) {
+        for (const a of cloneProvenance([], name, 7)) {
+          expect(AnnotationSchema.safeParse(a).success).toBe(true);
+        }
+      }
     });
   });
 
