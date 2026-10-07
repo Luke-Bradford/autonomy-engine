@@ -622,7 +622,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
             </LabelledControl>
           </div>
           <FilterPicker
-            label={<span className="visually-hidden">Folder</span>}
+            label={<span className="visually-hidden">Filter by folder</span>}
             allLabel="All folders"
             value={filters.folder}
             options={folderOptions}
