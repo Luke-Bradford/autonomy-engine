@@ -155,7 +155,7 @@ test('#1420 — ForEach over a listed folder copies every CSV into a table', asy
     /* …and the run page shows the iteration, not just a green pipeline. The box
        counts ITEMS; it used to read `round 2` for three files — the 0-based
        index of the last item, which reads as two passes. */
-    await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+    await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}?rdTab=graph`);
     await fluentRootReady(page);
     const box = page.getByRole('group', {
       name: 'ForEach 1 container, 1 activity, success, 3 of 3 items',
