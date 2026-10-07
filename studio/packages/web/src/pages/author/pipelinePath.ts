@@ -1,3 +1,5 @@
+import { withParams } from '../../lib/withParams';
+
 /**
  * The ONE place a pipeline-canvas path is built (U4).
  *
@@ -57,6 +59,23 @@ export function runVersionPath(
 export function readOpenVersion(params: URLSearchParams): number | undefined {
   const raw = params.get(OPEN_VERSION_PARAM);
   return raw !== null && /^[1-9]\d*$/.test(raw) ? Number(raw) : undefined;
+}
+
+/**
+ * #1521 — `params` with the editor's previewed version written in: `version`
+ * set to it, or removed for none, and `node` set to `nodeId` or removed. The
+ * node belongs to the version a link opened, so the caller passes it only while
+ * that version is the one shown.
+ */
+export function withOpenVersion(
+  params: URLSearchParams,
+  version: number | null,
+  nodeId: string | undefined,
+): URLSearchParams {
+  return withParams(params, {
+    [OPEN_VERSION_PARAM]: version === null ? '' : String(version),
+    [OPEN_NODE_PARAM]: nodeId ?? '',
+  });
 }
 
 /** The node `pipelinePath` asked to select, or `undefined` for none. Any

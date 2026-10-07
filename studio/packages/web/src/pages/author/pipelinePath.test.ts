@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { pipelinePath, readOpenNode, readOpenVersion, runVersionPath } from './pipelinePath';
+import {
+  pipelinePath,
+  readOpenNode,
+  readOpenVersion,
+  runVersionPath,
+  withOpenVersion,
+} from './pipelinePath';
 
 describe('pipelinePath (#1484)', () => {
   it('opens the pipeline, or one exact saved version of it', () => {
@@ -41,5 +47,24 @@ describe('pipelinePath (#1484)', () => {
     );
     expect(readOpenNode(new URLSearchParams('version=3'))).toBeUndefined();
     expect(readOpenNode(new URLSearchParams('version=3&node='))).toBeUndefined();
+  });
+});
+
+describe('withOpenVersion (#1521)', () => {
+  const at = (search: string, version: number | null, node?: string) =>
+    withOpenVersion(new URLSearchParams(search), version, node).toString();
+
+  it('writes the previewed version, keeping every other param', () => {
+    expect(at('tab=runs', 2)).toBe('tab=runs&version=2');
+    expect(at('version=1&tab=runs', 3)).toBe('version=3&tab=runs');
+  });
+
+  it('removes the version for none, and the node with it', () => {
+    expect(at('version=2&node=n_a&tab=runs', null)).toBe('tab=runs');
+  });
+
+  it('writes the node it is given, and removes one it is not', () => {
+    expect(at('', 2, 'n_a')).toBe('version=2&node=n_a');
+    expect(at('version=2&node=n_a', 1)).toBe('version=1');
   });
 });

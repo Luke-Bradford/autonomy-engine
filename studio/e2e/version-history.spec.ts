@@ -302,7 +302,7 @@ test.describe('pipeline version history', () => {
    */
   test('locks every route out of the preview while a restore is in flight', async ({ page }) => {
     const problems = collectPageProblems(page);
-    await seedThreeVersions(page, 'history-inflight');
+    const pipelineId = await seedThreeVersions(page, 'history-inflight');
 
     // Hold the POST open so the in-flight window is observable at all. Only the
     // POST — the GET that lists versions must still answer, or the page never
@@ -335,6 +335,10 @@ test.describe('pipeline version history', () => {
     // A row toggles the preview: off entirely, or across to another version.
     await expect(rows(page)).toHaveCount(3);
     for (let i = 0; i < 3; i++) await expect(rows(page).nth(i)).toBeDisabled();
+    // #1521 — and the URL is a fifth: one naming another version is put back.
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}?version=2`);
+    await expect(page).toHaveURL(/\?version=1$/);
+    await expect(page.getByTestId('version-preview-bar')).toContainText('Viewing v1');
 
     /* The property all four exist to hold: the editor is still not mounted, so
        there is no canvas holding edits for the response to overwrite. */
@@ -692,6 +696,76 @@ test.describe('version history column (#1475 OR27)', () => {
     await expect(page.locator('#version-history-panel')).toHaveCount(0);
     await expect(await historyItem(page)).toHaveAccessibleName('Show version history');
 
+    await expectQuiet(page, problems);
+  });
+
+  /**
+   * #1521 — the previewed version is in the URL both ways: a preview writes
+   * `?version=N` (replacing, not pushing), a reload reopens it, Back to editing
+   * removes it, and a `?version` the page did not write moves the view, all
+   * without remounting the editor or throwing its draft away.
+   */
+  test('keeps the previewed version in the URL, and follows the URL back', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    const pipelineId = await seedThreeVersions(page, 'history-url');
+    const editor = `/#/author/pipelines/${encodeURIComponent(pipelineId)}`;
+    const atVersion = (n: number) => new RegExp(`\\?version=${n}$`);
+    const bar = page.getByTestId('version-preview-bar');
+
+    // A draft the URL changes below must not cost: one activity added, unsaved.
+    await addActivity(page, 'Wait');
+    await expect(page.locator('.react-flow__node')).toHaveCount(4);
+
+    const entries = () => page.evaluate(() => window.history.length);
+    const before = await entries();
+    await (await historyItem(page)).click();
+    await rows(page).nth(2).click();
+    await expect(bar).toContainText('Viewing v1');
+    await expect(page).toHaveURL(atVersion(1));
+
+    await page.getByRole('button', { name: 'Back to editing' }).click();
+    await expect(page.locator('.canvas-grid')).toHaveCount(1);
+    await expect(page).toHaveURL(new RegExp(`${encodeURIComponent(pipelineId)}$`));
+    await expect(page.locator('.react-flow__node')).toHaveCount(4);
+    // Replaced, not pushed: opening and leaving a preview added no history.
+    expect(await entries()).toBe(before);
+
+    // A ?version the page did not write: the view follows, and Back returns.
+    await page.goto(`${editor}?version=2`);
+    await expect(bar).toContainText('Viewing v2');
+    await page.goto(`${editor}?version=1`);
+    await expect(bar).toContainText('Viewing v1');
+    await page.goBack();
+    await expect(bar).toContainText('Viewing v2');
+    await page.goBack();
+    await expect(page.locator('.canvas-grid')).toHaveCount(1);
+    // The same editor instance throughout: the unsaved activity is still there.
+    await expect(page.locator('.react-flow__node')).toHaveCount(4);
+
+    // The latest version is the editor, so its ?version is not left standing.
+    await page.goto(`${editor}?version=3`);
+    await expect(page).toHaveURL(new RegExp(`${encodeURIComponent(pipelineId)}$`));
+    await expect(page.getByTestId('canvas-preview')).toHaveCount(0);
+
+    /* `page.goto` to a new hash is the address bar, not a router navigation, so
+       React Router warns that the draft's leave guard cannot hold such a POP.
+       That is this test driving the URL by hand over an unsaved draft, which is
+       the case under test; the guard is for leaving the path, which none of
+       these do. */
+    await expectQuiet(page, problems, [
+      /^console\.warning: You are trying to use a blocker on a POP navigation to a location that was not created by/,
+    ]);
+  });
+
+  test('a reload reopens the previewed version', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await seedThreeVersions(page, 'history-url-reload');
+    await (await historyItem(page)).click();
+    await rows(page).nth(1).click();
+    await expect(page.getByTestId('version-preview-bar')).toContainText('Viewing v2');
+    await page.reload();
+    await fluentRootReady(page);
+    await expect(page.getByTestId('version-preview-bar')).toContainText('Viewing v2');
     await expectQuiet(page, problems);
   });
 
