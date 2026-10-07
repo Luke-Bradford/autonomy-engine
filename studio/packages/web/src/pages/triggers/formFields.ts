@@ -144,7 +144,8 @@ export interface BoundFields {
  *
  * The case it exists for is a daylight-saving GAP: under `Europe/London`,
  * `2026-03-29T01:30` does not exist (01:00 jumps to 02:00), so `Date` (or
- * `zonedWallClockInstant`, for a named zone) resolves it with the pre-transition offset and the stored instant reloads as `02:30`.
+ * `zonedWallClockInstant`, for a named zone) resolves it with the
+ * pre-transition offset and the stored instant reloads as `02:30`.
  * That instant is well-defined and stable, so the editors WARN rather than
  * refuse — what they must not do is let the typed value change with nothing
  * said. It reports ANY read-back mismatch, not only a gap — `Date` also rolls a
