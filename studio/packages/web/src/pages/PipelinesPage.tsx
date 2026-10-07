@@ -16,7 +16,6 @@ import { downloadPipelineExport } from '../api/pipelineExport';
 import {
   archiveConfirmMessage,
   archivePipeline,
-  createPipeline,
   deletePipeline,
   describeDeleteFailure,
   listArchivedPipelines,
@@ -33,9 +32,11 @@ import {
   liveStateKeys,
 } from './pipeline/editorState';
 import { pipelinesStore, type PipelinesStore } from '../stores/pipelinesStore';
-import { ImportPanel } from './ImportPanel';
-import { DemoPanel } from './DemoPanel';
+import { NewPipelineDrawer, type NewPipelineForm } from './NewPipelineDrawer';
+import { PipelineImportDrawer } from './PipelineImportDrawer';
+import { useDrawerForm } from '../lib/form/useDrawerForm';
 import { PipelinesGrid } from './author/PipelinesGrid';
+import { folderNamesOf } from './author/pipelineFolders';
 import {
   nextPipelineSort,
   pipelineSortParams,
@@ -73,13 +74,19 @@ import { pipelineDeletePlan, readPipelineDependents } from './pipelineDeleteConf
 
 /** The folder picker's options: each folder in the list, then "no folder". */
 function folderOptionsOf(pipelines: readonly Pipeline[]): { value: string; label: string }[] {
-  const names = [...new Set(pipelines.flatMap((p) => (p.folder === null ? [] : [p.folder])))].sort(
-    (a, b) => a.localeCompare(b, 'en'),
-  );
-  const options = names.map((f) => ({ value: f, label: f }));
+  const options = folderNamesOf(pipelines).map((f) => ({ value: f, label: f }));
   return pipelines.some((p) => p.folder === null)
     ? [...options, { value: NO_FOLDER, label: '(no folder)' }]
     : options;
+}
+
+/** #1569 slice 3 — the one drawer the toolbar opens: a new pipeline, or an import. */
+type PipelinesDrawer = NewPipelineForm | { kind: 'import' };
+
+/** What the open drawer would write, for its unsaved-changes check: an import
+ * holds nothing typed, so it is never dirty. */
+function drawerSignature(drawer: PipelinesDrawer): string {
+  return drawer.kind === 'import' ? 'import' : JSON.stringify([drawer.name, drawer.folder]);
 }
 
 /** The archived view draws only the columns it has facts for. */
@@ -111,11 +118,21 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
   const status = useStore(store, (s) => s.status);
   const pipelines = useStore(store, (s) => s.pipelines);
   // #1470 — a removed row hands focus to its neighbour's ⋯, else to this.
-  const createRef = useRef<HTMLInputElement>(null);
+  const newButtonRef = useRef<HTMLButtonElement>(null);
   const { restoreFocus: removalFocus, removing: removingRow } = useFocusAfterRemoval(
     pipelines,
-    createRef,
+    newButtonRef,
   );
+  const {
+    form: drawerForm,
+    setForm: setDrawerForm,
+    openForm: openDrawer,
+    seq: drawerSeq,
+    guard,
+    openerRef,
+    ...drawer
+  } = useDrawerForm(drawerSignature);
+  const liveFolderNames = useMemo(() => folderNamesOf(pipelines), [pipelines]);
   /* One removal per row at a time, spanning the dialog and the request: with
      the delete in flight the row's ⋯ still works, and a second Delete would
      ask again and 404 into the banner over a delete that succeeded (#1470).
@@ -273,8 +290,6 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
   );
 
   const [actionMsg, setActionMsg] = useState<string | null>(null);
-  const [name, setName] = useState('');
-  const [creating, setCreating] = useState(false);
 
   /**
    * #1058 — the ARCHIVED list, held here and deliberately NOT in
@@ -317,26 +332,6 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
     ensureFresh();
     retryIfFailed();
   }, [ensureFresh, retryIfFailed]);
-
-  const onCreate = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-      const trimmed = name.trim();
-      if (trimmed === '') return;
-      setCreating(true);
-      setActionMsg(null);
-      try {
-        await createPipeline({ name: trimmed });
-        setName('');
-        await refresh();
-      } catch (err) {
-        setActionMsg(`Could not create pipeline: ${messageOf(err)}`);
-      } finally {
-        setCreating(false);
-      }
-    },
-    [name, refresh],
-  );
 
   /**
    * Save the pipeline's export envelope to disk (#959). The fetch happens
@@ -615,7 +610,34 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
     <section aria-labelledby="pipelines-heading" className="pipelines-page">
       <div className="page-header">
         <h2 id="pipelines-heading">Pipelines</h2>
+        {/* #1569 slice 3 — the toolbar: each opens the drawer beside the list. */}
+        <div className="page-header-actions">
+          <button
+            ref={newButtonRef}
+            type="button"
+            className="primary"
+            onClick={(e) =>
+              drawer.openFrom(e.currentTarget, () =>
+                openDrawer({ kind: 'new', name: '', folder: '' }),
+              )
+            }
+          >
+            + New pipeline
+          </button>
+          <button
+            type="button"
+            onClick={(e) => drawer.openFrom(e.currentTarget, () => openDrawer({ kind: 'import' }))}
+          >
+            Import
+          </button>
+        </div>
       </div>
+
+      {/* #1396 — the list and the drawer side by side; the drawer is a column,
+          not an overlay, so the row actions stay reachable while it is open. */}
+      {guard.routeHold}
+      <div className={drawerForm ? 'drawer-layout-open' : undefined}>
+        <div>
 
       {loadError && (
         <p className="error" role="alert">
@@ -762,7 +784,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
       {/* Gated on a load having SUCCEEDED: an empty list and a failed load are
           different facts, and "no pipelines yet" is a lie about the second. */}
       {!showArchived && status === 'ready' && pipelines.length === 0 && (
-        <p>No pipelines yet — create one below.</p>
+        <p>No pipelines yet.</p>
       )}
 
       {/* Under a filter whose facts have not been read, every row is held back
@@ -834,37 +856,40 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
         />
       )}
 
-      <form
-        className="connection-form"
-        aria-label="New pipeline"
-        onSubmit={(e) => void onCreate(e)}
-      >
-        <h3>New pipeline</h3>
-        <label>
-          Name
-          <input
-            ref={createRef}
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="My pipeline"
-          />
-        </label>
-        <div className="form-actions">
-          <button type="submit" disabled={creating}>
-            {creating ? 'Creating…' : 'Create pipeline'}
-          </button>
         </div>
-      </form>
 
-      {/* The import surface lives here, on the list an imported pipeline lands
-          in — but it takes ANY export envelope, because `POST /api/import` does
-          (see `ImportPanel`). A connection or trigger file is imported and then
-          reported with a pointer to its own section, rather than refused by a
-          client-side rule the server does not have. */}
-      <ImportPanel listKind="pipeline" onImported={refresh} />
-      {/* #1481 OR32 — the demo loads into this list, and is removed from it. */}
-      <DemoPanel onChanged={refresh} />
+        {drawerForm?.kind === 'new' && (
+          <NewPipelineDrawer
+            key={drawerSeq}
+            form={drawerForm}
+            onChange={setDrawerForm}
+            folderNames={liveFolderNames}
+            guard={guard}
+            returnFocusTo={openerRef}
+            onClose={drawer.requestClose}
+            onCreated={async () => {
+              drawer.closeIfLatest(drawerSeq);
+              // The new pipeline is LIVE: from the archived view it would land
+              // out of sight, so the list it went into is the one shown.
+              if (showArchivedRef.current) {
+                setSearchParams((prev) =>
+                  withParams(prev, { [PIPELINE_FILTER_PARAMS.archived]: '' }),
+                );
+              }
+              await refresh();
+            }}
+          />
+        )}
+        {drawerForm?.kind === 'import' && (
+          <PipelineImportDrawer
+            key={drawerSeq}
+            guard={guard}
+            returnFocusTo={openerRef}
+            onClose={drawer.requestClose}
+            onChanged={refresh}
+          />
+        )}
+      </div>
       {confirmDialog}
     </section>
   );

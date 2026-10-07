@@ -5909,6 +5909,26 @@ button.danger {
   color: inherit;
 }
 
+/* #1569 OR37 slice 3 — the pipelines toolbar, right of the title; and the
+   import and demo panels inside the Import drawer, which supplies their frame. */
+.page-header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.import-panel,
+.demo-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.import-panel p,
+.demo-panel p {
+  margin: 0;
+}
+
 /* #1569 OR37 slice 2 — the pipelines bar is the runs bar (`.run-filters`): one
    row, data-sized controls. The search box leads it and is the one control
    that gives way. */
