@@ -326,8 +326,10 @@ const WALL_CLOCK = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/;
  *   what tells the operator.
  *
  * The offset either side of the wall clock (a day away, past any transition
- * that could be in play) gives at most two candidates; a candidate is the
- * answer when the zone's offset AT it is the one it was built from.
+ * that could be in play), and the one at the wall clock itself (for a zone that
+ * changes offset twice inside those two days), give at most three candidates;
+ * a candidate is the answer when the zone's offset AT it is the one it was
+ * built from. None confirming is a gap, which has no instant of its own.
  *
  * Not `zonedCalendar`'s bisection, whose header warns off an offset inverse:
  * that warning is about where a DAY begins, where the inverse lands on the
@@ -354,7 +356,8 @@ export function zonedWallClockInstant(local: string, zone: DisplayTimeZone): num
   const before = offsetAt(wall - WALL_DAY_MS, zone);
   const after = offsetAt(wall + WALL_DAY_MS, zone);
   // The larger offset reaches the wall clock SOONER, so it is tried first.
-  for (const offset of before >= after ? [before, after] : [after, before]) {
+  const offsets = [...new Set([before, offsetAt(wall, zone), after])].sort((a, b) => b - a);
+  for (const offset of offsets) {
     if (offsetAt(wall - offset, zone) === offset) return wall - offset;
   }
   const shifted = wall - before;
