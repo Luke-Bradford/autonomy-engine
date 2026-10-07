@@ -185,11 +185,14 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
   await expect(showActivity).toBeFocused();
 
   /* Opened from its graph node and then from Show activity, the drawer takes
-     focus each time, and Escape goes back to the last button that asked. */
+     focus each time, and Escape goes back to the last button that asked. The
+     open drawer lies over the banner's button, so the second ask is the
+     keyboard's. */
   const stopNode = page.locator('.react-flow__node[data-id="stop"] .run-node-open');
   await stopNode.click();
   await expect(drawerPanel).toBeFocused();
-  await showActivity.click();
+  await showActivity.focus();
+  await page.keyboard.press('Enter');
   await expect(drawerPanel).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(showActivity).toBeFocused();
