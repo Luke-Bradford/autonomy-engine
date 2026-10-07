@@ -651,88 +651,88 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
           has succeeded (the store reloads on every change, and the bar — with
           its Clear — would blink out under a filtered list). */}
       <div className="run-filters pipelines-filters" role="group" aria-label="Filter pipelines">
-          <div role="search" className="pipelines-filters__search">
-            <LabelledControl label={<span className="visually-hidden">Search pipelines</span>}>
+        <div role="search" className="pipelines-filters__search">
+          <LabelledControl label={<span className="visually-hidden">Search pipelines</span>}>
+            {(id) => (
+              <input
+                id={id}
+                type="search"
+                placeholder={
+                  showArchived ? 'Search name, folder…' : 'Search name, description, annotations…'
+                }
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+              />
+            )}
+          </LabelledControl>
+        </div>
+        <FilterPicker
+          label={<span className="visually-hidden">Filter by folder</span>}
+          allLabel="All folders"
+          value={filters.folder}
+          options={folderOptions}
+          onChange={(next) => setFilter(PIPELINE_FILTER_PARAMS.folder, next)}
+        />
+        {!showArchived && (
+          <>
+            <FilterMenu
+              label="Last run"
+              name="last"
+              values={LAST_RUN_FILTERS}
+              checked={filters.last}
+              labelOf={lastRunFilterLabel}
+              countNoun="statuses"
+              onChange={(items) => setFilter(PIPELINE_FILTER_PARAMS.last, lastRunParam(items))}
+            />
+            <LabelledControl label={<span className="visually-hidden">Triggers</span>}>
               {(id) => (
-                <input
+                <select
                   id={id}
-                  type="search"
-                  placeholder={
-                    showArchived ? 'Search name, folder…' : 'Search name, description, annotations…'
-                  }
-                  value={searchText}
-                  onChange={(e) => setSearchText(e.target.value)}
-                />
+                  value={filters.triggers ?? ''}
+                  onChange={(e) => setFilter(PIPELINE_FILTER_PARAMS.triggers, e.target.value)}
+                >
+                  <option value="">All triggers</option>
+                  {TRIGGERS_FILTERS.map((t) => (
+                    <option key={t} value={t}>
+                      {TRIGGERS_FILTER_LABELS[t]}
+                    </option>
+                  ))}
+                </select>
               )}
             </LabelledControl>
-          </div>
-          <FilterPicker
-            label={<span className="visually-hidden">Filter by folder</span>}
-            allLabel="All folders"
-            value={filters.folder}
-            options={folderOptions}
-            onChange={(next) => setFilter(PIPELINE_FILTER_PARAMS.folder, next)}
-          />
-          {!showArchived && (
-            <>
-              <FilterMenu
-                label="Last run"
-                name="last"
-                values={LAST_RUN_FILTERS}
-                checked={filters.last}
-                labelOf={lastRunFilterLabel}
-                countNoun="statuses"
-                onChange={(items) => setFilter(PIPELINE_FILTER_PARAMS.last, lastRunParam(items))}
-              />
-              <LabelledControl label={<span className="visually-hidden">Triggers</span>}>
-                {(id) => (
-                  <select
-                    id={id}
-                    value={filters.triggers ?? ''}
-                    onChange={(e) => setFilter(PIPELINE_FILTER_PARAMS.triggers, e.target.value)}
-                  >
-                    <option value="">All triggers</option>
-                    {TRIGGERS_FILTERS.map((t) => (
-                      <option key={t} value={t}>
-                        {TRIGGERS_FILTER_LABELS[t]}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </LabelledControl>
-              <LabelledControl label={<span className="visually-hidden">Live state</span>}>
-                {(id) => (
-                  <select
-                    id={id}
-                    value={filters.live ?? ''}
-                    onChange={(e) => setFilter(PIPELINE_FILTER_PARAMS.live, e.target.value)}
-                  >
-                    <option value="">All live states</option>
-                    {LIVE_STATE_KEYS.map((k) => (
-                      <option key={k} value={k}>
-                        {LIVE_STATE_LABELS[k]}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </LabelledControl>
-            </>
-          )}
-          {/* #1058 — the way back out of archive, and out of an archive this
+            <LabelledControl label={<span className="visually-hidden">Live state</span>}>
+              {(id) => (
+                <select
+                  id={id}
+                  value={filters.live ?? ''}
+                  onChange={(e) => setFilter(PIPELINE_FILTER_PARAMS.live, e.target.value)}
+                >
+                  <option value="">All live states</option>
+                  {LIVE_STATE_KEYS.map((k) => (
+                    <option key={k} value={k}>
+                      {LIVE_STATE_LABELS[k]}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </LabelledControl>
+          </>
+        )}
+        {/* #1058 — the way back out of archive, and out of an archive this
               page did NOT perform: a git import soft-archives every resource
               absent from the branch. "A refusal is safe exactly when the way
               back is reachable by the same person" (#907). */}
-          <ToggleButton size="small" checked={showArchived} onClick={onToggleArchived}>
-            Archived
-          </ToggleButton>
-          {/* "Clear" on screen to keep the bar one row; the accessible name
+        <ToggleButton size="small" checked={showArchived} onClick={onToggleArchived}>
+          Archived
+        </ToggleButton>
+        {/* "Clear" on screen to keep the bar one row; the accessible name
               keeps the whole phrase, and starts with the visible word. */}
-          {filtering && (
-            <button type="button" onClick={clearFilters} aria-label="Clear filters">
-              Clear
-            </button>
-          )}
-        </div>
+        {filtering && (
+          <button type="button" onClick={clearFilters} aria-label="Clear filters">
+            Clear
+          </button>
+        )}
+      </div>
 
       {showArchived && (
         <>

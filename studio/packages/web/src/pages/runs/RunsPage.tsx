@@ -1,8 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ToggleButton,
-  Tooltip,
-} from '@fluentui/react-components';
+import { ToggleButton, Tooltip } from '@fluentui/react-components';
 import {
   RUN_TRIGGERED_BY_KINDS,
   RUN_SEARCH_MAX_CHARS,

@@ -177,9 +177,9 @@ describe('pipelines grid filters (#1569 OR37 slice 2)', () => {
     );
     // A source no filter reads does not hold anything back.
     expect(filterFactsStatus(read('live=live'), { ...ready, summaries: 'failed' })).toBe('ready');
-    expect(filterFactsStatus(read('folder=etl'), { summaries: 'failed', liveStates: 'failed' })).toBe(
-      'ready',
-    );
+    expect(
+      filterFactsStatus(read('folder=etl'), { summaries: 'failed', liveStates: 'failed' }),
+    ).toBe('ready');
     // Failed wins over loading.
     expect(
       filterFactsStatus(read('last=failure&live=live'), {

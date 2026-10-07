@@ -190,7 +190,9 @@ test.describe('U4 Factory Resources pane', () => {
     // which only existed while something was in it, is gone.
     await openRowMenu(page, renamed);
     await page.getByRole('menuitem', { name: 'Move to folder…' }).click();
-    await expect(page.getByRole('combobox', { name: 'Folder', exact: true })).toHaveValue(folderName);
+    await expect(page.getByRole('combobox', { name: 'Folder', exact: true })).toHaveValue(
+      folderName,
+    );
     await page.getByRole('combobox', { name: 'Folder', exact: true }).fill('');
     await page.getByRole('button', { name: 'Move', exact: true }).click();
     await expect(folder()).toHaveCount(0);
