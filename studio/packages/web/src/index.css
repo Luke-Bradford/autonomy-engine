@@ -1059,7 +1059,8 @@ button:hover:not(:disabled) {
   border-color: var(--accent);
 }
 
-button:disabled {
+button:disabled,
+button[aria-disabled='true'] {
   opacity: 0.6;
   cursor: not-allowed;
 }
@@ -4910,12 +4911,15 @@ button.danger {
 /* #1484 — the density target is the first run at y ≤ 200 at 1440×900. Measured
    before this rule: a 55px title row (an h2's default margins), then the bar,
    the spend line and the table's own top margin put it at 226. The title row
-   is one control high, and the gaps between the bands are the bar's own. */
-.runs-page > .page-header {
+   is one control high, and the gaps between the bands are the bar's own.
+   #1569 — the Pipelines page's title row is the same, toolbar beside it. */
+.runs-page > .page-header,
+.pipelines-page > .page-header {
   margin-bottom: 0.375rem;
 }
 
-.runs-page > .page-header h2 {
+.runs-page > .page-header h2,
+.pipelines-page > .page-header h2 {
   margin: 0;
   font-size: 1.15rem;
 }
@@ -5907,6 +5911,26 @@ button.danger {
 
 .pipelines-grid__run {
   color: inherit;
+}
+
+/* #1569 OR37 slice 3 — the pipelines toolbar, right of the title; and the
+   import and demo panels inside the Import drawer, which supplies their frame. */
+.pipelines-page__toolbar {
+  display: flex;
+  gap: 8px;
+}
+
+.import-panel,
+.demo-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.import-panel p,
+.demo-panel p {
+  margin: 0;
 }
 
 /* #1569 OR37 slice 2 — the pipelines bar is the runs bar (`.run-filters`): one

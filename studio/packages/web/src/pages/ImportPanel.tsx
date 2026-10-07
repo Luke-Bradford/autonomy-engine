@@ -82,6 +82,13 @@ interface ImportPanelBaseProps {
    * anything the list went on to show.
    */
   onImported: () => Promise<void> | void;
+  /**
+   * #1569 — inside a drawer, which supplies the frame, the heading and the
+   * one-line account of what an import does: only the controls and the outcome.
+   */
+  embedded?: boolean;
+  /** Told when an import starts and ends, so a drawer can hold Close meanwhile. */
+  onBusyChange?: (busy: boolean) => void;
 }
 
 /**
@@ -101,8 +108,15 @@ export type ImportPanelProps = ImportPanelBaseProps &
     | { listKind: 'dataset'; stores: readonly ConnectionPublic[] }
   );
 
-export function ImportPanel({ listKind, onImported, stores }: ImportPanelProps) {
+export function ImportPanel({
+  listKind,
+  onImported,
+  stores,
+  embedded = false,
+  onBusyChange,
+}: ImportPanelProps) {
   const [busy, setBusy] = useState(false);
+  useEffect(() => onBusyChange?.(busy), [busy, onBusyChange]);
   /** #1143 — the chosen store for a dataset file; `''` = resolve it by identity. */
   const [store, setStore] = useState('');
   /** The choice as it stands NOW: a store that left the list (deleted, or the
@@ -189,14 +203,21 @@ export function ImportPanel({ listKind, onImported, stores }: ImportPanelProps) 
   );
 
   return (
-    <section className="connection-form" aria-labelledby="import-heading">
-      <h3 id="import-heading">Import</h3>
-      <p className="page-hint">
-        Bring in a pipeline, connection, trigger, dataset or global parameter from an export file.
-        Secrets are never exported, and neither is a pipeline&rsquo;s or trigger&rsquo;s binding to
-        anything else, so an imported resource usually needs something rebound — whatever that is
-        will be listed here.
-      </p>
+    <section
+      className={embedded ? 'import-panel' : 'connection-form'}
+      aria-labelledby={embedded ? undefined : 'import-heading'}
+    >
+      {!embedded && (
+        <>
+          <h3 id="import-heading">Import</h3>
+          <p className="page-hint">
+            Bring in a pipeline, connection, trigger, dataset or global parameter from an export
+            file. Secrets are never exported, and neither is a pipeline&rsquo;s or trigger&rsquo;s
+            binding to anything else, so an imported resource usually needs something rebound —
+            whatever that is will be listed here.
+          </p>
+        </>
+      )}
       {stores !== undefined && (
         <>
           {/* #1143 — chosen BEFORE the file: picking the file IS the import. */}

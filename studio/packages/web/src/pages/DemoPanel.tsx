@@ -27,6 +27,8 @@ export const REMOVE_DEMO_QUESTION =
 export function DemoPanel({
   onChanged,
   allowRemove = true,
+  embedded = false,
+  onBusyChange,
 }: {
   /**
    * Called after a successful load or remove, e.g. to refresh a list. Must not
@@ -35,6 +37,16 @@ export function DemoPanel({
    */
   onChanged?: () => void | Promise<void>;
   allowRemove?: boolean;
+  /**
+   * #1569 — inside a drawer, which supplies the frame, the heading and the
+   * account of what the demo is: only the state, the buttons and the outcome.
+   */
+  embedded?: boolean;
+  /**
+   * Told when a load or remove starts and ends — its question included, so a
+   * drawer holds Close (and the Escape that answers the question) meanwhile.
+   */
+  onBusyChange?: (busy: boolean) => void;
 }) {
   const [confirm, confirmDialog] = useConfirm();
   const guardedLoad = useGuardedLoad();
@@ -56,6 +68,7 @@ export function DemoPanel({
   useEffect(readStatus, [readStatus]);
 
   const busy = active.size > 0;
+  useEffect(() => onBusyChange?.(busy), [busy, onBusyChange]);
 
   const onLoad = () =>
     void run('demo', async () => {
@@ -96,8 +109,11 @@ export function DemoPanel({
     });
 
   return (
-    <section aria-labelledby="demo-workspace" className="home-section">
-      <h3 id="demo-workspace">Demo workspace</h3>
+    <section
+      aria-labelledby={embedded ? undefined : 'demo-workspace'}
+      className={embedded ? 'demo-panel' : 'home-section'}
+    >
+      {!embedded && <h3 id="demo-workspace">Demo workspace</h3>}
       {readError !== null && (
         <>
           <p role="alert" className="error">
@@ -116,11 +132,13 @@ export function DemoPanel({
       )}
       {status?.loaded === false && (
         <>
-          <p className="page-hint">
-            Five sample pipelines in folder “Demo” that load a messy orders CSV into a SQLite
-            warehouse, clean and aggregate it, run it all from an orchestrator, and fail once on
-            purpose — with their own connections and datasets, ready to run and watch in Monitor.
-          </p>
+          {!embedded && (
+            <p className="page-hint">
+              Five sample pipelines in folder “Demo” that load a messy orders CSV into a SQLite
+              warehouse, clean and aggregate it, run it all from an orchestrator, and fail once on
+              purpose — with their own connections and datasets, ready to run and watch in Monitor.
+            </p>
+          )}
           <button type="button" className="primary" onClick={onLoad} disabled={busy}>
             Load demo
           </button>
@@ -129,7 +147,10 @@ export function DemoPanel({
       {status?.loaded === true &&
         (allowRemove ? (
           <>
-            <p className="page-hint">The demo is loaded: its pipelines are in folder “Demo”.</p>
+            {/* Embedded, the section's hint already names the folder. */}
+            {!embedded && (
+              <p className="page-hint">The demo is loaded: its pipelines are in folder “Demo”.</p>
+            )}
             <button type="button" className="danger" onClick={onRemove} disabled={busy}>
               Remove demo
             </button>
