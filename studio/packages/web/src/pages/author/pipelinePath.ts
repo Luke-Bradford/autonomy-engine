@@ -59,6 +59,23 @@ export function readOpenVersion(params: URLSearchParams): number | undefined {
   return raw !== null && /^[1-9]\d*$/.test(raw) ? Number(raw) : undefined;
 }
 
+/**
+ * #1521 — `params` with the editor's previewed version written in: `version`
+ * set to it, or removed for none. `node` belongs to the version a link opened,
+ * so it stays only while that version is still the one asked for.
+ */
+export function withOpenVersion(
+  params: URLSearchParams,
+  version: number | null,
+  keepNode: boolean,
+): URLSearchParams {
+  const next = new URLSearchParams(params);
+  if (version === null) next.delete(OPEN_VERSION_PARAM);
+  else next.set(OPEN_VERSION_PARAM, String(version));
+  if (!keepNode) next.delete(OPEN_NODE_PARAM);
+  return next;
+}
+
 /** The node `pipelinePath` asked to select, or `undefined` for none. Any
  * non-empty id: an id the version does not hold selects nothing. */
 export function readOpenNode(params: URLSearchParams): string | undefined {

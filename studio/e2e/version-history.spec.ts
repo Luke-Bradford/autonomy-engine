@@ -695,6 +695,65 @@ test.describe('version history column (#1475 OR27)', () => {
     await expectQuiet(page, problems);
   });
 
+  /**
+   * #1521 — the previewed version is in the URL both ways: a preview writes
+   * `?version=N` (replacing, not pushing), a reload reopens it, Back to editing
+   * removes it, and a `?version` the page did not write moves the view, all
+   * without remounting the editor or throwing its draft away.
+   */
+  test('keeps the previewed version in the URL, and follows the URL back', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    const pipelineId = await seedThreeVersions(page, 'history-url');
+    const editor = `/#/author/pipelines/${encodeURIComponent(pipelineId)}`;
+    const atVersion = (n: number) => new RegExp(`\\?version=${n}$`);
+    const bar = page.getByTestId('version-preview-bar');
+
+    // A draft the URL changes below must not cost: one activity added, unsaved.
+    await addActivity(page, 'Wait');
+    await expect(page.locator('.react-flow__node')).toHaveCount(4);
+
+    await (await historyItem(page)).click();
+    await rows(page).nth(2).click();
+    await expect(bar).toContainText('Viewing v1');
+    await expect(page).toHaveURL(atVersion(1));
+
+    await page.getByRole('button', { name: 'Back to editing' }).click();
+    await expect(page.locator('.canvas-grid')).toHaveCount(1);
+    await expect(page).toHaveURL(new RegExp(`${encodeURIComponent(pipelineId)}$`));
+    await expect(page.locator('.react-flow__node')).toHaveCount(4);
+
+    // A ?version the page did not write: the view follows, and Back returns.
+    await page.goto(`${editor}?version=2`);
+    await expect(bar).toContainText('Viewing v2');
+    await page.goto(`${editor}?version=1`);
+    await expect(bar).toContainText('Viewing v1');
+    await page.goBack();
+    await expect(bar).toContainText('Viewing v2');
+    await page.goBack();
+    await expect(page.locator('.canvas-grid')).toHaveCount(1);
+    // The same editor instance throughout: the unsaved activity is still there.
+    await expect(page.locator('.react-flow__node')).toHaveCount(4);
+
+    // The latest version is the editor, so its ?version is not left standing.
+    await page.goto(`${editor}?version=3`);
+    await expect(page).toHaveURL(new RegExp(`${encodeURIComponent(pipelineId)}$`));
+    await expect(page.getByTestId('canvas-preview')).toHaveCount(0);
+
+    await expectQuiet(page, problems);
+  });
+
+  test('a reload reopens the previewed version', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await seedThreeVersions(page, 'history-url-reload');
+    await (await historyItem(page)).click();
+    await rows(page).nth(1).click();
+    await expect(page.getByTestId('version-preview-bar')).toContainText('Viewing v2');
+    await page.reload();
+    await fluentRootReady(page);
+    await expect(page.getByTestId('version-preview-bar')).toContainText('Viewing v2');
+    await expectQuiet(page, problems);
+  });
+
   test('closing the column leaves a preview and puts the editor back', async ({ page }) => {
     const problems = collectPageProblems(page);
     await seedThreeVersions(page, 'history-column-close');

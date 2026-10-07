@@ -2,6 +2,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useEffectEvent,
   useId,
   useLayoutEffect,
   useMemo,
@@ -25,7 +26,8 @@ import {
   ChevronDownRegular,
   MoreHorizontalRegular,
 } from '@fluentui/react-icons';
-import { useNavigate } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
+import { readOpenVersion, withOpenVersion } from '../author/pipelinePath';
 import { ZodError } from 'zod';
 import { triggersPath } from '../triggers/triggersPath';
 import { serverOnlyIssues, validationAnnouncement } from './validateDraft';
@@ -477,7 +479,43 @@ export function PipelineCanvas({
   const triggerButtonRef = useRef<HTMLButtonElement>(null);
   const setHistoryOpen = useStore(uiStore, (s) => s.setHistoryOpen);
   /** The version NUMBER being previewed read-only, or `null` while editing. */
-  const [previewing, setPreviewing] = useState<number | null>(null);
+  const [previewing, setPreviewingState] = useState<number | null>(null);
+  /*
+   * #1521 — the previewed version lives in the URL too (`?version=N`), so a
+   * reload reopens what is on screen and Back/Forward between two versions
+   * moves the view. Written with `replace`, because a preview is a view of this
+   * page rather than a place of its own. The canvas stays mounted throughout,
+   * so the draft is never thrown away. `urlSynced` is the version this page last
+   * wrote or followed: a URL change it did not make is one to follow.
+   */
+  const location = useLocation();
+  const urlVersion = readOpenVersion(new URLSearchParams(location.search));
+  const urlSynced = useRef(requestedVersion);
+  /* The location the writer below reads, so it stays one function for the
+     page's life: the load effect calls it, and must not re-run per URL change. */
+  const locationRef = useRef(location);
+  useLayoutEffect(() => {
+    locationRef.current = location;
+  });
+  const setPreviewing = useCallback(
+    (version: number | null) => {
+      setPreviewingState(version);
+      urlSynced.current = version ?? undefined;
+      const here = locationRef.current;
+      const params = new URLSearchParams(here.search);
+      const next = withOpenVersion(
+        params,
+        version,
+        version !== null && version === requestedVersion,
+      );
+      if (next.toString() === params.toString()) return;
+      void navigate(
+        { pathname: here.pathname, search: next.size > 0 ? `?${next}` : '', hash: here.hash },
+        { replace: true },
+      );
+    },
+    [navigate, requestedVersion],
+  );
   const [restoring, setRestoring] = useState(false);
   const [confirm, confirmDialog] = useConfirm();
   /**
@@ -534,6 +572,19 @@ export function PipelineCanvas({
    * canvas the operator can see is the canvas the in-flight write is about.
    */
   const previewLocked = restoring || saving;
+  /*
+   * #1521 — follow a `?version` this page did not write (Back/Forward, or a link
+   * to another version of this pipeline), as a link opens one: the latest or an
+   * unknown version is the editor. While a save or restore holds the preview,
+   * the URL is put back instead, as every other route into the preview is held.
+   */
+  const followUrlVersion = useEffectEvent((version: number | undefined) => {
+    if (!ready || version === urlSynced.current) return;
+    setPreviewing(previewLocked ? previewing : initialPreview(version, versions));
+  });
+  useEffect(() => {
+    followUrlVersion(urlVersion);
+  }, [urlVersion]);
   /**
    * Close the version-history column — from the ⋯ menu or its own Close
    * button. Closing also leaves any preview it opened, which would otherwise
@@ -816,7 +867,7 @@ export function PipelineCanvas({
         setLoadError(err instanceof Error ? err.message : String(err));
       });
     return () => ctrl.abort();
-  }, [pipelineId, store, requestedVersion, requestedNode]);
+  }, [pipelineId, store, requestedVersion, requestedNode, setPreviewing]);
 
   /**
    * #844 GL3 (spec GL-D8) — the globals change in ANOTHER page (Manage → Global
@@ -1546,7 +1597,7 @@ export function PipelineCanvas({
     } finally {
       setRestoring(false);
     }
-  }, [dirty, head, headVersion, pipelineId, previewed, store, confirm]);
+  }, [dirty, head, headVersion, pipelineId, previewed, store, confirm, setPreviewing]);
 
   /**
    * #979 — make the previewed version the active published one.
@@ -2431,7 +2482,7 @@ export function PipelineCanvas({
                once `ready`, so the reason's "loading" branch never reaches it. */
             locked={historyDisabledReason}
             onPreview={(version) => {
-              setPreviewing((current) => (current === version ? null : version));
+              setPreviewing(previewing === version ? null : version);
             }}
             onClose={() => {
               closeHistory();
