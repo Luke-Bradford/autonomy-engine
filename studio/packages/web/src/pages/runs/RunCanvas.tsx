@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo } from 'react';
+import { createContext, memo, useContext, useEffect, useMemo } from 'react';
 import {
   Background,
   Controls,
@@ -20,6 +20,7 @@ import { portsFromIds, TARGET_PORT_ID } from '../pipeline/ports';
 import { SourcePorts } from '../pipeline/SourcePorts';
 import { FIT_VIEW_OPTIONS } from '../pipeline/containerLayout';
 import {
+  activityNodeName,
   mergeRunNodes,
   NO_STATUS_LABEL,
   runCards,
@@ -77,8 +78,19 @@ import {
  * That map is also what turns those four into distinct sentences rather than
  * four spellings of "held".
  */
-const RunActivityNode = memo(function RunActivityNode({ data }: NodeProps) {
+/** #1484 M2 — what opens an activity run from the graph, and which nodes have
+ * one. Through context rather than node `data`: `sameRenderedData` compares
+ * data members by identity, and a callback there would tie every node's
+ * re-render to the page's. */
+interface RunNodeOpen {
+  openable: ReadonlySet<string>;
+  open: (nodeId: string, opener: HTMLElement) => void;
+}
+const RunNodeOpenContext = createContext<RunNodeOpen | null>(null);
+
+const RunActivityNode = memo(function RunActivityNode({ id, data }: NodeProps) {
   const d = data as RunNodeData;
+  const opener = useContext(RunNodeOpenContext);
   /* U19 — rebuilt from the ONE string `data` carries, not from an array: see
      `RunNodeData.portIds`. Memoised on that string so the ports keep their
      identity across the events that leave a node's rendering unchanged. */
@@ -115,6 +127,21 @@ const RunActivityNode = memo(function RunActivityNode({ data }: NodeProps) {
         </span>
       )}
       <SourcePorts ports={ports} />
+      {/* #1484 M2 — the node opens its activity run in the drawer. A real
+          button over the whole card rather than React Flow's `onNodeClick`:
+          React Flow answers a key on a node only when the node is selectable,
+          and this canvas has none. Absolutely placed, so it adds nothing to the
+          card's layout; `nopan` so a drag that starts on it does not pan the
+          canvas and then open the drawer on release. Only a node with an
+          activity run has one, so it never opens nothing. */}
+      {opener?.openable.has(id) && (
+        <button
+          type="button"
+          className="run-node-open nopan"
+          aria-label={`Open activity run: ${activityNodeName(d)}`}
+          onClick={(event) => opener.open(id, event.currentTarget)}
+        />
+      )}
     </div>
   );
 });
@@ -175,6 +202,10 @@ export interface RunCanvasProps {
   datasets?: readonly Dataset[];
   /** #1541 — the node or container to mark selected (`RunFlowOptions.selectedId`). */
   selectedNodeId?: string;
+  /** #1484 M2 — open an activity node's run, given the button that asked so
+   * focus can go back to it. Only nodes in `openableNodeIds` offer it. */
+  onOpenNode?: (nodeId: string, opener: HTMLElement) => void;
+  openableNodeIds?: ReadonlySet<string>;
 }
 
 /**
@@ -198,6 +229,8 @@ export function RunCanvas({
   activity,
   datasets,
   selectedNodeId,
+  onOpenNode,
+  openableNodeIds,
 }: RunCanvasProps) {
   /* React Flow owns the VIEW array so it can attach and KEEP each node's
      measured dimensions across renders — the author canvas holds them the same
@@ -229,39 +262,49 @@ export function RunCanvas({
     );
   }, [doc, state, showStatus, cards, activityById, selectedNodeId, setNodes]);
 
+  const opener = useMemo<RunNodeOpen | null>(
+    () =>
+      onOpenNode === undefined || openableNodeIds === undefined
+        ? null
+        : { openable: openableNodeIds, open: onOpenNode },
+    [onOpenNode, openableNodeIds],
+  );
+
   return (
     <div className="run-canvas" data-testid="run-canvas">
-      <ReactFlowProvider>
-        <EdgeMarkers />
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={nodeTypes}
-          onNodesChange={onNodesChange}
-          /* Read-only, stated on every axis rather than inferred from the fact
+      <RunNodeOpenContext.Provider value={opener}>
+        <ReactFlowProvider>
+          <EdgeMarkers />
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            onNodesChange={onNodesChange}
+            /* Read-only, stated on every axis rather than inferred from the fact
              that nothing here would act on an interaction. `onNodesChange` above
              carries measurements, and would happily carry a drag or a selection
              too — these are what stop one being produced in the first place. */
-          nodesDraggable={false}
-          nodesConnectable={false}
-          elementsSelectable={false}
-          nodesFocusable={false}
-          edgesFocusable={false}
-          /* `null` disables the key entirely — RF's default is Backspace, and a
+            nodesDraggable={false}
+            nodesConnectable={false}
+            elementsSelectable={false}
+            nodesFocusable={false}
+            edgesFocusable={false}
+            /* `null` disables the key entirely — RF's default is Backspace, and a
              delete gesture on a monitor is not a no-op worth risking. */
-          deleteKeyCode={null}
-          onlyRenderVisibleElements
-          fitView
-          fitViewOptions={FIT_VIEW_OPTIONS}
-          proOptions={{ hideAttribution: true }}
-        >
-          <Background />
-          {/* `showInteractive={false}` removes the lock toggle — it flips
+            deleteKeyCode={null}
+            onlyRenderVisibleElements
+            fitView
+            fitViewOptions={FIT_VIEW_OPTIONS}
+            proOptions={{ hideAttribution: true }}
+          >
+            <Background />
+            {/* `showInteractive={false}` removes the lock toggle — it flips
               `nodesDraggable`/`elementsSelectable` back ON, which would undo
               every line above from the UI. */}
-          <Controls showInteractive={false} fitViewOptions={FIT_VIEW_OPTIONS} />
-        </ReactFlow>
-      </ReactFlowProvider>
+            <Controls showInteractive={false} fitViewOptions={FIT_VIEW_OPTIONS} />
+          </ReactFlow>
+        </ReactFlowProvider>
+      </RunNodeOpenContext.Provider>
     </div>
   );
 }

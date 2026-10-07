@@ -1,6 +1,6 @@
 import type { ActivityRun, ActivityRunGroup } from '@autonomy-studio/shared';
 import { describe, expect, it } from 'vitest';
-import { activityRunEntries } from './activityRunsTree';
+import { activityRunEntries, activityRunOfNode } from './activityRunsTree';
 import { activityRun } from '../../testing/activityRun';
 
 const row = (key: string, extra: Partial<ActivityRun> = {}): ActivityRun =>
@@ -77,5 +77,61 @@ describe('#1484 M2 activityRunEntries', () => {
 
   it('drops no row: one naming a container that is not a group stays in place', () => {
     expect(shape([row('a', { containerId: 'gone' })], [])).toEqual([['a', 0, '']]);
+  });
+});
+
+describe('#1484 M2 activityRunOfNode — the activity run a graph node opens', () => {
+  const failed = (key: string, index: number) => ({
+    ...inItem(key, index),
+    status: 'failure' as const,
+  });
+
+  it('an item that failed is opened over a later item that succeeded', () => {
+    const rows = [inItem('w#0', 0), failed('w#1', 1), inItem('w#2', 2), row('other')];
+    expect(activityRunOfNode(rows, 'w')?.key).toBe('w#1');
+  });
+
+  it('a parallel item that failed is found under its instance key', () => {
+    const rows = [
+      { ...failed('w#0', 0), nodeId: 'w@0' },
+      { ...inItem('w#1', 1), nodeId: 'w@1' },
+    ];
+    expect(activityRunOfNode(rows, 'w')?.key).toBe('w#0');
+  });
+
+  it('of interleaved instances, the failure that came last in the run', () => {
+    // Item 1 fails, item 2 fails, then item 1's retry fails again: item 1's is last.
+    const rows = [
+      { ...failed('w#0', 0), nodeId: 'w' },
+      { ...failed('w#1', 1), nodeId: 'w' },
+      { ...failed('w#2', 0), nodeId: 'w' },
+    ];
+    expect(activityRunOfNode(rows, 'w')?.key).toBe('w#2');
+  });
+
+  it('an item that recovered on a retry opens the attempt that succeeded', () => {
+    // Two attempts of one item: the same instance, item 1.
+    const rows = [
+      { ...failed('w#0', 0), nodeId: 'w' },
+      { ...inItem('w#1', 0), nodeId: 'w' },
+      row('other'),
+    ];
+    expect(activityRunOfNode(rows, 'w')?.key).toBe('w#1');
+  });
+
+  it('a node outside any container that recovered opens its last attempt', () => {
+    const rows = [
+      { ...row('a#1', { activityId: 'a', nodeId: 'a' }), status: 'failure' as const },
+      row('a#2', { activityId: 'a', nodeId: 'a' }),
+    ];
+    expect(activityRunOfNode(rows, 'a')?.key).toBe('a#2');
+  });
+
+  it('with nothing failed, the last run', () => {
+    expect(activityRunOfNode([inItem('w#0', 0), inItem('w#1', 1)], 'w')?.key).toBe('w#1');
+  });
+
+  it('a node with no run opens nothing', () => {
+    expect(activityRunOfNode([row('other')], 'w')).toBeNull();
   });
 });

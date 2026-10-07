@@ -201,7 +201,11 @@ describe('RunFailureBanner (#1484 OR35 M2)', () => {
       '/author/pipelines/pl_1?version=3',
     );
     await userEvent.click(screen.getByRole('button', { name: 'Show activity' }));
-    expect(onShow).toHaveBeenCalledWith('copy#2');
+    // With the button, so the drawer it opens can hand focus back to it.
+    expect(onShow).toHaveBeenCalledWith(
+      'copy#2',
+      screen.getByRole('button', { name: 'Show activity' }),
+    );
   });
 
   it('says a container failed on its own, with no row to show', () => {
@@ -221,25 +225,34 @@ describe('RunFailureBanner (#1484 OR35 M2)', () => {
 });
 
 describe('ActivityRunsTable — the row "Show activity" asked for', () => {
-  it('marks it current and gives it focus', () => {
-    const rows = [failedRow({ key: 'a', nodeId: 'a', activityId: 'a' }), failedRow()];
-    render(
-      <MemoryRouter>
-        <ActivityRunsTable
-          rows={rows}
-          groups={[]}
-          error={null}
-          runStatus="failure"
-          nameOf={() => null}
-          typeOf={() => null}
-          containerNameOf={() => null}
-          selected={{ key: 'copy#2' }}
-        />
-      </MemoryRouter>,
-    );
-    const current = document.querySelector('tr[aria-current="true"]');
-    expect(current?.getAttribute('data-activity-id')).toBe('copy');
-    expect(document.querySelectorAll('tr[aria-current]')).toHaveLength(1);
-    expect(document.activeElement).toBe(current);
+  it('marks it current and scrolls to it, leaving focus with the asker', () => {
+    const scrolled: Element[] = [];
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+    try {
+      const rows = [failedRow({ key: 'a', nodeId: 'a', activityId: 'a' }), failedRow()];
+      render(
+        <MemoryRouter>
+          <ActivityRunsTable
+            rows={rows}
+            groups={[]}
+            error={null}
+            runStatus="failure"
+            nameOf={() => null}
+            typeOf={() => null}
+            containerNameOf={() => null}
+            selected={{ key: 'copy#2' }}
+          />
+        </MemoryRouter>,
+      );
+      const current = document.querySelector('tr[aria-current="true"]');
+      expect(current?.getAttribute('data-activity-id')).toBe('copy');
+      expect(document.querySelectorAll('tr[aria-current]')).toHaveLength(1);
+      expect(scrolled).toEqual([current]);
+      expect(document.activeElement).not.toBe(current);
+    } finally {
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    }
   });
 });

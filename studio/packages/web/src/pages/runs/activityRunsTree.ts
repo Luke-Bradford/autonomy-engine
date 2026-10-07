@@ -77,3 +77,38 @@ export function activityRunEntries(
   while (next < sorted.length) emitGroup(sorted[next++]!);
   return out;
 }
+
+/**
+ * #1484 M2 — the activity run a graph node opens. A node is one box however
+ * many attempts and items it ran, so the box opens the run that explains how
+ * it ended: the last run of any instance (an item, a round, the node itself)
+ * whose LAST attempt failed, otherwise the node's last run. So a ForEach item
+ * that failed is opened over a later item that succeeded, and a node that
+ * recovered on a retry opens the attempt that succeeded rather than the one it
+ * got past.
+ *
+ * Read off the rows alone, not the projected state: a parallel ForEach's items
+ * are projected under their instance keys (`w@2`) and never under the box's
+ * id, so the box has no state of its own to ask. Matched on `activityId`, the
+ * canvas node, so a parallel item is found by the box it is drawn as. `null`
+ * for a node with no run, which then offers nothing to open.
+ */
+export function activityRunOfNode(
+  rows: readonly ActivityRun[],
+  activityId: string,
+): ActivityRun | null {
+  const own = rows.filter((r) => r.activityId === activityId);
+  /* Each instance's last attempt, as its index in run order: a retry
+     supersedes its failure. The index, not the Map's order, decides which
+     failure is latest, since a key set again keeps its FIRST position and
+     instances interleave (a parallel ForEach, an earlier item's retry). */
+  const lastOf = new Map<string, number>();
+  own.forEach((r, i) => {
+    lastOf.set(`${r.nodeId}\n${r.iteration?.containerId ?? ''}\n${r.iteration?.index ?? ''}`, i);
+  });
+  let latestFailed = -1;
+  for (const i of lastOf.values()) {
+    if (own[i]!.status === 'failure' && i > latestFailed) latestFailed = i;
+  }
+  return own[latestFailed] ?? own.at(-1) ?? null;
+}

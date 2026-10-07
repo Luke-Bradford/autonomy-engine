@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Dataset, PipelineVersion } from '@autonomy-studio/shared';
 import { listDatasets } from '../../api/datasets';
-import { RunCanvas } from './RunCanvas';
+import { RunCanvas, type RunCanvasProps } from './RunCanvas';
 import type { NodeActivity } from './runSummary';
 import type { Overlay } from './useRunProjection';
 
@@ -25,11 +25,14 @@ export function RunGraph({
   doc,
   overlay,
   activity,
+  selectedNodeId,
+  onOpenNode,
+  openableNodeIds,
 }: {
   doc: PipelineVersion;
   overlay: Overlay;
   activity: readonly NodeActivity[];
-}) {
+} & Pick<RunCanvasProps, 'selectedNodeId' | 'onOpenNode' | 'openableNodeIds'>) {
   /* #1394 OR3 — the dataset NAMES a Copy card shows. Fetched once; a failed
      read leaves the list empty, so the card says "a dataset" (the summary's own
      no-name fallback) rather than an id or an error on a monitor whose job is
@@ -51,6 +54,9 @@ export function RunGraph({
         state={overlay.ready ? overlay.state : null}
         activity={activity}
         datasets={datasets}
+        selectedNodeId={selectedNodeId}
+        onOpenNode={onOpenNode}
+        openableNodeIds={openableNodeIds}
       />
       {!overlay.ready && (
         <p className="page-hint" role="status">

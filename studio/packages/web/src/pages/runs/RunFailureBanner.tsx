@@ -21,7 +21,8 @@ export function RunFailureBanner({
   /** The version that ran, with what failed selected in it (`failedNodeId`), or
    * `null` when its doc did not resolve. */
   versionHref: string | null;
-  onShowActivity: (rowKey: string) => void;
+  /** Given the button, so the drawer it opens can hand focus back to it. */
+  onShowActivity: (rowKey: string, opener: HTMLElement) => void;
 }) {
   const openVersion = versionHref !== null && (
     <Link to={versionHref} title="The version this run ran">
@@ -74,7 +75,7 @@ export function RunFailureBanner({
         ))}
       <span className="run-failure__actions">
         {row !== null && (
-          <button type="button" onClick={() => onShowActivity(row.key)}>
+          <button type="button" onClick={(event) => onShowActivity(row.key, event.currentTarget)}>
             Show activity
           </button>
         )}

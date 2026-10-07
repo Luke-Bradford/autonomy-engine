@@ -123,6 +123,48 @@ test('#1484 M2 — an activity run opens in a drawer, with its own item’s inpu
       .poll(async () => Math.round((await drawer.boundingBox())!.width))
       .toBe(second.width + 32);
 
+    /* The graph opens the same drawer. The node is one box for both items, so
+       it opens its last run (neither failed): item 2. That row is the open one
+       and the node is marked, and opening from the graph leaves the page where
+       the operator is, rather than scrolling up to the table. */
+    await drawer.getByRole('complementary').focus();
+    await page.keyboard.press('Escape');
+    await expect(drawer).toHaveCount(0);
+    const nodeOpen = page.locator('.run-canvas .run-node-open');
+    await expect(nodeOpen).toHaveCount(1);
+    await nodeOpen.scrollIntoViewIfNeeded();
+    const scrollBefore = await page.evaluate(() => window.scrollY);
+    await nodeOpen.click();
+    await expect(panel).toBeFocused();
+    await expect(panel).toContainText('Item 2 of 2');
+    await expect(panel).toContainText('folder-b');
+    await expect(opens.nth(1)).toHaveAttribute('aria-expanded', 'true');
+    const fromGraph = await page.evaluate(() => {
+      const button = document.querySelector<HTMLElement>('.run-canvas .run-node-open')!;
+      const card = button.closest<HTMLElement>('.run-node')!;
+      return {
+        scrollY: window.scrollY,
+        openRows: document.querySelectorAll('.activity-runs__table tr[data-open]').length,
+        selected: card.classList.contains('run-node--selected'),
+        label: button.getAttribute('aria-label'),
+        /* Over the whole card inside its border, adding nothing to it. Layout
+           sizes, which the canvas zoom does not scale. */
+        cover: [button.offsetWidth, button.offsetHeight, card.clientWidth, card.clientHeight],
+      };
+    });
+    expect(fromGraph.scrollY).toBe(scrollBefore);
+    expect(fromGraph.openRows).toBe(1);
+    expect(fromGraph.selected).toBe(true);
+    // The node's own name, status and selection, as the node itself says them.
+    expect(fromGraph.label).toMatch(/^Open activity run: .+, success, selected$/);
+    const [bw, bh, cw, ch] = fromGraph.cover;
+    expect([bw, bh]).toEqual([cw, ch]);
+    expect(cw).toBeGreaterThan(0);
+    // Escape hands focus back to the node that opened it.
+    await page.keyboard.press('Escape');
+    await expect(drawer).toHaveCount(0);
+    await expect(nodeOpen).toBeFocused();
+
     await expectQuiet(page, problems);
   } finally {
     rmSync(root, { recursive: true, force: true });
