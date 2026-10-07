@@ -1,4 +1,3 @@
-import { ariaSortOf } from '../../lib/urlSort';
 import { Fragment, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import {
   Menu,
@@ -21,6 +20,7 @@ import {
   type RunGridColumnId,
   type UiStore,
 } from '../../stores/uiStore';
+import { ariaSortOf } from '../../lib/urlSort';
 import { PaneSplitter } from '../../shell/PaneSplitter';
 import { runDetailPath } from './runPath';
 import { SortButton } from './SortButton';
