@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type TriggerPublic } from '@autonomy-studio/shared';
-import { useDisplayTimeZone } from '../lib/useDisplayTimeZone';
 import { Link, useSearchParams } from 'react-router';
+import { useDisplayTimeZone } from '../lib/useDisplayTimeZone';
 import { triggersPath } from './triggers/triggersPath';
 import { RUN_FILTER_PARAMS } from './runs/runFilters';
 import { messageOf } from '../api/client';

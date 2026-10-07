@@ -309,7 +309,8 @@ export function wallClockInput(ms: number, zone: DisplayTimeZone): string {
   return p.second === '00' ? base : `${base}:${p.second}`;
 }
 
-const WALL_CLOCK = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/;
+/** The `datetime-local` value shape: `YYYY-MM-DDTHH:MM`, optionally `:SS`. */
+export const WALL_CLOCK = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/;
 
 /**
  * #1524 — the instant a `datetime-local` wall clock names in `zone`, the

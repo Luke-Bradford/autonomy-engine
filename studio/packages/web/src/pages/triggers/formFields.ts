@@ -14,6 +14,7 @@ import type { z } from 'zod';
 import { splitIssues } from '../../lib/form/fieldValidation';
 import {
   LOCAL_TIME_ZONE,
+  WALL_CLOCK,
   wallClockInput,
   zonedWallClockInstant,
   type DisplayTimeZone,
@@ -72,7 +73,7 @@ export function localInputToUtcIso(local: string, zone: DisplayTimeZone): string
   const trimmed = local.trim();
   // Pin the accepted shape rather than trusting `Date`'s lenient fallback
   // parsing, which would accept (and mis-anchor) an offset-bearing string.
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(trimmed)) return null;
+  if (!WALL_CLOCK.test(trimmed)) return null;
   if (zone !== LOCAL_TIME_ZONE) {
     const ms = zonedWallClockInstant(trimmed, zone);
     return ms === null ? null : new Date(ms).toISOString();
