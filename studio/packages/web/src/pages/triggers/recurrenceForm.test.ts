@@ -619,7 +619,7 @@ describe('#1524 — the bounds are written in the display zone', () => {
     });
     expect(warnings).toEqual([
       expect.stringMatching(
-        /^Start time 2026-03-08T02:30 does not exist in America\/New_York time .* saved as 2026-03-08T03:30/,
+        /^Start time 2026-03-08T02:30 does not exist in the America\/New_York time zone .* saved as 2026-03-08T03:30/,
       ),
     ]);
   });

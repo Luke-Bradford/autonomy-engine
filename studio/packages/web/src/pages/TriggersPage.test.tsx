@@ -932,10 +932,10 @@ describe('#854 — the trigger modes that had no config UI', () => {
       await user.selectOptions(form.getByLabelText('Mode'), 'tumbling');
       await user.type(form.getByLabelText(/Each window covers/i), '2');
       const start = form.getByLabelText(/^Start time/i);
-      expect(start).toHaveAccessibleName(/America\/New_York time/);
+      expect(start).toHaveAccessibleName(/\(America\/New_York\)/);
       fireEvent.change(start, { target: { value: '2026-08-01T09:00' } });
       expect(form.getByTestId('window-bounds-utc')).toHaveTextContent(
-        'Windows are keyed from 2026-08-01T13:00:00.000Z, entered in America/New_York time',
+        'Windows are keyed from 2026-08-01T13:00:00.000Z, entered in the America/New_York time zone',
       );
       await user.click(form.getByRole('checkbox', { name: /Enabled/i }));
       await user.click(form.getByRole('button', { name: /Create trigger/i }));

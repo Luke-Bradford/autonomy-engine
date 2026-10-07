@@ -320,8 +320,8 @@ export function cronPreview(recurrence: Recurrence): CronPreview {
   if (s?.minutes) parts.push(`minute ${s.minutes.join(', ')}`);
   // Named even when absent. An unzoned recurrence only reaches this summary when
   // it is bounded — `interval > 1` requires a `startTime` anchor — so it always
-  // sits beside bounds "entered in your browser's local time", where a bare
-  // `at 09:00` would read as local rather than as the UTC it means.
+  // sits beside bounds entered in the display zone (#1524), where a bare
+  // `at 09:00` would read as that zone rather than as the UTC it means.
   parts.push(recurrence.timeZone ?? 'UTC');
   if (recurrence.startTime !== undefined) parts.push(`from ${recurrence.startTime}`);
   if (recurrence.endTime !== undefined) parts.push(`until ${recurrence.endTime}`);

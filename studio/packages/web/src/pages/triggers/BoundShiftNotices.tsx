@@ -1,5 +1,5 @@
 import type { DisplayTimeZone } from '../../lib/displayTime';
-import { boundShiftWarnings, boundZoneName, type BoundFields } from './formFields';
+import { boundShiftWarnings, boundZoneLabel, type BoundFields } from './formFields';
 
 /**
  * #855 — the bounds a daylight-saving gap will move, said where they were
@@ -20,5 +20,5 @@ export function BoundShiftNotices({ bounds }: { bounds: BoundFields }) {
  * control's label, and so of its accessible name.
  */
 export function BoundZoneNote({ zone }: { zone: DisplayTimeZone }) {
-  return <> ({boundZoneName(zone)})</>;
+  return <> ({boundZoneLabel(zone)})</>;
 }

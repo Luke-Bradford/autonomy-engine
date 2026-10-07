@@ -223,10 +223,15 @@ export function boundEcho(
   return local.trim() === '' ? null : resolveBound(local, originalIso, zone);
 }
 
-/** #1524 — the zone a bound control is written in, as both editors say it:
- * in a sentence ("does not exist in …", "entered in …") and beside the input. */
+/** #1524 — the zone a bound control is written in, as both editors say it in
+ * a sentence: "does not exist in …", "entered in …". */
 export function boundZoneName(zone: DisplayTimeZone): string {
-  return zone === LOCAL_TIME_ZONE ? "your browser's local time" : `${zone} time`;
+  return zone === LOCAL_TIME_ZONE ? "your browser's time zone" : `the ${zone} time zone`;
+}
+
+/** #1524 — the same zone, short enough to sit in a control's label. */
+export function boundZoneLabel(zone: DisplayTimeZone): string {
+  return zone === LOCAL_TIME_ZONE ? 'local time' : zone;
 }
 
 /**

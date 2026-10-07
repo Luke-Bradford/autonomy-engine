@@ -94,12 +94,12 @@ test('#1524 — a trigger window start is typed in the display time zone, and sa
   const form = triggerForm(page);
   await form.getByLabel(/^Mode/).selectOption('tumbling');
   const start = form.getByLabel(/^Start time/);
-  await expect(start).toHaveAccessibleName(/\(UTC time\)/);
+  await expect(start).toHaveAccessibleName(/\(UTC\)/);
   await start.fill('2026-08-01T09:00');
   // The browser is in New York (UTC-4 in August): read in ITS zone, 09:00 is
   // 13:00Z. Read in the chosen UTC, it is 09:00Z.
   await expect(form.getByTestId('window-bounds-utc')).toHaveText(
-    /^Windows are keyed from 2026-08-01T09:00:00\.000Z, entered in UTC time/,
+    /^Windows are keyed from 2026-08-01T09:00:00\.000Z, entered in the UTC time zone/,
   );
 
   await expectQuiet(page, problems);
