@@ -22,6 +22,9 @@ export interface RunHeaderNames {
   debug: boolean;
   triggeredByKind: RunTriggeredByKind;
   parentPipelineName: string | null;
+  /** #1541 — the activity in the parent that called this run, as the parent's
+   * editor names it; `null` while unread or when the parent's log names none. */
+  parentActivity: string | null;
 }
 
 /** The ticking half, in a leaf so the page's folds do not re-run every second
@@ -216,6 +219,7 @@ export function RunHeader({
                       <code>{run.parentRunId}</code>
                     </Link>
                   )}
+                  {names?.parentActivity != null && ` · ${names.parentActivity}`}
                 </dd>
               </div>
             )}
@@ -225,6 +229,10 @@ export function RunHeader({
               <div>
                 <dt>Rerun of</dt>
                 <dd>
+                  {/* #1541 — named by the pipeline: a rerun copies its source's
+                      version binding (`run/reseed.ts`), so the source ran this
+                      run's pipeline. */}
+                  {names?.pipeline != null && `${names.pipeline} · `}
                   <Link to={runDetailPath(rerunOf)} aria-label={runLinkLabel('Source', rerunOf)}>
                     <code>{shortId(rerunOf)}</code>
                   </Link>

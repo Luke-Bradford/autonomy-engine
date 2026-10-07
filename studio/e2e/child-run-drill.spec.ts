@@ -85,6 +85,11 @@ test('#1231 — a call node names its child run, and the child names its caller'
      presentation fact this spec has no stake in, while the raw node id the row
      carries is what the doc and the event feed are keyed on. */
   const callRow = activityRowById(page, 'callChild');
+  // #1541 — the name the parent's own page gives the calling activity.
+  const callerName = (
+    (await (await activityCell(page, callRow, 'Activity')).textContent()) ?? ''
+  ).trim();
+  expect(callerName).not.toBe('');
   await callRow.getByRole('button').first().click();
 
   const panel = page.getByRole('region', { name: 'Child runs' });
@@ -102,6 +107,13 @@ test('#1231 — a call node names its child run, and the child names its caller'
   const parentLink = page.locator('.run-header').getByTitle(parentRunId, { exact: true });
   await expect(page.locator('.run-header dt', { hasText: /^Parent$/ })).toBeVisible();
   await expect(parentLink).toHaveText(/\S/);
+  /* #1541 — and the activity in the parent that called it, by the name the
+     parent's own page gives it. */
+  await expect(
+    page
+      .locator('.run-header__facts > div', { has: page.locator('dt', { hasText: /^Parent$/ }) })
+      .locator('dd'),
+  ).toHaveText(`#1231 parent · ${callerName}`);
   await parentLink.click();
   await expect(page).toHaveURL(new RegExp(`/monitor/runs/${parentRunId}$`));
 

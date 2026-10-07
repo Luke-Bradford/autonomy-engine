@@ -97,6 +97,7 @@ vi.mock('./api/runs', async (importActual) => {
         triggerName: null,
         triggeredByKind: 'editor',
         parentPipelineName: null,
+        parentActivityId: null,
       }),
     ),
     // #1206 — the detail page reads the run on its own too (the R1 fallback, and
@@ -583,6 +584,7 @@ describe('route tree', () => {
             triggerName: null,
             triggeredByKind: 'editor',
             parentPipelineName: null,
+            parentActivityId: null,
           } as never),
     );
 

@@ -10,6 +10,7 @@ import {
   docUnchanged,
   historyEntries,
   initialPreview,
+  selectionIn,
   isPublishRefused,
   isStaleWrite,
   publishConfirmMessage,
@@ -615,5 +616,22 @@ describe('initialPreview (#1484)', () => {
     expect(initialPreview(9, versions)).toBeNull();
     expect(initialPreview(undefined, versions)).toBeNull();
     expect(initialPreview(1, [])).toBeNull();
+  });
+});
+
+describe('selectionIn (#1541)', () => {
+  const doc = version({
+    nodes: [{ id: 'n1', type: 'wait', position: { x: 0, y: 0 }, config: {} }],
+    containers: [{ id: 'c1', kind: 'stage', children: ['n1'] }],
+  });
+
+  it('selects the activity or the container a link named', () => {
+    expect(selectionIn(doc, 'n1')).toEqual({ kind: 'node', id: 'n1' });
+    expect(selectionIn(doc, 'c1')).toEqual({ kind: 'container', id: 'c1' });
+  });
+
+  it('selects nothing for no id, or one the version does not hold', () => {
+    expect(selectionIn(doc, undefined)).toBeNull();
+    expect(selectionIn(doc, 'gone')).toBeNull();
   });
 });

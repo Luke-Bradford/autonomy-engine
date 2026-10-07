@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { fireAndSettle, seedVersion } from './support/seedDoc';
+import { fireAndSettle, mintVersion, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 
 /**
@@ -40,7 +40,7 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
   page,
 }) => {
   const problems = collectPageProblems(page);
-  const { pipelineVersionId } = await seedVersion(page, 'M2 activity runs', DOC);
+  const { pipelineId, pipelineVersionId } = await seedVersion(page, 'M2 activity runs', DOC);
   const runId = await fireAndSettle(page, pipelineVersionId, 'M2 activity runs');
 
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -50,6 +50,9 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
   // 7 activity rows, plus the ForEach's group line and a line per item.
   await expect(table.locator('tbody tr')).toHaveCount(10);
 
+  /* The failure banner waits for activity runs read at the log's newest event
+     (#1541), which can be one throttled read after the table first fills. */
+  await expect(page.locator('.run-failure')).toBeVisible();
   // Every reading in one evaluate: a round trip per assertion is what costs.
   const seen = await page.evaluate(() => {
     const t = document.querySelector<HTMLTableElement>('.activity-runs__table')!;
@@ -217,6 +220,44 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
     .locator('tbody tr')
     .evaluateAll((trs) => trs.slice(0, 2).map((tr) => (tr as HTMLElement).dataset.activityId));
   expect(firstTwo).toEqual(['hold', 'hold']);
+
+  /* #1541 — Open in editor lands on the version that ran with what failed
+     selected. That version is still the latest, so it opens in the editor, and
+     the editor's own selection is the failed activity. */
+  const openInEditor = page.getByRole('link', { name: 'Open in editor' });
+  await openInEditor.click();
+  await expect(page).toHaveURL(/[?&]node=stop(&|$)/);
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
+  await expect(page.locator('.react-flow__node.selected')).toHaveAttribute('data-id', 'stop');
+
+  /* Once a newer version is saved, the run's version opens as a read-only
+     preview instead, with the failed box marked: one box, bordered in the
+     accent (the outline stays the status tone's), and named as selected. */
+  await mintVersion(page, pipelineId, DOC, pipelineVersionId);
+  await page.goBack();
+  await fluentRootReady(page);
+  await openInEditor.click();
+  await expect(page).toHaveURL(/[?&]node=stop(&|$)/);
+  const marked = page.locator('.run-node--selected');
+  await expect(marked).toHaveCount(1);
+  const mark = await marked.evaluate((el) => {
+    const probe = document.createElement('span');
+    probe.style.color = 'var(--accent)';
+    el.appendChild(probe);
+    const accent = getComputedStyle(probe).color;
+    probe.remove();
+    const node = el.closest('.react-flow__node');
+    return {
+      id: node?.getAttribute('data-id'),
+      label: node?.getAttribute('aria-label'),
+      border: getComputedStyle(el).borderTopColor,
+      accent,
+    };
+  });
+  expect(mark.id).toBe('stop');
+  expect(mark.label).toMatch(/, selected$/);
+  expect(mark.accent).not.toBe('');
+  expect(mark.border).toBe(mark.accent);
 
   await expectQuiet(page, problems);
 });

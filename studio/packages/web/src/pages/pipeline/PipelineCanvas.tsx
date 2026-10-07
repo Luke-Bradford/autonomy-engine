@@ -185,6 +185,7 @@ import {
   mergeVersionLists,
   saveAnywayLabel,
   type ActiveVersionState,
+  selectionIn,
 } from './versionHistory';
 import { useTransientNotice } from './useTransientNotice';
 import { EditorStatusStrip } from './EditorStatusStrip';
@@ -272,6 +273,13 @@ interface PipelineCanvasProps {
    */
   openVersion?: number;
   /**
+   * #1541 — the node a link asked to see selected in `openVersion` (`&node=`),
+   * read at mount with it: selected in the editor when that version is the
+   * latest, and marked on its read-only preview otherwise — for as long as that
+   * version is the one previewed.
+   */
+  openNode?: string;
+  /**
    * #1397 — called with the pipeline the archive returned, so the route's copy
    * says archived (and the banner appears). The ROW, not a flag: the archive
    * drops the pipeline from the side pane's list, which is where the heading's
@@ -329,9 +337,11 @@ export function PipelineCanvas({
   onUnarchived,
   onArchived,
   openVersion,
+  openNode,
 }: PipelineCanvasProps) {
   const displayZone = useDisplayTimeZone();
   const [requestedVersion] = useState(openVersion);
+  const [requestedNode] = useState(openNode);
   const store = useState(() => createCanvasStore())[0];
   const [connections, setConnections] = useState<ConnectionPublic[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
@@ -785,9 +795,18 @@ export function PipelineCanvas({
     ])
       .then(([loadedVersions, conns, sets, globals]) => {
         store.getState().setGlobals(toGlobalReads(globals));
-        store.getState().loadVersion(latestVersion(loadedVersions));
+        const head = latestVersion(loadedVersions);
+        store.getState().loadVersion(head);
         setVersions(loadedVersions);
-        setPreviewing(initialPreview(requestedVersion, loadedVersions));
+        const preview = initialPreview(requestedVersion, loadedVersions);
+        setPreviewing(preview);
+        /* #1541 — a link that asked for the LATEST version opens the editor,
+           whose graph is that version, so the node it named is selected there.
+           An older version's preview marks it instead (`RunCanvas`). */
+        if (preview === null && head !== null && head.version === requestedVersion) {
+          const sel = selectionIn(head, requestedNode);
+          if (sel !== null) store.getState().select(sel);
+        }
         setConnections(conns);
         setDatasets(sets);
         setReady(true);
@@ -797,7 +816,7 @@ export function PipelineCanvas({
         setLoadError(err instanceof Error ? err.message : String(err));
       });
     return () => ctrl.abort();
-  }, [pipelineId, store, requestedVersion]);
+  }, [pipelineId, store, requestedVersion, requestedNode]);
 
   /**
    * #844 GL3 (spec GL-D8) — the globals change in ANOTHER page (Manage → Global
@@ -2190,6 +2209,7 @@ export function PipelineCanvas({
               state={null}
               showStatus={false}
               datasets={datasets}
+              selectedNodeId={previewed.version === requestedVersion ? requestedNode : undefined}
             />
           </div>
         )}

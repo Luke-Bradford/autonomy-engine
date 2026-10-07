@@ -66,6 +66,19 @@ export function runFailure(
   return { kind: 'activity', nodeId: blamed, activityId: row?.activityId ?? parsed, row };
 }
 
+/** #1541 — the doc id of what failed: the activity, or the container whose own
+ * rule failed. What the banner names, and what its "Open in editor" selects. */
+export function failedNodeId(failure: Exclude<RunFailure, { kind: 'run' }>): string {
+  return failure.kind === 'activity' ? failure.activityId : failure.containerId;
+}
+
+/**
+ * #1541 — the longest the failure banner waits for the activity runs to catch
+ * up with the log (they are read after it, throttled). Past it the banner says
+ * what it can without them: a read that hangs must not hide what failed.
+ */
+export const FAILURE_BANNER_HOLD_MS = 2_000;
+
 /**
  * How the run's log says it ENDED: its `run.finished` event (the reason, `null`
  * when it states none) or its `run.interrupted` event (no outcome reason; the

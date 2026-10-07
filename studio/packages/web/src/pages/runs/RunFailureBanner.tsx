@@ -1,6 +1,6 @@
 import { Link } from 'react-router';
 import { failureClass } from './format';
-import type { RunFailure } from './runFailure';
+import { failedNodeId, type RunFailure } from './runFailure';
 
 /**
  * #1484 OR35 M2 — directly under a FAILED run's header: what failed, its error,
@@ -18,7 +18,8 @@ export function RunFailureBanner({
 }: {
   failure: RunFailure;
   nameOf: (activityId: string) => string | null;
-  /** The version that ran, or `null` when its doc did not resolve. */
+  /** The version that ran, with what failed selected in it (`failedNodeId`), or
+   * `null` when its doc did not resolve. */
   versionHref: string | null;
   onShowActivity: (rowKey: string) => void;
 }) {
@@ -42,7 +43,7 @@ export function RunFailureBanner({
     );
   }
 
-  const id = failure.kind === 'container' ? failure.containerId : failure.activityId;
+  const id = failedNodeId(failure);
   const name = nameOf(id) ?? id;
   const row = failure.kind === 'activity' ? failure.row : null;
   const message = row?.error?.message ?? null;

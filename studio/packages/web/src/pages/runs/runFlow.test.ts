@@ -617,6 +617,36 @@ describe('runFlowNodes — statusless', () => {
   });
 });
 
+describe('#1541 — runFlowNodes marks the one node a link asked to see', () => {
+  it('marks exactly the named activity or container, and says so in its name', () => {
+    const plain = runFlowNodes(CONTAINER_DOC, null, { showStatus: false });
+    const ids = plain.map((n) => n.id);
+    for (const id of ids) {
+      const nodes = runFlowNodes(CONTAINER_DOC, null, { showStatus: false, selectedId: id });
+      expect(nodes.filter((n) => n.data.selected).map((n) => n.id)).toEqual([id]);
+      const marked = nodes.find((n) => n.id === id)!;
+      const before = plain.find((n) => n.id === id)!;
+      expect(marked.ariaLabel).toBe(`${before.ariaLabel}, selected`);
+    }
+    // Always a boolean, never absent: `sameRenderedData` counts keys.
+    for (const n of plain) expect(n.data.selected).toBe(false);
+  });
+
+  it('marks nothing for an id the doc does not hold', () => {
+    const nodes = runFlowNodes(CONTAINER_DOC, null, { selectedId: 'not-in-doc' });
+    expect(nodes.some((n) => n.data.selected)).toBe(false);
+  });
+
+  it('keeps an unchanged node the same object, and rebuilds only the one newly marked', () => {
+    const prev = runFlowNodes(DOC, null);
+    const id = prev[0]!.id;
+    const next = mergeRunNodes(prev, runFlowNodes(DOC, null, { selectedId: id }));
+    expect(next[0]).not.toBe(prev[0]);
+    expect(next.slice(1)).toEqual(prev.slice(1));
+    next.slice(1).forEach((n, i) => expect(n).toBe(prev[i + 1]));
+  });
+});
+
 /** A run state with these node statuses — all `runNodeFacts` gating reads. */
 function settled(statuses: Record<string, NodeRunStatus>): RunState {
   return {

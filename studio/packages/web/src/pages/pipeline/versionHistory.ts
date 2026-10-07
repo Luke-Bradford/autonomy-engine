@@ -21,6 +21,7 @@ import type { ActivePipelineVersion, PipelineVersion } from '@autonomy-studio/sh
 import { ApiError } from '../../api/client';
 import { latestVersion, type PipelineVersionWrite } from '../../api/pipelines';
 import { toVersionBody } from './canvasDoc';
+import type { Selection } from './canvasStore';
 
 /**
  * #1502 — fold a re-read version list into the one on screen.
@@ -136,6 +137,20 @@ export function initialPreview(
   const latest = latestVersion(versions);
   if (latest === null || requested === latest.version) return null;
   return versions.some((v) => v.version === requested) ? requested : null;
+}
+
+/**
+ * #1541 — what the editor selects for a link's `&node=` on the version it
+ * opened: that activity, or that container, or nothing for an id the version
+ * does not hold (a link is not a promise the graph still has it).
+ */
+export function selectionIn(
+  doc: Pick<PipelineVersion, 'nodes' | 'containers'>,
+  id: string | undefined,
+): Selection | null {
+  if (id === undefined) return null;
+  if (doc.nodes.some((n) => n.id === id)) return { kind: 'node', id };
+  return doc.containers.some((c) => c.id === id) ? { kind: 'container', id } : null;
 }
 
 /**

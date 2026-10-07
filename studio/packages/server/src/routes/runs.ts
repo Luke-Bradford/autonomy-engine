@@ -43,13 +43,13 @@ import {
 import { getExternalWaitByAttempt, listPendingExternalWaitsByRun } from '../repo/external-waits.js';
 import { deriveExternalWaitToken } from '../webhooks/external-wait-token.js';
 import { makeRunActivityFold } from '../run/activity-counts.js';
-import { buildEngine, makeDocResolver } from '../run/driver.js';
+import { buildEngine, DocUnresolvableError, makeDocResolver } from '../run/driver.js';
 import {
   ACTIVITY_RUNS_MEMO_LIMIT,
   projectActivityRuns,
   type ProjectedActivityRuns,
 } from '../run/activity-runs.js';
-import { loadEngineLog } from '../run/events.js';
+import { loadEngineLog, RunLogUnparseableError } from '../run/events.js';
 import { BadRequestError, BusyError, NotFoundError } from '../errors.js';
 import {
   ExternalWaitPayloadError,
@@ -232,6 +232,29 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       if (oldest !== undefined) activityRunsMemo.delete(oldest);
     }
     return runs;
+  };
+  /**
+   * #1541 — the activity in `run`'s PARENT that called it: the parent's
+   * activity-run row whose child is `run`, read through the same memoised
+   * projection the parent's own page reads. `null` when nothing called the run,
+   * when the parent is not this run's owner's, and when the parent's own
+   * version or log will not read: the child's page must not fail over its
+   * parent's fault, it just cannot name the caller.
+   */
+  const callingActivityId = (run: Run): string | null => {
+    if (run.parentRunId === null) return null;
+    const parent = getRun(db, run.parentRunId);
+    if (parent === null || parent.ownerId !== run.ownerId) return null;
+    try {
+      const { rows } = projectedActivityRuns(parent.id, parent.pipelineVersionId);
+      return rows.find((r) => r.childRunId === run.id)?.activityId ?? null;
+    } catch (err) {
+      if (err instanceof DocUnresolvableError || err instanceof RunLogUnparseableError) {
+        fastify.log.warn({ err, runId: parent.id }, 'run detail: cannot name the calling activity');
+        return null;
+      }
+      throw err;
+    }
   };
   // #1484 — one per app, so its memo of settled runs' counts outlives a request.
   const foldActivities = makeRunActivityFold(resolveDoc, {
@@ -448,6 +471,7 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       pipelineName,
       triggerName,
       ...summary,
+      parentActivityId: callingActivityId(run),
     } satisfies RunDetail;
   });
 

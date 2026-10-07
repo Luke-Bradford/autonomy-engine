@@ -59,5 +59,13 @@ export const RunDetailSchema = z.object({
    */
   triggeredByKind: RunTriggeredByKindSchema,
   parentPipelineName: z.string().nullable(),
+  /**
+   * #1541 — the activity in the PARENT's version that called this run: the
+   * activity id of the parent's activity-run row whose child is this run.
+   * `null` for a run nothing called, and for a child the parent's log does not
+   * name or whose parent this owner does not own. An id, not a name: naming an
+   * activity is the web's job (`activityLabels`), against the parent's doc.
+   */
+  parentActivityId: z.string().nullable(),
 });
 export type RunDetail = z.infer<typeof RunDetailSchema>;

@@ -1068,6 +1068,85 @@ describe('runs routes (read-only)', () => {
       const res = await app.inject({ method: 'GET', url: `/api/runs/${run.id}/activity-runs` });
       expect(res.statusCode).toBe(404);
     });
+
+    it("#1541 — a called run's /detail names the activity that called it, from the parent's log", async () => {
+      const childVersion = createPipelineVersion(app.db, {
+        pipelineId: createPipeline(app.db, { ownerId: 'local', name: 'Child' }).id,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+      const parent = seedCaller(childVersion.id);
+      const mkChild = () =>
+        createRun(app.db, {
+          ownerId: 'local',
+          pipelineVersionId: childVersion.id,
+          triggerId: null,
+          parentRunId: parent.id,
+          params: {},
+        });
+      const child = mkChild();
+      // A sibling the parent's log never names: its caller is not known.
+      const unnamed = mkChild();
+      logCall(parent.id, parent.pipelineVersionId, child.id);
+      const detailOf = async (id: string) =>
+        RunDetailSchema.parse(
+          (await app.inject({ method: 'GET', url: `/api/runs/${id}/detail` })).json(),
+        );
+
+      expect((await detailOf(child.id)).parentActivityId).toBe('c');
+      expect((await detailOf(unnamed.id)).parentActivityId).toBeNull();
+      // Nothing called the parent.
+      expect((await detailOf(parent.id)).parentActivityId).toBeNull();
+
+      // A parent another owner holds is never read for its caller, though its
+      // log names this run (built at the repo layer: no route makes such a pair).
+      const foreignParent = createRun(app.db, {
+        ownerId: 'someone-else',
+        pipelineVersionId: parent.pipelineVersionId,
+        triggerId: null,
+        parentRunId: null,
+        params: {},
+      });
+      const orphan = createRun(app.db, {
+        ownerId: 'local',
+        pipelineVersionId: childVersion.id,
+        triggerId: null,
+        parentRunId: foreignParent.id,
+        params: {},
+      });
+      logCall(foreignParent.id, foreignParent.pipelineVersionId, orphan.id);
+      expect((await detailOf(orphan.id)).parentActivityId).toBeNull();
+    });
+
+    it("#1541 — a parent whose log will not read costs the child's /detail only the caller", async () => {
+      const childVersion = createPipelineVersion(app.db, {
+        pipelineId: createPipeline(app.db, { ownerId: 'local', name: 'Child' }).id,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+      const parent = seedCaller(childVersion.id);
+      const child = createRun(app.db, {
+        ownerId: 'local',
+        pipelineVersionId: childVersion.id,
+        triggerId: null,
+        parentRunId: parent.id,
+        params: {},
+      });
+      logCall(parent.id, parent.pipelineVersionId, child.id);
+      appendRunEvent(app.db, { runId: parent.id, type: 'no.such', payload: { type: 'no.such' } });
+
+      const res = await app.inject({ method: 'GET', url: `/api/runs/${child.id}/detail` });
+      expect(res.statusCode).toBe(200);
+      const detail = RunDetailSchema.parse(res.json());
+      expect(detail.parentActivityId).toBeNull();
+      expect(detail.parentPipelineName).toBe('Caller');
+    });
   });
 
   describe('R1 — GET /api/runs/:id/detail (the run-detail read-model)', () => {

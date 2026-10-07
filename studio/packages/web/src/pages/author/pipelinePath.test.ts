@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pipelinePath, readOpenVersion, runVersionPath } from './pipelinePath';
+import { pipelinePath, readOpenNode, readOpenVersion, runVersionPath } from './pipelinePath';
 
 describe('pipelinePath (#1484)', () => {
   it('opens the pipeline, or one exact saved version of it', () => {
@@ -25,5 +25,21 @@ describe('pipelinePath (#1484)', () => {
     ]) {
       expect(readOpenVersion(new URLSearchParams(raw)), raw).toBeUndefined();
     }
+  });
+
+  it('#1541 — names an activity to select in that version, and only in a saved one', () => {
+    expect(pipelinePath('pl_1', 3, 'n 1&x')).toBe('/author/pipelines/pl_1?version=3&node=n+1%26x');
+    // No version, no node: the editor's working copy is not the version that ran.
+    expect(pipelinePath('pl_1', undefined, 'n1')).toBe('/author/pipelines/pl_1');
+    expect(runVersionPath('pl_1', 3, false, 'n1')).toBe('/author/pipelines/pl_1?version=3&node=n1');
+    expect(runVersionPath('pl_1', 3, true, 'n1')).toBe('/author/pipelines/pl_1');
+  });
+
+  it('#1541 — reads the node back as written, and nothing for an absent or empty one', () => {
+    expect(readOpenNode(new URLSearchParams(pipelinePath('pl_1', 3, 'n 1&x').split('?')[1]))).toBe(
+      'n 1&x',
+    );
+    expect(readOpenNode(new URLSearchParams('version=3'))).toBeUndefined();
+    expect(readOpenNode(new URLSearchParams('version=3&node='))).toBeUndefined();
   });
 });
