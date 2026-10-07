@@ -18,6 +18,8 @@ import { formatRunDuration, formatWhen } from './format';
 import { runDetailPath, runLinkLabel } from './runPath';
 import { runStatusLabel } from './runStatus';
 import { When } from '../../lib/When';
+import { withParams } from '../../lib/withParams';
+import { RUN_FILTER_PARAMS } from './runFilters';
 import type { DisplayTimeZone } from '../../lib/displayTime';
 
 /** What a cell needs besides its run. */
@@ -28,6 +30,9 @@ export interface CellContext {
 
   /** The run's detail route, for the Run ID column's real link. */
   path: string;
+  /** The runs list's own query, so a cell can link to one more filter while
+   *  keeping the rest (#1521). */
+  search: string;
   /** The viewer's display time zone (#1484), for timestamps inside a title. */
   zone: DisplayTimeZone;
   /** #1484 — where the row sits under "Include child runs"; absent while the
@@ -271,10 +276,26 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
   annotations: {
     label: 'Annotations',
     /* #1016 — the tags of the version this run bound, as the annotation filter
-       matches them. */
-    cell: (r) => (
+       matches them. #1521 — each one links to that filter, keeping the others. */
+    cell: (r, { search }) => (
       <td title={r.annotations.length > 0 ? r.annotations.join(', ') : undefined}>
-        {r.annotations.length > 0 ? r.annotations.join(', ') : '—'}
+        {r.annotations.length > 0
+          ? r.annotations.map((tag, i) => (
+              <span key={tag}>
+                {i > 0 ? ', ' : null}
+                <Link
+                  to={{
+                    search: withParams(new URLSearchParams(search), {
+                      [RUN_FILTER_PARAMS.annotation]: tag,
+                    }).toString(),
+                  }}
+                  title={`Show only runs tagged ${tag}`}
+                >
+                  {tag}
+                </Link>
+              </span>
+            ))
+          : '—'}
       </td>
     ),
   },

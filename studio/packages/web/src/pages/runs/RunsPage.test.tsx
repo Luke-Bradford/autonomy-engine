@@ -455,6 +455,36 @@ describe('RunsPage', () => {
     ).toHaveTextContent(/^—$/);
   });
 
+  it('#1521 — a tag links to the annotation filter, keeping the filters already set', async () => {
+    const data = new Map<string, string>([[RUN_GRID_HIDDEN_STORAGE_KEY, '[]']]);
+    const ui = createUiStore({
+      getItem: (key) => data.get(key) ?? null,
+      setItem: (key, value) => {
+        data.set(key, value);
+      },
+    });
+    listMock.mockResolvedValue(
+      pageOf([run({ id: 'run_tagged', annotations: ['finance', 'nightly'] })]),
+    );
+    const { router } = renderWithDataRouter(
+      <RunsPage ui={ui} />,
+      '/monitor/runs?status=failed&annotation=finance',
+    );
+    const cell = cellUnder(
+      (await screen.findByText('run_tagged')).closest('tr') as HTMLElement,
+      'Annotations',
+    );
+    await userEvent.click(within(cell).getByRole('link', { name: 'nightly' }));
+    expect(router.state.location.pathname).toBe('/monitor/runs');
+    const params = new URLSearchParams(router.state.location.search);
+    expect(params.get('status')).toBe('failed');
+    expect(params.get('annotation')).toBe('nightly');
+    // The list asks the server for the new filter; the row did not open.
+    await vi.waitFor(() =>
+      expect(listMock.mock.calls.at(-1)?.[0]).toMatchObject({ annotation: 'nightly' }),
+    );
+  });
+
   it('draws the em-dash in both new columns when the server has no figure', async () => {
     listMock.mockResolvedValue(pageOf([run({ id: 'run_abc', status: 'queued' })]));
     renderWithRouter(<RunsPage />);
@@ -1858,12 +1888,19 @@ describe('#1484 — runs list Live mode and page size', () => {
   it('a failed live read keeps the rows, says so, and stops the count', async () => {
     listMock.mockResolvedValueOnce(pageOf([run({ id: 'run_live0001', startedAt: NOW - 65_000 })]));
     renderWithRouter(<RunsPage ui={liveUi()} />);
+    // Live's own poll; the grid's clock is not armed until an unfinished row is.
+    const liveOnly = vi.getTimerCount();
     await screen.findByText('run_live0001');
+    await vi.waitFor(() => expect(vi.getTimerCount()).toBe(liveOnly + 1));
     listMock.mockRejectedValueOnce(new Error('server down'));
     tick(RUNS_LIVE_POLL_MS);
     expect(await screen.findByRole('alert')).toHaveTextContent('Live update failed: server down');
     expect(screen.getByText(RUNS_LIVE_FAILING_LABEL)).toBeInTheDocument();
     // The page cannot hear this run finish now, so its duration stops counting.
+    // #1562 — the alert can be on screen before React has run the effect that
+    // stops the clock, and a tick then still counts. Wait for that interval to
+    // go, so a clock that never stops fails here, by name.
+    await vi.waitFor(() => expect(vi.getTimerCount()).toBe(liveOnly));
     const held = durationOf('run_live0001').textContent;
     tick(3_000);
     expect(durationOf('run_live0001').textContent).toBe(held);

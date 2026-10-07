@@ -9,7 +9,7 @@ import {
   MenuTrigger,
 } from '@fluentui/react-components';
 import { useStore } from 'zustand';
-import { useHref, useNavigate } from 'react-router';
+import { useHref, useLocation, useNavigate } from 'react-router';
 import type { RunSortKey, RunSummary } from '@autonomy-studio/shared';
 import {
   RUN_GRID_COLUMNS,
@@ -137,6 +137,7 @@ function RunRow({
   nest?: RunNest;
 }) {
   const navigate = useNavigate();
+  const { search } = useLocation();
   const path = runDetailPath(r.id);
   const href = useHref(path);
   const open = (e: ReactMouseEvent<HTMLTableRowElement>, newTab: boolean): void => {
@@ -157,7 +158,7 @@ function RunRow({
     if (newTab) window.open(href, '_blank', 'noopener');
     else void navigate(path);
   };
-  const ctx: CellContext = { loadedAt, path, zone, ...(nest ? { nest } : {}) };
+  const ctx: CellContext = { loadedAt, path, search, zone, ...(nest ? { nest } : {}) };
   return (
     <tr
       className={
