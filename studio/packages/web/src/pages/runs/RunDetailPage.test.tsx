@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
 import { renderWithDataRouter, renderWithRouter } from '../../testing/renderWithRouter';
+import { RUN_DETAIL_TAB_LABELS, RunDetailTabSchema } from './runDetailTabs';
 import { activityRun } from '../../testing/activityRun';
 import { answerConfirm } from '../../testing/confirmDialog';
 import type {
@@ -303,6 +304,9 @@ async function openDrawer(name: string, index = 0): Promise<HTMLElement> {
   await userEvent.click(screen.getAllByRole('button', { name })[index]!);
   return screen.getByRole('complementary', { name: `Node ${name}` });
 }
+
+/** The run page's Graph tab panel, to query what the graph itself says. */
+const graphPanel = () => within(screen.getByRole('tabpanel', { name: 'Graph' }));
 
 /** The run's timeline: where the page's reconciled per-node record is listed. */
 const timelineSection = () => screen.getByRole('region', { name: 'Timeline' });
@@ -621,7 +625,7 @@ describe('RunDetailPage', () => {
     renderWithRouter(<RunDetailPage runId="run_1" />, '/?rdTab=graph');
 
     expect(await screen.findByTestId('run-canvas')).toBeInTheDocument();
-    expect(screen.getByText(/Loading this run’s history/i)).toBeInTheDocument();
+    expect(graphPanel().getByText(/Loading this run’s history/i)).toBeInTheDocument();
   });
 
   it('U11 — refuses to project a log the stream CLOSED before finishing, and says why', async () => {
@@ -642,7 +646,7 @@ describe('RunDetailPage', () => {
 
     expect(await screen.findByTestId('run-canvas')).toBeInTheDocument();
     expect(
-      screen.getByText(/ended before this run’s history finished loading/i),
+      graphPanel().getByText(/ended before this run’s history finished loading/i),
     ).toBeInTheDocument();
   });
 
@@ -678,7 +682,7 @@ describe('RunDetailPage', () => {
     renderWithRouter(<RunDetailPage runId="run_1" />, '/?rdTab=graph');
 
     expect(await screen.findByTestId('run-canvas')).toBeInTheDocument();
-    expect(screen.getByText(/event stream is unavailable/i)).toBeInTheDocument();
+    expect(graphPanel().getByText(/event stream is unavailable/i)).toBeInTheDocument();
   });
 
   it('U11 — a doc that will not resolve costs the OVERLAY, not the run’s metadata', async () => {
@@ -3789,7 +3793,7 @@ describe('RunDetailPage — the activity run detail drawer (#1484 M2)', () => {
    open one in the URL. */
 describe('RunDetailPage — the run views as tabs (#1484 M2)', () => {
   const tabs = () => screen.getByRole('tablist', { name: 'Run views' });
-  const VIEWS = ['Gantt', 'Graph', 'Events', 'Variables', 'Cost'];
+  const VIEWS = RunDetailTabSchema.options.map((tab) => RUN_DETAIL_TAB_LABELS[tab]);
   /** The open tab's name. (Fluent repeats a tab's label in a hidden sizer, so
    * names are matched, not read off `textContent`.) */
   const selectedTab = () =>
@@ -3805,6 +3809,13 @@ describe('RunDetailPage — the run views as tabs (#1484 M2)', () => {
     );
     expect(selectedTab()).toEqual(['Gantt']);
     expect(screen.getByText('No activity has started.')).toBeVisible();
+  });
+
+  it('says why the Gantt is empty while the run’s history is still loading', async () => {
+    useRunStreamMock.mockReturnValue(stream({ replayComplete: false }));
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    expect(await screen.findByText('Loading this run’s history…')).toBeVisible();
+    expect(screen.queryByText('No activity has started.')).toBeNull();
   });
 
   it('opens on the tab the URL names, and writes the one chosen back to it', async () => {

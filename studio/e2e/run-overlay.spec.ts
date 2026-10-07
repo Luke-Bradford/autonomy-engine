@@ -54,6 +54,13 @@ test('U11 — the run canvas shows the engine’s own status for every node, inc
   await fluentRootReady(page);
   const canvas = page.getByTestId('run-canvas');
   await expect(canvas).toBeVisible();
+  /* #1484 M2 — in its tab the graph still takes the page's width, as the
+     activity runs above it do, not the dock's 56rem form cap. */
+  const width = async (selector: string) =>
+    (await page.locator(selector).boundingBox())?.width ?? Number.NaN;
+  expect(await width('[data-testid="run-canvas"]')).toBeGreaterThanOrEqual(
+    (await width('.activity-runs__table')) - 2,
+  );
 
   // Every node in the DOC is drawn — including the one that never dispatched.
   // The table below is fed by events, so nothing in the LOG accounts for

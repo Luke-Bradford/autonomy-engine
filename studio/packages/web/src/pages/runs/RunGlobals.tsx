@@ -1,5 +1,6 @@
+import type { ReactNode } from 'react';
+import type { RunState } from '@autonomy-studio/shared';
 import { InlineJsonValue } from './CappedValue';
-import { globalNames, type GlobalsOverlay } from './runValues';
 
 /**
  * #844 GL5 — the workspace globals this run read, as the ENGINE holds them.
@@ -14,15 +15,24 @@ import { globalNames, type GlobalsOverlay } from './runValues';
  * No type column: the snapshot carries values only, and the version's recorded
  * read types never reach the web.
  *
- * Omitted entirely for a run that read none, and while the projection is
- * unavailable (`globalNames` is empty for both). Without the projection there is
- * nothing to say whether the run read any, so any message would be a guess; the
- * run page's Variables tab says "read none" only once the projection is ready.
+ * Omitted entirely while the projection is unavailable: without it there is
+ * nothing to say whether the run read any, so any message would be a guess. For
+ * a run that read none it renders `empty`, which the run page's Variables tab
+ * uses to say so. The snapshot is taken at `run.started`, so a run past that
+ * which read none never will — but a queued run has no snapshot yet, and the
+ * page passes no `empty` for one.
  */
-export function RunGlobals({ overlay }: { overlay: GlobalsOverlay }) {
+export function RunGlobals({
+  overlay,
+  empty = null,
+}: {
+  overlay: { ready: true; state: Pick<RunState, 'globals'> } | { ready: false; reason: string };
+  /** Shown in place of the section for a run that read no globals. */
+  empty?: ReactNode;
+}) {
   if (!overlay.ready) return null;
-  const names = globalNames(overlay);
-  if (names.length === 0) return null;
+  const names = Object.keys(overlay.state.globals).sort((a, b) => a.localeCompare(b, 'en'));
+  if (names.length === 0) return empty;
   return (
     <section aria-labelledby="run-globals-heading">
       <h3 id="run-globals-heading">Global parameters</h3>

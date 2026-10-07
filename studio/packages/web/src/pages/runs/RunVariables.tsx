@@ -1,7 +1,7 @@
 import { VALUE_TYPE_TITLES } from '@autonomy-studio/shared';
+import type { ReactNode } from 'react';
 import type { RunState, VariableDef } from '@autonomy-studio/shared';
 import { InlineJsonValue } from './CappedValue';
-import { showsVariables } from './runValues';
 
 /**
  * #844 V7 (spec V-D9) — the run's pipeline variables, as the ENGINE holds them.
@@ -17,22 +17,24 @@ import { showsVariables } from './runValues';
  * Only the TYPE comes from the declaration, and the ORDER: rows follow the
  * Variables tab rather than the object's key order.
  *
- * Omitted entirely when there is nothing it could say: no version doc or a
- * pipeline that declares no variables (`showsVariables`). The run page's
- * Variables tab says which in its place, since a tab the reader opened must not
- * be blank.
+ * When there is nothing it could say — no version doc, or a pipeline that
+ * declares no variables — it renders `empty` instead, which the run page's
+ * Variables tab uses to say which: a tab the reader opened must not be blank.
  */
 export function RunVariables({
   declared,
   overlay,
   settled,
+  empty = null,
 }: {
   /** `doc?.variables` — `undefined` while the version doc is unavailable. */
   declared: readonly VariableDef[] | undefined;
   overlay: { ready: true; state: Pick<RunState, 'variables'> } | { ready: false; reason: string };
   settled: boolean;
+  /** Shown in place of the section when there are no variables to show. */
+  empty?: ReactNode;
 }) {
-  if (!showsVariables(declared)) return null;
+  if (declared === undefined || declared.length === 0) return empty;
   return (
     <section aria-labelledby="run-variables-heading">
       <h3 id="run-variables-heading">Variables</h3>

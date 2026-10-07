@@ -8,6 +8,15 @@ import { z } from 'zod';
 export const RunDetailTabSchema = z.enum(['gantt', 'graph', 'events', 'variables', 'cost']);
 export type RunDetailTab = z.infer<typeof RunDetailTabSchema>;
 
+/** Each tab's label: the page's strip and its tests read them from here. */
+export const RUN_DETAIL_TAB_LABELS: Record<RunDetailTab, string> = {
+  gantt: 'Gantt',
+  graph: 'Graph',
+  events: 'Events',
+  variables: 'Variables',
+  cost: 'Cost',
+};
+
 /** The tab a run opens on: the first, the one the ticket lists first. */
 export const DEFAULT_RUN_DETAIL_TAB: RunDetailTab = 'gantt';
 

@@ -52,10 +52,14 @@ import { useActivityRuns } from './useActivityRuns';
 import { RunCostSummary } from './RunCostSummary';
 import { RunGlobals } from './RunGlobals';
 import { RunVariables } from './RunVariables';
-import { globalNames, showsVariables } from './runValues';
 import { PanelTabs } from '../pipeline/PanelTabs';
 import { withParams } from '../../lib/withParams';
-import { readRunDetailTab, runDetailTabParams, type RunDetailTab } from './runDetailTabs';
+import {
+  readRunDetailTab,
+  RUN_DETAIL_TAB_LABELS,
+  runDetailTabParams,
+  type RunDetailTab,
+} from './runDetailTabs';
 import { RunDiagnostics } from './RunDiagnostics';
 import { RunGraph } from './RunGraph.lazy';
 import { useRunProjection } from './useRunProjection';
@@ -242,7 +246,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
 
   const stream = useRunStream(runId);
 
-  /* U25 — ONE projection for the whole page. The graph below takes this same
+  /* U25 — ONE projection for the whole page. The Graph tab takes this same
      overlay rather than folding the log a second time inside its lazy chunk,
      and the per-node record (the timeline, the run's spend, the cancel
      confirmation) reconciles against it, so neither surface can invent a
@@ -293,9 +297,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
     [stream.events],
   );
 
-  /* #882 — the ONE name a node has in this view. The graph below reads the same
-     `activityLabels` map off the same doc, so the table and the picture beside
-     it cannot come to call one node two things.
+  /* #882 — the ONE name a node has in this view. The Graph tab reads the same
+     `activityLabels` map off the same doc, so the table and the picture in that
+     tab cannot come to call one node two things.
 
      Two cases have no name and are not given an invented one.
 
@@ -339,9 +343,14 @@ export function RunDetailPage({ runId }: { runId: string }) {
      counts), and the run not yet terminal. The run clause covers the moment
      between a terminal event and the server's close, and a finished or
      cancelled run's never-closed span, which must not tick forever. The ROW
-     set, as `RunCostSummary`'s `settled` below, because `status` can fall back
+     set, as `settled` below, because `status` can fall back
      to the REST row's `queued`/`skipped`. */
   const countingLive = streamStillLive(stream.phase, status);
+  /* Whether the run has ended, for the sections that say "so far" or "final".
+     The ROW-status set, not the lifecycle one: `status` falls back to
+     `run.status`, which can be `queued` or `skipped` — neither of which the
+     lifecycle set knows about. See `TERMINAL_RUN_ROW_STATUS`. */
+  const settled = TERMINAL_RUN_ROW_STATUS.has(status);
   /* #1484 M2 — the activity runs, re-read as the log grows, and while a run
      this one called is still going and the page would hear this run settle. */
   const lastSeq = stream.events.at(-1)?.seq;
@@ -610,6 +619,32 @@ export function RunDetailPage({ runId }: { runId: string }) {
     [stream.events, totalEvents],
   );
 
+  /* The Graph tab's content, and nothing while another tab is open (see the
+     run views below). */
+  const graphView =
+    detailTab !== 'graph' ? null : doc === null ? (
+      <p>
+        {loadError === null
+          ? 'Loading the pipeline graph…'
+          : 'The pipeline graph is unavailable, so there is no node overlay. The event feed is unaffected.'}
+      </p>
+    ) : (
+      /* #698 — React Flow loads on demand, so the run metadata, activity
+         runs and event feed paint without waiting on it. The boundary is HERE
+         rather than at the route for that reason: all of that is useful
+         without the graph. */
+      <Suspense fallback={<p className="page-hint">Loading the graph…</p>}>
+        <RunGraph
+          doc={doc}
+          overlay={overlay}
+          activity={nodes}
+          selectedNodeId={drawerRow?.activityId}
+          onOpenNode={openNode}
+          openableNodeIds={openableNodeIds}
+        />
+      </Suspense>
+    );
+
   return (
     <section aria-labelledby="run-heading" className="run-page">
       <RunHeader
@@ -778,156 +813,138 @@ export function RunDetailPage({ runId }: { runId: string }) {
       {/* #1484 OR35 M2 — the run's secondary views, as tabs below the activity
           runs (principle 2: the table is the primary view). The tab is in the
           URL, so a link to a run's events opens on them. `PanelTabs` keeps every
-          panel mounted, so the diagnostics read and the cost figures do not
-          restart on a tab switch — except the graph, which mounts only while
-          its tab is open: React Flow measures its container to fit the view,
-          and a hidden panel measures zero. */}
-      <PanelTabs<RunDetailTab>
-        label="Run views"
-        selected={detailTab}
-        onSelect={(next) => setSearchParams((prev) => withParams(prev, runDetailTabParams(next)))}
-        tabs={[
-          {
-            key: 'gantt',
-            label: 'Gantt',
-            /* U12a (#1007) — each node's attempts on a shared time axis. */
-            content:
-              nodes.length > 0 ? (
-                <AttemptTimeline nodes={nodes} nameOf={nameOf} runStatus={status} />
-              ) : (
-                <p className="page-hint">No activity has started.</p>
-              ),
-          },
-          {
-            key: 'graph',
-            label: 'Graph',
-            content:
-              detailTab !== 'graph' ? null : doc === null ? (
-                <p>
-                  {loadError === null
-                    ? 'Loading the pipeline graph…'
-                    : 'The pipeline graph is unavailable, so there is no node overlay. The event feed is unaffected.'}
-                </p>
-              ) : (
-                /* #698 — React Flow loads on demand, so the run metadata,
-                   activity runs and event feed paint without waiting on it.
-                   The boundary is HERE rather than at the route for that
-                   reason: all of that is useful without the graph. */
-                <Suspense fallback={<p className="page-hint">Loading the graph…</p>}>
-                  <RunGraph
-                    doc={doc}
-                    overlay={overlay}
-                    activity={nodes}
-                    selectedNodeId={drawerRow?.activityId}
-                    onOpenNode={openNode}
-                    openableNodeIds={openableNodeIds}
-                  />
-                </Suspense>
-              ),
-          },
-          {
-            key: 'events',
-            label: 'Events',
-            content: (
-              <>
-                {/* #1065 — the reducer's explanations, above the raw decision
+          panel mounted, so a tab switch does not re-read the diagnostics or
+          rebuild the feed — except the graph, which mounts only while its tab is
+          open: React Flow measures its container to fit the view, and a hidden
+          panel measures zero. That costs the graph its pan and zoom on a switch.
+          The wrapper lifts the dock's form-width cap off these panels. */}
+      <div className="run-views">
+        <PanelTabs<RunDetailTab>
+          label="Run views"
+          selected={detailTab}
+          onSelect={(next) => setSearchParams((prev) => withParams(prev, runDetailTabParams(next)))}
+          tabs={[
+            {
+              key: 'gantt',
+              label: RUN_DETAIL_TAB_LABELS.gantt,
+              /* U12a (#1007) — each node's attempts on a shared time axis. */
+              content:
+                nodes.length > 0 ? (
+                  <AttemptTimeline nodes={nodes} nameOf={nameOf} runStatus={status} />
+                ) : (
+                  <p className="page-hint">
+                    {overlay.ready ? 'No activity has started.' : overlay.reason}
+                  </p>
+                ),
+            },
+            {
+              key: 'graph',
+              label: RUN_DETAIL_TAB_LABELS.graph,
+              content: graphView,
+            },
+            {
+              key: 'events',
+              label: RUN_DETAIL_TAB_LABELS.events,
+              content: (
+                <>
+                  {/* #1065 — the reducer's explanations, above the raw decision
                     log they explain: the only section that answers "why".
                     Rendered unconditionally — "the reducer neutralized nothing"
-                    is itself a fact worth stating. The settled set is the ROW
-                    one, as for the cost: `status` falls back to `run.status`,
-                    which can be `queued` or `skipped`. */}
-                <RunDiagnostics runId={runId} settled={TERMINAL_RUN_ROW_STATUS.has(status)} />
-                {totalEvents === 0 ? (
-                  <p>No events yet.</p>
-                ) : (
-                  <table className="event-feed">
-                    <thead>
-                      <tr>
-                        <th scope="col">Seq</th>
-                        {/* Clock times only, so the zone is named once, here. */}
-                        <th scope="col">
-                          Time{feed.length > 0 ? ` (${zoneLabel(feed[0]!.ts, zone)})` : ''}
-                        </th>
-                        <th scope="col">Type</th>
-                        <th scope="col">Detail</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {totalEvents > MAX_FEED_ROWS && (
+                    is itself a fact worth stating. */}
+                  <RunDiagnostics runId={runId} settled={settled} />
+                  {totalEvents === 0 ? (
+                    <p>No events yet.</p>
+                  ) : (
+                    <table className="event-feed">
+                      <thead>
                         <tr>
-                          <td colSpan={4}>
-                            … showing the most recent {MAX_FEED_ROWS} of {totalEvents} events
-                          </td>
+                          <th scope="col">Seq</th>
+                          {/* Clock times only, so the zone is named once, here. */}
+                          <th scope="col">
+                            Time{feed.length > 0 ? ` (${zoneLabel(feed[0]!.ts, zone)})` : ''}
+                          </th>
+                          <th scope="col">Type</th>
+                          <th scope="col">Detail</th>
                         </tr>
-                      )}
-                      {feed.map((e) => (
-                        <tr key={e.seq}>
-                          <td>{e.seq}</td>
-                          <td>{formatTimeOfDay(e.ts, zone, 'ms')}</td>
-                          <td>
-                            <code>{e.type}</code>
-                          </td>
-                          <td>{eventGloss(e)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </>
-            ),
-          },
-          {
-            key: 'variables',
-            label: 'Variables',
-            /* #844 V7 / GL5 — the run's variables and the globals it read, from
+                      </thead>
+                      <tbody>
+                        {totalEvents > MAX_FEED_ROWS && (
+                          <tr>
+                            <td colSpan={4}>
+                              … showing the most recent {MAX_FEED_ROWS} of {totalEvents} events
+                            </td>
+                          </tr>
+                        )}
+                        {feed.map((e) => (
+                          <tr key={e.seq}>
+                            <td>{e.seq}</td>
+                            <td>{formatTimeOfDay(e.ts, zone, 'ms')}</td>
+                            <td>
+                              <code>{e.type}</code>
+                            </td>
+                            <td>{eventGloss(e)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </>
+              ),
+            },
+            {
+              key: 'variables',
+              label: RUN_DETAIL_TAB_LABELS.variables,
+              /* #844 V7 / GL5 — the run's variables and the globals it read, from
                the same one projection the graph and the drawer read. Each says
                why it is absent, since the reader opened this tab to look. */
-            content: (
-              <>
-                {showsVariables(doc?.variables) ? (
+              content: (
+                <>
                   <RunVariables
                     declared={doc?.variables}
                     overlay={overlay}
-                    settled={TERMINAL_RUN_ROW_STATUS.has(status)}
+                    settled={settled}
+                    empty={
+                      <p className="page-hint">
+                        {doc === null
+                          ? 'The pipeline version is not loaded, so its variables are not shown.'
+                          : 'This pipeline declares no variables.'}
+                      </p>
+                    }
                   />
-                ) : (
-                  <p className="page-hint">
-                    {doc === null
-                      ? 'The pipeline version is not loaded, so its variables are not shown.'
-                      : 'This pipeline declares no variables.'}
-                  </p>
-                )}
-                {globalNames(overlay).length > 0 ? (
-                  <RunGlobals overlay={overlay} />
-                ) : (
-                  overlay.ready && <p className="page-hint">This run read no global parameters.</p>
-                )}
-              </>
-            ),
-          },
-          {
-            key: 'cost',
-            label: 'Cost',
-            /* U27 (#930) — the run-level spend. Rendered unconditionally — see
+                  {/* A queued run has no globals snapshot yet, so "none" waits. */}
+                  <RunGlobals
+                    overlay={overlay}
+                    empty={
+                      status === 'queued' ? null : (
+                        <p className="page-hint">This run read no global parameters.</p>
+                      )
+                    }
+                  />
+                </>
+              ),
+            },
+            {
+              key: 'cost',
+              label: RUN_DETAIL_TAB_LABELS.cost,
+              /* U27 (#930) — the run-level spend. Rendered unconditionally — see
                `RunCostSummary`, which owns every "should this say anything"
-               decision so the page cannot make a second one. The settled set is
-               the ROW-status one: `status` falls back to `run.status`, which
-               can be `queued` or `skipped` — neither of which the lifecycle set
-               knows about. See `TERMINAL_RUN_ROW_STATUS`. */
-            content: (
-              <RunCostSummary
-                usage={runUsage}
-                nodes={nodes}
-                settled={TERMINAL_RUN_ROW_STATUS.has(status)}
-                replayComplete={stream.replayComplete}
-                logTruncated={
-                  (stream.phase === 'closed' || stream.phase === 'error') && !stream.replayComplete
-                }
-              />
-            ),
-          },
-        ]}
-      />
+               decision so the page cannot make a second one. */
+              content: (
+                <RunCostSummary
+                  usage={runUsage}
+                  nodes={nodes}
+                  settled={settled}
+                  replayComplete={stream.replayComplete}
+                  logTruncated={
+                    (stream.phase === 'closed' || stream.phase === 'error') &&
+                    !stream.replayComplete
+                  }
+                />
+              ),
+            },
+          ]}
+        />
+      </div>
       {drawerRow !== null && drawerNode !== null && (
         <RunDrawer
           key={`${drawerRow.key}:${drawer?.n}`}

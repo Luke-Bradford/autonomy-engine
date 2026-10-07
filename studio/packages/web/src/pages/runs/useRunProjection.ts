@@ -54,7 +54,7 @@ export function useRunProjection(doc: PipelineVersion | null, stream: RunStreamS
     /* No doc, no projection — and this is a REAL state, not a defensive
        branch: R1 resolves the run's bound version, and a run whose version no
        longer resolves still has a full event log to render. The page already
-       says so above the graph; the table falls back to the doc-free fold. */
+       says so in its load error; the table falls back to the doc-free fold. */
     if (doc === null) {
       return {
         ready: false,
