@@ -11,11 +11,13 @@ import {
 import { When } from '../../lib/When';
 import { GridColumnHeader, GridColumnsMenu } from '../../lib/GridColumns';
 import { useGridColumnWidths } from '../../lib/useGridColumnWidths';
+import { useRowOpen } from '../../lib/useRowOpen';
 import { visibleGridColumns } from '../../stores/gridColumns';
 import { PIPELINE_GRID_SPEC, type PipelineGridColumnId, type UiStore } from '../../stores/uiStore';
 import { formatElapsed } from '../runs/format';
 import { runDetailPath } from '../runs/runPath';
 import { runStatusLabel } from '../runs/runStatus';
+import { triggersPath } from '../triggers/triggersPath';
 import { pipelinePath } from './pipelinePath';
 import { percentOf } from './successPercent';
 import type { PipelineSort, PipelineSortKey } from './pipelinesGridSort';
@@ -111,10 +113,13 @@ function triggersCell(s: PipelineSummary | undefined): ReactNode {
   const names = s.triggers.items
     .map((t) => `${t.name} · ${TRIGGER_MODE_LABELS[t.mode]}${t.enabled ? '' : ' (off)'}`)
     .join('\n');
+  // The pipeline's triggers, listed: Manage → Triggers under `?pipeline=`, the
+  // editor's Trigger ▾ → View triggers.
   return (
-    <span
+    <Link
+      to={triggersPath(s.pipelineId)}
       title={names}
-    >{`${String(s.triggers.enabled)} active / ${String(s.triggers.total)}`}</span>
+    >{`${String(s.triggers.enabled)} active / ${String(s.triggers.total)}`}</Link>
   );
 }
 
@@ -324,15 +329,29 @@ export function PipelinesGrid({
           {pipelines.map((p) => {
             const s = summaries?.get(p.id);
             return (
-              <tr key={p.id}>
+              <PipelineGridRow key={p.id} pipelineId={p.id}>
                 {shown.map((c) => cellOf(c, p, s))}
                 <td className="pipelines-grid__actions">{actions(p)}</td>
-              </tr>
+              </PipelineGridRow>
             );
           })}
         </tbody>
       </table>
     </div>
+  );
+}
+
+/**
+ * #1569 OR37 slice 7 — a click anywhere on the row that is not one of its own
+ * controls opens the editor (`useRowOpen`, the runs grid's rule). The Name link
+ * stays the keyboard path.
+ */
+function PipelineGridRow({ pipelineId, children }: { pipelineId: string; children: ReactNode }) {
+  const { onClick, onAuxClick } = useRowOpen(pipelinePath(pipelineId));
+  return (
+    <tr className="runs-grid__row" onClick={onClick} onAuxClick={onAuxClick}>
+      {children}
+    </tr>
   );
 }
 
