@@ -176,8 +176,12 @@ test('CX4 — cancelling a PARKED run finishes it at once, and the page says can
   await expect(nodeRowStatus(page, 'Wait')).toHaveText('stopped (cancelled)');
   /* #1329 — and its COLOUR says stopped on every surface, not the `holding` hue
      of a park still due: the table pill, the graph node and the open span on
-     the attempt timeline. One read, every assertion. */
+     the attempt timeline. One read, every assertion — once the graph, which
+     loads on demand, has drawn the node. */
   await openRunView(page, 'Graph');
+  await expect(page.locator('.react-flow__node[data-id="hold"] .run-node-status')).toHaveText(
+    'stopped (cancelled)',
+  );
   const stopped = await page.evaluate(() => {
     const pill = [...document.querySelectorAll<HTMLElement>('.activity-runs tr .node-status')].find(
       (el) => el.textContent?.trim() === 'stopped (cancelled)',
