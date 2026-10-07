@@ -848,3 +848,106 @@ test.describe('version history column (#1475 OR27)', () => {
     await expectQuiet(page, problems);
   });
 });
+
+/**
+ * #1569 OR37 — "Clone vN as new pipeline". Two versions whose SHARED node
+ * differs in config, so the copy is proved to be v1 by what a node holds and
+ * not only by how many nodes there are.
+ */
+test.describe('clone a version as a new pipeline', () => {
+  const URL_V1 = 'https://example.test/clone-v1';
+  const C1: SeedDoc = {
+    nodes: [
+      { id: 'n_a', position: { x: 0, y: 0 }, config: { url: URL_V1 } },
+      { id: 'n_b', position: { x: 320, y: 0 } },
+    ],
+    edges: [{ from: 'n_a', to: 'n_b', on: 'success' }],
+    description: 'first cut',
+    annotations: ['nightly'],
+  };
+  const C2: SeedDoc = {
+    nodes: [
+      { id: 'n_a', position: { x: 0, y: 0 }, config: { url: 'https://example.test/clone-v2' } },
+      { id: 'n_b', position: { x: 320, y: 0 } },
+      { id: 'n_c', position: { x: 640, y: 0 } },
+    ],
+    edges: [{ from: 'n_a', to: 'n_b', on: 'success' }],
+    description: 'second cut',
+    annotations: ['nightly'],
+  };
+
+  interface Version {
+    version: number;
+    nodes: { id: string; config: { url?: string } }[];
+    edges: unknown[];
+    description: string;
+    annotations: string[];
+  }
+  const versionsOf = async (page: Page, id: string): Promise<Version[]> => {
+    const res = await page.request.get(`/api/pipelines/${encodeURIComponent(id)}/versions`);
+    expect(res.status()).toBe(200);
+    return (await res.json()) as Version[];
+  };
+
+  test('copies the chosen version — not the latest — and records where it came from', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const source = 'history-clone';
+    const { pipelineId, pipelineVersionId } = await seedVersion(page, source, C1);
+    await mintVersion(page, pipelineId, C2, pipelineVersionId, source);
+
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+    await fluentRootReady(page);
+    await expect(nodeById(page, 'n_c')).toHaveClass(/\bdraggable\b/);
+    await (await historyItem(page)).click();
+    await expect(rows(page)).toHaveCount(2);
+
+    // Each row's ⋯ sits inside the column, beside its row — not wrapped under it.
+    const panel = (await page.locator('#version-history-panel').boundingBox())!;
+    const menu = page.getByRole('button', { name: 'Actions for v1', exact: true });
+    const menuBox = (await menu.boundingBox())!;
+    const rowBox = (await rows(page).nth(1).boundingBox())!;
+    expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(panel.x + panel.width);
+    expect(menuBox.y).toBeLessThan(rowBox.y + rowBox.height);
+
+    await menu.click();
+    await page.getByRole('menuitem', { name: 'Clone v1 as new pipeline…' }).click();
+    const name = page.getByRole('textbox', { name: 'New pipeline name' });
+    await expect(name).toHaveValue(`${source} v1 (copy)`);
+    await expect(name).toBeFocused();
+    /* Renamed: the e2e database is shared, and a pipeline NAMED "… v1 …" would
+       answer other specs' `getByText(/v1/)` in their pipeline pickers. */
+    const cloneName = 'history-clone copy';
+    await name.fill(cloneName);
+    await page.getByRole('button', { name: 'Clone', exact: true }).click();
+
+    const link = page.getByRole('status').getByRole('link', { name: cloneName });
+    await expect(link).toBeVisible();
+    const cloneId = decodeURIComponent((await link.getAttribute('href'))!.split('/').pop()!);
+    expect(cloneId).not.toBe(pipelineId);
+
+    const [copy, ...rest] = await versionsOf(page, cloneId);
+    expect(rest).toHaveLength(0);
+    expect(copy!.version).toBe(1);
+    expect(copy!.nodes.map((n) => n.id).sort()).toEqual(['n_a', 'n_b']);
+    expect(copy!.nodes.find((n) => n.id === 'n_a')!.config.url).toBe(URL_V1);
+    expect(copy!.edges).toHaveLength(1);
+    expect(copy!.description).toBe('first cut');
+    expect(copy!.annotations).toEqual(['nightly', `cloned from ${source} v1`]);
+    // The source is read, never written.
+    expect(await versionsOf(page, pipelineId)).toHaveLength(2);
+
+    // The resource tree has it without a reload, and the link opens it.
+    await expect(
+      page.locator('.factory-resources').getByRole('link', { name: cloneName }),
+    ).toBeVisible();
+    await link.click();
+    await expect(page.locator('#canvas-heading')).toHaveText(cloneName);
+    await expect(nodeById(page, 'n_b')).toBeVisible();
+    await expect(nodeById(page, 'n_c')).toHaveCount(0);
+
+    await expectQuiet(page, problems);
+  });
+});

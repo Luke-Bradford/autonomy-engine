@@ -19,6 +19,8 @@ import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 // that), so the listing is stubbed empty rather than served.
 vi.mock('../../api/pipelines', () => ({
   listAllPipelineVersions: () => Promise.resolve([]),
+  // The editor's module graph builds the shared pipelines store (#1569 clone).
+  listPipelines: () => Promise.resolve([]),
 }));
 
 /**

@@ -14,6 +14,8 @@ import { configFieldTitle, deriveConfigFields } from './configForm';
 
 vi.mock('../../api/pipelines', () => ({
   listAllPipelineVersions: () => Promise.resolve([]),
+  // The editor's module graph builds the shared pipelines store (#1569 clone).
+  listPipelines: () => Promise.resolve([]),
 }));
 
 /**

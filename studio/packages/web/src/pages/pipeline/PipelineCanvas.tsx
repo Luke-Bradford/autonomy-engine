@@ -75,6 +75,8 @@ import {
   archiveConfirmMessage,
   archivePipeline,
   createPipelineVersion,
+  duplicatePipeline,
+  getPipeline,
   latestVersion,
   listPipelineVersions,
   publishPipeline,
@@ -195,6 +197,7 @@ import { EditorStatusStrip } from './EditorStatusStrip';
 import { DOCK_HEIGHT_VAR, DOCK_WIDTH_VAR, DockSplitter } from './DockSplitter';
 import { TOOLBOX_WIDTH_VAR, ToolboxSplitter } from './ToolboxSplitter';
 import { PROBLEMS_WIDTH_VAR, ProblemsSplitter } from './ProblemsSplitter';
+import { pipelinesStore } from '../../stores/pipelinesStore';
 import { TOOLBOX_RAIL_WIDTH, uiStore, type NodeTab, type PipelineTab } from '../../stores/uiStore';
 import { DebugRunPanel, RunNowPanel } from './RunNowPanel';
 import { EditorRunDrawer, EditorRunProvider } from './editorRun';
@@ -1475,6 +1478,25 @@ export function PipelineCanvas({
   );
 
   /**
+   * #1569 OR37 — "Clone vN as new pipeline": a new pipeline whose first version
+   * is a copy of the stored vN, never of the canvas (which may be dirty, or on
+   * another version). The source row is read fresh for its folder and
+   * concurrency cap, which the editor does not hold. The tree refresh is not
+   * awaited and never rejects, so a clone that landed is never reported as a
+   * failure — which would invite a retry into a second copy.
+   */
+  const onClone = useCallback(
+    async (version: number, name: string) => {
+      const from = versions.find((v) => v.version === version);
+      if (from === undefined) throw new Error(`v${String(version)} is not loaded`);
+      const clone = await duplicatePipeline(await getPipeline(pipelineId), name, from);
+      void pipelinesStore.getState().refresh();
+      return clone;
+    },
+    [pipelineId, versions],
+  );
+
+  /**
    * #903 — restore the previewed version by minting a NEW version from ITS doc.
    *
    * Three properties are load-bearing and each is easy to lose:
@@ -2478,6 +2500,8 @@ export function PipelineCanvas({
             onPreview={(version) => {
               setPreviewing(previewing === version ? null : version);
             }}
+            pipelineName={pipelineName}
+            onClone={onClone}
             onClose={() => {
               closeHistory();
               // The button that had focus is gone with the column; hand focus to
