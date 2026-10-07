@@ -98,11 +98,17 @@ export function activityRunOfNode(
   activityId: string,
 ): ActivityRun | null {
   const own = rows.filter((r) => r.activityId === activityId);
-  // Each instance's last attempt, in run order: a retry supersedes its failure.
-  const lastOf = new Map<string, ActivityRun>();
-  for (const r of own) {
-    lastOf.set(`${r.nodeId}\n${r.iteration?.containerId ?? ''}\n${r.iteration?.index ?? ''}`, r);
+  /* Each instance's last attempt, as its index in run order: a retry
+     supersedes its failure. The index, not the Map's order, decides which
+     failure is latest, since a key set again keeps its FIRST position and
+     instances interleave (a parallel ForEach, an earlier item's retry). */
+  const lastOf = new Map<string, number>();
+  own.forEach((r, i) => {
+    lastOf.set(`${r.nodeId}\n${r.iteration?.containerId ?? ''}\n${r.iteration?.index ?? ''}`, i);
+  });
+  let latestFailed = -1;
+  for (const i of lastOf.values()) {
+    if (own[i]!.status === 'failure' && i > latestFailed) latestFailed = i;
   }
-  const failed = [...lastOf.values()].filter((r) => r.status === 'failure');
-  return failed.at(-1) ?? own.at(-1) ?? null;
+  return own[latestFailed] ?? own.at(-1) ?? null;
 }

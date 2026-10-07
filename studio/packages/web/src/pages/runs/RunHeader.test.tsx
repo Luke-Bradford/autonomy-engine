@@ -230,26 +230,29 @@ describe('ActivityRunsTable — the row "Show activity" asked for', () => {
     Element.prototype.scrollIntoView = function (this: Element) {
       scrolled.push(this);
     };
-    const rows = [failedRow({ key: 'a', nodeId: 'a', activityId: 'a' }), failedRow()];
-    render(
-      <MemoryRouter>
-        <ActivityRunsTable
-          rows={rows}
-          groups={[]}
-          error={null}
-          runStatus="failure"
-          nameOf={() => null}
-          typeOf={() => null}
-          containerNameOf={() => null}
-          selected={{ key: 'copy#2' }}
-        />
-      </MemoryRouter>,
-    );
-    const current = document.querySelector('tr[aria-current="true"]');
-    expect(current?.getAttribute('data-activity-id')).toBe('copy');
-    expect(document.querySelectorAll('tr[aria-current]')).toHaveLength(1);
-    expect(scrolled).toEqual([current]);
-    expect(document.activeElement).not.toBe(current);
-    delete (Element.prototype as Partial<Element>).scrollIntoView;
+    try {
+      const rows = [failedRow({ key: 'a', nodeId: 'a', activityId: 'a' }), failedRow()];
+      render(
+        <MemoryRouter>
+          <ActivityRunsTable
+            rows={rows}
+            groups={[]}
+            error={null}
+            runStatus="failure"
+            nameOf={() => null}
+            typeOf={() => null}
+            containerNameOf={() => null}
+            selected={{ key: 'copy#2' }}
+          />
+        </MemoryRouter>,
+      );
+      const current = document.querySelector('tr[aria-current="true"]');
+      expect(current?.getAttribute('data-activity-id')).toBe('copy');
+      expect(document.querySelectorAll('tr[aria-current]')).toHaveLength(1);
+      expect(scrolled).toEqual([current]);
+      expect(document.activeElement).not.toBe(current);
+    } finally {
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    }
   });
 });

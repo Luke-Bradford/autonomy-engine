@@ -99,6 +99,16 @@ describe('#1484 M2 activityRunOfNode — the activity run a graph node opens', (
     expect(activityRunOfNode(rows, 'w')?.key).toBe('w#0');
   });
 
+  it('of interleaved instances, the failure that came last in the run', () => {
+    // Item 1 fails, item 2 fails, then item 1's retry fails again: item 1's is last.
+    const rows = [
+      { ...failed('w#0', 0), nodeId: 'w' },
+      { ...failed('w#1', 1), nodeId: 'w' },
+      { ...failed('w#2', 0), nodeId: 'w' },
+    ];
+    expect(activityRunOfNode(rows, 'w')?.key).toBe('w#2');
+  });
+
   it('an item that recovered on a retry opens the attempt that succeeded', () => {
     // Two attempts of one item: the same instance, item 1.
     const rows = [
