@@ -8,6 +8,7 @@ import {
   deletePipeline,
   describeDeleteFailure,
   duplicatePipeline,
+  newPipeline,
   getPipeline,
   latestVersion,
   listAllPipelineVersions,
@@ -420,6 +421,57 @@ describe('pipelines API', () => {
 
       await expect(duplicatePipeline(pipeline, 'Copy')).rejects.toThrow(/nodes: invalid/);
       expect(fetchMock).toHaveBeenCalledTimes(4);
+    });
+  });
+
+  describe('newPipeline (#1569 OR37)', () => {
+    it('writes only the pipeline when there is no description', async () => {
+      const fetchMock = stubFetchSequence([{ status: 201, body: pipeline }]);
+      await expect(newPipeline({ name: 'My pipeline', folder: null }, '')).resolves.toEqual(
+        pipeline,
+      );
+      expect(urls(fetchMock)).toEqual(['/api/pipelines']);
+    });
+
+    it('a description of only spaces is no description', async () => {
+      const fetchMock = stubFetchSequence([{ status: 201, body: pipeline }]);
+      await newPipeline({ name: 'My pipeline', folder: null }, '  \n ');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('writes a first version — an empty graph carrying the description as typed', async () => {
+      const fetchMock = stubFetchSequence([
+        { status: 201, body: pipeline },
+        { status: 201, body: { ...version, description: ' Nightly load' } },
+      ]);
+      await expect(
+        newPipeline({ name: 'My pipeline', folder: null }, ' Nightly load'),
+      ).resolves.toEqual(pipeline);
+      expect(urls(fetchMock)).toEqual(['/api/pipelines', '/api/pipelines/pl_1/versions']);
+      expect(JSON.parse(initOf(fetchMock, 1).body as string)).toMatchObject({
+        description: ' Nightly load',
+        nodes: [],
+        edges: [],
+        params: [],
+        outputs: [],
+        containers: [],
+        variables: [],
+        annotations: [],
+        basedOnVersionId: null,
+      });
+    });
+
+    it('ROLLS BACK the pipeline when its first version fails, and reports that failure', async () => {
+      const fetchMock = stubFetchSequence([
+        { status: 201, body: pipeline },
+        { status: 400, body: { error: 'bad_request', message: 'description: too long' } },
+        { status: 204 },
+      ]);
+      await expect(newPipeline({ name: 'My pipeline', folder: null }, 'x')).rejects.toThrow(
+        /description: too long/,
+      );
+      expect(urls(fetchMock)[2]).toBe('/api/pipelines/pl_1');
+      expect(initOf(fetchMock, 2).method).toBe('DELETE');
     });
   });
 

@@ -4,6 +4,7 @@ import { LabelledControl } from '../../lib/LabelledControl';
 import type { createCanvasStore } from './canvasStore';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import { DockSection } from '../../lib/form/DockSection';
+import { AutoGrowTextarea } from '../../lib/form/AutoGrowTextarea';
 import { ContractSection } from './ContractEditor';
 
 type Store = ReturnType<typeof createCanvasStore>;
@@ -19,6 +20,9 @@ type Store = ReturnType<typeof createCanvasStore>;
  * editor) rather than one textarea split on newlines, so an annotation is never
  * re-cut by the editor. Their refusals are save-gating issues (`propertyIssues`),
  * not rewrites: nothing here trims or de-duplicates what was typed.
+ *
+ * #1569 OR37 — the description is one line that grows to four and then
+ * scrolls, inside the dock's own scroll, so typing never moves the canvas.
  */
 export function PipelineGeneral({ store }: { store: Store }) {
   const description = useStore(store, (s) => s.description);
@@ -29,10 +33,9 @@ export function PipelineGeneral({ store }: { store: Store }) {
       <DockSection heading="General" hint={FORM_SECTION_HINTS.pipeline.general}>
         <LabelledControl label="Description">
           {(id) => (
-            <textarea
+            <AutoGrowTextarea
               id={id}
               aria-label="pipeline description"
-              rows={3}
               maxLength={PIPELINE_DESCRIPTION_MAX_CHARS}
               value={description}
               onChange={(e) => store.getState().setDescription(e.target.value)}
