@@ -739,7 +739,14 @@ test.describe('version history column (#1475 OR27)', () => {
     await expect(page).toHaveURL(new RegExp(`${encodeURIComponent(pipelineId)}$`));
     await expect(page.getByTestId('canvas-preview')).toHaveCount(0);
 
-    await expectQuiet(page, problems);
+    /* `page.goto` to a new hash is the address bar, not a router navigation, so
+       React Router warns that the draft's leave guard cannot hold such a POP.
+       That is this test driving the URL by hand over an unsaved draft, which is
+       the case under test; the guard is for leaving the path, which none of
+       these do. */
+    await expectQuiet(page, problems, [
+      /^console\.warning: You are trying to use a blocker on a POP navigation to a location that was not created by/,
+    ]);
   });
 
   test('a reload reopens the previewed version', async ({ page }) => {
