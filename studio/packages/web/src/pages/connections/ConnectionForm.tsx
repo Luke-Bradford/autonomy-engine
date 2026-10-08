@@ -6,6 +6,7 @@ import {
   CONNECTION_SECRET_USE,
   connectionConfigAdvisory,
   connectionKindRequiresSecret,
+  DESCRIPTION_MAX_CHARS,
   type ConnectionKind,
   type ConnectionProbeResult,
   type ConnectionDependentsResponse,
@@ -34,6 +35,8 @@ import { useConfigEditor } from '../pipeline/useConfigEditor';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { FormDrawer } from '../../lib/form/FormDrawer';
 import { FormSection } from '../../lib/form/FormSection';
+import { AutoGrowTextarea } from '../../lib/form/AutoGrowTextarea';
+import { AnnotationRows } from '../../lib/form/AnnotationRows';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import { SecretInput } from '../../lib/form/SecretInput';
 import { RequiredMark } from '../../lib/form/RequiredMark';
@@ -47,7 +50,7 @@ import { allowlistChanged, connectionAllowlistSubject } from '../overrideAllowli
 import { KindSelect } from '../../lib/KindName';
 import { CONNECTION_KIND_ICONS } from '../../lib/kindIcons';
 
-import { connectionFields, type FormState } from './connectionFormState';
+import { connectionFields, metadataChecks, type FormState } from './connectionFormState';
 import { ProbeVerdict } from './ProbeVerdict';
 
 const KINDS = CONNECTION_KINDS;
@@ -151,17 +154,21 @@ export function ConnectionForm({
     () => ({
       ...nameCheck(form.name),
       ...configDraftErrors(jsonMode, { jsonText: form.jsonText, inputs: form.inputs }, fields),
+      // #1477 — the write shape's own refusals, by row.
+      ...metadataChecks(form.description, form.annotations),
     }),
     // What the checks read, not `form` whole: a SECRET keystroke re-checks nothing.
-    [form.name, form.jsonText, form.inputs, jsonMode, fields],
+    [form.name, form.jsonText, form.inputs, form.description, form.annotations, jsonMode, fields],
   );
   /** What to call a field key in the summary; `undefined` for a key this form does not show. */
   const labelOf = useCallback(
-    (key: string) => (key === 'name' ? 'Name' : configKeyLabel(key, jsonMode, fields)),
+    (key: string) => formFieldLabel(key) ?? configKeyLabel(key, jsonMode, fields),
     [jsonMode, fields],
   );
   const validation = useFieldValidation(checks, labelOf);
   const nameErrorId = useId();
+  const descriptionErrorId = useId();
+  const annotationErrorId = useId();
 
   /**
    * Everything a probe's verdict depends on. The same inputs the advisory memo
@@ -350,6 +357,9 @@ export function ConnectionForm({
       name: form.name,
       kind: form.kind,
       config,
+      // #1477 — always sent: the form holds both whole, as the server stores them.
+      description: form.description,
+      annotations: form.annotations,
       ...(form.secret !== '' ? { secret: form.secret } : {}),
       ...(allowlistChanged(form.parametersSeed, form.parameters)
         ? { parameters: form.parameters }
@@ -429,6 +439,20 @@ export function ConnectionForm({
           />
         </label>
         <FieldError id={nameErrorId} message={validation.errorFor('name')} />
+
+        {/* #1477 — ADF's linked-service order: Name, then Description. */}
+        <LabelledControl label="Description">
+          {(id) => (
+            <AutoGrowTextarea
+              id={id}
+              maxLength={DESCRIPTION_MAX_CHARS}
+              value={form.description}
+              onChange={(e) => onChange({ ...form, description: e.target.value })}
+              {...validation.attrsFor('description', descriptionErrorId)}
+            />
+          )}
+        </LabelledControl>
+        <FieldError id={descriptionErrorId} message={validation.errorFor('description')} />
 
         <LabelledControl
           label={
@@ -528,6 +552,45 @@ export function ConnectionForm({
         value={form.parameters}
         onChange={(parameters) => onChange({ ...form, parameters })}
       />
+
+      {/* #1477 — last, as in ADF's linked-service form. */}
+      <FormSection title="Annotations" hint={FORM_SECTION_HINTS.connection.annotations}>
+        <AnnotationRows
+          annotations={form.annotations}
+          onAdd={() => onChange({ ...form, annotations: [...form.annotations, ''] })}
+          onUpdate={(index, text) =>
+            onChange({
+              ...form,
+              annotations: form.annotations.map((old, i) => (i === index ? text : old)),
+            })
+          }
+          onRemove={(index) =>
+            onChange({ ...form, annotations: form.annotations.filter((_, i) => i !== index) })
+          }
+          field={(index) => {
+            const key = `annotations.${index}`;
+            const id = `${annotationErrorId}-${index}`;
+            const message = validation.errorFor(key);
+            return {
+              attrs: validation.attrsFor(key, id),
+              error: message ? <FieldError id={id} message={message} /> : null,
+            };
+          }}
+        />
+        <FieldError id={annotationErrorId} message={validation.errorFor('annotations')} />
+      </FormSection>
     </FormDrawer>
   );
+}
+
+/**
+ * The summary's name for a key this form owns outside the config — Name, and
+ * (#1477) Description and each Annotation row; `undefined` for any other.
+ */
+function formFieldLabel(key: string): string | undefined {
+  if (key === 'name') return 'Name';
+  if (key === 'description') return 'Description';
+  if (key === 'annotations') return 'Annotations';
+  const row = /^annotations\.(\d+)$/.exec(key);
+  return row ? `Annotation ${Number(row[1]) + 1}` : undefined;
 }

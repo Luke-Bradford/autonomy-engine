@@ -15,6 +15,7 @@ export const FORM_SECTION_HINTS = {
     connection: 'How to reach the system; the settings follow from the kind chosen above.',
     authentication:
       'The secret this connection uses, if its kind needs one; it is stored encrypted.',
+    annotations: 'Tags that describe this connection, such as an environment, a team or a system.',
   },
   dataset: {
     basics:

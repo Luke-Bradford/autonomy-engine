@@ -3,6 +3,7 @@ import {
   ConnectionDependentsResponseSchema,
   ConnectionProbeResultSchema,
   ConnectionPublicSchema,
+  ConnectionMetadataWriteShape,
   NewConnectionSchema,
   paginatedResponseSchema,
   type ConnectionDependentsResponse,
@@ -39,6 +40,8 @@ export const ConnectionWriteSchema = NewConnectionSchema.omit({
    * `allowlistChanged`).
    */
   parameters: z.array(z.string().min(1)).optional(),
+  // #1477 — the server body's own shape, so both refuse the same thing.
+  ...ConnectionMetadataWriteShape,
 });
 export type ConnectionWrite = z.input<typeof ConnectionWriteSchema>;
 

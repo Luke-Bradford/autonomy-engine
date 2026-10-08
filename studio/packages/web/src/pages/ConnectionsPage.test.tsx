@@ -105,6 +105,8 @@ function conn(overrides: Partial<ConnectionPublic> = {}): ConnectionPublic {
     kind: 'anthropic_api',
     config: { model: 'claude-opus-4-8' },
     parameters: [],
+    description: '',
+    annotations: [],
     secretStatus: 'ready',
     enabled: true,
     createdAt: 1,
@@ -190,6 +192,8 @@ describe('ConnectionsPage', () => {
         name: 'Prod key',
         kind: 'openai_api',
         config: { model: 'gpt-4o' },
+        description: '',
+        annotations: [],
         secret: 'sk-secret',
       }),
     );
@@ -605,6 +609,72 @@ describe('ConnectionsPage', () => {
     expect(id).toBe('conn_1');
     expect(body.name).toBe('Renamed');
     expect(body).not.toHaveProperty('secret'); // blank secret is omitted, not sent as ''
+  });
+
+  it('#1477 — edits a connection’s Description and Annotations, prefilled as stored', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([
+      conn({ name: 'Editable', description: 'Old feed', annotations: ['prod'] }),
+    ]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Editable');
+
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    expect(within(form).getByLabelText('Description')).toHaveValue('Old feed');
+    expect(within(form).getByLabelText('annotation 1')).toHaveValue('prod');
+
+    await user.clear(within(form).getByLabelText('Description'));
+    await user.type(within(form).getByLabelText('Description'), 'Nightly feed');
+    await user.click(within(form).getByRole('button', { name: 'Add annotation' }));
+    await user.type(within(form).getByLabelText('annotation 2'), 'finance');
+    await user.click(within(form).getByRole('button', { name: 'remove annotation 1' }));
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    const [, body] = updateMock.mock.calls[0]!;
+    expect(body).toMatchObject({ description: 'Nightly feed', annotations: ['finance'] });
+  });
+
+  it('#1477 — refuses a blank or duplicate annotation beside its row, without calling the API', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([conn({ name: 'Editable', annotations: ['prod'] })]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Editable');
+
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    await user.click(within(form).getByRole('button', { name: 'Add annotation' }));
+    await user.click(within(form).getByRole('button', { name: 'Add annotation' }));
+    await user.type(within(form).getByLabelText('annotation 3'), 'Prod');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    const blank = within(form).getByLabelText('annotation 2');
+    const duplicate = within(form).getByLabelText('annotation 3');
+    expect(blank).toHaveAttribute('aria-invalid', 'true');
+    expect(duplicate).toHaveAttribute('aria-invalid', 'true');
+    expect(within(form).getByText(/An annotation cannot be empty/)).toBeInTheDocument();
+    expect(within(form).getByText(/Duplicate annotation 'Prod'/)).toBeInTheDocument();
+    expect(updateMock).not.toHaveBeenCalled();
+
+    // Fixing a row clears its error before any second Save.
+    await user.type(blank, 'finance');
+    expect(blank).toHaveAttribute('aria-invalid', 'false');
+    expect(within(form).queryByText(/An annotation cannot be empty/)).not.toBeInTheDocument();
+  });
+
+  it('#1477 — a padded annotation is flagged when its row is left, before any Save', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText(/No connections yet/i);
+    await openNewConnection(user);
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    await user.click(within(form).getByRole('button', { name: 'Add annotation' }));
+    await user.type(within(form).getByLabelText('annotation 1'), ' prod');
+    await user.tab();
+    expect(within(form).getByLabelText('annotation 1')).toHaveAttribute('aria-invalid', 'true');
+    expect(within(form).getByText(/cannot start or end with a space/)).toBeInTheDocument();
+    expect(createMock).not.toHaveBeenCalled();
   });
 
   it('sends a rotated secret when one is typed on edit', async () => {

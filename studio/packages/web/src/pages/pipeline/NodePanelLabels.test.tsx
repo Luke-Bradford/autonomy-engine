@@ -40,6 +40,8 @@ const connectionOf = (kind: ConnectionKind): Connection =>
     kind,
     config: {},
     parameters: [],
+    description: '',
+    annotations: [],
     secretRef: null,
     secretStatus: 'not_required',
     enabled: true,
