@@ -588,6 +588,17 @@ export const BUNDLE_VERSION = 1;
  * envelopes that do. */
 export const BUNDLE_KIND = 'bundle';
 
+/** #1586 — the most members one bundle export may name. One constant for the
+ * route that refuses more and the toolbar that says so before asking. */
+export const MAX_BUNDLE_ITEMS = 1000;
+
+/** #1586 — the body of `POST /api/pipelines/export`: the pipelines to bundle,
+ * in the order the file should carry them. */
+export const PipelineBundleExportBodySchema = z.object({
+  ids: z.array(z.string().min(1)).min(1).max(MAX_BUNDLE_ITEMS),
+});
+export type PipelineBundleExportBody = z.infer<typeof PipelineBundleExportBodySchema>;
+
 /**
  * #1586 — several export envelopes in ONE file, which `POST /api/import`
  * accepts and imports all-or-nothing (the Pipelines toolbar's Export). The
@@ -595,6 +606,10 @@ export const BUNDLE_KIND = 'bundle';
  * import back. A bundle of envelopes, rather than a new multi-resource `data`
  * shape, so each member is byte-for-byte what its single export would be and
  * the importer reuses the one per-kind path every single file takes.
+ *
+ * Describes what EXPORT emits. It is never the gate on raw input: `items` here
+ * are CURRENT-version envelopes, and an older member must be upgraded before it
+ * could pass — `parseBundle` is the import gate.
  */
 export const ExportBundleSchema = z.object({
   kind: z.literal(BUNDLE_KIND),
@@ -635,7 +650,7 @@ export function parseBundle(
     throw new ImportError('Malformed import: expected a bundle');
   }
   const bundleVersion = parsed.bundleVersion;
-  if (typeof bundleVersion !== 'number' || !Number.isInteger(bundleVersion)) {
+  if (typeof bundleVersion !== 'number' || !Number.isInteger(bundleVersion) || bundleVersion < 1) {
     throw new ImportError('Malformed import: missing or invalid bundleVersion');
   }
   if (bundleVersion > BUNDLE_VERSION) {

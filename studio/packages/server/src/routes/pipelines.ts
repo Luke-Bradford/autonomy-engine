@@ -16,6 +16,7 @@ import {
   PublishPipelineResultSchema,
   ParamResolveError,
   canonicalStringify,
+  PipelineBundleExportBodySchema,
   resolveRunParams,
   rollupFromAggregates,
   type ActivePipelineVersion,
@@ -52,7 +53,8 @@ import { BadRequestError, NotFoundError, PublishRefusedError, StaleWriteError } 
 import { GlobalStartError, resolveRunGlobals } from '../run/globals.js';
 import { ArchivedPipelineError } from '../run/launcher.js';
 import { pageArgsFromQuery, requireOwned } from './util.js';
-import { exportPipeline } from '../portability/index.js';
+import { exportPipeline, exportPipelineBundle } from '../portability/index.js';
+import { REQUEST_BODY_LIMIT_BYTES } from '../limits.js';
 
 /** `ownerId` is stamped from `request.principal`, never client-supplied. */
 const PipelineWriteBodySchema = NewPipelineSchema.omit({ ownerId: true });
@@ -766,4 +768,29 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
     const envelope = exportPipeline(db, request.params.id, request.principal.ownerId);
     return reply.type('application/json').send(canonicalStringify(envelope));
   });
+
+  // #1586 — several pipelines as ONE file `POST /api/import` reads back (the
+  // Pipelines toolbar's Export). A POST because the ids are a body, not a
+  // query: a thousand of them would overrun a URL. Owner-scoped per id by
+  // `exportPipelineBundle`. A file over the import route's body limit is
+  // REFUSED rather than served, because an export the app cannot import back
+  // is the one-way door this format exists to close.
+  fastify.post('/api/pipelines/export', async (request, reply) => {
+    const { ids } = PipelineBundleExportBodySchema.parse(request.body);
+    const text = canonicalStringify(
+      exportPipelineBundle(db, ids, request.principal.ownerId),
+    );
+    const bytes = Buffer.byteLength(text, 'utf8');
+    if (bytes > REQUEST_BODY_LIMIT_BYTES) {
+      throw new BadRequestError(
+        `These ${ids.length} pipelines export to ${formatMiB(bytes)}, over the ` +
+          `${formatMiB(REQUEST_BODY_LIMIT_BYTES)} an import can read back — export fewer at a time`,
+      );
+    }
+    return reply.type('application/json').send(text);
+  });
 };
+
+function formatMiB(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}

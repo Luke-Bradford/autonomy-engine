@@ -1,5 +1,8 @@
 import {
+  BUNDLE_KIND,
+  BUNDLE_VERSION,
   CATALOG_VERSION,
+  ExportBundleSchema,
   ConnectionExportDataSchema,
   ExportEnvelopeSchema,
   PipelineExportDataSchema,
@@ -8,6 +11,7 @@ import {
   WebhookPublicConfigSchema,
   interpolationMode,
   type ConnectionExportData,
+  type ExportBundle,
   type ExportEnvelope,
   type Node,
   type NodeExport,
@@ -212,6 +216,23 @@ export function exportPipeline(db: Db, id: string, ownerId: string): ExportEnvel
       versions,
       strippedConnectionRefs: Array.from(strippedConnectionRefs),
     }),
+  });
+}
+
+/**
+ * #1586 — several pipelines as ONE importable file: a bundle whose members are
+ * exactly what `exportPipeline` returns for each (each with its own
+ * `exportedAt`; the bundle carries its own too). Ids are de-duplicated, first
+ * occurrence kept, so the file follows the order the caller asked in. Any id
+ * that is missing or not this owner's 404s the whole request, as a single
+ * export does — never a quietly shorter file.
+ */
+export function exportPipelineBundle(db: Db, ids: readonly string[], ownerId: string): ExportBundle {
+  return ExportBundleSchema.parse({
+    kind: BUNDLE_KIND,
+    bundleVersion: BUNDLE_VERSION,
+    exportedAt: Date.now(),
+    items: Array.from(new Set(ids)).map((id) => exportPipeline(db, id, ownerId)),
   });
 }
 

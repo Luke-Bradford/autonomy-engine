@@ -1,3 +1,4 @@
+import { ZodError } from 'zod';
 import {
   ConnectionPublicSchema,
   GlobalParamCreateBodySchema,
@@ -5,6 +6,7 @@ import {
   globalParamResourceId,
   TriggerPublicSchema,
   parseAndUpgradeEnvelope,
+  formatZodIssues,
   parseBundle,
   windowBindingErrors,
   type Connection,
@@ -23,6 +25,7 @@ import {
   createPipeline,
   createPipelineVersion,
   createTrigger,
+  InvalidPipelineDocError,
   getConnectionByResourceId,
   listOwnerGlobalParams,
 } from '../repo/index.js';
@@ -451,36 +454,66 @@ function importParsedEnvelope(
 /**
  * #1586 — a bundle, ALL OR NOTHING. Every member is parsed and upgraded first
  * (`parseBundle`), so a malformed member refuses the file before any write;
- * then ONE transaction imports each through the same per-kind path a single
- * file takes, so a member refused mid-way (a doc rule, a name conflict) rolls
+ * then ONE transaction imports each through the same path a single pipeline
+ * file takes, so a member refused mid-way (the doc gate, a write schema) rolls
  * back the members already written. The pipeline import's own transaction
  * nests as a SAVEPOINT inside this one (see `importPipelineEnvelope`).
  *
- * No store choice: `?connectionId=` names ONE store for ONE dataset file, and
- * a bundle may carry several, so a dataset member resolves its store by
- * identity or refuses, exactly as a single dataset file with no choice does.
+ * PIPELINES ONLY. The toolbar exports pipelines, and the other kinds would open
+ * paths a bundle cannot honour yet: a dataset needs a store chosen per file, a
+ * connection imported beside a dataset mints a fresh identity the dataset then
+ * cannot resolve, and two global parameters of one name would refuse each
+ * other with advice to edit a value that does not exist yet.
+ *
+ * Every refusal names the member — its position and pipeline name — because
+ * "pipeline doc invalid" from a 40-pipeline file says nothing about which.
  */
 export function importBundle(
   db: Db,
   ownerId: string,
   raw: unknown,
-  opts: ImportOptions,
+  opts: ImportOptions = {},
 ): ImportBundleResult {
   if (opts.resolveStore !== undefined) {
     throw new ImportError(
-      'a store connection was chosen, but this is a bundle — import its datasets one file at a time to choose their store',
+      'a store connection was chosen, but this is a bundle of pipelines — only a dataset lives in a store',
     );
   }
-  const envelopes = parseBundle(raw);
+  const envelopes = parseBundle(raw).map((envelope, i) => {
+    if (envelope.kind !== 'pipeline') {
+      throw new ImportError(
+        `Item ${i + 1}: a bundle carries pipelines only, and this is a ${envelope.kind} export — import it as its own file`,
+      );
+    }
+    return envelope;
+  });
   return db.transaction(() => ({
     kind: 'bundle' as const,
     items: envelopes.map((envelope, i) => {
       try {
-        return importParsedEnvelope(db, ownerId, envelope, undefined);
+        return importPipelineEnvelope(db, ownerId, envelope);
       } catch (err) {
-        if (err instanceof ImportError) throw new ImportError(`Item ${i + 1}: ${err.message}`);
-        throw err;
+        throw labelMemberError(err, `Item ${i + 1} (pipeline “${envelope.data.pipeline.name}”)`);
       }
     }),
   }));
+}
+
+/**
+ * A member's refusal, with the member named and its status kept: an
+ * `ImportError` stays an `import_error`, the doc gate's refusal keeps its class
+ * (and its `issues`) so `errors.ts` still answers `invalid_pipeline_doc`, and a
+ * write-schema `ZodError` — whose paths would point into the member, not the
+ * file — becomes an `ImportError` quoting the same value-free issues. Anything
+ * else is not a refusal and passes through unlabelled.
+ */
+function labelMemberError(err: unknown, label: string): unknown {
+  if (err instanceof ImportError) return new ImportError(`${label}: ${err.message}`);
+  if (err instanceof ZodError) {
+    return new ImportError(`${label}: ${formatZodIssues(err.issues)}`);
+  }
+  if (err instanceof InvalidPipelineDocError) {
+    err.message = `${label}: ${err.message}`;
+  }
+  return err;
 }
