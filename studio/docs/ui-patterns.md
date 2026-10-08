@@ -363,8 +363,8 @@ it.
 576px wide:
 
 - **Labels sit left.** Each field of a tab's own sections is a row: the label in a 150px column, then
-  the control, its hint and its error. The cells of a row card or a param-override row keep their
-  stacked form, because they are too narrow for a label column.
+  the control, its hint and its error. A row table's cells (below) and a param-override row's do
+  not, because they are too narrow for a label column.
 - **Short fields pack.** A number, a checkbox, or a choice whose options are all short (16
   characters or fewer, so they are not clipped) packs two to a row, or three once the tab
   is 900px wide. Everything else spans the row: free text, paths, expressions, JSON, row lists and
@@ -384,5 +384,30 @@ it.
   (`.node-detail-panel`) shares the dock and is not a form, so none of this applies to it.
 
 Comfortable density matches none of these rules and keeps the stacked column.
+
+**Authored rows are tables (#1477 OR29).** Params, variables, outputs, annotations and every row
+list (a Copy mapping, HTTP headers, LLM messages, an output schema) render through `RowTable`
+(`lib/form/RowTable.tsx`). It applies at every width and both densities.
+
+- **A header names each column once.** A cell shows no label of its own. It keeps one, out of sight,
+  as its control's name (`mapping row 2 sink`, `param 1 default`), so specs and screen readers still
+  reach each control. A row-list column's header carries what the cell label said: its title, its
+  format (`— number`, `— JSON`) and the required mark.
+- **A row is one line.** At compact density it is 32px (`--density-row-height`) of 28px controls. A
+  text cell is a one-line textarea that grows with its text. The growing is CSS `field-sizing:
+  content`, which only Chromium supports. Elsewhere the cell stays one line and scrolls.
+- **A row's errors and advisories go on a notes row under it** (`RowNotes`, spanning the table), only
+  when it has any, so they never widen a cell.
+- **A cell's `${}` and `ƒx` toggles show under the box only while the cell has focus**, or while their
+  list is open. ADF's "Add dynamic content" link sits under the box at all times
+  ([Learn](https://learn.microsoft.com/azure/data-factory/how-to-expression-language-functions));
+  showing it on focus is a deliberate difference for table rows. Inline, three text columns' toggles leave
+  no room for the text in a 589px tab. They are hidden from sight, not removed: Tab from the box lands
+  on `${}`, and a spec focuses the cell before it clicks one.
+- **The table scrolls sideways rather than crushing its columns.** A text column is at least 5rem, so
+  the 302px right-hand dock scrolls. At 1440x900 a three-row Copy mapping fits its tab whole, with no
+  sideways scroll (`e2e/row-tables.spec.ts`).
+- **Column help lives in the section's `?`.** The wrapper's `overflow-x` clips vertically too, so a
+  header `?` would cut off its own note. A row list's hint sits behind a `?` beside its label.
 
 Axe gates on every form (0 violations) belong to OR24 (#1415), which brings axe into the e2e suite.

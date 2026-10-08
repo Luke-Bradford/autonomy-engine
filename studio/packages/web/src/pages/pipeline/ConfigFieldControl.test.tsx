@@ -371,3 +371,126 @@ describe('ConfigFieldControl — a number field is a label beside its input, not
     expect(labelTextOf(input)).toEqual(['maxTokens']);
   });
 });
+
+describe('ConfigFieldControl — a row list is a compact table (#1477 OR29)', () => {
+  const mapping: ConfigField = {
+    name: 'mapping',
+    kind: 'objectList',
+    optional: true,
+    elementFields: [
+      { name: 'source', kind: 'text', optional: false },
+      { name: 'type', kind: 'enum', optional: true, enumOptions: ['string', 'integer'] },
+      { name: 'width', kind: 'number', optional: true },
+      { name: 'rules', kind: 'json', optional: true },
+      { name: 'nullable', kind: 'boolean', optional: true },
+    ],
+  };
+
+  it('names each column once, with the format and required mark its cells used to repeat', () => {
+    const { getByRole } = render(
+      <ConfigFieldControl field={mapping} value={[{}, {}]} onChange={noop} />,
+    );
+    const table = getByRole('table', { name: 'mapping' });
+    const ths = Array.from(table.querySelectorAll('th'));
+    expect(ths.map((th) => th.textContent)).toEqual([
+      'source',
+      'type',
+      'width — number',
+      'rules — JSON',
+      'nullable',
+      'Actions',
+    ]);
+    expect(ths[0]!.querySelector('.required-mark')).not.toBeNull();
+    expect(ths[1]!.querySelector('.required-mark')).toBeNull();
+    expect(table.querySelectorAll('tbody > tr')).toHaveLength(2);
+  });
+
+  it("a cell's label is out of sight but still its control's whole name", () => {
+    const { getByRole } = render(
+      <ConfigFieldControl field={mapping} value={[{}]} onChange={noop} />,
+    );
+    for (const control of [
+      getByRole('textbox', { name: 'mapping row 1 source' }),
+      getByRole('combobox', { name: 'mapping row 1 type' }),
+      getByRole('textbox', { name: 'mapping row 1 width — number' }),
+      getByRole('checkbox', { name: 'mapping row 1 nullable' }),
+    ]) {
+      const label = control.closest('td')!.querySelector('label')!;
+      expect(label.querySelector('.visually-hidden')).not.toBeNull();
+      // Nothing of the label's text is left in sight.
+      const seen = Array.from(label.childNodes).filter(
+        (n) => !(n instanceof HTMLElement && n.classList.contains('visually-hidden')),
+      );
+      expect(seen.map((n) => n.textContent).join('')).toBe('');
+    }
+    // A cell's asterisk is the header's, not its own.
+    expect(getByRole('table').querySelector('td .required-mark')).toBeNull();
+  });
+
+  it("a titled list's hint is behind a `?` beside its label, not a paragraph under the table", () => {
+    const field: ConfigField = {
+      ...mapping,
+      label: { title: 'Column mapping', description: 'Which column fills which.' },
+    };
+    const { getByRole, container } = render(
+      <ConfigFieldControl field={field} value={[{}]} onChange={noop} />,
+    );
+    expect(container.querySelector('p.field-hint')).toBeNull();
+    const help = container.querySelector('.object-list-label details.help-disclosure');
+    expect(help).not.toBeNull();
+    expect(help!.querySelector('summary')).toHaveAccessibleName('About Column mapping');
+    // Still the group's description, and the table keeps the list's name alone.
+    expect(getByRole('group', { name: 'Column mapping' })).toHaveAccessibleDescription(
+      'Which column fills which. mapping',
+    );
+    expect(getByRole('table')).toHaveAccessibleName('Column mapping');
+  });
+
+  it('a top-level field keeps its visible label (only cells hide theirs)', () => {
+    const { container } = render(
+      <ConfigFieldControl
+        field={{ name: 'path', kind: 'text', optional: true }}
+        value=""
+        onChange={noop}
+      />,
+    );
+    expect(container.querySelector('.visually-hidden')).toBeNull();
+  });
+
+  it("a cell's expression toggles are glyphs with their full names", () => {
+    const picker = {
+      describe: () => '',
+      resolve: () => ({ mode: 'off' }),
+      wraps: () => null,
+      examples: () => [],
+    } as unknown as Parameters<typeof ConfigFieldControl>[0]['picker'];
+    const { getByRole } = render(
+      <ConfigFieldControl field={mapping} value={[{}]} onChange={noop} picker={picker} />,
+    );
+    expect(
+      getByRole('button', { name: 'Insert reference into mapping row 1 source' }),
+    ).toHaveTextContent('${}');
+    expect(getByRole('button', { name: 'Functions for mapping row 1 source' })).toHaveTextContent(
+      'ƒx',
+    );
+    // A cell shows its toggles only while it has focus, and Safari does not
+    // focus a button on click: the toggle's mousedown keeps focus in the box.
+    const refs = getByRole('button', { name: 'Insert reference into mapping row 1 source' });
+    expect(fireEvent.mouseDown(refs)).toBe(false);
+    expect(
+      fireEvent.mouseDown(getByRole('button', { name: 'Functions for mapping row 1 source' })),
+    ).toBe(false);
+    // A top-level field's toggles are worded and always shown, so they need none of that.
+    const top = render(
+      <ConfigFieldControl
+        field={{ name: 'url', kind: 'text', optional: true }}
+        value=""
+        onChange={noop}
+        picker={picker}
+      />,
+    );
+    const worded = top.getByRole('button', { name: 'Insert reference into url' });
+    expect(worded).toHaveTextContent('Insert reference');
+    expect(fireEvent.mouseDown(worded)).toBe(true);
+  });
+});

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type RefObject } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type { Node, RefSuggestion } from '@autonomy-studio/shared';
 import {
   configFieldTitle,
@@ -21,6 +21,13 @@ import { useCaretInsert } from './useCaretInsert';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { JsonEditor } from '../../lib/form/JsonEditor';
 import { RequiredMark } from '../../lib/form/RequiredMark';
+import {
+  RemoveRowButton,
+  RowActions,
+  RowTable,
+  type RowTableColumn,
+} from '../../lib/form/RowTable';
+import { HelpDisclosure } from '../../lib/HelpDisclosure';
 import { FieldError } from '../../lib/form/FieldError';
 import { fieldAttrs } from '../../lib/form/fieldValidation';
 
@@ -224,6 +231,11 @@ export function ConfigFieldControl({
   // A cell's `name` already says where it sits; only a top-level field is titled.
   const titled = name === undefined ? field.label : undefined;
   const label = name === undefined ? configFieldTitle(field) : name;
+  // #1477 OR29 — a cell sits under its table's column header, which shows what
+  // its label said. The label stays, out of sight, as the control's NAME
+  // (`mapping row 2 sink`), so every spec and screen reader still reaches it.
+  const cell = name !== undefined;
+  const seen = (text: ReactNode) => (cell ? <span className="visually-hidden">{text}</span> : text);
   const required = !field.optional;
   const hintId = useId();
   // #1396 — a top-level number field leads its hint with what it admits
@@ -231,9 +243,9 @@ export function ConfigFieldControl({
   // " — number". A cell has no hint slot, and keeps the suffix.
   const numberField = name === undefined && field.kind === 'number';
   const rule = numberField ? describeNumberRule(field.numberRule ?? { integer: false }) : null;
-  const hint =
+  const hintBody =
     titled === undefined && rule === null ? null : (
-      <p id={hintId} className="field-hint">
+      <>
         {rule !== null && (
           <>
             {rule}.{titled === undefined ? '' : ' '}
@@ -242,6 +254,12 @@ export function ConfigFieldControl({
         {titled?.description !== undefined && <>{titled.description} </>}
         {/* An untitled field's label is already its key. */}
         {titled !== undefined && <code>{field.name}</code>}
+      </>
+    );
+  const hint =
+    hintBody === null ? null : (
+      <p id={hintId} className="field-hint">
+        {hintBody}
       </p>
     );
   const errorId = useId();
@@ -285,8 +303,8 @@ export function ConfigFieldControl({
           rows={isRowList(value) ? value : []}
           onChange={onChange}
           picker={picker}
+          help={hintBody === null ? undefined : { id: hintId, body: hintBody }}
         />
-        {hint}
         {errorSlot}
       </>
     );
@@ -304,7 +322,7 @@ export function ConfigFieldControl({
             aria-describedby={describedBy}
             onChange={(e) => onChange(e.target.checked)}
           />
-          {label}
+          {seen(label)}
         </label>
         {hint}
       </>
@@ -317,8 +335,8 @@ export function ConfigFieldControl({
         className="config-field"
         label={
           <>
-            {label}
-            {required && <RequiredMark />}
+            {seen(label)}
+            {required && !cell && <RequiredMark />}
           </>
         }
       >
@@ -358,8 +376,8 @@ export function ConfigFieldControl({
         className="config-field"
         label={
           <>
-            {numberField ? label : `${label} — number`}
-            {required && <RequiredMark />}
+            {seen(numberField ? label : `${label} — number`)}
+            {required && !cell && <RequiredMark />}
           </>
         }
       >
@@ -386,16 +404,15 @@ export function ConfigFieldControl({
     );
   }
 
-  const format =
-    field.kind === 'json' ? 'JSON' : field.kind === 'stringList' ? 'one per line' : null;
+  const format = textFormat(field);
 
   return (
     <LabelledControl
       className="config-field"
       label={
         <>
-          {format === null ? label : `${label} — ${format}`}
-          {required && <RequiredMark />}
+          {seen(format === null ? label : `${label} — ${format}`)}
+          {required && !cell && <RequiredMark />}
         </>
       }
     >
@@ -426,7 +443,7 @@ export function ConfigFieldControl({
               ref={inputRef as RefObject<HTMLTextAreaElement | null>}
               value={text}
               onSelect={onSelect}
-              rows={4}
+              rows={cell ? 2 : 4}
               placeholder={field.defaultText}
               aria-required={required || undefined}
               aria-describedby={describedBy}
@@ -439,7 +456,9 @@ export function ConfigFieldControl({
               ref={inputRef as RefObject<HTMLTextAreaElement | null>}
               value={text}
               onSelect={onSelect}
-              rows={field.kind === 'stringList' ? 4 : 2}
+              // A cell opens one line tall, and grows with its text
+              // (`field-sizing`, index.css) so a multi-line value still shows.
+              rows={cell ? 1 : field.kind === 'stringList' ? 4 : 2}
               spellCheck={false}
               placeholder={field.defaultText}
               aria-required={required || undefined}
@@ -533,6 +552,7 @@ export function ConfigFieldControl({
           {picker && field.kind === 'text' && !field.literal && (
             <ExpressionPicker
               fieldName={shown}
+              compact={cell}
               describe={picker.describe}
               resolve={() => picker.resolve(target ?? topLevelTarget(field.name))}
               onSelect={(insert, mode) => onChange(insertAtCaret(text, insert, mode))}
@@ -554,21 +574,42 @@ export function ConfigFieldControl({
   );
 }
 
+/** How a text-shaped field's value is written, when the label must say so. */
+function textFormat(field: ConfigField): string | null {
+  return field.kind === 'json' ? 'JSON' : field.kind === 'stringList' ? 'one per line' : null;
+}
+
+/**
+ * A row list's column for one cell (#1477 OR29): what the cell's label said —
+ * its title, how its value is written, and whether it is required.
+ */
+function cellColumn(cell: ConfigField): RowTableColumn {
+  const format = cell.kind === 'number' ? 'number' : textFormat(cell);
+  return {
+    key: cell.name,
+    header: (
+      <>
+        {format === null ? configFieldTitle(cell) : `${configFieldTitle(cell)} — ${format}`}
+        {!cell.optional && <RequiredMark />}
+      </>
+    ),
+    width: cell.kind === 'boolean' ? 'check' : cell.kind === 'enum' ? 'short' : 'long',
+  };
+}
+
 /**
  * A list of rows, one per element of an array-of-objects config field (#1169,
  * data-movement spec §13).
  *
- * §13 calls this a "table", and a `<table>` is what it is NOT. The property
- * panel is a fixed 320px column (`index.css`, `grid-template-columns: 180px 1fr
- * 320px`) and a string control in it is a `<textarea>` or at best a full-width
- * `<input>` — five columns of either in that width is about 60px each, which is
- * not an authoring surface.
- * §13's requirement is the SHAPE of the surface (a row per mapping, carrying its
- * own target type and `onError`), and at this width a stacked row card is that
- * shape. `.contract-row` is the panel's existing idiom for it, already carrying
- * `ParamRow` and `OutputRow`, whose `` `param ${i + 1} name` `` naming
- * convention this follows so the three read alike to a screen reader and to a
- * spec.
+ * §13 calls this a "table", and since #1477 OR29 a `<table>` is what it is
+ * (`RowTable`). It was once a stack of `.contract-row` cards, because the
+ * property panel was a fixed 320px column and five cells across it were about
+ * 60px each. The dock is wider now (a 589px tab at 1440x900), the table scrolls
+ * sideways rather than crushing its cells in a narrow right-hand dock, and a
+ * header row replaces a label repeated on every cell. Each cell's control keeps
+ * its own name — `` `mapping row 2 sink` `` — following `ParamRow`'s
+ * `` `param ${i + 1} name` `` convention, so the lists read alike to a screen
+ * reader and to a spec.
  *
  * Every cell is a plain `ConfigFieldControl`, and gets the panel's `picker`
  * with a `target` naming the cell's own position (#1178): the candidate is this
@@ -616,6 +657,7 @@ export function ObjectListControl({
   rows,
   onChange,
   picker,
+  help,
 }: {
   field: ConfigField;
   label: string;
@@ -628,8 +670,16 @@ export function ObjectListControl({
   rows: readonly ObjectListRow[];
   onChange: (next: readonly ObjectListRow[]) => void;
   picker?: FieldPicker;
+  /**
+   * #1477 OR29 — the list's hint, behind a `?` beside its label rather than a
+   * paragraph under the table. `id` is what `describedBy` names: a closed
+   * `<details>`' note is still the group's description.
+   */
+  help?: { id: string; body: ReactNode };
 }) {
   const cells = field.elementFields ?? [];
+  const columns = cells.map(cellColumn);
+  const labelId = useId();
   const [moves, setMoves] = useState(0);
   const groupRef = useRef<HTMLDivElement>(null);
   // Where the last move put its row. The buttons are index-keyed, so the
@@ -686,10 +736,16 @@ export function ObjectListControl({
       {...checked}
       ref={groupRef}
     >
-      <span className="object-list-label">
-        {label}
+      {/* A `div`: the `?` is a `<details>`, which a span may not hold. */}
+      <div className="object-list-label">
+        <span id={labelId}>{label}</span>
         {required && <RequiredMark />}
-      </span>
+        {help !== undefined && (
+          <HelpDisclosure label={`About ${label}`} noteId={help.id} inline>
+            {help.body}
+          </HelpDisclosure>
+        )}
+      </div>
       {rows.length === 0 ? <p className="page-hint">No rows.</p> : null}
       {field.recordValue === 'secret' ? (
         <p className="page-hint">
@@ -702,59 +758,62 @@ export function ObjectListControl({
           field&apos;s JSON Schema, such as <code>{'{"enum": ["a", "b"]}'}</code>.
         </p>
       ) : null}
-      {rows.map((row, index) => (
-        <div className="contract-row" key={index}>
-          {cells.map((cell) => {
-            const held = row[cell.name];
-            return (
-              <ConfigFieldControl
-                key={`${cell.name}:${rows.length}:${moves}`}
-                field={cell}
-                name={`${field.name} row ${index + 1} ${cell.name}`}
-                value={held ?? emptyControlValue(cell)}
-                picker={picker}
-                target={cellTarget(index, cell.name)}
-                onChange={(next) =>
-                  onChange(
-                    rows.map((r, i) =>
-                      // A cell value is always a scalar — `deriveElementFields`
-                      // refuses a cell that is itself a list — but the prop type
-                      // is the whole union, so the impossible case is dropped
-                      // rather than cast.
-                      i === index && !isRowList(next) ? { ...r, [cell.name]: next } : r,
-                    ),
-                  )
-                }
-              />
-            );
-          })}
-          <div className="object-list-row-actions">
-            <button
-              type="button"
-              aria-label={`move ${field.name} row ${index + 1} up`}
-              disabled={index === 0}
-              onClick={() => move(index, index - 1)}
-            >
-              Up
-            </button>
-            <button
-              type="button"
-              aria-label={`move ${field.name} row ${index + 1} down`}
-              disabled={index === rows.length - 1}
-              onClick={() => move(index, index + 1)}
-            >
-              Down
-            </button>
-            <button
-              type="button"
-              aria-label={`remove ${field.name} row ${index + 1}`}
-              onClick={() => onChange(rows.filter((_, i) => i !== index))}
-            >
-              Remove
-            </button>
-          </div>
-        </div>
-      ))}
+      {rows.length > 0 ? (
+        <RowTable columns={columns} labelledBy={labelId}>
+          {rows.map((row, index) => (
+            <tr key={index}>
+              {cells.map((cell, c) => {
+                const held = row[cell.name];
+                return (
+                  <td key={cell.name} data-width={columns[c]?.width}>
+                    <ConfigFieldControl
+                      key={`${cell.name}:${rows.length}:${moves}`}
+                      field={cell}
+                      name={`${field.name} row ${index + 1} ${cell.name}`}
+                      value={held ?? emptyControlValue(cell)}
+                      picker={picker}
+                      target={cellTarget(index, cell.name)}
+                      onChange={(next) =>
+                        onChange(
+                          rows.map((r, i) =>
+                            // A cell value is always a scalar — `deriveElementFields`
+                            // refuses a cell that is itself a list — but the prop type
+                            // is the whole union, so the impossible case is dropped
+                            // rather than cast.
+                            i === index && !isRowList(next) ? { ...r, [cell.name]: next } : r,
+                          ),
+                        )
+                      }
+                    />
+                  </td>
+                );
+              })}
+              <RowActions>
+                <button
+                  type="button"
+                  aria-label={`move ${field.name} row ${index + 1} up`}
+                  disabled={index === 0}
+                  onClick={() => move(index, index - 1)}
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  aria-label={`move ${field.name} row ${index + 1} down`}
+                  disabled={index === rows.length - 1}
+                  onClick={() => move(index, index + 1)}
+                >
+                  ↓
+                </button>
+                <RemoveRowButton
+                  label={`remove ${field.name} row ${index + 1}`}
+                  onRemove={() => onChange(rows.filter((_, i) => i !== index))}
+                />
+              </RowActions>
+            </tr>
+          ))}
+        </RowTable>
+      ) : null}
       <button type="button" onClick={() => onChange([...rows, {}])}>
         {`Add ${field.name} row`}
       </button>

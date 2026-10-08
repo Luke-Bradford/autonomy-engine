@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from 'react';
+import { useId, useRef, useState, type MouseEvent } from 'react';
 import type { FunctionDoc, RefSuggestion } from '@autonomy-studio/shared';
 import type { InsertMode } from './expressionInsert';
 
@@ -87,6 +87,7 @@ export function ExpressionPicker({
   resolve,
   onSelect,
   functions: functionsProp,
+  compact = false,
 }: {
   fieldName: string;
   /** How a suggestion is NAMED — web-side, because the node labels live here. */
@@ -106,8 +107,21 @@ export function ExpressionPicker({
    * had since changed.
    */
   functions?: { value: string; resolve: () => FunctionsOptions };
+  /**
+   * #1477 OR29 — the toggles as glyphs (`${}`, `ƒx`), for a table cell, where
+   * two worded buttons under every box would make each row three lines tall.
+   * Their accessible names are unchanged; the glyph's hover says it in words.
+   *
+   * A cell shows its toggles only while it has focus (index.css), and Safari
+   * and Firefox on macOS do not focus a button on click: the box would blur on
+   * mousedown, the toggles would hide, and the click would land on nothing. So
+   * a compact toggle's mousedown keeps focus where it is — in the box, which is
+   * also where an insert goes.
+   */
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState<Open | null>(null);
+  const keepFocus = compact ? (e: MouseEvent) => e.preventDefault() : undefined;
   const toggleRef = useRef<HTMLButtonElement>(null);
   const fnToggleRef = useRef<HTMLButtonElement>(null);
   const listId = useId();
@@ -153,9 +167,11 @@ export function ExpressionPicker({
         // is an invalid attribute value, which axe reports.
         aria-controls={options !== null ? listId : undefined}
         aria-label={`Insert reference into ${fieldName}`}
+        onMouseDown={keepFocus}
+        title={compact ? 'Insert reference' : undefined}
         onClick={() => setOpen(options !== null ? null : { kind: 'refs', options: resolve() })}
       >
-        Insert reference
+        {compact ? '${}' : 'Insert reference'}
       </button>
       {functionsProp && (
         <button
@@ -166,6 +182,8 @@ export function ExpressionPicker({
           aria-expanded={functionsOpen}
           aria-controls={functionsOpen ? fnListId : undefined}
           aria-label={`Functions for ${fieldName}`}
+          onMouseDown={keepFocus}
+          title={compact ? 'Functions' : undefined}
           onClick={() =>
             setOpen(
               functionsOpen
@@ -178,7 +196,7 @@ export function ExpressionPicker({
             )
           }
         >
-          Functions
+          {compact ? 'ƒx' : 'Functions'}
         </button>
       )}
 

@@ -212,7 +212,6 @@ describe('PipelinePanel (U16) — params', () => {
       expect('default' in p).toBe(true);
       expect(p.default).toBe('');
       expect(box()).toBeChecked();
-      expect(screen.getByText('The default is the empty string.')).toBeInTheDocument();
     });
 
     it('a stored `""` shows ticked, and unticking removes the key', () => {
@@ -224,7 +223,6 @@ describe('PipelinePanel (U16) — params', () => {
 
       expect('default' in store.getState().params[0]!).toBe(false);
       expect(box()).not.toBeChecked();
-      expect(screen.getByText('Leave blank for no default.')).toBeInTheDocument();
     });
 
     it('is offered only while the field is blank, and only for a string', () => {
@@ -584,5 +582,82 @@ describe('PipelinePanel (#1 F8a) — General', () => {
     expect(store.getState().annotations).toEqual(['']);
     act(() => store.getState().undo());
     expect(screen.getByLabelText('annotation 1')).toHaveValue('staging');
+  });
+});
+
+describe('PipelinePanel — declarations are a compact table (#1477 OR29)', () => {
+  const headers = (table: HTMLElement) =>
+    Array.from(table.querySelectorAll('th'), (th) => th.textContent ?? '');
+
+  it('params read as a table: headers once, a row per param, no per-row visible labels', () => {
+    mount(
+      version({
+        params: [
+          { name: 'a', type: 'string', required: false },
+          { name: 'b', type: 'number', required: false },
+        ],
+      }),
+    );
+    const table = screen.getByRole('table', { name: 'Params' });
+    expect(headers(table)).toEqual([
+      'Name',
+      'Type',
+      'Required',
+      'Default',
+      'Description',
+      'Actions',
+    ]);
+    expect(table.querySelectorAll('tbody > tr')).toHaveLength(2);
+    // The headers say what each cell is; the cells carry no label text of their own.
+    expect(table.querySelector('tbody label:not(.contract-check)')).toBeNull();
+    expect(screen.getByRole('textbox', { name: 'param 2 name' })).toHaveValue('b');
+    // The Default column's hint is in the section's `?` now.
+    expect(screen.getByRole('region', { name: 'Params' })).toHaveAccessibleDescription(
+      /Leave a default blank for no default\./,
+    );
+  });
+
+  it("a row's notes sit on a row of their own, spanning the table, and only when there are any", () => {
+    mount(
+      version({
+        params: [
+          { name: 'ok', type: 'string', required: false },
+          { name: 'a b', type: 'string', required: false },
+        ],
+      }),
+    );
+    const table = screen.getByRole('table', { name: 'Params' });
+    const notes = table.querySelectorAll('tr.row-table__notes');
+    expect(notes).toHaveLength(1);
+    const cell = notes[0]!.querySelector('td')!;
+    expect(cell.colSpan).toBe(6);
+    expect(cell).toHaveTextContent(/'a b' is not a plain identifier/);
+    // It follows the row it is about.
+    expect(notes[0]!.previousElementSibling).toContainElement(
+      screen.getByRole('textbox', { name: 'param 2 name' }),
+    );
+  });
+
+  it('variables and outputs carry their own columns', () => {
+    mount(
+      version({
+        variables: [{ name: 'n', type: 'number', default: 0 }],
+        outputs: [{ name: 'o', type: 'string' }],
+      }),
+    );
+    expect(headers(screen.getByRole('table', { name: 'Variables', hidden: true }))).toEqual([
+      'Name',
+      'Type',
+      'Default',
+      'Description',
+      'Actions',
+    ]);
+    expect(headers(screen.getByRole('table', { name: 'Outputs', hidden: true }))).toEqual([
+      'Name',
+      'Type',
+      'Optional',
+      'Description',
+      'Actions',
+    ]);
   });
 });

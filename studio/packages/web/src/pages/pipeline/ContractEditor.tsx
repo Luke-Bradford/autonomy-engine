@@ -14,8 +14,15 @@ import {
   VALUE_TYPE_TITLES,
   type ValueTypeName,
 } from '@autonomy-studio/shared';
-import { LabelledControl } from '../../lib/LabelledControl';
 import { DockSection } from '../../lib/form/DockSection';
+import {
+  RemoveRowButton,
+  RowActions,
+  RowNotes,
+  RowTable,
+  type RowTableColumn,
+} from '../../lib/form/RowTable';
+import { OUTPUT_COLUMNS, PARAM_COLUMNS, VARIABLE_COLUMNS } from './contractColumns';
 import type { createCanvasStore } from './canvasStore';
 import {
   coerceDefaultInput,
@@ -40,6 +47,11 @@ import {
  * `useDefaultDraft` the draft-and-commit-on-blur default field params and
  * variables both need. The aria-labels (`param 1 name`, …) are unchanged, so
  * every spec written against the two old rows still addresses the same controls.
+ *
+ * #1477 OR29 — the rows are a compact table (`RowTable`): the column headers
+ * replace the per-row visible labels, and a row's errors and advisories sit on a
+ * notes row under it. Each kind's columns are declared beside its row, so a
+ * row's cells and its section's headers are read from one place.
  */
 
 type Store = ReturnType<typeof createCanvasStore>;
@@ -63,6 +75,7 @@ function withDescription<R extends Declared>(row: R, text: string): R {
 export function ContractSection({
   heading,
   hint,
+  columns,
   count,
   addLabel,
   onAdd,
@@ -70,6 +83,7 @@ export function ContractSection({
 }: {
   heading: string;
   hint: ReactNode;
+  columns: readonly RowTableColumn[];
   count: number;
   addLabel: string;
   onAdd: () => void;
@@ -77,8 +91,13 @@ export function ContractSection({
 }) {
   return (
     <DockSection heading={heading} hint={hint}>
-      {count === 0 ? <p className="page-hint">None declared.</p> : null}
-      {children}
+      {count === 0 ? (
+        <p className="page-hint">None declared.</p>
+      ) : (
+        <RowTable columns={columns} label={heading}>
+          {children}
+        </RowTable>
+      )}
       <button type="button" onClick={onAdd}>
         {addLabel}
       </button>
@@ -87,8 +106,10 @@ export function ContractSection({
 }
 
 /**
- * One declaration row: Name, Type, then the kind's own controls (`children`),
- * then Description and Remove. `onType` receives the raw option text, and each
+ * One declaration row: Name, Type, then the kind's own cells (`children`, each a
+ * `<td>`, matching its `*_COLUMNS`), then Description and Remove. `notes` — the
+ * row's errors and advisories — go on a row of their own under it, and only when
+ * there is one. `onType` receives the raw option text, and each
  * kind parses it with its OWN schema — parsing rather than casting is what
  * enforces, for example, that no output can be typed `secret`.
  */
@@ -100,7 +121,9 @@ export function ContractRow<R extends Declared>({
   onChange,
   onType,
   onRemove,
+  columns,
   children,
+  notes,
 }: {
   kind: Kind;
   index: number;
@@ -109,23 +132,24 @@ export function ContractRow<R extends Declared>({
   onChange: (next: R) => void;
   onType: (raw: string) => void;
   onRemove: () => void;
+  /** The section's columns, for the notes row's span. */
+  columns: readonly RowTableColumn[];
   children?: ReactNode;
+  notes?: ReactNode;
 }) {
   const n = index + 1;
   return (
-    <div className="contract-row">
-      <label>
-        Name
-        <input
-          aria-label={`${kind} ${n} name`}
-          value={row.name}
-          onChange={(e) => onChange({ ...row, name: e.target.value })}
-        />
-      </label>
-      <LabelledControl label="Type">
-        {(id) => (
+    <>
+      <tr>
+        <td>
+          <input
+            aria-label={`${kind} ${n} name`}
+            value={row.name}
+            onChange={(e) => onChange({ ...row, name: e.target.value })}
+          />
+        </td>
+        <td>
           <select
-            id={id}
             aria-label={`${kind} ${n} type`}
             value={row.type}
             onChange={(e) => onType(e.target.value)}
@@ -136,21 +160,21 @@ export function ContractRow<R extends Declared>({
               </option>
             ))}
           </select>
-        )}
-      </LabelledControl>
-      {children}
-      <label>
-        Description
-        <input
-          aria-label={`${kind} ${n} description`}
-          value={row.description ?? ''}
-          onChange={(e) => onChange(withDescription(row, e.target.value))}
-        />
-      </label>
-      <button type="button" aria-label={`remove ${kind} ${n}`} onClick={onRemove}>
-        Remove
-      </button>
-    </div>
+        </td>
+        {children}
+        <td>
+          <input
+            aria-label={`${kind} ${n} description`}
+            value={row.description ?? ''}
+            onChange={(e) => onChange(withDescription(row, e.target.value))}
+          />
+        </td>
+        <RowActions>
+          <RemoveRowButton label={`remove ${kind} ${n}`} onRemove={onRemove} />
+        </RowActions>
+      </tr>
+      {notes ? <RowNotes span={columns.length + 1}>{notes}</RowNotes> : null}
+    </>
   );
 }
 
@@ -256,12 +280,62 @@ export function ParamRow({ store, index, param }: { store: Store; index: number;
   const emptyString = param.type === 'string' && field.draft === '';
   const isEmptyString = 'default' in param && param.default === '';
 
+  // The row's notes, in the order they used to stack under its fields.
+  const notes = [
+    param.required && 'default' in param ? (
+      // Was the Default field's own hint. It is a note about the doc rather
+      // than help with the field, so it moved to the notes row with the rest.
+      <p key="satisfied" className="contract-advisory">
+        Required, but this stored default already satisfies it — a run is never asked for a value.
+        Blank the field to make the param truly required.
+      </p>
+    ) : null,
+    field.error ? (
+      <p key="parse" className="error" role="alert">
+        {field.error}
+      </p>
+    ) : null,
+    !field.error && defect ? (
+      // #843 — a SAVE GATE now, not the advisory this used to be. The server
+      // refuses this doc (`paramDefaultDefect`, reached through
+      // `validateDoc`), so the badge already bars Save; this row-level copy of
+      // the SAME sentence is where the fix is made. Word-for-word the same
+      // string on purpose: an operator reading the badge can find the field it
+      // is about.
+      //
+      // `role="alert"` like every other `.error` in this app. It does mean this
+      // sentence is announced twice — the doc-level badge is a `role="status"`
+      // carrying the same string — but the badge only says the DOC has issues,
+      // while this one is attached to the control the operator just changed.
+      // Announcing where the problem is beats staying silent on the field that
+      // caused it.
+      <p key="defect" className="error" role="alert">
+        {defect}
+      </p>
+    ) : null,
+    // #844 — notes, not errors: each describes a doc that saves and runs. The
+    // default note is held back while the field shows a parse error, because it
+    // reads the STORED default the draft is replacing. No live-region role
+    // (#1249).
+    nameNote ? (
+      <p key="name" className="contract-advisory">
+        {nameNote}
+      </p>
+    ) : null,
+    !field.error && defaultNote ? (
+      <p key="default" className="contract-advisory">
+        {defaultNote}
+      </p>
+    ) : null,
+  ].filter((note) => note !== null);
+
   return (
     <ContractRow
       kind="param"
       index={index}
       row={param}
       types={ParamTypeSchema.options}
+      columns={PARAM_COLUMNS}
       onChange={update}
       onType={(raw) => {
         const parsed = ParamTypeSchema.safeParse(raw);
@@ -273,31 +347,32 @@ export function ParamRow({ store, index, param }: { store: Store; index: number;
         update({ ...param, type: parsed.data });
       }}
       onRemove={() => store.getState().removeParam(index)}
+      notes={notes.length > 0 ? notes : null}
     >
-      <label className="contract-check">
+      <td data-width="check">
         <input
           type="checkbox"
           aria-label={`param ${index + 1} required`}
           checked={param.required}
           onChange={(e) => update(withRequired(param, e.target.checked))}
         />
-        Required
-      </label>
-      {param.required && !('default' in param) ? (
-        <p className="page-hint">A run must supply this param.</p>
-      ) : (
-        // The field is shown whenever a default EXISTS, required or not.
-        //
-        // Hiding it for a required param — on the belief that a required param's
-        // default is never read — was wrong, and silently so. `resolveRunParams`
-        // tests `hasOwnProperty(p, 'default')` BEFORE it tests `p.required`, so a
-        // required param carrying a default resolves from that default and is
-        // never asked for a value. A doc minted through the API can hold one (the
-        // write path accepts any `default`), and hiding the field made that value
-        // invisible, un-editable, and immune to the advisory below — while the
-        // panel asserted the opposite of what the engine does.
-        <label>
-          Default
+      </td>
+      <td>
+        {param.required && !('default' in param) ? (
+          <span className="page-hint">A run must supply this param.</span>
+        ) : (
+          // The field is shown whenever a default EXISTS, required or not.
+          //
+          // Hiding it for a required param — on the belief that a required param's
+          // default is never read — was wrong, and silently so. `resolveRunParams`
+          // tests `hasOwnProperty(p, 'default')` BEFORE it tests `p.required`, so a
+          // required param carrying a default resolves from that default and is
+          // never asked for a value. A doc minted through the API can hold one (the
+          // write path accepts any `default`), and hiding the field made that value
+          // invisible, un-editable, and immune to the advisory above — while the
+          // panel asserted the opposite of what the engine does.
+          //
+          // "Leave blank for no default" is in the section's `?` now (#1477).
           <input
             aria-label={`param ${index + 1} default`}
             placeholder={DEFAULT_PLACEHOLDER[param.type]}
@@ -305,57 +380,22 @@ export function ParamRow({ store, index, param }: { store: Store; index: number;
             onChange={(e) => field.edit(e.target.value)}
             onBlur={(e) => commitDefault(e.target.value)}
           />
-          <span className="page-hint">
-            {param.required
-              ? 'Required, but this stored default already satisfies it — a run is never asked for a value. Blank the field to make the param truly required.'
-              : emptyString && isEmptyString
-                ? 'The default is the empty string.'
-                : 'Leave blank for no default.'}
-          </span>
-        </label>
-      )}
-      {emptyString && (!param.required || isEmptyString) ? (
-        <label className="contract-check">
-          <input
-            type="checkbox"
-            aria-label={`param ${index + 1} empty-string default`}
-            checked={isEmptyString}
-            onChange={(e) =>
-              update(e.target.checked ? { ...param, default: '' } : withoutDefault(param))
-            }
-          />
-          Empty string
-        </label>
-      ) : null}
-      {field.error ? (
-        <p className="error" role="alert">
-          {field.error}
-        </p>
-      ) : null}
-      {!field.error && defect ? (
-        // #843 — a SAVE GATE now, not the advisory this used to be. The server
-        // refuses this doc (`paramDefaultDefect`, reached through
-        // `validateDoc`), so the badge already bars Save; this row-level copy of
-        // the SAME sentence is where the fix is made. Word-for-word the same
-        // string on purpose: an operator reading the badge can find the field it
-        // is about.
-        //
-        // `role="alert"` like every other `.error` in this app. It does mean this
-        // sentence is announced twice — the doc-level badge is a `role="status"`
-        // carrying the same string — but the badge only says the DOC has issues,
-        // while this one is attached to the control the operator just changed.
-        // Announcing where the problem is beats staying silent on the field that
-        // caused it.
-        <p className="error" role="alert">
-          {defect}
-        </p>
-      ) : null}
-      {/* #844 — notes, not errors: each describes a doc that saves and runs.
-          The default note is held back while the field shows a parse error,
-          because it reads the STORED default the draft is replacing. No
-          live-region role (#1249). */}
-      {nameNote ? <p className="contract-advisory">{nameNote}</p> : null}
-      {!field.error && defaultNote ? <p className="contract-advisory">{defaultNote}</p> : null}
+        )}
+        {emptyString && (!param.required || isEmptyString) ? (
+          // Keeps its visible word: no column header names it.
+          <label className="contract-check">
+            <input
+              type="checkbox"
+              aria-label={`param ${index + 1} empty-string default`}
+              checked={isEmptyString}
+              onChange={(e) =>
+                update(e.target.checked ? { ...param, default: '' } : withoutDefault(param))
+              }
+            />
+            Empty string
+          </label>
+        ) : null}
+      </td>
     </ContractRow>
   );
 }
@@ -401,12 +441,25 @@ export function VariableRow({
     update({ ...variable, default: parsed.value });
   }
 
+  // Keyed by what each note is about, so two notes that happen to read alike
+  // cannot collide.
+  const notes = [
+    ...(field.error ? [['parse', field.error]] : []),
+    ...(nameDefect ? [['name', nameDefect]] : []),
+    ...(field.error ? [] : defaultDefects.map((d, i) => [`default:${i}`, d])),
+  ].map(([key, text]) => (
+    <p key={key} className="error" role="alert">
+      {text}
+    </p>
+  ));
+
   return (
     <ContractRow
       kind="variable"
       index={index}
       row={variable}
       types={VariableTypeSchema.options}
+      columns={VARIABLE_COLUMNS}
       onChange={update}
       onType={(raw) => {
         const parsed = VariableTypeSchema.safeParse(raw);
@@ -414,9 +467,10 @@ export function VariableRow({
         update(withVariableType(variable, parsed.data));
       }}
       onRemove={() => store.getState().removeVariable(index)}
+      notes={notes.length > 0 ? notes : null}
     >
-      <label>
-        Default
+      <td>
+        {/* "The value every run starts from" is in the section's `?` (#1477). */}
         <input
           aria-label={`variable ${index + 1} default`}
           placeholder={VARIABLE_PLACEHOLDER[variable.type]}
@@ -424,25 +478,7 @@ export function VariableRow({
           onChange={(e) => field.edit(e.target.value)}
           onBlur={(e) => commitDefault(e.target.value)}
         />
-        <span className="page-hint">The value every run starts from.</span>
-      </label>
-      {field.error ? (
-        <p className="error" role="alert">
-          {field.error}
-        </p>
-      ) : null}
-      {nameDefect ? (
-        <p className="error" role="alert">
-          {nameDefect}
-        </p>
-      ) : null}
-      {!field.error
-        ? defaultDefects.map((d) => (
-            <p key={d} className="error" role="alert">
-              {d}
-            </p>
-          ))
-        : null}
+      </td>
     </ContractRow>
   );
 }
@@ -463,6 +499,7 @@ export function OutputRow({
       index={index}
       row={output}
       types={OutputTypeSchema.options}
+      columns={OUTPUT_COLUMNS}
       onChange={update}
       onType={(raw) => {
         // `OutputTypeSchema` excludes `secret` — a declared secret output would
@@ -474,7 +511,7 @@ export function OutputRow({
       }}
       onRemove={() => store.getState().removeOutput(index)}
     >
-      <label className="contract-check">
+      <td data-width="check">
         <input
           type="checkbox"
           aria-label={`output ${index + 1} optional`}
@@ -492,8 +529,7 @@ export function OutputRow({
             }
           }}
         />
-        Optional
-      </label>
+      </td>
     </ContractRow>
   );
 }

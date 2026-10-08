@@ -1858,7 +1858,6 @@ button.danger {
    end's overrides read as belonging to the picker above them. #1305 — so does
    the owner-side allowlist those overrides are drawn from. */
 .container-create,
-.contract-row,
 .param-overrides,
 .overridable-keys {
   display: flex;
@@ -1892,9 +1891,8 @@ button.danger {
 
 /* U16 — the pipeline's typed params/outputs contract, in the nothing-selected
    property panel. `.property-panel` is already a flex column, so a section only
-   needs the separation that says where one declaration ends and the next
-   begins; the row border is what stops five stacked inputs reading as one
-   undifferentiated form. */
+   needs the separation between it and the next. Its rows are a `RowTable`
+   (#1477 OR29). */
 .contract-section {
   display: flex;
   flex-direction: column;
@@ -2569,6 +2567,7 @@ button.danger {
    grid) read one number rather than repeating it. */
 :root[data-density='compact'] {
   --density-control-height: 28px;
+  --density-row-height: 32px;
   --density-field-font: 13px;
   --density-label-font: 12px;
   --density-space-1: 4px;
@@ -2755,7 +2754,7 @@ button.danger {
 @container dock-tab (min-width: 576px) {
   /* LABEL-LEFT: the label in a column of its own, the control, its hint and
      its error in the next. Only a field row of the tab's own sections — not
-     the cells of a row card or a param-override row, which are too narrow. */
+     the cells of a row table or a param-override row, which are too narrow. */
   :root[data-density='compact']
     .property-dock
     .property-panel
@@ -4725,10 +4724,8 @@ button.danger {
   gap: 0.25rem;
 }
 
-/* #1169 — an array-of-objects config field. The rows themselves are
-   `.contract-row`, the panel's existing card idiom (see `ObjectListControl`'s
-   docblock for why this is a stack of cards and not a `<table>`); this only has
-   to space them and name the group the way a `<label>` would name a control. */
+/* #1169 — an array-of-objects config field: its label, its `RowTable`, and its
+   Add button, spaced the way a `<label>` names a control. */
 .object-list {
   gap: 0.5rem;
 }
@@ -4745,15 +4742,166 @@ button.danger {
   align-self: stretch;
 }
 
-/* #1347 — a row's Up / Down / Remove sit on one line under its cells. */
-.object-list-row-actions {
+/* #1477 OR29 — `RowTable`: authored rows (params, variables, outputs, a
+   mapping, headers, messages) as a compact table. Headers name the columns
+   once; each cell holds a bare control.
+
+   The wrapper scrolls sideways rather than letting the table crush its cells:
+   `min-width` per column kind keeps a cell usable in the 302px right-hand dock.
+   `overflow-x: auto` makes the wrapper clip vertically too, which is why no
+   header carries a `?` (its note would be clipped): a column's explanation is
+   in the section's `?`. */
+.row-table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.row-table {
+  margin-top: 0;
+}
+
+.row-table :is(th, td) {
+  padding: 0.2rem 0.3rem;
+  vertical-align: top;
+}
+
+.row-table th {
+  white-space: nowrap;
+  font-size: 0.8rem;
+}
+
+.row-table th[data-width='long'] {
+  min-width: 5rem;
+}
+
+/* A tick box and the actions take only what they need. */
+.row-table :is(th, td):is([data-width='check'], [data-width='actions'], .row-table__actions) {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.row-table td[data-width='check'] {
+  text-align: center;
+  vertical-align: middle;
+}
+
+.row-table__actions button {
+  min-width: 24px;
+  padding-inline: 0.3rem;
+}
+
+.row-table__actions button + button {
+  margin-left: 2px;
+}
+
+/* A bare text box fills its cell (a select keeps its content width). */
+.row-table td > input:not([type='checkbox']),
+.row-table td > .labelled-control > :is(input, textarea, .json-editor) {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* A config cell: its control, and under it a hint, an error or the open list.
+   The label is out of sight (the header shows it) and out of the flow. */
+.row-table td > .labelled-control {
+  position: relative;
   display: flex;
-  gap: 0.4rem;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.row-table td > .labelled-control > label {
+  position: absolute;
+}
+
+/* The `${}` / `ƒx` toggles show under the box only while its cell has focus
+   (or its list is open). ADF puts "Add dynamic content" under the box always;
+   showing it on focus is studio's own departure, for table rows. Inline, three
+   text columns' toggles leave no room for the text in a 589px tab, and under
+   every box they make each row three lines tall. Out of sight, not removed:
+   Tab from the box lands on `${}`, which keeps focus in the cell and so shows
+   it; a screen reader reaches them as always. */
+.row-table
+  td
+  > .labelled-control:not(:focus-within, :has(.expression-picker-list))
+  > .expression-picker {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* One line tall, growing with its text (where the engine supports it). */
+.row-table td textarea {
+  field-sizing: content;
+  min-height: 0;
+  max-height: 8lh;
+}
+
+.row-table .expression-picker {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+.row-table .expression-picker-toggle {
+  align-self: stretch;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+/* An open list is wider than its cell; the table grows into its scroll. */
+.row-table .expression-picker-list {
+  flex-basis: 100%;
+  min-width: 18rem;
+}
+
+.row-table__notes td {
+  padding-top: 0;
+}
+
+/* A row and its notes read as one entry: no rule between them. */
+.row-table tr:has(+ .row-table__notes) > td {
+  border-bottom: 0;
+}
+
+.row-table__notes p {
+  margin: 0;
+}
+
+/* Compact: a 28px control in a 32px row. */
+:root[data-density='compact'] .row-table td textarea {
+  box-sizing: border-box;
+  min-height: var(--density-control-height);
+  line-height: 16px;
+  padding-block: calc((var(--density-control-height) - 16px - 2px) / 2);
+}
+
+:root[data-density='compact'] .row-table :is(th, td) {
+  padding: calc((var(--density-row-height) - var(--density-control-height) - 1px) / 2) 2px;
+}
+
+:root[data-density='compact'] .row-table th {
+  font-size: var(--density-label-font);
+}
+
+:root[data-density='compact']
+  .row-table
+  :is(.row-table__actions button, .expression-picker-toggle) {
+  height: var(--density-control-height);
+  font-size: var(--density-label-font);
 }
 
 .object-list-label {
   font-size: 0.8rem;
   color: var(--muted);
+  /* Positioned, so its `?` note opens at the label row's width (#1477). */
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 .expression-picker {

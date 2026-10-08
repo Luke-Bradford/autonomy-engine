@@ -91,9 +91,15 @@ test.describe('#1477 OR29 — dock density', () => {
     // The ticket's bar: the first parameter row is at most 80px below the dock
     // header.
     const header = await rectOf(page, '.property-dock__header');
-    const row = await panel.locator('.contract-row').first().boundingBox();
-    expect(row).not.toBeNull();
-    expect(row!.y - header.bottom).toBeLessThanOrEqual(80);
+    // #1477 OR29 — the rows are a table now: it starts within the bar (where
+    // the first row card did), and the first row follows its column headers
+    // directly — its name box sits higher than a card's did under its "Name"
+    // label.
+    const table = await panel.getByRole('table', { name: 'Params' }).boundingBox();
+    const first = await firstRow.boundingBox();
+    expect(table!.y - header.bottom).toBeLessThanOrEqual(80);
+    // The header row is under one compact row (32px) tall.
+    expect(first!.y - table!.y).toBeLessThanOrEqual(32);
 
     // The section's help is one click away, not a paragraph on the page.
     const params = panel.getByRole('region', { name: 'Params', exact: true });
