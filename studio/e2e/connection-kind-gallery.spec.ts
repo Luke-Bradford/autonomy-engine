@@ -143,6 +143,12 @@ test.describe('#1477 the connection kind gallery', () => {
         .map((f) => f.type),
     );
     expect(holding).toEqual(['password']);
+
+    // #1605 — the pasted password is PostgreSQL's. Switching Kind to HTTP, which
+    // sends its secret as a Bearer header, clears it and says why.
+    await form.getByLabel('Kind').selectOption('http');
+    await expect(form.getByLabel('Secret', { exact: true })).toHaveValue('');
+    await expect(form.getByText('Typed secret cleared: it was for PostgreSQL')).toBeVisible();
     await expectQuiet(page, problems);
   });
 

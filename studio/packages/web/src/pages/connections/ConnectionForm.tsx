@@ -98,7 +98,46 @@ export function ConnectionForm({
   const [probing, setProbing] = useState(false);
   const editing = form.id !== null;
 
-  const editor = useConfigEditor({ form, onChange, setError, fieldsFor: connectionFields });
+  /**
+   * #1605 — a secret TYPED into this form belongs to the kind it was typed for.
+   * Every kind sends its secret somewhere different (HTTP as a Bearer header to
+   * the Base URL), so a PostgreSQL password left in the box across a Kind change
+   * would be saved as, and sent by, the new kind. The editor's `onChange` is the
+   * only path that moves `kind`, so the clear rides on it; a blank box (keep the
+   * stored secret, on edit) has nothing to clear. Remembers the old kind for the
+   * note until a secret is typed for the new one.
+   */
+  const [secretClearedFor, setSecretClearedFor] = useState<ConnectionKind | null>(null);
+  const onEditorChange = (next: FormState) => {
+    if (next.kind !== form.kind && next.secret !== '') {
+      setSecretClearedFor(form.kind);
+      onChange({ ...next, secret: '' });
+      return;
+    }
+    onChange(next);
+  };
+  /**
+   * What the Secret box now holds for this kind, when a Kind change made that
+   * non-obvious. On edit, a blank box KEEPS the stored secret (the server never
+   * clears `secretRef` on a kind change), so a stored PostgreSQL password would
+   * become the HTTP connection's secret unless a new one is typed.
+   */
+  const secretNote = (() => {
+    if (form.secret !== '') return null;
+    if (secretClearedFor !== null && secretClearedFor !== form.kind) {
+      return `Typed secret cleared: it was for ${CONNECTION_KIND_LABELS[secretClearedFor]}`;
+    }
+    if (stored !== undefined && stored.secretStatus === 'ready' && stored.kind !== form.kind) {
+      return `The stored secret was set for ${CONNECTION_KIND_LABELS[stored.kind]} and is kept: type one for ${CONNECTION_KIND_LABELS[form.kind]}`;
+    }
+    return null;
+  })();
+  const editor = useConfigEditor({
+    form,
+    onChange: onEditorChange,
+    setError,
+    fieldsFor: connectionFields,
+  });
   const { fields, jsonMode } = editor;
 
   /**
@@ -463,9 +502,15 @@ export function ConnectionForm({
         <SecretInput
           label="Secret"
           value={form.secret}
-          onChange={(secret) => onChange({ ...form, secret })}
+          onChange={(secret) => {
+            setSecretClearedFor(null);
+            onChange({ ...form, secret });
+          }}
           placeholder={editing ? 'leave blank to keep the current secret' : 'optional'}
         />
+        {/* #1605 — no `role`, for the reason the advisories above give: this
+            form's single `role="status"` is the probe verdict. */}
+        {secretNote !== null && <p className="page-hint">{secretNote}</p>}
         {/* Never a `required` input: on edit blank means KEEP the stored secret,
             and on create the server accepts a secretless row (it derives
             `needs_secret` and stores it). This says what the kind DOES with one. */}
