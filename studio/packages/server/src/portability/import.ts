@@ -122,9 +122,9 @@ function unresolvedDatasetNodeIds(versions: readonly { nodes: NodeExport[] }[]):
  * `NewPipelineVersionSchema` or (as of #444) by the doc gate. Without a
  * transaction the refusal lands mid-way, leaving an orphan pipeline and the
  * versions that happened to precede it: an import that "failed" but still
- * changed the database. (#1492 narrowed what refuses: a HISTORICAL version that
- * fails only #1480's activity check is admitted and reported, not refused.) #444 is what makes that likely rather than exotic, so
- * the two ship together.
+ * changed the database. #444 is what makes that likely rather than exotic, so
+ * the two ship together. (#1492 narrowed what refuses: a HISTORICAL version
+ * that fails only #1480's activity check is admitted and reported instead.)
  *
  * `createPipelineVersion` opens its OWN `db.transaction`; better-sqlite3 drops
  * a nested one to a `SAVEPOINT` and commits it with the outer scope, so passing

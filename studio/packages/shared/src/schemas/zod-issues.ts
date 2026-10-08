@@ -40,6 +40,19 @@ import type { z } from 'zod';
 export const ISSUE_LIST_CAP = 100;
 
 /**
+ * #1492 — an issue list as a response carries it: the first `ISSUE_LIST_CAP`
+ * and the uncapped count, so a reader can state the remainder with
+ * {@link summarizeIssueList}. The validate route and portable import's
+ * `unrunnableVersion` attention item both answer in this shape.
+ */
+export function capIssueList(issues: ReadonlyArray<string>): {
+  issues: string[];
+  totalIssues: number;
+} {
+  return { issues: issues.slice(0, ISSUE_LIST_CAP), totalIssues: issues.length };
+}
+
+/**
  * Join already-rendered issue lines into one bounded operator-facing string:
  * the first `ISSUE_LIST_CAP`, then the remainder STATED as "…and N more".
  *
@@ -70,19 +83,6 @@ export const ISSUE_LIST_CAP = 100;
  * well as what was sliced off here. It defaults to `rendered.length`, which is
  * the whole-list case and the only behaviour that existed before.
  */
-/**
- * #1492 — an issue list as a response carries it: the first `ISSUE_LIST_CAP`
- * and the uncapped count, so a reader can state the remainder with
- * {@link summarizeIssueList}. The validate route and portable import's
- * `unrunnableVersion` attention item both answer in this shape.
- */
-export function capIssueList(issues: ReadonlyArray<string>): {
-  issues: string[];
-  totalIssues: number;
-} {
-  return { issues: issues.slice(0, ISSUE_LIST_CAP), totalIssues: issues.length };
-}
-
 export function summarizeIssueList(
   rendered: ReadonlyArray<string>,
   total: number = rendered.length,

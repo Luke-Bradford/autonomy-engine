@@ -344,10 +344,10 @@ function gatePipelineVersion(
   //
   // #844 GL3 — the gate is also handed the OWNER's globals (GL-D2), the way it
   // is handed an owner-scoped resolver, and it collects what the doc reads. That
-  // list is complete because only a doc with no issues gets past here (no
-  // STRUCTURAL issues, under #1492's `skipActivityChecks`: the #1480 check reads
-  // no `${}`, so skipping it cannot hide a read), and it is
+  // list is complete because only a doc with no issues gets past here, and it is
   // stored as the version's `global_reads`, which a run's start check reads.
+  // Under #1492's `skipActivityChecks` that means no STRUCTURAL issues: the
+  // #1480 check collects no reads, so skipping it cannot leave one out.
   const globals = listOwnerGlobalTypes(db, callerOwnerId);
   const globalReadNames = new Set<string>();
   const issues = validatePipelineDoc(lowered, {
