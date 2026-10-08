@@ -513,7 +513,7 @@ Every studio UI change follows these rules unless its ticket says otherwise. A P
      | Comfortable | 12/400, 12/600, 14/400, 14/600, 16/600 (section), 20/600 (page title); body text moves up one step (13 to 14) and the section heading with it (14 to 16), so a section heading never shares a size with body text |
 
      Weights are 400 and 600, never 500 or 700.
-   - **Spacing on the 4px scale only** (4/8/12/16/24/32) in both densities.
+   - **Spacing (padding, margin, gap) on the 4px scale only** (4/8/12/16/24/32) in both densities. Control and row *heights* are not spacing; they come from this table:
 
      | Density | Controls | Table rows |
      | --- | --- | --- |
