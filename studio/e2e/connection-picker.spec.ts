@@ -73,6 +73,8 @@ test.describe('#1477 activity connection pickers', () => {
         pickerHeight: Math.round(el.querySelector('input')!.getBoundingClientRect().height),
         pickerChromeBorder: getComputedStyle(el.children[0]!).borderTopWidth,
         inputBorder: getComputedStyle(el.querySelector('input')!).borderTopWidth,
+        // Room for the chevron, against the compact density's own padding.
+        inputPadRight: getComputedStyle(el.querySelector('input')!).paddingRight,
         oneLine: new Set(rects.map((r) => Math.round(r.top + r.height / 2))).size === 1,
         gaps: rects.slice(1).map((r, i) => Math.round(r.left - rects[i]!.right)),
         buttonHeights: [
@@ -89,6 +91,7 @@ test.describe('#1477 activity connection pickers', () => {
       pickerHeight: 28,
       pickerChromeBorder: '0px',
       inputBorder: '1px',
+      inputPadRight: '28px',
       gaps: [8, 8, 8],
       oneLine: true,
       buttonHeights: [28],
@@ -239,6 +242,8 @@ test.describe('#1477 activity connection pickers', () => {
 
     // Typing into the closed picker opens it, filtered: only this run's row.
     await sink.focus();
+    // The cleared Fluent underline is replaced by the app's focus ring.
+    expect(await sink.evaluate((el) => getComputedStyle(el).outlineStyle)).toBe('solid');
     await page.keyboard.type(stamp);
     await expect(list).toBeVisible();
     await expect(list.locator('[data-connection-id]')).toHaveCount(1);
