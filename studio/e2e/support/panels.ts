@@ -17,6 +17,11 @@ export function properties(page: Page): Locator {
   return page.getByRole('complementary', { name: 'Properties' });
 }
 
+/** Matches text that starts with `prefix`; a substring would also match "store A2". */
+function startsWith(prefix: string): RegExp {
+  return new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
+}
+
 /**
  * #1477 OR29 slice 5c — bind the dock's connection picker labelled `label`.
  * The picker is a searchable combobox whose list is portalled, so it is opened
@@ -36,7 +41,7 @@ export async function pickConnection(
       ? list.getByRole('option', { name: 'None', exact: true })
       : 'id' in target
         ? list.locator(`[data-connection-id="${target.id}"]`)
-        : list.getByRole('option').filter({ hasText: target.name });
+        : list.getByRole('option').filter({ hasText: startsWith(target.name) });
   await option.click();
   await expect(list).toHaveCount(0);
 }
