@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { CATALOG_VERSION, SCHEMA_VERSION } from '../schemas/version.js';
 import {
+  BUNDLE_VERSION,
   ConnectionExportDataSchema,
   ExportEnvelopeSchema,
   ExportKindSchema,
   ImportError,
   NodeExportSchema,
+  isBundleEnvelope,
   parseAndUpgradeEnvelope,
+  parseBundle,
   type Upgrader,
 } from './envelope.js';
 import { RESOURCE_KINDS } from './paths.js';
@@ -728,5 +731,82 @@ describe('parseAndUpgradeEnvelope', () => {
       expect(result.data.window).toBeNull();
       expect(result.data.resourceId).toBeNull();
     });
+  });
+});
+
+describe('#1586 parseBundle', () => {
+  const bundle = (items: unknown[], bundleVersion: unknown = BUNDLE_VERSION) => ({
+    kind: 'bundle',
+    bundleVersion,
+    exportedAt: 1700000000000,
+    items,
+  });
+  const named = (name: string) => ({
+    ...validPipelineEnvelope,
+    data: {
+      ...validPipelineEnvelope.data,
+      pipeline: { ...validPipelineEnvelope.data.pipeline, name },
+    },
+  });
+
+  it('returns every member, parsed, in the file order — from an object or JSON text', () => {
+    const raw = bundle([named('A'), named('B')]);
+    for (const input of [raw, JSON.stringify(raw)]) {
+      const parsed = parseBundle(input);
+      expect(parsed.map((e) => (e.kind === 'pipeline' ? e.data.pipeline.name : e.kind))).toEqual([
+        'A',
+        'B',
+      ]);
+    }
+  });
+
+  it('upgrades each member from its OWN schemaVersion', () => {
+    const upgraders = new Map<number, Upgrader>([
+      [
+        SCHEMA_VERSION - 1,
+        (env) => ({ ...(env as Record<string, unknown>), schemaVersion: SCHEMA_VERSION }),
+      ],
+    ]);
+    const old = { ...named('Old'), schemaVersion: SCHEMA_VERSION - 1 };
+    const parsed = parseBundle(bundle([named('New'), old]), upgraders);
+    expect(parsed.map((e) => e.schemaVersion)).toEqual([SCHEMA_VERSION, SCHEMA_VERSION]);
+  });
+
+  it('names the member a refusal comes from', () => {
+    const bad = { ...named('Bad'), schemaVersion: SCHEMA_VERSION + 1 };
+    expect(() => parseBundle(bundle([named('A'), bad]))).toThrow(
+      new ImportError(
+        `Item 2: Cannot import: schemaVersion ${SCHEMA_VERSION + 1} is newer than this build supports (${SCHEMA_VERSION})`,
+      ),
+    );
+  });
+
+  it('refuses a nested bundle as a member', () => {
+    expect(() => parseBundle(bundle([bundle([named('A')])]))).toThrow(/^Item 1: /);
+  });
+
+  it.each([
+    ['newer than this build', BUNDLE_VERSION + 1, /bundleVersion 2 is newer/],
+    ['zero', 0, /invalid bundleVersion/],
+    ['null', null, /invalid bundleVersion/],
+    ['a fraction', 1.5, /invalid bundleVersion/],
+  ])('refuses a bundleVersion that is %s', (_label, version, message) => {
+    expect(() => parseBundle(bundle([named('A')], version))).toThrow(message);
+  });
+
+  it('refuses an empty or missing item list', () => {
+    expect(() => parseBundle(bundle([]))).toThrow(/at least one item/);
+    expect(() => parseBundle({ kind: 'bundle', bundleVersion: 1, exportedAt: 1 })).toThrow(
+      /at least one item/,
+    );
+  });
+
+  it('isBundleEnvelope reads the declaration only, from an object or JSON text', () => {
+    expect(isBundleEnvelope({ kind: 'bundle' })).toBe(true);
+    expect(isBundleEnvelope('{"kind":"bundle"}')).toBe(true);
+    expect(isBundleEnvelope(validPipelineEnvelope)).toBe(false);
+    expect(isBundleEnvelope('not json')).toBe(false);
+    expect(isBundleEnvelope(['bundle'])).toBe(false);
+    expect(isBundleEnvelope(null)).toBe(false);
   });
 });

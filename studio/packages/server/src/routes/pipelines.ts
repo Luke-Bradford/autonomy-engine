@@ -777,13 +777,12 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
   // is the one-way door this format exists to close.
   fastify.post('/api/pipelines/export', async (request, reply) => {
     const { ids } = PipelineBundleExportBodySchema.parse(request.body);
-    const text = canonicalStringify(
-      exportPipelineBundle(db, ids, request.principal.ownerId),
-    );
+    const bundle = exportPipelineBundle(db, ids, request.principal.ownerId);
+    const text = canonicalStringify(bundle);
     const bytes = Buffer.byteLength(text, 'utf8');
     if (bytes > REQUEST_BODY_LIMIT_BYTES) {
       throw new BadRequestError(
-        `These ${ids.length} pipelines export to ${formatMiB(bytes)}, over the ` +
+        `These ${bundle.items.length} pipelines export to ${formatMiB(bytes)}, over the ` +
           `${formatMiB(REQUEST_BODY_LIMIT_BYTES)} an import can read back — export fewer at a time`,
       );
     }

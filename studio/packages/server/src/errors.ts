@@ -1,6 +1,7 @@
 import { ZodError } from 'zod';
 import type { FastifyInstance } from 'fastify';
 import { ImportError, ISSUE_LIST_CAP } from '@autonomy-studio/shared';
+import { REQUEST_BODY_LIMIT_BYTES } from './limits.js';
 import type { ApiErrorBody } from '@autonomy-studio/shared';
 import {
   InvalidPipelineDocError,
@@ -486,6 +487,19 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     // fragment of the malformed body straight back at the client. The
     // generic message here avoids that echo; the real error (with detail)
     // still reaches the server log.
+    // #1586 — a body over `REQUEST_BODY_LIMIT_BYTES` is not malformed, it is
+    // too big, and saying "Malformed request" sends the operator looking for a
+    // defect in a file that is merely large (an import of a big export). The
+    // text is ours and quotes nothing from the body.
+    if (hasNumericStatusCode(error) && (error as { code?: unknown }).code === 'FST_ERR_CTP_BODY_TOO_LARGE') {
+      request.log.warn({ err: error }, 'request body too large');
+      reply.status(413).send({
+        error: 'bad_request',
+        message: `The request is larger than the ${REQUEST_BODY_LIMIT_BYTES / (1024 * 1024)} MiB this server accepts.`,
+      } satisfies ApiErrorBody);
+      return;
+    }
+
     if (hasNumericStatusCode(error)) {
       request.log.warn({ err: error }, 'malformed request');
       reply
