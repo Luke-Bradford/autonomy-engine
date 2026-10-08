@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
-import { fireAndSettle, seedVersion, type SeedDoc } from './support/seedDoc';
+import { fireAndSettle, mintVersion, seedVersion, type SeedDoc } from './support/seedDoc';
 import { newPipelineButton, openImportDrawer } from './support/pipelinesPage';
 
 /**
@@ -537,6 +537,110 @@ test('#1569 slice 7 — the row opens the editor; ⋯ triggers it now, opens its
   // A click on a plain cell is a click on the row: the editor opens.
   await row().locator('td').nth(2).click();
   await expect(page).toHaveURL(new RegExp(`#/author/pipelines/${seeded.pipelineId}$`));
+
+  await expectQuiet(page, problems);
+});
+
+/**
+ * #1569 OR37 slice 8 — the row's ⋯ → Clone from version… and Duplicate…, one
+ * drawer. Two versions whose SHARED node differs in config, so each copy is
+ * proved to be the version it names by what a node holds.
+ */
+test('#1569 slice 8 — ⋯ Clone from version… copies THAT version; Duplicate… copies the latest', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const URL_V1 = 'https://example.test/s8-v1';
+  const URL_V2 = 'https://example.test/s8-v2';
+  const at = (url: string) => ({ id: 'n_a', position: { x: 0, y: 0 }, config: { url } });
+  // No "v1" in any name: the suite shares one database, and other specs' pickers
+  // match `/v1/`.
+  const stamp = `e2e 1569s8 ${String(Date.now())}`;
+  const src = `${stamp} src`;
+  const { pipelineId, pipelineVersionId } = await seedVersion(page, src, {
+    nodes: [at(URL_V1)],
+    annotations: ['nightly'],
+  });
+  await mintVersion(
+    page,
+    pipelineId,
+    { nodes: [at(URL_V2), { id: 'n_c', position: { x: 320, y: 0 } }], annotations: ['nightly'] },
+    pipelineVersionId,
+    src,
+  );
+
+  interface Version {
+    version: number;
+    nodes: { id: string; config: { url?: string } }[];
+    annotations: string[];
+  }
+  // The copy's id from its own row in the grid: it is there without a reload.
+  const onlyVersionOf = async (name: string): Promise<Version> => {
+    const href = await rowOf(name)
+      .getByRole('link', { name: `Open ${name}`, exact: true })
+      .getAttribute('href');
+    const id = decodeURIComponent(href!.split('/').pop()!);
+    expect(id).not.toBe(pipelineId);
+    const res = await page.request.get(`/api/pipelines/${encodeURIComponent(id)}/versions`);
+    const versions = (await res.json()) as Version[];
+    expect(versions).toHaveLength(1);
+    return versions[0]!;
+  };
+
+  await page.goto(`/#/author/pipelines?q=${encodeURIComponent(stamp)}`);
+  await fluentRootReady(page);
+  const rowOf = (name: string) =>
+    page.getByRole('row').filter({ has: page.getByRole('link', { name: `Open ${name}` }) });
+  await expect(rowOf(src)).toBeVisible();
+  const choose = async (item: string) => {
+    await rowOf(src)
+      .getByRole('button', { name: `Actions for ${src}` })
+      .click();
+    const menuItem = page.getByRole('menuitem', { name: item });
+    // Clone waits on the row's version count, which arrives with the grid's facts.
+    await expect(menuItem).not.toHaveAttribute('aria-disabled', 'true');
+    await menuItem.click();
+  };
+
+  // Clone from version…: starts on v1, focused, and copies v1.
+  await choose('Clone from version…');
+  let drawer = page.getByRole('dialog', { name: `Clone from version — ${src}` });
+  const version = drawer.getByRole('combobox', { name: 'Version' });
+  await expect(version).toHaveValue('1');
+  await expect(version).toBeFocused();
+  await expect(drawer.getByRole('option', { name: 'Latest (v2)' })).toBeAttached();
+  // Sized to its options, not stretched across the drawer (UI standard rule 5).
+  const selectBox = (await version.boundingBox())!;
+  const drawerBox = (await drawer.boundingBox())!;
+  expect(selectBox.width).toBeLessThan(drawerBox.width / 2);
+  const name = drawer.getByRole('textbox', { name: /Name/ });
+  await expect(name).toHaveValue(`${src} v1 (copy)`);
+  const cloneName = `${stamp} clone`;
+  await name.fill(cloneName);
+  await drawer.getByRole('button', { name: 'Clone', exact: true }).click();
+  await expect(drawer).toHaveCount(0);
+  // The copy joins the grid without a reload.
+  await expect(rowOf(cloneName)).toBeVisible();
+  const clone = await onlyVersionOf(cloneName);
+  expect(clone.nodes.map((n) => n.id)).toEqual(['n_a']);
+  expect(clone.nodes[0]!.config.url).toBe(URL_V1);
+  expect(clone.annotations).toEqual(['nightly', `cloned from ${src} v1`]);
+
+  // Duplicate…: Latest by default, and copies v2 with no provenance label.
+  await choose('Duplicate…');
+  drawer = page.getByRole('dialog', { name: `Duplicate — ${src}` });
+  await expect(drawer.getByRole('combobox', { name: 'Version' })).toHaveValue('latest');
+  await expect(drawer.getByRole('textbox', { name: /Name/ })).toHaveValue(`${src} (copy)`);
+  const dupName = `${stamp} dup`;
+  await drawer.getByRole('textbox', { name: /Name/ }).fill(dupName);
+  await drawer.getByRole('button', { name: 'Duplicate', exact: true }).click();
+  await expect(drawer).toHaveCount(0);
+  await expect(rowOf(dupName)).toBeVisible();
+  const dup = await onlyVersionOf(dupName);
+  expect(dup.nodes.map((n) => n.id).sort()).toEqual(['n_a', 'n_c']);
+  expect(dup.nodes.find((n) => n.id === 'n_a')!.config.url).toBe(URL_V2);
+  expect(dup.annotations).toEqual(['nightly']);
 
   await expectQuiet(page, problems);
 });

@@ -59,6 +59,8 @@ test.describe('#1397 row ⋯ menus, by keyboard', () => {
       'Trigger now…',
       'Open last run',
       'Runs',
+      'Duplicate…',
+      'Clone from version…',
       'Export',
       'Archive',
       '—',

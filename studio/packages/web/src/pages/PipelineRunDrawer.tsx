@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { Link } from 'react-router';
-import type { PipelineVersion } from '@autonomy-studio/shared';
-import { messageOf } from '../api/client';
-import { latestVersion, listPipelineVersions, runPipelineVersion } from '../api/pipelines';
+import { runPipelineVersion } from '../api/pipelines';
 import { FormDrawer } from '../lib/form/FormDrawer';
 import type { UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { RunParamsFields } from './pipeline/RunNowPanel';
@@ -10,11 +8,7 @@ import { useRunParams } from './pipeline/useRunParams';
 import type { PipelineRunForm } from './pipelineRunForm';
 import { runDetailPath } from './runs/runPath';
 import { runDisabledReason, runNowRows } from './pipeline/runNowRules';
-
-type Load =
-  | { status: 'loading' }
-  | { status: 'ready'; version: PipelineVersion | null }
-  | { status: 'error'; message: string };
+import { usePipelineVersions } from './pipeline/usePipelineVersions';
 
 /**
  * #1569 OR37 — the pipelines grid's ⋯ → Trigger now, in the page's drawer: the
@@ -44,8 +38,6 @@ export function PipelineRunDrawer({
   onStarted: () => void;
   onBusyChange: (busy: boolean) => void;
 }) {
-  const [load, setLoad] = useState<Load>({ status: 'loading' });
-  const [attempt, setAttempt] = useState(0);
   const [started, setStarted] = useState<{ runId: string; version: number } | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const startRef = useRef<HTMLButtonElement>(null);
@@ -56,26 +48,12 @@ export function PipelineRunDrawer({
     cancelRef.current?.focus();
   }, []);
   const { pipelineId } = form;
-  useEffect(() => {
-    const ctrl = new AbortController();
-    listPipelineVersions(pipelineId, ctrl.signal).then(
-      (versions) => {
-        if (ctrl.signal.aborted) return;
-        const version = latestVersion(versions);
-        setLoad({ status: 'ready', version });
-        const seeded = runNowRows(version?.params ?? []);
-        update((prev) => ({ ...prev, rows: seeded, defaults: seeded }));
-      },
-      (err: unknown) => {
-        if (!ctrl.signal.aborted) setLoad({ status: 'error', message: messageOf(err) });
-      },
-    );
-    return () => ctrl.abort();
-    // Read once per pipeline and per Retry; `update` is this open's.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pipelineId, attempt]);
+  const { load, retry } = usePipelineVersions(pipelineId, (versions) => {
+    const seeded = runNowRows(versions[0]?.params ?? []);
+    update((prev) => ({ ...prev, rows: seeded, defaults: seeded }));
+  });
 
-  const version = load.status === 'ready' ? load.version : null;
+  const version = load.status === 'ready' ? (load.versions[0] ?? null) : null;
   // With params, the first one takes focus as it mounts; without, Start does.
   useEffect(() => {
     if (load.status === 'error') retryRef.current?.focus();
@@ -169,14 +147,7 @@ export function PipelineRunDrawer({
           <p className="form-error" role="alert">
             Could not read the versions: {load.message}
           </p>
-          <button
-            type="button"
-            ref={retryRef}
-            onClick={() => {
-              setLoad({ status: 'loading' });
-              setAttempt((n) => n + 1);
-            }}
-          >
+          <button type="button" ref={retryRef} onClick={retry}>
             Retry
           </button>
         </>

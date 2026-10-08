@@ -52,6 +52,8 @@ export const FORM_SECTION_HINTS = {
       'A pipeline, connection, trigger, dataset or global parameter export; what it needs rebound is listed after.',
     demo: 'Five sample pipelines in folder “Demo” with their own connections and datasets, ready to run.',
     general: 'A short account of what this pipeline does and why it exists.',
+    duplicate:
+      'Which saved version the copy starts from; any but Latest is recorded on the copy as an annotation.',
     annotations:
       'Tags that describe this pipeline, such as an environment, a team or a data domain.',
   },

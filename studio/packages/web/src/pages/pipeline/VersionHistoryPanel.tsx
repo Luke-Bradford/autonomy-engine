@@ -18,6 +18,7 @@ import { DismissRegular } from '@fluentui/react-icons';
 import type { Pipeline } from '@autonomy-studio/shared';
 import type { VersionEntry } from './versionHistory';
 import { messageOf } from '../../api/client';
+import { copyName } from '../../api/pipelines';
 import { When } from '../../lib/When';
 import { RowMoreMenu, type RowMenuOrigin } from '../../lib/RowMoreMenu';
 import { InlineNameForm } from '../../lib/form/InlineNameForm';
@@ -228,7 +229,7 @@ function VersionList({
                     setOutcome(null);
                     setDraft({
                       version: e.version,
-                      name: `${pipelineName} v${String(e.version)} (copy)`,
+                      name: copyName(pipelineName, e.version),
                       menu,
                     });
                   },
