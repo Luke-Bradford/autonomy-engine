@@ -2781,6 +2781,21 @@ button.danger {
   justify-self: start;
 }
 
+/* #1477 OR29 slice 5b — a connection binding: the select sized by its options
+   as above, Test and ＋ New beside it on one row. */
+.connection-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  justify-self: start;
+  max-width: 100%;
+}
+.connection-picker > select {
+  width: auto;
+  min-width: 0;
+  max-width: min(100%, 320px);
+}
 /* The label column of the dock's label-left rows (below). */
 :root[data-density='compact'] {
   --dock-label-column: 150px;
@@ -5646,7 +5661,8 @@ button.danger {
 
 /* --- #1476 OR28: the editor's Triggers column ------------------------------ */
 
-.pipeline-triggers {
+.pipeline-triggers,
+.pipeline-new-connection {
   /* A column beside the editor, like version history, but as wide as the
      shared drawer form inside it needs (`.drawer-layout-open` gives a drawer
      340px at least). The column scrolls, which keeps the form's sticky footer
@@ -5661,8 +5677,10 @@ button.danger {
   border-radius: 8px;
 }
 
-/* The column is the panel; the form inside it needs no second frame. */
-.pipeline-triggers .form-drawer {
+/* The column is the panel; the form inside it needs no second frame.
+   #1477 slice 5b — the New connection column is the same column. */
+.pipeline-triggers .form-drawer,
+.pipeline-new-connection .form-drawer {
   border: 0;
   border-radius: 0;
 }

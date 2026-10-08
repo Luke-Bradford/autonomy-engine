@@ -48,6 +48,7 @@ import { KindSelect } from '../../lib/KindName';
 import { CONNECTION_KIND_ICONS } from '../../lib/kindIcons';
 
 import { connectionFields, type FormState } from './connectionFormState';
+import { ProbeVerdict } from './ProbeVerdict';
 
 const KINDS = CONNECTION_KINDS;
 
@@ -74,7 +75,8 @@ export function ConnectionForm({
   guard: UnsavedChangesGuard;
   returnFocusTo: RefObject<HTMLElement | null>;
   onClose: () => void;
-  onSaved: () => void | Promise<void>;
+  /** Receives the row the server stored: the editor binds a created one. */
+  onSaved: (saved: ConnectionPublic) => void | Promise<void>;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -323,12 +325,11 @@ export function ConnectionForm({
 
     setSaving(true);
     try {
-      if (editing && form.id) {
-        await updateConnection(form.id, parsed.data);
-      } else {
-        await createConnection(parsed.data);
-      }
-      await onSaved();
+      const saved =
+        editing && form.id
+          ? await updateConnection(form.id, parsed.data)
+          : await createConnection(parsed.data);
+      await onSaved(saved);
     } catch (err) {
       setError(saveRefusal(err, validation));
       setSaving(false);
@@ -354,23 +355,8 @@ export function ConnectionForm({
         <>
           <FormErrors validation={validation} message={error} />
 
-          {/* #1191 — the probe verdict. `role="status"` (not `alert`): a passing
-              test is informational, and the page's `alert` is already spoken for by
-              errors. A REFUSAL still lands here rather than in the error slot,
-              because it is the adapter's answer to a question that was asked and
-              answered — not a failure of the form. */}
           {probe !== null && probe.signature === draftSignature && (
-            <p role="status" className={probe.result.ok ? 'probe-ok' : 'probe-failed'}>
-              {probe.result.ok
-                ? probe.result.probed === 'liveness'
-                  ? 'Connected.'
-                  : // The honest half of the contract: two kinds cannot reach
-                    // anything (`agent_cli` will not spawn a command just to look;
-                    // `http` has nowhere to go without a baseUrl), so their `ok`
-                    // means the settings parse and nothing more.
-                    'These settings are valid — this kind is not contacted until it runs.'
-                : probe.result.error}
-            </p>
+            <ProbeVerdict result={probe.result} />
           )}
         </>
       }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { eligibleForBinding } from './bindingPickers';
+import { connectionPickerGroups, connectionSlotReason, eligibleForBinding } from './bindingPickers';
 
 const items = [
   { id: 'a', kind: 'sqlite' },
@@ -33,5 +33,66 @@ describe('eligibleForBinding (#1139)', () => {
 
   it('tolerates a bound id that names no item — a deleted resource', () => {
     expect(eligibleForBinding(items, isSqlite, 'gone').map((i) => i.id)).toEqual(['a', 'c']);
+  });
+});
+
+describe('connectionSlotReason (#1477)', () => {
+  const sink = connectionSlotReason(['sqlite', 'postgres'], 'Copy', 'sink');
+  it('accepts the slot’s own kinds', () => {
+    expect(sink('sqlite')).toBeUndefined();
+    expect(sink('postgres')).toBeUndefined();
+  });
+  it('names the activity and the side for every other kind', () => {
+    expect(sink('fs')).toBe("Can't be a Copy sink yet");
+    expect(connectionSlotReason(['fs'], 'Copy', 'source')('http')).toBe(
+      "Can't be a Copy source yet",
+    );
+    expect(connectionSlotReason(['http'], 'HTTP request', 'single')('fs')).toBe(
+      "HTTP request can't use this kind yet",
+    );
+  });
+});
+
+describe('connectionPickerGroups (#1477)', () => {
+  const conns = [
+    { id: 'w', name: 'warehouse', kind: 'sqlite' as const },
+    { id: 'f', name: 'files', kind: 'fs' as const },
+    { id: 'p', name: 'prod', kind: 'postgres' as const },
+    { id: 'h', name: 'api', kind: 'http' as const },
+    { id: 'w2', name: 'archive', kind: 'sqlite' as const },
+  ];
+  const reason = connectionSlotReason(['sqlite', 'postgres'], 'Copy', 'sink');
+
+  it('groups by kind in the gallery’s kind order, every connection listed once', () => {
+    const groups = connectionPickerGroups(conns, reason, undefined);
+    expect(groups.map((g) => g.kind)).toEqual(['sqlite', 'postgres', 'fs', 'http']);
+    expect(groups.flatMap((g) => g.options.map((o) => o.id)).sort()).toEqual(
+      ['f', 'h', 'p', 'w', 'w2'].sort(),
+    );
+    expect(groups.find((g) => g.kind === 'sqlite')?.options.map((o) => o.id)).toEqual(['w', 'w2']);
+  });
+
+  it('marks a kind the slot refuses as disabled, with the reason', () => {
+    const groups = connectionPickerGroups(conns, reason, undefined);
+    const files = groups.find((g) => g.kind === 'fs')?.options[0];
+    expect(files).toEqual({
+      id: 'f',
+      label: 'files (File system)',
+      disabledReason: "Can't be a Copy sink yet",
+    });
+    expect(groups.find((g) => g.kind === 'sqlite')?.options[0]?.disabledReason).toBeUndefined();
+  });
+
+  it('keeps the BOUND connection pickable even when its kind is refused', () => {
+    // `eligibleForBinding`'s rule: a disabled selected option would still show,
+    // but re-picking it (or a keyboard pass over it) must not be refused.
+    const files = connectionPickerGroups(conns, reason, 'f')
+      .find((g) => g.kind === 'fs')
+      ?.options.find((o) => o.id === 'f');
+    expect(files?.disabledReason).toBeUndefined();
+  });
+
+  it('drops kinds with no connections', () => {
+    expect(connectionPickerGroups([], reason, undefined)).toEqual([]);
   });
 });

@@ -1,3 +1,10 @@
+import { CONNECTION_KIND_LABELS, type ConnectionKind } from '@autonomy-studio/shared';
+import {
+  connectionKindGroups,
+  type ConnectionKindDisabledReason,
+} from '../../lib/connectionKindGroups';
+import { connectionOptionLabel } from '../../lib/resourceOptionLabel';
+
 /**
  * #996 M5 slice 4c (#1139) — the one rule a resource picker on the node panel
  * filters by, extracted so the four pickers a `copy` node needs cannot each
@@ -33,4 +40,73 @@ export function eligibleForBinding<T extends { id: string }>(
   boundId: string | undefined,
 ): T[] {
   return items.filter((item) => accept(item) || item.id === boundId);
+}
+
+/**
+ * #1477 — which side of an activity a connection picker binds. `single` is the
+ * one `connectionId` an unpaired activity (HTTP, LLM, Lookup) carries.
+ */
+export type ConnectionSlotSide = 'single' | 'source' | 'sink';
+
+/**
+ * #1477 — why a connection kind cannot be bound on this side of this activity,
+ * or `undefined` when it can. ONE answer for both places that ask: the picker
+ * lists a refused connection disabled with it, and the New connection gallery
+ * shows a refused kind disabled with it, so the two never disagree about what
+ * the slot takes.
+ */
+export function connectionSlotReason(
+  accepted: readonly ConnectionKind[],
+  title: string,
+  side: ConnectionSlotSide,
+): ConnectionKindDisabledReason {
+  const reason =
+    side === 'single' ? `${title} can't use this kind yet` : `Can't be a ${title} ${side} yet`;
+  return (kind) => (accepted.includes(kind) ? undefined : reason);
+}
+
+export interface ConnectionPickerOption {
+  id: string;
+  label: string;
+  /** Set when the option is listed but cannot be picked here. */
+  disabledReason?: string;
+}
+
+export interface ConnectionPickerGroup {
+  kind: ConnectionKind;
+  label: string;
+  options: ConnectionPickerOption[];
+}
+
+/**
+ * #1477 — a connection picker's options, grouped by kind in the gallery's kind
+ * order (`connectionKindGroups`), kinds with no connection dropped.
+ *
+ * EVERY connection is listed — the operator's rule: a kind this side refuses is
+ * shown disabled with the reason, so the picker says what exists rather than
+ * looking empty. The bound connection is never disabled, whatever its kind:
+ * `eligibleForBinding`'s rule above, for the same reason.
+ */
+export function connectionPickerGroups(
+  connections: readonly { id: string; name: string; kind: ConnectionKind }[],
+  disabledReason: ConnectionKindDisabledReason,
+  boundId: string | undefined,
+): ConnectionPickerGroup[] {
+  return connectionKindGroups('')
+    .flatMap((group) => group.tiles.map((tile) => tile.kind))
+    .map((kind) => {
+      const reason = disabledReason(kind);
+      return {
+        kind,
+        label: CONNECTION_KIND_LABELS[kind],
+        options: connections
+          .filter((c) => c.kind === kind)
+          .map((c) =>
+            reason === undefined || c.id === boundId
+              ? { id: c.id, label: connectionOptionLabel(c) }
+              : { id: c.id, label: connectionOptionLabel(c), disabledReason: reason },
+          ),
+      };
+    })
+    .filter((group) => group.options.length > 0);
 }

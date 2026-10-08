@@ -50,6 +50,7 @@ import {
   type ActivePipelineVersion,
   type CallConfig,
   type Container,
+  type ConnectionKind,
   type ConnectionPublic,
   type ContainerKind,
   type Dataset,
@@ -92,7 +93,14 @@ import { listDatasets } from '../../api/datasets';
 import { listGlobalParams, toGlobalReads } from '../../api/globalParams';
 import { useGuardedLoad } from '../../hooks/useGuardedLoad';
 import { useRefreshOnFocus } from '../../hooks/useRefreshOnFocus';
-import { eligibleForBinding } from './bindingPickers';
+import {
+  connectionSlotReason,
+  eligibleForBinding,
+  type ConnectionSlotSide,
+} from './bindingPickers';
+import { ConnectionPicker } from './ConnectionPicker';
+import { NewConnectionColumn } from './NewConnectionColumn';
+import type { NewConnectionRequest } from './newConnectionRequest';
 import { ActivityToolbox } from './ActivityToolbox';
 import {
   assignContainerChild,
@@ -112,7 +120,7 @@ import type { FieldChoices, FieldPicker } from './ConfigFieldControl';
 import { variableWriteChoices } from './variableChoices';
 import { ParamOverridesEditor } from './ParamOverridesEditor';
 import { DraftNumberField, type DraftNumberParse } from './DraftNumberField';
-import { connectionOptionLabel, datasetOptionLabel } from '../../lib/resourceOptionLabel';
+import { datasetOptionLabel } from '../../lib/resourceOptionLabel';
 import { parseWholeNumber } from '../triggers/formFields';
 import {
   connectionOverrideResource,
@@ -474,6 +482,13 @@ export function PipelineCanvas({
    */
   const [triggersColumn, setTriggersColumn] = useState<{ newRequest: number } | null>(null);
   const triggerButtonRef = useRef<HTMLButtonElement>(null);
+  /** #1477 slice 5b — an activity's ＋ New connection, open in a side column;
+   * `seq` remounts the column for each new ask. */
+  const [newConnection, setNewConnection] = useState<{
+    request: NewConnectionRequest;
+    seq: number;
+  } | null>(null);
+  const newConnectionOpenerRef = useRef<HTMLElement | null>(null);
   const setHistoryOpen = useStore(uiStore, (s) => s.setHistoryOpen);
   /** The version NUMBER being previewed read-only, or `null` while editing. */
   const [previewing, setPreviewingState] = useState<number | null>(null);
@@ -654,14 +669,16 @@ export function PipelineCanvas({
   // #1476 — the Triggers column's open form is a second draft on this page, so
   // the title and the leave guard below count it too.
   const [triggerFormDirty, setTriggerFormDirty] = useState(false);
-  useShellUnsaved(dirty || triggerFormDirty);
+  // #1477 slice 5b — and so is the New connection column's.
+  const [connectionFormDirty, setConnectionFormDirty] = useState(false);
+  useShellUnsaved(dirty || triggerFormDirty || connectionFormDirty);
   // #1396 — the draft lives in this mount's store, so leaving the editor's path
   // (Back, another pipeline in the tree, Open run) throws it away. Hold that at
   // the shared prompt. A same-path change keeps this instance, and the draft.
   //
   // #1476 — the Triggers column's form holds no route of its own (the router
   // consults one blocker), so it is folded in here: one prompt for either.
-  const leaveGuard = useUnsavedChangesGuard(dirty || triggerFormDirty, {
+  const leaveGuard = useUnsavedChangesGuard(dirty || triggerFormDirty || connectionFormDirty, {
     holdRoute: leavesPath,
   });
   // The prompt takes focus while it asks and, on Keep, hands it back to wherever
@@ -1235,9 +1252,26 @@ export function PipelineCanvas({
     // Not while a restore or save holds the preview: closing history leaves
     // the preview, which every other route into it is locked against.
     if (historyOpen && !previewLocked) closeHistory();
+    if (!connectionFormDirty) setNewConnection(null);
     setTriggersColumn((open) => ({
       newRequest: withNewForm ? (open?.newRequest ?? 0) + 1 : (open?.newRequest ?? 0),
     }));
+  };
+  /**
+   * #1477 slice 5b — an activity's ＋ New connection: open the column, closing
+   * the other side columns as `openTriggersColumn` does (never a dirty form).
+   * A column already holding a typed draft is not replaced under it: the
+   * author is pointed at it instead.
+   */
+  const openNewConnection = (request: NewConnectionRequest, opener: HTMLElement) => {
+    if (connectionFormDirty) {
+      showCanvasMsg('Finish or cancel the new connection that is already open.');
+      return;
+    }
+    newConnectionOpenerRef.current = opener;
+    if (historyOpen && !previewLocked) closeHistory();
+    if (!triggerFormDirty) setTriggersColumn(null);
+    setNewConnection((open) => ({ request, seq: (open?.seq ?? 0) + 1 }));
   };
   /* #1476 OR28 — the ticket's rule for a toolbar row that cannot hold every
      act: overflow goes into ⋯, it never wraps or spills. Two things fold, one
@@ -1855,6 +1889,8 @@ export function PipelineCanvas({
                         setPreviewing(conflict.version);
                         // One side column at a time, as the ⋯ menu's item.
                         if (!triggerFormDirty) setTriggersColumn(null);
+                        if (!connectionFormDirty) setNewConnection(null);
+                        if (!connectionFormDirty) setNewConnection(null);
                       }}
                       // The same lock every other route into the preview carries: this
                       // is a fourth one, and the reported bug was precisely a route
@@ -2443,6 +2479,7 @@ export function PipelineCanvas({
                         datasets={datasets}
                         pipelineId={pipelineId}
                         onNotice={showCanvasMsg}
+                        onNewConnection={openNewConnection}
                       />
                       {/* Stacked under the properties in a right-hand dock, at a
                       fixed height, so there is no width to resize there. */}
@@ -2526,6 +2563,17 @@ export function PipelineCanvas({
             onDirtyChange={setTriggerFormDirty}
           />
         )}
+        {newConnection !== null && (
+          <NewConnectionColumn
+            key={newConnection.seq}
+            request={newConnection.request}
+            returnFocusTo={newConnectionOpenerRef}
+            onClose={() => setNewConnection(null)}
+            onCreated={(created) => setConnections((list) => [...list, created])}
+            onNotice={showCanvasMsg}
+            onDirtyChange={setConnectionFormDirty}
+          />
+        )}
       </div>
       {confirmDialog}
     </section>
@@ -2551,12 +2599,14 @@ function PropertyPanel({
   datasets,
   pipelineId,
   onNotice,
+  onNewConnection,
 }: {
   store: ReturnType<typeof createCanvasStore>;
   connections: ConnectionPublic[];
   datasets: Dataset[];
   pipelineId: string;
   onNotice: (message: string) => void;
+  onNewConnection: (request: NewConnectionRequest, opener: HTMLElement) => void;
 }) {
   const selection = useStore(store, (s) => s.selected);
   const nodes = useStore(store, (s) => s.nodes);
@@ -2652,23 +2702,21 @@ function PropertyPanel({
       call={node.call}
       tab={nodeTab}
       onTab={setNodeTab}
+      onNewConnection={onNewConnection}
     />
   );
 }
 
 /**
- * #996 M5 slice 4c (#1139) — one end of a paired resource binding.
+ * #996 M5 slice 4c (#1139) — one end of a paired DATASET binding. (The
+ * connection ends are `ConnectionPicker` since #1477 slice 5b.)
  *
- * Four of these replace what would otherwise be four copies of the singular
- * connection picker's JSX. It keeps that picker's a11y idiom deliberately: the
+ * Two of these replace what would otherwise be two copies of the same JSX. It keeps that picker's a11y idiom deliberately: the
  * label text sits INSIDE the `<label>` that wraps the control, so the accessible
  * name comes from the association rather than from a hand-written `aria-label`
  * that could drift from what is drawn.
  *
- * `options` are pre-labelled by the caller rather than typed generically over
- * the resource, because a connection reads `name (kind)` and a dataset reads
- * `name (kind)` from DIFFERENT fields of different shapes — pushing that into
- * this component would mean a discriminated union for no gain.
+ * `options` are pre-labelled by the caller (`datasetOptionLabel`).
  */
 function BindingSelect({
   label,
@@ -3493,6 +3541,7 @@ export function NodePanel({
   datasets,
   tab,
   onTab,
+  onNewConnection,
 }: {
   store: ReturnType<typeof createCanvasStore>;
   connections: ConnectionPublic[];
@@ -3506,6 +3555,8 @@ export function NodePanel({
   /** #852 — the dock's lifted tab choice; see `PanelTabs`. */
   tab?: NodeTab;
   onTab?: (tab: NodeTab) => void;
+  /** #1477 slice 5b — open the editor's New connection column; absent, no ＋ New. */
+  onNewConnection?: (request: NewConnectionRequest, opener: HTMLElement) => void;
 }) {
   const entry = getActivity(nodeType);
   // Edit config WITHOUT the internal `outputs` contract.
@@ -3647,14 +3698,6 @@ export function NodePanel({
     // they have already done.
     clearAutoMapNotice();
   }
-
-  // Kinds this activity accepts, PLUS whatever is currently bound — so a node
-  // bound to an off-kind connection (e.g. loaded from an older doc) still shows
-  // its real binding instead of silently reading as "— none —". The rule now
-  // lives in `bindingPickers.ts`, because #1139 needs it four more times.
-  const eligible = entry
-    ? eligibleForBinding(connections, (c) => entry.connectionKinds.includes(c.kind), connectionId)
-    : [...connections];
 
   // #996 M5 slice 4c (#1139) — a PAIRED activity (`copy`) binds two connections
   // and two datasets instead of one connection. Read from the CATALOG, never
@@ -3897,6 +3940,36 @@ export function NodePanel({
   }
 
   /**
+   * #1477 slice 5b — one connection slot's picker. The slot's refusal reason is
+   * worked out once and given to both the picker and its ＋ New, so the gallery
+   * disables exactly the kinds the picker does. Picking and creating bind the
+   * same way.
+   */
+  function connectionPicker(
+    label: string,
+    value: string | undefined,
+    accepted: readonly ConnectionKind[],
+    side: ConnectionSlotSide,
+    bind: (connectionId: string | undefined) => void,
+  ) {
+    const disabledReason = connectionSlotReason(accepted, entry?.title ?? nodeType, side);
+    return (
+      <ConnectionPicker
+        label={label}
+        value={value}
+        connections={connections}
+        disabledReason={disabledReason}
+        onPick={bind}
+        onNew={
+          onNewConnection === undefined
+            ? undefined
+            : (opener) => onNewConnection({ disabledReason, bind }, opener)
+        }
+      />
+    );
+  }
+
+  /**
    * #1477 — one binding slot's controls. Each slot sits on exactly one tab (the
    * catalog says which), and carries its own overrides with it.
    */
@@ -3906,24 +3979,9 @@ export function NodePanel({
       case 'connection':
         return (
           <Fragment key={slot}>
-            <LabelledControl label="Connection">
-              {(id) => (
-                <select
-                  id={id}
-                  value={connectionId ?? ''}
-                  onChange={(e) =>
-                    store.getState().setNodeConnection(nodeId, e.target.value || undefined)
-                  }
-                >
-                  <option value="">— none —</option>
-                  {eligible.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {connectionOptionLabel(c)}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </LabelledControl>
+            {connectionPicker('Connection', connectionId, entry.connectionKinds, 'single', (id) =>
+              store.getState().setNodeConnection(nodeId, id),
+            )}
             {thisNode?.connectionId !== undefined && (
               <ParamOverridesEditor
                 legend="Connection overrides"
@@ -3949,33 +4007,25 @@ export function NodePanel({
       case 'sourceConnection':
         return (
           <Fragment key={slot}>
-            <BindingSelect
-              label="Source connection"
-              value={boundConnections?.source}
-              options={eligibleForBinding(
-                connections,
-                (c) => entry.connectionKinds.includes(c.kind),
-                boundConnections?.source,
-              ).map((c) => ({ id: c.id, label: connectionOptionLabel(c) }))}
-              onPick={(id) =>
-                store.getState().setNodeBindingEnd(nodeId, 'connections', 'source', id)
-              }
-            />
+            {connectionPicker(
+              'Source connection',
+              boundConnections?.source,
+              entry.connectionKinds,
+              'source',
+              (id) => store.getState().setNodeBindingEnd(nodeId, 'connections', 'source', id),
+            )}
           </Fragment>
         );
       case 'sinkConnection':
         return sinkConnectionKinds === undefined ? null : (
           <Fragment key={slot}>
-            <BindingSelect
-              label="Sink connection"
-              value={boundConnections?.sink}
-              options={eligibleForBinding(
-                connections,
-                (c) => sinkConnectionKinds.includes(c.kind),
-                boundConnections?.sink,
-              ).map((c) => ({ id: c.id, label: connectionOptionLabel(c) }))}
-              onPick={(id) => store.getState().setNodeBindingEnd(nodeId, 'connections', 'sink', id)}
-            />
+            {connectionPicker(
+              'Sink connection',
+              boundConnections?.sink,
+              sinkConnectionKinds,
+              'sink',
+              (id) => store.getState().setNodeBindingEnd(nodeId, 'connections', 'sink', id),
+            )}
           </Fragment>
         );
       case 'sourceDataset':
