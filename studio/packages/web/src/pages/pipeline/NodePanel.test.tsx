@@ -816,8 +816,12 @@ describe('paired binding pickers (#1139)', () => {
     openTab(label.startsWith('Sink') ? 'Sink' : 'Source');
     return screen.getByRole('combobox', { name: label });
   };
-  const pick = (label: string, value: string) =>
-    fireEvent.change(picker(label), { target: { value } });
+  /** Pick by id through the list, as an author does; `''` is None. */
+  const pick = (label: string, value: string) => {
+    fireEvent.click(picker(label));
+    const name = value === '' ? 'None' : CONNS.find((c) => c.id === value)?.name;
+    fireEvent.click(screen.getByRole('option', { name: new RegExp(`^${name}`) }));
+  };
 
   it('offers FOUR pickers for a copy node, and hides the singular one', () => {
     // The singular picker is hidden rather than shown alongside: `validateDoc`
@@ -843,25 +847,20 @@ describe('paired binding pickers (#1139)', () => {
 
   it('offers only the kinds the CATALOG accepts; lists the rest disabled, with why (#1477)', () => {
     mountOver(copyNode(), CONNS, SETS);
-    const options = [...picker('Sink connection').querySelectorAll('option')].map((o) => ({
-      value: o.value,
-      disabled: o.disabled,
+    fireEvent.click(picker('Sink connection'));
+    const list = within(screen.getByRole('listbox'));
+    const options = list.getAllByRole('option').map((o) => ({
+      disabled: o.getAttribute('aria-disabled') === 'true',
       text: o.textContent,
     }));
     expect(options).toEqual([
-      { value: '', disabled: false, text: '— none —' },
-      { value: 'c_src', disabled: false, text: 'Source store (SQLite)' },
+      { disabled: false, text: 'None' },
+      { disabled: false, text: 'Source store' },
       // Listed, so the picker says what exists, but not pickable as a sink.
-      {
-        value: 'c_fs',
-        disabled: true,
-        text: "Files (File system) — Can't be a Copy Data sink yet",
-      },
+      { disabled: true, text: "FilesCan't be a Copy Data sink yet" },
     ]);
     // Grouped by kind, in the gallery's order.
-    expect([...picker('Sink connection').querySelectorAll('optgroup')].map((g) => g.label)).toEqual(
-      ['SQLite', 'File system'],
-    );
+    expect(list.getAllByRole('group').map((g) => g.textContent)).toEqual(['SQLiteSource store', "File systemFilesCan't be a Copy Data sink yet"]);
   });
 
   it('＋ New asks the editor for the column with the SLOT’s refusals and binds there (#1477)', () => {
@@ -970,9 +969,9 @@ describe('paired binding pickers (#1139)', () => {
   it('keeps the half-picked end SELECTED — it is store state, not panel state', () => {
     const { store } = mountOver(copyNode(), CONNS, SETS);
     pick('Source connection', 'c_src');
-    expect(
-      (screen.getByRole('combobox', { name: 'Source connection' }) as HTMLSelectElement).value,
-    ).toBe('c_src');
+    expect(screen.getByRole('combobox', { name: 'Source connection' })).toHaveValue(
+      'Source store (SQLite)',
+    );
     expect(store.getState().pendingBindings['n_copy']?.connections?.source).toBe('c_src');
   });
 
@@ -981,9 +980,9 @@ describe('paired binding pickers (#1139)', () => {
     // list makes the select read "— none —" while the doc says otherwise.
     const bound: Node = { ...copyNode(), connectionIds: { source: 'c_fs', sink: 'c_src' } };
     mountOver(bound, CONNS, SETS);
-    expect(
-      (screen.getByRole('combobox', { name: 'Source connection' }) as HTMLSelectElement).value,
-    ).toBe('c_fs');
+    expect(screen.getByRole('combobox', { name: 'Source connection' })).toHaveValue(
+      'Files (File system)',
+    );
   });
 
   it('offers to clear a stray singular connectionId that a paired node may not have', () => {
@@ -1795,9 +1794,8 @@ describe('parameter override editor (#1304)', () => {
     const { store } = mountOver(lookup({ connectionParams: { maxBytes: 5 } }), [
       fsConn(['maxBytes']),
     ]);
-    fireEvent.change(screen.getByRole('combobox', { name: 'Connection' }), {
-      target: { value: '' },
-    });
+    fireEvent.click(screen.getByRole('combobox', { name: 'Connection' }));
+    fireEvent.click(screen.getByRole('option', { name: 'None' }));
     expect('connectionParams' in docNode(store)).toBe(false);
     expect(screen.queryByRole('group', { name: 'Connection overrides' })).toBeNull();
   });
