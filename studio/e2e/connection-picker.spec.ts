@@ -303,8 +303,8 @@ test.describe('#1477 activity connection pickers', () => {
     expect(contrastRatio(color, behind.color)).toBeGreaterThanOrEqual(4.5);
     // The portalled list takes the dark theme too: an option's text is legible.
     await properties(page).getByRole('combobox', { name: 'Sink connection' }).click();
-    const none = page.getByRole('listbox').getByRole('option', { name: 'None', exact: true });
-    const optionColor = await none.evaluate((el) => getComputedStyle(el).color);
+    const entry = page.getByRole('listbox').getByRole('option', { name: 'New connection…' });
+    const optionColor = await entry.evaluate((el) => getComputedStyle(el).color);
     const optionBehind = await surfaceBehind(page, '.connection-picker__listbox [role="option"]');
     expect(contrastRatio(optionColor, optionBehind.color)).toBeGreaterThanOrEqual(4.5);
     await expectQuiet(page, problems);

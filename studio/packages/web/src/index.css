@@ -2827,8 +2827,8 @@ button.danger {
    background) is cleared so the inner input takes the dock's one control style
    (`.property-panel input` and the compact height), with the app's focus ring in
    place of the cleared underline, and the chevron over the input's right edge.
-   The input rule carries `:root .property-panel` to outrank the compact
-   density's padding, which would otherwise run the text under the chevron. */
+   The input rule is (0,6,1) to outrank the compact density's control rule,
+   (0,5,1), whose padding would otherwise run the text under the chevron. */
 .connection-picker .connection-picker__combobox {
   position: relative;
   width: calc(var(--picker-ch, 8) * 1ch + 40px);
@@ -2841,7 +2841,12 @@ button.danger {
 .connection-picker .connection-picker__combobox::after {
   display: none;
 }
-:root .property-panel .connection-picker .connection-picker__combobox > input {
+:root
+  .property-dock
+  .property-panel
+  .connection-picker
+  .connection-picker__combobox
+  > input.fui-Combobox__input {
   width: 100%;
   min-width: 0;
   padding-right: 28px;
