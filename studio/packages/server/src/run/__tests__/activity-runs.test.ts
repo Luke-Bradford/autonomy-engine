@@ -13,7 +13,7 @@ import { createPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun } from '../../repo/runs.js';
 import type { Db } from '../../repo/types.js';
 import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
-import { projectActivityRuns } from '../activity-runs.js';
+import { projectActivityRuns, projectActivityRunsFromLog } from '../activity-runs.js';
 import {
   buildEngine,
   driveRun,
@@ -994,6 +994,179 @@ describe('#1484 activity runs — containers are groups', () => {
     expect(rows.map((r) => r.key)).toEqual(['reused:a']);
     expect(groups).toEqual([
       expect.objectContaining({ containerId: 'stg', reused: false, startedAt: 2, position: 1 }),
+    ]);
+  });
+});
+
+describe('#1557 activity runs from the log alone — the version no longer resolves', () => {
+  const fromLog = (db: Db, runId: string) => projectActivityRunsFromLog(loadEngineLog(db, runId));
+  /** The fields the log alone can say. */
+  const logged = (r: ReturnType<typeof project>[number]) => ({
+    key: r.key,
+    nodeId: r.nodeId,
+    attemptId: r.attemptId,
+    status: r.status,
+    startedAt: r.startedAt,
+    finishedAt: r.finishedAt,
+    durationMs: r.durationMs,
+    branch: r.branch,
+    rowsRead: r.rowsRead,
+    rowsWritten: r.rowsWritten,
+    bytesRead: r.bytesRead,
+    bytesWritten: r.bytesWritten,
+    childRunId: r.childRunId,
+    error: r.error,
+  });
+
+  it("gives every attempt the full account's times, status, branch, counts and error", async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [
+        node('c', { type: 'if', config: { condition: '${equals(1, 1)}' } }),
+        node('t'),
+        node('f'),
+        node('boom'),
+        node('after'),
+      ],
+      [branchEdge('c', 't', 'true'), branchEdge('c', 'f', 'false'), edge('t', 'boom'), edge('boom', 'after')],
+    );
+    const runId = await drive(
+      db,
+      pvId,
+      stub({
+        t: { outputs: { rowsRead: 5, rowsWritten: 4, bytesRead: 1024, bytesWritten: -1 } },
+        boom: { outcome: 'failure', error: 'boom' },
+      }),
+    );
+
+    const full = project(db, pvId, runId).filter((r) => r.attemptId !== null);
+    expect(full.map((r) => r.activityId)).toEqual(['c', 't', 'boom']);
+    const { rows, groups } = fromLog(db, runId);
+    // No skip rows (`f`, `after`): no event records a skip.
+    expect(rows.map(logged)).toEqual(full.map(logged));
+    expect(rows.every((r) => r.attempt === null && r.iteration === null)).toBe(true);
+    expect(rows.every((r) => r.activityId === r.nodeId && r.containerId === null)).toBe(true);
+    expect(groups).toEqual([]);
+  });
+
+  it('lets no late duplicate result rewrite a settled row', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a')]);
+    const runId = await drive(db, pvId, stub({ a: { outcome: 'failure', error: 'boom' } }));
+    appendEngineEvent(db, {
+      type: 'node.failed',
+      runId,
+      nodeId: 'a',
+      attemptId: 'a#0',
+      error: 'late',
+      kind: 'transient',
+    });
+    appendEngineEvent(db, {
+      type: 'node.succeeded',
+      runId,
+      nodeId: 'a',
+      attemptId: 'a#0',
+      outputs: { rowsRead: 9 },
+    });
+
+    expect(fromLog(db, runId).rows).toEqual([
+      expect.objectContaining({
+        status: 'failure',
+        rowsRead: null,
+        error: expect.objectContaining({ message: 'boom', kind: 'permanent' }),
+      }),
+    ]);
+  });
+
+  const at = (ts: number, event: EngineEvent) => ({ ts, event, payload: event });
+  const started: EngineEvent = {
+    type: 'run.started',
+    runId: 'R',
+    pipelineVersionId: 'pv',
+    params: {},
+  };
+  const dispatched: EngineEvent = {
+    type: 'node.dispatched',
+    runId: 'R',
+    nodeId: 'w@1',
+    attemptId: 'w@1#0',
+    idempotent: true,
+  };
+
+  it('reads an attempt still open when the run finished as abandoned: skipped, with no end', () => {
+    const { rows } = projectActivityRunsFromLog([
+      at(1, started),
+      at(2, dispatched),
+      at(5, { type: 'run.finished', runId: 'R', outcome: 'failure' }),
+    ]);
+    expect(rows).toEqual([
+      expect.objectContaining({
+        nodeId: 'w@1',
+        // The instance key cannot be told from a literal doc id without the doc.
+        activityId: 'w@1',
+        status: 'skipped',
+        startedAt: 2,
+        finishedAt: null,
+        durationMs: null,
+      }),
+    ]);
+  });
+
+  it('leaves an open attempt as it was on a cancelled run, and while the run is live', () => {
+    const cancelled = projectActivityRunsFromLog([
+      at(1, started),
+      at(2, dispatched),
+      at(5, { type: 'run.finished', runId: 'R', outcome: 'cancelled' }),
+    ]);
+    expect(cancelled.rows[0]).toMatchObject({ status: 'dispatched', finishedAt: null });
+    const live = projectActivityRunsFromLog([at(1, started), at(2, dispatched)]);
+    expect(live.rows[0]).toMatchObject({ status: 'dispatched', finishedAt: null });
+  });
+
+  it("leads with a rerun's reused frontier, and gives a refused call its reason", () => {
+    const { rows } = projectActivityRunsFromLog([
+      at(1, { ...started, rerunOf: 'R0' }),
+      at(2, {
+        type: 'run.reseeded',
+        runId: 'R',
+        sourceRunId: 'R0',
+        frontier: ['a'],
+        copiedOutputs: { a: {} },
+        copiedContainers: {},
+      }),
+      at(3, {
+        type: 'call.started',
+        runId: 'R',
+        callNodeId: 'call',
+        attemptId: 'call#0',
+        childRunId: 'kid',
+      }),
+      at(9, {
+        type: 'call.returned',
+        runId: 'R',
+        callNodeId: 'call',
+        attemptId: 'call#0',
+        childRunId: 'kid',
+        childOutcome: 'failure',
+        outputs: {},
+        reason: 'the called version is archived',
+      }),
+    ]);
+    expect(rows).toEqual([
+      expect.objectContaining({ key: 'reused:a', reused: true, status: 'success', startedAt: null }),
+      expect.objectContaining({
+        attemptId: 'call#0',
+        status: 'failure',
+        childRunId: 'kid',
+        durationMs: 6,
+        error: {
+          message: 'the called version is archived',
+          kind: null,
+          code: null,
+          connectionId: null,
+        },
+      }),
     ]);
   });
 });
