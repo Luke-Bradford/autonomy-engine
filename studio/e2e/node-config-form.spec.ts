@@ -470,10 +470,10 @@ test.describe('U7 — per-activity node config form', () => {
     await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
     await page.locator('.react-flow__renderer').waitFor();
     await canvasNodes(page).first().click();
-    await properties(page).getByRole('tab', { name: 'Auth' }).click();
     await expect(p.getByRole('textbox', { name: 'headers row 2 value', exact: true })).toHaveValue(
       '${run.runId}',
     );
+    await properties(page).getByRole('tab', { name: 'Auth' }).click();
     await expect(
       p.getByRole('textbox', { name: 'secretHeaders row 1 secret name', exact: true }),
     ).toHaveValue('api-token');

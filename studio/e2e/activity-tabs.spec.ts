@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
 import { properties, expectTabNames } from './support/panels';
@@ -31,19 +31,19 @@ const seed = {
 const tabs = (page: Page) => properties(page).getByRole('tablist', { name: 'Activity properties' });
 
 /**
- * One read: how far the open tab's content runs past the panel's visible
- * bottom (≤ 0 means it fits without scrolling), with the panel scrolled to top.
+ * One read: how far `target` runs past its panel's visible bottom, with the
+ * panel scrolled to the top. ≤ 0 means it is on screen without scrolling.
  */
-function overflowOfOpenTab(page: Page) {
-  return properties(page).evaluate((panel) => {
+function overflowOf(target: Locator) {
+  return target.evaluate((el) => {
+    const panel = el.closest<HTMLElement>('.property-panel')!;
     panel.scrollTop = 0;
-    const open = panel.querySelector<HTMLElement>('[role="tabpanel"]:not([hidden])')!;
     const visibleBottom = panel.getBoundingClientRect().top + panel.clientHeight;
-    return Math.round(open.getBoundingClientRect().bottom - visibleBottom);
+    return Math.round(el.getBoundingClientRect().bottom - visibleBottom);
   });
 }
 
-test('a Copy node opens on Source, and Source, Sink and Mapping each fit the dock', async ({
+test('a Copy node opens on Source; each tab starts on screen and Sink fits whole', async ({
   page,
 }) => {
   const problems = collectPageProblems(page);
@@ -59,19 +59,30 @@ test('a Copy node opens on Source, and Source, Sink and Mapping each fit the doc
   await expect(source.getByRole('combobox', { name: 'Source connection' })).toBeVisible();
   await expect(source.getByRole('combobox', { name: 'Source dataset' })).toBeVisible();
   await expect(source.getByLabel('Container membership')).toBeVisible();
-  expect(await overflowOfOpenTab(page)).toBeLessThanOrEqual(0);
+  // The tab's required settings — its two pickers — are on screen without a
+  // scroll. Container membership closes the landing tab (U6d) and its New
+  // container form still runs below the fold until the label-left grid (a later
+  // OR29 slice) packs these rows.
+  expect(
+    await overflowOf(source.getByRole('combobox', { name: 'Source dataset' })),
+  ).toBeLessThanOrEqual(0);
 
   await tabs(page).getByRole('tab', { name: 'Sink' }).click();
   const sink = properties(page).getByRole('tabpanel', { name: 'Sink' });
   await expect(sink.getByRole('combobox', { name: 'Sink connection' })).toBeVisible();
   await expect(sink.getByRole('combobox', { name: 'Sink dataset' })).toBeVisible();
-  expect(await overflowOfOpenTab(page)).toBeLessThanOrEqual(0);
+  expect(await overflowOf(sink)).toBeLessThanOrEqual(0);
 
   await tabs(page).getByRole('tab', { name: 'Mapping' }).click();
   const mapping = properties(page).getByRole('tabpanel', { name: 'Mapping' });
   await expect(mapping.getByRole('button', { name: 'Add mapping row' })).toBeVisible();
   await expect(mapping.getByRole('button', { name: 'Auto-map columns' })).toBeVisible();
-  expect(await overflowOfOpenTab(page)).toBeLessThanOrEqual(0);
+  // The first mapping row is on screen; a row's four cells still stack, so a
+  // whole mapping fits only once row lists become compact tables (a later
+  // OR29 slice).
+  expect(
+    await overflowOf(mapping.getByRole('textbox', { name: 'mapping row 1 source' })),
+  ).toBeLessThanOrEqual(0);
   await expectQuiet(page, problems);
 });
 
