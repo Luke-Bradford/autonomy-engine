@@ -804,6 +804,28 @@ describe('PipelinesPage', () => {
           expect(drawer.getByRole('textbox', { name: /Name/ })).toHaveValue('Nightly (copy)');
         });
 
+        it('a copy in flight when its pipeline leaves the list finishes in its drawer first', async () => {
+          let finish!: (p: Pipeline) => void;
+          duplicateMock.mockReturnValue(new Promise((r) => (finish = r)));
+          const user = userEvent.setup();
+          renderPage();
+          const drawer = await open(user, 'Duplicate…');
+          await user.click(drawer.getByRole('button', { name: 'Duplicate' }));
+          expect(drawer.getByRole('button', { name: 'Creating…' })).toBeDisabled();
+          listMock.mockResolvedValue([]);
+          await chooseRowAction(user, 'Nightly', 'Archive');
+          await answerConfirm(user, 'accept');
+          await waitFor(() => expect(archiveMock).toHaveBeenCalled());
+          await waitFor(() => expect(screen.queryByText('1 active / 1')).not.toBeInTheDocument());
+          // Still there, still saying it is creating.
+          expect(screen.getByRole('button', { name: 'Creating…' })).toBeInTheDocument();
+          listMock.mockResolvedValue([copy]);
+          await act(async () => finish(copy));
+          await waitFor(() =>
+            expect(screen.queryByRole('dialog', { name: /Duplicate/ })).not.toBeInTheDocument(),
+          );
+        });
+
         it('closes when its pipeline leaves the list', async () => {
           const user = userEvent.setup();
           renderPage();

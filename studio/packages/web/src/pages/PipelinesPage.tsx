@@ -687,6 +687,7 @@ export function PipelinesPage({
       openDrawer({
         kind: 'duplicate',
         pipelineId: p.id,
+        openedAs: p,
         name: null,
         from: pickVersion && head != null && head >= 2 ? head - 1 : 'latest',
         pickVersion,
@@ -1037,10 +1038,10 @@ export function PipelinesPage({
             onStarted={refreshRowStates}
           />
         )}
-        {drawerForm?.kind === 'duplicate' && rowSource !== undefined && (
+        {drawerForm?.kind === 'duplicate' && (
           <DuplicatePipelineDrawer
             key={drawerSeq}
-            source={rowSource}
+            source={rowSource ?? drawerForm.openedAs}
             form={drawerForm}
             update={(fn) => {
               // Only into THIS drawer: one replaced since is not its to change.

@@ -1,3 +1,4 @@
+import type { Pipeline } from '@autonomy-studio/shared';
 import type { PipelineVersionsLoad } from './pipeline/usePipelineVersions';
 
 /**
@@ -12,6 +13,9 @@ export interface DuplicatePipelineForm {
   /** The row it was opened from. The drawer is handed that row as the list
    * holds it NOW, so a rename or a move made meanwhile is what the copy carries. */
   pipelineId: string;
+  /** That row as it was at open. Used only once the row has left the list,
+   * so a copy already in flight finishes, and says so, in its drawer. */
+  openedAs: Pipeline;
   /** `null` until typed in: the shown name is then `copyName` of the chosen
    * version, so picking another version renames an untouched copy. */
   name: string | null;
