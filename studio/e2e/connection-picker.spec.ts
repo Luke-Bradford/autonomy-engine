@@ -57,6 +57,7 @@ test.describe('#1477 activity connection pickers', () => {
       return {
         children: [...el.children].map((c) => c.tagName.toLowerCase()),
         oneLine: new Set(rects.map((r) => Math.round(r.top + r.height / 2))).size === 1,
+        gaps: rects.slice(1).map((r, i) => Math.round(r.left - rects[i]!.right)),
         buttonHeights: [
           ...new Set(
             [...el.querySelectorAll('button')].map((b) =>
@@ -68,6 +69,7 @@ test.describe('#1477 activity connection pickers', () => {
     });
     expect(row).toEqual({
       children: ['select', 'button', 'button'],
+      gaps: [8, 8],
       oneLine: true,
       buttonHeights: [28],
     });
