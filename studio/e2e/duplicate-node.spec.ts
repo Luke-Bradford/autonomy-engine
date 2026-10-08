@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { canvasNodes, edgeGroup, viewportSettled } from './support/canvasGraph';
 import { openSeededCanvas } from './support/seedDoc';
-import { properties } from './support/panels';
+import { properties, nodeMenuAction } from './support/panels';
 
 /**
  * U21 — duplicating a node on the authoring canvas.
@@ -45,7 +45,7 @@ test.describe('duplicate a node (U21)', () => {
       'https://example.test/${nodes.a.output.body}',
     );
 
-    await panel.getByRole('button', { name: 'Duplicate node' }).click();
+    await nodeMenuAction(page, 'Duplicate node');
 
     // Drawn: three nodes, and a second edge out of `a` into the copy.
     await expect(canvasNodes(page)).toHaveCount(3);

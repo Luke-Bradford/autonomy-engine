@@ -3,6 +3,7 @@ import { scaleOf, validationIssues } from './support/canvasGraph';
 import { answerConfirm } from './support/confirmDialog';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas, type SeedDoc } from './support/seedDoc';
+import { nodeMenuAction } from './support/panels';
 
 /**
  * The viewport's own inline transform — the thing that actually moves. Read here
@@ -67,7 +68,7 @@ function stageDoc(): SeedDoc {
 /** Select an activity and delete it through the property panel. */
 async function deleteActivity(page: Page, id: string): Promise<void> {
   await nodeById(page, id).click();
-  await page.getByRole('button', { name: 'Delete node' }).click();
+  await nodeMenuAction(page, 'Delete node');
   await expect(nodeById(page, id)).toHaveCount(0);
 }
 

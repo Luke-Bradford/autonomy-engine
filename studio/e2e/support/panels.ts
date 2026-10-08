@@ -22,6 +22,18 @@ export function dockPaste(page: Page): Locator {
   return page.locator('.property-dock__header').getByRole('button', { name: 'Paste', exact: true });
 }
 
+/**
+ * #1477 OR29 — a selected node's Duplicate node / Delete node, from the `⋯`
+ * menu in its pinned header.
+ */
+export async function nodeMenuAction(
+  page: Page,
+  action: 'Duplicate node' | 'Delete node',
+): Promise<void> {
+  await properties(page).getByRole('button', { name: 'More node actions', exact: true }).click();
+  await page.getByRole('menuitem', { name: action, exact: true }).click();
+}
+
 /** Manage → Triggers' create/edit form. */
 export function triggerForm(page: Page): Locator {
   return page.getByRole('form', { name: 'Trigger form' });

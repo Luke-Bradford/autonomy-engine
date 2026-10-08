@@ -40,9 +40,6 @@ export const FORM_SECTION_HINTS = {
   },
   node: {
     container: 'Which container this activity runs inside, if any, or a new one to put it in.',
-    bindings:
-      'The connections and datasets this activity uses, and any settings it overrides on them.',
-    activitySettings: 'What this activity does when it runs; the settings follow from its type.',
     runPolicy:
       'How this activity retries a transient failure, and what of it is kept out of the run log.',
   },

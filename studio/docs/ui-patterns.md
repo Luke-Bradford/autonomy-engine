@@ -241,13 +241,16 @@ message.
 
 ## The node property panel
 
-- **Under the node's name, one line says what the activity does and names its type**
-  (`Copy rows from a source dataset … \`copy\``, #1413). The sentence is the catalog entry's
-  required `description`, which also titles the item in the Activities palette, so the hover and the
-  panel cannot disagree. `registry.test.ts` holds every description to one sentence: not blank, not
-  the title, ending in a full stop, at most 120 characters, and no two the same. A type the catalog
-  does not know gets no line. A container's panel does the same with its palette description and
-  its kind (`foreach`, `loop`, `stage`).
+- **One header row, pinned with the tab strip** (#1477 OR29): the node's name, its type id, a `?`
+  holding what the activity does, then Edit as JSON, Revert, Apply config and a `⋯` menu (Duplicate
+  node, then Delete node after a divider). Header and tabs stay put while a long tab scrolls under
+  them (`PanelTabs`'s `header`, `.panel-tabs-sticky`). Apply's refusal shows under the header, so it
+  is visible from any tab. Revert is live only once the draft differs from the node.
+  The `?`'s sentence is the catalog entry's required `description`, which also titles the item in
+  the Activities palette, so the hover and the panel cannot disagree (#1413). `registry.test.ts`
+  holds every description to one sentence: not blank, not the title, ending in a full stop, at most
+  120 characters, and no two the same. A type the catalog does not know gets no `?`. A container's
+  panel shows its palette description and its kind (`foreach`, `loop`, `stage`).
 - **Activity config fields are titled like any other form's** (#1396 slice 7). Every field of every
   activity the generic form renders, and every container setting, carries `presented(...)`, pinned
   by `catalog/__tests__/activity-labels.test.ts`. A structural call (`execute_pipeline`) is authored
@@ -269,18 +272,24 @@ message.
 - What still names the KEY: the expression picker's buttons ("Insert reference into url"), a row
   list's buttons and its cells ("tools row 1 name"). The key is what a `${}` reference and a server
   message cite.
-- **The Settings tab is in three sections** (`FormSection`, not collapsible), in this order:
-  - *Bindings*: the connection or the source and sink pickers, their datasets and their overrides.
-    An activity that binds nothing has no Bindings section.
-  - *Container*: which container the activity is in (Container membership), and the New container
-    form. `ContainerSection` draws this section itself.
-  - *Activity settings*: the activity's own fields, Fields or JSON.
-
-  Apply config, Duplicate node and Delete node act on the whole node and sit after every section.
-  A section after the first is ruled off on its heading, not on its fieldset: a legend sits across
-  the fieldset's top border and would break the line.
-  A call node's settings stay as `CallPanel` heads them ("Call target", "Parameters"), followed by
-  the Container section.
+- **An activity's tabs are declared in its catalog entry** (#1477 OR29): *General* (run policy)
+  first, then the entry's `tabs`, from one fixed vocabulary (`ACTIVITY_TAB_KEYS`: Settings, Source,
+  Sink, Mapping, Request, Auth, Model, Prompt, Tools, Output, Location, Content), so a tab is named
+  the same on every activity that has one.
+  - Each tab lists its config keys, required first, and the binding slots it draws (a connection
+    with its overrides, a source or sink connection, a source or sink dataset with its overrides).
+    `activity-tabs.test.ts` holds every schema key to exactly one tab and every slot the entry has
+    to exactly one place.
+  - The node opens on its first TYPE tab, where its required settings are. The dock remembers the
+    last tab chosen; a node without that tab opens on its first type tab, and the choice is kept for
+    the next node that has it.
+  - Container membership (and the New container form) closes the landing tab, because it is also
+    where a container is created (U6d).
+  - JSON mode edits the whole config as one document. It shows on the tab the author is on, under
+    that tab's bindings; Apply always reads every tab's fields.
+  - A call node has General and Settings: `CallPanel` heads its parts ("Call target",
+    "Parameters") and applies them itself, followed by the Container section. Its header has no
+    Apply, Revert or JSON toggle.
 - **It is not a drawer.** The panel already sits beside the canvas it edits, and it applies each
   change to the editor's draft rather than saving a record, so there is no per-record Save or Cancel
   to put in a drawer footer. The editor's Save writes the draft, and its dirty dot says it is unsaved.

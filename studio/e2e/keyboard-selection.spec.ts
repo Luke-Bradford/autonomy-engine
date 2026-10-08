@@ -92,10 +92,10 @@ test.describe('#737 keyboard selection', () => {
     await tabToFocus(page, 'react-flow__node');
     await page.keyboard.press('Enter');
 
-    // The node editor, addressed by what it lets the operator DO — `Delete node`
-    // is unique to it, where the "Properties" landmark is shared with the empty
+    // The node editor, addressed by what it lets the operator DO — its `⋯`
+    // (Duplicate / Delete node) is unique to it, where the "Properties" landmark is shared with the empty
     // state and the edge panel.
-    await expect(panel.getByRole('button', { name: 'Delete node' })).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'More node actions' })).toBeVisible();
     await expectQuiet(page, problems);
   });
 
@@ -128,7 +128,7 @@ test.describe('#737 keyboard selection', () => {
     const panel = properties(page);
     await tabToFocus(page, 'react-flow__node');
     await page.keyboard.press('Enter');
-    await expect(panel.getByRole('button', { name: 'Delete node' })).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'More node actions' })).toBeVisible();
     await expect(canvasNodes(page).first()).toHaveClass(/\bselected\b/);
 
     // A palette-dropped HTTP node has no URL, and the save gate refuses it until
@@ -145,6 +145,6 @@ test.describe('#737 keyboard selection', () => {
 
     // And the node is not stranded — a plain click brings the editor back.
     await canvasNodes(page).first().click();
-    await expect(panel.getByRole('button', { name: 'Delete node' })).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'More node actions' })).toBeVisible();
   });
 });

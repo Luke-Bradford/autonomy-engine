@@ -1,3 +1,4 @@
+import { nodeMenuAction } from './support/panels';
 import { expect, test, type Page } from '@playwright/test';
 import { openCanvas } from './support/canvas';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
@@ -337,7 +338,7 @@ test.describe('#1066 — a container collapses its ports too', () => {
        port land 36px above the middle and lay its 24px target across a ✕ pinned
        2px from the top. */
     await nodeById(page, 'a').click();
-    await page.getByRole('button', { name: 'Delete node' }).click();
+    await nodeMenuAction(page, 'Delete node');
     await expect(nodeById(page, 'a')).toHaveCount(0);
     // In FLOW units (screen height / zoom): the fitted zoom depends on the
     // canvas's shape, which the #852 bottom dock changed, while the box, its
