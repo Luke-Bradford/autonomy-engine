@@ -302,8 +302,9 @@ function ImportOutcomes({ outcomes }: { outcomes: Outcome[] }) {
       </div>
     );
   }
-  const kinds = new Set(outcomes.map((o) => o.resource.kind));
-  const noun = kinds.size === 1 ? `${[...kinds][0]}s` : 'resources';
+  // A bundle carries pipelines only (`importBundle`); anything else is named
+  // generically rather than pluralised by string-gluing a kind.
+  const noun = outcomes.every((o) => o.resource.kind === 'pipeline') ? 'pipelines' : 'resources';
   return (
     <div className="notice" role="status">
       <p>

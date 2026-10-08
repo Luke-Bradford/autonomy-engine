@@ -1444,6 +1444,13 @@ button.danger {
   color: var(--muted);
 }
 
+/* #1586 — a bundle import lists every pipeline it created; scrolled, so a
+   large one cannot push the drawer's other sections out of reach. */
+.import-outcomes {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
 /* #904 — a save refused because the pipeline moved underneath the author.
    Deliberately not `--muted` like the plain `.notice` it sits beside, and NOT
    carrying that class either: several specs locate `.notice` strictly, and this

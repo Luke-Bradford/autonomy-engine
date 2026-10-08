@@ -465,8 +465,11 @@ function importParsedEnvelope(
  * cannot resolve, and two global parameters of one name would refuse each
  * other with advice to edit a value that does not exist yet.
  *
- * Every refusal names the member — its position and pipeline name — because
- * "pipeline doc invalid" from a 40-pipeline file says nothing about which.
+ * The importer's refusals name the member — its position and pipeline name —
+ * because "pipeline doc invalid" from a 40-pipeline file says nothing about
+ * which: an `ImportError`, the doc gate and a write schema (`labelMemberError`).
+ * The name is clipped, since a pipeline name has no length cap and the doc
+ * gate's message is bounded at its source (`errors.ts`).
  */
 export function importBundle(
   db: Db,
@@ -493,10 +496,20 @@ export function importBundle(
       try {
         return importPipelineEnvelope(db, ownerId, envelope);
       } catch (err) {
-        throw labelMemberError(err, `Item ${i + 1} (pipeline “${envelope.data.pipeline.name}”)`);
+        throw labelMemberError(
+          err,
+          `Item ${i + 1} (pipeline “${clip(envelope.data.pipeline.name, LABEL_NAME_CHARS)}”)`,
+        );
       }
     }),
   }));
+}
+
+/** How much of a pipeline name a member label quotes. */
+const LABEL_NAME_CHARS = 60;
+
+function clip(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
 
 /**

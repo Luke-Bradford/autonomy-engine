@@ -3,6 +3,7 @@ import { CATALOG_VERSION, SCHEMA_VERSION } from '../schemas/version.js';
 import {
   BUNDLE_VERSION,
   ConnectionExportDataSchema,
+  MAX_BUNDLE_ITEMS,
   ExportEnvelopeSchema,
   ExportKindSchema,
   ImportError,
@@ -792,6 +793,13 @@ describe('#1586 parseBundle', () => {
     ['a fraction', 1.5, /invalid bundleVersion/],
   ])('refuses a bundleVersion that is %s', (_label, version, message) => {
     expect(() => parseBundle(bundle([named('A')], version))).toThrow(message);
+  });
+
+  it('refuses more items than MAX_BUNDLE_ITEMS, before parsing any', () => {
+    const many = Array.from({ length: MAX_BUNDLE_ITEMS + 1 }, () => ({ kind: 'junk' }));
+    expect(() => parseBundle(bundle(many))).toThrow(
+      `a bundle carries at most ${MAX_BUNDLE_ITEMS} items, and this one has ${MAX_BUNDLE_ITEMS + 1}`,
+    );
   });
 
   it('refuses an empty or missing item list', () => {

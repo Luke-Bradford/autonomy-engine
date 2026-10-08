@@ -877,14 +877,18 @@ no bulk export at all.
   - A file larger than `REQUEST_BODY_LIMIT_BYTES` (1 MiB, unchanged) is **refused with a 400**
     rather than served, because the import could not read it back. The limit was deliberately not
     raised, since an import is one synchronous parse plus one synchronous transaction.
+  - A request body over that limit, on any route, is now a **413** that says it is too large,
+    rather than the generic "Malformed request" 400 it used to be.
 - **Import** (`importBundle`):
   - **All or nothing.** Every member is parsed and upgraded before any write, then ONE transaction
     imports them through the single-pipeline path. Each pipeline's own transaction nests as a
     SAVEPOINT.
+  - **At most `MAX_BUNDLE_ITEMS` members**, the same cap the export applies.
   - **Pipelines only.** A dataset needs a per-file store choice. A connection imported beside a
     dataset mints an identity the dataset cannot resolve. Two same-named global parameters would
     refuse each other. A non-pipeline member refuses the file.
-  - **Every refusal names its member**, as `Item N (pipeline "name")`. Each error keeps its class:
+  - **Every refusal the importer raises names its member**, as `Item N (pipeline "name")`, with
+    the name clipped to 60 characters. Each error keeps its class:
     a doc-gate refusal is still `invalid_pipeline_doc`, and a write-schema `ZodError` becomes an
     `import_error`.
   - The result is one `ImportResult` per member, each with its own attention items.

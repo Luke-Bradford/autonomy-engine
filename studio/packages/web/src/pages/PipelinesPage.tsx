@@ -13,7 +13,7 @@ import type {
 import { useBusyAction } from '../hooks/useBusyAction';
 import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus';
-import { messageOf } from '../api/client';
+import { ApiError, messageOf } from '../api/client';
 import { downloadPipelineExport, downloadPipelinesBundle } from '../api/pipelineExport';
 import {
   archiveConfirmMessage,
@@ -678,13 +678,15 @@ export function PipelinesPage({
   const exportWaits: string | null =
     bundling.size > 0
       ? 'Exporting…'
-      : !listWhole || factsStatus !== 'ready'
-        ? 'Waiting for the list to load'
-        : rows.length === 0
-          ? 'No pipelines shown'
-          : rows.length > MAX_BUNDLE_ITEMS
-            ? `Over ${MAX_BUNDLE_ITEMS} shown — filter to fewer`
-            : null;
+      : factsStatus === 'failed'
+        ? 'The run facts these filters need failed to load'
+        : !listWhole || factsStatus !== 'ready'
+          ? 'Waiting for the list to load'
+          : rows.length === 0
+            ? 'No pipelines shown'
+            : rows.length > MAX_BUNDLE_ITEMS
+              ? `Over ${MAX_BUNDLE_ITEMS} shown — filter to fewer`
+              : null;
   const onExportShown = () => {
     if (exportWaits !== null) return;
     const ids = rows.map((p) => p.id);
@@ -693,9 +695,15 @@ export function PipelinesPage({
       try {
         await downloadPipelinesBundle(ids);
       } catch (err) {
+        // A 404 names a pipeline that is no longer there (deleted or archived
+        // elsewhere): the list is out of date, so it is re-read, and the next
+        // Export takes what is shown then.
+        const stale = err instanceof ApiError && err.status === 404;
         setActionMsg(
-          `Could not export ${ids.length} pipeline${ids.length === 1 ? '' : 's'}: ${messageOf(err)}`,
+          `Could not export ${ids.length} pipeline${ids.length === 1 ? '' : 's'}: ${messageOf(err)}` +
+            (stale ? ' — the list was out of date and has been reloaded.' : ''),
         );
+        if (stale) void refresh();
       }
     });
   };

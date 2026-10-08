@@ -1396,6 +1396,16 @@ describe('#1586 importBundle', () => {
     expect(listPipelines(db, 'owner-b')).toEqual([]);
   });
 
+  it('clips a long pipeline name in the label — a name has no length cap', () => {
+    const { db } = freshDb();
+    const a = seed(db, 'A'.repeat(500), false);
+    const bundle = JSON.parse(JSON.stringify(exportPipelineBundle(db, [a.id], 'owner-a')));
+    bundle.items[0].data.pipeline.folder = '/';
+    expect(() => importBundle(db, 'owner-b', bundle)).toThrow(
+      new RegExp(`^Item 1 \\(pipeline “A{59}…”\\): `),
+    );
+  });
+
   it('carries pipelines only — any other member refuses the file before a write', () => {
     const { db } = freshDb();
     const a = seed(db, 'Alpha', false);

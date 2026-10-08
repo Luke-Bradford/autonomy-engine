@@ -66,12 +66,12 @@ export function exportDataset(id: string, signal?: AbortSignal): Promise<string>
   return apiFetchText(exportPath('datasets', id), { signal });
 }
 
-/** #844 GL6 — a global's file: `{ name, type, value, description }`, cleartext. */
 /** #1586 — the given pipelines as ONE file `importEnvelope` reads back. */
 export function exportPipelines(ids: readonly string[], signal?: AbortSignal): Promise<string> {
   return apiFetchText('/api/pipelines/export', { body: { ids }, signal });
 }
 
+/** #844 GL6 — a global's file: `{ name, type, value, description }`, cleartext. */
 export function exportGlobalParam(id: string, signal?: AbortSignal): Promise<string> {
   return apiFetchText(exportPath('global-params', id), { signal });
 }

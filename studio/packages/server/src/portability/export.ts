@@ -2,7 +2,6 @@ import {
   BUNDLE_KIND,
   BUNDLE_VERSION,
   CATALOG_VERSION,
-  ExportBundleSchema,
   ConnectionExportDataSchema,
   ExportEnvelopeSchema,
   PipelineExportDataSchema,
@@ -232,12 +231,15 @@ export function exportPipelineBundle(
   ids: readonly string[],
   ownerId: string,
 ): ExportBundle {
-  return ExportBundleSchema.parse({
+  // Not re-parsed through `ExportBundleSchema`: every member already passed
+  // `ExportEnvelopeSchema.parse` in `exportPipeline`, and the wrapper is built
+  // here from constants — a second walk of up to 1000 pipelines buys nothing.
+  return {
     kind: BUNDLE_KIND,
     bundleVersion: BUNDLE_VERSION,
     exportedAt: Date.now(),
     items: Array.from(new Set(ids)).map((id) => exportPipeline(db, id, ownerId)),
-  });
+  };
 }
 
 /**

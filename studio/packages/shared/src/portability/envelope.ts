@@ -588,8 +588,10 @@ export const BUNDLE_VERSION = 1;
  * envelopes that do. */
 export const BUNDLE_KIND = 'bundle';
 
-/** #1586 — the most members one bundle export may name. One constant for the
- * route that refuses more and the toolbar that says so before asking. */
+/** #1586 — the most members one bundle may carry: the export route refuses to
+ * name more, the import refuses to read more, and the toolbar says so before
+ * asking. In `shared`, unlike the server's other caps (`server/limits.ts`),
+ * because the web reads it too. */
 export const MAX_BUNDLE_ITEMS = 1000;
 
 /** #1586 — the body of `POST /api/pipelines/export`: the pipelines to bundle,
@@ -661,6 +663,11 @@ export function parseBundle(
   const items = parsed.items;
   if (!Array.isArray(items) || items.length === 0) {
     throw new ImportError('Malformed import: a bundle must carry at least one item');
+  }
+  if (items.length > MAX_BUNDLE_ITEMS) {
+    throw new ImportError(
+      `Cannot import: a bundle carries at most ${MAX_BUNDLE_ITEMS} items, and this one has ${items.length}`,
+    );
   }
   return items.map((item, i) => {
     try {

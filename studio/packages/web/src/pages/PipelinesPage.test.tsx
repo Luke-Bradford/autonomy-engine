@@ -364,6 +364,31 @@ describe('PipelinesPage', () => {
         );
       });
 
+      it('says the facts failed, rather than waiting for ever', async () => {
+        seed();
+        summariesMock.mockRejectedValue(new Error('down'));
+        renderAt('?last=failure');
+        await screen.findByText(/Could not read the run facts/);
+        expect(exportButton()).toHaveAttribute(
+          'title',
+          'The run facts these filters need failed to load',
+        );
+      });
+
+      it('re-reads the list when the export names a pipeline that is gone', async () => {
+        seed();
+        bundleMock.mockRejectedValue(new ApiError(404, 'pipeline pl_2 not found'));
+        const user = userEvent.setup();
+        renderAt('');
+        await waitFor(() => expect(rowNames()).toEqual(['Alpha', 'Beta', 'Gamma']));
+        const loads = listMock.mock.calls.length;
+        await user.click(exportButton());
+        expect(await screen.findByRole('alert')).toHaveTextContent(
+          'the list was out of date and has been reloaded',
+        );
+        await waitFor(() => expect(listMock.mock.calls.length).toBeGreaterThan(loads));
+      });
+
       it('says when nothing is shown, and reports a refused export', async () => {
         seed();
         bundleMock.mockRejectedValue(new Error('too big'));
