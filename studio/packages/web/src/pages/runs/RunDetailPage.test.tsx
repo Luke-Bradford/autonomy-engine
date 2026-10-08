@@ -63,7 +63,9 @@ vi.mock('../../api/runs', async (importActual) => ({
      over. */
   getRunDiagnostics: vi.fn().mockResolvedValue([]),
   // #1484 M2 — read from a mount effect, like `getRunDiagnostics`.
-  getRunActivityRuns: vi.fn().mockResolvedValue({ runId: 'r', basis: 'version', rows: [], groups: [] }),
+  getRunActivityRuns: vi
+    .fn()
+    .mockResolvedValue({ runId: 'r', basis: 'version', rows: [], groups: [] }),
   /* Mocked so an un-mocked write cannot reach `fetch`. NOT for the mount-effect
      reason above, which is specific to a member called from a MOUNT EFFECT:
      this one is only reachable from a click, so no other test in this file can
@@ -3625,7 +3627,9 @@ describe('RunDetailPage — the failure banner', () => {
     await waitFor(() => expect(runsApi.getRunActivityRuns).toHaveBeenCalled());
     expect(screen.queryByRole('group', { name: 'Failure' })).toBeNull();
 
-    await act(async () => answer({ runId: 'run_1', basis: 'version', rows: [failedRow], groups: [] }));
+    await act(async () =>
+      answer({ runId: 'run_1', basis: 'version', rows: [failedRow], groups: [] }),
+    );
     const banner = await screen.findByRole('group', { name: 'Failure' });
     expect(within(banner).getByRole('button', { name: 'Show activity' })).toBeVisible();
     // #1541 — and the way to the version that ran selects what failed in it.

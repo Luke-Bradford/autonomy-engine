@@ -427,9 +427,7 @@ export function ActivityRunsTable({
       )}
       {basis === 'log' && (
         <div className="activity-runs__basis">
-          <span>
-            Version unavailable: rows from the run log only
-          </span>
+          <span>Version unavailable: rows from the run log only</span>
           <HelpDisclosure label="About rows from the run log" noteId="activity-runs-basis-note">
             {LOG_BASIS_NOTE}
           </HelpDisclosure>

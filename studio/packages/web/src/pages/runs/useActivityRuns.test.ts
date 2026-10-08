@@ -150,7 +150,12 @@ describe('#1484 M2 useActivityRuns', () => {
         key: 'c#0',
         childRun: { id: 'k', pipelineName: 'Child', status, startedAt: 1, finishedAt: null },
       }) as unknown as ActivityRun;
-    getMock.mockResolvedValue({ runId: 'r', basis: 'version', rows: [caller('running')], groups: [] });
+    getMock.mockResolvedValue({
+      runId: 'r',
+      basis: 'version',
+      rows: [caller('running')],
+      groups: [],
+    });
     // Time in steps, so each tick's render lands before the next one.
     const pass = async (ms: number) => {
       for (let t = 0; t < ms; t += 250) await act(async () => vi.advanceTimersByTimeAsync(250));
@@ -171,7 +176,12 @@ describe('#1484 M2 useActivityRuns', () => {
     expect(getMock.mock.calls.length).toBe(before);
 
     // Live again, the child finishes: one read sees it, then nothing more.
-    getMock.mockResolvedValue({ runId: 'r', basis: 'version', rows: [caller('success')], groups: [] });
+    getMock.mockResolvedValue({
+      runId: 'r',
+      basis: 'version',
+      rows: [caller('success')],
+      groups: [],
+    });
     rerender({ live: true });
     await pass(ACTIVITY_RUNS_CHILD_POLL_MS * 2);
     before = getMock.mock.calls.length;

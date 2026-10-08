@@ -1029,7 +1029,12 @@ describe('#1557 activity runs from the log alone — the version no longer resol
         node('boom'),
         node('after'),
       ],
-      [branchEdge('c', 't', 'true'), branchEdge('c', 'f', 'false'), edge('t', 'boom'), edge('boom', 'after')],
+      [
+        branchEdge('c', 't', 'true'),
+        branchEdge('c', 'f', 'false'),
+        edge('t', 'boom'),
+        edge('boom', 'after'),
+      ],
     );
     const runId = await drive(
       db,
@@ -1154,7 +1159,12 @@ describe('#1557 activity runs from the log alone — the version no longer resol
       }),
     ]);
     expect(rows).toEqual([
-      expect.objectContaining({ key: 'reused:a', reused: true, status: 'success', startedAt: null }),
+      expect.objectContaining({
+        key: 'reused:a',
+        reused: true,
+        status: 'success',
+        startedAt: null,
+      }),
       expect.objectContaining({
         attemptId: 'call#0',
         status: 'failure',
