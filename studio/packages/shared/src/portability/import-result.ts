@@ -5,11 +5,13 @@ import { GlobalParamSchema } from '../schemas/global-param.js';
 import { PipelineSchema, PipelineVersionSchema } from '../schemas/pipeline.js';
 import { TriggerPublicSchema } from '../schemas/trigger.js';
 import { BUNDLE_KIND } from './envelope.js';
+import { ISSUE_LIST_CAP } from '../schemas/zod-issues.js';
 
 /**
- * One thing the importer must follow up on after `POST /api/import`
- * succeeds — never a blocking error (the import itself already succeeded),
- * always a pointer to a manual step the normal CRUD routes already handle.
+ * One thing the importer must know after `POST /api/import` succeeds — never a
+ * blocking error (the import itself already succeeded). Almost every item is a
+ * pointer to a manual step the normal CRUD routes already handle; the one that
+ * is not, `unrunnableVersion`, reports history that cannot be repaired at all.
  */
 export const ImportAttentionItemSchema = z.discriminatedUnion('type', [
   /** A pipeline node's `connectionId` came back `null` (every pipeline
@@ -52,6 +54,19 @@ export const ImportAttentionItemSchema = z.discriminatedUnion('type', [
    * imported trigger's `webhook` is `null` until the importer configures a
    * fresh webhook secret via `PATCH /api/triggers/:id`. */
   z.object({ type: z.literal('requiresWebhookSecret') }),
+  /** #1492 — a HISTORICAL version (not the head) was saved before #1480 with an
+   * activity type or literal config its adapter refuses. It is imported as it
+   * was, because versions are immutable and the source workspace holds it the
+   * same way, but it cannot run. `version` is its number in THIS workspace;
+   * `issues` are the save gate's own diagnostics, capped at `ISSUE_LIST_CAP`,
+   * with `totalIssues` the uncapped count. No repair step exists; the head is
+   * unaffected. */
+  z.object({
+    type: z.literal('unrunnableVersion'),
+    version: z.number().int().positive(),
+    issues: z.array(z.string()).min(1).max(ISSUE_LIST_CAP),
+    totalIssues: z.number().int().positive(),
+  }),
 ]);
 export type ImportAttentionItem = z.infer<typeof ImportAttentionItemSchema>;
 

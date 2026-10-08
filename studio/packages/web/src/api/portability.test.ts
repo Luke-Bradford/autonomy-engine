@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ISSUE_LIST_CAP } from '@autonomy-studio/shared';
 import { ApiError } from './client';
 import {
   EnvelopeParseError,
@@ -209,6 +210,30 @@ describe('describeAttention', () => {
     expect(ds).toMatch(/copyRows/);
     expect(ds).toMatch(/dataset/i);
     expect(ds).not.toMatch(/connection/i);
+  });
+
+  // #1492 — names the version and quotes the gate's own diagnostics, and says
+  // how many it left out when the list was capped.
+  it('names an unrunnable historical version, its issues, and any it left out', () => {
+    const one = describeAttention({
+      type: 'unrunnableVersion',
+      version: 3,
+      issues: ["node 'load': config.mode: bad"],
+      totalIssues: 1,
+    });
+    expect(one).toMatch(/^Version 3 cannot run/);
+    expect(one).toContain("node 'load': config.mode: bad");
+    expect(one).not.toMatch(/more/);
+    // A capped list is the first ISSUE_LIST_CAP; the tail states the rest.
+    const capped = Array.from({ length: ISSUE_LIST_CAP }, (_, k) => `issue ${k}`);
+    expect(
+      describeAttention({
+        type: 'unrunnableVersion',
+        version: 1,
+        issues: capped,
+        totalIssues: ISSUE_LIST_CAP + 3,
+      }),
+    ).toContain(`issue ${ISSUE_LIST_CAP - 1}; …and 3 more`);
   });
 });
 

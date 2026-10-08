@@ -111,8 +111,9 @@ describe('portability routes (export + import)', () => {
     // #1480 — an import mints versions through the same save gate, so a
     // hand-edited envelope carrying a config the adapter refuses is refused as a
     // whole, naming the node and field, and leaves nothing behind (the import
-    // is one transaction). It is not an attention item: those are repairable
-    // bindings on a pipeline that DID import; this version could never run.
+    // is one transaction). It is not an attention item: this version is the
+    // HEAD, and importing it would mint a head that could never run. (A
+    // historical version failing only this check is admitted, #1492.)
     it('refuses an envelope whose node config the adapter would refuse, and stores nothing (#1480)', async () => {
       const pipeline = (
         await app.inject({ method: 'POST', url: '/api/pipelines', payload: { name: 'Copier' } })

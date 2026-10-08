@@ -4,7 +4,7 @@ import { fluentRootReady } from './support/theme';
 import { seedConnection, seedDataset } from './support/seedResources';
 import { chooseRowAction, rowMenuButton } from './support/rowMenu';
 import { createPipelineFromList, openImportDrawer } from './support/pipelinesPage';
-import { seedVersion } from './support/seedDoc';
+import { mintVersion, seedVersion } from './support/seedDoc';
 
 /**
  * #959 — export and import, end to end through a real browser.
@@ -144,6 +144,53 @@ test.describe('#959 portability', () => {
     // Every pipeline is now there twice: the originals and the imports.
     await expect(rowMenuButton(page, bound)).toHaveCount(2);
     await expect(rowMenuButton(page, plain)).toHaveCount(2);
+
+    await expectQuiet(page, problems);
+  });
+
+  // #1492 — a history version saved before #1480 (here: hand-edited, which the
+  // save gate refuses exactly as it refuses a pre-#1480 row) no longer refuses
+  // the whole import. The pipeline lands, and the outcome names the version
+  // that cannot run.
+  test('imports a pipeline whose history holds an unrunnable version, and names it', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const name = `Old history ${Date.now()}`;
+    const copy = (mode: string) => ({
+      nodes: [
+        {
+          id: 'load',
+          type: 'copy',
+          config: { mapping: [{ source: 'id', sink: 'id', type: 'integer' }], mode },
+          position: { x: 0, y: 0 },
+        },
+      ],
+    });
+    const { pipelineId, pipelineVersionId } = await seedVersion(page, name, copy('append'));
+    await mintVersion(page, pipelineId, copy('append'), pipelineVersionId, name);
+    const exported = await page.request.get(
+      `/api/pipelines/${encodeURIComponent(pipelineId)}/export`,
+    );
+    expect(exported.status()).toBe(200);
+    const envelope = (await exported.json()) as {
+      data: { versions: { nodes: { config: { mode: string } }[] }[] };
+    };
+    expect(envelope.data.versions).toHaveLength(2);
+    envelope.data.versions[0]!.nodes[0]!.config.mode = 'truncate'; // history, not the head
+
+    await gotoPipelines(page);
+    await (await openImportDrawer(page)).getByLabel('Export file').setInputFiles({
+      name: 'old-history.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify(envelope)),
+    });
+
+    const outcome = page.getByRole('status');
+    await expect(outcome).toContainText(`Imported pipeline “${name}”`);
+    await expect(outcome).toContainText('Version 1 cannot run');
+    await expect(outcome).toContainText("node 'load': config.mode");
+    await expect(rowMenuButton(page, name)).toHaveCount(2);
 
     await expectQuiet(page, problems);
   });

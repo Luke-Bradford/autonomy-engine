@@ -3,6 +3,7 @@ import {
   ConnectionPublicSchema,
   GlobalParamCreateBodySchema,
   ImportError,
+  capIssueList,
   globalParamResourceId,
   TriggerPublicSchema,
   parseAndUpgradeEnvelope,
@@ -122,7 +123,8 @@ function unresolvedDatasetNodeIds(versions: readonly { nodes: NodeExport[] }[]):
  * transaction the refusal lands mid-way, leaving an orphan pipeline and the
  * versions that happened to precede it: an import that "failed" but still
  * changed the database. #444 is what makes that likely rather than exotic, so
- * the two ship together.
+ * the two ship together. (#1492 narrowed what refuses: a HISTORICAL version
+ * that fails only #1480's activity check is admitted and reported instead.)
  *
  * `createPipelineVersion` opens its OWN `db.transaction`; better-sqlite3 drops
  * a nested one to a `SAVEPOINT` and commits it with the outer scope, so passing
@@ -175,7 +177,7 @@ function importPipelineEnvelopeInTx(
   for (const nodeId of unresolvedDatasetNodeIds(exportedVersions)) {
     attention.push({ type: 'unresolvedDatasetRef', nodeId });
   }
-  const versions = exportedVersions.map((exportedVersion) => {
+  const versions = exportedVersions.map((exportedVersion, index) => {
     // SPREAD, not a field-by-field rebuild (#473). Listing the fields by hand
     // is what silently dropped `containers` on import: every field of
     // `NewPipelineVersion` that has a `.default()` is OPTIONAL in `z.input`, so
@@ -192,7 +194,36 @@ function importPipelineEnvelopeInTx(
       pipelineId: pipeline.id,
       nodes: exportedVersion.nodes.map(toDbNode),
     };
-    return createPipelineVersion(db, input);
+    // #1492 — the LAST version minted is the head here, whatever number the file
+    // gave it (versions renumber 1..n in file order), so it is always refused if
+    // invalid: importing it would mint a head that can never run.
+    const isHead = index === exportedVersions.length - 1;
+    try {
+      return createPipelineVersion(db, input);
+    } catch (err) {
+      if (isHead || !(err instanceof InvalidPipelineDocError)) throw err;
+      // A HISTORICAL version saved before #1480 may fail its activity check, and
+      // nothing can repair it (versions are immutable). Admit it if that check is
+      // ALL it fails, and say so; any structural fault still refuses the import,
+      // with the first, complete diagnostics. Only a second validation refusal is
+      // swapped for the first: any other fault propagates as itself.
+      let admitted;
+      try {
+        admitted = createPipelineVersion(db, input, { skipActivityChecks: true });
+      } catch (retryErr) {
+        throw retryErr instanceof InvalidPipelineDocError ? err : retryErr;
+      }
+      // ECHO: the issues quote node ids and config key paths from the file the
+      // caller just sent, back to that caller, on the same owner-scoped request —
+      // the argument `errors.ts` makes for `InvalidPipelineDocError`'s 400. They
+      // are the same strings, clipped the same way, as that 400 would carry.
+      attention.push({
+        type: 'unrunnableVersion',
+        version: admitted.version,
+        ...capIssueList(err.issues),
+      });
+      return admitted;
+    }
   });
 
   return { kind: 'pipeline', pipeline, versions, attention };

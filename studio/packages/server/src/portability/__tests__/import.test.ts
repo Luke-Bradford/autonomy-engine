@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CATALOG_VERSION,
   ImportError,
+  ISSUE_LIST_CAP,
   PipelineVersionSchema,
   type NewPipelineVersion,
   type PipelineVersion,
@@ -26,6 +27,7 @@ import {
   exportTrigger,
 } from '../export.js';
 import { importBundle, importEnvelope } from '../import.js';
+import { insertLegacyVersion } from '../../__tests__/legacy-version.js';
 
 describe('importEnvelope: pipeline', () => {
   it('round-trip: new ids, importer ownerId, same structural content, unresolved connectionRef reported', () => {
@@ -1441,5 +1443,148 @@ describe('#1586 importBundle', () => {
     const { db } = freshDb();
     const a = seed(db, 'Alpha', false);
     expect(() => exportPipelineBundle(db, [a.id], 'owner-b')).toThrow(/not found/i);
+  });
+});
+
+// #1492 — an exported HISTORY can hold a version saved before #1480 whose
+// activity config the save gate now refuses. Versions are immutable, so it can
+// never be repaired; refusing it refused the whole pipeline. It is admitted and
+// reported, while the head and every structural rule still refuse.
+describe('importEnvelope: history saved before #1480 (#1492)', () => {
+  const copyNode = (mode: string) => ({
+    id: 'load',
+    type: 'copy',
+    config: { mapping: [{ source: 'id', sink: 'id', type: 'integer' }], mode },
+    position: { x: 0, y: 0 },
+  });
+  const doc = (pipelineId: string, mode: string): NewPipelineVersion => ({
+    pipelineId,
+    params: [],
+    outputs: [],
+    nodes: [copyNode(mode)],
+    edges: [],
+    catalogVersion: CATALOG_VERSION,
+  });
+
+  it('admits an unrunnable HISTORICAL version, stored as it was, and reports it', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Copier' });
+    insertLegacyVersion(db, doc(pipeline.id, 'truncate'));
+    createPipelineVersion(db, doc(pipeline.id, 'append'));
+
+    const result = importEnvelope(db, 'owner-b', exportPipeline(db, pipeline.id, 'owner-a'));
+
+    if (result.kind !== 'pipeline') throw new Error('expected a pipeline import');
+    expect(result.attention).toEqual([
+      {
+        type: 'unrunnableVersion',
+        version: 1,
+        issues: [expect.stringMatching(/^node 'load': config\.mode: /)],
+        totalIssues: 1,
+      },
+    ]);
+    expect(result.versions.map((v) => [v.version, v.nodes[0]?.config.mode])).toEqual([
+      [1, 'truncate'],
+      [2, 'append'],
+    ]);
+    expect(listPipelineVersions(db, result.pipeline.id)).toHaveLength(2);
+  });
+
+  it('caps the reported issues at ISSUE_LIST_CAP and states the true total', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Copier' });
+    const many = ISSUE_LIST_CAP + 1;
+    insertLegacyVersion(db, {
+      ...doc(pipeline.id, 'truncate'),
+      nodes: Array.from({ length: many }, (_, i) => ({ ...copyNode('truncate'), id: `n${i}` })),
+    });
+    createPipelineVersion(db, doc(pipeline.id, 'append'));
+
+    const result = importEnvelope(db, 'owner-b', exportPipeline(db, pipeline.id, 'owner-a'));
+
+    if (result.kind !== 'pipeline') throw new Error('expected a pipeline import');
+    const [item] = result.attention;
+    if (item?.type !== 'unrunnableVersion') throw new Error('expected an unrunnableVersion');
+    expect(item.issues).toHaveLength(ISSUE_LIST_CAP);
+    expect(item.totalIssues).toBe(many);
+  });
+
+  it('still refuses an unrunnable HEAD, and stores nothing', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Copier' });
+    createPipelineVersion(db, doc(pipeline.id, 'append'));
+    insertLegacyVersion(db, doc(pipeline.id, 'truncate'));
+
+    expect(() => importEnvelope(db, 'owner-b', exportPipeline(db, pipeline.id, 'owner-a'))).toThrow(
+      InvalidPipelineDocError,
+    );
+    expect(listPipelines(db, 'owner-b')).toEqual([]);
+  });
+
+  it('the head is the LAST version in the file, not the highest number', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Copier' });
+    insertLegacyVersion(db, doc(pipeline.id, 'truncate'));
+    createPipelineVersion(db, doc(pipeline.id, 'append'));
+    const envelope = JSON.parse(JSON.stringify(exportPipeline(db, pipeline.id, 'owner-a')));
+    // Hand-reordered: the unrunnable v1 is now last, so it would become the head.
+    envelope.data.versions.reverse();
+
+    expect(() => importEnvelope(db, 'owner-b', envelope)).toThrow(InvalidPipelineDocError);
+    expect(listPipelines(db, 'owner-b')).toEqual([]);
+  });
+
+  it('still refuses a historical version with a STRUCTURAL fault beside the activity one', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Copier' });
+    insertLegacyVersion(db, doc(pipeline.id, 'truncate'));
+    createPipelineVersion(db, doc(pipeline.id, 'append'));
+    const envelope = JSON.parse(JSON.stringify(exportPipeline(db, pipeline.id, 'owner-a')));
+    const exportedNode = envelope.data.versions[0].nodes[0];
+    envelope.data.versions[0].nodes = [
+      { ...exportedNode, id: 'a' },
+      { ...exportedNode, id: 'b' },
+    ];
+    envelope.data.versions[0].edges = [
+      { id: 'e1', from: 'a', to: 'b', on: 'success' },
+      { id: 'e2', from: 'b', to: 'a', on: 'success' },
+    ];
+
+    let thrown: unknown;
+    try {
+      importEnvelope(db, 'owner-b', envelope);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(InvalidPipelineDocError);
+    const issues = (thrown as InvalidPipelineDocError).issues;
+    // The FIRST, complete diagnostics: the activity fault AND the structural one.
+    expect(issues.some((i) => /config\.mode/.test(i))).toBe(true);
+    expect(issues.some((i) => !/config\.mode/.test(i))).toBe(true);
+    expect(listPipelines(db, 'owner-b')).toEqual([]);
+  });
+
+  it('a bundle reports the unrunnable history on its own member only', () => {
+    const { db } = freshDb();
+    const old = createPipeline(db, { ownerId: 'owner-a', name: 'Old' });
+    insertLegacyVersion(db, doc(old.id, 'truncate'));
+    createPipelineVersion(db, doc(old.id, 'append'));
+    const fresh = createPipeline(db, { ownerId: 'owner-a', name: 'Fresh' });
+    createPipelineVersion(db, doc(fresh.id, 'append'));
+
+    const result = importBundle(
+      db,
+      'owner-b',
+      JSON.parse(JSON.stringify(exportPipelineBundle(db, [old.id, fresh.id], 'owner-a'))),
+    );
+
+    expect(
+      result.items.map((r) =>
+        r.kind === 'pipeline' ? [r.pipeline.name, r.attention.map((a) => a.type)] : r.kind,
+      ),
+    ).toEqual([
+      ['Old', ['unrunnableVersion']],
+      ['Fresh', []],
+    ]);
   });
 });
