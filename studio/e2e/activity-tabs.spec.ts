@@ -78,12 +78,8 @@ test('a Copy node opens on Source; each tab starts on screen and Sink fits whole
   const mapping = properties(page).getByRole('tabpanel', { name: 'Mapping' });
   await expect(mapping.getByRole('button', { name: 'Add mapping row' })).toBeVisible();
   await expect(mapping.getByRole('button', { name: 'Auto-map columns' })).toBeVisible();
-  // The first mapping row is on screen; a row's four cells still stack, so a
-  // whole mapping fits only once row lists become compact tables (a later
-  // OR29 slice).
-  expect(
-    await overflowOf(mapping.getByRole('textbox', { name: 'mapping row 1 source' })),
-  ).toBeLessThanOrEqual(0);
+  // #1477 OR29 — with the row list a compact table, the whole tab fits.
+  expect(await overflowOf(mapping)).toBeLessThanOrEqual(0);
   await expectQuiet(page, problems);
 });
 

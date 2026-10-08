@@ -91,7 +91,7 @@ test.describe('#1477 OR29 — dock density', () => {
     // The ticket's bar: the first parameter row is at most 80px below the dock
     // header.
     const header = await rectOf(page, '.property-dock__header');
-    const row = await panel.locator('.contract-row').first().boundingBox();
+    const row = await panel.locator('.row-table tbody tr').first().boundingBox();
     expect(row).not.toBeNull();
     expect(row!.y - header.bottom).toBeLessThanOrEqual(80);
 

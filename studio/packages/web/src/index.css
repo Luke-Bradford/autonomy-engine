@@ -4864,6 +4864,11 @@ button.danger {
 }
 
 /* Compact: a 28px control in a 32px row. */
+:root[data-density='compact'] .row-table td textarea {
+  line-height: 16px;
+  padding-block: calc((var(--density-control-height) - 16px - 2px) / 2);
+}
+
 :root[data-density='compact'] .row-table :is(th, td) {
   padding: calc((var(--density-row-height) - var(--density-control-height) - 1px) / 2)
     var(--density-space-1);
