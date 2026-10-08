@@ -82,7 +82,7 @@ export function NewConnectionColumn({
             if (refused === undefined) request.bind(saved.id);
             else
               onNotice(
-                `Created ${saved.name} (${CONNECTION_KIND_LABELS[saved.kind]}). Not bound here: ${refused.charAt(0).toLowerCase()}${refused.slice(1)}.`,
+                `Created ${saved.name} (${CONNECTION_KIND_LABELS[saved.kind]}), not bound here. ${refused}.`,
               );
             // Unmounting the column reports it clean (the effect above).
             onClose();

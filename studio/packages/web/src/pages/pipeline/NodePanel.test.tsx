@@ -859,9 +859,9 @@ describe('paired binding pickers (#1139)', () => {
       },
     ]);
     // Grouped by kind, in the gallery's order.
-    expect(
-      [...picker('Sink connection').querySelectorAll('optgroup')].map((g) => g.label),
-    ).toEqual(['SQLite', 'File system']);
+    expect([...picker('Sink connection').querySelectorAll('optgroup')].map((g) => g.label)).toEqual(
+      ['SQLite', 'File system'],
+    );
   });
 
   it('＋ New asks the editor for the column with the SLOT’s refusals and binds there (#1477)', () => {
