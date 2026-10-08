@@ -183,9 +183,9 @@ import {
   describeSaveConflict,
   docUnchanged,
   type DocSnapshot,
+  followsUrlVersion,
   historyEntries,
   initialPreview,
-  followsUrlVersion,
   isPublishRefused,
   isStaleWrite,
   publishConfirmMessage,
@@ -566,7 +566,10 @@ export function PipelineCanvas({
    * A render the page has since written over is not followed (#1589).
    */
   const followUrlVersion = useEffectEvent((version: number | undefined) => {
-    if (!ready || !followsUrlVersion(version, urlSynced.current, readOpenVersion(urlNow()))) return;
+    const standing = readOpenVersion(urlNow());
+    if (!ready || !followsUrlVersion({ rendered: version, synced: urlSynced.current, standing })) {
+      return;
+    }
     setPreviewing(previewLocked ? previewing : initialPreview(version, versions));
   });
   useEffect(() => {

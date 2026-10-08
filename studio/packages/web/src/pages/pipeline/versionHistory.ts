@@ -151,11 +151,15 @@ export function initialPreview(
  * preview and write `?version=1` back. The newer location renders next, and is
  * followed or not on its own terms.
  */
-export function followsUrlVersion(
-  rendered: number | undefined,
-  synced: number | undefined,
-  standing: number | undefined,
-): boolean {
+export function followsUrlVersion({
+  rendered,
+  synced,
+  standing,
+}: {
+  rendered: number | undefined;
+  synced: number | undefined;
+  standing: number | undefined;
+}): boolean {
   return rendered !== synced && rendered === standing;
 }
 
