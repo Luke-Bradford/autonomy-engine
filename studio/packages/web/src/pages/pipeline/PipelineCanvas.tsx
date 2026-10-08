@@ -1890,7 +1890,6 @@ export function PipelineCanvas({
                         // One side column at a time, as the ⋯ menu's item.
                         if (!triggerFormDirty) setTriggersColumn(null);
                         if (!connectionFormDirty) setNewConnection(null);
-                        if (!connectionFormDirty) setNewConnection(null);
                       }}
                       // The same lock every other route into the preview carries: this
                       // is a fourth one, and the reported bug was precisely a route
@@ -2226,6 +2225,7 @@ export function PipelineCanvas({
                       // One side column at a time — unless the Triggers column
                       // holds an unsaved form, which is never closed under it.
                       if (!triggerFormDirty) setTriggersColumn(null);
+                      if (!connectionFormDirty) setNewConnection(null);
                     }
                   }}
                 >
@@ -3963,7 +3963,19 @@ export function NodePanel({
         onNew={
           onNewConnection === undefined
             ? undefined
-            : (opener) => onNewConnection({ disabledReason, bind }, opener)
+            : (opener) =>
+                onNewConnection(
+                  {
+                    disabledReason,
+                    // The activity can be deleted while the column is open.
+                    bind: (connectionId) => {
+                      if (!store.getState().nodes.some((n) => n.id === nodeId)) return false;
+                      bind(connectionId);
+                      return true;
+                    },
+                  },
+                  opener,
+                )
         }
       />
     );

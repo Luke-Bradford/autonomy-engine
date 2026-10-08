@@ -1,8 +1,9 @@
-import { CONNECTION_KIND_LABELS, type ConnectionKind } from '@autonomy-studio/shared';
 import {
-  connectionKindGroups,
-  type ConnectionKindDisabledReason,
-} from '../../lib/connectionKindGroups';
+  CONNECTION_KIND_GROUPS,
+  CONNECTION_KIND_LABELS,
+  type ConnectionKind,
+} from '@autonomy-studio/shared';
+import type { ConnectionKindDisabledReason } from '../../lib/connectionKindGroups';
 import { connectionOptionLabel } from '../../lib/resourceOptionLabel';
 
 /**
@@ -80,7 +81,7 @@ export interface ConnectionPickerGroup {
 
 /**
  * #1477 — a connection picker's options, grouped by kind in the gallery's kind
- * order (`connectionKindGroups`), kinds with no connection dropped.
+ * order (`CONNECTION_KIND_GROUPS`), kinds with no connection dropped.
  *
  * EVERY connection is listed — the operator's rule: a kind this side refuses is
  * shown disabled with the reason, so the picker says what exists rather than
@@ -92,8 +93,7 @@ export function connectionPickerGroups(
   disabledReason: ConnectionKindDisabledReason,
   boundId: string | undefined,
 ): ConnectionPickerGroup[] {
-  return connectionKindGroups('')
-    .flatMap((group) => group.tiles.map((tile) => tile.kind))
+  return CONNECTION_KIND_GROUPS.flatMap((group) => group.kinds)
     .map((kind) => {
       const reason = disabledReason(kind);
       return {

@@ -79,11 +79,10 @@ export function NewConnectionColumn({
           onSaved={(saved) => {
             onCreated(saved);
             const refused = request.disabledReason(saved.kind);
-            if (refused === undefined) request.bind(saved.id);
-            else
-              onNotice(
-                `Created ${saved.name} (${CONNECTION_KIND_LABELS[saved.kind]}), not bound here. ${refused}.`,
-              );
+            const label = `${saved.name} (${CONNECTION_KIND_LABELS[saved.kind]})`;
+            if (refused !== undefined) onNotice(`Created ${label}, not bound here. ${refused}.`);
+            else if (!request.bind(saved.id))
+              onNotice(`Created ${label}, not bound: the activity was deleted.`);
             // Unmounting the column reports it clean (the effect above).
             onClose();
           }}

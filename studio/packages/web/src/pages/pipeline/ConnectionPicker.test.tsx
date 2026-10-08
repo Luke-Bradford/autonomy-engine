@@ -87,4 +87,18 @@ describe('ConnectionPicker (#1477 slice 5b)', () => {
     expect(screen.getByRole('status')).toHaveTextContent('HTTP 404: connection not found');
     expect(screen.getByRole('status')).toHaveClass('probe-failed');
   });
+
+  it('a re-pick drops the verdict even when it comes back to the probed connection', async () => {
+    // The reading was from one moment; coming back to it later must not show it
+    // again as though it were current.
+    probe.mockResolvedValue({ ok: true, probed: 'liveness' });
+    render(<Harness initial="a" />);
+    await act(async () => {
+      fireEvent.click(testButton());
+    });
+    const select = screen.getByRole('combobox', { name: 'Source connection' });
+    fireEvent.change(select, { target: { value: 'b' } });
+    fireEvent.change(select, { target: { value: 'a' } });
+    expect(screen.queryByRole('status')).toBeNull();
+  });
 });

@@ -12,7 +12,7 @@ export interface NewConnectionRequest {
   /**
    * Bind the created connection to the slot that asked. It closes over the
    * node's id and the canvas store, not the panel, so it binds the right node
-   * even after the selection has moved.
+   * even after the selection has moved. `false` when the node is gone.
    */
-  bind: (connectionId: string) => void;
+  bind: (connectionId: string) => boolean;
 }

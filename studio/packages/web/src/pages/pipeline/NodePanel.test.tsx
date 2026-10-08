@@ -874,8 +874,18 @@ describe('paired binding pickers (#1139)', () => {
     expect(request.disabledReason('fs')).toBe("Can't be a Copy Data sink yet");
     expect(request.disabledReason('postgres')).toBeUndefined();
     // Binding goes to the SINK end of THIS node — the end the author asked from.
-    request.bind('c_new');
+    expect(request.bind('c_new')).toBe(true);
     expect(store.getState().pendingBindings['n_copy']?.connections).toEqual({ sink: 'c_new' });
+  });
+
+  it('＋ New’s bind reports a node deleted while the column was open (#1477)', () => {
+    const asked: NewConnectionRequest[] = [];
+    const { store } = mountOver(copyNode(), CONNS, SETS, [], (request) => asked.push(request));
+    openTab('Sink');
+    fireEvent.click(screen.getByRole('button', { name: 'New sink connection' }));
+    act(() => store.setState({ nodes: [] }));
+    expect(asked[0]!.bind('c_new')).toBe(false);
+    expect(store.getState().pendingBindings['n_copy']).toBeUndefined();
   });
 
   it('offers no ＋ New when no editor hosts the column', () => {

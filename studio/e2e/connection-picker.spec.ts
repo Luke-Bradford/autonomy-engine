@@ -89,7 +89,8 @@ test.describe('#1477 activity connection pickers', () => {
     await form.getByLabel(/^Database file/).fill('e2e-1477-warehouse.db');
     // Test connection on the UNSAVED form, through the draft probe.
     await form.getByRole('button', { name: 'Test connection' }).click();
-    await expect(form.getByRole('status')).toHaveText(/\S/);
+    // A verdict, either way: the draft probe answered.
+    await expect(form.getByRole('status')).toHaveClass(/probe-(ok|failed)/);
 
     // The column sits inside the viewport beside the canvas, nothing scrolled.
     const placed = await column(page).evaluate((el) => {
@@ -116,7 +117,7 @@ test.describe('#1477 activity connection pickers', () => {
 
     // Test beside the picker probes the saved connection.
     await properties(page).getByRole('button', { name: 'Test selected sink connection' }).click();
-    await expect(properties(page).getByRole('status').filter({ hasText: /\S/ })).toBeVisible();
+    await expect(properties(page).locator('.probe-ok, .probe-failed')).toBeVisible();
     await expectQuiet(page, problems);
   });
 

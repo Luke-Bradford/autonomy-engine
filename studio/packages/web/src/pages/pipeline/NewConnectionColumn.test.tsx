@@ -33,7 +33,8 @@ function row(kind: ConnectionKind): ConnectionPublic {
 /** An LLM node's slot: the two API kinds, everything else refused. */
 function mount() {
   const calls = {
-    bind: vi.fn<(id: string) => void>(),
+    bind: vi.fn<(id: string) => boolean>(() => true),
+    onDirtyChange: vi.fn<(dirty: boolean) => void>(),
     onCreated: vi.fn<(c: ConnectionPublic) => void>(),
     onNotice: vi.fn<(m: string) => void>(),
     onClose: vi.fn<() => void>(),
@@ -48,7 +49,7 @@ function mount() {
       onClose={calls.onClose}
       onCreated={calls.onCreated}
       onNotice={calls.onNotice}
-      onDirtyChange={() => {}}
+      onDirtyChange={calls.onDirtyChange}
     />,
   );
   return calls;
@@ -102,6 +103,27 @@ describe('NewConnectionColumn (#1477 slice 5b)', () => {
     expect(calls.bind).not.toHaveBeenCalled();
     expect(calls.onNotice).toHaveBeenCalledWith(
       "Created Prod key (Ollama), not bound here. LLM can't use this kind yet.",
+    );
+  });
+
+  it('reports a typed draft up as dirty, so the editor’s leave guard holds it', async () => {
+    const user = userEvent.setup();
+    const calls = mount();
+    await user.click(await screen.findByRole('button', { name: 'Anthropic API' }));
+    expect(calls.onDirtyChange).toHaveBeenLastCalledWith(false);
+    await user.type(screen.getByLabelText('Name'), 'P');
+    expect(calls.onDirtyChange).toHaveBeenLastCalledWith(true);
+  });
+
+  it('says so when the activity was deleted before Create', async () => {
+    createMock.mockResolvedValue(row('anthropic_api'));
+    const user = userEvent.setup();
+    const calls = mount();
+    calls.bind.mockReturnValue(false);
+    await createAnthropic(user);
+    expect(calls.onCreated).toHaveBeenCalled();
+    expect(calls.onNotice).toHaveBeenCalledWith(
+      'Created Prod key (Anthropic API), not bound: the activity was deleted.',
     );
   });
 });

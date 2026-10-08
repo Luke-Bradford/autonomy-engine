@@ -81,7 +81,11 @@ export function ConnectionPicker({
             <select
               id={id}
               value={value ?? ''}
-              onChange={(e) => onPick(e.target.value || undefined)}
+              onChange={(e) => {
+                // A verdict is a reading from one moment; a re-pick starts afresh.
+                setVerdict(null);
+                onPick(e.target.value || undefined);
+              }}
             >
               <option value="">— none —</option>
               {groups.map((group) => (
