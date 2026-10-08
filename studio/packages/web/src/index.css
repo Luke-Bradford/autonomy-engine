@@ -2704,23 +2704,30 @@ button.danger {
 /* #1477 OR29 — CONTROLS SIZED BY TYPE, not stretched (compact dock, any
    width). A native select's own width is its longest option plus its arrow;
    a number takes 120px. Free text, paths, expressions and JSON still take the
-   row. `align-self` for a flex column parent, `justify-self` for the grid. */
-:root[data-density='compact'] .property-dock .property-panel .labelled-control > select {
+   row. `align-self` for a flex column parent, `justify-self` for the grid.
+   Not the run drawer, which is not a form. */
+:root[data-density='compact']
+  .property-dock
+  .property-panel:not(.node-detail-panel)
+  .labelled-control
+  > select {
   width: auto;
   max-width: min(100%, 320px);
   align-self: flex-start;
   justify-self: start;
 }
 
-:root[data-density='compact'] .property-dock .property-panel input.number-input {
+:root[data-density='compact']
+  .property-dock
+  .property-panel:not(.node-detail-panel)
+  input.number-input {
   width: 120px;
   max-width: 100%;
   align-self: flex-start;
   justify-self: start;
 }
 
-/* The node's own panel only: the run drawer (`.node-detail-panel`) shares the
-   dock but is a page of data, not a form. */
+/* The label column of the dock's label-left rows (below). */
 :root[data-density='compact'] {
   --dock-label-column: 150px;
 }
@@ -2733,8 +2740,10 @@ button.danger {
    number fit beside a 16px gutter: 2 × 278 + 16 = 572.
    Nothing inside a tab is fixed-position, so the containment this implies
    changes no containing block that matters. */
-/* The tab itself is uncapped so the grid can widen with the dock; inside it
-   the 56rem readability cap still holds for everything but the grid. */
+/* The node's own panel only: the run drawer (`.node-detail-panel`) shares the
+   dock but is a page of data, not a form. The tab itself is uncapped so the
+   grid can widen with the dock; inside it the 56rem readability cap still
+   holds for everything but the grid. */
 :root[data-density='compact']
   .property-dock__body
   > .property-panel:not(.node-detail-panel)
