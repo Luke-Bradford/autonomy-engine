@@ -33,7 +33,7 @@ required marks and display names; its layout is its own, below.
 - **"New connection" opens the kind gallery first** (`ConnectionKindDrawer`), as ADF's "New linked
   service" does. Picking a kind opens that kind's form, clean and with Name focused.
   `ConnectionKindGallery` is the one gallery for every place a connection is created: Manage →
-  Connections now, the activity Source and Sink pickers next. A new kind then appears in all of them.
+  Connections, and every activity's connection picker (below). A new kind then appears in all of them.
 - Focus goes to the search box on open. Escape or Cancel closes the gallery and hands focus back to
   the button that opened it, and pressing New again starts a fresh gallery.
 - Kinds are listed in `CONNECTION_KIND_GROUPS` order (Database · File · HTTP/API · AI) as compact
@@ -45,6 +45,19 @@ required marks and display names; its layout is its own, below.
   (`disabledReason`). It is not hidden. The tile is `aria-disabled` rather than `disabled`, so it
   stays focusable, and it is described by the reason and then the kind's description.
 - The term is **kind**, as in the Kind column and the form's Kind field. ADF says "type".
+
+## Activity connection pickers
+
+- **One `ConnectionPicker` for every connection slot** (an activity's Connection, or a Copy's
+  Source and Sink connection): the select, then **Test** and **New** beside it on one row.
+- **Every connection is listed, grouped by kind.** One this slot cannot use is listed disabled,
+  with its reason (`connectionSlotReason`), so the picker says what exists. The bound connection
+  is never disabled, whatever its kind.
+- **Test** probes the saved connection that is selected; its verdict goes when the selection moves.
+- **New** opens the kind gallery, with the same reasons disabling the same kinds, then that kind's
+  form, in a column beside the editor (as the Triggers column). Nothing navigates and the canvas
+  draft is untouched. Create binds the new connection to the slot that asked; a form switched to a
+  kind the slot refuses is created but not bound, and the editor says so.
 
 ## Sections
 
