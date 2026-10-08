@@ -64,6 +64,24 @@ export type ConfigFieldKind =
   | 'keyValue'
   | 'outputSchema';
 
+/**
+ * #1477 OR29 — how a field sits in the property dock's grid: a fixed-width
+ * control (a number, a checkbox, a choice between short names) packs beside
+ * others; free text, JSON, row lists and a choice with a long name take the
+ * grid's whole width, rather than be clipped to a packed cell's ~130px control
+ * column. 16 characters is about that column at the dock's 13px.
+ */
+export function fieldSpan(
+  field: Pick<ConfigField, 'kind' | 'enumOptions' | 'label'>,
+): 'short' | 'long' {
+  if (field.kind === 'number' || field.kind === 'boolean') return 'short';
+  if (field.kind !== 'enum') return 'long';
+  const shown = (field.enumOptions ?? []).map((o) => field.label?.options?.[o] ?? o);
+  return shown.every((text) => text.length <= SHORT_CHOICE_CHARS) ? 'short' : 'long';
+}
+
+const SHORT_CHOICE_CHARS = 16;
+
 /** One bound of a number field; an exclusive one only ever on a decimal. */
 export interface NumberBound {
   readonly value: number;

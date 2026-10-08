@@ -351,26 +351,38 @@ export function ConfigFieldControl({
     // A TEXT input, not `type="number"`: a number input reports an unparseable
     // entry as the empty string, which this form reads as "not set" — so a typo
     // would silently DELETE the setting instead of reporting "must be a number".
+    // #1477 OR29 — paired by `htmlFor`, not wrapped, like every other kind: the
+    // property dock's grid puts the label in a column of its own.
     return (
-      <>
-        <label>
-          {numberField ? label : `${label} — number`}
-          {required && <RequiredMark />}
-          <input
-            type="text"
-            inputMode={numberKeypad(field.numberRule)}
-            value={typeof value === 'string' ? value : ''}
-            spellCheck={false}
-            placeholder={field.defaultText}
-            aria-required={required || undefined}
-            aria-describedby={describedBy}
-            {...checked}
-            onChange={(e) => onChange(e.target.value)}
-          />
-        </label>
-        {hint}
-        {errorSlot}
-      </>
+      <LabelledControl
+        className="config-field"
+        label={
+          <>
+            {numberField ? label : `${label} — number`}
+            {required && <RequiredMark />}
+          </>
+        }
+      >
+        {(id) => (
+          <>
+            <input
+              id={id}
+              type="text"
+              className="number-input"
+              inputMode={numberKeypad(field.numberRule)}
+              value={typeof value === 'string' ? value : ''}
+              spellCheck={false}
+              placeholder={field.defaultText}
+              aria-required={required || undefined}
+              aria-describedby={describedBy}
+              {...checked}
+              onChange={(e) => onChange(e.target.value)}
+            />
+            {hint}
+            {errorSlot}
+          </>
+        )}
+      </LabelledControl>
     );
   }
 

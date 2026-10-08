@@ -89,6 +89,7 @@ export function DraftNumberField<V extends number | undefined>({
           <input
             id={id}
             type="text"
+            className="number-input"
             inputMode="numeric"
             spellCheck={false}
             placeholder={placeholder}

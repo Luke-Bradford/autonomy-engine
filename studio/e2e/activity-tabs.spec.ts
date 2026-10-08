@@ -60,9 +60,10 @@ test('a Copy node opens on Source; each tab starts on screen and Sink fits whole
   await expect(source.getByRole('combobox', { name: 'Source dataset' })).toBeVisible();
   await expect(source.getByLabel('Container membership')).toBeVisible();
   // The tab's required settings — its two pickers — are on screen without a
-  // scroll. Container membership closes the landing tab (U6d) and its New
-  // container form still runs below the fold until the label-left grid (a later
-  // OR29 slice) packs these rows.
+  // scroll. Container membership closes the landing tab (U6d): with the
+  // label-left grid, what still runs below the fold is that section's prose
+  // hint and its New container form (the section hints and an Advanced tab are
+  // later OR29 slices).
   expect(
     await overflowOf(source.getByRole('combobox', { name: 'Source dataset' })),
   ).toBeLessThanOrEqual(0);

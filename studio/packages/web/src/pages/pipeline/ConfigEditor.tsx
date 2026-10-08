@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from 'react';
 import { ConfigFieldControl, type FieldChoices, type FieldPicker } from './ConfigFieldControl';
-import { emptyControlValue } from './configForm';
+import { emptyControlValue, fieldSpan } from './configForm';
 import type { ConfigEditorState } from './useConfigEditor';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { FieldError } from '../../lib/form/FieldError';
@@ -73,7 +73,7 @@ export function ConfigEditor<K extends string>({
   const jsonErrorId = useId();
   const jsonError = errorFor?.('config');
   return (
-    <div className={className} role="group" aria-label="Config">
+    <div className={`config-editor ${className}`} role="group" aria-label="Config">
       {toolbar && (
         <div>
           <span>Config</span>
@@ -114,23 +114,27 @@ export function ConfigEditor<K extends string>({
           {fields.length === 0 && <p className="page-hint">{emptyHint}</p>}
           {fields.map((field) => {
             const choices = choicesFor?.(field.name);
+            // #1477 OR29 — one box per field, so the property dock's grid can
+            // pack or span it. `display: contents` everywhere else, which
+            // leaves a resource form's column exactly as it was.
             return (
-              <ConfigFieldControl
-                key={field.name}
-                field={field}
-                value={editor.inputs[field.name] ?? emptyControlValue(field)}
-                onChange={(next) => editor.setInput(field.name, next)}
-                {...(choices === undefined ? {} : { choices })}
-                {...(picker === undefined ? {} : { picker })}
-                {...(errorFor === undefined
-                  ? {}
-                  : {
-                      validation: {
-                        key: `config.${field.name}`,
-                        error: errorFor(`config.${field.name}`),
-                      },
-                    })}
-              />
+              <div key={field.name} className="config-cell" data-field-span={fieldSpan(field)}>
+                <ConfigFieldControl
+                  field={field}
+                  value={editor.inputs[field.name] ?? emptyControlValue(field)}
+                  onChange={(next) => editor.setInput(field.name, next)}
+                  {...(choices === undefined ? {} : { choices })}
+                  {...(picker === undefined ? {} : { picker })}
+                  {...(errorFor === undefined
+                    ? {}
+                    : {
+                        validation: {
+                          key: `config.${field.name}`,
+                          error: errorFor(`config.${field.name}`),
+                        },
+                      })}
+                />
+              </div>
             );
           })}
           {fieldModeExtra}

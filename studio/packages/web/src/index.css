@@ -2694,6 +2694,177 @@ button.danger {
   font-size: var(--density-field-font);
 }
 
+/* #1477 OR29 — a config field's own box (`ConfigEditor`), for the dock's grid
+   below. Everywhere else it generates no box, so the wrapper itself changes no
+   resource form's column. */
+.config-cell {
+  display: contents;
+}
+
+/* #1477 OR29 — CONTROLS SIZED BY TYPE, not stretched (compact dock, any
+   width). A native select's own width is its longest option plus its arrow;
+   a number takes 120px. Free text, paths, expressions and JSON still take the
+   row. `align-self` for a flex column parent, `justify-self` for the grid.
+   Not the run drawer, which is not a form. */
+:root[data-density='compact']
+  .property-dock
+  .property-panel:not(.node-detail-panel)
+  .labelled-control
+  > select {
+  width: auto;
+  max-width: min(100%, 320px);
+  align-self: flex-start;
+  justify-self: start;
+}
+
+:root[data-density='compact']
+  .property-dock
+  .property-panel:not(.node-detail-panel)
+  input.number-input {
+  width: 120px;
+  max-width: 100%;
+  align-self: flex-start;
+  justify-self: start;
+}
+
+/* The label column of the dock's label-left rows (below). */
+:root[data-density='compact'] {
+  --dock-label-column: 150px;
+}
+
+/* The query is on the TAB's width, not the window's or the dock's: the dock
+   docks bottom or right, is resizable, and shares its width with the Problems
+   column. Measured (#1477): the bottom dock's tab is 429px at 1280 wide, 589px
+   at 1440 and 1069px at 1920; the right dock's is 302–463px, so it always
+   stacks. 576px is where two cells of a 150px label, an 8px gap and a 120px
+   number fit beside a 16px gutter: 2 × 278 + 16 = 572.
+   Nothing inside a tab is fixed-position, so the containment this implies
+   changes no containing block that matters. */
+/* The node's own panel only: the run drawer (`.node-detail-panel`) shares the
+   dock but is a page of data, not a form. The tab itself is uncapped so the
+   grid can widen with the dock; inside it the 56rem readability cap still
+   holds for everything but the grid. */
+:root[data-density='compact']
+  .property-dock__body
+  > .property-panel:not(.node-detail-panel)
+  > .panel-tab {
+  max-width: none;
+  container: dock-tab / inline-size;
+}
+
+@container dock-tab (min-width: 576px) {
+  /* LABEL-LEFT: the label in a column of its own, the control, its hint and
+     its error in the next. Only a field row of the tab's own sections — not
+     the cells of a row card or a param-override row, which are too narrow. */
+  :root[data-density='compact']
+    .property-dock
+    .property-panel
+    :is(.config-cell, .contract-section, .form-section-body, .panel-tab)
+    > .labelled-control {
+    display: grid;
+    grid-template-columns: var(--dock-label-column) minmax(0, 1fr);
+    column-gap: var(--density-space-2);
+    row-gap: var(--density-space-1);
+    align-items: start;
+  }
+
+  /* Text and required mark on one line, centred on a 28px control's text (a
+     long label wraps inside its column). */
+  :root[data-density='compact']
+    .property-dock
+    .property-panel
+    :is(.config-cell, .contract-section, .form-section-body, .panel-tab)
+    > .labelled-control
+    > label {
+    display: block;
+    grid-column: 1;
+    line-height: 16px;
+    padding-block: calc((var(--density-control-height) - 16px) / 2);
+  }
+
+  :root[data-density='compact']
+    .property-dock
+    .property-panel
+    :is(.config-cell, .contract-section, .form-section-body, .panel-tab)
+    > .labelled-control
+    > :not(label) {
+    grid-column: 2;
+  }
+
+  /* In a packed cell the control column is ~130px: its hint and error read
+     across the whole cell, under the label too, rather than wrapping a word to
+     a line. */
+  :root[data-density='compact']
+    .property-dock
+    .property-panel
+    .config-cell[data-field-span='short']
+    > .labelled-control
+    > :is(.field-hint, .field-error-slot) {
+    grid-column: 1 / -1;
+  }
+
+  /* In a full-width row (the General tab's policy), a checkbox, and a hint or
+     error slot that is the SIBLING of its control rather than inside it
+     (a checkbox's, a `DraftNumberField`'s), line up with the control column.
+     A checkbox packed into a grid cell keeps the cell's whole width. */
+  :root[data-density='compact'] .property-dock .property-panel .form-section-body > .contract-check,
+  :root[data-density='compact']
+    .property-dock
+    .property-panel
+    :is(.contract-section, .form-section-body)
+    > :is(.labelled-control, .contract-check)
+    + :is(.page-hint, .field-hint),
+  :root[data-density='compact']
+    .property-dock
+    .property-panel
+    :is(.contract-section, .form-section-body)
+    > .labelled-control
+    + .page-hint
+    + .field-error-slot {
+    margin-left: calc(var(--dock-label-column) + var(--density-space-2));
+  }
+
+  /* MULTI-COLUMN: a short field (a choice, a number, a checkbox) packs beside
+     the next; everything else — free text, JSON, row lists, the advisories —
+     spans the row. Not `dense`: fields keep their order, left to right then
+     down, so the flow of decisions still reads in sequence. */
+  :root[data-density='compact'] .property-dock .property-panel .config-editor {
+    max-width: none;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: calc(2 * var(--density-space-2));
+    row-gap: var(--density-space-2);
+    align-items: start;
+  }
+
+  :root[data-density='compact'] .property-dock .property-panel .config-editor > * {
+    grid-column: 1 / -1;
+  }
+
+  :root[data-density='compact'] .property-dock .property-panel .config-editor > .config-cell {
+    display: flex;
+    flex-direction: column;
+    gap: var(--density-space-1);
+    min-width: 0;
+  }
+
+  :root[data-density='compact']
+    .property-dock
+    .property-panel
+    .config-editor
+    > .config-cell[data-field-span='short'] {
+    grid-column: auto;
+  }
+}
+
+/* Three short fields to a row once each cell still holds a label column and
+   a 120px number with room to spare; never four. */
+@container dock-tab (min-width: 900px) {
+  :root[data-density='compact'] .property-dock .property-panel .config-editor {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 /* #1484 OR35 M2 — the run page's views (Gantt · Graph · Events · …) are a page's
    width of data, not a form: the graph and the event table take the full width
    the activity runs above them do. */
