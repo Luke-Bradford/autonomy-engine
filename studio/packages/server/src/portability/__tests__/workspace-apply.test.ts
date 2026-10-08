@@ -778,6 +778,71 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     );
   });
 
+  it('#1477 — a description/annotations-only change applies as an update, and removing them clears them', () => {
+    const db = freshDb().db;
+    const conn = createConnection(db, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const tgt = freshDb().db;
+    applyWorkspace(tgt, 'local', snapshot(db), 'sha1', 'main');
+
+    updateConnection(db, conn.id, { description: 'Feed', annotations: ['prod', 'finance'] });
+    const r1 = applyWorkspace(tgt, 'local', snapshot(db), 'sha2', 'main');
+    expect(r1.applied.find((a) => a.kind === 'connection')?.action).toBe('updated');
+    expect(getConnectionByResourceId(tgt, 'local', conn.resourceId)).toMatchObject({
+      description: 'Feed',
+      annotations: ['prod', 'finance'],
+    });
+
+    // The file now carries neither key: the branch says "none", so they clear.
+    updateConnection(db, conn.id, { description: '', annotations: [] });
+    const r2 = applyWorkspace(tgt, 'local', snapshot(db), 'sha3', 'main');
+    expect(r2.applied.find((a) => a.kind === 'connection')?.action).toBe('updated');
+    expect(getConnectionByResourceId(tgt, 'local', conn.resourceId)).toMatchObject({
+      description: '',
+      annotations: [],
+    });
+
+    // Unchanged afterwards: an empty DB value equals the absent key.
+    const r3 = applyWorkspace(tgt, 'local', snapshot(db), 'sha4', 'main');
+    expect(r3.applied.find((a) => a.kind === 'connection')?.action).toBe('unchanged');
+  });
+
+  it('#1477 — a hand-edited connection file with a padded annotation ABORTS the apply, attributed', () => {
+    const db = freshDb().db;
+    createConnection(db, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const files = serializeWorkspace(db, 'local').map((f) => {
+      const env = JSON.parse(f.contents);
+      if (env.kind !== 'connection') return f;
+      env.data.annotations = [' prod'];
+      return { ...f, contents: JSON.stringify(env) };
+    });
+    const tgt = freshDb().db;
+    let refused: unknown;
+    try {
+      applyWorkspace(tgt, 'local', parseWorkspaceFiles(files), 'sha1', 'main');
+    } catch (err) {
+      refused = err;
+    }
+    // Re-pathed onto the file it came from (`attributedTo`), not a bare field.
+    expect(refused).toBeInstanceOf(ZodError);
+    const issue = (refused as ZodError).issues[0]!;
+    expect(issue.path.slice(0, 1)).toEqual([expect.stringMatching(/^connection connections\//)]);
+    expect(issue.path.slice(1)).toEqual(['annotations', 0]);
+    expect(issue.message).toBe('an annotation cannot start or end with a space');
+    expect(listConnections(tgt, 'local')).toHaveLength(0);
+  });
+
   it('updates a connection content edit and a pure rename independently (G3)', () => {
     const db = freshDb().db;
     const conn = createConnection(db, {

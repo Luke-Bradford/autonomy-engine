@@ -91,6 +91,8 @@ function store(overrides: Partial<ConnectionPublic> = {}): ConnectionPublic {
     kind: 'sqlite',
     config: { path: '/tmp/wh.db' },
     parameters: [],
+    description: '',
+    annotations: [],
     secretStatus: 'not_required',
     enabled: true,
     createdAt: 1,

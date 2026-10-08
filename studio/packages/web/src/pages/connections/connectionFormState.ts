@@ -3,6 +3,7 @@ import {
   connectionConfigSchema,
   type ConnectionKind,
   type ConnectionPublic,
+  ConnectionMetadataWriteShape,
 } from '@autonomy-studio/shared';
 import {
   deriveFieldsWithCarried,
@@ -13,6 +14,7 @@ import {
   type FieldInput,
 } from '../pipeline/configForm';
 import type { DetectedConnection } from '../../lib/detectConnection';
+import type { FieldErrors } from '../../lib/form/fieldValidation';
 
 /*
  * #1477 — the connection form's draft state and the helpers that build it,
@@ -47,7 +49,24 @@ export type FormState = {
    * REPLACES the stored one — a rename must never touch it.
    */
   parametersSeed: readonly string[];
+  /** #1477 — ADF's linked-service Description: what the connection is for. */
+  description: string;
+  /** #1477 — its tags, one row each, exactly as stored (never trimmed or deduped here). */
+  annotations: string[];
+  /**
+   * #1477 — both as the form opened on them. Save sends each only when the
+   * edit differs (`metadataChanges`), as it does `parameters`: so a rename
+   * never overwrites metadata changed elsewhere since the form opened (a git
+   * pull, another tab), and a save that does not touch them is not judged on
+   * them.
+   */
+  descriptionSeed: string;
+  annotationsSeed: readonly string[];
 };
+
+/** #1477 — a connection's Description and Annotations, as one form seed. */
+type ConnectionMeta = Pick<ConnectionPublic, 'description' | 'annotations'>;
+const NO_META: ConnectionMeta = { description: '', annotations: [] };
 
 /**
  * The controls for this kind's config, plus any key CARRIED over from another
@@ -68,6 +87,7 @@ function formFor(
   kind: ConnectionKind,
   config: Record<string, unknown>,
   parameters: readonly string[],
+  meta: ConnectionMeta = NO_META,
   secret = '',
 ): FormState {
   const { fields } = connectionFields(kind, config);
@@ -87,6 +107,12 @@ function formFor(
     // is possible, and an edit should not write the duplicate back.
     parameters: [...new Set(parameters)],
     parametersSeed: parameters,
+    // As stored, never repaired on open (unlike `parameters`): nothing the
+    // author did not type is ever written back.
+    description: meta.description,
+    annotations: [...meta.annotations],
+    descriptionSeed: meta.description,
+    annotationsSeed: meta.annotations,
   };
 }
 
@@ -100,11 +126,11 @@ export function blankForm(kind: ConnectionKind): FormState {
  * kind, the config it implies, and a postgres URL's password in the Secret.
  */
 export function detectedForm({ kind, config, secret }: DetectedConnection): FormState {
-  return formFor(null, '', kind, config, [], secret);
+  return formFor(null, '', kind, config, [], NO_META, secret);
 }
 
 export function formForEdit(conn: ConnectionPublic): FormState {
-  return formFor(conn.id, conn.name, conn.kind, conn.config, conn.parameters);
+  return formFor(conn.id, conn.name, conn.kind, conn.config, conn.parameters, conn);
 }
 
 /**
@@ -121,5 +147,46 @@ export function savePayloadSignature(form: FormState): string {
     saveableConfigOf(form, connectionFields),
     form.secret,
     [...form.parameters].sort(),
+    form.description,
+    form.annotations,
   ]);
+}
+
+/**
+ * #1477 — the Description and Annotations a Save should send: each only when it
+ * differs from what the form opened on (see `FormState.descriptionSeed`).
+ * Annotations compare in order — a reorder is an edit.
+ */
+export function metadataChanges(
+  form: Pick<FormState, 'description' | 'descriptionSeed' | 'annotations' | 'annotationsSeed'>,
+): { description?: string; annotations?: string[] } {
+  const listChanged =
+    form.annotations.length !== form.annotationsSeed.length ||
+    form.annotations.some((text, i) => text !== form.annotationsSeed[i]);
+  return {
+    ...(form.description !== form.descriptionSeed ? { description: form.description } : {}),
+    ...(listChanged ? { annotations: form.annotations } : {}),
+  };
+}
+
+/**
+ * #1477 — what the write body would refuse in what Save would send of the
+ * Description and Annotations, by field: `annotations.<i>` for a row (an empty,
+ * padded or duplicate tag), `annotations` for the list (over `MAX_ANNOTATIONS`),
+ * `description` for an over-long text. Read from the write shape itself, so the
+ * form and the server refuse the same thing with the same words. An unchanged
+ * field is not sent, so it is not judged.
+ */
+export function metadataChecks(changes: ReturnType<typeof metadataChanges>): FieldErrors {
+  const errors: Record<string, string> = {};
+  const desc = ConnectionMetadataWriteShape.description.safeParse(changes.description);
+  if (!desc.success) errors.description = desc.error.issues[0]!.message;
+  const list = ConnectionMetadataWriteShape.annotations.safeParse(changes.annotations);
+  if (!list.success) {
+    for (const issue of list.error.issues) {
+      const key = ['annotations', ...issue.path.map(String)].join('.');
+      errors[key] ??= issue.message;
+    }
+  }
+  return errors;
 }

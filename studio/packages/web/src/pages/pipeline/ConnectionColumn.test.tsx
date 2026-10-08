@@ -43,6 +43,8 @@ function row(kind: ConnectionKind, over: Partial<ConnectionPublic> = {}): Connec
     kind,
     config: {},
     parameters: [],
+    description: '',
+    annotations: [],
     secretStatus: 'ready',
     enabled: true,
     createdAt: 1,

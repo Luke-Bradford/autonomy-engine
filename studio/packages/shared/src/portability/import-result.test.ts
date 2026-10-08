@@ -41,6 +41,8 @@ describe('ImportResultSchema', () => {
       kind: 'http',
       config: {},
       parameters: [],
+      description: '',
+      annotations: [],
       // #3 G8a — an import result is the ACTUAL created connection's public
       // projection, so it carries the server-derived readiness fields.
       secretStatus: 'not_required',

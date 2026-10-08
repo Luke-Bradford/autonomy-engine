@@ -141,6 +141,68 @@ describe('connections routes', () => {
     expect(cleared.json().parameters).toEqual([]);
   });
 
+  it('#1477 — description + annotations persist, and a PATCH that omits them PRESERVES both', async () => {
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/connections',
+      payload: {
+        name: 'Warehouse API',
+        kind: 'http',
+        config: {},
+        description: 'Reads the nightly warehouse feed.',
+        annotations: ['prod', 'finance'],
+      },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const created = createRes.json();
+    expect(created).toMatchObject({
+      description: 'Reads the nightly warehouse feed.',
+      annotations: ['prod', 'finance'],
+    });
+    const read = await app.inject({ method: 'GET', url: `/api/connections/${created.id}` });
+    expect(read.json()).toMatchObject({ annotations: ['prod', 'finance'] });
+
+    // The partial-applies-default gotcha again: a rename must not wipe them.
+    const renamed = await app.inject({
+      method: 'PATCH',
+      url: `/api/connections/${created.id}`,
+      payload: { name: 'Renamed' },
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json()).toMatchObject({
+      description: 'Reads the nightly warehouse feed.',
+      annotations: ['prod', 'finance'],
+    });
+
+    const cleared = await app.inject({
+      method: 'PATCH',
+      url: `/api/connections/${created.id}`,
+      payload: { description: '', annotations: [] },
+    });
+    expect(cleared.json()).toMatchObject({ description: '', annotations: [] });
+  });
+
+  it('#1477 — a connection created without them reads as no description and no annotations', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/connections',
+      payload: { name: 'Bare', kind: 'http', config: {} },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ description: '', annotations: [] });
+  });
+
+  it('#1477 — the write bounds refuse a duplicate (ignoring case) or padded annotation', async () => {
+    for (const annotations of [['prod', 'Prod'], [' prod']]) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/connections',
+        payload: { name: 'Tagged', kind: 'http', config: {}, annotations },
+      });
+      expect(res.statusCode).toBe(400);
+    }
+  });
+
   it('POST with a plaintext secret never returns it, and stores an encrypted row', async () => {
     const plaintext = 'sk-super-secret-plaintext';
     const res = await app.inject({

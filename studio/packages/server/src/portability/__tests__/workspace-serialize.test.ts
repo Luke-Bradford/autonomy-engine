@@ -41,6 +41,37 @@ function baseVersion(pipelineId: string): NewPipelineVersion {
 }
 
 describe('serializeWorkspace', () => {
+  it('#1477 — writes a connection with no description/annotations WITHOUT the keys, and with them when set', () => {
+    const { db } = freshDb();
+    createConnection(db, {
+      ownerId: 'local',
+      name: 'Bare',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    createConnection(db, {
+      ownerId: 'local',
+      name: 'Tagged',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+      description: 'Feed',
+      annotations: ['prod'],
+    });
+    const files = serializeWorkspace(db, 'local');
+    const connFiles = files.filter((f) => JSON.parse(f.contents).kind === 'connection');
+    const byName = new Map(connFiles.map((f) => [JSON.parse(f.contents).data.name, f]));
+    // Byte-level: a file committed before #1477 has neither key, and must not churn.
+    expect(byName.get('Bare')!.contents).not.toMatch(/"description"|"annotations"/);
+    const tagged = JSON.parse(byName.get('Tagged')!.contents).data;
+    expect(tagged).toMatchObject({ description: 'Feed', annotations: ['prod'] });
+    // ...and parsing a file without the keys leaves them absent (no default re-added).
+    const parsed = parseWorkspaceFiles([byName.get('Bare')!]);
+    expect(parsed.connections[0]!.data).not.toHaveProperty('description');
+    expect(parsed.connections[0]!.data).not.toHaveProperty('annotations');
+  });
+
   it('serializes ONLY the latest version of each pipeline (not the whole trail)', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'My Pipeline' });

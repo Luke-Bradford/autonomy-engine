@@ -3,6 +3,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import {
   ConnectionKindSchema,
   ConnectionPublicSchema,
+  ConnectionMetadataWriteShape,
   NewConnectionSchema,
   canonicalStringify,
   type Connection,
@@ -55,6 +56,8 @@ const ConnectionWriteBodySchema = NewConnectionSchema.omit({
    * `createConnection`.
    */
   parameters: z.array(z.string().min(1)).optional(),
+  // #1477 — `.optional()` for the same reason as `parameters` (see the shape).
+  ...ConnectionMetadataWriteShape,
 });
 
 function toPublic(connection: Connection) {

@@ -1,5 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import {
+  ConnectionMetadataWriteSchema,
   ConnectionSchema,
   NewConnectionSchema,
   connectionNotReadyReason,
@@ -36,6 +37,11 @@ export function createConnection(
   opts?: CreateResourceOptions,
 ): Connection {
   const parsed = NewConnectionSchema.parse(input);
+  // #1477 — the read-tolerant schema above does not bound these; the write does.
+  ConnectionMetadataWriteSchema.parse({
+    description: parsed.description,
+    annotations: parsed.annotations,
+  });
   const now = Date.now();
   const row: Connection = {
     id: newId('conn'),
@@ -129,6 +135,11 @@ export function updateConnection(
 ): Connection | null {
   const existing = getConnection(db, id);
   if (!existing) return null;
+  // #1477 — what the patch writes is bounded; a field it leaves alone is not re-judged.
+  ConnectionMetadataWriteSchema.parse({
+    description: patch.description,
+    annotations: patch.annotations,
+  });
   const merged = { ...existing, ...patch };
   const updated = ConnectionSchema.parse({
     ...merged,

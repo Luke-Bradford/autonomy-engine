@@ -24,8 +24,3 @@ export const VARIABLE_COLUMNS = contractColumns([{ key: 'default', header: 'Defa
 export const OUTPUT_COLUMNS = contractColumns([
   { key: 'optional', header: 'Optional', width: 'check' },
 ]);
-
-/** A pipeline's annotations (General tab): one text box a row. */
-export const ANNOTATION_COLUMNS: readonly RowTableColumn[] = [
-  { key: 'annotation', header: 'Annotation' },
-];

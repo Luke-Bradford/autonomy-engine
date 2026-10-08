@@ -5,9 +5,7 @@ import type { createCanvasStore } from './canvasStore';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import { DockSection } from '../../lib/form/DockSection';
 import { AutoGrowTextarea } from '../../lib/form/AutoGrowTextarea';
-import { ContractSection } from './ContractEditor';
-import { ANNOTATION_COLUMNS } from './contractColumns';
-import { RemoveRowButton, RowActions } from '../../lib/form/RowTable';
+import { AnnotationRows } from '../../lib/form/AnnotationRows';
 
 type Store = ReturnType<typeof createCanvasStore>;
 
@@ -45,32 +43,14 @@ export function PipelineGeneral({ store }: { store: Store }) {
           )}
         </LabelledControl>
       </DockSection>
-      <ContractSection
-        heading="Annotations"
-        hint={FORM_SECTION_HINTS.pipeline.annotations}
-        columns={ANNOTATION_COLUMNS}
-        count={annotations.length}
-        addLabel="Add annotation"
-        onAdd={() => store.getState().addAnnotation()}
-      >
-        {annotations.map((text, i) => (
-          <tr key={i}>
-            <td>
-              <input
-                aria-label={`annotation ${i + 1}`}
-                value={text}
-                onChange={(e) => store.getState().updateAnnotation(i, e.target.value)}
-              />
-            </td>
-            <RowActions>
-              <RemoveRowButton
-                label={`remove annotation ${i + 1}`}
-                onRemove={() => store.getState().removeAnnotation(i)}
-              />
-            </RowActions>
-          </tr>
-        ))}
-      </ContractSection>
+      <DockSection heading="Annotations" hint={FORM_SECTION_HINTS.pipeline.annotations}>
+        <AnnotationRows
+          annotations={annotations}
+          onAdd={() => store.getState().addAnnotation()}
+          onUpdate={(i, text) => store.getState().updateAnnotation(i, text)}
+          onRemove={(i) => store.getState().removeAnnotation(i)}
+        />
+      </DockSection>
     </>
   );
 }

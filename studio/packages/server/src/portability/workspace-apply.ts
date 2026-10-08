@@ -1067,6 +1067,11 @@ export function applyWorkspace(
           kind: data.kind,
           config: data.config,
           parameters: data.parameters,
+          // #1477 — the file is authoritative: an absent key is a file with
+          // none (it is written without the key when empty), so it CLEARS a
+          // value this workspace holds rather than leaving it in place.
+          description: data.description ?? '',
+          annotations: data.annotations ?? [],
         };
         if (existing === null) {
           // secretRef is NEVER imported (secrets never in git) — a fresh

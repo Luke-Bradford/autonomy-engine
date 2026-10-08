@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { annotationsWriteSchema, DESCRIPTION_MAX_CHARS } from './pipeline.js';
 
 /**
  * A named worker binding (ADF "Linked Service" analog). `kind` selects which
@@ -232,6 +233,17 @@ export const ConnectionSchema = z.object({
    * also refuse a declared parameter naming a sink path.
    */
   parameters: z.array(z.string().min(1)).default([]),
+  /**
+   * #1477 — what the connection is for, and its tags (ADF's linked-service
+   * Description and Annotations). Unbounded on READ, like a pipeline version's:
+   * the bounds are the WRITE rules (`ConnectionMetadataWriteSchema`), which the
+   * repo layer applies on every create and patch — the route, an import and a
+   * git apply alike. The DB columns are NOT NULL with a DEFAULT, so the
+   * `.default()`s here only ever fill a file written before the fields existed,
+   * where "none" is the true value.
+   */
+  description: z.string().default(''),
+  annotations: z.array(z.string()).default([]),
   secretRef: z.string().min(1).nullable(),
   /**
    * #3 G8a — secret-readiness (see `SecretStatusSchema`) + operator enable flag.
@@ -268,6 +280,33 @@ export const NewConnectionSchema = ConnectionSchema.omit({
 // package uses the PRE-parse type, so a field with `.default()` elsewhere
 // stays optional for callers instead of appearing spuriously required.
 export type NewConnection = z.input<typeof NewConnectionSchema>;
+
+/**
+ * #1477 — the write-body shape of a connection's Description and Annotations,
+ * shared by the server's route body and the web form's `ConnectionWriteSchema`
+ * so both refuse the same thing. `.optional()`, NEVER `.default()`: the PATCH
+ * handler parses the body through `.partial()`, and Zod still applies a default
+ * there, so a rename that omits them would silently wipe both (the L13b
+ * `parameters` trap). Absent leaves the stored value alone; `createConnection`
+ * fills a create's absent keys from `NewConnectionSchema`'s read defaults.
+ */
+export const ConnectionMetadataWriteShape = {
+  description: z
+    .string()
+    .max(DESCRIPTION_MAX_CHARS, {
+      message: `the description can be at most ${DESCRIPTION_MAX_CHARS} characters`,
+    })
+    .optional(),
+  annotations: annotationsWriteSchema('connection').optional(),
+};
+
+/**
+ * #1477 — the same rules as one object, for the repo layer: every write path
+ * (the route, an import, a git apply) reaches `createConnection` /
+ * `updateConnection`, so the bounds are enforced there once rather than only on
+ * the HTTP body — as a pipeline version's are by its write schema.
+ */
+export const ConnectionMetadataWriteSchema = z.object(ConnectionMetadataWriteShape);
 
 /**
  * Client-facing projection with `secretRef` stripped, so a value never

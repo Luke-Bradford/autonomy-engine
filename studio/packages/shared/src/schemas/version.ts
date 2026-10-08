@@ -480,6 +480,14 @@
 // which is the SAFE polarity on its own (the save gate then refuses the
 // parallel writer rather than admitting it), but it rides the same bump because
 // no doc can use it without a `set`/`append` node.
+// NO BUMP for #1477: a connection gained `description` + `annotations`
+// (ADF's linked-service Description and Annotations). Both are optional on the
+// connection envelope, and `ConnectionExportDataSchema` is a plain `z.object`,
+// so a pre-#1477 build parses such a file and strips them. Nothing a run does
+// reads either: the connection reaches the same system with the same config,
+// so the older build loses descriptive metadata and nothing else — the inert
+// additive shape M1 and M3 did not bump for, and the one #1 F8a's pipeline
+// description/annotations rode in without a bump.
 export const CATALOG_VERSION = 33;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did

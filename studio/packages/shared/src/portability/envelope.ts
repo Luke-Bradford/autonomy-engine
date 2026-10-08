@@ -205,6 +205,16 @@ export const ConnectionExportDataSchema = ConnectionPublicSchema.omit({
 }).extend({
   requiresSecret: z.boolean(),
   resourceId: exportResourceId,
+  /**
+   * #1477 — OPTIONAL here, with no default, unlike the read schema. An empty
+   * description or annotation list is written WITHOUT the key
+   * (`omitEmptyLateFields`), so every connection file committed before #1477
+   * keeps its exact bytes; a default would put the key straight back at the
+   * envelope parse. Absent means none: the import and the git apply both fill
+   * `''` / `[]`.
+   */
+  description: z.string().optional(),
+  annotations: z.array(z.string()).optional(),
 });
 export type ConnectionExportData = z.infer<typeof ConnectionExportDataSchema>;
 

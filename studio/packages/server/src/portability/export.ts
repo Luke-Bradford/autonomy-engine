@@ -253,6 +253,8 @@ export function exportConnection(db: Db, id: string, ownerId: string): ExportEnv
   if (!connection || connection.ownerId !== ownerId) throw new NotFoundError('connection', id);
 
   const { secretRef, ...rest } = connection;
+  // #1477 — empty description / annotations omitted, as in the git file.
+  omitEmptyLateFields(rest);
   const data: ConnectionExportData = ConnectionExportDataSchema.parse({
     ...rest,
     requiresSecret: secretRef !== null,
