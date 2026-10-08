@@ -1,8 +1,10 @@
 import {
+  BUNDLE_KIND,
   ExportEnvelopeSchema,
-  ImportResultSchema,
+  ImportResponseSchema,
   type ImportAttentionItem,
   type ExportKind,
+  type ImportResponse,
   type ImportResult,
 } from '@autonomy-studio/shared';
 import { apiFetch, apiFetchText } from './client';
@@ -62,6 +64,11 @@ export function exportTrigger(id: string, signal?: AbortSignal): Promise<string>
 /** #1143 — the store travels as its connection's `resourceId`, never a local id. */
 export function exportDataset(id: string, signal?: AbortSignal): Promise<string> {
   return apiFetchText(exportPath('datasets', id), { signal });
+}
+
+/** #1586 — the given pipelines as ONE file `importEnvelope` reads back. */
+export function exportPipelines(ids: readonly string[], signal?: AbortSignal): Promise<string> {
+  return apiFetchText('/api/pipelines/export', { body: { ids }, signal });
 }
 
 /** #844 GL6 — a global's file: `{ name, type, value, description }`, cleartext. */
@@ -131,6 +138,19 @@ export function foreignEnvelopeKind(
   listKind: ImportResult['kind'],
 ): ExportKind | null {
   const kind: unknown = (envelope as { kind?: unknown }).kind;
+  // #1586 — a bundle belongs where its MEMBERS do, so it is judged by them:
+  // the first member of another known kind refuses the file. A malformed
+  // bundle is the server's to refuse, like an unknown kind.
+  if (kind === BUNDLE_KIND) {
+    const items: unknown = (envelope as { items?: unknown }).items;
+    if (!Array.isArray(items)) return null;
+    for (const item of items) {
+      if (item === null || typeof item !== 'object') continue;
+      const foreign = foreignEnvelopeKind(item, listKind);
+      if (foreign !== null) return foreign;
+    }
+    return null;
+  }
   if (typeof kind !== 'string' || !ENVELOPE_KINDS.has(kind)) return null;
   // #1114 — `ExportKind`, NOT `ImportResult['kind']`: `ENVELOPE_KINDS` derives
   // from `ExportEnvelopeSchema`, and a narrower cast would be a LIE the compiler
@@ -149,13 +169,13 @@ export function foreignEnvelopeKind(
 export function importEnvelope(
   envelope: unknown,
   opts: { connectionId?: string } = {},
-): Promise<ImportResult> {
+): Promise<ImportResponse> {
   const query =
     opts.connectionId === undefined ? '' : `?connectionId=${encodeURIComponent(opts.connectionId)}`;
   return apiFetch(`/api/import${query}`, {
     method: 'POST',
     body: envelope,
-    schema: ImportResultSchema,
+    schema: ImportResponseSchema,
   });
 }
 

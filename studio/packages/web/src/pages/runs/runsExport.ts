@@ -1,12 +1,13 @@
 /** #1484 OR35 M1 — the runs CSV export's wording and file name (`RunsExportButton`). */
 
+import { fileTimestamp } from '../../api/download';
+
 /**
  * The file name for an export taken at `now`: `runs-YYYYMMDD-HHmmssZ.csv`, in
  * UTC. No `:` in it, which Windows refuses in a file name.
  */
 export function runsExportFileName(now: number): string {
-  const stamp = new Date(now).toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
-  return `runs-${stamp}Z.csv`;
+  return `runs-${fileTimestamp(now)}.csv`;
 }
 
 /** What the page says when an export stopped at the server's cap. */

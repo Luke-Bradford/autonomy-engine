@@ -19,8 +19,13 @@ import {
   listPipelines,
 } from '../../repo/index.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
-import { exportConnection, exportPipeline, exportTrigger } from '../export.js';
-import { importEnvelope } from '../import.js';
+import {
+  exportConnection,
+  exportPipeline,
+  exportPipelineBundle,
+  exportTrigger,
+} from '../export.js';
+import { importBundle, importEnvelope } from '../import.js';
 
 describe('importEnvelope: pipeline', () => {
   it('round-trip: new ids, importer ownerId, same structural content, unresolved connectionRef reported', () => {
@@ -1297,5 +1302,144 @@ describe('#3 G1 — portable import mints fresh resourceIds', () => {
     const imported = listPipelines(db, 'owner-b').find((p) => p.id === result.pipeline.id);
     expect(imported!.resourceId).toBeTruthy();
     expect(listPipelineVersions(db, result.pipeline.id)[0]!.resourceId).toBeTruthy();
+  });
+});
+
+describe('#1586 importBundle', () => {
+  /** A pipeline whose one version binds a connection, so its import reports
+   * an `unresolvedConnectionRef` — the per-member attention under test. */
+  function seed(db: ReturnType<typeof freshDb>['db'], name: string, bound: boolean) {
+    const connection = createConnection(db, {
+      ownerId: 'owner-a',
+      name: `${name} conn`,
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name });
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: { prompt: 'p' },
+          ...(bound ? { connectionId: connection.id } : {}),
+          position: { x: 0, y: 0 },
+        },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+    return pipeline;
+  }
+
+  it('imports every member, in order, each with its own attention items', () => {
+    const { db } = freshDb();
+    const a = seed(db, 'Alpha', true);
+    const b = seed(db, 'Beta', false);
+    const bundle = exportPipelineBundle(db, [b.id, a.id, b.id], 'owner-a');
+    // De-duplicated, first occurrence kept.
+    expect(bundle.items).toHaveLength(2);
+
+    const result = importBundle(db, 'owner-b', JSON.parse(JSON.stringify(bundle)));
+
+    expect(result.kind).toBe('bundle');
+    const items = result.items.map((r) =>
+      r.kind === 'pipeline' ? { name: r.pipeline.name, attention: r.attention } : r.kind,
+    );
+    expect(items).toEqual([
+      { name: 'Beta', attention: [] },
+      { name: 'Alpha', attention: [{ type: 'unresolvedConnectionRef', nodeId: 'n1' }] },
+    ]);
+    expect(
+      listPipelines(db, 'owner-b')
+        .map((p) => p.name)
+        .sort(),
+    ).toEqual(['Alpha', 'Beta']);
+  });
+
+  it('a member refused mid-way rolls back the members already written, and is named', () => {
+    const { db } = freshDb();
+    const a = seed(db, 'Alpha', false);
+    const b = seed(db, 'Beta', false);
+    const bundle = JSON.parse(JSON.stringify(exportPipelineBundle(db, [a.id, b.id], 'owner-a')));
+    // The SECOND member breaks a doc rule (a forward cycle) the parse cannot
+    // see, so the first member is really written before it is refused.
+    const version = bundle.items[1].data.versions[0];
+    const node = version.nodes[0];
+    version.nodes = [
+      { ...node, id: 'x' },
+      { ...node, id: 'y' },
+    ];
+    version.edges = [
+      { id: 'e1', from: 'x', to: 'y', on: 'success' },
+      { id: 'e2', from: 'y', to: 'x', on: 'success' },
+    ];
+
+    expect(() => importBundle(db, 'owner-b', bundle)).toThrow(InvalidPipelineDocError);
+    expect(() => importBundle(db, 'owner-b', bundle)).toThrow(/^Item 2 \(pipeline “Beta”\): /);
+    expect(listPipelines(db, 'owner-b')).toEqual([]);
+  });
+
+  it('a write-schema refusal is an ImportError naming the member', () => {
+    const { db } = freshDb();
+    const a = seed(db, 'Alpha', false);
+    const bundle = JSON.parse(JSON.stringify(exportPipelineBundle(db, [a.id, a.id], 'owner-a')));
+    bundle.items.push(JSON.parse(JSON.stringify(bundle.items[0])));
+    // Passes the envelope's lenient folder, refused by the pipeline write schema.
+    bundle.items[1].data.pipeline.folder = '/';
+    expect(() => importBundle(db, 'owner-b', bundle)).toThrow(ImportError);
+    expect(() => importBundle(db, 'owner-b', bundle)).toThrow(/^Item 2 \(pipeline “Alpha”\): /);
+    expect(listPipelines(db, 'owner-b')).toEqual([]);
+  });
+
+  it('clips a long pipeline name in the label — a name has no length cap', () => {
+    const { db } = freshDb();
+    const a = seed(db, 'A'.repeat(500), false);
+    const bundle = JSON.parse(JSON.stringify(exportPipelineBundle(db, [a.id], 'owner-a')));
+    bundle.items[0].data.pipeline.folder = '/';
+    expect(() => importBundle(db, 'owner-b', bundle)).toThrow(
+      new RegExp(`^Item 1 \\(pipeline “A{59}…”\\): `),
+    );
+  });
+
+  it('carries pipelines only — any other member refuses the file before a write', () => {
+    const { db } = freshDb();
+    const a = seed(db, 'Alpha', false);
+    const connection = createConnection(db, {
+      ownerId: 'owner-a',
+      name: 'Other',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const bundle = JSON.parse(JSON.stringify(exportPipelineBundle(db, [a.id], 'owner-a')));
+    bundle.items.push(exportConnection(db, connection.id, 'owner-a'));
+    expect(() => importBundle(db, 'owner-b', bundle)).toThrow(
+      /^Item 2: a bundle carries pipelines only, and this is a connection export/,
+    );
+    expect(listPipelines(db, 'owner-b')).toEqual([]);
+  });
+
+  it('refuses a chosen store', () => {
+    const { db } = freshDb();
+    const a = seed(db, 'Alpha', false);
+    const bundle = exportPipelineBundle(db, [a.id], 'owner-a');
+    expect(() =>
+      importBundle(db, 'owner-b', bundle, {
+        resolveStore: () => {
+          throw new Error('never resolved');
+        },
+      }),
+    ).toThrow(/only a dataset lives in a store/);
+  });
+
+  it('exportPipelineBundle 404s an id the owner does not hold', () => {
+    const { db } = freshDb();
+    const a = seed(db, 'Alpha', false);
+    expect(() => exportPipelineBundle(db, [a.id], 'owner-b')).toThrow(/not found/i);
   });
 });

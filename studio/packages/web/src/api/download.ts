@@ -57,6 +57,15 @@ export function fileSlug(text: string): string {
   return text.toLowerCase().replace(NON_SLUG, '-').replace(/^-|-$/g, '');
 }
 
+/**
+ * A file-name timestamp for an export taken at `now`: `YYYYMMDD-HHmmssZ`, in
+ * UTC. No `:` in it, which Windows refuses in a file name. Lifted from the runs
+ * CSV export (#1484) when the pipelines bundle (#1586) became the second user.
+ */
+export function fileTimestamp(now: number): string {
+  return `${new Date(now).toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15)}Z`;
+}
+
 /** Everything outside this set collapses to a single hyphen. */
 const NON_SLUG = /[^a-z0-9]+/g;
 

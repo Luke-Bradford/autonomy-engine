@@ -4,6 +4,7 @@ import { DatasetSchema } from '../schemas/dataset.js';
 import { GlobalParamSchema } from '../schemas/global-param.js';
 import { PipelineSchema, PipelineVersionSchema } from '../schemas/pipeline.js';
 import { TriggerPublicSchema } from '../schemas/trigger.js';
+import { BUNDLE_KIND } from './envelope.js';
 
 /**
  * One thing the importer must follow up on after `POST /api/import`
@@ -94,3 +95,19 @@ export const ImportResultSchema = z.discriminatedUnion('kind', [
   }),
 ]);
 export type ImportResult = z.infer<typeof ImportResultSchema>;
+
+/**
+ * #1586 — the `201` body of `POST /api/import` for a bundle: one
+ * `ImportResult` per member, in the bundle's order, each with its own
+ * attention items. All or nothing — a refused member creates none of them.
+ */
+export const ImportBundleResultSchema = z.object({
+  kind: z.literal(BUNDLE_KIND),
+  items: z.array(ImportResultSchema),
+});
+export type ImportBundleResult = z.infer<typeof ImportBundleResultSchema>;
+
+/** Every body `POST /api/import` can answer `201` with: one envelope's result,
+ * or a bundle's. */
+export const ImportResponseSchema = z.union([ImportResultSchema, ImportBundleResultSchema]);
+export type ImportResponse = z.infer<typeof ImportResponseSchema>;

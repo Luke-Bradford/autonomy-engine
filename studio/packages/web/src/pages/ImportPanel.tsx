@@ -10,6 +10,7 @@ import {
   type ImportedResource,
 } from '../api/portability';
 import {
+  isBundleEnvelope,
   type ConnectionPublic,
   type ExportKind,
   type ImportAttentionItem,
@@ -127,8 +128,14 @@ export function ImportPanel({
   /** A file that belongs to another section: refused locally, nothing sent.
    * `ExportKind`, not `ImportedResource['kind']` — this can be a kind the import
    * route refuses outright (#1114). */
-  const [foreign, setForeign] = useState<{ kind: ExportKind; name: string } | null>(null);
-  const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const [foreign, setForeign] = useState<{
+    kind: ExportKind;
+    name: string;
+    bundle: boolean;
+  } | null>(null);
+  /** One per resource created: a single file makes one, a bundle (#1586) one
+   * per member. */
+  const [outcomes, setOutcomes] = useState<Outcome[] | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   /**
@@ -149,7 +156,7 @@ export function ImportPanel({
       setBusy(true);
       setError(null);
       setForeign(null);
-      setOutcome(null);
+      setOutcomes(null);
       try {
         const envelope = parseEnvelopeText(await file.text(), file.name);
         const elsewhere = foreignEnvelopeKind(envelope, listKind);
@@ -161,14 +168,17 @@ export function ImportPanel({
           // file.text()` above is a suspension point, so the panel can already
           // be unmounted by the time we get here.
           if (!mounted.current) return;
-          setForeign({ kind: elsewhere, name: file.name });
+          setForeign({ kind: elsewhere, name: file.name, bundle: isBundleEnvelope(envelope) });
           return;
         }
         const result =
           listKind === 'dataset' && chosen !== ''
             ? await importEnvelope(envelope, { connectionId: chosen })
             : await importEnvelope(envelope);
-        const resource = describeImported(result);
+        const created = (result.kind === 'bundle' ? result.items : [result]).map((r) => ({
+          resource: describeImported(r),
+          attention: r.attention,
+        }));
         // Refresh BEFORE reporting, so the row is on screen when the message
         // names it — as strongly as an awaited refresh can promise that, which
         // is weaker than it sounds (see the prop's docblock) — but catch its
@@ -188,7 +198,7 @@ export function ImportPanel({
           refreshFailure = messageOf(refreshErr);
         }
         if (!mounted.current) return;
-        setOutcome({ resource, attention: result.attention });
+        setOutcomes(created);
         if (refreshFailure !== null) {
           setError(`Imported, but this list could not be reloaded: ${refreshFailure}`);
         }
@@ -270,21 +280,51 @@ export function ImportPanel({
       )}
       {foreign && (
         <p className="error" role="alert">
-          “{foreign.name}” is a {foreign.kind} export, and this is the {SECTION[listKind].label}{' '}
-          list. Import it from{' '}
+          “{foreign.name}” {foreign.bundle ? 'carries' : 'is'} a {foreign.kind} export, and this is
+          the {SECTION[listKind].label} list. Import it from{' '}
           <Link to={SECTION[foreign.kind].path}>{SECTION[foreign.kind].label}</Link>. Nothing was
           created.
         </p>
       )}
-      {outcome && <ImportOutcome outcome={outcome} />}
+      {outcomes && <ImportOutcomes outcomes={outcomes} />}
     </section>
+  );
+}
+
+/** #1586 — one file, one resource: as before. A bundle: a count, then the
+ * same account of each member, in the file's order. */
+function ImportOutcomes({ outcomes }: { outcomes: Outcome[] }) {
+  const [only] = outcomes;
+  if (outcomes.length === 1 && only !== undefined) {
+    return (
+      <div className="notice" role="status">
+        <ImportOutcome outcome={only} />
+      </div>
+    );
+  }
+  // A bundle carries pipelines only (`importBundle`); anything else is named
+  // generically rather than pluralised by string-gluing a kind.
+  const noun = outcomes.every((o) => o.resource.kind === 'pipeline') ? 'pipelines' : 'resources';
+  return (
+    <div className="notice" role="status">
+      <p>
+        Imported {outcomes.length} {noun} from one file.
+      </p>
+      <ul className="import-outcomes">
+        {outcomes.map((outcome) => (
+          <li key={outcome.resource.id}>
+            <ImportOutcome outcome={outcome} />
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
 function ImportOutcome({ outcome }: { outcome: Outcome }) {
   const { resource, attention } = outcome;
   return (
-    <div className="notice" role="status">
+    <>
       <p>
         {/* The id, always. `/api/import` mints a new id and does NOT dedupe by
             name, so importing one file twice leaves two resources with the
@@ -307,6 +347,6 @@ function ImportOutcome({ outcome }: { outcome: Outcome }) {
           </ul>
         </>
       )}
-    </div>
+    </>
   );
 }

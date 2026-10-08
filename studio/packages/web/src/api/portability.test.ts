@@ -104,6 +104,20 @@ describe('parseEnvelopeText', () => {
 });
 
 describe('foreignEnvelopeKind', () => {
+  // #1586 — a bundle belongs where its members do: one foreign member refuses
+  // the whole file unsent, and a malformed bundle goes to the server.
+  it('judges a bundle by its members', () => {
+    const bundle = (...kinds: unknown[]) => ({
+      kind: 'bundle',
+      items: kinds.map((kind) => ({ kind })),
+    });
+    expect(foreignEnvelopeKind(bundle('pipeline', 'pipeline'), 'pipeline')).toBeNull();
+    expect(foreignEnvelopeKind(bundle('pipeline', 'connection'), 'pipeline')).toBe('connection');
+    expect(foreignEnvelopeKind(bundle('pipeline', 'something-new'), 'pipeline')).toBeNull();
+    expect(foreignEnvelopeKind({ kind: 'bundle', items: 'nope' }, 'pipeline')).toBeNull();
+    expect(foreignEnvelopeKind({ kind: 'bundle', items: [null, 3] }, 'pipeline')).toBeNull();
+  });
+
   it('names the section a mis-picked file belongs to, so it can be refused unsent', () => {
     expect(foreignEnvelopeKind({ kind: 'connection' }, 'pipeline')).toBe('connection');
     expect(foreignEnvelopeKind({ kind: 'pipeline' }, 'trigger')).toBe('pipeline');

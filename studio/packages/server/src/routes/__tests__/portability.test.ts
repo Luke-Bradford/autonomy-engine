@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import {
   CATALOG_VERSION,
   ISSUE_LIST_CAP,
+  MAX_BUNDLE_ITEMS,
   SCHEMA_VERSION,
   canonicalStringify,
 } from '@autonomy-studio/shared';
@@ -494,6 +495,107 @@ describe('portability routes (export + import)', () => {
       });
       expect(res.statusCode).toBe(400);
       expect(res.json().error).toBe('import_error');
+    });
+  });
+
+  describe('#1586 POST /api/pipelines/export (bundle)', () => {
+    async function seedPipeline(name: string, prompt = 'p') {
+      const pipeline = createPipeline(app.db, { ownerId: 'local', name });
+      createPipelineVersion(app.db, {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [{ id: 'n1', type: 'llm_call', config: { prompt }, position: { x: 0, y: 0 } }],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+      return pipeline;
+    }
+
+    it('serves ONE canonical file that POST /api/import reads back as every pipeline', async () => {
+      const a = await seedPipeline(`Bundle A ${Date.now()}`);
+      const b = await seedPipeline(`Bundle B ${Date.now()}`);
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines/export',
+        payload: { ids: [b.id, a.id] },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toContain('application/json');
+      const bundle = res.json();
+      expect(res.body).toBe(canonicalStringify(bundle));
+      expect(bundle).toMatchObject({ kind: 'bundle', bundleVersion: 1 });
+      expect(
+        bundle.items.map((e: { data: { pipeline: { name: string } } }) => e.data.pipeline.name),
+      ).toEqual([b.name, a.name]);
+
+      const imported = await app.inject({ method: 'POST', url: '/api/import', payload: bundle });
+      expect(imported.statusCode).toBe(201);
+      const result = imported.json();
+      expect(result.kind).toBe('bundle');
+      expect(result.items.map((r: { pipeline: { name: string } }) => r.pipeline.name)).toEqual([
+        b.name,
+        a.name,
+      ]);
+      expect(
+        result.items.every(
+          (r: { pipeline: { id: string } }) => ![a.id, b.id].includes(r.pipeline.id),
+        ),
+      ).toBe(true);
+    });
+
+    it('404s the whole request when one id is not the caller’s, exporting nothing', async () => {
+      const mine = await seedPipeline(`Mine ${Date.now()}`);
+      const other = createPipeline(app.db, { ownerId: 'someone-else', name: 'Not mine' });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines/export',
+        payload: { ids: [mine.id, other.id] },
+      });
+      expect(res.statusCode).toBe(404);
+      expect(res.body).not.toContain('Not mine');
+    });
+
+    it.each([
+      ['no ids', { ids: [] }],
+      ['too many ids', { ids: Array.from({ length: MAX_BUNDLE_ITEMS + 1 }, (_, i) => `p${i}`) }],
+      ['no body field', {}],
+    ])('refuses %s as a validation error', async (_label, payload) => {
+      const res = await app.inject({ method: 'POST', url: '/api/pipelines/export', payload });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('validation_error');
+    });
+
+    it('refuses a bundle larger than an import can read back, rather than serving it', async () => {
+      const big = 'x'.repeat(600 * 1024);
+      const a = await seedPipeline(`Big A ${Date.now()}`, big);
+      const b = await seedPipeline(`Big B ${Date.now()}`, big);
+      const one = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines/export',
+        payload: { ids: [a.id] },
+      });
+      expect(one.statusCode).toBe(200);
+      const both = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines/export',
+        payload: { ids: [a.id, b.id] },
+      });
+      expect(both.statusCode).toBe(400);
+      expect(both.json().message).toMatch(
+        /^These 2 pipelines export to 1\.\d MiB, over the 1\.0 MiB an import can read back/,
+      );
+    });
+
+    it('an import body over the limit is a 413 that says so, not "Malformed request"', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/import',
+        headers: { 'content-type': 'application/json' },
+        payload: JSON.stringify({ kind: 'bundle', pad: 'x'.repeat(1024 * 1024) }),
+      });
+      expect(res.statusCode).toBe(413);
+      expect(res.json().message).toBe('The request is larger than the 1 MiB this server accepts.');
     });
   });
 

@@ -45,6 +45,7 @@ import {
 } from './util/log-redaction.js';
 import { registerAuthHook } from './auth/principal.js';
 import { registerErrorHandler } from './errors.js';
+import { REQUEST_BODY_LIMIT_BYTES } from './limits.js';
 import { connectionsRoutes } from './routes/connections.js';
 import { datasetsRoutes } from './routes/datasets.js';
 import { secretsRoutes } from './routes/secrets.js';
@@ -260,15 +261,6 @@ const ALARM_TICK_MS = 1_000;
  * pending sweep never holds the process open at shutdown.
  */
 const RETENTION_SWEEP_MS = 60 * 60 * 1000;
-
-/**
- * Max request body size. Equal to Fastify's own default (1 MiB) — set
- * EXPLICITLY so the bound is a stated decision, not an inherited default worth
- * re-verifying on every Fastify upgrade. It is the upstream cap the error
- * handler's `ISSUE_LIST_CAP` complements: this bounds what a caller can POST;
- * that bounds what a validation failure of it returns (#496).
- */
-const REQUEST_BODY_LIMIT_BYTES = 1024 * 1024;
 
 export interface BuildAppOptions {
   /** Overrides `process.env.DB_PATH` / the built-in default. Call-time only — never a module-eval-time global. */

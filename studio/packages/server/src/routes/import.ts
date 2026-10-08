@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { FastifyPluginAsync } from 'fastify';
-import { importEnvelope } from '../portability/index.js';
+import { isBundleEnvelope } from '@autonomy-studio/shared';
+import { importBundle, importEnvelope } from '../portability/index.js';
 import { requireOwnedConnection } from './util.js';
 
 /**
@@ -28,14 +29,14 @@ export const importRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post('/api/import', async (request, reply) => {
     const { connectionId } = ImportQuerySchema.parse(request.query);
-    const result = importEnvelope(
-      db,
-      request.principal.ownerId,
-      request.body,
+    const opts =
       connectionId === undefined
         ? {}
-        : { resolveStore: () => requireOwnedConnection(db, request.principal, connectionId) },
-    );
+        : { resolveStore: () => requireOwnedConnection(db, request.principal, connectionId) };
+    // #1586 — a bundle (several envelopes, all or nothing) or one envelope.
+    const result = isBundleEnvelope(request.body)
+      ? importBundle(db, request.principal.ownerId, request.body, opts)
+      : importEnvelope(db, request.principal.ownerId, request.body, opts);
     reply.status(201).send(result);
   });
 };

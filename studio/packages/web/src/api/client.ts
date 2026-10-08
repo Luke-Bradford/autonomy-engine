@@ -198,9 +198,21 @@ export async function apiFetch<T = unknown>(path: string, opts: ApiRequest<T> = 
  */
 export async function apiFetchText(
   path: string,
-  opts: { signal?: AbortSignal } = {},
+  // #1586 — `body` makes it a JSON POST: the pipelines bundle export names its
+  // ids in a body, and answers with a file like every GET export.
+  opts: { signal?: AbortSignal; body?: unknown } = {},
 ): Promise<string> {
-  const res = await fetch(path, { method: 'GET', signal: opts.signal });
+  const res = await fetch(
+    path,
+    opts.body === undefined
+      ? { method: 'GET', signal: opts.signal }
+      : {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(opts.body),
+          signal: opts.signal,
+        },
+  );
   if (!res.ok) await throwApiError(res);
   return res.text();
 }

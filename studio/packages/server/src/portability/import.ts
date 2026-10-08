@@ -1,3 +1,4 @@
+import { ZodError } from 'zod';
 import {
   ConnectionPublicSchema,
   GlobalParamCreateBodySchema,
@@ -5,10 +6,13 @@ import {
   globalParamResourceId,
   TriggerPublicSchema,
   parseAndUpgradeEnvelope,
+  formatZodIssues,
+  parseBundle,
   windowBindingErrors,
   type Connection,
   type ExportEnvelope,
   type ImportAttentionItem,
+  type ImportBundleResult,
   type ImportResult,
   type NewPipelineVersion,
   type Node,
@@ -21,6 +25,7 @@ import {
   createPipeline,
   createPipelineVersion,
   createTrigger,
+  InvalidPipelineDocError,
   getConnectionByResourceId,
   listOwnerGlobalParams,
 } from '../repo/index.js';
@@ -423,6 +428,15 @@ export function importEnvelope(
         'lives in a store',
     );
   }
+  return importParsedEnvelope(db, ownerId, envelope, opts.resolveStore?.());
+}
+
+function importParsedEnvelope(
+  db: Db,
+  ownerId: string,
+  envelope: ExportEnvelope,
+  store: Connection | undefined,
+): ImportResult {
   switch (envelope.kind) {
     case 'pipeline':
       return importPipelineEnvelope(db, ownerId, envelope);
@@ -431,8 +445,88 @@ export function importEnvelope(
     case 'trigger':
       return importTriggerEnvelope(db, ownerId, envelope);
     case 'dataset':
-      return importDatasetEnvelope(db, ownerId, envelope, opts.resolveStore?.());
+      return importDatasetEnvelope(db, ownerId, envelope, store);
     case 'global-param':
       return importGlobalParamEnvelope(db, ownerId, envelope);
   }
+}
+
+/**
+ * #1586 — a bundle, ALL OR NOTHING. Every member is parsed and upgraded first
+ * (`parseBundle`), so a malformed member refuses the file before any write;
+ * then ONE transaction imports each through the same path a single pipeline
+ * file takes, so a member refused mid-way (the doc gate, a write schema) rolls
+ * back the members already written. The pipeline import's own transaction
+ * nests as a SAVEPOINT inside this one (see `importPipelineEnvelope`).
+ *
+ * PIPELINES ONLY. The toolbar exports pipelines, and the other kinds would open
+ * paths a bundle cannot honour yet: a dataset needs a store chosen per file, a
+ * connection imported beside a dataset mints a fresh identity the dataset then
+ * cannot resolve, and two global parameters of one name would refuse each
+ * other with advice to edit a value that does not exist yet.
+ *
+ * The importer's refusals name the member — its position and pipeline name —
+ * because "pipeline doc invalid" from a 40-pipeline file says nothing about
+ * which: an `ImportError`, the doc gate and a write schema (`labelMemberError`).
+ * The name is clipped, since a pipeline name has no length cap and the doc
+ * gate's message is bounded at its source (`errors.ts`).
+ */
+export function importBundle(
+  db: Db,
+  ownerId: string,
+  raw: unknown,
+  opts: ImportOptions = {},
+): ImportBundleResult {
+  if (opts.resolveStore !== undefined) {
+    throw new ImportError(
+      'a store connection was chosen, but this is a bundle of pipelines — only a dataset lives in a store',
+    );
+  }
+  const envelopes = parseBundle(raw).map((envelope, i) => {
+    if (envelope.kind !== 'pipeline') {
+      throw new ImportError(
+        `Item ${i + 1}: a bundle carries pipelines only, and this is a ${envelope.kind} export — import it as its own file`,
+      );
+    }
+    return envelope;
+  });
+  return db.transaction(() => ({
+    kind: 'bundle' as const,
+    items: envelopes.map((envelope, i) => {
+      try {
+        return importPipelineEnvelope(db, ownerId, envelope);
+      } catch (err) {
+        throw labelMemberError(
+          err,
+          `Item ${i + 1} (pipeline “${clip(envelope.data.pipeline.name, LABEL_NAME_CHARS)}”)`,
+        );
+      }
+    }),
+  }));
+}
+
+/** How much of a pipeline name a member label quotes. */
+const LABEL_NAME_CHARS = 60;
+
+function clip(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
+/**
+ * A member's refusal, with the member named and its status kept: an
+ * `ImportError` stays an `import_error`, the doc gate's refusal keeps its class
+ * (and its `issues`) so `errors.ts` still answers `invalid_pipeline_doc`, and a
+ * write-schema `ZodError` — whose paths would point into the member, not the
+ * file — becomes an `ImportError` quoting the same value-free issues. Anything
+ * else is not a refusal and passes through unlabelled.
+ */
+function labelMemberError(err: unknown, label: string): unknown {
+  if (err instanceof ImportError) return new ImportError(`${label}: ${err.message}`);
+  if (err instanceof ZodError) {
+    return new ImportError(`${label}: ${formatZodIssues(err.issues)}`);
+  }
+  if (err instanceof InvalidPipelineDocError) {
+    err.message = `${label}: ${err.message}`;
+  }
+  return err;
 }

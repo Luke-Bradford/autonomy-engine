@@ -573,3 +573,108 @@ export function parseAndUpgradeEnvelope(
   }
   return result.data;
 }
+
+/**
+ * #1586 — the bundle format's own version. It versions the WRAPPER only: each
+ * member is a complete envelope with its own `schemaVersion`/`catalogVersion`
+ * and is upgraded on its own by `parseAndUpgradeEnvelope`, so a member schema
+ * bump never needs a bundle bump. A future wrapper change bumps this and adds
+ * its own upgrade, exactly as `SCHEMA_VERSION` does for a member.
+ */
+export const BUNDLE_VERSION = 1;
+
+/** The `kind` a bundle declares. Not a resource kind (`RESOURCE_KINDS`): a
+ * bundle has no row, no git file and no import of its own — it only carries
+ * envelopes that do. */
+export const BUNDLE_KIND = 'bundle';
+
+/** #1586 — the most members one bundle may carry: the export route refuses to
+ * name more, the import refuses to read more, and the toolbar says so before
+ * asking. In `shared`, unlike the server's other caps (`server/limits.ts`),
+ * because the web reads it too. */
+export const MAX_BUNDLE_ITEMS = 1000;
+
+/** #1586 — the body of `POST /api/pipelines/export`: the pipelines to bundle,
+ * in the order the file should carry them. */
+export const PipelineBundleExportBodySchema = z.object({
+  ids: z.array(z.string().min(1)).min(1).max(MAX_BUNDLE_ITEMS),
+});
+export type PipelineBundleExportBody = z.infer<typeof PipelineBundleExportBodySchema>;
+
+/**
+ * #1586 — several export envelopes in ONE file, which `POST /api/import`
+ * accepts and imports all-or-nothing (the Pipelines toolbar's Export). The
+ * ADF analogue is "Export ARM template": the whole selection as a file you can
+ * import back. A bundle of envelopes, rather than a new multi-resource `data`
+ * shape, so each member is byte-for-byte what its single export would be and
+ * the importer reuses the one per-kind path every single file takes.
+ *
+ * Describes what EXPORT emits. It is never the gate on raw input: `items` here
+ * are CURRENT-version envelopes, and an older member must be upgraded before it
+ * could pass — `parseBundle` is the import gate.
+ */
+export const ExportBundleSchema = z.object({
+  kind: z.literal(BUNDLE_KIND),
+  bundleVersion: z.number().int(),
+  exportedAt: z.number().int(),
+  items: z.array(ExportEnvelopeSchema).min(1),
+});
+export type ExportBundle = z.infer<typeof ExportBundleSchema>;
+
+/** Whether `raw` (a parsed object or JSON text) declares itself a bundle. Only
+ * the declaration: `parseBundle` judges the rest. */
+export function isBundleEnvelope(raw: unknown): boolean {
+  let parsed = raw;
+  if (typeof raw === 'string') {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return false;
+    }
+  }
+  return isPlainObject(parsed) && parsed.kind === BUNDLE_KIND;
+}
+
+/**
+ * The bundle counterpart of `parseAndUpgradeEnvelope`: checks the wrapper, then
+ * passes EVERY member through `parseAndUpgradeEnvelope` before returning, so a
+ * caller that writes nothing until this returns writes nothing for a bundle
+ * with one bad member. A member's refusal names its position ("Item 2: …"). A
+ * nested bundle is refused there too, as an unknown member kind — bundles do
+ * not nest.
+ */
+export function parseBundle(
+  raw: unknown,
+  upgraders: UpgraderRegistry = UPGRADERS,
+): ExportEnvelope[] {
+  const parsed = typeof raw === 'string' ? parseJson(raw) : raw;
+  if (!isPlainObject(parsed) || parsed.kind !== BUNDLE_KIND) {
+    throw new ImportError('Malformed import: expected a bundle');
+  }
+  const bundleVersion = parsed.bundleVersion;
+  if (typeof bundleVersion !== 'number' || !Number.isInteger(bundleVersion) || bundleVersion < 1) {
+    throw new ImportError('Malformed import: missing or invalid bundleVersion');
+  }
+  if (bundleVersion > BUNDLE_VERSION) {
+    throw new ImportError(
+      `Cannot import: bundleVersion ${bundleVersion} is newer than this build supports (${BUNDLE_VERSION})`,
+    );
+  }
+  const items = parsed.items;
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new ImportError('Malformed import: a bundle must carry at least one item');
+  }
+  if (items.length > MAX_BUNDLE_ITEMS) {
+    throw new ImportError(
+      `Cannot import: a bundle carries at most ${MAX_BUNDLE_ITEMS} items, and this one has ${items.length}`,
+    );
+  }
+  return items.map((item, i) => {
+    try {
+      return parseAndUpgradeEnvelope(item, upgraders);
+    } catch (err) {
+      if (err instanceof ImportError) throw new ImportError(`Item ${i + 1}: ${err.message}`);
+      throw err;
+    }
+  });
+}

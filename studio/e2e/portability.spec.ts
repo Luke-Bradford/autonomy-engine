@@ -4,6 +4,7 @@ import { fluentRootReady } from './support/theme';
 import { seedConnection, seedDataset } from './support/seedResources';
 import { chooseRowAction, rowMenuButton } from './support/rowMenu';
 import { createPipelineFromList, openImportDrawer } from './support/pipelinesPage';
+import { seedVersion } from './support/seedDoc';
 
 /**
  * #959 — export and import, end to end through a real browser.
@@ -87,6 +88,62 @@ test.describe('#959 portability', () => {
     // panel renders an `Open <name>` link of its own, so a link count here is
     // 3 and says nothing about how many pipelines exist.
     await expect(rowMenuButton(page, name)).toHaveCount(2);
+
+    await expectQuiet(page, problems);
+  });
+
+  // #1586 — the toolbar's Export: the pipelines SHOWN, as one file, which the
+  // Import drawer reads back as every one of them, each with its own rebind.
+  test('exports the shown pipelines as ONE file, and importing it restores them all', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const tag = `Bundled ${Date.now()}`;
+    const bound = `${tag} bound`;
+    const plain = `${tag} plain`;
+    const connectionId = await seedConnection(page, {
+      name: `${tag} conn`,
+      kind: 'http',
+      config: { baseUrl: 'https://example.invalid' },
+    });
+    await seedVersion(page, bound, {
+      nodes: [{ id: 'call', connectionId, position: { x: 0, y: 0 } }],
+    });
+    await seedVersion(page, plain, { nodes: [{ id: 'call', position: { x: 0, y: 0 } }] });
+
+    // Filtered to these two, so the file is exactly them whatever else the
+    // shared database holds.
+    await page.goto(`/#/author/pipelines?q=${encodeURIComponent(tag)}`);
+    await fluentRootReady(page);
+    await expect(rowMenuButton(page)).toHaveCount(2);
+
+    const exportButton = page.getByRole('button', { name: 'Export', exact: true });
+    await expect(exportButton).toHaveAttribute('aria-disabled', 'false');
+    const downloadPromise = page.waitForEvent('download');
+    await exportButton.click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toMatch(/^pipelines-\d{8}-\d{6}Z\.json$/);
+    const file = await download.path();
+    const chunks: Buffer[] = [];
+    for await (const chunk of await download.createReadStream()) chunks.push(Buffer.from(chunk));
+    const bundle = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+      kind: string;
+      items: { data: { pipeline: { name: string } } }[];
+    };
+    expect(bundle.kind).toBe('bundle');
+    expect(bundle.items.map((i) => i.data.pipeline.name).sort()).toEqual([bound, plain]);
+
+    await (await openImportDrawer(page)).getByLabel('Export file').setInputFiles(file as string);
+
+    const outcome = page.getByRole('status');
+    await expect(outcome).toContainText('Imported 2 pipelines from one file.');
+    await expect(outcome).toContainText(`Imported pipeline “${bound}”`);
+    await expect(outcome).toContainText(`Imported pipeline “${plain}”`);
+    // The bound pipeline's rebind, and only that one's.
+    await expect(outcome.getByText(/Node “call” has no connection/)).toHaveCount(1);
+    // Every pipeline is now there twice: the originals and the imports.
+    await expect(rowMenuButton(page, bound)).toHaveCount(2);
+    await expect(rowMenuButton(page, plain)).toHaveCount(2);
 
     await expectQuiet(page, problems);
   });

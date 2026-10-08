@@ -299,3 +299,15 @@ export const LOOKUP_BATCH_ROWS = 100;
  * the page tells the operator to narrow the filters; it is never cut silently.
  */
 export const RUNS_EXPORT_MAX_ROWS = 10_000;
+
+/**
+ * Max request body size. Equal to Fastify's own default (1 MiB) — set
+ * EXPLICITLY so the bound is a stated decision, not an inherited default worth
+ * re-verifying on every Fastify upgrade. It is the upstream cap the error
+ * handler's `ISSUE_LIST_CAP` complements: this bounds what a caller can POST;
+ * that bounds what a validation failure of it returns (#496).
+ *
+ * Moved here from `index.ts` in #1586: the pipelines bundle export refuses a
+ * file larger than this, because `POST /api/import` could never read it back.
+ */
+export const REQUEST_BODY_LIMIT_BYTES = 1024 * 1024;

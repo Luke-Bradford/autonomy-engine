@@ -215,6 +215,43 @@ describe('ImportPanel', () => {
     expect(items[1]).toHaveTextContent(/classify/);
   });
 
+  // #1586 — a bundle creates one resource per member, and each is reported
+  // with its own id, Open link and attention items.
+  it('reports every pipeline a bundle created, each with its own attention', async () => {
+    const first = pipelineResult();
+    importMock.mockResolvedValue({
+      kind: 'bundle',
+      items: [
+        first,
+        pipelineResult({
+          pipeline: { ...first.pipeline, id: 'pl_two', name: 'Second flow' },
+          attention: [{ type: 'unresolvedConnectionRef', nodeId: 'summarise' }],
+        }),
+      ],
+    });
+    const onImported = vi.fn();
+    renderWithRouter(<ImportPanel listKind="pipeline" onImported={onImported} />);
+
+    await pick(envelopeFile('{"kind":"bundle","items":[{"kind":"pipeline"}]}', 'pipelines.json'));
+
+    const status = await screen.findByRole('status');
+    expect(status).toHaveTextContent('Imported 2 pipelines from one file.');
+    expect(status).toHaveTextContent('Imported pipeline “Imported flow” as pl_new.');
+    expect(status).toHaveTextContent('Imported pipeline “Second flow” as pl_two.');
+    expect(screen.getByRole('link', { name: 'Open Second flow' })).toBeInTheDocument();
+    expect(status).toHaveTextContent(/Node “summarise” has no connection/);
+    expect(onImported).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a bundle carrying another section’s file BEFORE sending it', async () => {
+    renderWithRouter(<ImportPanel listKind="pipeline" onImported={vi.fn()} />);
+
+    await pick(envelopeFile('{"kind":"bundle","items":[{"kind":"pipeline"},{"kind":"trigger"}]}'));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/carries a trigger export/);
+    expect(importMock).not.toHaveBeenCalled();
+  });
+
   it('refuses a file belonging to another section BEFORE sending it anywhere', async () => {
     // `/api/import` takes any envelope kind, so a connection export dropped on
     // the pipelines page would really create a connection — a row on a page
