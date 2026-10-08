@@ -2602,6 +2602,13 @@ export interface ValidateDocOptions {
    * when absent; a test that runs an injected catalog saves against it too.
    */
   catalog?: ActivityCatalog;
+  /**
+   * #1492 — `false` leaves out that #1480 check, and nothing else: every
+   * structural rule still runs. Only a portable import sets it, for a HISTORICAL
+   * version saved before #1480 (immutable, so unrepairable); the version it
+   * admits is reported to the importer as unable to run. Default `true`.
+   */
+  activityChecks?: boolean;
 }
 
 /** #844 GL3 — the globals a scan may read, and where it collects the reads. */
@@ -2877,7 +2884,8 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     // more specific diagnostics for the fields they own, and the dispatch schema
     // replays several of them (`llm_call`'s output coupling, `copy`'s cross-row
     // mapping rules), so running both would report one fault twice.
-    if (errors.length === beforeNode) errors.push(...activityNodeErrors(node, options.catalog));
+    if (errors.length === beforeNode && options.activityChecks !== false)
+      errors.push(...activityNodeErrors(node, options.catalog));
     // #2 L13b — connectionParams shape rules (activity-agnostic: any
     // connection-bound node may carry bindings). Both refusals follow the L12
     // call-node precedent: config that would be silently INERT is refused with

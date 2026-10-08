@@ -86,6 +86,14 @@ export interface CreatePipelineVersionOptions extends CreateResourceOptions {
    * a test that runs an injected executor catalog passes the same one here.
    */
   catalog?: ActivityCatalog;
+  /**
+   * #1492 — skip #1480's activity type/config check, and ONLY that check. Set by
+   * portable import alone, and only for a HISTORICAL version (never the one that
+   * becomes the head): an exported history can hold a version saved before #1480
+   * that the check now refuses, and refusing it would refuse the whole pipeline
+   * though nothing about it can be repaired. The import reports what it admitted.
+   */
+  skipActivityChecks?: boolean;
 }
 
 /**
@@ -336,7 +344,9 @@ function gatePipelineVersion(
   //
   // #844 GL3 — the gate is also handed the OWNER's globals (GL-D2), the way it
   // is handed an owner-scoped resolver, and it collects what the doc reads. That
-  // list is complete because only a doc with no issues gets past here, and it is
+  // list is complete because only a doc with no issues gets past here (no
+  // STRUCTURAL issues, under #1492's `skipActivityChecks`: the #1480 check reads
+  // no `${}`, so skipping it cannot hide a read), and it is
   // stored as the version's `global_reads`, which a run's start check reads.
   const globals = listOwnerGlobalTypes(db, callerOwnerId);
   const globalReadNames = new Set<string>();
@@ -346,6 +356,7 @@ function gatePipelineVersion(
     globals,
     globalReads: globalReadNames,
     ...(opts?.catalog !== undefined ? { catalog: opts.catalog } : {}),
+    ...(opts?.skipActivityChecks === true ? { activityChecks: false } : {}),
   });
   if (issues.length > 0) return { ok: false, issues };
   return { ok: true, lowered, id, globals, globalReadNames };

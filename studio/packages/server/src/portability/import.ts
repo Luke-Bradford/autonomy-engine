@@ -3,6 +3,7 @@ import {
   ConnectionPublicSchema,
   GlobalParamCreateBodySchema,
   ImportError,
+  ISSUE_LIST_CAP,
   globalParamResourceId,
   TriggerPublicSchema,
   parseAndUpgradeEnvelope,
@@ -175,7 +176,7 @@ function importPipelineEnvelopeInTx(
   for (const nodeId of unresolvedDatasetNodeIds(exportedVersions)) {
     attention.push({ type: 'unresolvedDatasetRef', nodeId });
   }
-  const versions = exportedVersions.map((exportedVersion) => {
+  const versions = exportedVersions.map((exportedVersion, index) => {
     // SPREAD, not a field-by-field rebuild (#473). Listing the fields by hand
     // is what silently dropped `containers` on import: every field of
     // `NewPipelineVersion` that has a `.default()` is OPTIONAL in `z.input`, so
@@ -192,7 +193,35 @@ function importPipelineEnvelopeInTx(
       pipelineId: pipeline.id,
       nodes: exportedVersion.nodes.map(toDbNode),
     };
-    return createPipelineVersion(db, input);
+    // #1492 — the LAST version minted is the head here, whatever number the file
+    // gave it (versions renumber 1..n in file order), so it is always refused if
+    // invalid: importing it would mint a head that can never run.
+    if (index === exportedVersions.length - 1) return createPipelineVersion(db, input);
+    try {
+      return createPipelineVersion(db, input);
+    } catch (err) {
+      if (!(err instanceof InvalidPipelineDocError)) throw err;
+      // A HISTORICAL version saved before #1480 may fail its activity check, and
+      // nothing can repair it (versions are immutable). Admit it if that check is
+      // ALL it fails, and say so; any structural fault still refuses the import,
+      // with the first, complete diagnostics.
+      let admitted;
+      try {
+        admitted = createPipelineVersion(db, input, { skipActivityChecks: true });
+      } catch {
+        throw err;
+      }
+      // ECHO: the issues quote node ids and config key paths from the file the
+      // caller just sent, back to that caller, on the same owner-scoped request —
+      // the argument `errors.ts` makes for `InvalidPipelineDocError`'s 400.
+      attention.push({
+        type: 'unrunnableVersion',
+        version: admitted.version,
+        issues: err.issues.slice(0, ISSUE_LIST_CAP),
+        totalIssues: err.issues.length,
+      });
+      return admitted;
+    }
   });
 
   return { kind: 'pipeline', pipeline, versions, attention };
