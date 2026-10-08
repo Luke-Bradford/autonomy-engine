@@ -8,8 +8,8 @@ import { ProbeVerdict } from '../connections/ProbeVerdict';
 import { connectionPickerGroups } from './bindingPickers';
 
 /**
- * #1477 OR29 slice 5b — one connection binding on an activity: the select, then
- * Test and New beside it, as ADF's linked-service picker has them.
+ * #1477 OR29 slice 5 — one connection binding on an activity: the select, then
+ * Test, Edit and New beside it, as ADF's linked-service picker has them.
  *
  * Every connection is listed, grouped by kind; a kind this side refuses is
  * listed disabled with the reason (`connectionPickerGroups`). The option text
@@ -19,10 +19,13 @@ import { connectionPickerGroups } from './bindingPickers';
  * Test probes the SAVED connection (`testSavedConnection`), so it answers for
  * what a run would use. The verdict is tagged with the id it was taken for and
  * stops rendering once the selection moves, as the form's verdict does with its
- * draft (#1191).
+ * draft (#1191). It is also tagged with the row's `updatedAt` (#1477 5c): once
+ * the connection is edited, "Connected." is a reading of what it used to be.
  *
- * ＋ New is offered only when the host can open the New connection column
- * (`onNew`); the editor hosts it, so a selection change cannot unmount a draft.
+ * Edit (5c) and ＋ New are offered only when the host can open the connection
+ * column (`onEdit`, `onNew`); the editor hosts it, so a selection change cannot
+ * unmount a draft. Edit needs a bound connection that still exists: a dangling
+ * id has nothing to open.
  */
 export function ConnectionPicker({
   label,
@@ -30,6 +33,7 @@ export function ConnectionPicker({
   connections,
   disabledReason,
   onPick,
+  onEdit,
   onNew,
 }: {
   label: string;
@@ -37,13 +41,18 @@ export function ConnectionPicker({
   connections: readonly ConnectionPublic[];
   disabledReason: ConnectionKindDisabledReason;
   onPick: (id: string | undefined) => void;
+  /** Open the bound connection in the connection column. */
+  onEdit?: (id: string, opener: HTMLElement) => void;
   /** Open the New connection column; the button is the opener focus returns to. */
   onNew?: (opener: HTMLElement) => void;
 }) {
   const groups = connectionPickerGroups(connections, disabledReason, value);
-  const [verdict, setVerdict] = useState<{ id: string; result: ConnectionProbeResult } | null>(
-    null,
-  );
+  const bound = value === undefined ? undefined : connections.find((c) => c.id === value);
+  const [verdict, setVerdict] = useState<{
+    id: string;
+    updatedAt: number | undefined;
+    result: ConnectionProbeResult;
+  } | null>(null);
   const [probing, setProbing] = useState(false);
   // A probe outlives a node switch (the panel remounts per node); its answer
   // must not be written into a panel that is gone.
@@ -63,7 +72,7 @@ export function ConnectionPicker({
   const probeSeq = useRef(0);
   const noun = label.charAt(0).toLowerCase() + label.slice(1);
 
-  async function onTest(id: string) {
+  async function onTest(id: string, updatedAt: number | undefined) {
     const seq = ++probeSeq.current;
     setVerdict(null);
     setProbing(true);
@@ -77,7 +86,7 @@ export function ConnectionPicker({
     }
     if (!mounted.current || seq !== probeSeq.current) return;
     setProbing(false);
-    setVerdict({ id, result });
+    setVerdict({ id, updatedAt, result });
   }
 
   return (
@@ -114,11 +123,23 @@ export function ConnectionPicker({
               aria-label={`Test selected ${noun}`}
               disabled={value === undefined || probing}
               onClick={() => {
-                if (value !== undefined) void onTest(value);
+                if (value !== undefined) void onTest(value, bound?.updatedAt);
               }}
             >
               Test
             </button>
+            {onEdit !== undefined && (
+              <button
+                type="button"
+                aria-label={`Edit selected ${noun}`}
+                disabled={bound === undefined}
+                onClick={(e) => {
+                  if (bound !== undefined) onEdit(bound.id, e.currentTarget);
+                }}
+              >
+                Edit
+              </button>
+            )}
             {onNew !== undefined && (
               <button
                 type="button"
@@ -131,7 +152,9 @@ export function ConnectionPicker({
           </div>
         )}
       </LabelledControl>
-      {verdict !== null && verdict.id === value && <ProbeVerdict result={verdict.result} />}
+      {verdict !== null && verdict.id === value && verdict.updatedAt === bound?.updatedAt && (
+        <ProbeVerdict result={verdict.result} />
+      )}
     </>
   );
 }

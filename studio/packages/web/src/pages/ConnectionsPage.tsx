@@ -1,9 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  type ConnectionDependentsResponse,
-  type ConnectionPublic,
-  type Dataset,
-} from '@autonomy-studio/shared';
+import { type ConnectionPublic } from '@autonomy-studio/shared';
 import { messageOf } from '../api/client';
 import { deleteConnection, listConnectionDependents, listConnections } from '../api/connections';
 import { listDatasets } from '../api/datasets';
@@ -11,6 +7,7 @@ import { downloadTextFile, exportFileName } from '../api/download';
 import { exportConnection } from '../api/portability';
 import { useBusyAction } from '../hooks/useBusyAction';
 import { useGuardedLoad } from '../hooks/useGuardedLoad';
+import { useConnectionAdvisories } from './connections/useConnectionAdvisories';
 import {
   datasetsOnConnection,
   deleteConfirmMessage,
@@ -65,53 +62,15 @@ export function ConnectionsPage() {
   // when one is already open.
   const [gallerySeq, setGallerySeq] = useState(0);
   const drawerOpen = form !== null || choosingKind;
-  /**
-   * #1174 — the datasets bound to the connection being edited, and whether that
-   * question could be answered at all.
-   *
-   * THREE STATES, NOT TWO. `null` with no error is "not read yet"; a non-null
-   * `datasetsUnavailable` is "could not read"; a list is a list. An empty list
-   * and a failed read must stay distinguishable, because collapsing them would
-   * render "nothing would be stranded" on the strength of a fetch that failed
-   * (prevention-log #18 — the healthy verdict is earned, never the fallback).
-   * `strandedDatasets.ts` is total over the three.
-   */
-  const [datasets, setDatasets] = useState<Dataset[] | null>(null);
-  const [datasetsUnavailable, setDatasetsUnavailable] = useState<string | null>(null);
-  /**
-   * #1211 — the enabled TRIGGERS a kind change or a delete would switch off,
-   * and whether that question could be answered at all. Same three states and
-   * the same reason as the datasets pair above, kept as a separate pair rather
-   * than folded in with them: the two are read from different routes and either
-   * can fail alone, and a shared "unavailable" would silence the advisory that
-   * did succeed.
-   */
-  const [dependents, setDependents] = useState<ConnectionDependentsResponse | null>(null);
-  const [dependentsUnavailable, setDependentsUnavailable] = useState<string | null>(null);
+  /** #1174 / #1211 — what the edit form's strand and trigger notes read. */
+  const {
+    datasets,
+    datasetsUnavailable,
+    dependents,
+    dependentsUnavailable,
+    loadFor: loadAdvisoriesFor,
+  } = useConnectionAdvisories();
   const guardedLoad = useGuardedLoad();
-  /**
-   * A SECOND instance, deliberately — `useGuardedLoad`'s "one instance per state
-   * target" rule. Two fetchers sharing one instance discard each other's
-   * answers, so the connections load and this one cannot be pointed at the same
-   * runner.
-   *
-   * Note this is the opposite call from `DatasetsPage.tsx`, which loads the very
-   * same PAIR through ONE fetcher and says why: its store picker resolves
-   * dataset rows against connection rows, so a list from a different moment
-   * would mis-render. Here the two are not resolved against each other on the
-   * critical surface — the connections table stands alone, and the datasets list
-   * feeds a DIAGNOSTIC. One fetcher would mean a datasets outage takes the
-   * connections list down with it, so the page whose job is connections would
-   * show an error banner because an advisory failed. The third state below
-   * exists exactly so that failure stays local.
-   */
-  const datasetsLoad = useGuardedLoad();
-  /**
-   * A THIRD instance, for the same "one instance per state target" reason: this
-   * load and the datasets load write different state, so sharing a runner would
-   * make each discard the other's answer. #1211.
-   */
-  const dependentsLoad = useGuardedLoad();
 
   // The ONE load path: the mount effect below and every post-mutation refetch
   // (delete / save / import) go through it. That is what ORDERS them — #1062:
@@ -144,73 +103,13 @@ export function ConnectionsPage() {
     void refresh();
   }, [refresh]);
 
-  /**
-   * #1174 — read the datasets, for the strand advisory only.
-   *
-   * ON EDIT-FORM OPEN, NOT ON MOUNT, and that is the whole staleness argument.
-   * A mount load would be read hours later by an operator who left the tab open
-   * and added datasets elsewhere, and would then answer "nothing would be
-   * stranded" from a snapshot that predates them — the manufactured-benign-
-   * default this page's three states exist to refuse, reached by a slower route.
-   * Bound to the gesture instead: the reading is at most as old as the form.
-   * It also costs a read-only visit nothing, which a mount load would not.
-   *
-   * NOT for the New-connection form: a connection that does not exist yet has
-   * no `connectionId` for any dataset to name.
-   */
-  const refreshDatasets = useCallback(
-    () =>
-      datasetsLoad(listDatasets, {
-        onData: (list) => {
-          setDatasets(list);
-          setDatasetsUnavailable(null);
-        },
-        // Local to the advisory. This never reaches `loadError` — a diagnostic
-        // that could not be computed must not present as a failure of the page.
-        onError: (err) => {
-          setDatasets(null);
-          setDatasetsUnavailable(messageOf(err));
-        },
-      }),
-    [datasetsLoad],
-  );
-
-  /**
-   * #1211 — read the triggers this connection's version-bound dependents would
-   * lose, on EDIT-FORM OPEN for exactly the staleness reason `refreshDatasets`
-   * documents above: bound to the gesture, so the reading is at most as old as
-   * the form. Not on mount, and not for the New-connection form (nothing can
-   * depend on a row that does not exist yet).
-   */
-  const refreshDependents = useCallback(
-    (connectionId: string) =>
-      dependentsLoad((signal) => listConnectionDependents(connectionId, signal), {
-        onData: (result) => {
-          setDependents(result);
-          setDependentsUnavailable(null);
-        },
-        // Local to the advisory, exactly like the datasets read — a diagnostic
-        // that could not be computed must not present as a failure of the page.
-        onError: (err) => {
-          setDependents(null);
-          setDependentsUnavailable(messageOf(err));
-        },
-      }),
-    [dependentsLoad],
-  );
-
   const openEditForm = useCallback(
     (conn: ConnectionPublic) => {
-      setDatasets(null);
-      setDatasetsUnavailable(null);
-      setDependents(null);
-      setDependentsUnavailable(null);
       setChoosingKind(false);
       openForm(formForEdit(conn));
-      void refreshDatasets();
-      void refreshDependents(conn.id);
+      loadAdvisoriesFor(conn.id);
     },
-    [openForm, refreshDatasets, refreshDependents],
+    [openForm, loadAdvisoriesFor],
   );
 
   /**

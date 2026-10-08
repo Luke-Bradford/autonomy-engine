@@ -6,7 +6,7 @@ import {
   type Node,
   type Param,
 } from '@autonomy-studio/shared';
-import type { NewConnectionRequest } from './newConnectionRequest';
+import type { ConnectionColumnRequest } from './connectionColumnRequest';
 import { NodePanel } from './PipelineCanvas';
 import { useStore } from 'zustand';
 import { createCanvasStore } from './canvasStore';
@@ -41,7 +41,7 @@ function mountOver(
   connections: Parameters<typeof NodePanel>[0]['connections'] = [],
   datasets: Parameters<typeof NodePanel>[0]['datasets'] = [],
   params: Param[] = [],
-  onNewConnection?: (request: NewConnectionRequest) => void,
+  onConnectionColumn?: (request: ConnectionColumnRequest) => void,
 ) {
   const store = createCanvasStore();
   store.setState({ nodes: [target], params });
@@ -59,7 +59,7 @@ function mountOver(
         config={node.config}
         connectionId={node.connectionId}
         call={undefined}
-        onNewConnection={onNewConnection}
+        onConnectionColumn={onConnectionColumn}
       />
     );
   }
@@ -865,12 +865,13 @@ describe('paired binding pickers (#1139)', () => {
   });
 
   it('＋ New asks the editor for the column with the SLOT’s refusals and binds there (#1477)', () => {
-    const asked: NewConnectionRequest[] = [];
+    const asked: ConnectionColumnRequest[] = [];
     const { store } = mountOver(copyNode(), CONNS, SETS, [], (request) => asked.push(request));
     openTab('Sink');
     fireEvent.click(screen.getByRole('button', { name: 'New sink connection' }));
     expect(asked).toHaveLength(1);
     const request = asked[0]!;
+    if (request.mode !== 'new') throw new Error(`asked for ${request.mode}`);
     expect(request.disabledReason('fs')).toBe("Can't be a Copy Data sink yet");
     expect(request.disabledReason('postgres')).toBeUndefined();
     // Binding goes to the SINK end of THIS node — the end the author asked from.
@@ -879,19 +880,40 @@ describe('paired binding pickers (#1139)', () => {
   });
 
   it('＋ New’s bind reports a node deleted while the column was open (#1477)', () => {
-    const asked: NewConnectionRequest[] = [];
+    const asked: ConnectionColumnRequest[] = [];
     const { store } = mountOver(copyNode(), CONNS, SETS, [], (request) => asked.push(request));
     openTab('Sink');
     fireEvent.click(screen.getByRole('button', { name: 'New sink connection' }));
     act(() => store.setState({ nodes: [] }));
-    expect(asked[0]!.bind('c_new')).toBe(false);
+    const request = asked[0]!;
+    if (request.mode !== 'new') throw new Error(`asked for ${request.mode}`);
+    expect(request.bind('c_new')).toBe(false);
     expect(store.getState().pendingBindings['n_copy']).toBeUndefined();
   });
 
-  it('offers no ＋ New when no editor hosts the column', () => {
+  it('Edit asks the editor for the column on the BOUND connection, with the slot’s refusals (#1477 5c)', () => {
+    const asked: ConnectionColumnRequest[] = [];
+    mountOver(
+      { ...copyNode(), connectionIds: { source: 'c_src', sink: 'c_src' } },
+      CONNS,
+      SETS,
+      [],
+      (request) => asked.push(request),
+    );
+    openTab('Sink');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit selected sink connection' }));
+    expect(asked).toHaveLength(1);
+    const request = asked[0]!;
+    if (request.mode !== 'edit') throw new Error(`asked for ${request.mode}`);
+    expect(request.connectionId).toBe('c_src');
+    expect(request.disabledReason('fs')).toBe("Can't be a Copy Data sink yet");
+  });
+
+  it('offers no ＋ New and no Edit when no editor hosts the column', () => {
     mountOver(copyNode(), CONNS, SETS);
     openTab('Sink');
     expect(screen.queryByRole('button', { name: 'New sink connection' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Edit selected sink connection' })).toBeNull();
   });
 
   it('narrows the dataset picker to the connection bound to the SAME end', () => {

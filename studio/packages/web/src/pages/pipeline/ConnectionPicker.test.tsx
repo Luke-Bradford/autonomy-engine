@@ -29,15 +29,24 @@ const conn = (id: string, name: string, kind: 'sqlite' | 'fs'): ConnectionPublic
 
 const CONNS = [conn('a', 'Alpha', 'sqlite'), conn('b', 'Beta', 'sqlite')];
 
-function Harness({ initial }: { initial?: string }) {
+function Harness({
+  initial,
+  connections = CONNS,
+  onEdit,
+}: {
+  initial?: string;
+  connections?: ConnectionPublic[];
+  onEdit?: (id: string, opener: HTMLElement) => void;
+}) {
   const [value, setValue] = useState<string | undefined>(initial);
   return (
     <ConnectionPicker
       label="Source connection"
       value={value}
-      connections={CONNS}
+      connections={connections}
       disabledReason={connectionSlotReason(['sqlite'], 'Copy Data', 'source')}
       onPick={setValue}
+      onEdit={onEdit}
     />
   );
 }
@@ -121,5 +130,38 @@ describe('ConnectionPicker (#1477 slice 5b)', () => {
       answer({ ok: true, probed: 'liveness' });
     });
     expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  describe('Edit (#1477 slice 5c)', () => {
+    const editButton = () =>
+      screen.getByRole('button', { name: 'Edit selected source connection' });
+
+    it('opens the BOUND connection, from the Edit button', () => {
+      const onEdit = vi.fn<(id: string, opener: HTMLElement) => void>();
+      render(<Harness initial="b" onEdit={onEdit} />);
+      fireEvent.click(editButton());
+      expect(onEdit).toHaveBeenCalledWith('b', editButton());
+    });
+
+    it('cannot Edit with nothing bound, or a binding whose connection is gone', () => {
+      const onEdit = vi.fn<(id: string, opener: HTMLElement) => void>();
+      const { unmount } = render(<Harness onEdit={onEdit} />);
+      expect(editButton()).toBeDisabled();
+      unmount();
+      render(<Harness initial="gone" onEdit={onEdit} />);
+      expect(editButton()).toBeDisabled();
+      fireEvent.click(editButton());
+      expect(onEdit).not.toHaveBeenCalled();
+    });
+
+    it('drops a Test verdict once the connection is edited: it was about the old one', async () => {
+      probe.mockResolvedValue({ ok: true, probed: 'liveness' });
+      const { rerender } = render(<Harness initial="a" />);
+      fireEvent.click(testButton());
+      expect(await screen.findByText(/Connected/)).toBeInTheDocument();
+      const edited = [{ ...CONNS[0]!, name: 'Alpha 2', updatedAt: 5 }, CONNS[1]!];
+      rerender(<Harness initial="a" connections={edited} />);
+      expect(screen.queryByText(/Connected/)).toBeNull();
+    });
   });
 });

@@ -49,11 +49,16 @@ required marks and display names; its layout is its own, below.
 ## Activity connection pickers
 
 - **One `ConnectionPicker` for every connection slot** (an activity's Connection, or a Copy's
-  Source and Sink connection): the select, then **Test** and **New** beside it on one row.
+  Source and Sink connection): the select, then **Test**, **Edit** and **New** beside it on one row.
 - **Every connection is listed, grouped by kind.** One this slot cannot use is listed disabled,
   with its reason (`connectionSlotReason`), so the picker says what exists. The bound connection
   is never disabled, whatever its kind.
-- **Test** probes the saved connection that is selected; its verdict goes when the selection moves.
+- **Test** probes the saved connection that is selected; its verdict goes when the selection moves
+  or the connection is edited.
+- **Edit** opens the bound connection's form in the same column as New. The column reads the
+  connection again first, so the form never prefills from the editor's older copy. Save updates
+  every picker in the editor; a kind change this slot refuses keeps the binding and the editor
+  says so. Edit is disabled when nothing is bound or the bound connection no longer exists.
 - **New** opens the kind gallery, with the same reasons disabling the same kinds, then that kind's
   form, in a column beside the editor (as the Triggers column). Nothing navigates and the canvas
   draft is untouched. Create binds the new connection to the slot that asked; a form switched to a

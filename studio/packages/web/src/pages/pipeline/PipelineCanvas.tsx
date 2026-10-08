@@ -99,8 +99,8 @@ import {
   type ConnectionSlotSide,
 } from './bindingPickers';
 import { ConnectionPicker } from './ConnectionPicker';
-import { NewConnectionColumn } from './NewConnectionColumn';
-import type { NewConnectionRequest } from './newConnectionRequest';
+import { ConnectionColumn } from './ConnectionColumn';
+import type { ConnectionColumnRequest } from './connectionColumnRequest';
 import { ActivityToolbox } from './ActivityToolbox';
 import {
   assignContainerChild,
@@ -482,13 +482,13 @@ export function PipelineCanvas({
    */
   const [triggersColumn, setTriggersColumn] = useState<{ newRequest: number } | null>(null);
   const triggerButtonRef = useRef<HTMLButtonElement>(null);
-  /** #1477 slice 5b — an activity's ＋ New connection, open in a side column;
-   * `seq` remounts the column for each new ask. */
-  const [newConnection, setNewConnection] = useState<{
-    request: NewConnectionRequest;
+  /** #1477 slice 5 — an activity's ＋ New or Edit connection, open in a side
+   * column; `seq` remounts the column for each new ask. */
+  const [connectionColumn, setConnectionColumn] = useState<{
+    request: ConnectionColumnRequest;
     seq: number;
   } | null>(null);
-  const newConnectionOpenerRef = useRef<HTMLElement | null>(null);
+  const connectionColumnOpenerRef = useRef<HTMLElement | null>(null);
   const setHistoryOpen = useStore(uiStore, (s) => s.setHistoryOpen);
   /** The version NUMBER being previewed read-only, or `null` while editing. */
   const [previewing, setPreviewingState] = useState<number | null>(null);
@@ -669,7 +669,7 @@ export function PipelineCanvas({
   // #1476 — the Triggers column's open form is a second draft on this page, so
   // the title and the leave guard below count it too.
   const [triggerFormDirty, setTriggerFormDirty] = useState(false);
-  // #1477 slice 5b — and so is the New connection column's.
+  // #1477 slice 5 — and so is the connection column's (New or Edit).
   const [connectionFormDirty, setConnectionFormDirty] = useState(false);
   useShellUnsaved(dirty || triggerFormDirty || connectionFormDirty);
   // #1396 — the draft lives in this mount's store, so leaving the editor's path
@@ -1252,26 +1252,26 @@ export function PipelineCanvas({
     // Not while a restore or save holds the preview: closing history leaves
     // the preview, which every other route into it is locked against.
     if (historyOpen && !previewLocked) closeHistory();
-    if (!connectionFormDirty) setNewConnection(null);
+    if (!connectionFormDirty) setConnectionColumn(null);
     setTriggersColumn((open) => ({
       newRequest: withNewForm ? (open?.newRequest ?? 0) + 1 : (open?.newRequest ?? 0),
     }));
   };
   /**
-   * #1477 slice 5b — an activity's ＋ New connection: open the column, closing
+   * #1477 slice 5 — an activity's ＋ New or Edit connection: open the column, closing
    * the other side columns as `openTriggersColumn` does (never a dirty form).
    * A column already holding a typed draft is not replaced under it: the
    * author is pointed at it instead.
    */
-  const openNewConnection = (request: NewConnectionRequest, opener: HTMLElement) => {
+  const openConnectionColumn = (request: ConnectionColumnRequest, opener: HTMLElement) => {
     if (connectionFormDirty) {
-      showCanvasMsg('Finish or cancel the new connection that is already open.');
+      showCanvasMsg('Finish or cancel the connection form that is already open.');
       return;
     }
-    newConnectionOpenerRef.current = opener;
+    connectionColumnOpenerRef.current = opener;
     if (historyOpen && !previewLocked) closeHistory();
     if (!triggerFormDirty) setTriggersColumn(null);
-    setNewConnection((open) => ({ request, seq: (open?.seq ?? 0) + 1 }));
+    setConnectionColumn((open) => ({ request, seq: (open?.seq ?? 0) + 1 }));
   };
   /* #1476 OR28 — the ticket's rule for a toolbar row that cannot hold every
      act: overflow goes into ⋯, it never wraps or spills. Two things fold, one
@@ -1889,7 +1889,7 @@ export function PipelineCanvas({
                         setPreviewing(conflict.version);
                         // One side column at a time, as the ⋯ menu's item.
                         if (!triggerFormDirty) setTriggersColumn(null);
-                        if (!connectionFormDirty) setNewConnection(null);
+                        if (!connectionFormDirty) setConnectionColumn(null);
                       }}
                       // The same lock every other route into the preview carries: this
                       // is a fourth one, and the reported bug was precisely a route
@@ -2225,7 +2225,7 @@ export function PipelineCanvas({
                       // One side column at a time — unless the Triggers column
                       // holds an unsaved form, which is never closed under it.
                       if (!triggerFormDirty) setTriggersColumn(null);
-                      if (!connectionFormDirty) setNewConnection(null);
+                      if (!connectionFormDirty) setConnectionColumn(null);
                     }
                   }}
                 >
@@ -2479,7 +2479,7 @@ export function PipelineCanvas({
                         datasets={datasets}
                         pipelineId={pipelineId}
                         onNotice={showCanvasMsg}
-                        onNewConnection={openNewConnection}
+                        onConnectionColumn={openConnectionColumn}
                       />
                       {/* Stacked under the properties in a right-hand dock, at a
                       fixed height, so there is no width to resize there. */}
@@ -2563,16 +2563,21 @@ export function PipelineCanvas({
             onDirtyChange={setTriggerFormDirty}
           />
         )}
-        {newConnection !== null && (
-          <NewConnectionColumn
-            key={newConnection.seq}
-            request={newConnection.request}
-            returnFocusTo={newConnectionOpenerRef}
-            onClose={() => setNewConnection(null)}
-            onCreated={(created) =>
-              // Once: a re-read may already have brought the row in.
+        {connectionColumn !== null && (
+          <ConnectionColumn
+            key={connectionColumn.seq}
+            request={connectionColumn.request}
+            connections={connections}
+            returnFocusTo={connectionColumnOpenerRef}
+            onClose={() => setConnectionColumn(null)}
+            onListed={setConnections}
+            onSaved={(saved) =>
+              // Replaced in place, so every picker on every node shows the edit;
+              // added once, since a re-read may already have brought it in.
               setConnections((list) =>
-                list.some((c) => c.id === created.id) ? list : [...list, created],
+                list.some((c) => c.id === saved.id)
+                  ? list.map((c) => (c.id === saved.id ? saved : c))
+                  : [...list, saved],
               )
             }
             onNotice={showCanvasMsg}
@@ -2604,14 +2609,14 @@ function PropertyPanel({
   datasets,
   pipelineId,
   onNotice,
-  onNewConnection,
+  onConnectionColumn,
 }: {
   store: ReturnType<typeof createCanvasStore>;
   connections: ConnectionPublic[];
   datasets: Dataset[];
   pipelineId: string;
   onNotice: (message: string) => void;
-  onNewConnection: (request: NewConnectionRequest, opener: HTMLElement) => void;
+  onConnectionColumn: (request: ConnectionColumnRequest, opener: HTMLElement) => void;
 }) {
   const selection = useStore(store, (s) => s.selected);
   const nodes = useStore(store, (s) => s.nodes);
@@ -2707,7 +2712,7 @@ function PropertyPanel({
       call={node.call}
       tab={nodeTab}
       onTab={setNodeTab}
-      onNewConnection={onNewConnection}
+      onConnectionColumn={onConnectionColumn}
     />
   );
 }
@@ -3546,7 +3551,7 @@ export function NodePanel({
   datasets,
   tab,
   onTab,
-  onNewConnection,
+  onConnectionColumn,
 }: {
   store: ReturnType<typeof createCanvasStore>;
   connections: ConnectionPublic[];
@@ -3560,8 +3565,8 @@ export function NodePanel({
   /** #852 — the dock's lifted tab choice; see `PanelTabs`. */
   tab?: NodeTab;
   onTab?: (tab: NodeTab) => void;
-  /** #1477 slice 5b — open the editor's New connection column; absent, no ＋ New. */
-  onNewConnection?: (request: NewConnectionRequest, opener: HTMLElement) => void;
+  /** #1477 slice 5 — open the editor's connection column; absent, no ＋ New and no Edit. */
+  onConnectionColumn?: (request: ConnectionColumnRequest, opener: HTMLElement) => void;
 }) {
   const entry = getActivity(nodeType);
   // Edit config WITHOUT the internal `outputs` contract.
@@ -3965,12 +3970,19 @@ export function NodePanel({
         connections={connections}
         disabledReason={disabledReason}
         onPick={bind}
+        onEdit={
+          onConnectionColumn === undefined
+            ? undefined
+            : (connectionId, opener) =>
+                onConnectionColumn({ mode: 'edit', connectionId, disabledReason }, opener)
+        }
         onNew={
-          onNewConnection === undefined
+          onConnectionColumn === undefined
             ? undefined
             : (opener) =>
-                onNewConnection(
+                onConnectionColumn(
                   {
+                    mode: 'new',
                     disabledReason,
                     // The activity can be deleted while the column is open.
                     bind: (connectionId) => {
