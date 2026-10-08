@@ -18,6 +18,8 @@ const validConnection = {
   kind: 'anthropic_api',
   config: { model: 'claude-sonnet' },
   parameters: [],
+  description: '',
+  annotations: [],
   secretRef: 'secret_1',
   secretStatus: 'ready',
   enabled: true,
