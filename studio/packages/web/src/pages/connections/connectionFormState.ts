@@ -57,8 +57,8 @@ export type FormState = {
    * #1477 — both as the form opened on them. Save sends each only when the
    * edit differs (`metadataChanges`), as it does `parameters`: so a rename
    * never overwrites metadata changed elsewhere since the form opened (a git
-   * pull, another tab), and a stored value the write rules refuse — a git file
-   * is read-tolerant — does not block a save that does not touch it.
+   * pull, another tab), and a save that does not touch them is not judged on
+   * them.
    */
   descriptionSeed: string;
   annotationsSeed: readonly string[];
@@ -107,9 +107,8 @@ function formFor(
     // is possible, and an edit should not write the duplicate back.
     parameters: [...new Set(parameters)],
     parametersSeed: parameters,
-    // As stored: unlike `parameters`, a duplicate or padded annotation is not
-    // repaired on open. The form shows it as an error on its row instead, so
-    // nothing the author did not type is ever written back.
+    // As stored, never repaired on open (unlike `parameters`): nothing the
+    // author did not type is ever written back.
     description: meta.description,
     annotations: [...meta.annotations],
     descriptionSeed: meta.description,

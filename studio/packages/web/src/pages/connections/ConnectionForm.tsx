@@ -148,13 +148,6 @@ export function ConnectionForm({
   });
   const { fields, jsonMode } = editor;
 
-  /**
-   * #1396 — what is wrong with the draft now, by field, in the form's order.
-   * The Name rule is the write schema's own (`min(1)`, so no trim: the form
-   * must not refuse what the server accepts), and the config's are the parse
-   * failures `readConfigDraft` would refuse — never the kind's schema rules,
-   * which stay the advisory below.
-   */
   /** #1477 — the Description and Annotations Save would send (only what was edited). */
   const metadata = useMemo(
     () =>
@@ -166,6 +159,13 @@ export function ConnectionForm({
       }),
     [form.description, form.descriptionSeed, form.annotations, form.annotationsSeed],
   );
+  /**
+   * #1396 — what is wrong with the draft now, by field, in the form's order.
+   * The Name rule is the write schema's own (`min(1)`, so no trim: the form
+   * must not refuse what the server accepts), and the config's are the parse
+   * failures `readConfigDraft` would refuse — never the kind's schema rules,
+   * which stay the advisory below.
+   */
   const checks = useMemo(
     () => ({
       ...nameCheck(form.name),

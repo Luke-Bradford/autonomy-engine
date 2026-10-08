@@ -235,12 +235,12 @@ export const ConnectionSchema = z.object({
   parameters: z.array(z.string().min(1)).default([]),
   /**
    * #1477 — what the connection is for, and its tags (ADF's linked-service
-   * Description and Annotations). Read-tolerant, like a pipeline version's: the
-   * bounds live on the WRITE body (`ConnectionMetadataWriteShape`), so a
-   * hand-edited git file or export that breaks them still loads and is repaired
-   * in the form rather than refused on read. The DB columns are NOT NULL with a
-   * DEFAULT, so the `.default()`s here only ever fill a file written before the
-   * fields existed, where "none" is the true value.
+   * Description and Annotations). Unbounded on READ, like a pipeline version's:
+   * the bounds are the WRITE rules (`ConnectionMetadataWriteSchema`), which the
+   * repo layer applies on every create and patch — the route, an import and a
+   * git apply alike. The DB columns are NOT NULL with a DEFAULT, so the
+   * `.default()`s here only ever fill a file written before the fields existed,
+   * where "none" is the true value.
    */
   description: z.string().default(''),
   annotations: z.array(z.string()).default([]),
@@ -299,6 +299,14 @@ export const ConnectionMetadataWriteShape = {
     .optional(),
   annotations: annotationsWriteSchema('connection').optional(),
 };
+
+/**
+ * #1477 — the same rules as one object, for the repo layer: every write path
+ * (the route, an import, a git apply) reaches `createConnection` /
+ * `updateConnection`, so the bounds are enforced there once rather than only on
+ * the HTTP body — as a pipeline version's are by its write schema.
+ */
+export const ConnectionMetadataWriteSchema = z.object(ConnectionMetadataWriteShape);
 
 /**
  * Client-facing projection with `secretRef` stripped, so a value never

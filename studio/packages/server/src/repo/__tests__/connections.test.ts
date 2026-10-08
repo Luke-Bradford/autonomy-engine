@@ -19,6 +19,28 @@ const newConnection = {
 };
 
 describe('connections repo', () => {
+  it('#1477 — a patch writing a description/annotations is held to the write rules; one leaving them alone is not', () => {
+    const { db } = freshDb();
+    const conn = createConnection(db, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+      annotations: ['prod'],
+    });
+    expect(() => updateConnection(db, conn.id, { annotations: ['prod', 'PROD'] })).toThrow(
+      /duplicate annotation/,
+    );
+    expect(() => updateConnection(db, conn.id, { description: 'x'.repeat(4001) })).toThrow(
+      /at most 4000 characters/,
+    );
+    expect(updateConnection(db, conn.id, { name: 'Renamed' })).toMatchObject({
+      name: 'Renamed',
+      annotations: ['prod'],
+    });
+  });
+
   it('creates and reads back a connection', () => {
     const { db } = freshDb();
     const created = createConnection(db, newConnection);

@@ -661,9 +661,10 @@ describe('ConnectionsPage', () => {
     expect(within(form).queryByText(/An annotation cannot be empty/)).not.toBeInTheDocument();
   });
 
-  it('#1477 — a rename sends neither field, so a stored tag the write rules refuse does not block it', async () => {
+  it('#1477 — a rename sends neither field, and is not judged on them', async () => {
     const user = userEvent.setup();
-    // A git file is read-tolerant: a case-duplicate can be stored.
+    // A case-duplicate the write rules would refuse: a save that leaves the
+    // list alone neither sends it nor checks it.
     listMock.mockResolvedValue([conn({ name: 'Editable', annotations: ['prod', 'Prod'] })]);
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Editable');

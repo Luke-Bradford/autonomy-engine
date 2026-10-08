@@ -442,6 +442,22 @@ describe('exportConnection', () => {
     });
   });
 
+  it('#1477 — an import holding a duplicate annotation is REFUSED, not stored past the write rules', () => {
+    const { db } = freshDb();
+    const conn = createConnection(db, {
+      ownerId: 'local',
+      name: 'Tagged',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const envelope = exportConnection(db, conn.id, 'local');
+    if (envelope.kind !== 'connection') throw new Error('unreachable');
+    const edited = { ...envelope, data: { ...envelope.data, annotations: ['prod', 'Prod'] } };
+    expect(() => importEnvelope(db, 'owner-b', edited)).toThrow(/duplicate annotation 'Prod'/);
+    expect(listConnections(db, 'owner-b')).toHaveLength(0);
+  });
+
   it('never includes secretRef, and sets requiresSecret true when one existed', () => {
     const { db } = freshDb();
     const secret = createSecret(db, { ref: 'secref_1', ciphertext: 'not-the-plaintext-cipher' });
