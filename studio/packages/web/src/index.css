@@ -4772,7 +4772,7 @@ button.danger {
 }
 
 .row-table th[data-width='long'] {
-  min-width: 7rem;
+  min-width: 5rem;
 }
 
 .row-table th[data-width='short'] {
@@ -4797,11 +4797,6 @@ button.danger {
 
 .row-table__actions button + button {
   margin-left: 2px;
-}
-
-/* Top-aligned, so an inline control adds no baseline gap under itself. */
-.row-table td :is(input, select, textarea, button) {
-  vertical-align: top;
 }
 
 /* A bare text box fills its cell (a select keeps its content width). */
@@ -4884,8 +4879,7 @@ button.danger {
 }
 
 :root[data-density='compact'] .row-table :is(th, td) {
-  padding: calc((var(--density-row-height) - var(--density-control-height) - 1px) / 2)
-    var(--density-space-1);
+  padding: calc((var(--density-row-height) - var(--density-control-height) - 1px) / 2) 2px;
 }
 
 :root[data-density='compact'] .row-table th {
