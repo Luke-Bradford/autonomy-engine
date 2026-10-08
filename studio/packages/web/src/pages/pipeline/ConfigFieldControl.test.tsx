@@ -357,3 +357,17 @@ describe('ConfigFieldControl — a resource form validation slot (#1396)', () =>
     expect(container.querySelector('.field-error-slot')).toBeNull();
   });
 });
+
+describe('ConfigFieldControl — a number field is a label beside its input, not around it (#1477 OR29)', () => {
+  it('pairs the label by for/id, so the dock grid can put the label in its own column', () => {
+    const field: ConfigField = { name: 'maxTokens', kind: 'number', optional: true };
+    const { getByLabelText } = render(
+      <ConfigFieldControl field={field} value="12" onChange={noop} />,
+    );
+    const input = getByLabelText('maxTokens') as HTMLInputElement;
+    expect(input.closest('label')).toBeNull();
+    expect(input.closest('.labelled-control')).toHaveClass('config-field');
+    expect(input).toHaveClass('number-input');
+    expect(labelTextOf(input)).toEqual(['maxTokens']);
+  });
+});

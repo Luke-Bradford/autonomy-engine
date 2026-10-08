@@ -343,7 +343,7 @@ was before density existed. Checkboxes, radios and textareas keep their own size
 Fluent's tabs keep their own metrics. `e2e/property-dock-density.spec.ts` measures the numbers at
 1440x900.
 
-## Width, and why there is no two-column grid
+## Width, and why a drawer has no two-column grid
 
 #1396 first asked for a two-column grid on wide screens, single column on narrow ones, with a maximum
 field width. Since then the drawer has settled the layout, and a grid would have nothing to fill.
@@ -358,5 +358,31 @@ field width. Since then the drawer has settled the layout, and a grid would have
 
 A form wider than the drawer, such as a full-page editor, should revisit this rather than inherit
 it.
+
+**The property dock is that exception (#1477 OR29).** At compact density, once a tab is at least
+576px wide:
+
+- **Labels sit left.** Each field of a tab's own sections is a row: the label in a 150px column, then
+  the control, its hint and its error. The cells of a row card or a param-override row keep their
+  stacked form, because they are too narrow for a label column.
+- **Short fields pack.** A number, a checkbox, or a choice whose options are all short (16
+  characters or fewer, so they are not clipped) packs two to a row, or three once the tab
+  is 900px wide. Everything else spans the row: free text, paths, expressions, JSON, row lists and
+  advisories. Fields keep their schema order, left to right and then down. `fieldSpan`
+  (`configForm.ts`) decides which kinds pack. `ConfigEditor` wraps each field in a
+  `.config-cell`, which is `display: contents` everywhere else, so the wrapper changes no resource
+  form. A number field is now `label[for]` beside its input, like every other kind, rather than a
+  label wrapping it, so its hint sits inside the `.config-field` it belongs to.
+- **The threshold is measured on the tab's width, not the dock's.** The dock shares its width with
+  the Problems column. At 1440 wide the bottom dock is 935px, but its tab is 589px. The tab is 429px
+  at 1280 wide, 1069px at 1920, and 302–463px when docked right, so a right-hand dock always stacks.
+  The operator's "dock at least 720px wide" in #1477 is this 576px tab: two cells of a 150px label and
+  a 120px number, plus the gaps, need 572px.
+- **Controls are sized by type at every width.** A select is as wide as its longest option, capped at
+  320px. A number (`.number-input`, on both `ConfigFieldControl` and `DraftNumberField`) is 120px.
+  Only free text grows. The 56rem readability cap is lifted for the grid alone. The run drawer
+  (`.node-detail-panel`) shares the dock and is not a form, so none of this applies to it.
+
+Comfortable density matches none of these rules and keeps the stacked column.
 
 Axe gates on every form (0 violations) belong to OR24 (#1415), which brings axe into the e2e suite.
