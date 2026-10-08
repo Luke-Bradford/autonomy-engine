@@ -853,6 +853,51 @@ the `GitHostClient.token` param, the `KeyedQueue`.
   token. The token-entry UI shipped 2026-08-06 (#956, U18 slice 1). Non-github hosts +
   multi-remote remain later work (#692).
 
+### Bulk export bundle built-block (2026-10-08, #1586)
+
+The Pipelines toolbar's **Export** writes the pipelines the grid shows as ONE file. #1586 offered
+two shapes, and this one was chosen: **(1) a bundle envelope that `POST /api/import` reads back**,
+the ADF "Export ARM template" analogue. The other option was **(2) pointing bulk export at the git
+working copy**. It was rejected because git is opt-in (#662 D2), so a no-repo workspace would have
+no bulk export at all.
+
+- **Format** (`shared/portability/envelope.ts`):
+  - The file is `{ kind: 'bundle', bundleVersion: 1, exportedAt, items: ExportEnvelope[] }`.
+  - Each member is exactly the file its single export would be, with its own
+    `schemaVersion`/`catalogVersion`/`exportedAt`. It upgrades on its own through
+    `parseAndUpgradeEnvelope`.
+  - `bundleVersion` versions only the wrapper.
+  - `bundle` is not a `RESOURCE_KIND`: it has no row and no git file.
+  - Bundles do not nest.
+- **Export** (`POST /api/pipelines/export { ids }`, 1..`MAX_BUNDLE_ITEMS`):
+  - Owner-scoped per id. One id that is missing or not the caller's 404s the whole request, so the
+    file is never quietly shorter than asked.
+  - Ids are de-duplicated and keep the caller's order.
+  - Canonical bytes.
+  - A file larger than `REQUEST_BODY_LIMIT_BYTES` (1 MiB, unchanged) is **refused with a 400**
+    rather than served, because the import could not read it back. The limit was deliberately not
+    raised, since an import is one synchronous parse plus one synchronous transaction.
+- **Import** (`importBundle`):
+  - **All or nothing.** Every member is parsed and upgraded before any write, then ONE transaction
+    imports them through the single-pipeline path. Each pipeline's own transaction nests as a
+    SAVEPOINT.
+  - **Pipelines only.** A dataset needs a per-file store choice. A connection imported beside a
+    dataset mints an identity the dataset cannot resolve. Two same-named global parameters would
+    refuse each other. A non-pipeline member refuses the file.
+  - **Every refusal names its member**, as `Item N (pipeline "name")`. Each error keeps its class:
+    a doc-gate refusal is still `invalid_pipeline_doc`, and a write-schema `ZodError` becomes an
+    `import_error`.
+  - The result is one `ImportResult` per member, each with its own attention items.
+- **Known and accepted:**
+  - `archived` is local state and is never exported, so exporting from the Archived view and
+    importing restores those pipelines **live**. The same is true of a single export.
+- **Web:**
+  - The Export button is aria-disabled until the list is known to be whole: the list or the
+    archived list has loaded, and the run facts a filter needs have been read. Otherwise the file
+    would be a different set from the one on screen.
+  - The Import drawer refuses, before sending, a bundle that carries a member of another page's
+    kind.
+
 ## Challenge-hardened CORE v2 (2026-07-14 — read the SHIPPED P1c code; MAJOR reshape)
 
 P1c is a **cross-workspace COPY primitive** (mints new ids, NULLs every internal ref
