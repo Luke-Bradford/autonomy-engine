@@ -399,7 +399,9 @@ list (a Copy mapping, HTTP headers, LLM messages, an output schema) render throu
 - **A row's errors and advisories go on a notes row under it** (`RowNotes`, spanning the table), only
   when it has any, so they never widen a cell.
 - **A cell's `${}` and `ƒx` toggles show under the box only while the cell has focus**, or while their
-  list is open. This is ADF's "Add dynamic content" on focus. Inline, three text columns' toggles leave
+  list is open. ADF's "Add dynamic content" link sits under the box at all times
+  ([Learn](https://learn.microsoft.com/azure/data-factory/how-to-expression-language-functions));
+  showing it on focus is a deliberate difference for table rows. Inline, three text columns' toggles leave
   no room for the text in a 589px tab. They are hidden from sight, not removed: Tab from the box lands
   on `${}`, and a spec focuses the cell before it clicks one.
 - **The table scrolls sideways rather than crushing its columns.** A text column is at least 5rem, so

@@ -4816,7 +4816,8 @@ button.danger {
 }
 
 /* The `${}` / `ƒx` toggles show under the box only while its cell has focus
-   (or its list is open) — ADF's "Add dynamic content" on focus. Inline, three
+   (or its list is open). ADF puts "Add dynamic content" under the box always;
+   showing it on focus is studio's own departure, for table rows. Inline, three
    text columns' toggles leave no room for the text in a 589px tab, and under
    every box they make each row three lines tall. Out of sight, not removed:
    Tab from the box lands on `${}`, which keeps focus in the cell and so shows
