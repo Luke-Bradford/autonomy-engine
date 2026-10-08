@@ -89,8 +89,10 @@ test.describe('#1477 the connection kind gallery', () => {
     await gotoConnections(page);
     const newButton = page.getByRole('button', { name: 'New connection' });
 
+    // Escape from a focused tile, not only from the search box.
     await newButton.click();
-    await gallery(page).press('Escape');
+    await gallery(page).getByRole('button', { name: 'HTTP', exact: true }).focus();
+    await page.keyboard.press('Escape');
     await expect(gallery(page)).toHaveCount(0);
     await expect(newButton).toBeFocused();
 

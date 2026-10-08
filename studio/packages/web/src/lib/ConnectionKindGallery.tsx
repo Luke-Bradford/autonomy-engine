@@ -30,8 +30,10 @@ export function ConnectionKindGallery({
 
   return (
     <div className="kind-gallery">
-      <label className="kind-gallery__search" htmlFor={searchId} role="search">
-        <span className="visually-hidden">Search connection kinds</span>
+      <div className="kind-gallery__search" role="search" aria-label="Connection kinds">
+        <label htmlFor={searchId} className="visually-hidden">
+          Search connection kinds
+        </label>
         {/* `text`, not `search`: a search box clears itself on Escape, which
             must close the drawer instead. */}
         <input
@@ -42,7 +44,7 @@ export function ConnectionKindGallery({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-      </label>
+      </div>
       {groups.length === 0 && <p className="kind-gallery__empty">No connection kinds match</p>}
       {groups.map((group) => (
         <section
@@ -53,7 +55,8 @@ export function ConnectionKindGallery({
           <h4 id={`${idBase}-${group.key}`}>{group.label}</h4>
           <ul className="kind-gallery__tiles">
             {group.tiles.map(({ kind, disabledReason: reason }) => {
-              const describedBy = `${idBase}-${kind}-d`;
+              const descriptionId = `${idBase}-${kind}-d`;
+              const reasonId = `${idBase}-${kind}-r`;
               return (
                 <li key={kind}>
                   <button
@@ -61,7 +64,9 @@ export function ConnectionKindGallery({
                     className="kind-gallery__tile"
                     title={CONNECTION_KIND_DESCRIPTIONS[kind]}
                     aria-disabled={reason !== undefined ? true : undefined}
-                    aria-describedby={describedBy}
+                    aria-describedby={
+                      reason !== undefined ? `${reasonId} ${descriptionId}` : descriptionId
+                    }
                     onClick={() => {
                       if (reason === undefined) onPick(kind);
                     }}
@@ -70,15 +75,14 @@ export function ConnectionKindGallery({
                   </button>
                   {/* Beside the button, not in it: text inside would join the
                       button's name, and the name is the kind. */}
-                  {reason !== undefined ? (
-                    <span id={describedBy} className="kind-gallery__reason">
+                  {reason !== undefined && (
+                    <span id={reasonId} className="kind-gallery__reason">
                       {reason}
                     </span>
-                  ) : (
-                    <span id={describedBy} className="visually-hidden">
-                      {CONNECTION_KIND_DESCRIPTIONS[kind]}
-                    </span>
                   )}
+                  <span id={descriptionId} className="visually-hidden">
+                    {CONNECTION_KIND_DESCRIPTIONS[kind]}
+                  </span>
                 </li>
               );
             })}

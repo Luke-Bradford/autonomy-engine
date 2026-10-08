@@ -207,6 +207,9 @@ export function ConnectionsPage() {
    * form (through the guard, via `openFrom`).
    */
   const [choosingKind, setChoosingKind] = useState(false);
+  // Each press of New is a fresh gallery (empty search, focus in it), even
+  // when one is already open.
+  const [gallerySeq, setGallerySeq] = useState(0);
   const drawerOpen = form !== null || choosingKind;
   /**
    * #1174 — the datasets bound to the connection being edited, and whether that
@@ -526,6 +529,7 @@ export function ConnectionsPage() {
             drawer.openFrom(e.currentTarget, () => {
               setForm(null);
               setChoosingKind(true);
+              setGallerySeq((n) => n + 1);
             })
           }
         >
@@ -609,6 +613,7 @@ export function ConnectionsPage() {
 
         {choosingKind && form === null && (
           <ConnectionKindDrawer
+            key={gallerySeq}
             returnFocusTo={openerRef}
             onClose={() => setChoosingKind(false)}
             onPick={(kind) => {
@@ -631,10 +636,11 @@ export function ConnectionsPage() {
              was never probed.
 
              Keyed on the open COUNTER rather than on `form.id`, because `id` is
-             `null` for every new-connection form: pressing "New connection"
-             twice would not remount, and `blankForm()` is byte-identical each
-             time, so the signature would match and the previous draft's verdict
-             would render against a form nothing has tested. */
+             `null` for every new-connection form and `blankForm(kind)` is
+             byte-identical each time, so the signature would match and the
+             previous draft's verdict would render against a form nothing has
+             tested. (#1477's kind gallery now unmounts the form between two
+             New presses; the counter is what still covers Edit → Edit.) */
             key={formSeq}
             form={form}
             /* #1174 — the inputs the strand note needs, read from the LIST rather

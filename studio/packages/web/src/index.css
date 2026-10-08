@@ -1435,11 +1435,6 @@ details.form-section > summary.form-section-title {
   text-align: left;
 }
 
-.kind-gallery__tile[aria-disabled='true'] {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
 .kind-gallery__reason,
 .kind-gallery__empty {
   margin: 0;

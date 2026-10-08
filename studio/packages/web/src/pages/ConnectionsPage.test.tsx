@@ -13,8 +13,6 @@ import { answerConfirm, setConfirmName } from '../testing/confirmDialog';
 import { TYPED_NAME_SUFFIX, typedNameLabel } from '../lib/confirm/typedName';
 import { ApiError } from '../api/client';
 
-// Mock only the network calls; keep ConnectionWriteSchema real so the form's
-// client-side validation is exercised exactly as it ships.
 /**
  * #1477 — "New connection" opens the kind gallery first; the form opens for
  * the kind picked there. Anthropic API was the form's default kind before the
@@ -25,6 +23,8 @@ async function openNewConnection(user: ReturnType<typeof userEvent.setup>, kind 
   await user.click(screen.getByRole('button', { name: kind }));
 }
 
+// Mock only the network calls; keep ConnectionWriteSchema real so the form's
+// client-side validation is exercised exactly as it ships.
 vi.mock('../api/connections', async (importActual) => {
   const actual = await importActual<typeof import('../api/connections')>();
   return {
@@ -832,18 +832,13 @@ describe('ConnectionsPage', () => {
     });
 
     it('does not carry a verdict into a SECOND new-connection form', async () => {
-      // "New connection" is not gated behind the form being closed, so it can be
-      // pressed with a new-connection form already open. `form.id` is `null`
-      // both times, so keying the form on `id` did not remount it — and
-      // `blankForm()` is byte-identical each time, so the draft SIGNATURE
-      // matched too, and the first draft's "Connected." rendered against a form
-      // nothing had tested.
-      //
-      // The draft is therefore left PRISTINE here, which is the whole point:
-      // the moment a field is touched the signature diverges on its own and the
-      // verdict hides for reasons that have nothing to do with the remount. It
-      // is the untouched blank form — the one case where both guards agree on
-      // the wrong answer — that needs the open COUNTER.
+      // "New connection" can be pressed with a new-connection form already
+      // open. `form.id` is `null` both times and `blankForm(kind)` is
+      // byte-identical, so the draft SIGNATURE matches: only a remount keeps the
+      // first draft's "Connected." off a form nothing has tested. Since #1477 the
+      // kind gallery sits between the two forms, which unmounts the first; the
+      // open COUNTER key still covers Edit → Edit, tested separately. The draft
+      // is left PRISTINE, the one case where the signature cannot tell.
       const user = userEvent.setup();
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText(/No connections yet/i);
@@ -1782,6 +1777,17 @@ describe('#1477 New connection opens the kind gallery first', () => {
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(newButton).toHaveFocus();
+  });
+
+  it('a second press of New starts a fresh gallery: empty search, focus in it', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+    await user.type(screen.getByRole('textbox', { name: 'Search connection kinds' }), 'post');
+    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    const search = screen.getByRole('textbox', { name: 'Search connection kinds' });
+    expect(search).toHaveValue('');
+    expect(search).toHaveFocus();
   });
 
   it('asks before replacing a dirty form; Keep keeps it, Discard opens the gallery', async () => {

@@ -63,7 +63,9 @@ describe('ConnectionKindGallery (#1477)', () => {
     );
     const tile = screen.getByRole('button', { name: 'File system' });
     expect(tile).toHaveAttribute('aria-disabled', 'true');
-    expect(tile).toHaveAccessibleDescription("Can't be a Copy sink yet");
+    expect(tile).toHaveAccessibleDescription(
+      `Can't be a Copy sink yet ${CONNECTION_KIND_DESCRIPTIONS.fs}`,
+    );
     expect(screen.getByText("Can't be a Copy sink yet")).toBeVisible();
     await user.click(tile);
     tile.focus();

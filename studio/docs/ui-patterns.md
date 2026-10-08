@@ -31,9 +31,11 @@ required marks and display names; its layout is its own, below.
 ## New connection: the kind gallery
 
 - **"New connection" opens the kind gallery first** (`ConnectionKindDrawer`), as ADF's "New linked
-  service" does. Picking a kind opens that kind's form, clean and with Name focused. The same
-  `ConnectionKindGallery` serves every place a connection is created, so a new kind appears in all
-  of them.
+  service" does. Picking a kind opens that kind's form, clean and with Name focused.
+  `ConnectionKindGallery` is the one gallery for every place a connection is created: Manage →
+  Connections now, the activity Source and Sink pickers next. A new kind then appears in all of them.
+- Focus goes to the search box on open. Escape or Cancel closes the gallery and hands focus back to
+  the button that opened it, and pressing New again starts a fresh gallery.
 - Kinds are listed in `CONNECTION_KIND_GROUPS` order (Database · File · HTTP/API · AI) as compact
   name tiles, two to a row. A kind's one-line description is its tooltip and accessible
   description, not text on the page.
@@ -41,7 +43,7 @@ required marks and display names; its layout is its own, below.
   prose, because words like "file" or "API" would then match kinds that are not that.
 - **A kind that cannot be used where the gallery was opened is shown disabled, with its reason**
   (`disabledReason`). It is not hidden. The tile is `aria-disabled` rather than `disabled`, so it
-  stays focusable and its reason can be read.
+  stays focusable, and it is described by the reason and then the kind's description.
 - The term is **kind**, as in the Kind column and the form's Kind field. ADF says "type".
 
 ## Sections
