@@ -150,8 +150,6 @@ test.describe('U7 — per-activity node config form', () => {
     await expectQuiet(page, problems);
   });
 
-  // #1396 — the Settings tab is grouped: what the step binds, the container it
-  // sits in, and what it does. A section after the first is ruled off from it.
   // #1477 OR29 — an activity's tabs come from its catalog entry. An HTTP node
   // opens on Request: its connection, its fields, then Container membership,
   // which closes the landing tab. Secret headers are on Auth.

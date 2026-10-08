@@ -31,9 +31,13 @@ export type ActivityKind = 'execution' | 'control';
  * is code-side metadata and is never persisted in a doc, so no older export can
  * carry a value this build does not know.
  */
+export const ACTIVITY_CATEGORIES = ['general', 'ai', 'control'] as const;
+export type ActivityCategory = (typeof ACTIVITY_CATEGORIES)[number];
+
 /**
- * #1477 OR29 — the property dock's per-activity TABS, as ADF draws them: a node
- * opens on "General" (run policy), then the tabs its catalog entry declares.
+ * #1477 OR29 — the property dock's per-activity TABS, as ADF draws them:
+ * "General" (run policy) first, then the tabs its catalog entry declares. A node
+ * OPENS on its first declared tab, where its required settings are.
  * The vocabulary is FIXED here, so a tab is spelled the same on every activity
  * that has one ("Source" on Copy and on Lookup) and a new tab is a deliberate
  * addition rather than a per-entry string. The order is the vocabulary's own.
@@ -111,9 +115,6 @@ export function applicableBindingSlots(
   }
   return slots;
 }
-
-export const ACTIVITY_CATEGORIES = ['general', 'ai', 'control'] as const;
-export type ActivityCategory = (typeof ACTIVITY_CATEGORIES)[number];
 
 /**
  * The GROUP HEADING the authoring toolbox renders for each category (U5).

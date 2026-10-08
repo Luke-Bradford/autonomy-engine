@@ -3273,8 +3273,8 @@ function ContainerSection({
   const canCreate =
     kind === 'loop' ? exitWhen.trim() !== '' : kind === 'foreach' ? items.trim() !== '' : true;
 
-  // #1396 — the Settings tab's Container section, on both panels that show it.
-  // The section's body is already the flex column these controls want, so no
+  // #1396 / #1477 — the Container section: on the landing tab of an activity's
+  // panel, and on a call node's Settings tab. The section's body is already the flex column these controls want, so no
   // wrapper of their own is needed.
   return (
     <FormSection title="Container" hint={FORM_SECTION_HINTS.node.container}>
@@ -4036,8 +4036,10 @@ export function NodePanel({
    * not hide behind a second tab.
    */
   function typeTabContent(t: (typeof typeTabs)[number]) {
+    // On General (no config of its own) the JSON sits on the landing tab, so a
+    // forced JSON editor is never mounted nowhere.
     const showConfig = editor.jsonMode
-      ? t.key === currentTab
+      ? t.key === (currentTab === 'general' ? landing : currentTab)
       : t.fields.length > 0 || t.bindings.length === 0;
     const holdsMapping = mappingField !== null && t.fields.some((f) => f === mappingField);
     return (
@@ -4055,7 +4057,7 @@ export function NodePanel({
                 stray singular `connectionId`. The paired pickers cannot clear it,
                 and `validateDoc` refuses the two together — so without this the
                 doc would be unsaveable with no affordance to repair it. */}
-            {t.bindings.includes('sourceConnection') && (
+            {(t.bindings.includes('sourceConnection') || t.bindings.includes('sinkConnection')) && (
               <>
                 {paired && connectionId !== undefined && (
                   <p className="contract-advisory">
@@ -4177,7 +4179,7 @@ export function NodePanel({
    * node is, and the acts on the whole node. The description is behind a `?`
    * (labels, not prose); the type id stays visible, as the one place it shows.
    */
-  function header(actions: boolean) {
+  function header(editActs: boolean) {
     return (
       <>
         <div className="property-panel__header">
@@ -4188,42 +4190,49 @@ export function NodePanel({
               {entry.description}
             </HelpDisclosure>
           )}
-          {actions && (
-            <span className="property-panel__actions">
-              {editor.canToggle && (
-                <button type="button" onClick={editor.toggleMode}>
-                  {editor.jsonMode ? 'Edit as fields' : 'Edit as JSON'}
+          <span className="property-panel__actions">
+            {editActs && (
+              <>
+                {editor.canToggle && currentTab !== 'general' && (
+                  <button type="button" onClick={editor.toggleMode}>
+                    {editor.jsonMode ? 'Edit as fields' : 'Edit as JSON'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={revert}
+                  disabled={!dirty}
+                  title="Discard the setting edits not yet applied, on every tab"
+                >
+                  Revert
                 </button>
-              )}
-              <button type="button" onClick={revert} disabled={!dirty}>
-                Revert
-              </button>
-              <button type="button" className="primary" onClick={apply}>
-                Apply config
-              </button>
-              {/* U21 — Duplicate acts on the node as SAVED into the store, not on
+                <button type="button" className="primary" onClick={apply}>
+                  Apply config
+                </button>
+              </>
+            )}
+            {/* U21 — Duplicate acts on the node as SAVED into the store, not on
                   the unapplied draft: the copy carries the config Apply last
                   wrote. Ungated, like Delete — what #907 gated is the SAVE of an
                   archived pipeline, which the server refuses. */}
-              <RowMoreMenu
-                name={nodeName}
-                label="More node actions"
-                actions={[
-                  {
-                    label: 'Duplicate node',
-                    onSelect: () => store.getState().duplicateNode(nodeId),
-                  },
-                ]}
-                destructive={{
-                  label: 'Delete node',
-                  onSelect: () => store.getState().deleteNode(nodeId),
-                }}
-              />
-            </span>
-          )}
+            <RowMoreMenu
+              name={nodeName}
+              label="More node actions"
+              actions={[
+                {
+                  label: 'Duplicate node',
+                  onSelect: () => store.getState().duplicateNode(nodeId),
+                },
+              ]}
+              destructive={{
+                label: 'Delete node',
+                onSelect: () => store.getState().deleteNode(nodeId),
+              }}
+            />
+          </span>
         </div>
         {/* Under the header, so Apply's refusal shows whichever tab is open. */}
-        {actions && error && (
+        {editActs && error && (
           <p className="error property-panel__error" role="alert">
             {error}
           </p>
@@ -4261,8 +4270,7 @@ export function NodePanel({
               content: (
                 <>
                   {/* `CallPanel` heads its own parts ("Call target", "Parameters")
-                      and applies them itself ("Apply call"), so the header has no
-                      Apply of its own here. */}
+                      and applies them itself ("Apply call"), so the header has no Apply, Revert or JSON toggle here, only its ⋯. */}
                   <CallPanel store={store} nodeId={nodeId} call={call} picker={picker} />
                   {/* Membership is orthogonal to the call blob: a container is
                       exactly the construct that puts a call node in one. */}

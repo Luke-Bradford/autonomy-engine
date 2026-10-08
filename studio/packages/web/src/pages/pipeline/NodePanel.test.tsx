@@ -294,8 +294,8 @@ describe('NodePanel says what the activity does (#1413)', () => {
     );
   });
 
-  /* The call arm returns early with its OWN header call — the same second copy #878
-     had to fix twice. */
+  /* The call arm returns early, a second render path — the kind #878 had to fix
+     twice — so its header is pinned on its own. */
   it('shows the same header in the call-editor arm too, without an Apply of its own', () => {
     const { row, type } = about('execute_pipeline');
     expect(type).toBe('execute_pipeline');
@@ -303,10 +303,12 @@ describe('NodePanel says what the activity does (#1413)', () => {
     expect(within(row).getByRole('note').textContent).toContain(
       getActivity('execute_pipeline')!.description,
     );
-    // `CallPanel` applies its own parts, so the node-level acts are absent here.
-    for (const name of ['Apply config', 'Revert', 'Edit as JSON', 'More node actions']) {
+    // `CallPanel` applies its own parts, so the draft acts are absent here; the
+    // node's ⋯ (Duplicate, Delete) is not.
+    for (const name of ['Apply config', 'Revert', 'Edit as JSON']) {
       expect(within(row).queryByRole('button', { name })).toBeNull();
     }
+    expect(within(row).getByRole('button', { name: 'More node actions' })).toBeTruthy();
   });
 
   it('offers no About ? for an uncatalogued type rather than an empty note', () => {
@@ -1982,6 +1984,17 @@ describe('NodePanel — what each tab holds (#1396, #1477)', () => {
 });
 
 describe('NodePanel — catalog tabs (#1477)', () => {
+  it('keeps a forced JSON editor mounted on the landing tab while General is open', () => {
+    mountOver(httpNode({ url: 'https://x', secretHeaders: { A: { $secret: 'x', extra: 1 } } }));
+    openTab('General');
+    // Hidden with its tab, not gone: going back finds the JSON the author was in.
+    expect(screen.getByLabelText('Config (JSON)')).toBeTruthy();
+    // General has no config of its own, so it offers no fields/JSON switch.
+    expect(screen.queryByRole('button', { name: /Edit as (JSON|fields)/ })).toBeNull();
+    openTab('Request');
+    expect(screen.getByRole('textbox', { name: 'Config (JSON)' })).toBeTruthy();
+  });
+
   const llmNode = (config: Record<string, unknown> = {}): Node => node('n_llm', 'llm_call', config);
 
   it('Apply reads EVERY tab, not only the one on screen', () => {

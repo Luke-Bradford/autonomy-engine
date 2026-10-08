@@ -25,8 +25,8 @@ export interface NodeTypeTab {
  * author cannot see or change:
  *  - a derived field no tab lists goes on the LAST tab, never nowhere, and a
  *    binding the entry has that no tab places goes on the FIRST;
- *  - a listed name the schema does not have, or a binding the entry cannot
- *    have, is dropped;
+ *  - a listed name the schema does not have, a binding the entry cannot
+ *    have, and a second listing of either, are dropped;
  *  - a tab left with nothing to show is dropped.
  * An entry that declares no tabs, or a type the catalog does not know, gets one
  * Settings tab holding everything.
@@ -42,6 +42,7 @@ export function nodeTypeTabs(
   }
   const byName = new Map(fields.map((f) => [f.name, f]));
   const placed = new Set<string>();
+  const slotted = new Set<ActivityBindingSlot>();
   const tabs = declared.map((tab) => {
     const own = tab.fields.flatMap((name) => {
       const field = byName.get(name);
@@ -53,7 +54,11 @@ export function nodeTypeTabs(
       key: tab.key,
       label: ACTIVITY_TAB_TITLES[tab.key],
       fields: own,
-      bindings: (tab.bindings ?? []).filter((slot) => slots.includes(slot)),
+      bindings: (tab.bindings ?? []).filter((slot) => {
+        if (!slots.includes(slot) || slotted.has(slot)) return false;
+        slotted.add(slot);
+        return true;
+      }),
     };
   });
   const unplaced = fields.filter((f) => !placed.has(f.name));

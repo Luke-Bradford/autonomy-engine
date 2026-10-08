@@ -56,6 +56,19 @@ describe('nodeTypeTabs (#1477)', () => {
     ]);
   });
 
+  it('draws a binding declared on two tabs once, on the first', () => {
+    const entry = entryWith({
+      tabs: [
+        { key: 'request', bindings: ['connection'], fields: ['url', 'method', 'headers', 'body'] },
+        { key: 'auth', bindings: ['connection'], fields: ['secretHeaders'] },
+      ],
+    });
+    expect(nodeTypeTabs(entry, fieldsOf(entry)).map((t) => t.bindings)).toEqual([
+      ['connection'],
+      [],
+    ]);
+  });
+
   it('drops a name the schema lacks, a binding the entry cannot have, and an emptied tab', () => {
     const entry = entryWith({
       connectionKinds: [],

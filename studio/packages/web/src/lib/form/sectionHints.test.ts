@@ -17,7 +17,7 @@ function flatten(node: string | Record<string, unknown>, path: string): [string,
 
 const hints = flatten(FORM_SECTION_HINTS, '');
 
-/** `node.activitySettings` → "activity settings", the section's title. */
+/** `node.runPolicy` → "run policy", the section's title. */
 function titleOf(path: string): string {
   const key = path.split('.').at(-1) ?? path;
   return key.replace(/([A-Z])/g, ' $1').toLowerCase();
