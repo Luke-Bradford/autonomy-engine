@@ -99,7 +99,7 @@ test.describe('#852 — the bottom property dock', () => {
     await expectQuiet(page, problems);
   });
 
-  test('an activity opens on Settings, and a chosen tab survives selecting another', async ({
+  test('an activity opens on its first type tab, and a chosen tab survives selecting another', async ({
     page,
   }) => {
     const problems = collectPageProblems(page);
@@ -107,24 +107,26 @@ test.describe('#852 — the bottom property dock', () => {
 
     await nodeById(page, 'a').click();
     await expect(properties(page).getByRole('heading', { name: /HTTP Request/ })).toBeVisible();
-    await expect(properties(page).getByRole('tab', { name: 'Settings' })).toHaveAttribute(
+    // #1477 — an HTTP node's first type tab is Request.
+    await expect(properties(page).getByRole('tab', { name: 'Request' })).toHaveAttribute(
       'aria-selected',
       'true',
     );
     await expect(properties(page).getByRole('button', { name: 'Apply config' })).toBeVisible();
     await expect(properties(page).getByRole('group', { name: 'Run policy' })).toHaveCount(0);
 
-    // Membership stays on Settings: it is also where a container is CREATED.
+    // Membership stays on the landing tab: it is also where a container is CREATED.
     await expect(
       properties(page).getByRole('combobox', { name: 'Container membership' }),
     ).toBeVisible();
 
     await properties(page).getByRole('tab', { name: 'General' }).click();
     await expect(properties(page).getByRole('group', { name: 'Run policy' })).toBeVisible();
-    await expect(properties(page).getByRole('button', { name: 'Apply config' })).toBeHidden();
+    // #1477 — Apply is in the pinned header, so it is reachable from any tab.
+    await expect(properties(page).getByRole('button', { name: 'Apply config' })).toBeVisible();
 
     // Another activity: the panel remounts (it is keyed per node) and must land
-    // on the tab the operator was using, not snap back to Settings.
+    // on the tab the operator was using, not snap back to its first type tab.
     await nodeById(page, 'b').click();
     await expect(properties(page).getByRole('tab', { name: 'General' })).toHaveAttribute(
       'aria-selected',

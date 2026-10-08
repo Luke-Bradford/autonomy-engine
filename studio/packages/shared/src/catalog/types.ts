@@ -35,6 +35,88 @@ export const ACTIVITY_CATEGORIES = ['general', 'ai', 'control'] as const;
 export type ActivityCategory = (typeof ACTIVITY_CATEGORIES)[number];
 
 /**
+ * #1477 OR29 — the property dock's per-activity TABS, as ADF draws them:
+ * "General" (run policy) first, then the tabs its catalog entry declares. A node
+ * OPENS on its first declared tab, where its required settings are.
+ * The vocabulary is FIXED here, so a tab is spelled the same on every activity
+ * that has one ("Source" on Copy and on Lookup) and a new tab is a deliberate
+ * addition rather than a per-entry string. The order is the vocabulary's own.
+ *
+ * Display-only metadata, like `description`: nothing persists it on a version,
+ * so declaring or regrouping tabs never bumps `CATALOG_VERSION`.
+ */
+export const ACTIVITY_TAB_KEYS = [
+  'settings',
+  'source',
+  'sink',
+  'mapping',
+  'request',
+  'auth',
+  'model',
+  'prompt',
+  'tools',
+  'output',
+  'location',
+  'content',
+] as const;
+export type ActivityTabKey = (typeof ACTIVITY_TAB_KEYS)[number];
+
+/** #1477 — each tab's label. The one place a tab's title is spelled. */
+export const ACTIVITY_TAB_TITLES: Readonly<Record<ActivityTabKey, string>> = {
+  settings: 'Settings',
+  source: 'Source',
+  sink: 'Sink',
+  mapping: 'Mapping',
+  request: 'Request',
+  auth: 'Auth',
+  model: 'Model',
+  prompt: 'Prompt',
+  tools: 'Tools',
+  output: 'Output',
+  location: 'Location',
+  content: 'Content',
+};
+
+/**
+ * #1477 — the bindings a node's panel can draw, each placed on exactly one tab.
+ * `connection` is the single-connection picker (with its overrides); a PAIRED
+ * activity has `sourceConnection` and `sinkConnection` instead. The dataset
+ * slots carry their own overrides. Which of these an activity HAS follows from
+ * its catalog entry alone — see `applicableBindingSlots`.
+ */
+export type ActivityBindingSlot =
+  'connection' | 'sourceConnection' | 'sinkConnection' | 'sourceDataset' | 'sinkDataset';
+
+export interface ActivityTab {
+  readonly key: ActivityTabKey;
+  /**
+   * The config keys this tab shows, IN THIS ORDER — required before optional.
+   * Every key of the entry's `configSchema` is on exactly one tab, and nothing
+   * else is (pinned by `activity-tabs.test.ts`), so this list cannot drift from the
+   * schema the way a hand-kept field list otherwise would (the U7 objection).
+   */
+  readonly fields: readonly string[];
+  readonly bindings?: readonly ActivityBindingSlot[];
+}
+
+/**
+ * #1477 — which binding slots an entry has. One reading of the entry for the
+ * catalog test, the web's tab resolver and the panel that draws them.
+ */
+export function applicableBindingSlots(
+  entry: Pick<ActivityCatalogEntry, 'connectionKinds' | 'sinkConnectionKinds' | 'datasetKinds'>,
+): ActivityBindingSlot[] {
+  const slots: ActivityBindingSlot[] = [];
+  if (entry.sinkConnectionKinds !== undefined) slots.push('sourceConnection', 'sinkConnection');
+  else if (entry.connectionKinds.length > 0) slots.push('connection');
+  if (entry.datasetKinds !== undefined) {
+    slots.push('sourceDataset');
+    if (entry.datasetKinds.sink !== undefined) slots.push('sinkDataset');
+  }
+  return slots;
+}
+
+/**
  * The GROUP HEADING the authoring toolbox renders for each category (U5).
  *
  * Lives here rather than web-side for the same reason `ActivityCatalogEntry.title`
@@ -409,6 +491,12 @@ export interface ActivityCatalogEntry {
    * owes the `CATALOG_VERSION` bump for POPULATING it (see `schemas/version.ts`).
    */
   datasetKinds?: { source: DatasetKind[]; sink?: DatasetKind[] };
+  /**
+   * #1477 OR29 — the property dock's tabs after "General", in order. Required on
+   * every entry the generic panel renders; a structural call (`execute_pipeline`)
+   * is authored by its own panel and declares none. See `ActivityTab`.
+   */
+  tabs?: readonly [ActivityTab, ...ActivityTab[]];
   /** Canonical outputs (UI/metadata). See the class doc — not the runtime SSOT. */
   outputs: Output[];
   /**

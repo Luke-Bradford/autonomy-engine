@@ -3,7 +3,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { canvasNodes } from './support/canvasGraph';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
 import { seedConnection } from './support/seedResources';
-import { properties } from './support/panels';
+import { properties, expectTabNames } from './support/panels';
 
 /**
  * U7 — authoring an activity's settings through NAMED controls.
@@ -150,39 +150,32 @@ test.describe('U7 — per-activity node config form', () => {
     await expectQuiet(page, problems);
   });
 
-  // #1396 — the Settings tab is grouped: what the step binds, the container it
-  // sits in, and what it does. A section after the first is ruled off from it.
-  test('the Settings tab groups bindings, container and the activity settings', async ({
+  // #1477 OR29 — an activity's tabs come from its catalog entry. An HTTP node
+  // opens on Request: its connection, its fields, then Container membership,
+  // which closes the landing tab. Secret headers are on Auth.
+  test('an activity opens on its first catalog tab, with Container closing it', async ({
     page,
   }) => {
     const problems = collectPageProblems(page);
-    await openSeededCanvas(page, 'or5 panel sections', {
+    await openSeededCanvas(page, 'or29 panel tabs', {
       nodes: [
         { id: 'a', type: 'http_request', position: { x: 0, y: 0 }, config: {} },
         { id: 'w', type: 'wait', position: { x: 300, y: 0 }, config: { seconds: '${30}' } },
       ],
     });
     await canvasNodes(page).first().click();
-    const section = (name: string) => properties(page).getByRole('group', { name, exact: true });
-    await expect(section('Bindings').getByRole('combobox', { name: 'Connection' })).toBeVisible();
-    await expect(section('Container').getByLabel('Container membership')).toBeVisible();
-    await expect(
-      section('Activity settings').getByRole('textbox', { name: 'Request URL', exact: true }),
-    ).toBeVisible();
-    // #1413 — each section says what it holds, as the group's description.
-    await expect(section('Bindings')).toHaveAccessibleDescription(
-      'The connections and datasets this activity uses, and any settings it overrides on them.',
-    );
-    await expect(section('Activity settings')).toHaveAccessibleDescription(
-      'What this activity does when it runs; the settings follow from its type.',
-    );
+    const tabs = properties(page).getByRole('tablist', { name: 'Activity properties' });
+    await expectTabNames(tabs, ['General', 'Request', 'Auth']);
+    const request = properties(page).getByRole('tabpanel', { name: 'Request' });
+    await expect(request).toBeVisible();
+    await expect(request.getByRole('combobox', { name: 'Connection' })).toBeVisible();
+    await expect(request.getByRole('textbox', { name: 'Request URL', exact: true })).toBeVisible();
+    await expect(request.getByLabel('Container membership')).toBeVisible();
 
-    // One read of every computed value. The rule is on each later section's
-    // HEADING; the section body keeps the panel's own gap; the activity's fields
-    // start right under their heading.
+    // One read of every computed value: Container is the tab's only form
+    // section, ruled off on its heading because the fields precede it, and its
+    // body keeps the panel's own gap.
     const layout = await properties(page).evaluate((panel) => {
-      // The Settings tab's sections only: the hidden General tab's Run policy
-      // is a form section too, mounted but not on screen.
       const sections = [
         ...panel.querySelectorAll<HTMLElement>(
           '[role="tabpanel"]:not([hidden]) fieldset.form-section',
@@ -196,51 +189,37 @@ test.describe('U7 — per-activity node config form', () => {
             title: legend.textContent,
             fieldsetBorder: getComputedStyle(el).borderTopWidth,
             ruled: getComputedStyle(legend).borderTopWidth,
-            // Asked only of a ruled heading: an unruled one may be its text's width.
             ruleSpansSection:
-              getComputedStyle(legend).borderTopWidth === '0px'
-                ? null
-                : Math.abs(
-                    legend.getBoundingClientRect().width - el.getBoundingClientRect().width,
-                  ) < 1,
+              Math.abs(legend.getBoundingClientRect().width - el.getBoundingClientRect().width) < 1,
             gap: getComputedStyle(el.querySelector('.form-section-body')!).rowGap,
           };
         }),
-        configMarginTop: getComputedStyle(
-          panel.querySelector('[role="group"][aria-label="Config"]')!,
-        ).marginTop,
       };
     });
-    const { panelGap } = layout;
     expect(layout.sections).toEqual([
-      {
-        title: 'Bindings',
-        fieldsetBorder: '0px',
-        ruled: '0px',
-        ruleSpansSection: null,
-        gap: panelGap,
-      },
       {
         title: 'Container',
         fieldsetBorder: '0px',
         ruled: '1px',
         ruleSpansSection: true,
-        gap: panelGap,
-      },
-      {
-        title: 'Activity settings',
-        fieldsetBorder: '0px',
-        ruled: '1px',
-        ruleSpansSection: true,
-        gap: panelGap,
+        gap: layout.panelGap,
       },
     ]);
-    expect(layout.configMarginTop).toBe('0px');
 
-    // A wait binds nothing, so it has no Bindings section at all.
+    await tabs.getByRole('tab', { name: 'Auth' }).click();
+    await expect(
+      properties(page)
+        .getByRole('tabpanel', { name: 'Auth' })
+        .getByRole('group', { name: 'Secret headers', exact: true }),
+    ).toBeVisible();
+
+    // A wait binds nothing: one Settings tab, its field, and no connection. The
+    // dock's remembered tab (Auth) is not one a wait has, so it opens on Settings.
     await canvasNodes(page).nth(1).click();
-    await expect(section('Activity settings')).toBeVisible();
-    await expect(section('Bindings')).toHaveCount(0);
+    await expectTabNames(tabs, ['General', 'Settings']);
+    const settings = properties(page).getByRole('tabpanel', { name: 'Settings' });
+    await expect(settings).toBeVisible();
+    await expect(settings.getByRole('combobox', { name: 'Connection' })).toHaveCount(0);
     await expectQuiet(page, problems);
   });
 
@@ -447,7 +426,6 @@ test.describe('U7 — per-activity node config form', () => {
     const p = properties(page);
     // No JSON blob for either record: a row group per field.
     await expect(p.getByRole('group', { name: 'Request headers', exact: true })).toBeVisible();
-    await expect(p.getByRole('group', { name: 'Secret headers', exact: true })).toBeVisible();
     await expect(p.getByRole('textbox', { name: 'headers row 1 key', exact: true })).toHaveValue(
       'X-Keep',
     );
@@ -455,6 +433,9 @@ test.describe('U7 — per-activity node config form', () => {
     await p.getByRole('button', { name: 'Add headers row', exact: true }).click();
     await p.getByRole('textbox', { name: 'headers row 2 key', exact: true }).fill('X-Trace');
     await p.getByRole('textbox', { name: 'headers row 2 value', exact: true }).fill('${run.runId}');
+    // #1477 — secret headers are on the Auth tab.
+    await p.getByRole('tab', { name: 'Auth' }).click();
+    await expect(p.getByRole('group', { name: 'Secret headers', exact: true })).toBeVisible();
     await p.getByRole('button', { name: 'Add secretHeaders row', exact: true }).click();
     await p
       .getByRole('textbox', { name: 'secretHeaders row 1 key', exact: true })
@@ -464,14 +445,15 @@ test.describe('U7 — per-activity node config form', () => {
       .fill('api-token');
     // The value cell takes a reference; the key and secret-name cells do not.
     await expect(
-      p.getByRole('button', { name: 'Insert reference into headers row 2 value', exact: true }),
-    ).toBeVisible();
-    await expect(
       p.getByRole('button', {
         name: 'Insert reference into secretHeaders row 1 secret name',
         exact: true,
       }),
     ).toHaveCount(0);
+    await p.getByRole('tab', { name: 'Request' }).click();
+    await expect(
+      p.getByRole('button', { name: 'Insert reference into headers row 2 value', exact: true }),
+    ).toBeVisible();
     await p.getByRole('button', { name: 'Apply config', exact: true }).click();
 
     await page.getByRole('button', { name: 'Save version', exact: true }).click();
@@ -489,6 +471,7 @@ test.describe('U7 — per-activity node config form', () => {
     await expect(p.getByRole('textbox', { name: 'headers row 2 value', exact: true })).toHaveValue(
       '${run.runId}',
     );
+    await properties(page).getByRole('tab', { name: 'Auth' }).click();
     await expect(
       p.getByRole('textbox', { name: 'secretHeaders row 1 secret name', exact: true }),
     ).toHaveValue('api-token');
@@ -517,6 +500,7 @@ test.describe('U7 — per-activity node config form', () => {
     });
 
     await canvasNodes(page).first().click();
+    await properties(page).getByRole('tab', { name: 'Prompt' }).click();
     const p = properties(page);
     await expect(p.getByRole('group', { name: 'Conversation', exact: true })).toBeVisible();
     await expect(p.getByRole('combobox', { name: 'messages row 1 role', exact: true })).toHaveValue(
@@ -558,6 +542,7 @@ test.describe('U7 — per-activity node config form', () => {
     await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
     await page.locator('.react-flow__renderer').waitFor();
     await canvasNodes(page).first().click();
+    await properties(page).getByRole('tab', { name: 'Prompt' }).click();
     await expect(p.getByRole('combobox', { name: 'messages row 2 role', exact: true })).toHaveValue(
       'assistant',
     );
@@ -599,6 +584,7 @@ test.describe('U7 — per-activity node config form', () => {
 
     await nodeById(page, 'a').click();
     const p = properties(page);
+    await properties(page).getByRole('tab', { name: 'Prompt' }).click();
     const history = p.getByRole('textbox', { name: 'History', exact: true });
     await expect(history).toHaveValue('');
     // The prompt, a template, IS offered the producer's string `text`...
@@ -623,6 +609,7 @@ test.describe('U7 — per-activity node config form', () => {
     await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
     await page.locator('.react-flow__renderer').waitFor();
     await nodeById(page, 'a').click();
+    await properties(page).getByRole('tab', { name: 'Prompt' }).click();
     await expect(history).toHaveValue('${nodes.p.output.messages}');
 
     await expectQuiet(page, problems);
@@ -653,6 +640,7 @@ test.describe('U7 — per-activity node config form', () => {
     });
 
     await canvasNodes(page).first().click();
+    await properties(page).getByRole('tab', { name: 'Prompt' }).click();
     const p = properties(page);
     await expect(
       p.getByRole('button', { name: 'move messages row 1 up', exact: true }),
@@ -710,6 +698,7 @@ test.describe('U7 — per-activity node config form', () => {
     });
 
     await canvasNodes(page).first().click();
+    await properties(page).getByRole('tab', { name: 'Output' }).click();
     const p = properties(page);
     const cell = (role: 'textbox' | 'combobox' | 'checkbox', row: number, name: string) =>
       p.getByRole(role, { name: new RegExp(`^outputSchema row ${row} ${name}\\b`) });
@@ -748,6 +737,7 @@ test.describe('U7 — per-activity node config form', () => {
     await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
     await page.locator('.react-flow__renderer').waitFor();
     await canvasNodes(page).first().click();
+    await properties(page).getByRole('tab', { name: 'Output' }).click();
     await expect(cell('textbox', 2, 'name')).toHaveValue('confidence');
     await expect(cell('checkbox', 2, 'required')).not.toBeChecked();
 

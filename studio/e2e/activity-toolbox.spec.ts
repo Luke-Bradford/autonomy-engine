@@ -125,11 +125,15 @@ test.describe('U5 activities toolbox', () => {
 
     await item.click();
     await canvasNodes(page).first().click();
-    const about = page
+    // #1477 OR29 — the panel header names the type and keeps the sentence
+    // behind its `?` (labels, not prose).
+    const header = page
       .getByRole('complementary', { name: 'Properties' })
-      .locator('.property-panel__about');
-    await expect(about).toHaveText(`${does} copy`);
-    await expect(about.locator('code')).toHaveText('copy');
+      .locator('.property-panel__header');
+    await expect(header.locator('code')).toHaveText('copy');
+    await expect(header.getByText(does)).toBeHidden();
+    await header.getByLabel('About Copy Data').click();
+    await expect(header.getByText(does)).toBeVisible();
     await expectQuiet(page, problems);
   });
 

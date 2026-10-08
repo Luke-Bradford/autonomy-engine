@@ -1564,10 +1564,12 @@ button.danger {
 
 .activity-toolbox,
 .property-panel {
+  /* #1477 — named, so the pinned header can reach across it. */
+  --property-panel-pad: 0.75rem;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 0.75rem;
+  padding: var(--property-panel-pad);
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
@@ -1584,6 +1586,59 @@ button.danger {
 .property-panel h3 {
   margin: 0;
   font-size: 0.95rem;
+}
+
+/* #1477 OR29 — a node's header row and its tab strip, pinned together while the
+   panel scrolls, so the node's name and Apply / Revert / ⋯ stay in reach from
+   the bottom of a long tab. Opaque and above the fields that scroll under it.
+   It reaches across the panel's padding (negative margins, matching padding),
+   so it sits where it will stick (no jump) and no field shows in the gutters.
+   `scroll-padding-top` keeps a field reached by Tab from landing beneath it. */
+.panel-tabs-sticky {
+  position: sticky;
+  top: 0;
+  margin: calc(-1 * var(--property-panel-pad)) calc(-1 * var(--property-panel-pad)) 0;
+  padding: var(--property-panel-pad) var(--property-panel-pad) 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  background: var(--panel);
+}
+
+.property-panel:has(> .panel-tabs-sticky) {
+  /* The pinned region's height with the header wrapped onto two rows, as it is
+     in the 320px-minimum right-hand dock. Erring high only scrolls a focused
+     field a little further; erring low would hide it under the header. */
+  scroll-padding-top: 7rem;
+}
+
+.property-panel__header {
+  /* The `?`'s note anchors to this row (`HelpDisclosure inline`). */
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.property-panel__type {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.property-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+
+/* Apply's refusal can list several issues; it scrolls rather than filling the dock. */
+.property-panel__error {
+  max-height: 3.5rem;
+  margin: 0;
+  overflow-y: auto;
 }
 
 /* #1475 — the dividers between the toolbox and the canvas, and between the
@@ -1772,7 +1827,7 @@ button.danger {
   color: var(--muted);
 }
 
-/* #1396 — the Settings tab's sections (Bindings, Container, Activity settings).
+/* #1396 — a form section in the property panel (Container, Run policy).
    The panel's own rhythm, not a drawer's, and a rule between sections so each
    reads as its own group. */
 .property-panel .form-section-body {
@@ -2525,7 +2580,8 @@ button.danger {
 }
 
 :root[data-density='compact'] .property-dock .property-panel {
-  padding: var(--density-space-2);
+  --property-panel-pad: var(--density-space-2);
+  padding: var(--property-panel-pad);
   gap: var(--density-space-2);
   font-size: var(--density-field-font);
 }
@@ -2566,6 +2622,14 @@ button.danger {
 :root[data-density='compact'] .property-dock .property-panel h3,
 :root[data-density='compact'] .property-dock .property-panel .contract-section h4 {
   margin: 0;
+}
+
+/* #1477 — the header's h3 is the node's NAME, not a section label: it keeps its
+   own case and reads at field size. */
+:root[data-density='compact'] .property-dock .property-panel .property-panel__header h3 {
+  font-size: var(--density-field-font);
+  letter-spacing: normal;
+  text-transform: none;
 }
 
 /* The title is the fieldset's legend, so the body's `gap` does not reach the

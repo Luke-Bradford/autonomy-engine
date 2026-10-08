@@ -86,9 +86,17 @@ test.describe('#1221 — lookup-node authoring', () => {
     await expect(properties(page).getByRole('combobox', { name: 'Source dataset' })).toBeVisible();
 
     // A lookup node has no settings of its own — everything that shapes the read
-    // belongs to the dataset — so the form derives to nothing rather than
-    // degrading to a raw JSON textarea.
-    await expect(properties(page)).toContainText('This activity has no settings.');
+    // belongs to the dataset — so its one tab (#1477: Source) holds the bindings
+    // and no config form, rather than degrading to a raw JSON textarea.
+    await expect(
+      properties(page).getByRole('tablist', { name: 'Activity properties' }).getByRole('tab'),
+    ).toHaveCount(2); // General, Source
+    await expect(properties(page).getByRole('tab', { name: 'Source' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await expect(properties(page).getByRole('group', { name: 'Config' })).toHaveCount(0);
+    await expect(properties(page).getByLabel('Config (JSON)')).toHaveCount(0);
 
     // Before a connection is picked, both stores' datasets are on offer. Asserted
     // by IDENTITY rather than by a total count: the e2e workspace is shared

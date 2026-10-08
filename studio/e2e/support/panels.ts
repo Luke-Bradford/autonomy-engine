@@ -22,6 +22,31 @@ export function dockPaste(page: Page): Locator {
   return page.locator('.property-dock__header').getByRole('button', { name: 'Paste', exact: true });
 }
 
+/**
+ * #1477 OR29 — a selected node's Duplicate node / Delete node, from the `⋯`
+ * menu in its pinned header.
+ */
+export async function nodeMenuAction(
+  page: Page,
+  action: 'Duplicate node' | 'Delete node',
+): Promise<void> {
+  await properties(page).getByRole('button', { name: 'More node actions', exact: true }).click();
+  await page.getByRole('menuitem', { name: action, exact: true }).click();
+}
+
+/**
+ * #1477 — a tab strip's tabs, by accessible name and in order. Not `toHaveText`:
+ * Fluent draws each label twice (one copy reserves the selected tab's bold
+ * width), so a tab's text reads "GeneralGeneral".
+ */
+export async function expectTabNames(tablist: Locator, names: readonly string[]): Promise<void> {
+  const tabs = tablist.getByRole('tab');
+  await expect(tabs).toHaveCount(names.length);
+  for (const [i, name] of names.entries()) {
+    await expect(tabs.nth(i)).toHaveAccessibleName(name);
+  }
+}
+
 /** Manage → Triggers' create/edit form. */
 export function triggerForm(page: Page): Locator {
   return page.getByRole('form', { name: 'Trigger form' });

@@ -56,6 +56,11 @@ async function seedDataset(
   return ((await res.json()) as { id: string }).id;
 }
 
+/** #1477 OR29 — a copy node's Source, Sink and Mapping are tabs of its panel. */
+async function copyTab(page: Page, name: 'Source' | 'Sink' | 'Mapping'): Promise<void> {
+  await properties(page).getByRole('tab', { name, exact: true }).click();
+}
+
 test.describe('#1139 — copy-node authoring', () => {
   test('a copy node is bound on all four ends and SURVIVES a save and reload', async ({ page }) => {
     const problems = collectPageProblems(page);
@@ -80,9 +85,14 @@ test.describe('#1139 — copy-node authoring', () => {
     await expect(
       properties(page).getByRole('combobox', { name: 'Connection', exact: true }),
     ).toHaveCount(0);
-    for (const label of ['Source connection', 'Sink connection', 'Source dataset']) {
+    // #1477 OR29 — each end's pickers are on its own tab, Source first.
+    await copyTab(page, 'Source');
+    for (const label of ['Source connection', 'Source dataset']) {
       await expect(properties(page).getByRole('combobox', { name: label })).toBeVisible();
     }
+    await copyTab(page, 'Sink');
+    await expect(properties(page).getByRole('combobox', { name: 'Sink connection' })).toBeVisible();
+    await copyTab(page, 'Source');
 
     // Picking ONE end leaves the doc without the pair, and the panel says so
     // rather than letting the pick look saved.
@@ -91,6 +101,7 @@ test.describe('#1139 — copy-node authoring', () => {
       .selectOption(srcConn);
     await expect(properties(page).getByRole('status')).toContainText('not saved');
 
+    await copyTab(page, 'Sink');
     await properties(page)
       .getByRole('combobox', { name: 'Sink connection' })
       .selectOption(sinkConn);
@@ -98,17 +109,20 @@ test.describe('#1139 — copy-node authoring', () => {
     // The dataset lists are narrowed by the connection bound to the SAME end —
     // a disagreeing pair is refused at dispatch, so offering one is offering a
     // binding that cannot run.
+    await copyTab(page, 'Source');
     await expect(
       properties(page).getByRole('combobox', { name: 'Source dataset' }).locator('option'),
     ).toHaveCount(2); // "— none —" plus the one dataset on the source store
 
     await properties(page).getByRole('combobox', { name: 'Source dataset' }).selectOption(srcSet);
+    await copyTab(page, 'Sink');
     await properties(page).getByRole('combobox', { name: 'Sink dataset' }).selectOption(sinkSet);
     await expect(properties(page).getByRole('status')).toHaveCount(0);
 
     // The column mapping is a REQUIRED config field the operator fills — an empty
     // palette-dropped copy is refused at save (#1480). One row is enough here;
     // the mapping itself is the next test's subject.
+    await copyTab(page, 'Mapping');
     await properties(page).getByRole('button', { name: 'Add mapping row' }).click();
     await properties(page).getByRole('textbox', { name: 'mapping row 1 source' }).fill('id');
     await properties(page).getByRole('textbox', { name: 'mapping row 1 sink' }).fill('id');
@@ -124,15 +138,19 @@ test.describe('#1139 — copy-node authoring', () => {
     await expect(canvasNodes(page)).toHaveCount(1);
     await canvasNodes(page).first().click();
 
+    await copyTab(page, 'Source');
     await expect(properties(page).getByRole('combobox', { name: 'Source connection' })).toHaveValue(
       srcConn,
     );
+    await copyTab(page, 'Sink');
     await expect(properties(page).getByRole('combobox', { name: 'Sink connection' })).toHaveValue(
       sinkConn,
     );
+    await copyTab(page, 'Source');
     await expect(properties(page).getByRole('combobox', { name: 'Source dataset' })).toHaveValue(
       srcSet,
     );
+    await copyTab(page, 'Sink');
     await expect(properties(page).getByRole('combobox', { name: 'Sink dataset' })).toHaveValue(
       sinkSet,
     );
@@ -191,13 +209,17 @@ test.describe('#1139 — copy-node authoring', () => {
     await addActivity(page, 'Copy Data');
     await canvasNodes(page).first().click();
 
+    await copyTab(page, 'Source');
     await properties(page)
       .getByRole('combobox', { name: 'Source connection' })
       .selectOption(srcConn);
+    await copyTab(page, 'Sink');
     await properties(page)
       .getByRole('combobox', { name: 'Sink connection' })
       .selectOption(sinkConn);
+    await copyTab(page, 'Source');
     await properties(page).getByRole('combobox', { name: 'Source dataset' }).selectOption(srcSet);
+    await copyTab(page, 'Sink');
     await properties(page).getByRole('combobox', { name: 'Sink dataset' }).selectOption(sinkSet);
 
     // The JSON textarea this control replaces — for the field, and for the whole
@@ -210,6 +232,7 @@ test.describe('#1139 — copy-node authoring', () => {
       [1, 'id', 'id', 'integer'],
       [2, 'label', 'full_name', 'string'],
     ] as const) {
+      await copyTab(page, 'Mapping');
       await properties(page).getByRole('button', { name: 'Add mapping row' }).click();
       await properties(page)
         .getByRole('textbox', { name: `mapping row ${row} source` })
@@ -249,6 +272,7 @@ test.describe('#1139 — copy-node authoring', () => {
     // And it comes BACK into the same controls, one row per stored mapping.
     await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
     await canvasNodes(page).first().click();
+    await copyTab(page, 'Mapping');
     await expect(properties(page).getByRole('textbox', { name: 'mapping row 2 sink' })).toHaveValue(
       'full_name',
     );
@@ -294,20 +318,26 @@ test.describe('#1170 — Auto-map and the unmapped advisory', () => {
 
     // Before either dataset is bound there is nothing to map FROM, and the
     // button says so rather than sitting there live and doing nothing.
+    await copyTab(page, 'Mapping');
     await expect(properties(page).getByRole('button', { name: 'Auto-map columns' })).toBeDisabled();
 
+    await copyTab(page, 'Source');
     await properties(page)
       .getByRole('combobox', { name: 'Source connection' })
       .selectOption(srcConn);
+    await copyTab(page, 'Sink');
     await properties(page)
       .getByRole('combobox', { name: 'Sink connection' })
       .selectOption(sinkConn);
+    await copyTab(page, 'Source');
     await properties(page).getByRole('combobox', { name: 'Source dataset' }).selectOption(srcSet);
+    await copyTab(page, 'Sink');
     await properties(page).getByRole('combobox', { name: 'Sink dataset' }).selectOption(sinkSet);
 
     // §13 — with NO mapping yet, the sink's NOT NULL columns are already named.
     // That is the point of the advisory: the author learns the copy cannot
     // succeed here, rather than at dispatch.
+    await copyTab(page, 'Mapping');
     await expect(
       properties(page).getByText(/The sink requires a value for id, imported_by/),
     ).toBeVisible();
@@ -358,6 +388,7 @@ test.describe('#1170 — Auto-map and the unmapped advisory', () => {
     // And a second press is ADDITIVE, so it cannot destroy what is already there.
     await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
     await canvasNodes(page).first().click();
+    await copyTab(page, 'Mapping');
     await properties(page).getByRole('button', { name: 'Auto-map columns' }).click();
     await expect(properties(page).getByText(/No new columns matched\./)).toBeVisible();
     await expect(properties(page).getByRole('textbox', { name: 'mapping row 1 sink' })).toHaveValue(
@@ -395,15 +426,20 @@ test.describe('#1178 — the expression picker on a mapping cell', () => {
     await addActivity(page, 'Copy Data');
     await canvasNodes(page).first().click();
 
+    await copyTab(page, 'Source');
     await properties(page)
       .getByRole('combobox', { name: 'Source connection' })
       .selectOption(srcConn);
+    await copyTab(page, 'Sink');
     await properties(page)
       .getByRole('combobox', { name: 'Sink connection' })
       .selectOption(sinkConn);
+    await copyTab(page, 'Source');
     await properties(page).getByRole('combobox', { name: 'Source dataset' }).selectOption(srcSet);
+    await copyTab(page, 'Sink');
     await properties(page).getByRole('combobox', { name: 'Sink dataset' }).selectOption(sinkSet);
 
+    await copyTab(page, 'Mapping');
     await properties(page).getByRole('button', { name: 'Add mapping row' }).click();
     await properties(page).getByRole('textbox', { name: 'mapping row 1 sink' }).fill('label');
     await properties(page).getByLabel('mapping row 1 type').selectOption('string');

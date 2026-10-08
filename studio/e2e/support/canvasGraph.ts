@@ -118,6 +118,12 @@ export async function fillSelectedNodeConfig(
   fields: Record<string, string>,
 ): Promise<void> {
   for (const [title, value] of Object.entries(fields)) {
+    // #1477 — a field sits on one of its activity's tabs; open that tab first.
+    const tabpanel = properties(page)
+      .getByRole('tabpanel', { includeHidden: true })
+      .filter({ has: page.getByLabel(title, { exact: true }) });
+    const tabId = await tabpanel.getAttribute('aria-labelledby');
+    if (tabId !== null) await page.locator(`[id="${tabId}"]`).click();
     await properties(page).getByRole('textbox', { name: title, exact: true }).fill(value);
   }
   await properties(page).getByRole('button', { name: 'Apply config', exact: true }).click();
