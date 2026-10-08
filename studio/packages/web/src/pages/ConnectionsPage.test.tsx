@@ -470,6 +470,47 @@ describe('ConnectionsPage', () => {
     expect(within(form).getByLabelText('Config (JSON)')).toHaveValue('{oops');
   });
 
+  it('clears a secret typed for one kind when the Kind changes, and says so (#1605)', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([]);
+    createMock.mockResolvedValue(conn({ name: 'Api', kind: 'http' }));
+    renderWithRouter(<ConnectionsPage />);
+
+    await openNewConnection(user, 'PostgreSQL');
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    await user.type(within(form).getByLabelText('Name'), 'Api');
+    await user.type(within(form).getByLabelText('Secret'), 'pg-password');
+
+    // HTTP sends its secret as a Bearer header to the Base URL, so a password
+    // typed for PostgreSQL must not ride along to it.
+    await user.selectOptions(within(form).getByLabelText('Kind'), 'http');
+    expect(within(form).getByLabelText('Secret')).toHaveValue('');
+    expect(within(form).getByText('Secret cleared: it was for PostgreSQL')).toBeInTheDocument();
+
+    // Typing a secret for the new kind retires the note.
+    await user.type(within(form).getByLabelText('Secret'), 'token');
+    expect(within(form).queryByText(/Secret cleared/)).not.toBeInTheDocument();
+
+    await user.type(within(form).getByLabelText('Base URL'), 'https://api.example.com');
+    await user.click(within(form).getByRole('button', { name: 'Create connection' }));
+    await waitFor(() =>
+      expect(createMock).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'http', secret: 'token' }),
+      ),
+    );
+  });
+
+  it('a Kind change with no secret typed shows no cleared note (#1605)', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([]);
+    renderWithRouter(<ConnectionsPage />);
+
+    await openNewConnection(user, 'PostgreSQL');
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    await user.selectOptions(within(form).getByLabelText('Kind'), 'http');
+    expect(within(form).queryByText(/Secret cleared/)).not.toBeInTheDocument();
+  });
+
   it('warns about a RELATIVE fs root, which the shared schema does not refuse', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([
