@@ -155,26 +155,26 @@ export function ConnectionForm({
    * failures `readConfigDraft` would refuse — never the kind's schema rules,
    * which stay the advisory below.
    */
+  /** #1477 — the Description and Annotations Save would send (only what was edited). */
+  const metadata = useMemo(
+    () =>
+      metadataChanges({
+        description: form.description,
+        descriptionSeed: form.descriptionSeed,
+        annotations: form.annotations,
+        annotationsSeed: form.annotationsSeed,
+      }),
+    [form.description, form.descriptionSeed, form.annotations, form.annotationsSeed],
+  );
   const checks = useMemo(
     () => ({
       ...nameCheck(form.name),
       ...configDraftErrors(jsonMode, { jsonText: form.jsonText, inputs: form.inputs }, fields),
       // #1477 — the write shape's own refusals, by row.
-      ...metadataChecks(metadataChanges(form)),
+      ...metadataChecks(metadata),
     }),
     // What the checks read, not `form` whole: a SECRET keystroke re-checks nothing.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the four metadata fields ARE what `metadataChanges` reads
-    [
-      form.name,
-      form.jsonText,
-      form.inputs,
-      form.description,
-      form.descriptionSeed,
-      form.annotations,
-      form.annotationsSeed,
-      jsonMode,
-      fields,
-    ],
+    [form.name, form.jsonText, form.inputs, metadata, jsonMode, fields],
   );
   /** What to call a field key in the summary; `undefined` for a key this form does not show. */
   const labelOf = useCallback(
@@ -374,7 +374,7 @@ export function ConnectionForm({
       kind: form.kind,
       config,
       // #1477 — each only when edited, as `parameters` below.
-      ...metadataChanges(form),
+      ...metadata,
       ...(form.secret !== '' ? { secret: form.secret } : {}),
       ...(allowlistChanged(form.parametersSeed, form.parameters)
         ? { parameters: form.parameters }

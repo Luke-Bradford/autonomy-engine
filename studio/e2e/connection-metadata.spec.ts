@@ -19,7 +19,7 @@ async function gotoConnections(page: Page): Promise<void> {
 const form = (page: Page) => page.getByRole('form', { name: 'Connection form' });
 
 test.describe('#1477 connection description + annotations', () => {
-  test('are created, saved and prefilled on Edit, in ADF order and at compact density', async ({
+  test('are created, saved and prefilled on Edit, in ADF order, one line per row', async ({
     page,
   }) => {
     const problems = collectPageProblems(page);
@@ -40,6 +40,10 @@ test.describe('#1477 connection description + annotations', () => {
       nameAboveDescription: (await topOf('Name')) < (await topOf('Description')),
       descriptionAboveKind: (await topOf('Description')) < (await topOf('Kind')),
     };
+    // The labelled controls, not DOM order: a reordered field cannot change what is compared.
+    const heightOf = async (label: string) =>
+      Math.round((await form(page).getByLabel(label, { exact: true }).boundingBox())!.height);
+    const rowInputMatchesName = (await heightOf('annotation 1')) === (await heightOf('Name'));
     const layout = await page.evaluate(() => {
       const root = document.querySelector('form[aria-label="Connection form"]')!;
       const sections = [...root.querySelectorAll('.form-section-title')].map((h) =>
@@ -47,23 +51,20 @@ test.describe('#1477 connection description + annotations', () => {
       );
       const row = root.querySelector('table[aria-label="Annotations"] tbody tr')!;
       const input = row.querySelector('input')!;
-      const nameInput = root.querySelector('input[type="text"]')!;
-      const height = (el: Element) => Math.round(el.getBoundingClientRect().height);
       return {
         annotationsLast: sections.at(-1),
-        // A row's box is as tall as the drawer's own text box. The drawer is not on
-        // compact density yet, and its 14.4px field text is off the type ramp: both
-        // are OR40 #1594's to change, for every field at once.
-        rowInputMatchesName: height(input) === height(nameInput),
         rowsOneLine:
           Math.round(row.getBoundingClientRect().height) <=
           Math.round(input.getBoundingClientRect().height) + 8,
       };
     });
     expect(order).toEqual({ nameAboveDescription: true, descriptionAboveKind: true });
+    // A row's box is as tall as the drawer's own text box. The drawer is not on
+    // compact density yet, and its 14.4px field text is off the type ramp: both
+    // are OR40 #1594's to change, for every field at once.
+    expect(rowInputMatchesName).toBe(true);
     expect(layout).toEqual({
       annotationsLast: 'Annotations',
-      rowInputMatchesName: true,
       rowsOneLine: true,
     });
 
