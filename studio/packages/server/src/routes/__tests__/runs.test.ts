@@ -24,7 +24,7 @@ import {
   deleteTrigger,
   updatePipeline,
 } from '../../repo/index.js';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { pipelineVersions, runs } from '../../db/schema.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 
@@ -959,6 +959,7 @@ describe('runs routes (read-only)', () => {
       const res = await app.inject({ method: 'GET', url: `/api/runs/${parent.id}/activity-runs` });
       expect(res.statusCode).toBe(200);
       const body = ActivityRunsResponseSchema.parse(res.json());
+      expect(body.basis).toBe('version');
       expect(body.rows).toHaveLength(1);
       // The caller is not in a container, so there is no group to sit under.
       expect(body.groups).toEqual([]);
@@ -1019,6 +1020,66 @@ describe('runs routes (read-only)', () => {
           position: 0,
         }),
       ]);
+    });
+
+    it('#1557 — a version that no longer parses costs the structure, not the rows', async () => {
+      const childVersion = createPipelineVersion(app.db, {
+        pipelineId: createPipeline(app.db, { ownerId: 'local', name: 'Load orders' }).id,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+      const parent = seedCaller(childVersion.id);
+      const child = createRun(app.db, {
+        ownerId: 'local',
+        pipelineVersionId: childVersion.id,
+        triggerId: null,
+        parentRunId: parent.id,
+        params: {},
+      });
+      logCall(parent.id, parent.pipelineVersionId, child.id);
+      const read = async () => {
+        const res = await app.inject({
+          method: 'GET',
+          url: `/api/runs/${parent.id}/activity-runs`,
+        });
+        expect(res.statusCode).toBe(200);
+        return ActivityRunsResponseSchema.parse(res.json());
+      };
+
+      // Stored before a schema tightening, say: the row is there and will not parse.
+      app.db.run(sql`drop trigger pipeline_versions_no_update`);
+      try {
+        app.db.run(
+          sql`update pipeline_versions set nodes = '[{"id":1}]' where id = ${parent.pipelineVersionId}`,
+        );
+      } finally {
+        app.db.run(sql`create trigger pipeline_versions_no_update
+          before update on pipeline_versions
+          begin select raise(abort, 'pipeline_versions are immutable: update is not allowed'); end`);
+      }
+
+      const body = await read();
+      expect(body.basis).toBe('log');
+      expect(body.groups).toEqual([]);
+      expect(body.rows).toEqual([
+        expect.objectContaining({
+          activityId: 'c',
+          attemptId: 'c#0',
+          attempt: null,
+          status: 'dispatched',
+          childRunId: child.id,
+          childRun: expect.objectContaining({ id: child.id, pipelineName: 'Load orders' }),
+        }),
+      ]);
+      // The child's page names no caller from an account whose ids are not the
+      // version's.
+      const detail = RunDetailSchema.parse(
+        (await app.inject({ method: 'GET', url: `/api/runs/${child.id}/detail` })).json(),
+      );
+      expect(detail.parentActivityId).toBeNull();
     });
 
     it("never resolves a child run the caller does not own; the log's id stays", async () => {

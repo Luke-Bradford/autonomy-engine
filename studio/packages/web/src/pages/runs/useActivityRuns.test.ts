@@ -19,9 +19,17 @@ describe('#1484 M2 useActivityRuns', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     getMock.mockReset();
-    getMock.mockResolvedValue({ runId: 'r', rows: [], groups: [] });
+    getMock.mockResolvedValue({ runId: 'r', basis: 'version', rows: [], groups: [] });
   });
   afterEach(() => vi.useRealTimers());
+
+  it('#1557 — carries what the rows were projected from: none before the first read', async () => {
+    getMock.mockResolvedValue({ runId: 'r', basis: 'log', rows: [], groups: [] });
+    const { result } = renderHook(() => useActivityRuns('r', 1, false));
+    expect(result.current.basis).toBeNull();
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(result.current.basis).toBe('log');
+  });
 
   it('reads at once, then at most once per interval while frames keep arriving, never starving', async () => {
     const { rerender } = renderHook(({ seq }) => useActivityRuns('r', seq, true), {
@@ -47,7 +55,7 @@ describe('#1484 M2 useActivityRuns', () => {
   });
 
   it('never has two reads in flight, and re-reads once when the stream moved on meanwhile', async () => {
-    let answer!: (v: { runId: string; rows: []; groups: [] }) => void;
+    let answer!: (v: { runId: string; basis: 'version'; rows: []; groups: [] }) => void;
     getMock.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -69,14 +77,14 @@ describe('#1484 M2 useActivityRuns', () => {
 
     // It lands; the stream moved on, so exactly one more read follows.
     await act(async () => {
-      answer({ runId: 'r', rows: [], groups: [] });
+      answer({ runId: 'r', basis: 'version', rows: [], groups: [] });
       await vi.advanceTimersByTimeAsync(ACTIVITY_RUNS_REFRESH_MS * 4);
     });
     expect(getMock).toHaveBeenCalledTimes(2);
   });
 
   it('#1541 — says which frame each landed read was asked at, and keeps it through a failure', async () => {
-    let answer!: (v: { runId: string; rows: []; groups: [] }) => void;
+    let answer!: (v: { runId: string; basis: 'version'; rows: []; groups: [] }) => void;
     getMock.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -91,7 +99,7 @@ describe('#1484 M2 useActivityRuns', () => {
     // Frames arrive while the read asked at 3 is in flight: it is still 3's.
     rerender({ seq: 7 });
     await act(async () => {
-      answer({ runId: 'r', rows: [], groups: [] });
+      answer({ runId: 'r', basis: 'version', rows: [], groups: [] });
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(result.current.readAt).toBe(3);
@@ -107,7 +115,7 @@ describe('#1484 M2 useActivityRuns', () => {
   });
 
   it('schedules nothing once unmounted, even when a read lands afterwards', async () => {
-    let answer!: (v: { runId: string; rows: []; groups: [] }) => void;
+    let answer!: (v: { runId: string; basis: 'version'; rows: []; groups: [] }) => void;
     getMock.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -122,7 +130,7 @@ describe('#1484 M2 useActivityRuns', () => {
     unmount();
 
     await act(async () => {
-      answer({ runId: 'r', rows: [], groups: [] });
+      answer({ runId: 'r', basis: 'version', rows: [], groups: [] });
       await vi.advanceTimersByTimeAsync(0);
     });
     // `useGuardedLoad` would refuse the read anyway; no timer is left either.
@@ -142,7 +150,12 @@ describe('#1484 M2 useActivityRuns', () => {
         key: 'c#0',
         childRun: { id: 'k', pipelineName: 'Child', status, startedAt: 1, finishedAt: null },
       }) as unknown as ActivityRun;
-    getMock.mockResolvedValue({ runId: 'r', rows: [caller('running')], groups: [] });
+    getMock.mockResolvedValue({
+      runId: 'r',
+      basis: 'version',
+      rows: [caller('running')],
+      groups: [],
+    });
     // Time in steps, so each tick's render lands before the next one.
     const pass = async (ms: number) => {
       for (let t = 0; t < ms; t += 250) await act(async () => vi.advanceTimersByTimeAsync(250));
@@ -163,7 +176,12 @@ describe('#1484 M2 useActivityRuns', () => {
     expect(getMock.mock.calls.length).toBe(before);
 
     // Live again, the child finishes: one read sees it, then nothing more.
-    getMock.mockResolvedValue({ runId: 'r', rows: [caller('success')], groups: [] });
+    getMock.mockResolvedValue({
+      runId: 'r',
+      basis: 'version',
+      rows: [caller('success')],
+      groups: [],
+    });
     rerender({ live: true });
     await pass(ACTIVITY_RUNS_CHILD_POLL_MS * 2);
     before = getMock.mock.calls.length;
@@ -182,13 +200,13 @@ describe('#1484 M2 useActivityRuns', () => {
         finishedAt: null,
       },
     } as unknown as ActivityRun;
-    getMock.mockResolvedValueOnce({ runId: 'r', rows: [going], groups: [] });
+    getMock.mockResolvedValueOnce({ runId: 'r', basis: 'version', rows: [going], groups: [] });
     // The next read hangs until released, so each poll tick lands on a read in flight.
     let release: (() => void) | undefined;
     getMock.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          release = () => resolve({ runId: 'r', rows: [going], groups: [] });
+          release = () => resolve({ runId: 'r', basis: 'version', rows: [going], groups: [] });
         }),
     );
     getMock.mockImplementation(() => new Promise(() => {}));

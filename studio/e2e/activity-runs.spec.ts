@@ -285,3 +285,49 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * #1557 — a run whose version no longer resolves still lists its activity runs,
+ * read from the log alone, and the table says so. No route can make a stored
+ * version unparseable (versions are immutable), so the server's real answer for
+ * a real run is rewritten to the log-only basis; the server side of the
+ * fallback is proved in `routes/__tests__/runs.test.ts`.
+ */
+test('#1557 — rows from the run log alone say the version is unavailable', async ({ page }) => {
+  const problems = collectPageProblems(page);
+  const doc = {
+    nodes: [
+      {
+        id: 'pick',
+        type: 'if',
+        config: { condition: '${equals(1, 1)}' },
+        position: { x: 0, y: 0 },
+      },
+    ],
+  };
+  const { pipelineVersionId } = await seedVersion(page, '1557 log basis', doc);
+  const runId = await fireAndSettle(page, pipelineVersionId, '1557 log basis');
+  await page.route('**/api/runs/*/activity-runs', async (route) => {
+    const res = await route.fetch();
+    const body = (await res.json()) as { basis: string };
+    await route.fulfill({ response: res, json: { ...body, basis: 'log' } });
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await fluentRootReady(page);
+  const notice = page.locator('.activity-runs__basis');
+  await expect(notice).toContainText('Rows from the run log only');
+  // The rows are still there, and the notice costs them no more than a line.
+  const seen = await page.evaluate(() => {
+    const n = document.querySelector('.activity-runs__basis')!.getBoundingClientRect();
+    const rows = document.querySelectorAll('.activity-runs__table tbody tr');
+    return { rows: rows.length, noticeHeight: Math.round(n.height) };
+  });
+  expect(seen.rows).toBe(1);
+  expect(seen.noticeHeight).toBeLessThanOrEqual(32);
+  await notice.getByTitle('About rows from the run log').click();
+  await expect(notice.getByRole('note')).toContainText('reused inside a container are missing');
+
+  await expectQuiet(page, problems);
+});

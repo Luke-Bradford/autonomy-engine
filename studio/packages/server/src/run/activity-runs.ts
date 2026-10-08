@@ -159,6 +159,90 @@ function statedKind(payload: unknown): boolean {
   return typeof payload === 'object' && payload !== null && 'kind' in payload;
 }
 
+/** A row with nothing known yet but its key, node and status. */
+function emptyRow(
+  key: string,
+  nodeId: string,
+  status: NodeRunStatus,
+  iteration: ActivityRunIteration | null,
+): ProjectedActivityRun {
+  return {
+    key,
+    nodeId,
+    activityId: nodeId,
+    containerId: null,
+    attemptId: null,
+    attempt: null,
+    status,
+    reused: false,
+    startedAt: null,
+    finishedAt: null,
+    durationMs: null,
+    iteration,
+    branch: null,
+    rowsRead: null,
+    rowsWritten: null,
+    bytesRead: null,
+    bytesWritten: null,
+    childRunId: null,
+    error: null,
+    skipReason: null,
+  };
+}
+
+/** Settles a row at `ts`. `timed` is false for a row the same event opened: an
+ * If, a `fail` or a variable write has a time but no measured span, and #867's
+ * "nothing timed it" is no duration, never a zero. */
+function settleRow(row: ProjectedActivityRun, status: NodeRunStatus, ts: number, timed: boolean) {
+  row.status = status;
+  row.finishedAt = ts;
+  row.durationMs =
+    timed && row.startedAt !== null && ts >= row.startedAt ? ts - row.startedAt : null;
+}
+
+/** What an event says about its attempt's row: the branch an If or Switch took,
+ * the child a call started, the counts a success logged, the error a failure
+ * gave. The caller decides whether the row may still take it (rule 1). */
+function fillDetail(row: ProjectedActivityRun, e: EngineEvent, payload: unknown): void {
+  switch (e.type) {
+    case 'condition.evaluated':
+    case 'switch.evaluated':
+      row.branch = e.branch;
+      return;
+    case 'call.started':
+    case 'call.detached':
+    case 'call.returned':
+      row.childRunId ??= e.childRunId;
+      return;
+    case 'node.succeeded':
+      row.rowsRead = loggedCount(e.outputs.rowsRead);
+      row.rowsWritten = loggedCount(e.outputs.rowsWritten);
+      row.bytesRead = loggedCount(e.outputs.bytesRead);
+      row.bytesWritten = loggedCount(e.outputs.bytesWritten);
+      return;
+    case 'node.failed':
+      row.error = {
+        message: e.error,
+        kind: statedKind(payload) ? e.kind : null,
+        code: e.code ?? null,
+        connectionId: e.connectionId ?? null,
+      };
+      return;
+    default:
+      return;
+  }
+}
+
+/** A result's own reason, for a row no `node.failed` gave an error. */
+function noteResultError(
+  row: ProjectedActivityRun,
+  result: NonNullable<ReturnType<typeof resultOf>>,
+): void {
+  if (result.error !== undefined && row.error === null) {
+    row.error = { message: result.error, kind: null, code: null, connectionId: null };
+  }
+}
+
 export function projectActivityRuns(
   doc: Doc,
   engine: Engine,
@@ -205,27 +289,7 @@ export function projectActivityRuns(
     nodeId: string,
     status: NodeRunStatus,
     iteration: ActivityRunIteration | null,
-  ): ProjectedActivityRun => ({
-    key,
-    nodeId,
-    ...placeOf(nodeId),
-    attemptId: null,
-    attempt: null,
-    status,
-    reused: false,
-    startedAt: null,
-    finishedAt: null,
-    durationMs: null,
-    iteration,
-    branch: null,
-    rowsRead: null,
-    rowsWritten: null,
-    bytesRead: null,
-    bytesWritten: null,
-    childRunId: null,
-    error: null,
-    skipReason: null,
-  });
+  ): ProjectedActivityRun => ({ ...emptyRow(key, nodeId, status, iteration), ...placeOf(nodeId) });
 
   const rows: ProjectedActivityRun[] = [];
   const byAttempt = new Map<string, ProjectedActivityRun>();
@@ -256,12 +320,7 @@ export function projectActivityRuns(
    * timed it" is no duration, never a zero. */
   const openedNow = new Set<ProjectedActivityRun>();
   const settle = (row: ProjectedActivityRun, status: NodeRunStatus, ts: number) => {
-    row.status = status;
-    row.finishedAt = ts;
-    row.durationMs =
-      !openedNow.has(row) && row.startedAt !== null && ts >= row.startedAt
-        ? ts - row.startedAt
-        : null;
+    settleRow(row, status, ts, !openedNow.has(row));
     open.delete(row);
   };
   /** Rule 2: the node's state, while it still holds the attempt. */
@@ -364,34 +423,9 @@ export function projectActivityRuns(
         ? row
         : undefined;
     };
-    if (e.type === 'condition.evaluated' || e.type === 'switch.evaluated') {
-      const row = detail(e.attemptId);
-      if (row !== undefined) row.branch = e.branch;
-    } else if (
-      e.type === 'call.started' ||
-      e.type === 'call.detached' ||
-      e.type === 'call.returned'
-    ) {
-      const row = detail(e.attemptId);
-      if (row !== undefined) row.childRunId ??= e.childRunId;
-    } else if (e.type === 'node.succeeded') {
-      const row = detail(e.attemptId);
-      if (row !== undefined) {
-        row.rowsRead = loggedCount(e.outputs.rowsRead);
-        row.rowsWritten = loggedCount(e.outputs.rowsWritten);
-        row.bytesRead = loggedCount(e.outputs.bytesRead);
-        row.bytesWritten = loggedCount(e.outputs.bytesWritten);
-      }
-    } else if (e.type === 'node.failed') {
-      const row = detail(e.attemptId);
-      if (row !== undefined) {
-        row.error = {
-          message: e.error,
-          kind: statedKind(payload) ? e.kind : null,
-          code: e.code ?? null,
-          connectionId: e.connectionId ?? null,
-        };
-      }
+    if (ref !== null) {
+      const row = detail(ref.attemptId);
+      if (row !== undefined) fillDetail(row, e, payload);
     }
 
     const result = resultOf(e);
@@ -402,9 +436,7 @@ export function projectActivityRuns(
       open.has(own) &&
       before.nodes[own.nodeId]?.currentAttemptId === own.attemptId
     ) {
-      if (result?.error !== undefined && own.error === null) {
-        own.error = { message: result.error, kind: null, code: null, connectionId: null };
-      }
+      if (result !== null) noteResultError(own, result);
       const entry = state.nodes[own.nodeId];
       if (entry?.currentAttemptId === own.attemptId) observe(own, entry.status, ts);
       else if (result !== null) settle(own, result.status, ts);
@@ -477,6 +509,75 @@ export function projectActivityRuns(
     rows: [...carried, ...rows],
     groups: [...groups.values()].sort((a, b) => a.position - b.position),
   };
+}
+
+/**
+ * #1557 — the activity runs of a run whose version no longer resolves (deleted,
+ * or present but no longer parsing). With no doc there is no engine to step, so
+ * this reads the log alone, and says less:
+ * - a row per attempt, from the first event naming it, settled by the first
+ *   result for it; a later result for the same attempt changes nothing;
+ * - no containers, iterations or skips (no event records a skip), and no
+ *   `attempt` number (policy retries are counted in reducer state);
+ * - `activityId` is the id the events carry: a parallel ForEach's instance key
+ *   (`w@2`) cannot be told from a literal doc id without the doc;
+ * - a status the reducer corrected after the event (rule 2: a success whose
+ *   outputs broke the contract) reads as logged, and a result the reducer would
+ *   have ignored as stale (rule 1: for an attempt no longer the node's live one)
+ *   settles its row all the same;
+ * - the rows a rerun reused are the reseed's top-level frontier; a copied
+ *   container's activities are not listed.
+ * An attempt still open when the run finished was abandoned without an event
+ * of its own (rule 4: F1b's drain means nothing is still running then), so it
+ * reads `skipped`, with no reason, except on a cancelled run, which the page
+ * names as such.
+ *
+ * Reused rows come from the last `run.reseeded`'s frontier directly, not from
+ * `reusedIds`: with no containers to expand, that would add each copied
+ * container's own id, and a container is never a row.
+ */
+export function projectActivityRunsFromLog(
+  log: readonly LoggedEngineEvent[],
+): ProjectedActivityRuns {
+  const rows: ProjectedActivityRun[] = [];
+  const byAttempt = new Map<string, ProjectedActivityRun>();
+  const open = new Set<ProjectedActivityRun>();
+  let frontier: readonly string[] = [];
+  for (const { event: e, ts, payload } of log) {
+    if (e.type === 'run.reseeded') frontier = e.frontier;
+    const ref = attemptOf(e);
+    let opened: ProjectedActivityRun | undefined;
+    if (ref !== null && !byAttempt.has(ref.attemptId)) {
+      opened = {
+        ...emptyRow(ref.attemptId, ref.nodeId, 'dispatched', null),
+        attemptId: ref.attemptId,
+        startedAt: ts,
+      };
+      rows.push(opened);
+      byAttempt.set(ref.attemptId, opened);
+      open.add(opened);
+    }
+    if (ref !== null) {
+      const row = byAttempt.get(ref.attemptId)!;
+      if (open.has(row)) fillDetail(row, e, payload);
+    }
+    const result = resultOf(e);
+    const own = result === null ? undefined : byAttempt.get(result.attemptId);
+    if (result !== null && own !== undefined && open.has(own)) {
+      noteResultError(own, result);
+      settleRow(own, result.status, ts, own !== opened);
+      open.delete(own);
+    }
+    if (e.type === 'run.finished' && e.outcome !== 'cancelled') {
+      for (const row of open) row.status = 'skipped';
+      open.clear();
+    }
+  }
+  const carried = frontier.map((id) => ({
+    ...emptyRow(`reused:${id}`, id, 'success', null),
+    reused: true,
+  }));
+  return { rows: [...carried, ...rows], groups: [] };
 }
 
 /**

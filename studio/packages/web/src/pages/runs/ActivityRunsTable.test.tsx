@@ -692,3 +692,39 @@ describe('#1484 M2 ActivityRunsTable — a running row says how it is going', ()
     }
   });
 });
+
+describe('#1557 ActivityRunsTable — rows from the run log alone', () => {
+  const showBased = (basis?: 'version' | 'log') =>
+    render(
+      <MemoryRouter>
+        <ActivityRunsTable
+          rows={[BASE]}
+          groups={[]}
+          {...(basis === undefined ? {} : { basis })}
+          error={null}
+          runStatus="failure"
+          nameOf={() => null}
+          typeOf={() => null}
+          containerNameOf={() => null}
+        />
+      </MemoryRouter>,
+    );
+
+  it('says the version is unavailable, with what is missing behind ?', () => {
+    showBased('log');
+    expect(screen.getByText('Rows from the run log only')).toBeVisible();
+    fireEvent.click(screen.getByTitle('About rows from the run log'));
+    expect(screen.getByRole('note')).toHaveTextContent(
+      /Containers, ForEach items, skipped activities, retry numbers and the activities a rerun reused inside a container are missing/,
+    );
+    // The rows are still the table.
+    expect(screen.getAllByRole('row')).toHaveLength(2);
+  });
+
+  it('says nothing of it for the full account', () => {
+    showBased('version');
+    expect(screen.queryByText(/Rows from the run log only/)).toBeNull();
+    showBased();
+    expect(screen.queryByText(/Rows from the run log only/)).toBeNull();
+  });
+});

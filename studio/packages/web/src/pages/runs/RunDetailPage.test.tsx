@@ -63,7 +63,9 @@ vi.mock('../../api/runs', async (importActual) => ({
      over. */
   getRunDiagnostics: vi.fn().mockResolvedValue([]),
   // #1484 M2 — read from a mount effect, like `getRunDiagnostics`.
-  getRunActivityRuns: vi.fn().mockResolvedValue({ runId: 'r', rows: [], groups: [] }),
+  getRunActivityRuns: vi
+    .fn()
+    .mockResolvedValue({ runId: 'r', basis: 'version', rows: [], groups: [] }),
   /* Mocked so an un-mocked write cannot reach `fetch`. NOT for the mount-effect
      reason above, which is specific to a member called from a MOUNT EFFECT:
      this one is only reachable from a click, so no other test in this file can
@@ -281,6 +283,7 @@ function streamedEvents(): RunEvent[] {
 function serveActivityRuns(extra: ActivityRun[] = []) {
   vi.mocked(runsApi.getRunActivityRuns).mockImplementation(async (runId) => ({
     runId,
+    basis: 'version',
     rows: [...activityRunsOf(streamedEvents()), ...extra],
     groups: [],
   }));
@@ -3584,6 +3587,7 @@ describe('RunDetailPage — the failure banner', () => {
     });
     vi.mocked(runsApi.getRunActivityRuns).mockResolvedValue({
       runId: 'run_1',
+      basis: 'version',
       rows: [failedRow],
       groups: [],
     });
@@ -3610,7 +3614,7 @@ describe('RunDetailPage — the failure banner', () => {
      they are older than the log. The banner waits for them rather than show a
      banner with no row (no Show activity) or an earlier attempt's error. */
   it('waits for the activity runs read at the newest event, then names the row', async () => {
-    let answer!: (v: { runId: string; rows: ActivityRun[]; groups: [] }) => void;
+    let answer!: (v: { runId: string; basis: 'version'; rows: ActivityRun[]; groups: [] }) => void;
     vi.mocked(runsApi.getRunActivityRuns).mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -3623,7 +3627,9 @@ describe('RunDetailPage — the failure banner', () => {
     await waitFor(() => expect(runsApi.getRunActivityRuns).toHaveBeenCalled());
     expect(screen.queryByRole('group', { name: 'Failure' })).toBeNull();
 
-    await act(async () => answer({ runId: 'run_1', rows: [failedRow], groups: [] }));
+    await act(async () =>
+      answer({ runId: 'run_1', basis: 'version', rows: [failedRow], groups: [] }),
+    );
     const banner = await screen.findByRole('group', { name: 'Failure' });
     expect(within(banner).getByRole('button', { name: 'Show activity' })).toBeVisible();
     // #1541 — and the way to the version that ran selects what failed in it.
@@ -3718,6 +3724,7 @@ describe('RunDetailPage — the activity run detail drawer (#1484 M2)', () => {
     getRunDetailMock.mockResolvedValue({ ...NAMES, run: run(), pipelineVersion: version() });
     vi.mocked(runsApi.getRunActivityRuns).mockResolvedValue({
       runId: 'run_1',
+      basis: 'version',
       rows: [itemRow(0, 'a.csv'), itemRow(1, 'b.csv')],
       groups: [],
     });
