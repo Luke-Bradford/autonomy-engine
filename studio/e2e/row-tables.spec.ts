@@ -111,10 +111,20 @@ test('a Copy mapping is one compact table, whole on its tab, with the row action
   expect(m.scrolls).toBe(false);
   await expect(table.getByRole('button', { name: 'remove mapping row 3' })).toBeInViewport();
 
-  // A cell's `${}` list opens wider than its cell, and closes on Escape.
-  await table
-    .getByRole('button', { name: 'Insert reference into mapping row 1 expression' })
-    .click();
+  // A cell's `${}` / `ƒx` are out of sight until the cell has focus; Tab from
+  // the box reaches `${}` and shows it. Its list opens wider than the cell.
+  const cell = table.getByRole('textbox', { name: 'mapping row 1 expression' });
+  const toggles = cell.locator('xpath=..').locator('.expression-picker');
+  const width = () => toggles.evaluate((el) => el.getBoundingClientRect().width);
+  expect(await width()).toBeLessThanOrEqual(1);
+  await cell.focus();
+  expect(await width()).toBeGreaterThan(40);
+  await page.keyboard.press('Tab');
+  const refs = table.getByRole('button', {
+    name: 'Insert reference into mapping row 1 expression',
+  });
+  await expect(refs).toBeFocused();
+  await refs.press('Enter');
   const list = mapping.locator('.expression-picker-list');
   await expect(list).toBeVisible();
   expect((await list.boundingBox())!.width).toBeGreaterThanOrEqual(280);

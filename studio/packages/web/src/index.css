@@ -4790,14 +4790,18 @@ button.danger {
   vertical-align: middle;
 }
 
-.row-table__actions {
-  display: flex;
-  gap: 2px;
-}
-
 .row-table__actions button {
   min-width: 24px;
   padding-inline: 0.3rem;
+}
+
+.row-table__actions button + button {
+  margin-left: 2px;
+}
+
+/* Top-aligned, so an inline control adds no baseline gap under itself. */
+.row-table td :is(input, select, textarea, button) {
+  vertical-align: top;
 }
 
 /* A bare text box fills its cell (a select keeps its content width). */
@@ -4808,13 +4812,12 @@ button.danger {
   box-sizing: border-box;
 }
 
-/* A config cell: its control, then its `${}` / `ƒx` toggles beside it; a hint,
-   an error or an open list drops to a line of its own. The label is out of
-   sight (the header shows it), and out of the flow so it costs no gap. */
+/* A config cell: its control, and under it a hint, an error or the open list.
+   The label is out of sight (the header shows it) and out of the flow. */
 .row-table td > .labelled-control {
+  position: relative;
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
+  flex-direction: column;
   gap: 2px;
 }
 
@@ -4822,13 +4825,22 @@ button.danger {
   position: absolute;
 }
 
-.row-table td > .labelled-control > :is(input, textarea, .json-editor) {
-  flex: 1 1 5rem;
-  width: auto;
-}
-
-.row-table td > .labelled-control > :is(.field-hint, .field-error-slot, .config-field-choices) {
-  flex-basis: 100%;
+/* The `${}` / `ƒx` toggles show under the box only while its cell has focus
+   (or its list is open) — ADF's "Add dynamic content" on focus. Inline, three
+   text columns' toggles leave no room for the text in a 589px tab, and under
+   every box they make each row three lines tall. Out of sight, not removed:
+   Tab from the box lands on `${}`, which keeps focus in the cell and so shows
+   it; a screen reader reaches them as always. */
+.row-table
+  td
+  > .labelled-control:not(:focus-within, :has(.expression-picker-list))
+  > .expression-picker {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* One line tall, growing with its text (where the engine supports it). */

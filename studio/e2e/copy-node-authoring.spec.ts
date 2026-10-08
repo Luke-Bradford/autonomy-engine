@@ -444,7 +444,9 @@ test.describe('#1178 — the expression picker on a mapping cell', () => {
     await properties(page).getByRole('textbox', { name: 'mapping row 1 sink' }).fill('label');
     await properties(page).getByLabel('mapping row 1 type').selectOption('string');
 
-    // The column-name cell: held to a literal, so nothing is offered.
+    // The column-name cell: held to a literal, so nothing is offered. (A
+    // cell's toggles show while it has focus, #1477 OR29.)
+    await properties(page).getByRole('textbox', { name: 'mapping row 1 sink' }).focus();
     await properties(page)
       .getByRole('button', { name: 'Insert reference into mapping row 1 sink' })
       .click();
@@ -455,6 +457,7 @@ test.describe('#1178 — the expression picker on a mapping cell', () => {
     await page.keyboard.press('Escape');
 
     // The value cell: the param is offered, and lands in THIS row's expression.
+    await properties(page).getByRole('textbox', { name: 'mapping row 1 expression' }).focus();
     await properties(page)
       .getByRole('button', { name: 'Insert reference into mapping row 1 expression' })
       .click();
