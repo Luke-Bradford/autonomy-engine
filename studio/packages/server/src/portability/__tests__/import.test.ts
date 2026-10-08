@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CATALOG_VERSION,
   ImportError,
+  ISSUE_LIST_CAP,
   PipelineVersionSchema,
   type NewPipelineVersion,
   type PipelineVersion,
@@ -1487,6 +1488,25 @@ describe('importEnvelope: history saved before #1480 (#1492)', () => {
       [2, 'append'],
     ]);
     expect(listPipelineVersions(db, result.pipeline.id)).toHaveLength(2);
+  });
+
+  it('caps the reported issues at ISSUE_LIST_CAP and states the true total', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Copier' });
+    const many = ISSUE_LIST_CAP + 1;
+    insertLegacyVersion(db, {
+      ...doc(pipeline.id, 'truncate'),
+      nodes: Array.from({ length: many }, (_, i) => ({ ...copyNode('truncate'), id: `n${i}` })),
+    });
+    createPipelineVersion(db, doc(pipeline.id, 'append'));
+
+    const result = importEnvelope(db, 'owner-b', exportPipeline(db, pipeline.id, 'owner-a'));
+
+    if (result.kind !== 'pipeline') throw new Error('expected a pipeline import');
+    const [item] = result.attention;
+    if (item?.type !== 'unrunnableVersion') throw new Error('expected an unrunnableVersion');
+    expect(item.issues).toHaveLength(ISSUE_LIST_CAP);
+    expect(item.totalIssues).toBe(many);
   });
 
   it('still refuses an unrunnable HEAD, and stores nothing', () => {

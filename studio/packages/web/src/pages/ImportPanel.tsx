@@ -339,7 +339,7 @@ function ImportOutcome({ outcome }: { outcome: Outcome }) {
       {resource.note && <p>{resource.note}</p>}
       {attention.length > 0 && (
         <>
-          <p>Before it can run:</p>
+          <p>Needs attention</p>
           <ul>
             {attention.map((item, i) => (
               <li key={`${item.type}-${i}`}>{describeAttention(item)}</li>

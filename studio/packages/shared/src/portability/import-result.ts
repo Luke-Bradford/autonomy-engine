@@ -59,8 +59,8 @@ export const ImportAttentionItemSchema = z.discriminatedUnion('type', [
    * was, because versions are immutable and the source workspace holds it the
    * same way, but it cannot run. `version` is its number in THIS workspace;
    * `issues` are the save gate's own diagnostics, capped at `ISSUE_LIST_CAP`,
-   * with `totalIssues` the uncapped count. No repair step exists: the head is
-   * unaffected, and a trigger or call should pin a version that runs. */
+   * with `totalIssues` the uncapped count. No repair step exists; the head is
+   * unaffected. */
   z.object({
     type: z.literal('unrunnableVersion'),
     version: z.number().int().positive(),

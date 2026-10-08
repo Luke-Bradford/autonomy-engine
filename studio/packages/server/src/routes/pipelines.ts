@@ -3,7 +3,7 @@ import { z } from 'zod';
 import {
   ActivePipelineVersionResponseSchema,
   CreatePipelineVersionBodySchema,
-  ISSUE_LIST_CAP,
+  capIssueList,
   PipelineDraftBodySchema,
   type PipelineValidation,
   DebugRunRequestSchema,
@@ -675,10 +675,7 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
     );
     const draft = PipelineDraftBodySchema.parse(request.body);
     const issues = checkPipelineVersion(db, { ...draft, pipelineId: pipeline.id });
-    return {
-      issues: issues.slice(0, ISSUE_LIST_CAP),
-      totalIssues: issues.length,
-    } satisfies PipelineValidation;
+    return capIssueList(issues) satisfies PipelineValidation;
   });
 
   fastify.get<{ Params: { id: string } }>('/api/pipelines/:id/versions', async (request) => {

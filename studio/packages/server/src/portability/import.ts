@@ -3,7 +3,7 @@ import {
   ConnectionPublicSchema,
   GlobalParamCreateBodySchema,
   ImportError,
-  ISSUE_LIST_CAP,
+  capIssueList,
   globalParamResourceId,
   TriggerPublicSchema,
   parseAndUpgradeEnvelope,
@@ -122,7 +122,8 @@ function unresolvedDatasetNodeIds(versions: readonly { nodes: NodeExport[] }[]):
  * `NewPipelineVersionSchema` or (as of #444) by the doc gate. Without a
  * transaction the refusal lands mid-way, leaving an orphan pipeline and the
  * versions that happened to precede it: an import that "failed" but still
- * changed the database. #444 is what makes that likely rather than exotic, so
+ * changed the database. (#1492 narrowed what refuses: a HISTORICAL version that
+ * fails only #1480's activity check is admitted and reported, not refused.) #444 is what makes that likely rather than exotic, so
  * the two ship together.
  *
  * `createPipelineVersion` opens its OWN `db.transaction`; better-sqlite3 drops
@@ -196,29 +197,30 @@ function importPipelineEnvelopeInTx(
     // #1492 — the LAST version minted is the head here, whatever number the file
     // gave it (versions renumber 1..n in file order), so it is always refused if
     // invalid: importing it would mint a head that can never run.
-    if (index === exportedVersions.length - 1) return createPipelineVersion(db, input);
+    const isHead = index === exportedVersions.length - 1;
     try {
       return createPipelineVersion(db, input);
     } catch (err) {
-      if (!(err instanceof InvalidPipelineDocError)) throw err;
+      if (isHead || !(err instanceof InvalidPipelineDocError)) throw err;
       // A HISTORICAL version saved before #1480 may fail its activity check, and
       // nothing can repair it (versions are immutable). Admit it if that check is
       // ALL it fails, and say so; any structural fault still refuses the import,
-      // with the first, complete diagnostics.
+      // with the first, complete diagnostics. Only a second validation refusal is
+      // swapped for the first: any other fault propagates as itself.
       let admitted;
       try {
         admitted = createPipelineVersion(db, input, { skipActivityChecks: true });
-      } catch {
-        throw err;
+      } catch (retryErr) {
+        throw retryErr instanceof InvalidPipelineDocError ? err : retryErr;
       }
       // ECHO: the issues quote node ids and config key paths from the file the
       // caller just sent, back to that caller, on the same owner-scoped request —
-      // the argument `errors.ts` makes for `InvalidPipelineDocError`'s 400.
+      // the argument `errors.ts` makes for `InvalidPipelineDocError`'s 400. They
+      // are the same strings, clipped the same way, as that 400 would carry.
       attention.push({
         type: 'unrunnableVersion',
         version: admitted.version,
-        issues: err.issues.slice(0, ISSUE_LIST_CAP),
-        totalIssues: err.issues.length,
+        ...capIssueList(err.issues),
       });
       return admitted;
     }

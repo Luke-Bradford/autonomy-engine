@@ -2,6 +2,7 @@ import {
   BUNDLE_KIND,
   ExportEnvelopeSchema,
   ImportResponseSchema,
+  summarizeIssueList,
   type ImportAttentionItem,
   type ExportKind,
   type ImportResponse,
@@ -197,10 +198,8 @@ export function describeAttention(item: ImportAttentionItem): string {
       return 'This trigger is not bound to a pipeline version — every export drops the binding, and an unbound trigger will never fire. Edit the trigger and bind it.';
     case 'requiresWebhookSecret':
       return 'This webhook trigger needs a fresh webhook secret — an export never carries one. Provision one from the trigger before calling its URL.';
-    case 'unrunnableVersion': {
-      const more = item.totalIssues - item.issues.length;
-      return `Version ${item.version} cannot run — it was saved before studio checked activity settings, and is kept as history: ${item.issues.join('; ')}${more > 0 ? ` (and ${more} more)` : ''}. The latest version is unaffected; pin triggers and calls to a version that runs.`;
-    }
+    case 'unrunnableVersion':
+      return `Version ${item.version} cannot run — its activity settings fail the save check, so it is kept as history only: ${summarizeIssueList(item.issues, item.totalIssues)}. The latest version is unaffected; pin triggers and calls to a version that runs.`;
   }
 }
 

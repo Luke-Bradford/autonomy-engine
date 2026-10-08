@@ -222,7 +222,7 @@ describe('describeAttention', () => {
     });
     expect(one).toMatch(/^Version 3 cannot run/);
     expect(one).toContain("node 'load': config.mode: bad");
-    expect(one).not.toMatch(/more\)/);
+    expect(one).not.toMatch(/more/);
     expect(
       describeAttention({
         type: 'unrunnableVersion',
@@ -230,7 +230,7 @@ describe('describeAttention', () => {
         issues: ['a', 'b'],
         totalIssues: 5,
       }),
-    ).toContain('a; b (and 3 more)');
+    ).toContain('a; b; …and 3 more');
   });
 });
 
