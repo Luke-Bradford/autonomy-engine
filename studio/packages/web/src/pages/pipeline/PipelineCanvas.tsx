@@ -22,6 +22,8 @@ import {
   MenuTrigger,
 } from '@fluentui/react-components';
 import {
+  ArrowMaximizeRegular,
+  ArrowMinimizeRegular,
   ArrowRedoRegular,
   ArrowUndoRegular,
   ChevronDownRegular,
@@ -155,6 +157,7 @@ import {
 import { nameIssues, propertyIssues } from './paramRules';
 import { PipelineGeneral } from './PipelineGeneral';
 import { DockPasteButton } from './DockPasteButton';
+import { isDockDrawerEscape } from './dockExpand';
 import { pasteAndSay } from './paste';
 import { ContractSection, OutputRow, ParamRow, VariableRow } from './ContractEditor';
 import { OUTPUT_COLUMNS, PARAM_COLUMNS, VARIABLE_COLUMNS } from './contractColumns';
@@ -367,6 +370,11 @@ export function PipelineCanvas({
   const setDockPosition = useStore(uiStore, (s) => s.setDockPosition);
   const dockWidth = useStore(uiStore, (s) => s.dockWidth);
   const dockRight = dockOpen && dockPosition === 'right';
+  /* #1477 OR29 — the dock expanded into a full-height drawer over the canvas,
+     for long forms. A moment's mode, not a preference: a reload docks it. Only
+     an open dock expands, and folding it ends the mode. */
+  const [dockExpandedMode, setDockExpanded] = useState(false);
+  const dockExpanded = dockExpandedMode && dockOpen;
   const dockId = useId();
   const dockBodyId = useId();
   const canvasMainRef = useRef<HTMLDivElement>(null);
@@ -2340,7 +2348,13 @@ export function PipelineCanvas({
                 #1475 — or beside it, per viewer. The position is a CLASS on the same tree, never a
                 second branch: the dock holds drafts a remount would drop. */}
                 <div
-                  className={dockRight ? 'canvas-main canvas-main--dock-right' : 'canvas-main'}
+                  className={[
+                    'canvas-main',
+                    dockRight && 'canvas-main--dock-right',
+                    dockExpanded && 'canvas-main--dock-expanded',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
                   ref={canvasMainRef}
                 >
                   <div className="canvas-wrap">
@@ -2367,8 +2381,30 @@ export function PipelineCanvas({
                     id={dockId}
                     ref={dockRef}
                     className={
-                      dockOpen ? 'property-dock' : 'property-dock property-dock--collapsed'
+                      !dockOpen
+                        ? 'property-dock property-dock--collapsed'
+                        : dockExpanded
+                          ? 'property-dock property-dock--expanded'
+                          : 'property-dock'
                     }
+                    /* #1477 OR29 — Escape returns an expanded dock to its place,
+                     with the same tree and so the same drafts. */
+                    onKeyDown={(e) => {
+                      if (
+                        !dockExpanded ||
+                        !isDockDrawerEscape({
+                          key: e.key,
+                          defaultPrevented: e.defaultPrevented,
+                          isComposing: e.nativeEvent.isComposing,
+                          target: e.target,
+                          currentTarget: e.currentTarget,
+                        })
+                      ) {
+                        return;
+                      }
+                      e.preventDefault();
+                      setDockExpanded(false);
+                    }}
                     /* Written from the stored preference on EVERY render, so a
                      reload paints the operator's height first time rather than
                      the default and then a jump. `null` leaves the CSS default. */
@@ -2389,7 +2425,10 @@ export function PipelineCanvas({
                         className="property-dock__toggle"
                         aria-expanded={dockOpen}
                         aria-controls={dockBodyId}
-                        onClick={() => setDockOpen(!dockOpen)}
+                        onClick={() => {
+                          if (dockOpen) setDockExpanded(false);
+                          setDockOpen(!dockOpen);
+                        }}
                       >
                         {/* Folded, a selection would otherwise change nothing on screen
                       but the canvas highlight. The dock does NOT reopen by itself:
@@ -2428,16 +2467,19 @@ export function PipelineCanvas({
                       </button>
                       {/* #1475 OR27 — the label names where the dock GOES, so it
                       needs no pressed state on top. Offered folded too: it
-                      decides where the dock opens. */}
-                      <button
-                        type="button"
-                        className="property-dock__toggle"
-                        onClick={() =>
-                          setDockPosition(dockPosition === 'right' ? 'bottom' : 'right')
-                        }
-                      >
-                        {dockPosition === 'right' ? 'Dock to bottom' : 'Dock to right'}
-                      </button>
+                      decides where the dock opens. Not while expanded, when
+                      moving it would change nothing on screen. */}
+                      {!dockExpanded && (
+                        <button
+                          type="button"
+                          className="property-dock__toggle"
+                          onClick={() =>
+                            setDockPosition(dockPosition === 'right' ? 'bottom' : 'right')
+                          }
+                        >
+                          {dockPosition === 'right' ? 'Dock to bottom' : 'Dock to right'}
+                        </button>
+                      )}
                       {/* #1477 OR29 — U21's Paste, moved here from a full-width
                       bar in the nothing-selected panel. */}
                       <DockPasteButton
@@ -2446,6 +2488,25 @@ export function PipelineCanvas({
                         onNotice={showCanvasMsg}
                         busy={previewLocked}
                       />
+                      {/* #1477 OR29 — room for a long form (a prompt, a mapping,
+                      JSON): the same panel, expanded over the canvas. Like the
+                      position toggle, the name says where it goes. */}
+                      {dockOpen && (
+                        <button
+                          type="button"
+                          className="icon-button property-dock__icon-button"
+                          aria-label={dockExpanded ? 'Back to dock' : 'Expand properties'}
+                          title={dockExpanded ? 'Back to dock (Esc)' : 'Expand properties'}
+                          aria-controls={dockBodyId}
+                          onClick={() => setDockExpanded(!dockExpanded)}
+                        >
+                          {dockExpanded ? (
+                            <ArrowMinimizeRegular aria-hidden="true" />
+                          ) : (
+                            <ArrowMaximizeRegular aria-hidden="true" />
+                          )}
+                        </button>
+                      )}
                       {/* The page's ONE announcer of a blocked save (#1249). Here
                       in the always-shown header, not on the list: the list is
                       `hidden` whenever Problems or the dock is folded, and a
