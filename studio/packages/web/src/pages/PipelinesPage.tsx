@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLatestSearchParams } from '../lib/useLatestSearchParams';
+import { useNavigate } from 'react-router';
 import { ToggleButton } from '@fluentui/react-components';
 import { useStore } from 'zustand';
 import type {
@@ -34,6 +35,8 @@ import {
 import { pipelinesStore, type PipelinesStore } from '../stores/pipelinesStore';
 import { NewPipelineDrawer, type NewPipelineForm } from './NewPipelineDrawer';
 import { PipelineImportDrawer } from './PipelineImportDrawer';
+import { PipelineRunDrawer } from './PipelineRunDrawer';
+import { pipelineRunSignature, type PipelineRunForm } from './pipelineRunForm';
 import { useDrawerForm } from '../lib/form/useDrawerForm';
 import { leavesPath } from '../lib/form/leavesPath';
 import { PipelineGridColumnsMenu, PipelinesGrid } from './author/PipelinesGrid';
@@ -66,6 +69,8 @@ import {
 import { FilterMenu } from './runs/FilterMenu';
 import { FilterPicker } from './runs/FilterPicker';
 import { runStatusLabel } from './runs/runStatus';
+import { runDetailPath } from './runs/runPath';
+import { pipelineRunsPath } from './runs/runFilters';
 import { LabelledControl } from '../lib/LabelledControl';
 import { useSearchBox } from '../lib/useSearchBox';
 import { withParams } from '../lib/withParams';
@@ -83,14 +88,14 @@ function folderOptionsOf(pipelines: readonly Pipeline[]): { value: string; label
 }
 
 /** #1569 slice 3 — the one drawer the toolbar opens: a new pipeline, or an import. */
-type PipelinesDrawer = NewPipelineForm | { kind: 'import' };
+type PipelinesDrawer = NewPipelineForm | PipelineRunForm | { kind: 'import' };
 
 /** What the open drawer would write, for its unsaved-changes check: an import
  * holds nothing typed, so it is never dirty. */
 function drawerSignature(drawer: PipelinesDrawer): string {
-  return drawer.kind === 'import'
-    ? 'import'
-    : JSON.stringify([drawer.name, drawer.folder, drawer.description]);
+  if (drawer.kind === 'import') return 'import';
+  if (drawer.kind === 'run') return pipelineRunSignature(drawer);
+  return JSON.stringify([drawer.name, drawer.folder, drawer.description]);
 }
 
 /** The archived view draws only the columns it has facts for. */
@@ -137,6 +142,7 @@ export function PipelinesPage({
     seq: drawerSeq,
     guard,
     openerRef,
+    closeIfLatest,
     ...drawer
     // Only a change of PAGE is walking away from typed input: the sort, the
     // filters and the Archived toggle are this page's own URL.
@@ -310,6 +316,7 @@ export function PipelinesPage({
   );
 
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const navigate = useNavigate();
 
   /**
    * #1058 — the ARCHIVED list, held here and deliberately NOT in
@@ -594,6 +601,17 @@ export function PipelinesPage({
     [loadArchived, refresh],
   );
 
+  /* A Trigger now drawer whose pipeline has left the live list (archived or
+     deleted here or elsewhere) closes: there is nothing left for it to run,
+     and its typed values were for that pipeline alone. */
+  const runDrawerGone =
+    drawerForm?.kind === 'run' &&
+    status === 'ready' &&
+    !pipelines.some((p) => p.id === drawerForm.pipelineId);
+  useEffect(() => {
+    if (runDrawerGone) closeIfLatest(drawerSeq);
+  }, [runDrawerGone, closeIfLatest, drawerSeq]);
+
   const base = showArchived ? archived : pipelines;
   const rows = useMemo(
     () =>
@@ -633,6 +651,19 @@ export function PipelinesPage({
               }),
       });
   const folderOptions = useMemo(() => folderOptionsOf(base), [base]);
+
+  /* Open last run: the summary's newest run. Not offered before the summaries
+     answer, and not for a pipeline that has never run. */
+  const lastRunAction = (p: Pipeline) => {
+    const last = summaries?.byId.get(p.id)?.lastRun;
+    return {
+      label: 'Open last run',
+      onSelect: () => {
+        if (last != null) void navigate(runDetailPath(last.runId));
+      },
+      disabled: last == null,
+    };
+  };
 
   const clearFilters = () => {
     setSearchText('');
@@ -883,6 +914,27 @@ export function PipelinesPage({
                     name={p.name}
                     actions={[
                       {
+                        label: 'Trigger now…',
+                        onSelect: (origin) => {
+                          if (drawerBusy) return;
+                          drawer.openFrom(origin.element, () =>
+                            openDrawer({
+                              kind: 'run',
+                              pipelineId: p.id,
+                              name: p.name,
+                              rows: {},
+                              defaults: {},
+                            }),
+                          );
+                        },
+                        disabled: drawerBusy,
+                      },
+                      lastRunAction(p),
+                      {
+                        label: 'Runs',
+                        onSelect: () => void navigate(pipelineRunsPath(p.id)),
+                      },
+                      {
                         label: 'Export',
                         onSelect: () => void onExport(p),
                         disabled: exporting.has(p.id),
@@ -914,9 +966,26 @@ export function PipelinesPage({
               // Only when it is THIS drawer that closes: armed for a drawer
               // already replaced, the flag would fire on some later close.
               if (drawer.isLatest(drawerSeq)) leaveArchivedRef.current = showArchivedRef.current;
-              drawer.closeIfLatest(drawerSeq);
+              closeIfLatest(drawerSeq);
               await refresh();
             }}
+          />
+        )}
+        {drawerForm?.kind === 'run' && (
+          <PipelineRunDrawer
+            key={drawerSeq}
+            form={drawerForm}
+            update={(fn) => {
+              // Only into THIS drawer: one replaced since is not its to change.
+              if (!drawer.isLatest(drawerSeq)) return;
+              setDrawerForm((prev) => (prev?.kind === 'run' ? fn(prev) : prev));
+            }}
+            guard={guard}
+            returnFocusTo={openerRef}
+            onClose={drawer.requestClose}
+            onBusyChange={setDrawerBusy}
+            // The row's Last run, success % and runs count all just moved.
+            onStarted={refreshRowStates}
           />
         )}
         {drawerForm?.kind === 'import' && (

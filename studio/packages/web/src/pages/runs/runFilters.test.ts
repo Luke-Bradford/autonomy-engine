@@ -16,6 +16,7 @@ import {
   runGridHiddenParam,
   RUN_GRID_HIDDEN_PARAM,
   triggerRunsPath,
+  pipelineRunsPath,
 } from './runFilters';
 
 describe('readRunFilters — U26 annotation', () => {
@@ -264,5 +265,14 @@ describe('triggerRunsPath — #1484 M2', () => {
     expect(path).toBe('/monitor/runs?trigger=trg+a%26b');
     const params = new URLSearchParams(path.slice(path.indexOf('?')));
     expect(readRunFilters(params).triggerId).toBe('trg a&b');
+  });
+});
+
+describe('pipelineRunsPath — #1569 OR37', () => {
+  it("is the runs list under the list's own pipeline filter, and reads back as one", () => {
+    const path = pipelineRunsPath('pl a&b');
+    expect(path).toBe('/monitor/runs?pipeline=pl+a%26b');
+    const params = new URLSearchParams(path.slice(path.indexOf('?')));
+    expect(readRunFilters(params).pipelineId).toBe('pl a&b');
   });
 });

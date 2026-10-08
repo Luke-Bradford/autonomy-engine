@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { Pipeline, PipelineSummary } from '@autonomy-studio/shared';
+import type { Pipeline, PipelineSummary, PipelineVersion } from '@autonomy-studio/shared';
 import { PipelinesPage } from './PipelinesPage';
 import { ApiError } from '../api/client';
 import { createPipelinesStore } from '../stores/pipelinesStore';
@@ -35,6 +35,8 @@ vi.mock('../api/pipelines', async (importActual) => {
     listArchivedPipelines: vi.fn(),
     listPipelineVersionStates: vi.fn(),
     listPipelineSummaries: vi.fn(),
+    listPipelineVersions: vi.fn(),
+    runPipelineVersion: vi.fn(),
   };
 });
 vi.mock('../api/workspaceGit', async (importActual) => ({
@@ -77,6 +79,8 @@ const downloadMock = vi.mocked(downloadApi.downloadTextFile);
 const exportMock = vi.mocked(portabilityApi.exportPipeline);
 const statesMock = vi.mocked(pipelinesApi.listPipelineVersionStates);
 const summariesMock = vi.mocked(pipelinesApi.listPipelineSummaries);
+const versionsMock = vi.mocked(pipelinesApi.listPipelineVersions);
+const runMock = vi.mocked(pipelinesApi.runPipelineVersion);
 const gitMock = vi.mocked(workspaceGitApi.getWorkspaceGit);
 const syncMock = vi.mocked(workspaceGitApi.readWorkspaceGitSync);
 
@@ -386,6 +390,225 @@ describe('PipelinesPage', () => {
         renderAt('?archived=1');
         expect(await screen.findByText('Retired')).toBeInTheDocument();
         expect(listArchivedMock).toHaveBeenCalledTimes(1);
+      });
+    });
+    /** #1569 OR37 slice 7 — the row opens the editor; ⋯ runs it, opens its runs. */
+    describe('row actions', () => {
+      const v2 = {
+        id: 'pv_2',
+        pipelineId: 'pl_1',
+        resourceId: 'res_pl1',
+        version: 2,
+        nodes: [],
+        edges: [],
+        containers: [],
+        params: [{ name: 'region', type: 'string', required: false, default: 'eu' }],
+        outputs: [],
+        catalogVersion: 1,
+        createdAt: 0,
+      } as unknown as PipelineVersion;
+      const v1 = { ...v2, id: 'pv_1', version: 1, params: [] } as unknown as PipelineVersion;
+      const seedRan = () => {
+        listMock.mockResolvedValue([pipeline({ name: 'Nightly' })]);
+        summariesMock.mockResolvedValue([
+          summary('pl_1', {
+            lastRun: { runId: 'run_9', status: 'success', startedAt: 5, finishedAt: 9 },
+            triggers: {
+              total: 1,
+              enabled: 1,
+              items: [{ id: 't1', name: 'Hourly', mode: 'schedule', enabled: true }],
+            },
+          }),
+        ]);
+      };
+      const path = (router: ReturnType<typeof renderPage>['router']) =>
+        `${router.state.location.pathname}${router.state.location.search}`;
+
+      it('opens the editor from a click on the row, but not from its own controls', async () => {
+        seedRan();
+        const user = userEvent.setup();
+        const { router } = renderPage();
+        const cell = await screen.findByText('1 active / 1');
+        await user.click(screen.getByRole('button', { name: 'Actions for Nightly' }));
+        await closeRowMenu(user);
+        expect(path(router)).toBe('/author/pipelines');
+        // A plain cell is the row.
+        await user.click(within(cell.closest('tr')!).getAllByRole('cell')[2]!);
+        expect(path(router)).toBe('/author/pipelines/pl_1');
+      });
+
+      it("a link in the row goes where it says, and the row's click does not follow it", async () => {
+        seedRan();
+        const user = userEvent.setup();
+        const { router } = renderPage();
+        await user.click(await screen.findByRole('link', { name: '1 active / 1 triggers' }));
+        await waitFor(() => expect(path(router)).toBe('/manage/triggers?pipeline=pl_1'));
+        await new Promise((r) => setTimeout(r, 30));
+        expect(path(router)).toBe('/manage/triggers?pipeline=pl_1');
+      });
+
+      it("links the Triggers count to the pipeline's triggers", async () => {
+        seedRan();
+        renderPage();
+        expect(await screen.findByRole('link', { name: '1 active / 1 triggers' })).toHaveAttribute(
+          'href',
+          '/manage/triggers?pipeline=pl_1',
+        );
+      });
+
+      it('⋯ Runs opens the Monitor filtered to the pipeline; Open last run opens its run', async () => {
+        seedRan();
+        const user = userEvent.setup();
+        const { router } = renderPage();
+        await screen.findByText('1 active / 1');
+        await chooseRowAction(user, 'Nightly', 'Runs');
+        await waitFor(() => expect(path(router)).toBe('/monitor/runs?pipeline=pl_1'));
+        // …and stays there: the menu item's click is not also the row's.
+        await new Promise((r) => setTimeout(r, 30));
+        expect(path(router)).toBe('/monitor/runs?pipeline=pl_1');
+        await act(() => router.navigate('/author/pipelines'));
+        await screen.findByText('1 active / 1');
+        await chooseRowAction(user, 'Nightly', 'Open last run');
+        await waitFor(() => expect(path(router)).toBe('/monitor/runs/run_9'));
+      });
+
+      it('offers no Open last run for a pipeline that has never run', async () => {
+        listMock.mockResolvedValue([pipeline({ name: 'Fresh' })]);
+        summariesMock.mockResolvedValue([summary('pl_1')]);
+        const user = userEvent.setup();
+        const { router } = renderPage();
+        await waitFor(() => expect(summariesMock).toHaveBeenCalled());
+        const item = await chooseRowAction(user, 'Fresh', 'Open last run');
+        expect(item).toHaveAttribute('aria-disabled', 'true');
+        expect(path(router)).toBe('/author/pipelines');
+      });
+
+      it('Trigger now runs the LATEST version with the typed params, then says so', async () => {
+        seedRan();
+        // Oldest first: the latest is picked by number, not by position.
+        versionsMock.mockResolvedValue([v1, v2]);
+        runMock.mockResolvedValue({ outcome: 'started', runId: 'run_10' } as never);
+        const user = userEvent.setup();
+        renderPage();
+        await screen.findByText('1 active / 1');
+        const before = summariesMock.mock.calls.length;
+        await chooseRowAction(user, 'Nightly', 'Trigger now…');
+        const drawer = within(await screen.findByRole('dialog', { name: /Trigger now/ }));
+        expect(await drawer.findByText('v2 · latest')).toBeInTheDocument();
+        const region = drawer.getByLabelText('region');
+        expect(region).toHaveValue('eu');
+        await user.clear(region);
+        await user.type(region, 'us');
+        await user.click(drawer.getByRole('button', { name: 'Start run' }));
+        await waitFor(() =>
+          expect(runMock).toHaveBeenCalledWith('pl_1', {
+            pipelineVersionId: 'pv_2',
+            params: { region: 'us' },
+          }),
+        );
+        // Said in the drawer, which stays open: the grid beside it does not move.
+        const notice = drawer.getByRole('status');
+        await waitFor(() => expect(notice).toHaveTextContent('Started v2 · Open run'));
+        expect(within(notice).getByRole('link', { name: 'Open run' })).toHaveAttribute(
+          'href',
+          '/monitor/runs/run_10',
+        );
+        // What was typed has been used: Done does not ask.
+        await user.click(drawer.getByRole('button', { name: 'Done' }));
+        await waitFor(() =>
+          expect(screen.queryByRole('dialog', { name: /Trigger now/ })).not.toBeInTheDocument(),
+        );
+        // The row's facts are read again: its last run just changed.
+        await waitFor(() => expect(summariesMock.mock.calls.length).toBeGreaterThan(before));
+      });
+
+      it('keeps a value typed while the start is in flight, and still asks for it', async () => {
+        seedRan();
+        versionsMock.mockResolvedValue([v2]);
+        const pending = deferred<Awaited<ReturnType<typeof pipelinesApi.runPipelineVersion>>>();
+        runMock.mockReturnValue(pending.promise);
+        const user = userEvent.setup();
+        renderPage();
+        await screen.findByText('1 active / 1');
+        await chooseRowAction(user, 'Nightly', 'Trigger now…');
+        const drawer = within(await screen.findByRole('dialog', { name: /Trigger now/ }));
+        const region = await drawer.findByLabelText('region');
+        await user.click(drawer.getByRole('button', { name: 'Start run' }));
+        await waitFor(() => expect(runMock).toHaveBeenCalled());
+        await user.type(region, '-2');
+        await act(async () => {
+          pending.resolve({ outcome: 'started', runId: 'run_11' } as never);
+          await pending.promise;
+        });
+        await waitFor(() => expect(drawer.getByRole('status')).toHaveTextContent('Started v2'));
+        // The start used `eu`; `eu-2` was typed after it, so it is kept, and unsaved.
+        expect(region).toHaveValue('eu-2');
+        await user.click(drawer.getByRole('button', { name: 'Done' }));
+        expect(await screen.findByRole('alertdialog')).toBeInTheDocument();
+      });
+
+      it('Trigger now puts focus on Start for a pipeline with no params', async () => {
+        seedRan();
+        versionsMock.mockResolvedValue([v1]);
+        const user = userEvent.setup();
+        renderPage();
+        await screen.findByText('1 active / 1');
+        await chooseRowAction(user, 'Nightly', 'Trigger now…');
+        const drawer = within(await screen.findByRole('dialog', { name: /Trigger now/ }));
+        await drawer.findByText('v1 · latest');
+        await waitFor(() =>
+          expect(drawer.getByRole('button', { name: 'Start run' })).toHaveFocus(),
+        );
+      });
+
+      it('Trigger now says why a never-saved pipeline cannot run, and starts nothing', async () => {
+        seedRan();
+        versionsMock.mockResolvedValue([]);
+        const user = userEvent.setup();
+        renderPage();
+        await screen.findByText('1 active / 1');
+        await chooseRowAction(user, 'Nightly', 'Trigger now…');
+        const drawer = within(await screen.findByRole('dialog', { name: /Trigger now/ }));
+        expect(await drawer.findByText(/Save a version first/)).toBeInTheDocument();
+        expect(drawer.getByRole('button', { name: 'Start run' })).toBeDisabled();
+        expect(runMock).not.toHaveBeenCalled();
+      });
+
+      it('asks before dropping a typed param value, but not an untouched default', async () => {
+        seedRan();
+        versionsMock.mockResolvedValue([v2]);
+        const user = userEvent.setup();
+        renderPage();
+        await screen.findByText('1 active / 1');
+        await chooseRowAction(user, 'Nightly', 'Trigger now…');
+        let drawer = within(await screen.findByRole('dialog', { name: /Trigger now/ }));
+        await drawer.findByLabelText('region');
+        // Seeded with the defaults, it holds nothing typed: Cancel just closes.
+        await user.click(drawer.getByRole('button', { name: 'Cancel' }));
+        await waitFor(() =>
+          expect(screen.queryByRole('dialog', { name: /Trigger now/ })).not.toBeInTheDocument(),
+        );
+        await chooseRowAction(user, 'Nightly', 'Trigger now…');
+        drawer = within(await screen.findByRole('dialog', { name: /Trigger now/ }));
+        await user.type(await drawer.findByLabelText('region'), '-west');
+        await user.click(drawer.getByRole('button', { name: 'Cancel' }));
+        expect(await screen.findByRole('alertdialog')).toBeInTheDocument();
+      });
+
+      it('closes the Trigger now drawer when its pipeline leaves the list', async () => {
+        seedRan();
+        versionsMock.mockResolvedValue([v2]);
+        const user = userEvent.setup();
+        renderPage();
+        await screen.findByText('1 active / 1');
+        await chooseRowAction(user, 'Nightly', 'Trigger now…');
+        await screen.findByRole('dialog', { name: /Trigger now/ });
+        listMock.mockResolvedValue([]);
+        await chooseRowAction(user, 'Nightly', 'Archive');
+        await answerConfirm(user, 'accept');
+        await waitFor(() =>
+          expect(screen.queryByRole('dialog', { name: /Trigger now/ })).not.toBeInTheDocument(),
+        );
       });
     });
   });

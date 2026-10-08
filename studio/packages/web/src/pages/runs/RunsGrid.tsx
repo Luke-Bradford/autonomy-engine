@@ -1,10 +1,11 @@
-import { Fragment, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { useStore } from 'zustand';
-import { useHref, useLocation, useNavigate } from 'react-router';
+import { useLocation } from 'react-router';
 import type { RunSortKey, RunSummary } from '@autonomy-studio/shared';
 import { RUN_GRID_SPEC, type RunGridColumnId, type UiStore } from '../../stores/uiStore';
 import { GridColumnHeader, GridColumnsMenu } from '../../lib/GridColumns';
 import { useGridColumnWidths } from '../../lib/useGridColumnWidths';
+import { useRowOpen } from '../../lib/useRowOpen';
 import { runDetailPath } from './runPath';
 import { nestRuns } from './runTree';
 import {
@@ -93,32 +94,9 @@ function RunRow({
   zone: DisplayTimeZone;
   nest?: RunNest;
 }) {
-  const navigate = useNavigate();
   const { search } = useLocation();
   const path = runDetailPath(r.id);
-  const href = useHref(path);
-  const open = (e: ReactMouseEvent<HTMLTableRowElement>, newTab: boolean): void => {
-    if (e.target instanceof Element && e.target.closest('a, button, input, select, textarea')) {
-      return;
-    }
-    // #1566 — React bubbles a click through a PORTAL to this row too: the
-    // Pipeline cell's ⋯ menu renders in the body, so a click on one of its
-    // items is not in the row's DOM and must not also open the run.
-    if (!(e.target instanceof Node) || !e.currentTarget.contains(e.target)) return;
-    // Only a selection INSIDE this row means "I was selecting text"; a stale one
-    // elsewhere on the page must not make every row click do nothing.
-    const selection = window.getSelection();
-    if (
-      selection !== null &&
-      !selection.isCollapsed &&
-      selection.anchorNode !== null &&
-      e.currentTarget.contains(selection.anchorNode)
-    ) {
-      return;
-    }
-    if (newTab) window.open(href, '_blank', 'noopener');
-    else void navigate(path);
-  };
+  const rowOpen = useRowOpen(path);
   const ctx: CellContext = { loadedAt, path, search, zone, ...(nest ? { nest } : {}) };
   return (
     <tr
@@ -127,10 +105,8 @@ function RunRow({
           ? 'runs-grid__row runs-grid__row--child'
           : 'runs-grid__row'
       }
-      onClick={(e) => open(e, e.metaKey || e.ctrlKey || e.shiftKey)}
-      onAuxClick={(e) => {
-        if (e.button === 1) open(e, true);
-      }}
+      onClick={rowOpen.onClick}
+      onAuxClick={rowOpen.onAuxClick}
     >
       {columns.map((column) => (
         <Fragment key={column}>{RUN_GRID_COLUMN_DEFS[column].cell(r, ctx)}</Fragment>

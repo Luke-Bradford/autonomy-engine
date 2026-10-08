@@ -4841,11 +4841,13 @@ button.danger {
   color: var(--muted);
 }
 
-.runs-grid__row {
+.runs-grid__row,
+.pipelines-grid__row {
   cursor: pointer;
 }
 
-.runs-grid__row:hover {
+.runs-grid__row:hover,
+.pipelines-grid__row:hover {
   background: var(--panel-2);
 }
 
@@ -5986,4 +5988,16 @@ button.danger {
 
 .pipelines-filters__search input {
   width: 100%;
+}
+
+/* #1569 OR37 slice 7 — the Trigger now drawer's version, as a label, and the
+   run it started; the status line is empty (and flat) until then. */
+.run-drawer__version {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.run-drawer__started {
+  margin: 0;
 }

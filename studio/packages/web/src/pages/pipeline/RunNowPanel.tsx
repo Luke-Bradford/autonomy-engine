@@ -1,6 +1,6 @@
 import { VALUE_TYPE_TITLES } from '@autonomy-studio/shared';
-import { useRef, useState } from 'react';
-import type { FormEvent, KeyboardEvent } from 'react';
+import { useState } from 'react';
+import type { KeyboardEvent } from 'react';
 import type {
   DebugRunRequest,
   DebugRunResult,
@@ -8,11 +8,11 @@ import type {
   Param,
   PipelineVersion,
 } from '@autonomy-studio/shared';
-import { messageOf } from '../../api/client';
 import { debugPipelineDraft, runPipelineVersion } from '../../api/pipelines';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { JsonEditor } from '../../lib/form/JsonEditor';
-import { buildRunNowParams, runNowRows } from './runNowRules';
+import { runNowRows } from './runNowRules';
+import { useRunParams } from './useRunParams';
 
 /**
  * #1395 OR4 — the editor's Run form: the saved version's params, prefilled with
@@ -91,11 +91,47 @@ export function DebugRunPanel({
   );
 }
 
-/**
- * The form Run and Debug share: one row per param, prefilled from its default,
- * turned into typed values by `buildRunNowParams`, then `start`ed. A `started`
- * result is handed up; anything else is said in the form.
- */
+/** One labelled control per param, with its type, `required` and description. */
+export function RunParamsFields({
+  params,
+  rows,
+  onChange,
+}: {
+  params: readonly Param[];
+  rows: Readonly<Record<string, string>>;
+  onChange: (name: string, value: string) => void;
+}) {
+  if (params.length === 0) return <p className="page-hint">This pipeline takes no parameters.</p>;
+  return (
+    <>
+      <p className="page-hint">Leave a value blank to use its default.</p>
+      {params.map((p, i) => (
+        <LabelledControl key={p.name} label={p.name}>
+          {(id) => (
+            <>
+              <ParamValueInput
+                id={id}
+                param={p}
+                value={rows[p.name] ?? ''}
+                onChange={(v) => onChange(p.name, v)}
+                // The fields mount once their version is known, so the first
+                // one is where typing goes, in the panel and in a drawer.
+                autoFocus={i === 0}
+              />
+              <span id={`${id}-hint`} className="page-hint">
+                {VALUE_TYPE_TITLES[p.type]}
+                {p.required ? ' · required' : ''}
+                {p.description !== undefined && p.description !== '' ? ` — ${p.description}` : ''}
+              </span>
+            </>
+          )}
+        </LabelledControl>
+      ))}
+    </>
+  );
+}
+
+/** The floating form Run and Debug share, over `useRunParams`. */
 function RunParamsForm<R extends FireResult>({
   heading,
   params,
@@ -112,83 +148,29 @@ function RunParamsForm<R extends FireResult>({
   onClose: () => void;
 }) {
   const [rows, setRows] = useState(() => runNowRows(params));
-  const [error, setError] = useState<string | null>(null);
-  const [starting, setStarting] = useState(false);
-  // A ref, not `starting`: two submits in one tick (Enter held, a double click)
-  // both read the same stale state, and each would start a run.
-  const inFlight = useRef(false);
-
-  async function onStart(e: FormEvent) {
-    e.preventDefault();
-    if (inFlight.current) return;
-    const built = buildRunNowParams(rows, params);
-    if (!built.ok) {
-      setError(built.error);
-      return;
-    }
-    setError(null);
-    inFlight.current = true;
-    setStarting(true);
-    try {
-      const result = await start(built.value);
-      if (result.outcome === 'started' && result.runId !== undefined) {
-        onStarted({ ...result, runId: result.runId });
-        return;
-      }
-      setError(`The run did not start: ${result.reason ?? result.outcome}.`);
-    } catch (err) {
-      setError(messageOf(err));
-    } finally {
-      inFlight.current = false;
-      setStarting(false);
-    }
-  }
+  const { set, error, starting, submit } = useRunParams({
+    params,
+    rows,
+    onRowsChange: setRows,
+    start,
+    onStarted,
+  });
 
   function onKeyDown(e: KeyboardEvent) {
     if (e.key === 'Escape') onClose();
   }
-
-  const set = (name: string, value: string) => setRows((r) => ({ ...r, [name]: value }));
 
   return (
     <form
       className="run-now-panel"
       role="dialog"
       aria-label={heading}
-      onSubmit={(e) => void onStart(e)}
+      onSubmit={(e) => void submit(e)}
       onKeyDown={onKeyDown}
     >
       <h3>{heading}</h3>
       {note !== undefined && <p className="page-hint">{note}</p>}
-      {params.length === 0 ? (
-        <p className="page-hint">This pipeline takes no parameters.</p>
-      ) : (
-        <>
-          <p className="page-hint">Leave a value blank to use its default.</p>
-          {params.map((p, i) => (
-            <LabelledControl key={p.name} label={p.name}>
-              {(id) => (
-                <>
-                  <ParamValueInput
-                    id={id}
-                    param={p}
-                    value={rows[p.name] ?? ''}
-                    onChange={(v) => set(p.name, v)}
-                    autoFocus={i === 0}
-                  />
-                  <span id={`${id}-hint`} className="page-hint">
-                    {VALUE_TYPE_TITLES[p.type]}
-                    {p.required ? ' · required' : ''}
-                    {p.description !== undefined && p.description !== ''
-                      ? ` — ${p.description}`
-                      : ''}
-                  </span>
-                </>
-              )}
-            </LabelledControl>
-          ))}
-        </>
-      )}
+      <RunParamsFields params={params} rows={rows} onChange={set} />
       {error !== null && (
         <p className="form-error" role="alert">
           {error}
