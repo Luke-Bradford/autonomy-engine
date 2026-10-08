@@ -163,7 +163,10 @@ describe('node panel labels (#1396)', () => {
         call={undefined}
       />,
     );
-    expect(getByRole('option', { name: `Bound (${CONNECTION_KIND_LABELS.http})` })).toBeTruthy();
+    // The closed picker reads the binding (#1477 slice 5c: a combobox, not a select).
+    expect(getByRole('combobox', { name: 'Connection' })).toHaveValue(
+      `Bound (${CONNECTION_KIND_LABELS.http})`,
+    );
   });
 });
 

@@ -11,7 +11,7 @@ import {
 } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
-import { properties, triggerForm } from './support/panels';
+import { properties, triggerForm, pickConnection } from './support/panels';
 import { rowMenuButton } from './support/rowMenu';
 import { openNewConnection } from './support/newConnection';
 
@@ -69,9 +69,7 @@ test('#1386 — create a connection, author and bind, trigger it, and read the r
   // 3. Configure both nodes, binding the Agent Task to the connection from step 1.
   await canvasNodes(page).nth(0).click();
   const panel = properties(page);
-  await panel.getByLabel('Connection', { exact: true }).selectOption({
-    label: `${CONNECTION} (Agent CLI (subscription))`,
-  });
+  await pickConnection(page, 'Connection', { name: CONNECTION });
   await panel.getByLabel('Task', { exact: true }).fill(TASK);
   await panel.getByRole('button', { name: 'Apply config', exact: true }).click();
 

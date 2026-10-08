@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { addActivity, canvasNodes } from './support/canvasGraph';
 import { openSeededCanvas } from './support/seedDoc';
-import { properties } from './support/panels';
+import { properties, pickConnection } from './support/panels';
 
 /**
  * #996 M12 slice 2 (#1221) — authoring a `lookup` node on the canvas.
@@ -112,9 +112,7 @@ test.describe('#1221 — lookup-node authoring', () => {
     // axis silently degraded to kind-only and offered datasets on stores this
     // node is not bound to, which dispatch then refuses with
     // `DATASET_CONNECTION_MISMATCH`.
-    await properties(page)
-      .getByRole('combobox', { name: 'Connection', exact: true })
-      .selectOption(connA);
+    await pickConnection(page, 'Connection', { id: connA });
     // Store B's dataset is GONE, store A's remains — and now the total IS
     // deterministic, because narrowing to this connection excludes every other
     // spec's datasets too: "— none —" plus store A's one.
@@ -138,7 +136,7 @@ test.describe('#1221 — lookup-node authoring', () => {
     await canvasNodes(page).first().click();
     await expect(
       properties(page).getByRole('combobox', { name: 'Connection', exact: true }),
-    ).toHaveValue(connA);
+    ).toHaveValue('e2e 1221 store A (SQLite)');
     await expect(properties(page).getByRole('combobox', { name: 'Source dataset' })).toHaveValue(
       setA,
     );

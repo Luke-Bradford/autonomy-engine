@@ -49,6 +49,11 @@ function KindName<K extends string>({
   );
 }
 
+/** #1477 slice 5c — a connection kind's icon alone, for a picker option. */
+export function ConnectionKindGlyph({ kind }: { kind: ConnectionKind }) {
+  return <KindGlyph icons={CONNECTION_KIND_ICONS} kind={kind} />;
+}
+
 export function ConnectionKindName({ kind }: { kind: ConnectionKind }) {
   return <KindName icons={CONNECTION_KIND_ICONS} labels={CONNECTION_KIND_LABELS} kind={kind} />;
 }

@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { addActivity, canvasNodes } from './support/canvasGraph';
 import { openSeededCanvas } from './support/seedDoc';
-import { properties } from './support/panels';
+import { properties, pickConnection } from './support/panels';
 
 /**
  * #996 M5 slice 4c (#1139) — authoring a `copy` node on the canvas.
@@ -96,15 +96,11 @@ test.describe('#1139 — copy-node authoring', () => {
 
     // Picking ONE end leaves the doc without the pair, and the panel says so
     // rather than letting the pick look saved.
-    await properties(page)
-      .getByRole('combobox', { name: 'Source connection' })
-      .selectOption(srcConn);
+    await pickConnection(page, 'Source connection', { id: srcConn });
     await expect(properties(page).getByRole('status')).toContainText('not saved');
 
     await copyTab(page, 'Sink');
-    await properties(page)
-      .getByRole('combobox', { name: 'Sink connection' })
-      .selectOption(sinkConn);
+    await pickConnection(page, 'Sink connection', { id: sinkConn });
 
     // The dataset lists are narrowed by the connection bound to the SAME end —
     // a disagreeing pair is refused at dispatch, so offering one is offering a
@@ -140,11 +136,11 @@ test.describe('#1139 — copy-node authoring', () => {
 
     await copyTab(page, 'Source');
     await expect(properties(page).getByRole('combobox', { name: 'Source connection' })).toHaveValue(
-      srcConn,
+      'e2e 1139 source store (SQLite)',
     );
     await copyTab(page, 'Sink');
     await expect(properties(page).getByRole('combobox', { name: 'Sink connection' })).toHaveValue(
-      sinkConn,
+      'e2e 1139 sink store (SQLite)',
     );
     await copyTab(page, 'Source');
     await expect(properties(page).getByRole('combobox', { name: 'Source dataset' })).toHaveValue(
@@ -210,13 +206,9 @@ test.describe('#1139 — copy-node authoring', () => {
     await canvasNodes(page).first().click();
 
     await copyTab(page, 'Source');
-    await properties(page)
-      .getByRole('combobox', { name: 'Source connection' })
-      .selectOption(srcConn);
+    await pickConnection(page, 'Source connection', { id: srcConn });
     await copyTab(page, 'Sink');
-    await properties(page)
-      .getByRole('combobox', { name: 'Sink connection' })
-      .selectOption(sinkConn);
+    await pickConnection(page, 'Sink connection', { id: sinkConn });
     await copyTab(page, 'Source');
     await properties(page).getByRole('combobox', { name: 'Source dataset' }).selectOption(srcSet);
     await copyTab(page, 'Sink');
@@ -322,13 +314,9 @@ test.describe('#1170 — Auto-map and the unmapped advisory', () => {
     await expect(properties(page).getByRole('button', { name: 'Auto-map columns' })).toBeDisabled();
 
     await copyTab(page, 'Source');
-    await properties(page)
-      .getByRole('combobox', { name: 'Source connection' })
-      .selectOption(srcConn);
+    await pickConnection(page, 'Source connection', { id: srcConn });
     await copyTab(page, 'Sink');
-    await properties(page)
-      .getByRole('combobox', { name: 'Sink connection' })
-      .selectOption(sinkConn);
+    await pickConnection(page, 'Sink connection', { id: sinkConn });
     await copyTab(page, 'Source');
     await properties(page).getByRole('combobox', { name: 'Source dataset' }).selectOption(srcSet);
     await copyTab(page, 'Sink');
@@ -427,13 +415,9 @@ test.describe('#1178 — the expression picker on a mapping cell', () => {
     await canvasNodes(page).first().click();
 
     await copyTab(page, 'Source');
-    await properties(page)
-      .getByRole('combobox', { name: 'Source connection' })
-      .selectOption(srcConn);
+    await pickConnection(page, 'Source connection', { id: srcConn });
     await copyTab(page, 'Sink');
-    await properties(page)
-      .getByRole('combobox', { name: 'Sink connection' })
-      .selectOption(sinkConn);
+    await pickConnection(page, 'Sink connection', { id: sinkConn });
     await copyTab(page, 'Source');
     await properties(page).getByRole('combobox', { name: 'Source dataset' }).selectOption(srcSet);
     await copyTab(page, 'Sink');
