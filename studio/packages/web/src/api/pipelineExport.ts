@@ -1,5 +1,5 @@
-import { downloadTextFile, exportFileName } from './download';
-import { exportPipeline } from './portability';
+import { downloadTextFile, exportFileName, fileTimestamp } from './download';
+import { exportPipeline, exportPipelines } from './portability';
 
 /**
  * #1397 — export one pipeline and hand the browser its file.
@@ -20,4 +20,14 @@ export async function downloadPipelineExport(pipeline: {
     exportFileName('pipeline', pipeline.name, pipeline.id),
     await exportPipeline(pipeline.id),
   );
+}
+
+/**
+ * #1586 — export several pipelines as ONE importable file (the Pipelines
+ * toolbar's Export), named for when it was taken: `pipelines-<stamp>.json`.
+ * The bytes are the server's, unchanged, as for a single export.
+ */
+export async function downloadPipelinesBundle(ids: readonly string[]): Promise<void> {
+  const text = await exportPipelines(ids);
+  downloadTextFile(`pipelines-${fileTimestamp(Date.now())}.json`, text);
 }
