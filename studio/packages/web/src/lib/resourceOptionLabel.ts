@@ -8,7 +8,7 @@ import {
 /**
  * #1396 — how a connection or dataset reads in a picker: its name, then its
  * kind's display name ("Orders (Delimited text (CSV))" rather than the stored
- * `delimited`). One format for every select that offers one.
+ * `delimited`). One format for every picker that offers one.
  */
 export function connectionOptionLabel(c: { name: string; kind: ConnectionKind }): string {
   return `${c.name} (${CONNECTION_KIND_LABELS[c.kind]})`;
@@ -67,6 +67,7 @@ export function connectionLocation(c: {
       return folders.length === 0 ? undefined : folders.join(', ');
     }
     case 'agent_cli':
+      // The executable alone: its arguments are a separate field (`args`).
       return text('command');
     case 'http':
     case 'anthropic_api':
@@ -90,5 +91,7 @@ function urlLocation(value: string | undefined): string | undefined {
   } catch {
     return undefined;
   }
+  // `localhost:11434` parses as scheme `localhost:` with no host.
+  if (url.host === '') return undefined;
   return `${url.protocol}//${url.host}${url.pathname === '/' ? '' : url.pathname}`;
 }

@@ -853,8 +853,8 @@ describe('paired binding pickers (#1139)', () => {
       disabled: o.getAttribute('aria-disabled') === 'true',
       text: o.textContent,
     }));
+    // No None: nothing is bound, and None is the unbind.
     expect(options).toEqual([
-      { disabled: false, text: 'None' },
       { disabled: false, text: 'Source store' },
       // Listed, so the picker says what exists, but not pickable as a sink.
       { disabled: true, text: "FilesCan't be a Copy Data sink yet" },

@@ -35,6 +35,9 @@ describe('connectionLocation', () => {
       }),
     ).toBe('https://api.test/v1');
     expect(connectionLocation({ kind: 'http', config: { baseUrl: 'not a url' } })).toBeUndefined();
+    expect(
+      connectionLocation({ kind: 'ollama', config: { baseUrl: 'localhost:11434' } }),
+    ).toBeUndefined();
   });
 
   it('has no line for a connection with nothing to point at', () => {

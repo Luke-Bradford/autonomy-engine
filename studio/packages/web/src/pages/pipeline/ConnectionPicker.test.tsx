@@ -216,16 +216,39 @@ describe('ConnectionPicker (#1477 slice 5b)', () => {
       expect(onPick).not.toHaveBeenCalled();
     });
 
-    it('filters on what is typed, by name or location', () => {
-      render(<Harness connections={MIXED} />);
+    it('filters on what is typed, by name or location, with only matches listed', () => {
+      // New is offered, and still leaves the list while a search is typed.
+      render(<Harness connections={MIXED} onNew={vi.fn()} />);
       search('beta.sql');
       expect(picker()).toHaveValue('beta.sql');
-      expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual([
-        'None',
-        'Beta/srv/beta.sqlite',
-      ]);
+      expect(
+        screen.getAllByRole('option').map((o) => o.getAttribute('data-connection-id')),
+      ).toEqual(['b']);
       search('zzz');
       expect(screen.getByRole('option', { name: 'No connections match' })).toBeInTheDocument();
+    });
+
+    it('Enter after a search picks the first MATCH, never None', () => {
+      // `beta.sql` matches by location, not as a prefix of any option's text,
+      // so Fluent falls back to the list's first option: that must be the match.
+      const onPick = vi.fn();
+      render(<Harness initial="a" connections={MIXED} onPick={onPick} />);
+      search('beta.sql');
+      fireEvent.keyDown(picker(), { key: 'Enter' });
+      expect(onPick).toHaveBeenCalledWith('b');
+    });
+
+    it('focus selects the bound text, so typing starts a search instead of appending', () => {
+      render(<Harness initial="a" connections={MIXED} />);
+      const input = picker() as HTMLInputElement;
+      fireEvent.focus(input);
+      expect([input.selectionStart, input.selectionEnd]).toEqual([0, 'Alpha (SQLite)'.length]);
+    });
+
+    it('lists None only while something is bound: it is the unbind', () => {
+      render(<Harness connections={MIXED} />);
+      fireEvent.click(picker());
+      expect(screen.queryByRole('option', { name: 'None' })).toBeNull();
     });
 
     it('typing a search is not an unbind, and closing the list restores the binding', () => {

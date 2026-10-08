@@ -2823,12 +2823,15 @@ button.danger {
   max-width: 100%;
 }
 /* #1477 slice 5c — the picker is a Fluent Combobox, sized to its widest option
-   in `ch` by the component. Its own chrome (border, underline, background) is
-   cleared so the inner input takes the dock's one control style
-   (`.property-panel input` and the compact height below), and the chevron sits
-   over the input's right edge. Two classes: Griffel's atomic classes are one. */
+   by the component (`--picker-ch`). Its own chrome (border, underline,
+   background) is cleared so the inner input takes the dock's one control style
+   (`.property-panel input` and the compact height), with the app's focus ring in
+   place of the cleared underline, and the chevron over the input's right edge.
+   The input rule carries `:root .property-panel` to outrank the compact
+   density's padding, which would otherwise run the text under the chevron. */
 .connection-picker .connection-picker__combobox {
   position: relative;
+  width: calc(var(--picker-ch, 8) * 1ch + 40px);
   min-width: 0;
   max-width: min(100%, 320px);
   padding: 0;
@@ -2838,11 +2841,15 @@ button.danger {
 .connection-picker .connection-picker__combobox::after {
   display: none;
 }
-.connection-picker .connection-picker__combobox > input {
+:root .property-panel .connection-picker .connection-picker__combobox > input {
   width: 100%;
   min-width: 0;
   padding-right: 28px;
   text-overflow: ellipsis;
+}
+.connection-picker .connection-picker__combobox > input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 .connection-picker .connection-picker__combobox > .fui-Combobox__expandIcon {
   position: absolute;
@@ -2850,24 +2857,25 @@ button.danger {
   top: 50%;
   transform: translateY(-50%);
 }
+/* Portalled out of the dock, so the density's field font is set here. */
 .connection-picker__listbox {
   min-width: 240px;
   max-width: 480px;
+  font-size: var(--density-field-font, 14px);
 }
+/* Icon in its own column; the name and its lines share the second. */
 .connection-option {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.connection-option__name {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 8px;
   align-items: center;
-  gap: 8px;
+}
+.connection-option > :not(.kind-icon) {
+  grid-column: 2;
 }
 .connection-option__line {
-  padding-left: 24px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--density-label-font, 12px);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

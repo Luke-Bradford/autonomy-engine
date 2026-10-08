@@ -22,7 +22,7 @@ import { connectionLocation, connectionOptionLabel } from '../../lib/resourceOpt
  * doc can hold a binding this build would not offer: authored before an
  * allowlist narrowed, imported from a workspace with different resources, or
  * simply pointing at a row whose kind changed. Dropping it from the list makes
- * the select fall back to "— none —", which reads as "nothing is bound" while
+ * the picker fall back to showing nothing bound, which reads as "nothing is bound" while
  * the doc says otherwise — and the next save would silently write that lie.
  */
 
@@ -97,7 +97,7 @@ export function connectionPickerGroups(
     id: string;
     name: string;
     kind: ConnectionKind;
-    config?: Record<string, unknown>;
+    config: Record<string, unknown>;
   }[],
   disabledReason: ConnectionKindDisabledReason,
   boundId: string | undefined,
@@ -111,8 +111,7 @@ export function connectionPickerGroups(
         options: connections
           .filter((c) => c.kind === kind)
           .map((c) => {
-            const location =
-              c.config === undefined ? undefined : connectionLocation({ ...c, config: c.config });
+            const location = connectionLocation(c);
             const option: ConnectionPickerOption = {
               id: c.id,
               label: connectionOptionLabel(c),
@@ -130,7 +129,8 @@ export function connectionPickerGroups(
 
 /**
  * #1477 OR29 slice 5c — the picker's search: the groups whose options match
- * `query` on name, kind or location, case-insensitively, each keeping only its
+ * `query` on name, kind (its label or stored id, as the gallery's search
+ * does) or location, case-insensitively, each keeping only its
  * matches. A blank query is no filter. Disabled options are searched too: the
  * list says what exists, and a search must not hide that a match is refused.
  */
@@ -144,7 +144,7 @@ export function filterConnectionPickerGroups(
     .map((group) => ({
       ...group,
       options: group.options.filter((o) =>
-        [o.name, group.label, o.location ?? ''].some((text) => text.toLowerCase().includes(needle)),
+        [o.name, group.label, group.kind, o.location ?? ''].some((text) => text.toLowerCase().includes(needle)),
       ),
     }))
     .filter((group) => group.options.length > 0);

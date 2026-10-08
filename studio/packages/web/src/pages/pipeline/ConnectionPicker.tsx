@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Combobox, Option, OptionGroup } from '@fluentui/react-components';
 import type { ConnectionProbeResult, ConnectionPublic } from '@autonomy-studio/shared';
 import { messageOf } from '../../api/client';
@@ -17,8 +17,12 @@ import { connectionPickerGroups, filterConnectionPickerGroups } from './bindingP
  */
 const NONE = '\u0000none';
 const NEW = '\u0000new';
+const NO_MATCH = '\u0000nomatch';
 
-/** The closed picker's widest text, in `ch`, before it stops growing (≈ 320px). */
+/**
+ * The closed picker's widest text, in `ch`. Approximate (`ch` is a "0", names
+ * are proportional), so the stylesheet's 320px cap is the real bound.
+ */
 const MAX_WIDTH_CH = 40;
 
 /**
@@ -46,10 +50,15 @@ const MAX_WIDTH_CH = 40;
  * list would be clipped by it) and keyboard handling is Fluent's. Each option
  * is the kind's icon, the name, and where it points (`connectionLocation`).
  * Typing filters on name, kind and location; a refused match stays listed,
- * disabled. ＋ New is also the list's last entry, as in ADF's linked-service
- * dropdown, which makes it the empty picker's one live entry: with nothing this
- * slot can use, opening the list leads to the kind gallery rather than a dead
- * "none".
+ * disabled. Focus selects the text, so the first keystroke starts a search
+ * rather than appending to the bound name. While a search is typed, None and
+ * New leave the list: Fluent highlights the first option, and Enter must pick
+ * the first MATCH, not unbind.
+ *
+ * ＋ New is also the list's last entry, as in ADF's linked-service dropdown,
+ * which makes it the empty picker's one live entry: with nothing this slot can
+ * use, opening the list leads to the kind gallery rather than a dead "none".
+ * None is listed only while something is bound, since it is the unbind.
  *
  * A bound id with no row behind it (deleted, or not yet loaded) is SHOWN, as
  * the id: a blank picker reads as "nothing is bound" while the doc says
@@ -81,6 +90,8 @@ export function ConnectionPicker({
   const input = useRef<HTMLInputElement>(null);
   const shown = query === null ? groups : filterConnectionPickerGroups(groups, query);
   const pickable = groups.some((g) => g.options.some((o) => o.disabledReason === undefined));
+  const searching = query !== null && query.trim() !== '';
+  const placeholder = pickable || value !== undefined ? 'None' : 'No connection yet';
   const selectedText =
     value === undefined
       ? ''
@@ -89,6 +100,7 @@ export function ConnectionPicker({
         : `${value} (not found)`;
   const widest = Math.max(
     selectedText.length,
+    placeholder.length,
     ...groups.flatMap((g) => g.options.map((o) => o.label.length)),
     8,
   );
@@ -142,14 +154,15 @@ export function ConnectionPicker({
               id={id}
               ref={input}
               className="connection-picker__combobox"
-              style={{ width: `calc(${Math.min(widest, MAX_WIDTH_CH)}ch + 40px)` }}
+              style={{ '--picker-ch': Math.min(widest, MAX_WIDTH_CH) } as CSSProperties}
               listbox={{ className: 'connection-picker__listbox' }}
               // Always below, shortened to the room there. Flipped above, the
               // list landed over the dock's own header, which painted over it
               // and took the clicks meant for its last options (measured, e2e).
               positioning={{ position: 'below', align: 'start', pinned: true, autoSize: 'height' }}
-              placeholder={pickable || value !== undefined ? 'None' : 'No connection yet'}
+              placeholder={placeholder}
               value={query ?? selectedText}
+              onFocus={(e) => e.currentTarget.select()}
               selectedOptions={value === undefined ? [] : [value]}
               onChange={(e) => setQuery(e.target.value)}
               onOpenChange={(_e, data) => {
@@ -175,9 +188,11 @@ export function ConnectionPicker({
                 onPick(next);
               }}
             >
-              <Option value={NONE} text="None">
-                None
-              </Option>
+              {value !== undefined && !searching && (
+                <Option value={NONE} text="None">
+                  None
+                </Option>
+              )}
               {shown.map((group) => (
                 <OptionGroup key={group.kind} label={group.label}>
                   {group.options.map((o) => (
@@ -189,10 +204,8 @@ export function ConnectionPicker({
                       data-connection-id={o.id}
                     >
                       <span className="connection-option" title={o.location}>
-                        <span className="connection-option__name">
-                          <ConnectionKindGlyph kind={group.kind} />
-                          {o.name}
-                        </span>
+                        <ConnectionKindGlyph kind={group.kind} />
+                        <span>{o.name}</span>
                         {o.location !== undefined && (
                           <span className="connection-option__line">{o.location}</span>
                         )}
@@ -204,12 +217,12 @@ export function ConnectionPicker({
                   ))}
                 </OptionGroup>
               ))}
-              {query !== null && query.trim() !== '' && shown.length === 0 && (
-                <Option value={'\u0000nomatch'} disabled>
+              {searching && shown.length === 0 && (
+                <Option value={NO_MATCH} disabled>
                   No connections match
                 </Option>
               )}
-              {onNew !== undefined && <Option value={NEW}>New connection…</Option>}
+              {onNew !== undefined && !searching && <Option value={NEW}>New connection…</Option>}
             </Combobox>
             <button
               type="button"
