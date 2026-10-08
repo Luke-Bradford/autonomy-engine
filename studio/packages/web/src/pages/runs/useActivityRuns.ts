@@ -3,6 +3,7 @@ import {
   TERMINAL_RUN_ROW_STATUS,
   type ActivityRun,
   type ActivityRunGroup,
+  type ActivityRunsBasis,
 } from '@autonomy-studio/shared';
 import { getRunActivityRuns } from '../../api/runs';
 import { messageOf } from '../../api/client';
@@ -19,6 +20,9 @@ export interface ActivityRunsReading {
   readonly rows: readonly ActivityRun[] | null;
   /** The containers the rows sit in, read with them; empty before the first read. */
   readonly groups: readonly ActivityRunGroup[];
+  /** #1557 — what the rows were projected from; `null` before the first read.
+   * `log`: the run's version no longer resolves, so they say less. */
+  readonly basis: ActivityRunsBasis | null;
   /** The last read's failure; the rows before it stay on screen. */
   readonly error: string | null;
   /**
@@ -58,6 +62,7 @@ export function useActivityRuns(
   const [reading, setReading] = useState<ActivityRunsReading>({
     rows: null,
     groups: [],
+    basis: null,
     error: null,
     readAt: null,
   });
@@ -125,7 +130,13 @@ export function useActivityRuns(
         const askedAt = f.wantedSeq ?? null;
         void load((signal) => getRunActivityRuns(runId, signal), {
           onData: (res) =>
-            setReading({ rows: res.rows, groups: res.groups, error: null, readAt: askedAt }),
+            setReading({
+              rows: res.rows,
+              groups: res.groups,
+              basis: res.basis,
+              error: null,
+              readAt: askedAt,
+            }),
           onError: (err) => setReading((prev) => ({ ...prev, error: messageOf(err) })),
         }).finally(() => {
           f.inFlight = false;

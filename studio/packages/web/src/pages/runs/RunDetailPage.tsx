@@ -783,6 +783,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
       <ActivityRunsTable
         rows={activityRuns.rows}
         groups={activityRuns.groups}
+        basis={activityRuns.basis}
         error={activityRuns.error}
         runStatus={status}
         nameOf={nameOf}

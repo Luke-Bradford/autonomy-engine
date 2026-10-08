@@ -9,6 +9,7 @@ import {
   type ActivityRun,
   type ActivityRunChild,
   type ActivityRunGroup,
+  type ActivityRunsBasis,
   type RunStatus,
   type SkipReason,
 } from '@autonomy-studio/shared';
@@ -16,6 +17,7 @@ import { ariaSortOf } from '../../lib/urlSort';
 import { When } from '../../lib/When';
 import { countOf } from '../../lib/countOf';
 import { LabelledControl } from '../../lib/LabelledControl';
+import { HelpDisclosure } from '../../lib/HelpDisclosure';
 import { withParams } from '../../lib/withParams';
 import { useSearchBox } from '../../lib/useSearchBox';
 import { FilterPicker, type FilterOption } from './FilterPicker';
@@ -191,6 +193,12 @@ const BETWEEN_ITERATION_AND_ERROR = ACTIVITY_RUN_COLUMNS.slice(
   ACTIVITY_RUN_COLUMNS.indexOf('Error'),
 );
 
+/** #1557 — what a log-only account leaves out (`projectActivityRunsFromLog`). */
+const LOG_BASIS_NOTE =
+  'The version this run used can no longer be read, so these rows come from the run log alone. ' +
+  'Containers, ForEach items, skipped activities and retry numbers are missing, ' +
+  'and each status is as the log recorded it.';
+
 /**
  * #1484 OR35 M2 — the run's activity runs: one row per attempt of each activity,
  * per iteration, directly under the run's header (the server's projection,
@@ -212,6 +220,7 @@ const BETWEEN_ITERATION_AND_ERROR = ACTIVITY_RUN_COLUMNS.slice(
 export function ActivityRunsTable({
   rows,
   groups,
+  basis = 'version',
   error,
   runStatus,
   nameOf,
@@ -225,6 +234,9 @@ export function ActivityRunsTable({
 }: {
   rows: readonly ActivityRun[] | null;
   groups: readonly ActivityRunGroup[];
+  /** #1557 — `log` when the run's version no longer resolves and the rows
+   * come from the log alone; the table says so. */
+  basis?: ActivityRunsBasis | null;
   error: string | null;
   runStatus: RunStatus;
   nameOf: (activityId: string) => string | null;
@@ -411,6 +423,16 @@ export function ActivityRunsTable({
       {error !== null && (
         <p role="alert" className="error">
           Could not read the activity runs: {error}
+        </p>
+      )}
+      {basis === 'log' && (
+        <p className="activity-runs__basis">
+          <span>
+            Version unavailable: rows from the run log only
+          </span>
+          <HelpDisclosure label="About rows from the run log" noteId="activity-runs-basis-note">
+            {LOG_BASIS_NOTE}
+          </HelpDisclosure>
         </p>
       )}
       {rows === null ? (

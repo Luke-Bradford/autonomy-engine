@@ -5311,6 +5311,14 @@ button.danger {
   overflow-x: auto;
 }
 
+/* #1557 — the rows are the log's account alone: one line, its limits behind ?. */
+.activity-runs__basis {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 8px;
+}
+
 /* The table's label, close to it: the first row is what the page is for. Its
    filters share the label's row, so filtering never pushes the first row down. */
 .activity-runs__bar {

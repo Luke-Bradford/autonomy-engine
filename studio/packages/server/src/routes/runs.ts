@@ -23,7 +23,9 @@ import {
   type ApiErrorBody,
   type RunDetail,
   type ActivityRunChild,
+  type ActivityRunsBasis,
   type ActivityRunsResponse,
+  type PipelineVersion,
   type Run,
 } from '@autonomy-studio/shared';
 import {
@@ -47,6 +49,7 @@ import { buildEngine, DocUnresolvableError, makeDocResolver } from '../run/drive
 import {
   ACTIVITY_RUNS_MEMO_LIMIT,
   projectActivityRuns,
+  projectActivityRunsFromLog,
   type ProjectedActivityRuns,
 } from '../run/activity-runs.js';
 import { loadEngineLog, RunLogUnparseableError } from '../run/events.js';
@@ -215,16 +218,30 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
      (the log is append-only, so an unchanged `seq` is an unchanged log): a page
      re-reads it as the run's log grows, and a settled run is folded once. The
      bound keeps a long-lived server from holding every run anyone has opened. */
-  const activityRunsMemo = new Map<string, { lastSeq: number; runs: ProjectedActivityRuns }>();
-  const projectedActivityRuns = (runId: string, versionId: string): ProjectedActivityRuns => {
+  /* #1557 — a version that will not resolve (deleted, or no longer parsing)
+     costs the structure, not the rows: they are read from the log alone, and
+     `basis` says so. That verdict is permanent (`DocUnparseableError`), so the
+     partial account is memoised like the full one. */
+  type BasedActivityRuns = ProjectedActivityRuns & { basis: ActivityRunsBasis };
+  const activityRunsMemo = new Map<string, { lastSeq: number; runs: BasedActivityRuns }>();
+  const projectedActivityRuns = (runId: string, versionId: string): BasedActivityRuns => {
     const lastSeq = listRunLastSeqs(db, [runId]).get(runId);
-    if (lastSeq === undefined) return { rows: [], groups: [] };
+    if (lastSeq === undefined) return { rows: [], groups: [], basis: 'version' };
     const hit = activityRunsMemo.get(runId);
     activityRunsMemo.delete(runId);
     let runs = hit !== undefined && hit.lastSeq === lastSeq ? hit.runs : undefined;
     if (runs === undefined) {
-      const doc = resolveDoc(versionId);
-      runs = projectActivityRuns(doc, buildEngine(doc), loadEngineLog(db, runId));
+      let doc: PipelineVersion | null = null;
+      try {
+        doc = resolveDoc(versionId);
+      } catch (err) {
+        if (!(err instanceof DocUnresolvableError)) throw err;
+      }
+      const log = loadEngineLog(db, runId);
+      runs =
+        doc === null
+          ? { ...projectActivityRunsFromLog(log), basis: 'log' }
+          : { ...projectActivityRuns(doc, buildEngine(doc), log), basis: 'version' };
     }
     activityRunsMemo.set(runId, { lastSeq, runs });
     if (activityRunsMemo.size > ACTIVITY_RUNS_MEMO_LIMIT) {
@@ -238,18 +255,22 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
    * activity-run row whose child is `run`, read through the same memoised
    * projection the parent's own page reads. `null` when nothing called the run,
    * when the parent is not this run's owner's, and when the parent's own
-   * version or log will not read: the child's page must not fail over its
-   * parent's fault, it just cannot name the caller.
+   * version or log will not read (a version that will not resolve leaves only
+   * the log-only account, whose ids are not the version's): the child's page
+   * must not fail over its parent's fault, it just cannot name the caller.
    */
   const callingActivityId = (run: Run): string | null => {
     if (run.parentRunId === null) return null;
     const parent = getRun(db, run.parentRunId);
     if (parent === null || parent.ownerId !== run.ownerId) return null;
     try {
-      const { rows } = projectedActivityRuns(parent.id, parent.pipelineVersionId);
+      const { rows, basis } = projectedActivityRuns(parent.id, parent.pipelineVersionId);
+      // A log-only account's `activityId` may be an instance key, not a node of
+      // the parent's version: name no caller rather than a wrong one (#1557).
+      if (basis === 'log') return null;
       return rows.find((r) => r.childRunId === run.id)?.activityId ?? null;
     } catch (err) {
-      if (err instanceof DocUnresolvableError || err instanceof RunLogUnparseableError) {
+      if (err instanceof RunLogUnparseableError) {
         fastify.log.warn({ err, runId: parent.id }, 'run detail: cannot name the calling activity');
         return null;
       }
@@ -486,9 +507,12 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
    * parent's own log records. A child's pipeline name passes the owner check per
    * row, as `/detail`'s names do.
    *
-   * A version that will not resolve is a 409 through the global handler, as on
-   * `/detail`. A log that will not parse is a 500: `RunLogUnparseableError` is a
-   * server fault, and the page keeps its other sections.
+   * A version that will not resolve is NOT a 409 here, unlike `/detail` (#1557):
+   * a run whose graph is gone is when its facts matter most, so the rows are
+   * read from the log alone and `basis: 'log'` says how much less they say
+   * (`projectActivityRunsFromLog`). A log that will not parse is a 500:
+   * `RunLogUnparseableError` is a server fault, and the page keeps its other
+   * sections.
    */
   fastify.get<{ Params: { id: string } }>(
     '/api/runs/:id/activity-runs',
@@ -499,7 +523,7 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
         'run',
         request.params.id,
       );
-      const { rows, groups } = projectedActivityRuns(run.id, run.pipelineVersionId);
+      const { rows, groups, basis } = projectedActivityRuns(run.id, run.pipelineVersionId);
       // Only the children this run's own log names, read leniently so one
       // corrupt child row costs its link and not the whole table.
       const children =
@@ -524,6 +548,7 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       };
       return {
         runId: run.id,
+        basis,
         rows: rows.map((row) => {
           const child = row.childRunId === null ? undefined : children.get(row.childRunId);
           const childRun: ActivityRunChild | null =

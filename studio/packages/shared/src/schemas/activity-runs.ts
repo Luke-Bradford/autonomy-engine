@@ -159,8 +159,20 @@ export const ActivityRunGroupSchema = z.object({
 });
 export type ActivityRunGroup = z.infer<typeof ActivityRunGroupSchema>;
 
+/**
+ * #1557 — what the rows were projected from. `version`: the run's log stepped
+ * through the engine built from the version that ran, the full account. `log`:
+ * that version no longer resolves (deleted, or present but no longer parsing),
+ * so the rows come from the log alone, with no containers, iterations, skips or
+ * retry numbers, and each status as the log recorded it. Required, never
+ * defaulted: a reader must not mistake the partial account for the full one.
+ */
+export const ActivityRunsBasisSchema = z.enum(['version', 'log']);
+export type ActivityRunsBasis = z.infer<typeof ActivityRunsBasisSchema>;
+
 export const ActivityRunsResponseSchema = z.object({
   runId: z.string(),
+  basis: ActivityRunsBasisSchema,
   rows: z.array(ActivityRunSchema),
   groups: z.array(ActivityRunGroupSchema),
 });
