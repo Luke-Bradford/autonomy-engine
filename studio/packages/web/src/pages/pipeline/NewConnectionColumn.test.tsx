@@ -62,7 +62,9 @@ async function createAnthropic(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('NewConnectionColumn (#1477 slice 5b)', () => {
-  beforeEach(() => createMock.mockReset());
+  beforeEach(() => {
+    createMock.mockReset();
+  });
 
   it('opens on the gallery with the slot’s refused kinds disabled, and why', async () => {
     mount();

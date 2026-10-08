@@ -45,7 +45,9 @@ function Harness({ initial }: { initial?: string }) {
 const testButton = () => screen.getByRole('button', { name: 'Test selected source connection' });
 
 describe('ConnectionPicker (#1477 slice 5b)', () => {
-  beforeEach(() => probe.mockReset());
+  beforeEach(() => {
+    probe.mockReset();
+  });
   afterEach(() => vi.useRealTimers());
 
   it('cannot Test with nothing selected', () => {
@@ -77,7 +79,7 @@ describe('ConnectionPicker (#1477 slice 5b)', () => {
   });
 
   it('reports a request that failed as a failed verdict, not silence', async () => {
-    probe.mockRejectedValueOnce(new Error('HTTP 404: connection not found'));
+    probe.mockRejectedValue(new Error('HTTP 404: connection not found'));
     render(<Harness initial="a" />);
     await act(async () => {
       fireEvent.click(testButton());
