@@ -96,7 +96,7 @@ test.describe('#1477 OR29 — Expand properties', () => {
     expect(docked.dock.top).toBeGreaterThanOrEqual(docked.wrap.bottom);
 
     // An edit that is NOT applied: only the panel's own draft holds it.
-    const prompt = properties(page).getByRole('textbox', { name: /^Prompt/ });
+    const prompt = properties(page).getByRole('textbox', { name: /^User prompt/ });
     await prompt.fill('Hello, a long prompt that wants room');
     const apply = properties(page).getByRole('button', { name: 'Apply config' });
     await expect(apply).toBeEnabled();
