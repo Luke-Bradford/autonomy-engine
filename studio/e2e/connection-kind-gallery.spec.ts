@@ -148,9 +148,7 @@ test.describe('#1477 the connection kind gallery', () => {
     // sends its secret as a Bearer header, clears it and says why.
     await form.getByLabel('Kind').selectOption('http');
     await expect(form.getByLabel('Secret', { exact: true })).toHaveValue('');
-    await expect(form.getByRole('status').filter({ hasText: 'Secret cleared' })).toHaveText(
-      'Secret cleared: it was for PostgreSQL',
-    );
+    await expect(form.getByText('Typed secret cleared: it was for PostgreSQL')).toBeVisible();
     await expectQuiet(page, problems);
   });
 

@@ -116,6 +116,22 @@ export function ConnectionForm({
     }
     onChange(next);
   };
+  /**
+   * What the Secret box now holds for this kind, when a Kind change made that
+   * non-obvious. On edit, a blank box KEEPS the stored secret (the server never
+   * clears `secretRef` on a kind change), so a stored PostgreSQL password would
+   * become the HTTP connection's secret unless a new one is typed.
+   */
+  const secretNote = (() => {
+    if (form.secret !== '') return null;
+    if (secretClearedFor !== null && secretClearedFor !== form.kind) {
+      return `Typed secret cleared: it was for ${CONNECTION_KIND_LABELS[secretClearedFor]}`;
+    }
+    if (stored !== undefined && stored.secretStatus === 'ready' && stored.kind !== form.kind) {
+      return `The stored secret was set for ${CONNECTION_KIND_LABELS[stored.kind]} and is kept: type one for ${CONNECTION_KIND_LABELS[form.kind]}`;
+    }
+    return null;
+  })();
   const editor = useConfigEditor({
     form,
     onChange: onEditorChange,
@@ -492,11 +508,9 @@ export function ConnectionForm({
           }}
           placeholder={editing ? 'leave blank to keep the current secret' : 'optional'}
         />
-        {secretClearedFor !== null && form.secret === '' && (
-          <p className="page-hint" role="status">
-            Secret cleared: it was for {CONNECTION_KIND_LABELS[secretClearedFor]}
-          </p>
-        )}
+        {/* #1605 — no `role`, for the reason the advisories above give: this
+            form's single `role="status"` is the probe verdict. */}
+        {secretNote !== null && <p className="page-hint">{secretNote}</p>}
         {/* Never a `required` input: on edit blank means KEEP the stored secret,
             and on create the server accepts a secretless row (it derives
             `needs_secret` and stores it). This says what the kind DOES with one. */}

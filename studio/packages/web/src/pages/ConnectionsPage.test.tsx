@@ -485,11 +485,13 @@ describe('ConnectionsPage', () => {
     // typed for PostgreSQL must not ride along to it.
     await user.selectOptions(within(form).getByLabelText('Kind'), 'http');
     expect(within(form).getByLabelText('Secret')).toHaveValue('');
-    expect(within(form).getByText('Secret cleared: it was for PostgreSQL')).toBeInTheDocument();
+    expect(
+      within(form).getByText('Typed secret cleared: it was for PostgreSQL'),
+    ).toBeInTheDocument();
 
     // Typing a secret for the new kind retires the note.
     await user.type(within(form).getByLabelText('Secret'), 'token');
-    expect(within(form).queryByText(/Secret cleared/)).not.toBeInTheDocument();
+    expect(within(form).queryByText(/secret cleared/i)).not.toBeInTheDocument();
 
     await user.type(within(form).getByLabelText('Base URL'), 'https://api.example.com');
     await user.click(within(form).getByRole('button', { name: 'Create connection' }));
@@ -500,6 +502,58 @@ describe('ConnectionsPage', () => {
     );
   });
 
+  it('a switch back to the kind the secret was typed for drops the cleared note (#1605)', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([]);
+    renderWithRouter(<ConnectionsPage />);
+
+    await openNewConnection(user, 'PostgreSQL');
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    await user.type(within(form).getByLabelText('Secret'), 'pg-password');
+    await user.selectOptions(within(form).getByLabelText('Kind'), 'http');
+    await user.selectOptions(within(form).getByLabelText('Kind'), 'postgres');
+    expect(within(form).getByLabelText('Secret')).toHaveValue('');
+    expect(within(form).queryByText(/secret cleared/i)).not.toBeInTheDocument();
+  });
+
+  it('on edit, a secret typed before a Kind change is cleared too (#1605)', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([
+      conn({ name: 'Warehouse', kind: 'postgres', secretStatus: 'not_required' }),
+    ]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Warehouse');
+
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    await user.type(within(form).getByLabelText('Secret'), 'pg-password');
+    await user.selectOptions(within(form).getByLabelText('Kind'), 'http');
+    expect(within(form).getByLabelText('Secret')).toHaveValue('');
+    expect(
+      within(form).getByText('Typed secret cleared: it was for PostgreSQL'),
+    ).toBeInTheDocument();
+  });
+
+  it('on edit, a Kind change says the STORED secret is kept for the new kind (#1605)', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([
+      conn({ name: 'Warehouse', kind: 'postgres', secretStatus: 'ready' }),
+    ]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Warehouse');
+
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    expect(within(form).queryByText(/stored secret was set/)).not.toBeInTheDocument();
+    // The server never clears `secretRef` on a kind change, so a blank box
+    // would send PostgreSQL's password as HTTP's Bearer token.
+    await user.selectOptions(within(form).getByLabelText('Kind'), 'http');
+    const note = 'The stored secret was set for PostgreSQL and is kept: type one for HTTP';
+    expect(within(form).getByText(note)).toBeInTheDocument();
+    await user.type(within(form).getByLabelText('Secret'), 'token');
+    expect(within(form).queryByText(note)).not.toBeInTheDocument();
+  });
+
   it('a Kind change with no secret typed shows no cleared note (#1605)', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([]);
@@ -508,7 +562,7 @@ describe('ConnectionsPage', () => {
     await openNewConnection(user, 'PostgreSQL');
     const form = screen.getByRole('form', { name: 'Connection form' });
     await user.selectOptions(within(form).getByLabelText('Kind'), 'http');
-    expect(within(form).queryByText(/Secret cleared/)).not.toBeInTheDocument();
+    expect(within(form).queryByText(/secret cleared/i)).not.toBeInTheDocument();
   });
 
   it('warns about a RELATIVE fs root, which the shared schema does not refuse', async () => {
