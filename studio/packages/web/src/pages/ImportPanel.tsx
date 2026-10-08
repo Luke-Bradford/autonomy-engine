@@ -10,6 +10,7 @@ import {
   type ImportedResource,
 } from '../api/portability';
 import {
+  isBundleEnvelope,
   type ConnectionPublic,
   type ExportKind,
   type ImportAttentionItem,
@@ -127,7 +128,11 @@ export function ImportPanel({
   /** A file that belongs to another section: refused locally, nothing sent.
    * `ExportKind`, not `ImportedResource['kind']` — this can be a kind the import
    * route refuses outright (#1114). */
-  const [foreign, setForeign] = useState<{ kind: ExportKind; name: string } | null>(null);
+  const [foreign, setForeign] = useState<{
+    kind: ExportKind;
+    name: string;
+    bundle: boolean;
+  } | null>(null);
   /** One per resource created: a single file makes one, a bundle (#1586) one
    * per member. */
   const [outcomes, setOutcomes] = useState<Outcome[] | null>(null);
@@ -163,7 +168,7 @@ export function ImportPanel({
           // file.text()` above is a suspension point, so the panel can already
           // be unmounted by the time we get here.
           if (!mounted.current) return;
-          setForeign({ kind: elsewhere, name: file.name });
+          setForeign({ kind: elsewhere, name: file.name, bundle: isBundleEnvelope(envelope) });
           return;
         }
         const result =
@@ -275,8 +280,8 @@ export function ImportPanel({
       )}
       {foreign && (
         <p className="error" role="alert">
-          “{foreign.name}” is a {foreign.kind} export, and this is the {SECTION[listKind].label}{' '}
-          list. Import it from{' '}
+          “{foreign.name}” {foreign.bundle ? 'carries' : 'is'} a {foreign.kind} export, and this is
+          the {SECTION[listKind].label} list. Import it from{' '}
           <Link to={SECTION[foreign.kind].path}>{SECTION[foreign.kind].label}</Link>. Nothing was
           created.
         </p>

@@ -59,6 +59,7 @@ vi.mock('../api/download', async (importActual) => ({
 vi.mock('../api/portability', async (importActual) => ({
   ...(await importActual<typeof import('../api/portability')>()),
   exportPipeline: vi.fn(),
+  exportPipelines: vi.fn(),
 }));
 
 const listMock = vi.mocked(pipelinesApi.listPipelines);
@@ -78,6 +79,7 @@ const restoreMock = vi.mocked(pipelinesApi.restorePipeline);
 const listArchivedMock = vi.mocked(pipelinesApi.listArchivedPipelines);
 const downloadMock = vi.mocked(downloadApi.downloadTextFile);
 const exportMock = vi.mocked(portabilityApi.exportPipeline);
+const bundleMock = vi.mocked(portabilityApi.exportPipelines);
 const statesMock = vi.mocked(pipelinesApi.listPipelineVersionStates);
 const summariesMock = vi.mocked(pipelinesApi.listPipelineSummaries);
 const versionsMock = vi.mocked(pipelinesApi.listPipelineVersions);
@@ -121,6 +123,8 @@ beforeEach(() => {
   downloadMock.mockReset();
   exportMock.mockReset();
   exportMock.mockResolvedValue('{"kind":"pipeline"}');
+  bundleMock.mockReset();
+  bundleMock.mockResolvedValue('{"kind":"bundle"}');
   statesMock.mockResolvedValue([]);
   summariesMock.mockResolvedValue([]);
   gitMock.mockResolvedValue(null);
@@ -321,6 +325,61 @@ describe('PipelinesPage', () => {
         pending.resolve([summary('pl_2', { lastRun: failed })]);
         await waitFor(() => expect(rowNames()).toEqual(['Beta']));
         expect(screen.queryByText('Loading run facts…')).not.toBeInTheDocument();
+      });
+
+      // #1586 — the toolbar's Export takes exactly the rows on screen, in
+      // their order, and waits rather than export a list it cannot vouch for.
+      const exportButton = () => screen.getByRole('button', { name: 'Export', exact: true });
+
+      it('exports the SHOWN rows, in order, as one file', async () => {
+        seed();
+        const user = userEvent.setup();
+        renderAt('?last=failure,never');
+        await waitFor(() => expect(rowNames()).toEqual(['Beta', 'Gamma']));
+        await user.click(exportButton());
+        await waitFor(() => expect(downloadMock).toHaveBeenCalledTimes(1));
+        expect(bundleMock).toHaveBeenCalledWith(['pl_2', 'pl_3']);
+        expect(downloadMock).toHaveBeenCalledWith(
+          expect.stringMatching(/^pipelines-\d{8}-\d{6}Z\.json$/),
+          '{"kind":"bundle"}',
+        );
+      });
+
+      it('waits while the facts a filter needs are unread — a held-back list is not the shown one', async () => {
+        seed();
+        const pending = deferred<PipelineSummary[]>();
+        summariesMock.mockReturnValue(pending.promise);
+        const user = userEvent.setup();
+        renderAt('?last=failure');
+        await screen.findByText('Loading run facts…');
+        expect(exportButton()).toHaveAttribute('aria-disabled', 'true');
+        expect(exportButton()).toHaveAttribute('title', 'Waiting for the list to load');
+        await user.click(exportButton());
+        expect(bundleMock).not.toHaveBeenCalled();
+        pending.resolve([summary('pl_2', { lastRun: failed })]);
+        await waitFor(() => expect(exportButton()).toHaveAttribute('aria-disabled', 'false'));
+        expect(exportButton()).toHaveAttribute(
+          'title',
+          'Export the 1 shown as one importable file',
+        );
+      });
+
+      it('says when nothing is shown, and reports a refused export', async () => {
+        seed();
+        bundleMock.mockRejectedValue(new Error('too big'));
+        const user = userEvent.setup();
+        renderAt('?q=nothing-matches-this');
+        await screen.findByText(/No pipelines match/);
+        expect(exportButton()).toHaveAttribute('title', 'No pipelines shown');
+        cleanup();
+        seed();
+        renderAt('');
+        await waitFor(() => expect(rowNames()).toEqual(['Alpha', 'Beta', 'Gamma']));
+        await user.click(exportButton());
+        expect(await screen.findByRole('alert')).toHaveTextContent(
+          'Could not export 3 pipelines: too big',
+        );
+        expect(downloadMock).not.toHaveBeenCalled();
       });
 
       it('holds a search back while the descriptions are unread, showing the name matches', async () => {
