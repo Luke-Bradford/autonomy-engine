@@ -76,6 +76,7 @@ import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerFo
 import { OverridableKeysSection } from './OverridableKeysField';
 import { allowlistChanged, connectionAllowlistSubject } from './overrideAllowlist';
 import { ConnectionKindName, KindSelect } from '../lib/KindName';
+import { ConnectionKindDrawer } from '../lib/ConnectionKindGallery';
 import { CONNECTION_KIND_ICONS } from '../lib/kindIcons';
 import { useConfirm } from '../lib/confirm/useConfirm';
 import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
@@ -147,9 +148,9 @@ function formFor(
   };
 }
 
-function blankForm(): FormState {
-  // KINDS is the connection-kind enum's option list — statically non-empty.
-  return formFor(null, '', KINDS[0]!, {}, []);
+/** #1477 — a new connection's form opens for the kind picked in the gallery. */
+function blankForm(kind: ConnectionKind): FormState {
+  return formFor(null, '', kind, {}, []);
 }
 
 function formForEdit(conn: ConnectionPublic): FormState {
@@ -199,6 +200,17 @@ export function ConnectionsPage() {
     closeWhere,
     ...drawer
   } = useDrawerForm(savePayloadSignature);
+  /**
+   * #1477 — "New connection" opens the kind gallery first, as ADF's "New
+   * linked service" does; picking a kind opens that kind's form. Only while no
+   * form is open: every way a form opens clears it, and opening it closes the
+   * form (through the guard, via `openFrom`).
+   */
+  const [choosingKind, setChoosingKind] = useState(false);
+  // Each press of New is a fresh gallery (empty search, focus in it), even
+  // when one is already open.
+  const [gallerySeq, setGallerySeq] = useState(0);
+  const drawerOpen = form !== null || choosingKind;
   /**
    * #1174 — the datasets bound to the connection being edited, and whether that
    * question could be answered at all.
@@ -339,6 +351,7 @@ export function ConnectionsPage() {
       setDatasetsUnavailable(null);
       setDependents(null);
       setDependentsUnavailable(null);
+      setChoosingKind(false);
       openForm(formForEdit(conn));
       void refreshDatasets();
       void refreshDependents(conn.id);
@@ -512,7 +525,13 @@ export function ConnectionsPage() {
         <button
           ref={createRef}
           type="button"
-          onClick={(e) => drawer.openFrom(e.currentTarget, () => openForm(blankForm()))}
+          onClick={(e) =>
+            drawer.openFrom(e.currentTarget, () => {
+              setForm(null);
+              setChoosingKind(true);
+              setGallerySeq((n) => n + 1);
+            })
+          }
         >
           New connection
         </button>
@@ -532,7 +551,7 @@ export function ConnectionsPage() {
       {/* #1396 — the list and the form side by side; the form is a column, not
           an overlay, so the row actions stay reachable while it is open. */}
       {guard.routeHold}
-      <div className={form ? 'drawer-layout-open' : undefined}>
+      <div className={drawerOpen ? 'drawer-layout-open' : undefined}>
         <div>
           {connections === null && !loadError && <p>Loading connections…</p>}
 
@@ -592,6 +611,18 @@ export function ConnectionsPage() {
           )}
         </div>
 
+        {choosingKind && form === null && (
+          <ConnectionKindDrawer
+            key={gallerySeq}
+            returnFocusTo={openerRef}
+            onClose={() => setChoosingKind(false)}
+            onPick={(kind) => {
+              setChoosingKind(false);
+              openForm(blankForm(kind));
+            }}
+          />
+        )}
+
         {form && (
           <ConnectionForm
             /* Remount on every OPEN. The table stays interactive while the form
@@ -605,10 +636,11 @@ export function ConnectionsPage() {
              was never probed.
 
              Keyed on the open COUNTER rather than on `form.id`, because `id` is
-             `null` for every new-connection form: pressing "New connection"
-             twice would not remount, and `blankForm()` is byte-identical each
-             time, so the signature would match and the previous draft's verdict
-             would render against a form nothing has tested. */
+             `null` for every new-connection form and `blankForm(kind)` is
+             byte-identical each time, so the signature would match and the
+             previous draft's verdict would render against a form nothing has
+             tested. (#1477's kind gallery now unmounts the form between two
+             New presses; the counter is what still covers Edit → Edit.) */
             key={formSeq}
             form={form}
             /* #1174 — the inputs the strand note needs, read from the LIST rather

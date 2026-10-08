@@ -13,6 +13,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 import { properties, triggerForm } from './support/panels';
 import { rowMenuButton } from './support/rowMenu';
+import { openNewConnection } from './support/newConnection';
 
 /**
  * #1386 — one operator path, end to end, through the UI.
@@ -47,10 +48,9 @@ test('#1386 — create a connection, author and bind, trigger it, and read the r
   await page.goto('/#/manage/connections');
   await page.getByRole('heading', { name: 'Connections' }).waitFor();
   await fluentRootReady(page);
-  await page.getByRole('button', { name: 'New connection' }).click();
+  await openNewConnection(page, 'agent_cli');
   const connectionForm = page.getByRole('form', { name: 'Connection form' });
   await connectionForm.getByLabel('Name').fill(CONNECTION);
-  await connectionForm.getByLabel('Kind').selectOption('agent_cli');
   await connectionForm.getByLabel('Command', { exact: true }).fill('/bin/echo');
   await connectionForm.getByRole('button', { name: 'Create connection' }).click();
   await expect(rowMenuButton(page, CONNECTION)).toBeVisible();

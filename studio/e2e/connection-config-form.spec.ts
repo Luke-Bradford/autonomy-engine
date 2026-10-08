@@ -4,6 +4,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { seedConnection, seedDataset } from './support/seedResources';
 import { fluentRootReady } from './support/theme';
 import { chooseRowAction, rowMenuButton } from './support/rowMenu';
+import { openNewConnection } from './support/newConnection';
 
 /**
  * U13b (#1087) — the per-kind connection config form.
@@ -37,9 +38,8 @@ test.describe('U13b per-kind connection config', () => {
     await gotoConnections(page);
 
     const name = `e2e u13b fs ${Date.now()}`;
-    await page.getByRole('button', { name: 'New connection' }).click();
+    await openNewConnection(page, 'fs');
     await form(page).getByLabel('Name').fill(name);
-    await form(page).getByLabel('Kind').selectOption('fs');
 
     // These controls exist ONLY because the form read `fs`'s own schema. Before
     // #1087 the whole config was one textarea and an operator had to know the
@@ -97,9 +97,8 @@ test.describe('U13b per-kind connection config', () => {
     await gotoConnections(page);
 
     const name = `e2e m10 postgres ${Date.now()}`;
-    await page.getByRole('button', { name: 'New connection' }).click();
+    await openNewConnection(page, 'postgres');
     await form(page).getByLabel('Name').fill(name);
-    await form(page).getByLabel('Kind').selectOption('postgres');
 
     // A postgres connection cannot dispatch without a password, and the form
     // must say so — this is the visible face of joining
@@ -179,7 +178,7 @@ test.describe('U13b per-kind connection config', () => {
     const problems = collectPageProblems(page);
     await gotoConnections(page);
 
-    await page.getByRole('button', { name: 'New connection' }).click();
+    await openNewConnection(page, 'anthropic_api');
     // anthropic_api is the first kind: its own header field is present, and the
     // secret note says it cannot dispatch without one.
     await expect(form(page).getByLabel('API version', { exact: true })).toBeVisible();
@@ -217,9 +216,8 @@ test.describe('#1191 test connection', () => {
     await gotoConnections(page);
 
     const name = `e2e 1191 fs ${Date.now()}`;
-    await page.getByRole('button', { name: 'New connection' }).click();
+    await openNewConnection(page, 'fs');
     await form(page).getByLabel('Name').fill(name);
-    await form(page).getByLabel('Kind').selectOption('fs');
 
     // A root that DOES exist on any machine this suite runs on. The adapter
     // stats it for real — this is a liveness answer, not a schema check.
@@ -270,9 +268,8 @@ test.describe('#1191 test connection', () => {
     const problems = collectPageProblems(page);
     await gotoConnections(page);
 
-    await page.getByRole('button', { name: 'New connection' }).click();
+    await openNewConnection(page, 'agent_cli');
     await form(page).getByLabel('Name').fill(`e2e 1191 agent ${Date.now()}`);
-    await form(page).getByLabel('Kind').selectOption('agent_cli');
     await form(page)
       .getByLabel(/^Command/)
       .fill('definitely-not-a-real-binary');

@@ -71,6 +71,23 @@ export const CONNECTION_KIND_DESCRIPTIONS: Record<ConnectionKind, string> = {
 };
 
 /**
+ * #1477 — the groups the New-connection gallery lists kinds under, in display
+ * order (ADF's "New linked service" groups its gallery the same way). Display
+ * only, like the labels. Every kind is in exactly one group, which
+ * `connection-kind-groups.test.ts` pins, so a new kind cannot ship ungrouped.
+ */
+export const CONNECTION_KIND_GROUPS: readonly {
+  readonly key: string;
+  readonly label: string;
+  readonly kinds: readonly ConnectionKind[];
+}[] = [
+  { key: 'database', label: 'Database', kinds: ['sqlite', 'postgres'] },
+  { key: 'file', label: 'File', kinds: ['fs'] },
+  { key: 'http', label: 'HTTP/API', kinds: ['http'] },
+  { key: 'ai', label: 'AI', kinds: ['anthropic_api', 'openai_api', 'ollama', 'agent_cli'] },
+];
+
+/**
  * The CLI/subscription connection kind (`claude -p` / `codex exec`). Named here
  * so the equality checks that gate subscription-only behaviour — the #2 L14c
  * quota admission gate (executor pre-flight) and its window writer (driver) —

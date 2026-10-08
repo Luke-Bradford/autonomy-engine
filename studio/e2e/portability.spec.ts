@@ -5,6 +5,7 @@ import { seedConnection, seedDataset } from './support/seedResources';
 import { chooseRowAction, rowMenuButton } from './support/rowMenu';
 import { createPipelineFromList, openImportDrawer } from './support/pipelinesPage';
 import { mintVersion, seedVersion } from './support/seedDoc';
+import { openNewConnection } from './support/newConnection';
 
 /**
  * #959 — export and import, end to end through a real browser.
@@ -232,7 +233,7 @@ test.describe('#959 portability', () => {
     await page.getByRole('heading', { name: 'Connections' }).waitFor();
     await fluentRootReady(page);
 
-    await page.getByRole('button', { name: 'New connection' }).click();
+    await openNewConnection(page, 'anthropic_api');
     const form = page.getByRole('form', { name: 'Connection form' });
     await form.getByLabel('Name').fill(name);
     // A secret IS typed, so `secretRef !== null` server-side — which is the

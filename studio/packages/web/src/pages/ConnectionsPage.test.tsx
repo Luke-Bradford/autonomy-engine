@@ -13,6 +13,16 @@ import { answerConfirm, setConfirmName } from '../testing/confirmDialog';
 import { TYPED_NAME_SUFFIX, typedNameLabel } from '../lib/confirm/typedName';
 import { ApiError } from '../api/client';
 
+/**
+ * #1477 — "New connection" opens the kind gallery first; the form opens for
+ * the kind picked there. Anthropic API was the form's default kind before the
+ * gallery, so the cases written against that default pick it.
+ */
+async function openNewConnection(user: ReturnType<typeof userEvent.setup>, kind = 'Anthropic API') {
+  await user.click(await screen.findByRole('button', { name: 'New connection' }));
+  await user.click(screen.getByRole('button', { name: kind }));
+}
+
 // Mock only the network calls; keep ConnectionWriteSchema real so the form's
 // client-side validation is exercised exactly as it ships.
 vi.mock('../api/connections', async (importActual) => {
@@ -164,7 +174,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText(/No connections yet/i);
 
-    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    await openNewConnection(user);
     await user.type(screen.getByLabelText('Name'), 'Prod key');
     await user.selectOptions(screen.getByLabelText('Kind'), 'openai_api');
     // #1087 — the kind's OWN field, not a JSON blob the author had to know.
@@ -199,7 +209,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
 
     // The mount load is held open; the form is reachable regardless.
-    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    await openNewConnection(user);
     await user.type(screen.getByLabelText('Name'), 'Prod key');
     await user.type(screen.getByLabelText('Secret'), 'sk-secret');
 
@@ -222,7 +232,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText(/No connections yet/i);
 
-    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    await openNewConnection(user);
     await user.type(screen.getByLabelText('Name'), 'Broken');
     // #1087 — the JSON editor is now the escape hatch behind a toggle, so this
     // reaches it the way an operator does. The rule it guards is unchanged.
@@ -241,7 +251,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText(/No connections yet/i);
 
-    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    await openNewConnection(user);
     // `anthropic_api` (the first kind) declares the LLM trio plus its own
     // version header; `fs` declares none of them and requires `roots`.
     expect(screen.getByLabelText('API version')).toBeInTheDocument();
@@ -273,7 +283,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText(/No connections yet/i);
 
-    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    await openNewConnection(user);
     // `model` is declared by anthropic_api AND ollama, so it survives the switch
     // as the same field — a re-seed would blank it.
     await user.type(screen.getByLabelText('Default model'), 'claude-opus-5');
@@ -287,7 +297,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText(/No connections yet/i);
 
-    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    await openNewConnection(user);
     await user.type(screen.getByLabelText('Default model'), 'claude-opus-5');
     // The JSON editor must open on what SAVE would write, not on the config the
     // form mounted with — otherwise the toggle silently discards the edit.
@@ -386,7 +396,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText(/No connections yet/i);
 
-    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    await openNewConnection(user);
     const form = screen.getByRole('form', { name: 'Connection form' });
     // anthropic_api REQUIRES one (SECRET_REQUIRING_CONNECTION_KINDS)...
     expect(within(form).getByText(/cannot dispatch without a secret/)).toBeInTheDocument();
@@ -405,7 +415,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText(/No connections yet/i);
 
-    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    await openNewConnection(user);
     await user.type(screen.getByLabelText('Name'), 'Empty agent');
     await user.selectOptions(screen.getByLabelText('Kind'), 'agent_cli');
     // `command` is REQUIRED by the adapter and absent here.
@@ -688,7 +698,7 @@ describe('ConnectionsPage', () => {
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText(/No connections yet/i);
 
-      await user.click(screen.getByRole('button', { name: 'New connection' }));
+      await openNewConnection(user);
       await user.type(screen.getByLabelText('Name'), 'New fs');
       await user.selectOptions(screen.getByLabelText('Kind'), 'fs');
       await user.type(screen.getByLabelText(/^Allowed folders/), '/srv/data');
@@ -751,7 +761,7 @@ describe('ConnectionsPage', () => {
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText(/No connections yet/i);
 
-      await user.click(screen.getByRole('button', { name: 'New connection' }));
+      await openNewConnection(user);
       await user.selectOptions(screen.getByLabelText('Kind'), 'agent_cli');
 
       testDraftMock.mockResolvedValue({ ok: true, probed: 'config' });
@@ -767,7 +777,7 @@ describe('ConnectionsPage', () => {
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText(/No connections yet/i);
 
-      await user.click(screen.getByRole('button', { name: 'New connection' }));
+      await openNewConnection(user);
       await user.selectOptions(screen.getByLabelText('Kind'), 'fs');
       await user.type(screen.getByLabelText(/^Allowed folders/), '/srv/data');
 
@@ -784,7 +794,7 @@ describe('ConnectionsPage', () => {
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText(/No connections yet/i);
 
-      await user.click(screen.getByRole('button', { name: 'New connection' }));
+      await openNewConnection(user);
       await user.selectOptions(screen.getByLabelText('Kind'), 'fs');
       await user.type(screen.getByLabelText(/^Allowed folders/), '/srv/data');
 
@@ -822,29 +832,24 @@ describe('ConnectionsPage', () => {
     });
 
     it('does not carry a verdict into a SECOND new-connection form', async () => {
-      // "New connection" is not gated behind the form being closed, so it can be
-      // pressed with a new-connection form already open. `form.id` is `null`
-      // both times, so keying the form on `id` did not remount it — and
-      // `blankForm()` is byte-identical each time, so the draft SIGNATURE
-      // matched too, and the first draft's "Connected." rendered against a form
-      // nothing had tested.
-      //
-      // The draft is therefore left PRISTINE here, which is the whole point:
-      // the moment a field is touched the signature diverges on its own and the
-      // verdict hides for reasons that have nothing to do with the remount. It
-      // is the untouched blank form — the one case where both guards agree on
-      // the wrong answer — that needs the open COUNTER.
+      // "New connection" can be pressed with a new-connection form already
+      // open. `form.id` is `null` both times and `blankForm(kind)` is
+      // byte-identical, so the draft SIGNATURE matches: only a remount keeps the
+      // first draft's "Connected." off a form nothing has tested. Since #1477 the
+      // kind gallery sits between the two forms, which unmounts the first; the
+      // open COUNTER key still covers Edit → Edit, tested separately. The draft
+      // is left PRISTINE, the one case where the signature cannot tell.
       const user = userEvent.setup();
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText(/No connections yet/i);
 
-      await user.click(screen.getByRole('button', { name: 'New connection' }));
+      await openNewConnection(user);
       testDraftMock.mockResolvedValue({ ok: true, probed: 'liveness' });
       await user.click(screen.getByRole('button', { name: 'Test connection' }));
       expect(await screen.findByRole('status')).toHaveTextContent('Connected.');
 
       // Start over. The new form is blank and untested — it must say nothing.
-      await user.click(screen.getByRole('button', { name: 'New connection' }));
+      await openNewConnection(user);
       await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
     });
 
@@ -853,7 +858,7 @@ describe('ConnectionsPage', () => {
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText(/No connections yet/i);
 
-      await user.click(screen.getByRole('button', { name: 'New connection' }));
+      await openNewConnection(user);
       await user.type(screen.getByLabelText('Name'), 'Prod');
       await user.selectOptions(screen.getByLabelText('Kind'), 'fs');
       await user.type(screen.getByLabelText(/^Allowed folders/), '/srv/data');
@@ -1415,7 +1420,7 @@ describe('the connection form drawer (#1396)', () => {
     listMock.mockResolvedValue([conn()]);
     const user = userEvent.setup();
     renderWithRouter(<ConnectionsPage />);
-    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+    await openNewConnection(user);
 
     const drawer = drawerNamed('New connection');
     // The list is still on screen beside it.
@@ -1444,7 +1449,7 @@ describe('the connection form drawer (#1396)', () => {
   it('closes a clean form on Escape without asking', async () => {
     const user = userEvent.setup();
     renderWithRouter(<ConnectionsPage />);
-    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+    await openNewConnection(user);
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
@@ -1452,7 +1457,7 @@ describe('the connection form drawer (#1396)', () => {
   it('holds a dirty form at a prompt: Keep editing keeps it, Discard closes it', async () => {
     const user = userEvent.setup();
     renderWithRouter(<ConnectionsPage />);
-    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+    await openNewConnection(user);
     await user.type(screen.getByLabelText('Name'), 'Draft');
 
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -1499,7 +1504,7 @@ describe('the connection form drawer (#1396)', () => {
   it('holds a route change while dirty, and lets it through on Discard', async () => {
     const user = userEvent.setup();
     const { router } = renderWithRouter(<ConnectionsPage />, '/manage/connections');
-    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+    await openNewConnection(user);
     await user.type(screen.getByLabelText('Name'), 'Draft');
 
     await act(() => router.navigate('/author'));
@@ -1512,7 +1517,7 @@ describe('the connection form drawer (#1396)', () => {
   it('arms the browser’s leave-page prompt only while the form is dirty', async () => {
     const user = userEvent.setup();
     renderWithRouter(<ConnectionsPage />);
-    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+    await openNewConnection(user);
     const clean = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(clean);
     expect(clean.defaultPrevented).toBe(false);
@@ -1536,7 +1541,7 @@ describe('the connection form drawer (#1396)', () => {
   it('shows a typed secret on request', async () => {
     const user = userEvent.setup();
     renderWithRouter(<ConnectionsPage />);
-    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+    await openNewConnection(user);
     const secret = screen.getByLabelText('Secret');
     expect(secret).toHaveAttribute('type', 'password');
     await user.click(screen.getByRole('button', { name: 'Show secret' }));
@@ -1548,7 +1553,7 @@ describe('the connection form drawer (#1396)', () => {
   it('marks the required basics', async () => {
     const user = userEvent.setup();
     renderWithRouter(<ConnectionsPage />);
-    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+    await openNewConnection(user);
     const basics = screen.getByRole('group', { name: 'Basics' });
     expect(within(basics).getByLabelText('Kind')).toHaveAttribute('aria-required', 'true');
     expect(basics.querySelectorAll('.required-mark')).toHaveLength(2);
@@ -1571,7 +1576,7 @@ describe('the connection form drawer (#1396)', () => {
   it('Escape at the prompt keeps editing', async () => {
     const user = userEvent.setup();
     renderWithRouter(<ConnectionsPage />);
-    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+    await openNewConnection(user);
     await user.type(screen.getByLabelText('Name'), 'Draft');
     await user.keyboard('{Escape}');
     expect(prompt()).toBeInTheDocument();
@@ -1584,7 +1589,7 @@ describe('the connection form drawer (#1396)', () => {
   it('Keep editing at a held route change stays on the page', async () => {
     const user = userEvent.setup();
     const { router } = renderWithRouter(<ConnectionsPage />, '/manage/connections');
-    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+    await openNewConnection(user);
     await user.type(screen.getByLabelText('Name'), 'Draft');
     await act(() => router.navigate('/author'));
     await user.click(screen.getByRole('button', { name: 'Keep editing' }));
@@ -1600,6 +1605,7 @@ describe('the connection form drawer (#1396)', () => {
     renderWithRouter(<ConnectionsPage />);
     const newButton = await screen.findByRole('button', { name: 'New connection' });
     await user.click(newButton);
+    await user.click(screen.getByRole('button', { name: 'Anthropic API' }));
     await user.type(screen.getByLabelText('Name'), 'Saved');
     await user.click(screen.getByRole('button', { name: 'Create connection' }));
     await user.click(newButton);
@@ -1657,7 +1663,7 @@ describe('ConnectionsPage — inline validation (#1396)', () => {
     const user = userEvent.setup();
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText(/No connections yet/i);
-    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    await openNewConnection(user);
     return user;
   }
 
@@ -1738,5 +1744,77 @@ describe('ConnectionsPage — inline validation (#1396)', () => {
     expect(alert).toHaveTextContent('Timeout (ms): must be a number');
     expect(alert).not.toHaveTextContent('Name');
     expect(screen.getByLabelText('Name')).toHaveAttribute('aria-invalid', 'false');
+  });
+});
+
+describe('#1477 New connection opens the kind gallery first', () => {
+  const prompt = () => screen.queryByRole('alertdialog', { name: 'Unsaved changes' });
+
+  it('shows the gallery, not a form; picking a kind opens that kind’s form with Name focused', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+
+    const gallery = screen.getByRole('dialog', { name: 'New connection' });
+    expect(screen.queryByRole('form', { name: 'Connection form' })).not.toBeInTheDocument();
+    expect(within(gallery).getByRole('textbox', { name: 'Search connection kinds' })).toHaveFocus();
+
+    await user.click(within(gallery).getByRole('button', { name: 'SQLite' }));
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    expect(within(form).getByLabelText('Kind')).toHaveValue('sqlite');
+    expect(within(form).getByLabelText('Name')).toHaveFocus();
+    // A form that opened for the picked kind is clean: closing it asks nothing.
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(prompt()).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('closes on Escape and hands focus back to New connection', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    const newButton = await screen.findByRole('button', { name: 'New connection' });
+    await user.click(newButton);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(newButton).toHaveFocus();
+  });
+
+  it('a second press of New starts a fresh gallery: empty search, focus in it', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+    await user.type(screen.getByRole('textbox', { name: 'Search connection kinds' }), 'post');
+    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    const search = screen.getByRole('textbox', { name: 'Search connection kinds' });
+    expect(search).toHaveValue('');
+    expect(search).toHaveFocus();
+  });
+
+  it('asks before replacing a dirty form; Keep keeps it, Discard opens the gallery', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await openNewConnection(user, 'File system');
+    await user.type(screen.getByLabelText('Name'), 'Half typed');
+
+    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    expect(prompt()).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(screen.getByLabelText('Name')).toHaveValue('Half typed');
+
+    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+    expect(screen.queryByRole('form', { name: 'Connection form' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'PostgreSQL' })).toBeInTheDocument();
+  });
+
+  it('Edit on a row replaces the gallery, and closing that form does not bring it back', async () => {
+    listMock.mockResolvedValue([conn()]);
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+    await user.click(screen.getByRole('button', { name: 'Edit Claude' }));
+    expect(screen.getByRole('dialog', { name: 'Edit connection' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });

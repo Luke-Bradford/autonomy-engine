@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady, resolvedPaletteColor, setTheme } from './support/theme';
+import { openNewConnection } from './support/newConnection';
 
 /**
  * #1396 — `JsonEditor`, the one control for typing JSON, in the shipped bundle.
@@ -16,9 +17,8 @@ async function openConnectionJson(page: Page) {
   await page.goto('/#/manage/connections');
   await page.getByRole('heading', { name: 'Connections' }).waitFor();
   await fluentRootReady(page);
-  await page.getByRole('button', { name: 'New connection' }).click();
+  await openNewConnection(page, 'agent_cli');
   const form = page.getByRole('form', { name: 'Connection form' });
-  await form.getByLabel('Kind').selectOption('agent_cli');
   await form.getByRole('button', { name: 'Edit as JSON' }).click();
   return { form, box: form.getByLabel('Config (JSON)') };
 }

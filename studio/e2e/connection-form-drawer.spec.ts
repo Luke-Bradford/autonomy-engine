@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { seedConnection } from './support/seedResources';
 import { contrastRatio, fluentRootReady, setTheme, surfaceBehind } from './support/theme';
+import { openNewConnection } from './support/newConnection';
 
 /**
  * #1396 OR5 slice 1 — the shared form pattern on the Connections page: the
@@ -28,7 +29,7 @@ test.describe('#1396 the connection form drawer', () => {
     const seeded = `e2e 1396 seeded ${Date.now()}`;
     await seedConnection(page, { name: seeded, kind: 'ollama', config: {} });
     await gotoConnections(page);
-    await page.getByRole('button', { name: 'New connection' }).click();
+    await openNewConnection(page, 'anthropic_api');
     await expect(drawer(page)).toBeVisible();
 
     // A column to the right of the list, not an overlay on top of it.
@@ -103,7 +104,7 @@ test.describe('#1396 the connection form drawer', () => {
     await seedConnection(page, { name: seeded, kind: 'ollama', config: {} });
     await gotoConnections(page);
     await setTheme(page, 'dark');
-    await page.getByRole('button', { name: 'New connection' }).click();
+    await openNewConnection(page, 'anthropic_api');
     await expect(drawer(page)).toBeVisible();
 
     const read = () =>
@@ -171,8 +172,7 @@ test.describe('#1396 the connection form drawer', () => {
     const problems = collectPageProblems(page);
     await page.setViewportSize({ width: 1280, height: 560 });
     await gotoConnections(page);
-    await page.getByRole('button', { name: 'New connection' }).click();
-    await form(page).getByLabel('Kind').selectOption('agent_cli');
+    await openNewConnection(page, 'agent_cli');
 
     // The form runs past the bottom of the window…
     const drawerBottom = await drawer(page).evaluate((el) => el.getBoundingClientRect().bottom);
@@ -200,13 +200,13 @@ test.describe('#1396 the connection form drawer', () => {
   test('a dirty form is held at a prompt on Escape and on a route change', async ({ page }) => {
     const problems = collectPageProblems(page);
     await gotoConnections(page);
-    await page.getByRole('button', { name: 'New connection' }).click();
+    await openNewConnection(page, 'anthropic_api');
 
     // Clean: Escape just closes.
     await page.keyboard.press('Escape');
     await expect(drawer(page)).toBeHidden();
 
-    await page.getByRole('button', { name: 'New connection' }).click();
+    await openNewConnection(page, 'anthropic_api');
     await form(page).getByLabel('Name').fill('half-typed');
     await page.keyboard.press('Escape');
     await expect(prompt(page)).toBeVisible();
@@ -230,9 +230,8 @@ test.describe('#1396 the connection form drawer', () => {
     const problems = collectPageProblems(page);
     const name = `e2e 1396 create ${Date.now()}`;
     await gotoConnections(page);
-    await page.getByRole('button', { name: 'New connection' }).click();
+    await openNewConnection(page, 'ollama');
     await form(page).getByLabel('Name').fill(name);
-    await form(page).getByLabel('Kind').selectOption('ollama');
     await form(page).getByRole('button', { name: 'Create connection' }).click();
     await expect(drawer(page)).toBeHidden();
     await expect(prompt(page)).toBeHidden();

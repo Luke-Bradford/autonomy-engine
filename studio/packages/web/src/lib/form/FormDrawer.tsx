@@ -1,10 +1,8 @@
-import { useEffect, useId, useRef, type FormEvent, type ReactNode, type RefObject } from 'react';
+import { useEffect, useRef, type FormEvent, type ReactNode, type RefObject } from 'react';
 import type { UnsavedChangesGuard } from './useUnsavedChangesGuard';
+import { DrawerShell, FIRST_FIELD } from './DrawerShell';
 import { firstBadInput, focusFirstInvalid, type FieldValidation } from './fieldValidation';
 import { UnsavedChangesPrompt } from './UnsavedChangesPrompt';
-
-/** The first field a person can type into: read-only ones are skipped. */
-const FIRST_FIELD = 'input:not([readonly]), select, textarea:not([readonly])';
 
 /**
  * #1396 — the create/edit drawer every resource form opens in.
@@ -67,22 +65,8 @@ export function FormDrawer({
   actions: ReactNode;
   children: ReactNode;
 }) {
-  const titleId = useId();
   const bodyRef = useRef<HTMLDivElement>(null);
   const keepRef = useRef<HTMLButtonElement>(null);
-
-  // On open, focus the first field the operator can change: a read-only Name
-  // on an edit form is information, not where typing goes. On close, hand
-  // focus back to whatever opened the drawer (the "New"/"Edit" button).
-  useEffect(() => {
-    const opener = returnFocusTo?.current ?? document.activeElement;
-    bodyRef.current?.querySelector<HTMLElement>(FIRST_FIELD)?.focus();
-    return () => {
-      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
-    };
-    // Mount-only: the opener is whatever it was when this drawer opened.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // The prompt takes focus while it asks, and gives it back to the form when it
   // goes: its buttons unmount, and focus left on <body> would put the drawer
@@ -104,28 +88,16 @@ export function FormDrawer({
   }, [focusRequest]);
 
   return (
-    <div
-      className="form-drawer"
-      role="dialog"
-      aria-modal="false"
-      aria-labelledby={titleId}
-      onKeyDown={(event) => {
-        // Escape that a control inside already handled (a picker, an IME
-        // composition) is not a request to close the whole form.
-        if (event.key !== 'Escape' || event.defaultPrevented || event.nativeEvent.isComposing) {
-          return;
-        }
-        event.preventDefault();
+    <DrawerShell
+      title={title}
+      onEscape={() => {
         if (guard.confirming) guard.keep();
         else if (!busy) onRequestClose();
       }}
+      onClose={onRequestClose}
+      closeDisabled={busy}
+      returnFocusTo={returnFocusTo}
     >
-      <div className="form-drawer-header">
-        <h3 id={titleId}>{title}</h3>
-        <button type="button" aria-label="Close" onClick={onRequestClose} disabled={busy}>
-          ✕
-        </button>
-      </div>
       <form
         className={className}
         aria-label={formLabel}
@@ -159,6 +131,6 @@ export function FormDrawer({
           )}
         </div>
       </form>
-    </div>
+    </DrawerShell>
   );
 }
