@@ -5317,6 +5317,7 @@ button.danger {
   align-items: center;
   gap: 4px;
   margin: 0 0 8px;
+  color: var(--muted);
 }
 
 /* The table's label, close to it: the first row is what the page is for. Its

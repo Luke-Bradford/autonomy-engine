@@ -305,8 +305,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
      Two cases have no name and are not given an invented one.
 
      `doc` is null whenever the bound version will not resolve, which this page
-     is built to survive (U11) — the whole table still renders, from the doc-free
-     fold. That is the common one.
+     is built to survive (U11) — the whole table still renders, from the
+     log-only activity runs (`basis: 'log'`, #1557). That is the common one.
 
      The other is narrower than it first looks, and worth stating exactly rather
      than hand-waving at "the lists differ". A RERUN cannot cause it: `reseed`

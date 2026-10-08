@@ -1129,6 +1129,36 @@ describe('#1557 activity runs from the log alone — the version no longer resol
     expect(live.rows[0]).toMatchObject({ status: 'dispatched', finishedAt: null });
   });
 
+  it('settles a Wait at its timer and an attempt an operator retried with the reason given', () => {
+    const { rows } = projectActivityRunsFromLog([
+      at(1, started),
+      at(2, {
+        type: 'timer.waitScheduled',
+        runId: 'R',
+        nodeId: 'hold',
+        attemptId: 'hold#0',
+        dueAt: 7,
+      }),
+      at(7, { type: 'timer.due', runId: 'R', nodeId: 'hold', previousAttemptId: 'hold#0' }),
+      at(8, { ...dispatched, nodeId: 'x', attemptId: 'x#0' }),
+      at(12, {
+        type: 'node.retryRequested',
+        runId: 'R',
+        nodeId: 'x',
+        previousAttemptId: 'x#0',
+        reason: 'stuck',
+      }),
+      at(13, { ...dispatched, nodeId: 'x', attemptId: 'x#1' }),
+    ]);
+    expect(
+      rows.map((r) => [r.attemptId, r.status, r.durationMs, r.error?.message ?? null]),
+    ).toEqual([
+      ['hold#0', 'success', 5, null],
+      ['x#0', 'failure', 4, 'stuck'],
+      ['x#1', 'dispatched', null, null],
+    ]);
+  });
+
   it("leads with a rerun's reused frontier, and gives a refused call its reason", () => {
     const { rows } = projectActivityRunsFromLog([
       at(1, { ...started, rerunOf: 'R0' }),

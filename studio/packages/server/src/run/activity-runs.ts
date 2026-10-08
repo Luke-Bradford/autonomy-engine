@@ -522,12 +522,19 @@ export function projectActivityRuns(
  * - `activityId` is the id the events carry: a parallel ForEach's instance key
  *   (`w@2`) cannot be told from a literal doc id without the doc;
  * - a status the reducer corrected after the event (rule 2: a success whose
- *   outputs broke the contract) reads as logged;
+ *   outputs broke the contract) reads as logged, and a result the reducer would
+ *   have ignored as stale (rule 1: for an attempt no longer the node's live one)
+ *   settles its row all the same;
  * - the rows a rerun reused are the reseed's top-level frontier; a copied
  *   container's activities are not listed.
  * An attempt still open when the run finished was abandoned without an event
  * of its own (rule 4: F1b's drain means nothing is still running then), so it
- * reads `skipped`, except on a cancelled run, which the page names as such.
+ * reads `skipped`, with no reason, except on a cancelled run, which the page
+ * names as such.
+ *
+ * Reused rows come from the last `run.reseeded`'s frontier directly, not from
+ * `reusedIds`: with no containers to expand, that would add each copied
+ * container's own id, and a container is never a row.
  */
 export function projectActivityRunsFromLog(
   log: readonly LoggedEngineEvent[],

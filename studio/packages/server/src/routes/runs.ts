@@ -214,15 +214,17 @@ function ownedName(
 export const runsRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
   const resolveDoc = makeDocResolver(db);
+  /* #1557 — a version that will not resolve (deleted, or no longer parsing)
+     costs the structure, not the rows: they are read from the log alone, and
+     `basis` says so. Both causes are permanent today (a version row is immutable
+     and never re-created, and a fixed schema never re-parses it), so the partial
+     account is memoised like the full one; a new cause that could heal would
+     need its own invalidation. */
+  type BasedActivityRuns = ProjectedActivityRuns & { basis: ActivityRunsBasis };
   /* #1484 M2 — the activity-runs projection, memoised per run on its last `seq`
      (the log is append-only, so an unchanged `seq` is an unchanged log): a page
      re-reads it as the run's log grows, and a settled run is folded once. The
      bound keeps a long-lived server from holding every run anyone has opened. */
-  /* #1557 — a version that will not resolve (deleted, or no longer parsing)
-     costs the structure, not the rows: they are read from the log alone, and
-     `basis` says so. That verdict is permanent (`DocUnparseableError`), so the
-     partial account is memoised like the full one. */
-  type BasedActivityRuns = ProjectedActivityRuns & { basis: ActivityRunsBasis };
   const activityRunsMemo = new Map<string, { lastSeq: number; runs: BasedActivityRuns }>();
   const projectedActivityRuns = (runId: string, versionId: string): BasedActivityRuns => {
     const lastSeq = listRunLastSeqs(db, [runId]).get(runId);
@@ -236,6 +238,10 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
         doc = resolveDoc(versionId);
       } catch (err) {
         if (!(err instanceof DocUnresolvableError)) throw err;
+        fastify.log.warn(
+          { err, runId },
+          'activity runs: version unresolvable, reading the log alone',
+        );
       }
       const log = loadEngineLog(db, runId);
       runs =

@@ -196,7 +196,8 @@ const BETWEEN_ITERATION_AND_ERROR = ACTIVITY_RUN_COLUMNS.slice(
 /** #1557 — what a log-only account leaves out (`projectActivityRunsFromLog`). */
 const LOG_BASIS_NOTE =
   'The version this run used can no longer be read, so these rows come from the run log alone. ' +
-  'Containers, ForEach items, skipped activities and retry numbers are missing, ' +
+  'Containers, ForEach items, skipped activities, retry numbers and the activities a rerun ' +
+  'reused inside a container are missing, ' +
   'and each status is as the log recorded it.';
 
 /**
@@ -209,6 +210,9 @@ const LOG_BASIS_NOTE =
  * Containers are GROUP lines with their rows under them, and a ForEach or Until
  * has a line per item or round (`activityRunsTree.ts`). Every group and
  * iteration starts open and can be collapsed.
+ *
+ * When the run's version no longer resolves the rows are the log's account
+ * alone (`basis: 'log'`, #1557), and a line above the table says so.
  *
  * Names and types come from the version that ran (`nameOf`, `typeOf`,
  * `containerNameOf`), never from the server, which names nothing.
@@ -427,7 +431,7 @@ export function ActivityRunsTable({
       )}
       {basis === 'log' && (
         <div className="activity-runs__basis">
-          <span>Version unavailable: rows from the run log only</span>
+          <span>Rows from the run log only</span>
           <HelpDisclosure label="About rows from the run log" noteId="activity-runs-basis-note">
             {LOG_BASIS_NOTE}
           </HelpDisclosure>

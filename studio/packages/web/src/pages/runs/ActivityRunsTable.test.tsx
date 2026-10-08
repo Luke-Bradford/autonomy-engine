@@ -712,10 +712,10 @@ describe('#1557 ActivityRunsTable — rows from the run log alone', () => {
 
   it('says the version is unavailable, with what is missing behind ?', () => {
     showBased('log');
-    expect(screen.getByText('Version unavailable: rows from the run log only')).toBeVisible();
+    expect(screen.getByText('Rows from the run log only')).toBeVisible();
     fireEvent.click(screen.getByTitle('About rows from the run log'));
     expect(screen.getByRole('note')).toHaveTextContent(
-      /Containers, ForEach items, skipped activities and retry numbers are missing/,
+      /Containers, ForEach items, skipped activities, retry numbers and the activities a rerun reused inside a container are missing/,
     );
     // The rows are still the table.
     expect(screen.getAllByRole('row')).toHaveLength(2);
@@ -723,8 +723,8 @@ describe('#1557 ActivityRunsTable — rows from the run log alone', () => {
 
   it('says nothing of it for the full account', () => {
     showBased('version');
-    expect(screen.queryByText(/Version unavailable/)).toBeNull();
+    expect(screen.queryByText(/Rows from the run log only/)).toBeNull();
     showBased();
-    expect(screen.queryByText(/Version unavailable/)).toBeNull();
+    expect(screen.queryByText(/Rows from the run log only/)).toBeNull();
   });
 });

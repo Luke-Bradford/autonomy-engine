@@ -317,7 +317,7 @@ test('#1557 — rows from the run log alone say the version is unavailable', asy
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
   const notice = page.locator('.activity-runs__basis');
-  await expect(notice).toContainText('Version unavailable: rows from the run log only');
+  await expect(notice).toContainText('Rows from the run log only');
   // The rows are still there, and the notice costs them no more than a line.
   const seen = await page.evaluate(() => {
     const n = document.querySelector('.activity-runs__basis')!.getBoundingClientRect();
@@ -327,7 +327,7 @@ test('#1557 — rows from the run log alone say the version is unavailable', asy
   expect(seen.rows).toBe(1);
   expect(seen.noticeHeight).toBeLessThanOrEqual(32);
   await notice.getByTitle('About rows from the run log').click();
-  await expect(notice.getByRole('note')).toContainText('retry numbers are missing');
+  await expect(notice.getByRole('note')).toContainText('reused inside a container are missing');
 
   await expectQuiet(page, problems);
 });
