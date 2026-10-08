@@ -146,7 +146,7 @@ export function ConnectionColumn({
           disabledReason={request.disabledReason}
           onClose={onClose}
           onPick={(kind) => openForm(blankForm(kind))}
-          onDetect={(detected) => openForm(detectedForm(detected))}
+          onDetect={(detected) => openForm(detectedForm(detected), blankForm(detected.kind))}
         />
       ) : (
         <DrawerShell

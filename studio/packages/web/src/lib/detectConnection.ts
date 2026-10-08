@@ -75,13 +75,17 @@ function fromPostgresUrl(value: string): DetectedConnection | null {
   const database = decode(url.pathname.replace(/^\//, ''));
   const user = decode(url.username);
   const secret = decode(url.password);
-  // A stray `%` is not a value to guess at, least of all in a password.
+  // A stray `%` is not a value to guess at, least of all in a password. Nor is
+  // a database holding `@` or `/`: that is an unencoded password that split the
+  // URL in the wrong place (`u:12/ab@h/db`).
   if (database === null || user === null || secret === null) return null;
+  if (/[@/]/.test(database)) return null;
   const config: Record<string, unknown> = {};
-  // One host only: a multi-host list (`h1,h2`) or a socket URL (`postgres:///db`)
-  // leaves Host for the author, and the form says it is required.
+  // One host only: a multi-host list (`h1,h2`) or a socket (`postgres:///db`,
+  // an encoded `%2Fvar%2Frun`) leaves Host for the author, and the form says
+  // it is required.
   const host = url.hostname.replace(/^\[(.*)\]$/, '$1');
-  if (host !== '' && !host.includes(',')) config.host = host;
+  if (host !== '' && !/[,%]/.test(host)) config.host = host;
   if (url.port !== '') config.port = Number(url.port);
   if (database !== '') config.database = database;
   if (user !== '') config.user = user;
@@ -105,19 +109,25 @@ function fromPath(value: string): DetectedConnection | null {
   if (!windows && !value.startsWith('/')) return null;
   const separators = windows ? /[\\/]+$/ : /\/+$/;
   const rootLength = windows ? 3 : 1;
-  const path = value.length > rootLength ? value.replace(separators, '') : value;
+  const root = value.slice(0, rootLength);
+  // Stripping must not eat the root itself (`//`, `C:\\`).
+  const stripped = value.replace(separators, '');
+  const path = stripped.length < rootLength ? root : stripped;
 
   const cut = Math.max(path.lastIndexOf('/'), windows ? path.lastIndexOf('\\') : -1);
   const name = path.slice(cut + 1);
   const dot = name.lastIndexOf('.');
   const extension = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
-  const parent = cut < rootLength ? path.slice(0, rootLength) : path.slice(0, cut);
+  const parent = cut < rootLength ? root : path.slice(0, cut);
 
   if (SQLITE_EXTENSIONS.has(extension)) {
     return { kind: 'sqlite', config: { roots: [parent], path }, secret: '' };
   }
-  const root = DATA_FILE_EXTENSIONS.has(extension) ? parent : path;
-  return { kind: 'fs', config: { roots: [root] }, secret: '' };
+  return {
+    kind: 'fs',
+    config: { roots: [DATA_FILE_EXTENSIONS.has(extension) ? parent : path] },
+    secret: '',
+  };
 }
 
 function parseUrl(value: string): URL | null {

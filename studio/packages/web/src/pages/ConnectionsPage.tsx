@@ -380,7 +380,7 @@ export function ConnectionsPage() {
             }}
             onDetect={(detected) => {
               setChoosingKind(false);
-              openForm(detectedForm(detected));
+              openForm(detectedForm(detected), blankForm(detected.kind));
             }}
           />
         )}

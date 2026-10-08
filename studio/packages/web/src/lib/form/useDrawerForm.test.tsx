@@ -32,6 +32,16 @@ describe('useDrawerForm (#1396)', () => {
     expect(hook.current().form).toBeNull();
   });
 
+  it('a form opened against a baseline is dirty until it matches it (#1477)', () => {
+    const hook = mountHook();
+    act(() => hook.current().openForm('pasted', ''));
+    expect(hook.current().dirty).toBe(true);
+    act(() => hook.current().setForm(''));
+    expect(hook.current().dirty).toBe(false);
+    act(() => hook.current().openForm('plain'));
+    expect(hook.current().dirty).toBe(false);
+  });
+
   it('closeWhere closes only a matching form, dirty or not, without the prompt', () => {
     const hook = mountHook();
     act(() => hook.current().openForm('kept'));

@@ -48,6 +48,13 @@ describe('detectConnection (#1477 paste-to-detect)', () => {
       secret: '',
     });
     expect(detectConnection('postgres://u:50%off@h/db')).toBeNull();
+    // An unencoded password with a `/` splits the URL in the wrong place.
+    expect(detectConnection('postgres://u:123/ss@h/db')).toBeNull();
+    expect(detectConnection('postgres://u@%2Fvar%2Frun%2Fpostgresql/db')).toEqual({
+      kind: 'postgres',
+      config: { database: 'db', user: 'u' },
+      secret: '',
+    });
   });
 
   it('reads an http(s) URL as the base URL, dropping user info, query and fragment', () => {
@@ -113,6 +120,13 @@ describe('detectConnection (#1477 paste-to-detect)', () => {
     expect(detectConnection('D:/stores/app.sqlite')).toEqual({
       kind: 'sqlite',
       config: { roots: ['D:/stores'], path: 'D:/stores/app.sqlite' },
+      secret: '',
+    });
+    // Trailing separators never eat the root itself.
+    expect(detectConnection('//')).toEqual({ kind: 'fs', config: { roots: ['/'] }, secret: '' });
+    expect(detectConnection('C:\\\\')).toEqual({
+      kind: 'fs',
+      config: { roots: ['C:\\'] },
       secret: '',
     });
     expect(detectConnection('C:\\')).toEqual({

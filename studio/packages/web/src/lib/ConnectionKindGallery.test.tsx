@@ -124,12 +124,13 @@ describe('ConnectionKindGallery (#1477)', () => {
     const paste = screen.getByRole('textbox', { name: 'Paste a path or URL' });
     const use = screen.getByRole('button', { name: 'Use' });
     expect(use).toBeDisabled();
+    // Enter on an empty field agrees with the disabled button: nothing happens.
+    await user.type(paste, '{Enter}');
+    expect(screen.getByRole('status')).toBeEmptyDOMElement();
 
     await user.type(paste, 'orders.csv');
     await user.click(use);
-    expect(paste).toHaveAccessibleDescription(
-      'Not a path or URL studio recognises. Pick a kind below',
-    );
+    expect(paste).toHaveAccessibleDescription('Not a recognised path or URL');
 
     await user.clear(paste);
     await user.type(paste, '/srv/landing');

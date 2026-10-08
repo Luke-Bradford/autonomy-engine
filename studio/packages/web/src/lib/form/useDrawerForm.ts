@@ -28,8 +28,13 @@ export interface DrawerForm<F> {
   readonly form: F | null;
   /** Edit the open form, or close it with `null` (bypassing the guard). */
   readonly setForm: Dispatch<SetStateAction<F | null>>;
-  /** Open `next` now. Pages call it inside `guard.request`. */
-  readonly openForm: (next: F) => void;
+  /**
+   * Open `next` now. Pages call it inside `guard.request`. `baseline` is what
+   * "dirty" compares against, `next` itself by default; a form opened already
+   * holding the operator's input (#1477 paste-to-detect) passes the blank form,
+   * so closing it asks first.
+   */
+  readonly openForm: (next: F, baseline?: F) => void;
   /**
    * How many times a form has been OPENED; mount the form with this as its
    * `key`.
@@ -92,9 +97,9 @@ export function useDrawerForm<F>(
   const openerRef = useRef<HTMLElement | null>(null);
 
   const openForm = useCallback(
-    (next: F) => {
+    (next: F, baseline: F = next) => {
       setForm(next);
-      setOpenedAs(signatureOf(next));
+      setOpenedAs(signatureOf(baseline));
       latestSeq.current += 1;
       setSeq(latestSeq.current);
       // A page passes a module-level function, so this is stable in practice.

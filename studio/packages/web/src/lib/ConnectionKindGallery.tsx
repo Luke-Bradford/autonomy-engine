@@ -51,6 +51,7 @@ export function ConnectionKindGallery({
           id={searchId}
           type="text"
           placeholder="Search"
+          // The search, not the paste shortcut above it, is where typing goes.
           data-autofocus
           autoComplete="off"
           value={query}
@@ -124,9 +125,10 @@ function PasteToDetect({
   const problemId = useId();
 
   const use = () => {
+    if (text.trim() === '') return;
     const detected = detectConnection(text);
     if (detected === null) {
-      setProblem('Not a path or URL studio recognises. Pick a kind below');
+      setProblem('Not a recognised path or URL');
       return;
     }
     const reason = disabledReason?.(detected.kind);
@@ -153,12 +155,13 @@ function PasteToDetect({
         spellCheck={false}
         value={text}
         aria-describedby={problem !== null ? problemId : undefined}
+        aria-invalid={problem !== null ? true : undefined}
         onChange={(e) => {
           setText(e.target.value);
           setProblem(null);
         }}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') {
+          if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
             e.preventDefault();
             use();
           }
@@ -187,6 +190,7 @@ export function ConnectionKindDrawer({
   disabledReason,
 }: {
   onPick: (kind: ConnectionKind) => void;
+  /** Passed to the gallery: given, it offers paste-to-detect. */
   onDetect?: (detected: DetectedConnection) => void;
   onClose: () => void;
   returnFocusTo?: RefObject<HTMLElement | null>;
