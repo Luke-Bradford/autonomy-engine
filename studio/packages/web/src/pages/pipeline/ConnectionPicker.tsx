@@ -182,6 +182,7 @@ export function ConnectionPicker({
                       value={o.id}
                       text={o.label}
                       disabled={o.disabledReason !== undefined}
+                      data-connection-id={o.id}
                     >
                       <span className="connection-option" title={o.location}>
                         <span className="connection-option__name">

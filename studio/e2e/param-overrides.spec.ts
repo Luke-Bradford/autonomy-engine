@@ -3,7 +3,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { addActivity, canvasNodes } from './support/canvasGraph';
 import { openSeededCanvas } from './support/seedDoc';
 import { seedConnection, seedDataset } from './support/seedResources';
-import { properties } from './support/panels';
+import { properties, pickConnection } from './support/panels';
 
 /**
  * #1304 — a node's per-dispatch parameter overrides are authored on the canvas.
@@ -47,9 +47,7 @@ test.describe('#1304 — parameter overrides on the canvas', () => {
     const connGroup = properties(page).getByRole('group', { name: 'Connection overrides' });
     await expect(connGroup).toHaveCount(0);
 
-    await properties(page)
-      .getByRole('combobox', { name: 'Connection', exact: true })
-      .selectOption(connId);
+    await pickConnection(page, 'Connection', { id: connId });
     await properties(page).getByRole('combobox', { name: 'Source dataset' }).selectOption(setId);
 
     // The Add list is the connection's allowlist: `maxBytes` and nothing else.

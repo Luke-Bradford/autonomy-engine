@@ -17,6 +17,30 @@ export function properties(page: Page): Locator {
   return page.getByRole('complementary', { name: 'Properties' });
 }
 
+/**
+ * #1477 OR29 slice 5c — bind the dock's connection picker labelled `label`.
+ * The picker is a searchable combobox whose list is portalled, so it is opened
+ * and the option clicked in the one open listbox. `{ id }` targets the row
+ * exactly (each option carries `data-connection-id`), `{ name }` the option
+ * whose name starts with it, and `null` picks None.
+ */
+export async function pickConnection(
+  page: Page,
+  label: string,
+  target: { id: string } | { name: string } | null,
+): Promise<void> {
+  await properties(page).getByRole('combobox', { name: label, exact: true }).click();
+  const list = page.getByRole('listbox');
+  const option =
+    target === null
+      ? list.getByRole('option', { name: 'None', exact: true })
+      : 'id' in target
+        ? list.locator(`[data-connection-id="${target.id}"]`)
+        : list.getByRole('option').filter({ hasText: target.name });
+  await option.click();
+  await expect(list).toHaveCount(0);
+}
+
 /** #1477 OR29 — the dock header's Paste (U21), shown whatever is selected. */
 export function dockPaste(page: Page): Locator {
   return page.locator('.property-dock__header').getByRole('button', { name: 'Paste', exact: true });

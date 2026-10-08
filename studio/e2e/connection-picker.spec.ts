@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { addActivity, canvasNodes } from './support/canvasGraph';
 import { openSeededCanvas } from './support/seedDoc';
-import { properties } from './support/panels';
+import { pickConnection, properties } from './support/panels';
 import { contrastRatio, fluentRootReady, setTheme, surfaceBehind } from './support/theme';
 
 /**
@@ -56,16 +56,23 @@ test.describe('#1477 activity connection pickers', () => {
 
     const sink = properties(page).getByRole('combobox', { name: 'Sink connection' });
     // An existing File system connection is LISTED, disabled, with the reason.
-    const filesOption = sink.locator('option', { hasText: files });
-    await expect(filesOption).toBeDisabled();
-    await expect(filesOption).toHaveText(`${files} (File system) — Can't be a Copy Data sink yet`);
+    await sink.click();
+    const filesOption = page.getByRole('listbox').getByRole('option').filter({ hasText: files });
+    await expect(filesOption).toHaveAttribute('aria-disabled', 'true');
+    await expect(filesOption).toContainText("Can't be a Copy Data sink yet");
+    await sink.press('Escape');
+    await expect(page.getByRole('listbox')).toHaveCount(0);
 
     // The row: select, Test and ＋ New side by side, compact.
     // The Sink tab's own row (the Source tab's picker is in the DOM, hidden).
-    const row = await sink.locator('xpath=..').evaluate((el) => {
+    const row = await sink.locator('xpath=../..').evaluate((el) => {
       const rects = [...el.children].map((c) => c.getBoundingClientRect());
       return {
         children: [...el.children].map((c) => c.tagName.toLowerCase()),
+        // The combobox's own chrome is cleared: ONE box, the dock's input.
+        pickerHeight: Math.round(el.querySelector('input')!.getBoundingClientRect().height),
+        pickerChromeBorder: getComputedStyle(el.children[0]!).borderTopWidth,
+        inputBorder: getComputedStyle(el.querySelector('input')!).borderTopWidth,
         oneLine: new Set(rects.map((r) => Math.round(r.top + r.height / 2))).size === 1,
         gaps: rects.slice(1).map((r, i) => Math.round(r.left - rects[i]!.right)),
         buttonHeights: [
@@ -78,7 +85,10 @@ test.describe('#1477 activity connection pickers', () => {
       };
     });
     expect(row).toEqual({
-      children: ['select', 'button', 'button', 'button'],
+      children: ['div', 'button', 'button', 'button'],
+      pickerHeight: 28,
+      pickerChromeBorder: '0px',
+      inputBorder: '1px',
       gaps: [8, 8, 8],
       oneLine: true,
       buttonHeights: [28],
@@ -116,8 +126,7 @@ test.describe('#1477 activity connection pickers', () => {
     await expect(column(page)).toHaveCount(0);
 
     // Bound to the slot that asked, and focus back on the New that opened it.
-    await expect(sink.locator('option:checked')).toHaveText(`${name} (SQLite)`);
-    await expect(sink).not.toHaveValue('');
+    await expect(sink).toHaveValue(`${name} (SQLite)`);
     await expect(
       properties(page).getByRole('button', { name: 'New sink connection' }),
     ).toBeFocused();
@@ -151,7 +160,7 @@ test.describe('#1477 activity connection pickers', () => {
       await canvasNodes(page).nth(index).click();
       await properties(page).getByRole('tab', { name: 'Sink', exact: true }).click();
       await expect(editSink).toBeDisabled();
-      await sink.selectOption({ label: `${name} (SQLite)` });
+      await pickConnection(page, 'Sink connection', { name });
     }
     await expect(editing(page)).toHaveText(/^Draft/);
     const url = page.url();
@@ -175,12 +184,12 @@ test.describe('#1477 activity connection pickers', () => {
     const stored = await page.request.get(`/api/connections/${id}`);
     expect(((await stored.json()) as { name: string }).name).toBe(renamed);
     // This node's picker shows it, focus is back on Edit, nothing navigated.
-    await expect(sink.locator('option:checked')).toHaveText(`${renamed} (SQLite)`);
+    await expect(sink).toHaveValue(`${renamed} (SQLite)`);
     await expect(editSink).toBeFocused();
     expect(page.url()).toBe(url);
     // The OTHER node bound to it shows it too.
     await canvasNodes(page).nth(1).click();
-    await expect(sink.locator('option:checked')).toHaveText(`${renamed} (SQLite)`);
+    await expect(sink).toHaveValue(`${renamed} (SQLite)`);
     // The canvas draft is untouched: both activities and their bindings, unsaved.
     await expect(canvasNodes(page)).toHaveCount(2);
     await expect(editing(page)).toHaveText(/^Draft/);
@@ -217,6 +226,62 @@ test.describe('#1477 activity connection pickers', () => {
     await expect(editing(page)).toHaveText(/^Draft/);
   });
 
+  test('the list searches as you type, shows where each connection points, and ends in New', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const stamp = String(Date.now());
+    const name = `e2e 1477 search ${stamp}`;
+    const id = await seedSqliteConnection(page, name);
+    await copyNodeOnSink(page, 'e2e 1477 picker search');
+    const sink = properties(page).getByRole('combobox', { name: 'Sink connection' });
+    const list = page.getByRole('listbox');
+
+    // Typing into the closed picker opens it, filtered: only this run's row.
+    await sink.focus();
+    await page.keyboard.type(stamp);
+    await expect(list).toBeVisible();
+    await expect(list.locator('[data-connection-id]')).toHaveCount(1);
+    const row = list.locator(`[data-connection-id="${id}"]`);
+    await expect(row).toContainText(name);
+    // Its second line is where it points; its icon is its kind's.
+    await expect(row.locator('.connection-option__line')).toHaveText('e2e-1477-edit.db');
+    await expect(row.locator('.kind-icon[data-kind="sqlite"]')).toBeVisible();
+    // Backspace edits the search; it never reaches the canvas's Delete.
+    await page.keyboard.press('Backspace');
+    await expect(canvasNodes(page)).toHaveCount(1);
+
+    // Measured at 1440×900: the open list sits inside the window, the row whole.
+    const placed = await row.evaluate((el) => {
+      const box = el.closest('[role="listbox"]')!.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      return {
+        listInside: box.bottom <= window.innerHeight && box.right <= window.innerWidth,
+        rowInside: r.left >= box.left && r.right <= box.right,
+      };
+    });
+    expect(placed).toEqual({ listInside: true, rowInside: true });
+
+    await row.click();
+    await expect(list).toHaveCount(0);
+    await expect(sink).toHaveValue(`${name} (SQLite)`);
+
+    // ＋ New is also the list's last entry, as in ADF's linked-service dropdown.
+    await sink.click();
+    await list.getByRole('option', { name: 'New connection…' }).click();
+    await expect(column(page)).toBeVisible();
+    // The pick did not unbind: New is an action, not a choice.
+    await expect(sink).toHaveValue(`${name} (SQLite)`);
+    await page.keyboard.press('Escape');
+    await expect(column(page)).toHaveCount(0);
+    // Focus is back on the picker that asked, with its list closed.
+    await expect(sink).toBeFocused();
+    await expect(list).toHaveCount(0);
+    await expect(canvasNodes(page)).toHaveCount(1);
+    await expect(editing(page)).toHaveText(/^Draft/);
+    await expectQuiet(page, problems);
+  });
+
   test('dark mode: the picker buttons are legible', async ({ page }) => {
     const problems = collectPageProblems(page);
     await copyNodeOnSink(page, 'e2e 1477 picker dark');
@@ -225,6 +290,12 @@ test.describe('#1477 activity connection pickers', () => {
     const color = await button.evaluate((el) => getComputedStyle(el).color);
     const behind = await surfaceBehind(page, '.connection-picker button');
     expect(contrastRatio(color, behind.color)).toBeGreaterThanOrEqual(4.5);
+    // The portalled list takes the dark theme too: an option's text is legible.
+    await properties(page).getByRole('combobox', { name: 'Sink connection' }).click();
+    const none = page.getByRole('listbox').getByRole('option', { name: 'None', exact: true });
+    const optionColor = await none.evaluate((el) => getComputedStyle(el).color);
+    const optionBehind = await surfaceBehind(page, '.connection-picker__listbox [role="option"]');
+    expect(contrastRatio(optionColor, optionBehind.color)).toBeGreaterThanOrEqual(4.5);
     await expectQuiet(page, problems);
   });
 });
