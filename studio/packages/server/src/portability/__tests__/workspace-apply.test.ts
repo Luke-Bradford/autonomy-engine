@@ -778,6 +778,40 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     );
   });
 
+  it('#1477 — a description/annotations-only change applies as an update, and removing them clears them', () => {
+    const db = freshDb().db;
+    const conn = createConnection(db, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const tgt = freshDb().db;
+    applyWorkspace(tgt, 'local', snapshot(db), 'sha1', 'main');
+
+    updateConnection(db, conn.id, { description: 'Feed', annotations: ['prod', 'finance'] });
+    const r1 = applyWorkspace(tgt, 'local', snapshot(db), 'sha2', 'main');
+    expect(r1.applied.find((a) => a.kind === 'connection')?.action).toBe('updated');
+    expect(getConnectionByResourceId(tgt, 'local', conn.resourceId)).toMatchObject({
+      description: 'Feed',
+      annotations: ['prod', 'finance'],
+    });
+
+    // The file now carries neither key: the branch says "none", so they clear.
+    updateConnection(db, conn.id, { description: '', annotations: [] });
+    const r2 = applyWorkspace(tgt, 'local', snapshot(db), 'sha3', 'main');
+    expect(r2.applied.find((a) => a.kind === 'connection')?.action).toBe('updated');
+    expect(getConnectionByResourceId(tgt, 'local', conn.resourceId)).toMatchObject({
+      description: '',
+      annotations: [],
+    });
+
+    // Unchanged afterwards: an empty DB value equals the absent key.
+    const r3 = applyWorkspace(tgt, 'local', snapshot(db), 'sha4', 'main');
+    expect(r3.applied.find((a) => a.kind === 'connection')?.action).toBe('unchanged');
+  });
+
   it('updates a connection content edit and a pure rename independently (G3)', () => {
     const db = freshDb().db;
     const conn = createConnection(db, {

@@ -241,6 +241,21 @@ describe('connectionContentForm', () => {
     expect(connectionContentForm(a)).toBe(connectionContentForm(b));
   });
 
+  it('#1477 — an EMPTY description / annotation list equals the absent key (a pre-#1477 file)', () => {
+    const absent = connectionData();
+    delete (absent as { description?: string }).description;
+    delete (absent as { annotations?: string[] }).annotations;
+    expect(connectionContentForm(connectionData({ description: '', annotations: [] }))).toBe(
+      connectionContentForm(absent),
+    );
+  });
+
+  it('#1477 — DIFFERS when the description or annotations change', () => {
+    const base = connectionContentForm(connectionData());
+    expect(connectionContentForm(connectionData({ description: 'Feed' }))).not.toBe(base);
+    expect(connectionContentForm(connectionData({ annotations: ['prod'] }))).not.toBe(base);
+  });
+
   it('DIFFERS when config changes', () => {
     expect(connectionContentForm(connectionData({ config: { baseUrl: 'https://y' } }))).not.toBe(
       connectionContentForm(connectionData()),
