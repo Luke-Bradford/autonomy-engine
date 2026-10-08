@@ -394,7 +394,8 @@ list (a Copy mapping, HTTP headers, LLM messages, an output schema) render throu
   reach each control. A row-list column's header carries what the cell label said: its title, its
   format (`— number`, `— JSON`) and the required mark.
 - **A row is one line.** At compact density it is 32px (`--density-row-height`) of 28px controls. A
-  text cell is a one-line textarea that grows with its text.
+  text cell is a one-line textarea that grows with its text. The growing is CSS `field-sizing:
+  content`, which only Chromium supports. Elsewhere the cell stays one line and scrolls.
 - **A row's errors and advisories go on a notes row under it** (`RowNotes`, spanning the table), only
   when it has any, so they never widen a cell.
 - **A cell's `${}` and `ƒx` toggles show under the box only while the cell has focus**, or while their
