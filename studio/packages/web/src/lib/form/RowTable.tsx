@@ -85,3 +85,44 @@ export function RowNotes({ span, children }: { span: number; children: ReactNode
     </tr>
   );
 }
+
+/**
+ * #1477 — a list of authored rows with its frame: "None declared." when empty,
+ * otherwise the `RowTable`, then the Add button. Shared by the pipeline contract
+ * sections (`ContractSection`) and the annotation lists (`AnnotationRows`), so
+ * the empty state and the Add control are one thing, whatever section chrome
+ * (`DockSection`, `FormSection`) holds them. `addDisabled` is for a list with a
+ * write-schema limit.
+ */
+export function RowList({
+  columns,
+  label,
+  count,
+  addLabel,
+  onAdd,
+  addDisabled = false,
+  children,
+}: {
+  columns: readonly RowTableColumn[];
+  label: string;
+  count: number;
+  addLabel: string;
+  onAdd: () => void;
+  addDisabled?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <>
+      {count === 0 ? (
+        <p className="page-hint">None declared.</p>
+      ) : (
+        <RowTable columns={columns} label={label}>
+          {children}
+        </RowTable>
+      )}
+      <button type="button" onClick={onAdd} disabled={addDisabled}>
+        {addLabel}
+      </button>
+    </>
+  );
+}

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { ConnectionPublic, Dataset } from '@autonomy-studio/shared';
+import { MAX_ANNOTATIONS, type ConnectionPublic, type Dataset } from '@autonomy-studio/shared';
 import { ConnectionsPage } from './ConnectionsPage';
 import * as api from '../api/connections';
 import * as datasetsApi from '../api/datasets';
@@ -192,8 +192,6 @@ describe('ConnectionsPage', () => {
         name: 'Prod key',
         kind: 'openai_api',
         config: { model: 'gpt-4o' },
-        description: '',
-        annotations: [],
         secret: 'sk-secret',
       }),
     );
@@ -661,6 +659,38 @@ describe('ConnectionsPage', () => {
     await user.type(blank, 'finance');
     expect(blank).toHaveAttribute('aria-invalid', 'false');
     expect(within(form).queryByText(/An annotation cannot be empty/)).not.toBeInTheDocument();
+  });
+
+  it('#1477 — a rename sends neither field, so a stored tag the write rules refuse does not block it', async () => {
+    const user = userEvent.setup();
+    // A git file is read-tolerant: a case-duplicate can be stored.
+    listMock.mockResolvedValue([conn({ name: 'Editable', annotations: ['prod', 'Prod'] })]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Editable');
+
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    await user.clear(within(form).getByLabelText('Name'));
+    await user.type(within(form).getByLabelText('Name'), 'Renamed');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    const [, body] = updateMock.mock.calls[0]!;
+    expect(body).not.toHaveProperty('annotations');
+    expect(body).not.toHaveProperty('description');
+  });
+
+  it('#1477 — Add annotation stops at the write limit', async () => {
+    const user = userEvent.setup();
+    const full = Array.from({ length: MAX_ANNOTATIONS }, (_, i) => `tag${i}`);
+    listMock.mockResolvedValue([conn({ name: 'Editable', annotations: full })]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Editable');
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    expect(within(form).getByRole('button', { name: 'Add annotation' })).toBeDisabled();
+    await user.click(within(form).getByRole('button', { name: 'remove annotation 1' }));
+    expect(within(form).getByRole('button', { name: 'Add annotation' })).toBeEnabled();
   });
 
   it('#1477 — a padded annotation is flagged when its row is left, before any Save', async () => {

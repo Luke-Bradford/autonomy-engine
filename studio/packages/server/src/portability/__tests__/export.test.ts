@@ -10,6 +10,8 @@ import {
 import { NotFoundError } from '../../errors.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import { exportConnection, exportPipeline, exportTrigger } from '../export.js';
+import { importEnvelope } from '../import.js';
+import { listConnections } from '../../repo/connections.js';
 
 describe('exportPipeline', () => {
   it('exports the pipeline + all of its versions, with every node connectionId nulled', () => {
@@ -402,6 +404,44 @@ describe('exportPipeline', () => {
 });
 
 describe('exportConnection', () => {
+  it('#1477 — omits an empty description/annotations, and round-trips set ones through import', () => {
+    const { db } = freshDb();
+    const bare = createConnection(db, {
+      ownerId: 'local',
+      name: 'Bare',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const bareData = exportConnection(db, bare.id, 'local').data;
+    expect(bareData).not.toHaveProperty('description');
+    expect(bareData).not.toHaveProperty('annotations');
+
+    const tagged = createConnection(db, {
+      ownerId: 'local',
+      name: 'Tagged',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+      description: 'Feed',
+      annotations: ['prod'],
+    });
+    const envelope = exportConnection(db, tagged.id, 'local');
+    expect(envelope.data).toMatchObject({ description: 'Feed', annotations: ['prod'] });
+
+    importEnvelope(db, 'owner-b', envelope);
+    importEnvelope(db, 'owner-b', exportConnection(db, bare.id, 'local'));
+    const imported = listConnections(db, 'owner-b');
+    expect(imported.find((c) => c.name === 'Tagged')).toMatchObject({
+      description: 'Feed',
+      annotations: ['prod'],
+    });
+    expect(imported.find((c) => c.name === 'Bare')).toMatchObject({
+      description: '',
+      annotations: [],
+    });
+  });
+
   it('never includes secretRef, and sets requiresSecret true when one existed', () => {
     const { db } = freshDb();
     const secret = createSecret(db, { ref: 'secref_1', ciphertext: 'not-the-plaintext-cipher' });

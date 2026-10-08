@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ConnectionMetadataWriteShape,
   ConnectionKindSchema,
   ConnectionPublicSchema,
   ConnectionSchema,
@@ -9,6 +10,7 @@ import {
   connectionNotReadyReason,
   deriveSecretStatus,
 } from './connection.js';
+import { DESCRIPTION_MAX_CHARS, MAX_ANNOTATIONS, NewPipelineVersionSchema } from './pipeline.js';
 
 const validConnection = {
   id: 'conn_1',
@@ -84,6 +86,41 @@ describe('ConnectionSchema', () => {
     expect(() =>
       ConnectionSchema.parse({ ...validConnection, parameters: { model: true } }),
     ).toThrow();
+  });
+});
+
+describe('#1477 connection description + annotations', () => {
+  it('reads a row without them as no description and no annotations', () => {
+    const { description, annotations, ...older } = validConnection;
+    void description;
+    void annotations;
+    expect(ConnectionSchema.parse(older)).toMatchObject({ description: '', annotations: [] });
+  });
+
+  it('the write shape refuses an over-long description and one annotation too many', () => {
+    const { description, annotations } = ConnectionMetadataWriteShape;
+    expect(description.safeParse('x'.repeat(DESCRIPTION_MAX_CHARS)).success).toBe(true);
+    expect(description.safeParse('x'.repeat(DESCRIPTION_MAX_CHARS + 1)).success).toBe(false);
+    const tags = (n: number) => Array.from({ length: n }, (_, i) => `t${i}`);
+    expect(annotations.safeParse(tags(MAX_ANNOTATIONS)).success).toBe(true);
+    const over = annotations.safeParse(tags(MAX_ANNOTATIONS + 1));
+    expect(over.success).toBe(false);
+    expect(over.error?.issues[0]?.message).toBe(
+      `a connection can have at most ${MAX_ANNOTATIONS} annotations`,
+    );
+  });
+
+  it('the write shape leaves an absent field absent (no default through a PATCH)', () => {
+    expect(ConnectionMetadataWriteShape.description.parse(undefined)).toBeUndefined();
+    expect(ConnectionMetadataWriteShape.annotations.parse(undefined)).toBeUndefined();
+  });
+
+  it('the pipeline version keeps its own wording for the shared annotation limit', () => {
+    const tags = Array.from({ length: MAX_ANNOTATIONS + 1 }, (_, i) => `t${i}`);
+    const parsed = NewPipelineVersionSchema.shape.annotations.safeParse(tags);
+    expect(parsed.error?.issues[0]?.message).toBe(
+      `a pipeline can have at most ${MAX_ANNOTATIONS} annotations`,
+    );
   });
 });
 

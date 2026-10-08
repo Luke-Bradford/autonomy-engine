@@ -19,7 +19,7 @@ import {
   RemoveRowButton,
   RowActions,
   RowNotes,
-  RowTable,
+  RowList,
   type RowTableColumn,
 } from '../../lib/form/RowTable';
 import { OUTPUT_COLUMNS, PARAM_COLUMNS, VARIABLE_COLUMNS } from './contractColumns';
@@ -91,16 +91,9 @@ export function ContractSection({
 }) {
   return (
     <DockSection heading={heading} hint={hint}>
-      {count === 0 ? (
-        <p className="page-hint">None declared.</p>
-      ) : (
-        <RowTable columns={columns} label={heading}>
-          {children}
-        </RowTable>
-      )}
-      <button type="button" onClick={onAdd}>
-        {addLabel}
-      </button>
+      <RowList columns={columns} label={heading} count={count} addLabel={addLabel} onAdd={onAdd}>
+        {children}
+      </RowList>
     </DockSection>
   );
 }

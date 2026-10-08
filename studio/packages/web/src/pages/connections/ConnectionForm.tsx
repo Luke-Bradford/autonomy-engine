@@ -50,7 +50,12 @@ import { allowlistChanged, connectionAllowlistSubject } from '../overrideAllowli
 import { KindSelect } from '../../lib/KindName';
 import { CONNECTION_KIND_ICONS } from '../../lib/kindIcons';
 
-import { connectionFields, metadataChecks, type FormState } from './connectionFormState';
+import {
+  connectionFields,
+  metadataChanges,
+  metadataChecks,
+  type FormState,
+} from './connectionFormState';
 import { ProbeVerdict } from './ProbeVerdict';
 
 const KINDS = CONNECTION_KINDS;
@@ -155,10 +160,21 @@ export function ConnectionForm({
       ...nameCheck(form.name),
       ...configDraftErrors(jsonMode, { jsonText: form.jsonText, inputs: form.inputs }, fields),
       // #1477 — the write shape's own refusals, by row.
-      ...metadataChecks(form.description, form.annotations),
+      ...metadataChecks(metadataChanges(form)),
     }),
     // What the checks read, not `form` whole: a SECRET keystroke re-checks nothing.
-    [form.name, form.jsonText, form.inputs, form.description, form.annotations, jsonMode, fields],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the four metadata fields ARE what `metadataChanges` reads
+    [
+      form.name,
+      form.jsonText,
+      form.inputs,
+      form.description,
+      form.descriptionSeed,
+      form.annotations,
+      form.annotationsSeed,
+      jsonMode,
+      fields,
+    ],
   );
   /** What to call a field key in the summary; `undefined` for a key this form does not show. */
   const labelOf = useCallback(
@@ -357,9 +373,8 @@ export function ConnectionForm({
       name: form.name,
       kind: form.kind,
       config,
-      // #1477 — always sent: the form holds both whole, as the server stores them.
-      description: form.description,
-      annotations: form.annotations,
+      // #1477 — each only when edited, as `parameters` below.
+      ...metadataChanges(form),
       ...(form.secret !== '' ? { secret: form.secret } : {}),
       ...(allowlistChanged(form.parametersSeed, form.parameters)
         ? { parameters: form.parameters }

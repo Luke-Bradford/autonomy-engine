@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { MAX_ANNOTATIONS } from '@autonomy-studio/shared';
-import { RemoveRowButton, RowActions, RowNotes, RowTable, type RowTableColumn } from './RowTable';
+import { RemoveRowButton, RowActions, RowList, RowNotes, type RowTableColumn } from './RowTable';
 
 /** A resource's annotations: one text box a row. */
 const ANNOTATION_COLUMNS: readonly RowTableColumn[] = [{ key: 'annotation', header: 'Annotation' }];
@@ -39,42 +39,37 @@ export function AnnotationRows({
   field?: (index: number) => AnnotationRowField;
 }) {
   return (
-    <>
-      {annotations.length === 0 ? (
-        <p className="page-hint">None declared.</p>
-      ) : (
-        <RowTable columns={ANNOTATION_COLUMNS} label="Annotations">
-          {annotations.map((text, i) => {
-            const wiring = field?.(i);
-            return [
-              <tr key={`row-${i}`}>
-                <td>
-                  <input
-                    aria-label={`annotation ${i + 1}`}
-                    value={text}
-                    onChange={(e) => onUpdate(i, e.target.value)}
-                    {...wiring?.attrs}
-                  />
-                </td>
-                <RowActions>
-                  <RemoveRowButton
-                    label={`remove annotation ${i + 1}`}
-                    onRemove={() => onRemove(i)}
-                  />
-                </RowActions>
-              </tr>,
-              wiring?.error ? (
-                <RowNotes key={`notes-${i}`} span={ANNOTATION_COLUMNS.length + 1}>
-                  {wiring.error}
-                </RowNotes>
-              ) : null,
-            ];
-          })}
-        </RowTable>
-      )}
-      <button type="button" onClick={onAdd} disabled={annotations.length >= MAX_ANNOTATIONS}>
-        Add annotation
-      </button>
-    </>
+    <RowList
+      columns={ANNOTATION_COLUMNS}
+      label="Annotations"
+      count={annotations.length}
+      addLabel="Add annotation"
+      onAdd={onAdd}
+      addDisabled={annotations.length >= MAX_ANNOTATIONS}
+    >
+      {annotations.map((text, i) => {
+        const wiring = field?.(i);
+        return [
+          <tr key={`row-${i}`}>
+            <td>
+              <input
+                aria-label={`annotation ${i + 1}`}
+                value={text}
+                onChange={(e) => onUpdate(i, e.target.value)}
+                {...wiring?.attrs}
+              />
+            </td>
+            <RowActions>
+              <RemoveRowButton label={`remove annotation ${i + 1}`} onRemove={() => onRemove(i)} />
+            </RowActions>
+          </tr>,
+          wiring?.error ? (
+            <RowNotes key={`notes-${i}`} span={ANNOTATION_COLUMNS.length + 1}>
+              {wiring.error}
+            </RowNotes>
+          ) : null,
+        ];
+      })}
+    </RowList>
   );
 }
