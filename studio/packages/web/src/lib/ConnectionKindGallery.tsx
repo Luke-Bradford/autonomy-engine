@@ -1,6 +1,11 @@
 import { useId, useState, type RefObject } from 'react';
-import { CONNECTION_KIND_DESCRIPTIONS, type ConnectionKind } from '@autonomy-studio/shared';
+import {
+  CONNECTION_KIND_DESCRIPTIONS,
+  CONNECTION_KIND_LABELS,
+  type ConnectionKind,
+} from '@autonomy-studio/shared';
 import { ConnectionKindName } from './KindName';
+import { detectConnection, type DetectedConnection } from './detectConnection';
 import { DrawerShell } from './form/DrawerShell';
 import { connectionKindGroups, type ConnectionKindDisabledReason } from './connectionKindGroups';
 
@@ -18,9 +23,12 @@ import { connectionKindGroups, type ConnectionKindDisabledReason } from './conne
  */
 export function ConnectionKindGallery({
   onPick,
+  onDetect,
   disabledReason,
 }: {
   onPick: (kind: ConnectionKind) => void;
+  /** Given, the gallery offers paste-to-detect above the kinds. */
+  onDetect?: (detected: DetectedConnection) => void;
   disabledReason?: ConnectionKindDisabledReason;
 }) {
   const [query, setQuery] = useState('');
@@ -30,6 +38,9 @@ export function ConnectionKindGallery({
 
   return (
     <div className="kind-gallery">
+      {onDetect !== undefined && (
+        <PasteToDetect onDetect={onDetect} disabledReason={disabledReason} />
+      )}
       <div className="kind-gallery__search" role="search" aria-label="Connection kinds">
         <label htmlFor={searchId} className="visually-hidden">
           Search connection kinds
@@ -40,6 +51,7 @@ export function ConnectionKindGallery({
           id={searchId}
           type="text"
           placeholder="Search"
+          data-autofocus
           autoComplete="off"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -94,17 +106,88 @@ export function ConnectionKindGallery({
 }
 
 /**
+ * #1477 — the shortcut above the kinds: paste a connection string, URL or
+ * path, and the form opens on the kind it implies (`detectConnection`). A
+ * kind refused here is reported, not opened, as its tile would be. The field
+ * is cleared once it is used, because a postgres URL can carry a password.
+ */
+function PasteToDetect({
+  onDetect,
+  disabledReason,
+}: {
+  onDetect: (detected: DetectedConnection) => void;
+  disabledReason?: ConnectionKindDisabledReason;
+}) {
+  const [text, setText] = useState('');
+  const [problem, setProblem] = useState<string | null>(null);
+  const inputId = useId();
+  const problemId = useId();
+
+  const use = () => {
+    const detected = detectConnection(text);
+    if (detected === null) {
+      setProblem('Not a path or URL studio recognises. Pick a kind below');
+      return;
+    }
+    const reason = disabledReason?.(detected.kind);
+    if (reason !== undefined) {
+      setProblem(`${CONNECTION_KIND_LABELS[detected.kind]}: ${reason}`);
+      return;
+    }
+    setText('');
+    setProblem(null);
+    onDetect(detected);
+  };
+
+  return (
+    <div className="kind-gallery__paste">
+      <label htmlFor={inputId} className="visually-hidden">
+        Paste a path or URL
+      </label>
+      <input
+        id={inputId}
+        type="text"
+        placeholder="Paste a path or URL"
+        title="A postgres:// URL, an http(s):// URL, a SQLite file, or a folder or file path"
+        autoComplete="off"
+        spellCheck={false}
+        value={text}
+        aria-describedby={problem !== null ? problemId : undefined}
+        onChange={(e) => {
+          setText(e.target.value);
+          setProblem(null);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            use();
+          }
+        }}
+      />
+      <button type="button" onClick={use} disabled={text.trim() === ''}>
+        Use
+      </button>
+      <p id={problemId} role="status" className="kind-gallery__reason">
+        {problem}
+      </p>
+    </div>
+  );
+}
+
+/**
  * The gallery as the first step of a "New connection" drawer. Not a `<form>`:
  * picking a kind IS the act (a lone text field in a form would submit on
  * Enter), and there is nothing to lose, so no unsaved-changes guard.
  */
 export function ConnectionKindDrawer({
   onPick,
+  onDetect,
   onClose,
   returnFocusTo,
   disabledReason,
 }: {
   onPick: (kind: ConnectionKind) => void;
+  onDetect?: (detected: DetectedConnection) => void;
   onClose: () => void;
   returnFocusTo?: RefObject<HTMLElement | null>;
   disabledReason?: ConnectionKindDisabledReason;
@@ -117,7 +200,11 @@ export function ConnectionKindDrawer({
       returnFocusTo={returnFocusTo}
     >
       <div className="form-drawer-body">
-        <ConnectionKindGallery onPick={onPick} disabledReason={disabledReason} />
+        <ConnectionKindGallery
+          onPick={onPick}
+          onDetect={onDetect}
+          disabledReason={disabledReason}
+        />
       </div>
       <div className="form-drawer-footer">
         <div className="form-actions">

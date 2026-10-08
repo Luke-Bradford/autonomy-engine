@@ -23,7 +23,8 @@ const SQLITE_EXTENSIONS = new Set(['db', 'sqlite', 'sqlite3', 'db3']);
 /**
  * Data files: a path ending in one is a file, so the fs root is its folder.
  * Any other last segment is taken as the folder itself, so a folder with a
- * dot in its name is never widened to its parent.
+ * dot in its name is never widened to its parent. A guess either way: the
+ * roots are on the form, and Test connection shows a wrong one.
  */
 const DATA_FILE_EXTENSIONS = new Set([
   'csv',
@@ -42,7 +43,12 @@ const DATA_FILE_EXTENSIONS = new Set([
 
 const WINDOWS_ABSOLUTE = /^[A-Za-z]:[\\/]/;
 
-/** What a pasted text describes, or `null` when it is none of the above. */
+/**
+ * What a pasted text describes, or `null` when it is none of the above.
+ * Deliberately not inferred: the LLM kinds (an Ollama or OpenAI endpoint is
+ * read as HTTP; the kind stays editable). A Windows path is read on any
+ * platform; the server decides whether it is absolute where it runs.
+ */
 export function detectConnection(text: string): DetectedConnection | null {
   let value = text.trim();
   // Windows "Copy as path" wraps the path in double quotes.
@@ -56,37 +62,42 @@ export function detectConnection(text: string): DetectedConnection | null {
   if (scheme === 'http' || scheme === 'https') return fromHttpUrl(value);
   if (scheme === 'file') {
     const url = parseUrl(value);
-    if (url === null || url.host !== '') return null;
+    const path = url === null || url.host !== '' ? null : decode(url.pathname);
     // `file:///C:/data` has the pathname `/C:/data`.
-    return fromPath(decode(url.pathname).replace(/^\/(?=[A-Za-z]:\/)/, ''));
+    return path === null ? null : fromPath(path.replace(/^\/(?=[A-Za-z]:\/)/, ''));
   }
   return fromPath(value);
 }
 
 function fromPostgresUrl(value: string): DetectedConnection | null {
   const url = parseUrl(value);
-  if (url === null || url.hostname === '') return null;
-  const config: Record<string, unknown> = { host: url.hostname.replace(/^\[(.*)\]$/, '$1') };
-  if (url.port !== '') config.port = Number(url.port);
+  if (url === null) return null;
   const database = decode(url.pathname.replace(/^\//, ''));
+  const user = decode(url.username);
+  const secret = decode(url.password);
+  // A stray `%` is not a value to guess at, least of all in a password.
+  if (database === null || user === null || secret === null) return null;
+  const config: Record<string, unknown> = {};
+  // One host only: a multi-host list (`h1,h2`) or a socket URL (`postgres:///db`)
+  // leaves Host for the author, and the form says it is required.
+  const host = url.hostname.replace(/^\[(.*)\]$/, '$1');
+  if (host !== '' && !host.includes(',')) config.host = host;
+  if (url.port !== '') config.port = Number(url.port);
   if (database !== '') config.database = database;
-  if (url.username !== '') config.user = decode(url.username);
+  if (user !== '') config.user = user;
   const sslmode = PostgresSslModeSchema.safeParse(url.searchParams.get('sslmode'));
   if (sslmode.success) config.sslmode = sslmode.data;
-  return { kind: 'postgres', config, secret: decode(url.password) };
+  if (Object.keys(config).length === 0) return null;
+  return { kind: 'postgres', config, secret };
 }
 
 function fromHttpUrl(value: string): DetectedConnection | null {
   const url = parseUrl(value);
   if (url === null || url.hostname === '') return null;
-  // An http connection's secret is a Bearer token, not basic-auth user info,
-  // so the user info is dropped rather than carried into the stored config.
-  const hadUserInfo = url.username !== '' || url.password !== '';
-  url.username = '';
-  url.password = '';
-  // `href` normalises: keep the author's text when it had no user info.
-  const baseUrl = hadUserInfo ? url.href : value;
-  return { kind: 'http', config: { baseUrl }, secret: '' };
+  // An http connection's secret is a Bearer token, so user info is dropped,
+  // and so are the query and fragment (`?api_key=…`): the base URL is stored
+  // and shown in the clear.
+  return { kind: 'http', config: { baseUrl: `${url.origin}${url.pathname}` }, secret: '' };
 }
 
 function fromPath(value: string): DetectedConnection | null {
@@ -117,10 +128,10 @@ function parseUrl(value: string): URL | null {
   }
 }
 
-function decode(value: string): string {
+function decode(value: string): string | null {
   try {
     return decodeURIComponent(value);
   } catch {
-    return value;
+    return null;
   }
 }

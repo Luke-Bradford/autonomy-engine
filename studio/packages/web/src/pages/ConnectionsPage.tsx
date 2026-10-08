@@ -24,7 +24,12 @@ import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 
 import { ConnectionForm } from './connections/ConnectionForm';
-import { blankForm, formForEdit, savePayloadSignature } from './connections/connectionFormState';
+import {
+  blankForm,
+  detectedForm,
+  formForEdit,
+  savePayloadSignature,
+} from './connections/connectionFormState';
 /**
  * Connections page: the first MVP-bar step ("Add a Connection"). Full CRUD
  * over `/api/connections`. Secrets are write-only end to end — the list never
@@ -372,6 +377,10 @@ export function ConnectionsPage() {
             onPick={(kind) => {
               setChoosingKind(false);
               openForm(blankForm(kind));
+            }}
+            onDetect={(detected) => {
+              setChoosingKind(false);
+              openForm(detectedForm(detected));
             }}
           />
         )}

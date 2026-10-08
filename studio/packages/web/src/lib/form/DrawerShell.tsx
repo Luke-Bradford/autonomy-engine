@@ -41,11 +41,17 @@ export function DrawerShell({
   const rootRef = useRef<HTMLDivElement>(null);
 
   // On open, focus the first field the operator can change: a read-only Name
-  // on an edit form is information, not where typing goes. On close, hand
-  // focus back to whatever opened the drawer (the "New"/"Edit" button).
+  // on an edit form is information, not where typing goes. A field marked
+  // `data-autofocus` wins, for a body whose first field is a shortcut rather
+  // than where typing usually goes. On close, hand focus back to whatever
+  // opened the drawer (the "New"/"Edit" button).
   useEffect(() => {
     const opener = returnFocusTo?.current ?? document.activeElement;
-    rootRef.current?.querySelector<HTMLElement>(FIRST_FIELD)?.focus();
+    const root = rootRef.current;
+    (
+      root?.querySelector<HTMLElement>('[data-autofocus]') ??
+      root?.querySelector<HTMLElement>(FIRST_FIELD)
+    )?.focus();
     return () => {
       if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
     };

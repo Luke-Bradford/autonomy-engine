@@ -34,7 +34,21 @@ describe('detectConnection (#1477 paste-to-detect)', () => {
     });
   });
 
-  it('reads an http(s) URL as the base URL, dropping any user info', () => {
+  it('leaves Host for the author on a multi-host or socket URL, and refuses a stray %', () => {
+    expect(detectConnection('postgres://u@h1,h2/db')).toEqual({
+      kind: 'postgres',
+      config: { database: 'db', user: 'u' },
+      secret: '',
+    });
+    expect(detectConnection('postgres:///db?host=/tmp')).toEqual({
+      kind: 'postgres',
+      config: { database: 'db' },
+      secret: '',
+    });
+    expect(detectConnection('postgres://u:50%off@h/db')).toBeNull();
+  });
+
+  it('reads an http(s) URL as the base URL, dropping user info, query and fragment', () => {
     expect(detectConnection('https://api.example.com/v2/')).toEqual({
       kind: 'http',
       config: { baseUrl: 'https://api.example.com/v2/' },
@@ -44,6 +58,12 @@ describe('detectConnection (#1477 paste-to-detect)', () => {
     expect(d).toEqual({
       kind: 'http',
       config: { baseUrl: 'https://api.example.com/v2' },
+      secret: '',
+    });
+    expect(JSON.stringify(d)).not.toContain('hunter2');
+    expect(detectConnection('http://localhost:11434/v1?api_key=K#top')).toEqual({
+      kind: 'http',
+      config: { baseUrl: 'http://localhost:11434/v1' },
       secret: '',
     });
   });
@@ -98,6 +118,11 @@ describe('detectConnection (#1477 paste-to-detect)', () => {
       config: { roots: ['C:\\'] },
       secret: '',
     });
+    expect(detectConnection('file:///C:/data/x.csv')).toEqual({
+      kind: 'fs',
+      config: { roots: ['C:/data'] },
+      secret: '',
+    });
     expect(detectConnection("  'file:///srv/my%20files/'  ")).toEqual({
       kind: 'fs',
       config: { roots: ['/srv/my files'] },
@@ -116,6 +141,9 @@ describe('detectConnection (#1477 paste-to-detect)', () => {
       'not a url',
       '/srv/a\n/srv/b',
       'postgres://',
+      '\\\\srv\\share',
+      'file://server/share/x.csv',
+      'file:///srv/%zz',
     ]) {
       expect(detectConnection(text), text).toBeNull();
     }

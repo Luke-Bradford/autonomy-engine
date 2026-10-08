@@ -87,4 +87,55 @@ describe('ConnectionKindGallery (#1477)', () => {
     expect(screen.getByText('No connection kinds match')).toBeInTheDocument();
     expect(screen.queryAllByRole('button')).toHaveLength(0);
   });
+
+  it('offers paste-to-detect only when asked, and opens the detected kind', async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<ConnectionKindGallery onPick={() => {}} />);
+    expect(screen.queryByRole('textbox', { name: 'Paste a path or URL' })).toBeNull();
+    unmount();
+
+    const onDetect = vi.fn();
+    const onPick = vi.fn();
+    render(<ConnectionKindGallery onPick={onPick} onDetect={onDetect} />);
+    const paste = screen.getByRole('textbox', { name: 'Paste a path or URL' });
+    await user.click(paste);
+    await user.paste('postgres://etl:pw@db/sales');
+    await user.keyboard('{Enter}');
+    expect(onDetect).toHaveBeenCalledWith({
+      kind: 'postgres',
+      config: { host: 'db', database: 'sales', user: 'etl' },
+      secret: 'pw',
+    });
+    // Cleared: the text held a password.
+    expect(paste).toHaveValue('');
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
+  it('says when a paste is not recognised, and refuses a kind this context cannot use', async () => {
+    const user = userEvent.setup();
+    const onDetect = vi.fn();
+    render(
+      <ConnectionKindGallery
+        onPick={() => {}}
+        onDetect={onDetect}
+        disabledReason={(k) => (k === 'fs' ? "Can't be a Copy sink yet" : undefined)}
+      />,
+    );
+    const paste = screen.getByRole('textbox', { name: 'Paste a path or URL' });
+    const use = screen.getByRole('button', { name: 'Use' });
+    expect(use).toBeDisabled();
+
+    await user.type(paste, 'orders.csv');
+    await user.click(use);
+    expect(paste).toHaveAccessibleDescription(
+      'Not a path or URL studio recognises. Pick a kind below',
+    );
+
+    await user.clear(paste);
+    await user.type(paste, '/srv/landing');
+    await user.click(use);
+    expect(screen.getByRole('status')).toHaveTextContent("File system: Can't be a Copy sink yet");
+    expect(paste).toHaveValue('/srv/landing');
+    expect(onDetect).not.toHaveBeenCalled();
+  });
 });
