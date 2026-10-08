@@ -1,4 +1,3 @@
-import { nodeMenuAction } from './support/panels';
 import { expect, test, type Page } from '@playwright/test';
 import { openCanvas } from './support/canvas';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
@@ -10,6 +9,7 @@ import {
   seedSelectedEdge,
   selectEdge,
 } from './support/canvasGraph';
+import { nodeMenuAction } from './support/panels';
 
 /**
  * #992 + #997 — the canvas is QUIET AT REST, in a real browser.

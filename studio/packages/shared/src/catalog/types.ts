@@ -92,7 +92,7 @@ export interface ActivityTab {
   /**
    * The config keys this tab shows, IN THIS ORDER — required before optional.
    * Every key of the entry's `configSchema` is on exactly one tab, and nothing
-   * else is (pinned by `registry.test.ts`), so this list cannot drift from the
+   * else is (pinned by `activity-tabs.test.ts`), so this list cannot drift from the
    * schema the way a hand-kept field list otherwise would (the U7 objection).
    */
   readonly fields: readonly string[];
