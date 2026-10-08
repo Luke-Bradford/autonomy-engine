@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLatestSearchParams } from '../lib/useLatestSearchParams';
 import { useNavigate } from 'react-router';
 import { ToggleButton } from '@fluentui/react-components';
+import { MAX_BUNDLE_ITEMS } from '@autonomy-studio/shared';
 import { useStore } from 'zustand';
 import type {
   Pipeline,
@@ -13,7 +14,7 @@ import { useBusyAction } from '../hooks/useBusyAction';
 import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus';
 import { messageOf } from '../api/client';
-import { downloadPipelineExport } from '../api/pipelineExport';
+import { downloadPipelineExport, downloadPipelinesBundle } from '../api/pipelineExport';
 import {
   archiveConfirmMessage,
   archivePipeline,
@@ -664,6 +665,41 @@ export function PipelinesPage({
       });
   const folderOptions = useMemo(() => folderOptionsOf(base), [base]);
 
+  /* #1586 — the toolbar's Export: the rows SHOWN, in their shown order, as one
+     file `POST /api/import` reads back. Only over a list known to be whole —
+     the rule "No pipelines match" follows — so not while run facts hold rows
+     back and not over a list still loading or failed: the file would quietly
+     be a different set from the one on screen. The reason it waits is its
+     tooltip. */
+  const { active: bundling, run: runBundle } = useBusyAction();
+  const listWhole = showArchived
+    ? archivedStatus === 'ready' && !archivedLoading
+    : status === 'ready';
+  const exportWaits: string | null =
+    bundling.size > 0
+      ? 'Exporting…'
+      : !listWhole || factsStatus !== 'ready'
+        ? 'Waiting for the list to load'
+        : rows.length === 0
+          ? 'No pipelines shown'
+          : rows.length > MAX_BUNDLE_ITEMS
+            ? `Over ${MAX_BUNDLE_ITEMS} shown — filter to fewer`
+            : null;
+  const onExportShown = () => {
+    if (exportWaits !== null) return;
+    const ids = rows.map((p) => p.id);
+    void runBundle('shown', async () => {
+      setActionMsg(null);
+      try {
+        await downloadPipelinesBundle(ids);
+      } catch (err) {
+        setActionMsg(
+          `Could not export ${ids.length} pipeline${ids.length === 1 ? '' : 's'}: ${messageOf(err)}`,
+        );
+      }
+    });
+  };
+
   /* Open last run: the summary's newest run. Not offered before the summaries
      answer, and not for a pipeline that has never run. */
   const lastRunAction = (p: Pipeline) => {
@@ -753,6 +789,14 @@ export function PipelinesPage({
             onClick={(e) => openFromToolbar(e.currentTarget, { kind: 'import' })}
           >
             Import
+          </button>
+          <button
+            type="button"
+            aria-disabled={exportWaits !== null}
+            title={exportWaits ?? `Export the ${rows.length} shown as one importable file`}
+            onClick={onExportShown}
+          >
+            Export
           </button>
         </div>
       </div>
