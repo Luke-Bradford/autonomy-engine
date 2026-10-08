@@ -1,0 +1,127 @@
+import { useId, useState, type RefObject } from 'react';
+import { CONNECTION_KIND_DESCRIPTIONS, type ConnectionKind } from '@autonomy-studio/shared';
+import { ConnectionKindName } from './KindName';
+import { DrawerShell } from './form/DrawerShell';
+import { connectionKindGroups, type ConnectionKindDisabledReason } from './connectionKindGroups';
+
+/**
+ * #1477 — ADF's "New linked service" step for studio: every connection kind,
+ * grouped and searchable, picked BEFORE the form opens. The ONE gallery every
+ * "new connection" entry point uses (Manage → Connections now; the activity
+ * Source/Sink pickers next), so a kind added to the enum appears everywhere.
+ *
+ * A kind that cannot be used where the gallery was opened is shown disabled
+ * with its reason, not hidden. `aria-disabled` rather than `disabled`, so the
+ * tile stays focusable and its reason can be read; the click is refused here.
+ * The kind's description is the tile's tooltip and accessible description,
+ * not text on the page (labels, not prose).
+ */
+export function ConnectionKindGallery({
+  onPick,
+  disabledReason,
+}: {
+  onPick: (kind: ConnectionKind) => void;
+  disabledReason?: ConnectionKindDisabledReason;
+}) {
+  const [query, setQuery] = useState('');
+  const searchId = useId();
+  const idBase = useId();
+  const groups = connectionKindGroups(query, disabledReason);
+
+  return (
+    <div className="kind-gallery">
+      <label className="kind-gallery__search" htmlFor={searchId} role="search">
+        <span className="visually-hidden">Search connection kinds</span>
+        {/* `text`, not `search`: a search box clears itself on Escape, which
+            must close the drawer instead. */}
+        <input
+          id={searchId}
+          type="text"
+          placeholder="Search"
+          autoComplete="off"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </label>
+      {groups.length === 0 && <p className="kind-gallery__empty">No connection kinds match</p>}
+      {groups.map((group) => (
+        <section
+          key={group.key}
+          className="kind-gallery__group"
+          aria-labelledby={`${idBase}-${group.key}`}
+        >
+          <h4 id={`${idBase}-${group.key}`}>{group.label}</h4>
+          <ul className="kind-gallery__tiles">
+            {group.tiles.map(({ kind, disabledReason: reason }) => {
+              const describedBy = `${idBase}-${kind}-d`;
+              return (
+                <li key={kind}>
+                  <button
+                    type="button"
+                    className="kind-gallery__tile"
+                    title={CONNECTION_KIND_DESCRIPTIONS[kind]}
+                    aria-disabled={reason !== undefined ? true : undefined}
+                    aria-describedby={describedBy}
+                    onClick={() => {
+                      if (reason === undefined) onPick(kind);
+                    }}
+                  >
+                    <ConnectionKindName kind={kind} />
+                  </button>
+                  {/* Beside the button, not in it: text inside would join the
+                      button's name, and the name is the kind. */}
+                  {reason !== undefined ? (
+                    <span id={describedBy} className="kind-gallery__reason">
+                      {reason}
+                    </span>
+                  ) : (
+                    <span id={describedBy} className="visually-hidden">
+                      {CONNECTION_KIND_DESCRIPTIONS[kind]}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The gallery as the first step of a "New connection" drawer. Not a `<form>`:
+ * picking a kind IS the act (a lone text field in a form would submit on
+ * Enter), and there is nothing to lose, so no unsaved-changes guard.
+ */
+export function ConnectionKindDrawer({
+  onPick,
+  onClose,
+  returnFocusTo,
+  disabledReason,
+}: {
+  onPick: (kind: ConnectionKind) => void;
+  onClose: () => void;
+  returnFocusTo?: RefObject<HTMLElement | null>;
+  disabledReason?: ConnectionKindDisabledReason;
+}) {
+  return (
+    <DrawerShell
+      title="New connection"
+      onEscape={onClose}
+      onClose={onClose}
+      returnFocusTo={returnFocusTo}
+    >
+      <div className="form-drawer-body">
+        <ConnectionKindGallery onPick={onPick} disabledReason={disabledReason} />
+      </div>
+      <div className="form-drawer-footer">
+        <div className="form-actions">
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </DrawerShell>
+  );
+}
