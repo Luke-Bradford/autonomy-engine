@@ -9,7 +9,7 @@ import { connectionPickerGroups } from './bindingPickers';
 
 /**
  * #1477 OR29 slice 5b — one connection binding on an activity: the select, then
- * Test and ＋ New beside it, as ADF's linked-service picker has them.
+ * Test and New beside it, as ADF's linked-service picker has them.
  *
  * Every connection is listed, grouped by kind; a kind this side refuses is
  * listed disabled with the reason (`connectionPickerGroups`). The option text
@@ -112,7 +112,7 @@ export function ConnectionPicker({
                 aria-label={`New ${noun}`}
                 onClick={(e) => onNew(e.currentTarget)}
               >
-                ＋ New
+                New
               </button>
             )}
           </div>

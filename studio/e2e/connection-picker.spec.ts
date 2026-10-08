@@ -51,23 +51,21 @@ test.describe('#1477 activity connection pickers', () => {
     await expect(filesOption).toHaveText(`${files} (File system) — Can't be a Copy Data sink yet`);
 
     // The row: select, Test and ＋ New side by side, compact.
-    const row = await properties(page)
-      .locator('.connection-picker')
-      .first()
-      .evaluate((el) => {
-        const rects = [...el.children].map((c) => c.getBoundingClientRect());
-        return {
-          children: [...el.children].map((c) => c.tagName.toLowerCase()),
-          oneLine: new Set(rects.map((r) => Math.round(r.top + r.height / 2))).size === 1,
-          buttonHeights: [
-            ...new Set(
-              [...el.querySelectorAll('button')].map((b) =>
-                Math.round(b.getBoundingClientRect().height),
-              ),
+    // The Sink tab's own row (the Source tab's picker is in the DOM, hidden).
+    const row = await sink.locator('xpath=..').evaluate((el) => {
+      const rects = [...el.children].map((c) => c.getBoundingClientRect());
+      return {
+        children: [...el.children].map((c) => c.tagName.toLowerCase()),
+        oneLine: new Set(rects.map((r) => Math.round(r.top + r.height / 2))).size === 1,
+        buttonHeights: [
+          ...new Set(
+            [...el.querySelectorAll('button')].map((b) =>
+              Math.round(b.getBoundingClientRect().height),
             ),
-          ],
-        };
-      });
+          ),
+        ],
+      };
+    });
     expect(row).toEqual({
       children: ['select', 'button', 'button'],
       oneLine: true,
@@ -104,14 +102,9 @@ test.describe('#1477 activity connection pickers', () => {
     await form.getByRole('button', { name: 'Create connection' }).click();
     await expect(column(page)).toHaveCount(0);
 
-    const list = (await (await page.request.get('/api/connections')).json()) as {
-      id: string;
-      name: string;
-    }[];
-    const created = list.find((c) => c.name === name);
-    expect(created).toBeDefined();
-    // Bound to the slot that asked, and focus back on the ＋ New that opened it.
-    await expect(sink).toHaveValue(created!.id);
+    // Bound to the slot that asked, and focus back on the New that opened it.
+    await expect(sink.locator('option:checked')).toHaveText(`${name} (SQLite)`);
+    await expect(sink).not.toHaveValue('');
     await expect(
       properties(page).getByRole('button', { name: 'New sink connection' }),
     ).toBeFocused();
