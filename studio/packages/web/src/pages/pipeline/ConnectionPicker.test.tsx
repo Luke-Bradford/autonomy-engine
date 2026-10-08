@@ -219,12 +219,27 @@ describe('ConnectionPicker (#1477 slice 5b)', () => {
     it('filters on what is typed, by name or location', () => {
       render(<Harness connections={MIXED} />);
       search('beta.sql');
+      expect(picker()).toHaveValue('beta.sql');
       expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual([
         'None',
         'Beta/srv/beta.sqlite',
       ]);
       search('zzz');
       expect(screen.getByRole('option', { name: 'No connections match' })).toBeInTheDocument();
+    });
+
+    it('typing a search is not an unbind, and closing the list restores the binding', () => {
+      const onPick = vi.fn();
+      render(<Harness initial="a" connections={MIXED} onPick={onPick} />);
+      // Text that matches nothing, then nothing at all: each is where Fluent
+      // clears its own selection, which must not reach the binding.
+      search('zzz');
+      expect(picker()).toHaveValue('zzz');
+      search('');
+      expect(onPick).not.toHaveBeenCalled();
+      fireEvent.keyDown(picker(), { key: 'Escape' });
+      expect(picker()).toHaveValue('Alpha (SQLite)');
+      expect(onPick).not.toHaveBeenCalled();
     });
 
     it('a pick ends the search: the picker reads the new binding', () => {
