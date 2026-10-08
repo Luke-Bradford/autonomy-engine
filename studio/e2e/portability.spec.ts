@@ -180,9 +180,7 @@ test.describe('#959 portability', () => {
     envelope.data.versions[0]!.nodes[0]!.config.mode = 'truncate'; // history, not the head
 
     await gotoPipelines(page);
-    await (
-      await openImportDrawer(page)
-    ).getByLabel('Export file').setInputFiles({
+    await (await openImportDrawer(page)).getByLabel('Export file').setInputFiles({
       name: 'old-history.json',
       mimeType: 'application/json',
       buffer: Buffer.from(JSON.stringify(envelope)),

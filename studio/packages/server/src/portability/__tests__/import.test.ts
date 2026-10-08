@@ -1495,9 +1495,9 @@ describe('importEnvelope: history saved before #1480 (#1492)', () => {
     createPipelineVersion(db, doc(pipeline.id, 'append'));
     insertLegacyVersion(db, doc(pipeline.id, 'truncate'));
 
-    expect(() =>
-      importEnvelope(db, 'owner-b', exportPipeline(db, pipeline.id, 'owner-a')),
-    ).toThrow(InvalidPipelineDocError);
+    expect(() => importEnvelope(db, 'owner-b', exportPipeline(db, pipeline.id, 'owner-a'))).toThrow(
+      InvalidPipelineDocError,
+    );
     expect(listPipelines(db, 'owner-b')).toEqual([]);
   });
 

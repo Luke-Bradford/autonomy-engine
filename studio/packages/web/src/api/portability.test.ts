@@ -224,7 +224,12 @@ describe('describeAttention', () => {
     expect(one).toContain("node 'load': config.mode: bad");
     expect(one).not.toMatch(/more\)/);
     expect(
-      describeAttention({ type: 'unrunnableVersion', version: 1, issues: ['a', 'b'], totalIssues: 5 }),
+      describeAttention({
+        type: 'unrunnableVersion',
+        version: 1,
+        issues: ['a', 'b'],
+        totalIssues: 5,
+      }),
     ).toContain('a; b (and 3 more)');
   });
 });
