@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ISSUE_LIST_CAP } from '@autonomy-studio/shared';
 import { ApiError } from './client';
 import {
   EnvelopeParseError,
@@ -223,14 +224,16 @@ describe('describeAttention', () => {
     expect(one).toMatch(/^Version 3 cannot run/);
     expect(one).toContain("node 'load': config.mode: bad");
     expect(one).not.toMatch(/more/);
+    // A capped list is the first ISSUE_LIST_CAP; the tail states the rest.
+    const capped = Array.from({ length: ISSUE_LIST_CAP }, (_, k) => `issue ${k}`);
     expect(
       describeAttention({
         type: 'unrunnableVersion',
         version: 1,
-        issues: ['a', 'b'],
-        totalIssues: 5,
+        issues: capped,
+        totalIssues: ISSUE_LIST_CAP + 3,
       }),
-    ).toContain('a; b; …and 3 more');
+    ).toContain(`issue ${ISSUE_LIST_CAP - 1}; …and 3 more`);
   });
 });
 
