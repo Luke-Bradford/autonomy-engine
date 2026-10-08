@@ -611,6 +611,10 @@ describe('PipelinePanel — declarations are a compact table (#1477 OR29)', () =
     // The headers say what each cell is; the cells carry no label text of their own.
     expect(table.querySelector('tbody label:not(.contract-check)')).toBeNull();
     expect(screen.getByRole('textbox', { name: 'param 2 name' })).toHaveValue('b');
+    // The Default column's hint is in the section's `?` now.
+    expect(screen.getByRole('region', { name: 'Params' })).toHaveAccessibleDescription(
+      /Leave a default blank for no default\./,
+    );
   });
 
   it("a row's notes sit on a row of their own, spanning the table, and only when there are any", () => {

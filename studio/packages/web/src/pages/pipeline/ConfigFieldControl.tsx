@@ -21,7 +21,12 @@ import { useCaretInsert } from './useCaretInsert';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { JsonEditor } from '../../lib/form/JsonEditor';
 import { RequiredMark } from '../../lib/form/RequiredMark';
-import { RowTable, type RowTableColumn } from '../../lib/form/RowTable';
+import {
+  RemoveRowButton,
+  RowActions,
+  RowTable,
+  type RowTableColumn,
+} from '../../lib/form/RowTable';
 import { HelpDisclosure } from '../../lib/HelpDisclosure';
 import { FieldError } from '../../lib/form/FieldError';
 import { fieldAttrs } from '../../lib/form/fieldValidation';
@@ -731,7 +736,8 @@ export function ObjectListControl({
       {...checked}
       ref={groupRef}
     >
-      <span className="object-list-label">
+      {/* A `div`: the `?` is a `<details>`, which a span may not hold. */}
+      <div className="object-list-label">
         <span id={labelId}>{label}</span>
         {required && <RequiredMark />}
         {help !== undefined && (
@@ -739,7 +745,7 @@ export function ObjectListControl({
             {help.body}
           </HelpDisclosure>
         )}
-      </span>
+      </div>
       {rows.length === 0 ? <p className="page-hint">No rows.</p> : null}
       {field.recordValue === 'secret' ? (
         <p className="page-hint">
@@ -782,13 +788,12 @@ export function ObjectListControl({
                   </td>
                 );
               })}
-              <td className="row-table__actions">
+              <RowActions>
                 <button
                   type="button"
                   aria-label={`move ${field.name} row ${index + 1} up`}
                   disabled={index === 0}
                   onClick={() => move(index, index - 1)}
-                  title="Up"
                 >
                   ↑
                 </button>
@@ -797,19 +802,14 @@ export function ObjectListControl({
                   aria-label={`move ${field.name} row ${index + 1} down`}
                   disabled={index === rows.length - 1}
                   onClick={() => move(index, index + 1)}
-                  title="Down"
                 >
                   ↓
                 </button>
-                <button
-                  type="button"
-                  aria-label={`remove ${field.name} row ${index + 1}`}
-                  onClick={() => onChange(rows.filter((_, i) => i !== index))}
-                  title="Remove"
-                >
-                  ✕
-                </button>
-              </td>
+                <RemoveRowButton
+                  label={`remove ${field.name} row ${index + 1}`}
+                  onRemove={() => onChange(rows.filter((_, i) => i !== index))}
+                />
+              </RowActions>
             </tr>
           ))}
         </RowTable>

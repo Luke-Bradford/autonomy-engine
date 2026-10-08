@@ -642,7 +642,7 @@ function deriveElementFields(element: unknown, waivedByIdentity = false): Config
     const { inner, optional, defaultText, singleLine, label } = unwrap(cellSchema);
     // Classified WITHOUT recursion: a cell that is itself a row list or a
     // one-per-line list degrades the whole field to JSON rather than nesting.
-    // Neither has a designed shape inside a row card, and `stringList`'s
+    // Neither has a designed shape inside a table cell, and `stringList`'s
     // newlines are structural, so a row of them cannot be read back honestly.
     //
     // The `nestable: false` argument is ALSO what bounds the recursion, and it

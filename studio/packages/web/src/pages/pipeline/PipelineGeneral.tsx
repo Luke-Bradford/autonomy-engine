@@ -6,10 +6,10 @@ import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import { DockSection } from '../../lib/form/DockSection';
 import { AutoGrowTextarea } from '../../lib/form/AutoGrowTextarea';
 import { ContractSection } from './ContractEditor';
+import { ANNOTATION_COLUMNS } from './contractColumns';
+import { RemoveRowButton, RowActions } from '../../lib/form/RowTable';
 
 type Store = ReturnType<typeof createCanvasStore>;
-
-const ANNOTATION_COLUMNS = [{ key: 'annotation', header: 'Annotation' }] as const;
 
 /**
  * #1 F8a — the pipeline-level General tab: what the pipeline is for, and the
@@ -62,16 +62,12 @@ export function PipelineGeneral({ store }: { store: Store }) {
                 onChange={(e) => store.getState().updateAnnotation(i, e.target.value)}
               />
             </td>
-            <td className="row-table__actions">
-              <button
-                type="button"
-                aria-label={`remove annotation ${i + 1}`}
-                title="Remove"
-                onClick={() => store.getState().removeAnnotation(i)}
-              >
-                ✕
-              </button>
-            </td>
+            <RowActions>
+              <RemoveRowButton
+                label={`remove annotation ${i + 1}`}
+                onRemove={() => store.getState().removeAnnotation(i)}
+              />
+            </RowActions>
           </tr>
         ))}
       </ContractSection>

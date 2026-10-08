@@ -60,6 +60,23 @@ export function RowTable({
   );
 }
 
+/** A row's last cell, under the header-less Actions column. */
+export function RowActions({ children }: { children: ReactNode }) {
+  return <td className="row-table__actions">{children}</td>;
+}
+
+/**
+ * A row's ✕. `label` is its whole name (`remove param 1`), which says WHICH
+ * row; the glyph alone is what shows.
+ */
+export function RemoveRowButton({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <button type="button" aria-label={label} onClick={onRemove}>
+      ✕
+    </button>
+  );
+}
+
 /** A row's errors and advisories, on a row of their own under it (see `RowTable`). */
 export function RowNotes({ span, children }: { span: number; children: ReactNode }) {
   return (

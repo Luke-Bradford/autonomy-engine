@@ -15,7 +15,13 @@ import {
   type ValueTypeName,
 } from '@autonomy-studio/shared';
 import { DockSection } from '../../lib/form/DockSection';
-import { RowNotes, RowTable, type RowTableColumn } from '../../lib/form/RowTable';
+import {
+  RemoveRowButton,
+  RowActions,
+  RowNotes,
+  RowTable,
+  type RowTableColumn,
+} from '../../lib/form/RowTable';
 import { OUTPUT_COLUMNS, PARAM_COLUMNS, VARIABLE_COLUMNS } from './contractColumns';
 import type { createCanvasStore } from './canvasStore';
 import {
@@ -163,16 +169,9 @@ export function ContractRow<R extends Declared>({
             onChange={(e) => onChange(withDescription(row, e.target.value))}
           />
         </td>
-        <td className="row-table__actions">
-          <button
-            type="button"
-            aria-label={`remove ${kind} ${n}`}
-            title="Remove"
-            onClick={onRemove}
-          >
-            ✕
-          </button>
-        </td>
+        <RowActions>
+          <RemoveRowButton label={`remove ${kind} ${n}`} onRemove={onRemove} />
+        </RowActions>
       </tr>
       {notes ? <RowNotes span={columns.length + 1}>{notes}</RowNotes> : null}
     </>
@@ -442,12 +441,14 @@ export function VariableRow({
     update({ ...variable, default: parsed.value });
   }
 
+  // Keyed by what each note is about, so two notes that happen to read alike
+  // cannot collide.
   const notes = [
-    ...(field.error ? [field.error] : []),
-    ...(nameDefect ? [nameDefect] : []),
-    ...(field.error ? [] : defaultDefects),
-  ].map((text) => (
-    <p key={text} className="error" role="alert">
+    ...(field.error ? [['parse', field.error]] : []),
+    ...(nameDefect ? [['name', nameDefect]] : []),
+    ...(field.error ? [] : defaultDefects.map((d, i) => [`default:${i}`, d])),
+  ].map(([key, text]) => (
+    <p key={key} className="error" role="alert">
       {text}
     </p>
   ));

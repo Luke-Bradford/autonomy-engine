@@ -1891,9 +1891,8 @@ button.danger {
 
 /* U16 — the pipeline's typed params/outputs contract, in the nothing-selected
    property panel. `.property-panel` is already a flex column, so a section only
-   needs the separation that says where one declaration ends and the next
-   begins; the row border is what stops five stacked inputs reading as one
-   undifferentiated form. */
+   needs the separation between it and the next. Its rows are a `RowTable`
+   (#1477 OR29). */
 .contract-section {
   display: flex;
   flex-direction: column;
@@ -2755,7 +2754,7 @@ button.danger {
 @container dock-tab (min-width: 576px) {
   /* LABEL-LEFT: the label in a column of its own, the control, its hint and
      its error in the next. Only a field row of the tab's own sections — not
-     the cells of a row card or a param-override row, which are too narrow. */
+     the cells of a row table or a param-override row, which are too narrow. */
   :root[data-density='compact']
     .property-dock
     .property-panel
@@ -4775,10 +4774,6 @@ button.danger {
   min-width: 5rem;
 }
 
-.row-table th[data-width='short'] {
-  min-width: 5rem;
-}
-
 /* A tick box and the actions take only what they need. */
 .row-table :is(th, td):is([data-width='check'], [data-width='actions'], .row-table__actions) {
   width: 1%;
@@ -4864,6 +4859,11 @@ button.danger {
 
 .row-table__notes td {
   padding-top: 0;
+}
+
+/* A row and its notes read as one entry: no rule between them. */
+.row-table tr:has(+ .row-table__notes) > td {
+  border-bottom: 0;
 }
 
 .row-table__notes p {

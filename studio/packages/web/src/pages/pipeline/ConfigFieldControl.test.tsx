@@ -473,5 +473,24 @@ describe('ConfigFieldControl — a row list is a compact table (#1477 OR29)', ()
     expect(getByRole('button', { name: 'Functions for mapping row 1 source' })).toHaveTextContent(
       'ƒx',
     );
+    // A cell shows its toggles only while it has focus, and Safari does not
+    // focus a button on click: the toggle's mousedown keeps focus in the box.
+    const refs = getByRole('button', { name: 'Insert reference into mapping row 1 source' });
+    expect(fireEvent.mouseDown(refs)).toBe(false);
+    expect(
+      fireEvent.mouseDown(getByRole('button', { name: 'Functions for mapping row 1 source' })),
+    ).toBe(false);
+    // A top-level field's toggles are worded and always shown, so they need none of that.
+    const top = render(
+      <ConfigFieldControl
+        field={{ name: 'url', kind: 'text', optional: true }}
+        value=""
+        onChange={noop}
+        picker={picker}
+      />,
+    );
+    const worded = top.getByRole('button', { name: 'Insert reference into url' });
+    expect(worded).toHaveTextContent('Insert reference');
+    expect(fireEvent.mouseDown(worded)).toBe(true);
   });
 });
