@@ -206,9 +206,7 @@ test.describe('#1477 activity connection pickers', () => {
 
     await paste.fill('/srv/landing/orders.csv');
     await paste.press('Enter');
-    await expect(paste).toHaveAccessibleDescription(
-      "File system: Can't be a Copy Data sink yet",
-    );
+    await expect(paste).toHaveAccessibleDescription("File system: Can't be a Copy Data sink yet");
 
     await paste.fill('/srv/stores/warehouse.sqlite');
     await paste.press('Enter');

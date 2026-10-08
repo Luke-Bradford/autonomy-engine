@@ -3,7 +3,9 @@ import { detectConnection } from './detectConnection';
 
 describe('detectConnection (#1477 paste-to-detect)', () => {
   it('reads a postgres URL into its fields, the password into the secret only', () => {
-    const d = detectConnection('postgres://etl:s3cr%40t@db.internal:6543/warehouse?sslmode=require');
+    const d = detectConnection(
+      'postgres://etl:s3cr%40t@db.internal:6543/warehouse?sslmode=require',
+    );
     expect(d).toEqual({
       kind: 'postgres',
       config: {
