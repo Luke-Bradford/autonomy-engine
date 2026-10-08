@@ -510,7 +510,7 @@ Every studio UI change follows these rules unless its ticket says otherwise. A P
      | Density | Ramp |
      | --- | --- |
      | Compact (default) | 12/400, 12/600, 13/400, 13/600, 14/600 (section), 20/600 (page title) |
-     | Comfortable | 12/400, 12/600, 14/400, 14/600 (body strong and section), 20/600 (page title); body text moves from 13 to 14 and nothing else changes |
+     | Comfortable | 12/400, 12/600, 14/400, 14/600, 16/600 (section), 20/600 (page title); body text moves up one step (13 to 14) and the section heading with it (14 to 16), so a section heading never shares a size with body text |
 
      Weights are 400 and 600, never 500 or 700.
    - **Spacing on the 4px scale only** (4/8/12/16/24/32) in both densities.
