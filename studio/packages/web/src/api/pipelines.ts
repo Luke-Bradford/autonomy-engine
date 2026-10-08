@@ -520,6 +520,17 @@ export function cloneProvenance(
 }
 
 /**
+ * #1569 OR37 — the name a copy is offered by default: `<name> (copy)` for the
+ * latest version, `<name> vN (copy)` for a chosen one. The ONE rule, shared by
+ * the tree's Duplicate, the version history's Clone and the grid's dialog.
+ */
+export function copyName(sourceName: string, version?: number): string {
+  return version === undefined
+    ? `${sourceName} (copy)`
+    : `${sourceName} v${String(version)} (copy)`;
+}
+
+/**
  * Duplicate a pipeline under a new name (U4), from its latest version or —
  * #1569 OR37 "Clone vN as new pipeline" — from the version `from` the caller
  * already holds.

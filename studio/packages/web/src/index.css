@@ -6001,3 +6001,10 @@ button.danger {
 .run-drawer__started {
   margin: 0;
 }
+
+/* #1569 OR37 slice 8 — a drawer control as wide as its content, not the
+   drawer (UI standard rule 5): a select of short choices, a lone button. The
+   form's column flex would otherwise stretch it. */
+.connection-form .form-select--fit {
+  align-self: flex-start;
+}

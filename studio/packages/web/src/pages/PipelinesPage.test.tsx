@@ -37,6 +37,7 @@ vi.mock('../api/pipelines', async (importActual) => {
     listPipelineSummaries: vi.fn(),
     listPipelineVersions: vi.fn(),
     runPipelineVersion: vi.fn(),
+    duplicatePipeline: vi.fn(),
   };
 });
 vi.mock('../api/workspaceGit', async (importActual) => ({
@@ -81,6 +82,7 @@ const statesMock = vi.mocked(pipelinesApi.listPipelineVersionStates);
 const summariesMock = vi.mocked(pipelinesApi.listPipelineSummaries);
 const versionsMock = vi.mocked(pipelinesApi.listPipelineVersions);
 const runMock = vi.mocked(pipelinesApi.runPipelineVersion);
+const duplicateMock = vi.mocked(pipelinesApi.duplicatePipeline);
 const gitMock = vi.mocked(workspaceGitApi.getWorkspaceGit);
 const syncMock = vi.mocked(workspaceGitApi.readWorkspaceGitSync);
 
@@ -609,6 +611,232 @@ describe('PipelinesPage', () => {
         await waitFor(() =>
           expect(screen.queryByRole('dialog', { name: /Trigger now/ })).not.toBeInTheDocument(),
         );
+      });
+
+      /** #1569 OR37 slice 8 — Duplicate… and Clone from version…, one drawer. */
+      describe('duplicate', () => {
+        const heads = (latestVersion: number | null) =>
+          statesMock.mockResolvedValue([{ pipelineId: 'pl_1', latestVersion, active: null }]);
+        const copy = pipeline({ id: 'pl_copy', name: 'Nightly (copy)' });
+        const open = async (user: ReturnType<typeof userEvent.setup>, item: string) => {
+          await screen.findByText('1 active / 1');
+          await chooseRowAction(user, 'Nightly', item);
+          return within(await screen.findByRole('dialog', { name: new RegExp(item.slice(0, -1)) }));
+        };
+        beforeEach(() => {
+          seedRan();
+          heads(2);
+          versionsMock.mockResolvedValue([v1, v2]);
+          duplicateMock.mockResolvedValue(copy);
+        });
+
+        it('Duplicate… copies the latest version under "<name> (copy)", then closes and refreshes', async () => {
+          const user = userEvent.setup();
+          renderPage();
+          const drawer = await open(user, 'Duplicate…');
+          const version = drawer.getByRole('combobox', { name: 'Version' });
+          expect(await drawer.findByRole('option', { name: 'Latest (v2)' })).toBeInTheDocument();
+          expect(version).toHaveValue('latest');
+          expect(drawer.getByRole('textbox', { name: /Name/ })).toHaveValue('Nightly (copy)');
+          const lists = listMock.mock.calls.length;
+          await user.click(drawer.getByRole('button', { name: 'Duplicate' }));
+          await waitFor(() =>
+            expect(screen.queryByRole('dialog', { name: /Duplicate/ })).not.toBeInTheDocument(),
+          );
+          // Latest: no version handed over, so the copy is read as it is made.
+          expect(duplicateMock).toHaveBeenCalledWith(
+            expect.objectContaining({ id: 'pl_1' }),
+            'Nightly (copy)',
+            undefined,
+          );
+          expect(listMock.mock.calls.length).toBeGreaterThan(lists);
+        });
+
+        it('a picked version is copied as that version, and renames an untouched name only', async () => {
+          const user = userEvent.setup();
+          renderPage();
+          const drawer = await open(user, 'Duplicate…');
+          await drawer.findByRole('option', { name: 'v1' });
+          // The head is offered once, as Latest, not again as v2.
+          expect(drawer.queryByRole('option', { name: 'v2' })).not.toBeInTheDocument();
+          const version = drawer.getByRole('combobox', { name: 'Version' });
+          const name = drawer.getByRole('textbox', { name: /Name/ });
+          await user.selectOptions(version, 'v1');
+          expect(name).toHaveValue('Nightly v1 (copy)');
+          await user.clear(name);
+          await user.type(name, 'Restored');
+          await user.selectOptions(version, 'Latest (v2)');
+          await user.selectOptions(version, 'v1');
+          expect(name).toHaveValue('Restored');
+          await user.click(drawer.getByRole('button', { name: 'Duplicate' }));
+          await waitFor(() => expect(duplicateMock).toHaveBeenCalledTimes(1));
+          expect(duplicateMock.mock.calls[0]![1]).toBe('Restored');
+          expect(duplicateMock.mock.calls[0]![2]).toBe(v1);
+        });
+
+        it('Clone from version… starts on the version below the head, focused', async () => {
+          const user = userEvent.setup();
+          renderPage();
+          const drawer = await open(user, 'Clone from version…');
+          const version = drawer.getByRole('combobox', { name: 'Version' });
+          expect(version).toHaveValue('1');
+          expect(version).toHaveFocus();
+          expect(drawer.getByRole('textbox', { name: /Name/ })).toHaveValue('Nightly v1 (copy)');
+          await drawer.findByRole('option', { name: 'Latest (v2)' });
+          await user.click(drawer.getByRole('button', { name: 'Clone' }));
+          await waitFor(() => expect(duplicateMock).toHaveBeenCalledTimes(1));
+          expect(duplicateMock.mock.calls[0]![2]).toBe(v1);
+        });
+
+        it('offers Clone from version… only once there is a version to go back to', async () => {
+          heads(1);
+          const user = userEvent.setup();
+          renderPage();
+          await screen.findByText('1 active / 1');
+          // The row's version count has ANSWERED, so it is the count that disables.
+          await waitFor(() => expect(statesMock).toHaveBeenCalled());
+          await act(() => Promise.resolve());
+          const item = await chooseRowAction(user, 'Nightly', 'Clone from version…');
+          expect(item).toHaveAttribute('aria-disabled', 'true');
+          expect(screen.queryByRole('dialog', { name: /Clone/ })).not.toBeInTheDocument();
+        });
+
+        it('when the versions cannot be read, Latest still copies and a picked version is refused', async () => {
+          versionsMock.mockRejectedValue(new Error('boom'));
+          const user = userEvent.setup();
+          renderPage();
+          const drawer = await open(user, 'Clone from version…');
+          expect(await drawer.findByRole('alert')).toHaveTextContent(
+            'Could not read the versions: boom',
+          );
+          // The failure does not take focus from where the operator is.
+          expect(drawer.getByRole('combobox', { name: 'Version' })).toHaveFocus();
+          await user.click(drawer.getByRole('button', { name: 'Clone' }));
+          expect(await drawer.findByRole('alert')).toHaveTextContent(
+            'v1 could not be read. Retry, or pick Latest.',
+          );
+          expect(duplicateMock).not.toHaveBeenCalled();
+          await user.selectOptions(drawer.getByRole('combobox', { name: 'Version' }), 'Latest');
+          // Picking again clears the refusal: only the failed read is left.
+          expect(drawer.getByRole('alert')).toHaveTextContent('Could not read the versions: boom');
+          await user.click(drawer.getByRole('button', { name: 'Clone' }));
+          await waitFor(() => expect(duplicateMock).toHaveBeenCalledTimes(1));
+          expect(duplicateMock.mock.calls[0]![2]).toBeUndefined();
+        });
+
+        it('says a never-saved source copies as an empty pipeline', async () => {
+          heads(null);
+          versionsMock.mockResolvedValue([]);
+          const user = userEvent.setup();
+          renderPage();
+          const drawer = await open(user, 'Duplicate…');
+          await drawer.findByRole('option', { name: 'None saved' });
+          expect(drawer.getByRole('combobox', { name: 'Version' })).toBeDisabled();
+        });
+
+        it('Retry reads the versions again, and keeps focus in the form', async () => {
+          versionsMock.mockRejectedValueOnce(new Error('boom'));
+          const user = userEvent.setup();
+          renderPage();
+          const drawer = await open(user, 'Duplicate…');
+          await user.click(await drawer.findByRole('button', { name: 'Retry' }));
+          expect(drawer.getByRole('combobox', { name: 'Version' })).toHaveFocus();
+          await drawer.findByRole('option', { name: 'v1' });
+          expect(drawer.queryByRole('alert')).not.toBeInTheDocument();
+          await user.selectOptions(drawer.getByRole('combobox', { name: 'Version' }), 'v1');
+          await user.click(drawer.getByRole('button', { name: 'Duplicate' }));
+          await waitFor(() => expect(duplicateMock).toHaveBeenCalledTimes(1));
+          expect(duplicateMock.mock.calls[0]![2]).toBe(v1);
+        });
+
+        it('waits for the list before copying a chosen version', async () => {
+          let answer!: (v: PipelineVersion[]) => void;
+          versionsMock.mockReturnValue(new Promise((r) => (answer = r)));
+          const user = userEvent.setup();
+          renderPage();
+          const drawer = await open(user, 'Clone from version…');
+          expect(drawer.getByRole('button', { name: 'Clone' })).toBeDisabled();
+          await act(async () => answer([v1, v2]));
+          expect(drawer.getByRole('button', { name: 'Clone' })).toBeEnabled();
+        });
+
+        it('a preset that is now the head reads as Latest, not as a version', async () => {
+          // The grid's count says 2; the drawer's read finds v1 is the head.
+          versionsMock.mockResolvedValue([v1]);
+          const user = userEvent.setup();
+          renderPage();
+          const drawer = await open(user, 'Clone from version…');
+          await drawer.findByRole('option', { name: 'Latest (v1)' });
+          expect(drawer.getByRole('combobox', { name: 'Version' })).toHaveValue('latest');
+          expect(drawer.getByRole('textbox', { name: /Name/ })).toHaveValue('Nightly (copy)');
+        });
+
+        it('copies the row as it is now, not as it was when the drawer opened', async () => {
+          const user = userEvent.setup();
+          const store = createPipelinesStore();
+          renderWithDataRouter(<PipelinesPage store={store} />, '/author/pipelines');
+          const drawer = await open(user, 'Duplicate…');
+          await drawer.findByRole('option', { name: 'v1' });
+          listMock.mockResolvedValue([pipeline({ name: 'Nightly', folder: 'Moved' })]);
+          await act(() => store.getState().refresh());
+          await user.click(drawer.getByRole('button', { name: 'Duplicate' }));
+          await waitFor(() => expect(duplicateMock).toHaveBeenCalledTimes(1));
+          expect(duplicateMock.mock.calls[0]![0]).toMatchObject({ folder: 'Moved' });
+        });
+
+        it('refuses a blank name beside the field, without a request', async () => {
+          const user = userEvent.setup();
+          renderPage();
+          const drawer = await open(user, 'Duplicate…');
+          await user.clear(drawer.getByRole('textbox', { name: /Name/ }));
+          await user.click(drawer.getByRole('button', { name: 'Duplicate' }));
+          expect(await drawer.findAllByText('Enter a name.')).not.toHaveLength(0);
+          expect(duplicateMock).not.toHaveBeenCalled();
+        });
+
+        it('keeps the drawer and says why when the copy is refused', async () => {
+          duplicateMock.mockRejectedValue(new Error('disk full'));
+          const user = userEvent.setup();
+          renderPage();
+          const drawer = await open(user, 'Duplicate…');
+          await user.click(drawer.getByRole('button', { name: 'Duplicate' }));
+          expect(await drawer.findByText(/disk full/)).toBeInTheDocument();
+          expect(drawer.getByRole('textbox', { name: /Name/ })).toHaveValue('Nightly (copy)');
+        });
+
+        it('a copy in flight when its pipeline leaves the list finishes in its drawer first', async () => {
+          let finish!: (p: Pipeline) => void;
+          duplicateMock.mockReturnValue(new Promise((r) => (finish = r)));
+          const user = userEvent.setup();
+          renderPage();
+          const drawer = await open(user, 'Duplicate…');
+          await user.click(drawer.getByRole('button', { name: 'Duplicate' }));
+          expect(drawer.getByRole('button', { name: 'Creating…' })).toBeDisabled();
+          listMock.mockResolvedValue([]);
+          await chooseRowAction(user, 'Nightly', 'Archive');
+          await answerConfirm(user, 'accept');
+          await waitFor(() => expect(archiveMock).toHaveBeenCalled());
+          await waitFor(() => expect(screen.queryByText('1 active / 1')).not.toBeInTheDocument());
+          // Still there, still saying it is creating.
+          expect(screen.getByRole('button', { name: 'Creating…' })).toBeInTheDocument();
+          listMock.mockResolvedValue([copy]);
+          await act(async () => finish(copy));
+          await waitFor(() =>
+            expect(screen.queryByRole('dialog', { name: /Duplicate/ })).not.toBeInTheDocument(),
+          );
+        });
+
+        it('closes when its pipeline leaves the list', async () => {
+          const user = userEvent.setup();
+          renderPage();
+          await open(user, 'Duplicate…');
+          listMock.mockResolvedValue([]);
+          await chooseRowAction(user, 'Nightly', 'Archive');
+          await answerConfirm(user, 'accept');
+          await waitFor(() =>
+            expect(screen.queryByRole('dialog', { name: /Duplicate/ })).not.toBeInTheDocument(),
+          );
+        });
       });
     });
   });

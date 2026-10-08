@@ -14,6 +14,7 @@ import {
   createPipeline,
   deletePipeline,
   describeDeleteFailure,
+  copyName,
   duplicatePipeline,
   movePipelineToFolder,
   renamePipeline,
@@ -528,7 +529,7 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
               onSelect: () => {
                 setExpanded(true);
                 openDraft(
-                  { kind: 'duplicate', source: p, name: `${p.name} (copy)` },
+                  { kind: 'duplicate', source: p, name: copyName(p.name) },
                   rowMenuId(p.id),
                 );
               },

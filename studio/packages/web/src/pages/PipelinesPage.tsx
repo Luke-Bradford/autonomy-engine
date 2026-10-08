@@ -37,6 +37,8 @@ import { NewPipelineDrawer, type NewPipelineForm } from './NewPipelineDrawer';
 import { PipelineImportDrawer } from './PipelineImportDrawer';
 import { PipelineRunDrawer } from './PipelineRunDrawer';
 import { pipelineRunSignature, type PipelineRunForm } from './pipelineRunForm';
+import { DuplicatePipelineDrawer } from './DuplicatePipelineDrawer';
+import { duplicatePipelineSignature, type DuplicatePipelineForm } from './duplicatePipelineForm';
 import { useDrawerForm } from '../lib/form/useDrawerForm';
 import { leavesPath } from '../lib/form/leavesPath';
 import { PipelineGridColumnsMenu, PipelinesGrid } from './author/PipelinesGrid';
@@ -87,15 +89,23 @@ function folderOptionsOf(pipelines: readonly Pipeline[]): { value: string; label
     : options;
 }
 
-/** #1569 slice 3 — the one drawer the toolbar opens: a new pipeline, or an import. */
-type PipelinesDrawer = NewPipelineForm | PipelineRunForm | { kind: 'import' };
+/** #1569 — the one drawer beside the grid: a new pipeline or an import from the
+ * toolbar; Trigger now or Duplicate from a row's ⋯. */
+type PipelinesDrawer =
+  NewPipelineForm | PipelineRunForm | DuplicatePipelineForm | { kind: 'import' };
 
 /** What the open drawer would write, for its unsaved-changes check: an import
  * holds nothing typed, so it is never dirty. */
 function drawerSignature(drawer: PipelinesDrawer): string {
   if (drawer.kind === 'import') return 'import';
   if (drawer.kind === 'run') return pipelineRunSignature(drawer);
+  if (drawer.kind === 'duplicate') return duplicatePipelineSignature(drawer);
   return JSON.stringify([drawer.name, drawer.folder, drawer.description]);
+}
+
+/** The pipeline a row's drawer acts on, or `null` for the toolbar's. */
+function drawerPipelineId(drawer: PipelinesDrawer | null): string | null {
+  return drawer?.kind === 'run' || drawer?.kind === 'duplicate' ? drawer.pipelineId : null;
 }
 
 /** The archived view draws only the columns it has facts for. */
@@ -601,16 +611,18 @@ export function PipelinesPage({
     [loadArchived, refresh],
   );
 
-  /* A Trigger now drawer whose pipeline has left the live list (archived or
-     deleted here or elsewhere) closes: there is nothing left for it to run,
-     and its typed values were for that pipeline alone. */
-  const runDrawerGone =
-    drawerForm?.kind === 'run' &&
-    status === 'ready' &&
-    !pipelines.some((p) => p.id === drawerForm.pipelineId);
+  /* A Trigger now or Duplicate drawer whose pipeline has left the live list
+     (archived or deleted here or elsewhere) closes: there is nothing left for
+     it to run or copy, and its typed values were for that pipeline alone. Not
+     mid-request: a copy in flight finishes, and says so, first. */
+  const rowDrawerFor = drawerPipelineId(drawerForm);
+  const rowSource =
+    rowDrawerFor === null ? undefined : pipelines.find((p) => p.id === rowDrawerFor);
+  const rowDrawerGone =
+    rowDrawerFor !== null && status === 'ready' && rowSource === undefined && !drawerBusy;
   useEffect(() => {
-    if (runDrawerGone) closeIfLatest(drawerSeq);
-  }, [runDrawerGone, closeIfLatest, drawerSeq]);
+    if (rowDrawerGone) closeIfLatest(drawerSeq);
+  }, [rowDrawerGone, closeIfLatest, drawerSeq]);
 
   const base = showArchived ? archived : pipelines;
   const rows = useMemo(
@@ -663,6 +675,49 @@ export function PipelinesPage({
       },
       disabled: last == null,
     };
+  };
+
+  /* Duplicate… and Clone from version…: one drawer, from the row. Clone starts
+     on the version below the head, and is offered only once there is one —
+     with a single version it would be Duplicate under another name. */
+  const openDuplicate = (p: Pipeline, origin: RowMenuOrigin, pickVersion: boolean) => {
+    if (drawerBusy) return;
+    const head = versionStates?.get(p.id)?.latestVersion;
+    drawer.openFrom(origin.element, () =>
+      openDrawer({
+        kind: 'duplicate',
+        pipelineId: p.id,
+        openedAs: p,
+        name: null,
+        from: pickVersion && head != null && head >= 2 ? head - 1 : 'latest',
+        pickVersion,
+      }),
+    );
+  };
+  const duplicateActions = (p: Pipeline) => {
+    const head = versionStates?.get(p.id)?.latestVersion;
+    return [
+      {
+        label: 'Duplicate…',
+        onSelect: (origin: RowMenuOrigin) => openDuplicate(p, origin, false),
+        disabled: drawerBusy,
+      },
+      {
+        label: 'Clone from version…',
+        onSelect: (origin: RowMenuOrigin) => openDuplicate(p, origin, true),
+        disabled: drawerBusy || head == null || head < 2,
+      },
+    ];
+  };
+
+  /* A pipeline made by the New or Duplicate drawer: it closes, and the list
+     — the live one, even from the Archived view — shows the new row. */
+  const onDrawerCreated = async () => {
+    // Only when it is THIS drawer that closes: armed for a drawer already
+    // replaced, the flag would fire on some later close.
+    if (drawer.isLatest(drawerSeq)) leaveArchivedRef.current = showArchivedRef.current;
+    closeIfLatest(drawerSeq);
+    await refresh();
   };
 
   const clearFilters = () => {
@@ -934,6 +989,7 @@ export function PipelinesPage({
                         label: 'Runs',
                         onSelect: () => void navigate(pipelineRunsPath(p.id)),
                       },
+                      ...duplicateActions(p),
                       {
                         label: 'Export',
                         onSelect: () => void onExport(p),
@@ -962,13 +1018,7 @@ export function PipelinesPage({
             returnFocusTo={openerRef}
             onClose={drawer.requestClose}
             onBusyChange={setDrawerBusy}
-            onCreated={async () => {
-              // Only when it is THIS drawer that closes: armed for a drawer
-              // already replaced, the flag would fire on some later close.
-              if (drawer.isLatest(drawerSeq)) leaveArchivedRef.current = showArchivedRef.current;
-              closeIfLatest(drawerSeq);
-              await refresh();
-            }}
+            onCreated={onDrawerCreated}
           />
         )}
         {drawerForm?.kind === 'run' && (
@@ -986,6 +1036,23 @@ export function PipelinesPage({
             onBusyChange={setDrawerBusy}
             // The row's Last run, success % and runs count all just moved.
             onStarted={refreshRowStates}
+          />
+        )}
+        {drawerForm?.kind === 'duplicate' && (
+          <DuplicatePipelineDrawer
+            key={drawerSeq}
+            source={rowSource ?? drawerForm.openedAs}
+            form={drawerForm}
+            update={(fn) => {
+              // Only into THIS drawer: one replaced since is not its to change.
+              if (!drawer.isLatest(drawerSeq)) return;
+              setDrawerForm((prev) => (prev?.kind === 'duplicate' ? fn(prev) : prev));
+            }}
+            guard={guard}
+            returnFocusTo={openerRef}
+            onClose={drawer.requestClose}
+            onBusyChange={setDrawerBusy}
+            onCreated={onDrawerCreated}
           />
         )}
         {drawerForm?.kind === 'import' && (
