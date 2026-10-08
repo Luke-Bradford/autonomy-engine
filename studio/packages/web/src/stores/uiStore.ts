@@ -10,7 +10,7 @@ import {
   type GridColumnSpec,
   type GridWidths,
 } from './gridColumns';
-import { RUN_PAGE_SIZES, type RunPageSize } from '@autonomy-studio/shared';
+import { ACTIVITY_TAB_KEYS, RUN_PAGE_SIZES, type RunPageSize } from '@autonomy-studio/shared';
 import {
   DEFAULT_DISPLAY_TIME_ZONE,
   parseDisplayTimeZone,
@@ -170,8 +170,13 @@ export interface UiState {
 
 export type UiStore = StoreApi<UiState>;
 
-/** #852 — an activity's dock tabs: its configuration, then ADF's "General" (run policy). */
-export const NODE_TABS = ['settings', 'general'] as const;
+/**
+ * #852 / #1477 OR29 — an activity's dock tabs: ADF's "General" (run policy),
+ * then the type tabs its catalog entry declares, from the shared vocabulary. The
+ * dock remembers ONE choice across nodes; a node without that tab opens on its
+ * first type tab, and the choice stays for the next node that has it.
+ */
+export const NODE_TABS = ['general', ...ACTIVITY_TAB_KEYS] as const;
 export type NodeTab = (typeof NODE_TABS)[number];
 /** #844 — the pipeline-level panel's tabs. */
 export const PIPELINE_TABS = ['params', 'variables', 'outputs', 'general'] as const;

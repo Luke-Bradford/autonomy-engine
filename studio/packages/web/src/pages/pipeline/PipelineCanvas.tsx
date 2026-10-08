@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useContext,
   useEffect,
@@ -59,6 +60,7 @@ import {
   type WorkspaceGitStatus,
   type WorkspaceGitPullRequestReading,
   type WorkspaceGitSync,
+  type ActivityBindingSlot,
 } from '@autonomy-studio/shared';
 import {
   clipboardCommandFor,
@@ -124,12 +126,15 @@ import {
   emptyControlValue,
   formatFieldValue,
   parseFieldInput,
+  payloadSignature,
   readConfigDraft,
+  saveableConfigOf,
   schemaPrecheckCandidate,
   seedFieldInputs,
   type ConfigDraft,
   type ConfigField,
 } from './configForm';
+import { nodeTypeTabs } from './activityTabs';
 import {
   CONTAINER_EDIT_TONE,
   containerEditQuestion,
@@ -219,6 +224,8 @@ import { leavesPath } from '../../lib/form/leavesPath';
 import { UnsavedChangesPrompt } from '../../lib/form/UnsavedChangesPrompt';
 import { FormSection } from '../../lib/form/FormSection';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
+import { HelpDisclosure } from '../../lib/HelpDisclosure';
+import { RowMoreMenu } from '../../lib/RowMoreMenu';
 import { claimTicket, readPublishState, takeTicket, type ReadSequence } from './publishState';
 import { readWorkspaceGitPullRequest, readWorkspaceGitSync } from '../../api/workspaceGit';
 import { EditorStateBadge } from './EditorStateBadge';
@@ -3546,15 +3553,6 @@ export function NodePanel({
    * type, for a node the doc no longer holds.
    */
   const nodeName = nodeNames.get(nodeId) ?? entry?.title ?? nodeType;
-  // #1413 OR22 — under the name, what the activity DOES and which type it is.
-  // The panel is the one place the type id still shows: the palette's hover now
-  // carries the description instead. An uncatalogued type has no description,
-  // so it gets no line rather than an empty one.
-  const about = entry ? (
-    <p className="page-hint property-panel__about">
-      {entry.description} <code>{nodeType}</code>
-    </p>
-  ) : null;
 
   // U7 — the per-activity form, derived from the activity's own `configSchema`
   // (see `configForm.ts` for why the schema, not hand-written metadata, is the
@@ -3585,6 +3583,15 @@ export function NodePanel({
     fieldsFor,
     forcedJson,
   });
+
+  // #1477 OR29 — what Apply would write, as one comparable string, so Revert is
+  // live only once the draft differs from the node. Read the way an
+  // unsaved-changes guard reads a resource form (`saveableConfigOf`): switching
+  // between fields and JSON is not an edit, and an unreadable draft counts as one.
+  const signatureOf = (d: ConfigDraft<string>) =>
+    payloadSignature(saveableConfigOf(d, fieldsFor, forcedJson));
+  const [baseline, setBaseline] = useState(() => signatureOf(draft));
+  const dirty = signatureOf(draft) !== baseline;
 
   // #844 V6 — a variable writer names its variable from the DECLARED list, the
   // one thing its `variable` field may hold. The chooser only fills the draft,
@@ -3621,7 +3628,9 @@ export function NodePanel({
   const [syncedConfig, setSyncedConfig] = useState(config);
   if (syncedConfig !== config) {
     setSyncedConfig(config);
-    setDraft(seedNodeDraft(nodeType, editable, fields, draft.jsonMode));
+    const seeded = seedNodeDraft(nodeType, editable, fields, draft.jsonMode);
+    setDraft(seeded);
+    setBaseline(signatureOf(seeded));
     setError(null);
     // The auto-map line describes a DRAFT. A new `config` identity means that
     // draft is gone (usually because Apply just committed it), so a notice still
@@ -3672,14 +3681,6 @@ export function NodePanel({
     (datasetKinds !== undefined &&
       thisNode?.datasetIds === undefined &&
       boundDatasets !== undefined);
-  // #1396 — whether the Settings tab has a Bindings section at all. The union of
-  // what renders inside it: a single-connection picker, a paired activity's
-  // pickers (and its stray-binding repair), the dataset pickers. `halfBound`
-  // implies `paired` or `datasetKinds`, so it needs no term of its own.
-  const hasBindings =
-    (entry !== undefined && entry.connectionKinds.length > 0) ||
-    paired ||
-    datasetKinds !== undefined;
 
   /**
    * Validate a candidate settings blob against the activity's own schema.
@@ -3858,55 +3859,421 @@ export function NodePanel({
     );
   }
 
+  /**
+   * #1477 OR29 — the tabs after "General", as the catalog declares them. One
+   * resolved list read by the tab strip, the tab bodies and the landing choice.
+   */
+  const typeTabs = useMemo(() => nodeTypeTabs(entry, fields ?? []), [entry, fields]);
+  const landing = typeTabs[0].key;
+  const offered = (key: NodeTab | undefined): key is NodeTab =>
+    key !== undefined && (key === 'general' || typeTabs.some((t) => t.key === key));
+  // The lifted choice is honoured when THIS node has that tab, and otherwise the
+  // node opens on its first type tab — without writing the store, so the choice
+  // survives a visit to a node that lacks it (Copy's Mapping, an HTTP node, back
+  // to Copy: Mapping again). The local copy keeps a panel rendered without a
+  // host (a unit test) switching tabs, and tells the JSON editor which tab it is on.
+  const [ownTab, setOwnTab] = useState<NodeTab>(() => (offered(tab) ? tab : landing));
+  const currentTab: NodeTab = offered(tab) ? tab : offered(ownTab) ? ownTab : landing;
+  const chooseTab = (next: NodeTab) => {
+    setOwnTab(next);
+    onTab?.(next);
+  };
+
+  function revert() {
+    const seeded = seedNodeDraft(nodeType, editable, fields, draft.jsonMode);
+    setDraft(seeded);
+    setBaseline(signatureOf(seeded));
+    setError(null);
+    clearAutoMapNotice();
+  }
+
+  /**
+   * #1477 — one binding slot's controls. Each slot sits on exactly one tab (the
+   * catalog says which), and carries its own overrides with it.
+   */
+  function bindingControls(slot: ActivityBindingSlot) {
+    if (entry === undefined) return null;
+    switch (slot) {
+      case 'connection':
+        return (
+          <Fragment key={slot}>
+            <LabelledControl label="Connection">
+              {(id) => (
+                <select
+                  id={id}
+                  value={connectionId ?? ''}
+                  onChange={(e) =>
+                    store.getState().setNodeConnection(nodeId, e.target.value || undefined)
+                  }
+                >
+                  <option value="">— none —</option>
+                  {eligible.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {connectionOptionLabel(c)}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </LabelledControl>
+            {thisNode?.connectionId !== undefined && (
+              <ParamOverridesEditor
+                legend="Connection overrides"
+                noun="connection"
+                resource={overrideResourceFor(
+                  connections,
+                  thisNode.connectionId,
+                  connectionOverrideResource,
+                )}
+                value={thisNode.connectionParams}
+                onChange={(next, key) =>
+                  store.getState().setNodeParamOverrides(nodeId, 'connection', next, key)
+                }
+                picker={picker}
+                place={(n, key, v) => ({
+                  ...n,
+                  connectionParams: { ...n.connectionParams, [key]: v },
+                })}
+              />
+            )}
+          </Fragment>
+        );
+      case 'sourceConnection':
+        return (
+          <Fragment key={slot}>
+            <BindingSelect
+              label="Source connection"
+              value={boundConnections?.source}
+              options={eligibleForBinding(
+                connections,
+                (c) => entry.connectionKinds.includes(c.kind),
+                boundConnections?.source,
+              ).map((c) => ({ id: c.id, label: connectionOptionLabel(c) }))}
+              onPick={(id) =>
+                store.getState().setNodeBindingEnd(nodeId, 'connections', 'source', id)
+              }
+            />
+          </Fragment>
+        );
+      case 'sinkConnection':
+        return sinkConnectionKinds === undefined ? null : (
+          <Fragment key={slot}>
+            <BindingSelect
+              label="Sink connection"
+              value={boundConnections?.sink}
+              options={eligibleForBinding(
+                connections,
+                (c) => sinkConnectionKinds.includes(c.kind),
+                boundConnections?.sink,
+              ).map((c) => ({ id: c.id, label: connectionOptionLabel(c) }))}
+              onPick={(id) => store.getState().setNodeBindingEnd(nodeId, 'connections', 'sink', id)}
+            />
+          </Fragment>
+        );
+      case 'sourceDataset':
+        return datasetKinds === undefined ? null : (
+          <Fragment key={slot}>
+            {/* #1139 — the dataset ADDRESSES within those stores. Narrowed by the
+                connection bound to the SAME end as well as by kind: slice 4a
+                refuses a node/dataset connection disagreement at dispatch
+                (`DATASET_CONNECTION_MISMATCH`), so an unnarrowed list would offer
+                bindings that cannot run. */}
+            <BindingSelect
+              label="Source dataset"
+              value={boundDatasets?.source}
+              options={eligibleForBinding(
+                datasets,
+                (d) =>
+                  datasetKinds.source.includes(d.kind) &&
+                  (sourceConnectionId === undefined || d.connectionId === sourceConnectionId),
+                boundDatasets?.source,
+              ).map((d) => ({ id: d.id, label: datasetOptionLabel(d) }))}
+              onPick={(id) => store.getState().setNodeBindingEnd(nodeId, 'datasets', 'source', id)}
+            />
+
+            <DatasetOverrides
+              store={store}
+              node={thisNode}
+              side="source"
+              datasets={datasets}
+              picker={picker}
+            />
+          </Fragment>
+        );
+      case 'sinkDataset':
+        return datasetKinds?.sink === undefined ? null : (
+          <Fragment key={slot}>
+            <BindingSelect
+              label="Sink dataset"
+              value={boundDatasets?.sink}
+              options={eligibleForBinding(
+                datasets,
+                (d) =>
+                  (datasetKinds.sink ?? []).includes(d.kind) &&
+                  (boundConnections?.sink === undefined ||
+                    d.connectionId === boundConnections.sink),
+                boundDatasets?.sink,
+              ).map((d) => ({ id: d.id, label: datasetOptionLabel(d) }))}
+              onPick={(id) => store.getState().setNodeBindingEnd(nodeId, 'datasets', 'sink', id)}
+            />
+
+            <DatasetOverrides
+              store={store}
+              node={thisNode}
+              side="sink"
+              datasets={datasets}
+              picker={picker}
+            />
+          </Fragment>
+        );
+    }
+  }
+
+  /**
+   * A type tab's body: its bindings, then its fields. In JSON mode the WHOLE
+   * config is one document, so it is shown on the tab the author is on — and
+   * only there, so one textarea is ever mounted. Container membership closes
+   * the LANDING tab: it is also where a container is CREATED (U6d), which must
+   * not hide behind a second tab.
+   */
+  function typeTabContent(t: (typeof typeTabs)[number]) {
+    const showConfig = editor.jsonMode
+      ? t.key === currentTab
+      : t.fields.length > 0 || t.bindings.length === 0;
+    const holdsMapping = mappingField !== null && t.fields.some((f) => f === mappingField);
+    return (
+      <>
+        {t.bindings.map((slot) => bindingControls(slot))}
+        {t.bindings.length > 0 && (
+          <>
+            {/* On every tab holding a binding: a pair is half-picked from either end. */}
+            {halfBound && (
+              <p className="contract-advisory" role="status">
+                Both ends of a binding are needed — a half-bound pair is not saved.
+              </p>
+            )}
+            {/* A `copy` node that arrived by import or an API seed can carry a
+                stray singular `connectionId`. The paired pickers cannot clear it,
+                and `validateDoc` refuses the two together — so without this the
+                doc would be unsaveable with no affordance to repair it. */}
+            {t.bindings.includes('sourceConnection') && (
+              <>
+                {paired && connectionId !== undefined && (
+                  <p className="contract-advisory">
+                    This node also carries a single-connection binding, which a paired activity may
+                    not have.{' '}
+                    <button
+                      type="button"
+                      onClick={() => store.getState().setNodeConnection(nodeId, undefined)}
+                    >
+                      Clear it
+                    </button>
+                  </p>
+                )}
+              </>
+            )}
+          </>
+        )}
+        {showConfig && (
+          <ConfigEditor
+            editor={editor}
+            kindLabel={entry?.title ?? nodeType}
+            className="contract-section"
+            rows={10}
+            advisory={null}
+            picker={picker}
+            choicesFor={choicesFor}
+            emptyHint="This activity has no settings."
+            fieldNames={t.fields.map((f) => f.name)}
+            toolbar={false}
+            fieldModeExtra={
+              /* #1170 M8 slice 2 — Auto-map (§6.3) and §13's explicit *unmapped*
+                 state, on the tab that holds the mapping. After the derived
+                 controls, never inside them: that loop is the generic U7
+                 renderer. A field-mode extra because it describes the FORM
+                 draft, which the author is not editing in JSON mode. */
+              holdsMapping && (
+                <div className="contract-section">
+                  <button type="button" onClick={runAutoMap} disabled={autoMapBlocked !== null}>
+                    Auto-map columns
+                  </button>
+                  {autoMapBlocked !== null && <p className="page-hint">{autoMapBlocked}</p>}
+                  {autoMapNotice !== null && (
+                    <p className="contract-advisory" role="status">
+                      {autoMapNotice}
+                    </p>
+                  )}
+                  {/* NOT a live region, deliberately, though it sits beside one that is.
+                  This is recomputed STATE rather than the outcome of a gesture, and
+                  it changes on every keystroke in a mapping cell — announced, it
+                  would talk over the author continuously and collide with the
+                  notice above (#960's two-live-regions failure). It is plain
+                  visible text, always present, read on demand. */}
+                  {requiredUnwritten.length > 0 && (
+                    <p className="contract-advisory">
+                      The sink requires a value for{' '}
+                      {requiredUnwritten.map((c) => c.name).join(', ')}, and nothing writes{' '}
+                      {requiredUnwritten.length === 1 ? 'it' : 'them'} — the copy cannot succeed
+                      until every one is mapped.
+                    </p>
+                  )}
+                  {optionalUnwritten.length > 0 && (
+                    <p className="contract-advisory">
+                      Not copied: {optionalUnwritten.map((c) => c.name).join(', ')}.
+                    </p>
+                  )}
+                  {sinkAdvisory !== null &&
+                    sinkAdvisory.duplicateWrites.map((pair) => (
+                      <p className="contract-advisory" key={`${pair.first}/${pair.second}`}>
+                        {pair.first} and {pair.second} differ only by case, so both write the same
+                        sink column — the store refuses that when the copy runs.
+                      </p>
+                    ))}
+                  {sinkAdvisory !== null && sinkAdvisory.undeclared.length > 0 && (
+                    <p className="contract-advisory">
+                      {sinkAdvisory.undeclared.join(', ')}{' '}
+                      {sinkAdvisory.undeclared.length === 1 ? 'is' : 'are'} not declared by the sink
+                      dataset.
+                    </p>
+                  )}
+                  {sourceAdvisory !== null && sourceAdvisory.unmapped.length > 0 && (
+                    <p className="contract-advisory">
+                      Not read from the source: {sourceAdvisory.unmapped.join(', ')}.
+                    </p>
+                  )}
+                  {sourceAdvisory !== null && sourceAdvisory.missing.length > 0 && (
+                    <p className="contract-advisory">
+                      {sourceAdvisory.missing.join(', ')}{' '}
+                      {sourceAdvisory.missing.length === 1 ? 'is' : 'are'} not declared by the
+                      source dataset.
+                    </p>
+                  )}
+                  {sourceAdvisory !== null && sourceAdvisory.ambiguous.length > 0 && (
+                    <p className="contract-advisory">
+                      {sourceAdvisory.ambiguous.join(', ')} match more than one source column
+                      case-insensitively — name the column exactly.
+                    </p>
+                  )}
+                  {/* A declared column list is an authoring aid and can be stale, so
+                  every line above is a warning and none of them is a refusal. The
+                  gate reads the store's ACTUAL columns at dispatch. */}
+                  {(sinkAdvisory !== null || sourceAdvisory !== null) && (
+                    <p className="page-hint">
+                      Read from each dataset&rsquo;s declared columns, which can be out of date —
+                      the copy is checked against the store itself when it runs.
+                    </p>
+                  )}
+                </div>
+              )
+            }
+          />
+        )}
+        {t.key === landing && <ContainerSection store={store} nodeId={nodeId} />}
+      </>
+    );
+  }
+
+  /**
+   * #1477 OR29 — the panel's one header row, pinned with the tab strip: what the
+   * node is, and the acts on the whole node. The description is behind a `?`
+   * (labels, not prose); the type id stays visible, as the one place it shows.
+   */
+  function header(actions: boolean) {
+    return (
+      <>
+        <div className="property-panel__header">
+          <h3>{nodeName}</h3>
+          <code className="property-panel__type">{nodeType}</code>
+          {entry !== undefined && (
+            <HelpDisclosure label={`About ${entry.title}`} noteId={`${nodeId}-about`} inline>
+              {entry.description}
+            </HelpDisclosure>
+          )}
+          {actions && (
+            <span className="property-panel__actions">
+              {editor.canToggle && (
+                <button type="button" onClick={editor.toggleMode}>
+                  {editor.jsonMode ? 'Edit as fields' : 'Edit as JSON'}
+                </button>
+              )}
+              <button type="button" onClick={revert} disabled={!dirty}>
+                Revert
+              </button>
+              <button type="button" className="primary" onClick={apply}>
+                Apply config
+              </button>
+              {/* U21 — Duplicate acts on the node as SAVED into the store, not on
+                  the unapplied draft: the copy carries the config Apply last
+                  wrote. Ungated, like Delete — what #907 gated is the SAVE of an
+                  archived pipeline, which the server refuses. */}
+              <RowMoreMenu
+                name={nodeName}
+                label="More node actions"
+                actions={[
+                  {
+                    label: 'Duplicate node',
+                    onSelect: () => store.getState().duplicateNode(nodeId),
+                  },
+                ]}
+                destructive={{
+                  label: 'Delete node',
+                  onSelect: () => store.getState().deleteNode(nodeId),
+                }}
+              />
+            </span>
+          )}
+        </div>
+        {/* Under the header, so Apply's refusal shows whichever tab is open. */}
+        {actions && error && (
+          <p className="error property-panel__error" role="alert">
+            {error}
+          </p>
+        )}
+      </>
+    );
+  }
+
   // #953 — routed on `authorsCallBlob`, not on the type alone. `Node.call` is an
   // optional discriminant valid on a node of any type, so a doc carrying the
-  // literal `type: 'call_pipeline'` (reachable by import or an API seed, and used
-  // throughout the engine test suite) used to land on the generic form instead —
-  // and since that type is not catalogued, the form derived no fields and the
-  // call blob was neither visible nor editable. `authorsCallBlob` is the shared
-  // reading of what actually dispatches the node, so this cannot drift from the
-  // reducer the way a local type check did.
+  // literal `type: 'call_pipeline'` (reachable by import or an API seed) used to
+  // land on the generic form instead. `authorsCallBlob` is the shared reading of
+  // what actually dispatches the node, so this cannot drift from the reducer.
   if (authorsCallBlob({ type: nodeType, call })) {
     return (
       <aside className="property-panel" aria-label="Properties">
-        <h3>{nodeName}</h3>
-        {about}
         <PanelTabs
           label="Activity properties"
-          selected={tab}
-          onSelect={onTab}
+          header={header(false)}
+          selected={currentTab === 'general' ? 'general' : 'settings'}
+          onSelect={chooseTab}
           tabs={[
+            {
+              key: 'general',
+              label: 'General',
+              content: (
+                // #1312 — policy: retry applies to a call, and a secure flag is
+                // refused on one, which is explained only if the section is here.
+                <PolicyEditor store={store} nodeId={nodeId} />
+              ),
+            },
             {
               key: 'settings',
               label: 'Settings',
               content: (
                 <>
-                  {/* Not in a section of its own: `CallPanel` already heads its two
-                      parts ("Call target", "Parameters"). */}
+                  {/* `CallPanel` heads its own parts ("Call target", "Parameters")
+                      and applies them itself ("Apply call"), so the header has no
+                      Apply of its own here. */}
                   <CallPanel store={store} nodeId={nodeId} call={call} picker={picker} />
-                  {/* Membership is orthogonal to the call blob, so this early
-                      return must not swallow it: a container is exactly the
-                      construct that puts a call node in one, and this is the
-                      only panel such a node ever gets. */}
+                  {/* Membership is orthogonal to the call blob: a container is
+                      exactly the construct that puts a call node in one. */}
                   <ContainerSection store={store} nodeId={nodeId} />
                 </>
-              ),
-            },
-            {
-              key: 'general',
-              label: 'General',
-              content: (
-                // #1312 — likewise policy: retry applies to a call, and a secure
-                // flag is refused on one, which is explained only if the section
-                // is here.
-                <PolicyEditor store={store} nodeId={nodeId} />
               ),
             },
           ]}
         />
         {/* #1393 — AFTER the fields, not above them: an issue arriving must not push
-            the control being edited out from under the pointer. The Problems column
-            beside the panel lists it too. */}
+            the control being edited out from under the pointer. */}
         <SubjectIssues issues={ownIssues} listedElsewhere={policyElsewhere} />
       </aside>
     );
@@ -3914,326 +4281,22 @@ export function NodePanel({
 
   return (
     <aside className="property-panel" aria-label="Properties">
-      <h3>{nodeName}</h3>
-      {about}
-      {/* #852 — ADF's split: what the activity DOES under Settings, how it RUNS
-          (retry, timeout, secure input/output) under General. Policy was already
-          outside the config form's Apply draft (#1312), so the tab boundary
-          follows a line the panel already drew. Container MEMBERSHIP stays on
-          Settings: it is also where a container is CREATED (U6d), an authoring
-          act that must not hide behind a second tab. */}
+      {/* #852 / #1477 — ADF's split: how the activity RUNS (retry, timeout,
+          secure input/output) under General, then what it DOES under the tabs
+          its catalog entry declares. The node opens on its first type tab, where
+          its required settings are. */}
       <PanelTabs
         label="Activity properties"
-        selected={tab}
-        onSelect={onTab}
+        header={header(true)}
+        selected={currentTab}
+        onSelect={chooseTab}
         tabs={[
-          {
-            key: 'settings',
-            label: 'Settings',
-            content: (
-              <>
-                {/* #1396 — three sections, in the order the panel already had:
-                    what the step reads and writes through, where it sits, what
-                    it does. Apply, Duplicate and Delete act on the whole node,
-                    so they stay after every section. */}
-                {hasBindings && (
-                  <FormSection title="Bindings" hint={FORM_SECTION_HINTS.node.bindings}>
-                    {entry && !paired && entry.connectionKinds.length > 0 && (
-                      <LabelledControl label="Connection">
-                        {(id) => (
-                          <select
-                            id={id}
-                            value={connectionId ?? ''}
-                            onChange={(e) =>
-                              store
-                                .getState()
-                                .setNodeConnection(nodeId, e.target.value || undefined)
-                            }
-                          >
-                            <option value="">— none —</option>
-                            {eligible.map((c) => (
-                              <option key={c.id} value={c.id}>
-                                {connectionOptionLabel(c)}
-                              </option>
-                            ))}
-                          </select>
-                        )}
-                      </LabelledControl>
-                    )}
-                    {entry &&
-                      !paired &&
-                      entry.connectionKinds.length > 0 &&
-                      thisNode?.connectionId !== undefined && (
-                        <ParamOverridesEditor
-                          legend="Connection overrides"
-                          noun="connection"
-                          resource={overrideResourceFor(
-                            connections,
-                            thisNode.connectionId,
-                            connectionOverrideResource,
-                          )}
-                          value={thisNode.connectionParams}
-                          onChange={(next, key) =>
-                            store.getState().setNodeParamOverrides(nodeId, 'connection', next, key)
-                          }
-                          picker={picker}
-                          place={(n, key, v) => ({
-                            ...n,
-                            connectionParams: { ...n.connectionParams, [key]: v },
-                          })}
-                        />
-                      )}
-
-                    {/* #1139 — a PAIRED activity binds a source and a sink store. The singular
-          picker above is hidden rather than shown alongside, because
-          `validateDoc` refuses `connectionId` and `connectionIds` together. */}
-                    {entry && paired && sinkConnectionKinds !== undefined && (
-                      <>
-                        <BindingSelect
-                          label="Source connection"
-                          value={boundConnections?.source}
-                          options={eligibleForBinding(
-                            connections,
-                            (c) => entry.connectionKinds.includes(c.kind),
-                            boundConnections?.source,
-                          ).map((c) => ({ id: c.id, label: connectionOptionLabel(c) }))}
-                          onPick={(id) =>
-                            store.getState().setNodeBindingEnd(nodeId, 'connections', 'source', id)
-                          }
-                        />
-                        <BindingSelect
-                          label="Sink connection"
-                          value={boundConnections?.sink}
-                          options={eligibleForBinding(
-                            connections,
-                            (c) => sinkConnectionKinds.includes(c.kind),
-                            boundConnections?.sink,
-                          ).map((c) => ({ id: c.id, label: connectionOptionLabel(c) }))}
-                          onPick={(id) =>
-                            store.getState().setNodeBindingEnd(nodeId, 'connections', 'sink', id)
-                          }
-                        />
-                      </>
-                    )}
-
-                    {/* #1139 — the dataset ADDRESSES within those stores. Narrowed by the
-          connection bound to the SAME end as well as by kind: slice 4a refuses a
-          node/dataset connection disagreement at dispatch
-          (`DATASET_CONNECTION_MISMATCH`), so an unnarrowed list would offer
-          bindings that cannot run. `sink` is optional — M12's `lookup` reads a
-          source only. */}
-                    {datasetKinds !== undefined && (
-                      <>
-                        <BindingSelect
-                          label="Source dataset"
-                          value={boundDatasets?.source}
-                          options={eligibleForBinding(
-                            datasets,
-                            (d) =>
-                              datasetKinds.source.includes(d.kind) &&
-                              (sourceConnectionId === undefined ||
-                                d.connectionId === sourceConnectionId),
-                            boundDatasets?.source,
-                          ).map((d) => ({ id: d.id, label: datasetOptionLabel(d) }))}
-                          onPick={(id) =>
-                            store.getState().setNodeBindingEnd(nodeId, 'datasets', 'source', id)
-                          }
-                        />
-                        <DatasetOverrides
-                          store={store}
-                          node={thisNode}
-                          side="source"
-                          datasets={datasets}
-                          picker={picker}
-                        />
-                        {datasetKinds.sink !== undefined && (
-                          <BindingSelect
-                            label="Sink dataset"
-                            value={boundDatasets?.sink}
-                            options={eligibleForBinding(
-                              datasets,
-                              (d) =>
-                                (datasetKinds.sink ?? []).includes(d.kind) &&
-                                (boundConnections?.sink === undefined ||
-                                  d.connectionId === boundConnections.sink),
-                              boundDatasets?.sink,
-                            ).map((d) => ({ id: d.id, label: datasetOptionLabel(d) }))}
-                            onPick={(id) =>
-                              store.getState().setNodeBindingEnd(nodeId, 'datasets', 'sink', id)
-                            }
-                          />
-                        )}
-                        {datasetKinds.sink !== undefined && (
-                          <DatasetOverrides
-                            store={store}
-                            node={thisNode}
-                            side="sink"
-                            datasets={datasets}
-                            picker={picker}
-                          />
-                        )}
-                      </>
-                    )}
-
-                    {halfBound && (
-                      <p className="contract-advisory" role="status">
-                        Both ends of a binding are needed — a half-bound pair is not saved.
-                      </p>
-                    )}
-
-                    {/* A `copy` node that arrived by import or an API seed can carry a stray
-          singular `connectionId`. The paired branch hides the picker that would
-          clear it, and `validateDoc` refuses the two together — so without this
-          the doc would be unsaveable with no affordance to repair it. */}
-                    {paired && connectionId !== undefined && (
-                      <p className="contract-advisory">
-                        This node also carries a single-connection binding, which a paired activity
-                        may not have.{' '}
-                        <button
-                          type="button"
-                          onClick={() => store.getState().setNodeConnection(nodeId, undefined)}
-                        >
-                          Clear it
-                        </button>
-                      </p>
-                    )}
-                  </FormSection>
-                )}
-                <ContainerSection store={store} nodeId={nodeId} />
-
-                <FormSection
-                  title="Activity settings"
-                  hint={FORM_SECTION_HINTS.node.activitySettings}
-                >
-                  <ConfigEditor
-                    editor={editor}
-                    kindLabel={entry?.title ?? nodeType}
-                    className="contract-section"
-                    rows={10}
-                    advisory={null}
-                    picker={picker}
-                    choicesFor={choicesFor}
-                    emptyHint="This activity has no settings."
-                    fieldModeExtra={
-                      /* #1170 M8 slice 2 — Auto-map (§6.3) and §13's explicit *unmapped*
-             state. After the derived controls, never inside them: that loop is
-             the generic U7 renderer and a field-name branch inside it would be
-             the activity-specific fork U7 exists to keep out. A field-mode
-             extra because it describes the FORM draft, which the author is not
-             editing in JSON mode. */
-                      mappingField && (
-                        <div className="contract-section">
-                          <button
-                            type="button"
-                            onClick={runAutoMap}
-                            disabled={autoMapBlocked !== null}
-                          >
-                            Auto-map columns
-                          </button>
-                          {autoMapBlocked !== null && <p className="page-hint">{autoMapBlocked}</p>}
-                          {autoMapNotice !== null && (
-                            <p className="contract-advisory" role="status">
-                              {autoMapNotice}
-                            </p>
-                          )}
-                          {/* NOT a live region, deliberately, though it sits beside one that is.
-                  This is recomputed STATE rather than the outcome of a gesture, and
-                  it changes on every keystroke in a mapping cell — announced, it
-                  would talk over the author continuously and collide with the
-                  notice above (#960's two-live-regions failure). It is plain
-                  visible text, always present, read on demand. */}
-                          {requiredUnwritten.length > 0 && (
-                            <p className="contract-advisory">
-                              The sink requires a value for{' '}
-                              {requiredUnwritten.map((c) => c.name).join(', ')}, and nothing writes{' '}
-                              {requiredUnwritten.length === 1 ? 'it' : 'them'} — the copy cannot
-                              succeed until every one is mapped.
-                            </p>
-                          )}
-                          {optionalUnwritten.length > 0 && (
-                            <p className="contract-advisory">
-                              Not copied: {optionalUnwritten.map((c) => c.name).join(', ')}.
-                            </p>
-                          )}
-                          {sinkAdvisory !== null &&
-                            sinkAdvisory.duplicateWrites.map((pair) => (
-                              <p className="contract-advisory" key={`${pair.first}/${pair.second}`}>
-                                {pair.first} and {pair.second} differ only by case, so both write
-                                the same sink column — the store refuses that when the copy runs.
-                              </p>
-                            ))}
-                          {sinkAdvisory !== null && sinkAdvisory.undeclared.length > 0 && (
-                            <p className="contract-advisory">
-                              {sinkAdvisory.undeclared.join(', ')}{' '}
-                              {sinkAdvisory.undeclared.length === 1 ? 'is' : 'are'} not declared by
-                              the sink dataset.
-                            </p>
-                          )}
-                          {sourceAdvisory !== null && sourceAdvisory.unmapped.length > 0 && (
-                            <p className="contract-advisory">
-                              Not read from the source: {sourceAdvisory.unmapped.join(', ')}.
-                            </p>
-                          )}
-                          {sourceAdvisory !== null && sourceAdvisory.missing.length > 0 && (
-                            <p className="contract-advisory">
-                              {sourceAdvisory.missing.join(', ')}{' '}
-                              {sourceAdvisory.missing.length === 1 ? 'is' : 'are'} not declared by
-                              the source dataset.
-                            </p>
-                          )}
-                          {sourceAdvisory !== null && sourceAdvisory.ambiguous.length > 0 && (
-                            <p className="contract-advisory">
-                              {sourceAdvisory.ambiguous.join(', ')} match more than one source
-                              column case-insensitively — name the column exactly.
-                            </p>
-                          )}
-                          {/* A declared column list is an authoring aid and can be stale, so
-                  every line above is a warning and none of them is a refusal. The
-                  gate reads the store's ACTUAL columns at dispatch. */}
-                          {(sinkAdvisory !== null || sourceAdvisory !== null) && (
-                            <p className="page-hint">
-                              Read from each dataset&rsquo;s declared columns, which can be out of
-                              date — the copy is checked against the store itself when it runs.
-                            </p>
-                          )}
-                        </div>
-                      )
-                    }
-                  />
-                </FormSection>
-
-                {error && (
-                  <p className="error" role="alert">
-                    {error}
-                  </p>
-                )}
-                <div className="form-actions">
-                  <button type="button" onClick={apply}>
-                    Apply config
-                  </button>
-                  {/* U21 — duplicate. Between Apply and Delete because that is the order
-            of consequence, and because it acts on the node as SAVED into the
-            store, not on the unapplied form state: the copy carries the config
-            `Apply config` last wrote, which is why it sits after it. Ungated for
-            the same reason `Delete node` is — what #907 gated is the SAVE of an
-            archived pipeline, which the server REFUSES (the button itself stays
-            live); editing was left alone, and a copy that cannot yet be saved is
-            still an edit the operator can undo. */}
-                  <button type="button" onClick={() => store.getState().duplicateNode(nodeId)}>
-                    Duplicate node
-                  </button>
-                  <button type="button" onClick={() => store.getState().deleteNode(nodeId)}>
-                    Delete node
-                  </button>
-                </div>
-              </>
-            ),
-          },
           {
             key: 'general',
             label: 'General',
             content: <PolicyEditor store={store} nodeId={nodeId} />,
           },
+          ...typeTabs.map((t) => ({ key: t.key, label: t.label, content: typeTabContent(t) })),
         ]}
       />
       {/* #1393 — AFTER the fields, not above them: an issue arriving must not push

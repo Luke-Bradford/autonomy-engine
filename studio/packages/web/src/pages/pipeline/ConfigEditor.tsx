@@ -25,6 +25,8 @@ export function ConfigEditor<K extends string>({
   emptyHint = 'This kind has no settings.',
   fieldModeExtra,
   errorFor,
+  fieldNames,
+  toolbar = true,
   children,
 }: {
   editor: ConfigEditorState<K>;
@@ -49,22 +51,39 @@ export function ConfigEditor<K extends string>({
    * canvas passes none.
    */
   errorFor?: (key: string) => string | undefined;
+  /**
+   * #1477 OR29 — show only these fields, in this order (a node's tab). Display
+   * only: the editor still READS every field, so Apply writes what the other
+   * tabs hold too. Omitted: every field, in the schema's order.
+   */
+  fieldNames?: readonly string[];
+  /**
+   * #1477 — the "Config" title and the fields/JSON toggle. A canvas node draws
+   * the toggle in its panel header instead, once for all its tabs.
+   */
+  toolbar?: boolean;
   /** Rendered last inside the group, in both modes. */
   children?: ReactNode;
 }) {
-  const { jsonMode, unrenderable, fields, carried } = editor;
+  const { jsonMode, unrenderable, carried } = editor;
+  const fields =
+    fieldNames === undefined
+      ? editor.fields
+      : fieldNames.flatMap((name) => editor.fields.filter((f) => f.name === name));
   const jsonErrorId = useId();
   const jsonError = errorFor?.('config');
   return (
     <div className={className} role="group" aria-label="Config">
-      <div>
-        <span>Config</span>
-        {editor.canToggle && (
-          <button type="button" onClick={editor.toggleMode}>
-            {jsonMode ? 'Edit as fields' : 'Edit as JSON'}
-          </button>
-        )}
-      </div>
+      {toolbar && (
+        <div>
+          <span>Config</span>
+          {editor.canToggle && (
+            <button type="button" onClick={editor.toggleMode}>
+              {jsonMode ? 'Edit as fields' : 'Edit as JSON'}
+            </button>
+          )}
+        </div>
+      )}
 
       {unrenderable.length > 0 && (
         <p className="contract-advisory">

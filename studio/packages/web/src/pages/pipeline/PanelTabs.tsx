@@ -29,11 +29,18 @@ export function PanelTabs<K extends string>({
   tabs,
   selected,
   onSelect,
+  header,
 }: {
   label: string;
   tabs: readonly [PanelTab<K>, ...PanelTab<K>[]];
   selected?: K;
   onSelect?: (key: K) => void;
+  /**
+   * #1477 OR29 — drawn above the strip, and pinned WITH it while the panel
+   * scrolls (`.panel-tabs-sticky`): the property dock's node name and its
+   * Apply / Revert / ⋯ stay in reach from the bottom of a long tab.
+   */
+  header?: ReactNode;
 }) {
   const baseId = useId();
   const [own, setOwn] = useState<K>(tabs[0].key);
@@ -41,28 +48,39 @@ export function PanelTabs<K extends string>({
   const tabId = (key: K) => `${baseId}-tab-${key}`;
   const panelId = (key: K) => `${baseId}-panel-${key}`;
 
+  const strip = (
+    <TabList
+      className="panel-tabs"
+      size="small"
+      selectedValue={current}
+      // Fluent types `data.value` as `unknown`; narrowed against the tabs
+      // actually offered rather than asserted.
+      onTabSelect={(_, data) => {
+        const next = tabs.find((t) => t.key === data.value);
+        if (!next) return;
+        setOwn(next.key);
+        onSelect?.(next.key);
+      }}
+      aria-label={label}
+    >
+      {tabs.map((t) => (
+        <Tab key={t.key} value={t.key} id={tabId(t.key)} aria-controls={panelId(t.key)}>
+          {t.label}
+        </Tab>
+      ))}
+    </TabList>
+  );
+
   return (
     <>
-      <TabList
-        className="panel-tabs"
-        size="small"
-        selectedValue={current}
-        // Fluent types `data.value` as `unknown`; narrowed against the tabs
-        // actually offered rather than asserted.
-        onTabSelect={(_, data) => {
-          const next = tabs.find((t) => t.key === data.value);
-          if (!next) return;
-          setOwn(next.key);
-          onSelect?.(next.key);
-        }}
-        aria-label={label}
-      >
-        {tabs.map((t) => (
-          <Tab key={t.key} value={t.key} id={tabId(t.key)} aria-controls={panelId(t.key)}>
-            {t.label}
-          </Tab>
-        ))}
-      </TabList>
+      {header === undefined ? (
+        strip
+      ) : (
+        <div className="panel-tabs-sticky">
+          {header}
+          {strip}
+        </div>
+      )}
       {tabs.map((t) => (
         <div
           key={t.key}
