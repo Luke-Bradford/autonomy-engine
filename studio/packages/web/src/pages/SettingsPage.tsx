@@ -4,7 +4,7 @@ import { useStore } from 'zustand';
 import { getSettings } from '../api/settings';
 import { displayTimeZoneName, displayTimeZoneOptions, formatTimestamp } from '../lib/displayTime';
 import { LabelledControl } from '../lib/LabelledControl';
-import { uiStore, type UiStore } from '../stores/uiStore';
+import { DENSITIES, uiStore, type Density, type UiStore } from '../stores/uiStore';
 import { ThemeToggle } from '../theme/ThemeToggle';
 
 /**
@@ -54,6 +54,41 @@ function DisplayTimeZonePicker({ store = uiStore }: { store?: UiStore }) {
           {shown.map((option) => (
             <option key={option} value={option}>
               {displayTimeZoneName(option)}
+            </option>
+          ))}
+        </select>
+      )}
+    </LabelledControl>
+  );
+}
+
+const DENSITY_LABELS: Record<Density, string> = {
+  compact: 'Compact',
+  comfortable: 'Comfortable',
+};
+
+/**
+ * #1477 OR29 — how tightly the work surfaces are set, per viewer
+ * (`uiStore.density`). Compact is the default; comfortable restores the roomier
+ * spacing.
+ */
+function DensityPicker({ store = uiStore }: { store?: UiStore }) {
+  const density = useStore(store, (s) => s.density);
+  const setDensity = useStore(store, (s) => s.setDensity);
+  return (
+    <LabelledControl label="Density">
+      {(id) => (
+        <select
+          id={id}
+          value={density}
+          onChange={(e) => {
+            const next = DENSITIES.find((option) => option === e.target.value);
+            if (next !== undefined) setDensity(next);
+          }}
+        >
+          {DENSITIES.map((option) => (
+            <option key={option} value={option}>
+              {DENSITY_LABELS[option]}
             </option>
           ))}
         </select>
@@ -132,6 +167,9 @@ export function SettingsPage() {
               reader would announce "Dark mode, switch" and then "Dark mode"
               again. */}
           <span aria-hidden="true">Dark mode</span>
+        </div>
+        <div className="settings-row">
+          <DensityPicker />
         </div>
         <div className="settings-row">
           <DisplayTimeZonePicker />

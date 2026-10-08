@@ -1,4 +1,5 @@
 import { webDarkTheme, webLightTheme, type Theme } from '@fluentui/react-components';
+import type { Density } from '../stores/uiStore';
 
 /** The two shipped themes. `uiStore.themeMode` selects between them (U1). */
 export type ThemeMode = 'light' | 'dark';
@@ -39,4 +40,13 @@ export function syncColorScheme(mode: ThemeMode): void {
   const root = document.documentElement;
   root.dataset.theme = mode;
   root.style.colorScheme = mode;
+}
+
+/**
+ * #1477 OR29 — the viewer's density on `<html data-density>`, which the
+ * compact rules in `index.css` key on. On the root rather than one surface so
+ * every later surface that adopts compact needs a selector, not wiring.
+ */
+export function syncDensity(density: Density): void {
+  document.documentElement.dataset.density = density;
 }

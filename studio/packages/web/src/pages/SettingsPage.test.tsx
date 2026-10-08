@@ -96,6 +96,21 @@ describe('SettingsPage — appearance', () => {
   });
 });
 
+describe('SettingsPage — density (#1477 OR29)', () => {
+  afterEach(() => uiStore.getState().setDensity('compact'));
+
+  it('starts compact, and a choice is the store’s', async () => {
+    getSettingsMock.mockResolvedValue(settings('env', null));
+    render(<SettingsPage />);
+    const picker = screen.getByLabelText<HTMLSelectElement>('Density');
+    expect(picker.value).toBe('compact');
+
+    await userEvent.selectOptions(picker, 'Comfortable');
+    expect(uiStore.getState().density).toBe('comfortable');
+    expect(picker.value).toBe('comfortable');
+  });
+});
+
 describe('SettingsPage — display time zone (#1484)', () => {
   afterEach(() => uiStore.getState().setDisplayTimeZone('local'));
 

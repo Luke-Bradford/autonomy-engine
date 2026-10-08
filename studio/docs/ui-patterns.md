@@ -98,6 +98,11 @@ required marks and display names; its layout is its own, below.
   `sectionHints.test.ts`. The line is the group's `aria-describedby`. A hint never restates a note
   already inside its section, which a screen reader would read twice. A collapsed section's hint
   shows once it is opened.
+  **In the property dock and the run monitor's node panel (`DockSection`) the hint sits behind a
+  `?` beside the heading, not under it** (#1477 OR29): the dock is a work surface and the UI
+  standard keeps prose off it. The note is still the section's `aria-describedby`; the `?` is
+  beside the `h4`, never inside it, so the region's name stays the heading alone. Drawers keep the
+  line under the title.
 - A field's title must not contain another label on the same form ("Name", "Kind", "Store"):
   label lookups by substring, in tests and in assistive tech, would then find two controls.
 - **Required fields get an asterisk and `aria-required`** (native `required` on a plain input).
@@ -313,6 +318,21 @@ pipeline parameter's default. Their refusals still say where the mistake is (bel
   home until #1418 (OR25). Either would also replace the native box that the labels, the form
   validation and the e2e suite rely on. There is no line-number gutter: a textarea cannot align one
   reliably under zoom or with a horizontal scrollbar. Format selecting the mistake does that job.
+
+## Density
+
+Compact is the default and comfortable is a per-viewer setting (Settings → Appearance → Density,
+`uiStore.density`, mirrored onto `<html data-density>`), per the UI standard and #1477 OR29.
+Compact means 13px field text, 12px labels and section headings (uppercase), 28px single-line
+controls, and 4/8px spacing. Those numbers are tokens on `:root[data-density='compact']`
+(`--density-control-height`, `--density-field-font`, `--density-label-font`, `--density-space-1`,
+`--density-space-2`). Read the tokens rather than repeating the numbers.
+
+The rules are scoped per surface. Today that is only the property dock's panel. A surface adopts
+compact by adding its selector to that block, and comfortable leaves every surface exactly as it
+was before density existed. Checkboxes, radios and textareas keep their own size. Icon buttons and
+Fluent's tabs keep their own metrics. `e2e/property-dock-density.spec.ts` measures the numbers at
+1440x900.
 
 ## Width, and why there is no two-column grid
 

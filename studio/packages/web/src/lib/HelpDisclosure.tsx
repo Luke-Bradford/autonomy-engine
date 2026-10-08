@@ -9,7 +9,10 @@ import {
 
 /**
  * #1484 M2 — a `?` help: a `<details>` whose note floats over the page
- * (`.run-header__help`). It dismisses the way a popover does, which native
+ * (`.help-disclosure`), anchored to the `?`'s right edge. `inline` (#1477
+ * OR29, `DockSection`) anchors it to the section's heading row instead, at that
+ * row's width: in a scrolling dock, a note anchored to a `?` at the left would
+ * hang off the panel's edge. It dismisses the way a popover does, which native
  * `<details>` does not: on Escape, when focus moves to an element outside it,
  * and on a pointer press outside it.
  *
@@ -25,12 +28,15 @@ import {
 export function HelpDisclosure({
   label,
   noteId,
+  inline = false,
   children,
 }: {
   /** The `?`'s accessible name, also its hover. */
   label: string;
   /** The note's id, for a control's `aria-describedby`. */
   noteId: string;
+  /** Anchor the open note to the enclosing positioned row, at its width. */
+  inline?: boolean;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDetailsElement>(null);
@@ -59,7 +65,7 @@ export function HelpDisclosure({
   return (
     <details
       ref={ref}
-      className="run-header__help"
+      className={inline ? 'help-disclosure help-disclosure--inline' : 'help-disclosure'}
       onToggle={(e) => setOpen(e.currentTarget.open)}
       onKeyDown={onKeyDown}
       onBlur={onBlur}

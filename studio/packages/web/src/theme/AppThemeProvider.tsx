@@ -2,7 +2,7 @@ import { useLayoutEffect, type ReactNode } from 'react';
 import { FluentProvider } from '@fluentui/react-components';
 import { useStore } from 'zustand';
 import { uiStore, type UiStore } from '../stores/uiStore';
-import { FLUENT_ROOT_CLASS, THEMES, syncColorScheme } from './fluentTheme';
+import { FLUENT_ROOT_CLASS, THEMES, syncColorScheme, syncDensity } from './fluentTheme';
 
 interface AppThemeProviderProps {
   children: ReactNode;
@@ -32,10 +32,16 @@ interface AppThemeProviderProps {
  */
 export function AppThemeProvider({ children, store = uiStore }: AppThemeProviderProps) {
   const mode = useStore(store, (s) => s.themeMode);
+  const density = useStore(store, (s) => s.density);
 
   useLayoutEffect(() => {
     syncColorScheme(mode);
   }, [mode]);
+  // #1477 OR29 — the density preference, mirrored the same way and for the
+  // same before-paint reason.
+  useLayoutEffect(() => {
+    syncDensity(density);
+  }, [density]);
 
   return (
     <FluentProvider theme={THEMES[mode]} className={FLUENT_ROOT_CLASS}>

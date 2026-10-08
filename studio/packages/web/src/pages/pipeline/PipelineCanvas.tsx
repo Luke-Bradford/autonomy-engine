@@ -98,7 +98,6 @@ import {
   containersWithNew,
   createCanvasStore,
   singleSelection,
-  type PasteOutcome,
   type Selection,
   type CanvasState,
 } from './canvasStore';
@@ -142,6 +141,8 @@ import {
 } from './containerRules';
 import { nameIssues, propertyIssues } from './paramRules';
 import { PipelineGeneral } from './PipelineGeneral';
+import { DockPasteButton } from './DockPasteButton';
+import { pasteAndSay } from './paste';
 import { ContractSection, OutputRow, ParamRow, VariableRow } from './ContractEditor';
 import {
   isOwnPolicyIssue,
@@ -241,23 +242,6 @@ import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
  * the third.
  */
 const CANVAS_NOTICE_MS = 6_000;
-
-/**
- * U21 — the notice a paste leaves, for ⌘V and the Paste button alike. A paste
- * from another pipeline says so (#935): its copies arrive without the in-edges
- * and container a local paste re-derives, and the line is where that shows.
- *
- * A pasted container is named by its COPY's label, read off `containers` AFTER
- * the paste — the name the operator now sees on the new box, as ⌘D's notice does.
- */
-function pasteNotice(outcome: PasteOutcome, containers: Container[]): string {
-  if (!outcome.ok) return outcome.reason;
-  const what =
-    outcome.containerId === undefined
-      ? `${outcome.count} ${outcome.count === 1 ? 'activity' : 'activities'}`
-      : (containerLabels(containers).get(outcome.containerId) ?? 'a container');
-  return outcome.crossPipeline ? `Pasted ${what} from another pipeline.` : `Pasted ${what}.`;
-}
 
 interface PipelineCanvasProps {
   pipelineId: string;
@@ -780,8 +764,7 @@ export function PipelineCanvas({
           return;
         }
         e.preventDefault();
-        const pasted = store.getState().pasteClipboard(pipelineId);
-        showCanvasMsg(pasteNotice(pasted, store.getState().containers));
+        showCanvasMsg(pasteAndSay(store, pipelineId));
         return;
       }
       const command = historyCommandFor(e);
@@ -2406,6 +2389,14 @@ export function PipelineCanvas({
                       >
                         {dockPosition === 'right' ? 'Dock to bottom' : 'Dock to right'}
                       </button>
+                      {/* #1477 OR29 — U21's Paste, moved here from a full-width
+                      bar in the nothing-selected panel. */}
+                      <DockPasteButton
+                        store={store}
+                        pipelineId={pipelineId}
+                        onNotice={showCanvasMsg}
+                        busy={previewLocked}
+                      />
                       {/* The page's ONE announcer of a blocked save (#1249). Here
                       in the always-shown header, not on the list: the list is
                       `hidden` whenever Problems or the dock is folded, and a
@@ -2569,15 +2560,7 @@ function PropertyPanel({
   const setNodeTab = useStore(uiStore, (s) => s.setDockNodeTab);
   const pipelineTab = useStore(uiStore, (s) => s.dockPipelineTab);
   const setPipelineTab = useStore(uiStore, (s) => s.setDockPipelineTab);
-  const pipelinePanel = (
-    <PipelinePanel
-      store={store}
-      pipelineId={pipelineId}
-      onNotice={onNotice}
-      tab={pipelineTab}
-      onTab={setPipelineTab}
-    />
-  );
+  const pipelinePanel = <PipelinePanel store={store} tab={pipelineTab} onTab={setPipelineTab} />;
 
   // U21 — a marquee selects many, and the editor below edits ONE. `singleSelection`
   // is the seam: many is its own state with its own panel, not "the first one".
@@ -2786,7 +2769,8 @@ export function MultiSelectionPanel({
  * U16 — the PIPELINE-level property panel: the typed `params` (inputs) and
  * `outputs` (declared results) contract.
  *
- * Placement is the nothing-selected slot, which previously held only a hint.
+ * Placement is the nothing-selected slot (once a hint; since #1477 OR29 it opens
+ * straight onto the tabs, with Paste moved to the dock's header).
  * That is the ADF pattern — click the canvas background to edit the pipeline
  * itself — and it needs no new shell chrome. The spec's U16 row calls for a
  * BOTTOM-pane tab; the bottom pane does not exist yet, and building one is shell
@@ -2797,14 +2781,10 @@ export function MultiSelectionPanel({
  */
 export function PipelinePanel({
   store,
-  pipelineId,
-  onNotice,
   tab,
   onTab,
 }: {
   store: ReturnType<typeof createCanvasStore>;
-  pipelineId: string;
-  onNotice: (message: string) => void;
   /** #844 — the dock's lifted tab choice; see `PanelTabs`. */
   tab?: PipelineTab;
   onTab?: (tab: PipelineTab) => void;
@@ -2815,26 +2795,10 @@ export function PipelinePanel({
 
   return (
     <aside className="property-panel" aria-label="Properties">
-      <h3>Pipeline</h3>
-      <p className="page-hint">
-        Select a node or an edge to edit it, or use the ⚙ on a container box.
-      </p>
-
-      {/* U21 — Paste lives in the NOTHING-selected panel because that is where an
-          operator is standing when they want it: they have just clicked the
-          background to deselect, and ⌘V is otherwise invisible. It is always
-          enabled — the refusal reason (empty clipboard, or a copy from another
-          pipeline that reads a node it did not bring) is more useful said than
-          hidden behind a grey button. */}
-      <button
-        type="button"
-        onClick={() => {
-          const pasted = store.getState().pasteClipboard(pipelineId);
-          onNotice(pasteNotice(pasted, store.getState().containers));
-        }}
-      >
-        Paste
-      </button>
+      {/* #1477 OR29 — named for assistive tech, not drawn: the tabs below
+          (Parameters · Variables · Outputs · General) already say this is the
+          pipeline, and the line they would cost puts the first row lower. */}
+      <h3 className="visually-hidden">Pipeline</h3>
 
       {/* #844 — the U16 contract editor, as the dock's pipeline-level tabs (ADF's
           Parameters / Output). Each section keeps its heading inside its tab, so

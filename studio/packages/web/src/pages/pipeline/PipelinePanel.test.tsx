@@ -3,7 +3,6 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { PipelineVersionSchema, type PipelineVersion } from '@autonomy-studio/shared';
 import { PipelinePanel } from './PipelineCanvas';
 import { createCanvasStore } from './canvasStore';
-import { clearClipboard } from './clipboard';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 
 function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
@@ -26,7 +25,7 @@ function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
 function mount(v: PipelineVersion) {
   const store = createCanvasStore();
   store.getState().loadVersion(v);
-  render(<PipelinePanel pipelineId="pl_1" onNotice={() => {}} store={store} />);
+  render(<PipelinePanel store={store} />);
   return store;
 }
 
@@ -525,42 +524,14 @@ describe('PipelinePanel (#844 V3) — variables', () => {
   });
 });
 
-describe('PipelinePanel — Paste (U21)', () => {
-  /**
-   * Paste lives in the NOTHING-selected panel because that is where an operator
-   * is standing when they want it, and it is the only place ⌘V is discoverable.
-   */
-  function panel() {
-    const store = createCanvasStore();
-    store.getState().loadVersion(version());
-    render(<PipelinePanel pipelineId="pl_1" onNotice={() => {}} store={store} />);
-    return store;
-  }
-
-  it('pastes what was copied, and says how much', () => {
-    clearClipboard();
-    const store = createCanvasStore();
-    store.getState().loadVersion(version());
-    store.getState().setSelection([{ kind: 'node', id: 'n_a' }]);
-    store.getState().copySelection('pl_1');
-    // Deselect, which is the state this panel is shown in at all.
-    store.getState().setSelection([]);
-
-    const notices: string[] = [];
-    render(<PipelinePanel pipelineId="pl_1" onNotice={(m) => notices.push(m)} store={store} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Paste' }));
-
-    expect(store.getState().nodes).toHaveLength(2);
-    expect(store.getState().past).toHaveLength(1);
-    expect(notices).toEqual(['Pasted 1 activity.']);
-  });
-
-  it('is ALWAYS enabled — the refusal is more use said than hidden', () => {
-    clearClipboard();
-    panel();
-    // A greyed button cannot explain WHY it is grey, and "nothing copied yet"
-    // and "copied from another pipeline" are different answers.
-    expect(screen.getByRole('button', { name: 'Paste' })).toBeEnabled();
+describe('PipelinePanel — no prose, no Paste bar (#1477 OR29)', () => {
+  it('opens on its tabs, with no instructions paragraph and no Paste button', () => {
+    mount(version());
+    expect(screen.queryByText(/Select a node or an edge/)).toBeNull();
+    // Paste moved to the dock header (`DockPasteButton`), where a folded or
+    // filled dock still offers it.
+    expect(screen.queryByRole('button', { name: 'Paste' })).toBeNull();
+    expect(screen.getByRole('tablist', { name: 'Pipeline properties' })).toBeVisible();
   });
 });
 

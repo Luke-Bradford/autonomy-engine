@@ -17,6 +17,11 @@ export function properties(page: Page): Locator {
   return page.getByRole('complementary', { name: 'Properties' });
 }
 
+/** #1477 OR29 — the dock header's Paste (U21), shown whatever is selected. */
+export function dockPaste(page: Page): Locator {
+  return page.locator('.property-dock__header').getByRole('button', { name: 'Paste', exact: true });
+}
+
 /** Manage → Triggers' create/edit form. */
 export function triggerForm(page: Page): Locator {
   return page.getByRole('form', { name: 'Trigger form' });

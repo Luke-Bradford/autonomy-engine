@@ -119,6 +119,13 @@ export interface UiState {
   displayTimeZone: DisplayTimeZone;
   setDisplayTimeZone: (zone: DisplayTimeZone) => void;
   /**
+   * #1477 OR29 — how tightly the work surfaces are set. Compact is the
+   * default (the UI standard: data engineers first); comfortable is the
+   * viewer's own choice, mirrored onto `<html data-density>` for CSS.
+   */
+  density: Density;
+  setDensity: (density: Density) => void;
+  /**
    * #1484 OR35 M1 — the runs grid's column choice and widths, per viewer.
    * `runsGridHidden` names the columns the operator turned OFF, in column
    * order; storing the hidden set rather than the shown one means a column a
@@ -169,6 +176,10 @@ export type NodeTab = (typeof NODE_TABS)[number];
 /** #844 — the pipeline-level panel's tabs. */
 export const PIPELINE_TABS = ['params', 'variables', 'outputs', 'general'] as const;
 export type PipelineTab = (typeof PIPELINE_TABS)[number];
+
+/** #1477 OR29 — the densities a viewer can pick; the first is the default. */
+export const DENSITIES = ['compact', 'comfortable'] as const;
+export type Density = (typeof DENSITIES)[number];
 
 /** #1475 OR27 — the dock's places; the first is the default. */
 export const DOCK_POSITIONS = ['bottom', 'right'] as const;
@@ -334,6 +345,7 @@ export const DOCK_NODE_TAB_STORAGE_KEY = 'autonomy-studio.dock-node-tab';
 export const DOCK_PIPELINE_TAB_STORAGE_KEY = 'autonomy-studio.dock-pipeline-tab';
 export const HISTORY_OPEN_STORAGE_KEY = 'autonomy-studio.history-open';
 export const DISPLAY_TIME_ZONE_STORAGE_KEY = 'autonomy-studio.display-time-zone';
+export const DENSITY_STORAGE_KEY = 'autonomy-studio.density';
 /* Two keys, not one record, for the dock keys' reason above. */
 export const RUN_GRID_HIDDEN_STORAGE_KEY = 'autonomy-studio.runs-grid-hidden';
 export const RUN_GRID_WIDTHS_STORAGE_KEY = 'autonomy-studio.runs-grid-widths';
@@ -609,6 +621,7 @@ type StoredAsIs =
   | 'dockPipelineTab'
   | 'historyOpen'
   | 'displayTimeZone'
+  | 'density'
   | 'runsLive'
   | 'runsPageSize'
   | 'runsLastQuery';
@@ -717,6 +730,12 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       DISPLAY_TIME_ZONE_STORAGE_KEY,
       parseDisplayTimeZone,
       DEFAULT_DISPLAY_TIME_ZONE,
+    );
+    const [density, setDensity] = pref(
+      'density',
+      DENSITY_STORAGE_KEY,
+      parseOneOf(DENSITIES),
+      DENSITIES[0],
     );
 
     const [historyOpen, setHistoryOpen] = pref(
@@ -905,6 +924,8 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       historyOpen,
       setHistoryOpen,
       displayTimeZone,
+      density,
+      setDensity,
       runsLive,
       setRunsLive,
       runsPageSize,
