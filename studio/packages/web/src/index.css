@@ -2822,10 +2822,55 @@ button.danger {
   justify-self: start;
   max-width: 100%;
 }
-.connection-picker > select {
-  width: auto;
+/* #1477 slice 5c — the picker is a Fluent Combobox, sized to its widest option
+   in `ch` by the component. Its own chrome (border, underline, background) is
+   cleared so the inner input takes the dock's one control style
+   (`.property-panel input` and the compact height below), and the chevron sits
+   over the input's right edge. Two classes: Griffel's atomic classes are one. */
+.connection-picker .connection-picker__combobox {
+  position: relative;
   min-width: 0;
   max-width: min(100%, 320px);
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+.connection-picker .connection-picker__combobox::after {
+  display: none;
+}
+.connection-picker .connection-picker__combobox > input {
+  width: 100%;
+  min-width: 0;
+  padding-right: 28px;
+  text-overflow: ellipsis;
+}
+.connection-picker .connection-picker__combobox > .fui-Combobox__expandIcon {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.connection-picker__listbox {
+  min-width: 240px;
+  max-width: 480px;
+}
+.connection-option {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.connection-option__name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.connection-option__line {
+  padding-left: 24px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* The label column of the dock's label-left rows (below). */
 :root[data-density='compact'] {

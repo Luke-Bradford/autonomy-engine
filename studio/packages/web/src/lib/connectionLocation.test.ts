@@ -27,6 +27,16 @@ describe('connectionLocation', () => {
     expect(connectionLocation({ kind: 'agent_cli', config: { command: 'claude' } })).toBe('claude');
   });
 
+  it('drops user info and the query from a base URL: either can hold a credential', () => {
+    expect(
+      connectionLocation({
+        kind: 'http',
+        config: { baseUrl: 'https://user:pw@api.test/v1?key=abc#x' },
+      }),
+    ).toBe('https://api.test/v1');
+    expect(connectionLocation({ kind: 'http', config: { baseUrl: 'not a url' } })).toBeUndefined();
+  });
+
   it('has no line for a connection with nothing to point at', () => {
     expect(connectionLocation({ kind: 'http', config: {} })).toBeUndefined();
     expect(connectionLocation({ kind: 'anthropic_api', config: {} })).toBeUndefined();

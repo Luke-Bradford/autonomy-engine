@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { connectionPickerGroups, connectionSlotReason, eligibleForBinding } from './bindingPickers';
+import {
+  connectionPickerGroups,
+  connectionSlotReason,
+  eligibleForBinding,
+  filterConnectionPickerGroups,
+} from './bindingPickers';
 
 const items = [
   { id: 'a', kind: 'sqlite' },
@@ -78,6 +83,7 @@ describe('connectionPickerGroups (#1477)', () => {
     expect(files).toEqual({
       id: 'f',
       label: 'files (File system)',
+      name: 'files',
       disabledReason: "Can't be a Copy sink yet",
     });
     expect(groups.find((g) => g.kind === 'sqlite')?.options[0]?.disabledReason).toBeUndefined();
@@ -94,5 +100,46 @@ describe('connectionPickerGroups (#1477)', () => {
 
   it('drops kinds with no connections', () => {
     expect(connectionPickerGroups([], reason, undefined)).toEqual([]);
+  });
+
+  it('carries where each connection points, when its config says', () => {
+    const [group] = connectionPickerGroups(
+      [{ id: 'p', name: 'prod', kind: 'postgres', config: { host: 'db', database: 'sales' } }],
+      reason,
+      undefined,
+    );
+    expect(group?.options[0]?.location).toBe('db/sales');
+  });
+});
+
+describe('filterConnectionPickerGroups (#1477 slice 5c)', () => {
+  const groups = connectionPickerGroups(
+    [
+      { id: 'w', name: 'warehouse', kind: 'sqlite', config: { path: '/srv/w.sqlite' } },
+      { id: 'p', name: 'prod', kind: 'postgres', config: { host: 'db', database: 'sales' } },
+      { id: 'f', name: 'files', kind: 'fs', config: { roots: ['/in'] } },
+    ],
+    connectionSlotReason(['sqlite', 'postgres'], 'Copy', 'sink'),
+    undefined,
+  );
+  const ids = (query: string) =>
+    filterConnectionPickerGroups(groups, query).flatMap((g) => g.options.map((o) => o.id));
+
+  it('matches on name, kind and location, ignoring case', () => {
+    expect(ids('WARE')).toEqual(['w']);
+    expect(ids('postgre')).toEqual(['p']);
+    expect(ids('sales')).toEqual(['p']);
+  });
+
+  it('keeps a refused match, still disabled: the search must not hide what exists', () => {
+    const [group] = filterConnectionPickerGroups(groups, '/in');
+    expect(group?.options.map((o) => [o.id, o.disabledReason])).toEqual([
+      ['f', "Can't be a Copy sink yet"],
+    ]);
+  });
+
+  it('drops groups left empty, and a blank query filters nothing', () => {
+    expect(filterConnectionPickerGroups(groups, 'nothing-matches')).toEqual([]);
+    expect(ids('  ')).toEqual(['w', 'p', 'f']);
   });
 });

@@ -72,6 +72,23 @@ export function connectionLocation(c: {
     case 'anthropic_api':
     case 'openai_api':
     case 'ollama':
-      return text('baseUrl');
+      return urlLocation(text('baseUrl'));
   }
+}
+
+/**
+ * A base URL as a location: scheme, host and path. User info and the query are
+ * dropped, since either can carry a credential and a picker line is on screen
+ * for anyone looking. A value that does not parse is not shown at all, rather
+ * than shown unvetted.
+ */
+function urlLocation(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return undefined;
+  }
+  return `${url.protocol}//${url.host}${url.pathname === '/' ? '' : url.pathname}`;
 }

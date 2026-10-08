@@ -4,7 +4,7 @@ import {
   type ConnectionKind,
 } from '@autonomy-studio/shared';
 import type { ConnectionKindDisabledReason } from '../../lib/connectionKindGroups';
-import { connectionOptionLabel } from '../../lib/resourceOptionLabel';
+import { connectionLocation, connectionOptionLabel } from '../../lib/resourceOptionLabel';
 
 /**
  * #996 M5 slice 4c (#1139) — the one rule a resource picker on the node panel
@@ -68,7 +68,11 @@ export function connectionSlotReason(
 
 export interface ConnectionPickerOption {
   id: string;
+  /** The closed picker's text: name and kind (`connectionOptionLabel`). */
   label: string;
+  name: string;
+  /** Where it points, for the option's second line (`connectionLocation`). */
+  location?: string;
   /** Set when the option is listed but cannot be picked here. */
   disabledReason?: string;
 }
@@ -89,7 +93,12 @@ export interface ConnectionPickerGroup {
  * `eligibleForBinding`'s rule above, for the same reason.
  */
 export function connectionPickerGroups(
-  connections: readonly { id: string; name: string; kind: ConnectionKind }[],
+  connections: readonly {
+    id: string;
+    name: string;
+    kind: ConnectionKind;
+    config?: Record<string, unknown>;
+  }[],
   disabledReason: ConnectionKindDisabledReason,
   boundId: string | undefined,
 ): ConnectionPickerGroup[] {
@@ -101,12 +110,44 @@ export function connectionPickerGroups(
         label: CONNECTION_KIND_LABELS[kind],
         options: connections
           .filter((c) => c.kind === kind)
-          .map((c) =>
-            reason === undefined || c.id === boundId
-              ? { id: c.id, label: connectionOptionLabel(c) }
-              : { id: c.id, label: connectionOptionLabel(c), disabledReason: reason },
-          ),
+          .map((c) => {
+            const location =
+              c.config === undefined ? undefined : connectionLocation({ ...c, config: c.config });
+            const option: ConnectionPickerOption = {
+              id: c.id,
+              label: connectionOptionLabel(c),
+              name: c.name,
+              ...(location === undefined ? {} : { location }),
+            };
+            return reason === undefined || c.id === boundId
+              ? option
+              : { ...option, disabledReason: reason };
+          }),
       };
     })
+    .filter((group) => group.options.length > 0);
+}
+
+/**
+ * #1477 OR29 slice 5c — the picker's search: the groups whose options match
+ * `query` on name, kind or location, case-insensitively, each keeping only its
+ * matches. A blank query is no filter. Disabled options are searched too: the
+ * list says what exists, and a search must not hide that a match is refused.
+ */
+export function filterConnectionPickerGroups(
+  groups: readonly ConnectionPickerGroup[],
+  query: string,
+): ConnectionPickerGroup[] {
+  const needle = query.trim().toLowerCase();
+  if (needle === '') return [...groups];
+  return groups
+    .map((group) => ({
+      ...group,
+      options: group.options.filter((o) =>
+        [o.name, group.label, o.location ?? ''].some((text) =>
+          text.toLowerCase().includes(needle),
+        ),
+      ),
+    }))
     .filter((group) => group.options.length > 0);
 }
