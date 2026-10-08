@@ -9,6 +9,8 @@ import { ContractSection } from './ContractEditor';
 
 type Store = ReturnType<typeof createCanvasStore>;
 
+const ANNOTATION_COLUMNS = [{ key: 'annotation', header: 'Annotation' }] as const;
+
 /**
  * #1 F8a — the pipeline-level General tab: what the pipeline is for, and the
  * annotations (tags) it carries. Both live on the immutable version, so they are
@@ -46,28 +48,31 @@ export function PipelineGeneral({ store }: { store: Store }) {
       <ContractSection
         heading="Annotations"
         hint={FORM_SECTION_HINTS.pipeline.annotations}
+        columns={ANNOTATION_COLUMNS}
         count={annotations.length}
         addLabel="Add annotation"
         onAdd={() => store.getState().addAnnotation()}
       >
         {annotations.map((text, i) => (
-          <div className="contract-row" key={i}>
-            <label>
-              Annotation
+          <tr key={i}>
+            <td>
               <input
                 aria-label={`annotation ${i + 1}`}
                 value={text}
                 onChange={(e) => store.getState().updateAnnotation(i, e.target.value)}
               />
-            </label>
-            <button
-              type="button"
-              aria-label={`remove annotation ${i + 1}`}
-              onClick={() => store.getState().removeAnnotation(i)}
-            >
-              Remove
-            </button>
-          </div>
+            </td>
+            <td className="row-table__actions">
+              <button
+                type="button"
+                aria-label={`remove annotation ${i + 1}`}
+                title="Remove"
+                onClick={() => store.getState().removeAnnotation(i)}
+              >
+                ✕
+              </button>
+            </td>
+          </tr>
         ))}
       </ContractSection>
     </>

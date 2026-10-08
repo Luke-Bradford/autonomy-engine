@@ -87,6 +87,7 @@ export function ExpressionPicker({
   resolve,
   onSelect,
   functions: functionsProp,
+  compact = false,
 }: {
   fieldName: string;
   /** How a suggestion is NAMED — web-side, because the node labels live here. */
@@ -106,6 +107,12 @@ export function ExpressionPicker({
    * had since changed.
    */
   functions?: { value: string; resolve: () => FunctionsOptions };
+  /**
+   * #1477 OR29 — the toggles as glyphs (`${}`, `ƒx`), for a table cell, where
+   * two worded buttons under every box would make each row three lines tall.
+   * Their accessible names are unchanged; the glyph's hover says it in words.
+   */
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState<Open | null>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
@@ -153,9 +160,10 @@ export function ExpressionPicker({
         // is an invalid attribute value, which axe reports.
         aria-controls={options !== null ? listId : undefined}
         aria-label={`Insert reference into ${fieldName}`}
+        title={compact ? 'Insert reference' : undefined}
         onClick={() => setOpen(options !== null ? null : { kind: 'refs', options: resolve() })}
       >
-        Insert reference
+        {compact ? '${}' : 'Insert reference'}
       </button>
       {functionsProp && (
         <button
@@ -166,6 +174,7 @@ export function ExpressionPicker({
           aria-expanded={functionsOpen}
           aria-controls={functionsOpen ? fnListId : undefined}
           aria-label={`Functions for ${fieldName}`}
+          title={compact ? 'Functions' : undefined}
           onClick={() =>
             setOpen(
               functionsOpen
@@ -178,7 +187,7 @@ export function ExpressionPicker({
             )
           }
         >
-          Functions
+          {compact ? 'ƒx' : 'Functions'}
         </button>
       )}
 

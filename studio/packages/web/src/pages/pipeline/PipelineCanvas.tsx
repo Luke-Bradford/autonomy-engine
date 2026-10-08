@@ -149,6 +149,7 @@ import { PipelineGeneral } from './PipelineGeneral';
 import { DockPasteButton } from './DockPasteButton';
 import { pasteAndSay } from './paste';
 import { ContractSection, OutputRow, ParamRow, VariableRow } from './ContractEditor';
+import { OUTPUT_COLUMNS, PARAM_COLUMNS, VARIABLE_COLUMNS } from './contractColumns';
 import {
   isOwnPolicyIssue,
   policyIssues,
@@ -2829,9 +2830,10 @@ export function PipelinePanel({
                 hint={
                   <>
                     The typed inputs a run supplies. Referenced as <code>{'${params.name}'}</code>,
-                    and what a trigger binds its values to.
+                    and what a trigger binds its values to. Leave a default blank for no default.
                   </>
                 }
+                columns={PARAM_COLUMNS}
                 count={params.length}
                 addLabel="Add param"
                 onAdd={() => store.getState().addParam()}
@@ -2856,6 +2858,7 @@ export function PipelinePanel({
                     variable or Append variable activity changes it.
                   </>
                 }
+                columns={VARIABLE_COLUMNS}
                 count={variables.length}
                 addLabel="Add variable"
                 onAdd={() => store.getState().addVariable()}
@@ -2873,6 +2876,7 @@ export function PipelinePanel({
               <ContractSection
                 heading="Outputs"
                 hint="The results this pipeline declares to a caller."
+                columns={OUTPUT_COLUMNS}
                 count={outputs.length}
                 addLabel="Add output"
                 onAdd={() => store.getState().addOutput()}
