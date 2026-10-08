@@ -3,9 +3,7 @@ import { MAX_ANNOTATIONS } from '@autonomy-studio/shared';
 import { RemoveRowButton, RowActions, RowNotes, RowTable, type RowTableColumn } from './RowTable';
 
 /** A resource's annotations: one text box a row. */
-const ANNOTATION_COLUMNS: readonly RowTableColumn[] = [
-  { key: 'annotation', header: 'Annotation' },
-];
+const ANNOTATION_COLUMNS: readonly RowTableColumn[] = [{ key: 'annotation', header: 'Annotation' }];
 
 /** What a row's input is wired to when its form reports errors by field. */
 export interface AnnotationRowField {

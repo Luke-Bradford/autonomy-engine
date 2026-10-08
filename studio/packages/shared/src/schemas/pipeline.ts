@@ -1040,7 +1040,9 @@ function refuseDuplicateAnnotations(items: readonly string[], ctx: z.RefinementC
 export function annotationsWriteSchema(subject: string) {
   return z
     .array(AnnotationSchema)
-    .max(MAX_ANNOTATIONS, { message: `a ${subject} can have at most ${MAX_ANNOTATIONS} annotations` })
+    .max(MAX_ANNOTATIONS, {
+      message: `a ${subject} can have at most ${MAX_ANNOTATIONS} annotations`,
+    })
     .superRefine(refuseDuplicateAnnotations);
 }
 

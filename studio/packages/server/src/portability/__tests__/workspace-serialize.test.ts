@@ -43,7 +43,13 @@ function baseVersion(pipelineId: string): NewPipelineVersion {
 describe('serializeWorkspace', () => {
   it('#1477 — writes a connection with no description/annotations WITHOUT the keys, and with them when set', () => {
     const { db } = freshDb();
-    createConnection(db, { ownerId: 'local', name: 'Bare', kind: 'http', config: {}, secretRef: null });
+    createConnection(db, {
+      ownerId: 'local',
+      name: 'Bare',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
     createConnection(db, {
       ownerId: 'local',
       name: 'Tagged',
