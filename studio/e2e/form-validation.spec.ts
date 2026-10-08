@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { seedConnection } from './support/seedResources';
 import { fluentRootReady } from './support/theme';
+import { openNewConnection } from './support/newConnection';
 
 /**
  * #1396 OR5 slice 5 — inline validation on the drawer forms. A field is checked
@@ -23,9 +24,10 @@ async function openNew(page: Page, hub: 'connections' | 'datasets'): Promise<voi
     .getByRole('heading', { name: hub === 'connections' ? 'Connections' : 'Datasets' })
     .waitFor();
   await fluentRootReady(page);
-  await page
-    .getByRole('button', { name: hub === 'connections' ? 'New connection' : 'New dataset' })
-    .click();
+  // #1477 — a new connection starts in the kind gallery; these cases were
+  // written against the form's old default kind.
+  if (hub === 'connections') await openNewConnection(page, 'anthropic_api');
+  else await page.getByRole('button', { name: 'New dataset' }).click();
 }
 
 const connectionForm = (page: Page) => page.getByRole('form', { name: 'Connection form' });

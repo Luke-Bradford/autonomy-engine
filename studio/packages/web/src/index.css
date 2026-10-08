@@ -1387,6 +1387,66 @@ details.form-section > summary.form-section-title {
   font-size: 1.1em;
 }
 
+/* #1477 — the New-connection kind gallery (lib/ConnectionKindGallery). Two
+   columns of compact name tiles in a 460px drawer, so every kind is on screen
+   at once; the description is the tile's tooltip, not text on the page. */
+.kind-gallery {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.kind-gallery__search input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.kind-gallery__group h4 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.kind-gallery__tiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.kind-gallery__tiles li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.kind-gallery__tile {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-weight: 400;
+  text-align: left;
+}
+
+.kind-gallery__tile[aria-disabled='true'] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.kind-gallery__reason,
+.kind-gallery__empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 /* The chosen kind's icon beside the form's Kind/Mode picker. The picker keeps
    the full width it had as the field's only control. */
 .kind-select {

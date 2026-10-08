@@ -4,6 +4,7 @@ import { fluentRootReady } from './support/theme';
 import { canvasNodes } from './support/canvasGraph';
 import { openSeededCanvas } from './support/seedDoc';
 import { properties, triggerForm } from './support/panels';
+import { openNewConnection } from './support/newConnection';
 
 /**
  * #1227 — every `<select>`/`<textarea>` is paired with its label by `for`/`id`
@@ -128,9 +129,8 @@ test.describe('#1227 — a label names its control and nothing else', () => {
 
     await page.goto('/#/manage/connections');
     await fluentRootReady(page);
-    await page.getByRole('button', { name: 'New connection' }).click();
+    await openNewConnection(page, 'fs');
     const form = page.getByRole('form', { name: 'Connection form' });
-    await form.getByLabel('Kind', { exact: true }).selectOption('fs');
     const roots = form.getByLabel(/^Allowed folders/);
     await expect(roots).toBeVisible();
     expect(await configFieldStyle(roots)).toEqual(CONFIG_FIELD_RHYTHM);
