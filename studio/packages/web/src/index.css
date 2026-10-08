@@ -4877,6 +4877,8 @@ button.danger {
 
 /* Compact: a 28px control in a 32px row. */
 :root[data-density='compact'] .row-table td textarea {
+  box-sizing: border-box;
+  min-height: var(--density-control-height);
   line-height: 16px;
   padding-block: calc((var(--density-control-height) - 16px - 2px) / 2);
 }
@@ -4900,6 +4902,11 @@ button.danger {
 .object-list-label {
   font-size: 0.8rem;
   color: var(--muted);
+  /* Positioned, so its `?` note opens at the label row's width (#1477). */
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 .expression-picker {

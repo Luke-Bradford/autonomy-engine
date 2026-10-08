@@ -22,6 +22,7 @@ import { LabelledControl } from '../../lib/LabelledControl';
 import { JsonEditor } from '../../lib/form/JsonEditor';
 import { RequiredMark } from '../../lib/form/RequiredMark';
 import { RowTable, type RowTableColumn } from '../../lib/form/RowTable';
+import { HelpDisclosure } from '../../lib/HelpDisclosure';
 import { FieldError } from '../../lib/form/FieldError';
 import { fieldAttrs } from '../../lib/form/fieldValidation';
 
@@ -237,9 +238,9 @@ export function ConfigFieldControl({
   // " — number". A cell has no hint slot, and keeps the suffix.
   const numberField = name === undefined && field.kind === 'number';
   const rule = numberField ? describeNumberRule(field.numberRule ?? { integer: false }) : null;
-  const hint =
+  const hintBody =
     titled === undefined && rule === null ? null : (
-      <p id={hintId} className="field-hint">
+      <>
         {rule !== null && (
           <>
             {rule}.{titled === undefined ? '' : ' '}
@@ -248,6 +249,12 @@ export function ConfigFieldControl({
         {titled?.description !== undefined && <>{titled.description} </>}
         {/* An untitled field's label is already its key. */}
         {titled !== undefined && <code>{field.name}</code>}
+      </>
+    );
+  const hint =
+    hintBody === null ? null : (
+      <p id={hintId} className="field-hint">
+        {hintBody}
       </p>
     );
   const errorId = useId();
@@ -291,8 +298,8 @@ export function ConfigFieldControl({
           rows={isRowList(value) ? value : []}
           onChange={onChange}
           picker={picker}
+          help={hintBody === null ? undefined : { id: hintId, body: hintBody }}
         />
-        {hint}
         {errorSlot}
       </>
     );
@@ -645,6 +652,7 @@ export function ObjectListControl({
   rows,
   onChange,
   picker,
+  help,
 }: {
   field: ConfigField;
   label: string;
@@ -657,6 +665,12 @@ export function ObjectListControl({
   rows: readonly ObjectListRow[];
   onChange: (next: readonly ObjectListRow[]) => void;
   picker?: FieldPicker;
+  /**
+   * #1477 OR29 — the list's hint, behind a `?` beside its label rather than a
+   * paragraph under the table. `id` is what `describedBy` names: a closed
+   * `<details>`' note is still the group's description.
+   */
+  help?: { id: string; body: ReactNode };
 }) {
   const cells = field.elementFields ?? [];
   const columns = cells.map(cellColumn);
@@ -717,9 +731,14 @@ export function ObjectListControl({
       {...checked}
       ref={groupRef}
     >
-      <span className="object-list-label" id={labelId}>
-        {label}
+      <span className="object-list-label">
+        <span id={labelId}>{label}</span>
         {required && <RequiredMark />}
+        {help !== undefined && (
+          <HelpDisclosure label={`About ${label}`} noteId={help.id} inline>
+            {help.body}
+          </HelpDisclosure>
+        )}
       </span>
       {rows.length === 0 ? <p className="page-hint">No rows.</p> : null}
       {field.recordValue === 'secret' ? (

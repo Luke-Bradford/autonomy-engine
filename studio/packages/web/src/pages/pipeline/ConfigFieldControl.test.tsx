@@ -427,6 +427,25 @@ describe('ConfigFieldControl — a row list is a compact table (#1477 OR29)', ()
     expect(getByRole('table').querySelector('td .required-mark')).toBeNull();
   });
 
+  it("a titled list's hint is behind a `?` beside its label, not a paragraph under the table", () => {
+    const field: ConfigField = {
+      ...mapping,
+      label: { title: 'Column mapping', description: 'Which column fills which.' },
+    };
+    const { getByRole, container } = render(
+      <ConfigFieldControl field={field} value={[{}]} onChange={noop} />,
+    );
+    expect(container.querySelector('p.field-hint')).toBeNull();
+    const help = container.querySelector('.object-list-label details.help-disclosure');
+    expect(help).not.toBeNull();
+    expect(help!.querySelector('summary')).toHaveAccessibleName('About Column mapping');
+    // Still the group's description, and the table keeps the list's name alone.
+    expect(getByRole('group', { name: 'Column mapping' })).toHaveAccessibleDescription(
+      'Which column fills which. mapping',
+    );
+    expect(getByRole('table')).toHaveAccessibleName('Column mapping');
+  });
+
   it('a top-level field keeps its visible label (only cells hide theirs)', () => {
     const { container } = render(
       <ConfigFieldControl
