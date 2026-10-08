@@ -1607,7 +1607,10 @@ button.danger {
 }
 
 .property-panel:has(> .panel-tabs-sticky) {
-  scroll-padding-top: 5.5rem;
+  /* The pinned region's height with the header wrapped onto two rows, as it is
+     in the 320px-minimum right-hand dock. Erring high only scrolls a focused
+     field a little further; erring low would hide it under the header. */
+  scroll-padding-top: 7rem;
 }
 
 .property-panel__header {
