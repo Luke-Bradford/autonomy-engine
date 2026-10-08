@@ -160,6 +160,10 @@ function scrubVersion(version: { nodes: unknown[] }): void {
  * changed, and the next Commit would rewrite every file with no real change.
  * (`containers` never needed this: it predates git serialization.)
  *
+ * #1477 — a connection's `description` + `annotations` are late fields in the
+ * same sense, and go through this same helper (a connection never has
+ * `variables`, so that line is inert for it).
+ *
  * The ONE definition, applied at both places that matter: the content form
  * (`scrubVersion`) and the bytes of a serialized file (`serializePipeline`, and
  * the portable export for the same shape). A non-empty value is left untouched,
@@ -231,6 +235,10 @@ export function connectionContentForm(data: ConnectionExportData): string {
   // present (G8's readiness concern), not authoring content — exclude it so a
   // machine that has not re-entered the secret does not churn every connection.
   omitKeys(clone, [...RESOURCE_VOLATILE, 'requiresSecret']);
+  // #1477 — an empty description or annotation list is the absent key, as on a
+  // pipeline version: a file committed before the fields existed has neither,
+  // and a hand-written `""` / `[]` means the same thing.
+  omitEmptyLateFields(clone);
   return canonicalStringify(clone);
 }
 

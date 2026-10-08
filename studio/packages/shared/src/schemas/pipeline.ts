@@ -977,8 +977,13 @@ export type NewPipeline = z.input<typeof NewPipelineSchema>;
  * #1 F8a (spec D1) — the bounds on a version's `description` and `annotations`.
  * Exported so the canvas (`propertyIssues`) and the write schema below refuse
  * the same thing with the same words.
+ *
+ * #1477 — a connection carries the same two fields (ADF's linked-service form)
+ * under the same bounds, so `DESCRIPTION_MAX_CHARS` is the one limit and the
+ * pipeline name stays as its alias for the code that already reads it.
  */
-export const PIPELINE_DESCRIPTION_MAX_CHARS = 4000;
+export const DESCRIPTION_MAX_CHARS = 4000;
+export const PIPELINE_DESCRIPTION_MAX_CHARS = DESCRIPTION_MAX_CHARS;
 export const ANNOTATION_MAX_CHARS = 100;
 export const MAX_ANNOTATIONS = 50;
 
@@ -1023,6 +1028,20 @@ function refuseDuplicateAnnotations(items: readonly string[], ctx: z.RefinementC
     }
     seen.add(key);
   }
+}
+
+/**
+ * #1477 — the write-path list of annotations, for any resource that carries
+ * them (a pipeline version, a connection): each one `AnnotationSchema`, at most
+ * `MAX_ANNOTATIONS`, no case-insensitive duplicate. `subject` only words the
+ * count refusal. No `.default()` here, deliberately: each caller decides, and a
+ * PATCH body must not have one (Zod applies a default through `.partial()`).
+ */
+export function annotationsWriteSchema(subject: string) {
+  return z
+    .array(AnnotationSchema)
+    .max(MAX_ANNOTATIONS, { message: `a ${subject} can have at most ${MAX_ANNOTATIONS} annotations` })
+    .superRefine(refuseDuplicateAnnotations);
 }
 
 export const PipelineVersionSchema = z.object({
@@ -1139,11 +1158,7 @@ export const NewPipelineVersionSchema = PipelineVersionSchema.omit({
       message: `the description can be at most ${PIPELINE_DESCRIPTION_MAX_CHARS} characters`,
     })
     .default(''),
-  annotations: z
-    .array(AnnotationSchema)
-    .max(MAX_ANNOTATIONS, { message: `a pipeline can have at most ${MAX_ANNOTATIONS} annotations` })
-    .superRefine(refuseDuplicateAnnotations)
-    .default([]),
+  annotations: annotationsWriteSchema('pipeline').default([]),
 });
 export type NewPipelineVersion = z.input<typeof NewPipelineVersionSchema>;
 

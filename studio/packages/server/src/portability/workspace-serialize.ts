@@ -648,6 +648,9 @@ function serializePipeline(
 
 function serializeConnection(connection: Connection): ExportEnvelope {
   const { secretRef, ...rest } = connection;
+  // #1477 — an empty description / annotation list is written without the
+  // key, so every connection file committed before #1477 keeps its bytes.
+  omitEmptyLateFields(rest);
   return ExportEnvelopeSchema.parse({
     schemaVersion: SCHEMA_VERSION,
     catalogVersion: CATALOG_VERSION,

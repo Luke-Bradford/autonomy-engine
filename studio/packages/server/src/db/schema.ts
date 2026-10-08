@@ -102,6 +102,12 @@ export const connections = sqliteTable(
     // (`mode: 'json'` defaults take the JS value — Drizzle serializes it; a
     // string here would double-encode to '"[]"' and read back as a string.)
     parameters: text('parameters', { mode: 'json' }).notNull().default([]).$type<string[]>(),
+    // #1477 — ADF's linked-service Description and Annotations (0046). NOT NULL
+    // with a DB DEFAULT, like `parameters`: the app write path always supplies
+    // both (`ConnectionSchema`'s read defaults), so the DB default only ever
+    // serves the migration's backfill.
+    description: text('description').notNull().default(''),
+    annotations: text('annotations', { mode: 'json' }).notNull().default([]).$type<string[]>(),
     // Nullable (a connection need not use a secret), but when present it MUST
     // resolve to a real `secrets.ref` row — RESTRICT so a secret can't be
     // deleted out from under a connection still pointing at it. Forward
