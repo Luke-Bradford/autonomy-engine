@@ -426,14 +426,14 @@ export function ActivityRunsTable({
         </p>
       )}
       {basis === 'log' && (
-        <p className="activity-runs__basis">
+        <div className="activity-runs__basis">
           <span>
             Version unavailable: rows from the run log only
           </span>
           <HelpDisclosure label="About rows from the run log" noteId="activity-runs-basis-note">
             {LOG_BASIS_NOTE}
           </HelpDisclosure>
-        </p>
+        </div>
       )}
       {rows === null ? (
         error === null && <p>Loading activity runs…</p>

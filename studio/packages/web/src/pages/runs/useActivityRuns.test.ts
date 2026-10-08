@@ -23,6 +23,14 @@ describe('#1484 M2 useActivityRuns', () => {
   });
   afterEach(() => vi.useRealTimers());
 
+  it('#1557 — carries what the rows were projected from: none before the first read', async () => {
+    getMock.mockResolvedValue({ runId: 'r', basis: 'log', rows: [], groups: [] });
+    const { result } = renderHook(() => useActivityRuns('r', 1, false));
+    expect(result.current.basis).toBeNull();
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(result.current.basis).toBe('log');
+  });
+
   it('reads at once, then at most once per interval while frames keep arriving, never starving', async () => {
     const { rerender } = renderHook(({ seq }) => useActivityRuns('r', seq, true), {
       initialProps: { seq: undefined as number | undefined },
