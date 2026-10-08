@@ -2569,7 +2569,12 @@ export function PipelineCanvas({
             request={newConnection.request}
             returnFocusTo={newConnectionOpenerRef}
             onClose={() => setNewConnection(null)}
-            onCreated={(created) => setConnections((list) => [...list, created])}
+            onCreated={(created) =>
+              // Once: a re-read may already have brought the row in.
+              setConnections((list) =>
+                list.some((c) => c.id === created.id) ? list : [...list, created],
+              )
+            }
             onNotice={showCanvasMsg}
             onDirtyChange={setConnectionFormDirty}
           />

@@ -62,14 +62,14 @@ required marks and display names; its layout is its own, below.
 ## Sections
 
 - The form is grouped into titled sections (`FormSection`, a `fieldset` and `legend`):
-  - for a connection: _Basics_ (name, kind), _Connection_ (the kind's settings), _Authentication_
-    (the secret) and _Advanced_;
-  - for a dataset: _Basics_ (name, store, kind), _Dataset_ (the kind's settings), _Columns_ (the
-    declared schema) and _Advanced_;
-  - for a secret: _Basics_ (name) and _Value_;
-  - for a global parameter: _Basics_ (name, type) and _Value_ (value, description);
-  - for a trigger: _Basics_ (name, enabled), _Pipeline_ (the binding), _Firing_ (the mode, its
-    schedule, event or window, and the run windows), _Concurrency_ and _Parameters_.
+  - for a connection: *Basics* (name, kind), *Connection* (the kind's settings), *Authentication*
+    (the secret) and *Advanced*;
+  - for a dataset: *Basics* (name, store, kind), *Dataset* (the kind's settings), *Columns* (the
+    declared schema) and *Advanced*;
+  - for a secret: *Basics* (name) and *Value*;
+  - for a global parameter: *Basics* (name, type) and *Value* (value, description);
+  - for a trigger: *Basics* (name, enabled), *Pipeline* (the binding), *Firing* (the mode, its
+    schedule, event or window, and the run windows), *Concurrency* and *Parameters*.
 - Triggers use the drawer too, not a full page: the form is long but narrow, and the drawer's body
   scrolls with the page while its footer stays in view. It has no Advanced section, because every
   section holds settings an ordinary trigger uses.
@@ -86,7 +86,6 @@ required marks and display names; its layout is its own, below.
     `aria-describedby`).
 
   Keep the key visible: server errors, advisories and `${}` expressions all cite it.
-
 - `unit` names what the stored value is in. It never converts the value.
 - **A number field says what it admits.** Its hint leads with the rule the schema states, read by
   `configForm.ts` (`numberRule`, `describeNumberRule`): "Whole number from 1 to 65535.",
@@ -209,7 +208,7 @@ message.
   does not show now. This changes with the kind and the JSON view; `configKeyLabel` names the config
   keys. The summary uses these names, and a refusal's issue is filed under a field only if
   `labelOf` names it.
-- **What is shown is narrower.** A check is shown once the field is left _after an edit_, or after
+- **What is shown is narrower.** A check is shown once the field is left *after an edit*, or after
   Save is pressed. Tabbing past an untouched field shows nothing, and typing never raises an error.
   A fix shows at once: the error goes the moment the value is fine, and a new problem in the same
   field waits for the next blur. A field that leaves the form takes its error with it.
@@ -221,7 +220,6 @@ message.
   - `aria-describedby` with the error first, then the hint.
 
   The line has no live role.
-
 - **A refused Save shows a summary and focuses the first invalid field**, after the errors are on
   screen. The summary lists every invalid field as a button ("Timeout (ms): must be a number") that
   takes focus to the field, opening a collapsed section on the way. It lives in the **footer**, not
@@ -308,7 +306,7 @@ message.
 - What still names the KEY: the expression picker's buttons ("Insert reference into url"), a row
   list's buttons and its cells ("tools row 1 name"). The key is what a `${}` reference and a server
   message cite.
-- **An activity's tabs are declared in its catalog entry** (#1477 OR29): _General_ (run policy)
+- **An activity's tabs are declared in its catalog entry** (#1477 OR29): *General* (run policy)
   first, then the entry's `tabs`, from one fixed vocabulary (`ACTIVITY_TAB_KEYS`: Settings, Source,
   Sink, Mapping, Request, Auth, Model, Prompt, Tools, Output, Location, Content), so a tab is named
   the same on every activity that has one.
@@ -431,7 +429,7 @@ list (a Copy mapping, HTTP headers, LLM messages, an output schema) render throu
   format (`— number`, `— JSON`) and the required mark.
 - **A row is one line.** At compact density it is 32px (`--density-row-height`) of 28px controls. A
   text cell is a one-line textarea that grows with its text. The growing is CSS `field-sizing:
-content`, which only Chromium supports. Elsewhere the cell stays one line and scrolls.
+  content`, which only Chromium supports. Elsewhere the cell stays one line and scrolls.
 - **A row's errors and advisories go on a notes row under it** (`RowNotes`, spanning the table), only
   when it has any, so they never widen a cell.
 - **A cell's `${}` and `ƒx` toggles show under the box only while the cell has focus**, or while their

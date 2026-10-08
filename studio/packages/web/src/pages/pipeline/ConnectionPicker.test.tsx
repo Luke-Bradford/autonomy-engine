@@ -101,4 +101,25 @@ describe('ConnectionPicker (#1477 slice 5b)', () => {
     fireEvent.change(select, { target: { value: 'a' } });
     expect(screen.queryByRole('status')).toBeNull();
   });
+
+  it('drops a probe that was in flight across a re-pick, even back to the same connection', async () => {
+    let answer!: (r: { ok: true; probed: 'liveness' }) => void;
+    probe.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    render(<Harness initial="a" />);
+    fireEvent.click(testButton());
+    const select = screen.getByRole('combobox', { name: 'Source connection' });
+    fireEvent.change(select, { target: { value: 'b' } });
+    // The re-pick frees Test for the new choice rather than waiting on the old probe.
+    expect(testButton()).toBeEnabled();
+    fireEvent.change(select, { target: { value: 'a' } });
+    await act(async () => {
+      answer({ ok: true, probed: 'liveness' });
+    });
+    expect(screen.queryByRole('status')).toBeNull();
+  });
 });

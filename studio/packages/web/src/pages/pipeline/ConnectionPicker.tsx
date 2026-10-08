@@ -55,9 +55,16 @@ export function ConnectionPicker({
       mounted.current = false;
     };
   }, []);
+  /**
+   * Which probe may still report. A pick moves it on, so a probe that was in
+   * flight across a re-pick — even back to the same connection — is dropped
+   * rather than shown as a reading of the new choice.
+   */
+  const probeSeq = useRef(0);
   const noun = label.charAt(0).toLowerCase() + label.slice(1);
 
   async function onTest(id: string) {
+    const seq = ++probeSeq.current;
     setVerdict(null);
     setProbing(true);
     let result: ConnectionProbeResult;
@@ -68,7 +75,7 @@ export function ConnectionPicker({
       // question was asked and got no "Connected." back.
       result = { ok: false, error: messageOf(err) };
     }
-    if (!mounted.current) return;
+    if (!mounted.current || seq !== probeSeq.current) return;
     setProbing(false);
     setVerdict({ id, result });
   }
@@ -83,6 +90,8 @@ export function ConnectionPicker({
               value={value ?? ''}
               onChange={(e) => {
                 // A verdict is a reading from one moment; a re-pick starts afresh.
+                probeSeq.current += 1;
+                setProbing(false);
                 setVerdict(null);
                 onPick(e.target.value || undefined);
               }}
