@@ -140,6 +140,30 @@ export function initialPreview(
 }
 
 /**
+ * #1589 — whether the editor follows the `?version` it has just rendered:
+ * `rendered` is that render's version, `synced` the one the page last wrote or
+ * followed, and `standing` the URL's as it stands now (the page's own writes
+ * included, which the router has not rendered yet).
+ *
+ * A render the page has since written over is not followed. The router commits
+ * in a transition, so the follower can run for `?version=1` after Back to
+ * editing has already written it away; following that would reopen the
+ * preview and write `?version=1` back. The newer location renders next, and is
+ * followed or not on its own terms.
+ */
+export function followsUrlVersion({
+  rendered,
+  synced,
+  standing,
+}: {
+  rendered: number | undefined;
+  synced: number | undefined;
+  standing: number | undefined;
+}): boolean {
+  return rendered !== synced && rendered === standing;
+}
+
+/**
  * #1541 — what the editor selects for a link's `&node=` on the version it
  * opened: that activity, or that container, or nothing for an id the version
  * does not hold (a link is not a promise the graph still has it).

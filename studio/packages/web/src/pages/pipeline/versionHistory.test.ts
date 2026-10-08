@@ -8,6 +8,7 @@ import {
   describeRestoreConflict,
   describeSaveConflict,
   docUnchanged,
+  followsUrlVersion,
   historyEntries,
   initialPreview,
   selectionIn,
@@ -616,6 +617,32 @@ describe('initialPreview (#1484)', () => {
     expect(initialPreview(9, versions)).toBeNull();
     expect(initialPreview(undefined, versions)).toBeNull();
     expect(initialPreview(1, [])).toBeNull();
+  });
+});
+
+describe('followsUrlVersion (#1589)', () => {
+  const follows = (rendered?: number, synced?: number, standing?: number) =>
+    followsUrlVersion({ rendered, synced, standing });
+
+  it('follows a ?version the page did not write', () => {
+    // Back/Forward or a link: the rendered URL is the URL as it stands.
+    expect(follows(2, 1, 2)).toBe(true);
+    expect(follows(undefined, 2, undefined)).toBe(true);
+  });
+
+  it('does not follow the version it last wrote or followed', () => {
+    expect(follows(1, 1, 1)).toBe(false);
+    expect(follows(undefined, undefined, undefined)).toBe(false);
+    expect(follows(1, 1, undefined)).toBe(false);
+  });
+
+  it('does not follow a rendered ?version the page has since written over', () => {
+    /* The row click wrote ?version=1 and Back to editing then wrote it away
+       before the follower saw ?version=1 render: following it would reopen the
+       preview and write ?version=1 back. */
+    expect(follows(1, undefined, undefined)).toBe(false);
+    // Written on again since: the newest write's own render decides.
+    expect(follows(2, 1, 3)).toBe(false);
   });
 });
 
