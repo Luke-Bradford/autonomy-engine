@@ -491,7 +491,10 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     // too big, and saying "Malformed request" sends the operator looking for a
     // defect in a file that is merely large (an import of a big export). The
     // text is ours and quotes nothing from the body.
-    if (hasNumericStatusCode(error) && (error as { code?: unknown }).code === 'FST_ERR_CTP_BODY_TOO_LARGE') {
+    if (
+      hasNumericStatusCode(error) &&
+      (error as { code?: unknown }).code === 'FST_ERR_CTP_BODY_TOO_LARGE'
+    ) {
       request.log.warn({ err: error }, 'request body too large');
       reply.status(413).send({
         error: 'bad_request',

@@ -539,7 +539,11 @@ describe('portability routes (export + import)', () => {
         b.name,
         a.name,
       ]);
-      expect(result.items.every((r: { pipeline: { id: string } }) => ![a.id, b.id].includes(r.pipeline.id))).toBe(true);
+      expect(
+        result.items.every(
+          (r: { pipeline: { id: string } }) => ![a.id, b.id].includes(r.pipeline.id),
+        ),
+      ).toBe(true);
     });
 
     it('404s the whole request when one id is not the caller’s, exporting nothing', async () => {

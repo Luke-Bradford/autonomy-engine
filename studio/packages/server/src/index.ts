@@ -262,7 +262,6 @@ const ALARM_TICK_MS = 1_000;
  */
 const RETENTION_SWEEP_MS = 60 * 60 * 1000;
 
-
 export interface BuildAppOptions {
   /** Overrides `process.env.DB_PATH` / the built-in default. Call-time only — never a module-eval-time global. */
   dbPath?: string;

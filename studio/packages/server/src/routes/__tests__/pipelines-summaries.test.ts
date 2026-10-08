@@ -185,7 +185,10 @@ describe('GET /api/pipelines/summaries (#1569 OR37)', () => {
           pipelineVersionId,
           params: {},
           mode: 'schedule',
-          schedule: '0 2 * * *',
+          // At :17, like the hourly below, so every nightly fire is ALSO an
+          // hourly one. `0 2 * * *` fell before the next hourly :17 whenever
+          // the suite ran between 01:17 and 02:00 UTC (#1586 found it).
+          schedule: '17 2 * * *',
           webhook: null,
           concurrency: { policy: 'skip_if_running' },
           runWindows: null,
@@ -210,7 +213,8 @@ describe('GET /api/pipelines/summaries (#1569 OR37)', () => {
       ['Nightly', 'schedule', true],
       ['Off', 'schedule', false],
     ]);
-    // The hourly tick is always the earlier of the two armed schedules.
+    // The hourly tick is never later than the nightly one: every nightly
+    // instant is an hourly instant too.
     expect(s?.nextFireAt).toBe(pendingTicks(app.db, hourly)[0]!.dueAt);
   });
 

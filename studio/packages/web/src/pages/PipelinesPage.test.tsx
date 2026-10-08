@@ -329,7 +329,7 @@ describe('PipelinesPage', () => {
 
       // #1586 — the toolbar's Export takes exactly the rows on screen, in
       // their order, and waits rather than export a list it cannot vouch for.
-      const exportButton = () => screen.getByRole('button', { name: 'Export', exact: true });
+      const exportButton = () => screen.getByRole('button', { name: 'Export' });
 
       it('exports the SHOWN rows, in order, as one file', async () => {
         seed();
