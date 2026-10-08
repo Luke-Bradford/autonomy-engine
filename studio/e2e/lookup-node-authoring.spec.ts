@@ -136,7 +136,7 @@ test.describe('#1221 — lookup-node authoring', () => {
     await canvasNodes(page).first().click();
     await expect(
       properties(page).getByRole('combobox', { name: 'Connection', exact: true }),
-    ).toHaveValue(connA);
+    ).toHaveValue('e2e 1221 store A (SQLite)');
     await expect(properties(page).getByRole('combobox', { name: 'Source dataset' })).toHaveValue(
       setA,
     );

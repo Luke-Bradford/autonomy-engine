@@ -860,7 +860,10 @@ describe('paired binding pickers (#1139)', () => {
       { disabled: true, text: "FilesCan't be a Copy Data sink yet" },
     ]);
     // Grouped by kind, in the gallery's order.
-    expect(list.getAllByRole('group').map((g) => g.textContent)).toEqual(['SQLiteSource store', "File systemFilesCan't be a Copy Data sink yet"]);
+    expect(list.getAllByRole('group').map((g) => g.textContent)).toEqual([
+      'SQLiteSource store',
+      "File systemFilesCan't be a Copy Data sink yet",
+    ]);
   });
 
   it('＋ New asks the editor for the column with the SLOT’s refusals and binds there (#1477)', () => {

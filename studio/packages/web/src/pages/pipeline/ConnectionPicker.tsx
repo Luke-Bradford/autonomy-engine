@@ -144,6 +144,10 @@ export function ConnectionPicker({
               className="connection-picker__combobox"
               style={{ width: `calc(${Math.min(widest, MAX_WIDTH_CH)}ch + 40px)` }}
               listbox={{ className: 'connection-picker__listbox' }}
+              // Always below, shortened to the room there. Flipped above, the
+              // list landed over the dock's own header, which painted over it
+              // and took the clicks meant for its last options (measured, e2e).
+              positioning={{ position: 'below', align: 'start', pinned: true, autoSize: 'height' }}
               placeholder={pickable || value !== undefined ? 'None' : 'No connection yet'}
               value={query ?? selectedText}
               selectedOptions={value === undefined ? [] : [value]}
@@ -205,11 +209,7 @@ export function ConnectionPicker({
                   No connections match
                 </Option>
               )}
-              {onNew !== undefined && (
-                <Option value={NEW}>
-                  New connection…
-                </Option>
-              )}
+              {onNew !== undefined && <Option value={NEW}>New connection…</Option>}
             </Combobox>
             <button
               type="button"

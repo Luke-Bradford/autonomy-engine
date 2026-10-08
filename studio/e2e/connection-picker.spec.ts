@@ -251,16 +251,22 @@ test.describe('#1477 activity connection pickers', () => {
     await page.keyboard.press('Backspace');
     await expect(canvasNodes(page)).toHaveCount(1);
 
-    // Measured at 1440×900: the open list sits inside the window, the row whole.
+    // Measured at 1440×900: the open list sits BELOW the picker and inside the
+    // window, the row whole and on top. (Flipped above, it landed under the
+    // dock's header, which painted over it and took its clicks.)
     const placed = await row.evaluate((el) => {
       const box = el.closest('[role="listbox"]')!.getBoundingClientRect();
+      const picker = document.activeElement!.getBoundingClientRect();
       const r = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
       return {
+        below: box.top >= picker.bottom,
         listInside: box.bottom <= window.innerHeight && box.right <= window.innerWidth,
         rowInside: r.left >= box.left && r.right <= box.right,
+        rowOnTop: hit !== null && el.contains(hit),
       };
     });
-    expect(placed).toEqual({ listInside: true, rowInside: true });
+    expect(placed).toEqual({ below: true, listInside: true, rowInside: true, rowOnTop: true });
 
     await row.click();
     await expect(list).toHaveCount(0);
