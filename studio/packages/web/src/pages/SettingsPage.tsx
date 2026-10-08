@@ -78,7 +78,14 @@ function DensityPicker({ store = uiStore }: { store?: UiStore }) {
   return (
     <LabelledControl label="Density">
       {(id) => (
-        <select id={id} value={density} onChange={(e) => setDensity(e.target.value as Density)}>
+        <select
+          id={id}
+          value={density}
+          onChange={(e) => {
+            const next = DENSITIES.find((option) => option === e.target.value);
+            if (next !== undefined) setDensity(next);
+          }}
+        >
           {DENSITIES.map((option) => (
             <option key={option} value={option}>
               {DENSITY_LABELS[option]}

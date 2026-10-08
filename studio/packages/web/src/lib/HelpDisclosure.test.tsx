@@ -71,13 +71,11 @@ describe('HelpDisclosure (#1484 M2 — the ? help)', () => {
 
   it('inline (#1477 OR29): the same note and description, anchored by its row', () => {
     render(
-      <>
-        <section aria-describedby="n_inline">
-          <HelpDisclosure label="About Params" noteId="n_inline" inline>
-            What the section holds.
-          </HelpDisclosure>
-        </section>
-      </>,
+      <section aria-describedby="n_inline">
+        <HelpDisclosure label="About Params" noteId="n_inline" inline>
+          What the section holds.
+        </HelpDisclosure>
+      </section>,
     );
     const details = screen.getByText('What the section holds.').closest('details');
     expect(details).toHaveClass('help-disclosure', 'help-disclosure--inline');
