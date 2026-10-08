@@ -5,10 +5,12 @@ import {
   globalParamResourceId,
   TriggerPublicSchema,
   parseAndUpgradeEnvelope,
+  parseBundle,
   windowBindingErrors,
   type Connection,
   type ExportEnvelope,
   type ImportAttentionItem,
+  type ImportBundleResult,
   type ImportResult,
   type NewPipelineVersion,
   type Node,
@@ -423,6 +425,15 @@ export function importEnvelope(
         'lives in a store',
     );
   }
+  return importParsedEnvelope(db, ownerId, envelope, opts.resolveStore?.());
+}
+
+function importParsedEnvelope(
+  db: Db,
+  ownerId: string,
+  envelope: ExportEnvelope,
+  store: Connection | undefined,
+): ImportResult {
   switch (envelope.kind) {
     case 'pipeline':
       return importPipelineEnvelope(db, ownerId, envelope);
@@ -431,8 +442,45 @@ export function importEnvelope(
     case 'trigger':
       return importTriggerEnvelope(db, ownerId, envelope);
     case 'dataset':
-      return importDatasetEnvelope(db, ownerId, envelope, opts.resolveStore?.());
+      return importDatasetEnvelope(db, ownerId, envelope, store);
     case 'global-param':
       return importGlobalParamEnvelope(db, ownerId, envelope);
   }
+}
+
+/**
+ * #1586 — a bundle, ALL OR NOTHING. Every member is parsed and upgraded first
+ * (`parseBundle`), so a malformed member refuses the file before any write;
+ * then ONE transaction imports each through the same per-kind path a single
+ * file takes, so a member refused mid-way (a doc rule, a name conflict) rolls
+ * back the members already written. The pipeline import's own transaction
+ * nests as a SAVEPOINT inside this one (see `importPipelineEnvelope`).
+ *
+ * No store choice: `?connectionId=` names ONE store for ONE dataset file, and
+ * a bundle may carry several, so a dataset member resolves its store by
+ * identity or refuses, exactly as a single dataset file with no choice does.
+ */
+export function importBundle(
+  db: Db,
+  ownerId: string,
+  raw: unknown,
+  opts: ImportOptions,
+): ImportBundleResult {
+  if (opts.resolveStore !== undefined) {
+    throw new ImportError(
+      'a store connection was chosen, but this is a bundle — import its datasets one file at a time to choose their store',
+    );
+  }
+  const envelopes = parseBundle(raw);
+  return db.transaction(() => ({
+    kind: 'bundle' as const,
+    items: envelopes.map((envelope, i) => {
+      try {
+        return importParsedEnvelope(db, ownerId, envelope, undefined);
+      } catch (err) {
+        if (err instanceof ImportError) throw new ImportError(`Item ${i + 1}: ${err.message}`);
+        throw err;
+      }
+    }),
+  }));
 }
