@@ -29,3 +29,49 @@ export function kindPlural(kind: string, noun: 'connection' | 'dataset'): string
     noun === 'connection' ? CONNECTION_KIND_LABELS : DATASET_KIND_LABELS;
   return `${labels[kind] ?? kind} ${noun}s`;
 }
+
+/**
+ * #1477 OR29 slice 5c — where a connection points, for the second line of a
+ * picker option: a Postgres host and database, a SQLite file, a file system's
+ * folders, a base URL, an agent's command. `undefined` when there is nothing to
+ * show, so the option is one line rather than an empty second one.
+ *
+ * `config` is a record of unknowns (the shared schema is adapter-specific), and
+ * an imported or hand-edited row can hold anything, so every field is read
+ * defensively: a value of the wrong type is skipped, never thrown on. A picker
+ * that cannot render because one row is odd hides every other connection too.
+ */
+export function connectionLocation(c: {
+  kind: ConnectionKind;
+  config: Record<string, unknown>;
+}): string | undefined {
+  const text = (key: string): string | undefined => {
+    const value = c.config[key];
+    return typeof value === 'string' && value !== '' ? value : undefined;
+  };
+  switch (c.kind) {
+    case 'postgres': {
+      const host = text('host');
+      if (host === undefined) return undefined;
+      const port = c.config.port;
+      const at = typeof port === 'number' ? `${host}:${port}` : host;
+      const database = text('database');
+      return database === undefined ? at : `${at}/${database}`;
+    }
+    case 'sqlite':
+      return text('path');
+    case 'fs': {
+      const roots = c.config.roots;
+      if (!Array.isArray(roots)) return undefined;
+      const folders = roots.filter((r): r is string => typeof r === 'string' && r !== '');
+      return folders.length === 0 ? undefined : folders.join(', ');
+    }
+    case 'agent_cli':
+      return text('command');
+    case 'http':
+    case 'anthropic_api':
+    case 'openai_api':
+    case 'ollama':
+      return text('baseUrl');
+  }
+}
