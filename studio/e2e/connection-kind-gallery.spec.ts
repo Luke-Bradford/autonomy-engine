@@ -127,7 +127,8 @@ test.describe('#1477 the connection kind gallery', () => {
 
     await paste.fill('postgres://etl:pa%24%24word@db.internal:6543/warehouse?sslmode=require');
     await paste.press('Enter');
-    await expect(gallery(page)).toHaveCount(0);
+    // The gallery gives way to the form (whose drawer has the same title).
+    await expect(paste).toHaveCount(0);
     const form = page.getByRole('form', { name: 'Connection form' });
     await expect(form.getByLabel('Kind')).toHaveValue('postgres');
     await expect(form.getByLabel(/^Host/)).toHaveValue('db.internal');
