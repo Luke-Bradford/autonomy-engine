@@ -7,7 +7,12 @@ import { ConnectionKindDrawer } from '../../lib/ConnectionKindGallery';
 import { DrawerShell } from '../../lib/form/DrawerShell';
 import { useDrawerForm } from '../../lib/form/useDrawerForm';
 import { ConnectionForm } from '../connections/ConnectionForm';
-import { blankForm, formForEdit, savePayloadSignature } from '../connections/connectionFormState';
+import {
+  blankForm,
+  detectedForm,
+  formForEdit,
+  savePayloadSignature,
+} from '../connections/connectionFormState';
 import { useConnectionAdvisories } from '../connections/useConnectionAdvisories';
 import type { ConnectionColumnRequest } from './connectionColumnRequest';
 
@@ -141,6 +146,7 @@ export function ConnectionColumn({
           disabledReason={request.disabledReason}
           onClose={onClose}
           onPick={(kind) => openForm(blankForm(kind))}
+          onDetect={(detected) => openForm(detectedForm(detected), blankForm(detected.kind))}
         />
       ) : (
         <DrawerShell

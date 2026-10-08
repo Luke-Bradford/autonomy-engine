@@ -197,6 +197,26 @@ test.describe('#1477 activity connection pickers', () => {
     await expect(newSink).toBeFocused();
   });
 
+  test('paste-to-detect in the column: a refused kind says why; a SQLite path opens its form', async ({
+    page,
+  }) => {
+    await copyNodeOnSink(page, 'e2e 1477 picker paste');
+    await properties(page).getByRole('button', { name: 'New sink connection' }).click();
+    const paste = column(page).getByRole('textbox', { name: 'Paste a path or URL' });
+
+    await paste.fill('/srv/landing/orders.csv');
+    await paste.press('Enter');
+    await expect(paste).toHaveAccessibleDescription("File system: Can't be a Copy Data sink yet");
+
+    await paste.fill('/srv/stores/warehouse.sqlite');
+    await paste.press('Enter');
+    const form = column(page).getByRole('form', { name: 'Connection form' });
+    await expect(form.getByLabel('Kind')).toHaveValue('sqlite');
+    await expect(form.getByLabel(/^Database file/)).toHaveValue('/srv/stores/warehouse.sqlite');
+    await expect(canvasNodes(page)).toHaveCount(1);
+    await expect(editing(page)).toHaveText(/^Draft/);
+  });
+
   test('dark mode: the picker buttons are legible', async ({ page }) => {
     const problems = collectPageProblems(page);
     await copyNodeOnSink(page, 'e2e 1477 picker dark');

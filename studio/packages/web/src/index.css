@@ -1401,6 +1401,37 @@ details.form-section > summary.form-section-title {
   box-sizing: border-box;
 }
 
+/* Paste-to-detect, above the search: one 28px row, the field stretches. */
+.kind-gallery__paste {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
+}
+
+.kind-gallery__paste input {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.kind-gallery__paste .kind-gallery__reason {
+  flex-basis: 100%;
+}
+
+/* Compact density: the gallery's search, paste field and Use button at the
+   standard control height, like the property dock's. */
+:root[data-density='compact'] .kind-gallery input,
+:root[data-density='compact'] .kind-gallery__paste button {
+  box-sizing: border-box;
+  height: var(--density-control-height);
+  padding: 0 var(--density-space-2);
+  font-size: var(--density-field-font);
+}
+
+/* Empty, the live region takes no height; it stays rendered so it announces. */
+.kind-gallery__paste .kind-gallery__reason:not(:empty) {
+  margin-top: 4px;
+}
+
 .kind-gallery__group h4 {
   margin: 0 0 4px;
   font-size: 12px;

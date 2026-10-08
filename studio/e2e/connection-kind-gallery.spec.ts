@@ -104,6 +104,48 @@ test.describe('#1477 the connection kind gallery', () => {
     await expect(form.getByLabel(/^Database file/)).toBeVisible();
   });
 
+  test('paste-to-detect: a postgres URL opens the PostgreSQL form filled in, the password only in Secret', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await gotoConnections(page);
+    await page.getByRole('button', { name: 'New connection' }).click();
+    // A shortcut above the kinds: one compact row, and the search keeps focus.
+    const paste = gallery(page).getByRole('textbox', { name: 'Paste a path or URL' });
+    await expect(
+      gallery(page).getByRole('textbox', { name: 'Search connection kinds' }),
+    ).toBeFocused();
+    const row = await paste.locator('xpath=..').evaluate((el) => {
+      const search = document.querySelector('.kind-gallery__search')!.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      const controls = [...el.querySelectorAll('input, button')].map((c) =>
+        Math.round(c.getBoundingClientRect().height),
+      );
+      return { above: r.bottom <= search.top, height: Math.round(r.height), controls };
+    });
+    expect(row).toEqual({ above: true, height: 28, controls: [28, 28] });
+
+    await paste.fill('postgres://etl:pa%24%24word@db.internal:6543/warehouse?sslmode=require');
+    await paste.press('Enter');
+    // The gallery gives way to the form (whose drawer has the same title).
+    await expect(paste).toHaveCount(0);
+    const form = page.getByRole('form', { name: 'Connection form' });
+    await expect(form.getByLabel('Kind')).toHaveValue('postgres');
+    await expect(form.getByLabel(/^Host/)).toHaveValue('db.internal');
+    await expect(form.getByLabel(/^Port/)).toHaveValue('6543');
+    await expect(form.getByLabel(/^Database/)).toHaveValue('warehouse');
+    await expect(form.getByLabel(/^User/)).toHaveValue('etl');
+    await expect(form.getByLabel(/^TLS mode/)).toHaveValue('require');
+    // The password is in the write-only Secret, and in no other field.
+    const holding = await form.evaluate((el) =>
+      [...el.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea')]
+        .filter((f) => f.value.includes('pa$$word'))
+        .map((f) => f.type),
+    );
+    expect(holding).toEqual(['password']);
+    await expectQuiet(page, problems);
+  });
+
   test('dark mode: tiles are legible on the drawer', async ({ page }) => {
     const problems = collectPageProblems(page);
     await gotoConnections(page);

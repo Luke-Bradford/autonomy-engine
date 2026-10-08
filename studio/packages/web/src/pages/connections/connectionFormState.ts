@@ -12,6 +12,7 @@ import {
   type ConfigField,
   type FieldInput,
 } from '../pipeline/configForm';
+import type { DetectedConnection } from '../../lib/detectConnection';
 
 /*
  * #1477 — the connection form's draft state and the helpers that build it,
@@ -67,6 +68,7 @@ function formFor(
   kind: ConnectionKind,
   config: Record<string, unknown>,
   parameters: readonly string[],
+  secret = '',
 ): FormState {
   const { fields } = connectionFields(kind, config);
   return {
@@ -77,7 +79,10 @@ function formFor(
     inputs: seedFieldInputs(fields, config),
     jsonText: JSON.stringify(config, null, 2),
     jsonMode: false,
-    secret: '', // never prefilled — secrets are write-only, blank = keep existing
+    // Never prefilled from a stored connection — secrets are write-only, blank
+    // = keep existing. Only a NEW form opened by paste-to-detect carries one:
+    // the password the author pasted in a postgres URL.
+    secret,
     // Deduped: the server stores the list as written, so a stored `['a', 'a']`
     // is possible, and an edit should not write the duplicate back.
     parameters: [...new Set(parameters)],
@@ -88,6 +93,14 @@ function formFor(
 /** #1477 — a new connection's form opens for the kind picked in the gallery. */
 export function blankForm(kind: ConnectionKind): FormState {
   return formFor(null, '', kind, {}, []);
+}
+
+/**
+ * #1477 — a new connection's form opens on what paste-to-detect read: the
+ * kind, the config it implies, and a postgres URL's password in the Secret.
+ */
+export function detectedForm({ kind, config, secret }: DetectedConnection): FormState {
+  return formFor(null, '', kind, config, [], secret);
 }
 
 export function formForEdit(conn: ConnectionPublic): FormState {
