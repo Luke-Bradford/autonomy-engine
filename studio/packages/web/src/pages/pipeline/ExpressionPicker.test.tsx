@@ -60,6 +60,8 @@ function mount(
   return {
     storedConfig: () => store.getState().nodes.find((n) => n.id === selected)?.config ?? {},
     apply: () => fireEvent.click(screen.getByRole('button', { name: 'Apply config' })),
+    /** An inactive tab's panel is `hidden`, so a control on it is reached by role only once its tab is open (#1477). */
+    tab: (name: string) => fireEvent.click(screen.getByRole('tab', { name })),
     open: (field: string) =>
       fireEvent.click(screen.getByRole('button', { name: `Insert reference into ${field}` })),
     openFunctions: (field: string) =>
@@ -340,6 +342,7 @@ describe('ExpressionPicker in NodePanel', () => {
       position: at,
     };
     const ui = mount([src, llm], [{ id: 'e1', from: 'src', to: 'llm', on: 'success' }], [], 'llm');
+    ui.tab('Prompt'); // `history` is on the llm_call's Prompt tab
     fireEvent.change(ui.field('History'), { target: { value: 'stale' } });
 
     ui.open('history');
@@ -359,27 +362,34 @@ describe('ExpressionPicker in NodePanel', () => {
     // validator would wave every reference through on it — the false offer.
     // A secret name may not hold `${}` at all.
     const ui = mount([FETCH, CALL], CHAIN, [], 'call');
+    // `headers` is on the Request tab (where the node opens), `secretHeaders` on Auth.
     fireEvent.click(screen.getByRole('button', { name: 'Add headers row' }));
+    ui.tab('Auth');
     fireEvent.click(screen.getByRole('button', { name: 'Add secretHeaders row' }));
+    ui.tab('Request');
     expect(
       screen.getByRole('button', { name: 'Insert reference into headers row 1 value' }),
     ).toBeTruthy();
-    for (const cell of [
-      'headers row 1 key',
-      'secretHeaders row 1 key',
-      'secretHeaders row 1 secret name',
-    ]) {
+    for (const [tab, cell] of [
+      ['Request', 'headers row 1 key'],
+      ['Auth', 'secretHeaders row 1 key'],
+      ['Auth', 'secretHeaders row 1 secret name'],
+    ] as const) {
+      ui.tab(tab);
       expect(screen.getByRole('textbox', { name: cell })).toBeTruthy();
       expect(screen.queryByRole('button', { name: `Insert reference into ${cell}` })).toBeNull();
     }
+    ui.tab('Request');
 
     // Picked while the row has no key yet: the candidate still carries the
     // probed row (`placeRowCandidate`, unit-tested), so the value lands.
     ui.open('headers row 1 value');
     fireEvent.click(screen.getByRole('button', { name: /HTTP Request 1 → body/ }));
     fireEvent.change(ui.field('headers row 1 key'), { target: { value: 'X-Body' } });
+    ui.tab('Auth');
     fireEvent.change(ui.field('secretHeaders row 1 key'), { target: { value: 'Authorization' } });
     fireEvent.change(ui.field('secretHeaders row 1 secret name'), { target: { value: 'tok' } });
+    ui.tab('Request');
     fireEvent.change(ui.field('Request URL'), { target: { value: 'https://b.test' } });
     ui.apply();
     expect(ui.storedConfig()).toMatchObject({

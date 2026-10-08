@@ -83,6 +83,20 @@ const agentNode = (config: Record<string, unknown>): Node => node('n_agent', 'ag
 /** The shared editor's mode toggle (#1088) — one button whose caption names the mode it goes TO. */
 const toJson = () => screen.getByRole('button', { name: 'Edit as JSON' });
 const toFields = () => screen.getByRole('button', { name: 'Edit as fields' });
+/**
+ * #1477 — an inactive tab's panel stays MOUNTED but `hidden`: `getByLabelText` still
+ * finds its fields, `getByRole` does not. Switch to the tab that holds a control
+ * before reaching it by role.
+ */
+const openTab = (name: string) => fireEvent.click(screen.getByRole('tab', { name }));
+/** The strip's labels, in order. Fluent's Tab renders its label twice, so read the visible span. */
+const tabNames = () =>
+  screen.getAllByRole('tab').map((t) => t.querySelector('.fui-Tab__content')?.textContent);
+/** The More node actions menu (#1477) — Fluent's, so the item arrives after the click. */
+const chooseNodeAction = async (name: 'Duplicate node' | 'Delete node') => {
+  fireEvent.click(screen.getByRole('button', { name: 'More node actions' }));
+  fireEvent.click(await screen.findByRole('menuitem', { name }));
+};
 
 // Named for what it tests, not for the sibling that used to share the file. U5
 // replaced the flat `Palette` with `ActivityToolbox` (own file, own spec), and
@@ -238,10 +252,10 @@ describe('NodePanel heading (#878)', () => {
 });
 
 /**
- * #1413 OR22 — under the node's name the panel says what the activity DOES, and
- * which type it is. The type id appears nowhere else in the editor: the palette
- * hover used to carry it, and now carries the description instead. (The run
- * monitor's node panel shows neither yet.)
+ * #1413 OR22 / #1477 OR29 — the node's header says which type the node is (the
+ * type id appears nowhere else in the editor) and, behind a `?`, what the activity
+ * DOES. The description is a note the author opens, not prose printed under the
+ * name. (The run monitor's node panel shows neither yet.)
  */
 describe('NodePanel says what the activity does (#1413)', () => {
   function about(nodeType: string, call?: { pipelineVersionId: string; params: object }) {
@@ -257,30 +271,56 @@ describe('NodePanel says what the activity does (#1413)', () => {
         call={call as never}
       />,
     );
-    const h3 = screen.getAllByRole('heading', { level: 3 })[0]!;
-    const next = h3.nextElementSibling;
-    return next?.classList.contains('property-panel__about') ? next : null;
+    const row = screen
+      .getAllByRole('heading', { level: 3 })[0]!
+      .closest<HTMLElement>('.property-panel__header')!;
+    return {
+      row,
+      type: row.querySelector('code')?.textContent,
+      help: row.querySelector('details'),
+    };
   }
 
-  it('shows the description and the type id under the heading', () => {
-    const hint = about('http_request');
-    expect(hint?.textContent).toBe(`${getActivity('http_request')!.description} http_request`);
-    expect(hint?.querySelector('code')?.textContent).toBe('http_request');
+  it('shows the type id in the header, and the description behind the About ?', () => {
+    const { row, type, help } = about('http_request');
+    expect(type).toBe('http_request');
+    const summary = within(row).getByLabelText('About HTTP Request');
+    expect(summary.tagName).toBe('SUMMARY');
+    expect(summary.textContent).toBe('?');
+    // Behind the `?`: the note is there to read once opened, and it is closed now.
+    expect(help?.open).toBe(false);
+    expect(within(row).getByRole('note').textContent).toBe(
+      getActivity('http_request')!.description,
+    );
   });
 
-  /* The call arm returns early with its OWN heading — the same second copy #878
+  /* The call arm returns early with its OWN header call — the same second copy #878
      had to fix twice. */
-  it('shows it in the call-editor arm too', () => {
-    const hint = about('execute_pipeline');
-    expect(hint?.textContent).toContain(getActivity('execute_pipeline')!.description);
+  it('shows the same header in the call-editor arm too, without an Apply of its own', () => {
+    const { row, type } = about('execute_pipeline');
+    expect(type).toBe('execute_pipeline');
+    expect(within(row).getByLabelText('About Execute Pipeline')).toBeTruthy();
+    expect(within(row).getByRole('note').textContent).toContain(
+      getActivity('execute_pipeline')!.description,
+    );
+    // `CallPanel` applies its own parts, so the node-level acts are absent here.
+    for (const name of ['Apply config', 'Revert', 'Edit as JSON', 'More node actions']) {
+      expect(within(row).queryByRole('button', { name })).toBeNull();
+    }
   });
 
-  it('shows nothing for an uncatalogued type rather than an empty line', () => {
-    expect(about('call_pipeline', { pipelineVersionId: 'pv_1', params: {} })).toBeNull();
+  it('offers no About ? for an uncatalogued type rather than an empty note', () => {
+    const { row, help } = about('call_pipeline', { pipelineVersionId: 'pv_1', params: {} });
+    expect(help).toBeNull();
+    expect(within(row).queryByRole('note')).toBeNull();
   });
 
-  it('shows nothing for an uncatalogued type in the config-form arm either', () => {
-    expect(about('not_a_catalogued_type')).toBeNull();
+  it('offers no About ? for an uncatalogued type in the config-form arm either', () => {
+    const { row, type, help } = about('not_a_catalogued_type');
+    expect(help).toBeNull();
+    // The type id is still said: it is the one thing known about the node.
+    expect(type).toBe('not_a_catalogued_type');
+    expect(within(row).getByRole('button', { name: 'Apply config' })).toBeTruthy();
   });
 });
 
@@ -346,6 +386,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     const outputSchema = { type: 'object', properties: { a: { type: 'string' } } };
     const panel = mountOver(agentNode({ task: 'x', outputSchema }));
 
+    openTab('Output'); // `outputSchema` is on the agent's Output tab (#1477)
     fireEvent.change(screen.getByRole('textbox', { name: /outputSchema row 1 constraints/ }), {
       target: { value: '{not json}' },
     });
@@ -365,6 +406,8 @@ describe('NodePanel (U7 per-activity config form)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add headers row' }));
     fireEvent.change(screen.getByLabelText('headers row 2 key'), { target: { value: 'X-New' } });
     fireEvent.change(screen.getByLabelText('headers row 2 value'), { target: { value: 'v' } });
+    // `secretHeaders` is on the Auth tab (#1477).
+    openTab('Auth');
     fireEvent.click(screen.getByRole('button', { name: 'Add secretHeaders row' }));
     fireEvent.change(screen.getByLabelText('secretHeaders row 1 key'), {
       target: { value: 'Authorization' },
@@ -564,6 +607,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
       }),
     );
 
+    openTab('Output'); // `outputSchema` is on the agent's Output tab (#1477)
     fireEvent.change(screen.getByRole('textbox', { name: /outputSchema row 1 constraints/ }), {
       target: { value: '{not json}' },
     });
@@ -689,10 +733,10 @@ describe('NodePanel (U7 per-activity config form)', () => {
 });
 
 describe('NodePanel — duplicate (U21)', () => {
-  it('duplicates the node as it is STORED, config and all', () => {
+  it('duplicates the node as it is STORED, config and all', async () => {
     const panel = mountOver(httpNode({ url: 'https://example.test/a' }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Duplicate node' }));
+    await chooseNodeAction('Duplicate node');
 
     const nodes = panel.store.getState().nodes;
     expect(nodes).toHaveLength(2);
@@ -700,13 +744,13 @@ describe('NodePanel — duplicate (U21)', () => {
     expect(nodes[1]!.config).toEqual({ url: 'https://example.test/a' });
   });
 
-  it('copies what Apply last wrote, not what the form is holding unapplied', () => {
+  it('copies what Apply last wrote, not what the form is holding unapplied', async () => {
     const panel = mountOver(httpNode({ url: 'https://example.test/a' }));
     fireEvent.change(screen.getByLabelText('Request URL'), {
       target: { value: 'https://example.test/edited' },
     });
     // No apply — the edit is still only in the form's draft state.
-    fireEvent.click(screen.getByRole('button', { name: 'Duplicate node' }));
+    await chooseNodeAction('Duplicate node');
 
     const nodes = panel.store.getState().nodes;
     expect(nodes[1]!.config).toEqual({ url: 'https://example.test/a' });
@@ -759,8 +803,16 @@ describe('paired binding pickers (#1139)', () => {
     dset('d_other', 'elsewhere', 'c_fs', 'table'),
   ];
   const copyNode = () => node('n_copy', 'copy', {});
+  /**
+   * A paired activity's pickers sit on two tabs (#1477): the source pair on Source,
+   * the sink pair on Sink. Reach one by role through the tab that holds it.
+   */
+  const picker = (label: string) => {
+    openTab(label.startsWith('Sink') ? 'Sink' : 'Source');
+    return screen.getByRole('combobox', { name: label });
+  };
   const pick = (label: string, value: string) =>
-    fireEvent.change(screen.getByRole('combobox', { name: label }), { target: { value } });
+    fireEvent.change(picker(label), { target: { value } });
 
   it('offers FOUR pickers for a copy node, and hides the singular one', () => {
     // The singular picker is hidden rather than shown alongside: `validateDoc`
@@ -772,7 +824,7 @@ describe('paired binding pickers (#1139)', () => {
       'Source dataset',
       'Sink dataset',
     ]) {
-      expect(screen.getByRole('combobox', { name: label })).toBeTruthy();
+      expect(picker(label)).toBeTruthy();
     }
     expect(screen.queryByRole('combobox', { name: 'Connection' })).toBeNull();
   });
@@ -786,7 +838,7 @@ describe('paired binding pickers (#1139)', () => {
 
   it('filters the connection pickers to the kinds the CATALOG accepts', () => {
     mountOver(copyNode(), CONNS, SETS);
-    const options = [...screen.getByRole('combobox', { name: 'Sink connection' }).children].map(
+    const options = [...picker('Sink connection').children].map(
       (o) => (o as HTMLOptionElement).value,
     );
     expect(options).toEqual(['', 'c_src']); // the `fs` connection is not offered
@@ -798,7 +850,7 @@ describe('paired binding pickers (#1139)', () => {
     // offering a binding that cannot run.
     const { store } = mountOver(copyNode(), CONNS, SETS);
     pick('Source connection', 'c_src');
-    const options = [...screen.getByRole('combobox', { name: 'Source dataset' }).children].map(
+    const options = [...picker('Source dataset').children].map(
       (o) => (o as HTMLOptionElement).value,
     );
     expect(options).toEqual(['', 'd_a', 'd_q']);
@@ -808,9 +860,7 @@ describe('paired binding pickers (#1139)', () => {
   it('offers only `table` for the SINK dataset — a query has nothing to write into', () => {
     mountOver(copyNode(), CONNS, SETS);
     pick('Sink connection', 'c_src');
-    const options = [...screen.getByRole('combobox', { name: 'Sink dataset' }).children].map(
-      (o) => (o as HTMLOptionElement).value,
-    );
+    const options = [...picker('Sink dataset').children].map((o) => (o as HTMLOptionElement).value);
     expect(options).toEqual(['', 'd_a']);
   });
 
@@ -888,10 +938,17 @@ describe('NodePanel (the objectList control, #1169)', () => {
     config,
   });
 
+  /** A copy node opens on Source (#1477); the mapping's rows are on its Mapping tab. */
+  const mountMapping = (config: Record<string, unknown>) => {
+    const panel = mountOver(copyNode(config));
+    openTab('Mapping');
+    return panel;
+  };
+
   const oneRow = [{ source: 'name', sink: 'full_name', type: 'string', onError: 'fail' }];
 
   it('names every cell of every row, instead of one JSON blob for the whole mapping', () => {
-    mountOver(copyNode({ mapping: oneRow, mode: 'append' }));
+    mountMapping({ mapping: oneRow, mode: 'append' });
 
     expect(screen.getByLabelText('mapping row 1 source')).toBeTruthy();
     expect(screen.getByLabelText('mapping row 1 sink')).toBeTruthy();
@@ -923,7 +980,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
   });
 
   it('appends a row and stores it once its required columns are filled', () => {
-    const panel = mountOver(copyNode({ mapping: oneRow, mode: 'append' }));
+    const panel = mountMapping({ mapping: oneRow, mode: 'append' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Add mapping row' }));
     fireEvent.change(screen.getByLabelText('mapping row 2 source'), {
@@ -941,12 +998,10 @@ describe('NodePanel (the objectList control, #1169)', () => {
   });
 
   it('removes the row the author asked for, not the one that shifts into its place', () => {
-    const panel = mountOver(
-      copyNode({
-        mapping: [...oneRow, { source: 'age', sink: 'years', type: 'integer', onError: 'fail' }],
-        mode: 'append',
-      }),
-    );
+    const panel = mountMapping({
+      mapping: [...oneRow, { source: 'age', sink: 'years', type: 'integer', onError: 'fail' }],
+      mode: 'append',
+    });
 
     fireEvent.click(screen.getByRole('button', { name: 'remove mapping row 1' }));
     panel.apply();
@@ -971,7 +1026,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
   ];
 
   it('edits the row the cell belongs to when it is neither the first nor the second', () => {
-    const panel = mountOver(copyNode({ mapping: threeRows, mode: 'append' }));
+    const panel = mountMapping({ mapping: threeRows, mode: 'append' });
 
     fireEvent.change(screen.getByLabelText('mapping row 3 sink'), {
       target: { value: 'municipality' },
@@ -984,7 +1039,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
   });
 
   it('removes the MIDDLE row, leaving the ones on either side of it', () => {
-    const panel = mountOver(copyNode({ mapping: threeRows, mode: 'append' }));
+    const panel = mountMapping({ mapping: threeRows, mode: 'append' });
 
     fireEvent.click(screen.getByRole('button', { name: 'remove mapping row 2' }));
     panel.apply();
@@ -995,7 +1050,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
   // #1347. The middle row again, for the same reason as above: a move that
   // hardcoded either neighbour would pass on a two-row list.
   it('moves the MIDDLE row up, swapping it with the row above and no other', () => {
-    const panel = mountOver(copyNode({ mapping: threeRows, mode: 'append' }));
+    const panel = mountMapping({ mapping: threeRows, mode: 'append' });
 
     fireEvent.click(screen.getByRole('button', { name: 'move mapping row 2 up' }));
     panel.apply();
@@ -1006,7 +1061,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
   });
 
   it('moves the MIDDLE row down, swapping it with the row below and no other', () => {
-    const panel = mountOver(copyNode({ mapping: threeRows, mode: 'append' }));
+    const panel = mountMapping({ mapping: threeRows, mode: 'append' });
 
     fireEvent.click(screen.getByRole('button', { name: 'move mapping row 2 down' }));
     panel.apply();
@@ -1020,7 +1075,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
     // The buttons are index-keyed, so without this the focused `move row 2 up`
     // would be the row that just shifted DOWN, and a second press would undo
     // the first. At the top the `up` is disabled, so focus takes `down`.
-    const panel = mountOver(copyNode({ mapping: threeRows, mode: 'append' }));
+    const panel = mountMapping({ mapping: threeRows, mode: 'append' });
 
     fireEvent.click(screen.getByRole('button', { name: 'move mapping row 3 up' }));
     expect(document.activeElement).toBe(
@@ -1038,7 +1093,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
   });
 
   it('offers no move past either end of the list', () => {
-    mountOver(copyNode({ mapping: threeRows, mode: 'append' }));
+    mountMapping({ mapping: threeRows, mode: 'append' });
 
     const button = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement;
     expect(button('move mapping row 1 up').disabled).toBe(true);
@@ -1056,7 +1111,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
     // a schedule fires it. `mappingArray`'s `.min(1)` now refuses it here, where
     // the author is standing. `Remove` is NOT disabled on the last row: a
     // disabled button hides its reason, and the refusal names it.
-    const panel = mountOver(copyNode({ mapping: oneRow, mode: 'append' }));
+    const panel = mountMapping({ mapping: oneRow, mode: 'append' });
 
     fireEvent.click(screen.getByRole('button', { name: 'remove mapping row 1' }));
     panel.apply();
@@ -1069,7 +1124,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
     // Two rows writing one sink column is silent LAST-WINS into the operator's
     // store. No single cell can see it; `copyMappingShapeIssues` can, and the panel must
     // surface that rather than save.
-    const panel = mountOver(copyNode({ mapping: oneRow, mode: 'append' }));
+    const panel = mountMapping({ mapping: oneRow, mode: 'append' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Add mapping row' }));
     fireEvent.change(screen.getByLabelText('mapping row 2 source'), {
@@ -1160,7 +1215,12 @@ describe('NodePanel (Auto-map and the unmapped advisory, #1170)', () => {
       dset('d_sink', 'staff', [col('id', 'integer'), col('name')]),
     ],
     bound = true,
-  ) => mountOver(copyNode(config, bound), [], sets);
+  ) => {
+    const panel = mountOver(copyNode(config, bound), [], sets);
+    // Auto-map and the advisories live on the Mapping tab; a copy opens on Source (#1477).
+    openTab('Mapping');
+    return panel;
+  };
 
   const autoMap = () => fireEvent.click(screen.getByRole('button', { name: 'Auto-map columns' }));
 
@@ -1358,12 +1418,18 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     { expression: 'fixed', sink: 'tag', type: 'string', onError: 'fail' },
     { source: 'city', sink: 'town', type: 'string', onError: 'fail' },
   ];
+  /** The mapping rows are on a copy's Mapping tab; the node opens on Source (#1477). */
+  const mountMapping = () => {
+    const panel = mountOver(copyNode({ mapping: rows, mode: 'append' }), [], [], params);
+    openTab('Mapping');
+    return panel;
+  };
   const open = (cell: string) =>
     fireEvent.click(screen.getByRole('button', { name: `Insert reference into ${cell}` }));
   const offered = () => screen.queryByRole('button', { name: /^limit/ });
 
   it("writes a chosen reference into THAT row's expression, and no other row", () => {
-    const panel = mountOver(copyNode({ mapping: rows, mode: 'append' }), [], [], params);
+    const panel = mountMapping();
 
     fireEvent.change(screen.getByLabelText('mapping row 2 expression'), {
       target: { value: '' },
@@ -1382,7 +1448,7 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     // repeats row 2's sink. Compared against the STORED doc, every candidate
     // would carry that duplicate-sink complaint as a NEW issue and be refused for
     // a problem the reference did not cause — so the list would be empty.
-    mountOver(copyNode({ mapping: rows, mode: 'append' }), [], [], params);
+    mountMapping();
 
     fireEvent.click(screen.getByRole('button', { name: 'Add mapping row' }));
     fireEvent.change(screen.getByLabelText('mapping row 4 sink'), { target: { value: 'tag' } });
@@ -1398,7 +1464,7 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     // `sink` refuses any `${}` at save (`validateCopyMappingIdentifiers`). Both
     // mode probes carry that refusal equally, so the field reads as a template —
     // and an unfiltered template list would offer references that are ALL refused.
-    mountOver(copyNode({ mapping: rows, mode: 'append' }), [], [], params);
+    mountMapping();
     // Already holding a refused `${}`: the refusal must not become the BASELINE
     // a candidate is compared against, or every candidate would pass as "no new
     // issue".
@@ -1414,7 +1480,7 @@ describe('the expression picker on a mapping cell (#1178)', () => {
 
   it('offers nothing to the expression of a row that already reads a source column', () => {
     // `source` XOR `expression`: any reference here is refused at save.
-    mountOver(copyNode({ mapping: rows, mode: 'append' }), [], [], params);
+    mountMapping();
 
     open('mapping row 1 expression');
 
@@ -1425,7 +1491,7 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     // Row 2's list is resolved against row 2. Removing row 1 slides row 3 (which
     // reads a `source`, so its expression is XOR-refused) into that slot; a list
     // still open there would write a reference into a row it never checked.
-    mountOver(copyNode({ mapping: rows, mode: 'append' }), [], [], params);
+    mountMapping();
 
     open('mapping row 2 expression');
     expect(offered()).toBeTruthy();
@@ -1438,7 +1504,7 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     // Moving row 1 down puts row 2 in row 1's slot with the list count
     // unchanged. A list keyed on the count alone would stay open there, aimed at
     // a row it was never resolved against.
-    mountOver(copyNode({ mapping: rows, mode: 'append' }), [], [], params);
+    mountMapping();
 
     open('mapping row 2 expression');
     expect(offered()).toBeTruthy();
@@ -1473,6 +1539,7 @@ describe('the expression picker on a mapping cell (#1178)', () => {
       params,
     );
 
+    openTab('Tools'); // `tools` is on the llm_call's Tools tab (#1477)
     for (const cell of ['name', 'description', 'expression']) {
       open(`tools row 1 ${cell}`);
       expect(offered(), cell).toBeNull();
@@ -1483,7 +1550,8 @@ describe('the expression picker on a mapping cell (#1178)', () => {
         },
       );
     }
-    // …while a plain field on the same node is still offered it.
+    // …while a plain field on the same node (its Prompt tab) is still offered it.
+    openTab('Prompt');
     open('prompt');
     expect(offered()).toBeTruthy();
   });
@@ -1499,6 +1567,7 @@ describe('the expression picker on a mapping cell (#1178)', () => {
       params,
     );
 
+    openTab('Prompt');
     open('messages row 1 content');
 
     expect(offered()).toBeTruthy();
@@ -1677,25 +1746,30 @@ describe('NodePanel — run policy (#1312)', () => {
 });
 
 describe('NodePanel — the dock tabs (#852)', () => {
-  it('opens on Settings, with run policy behind General', () => {
+  it('opens on its first type tab, with run policy behind General', () => {
     mountOver(httpNode({ url: 'https://example.test' }));
-    expect(screen.getByRole('tab', { name: 'Settings', selected: true })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Apply config' })).toBeTruthy();
+    // #1477 — General leads the strip, but a node OPENS on the first tab its
+    // catalog entry declares, where its required settings are.
+    expect(tabNames()).toEqual(['General', 'Request', 'Auth']);
+    expect(screen.getByRole('tab', { name: 'Request', selected: true })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: 'Request URL' })).toBeTruthy();
     expect(screen.queryByRole('group', { name: 'Run policy' })).toBeNull();
 
     fireEvent.click(screen.getByRole('tab', { name: 'General' }));
     expect(screen.getByRole('group', { name: 'Run policy' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Apply config' })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'Request URL' })).toBeNull();
+    // Apply is in the header, so it stays reachable from General (it was tab-bound before).
+    expect(screen.getByRole('button', { name: 'Apply config' })).toBeTruthy();
   });
 
   it('keeps a half-typed field in the tab it left', () => {
     // The panels are HIDDEN, not unmounted. `Retries` holds its draft in its OWN
     // state until blur (#1315), so a strip that unmounted the tab it left would
-    // throw that draft away on the way to the Settings form and back.
+    // throw that draft away on the way to the Request form and back.
     const { store } = mountOver(httpNode({ url: 'https://example.test' }));
     fireEvent.click(screen.getByRole('tab', { name: 'General' }));
     fireEvent.change(screen.getByLabelText('Retries'), { target: { value: '3' } });
-    fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Request' }));
     fireEvent.click(screen.getByRole('tab', { name: 'General' }));
     expect((screen.getByLabelText('Retries') as HTMLInputElement).value).toBe('3');
     // Still a draft — nothing reached the store without the blur.
@@ -1721,8 +1795,8 @@ describe('NodePanel — the dock tabs (#852)', () => {
       />,
     );
     expect(screen.getByRole('group', { name: 'Run policy' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
-    expect(onTab).toHaveBeenCalledWith('settings');
+    fireEvent.click(screen.getByRole('tab', { name: 'Request' }));
+    expect(onTab).toHaveBeenCalledWith('request');
   });
 });
 
@@ -1789,8 +1863,16 @@ describe('NodePanel — a single-line field takes a reference at its caret (#852
   });
 });
 
-describe('NodePanel — sections on the Settings tab (#1396)', () => {
+describe('NodePanel — what each tab holds (#1396, #1477)', () => {
   const section = (name: string) => screen.getByRole('group', { name });
+  const selectedTab = () =>
+    screen.getByRole('tab', { selected: true }).querySelector('.fui-Tab__content')?.textContent;
+  // A hidden panel has no accessible name, so reach it through the tab that controls it.
+  const panelOf = (name: string) =>
+    document.getElementById(screen.getByRole('tab', { name }).getAttribute('aria-controls')!)!;
+  const follows = (a: Element, b: Element) =>
+    (a.compareDocumentPosition(b) & document.DOCUMENT_POSITION_FOLLOWING) ===
+    document.DOCUMENT_POSITION_FOLLOWING;
   const httpConn = {
     id: 'c_http',
     name: 'Service',
@@ -1805,58 +1887,75 @@ describe('NodePanel — sections on the Settings tab (#1396)', () => {
     updatedAt: 0,
   } as unknown as Parameters<typeof NodePanel>[0]['connections'][number];
 
-  it('groups bindings, container and the activity settings, in that order', () => {
+  it('puts bindings, then settings, then Container on the landing tab', () => {
     mountOver({ ...httpNode({ url: 'https://example.test' }), connectionId: 'c_http' }, [httpConn]);
-    const bindings = section('Bindings');
-    const container = section('Container');
-    const settings = section('Activity settings');
-    expect(within(bindings).getByRole('combobox', { name: 'Connection' })).toBeTruthy();
-    expect(within(bindings).getByRole('group', { name: 'Connection overrides' })).toBeTruthy();
+    expect(selectedTab()).toBe('Request');
+    const request = within(screen.getByRole('tabpanel', { name: 'Request' }));
+    const connection = request.getByRole('combobox', { name: 'Connection' });
+    const overrides = request.getByRole('group', { name: 'Connection overrides' });
+    const url = request.getByRole('textbox', { name: /Request URL/ });
+    const container = request.getByRole('group', { name: 'Container' });
     expect(within(container).getByRole('combobox', { name: 'Container membership' })).toBeTruthy();
-    expect(within(settings).getByRole('group', { name: 'Config' })).toBeTruthy();
-    expect(within(settings).getByRole('textbox', { name: /Request URL/ })).toBeTruthy();
-    // Document order: what the step reads from, where it sits, what it does.
-    expect(bindings.compareDocumentPosition(container) & document.DOCUMENT_POSITION_FOLLOWING).toBe(
-      document.DOCUMENT_POSITION_FOLLOWING,
-    );
-    expect(container.compareDocumentPosition(settings) & document.DOCUMENT_POSITION_FOLLOWING).toBe(
-      document.DOCUMENT_POSITION_FOLLOWING,
-    );
-    // The actions act on the whole node, so they sit after every section.
-    for (const name of ['Apply config', 'Duplicate node', 'Delete node']) {
+    // Document order: what the step reads from, what it does, where it sits.
+    expect(follows(connection, overrides)).toBe(true);
+    expect(follows(overrides, url)).toBe(true);
+    expect(follows(url, container)).toBe(true);
+    // Container closes the LANDING tab only — Auth does not repeat it.
+    expect(within(panelOf('Auth')).queryByRole('group', { name: 'Container' })).toBeNull();
+    // The acts on the whole node are in the header, above the strip and every panel.
+    for (const name of ['Apply config', 'More node actions']) {
       const button = screen.getByRole('button', { name });
-      expect(settings.compareDocumentPosition(button) & document.DOCUMENT_POSITION_FOLLOWING).toBe(
-        document.DOCUMENT_POSITION_FOLLOWING,
-      );
-      for (const s of [bindings, container, settings]) expect(s.contains(button)).toBe(false);
+      expect(follows(button, screen.getAllByRole('tab')[0]!)).toBe(true);
+      for (const panel of screen.getAllByRole('tabpanel', { hidden: true })) {
+        expect(panel.contains(button)).toBe(false);
+      }
     }
   });
 
-  it('puts a paired activity’s four pickers in Bindings', () => {
+  it('splits a paired activity’s pickers over Source and Sink, opening on Source', () => {
     mountOver(node('n_copy', 'copy', {}));
-    const bindings = section('Bindings');
-    for (const label of [
-      'Source connection',
-      'Sink connection',
-      'Source dataset',
-      'Sink dataset',
-    ]) {
-      expect(within(bindings).getByRole('combobox', { name: label })).toBeTruthy();
+    expect(tabNames()).toEqual(['General', 'Source', 'Sink', 'Mapping']);
+    expect(selectedTab()).toBe('Source');
+    const source = within(screen.getByRole('tabpanel', { name: 'Source' }));
+    for (const label of ['Source connection', 'Source dataset']) {
+      expect(source.getByRole('combobox', { name: label })).toBeTruthy();
     }
-  });
-
-  it('puts a dataset picker in Bindings for an unpaired activity', () => {
-    mountOver(node('n_look', 'lookup', {}));
+    expect(source.queryByRole('combobox', { name: 'Sink connection' })).toBeNull();
+    // Container closes the landing tab, after its bindings.
     expect(
-      within(section('Bindings')).getByRole('combobox', { name: 'Source dataset' }),
-    ).toBeTruthy();
+      follows(
+        source.getByRole('combobox', { name: 'Source dataset' }),
+        source.getByRole('group', { name: 'Container' }),
+      ),
+    ).toBe(true);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Sink' }));
+    const sink = within(screen.getByRole('tabpanel', { name: 'Sink' }));
+    for (const label of ['Sink connection', 'Sink dataset']) {
+      expect(sink.getByRole('combobox', { name: label })).toBeTruthy();
+    }
+    expect(sink.queryByRole('combobox', { name: 'Source connection' })).toBeNull();
+    expect(sink.queryByRole('group', { name: 'Container' })).toBeNull();
   });
 
-  it('has no Bindings section for an activity that binds nothing', () => {
+  it('puts a dataset picker on the Source tab of an unpaired activity', () => {
+    mountOver(node('n_look', 'lookup', {}));
+    expect(tabNames()).toEqual(['General', 'Source']);
+    expect(selectedTab()).toBe('Source');
+    const source = within(screen.getByRole('tabpanel', { name: 'Source' }));
+    expect(source.getByRole('combobox', { name: 'Connection' })).toBeTruthy();
+    expect(source.getByRole('combobox', { name: 'Source dataset' })).toBeTruthy();
+  });
+
+  it('draws no binding controls for an activity that binds nothing', () => {
     mountOver(node('n_wait', 'wait', {}));
+    expect(tabNames()).toEqual(['General', 'Settings']);
+    expect(selectedTab()).toBe('Settings');
+    const settings = within(screen.getByRole('tabpanel', { name: 'Settings' }));
+    expect(settings.queryByRole('combobox', { name: /connection|dataset/i })).toBeNull();
     expect(screen.queryByRole('group', { name: 'Bindings' })).toBeNull();
-    expect(section('Container')).toBeTruthy();
-    expect(section('Activity settings')).toBeTruthy();
+    expect(settings.getByRole('textbox', { name: /Wait time/ })).toBeTruthy();
+    expect(settings.getByRole('combobox', { name: 'Container membership' })).toBeTruthy();
   });
 
   it('gives a call node’s panel a Container section', () => {
@@ -1872,11 +1971,125 @@ describe('NodePanel — sections on the Settings tab (#1396)', () => {
         call={undefined}
       />,
     );
+    expect(tabNames()).toEqual(['General', 'Settings']);
     // `CallPanel` heads its own parts, so it gets no section around it.
     expect(screen.getByRole('heading', { name: 'Call target' })).toBeTruthy();
     expect(screen.queryByRole('group', { name: 'Activity settings' })).toBeNull();
     expect(
       within(section('Container')).getByRole('combobox', { name: 'Container membership' }),
     ).toBeTruthy();
+  });
+});
+
+describe('NodePanel — catalog tabs (#1477)', () => {
+  const llmNode = (config: Record<string, unknown> = {}): Node => node('n_llm', 'llm_call', config);
+
+  it('Apply reads EVERY tab, not only the one on screen', () => {
+    const panel = mountOver(llmNode());
+
+    // An llm_call opens on Model; `prompt` lives on the Prompt tab.
+    fireEvent.change(screen.getByRole('textbox', { name: 'Model for this step' }), {
+      target: { value: 'claude-opus-5' },
+    });
+    openTab('Prompt');
+    fireEvent.change(screen.getByRole('textbox', { name: 'User prompt' }), {
+      target: { value: 'Say hi.' },
+    });
+    panel.apply();
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(panel.storedConfig()).toMatchObject({ model: 'claude-opus-5', prompt: 'Say hi.' });
+  });
+
+  describe('Revert', () => {
+    const revertButton = () => screen.getByRole('button', { name: 'Revert' }) as HTMLButtonElement;
+
+    it('is disabled on open, enabled by an edit, and puts the original value back', () => {
+      mountOver(httpNode({ url: 'https://example.test/a' }));
+      const url = () => screen.getByRole('textbox', { name: 'Request URL' }) as HTMLInputElement;
+      expect(revertButton().disabled).toBe(true);
+
+      fireEvent.change(url(), { target: { value: 'https://example.test/edited' } });
+      expect(revertButton().disabled).toBe(false);
+
+      fireEvent.click(revertButton());
+      expect(url().value).toBe('https://example.test/a');
+      expect(revertButton().disabled).toBe(true);
+    });
+
+    it('does not count a change of tab as an edit', () => {
+      mountOver(httpNode({ url: 'https://example.test/a' }));
+      openTab('Auth');
+      openTab('General');
+      expect(revertButton().disabled).toBe(true);
+    });
+  });
+
+  it('opens a lifted tab the node lacks on its first type tab, without telling the host', () => {
+    const store = createCanvasStore();
+    const target = httpNode({ url: 'https://example.test' });
+    store.setState({ nodes: [target] });
+    const onTab = vi.fn();
+    render(
+      <NodePanel
+        store={store}
+        connections={[]}
+        datasets={[]}
+        nodeId={target.id}
+        nodeType="http_request"
+        config={target.config}
+        connectionId={undefined}
+        call={undefined}
+        tab="mapping"
+        onTab={onTab}
+      />,
+    );
+
+    expect(screen.getByRole('tab', { name: 'Request', selected: true })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: 'Request URL' })).toBeTruthy();
+    // The host's choice is left as it was: it may still be Mapping for the next copy node.
+    expect(onTab).not.toHaveBeenCalled();
+  });
+
+  it('puts the whole-config JSON on the ACTIVE type tab only', () => {
+    mountOver(httpNode({ url: 'https://example.test' }));
+
+    fireEvent.click(toJson());
+    const json = () => screen.getAllByRole('textbox', { name: 'Config (JSON)' });
+    expect(json()).toHaveLength(1);
+    // One textarea is MOUNTED, not merely one visible: hidden panels keep their DOM.
+    expect(screen.getAllByLabelText('Config (JSON)')).toHaveLength(1);
+    const panelId = (el: HTMLElement) => el.closest('[role="tabpanel"]')?.id;
+    const request = screen.getByRole('tab', { name: 'Request' }).getAttribute('aria-controls');
+    expect(panelId(json()[0]!)).toBe(request);
+
+    openTab('Auth');
+    expect(json()).toHaveLength(1);
+    expect(screen.getAllByLabelText('Config (JSON)')).toHaveLength(1);
+    expect(panelId(json()[0]!)).toBe(
+      screen.getByRole('tab', { name: 'Auth' }).getAttribute('aria-controls'),
+    );
+  });
+
+  describe('the More node actions menu', () => {
+    it('Duplicate node adds a copy of the stored node to the doc', async () => {
+      const panel = mountOver(httpNode({ url: 'https://example.test/a' }));
+
+      await chooseNodeAction('Duplicate node');
+
+      const nodes = panel.store.getState().nodes;
+      expect(nodes).toHaveLength(2);
+      expect(nodes[0]!.id).toBe('n_http');
+      expect(nodes[1]!.id).not.toBe('n_http');
+      expect(nodes[1]!.config).toEqual({ url: 'https://example.test/a' });
+    });
+
+    it('Delete node removes the node from the doc', async () => {
+      const panel = mountOver(httpNode({ url: 'https://example.test/a' }));
+
+      await chooseNodeAction('Delete node');
+
+      expect(panel.store.getState().nodes).toHaveLength(0);
+    });
   });
 });
