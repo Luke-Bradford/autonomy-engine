@@ -144,7 +144,9 @@ export function filterConnectionPickerGroups(
     .map((group) => ({
       ...group,
       options: group.options.filter((o) =>
-        [o.name, group.label, group.kind, o.location ?? ''].some((text) => text.toLowerCase().includes(needle)),
+        [o.name, group.label, group.kind, o.location ?? ''].some((text) =>
+          text.toLowerCase().includes(needle),
+        ),
       ),
     }))
     .filter((group) => group.options.length > 0);
