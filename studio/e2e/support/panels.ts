@@ -34,6 +34,19 @@ export async function nodeMenuAction(
   await page.getByRole('menuitem', { name: action, exact: true }).click();
 }
 
+/**
+ * #1477 — a tab strip's tabs, by accessible name and in order. Not `toHaveText`:
+ * Fluent draws each label twice (one copy reserves the selected tab's bold
+ * width), so a tab's text reads "GeneralGeneral".
+ */
+export async function expectTabNames(tablist: Locator, names: readonly string[]): Promise<void> {
+  const tabs = tablist.getByRole('tab');
+  await expect(tabs).toHaveCount(names.length);
+  for (const [i, name] of names.entries()) {
+    await expect(tabs.nth(i)).toHaveAccessibleName(name);
+  }
+}
+
 /** Manage → Triggers' create/edit form. */
 export function triggerForm(page: Page): Locator {
   return page.getByRole('form', { name: 'Trigger form' });

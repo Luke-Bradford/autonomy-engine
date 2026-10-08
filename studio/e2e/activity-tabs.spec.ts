@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
-import { properties } from './support/panels';
+import { properties, expectTabNames } from './support/panels';
 
 /**
  * #1477 OR29 slice 2 — an activity's properties are on the tabs its catalog
@@ -12,14 +12,19 @@ test.use({ viewport: { width: 1440, height: 900 } });
 
 const seed = {
   nodes: [
-    { id: 'c', type: 'copy', position: { x: 0, y: 0 }, config: { mapping: [] } },
+    {
+      id: 'c',
+      type: 'copy',
+      position: { x: 0, y: 0 },
+      config: { mapping: [{ source: 'id', sink: 'id', type: 'integer' }] },
+    },
     {
       id: 'h',
       type: 'http_request',
       position: { x: 300, y: 0 },
       config: { url: 'https://a.example.test' },
     },
-    { id: 'l', type: 'llm_call', position: { x: 600, y: 0 }, config: {} },
+    { id: 'l', type: 'llm_call', position: { x: 600, y: 0 }, config: { prompt: 'Hello' } },
   ],
 };
 
@@ -45,7 +50,7 @@ test('a Copy node opens on Source, and Source, Sink and Mapping each fit the doc
   await openSeededCanvas(page, 'or29 copy tabs', seed);
   await nodeById(page, 'c').click();
 
-  await expect(tabs(page).getByRole('tab')).toHaveText(['General', 'Source', 'Sink', 'Mapping']);
+  await expectTabNames(tabs(page), ['General', 'Source', 'Sink', 'Mapping']);
   await expect(tabs(page).getByRole('tab', { name: 'Source' })).toHaveAttribute(
     'aria-selected',
     'true',

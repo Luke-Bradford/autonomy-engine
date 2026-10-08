@@ -3,7 +3,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { canvasNodes } from './support/canvasGraph';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
 import { seedConnection } from './support/seedResources';
-import { properties } from './support/panels';
+import { properties, expectTabNames } from './support/panels';
 
 /**
  * U7 — authoring an activity's settings through NAMED controls.
@@ -167,7 +167,7 @@ test.describe('U7 — per-activity node config form', () => {
     });
     await canvasNodes(page).first().click();
     const tabs = properties(page).getByRole('tablist', { name: 'Activity properties' });
-    await expect(tabs.getByRole('tab')).toHaveText(['General', 'Request', 'Auth']);
+    await expectTabNames(tabs, ['General', 'Request', 'Auth']);
     const request = properties(page).getByRole('tabpanel', { name: 'Request' });
     await expect(request).toBeVisible();
     await expect(request.getByRole('combobox', { name: 'Connection' })).toBeVisible();
@@ -218,7 +218,7 @@ test.describe('U7 — per-activity node config form', () => {
     // A wait binds nothing: one Settings tab, its field, and no connection. The
     // dock's remembered tab (Auth) is not one a wait has, so it opens on Settings.
     await canvasNodes(page).nth(1).click();
-    await expect(tabs.getByRole('tab')).toHaveText(['General', 'Settings']);
+    await expectTabNames(tabs, ['General', 'Settings']);
     const settings = properties(page).getByRole('tabpanel', { name: 'Settings' });
     await expect(settings).toBeVisible();
     await expect(settings.getByRole('combobox', { name: 'Connection' })).toHaveCount(0);
@@ -470,6 +470,7 @@ test.describe('U7 — per-activity node config form', () => {
     await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
     await page.locator('.react-flow__renderer').waitFor();
     await canvasNodes(page).first().click();
+    await properties(page).getByRole('tab', { name: 'Auth' }).click();
     await expect(p.getByRole('textbox', { name: 'headers row 2 value', exact: true })).toHaveValue(
       '${run.runId}',
     );
@@ -501,6 +502,7 @@ test.describe('U7 — per-activity node config form', () => {
     });
 
     await canvasNodes(page).first().click();
+    await properties(page).getByRole('tab', { name: 'Prompt' }).click();
     const p = properties(page);
     await expect(p.getByRole('group', { name: 'Conversation', exact: true })).toBeVisible();
     await expect(p.getByRole('combobox', { name: 'messages row 1 role', exact: true })).toHaveValue(
@@ -542,6 +544,7 @@ test.describe('U7 — per-activity node config form', () => {
     await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
     await page.locator('.react-flow__renderer').waitFor();
     await canvasNodes(page).first().click();
+    await properties(page).getByRole('tab', { name: 'Prompt' }).click();
     await expect(p.getByRole('combobox', { name: 'messages row 2 role', exact: true })).toHaveValue(
       'assistant',
     );
@@ -583,6 +586,7 @@ test.describe('U7 — per-activity node config form', () => {
 
     await nodeById(page, 'a').click();
     const p = properties(page);
+    await properties(page).getByRole('tab', { name: 'Prompt' }).click();
     const history = p.getByRole('textbox', { name: 'History', exact: true });
     await expect(history).toHaveValue('');
     // The prompt, a template, IS offered the producer's string `text`...
@@ -607,6 +611,7 @@ test.describe('U7 — per-activity node config form', () => {
     await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
     await page.locator('.react-flow__renderer').waitFor();
     await nodeById(page, 'a').click();
+    await properties(page).getByRole('tab', { name: 'Prompt' }).click();
     await expect(history).toHaveValue('${nodes.p.output.messages}');
 
     await expectQuiet(page, problems);
@@ -637,6 +642,7 @@ test.describe('U7 — per-activity node config form', () => {
     });
 
     await canvasNodes(page).first().click();
+    await properties(page).getByRole('tab', { name: 'Prompt' }).click();
     const p = properties(page);
     await expect(
       p.getByRole('button', { name: 'move messages row 1 up', exact: true }),
@@ -694,6 +700,7 @@ test.describe('U7 — per-activity node config form', () => {
     });
 
     await canvasNodes(page).first().click();
+    await properties(page).getByRole('tab', { name: 'Output' }).click();
     const p = properties(page);
     const cell = (role: 'textbox' | 'combobox' | 'checkbox', row: number, name: string) =>
       p.getByRole(role, { name: new RegExp(`^outputSchema row ${row} ${name}\\b`) });
@@ -732,6 +739,7 @@ test.describe('U7 — per-activity node config form', () => {
     await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
     await page.locator('.react-flow__renderer').waitFor();
     await canvasNodes(page).first().click();
+    await properties(page).getByRole('tab', { name: 'Output' }).click();
     await expect(cell('textbox', 2, 'name')).toHaveValue('confidence');
     await expect(cell('checkbox', 2, 'required')).not.toBeChecked();
 
