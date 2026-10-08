@@ -47,7 +47,7 @@ import {
   runFinished,
   runStartedAt,
 } from './runFailure';
-import { HelpDisclosure } from './HelpDisclosure';
+import { HelpDisclosure } from '../../lib/HelpDisclosure';
 import { containerLabels } from '../pipeline/containerRules';
 import { useActivityRuns } from './useActivityRuns';
 import { RunCostSummary } from './RunCostSummary';

@@ -29,6 +29,7 @@ function fluentTokenCss(): string {
 // than letting one case's mode decide the next case's starting state.
 afterEach(() => {
   delete document.documentElement.dataset.theme;
+  delete document.documentElement.dataset.density;
   document.documentElement.style.colorScheme = '';
 });
 
@@ -94,5 +95,25 @@ describe('AppThemeProvider', () => {
     expect(document.documentElement.style.colorScheme).toBe('light');
     // Same mounted provider, different token values.
     expect(fluentTokenCss()).not.toBe(darkTokens);
+  });
+
+  /**
+   * #1477 OR29 — density is a viewer preference read by CSS anywhere in the
+   * app, so it lives on the document root beside `data-theme`, from the same
+   * store, and follows a change without a reload.
+   */
+  it('mirrors the density onto the document root, and follows a change', () => {
+    const store = createUiStore();
+    render(
+      <AppThemeProvider store={store}>
+        <span>content</span>
+      </AppThemeProvider>,
+    );
+    expect(document.documentElement.dataset.density).toBe('compact');
+
+    act(() => {
+      store.getState().setDensity('comfortable');
+    });
+    expect(document.documentElement.dataset.density).toBe('comfortable');
   });
 });

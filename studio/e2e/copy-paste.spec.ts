@@ -9,7 +9,7 @@ import {
   viewportSettled,
 } from './support/canvasGraph';
 import { nodeById, openSeededCanvas, seedVersion } from './support/seedDoc';
-import { properties } from './support/panels';
+import { dockPaste, properties } from './support/panels';
 
 /**
  * U21 slice 3 — copy/paste on the authoring canvas, and the ref remapping that
@@ -323,8 +323,7 @@ test.describe('copy/paste on the canvas (U21)', () => {
     await expect(page.getByText('Copied 1 activity.')).toBeVisible();
 
     await openInApp(page, targetId, ['z', 'a']);
-    const panel = properties(page);
-    await panel.getByRole('button', { name: 'Paste' }).click();
+    await dockPaste(page).click();
     await expect(
       page.getByText(
         'Not pasted: the copied activities read from a, which was not copied. Copy it too.',
@@ -344,10 +343,9 @@ test.describe('copy/paste on the canvas (U21)', () => {
       edges: [],
     });
 
-    // The nothing-selected panel is where Paste lives, and where an operator
-    // discovers the gesture exists at all.
-    const panel = properties(page);
-    await panel.getByRole('button', { name: 'Paste' }).click();
+    // #1477 OR29 — Paste lives in the dock's header, where an operator
+    // discovers the gesture exists at all whatever is selected.
+    await dockPaste(page).click();
     await expect(page.getByText('Nothing has been copied yet.')).toBeVisible();
     await expect(canvasNodes(page)).toHaveCount(1);
 

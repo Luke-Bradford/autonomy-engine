@@ -10,6 +10,7 @@ import {
   CANVAS_MIN_WIDTH,
   DOCK_MIN_WIDTH,
   DOCK_POSITION_STORAGE_KEY,
+  DENSITY_STORAGE_KEY,
   DOCK_WIDTH_STORAGE_KEY,
   RUN_DRAWER_WIDTH_STORAGE_KEY,
   dockMaxWidth,
@@ -558,6 +559,25 @@ describe('uiStore dock position (#1475 OR27)', () => {
     expect(storage.data.get(DOCK_WIDTH_STORAGE_KEY)).toBe(String(DOCK_MIN_WIDTH));
     store.getState().setDockWidth(null);
     expect(createUiStore(storage).getState().dockWidth).toBeNull();
+  });
+});
+
+describe('uiStore density (#1477 OR29)', () => {
+  it('is compact until the viewer chooses otherwise', () => {
+    expect(createUiStore(fakeStorage()).getState().density).toBe('compact');
+  });
+
+  it('persists comfortable across a new store on the same storage', () => {
+    const storage = fakeStorage();
+    createUiStore(storage).getState().setDensity('comfortable');
+    expect(storage.data.get(DENSITY_STORAGE_KEY)).toBe('comfortable');
+    expect(createUiStore(storage).getState().density).toBe('comfortable');
+  });
+
+  it.each(['', 'COMPACT', 'cozy', 'spacious'])('reads a stored density of %j as compact', (raw) => {
+    expect(createUiStore(fakeStorage({ [DENSITY_STORAGE_KEY]: raw })).getState().density).toBe(
+      'compact',
+    );
   });
 });
 

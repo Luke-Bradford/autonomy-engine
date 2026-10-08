@@ -8,7 +8,7 @@ import './theme/xyThemeBridge.css';
 import { AppThemeProvider } from './theme/AppThemeProvider';
 import { ConfirmHost } from './lib/confirm/useConfirm';
 import { uiStore } from './stores/uiStore';
-import { syncColorScheme } from './theme/fluentTheme';
+import { syncColorScheme, syncDensity } from './theme/fluentTheme';
 
 const container = document.getElementById('root');
 if (!container) {
@@ -25,6 +25,7 @@ if (!container) {
 // needs an inline bootstrap script in `index.html`, deferred as not worth the
 // CSP surface for a local-first app.
 syncColorScheme(uiStore.getState().themeMode);
+syncDensity(uiStore.getState().density);
 
 createRoot(container).render(
   <StrictMode>
