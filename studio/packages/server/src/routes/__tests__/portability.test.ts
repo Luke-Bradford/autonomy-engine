@@ -498,8 +498,6 @@ describe('portability routes (export + import)', () => {
     });
   });
 
-  // #3 G1 — export bodies are CANONICAL JSON: stable bytes for identical
-  // content (the git file writer #3 G3 will reuse this exact serialization).
   describe('#1586 POST /api/pipelines/export (bundle)', () => {
     async function seedPipeline(name: string, prompt = 'p') {
       const pipeline = createPipeline(app.db, { ownerId: 'local', name });
@@ -601,6 +599,8 @@ describe('portability routes (export + import)', () => {
     });
   });
 
+  // #3 G1 — export bodies are CANONICAL JSON: stable bytes for identical
+  // content (the git file writer #3 G3 will reuse this exact serialization).
   describe('#3 G1 — canonical export bodies', () => {
     it('the HTTP body IS canonicalStringify(envelope), served as application/json', async () => {
       const pipelineRes = await app.inject({
