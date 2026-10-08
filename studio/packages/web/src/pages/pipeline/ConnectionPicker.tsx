@@ -48,12 +48,13 @@ export function ConnectionPicker({
   // A probe outlives a node switch (the panel remounts per node); its answer
   // must not be written into a panel that is gone.
   const mounted = useRef(true);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // Set here as well as initially: StrictMode runs the cleanup once on mount.
+    mounted.current = true;
+    return () => {
       mounted.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
   const noun = label.charAt(0).toLowerCase() + label.slice(1);
 
   async function onTest(id: string) {

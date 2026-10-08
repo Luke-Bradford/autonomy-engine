@@ -6,6 +6,7 @@ import {
   type Node,
   type Param,
 } from '@autonomy-studio/shared';
+import type { NewConnectionRequest } from './newConnectionRequest';
 import { NodePanel } from './PipelineCanvas';
 import { useStore } from 'zustand';
 import { createCanvasStore } from './canvasStore';
@@ -40,6 +41,7 @@ function mountOver(
   connections: Parameters<typeof NodePanel>[0]['connections'] = [],
   datasets: Parameters<typeof NodePanel>[0]['datasets'] = [],
   params: Param[] = [],
+  onNewConnection?: (request: NewConnectionRequest) => void,
 ) {
   const store = createCanvasStore();
   store.setState({ nodes: [target], params });
@@ -57,6 +59,7 @@ function mountOver(
         config={node.config}
         connectionId={node.connectionId}
         call={undefined}
+        onNewConnection={onNewConnection}
       />
     );
   }
@@ -838,12 +841,47 @@ describe('paired binding pickers (#1139)', () => {
     expect(screen.queryByRole('combobox', { name: 'Source dataset' })).toBeNull();
   });
 
-  it('filters the connection pickers to the kinds the CATALOG accepts', () => {
+  it('offers only the kinds the CATALOG accepts; lists the rest disabled, with why (#1477)', () => {
     mountOver(copyNode(), CONNS, SETS);
-    const options = [...picker('Sink connection').children].map(
-      (o) => (o as HTMLOptionElement).value,
-    );
-    expect(options).toEqual(['', 'c_src']); // the `fs` connection is not offered
+    const options = [...picker('Sink connection').querySelectorAll('option')].map((o) => ({
+      value: o.value,
+      disabled: o.disabled,
+      text: o.textContent,
+    }));
+    expect(options).toEqual([
+      { value: '', disabled: false, text: '— none —' },
+      { value: 'c_src', disabled: false, text: 'Source store (SQLite)' },
+      // Listed, so the picker says what exists, but not pickable as a sink.
+      {
+        value: 'c_fs',
+        disabled: true,
+        text: "Files (File system) — Can't be a Copy Data sink yet",
+      },
+    ]);
+    // Grouped by kind, in the gallery's order.
+    expect(
+      [...picker('Sink connection').querySelectorAll('optgroup')].map((g) => g.label),
+    ).toEqual(['SQLite', 'File system']);
+  });
+
+  it('＋ New asks the editor for the column with the SLOT’s refusals and binds there (#1477)', () => {
+    const asked: NewConnectionRequest[] = [];
+    const { store } = mountOver(copyNode(), CONNS, SETS, [], (request) => asked.push(request));
+    openTab('Sink');
+    fireEvent.click(screen.getByRole('button', { name: 'New sink connection' }));
+    expect(asked).toHaveLength(1);
+    const request = asked[0]!;
+    expect(request.disabledReason('fs')).toBe("Can't be a Copy Data sink yet");
+    expect(request.disabledReason('postgres')).toBeUndefined();
+    // Binding goes to the SINK end of THIS node — the end the author asked from.
+    request.bind('c_new');
+    expect(store.getState().pendingBindings['n_copy']?.connections).toEqual({ sink: 'c_new' });
+  });
+
+  it('offers no ＋ New when no editor hosts the column', () => {
+    mountOver(copyNode(), CONNS, SETS);
+    openTab('Sink');
+    expect(screen.queryByRole('button', { name: 'New sink connection' })).toBeNull();
   });
 
   it('narrows the dataset picker to the connection bound to the SAME end', () => {
