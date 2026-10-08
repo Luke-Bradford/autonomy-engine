@@ -10,6 +10,7 @@ import {
   docUnchanged,
   historyEntries,
   initialPreview,
+  followsUrlVersion,
   selectionIn,
   isPublishRefused,
   isStaleWrite,
@@ -616,6 +617,26 @@ describe('initialPreview (#1484)', () => {
     expect(initialPreview(9, versions)).toBeNull();
     expect(initialPreview(undefined, versions)).toBeNull();
     expect(initialPreview(1, [])).toBeNull();
+  });
+});
+
+describe('followsUrlVersion (#1589)', () => {
+  it('follows a ?version the page did not write', () => {
+    // Back/Forward or a link: the rendered URL is the URL as it stands.
+    expect(followsUrlVersion(2, 1, 2)).toBe(true);
+    expect(followsUrlVersion(undefined, 2, undefined)).toBe(true);
+  });
+
+  it('does not follow the version it last wrote or followed', () => {
+    expect(followsUrlVersion(1, 1, 1)).toBe(false);
+    expect(followsUrlVersion(undefined, undefined, undefined)).toBe(false);
+  });
+
+  it('does not follow a rendered ?version the page has since written over', () => {
+    /* The row click wrote ?version=1 and Back to editing then wrote it away
+       before the follower saw ?version=1 render: following it would reopen the
+       preview and write ?version=1 back. */
+    expect(followsUrlVersion(1, undefined, undefined)).toBe(false);
   });
 });
 

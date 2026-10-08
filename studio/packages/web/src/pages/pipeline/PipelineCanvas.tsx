@@ -185,6 +185,7 @@ import {
   type DocSnapshot,
   historyEntries,
   initialPreview,
+  followsUrlVersion,
   isPublishRefused,
   isStaleWrite,
   publishConfirmMessage,
@@ -562,9 +563,10 @@ export function PipelineCanvas({
    * to another version of this pipeline), as a link opens one: the latest or an
    * unknown version is the editor. While a save or restore holds the preview,
    * the URL is put back instead, as every other route into the preview is held.
+   * A render the page has since written over is not followed (#1589).
    */
   const followUrlVersion = useEffectEvent((version: number | undefined) => {
-    if (!ready || version === urlSynced.current) return;
+    if (!ready || !followsUrlVersion(version, urlSynced.current, readOpenVersion(urlNow()))) return;
     setPreviewing(previewLocked ? previewing : initialPreview(version, versions));
   });
   useEffect(() => {
