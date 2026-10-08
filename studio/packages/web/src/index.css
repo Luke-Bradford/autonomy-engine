@@ -2253,13 +2253,12 @@ button.danger {
   max-width: none;
 }
 
-/* #1477 OR29 — the dock EXPANDED: a full-height drawer over the canvas, on
-   the right, for long forms. The same element as the dock, moved out of the
-   column's flow (the dock holds drafts a remount would drop), so the canvas
-   fills the column underneath and a strip of it stays clickable on the left.
-   After the right-hand dock's rules and as specific, so its width and cap give
-   way here; the body keeps the position's own layout. The divider stays mounted
-   (it remembers the size a double-click maximise restores) but is not drawn. */
+/* #1477 OR29 — the dock EXPANDED: the same element (it holds drafts a remount
+   would drop) taken out of the column's flow as a full-height drawer over the
+   canvas, leaving a strip of canvas clickable on its left. After the right-hand
+   dock's rules and as specific, so their width and cap give way. The surface is
+   the run drawer's (`.run-drawer`). The divider stays mounted, keeping what a
+   double-click maximise restores, but is not drawn. */
 .canvas-main--dock-expanded {
   position: relative;
 }
@@ -2275,10 +2274,11 @@ button.danger {
   max-height: none;
   padding: 8px;
   background: var(--panel);
-  border-left: 1px solid var(--border);
+  border-inline-start: 1px solid var(--border);
   box-shadow: -4px 0 16px var(--shadow);
 }
 
+/* As in the right-hand dock: wrap rather than clip on a narrow column. */
 .canvas-main--dock-expanded > .property-dock > .property-dock__header {
   flex-wrap: wrap;
 }
@@ -2319,17 +2319,17 @@ button.danger {
   align-items: center;
 }
 
-/* #1477 OR29 — the header's icon acts (Paste, Expand), at the row's far end. */
+/* #1477 OR29 — the header's icon acts (Paste, Expand), together at the row's
+   far end, so a wrapped header moves them as one. */
+.property-dock__acts {
+  display: flex;
+  margin-left: auto;
+}
+
 .property-dock__icon-button {
   width: 24px;
   height: 24px;
-  margin-left: auto;
   font-size: 16px;
-}
-
-/* The first one is pushed to the end; the rest sit beside it. */
-.property-dock__icon-button + .property-dock__icon-button {
-  margin-left: 0;
 }
 
 /* #1393 — the validation list, as a FIXED-width column beside the properties.

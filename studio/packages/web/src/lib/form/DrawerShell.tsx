@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react';
+import { isUnhandledEscape } from '../escape';
 
 /** The first field a person can type into: read-only ones are skipped. */
 export const FIRST_FIELD = 'input:not([readonly]), select, textarea:not([readonly])';
@@ -69,9 +70,7 @@ export function DrawerShell({
       onKeyDown={(event) => {
         // Escape that a control inside already handled (a picker, an IME
         // composition) is not a request to close the whole drawer.
-        if (event.key !== 'Escape' || event.defaultPrevented || event.nativeEvent.isComposing) {
-          return;
-        }
+        if (!isUnhandledEscape(event)) return;
         event.preventDefault();
         onEscape();
       }}

@@ -158,6 +158,7 @@ import { nameIssues, propertyIssues } from './paramRules';
 import { PipelineGeneral } from './PipelineGeneral';
 import { DockPasteButton } from './DockPasteButton';
 import { isDockDrawerEscape } from './dockExpand';
+import { isUnhandledEscape } from '../../lib/escape';
 import { pasteAndSay } from './paste';
 import { ContractSection, OutputRow, ParamRow, VariableRow } from './ContractEditor';
 import { OUTPUT_COLUMNS, PARAM_COLUMNS, VARIABLE_COLUMNS } from './contractColumns';
@@ -373,8 +374,9 @@ export function PipelineCanvas({
   /* #1477 OR29 — the dock expanded into a full-height drawer over the canvas,
      for long forms. A moment's mode, not a preference: a reload docks it. Only
      an open dock expands, and folding it ends the mode. */
-  const [dockExpandedMode, setDockExpanded] = useState(false);
-  const dockExpanded = dockExpandedMode && dockOpen;
+  const [dockExpanded, setDockExpanded] = useState(false);
+  // However the dock is folded, unfolding docks it rather than re-expanding.
+  if (dockExpanded && !dockOpen) setDockExpanded(false);
   const dockId = useId();
   const dockBodyId = useId();
   const canvasMainRef = useRef<HTMLDivElement>(null);
@@ -1806,7 +1808,7 @@ export function PipelineCanvas({
         <div
           className="editor-leave-prompt"
           onKeyDown={(e) => {
-            if (e.key !== 'Escape' || e.defaultPrevented || e.nativeEvent.isComposing) return;
+            if (!isUnhandledEscape(e)) return;
             e.preventDefault();
             leaveGuard.keep();
           }}
@@ -2375,31 +2377,19 @@ export function PipelineCanvas({
                       dockRef={dockRef}
                       dockId={dockId}
                       position={dockPosition}
+                      expanded={dockExpanded}
                     />
                   )}
                   <div
                     id={dockId}
                     ref={dockRef}
                     className={
-                      !dockOpen
-                        ? 'property-dock property-dock--collapsed'
-                        : dockExpanded
-                          ? 'property-dock property-dock--expanded'
-                          : 'property-dock'
+                      dockOpen ? 'property-dock' : 'property-dock property-dock--collapsed'
                     }
                     /* #1477 OR29 — Escape returns an expanded dock to its place,
                      with the same tree and so the same drafts. */
                     onKeyDown={(e) => {
-                      if (
-                        !dockExpanded ||
-                        !isDockDrawerEscape({
-                          key: e.key,
-                          defaultPrevented: e.defaultPrevented,
-                          isComposing: e.nativeEvent.isComposing,
-                          target: e.target,
-                          currentTarget: e.currentTarget,
-                        })
-                      ) {
+                      if (!dockExpanded || !isDockDrawerEscape(e)) {
                         return;
                       }
                       e.preventDefault();
@@ -2425,10 +2415,7 @@ export function PipelineCanvas({
                         className="property-dock__toggle"
                         aria-expanded={dockOpen}
                         aria-controls={dockBodyId}
-                        onClick={() => {
-                          if (dockOpen) setDockExpanded(false);
-                          setDockOpen(!dockOpen);
-                        }}
+                        onClick={() => setDockOpen(!dockOpen)}
                       >
                         {/* Folded, a selection would otherwise change nothing on screen
                       but the canvas highlight. The dock does NOT reopen by itself:
@@ -2482,31 +2469,33 @@ export function PipelineCanvas({
                       )}
                       {/* #1477 OR29 — U21's Paste, moved here from a full-width
                       bar in the nothing-selected panel. */}
-                      <DockPasteButton
-                        store={store}
-                        pipelineId={pipelineId}
-                        onNotice={showCanvasMsg}
-                        busy={previewLocked}
-                      />
-                      {/* #1477 OR29 — room for a long form (a prompt, a mapping,
-                      JSON): the same panel, expanded over the canvas. Like the
-                      position toggle, the name says where it goes. */}
-                      {dockOpen && (
-                        <button
-                          type="button"
-                          className="icon-button property-dock__icon-button"
-                          aria-label={dockExpanded ? 'Back to dock' : 'Expand properties'}
-                          title={dockExpanded ? 'Back to dock (Esc)' : 'Expand properties'}
-                          aria-controls={dockBodyId}
-                          onClick={() => setDockExpanded(!dockExpanded)}
-                        >
-                          {dockExpanded ? (
-                            <ArrowMinimizeRegular aria-hidden="true" />
-                          ) : (
-                            <ArrowMaximizeRegular aria-hidden="true" />
-                          )}
-                        </button>
-                      )}
+                      <span className="property-dock__acts">
+                        <DockPasteButton
+                          store={store}
+                          pipelineId={pipelineId}
+                          onNotice={showCanvasMsg}
+                          busy={previewLocked}
+                        />
+                        {/* #1477 OR29 — room for a long form (a prompt, a mapping,
+                        JSON): the same panel, expanded over the canvas. Like the
+                        position toggle, the name says where it goes. */}
+                        {dockOpen && (
+                          <button
+                            type="button"
+                            className="icon-button property-dock__icon-button"
+                            aria-label={dockExpanded ? 'Back to dock' : 'Expand properties'}
+                            title={dockExpanded ? 'Back to dock (Esc)' : 'Expand properties'}
+                            aria-controls={dockId}
+                            onClick={() => setDockExpanded(!dockExpanded)}
+                          >
+                            {dockExpanded ? (
+                              <ArrowMinimizeRegular aria-hidden="true" />
+                            ) : (
+                              <ArrowMaximizeRegular aria-hidden="true" />
+                            )}
+                          </button>
+                        )}
+                      </span>
                       {/* The page's ONE announcer of a blocked save (#1249). Here
                       in the always-shown header, not on the list: the list is
                       `hidden` whenever Problems or the dock is folded, and a

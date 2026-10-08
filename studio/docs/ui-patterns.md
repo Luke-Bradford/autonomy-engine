@@ -332,6 +332,16 @@ message.
 - **It is not a drawer.** The panel already sits beside the canvas it edits, and it applies each
   change to the editor's draft rather than saving a record, so there is no per-record Save or Cancel
   to put in a drawer footer. The editor's Save writes the draft, and its dirty dot says it is unsaved.
+- **Expand properties** (the header's ⤢, #1477 OR29) moves the same panel over the canvas as a
+  full-height drawer on the right, for long forms such as prompts, mappings and JSON. It is still
+  not a form drawer: no Save or Cancel, and Apply works as it does docked.
+  - It is the SAME element with a class, never a second tree, so an unapplied edit survives both
+    ways.
+  - A strip of canvas stays visible on the left; selecting an activity there shows it in the drawer.
+  - Escape (from inside the dock) or Back to dock returns it. An open picker list or help popover
+    takes the first Escape. Escape on the canvas keeps its own meaning.
+  - It is a moment's mode, not a preference: a reload or folding the dock docks it again. Dock to
+    bottom/right is hidden while it is expanded.
 
 ## Typing JSON
 

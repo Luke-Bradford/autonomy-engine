@@ -38,6 +38,15 @@ describe('HelpDisclosure (#1484 M2 — the ? help)', () => {
     expect(document.activeElement).toBe(screen.getByLabelText('About it'));
   });
 
+  it('claims the Escape that closes it, and only that one', () => {
+    const { details } = help();
+    // `fireEvent` returns false when the handler called `preventDefault`: a
+    // drawer or the expanded dock around it then leaves that Escape alone.
+    expect(fireEvent.keyDown(screen.getByText('inside'), { key: 'Escape' })).toBe(false);
+    expect(details.open).toBe(false);
+    expect(fireEvent.keyDown(screen.getByLabelText('About it'), { key: 'Escape' })).toBe(true);
+  });
+
   it('closes when focus moves outside it, not inside it, and not to nothing', () => {
     const { details } = help();
     fireEvent.blur(screen.getByLabelText('About it'), {

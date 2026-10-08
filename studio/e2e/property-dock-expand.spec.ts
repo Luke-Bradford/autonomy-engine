@@ -63,22 +63,27 @@ function dockOnTop(page: Page) {
 }
 
 async function expectExpanded(page: Page) {
+  // Polled on what only the drawer satisfies: a docked dock is under the
+  // canvas, or beside it at most 520px wide by default.
   await expect
     .poll(async () => {
       const { dock, column } = await boxes(page);
-      return Math.round(column.bottom - dock.bottom) === 0 && Math.round(dock.top - column.top);
+      return (
+        Math.abs(dock.top - column.top) <= 1 &&
+        Math.abs(dock.bottom - column.bottom) <= 1 &&
+        Math.abs(dock.right - column.right) <= 1 &&
+        dock.width >= 600
+      );
     })
-    .toBe(0);
+    .toBe(true);
   const { dock, wrap, column } = await boxes(page);
-  // Full height of the column, flush with its right edge, over the canvas…
-  expect(Math.abs(dock.right - column.right)).toBeLessThanOrEqual(1);
-  expect(dock.width).toBeGreaterThanOrEqual(600);
-  expect(dock.left).toBeLessThan(wrap.right - 600);
-  // …which now has the column to itself underneath, with a strip left showing.
-  expect(Math.round(wrap.height)).toBe(Math.round(column.height));
+  // The canvas has the column to itself underneath, with a strip left showing.
+  expect(Math.abs(wrap.width - column.width)).toBeLessThanOrEqual(1);
+  expect(Math.abs(wrap.height - column.height)).toBeLessThanOrEqual(1);
   expect(dock.left - column.left).toBeGreaterThanOrEqual(100);
   expect(await dockOnTop(page)).toBe(true);
-  // The divider is not drawn over the drawer.
+  // The divider is not drawn over the drawer, but stays mounted.
+  await expect(page.locator('.dock-splitter')).toHaveCount(1);
   await expect(page.locator('.dock-splitter')).toBeHidden();
 }
 
@@ -185,6 +190,30 @@ test.describe('#1477 OR29 — Expand properties', () => {
     await expect(page.getByRole('button', { name: 'Expand properties' })).toBeVisible();
     const right = await boxes(page);
     expect(right.dock.left).toBeGreaterThanOrEqual(right.wrap.right);
+    await expectQuiet(page, problems);
+  });
+
+  test('the divider reads the docked size again after the drawer', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openSeededCanvas(page, `e2e 1477 expand divider ${String(Date.now())}`, seed);
+    await nodeById(page, 'h').click();
+    const divider = page.getByRole('separator', { name: 'Resize properties' });
+    await expect(divider).toBeVisible();
+
+    await page.getByRole('button', { name: 'Expand properties' }).click();
+    await expectExpanded(page);
+    // The column changes while the divider is not drawn…
+    await page.setViewportSize({ width: 1440, height: 800 });
+    await page.getByRole('button', { name: 'Back to dock' }).click();
+
+    // …and it reports the dock's docked height, not the drawer's.
+    await expect
+      .poll(async () => {
+        const dock = await rectOf(page, '.property-dock');
+        return Number(await divider.getAttribute('aria-valuenow')) - Math.round(dock.height);
+      })
+      .toBe(0);
     await expectQuiet(page, problems);
   });
 });

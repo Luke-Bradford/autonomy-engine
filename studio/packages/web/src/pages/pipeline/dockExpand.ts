@@ -1,10 +1,8 @@
+import { isUnhandledEscape, type EscapeKeyEvent } from '../../lib/escape';
 import { isModalDialogOpen } from './undoRedo';
 
 /** The parts of a React keydown the rule reads, so it can be tested on plain DOM. */
-export interface DockKeyEvent {
-  readonly key: string;
-  readonly defaultPrevented: boolean;
-  readonly isComposing: boolean;
+export interface DockKeyEvent extends EscapeKeyEvent {
   readonly target: EventTarget;
   readonly currentTarget: Element;
 }
@@ -13,8 +11,7 @@ export interface DockKeyEvent {
  * #1477 OR29 — whether an Escape pressed in the EXPANDED property dock is the
  * dock's, returning it to its place. Escape belongs to the innermost thing
  * that is open, so the dock takes it only when nothing nearer does:
- * - a control that already handled it (`ExpressionPicker`, `HelpDisclosure`
- *   call `preventDefault`), or an IME composition it ends;
+ * - one `isUnhandledEscape` says is claimed;
  * - a key from OUTSIDE the dock's DOM. React bubbles a portalled popup's keys
  *   (Fluent's `Menu`, a dialog) through the dock, and that Escape is the
  *   popup's;
@@ -26,7 +23,7 @@ export interface DockKeyEvent {
  * - a modal dialog over the page, as the editor's document keys check.
  */
 export function isDockDrawerEscape(e: DockKeyEvent): boolean {
-  if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return false;
+  if (!isUnhandledEscape(e)) return false;
   if (!(e.target instanceof Node) || !e.currentTarget.contains(e.target)) return false;
   if (e.target instanceof Element && e.target.closest('[role="combobox"][aria-expanded="true"]')) {
     return false;

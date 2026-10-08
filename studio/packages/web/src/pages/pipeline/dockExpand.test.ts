@@ -23,7 +23,7 @@ function escape(
   return isDockDrawerEscape({
     key: init.key ?? 'Escape',
     defaultPrevented: init.defaultPrevented ?? false,
-    isComposing: init.isComposing ?? false,
+    nativeEvent: { isComposing: init.isComposing ?? false },
     target,
     currentTarget: dock,
   });
@@ -71,6 +71,11 @@ describe('isDockDrawerEscape', () => {
     toggle.setAttribute('aria-expanded', 'true');
     dock.append(toggle);
     expect(escape(dock, toggle)).toBe(true);
+  });
+
+  it('leaves a key whose target is not a DOM node', () => {
+    const { dock } = setup();
+    expect(escape(dock, new EventTarget())).toBe(false);
   });
 
   it('leaves an Escape that arrived through a portal (a menu outside the dock)', () => {

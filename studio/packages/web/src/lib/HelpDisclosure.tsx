@@ -54,6 +54,8 @@ export function HelpDisclosure({
 
   const onKeyDown = (e: KeyboardEvent<HTMLDetailsElement>) => {
     if (e.key !== 'Escape' || !e.currentTarget.open) return;
+    // Claimed, so a drawer or the expanded dock around it stays open.
+    e.preventDefault();
     e.currentTarget.open = false;
     e.currentTarget.querySelector('summary')?.focus();
   };

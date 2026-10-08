@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useStore } from 'zustand';
+import { isUnhandledEscape } from '../../lib/escape';
 import { PaneSplitter } from '../../shell/PaneSplitter';
 import { DOCK_MIN_WIDTH, uiStore } from '../../stores/uiStore';
 
@@ -95,9 +96,7 @@ export function RunDrawer({
       style={width === null ? undefined : ({ [WIDTH_VAR]: `${width}px` } as CSSProperties)}
       onKeyDown={(event) => {
         // An Escape a control inside already handled is not a request to close.
-        if (event.key !== 'Escape' || event.defaultPrevented || event.nativeEvent.isComposing) {
-          return;
-        }
+        if (!isUnhandledEscape(event)) return;
         event.preventDefault();
         onClose();
       }}
