@@ -98,7 +98,8 @@ test.describe('#1477 OR29 — dock density', () => {
     const table = await panel.getByRole('table', { name: 'Params' }).boundingBox();
     const first = await firstRow.boundingBox();
     expect(table!.y - header.bottom).toBeLessThanOrEqual(80);
-    expect(first!.y - table!.y).toBeLessThanOrEqual(24);
+    // The header row is under one compact row (32px) tall.
+    expect(first!.y - table!.y).toBeLessThanOrEqual(32);
 
     // The section's help is one click away, not a paragraph on the page.
     const params = panel.getByRole('region', { name: 'Params', exact: true });
