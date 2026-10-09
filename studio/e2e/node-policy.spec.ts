@@ -72,7 +72,9 @@ test.describe('#1312 — node run policy editor', () => {
     await nodeById(page, 'a').click();
     await openGeneralTab(page);
     await expect(policySection(page).getByLabel('Retries', { exact: true })).toHaveValue('2');
-    await expect(policySection(page).getByLabel('Retry interval (seconds)', { exact: true })).toHaveValue('60');
+    await expect(
+      policySection(page).getByLabel('Retry interval (seconds)', { exact: true }),
+    ).toHaveValue('60');
     await expect(policySection(page).getByLabel('Secure output')).toBeChecked();
     await expect(policySection(page).getByLabel('Secure input')).not.toBeChecked();
 

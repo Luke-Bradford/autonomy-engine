@@ -297,7 +297,10 @@ describe('EdgePanel — a back-edge bounce cap', () => {
       }),
     );
     render(<EdgePanel store={store} edge={edge} nodes={NODES} edges={[edge]} />);
-    return { store, field: screen.getByLabelText('Bounce cap', { exact: true }) as HTMLInputElement };
+    return {
+      store,
+      field: screen.getByLabelText('Bounce cap', { exact: true }) as HTMLInputElement,
+    };
   }
 
   it('names the element a back-edge and shows the stored cap', () => {

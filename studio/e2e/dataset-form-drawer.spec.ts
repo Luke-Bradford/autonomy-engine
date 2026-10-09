@@ -87,7 +87,10 @@ test.describe('#1396 the dataset form drawer', () => {
     const table = form(page).getByLabel('Table', { exact: true });
     await expect(table).toHaveAttribute('aria-required', 'true');
     await expect(table).toHaveAccessibleDescription(/bare identifier.*table/);
-    await expect(form(page).getByLabel('Columns (JSON)', { exact: true })).toHaveAttribute('aria-required', 'true');
+    await expect(form(page).getByLabel('Columns (JSON)', { exact: true })).toHaveAttribute(
+      'aria-required',
+      'true',
+    );
 
     // Sections, with Advanced closed on a new dataset.
     for (const section of ['Basics', 'Dataset', 'Columns']) {

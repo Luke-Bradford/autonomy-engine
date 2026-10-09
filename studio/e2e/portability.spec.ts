@@ -317,7 +317,9 @@ test.describe('#959 portability', () => {
     const rows = page.getByRole('row').filter({ hasText: name });
 
     // 1. Into a CHOSEN store — the cross-workspace path.
-    await page.getByLabel('Store it in', { exact: true }).selectOption({ label: `${destStore} (File system)` });
+    await page
+      .getByLabel('Store it in', { exact: true })
+      .selectOption({ label: `${destStore} (File system)` });
     await page.getByLabel('Export file').setInputFiles(file as string);
     await expect(page.getByRole('status')).toContainText(`Imported dataset “${name}”`);
     await expect(rows).toHaveCount(2);
