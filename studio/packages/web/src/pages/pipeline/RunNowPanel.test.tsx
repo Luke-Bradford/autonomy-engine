@@ -109,6 +109,21 @@ describe('RunNowPanel (#1395 OR4)', () => {
     expect(screen.queryByText(/unsaved edits/)).toBeNull();
   });
 
+  it('marks a required boolean choice and json text area aria-required too (#1594 S3c)', () => {
+    const typed = {
+      ...version,
+      params: [
+        { name: 'dry', type: 'boolean', required: true },
+        { name: 'opts', type: 'json', required: true },
+        { name: 'note', type: 'json', required: false },
+      ],
+    } as unknown as PipelineVersion;
+    panel(vi.fn(), vi.fn(), typed);
+    expect(screen.getByLabelText('dry')).toHaveAttribute('aria-required', 'true');
+    expect(screen.getByLabelText('opts')).toHaveAttribute('aria-required', 'true');
+    expect(screen.getByLabelText('note')).not.toHaveAttribute('aria-required');
+  });
+
   it('offers a boolean as a choice and json as a text area, and sends them typed', async () => {
     runPipelineVersion.mockResolvedValue({ outcome: 'started', runId: 'run_1' });
     const typed = {
