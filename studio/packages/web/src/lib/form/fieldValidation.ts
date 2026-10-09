@@ -175,7 +175,8 @@ export interface FieldValidation {
   /** What to show beside a field now, or `undefined`. */
   errorFor: (key: string) => string | undefined;
   /** `fieldAttrs` for a hand-written control: its key, its error now, and its error line's id. */
-  attrsFor: (key: string, errorId: string) => ReturnType<typeof fieldAttrs>;
+  /** `hintId` — the field's hint or `?` note, described after the error. */
+  attrsFor: (key: string, errorId: string, hintId?: string) => ReturnType<typeof fieldAttrs>;
   /**
    * A refusal of input the browser could not read, in a control that is not
    * one of the form's fields (one carrying no `data-field`, or one `labelOf`
@@ -340,7 +341,8 @@ export function useFieldValidation(
   }, []);
 
   const attrsFor = useCallback(
-    (key: string, errorId: string) => fieldAttrs({ key, error: errorFor(key), errorId }),
+    (key: string, errorId: string, hintId?: string) =>
+      fieldAttrs({ key, error: errorFor(key), errorId, hintId }),
     [errorFor],
   );
 

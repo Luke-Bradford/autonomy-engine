@@ -3202,7 +3202,7 @@ function BounceCapField({
       stored={edge.maxBounces}
       parse={parseBounceCap}
       onCommit={(n) => store.getState().updateEdgeBounces(edge.id, n)}
-      hint={
+      about={
         <>
           How many times this loop may repeat before the run fails as <code>capped</code>. Zero
           never bounces.

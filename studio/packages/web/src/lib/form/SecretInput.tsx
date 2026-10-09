@@ -22,6 +22,7 @@ export function SecretInput({
   placeholder,
   required = false,
   field,
+  about,
 }: {
   label: ReactNode;
   value: string;
@@ -29,11 +30,13 @@ export function SecretInput({
   placeholder?: string;
   required?: boolean;
   field?: ReturnType<typeof fieldAttrs>;
+  /** What the secret is for, behind a `?` beside the label (`LabelledControl`). */
+  about?: { name: string; note: ReactNode };
 }) {
   const [shown, setShown] = useState(false);
   return (
-    <LabelledControl label={label}>
-      {(id) => (
+    <LabelledControl label={label} about={about}>
+      {(id, describedBy) => (
         <div className="secret-field">
           <input
             id={id}
@@ -45,6 +48,11 @@ export function SecretInput({
             spellCheck={false}
             required={required}
             {...field}
+            aria-describedby={
+              [field?.['aria-describedby'], describedBy]
+                .filter((each) => each !== undefined)
+                .join(' ') || undefined
+            }
           />
           <button
             type="button"

@@ -231,10 +231,21 @@ export function ImportPanel({
       {stores !== undefined && (
         <>
           {/* #1143 — chosen BEFORE the file: picking the file IS the import. */}
-          <LabelledControl label="Store it in">
-            {(id) => (
+          <LabelledControl
+            label="Store it in"
+            about={
+              stores.length === 0
+                ? undefined
+                : {
+                    name: 'Store it in',
+                    note: 'A dataset file names the connection it was exported from, which is only here if this is that workspace (or one synced from the same git repo). From anywhere else, choose the connection it should live in.',
+                  }
+            }
+          >
+            {(id, aboutId) => (
               <select
                 id={id}
+                aria-describedby={aboutId}
                 value={chosen}
                 disabled={busy}
                 onChange={(e) => setStore(e.target.value)}
@@ -248,11 +259,13 @@ export function ImportPanel({
               </select>
             )}
           </LabelledControl>
-          <p className="page-hint">
-            {stores.length === 0
-              ? 'A dataset lives in a store, and there are no connections here yet — add one under Manage → Connections first.'
-              : 'A dataset file names the connection it was exported from, which is only here if this is that workspace (or one synced from the same git repo). From anywhere else, choose the connection it should live in.'}
-          </p>
+          {/* No store to choose is the panel's STATE, so it stays a line. */}
+          {stores.length === 0 && (
+            <p className="page-hint">
+              A dataset lives in a store, and there are no connections here yet — add one under
+              Manage → Connections first.
+            </p>
+          )}
         </>
       )}
       <LabelledControl label="Export file">

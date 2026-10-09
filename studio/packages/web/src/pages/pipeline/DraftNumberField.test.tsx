@@ -12,7 +12,7 @@ describe('DraftNumberField error', () => {
         label="Retries"
         stored={undefined}
         parse={parseWholeNumber}
-        hint="How many times."
+        about="How many times."
         onCommit={onCommit}
       />,
     );
@@ -33,6 +33,10 @@ describe('DraftNumberField error', () => {
     expect(screen.getByText('How many times.')).toBeTruthy();
     expect(input.getAttribute('aria-invalid')).toBe('true');
     expect(input.getAttribute('aria-describedby')?.split(' ')).toContain(alert.id);
+    // #1594 OR40 S3c-2 — the meaning is behind a `?` beside the label, and
+    // still the input's description after its error.
+    expect(container.querySelector('summary')?.getAttribute('aria-label')).toBe('About Retries');
+    expect(input).toHaveAccessibleDescription(`${alert.textContent} How many times.`);
   });
 
   it('clears the error as soon as the text is valid, before any blur', () => {
