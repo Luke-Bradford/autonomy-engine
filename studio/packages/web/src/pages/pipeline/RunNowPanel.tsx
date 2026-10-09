@@ -13,6 +13,7 @@ import { LabelledControl } from '../../lib/LabelledControl';
 import { JsonEditor } from '../../lib/form/JsonEditor';
 import { runNowRows } from './runNowRules';
 import { useRunParams } from './useRunParams';
+import { RequiredMark } from '../../lib/form/RequiredMark';
 
 /**
  * #1395 OR4 — the editor's Run form: the saved version's params, prefilled with
@@ -106,7 +107,15 @@ export function RunParamsFields({
     <>
       <p className="page-hint">Leave a value blank to use its default.</p>
       {params.map((p, i) => (
-        <LabelledControl key={p.name} label={p.name}>
+        <LabelledControl
+          key={p.name}
+          label={
+            <>
+              {p.name}
+              {p.required && <RequiredMark />}
+            </>
+          }
+        >
           {(id) => (
             <>
               <ParamValueInput
@@ -120,7 +129,6 @@ export function RunParamsFields({
               />
               <span id={`${id}-hint`} className="page-hint">
                 {VALUE_TYPE_TITLES[p.type]}
-                {p.required ? ' · required' : ''}
                 {p.description !== undefined && p.description !== '' ? ` — ${p.description}` : ''}
               </span>
             </>
@@ -202,7 +210,12 @@ function ParamValueInput({
   onChange: (value: string) => void;
   autoFocus: boolean;
 }) {
-  const common = { id, 'aria-describedby': `${id}-hint`, autoFocus };
+  const common = {
+    id,
+    'aria-describedby': `${id}-hint`,
+    'aria-required': param.required || undefined,
+    autoFocus,
+  };
   if (param.type === 'boolean') {
     return (
       <select {...common} value={value} onChange={(e) => onChange(e.target.value)}>

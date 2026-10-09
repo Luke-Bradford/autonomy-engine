@@ -85,137 +85,171 @@ export function WindowEditor({
         )}
       </LabelledControl>
 
-      <label>
-        {`Each window covers N ${PERIOD_NOUN[value.frequency]}`}
-        <input
-          type="number"
-          min={1}
-          value={value.interval}
-          {...f.attrs('interval')}
-          onChange={(e) => set({ interval: e.target.value })}
-          placeholder="1"
-        />
-      </label>
+      <LabelledControl label={`Each window covers N ${PERIOD_NOUN[value.frequency]}`}>
+        {(id) => (
+          <input
+            id={id}
+            type="number"
+            min={1}
+            value={value.interval}
+            {...f.attrs('interval')}
+            onChange={(e) => set({ interval: e.target.value })}
+            placeholder="1"
+          />
+        )}
+      </LabelledControl>
       <FieldError {...f.errorProps('interval')} />
 
       {/* `step={1}` admits seconds, so a stored bound that has them can be both
           shown and re-entered rather than silently rounded to the minute. */}
-      <label>
-        <span>
-          Start time (the window epoch)
-          <BoundZoneNote zone={value.boundsZone} />
-          <RequiredMark />
-        </span>
-        <input
-          type="datetime-local"
-          step={1}
-          // `aria-required`, not native `required`: a DISABLED tumbling trigger
-          // may be saved with no window at all, which the form's own refusal
-          // path decides, so the browser must not block that submit.
-          aria-required="true"
-          value={value.startTime}
-          {...f.attrs('startTime')}
-          onChange={(e) => set({ startTime: e.target.value })}
-        />
-      </label>
+      <LabelledControl
+        label={
+          <>
+            Start time (the window epoch)
+            <BoundZoneNote zone={value.boundsZone} />
+            <RequiredMark />
+          </>
+        }
+      >
+        {(id) => (
+          <input
+            id={id}
+            type="datetime-local"
+            step={1}
+            // `aria-required`, not native `required`: a DISABLED tumbling trigger
+            // may be saved with no window at all, which the form's own refusal
+            // path decides, so the browser must not block that submit.
+            aria-required="true"
+            value={value.startTime}
+            {...f.attrs('startTime')}
+            onChange={(e) => set({ startTime: e.target.value })}
+          />
+        )}
+      </LabelledControl>
       <FieldError {...f.errorProps('startTime')} />
 
-      <label>
-        End time
-        <BoundZoneNote zone={value.boundsZone} />
-        <input
-          type="datetime-local"
-          step={1}
-          value={value.endTime}
-          {...f.attrs('endTime')}
-          onChange={(e) => set({ endTime: e.target.value })}
-        />
-      </label>
+      <LabelledControl
+        label={
+          <>
+            End time
+            <BoundZoneNote zone={value.boundsZone} />
+          </>
+        }
+      >
+        {(id) => (
+          <input
+            id={id}
+            type="datetime-local"
+            step={1}
+            value={value.endTime}
+            {...f.attrs('endTime')}
+            onChange={(e) => set({ endTime: e.target.value })}
+          />
+        )}
+      </LabelledControl>
       <FieldError {...f.errorProps('endTime')} />
 
-      <label>
-        Max backfill windows (blank means none)
-        <input
-          type="number"
-          min={1}
-          max={MAX_BACKFILL_WINDOWS_CAP}
-          value={value.maxBackfillWindows}
-          {...f.attrs('maxBackfillWindows')}
-          onChange={(e) => set({ maxBackfillWindows: e.target.value })}
-          placeholder="no backfill"
-        />
-      </label>
+      <LabelledControl label="Max backfill windows (blank means none)">
+        {(id) => (
+          <input
+            id={id}
+            type="number"
+            min={1}
+            max={MAX_BACKFILL_WINDOWS_CAP}
+            value={value.maxBackfillWindows}
+            {...f.attrs('maxBackfillWindows')}
+            onChange={(e) => set({ maxBackfillWindows: e.target.value })}
+            placeholder="no backfill"
+          />
+        )}
+      </LabelledControl>
       <FieldError {...f.errorProps('maxBackfillWindows')} />
 
-      <label>
-        Max concurrent windows (blank means one)
-        <input
-          type="number"
-          min={1}
-          max={MAX_CONCURRENT_WINDOWS_CAP}
-          value={value.maxConcurrentWindows}
-          {...f.attrs('maxConcurrentWindows')}
-          onChange={(e) => set({ maxConcurrentWindows: e.target.value })}
-          placeholder="one at a time"
-        />
-      </label>
+      <LabelledControl label="Max concurrent windows (blank means one)">
+        {(id) => (
+          <input
+            id={id}
+            type="number"
+            min={1}
+            max={MAX_CONCURRENT_WINDOWS_CAP}
+            value={value.maxConcurrentWindows}
+            {...f.attrs('maxConcurrentWindows')}
+            onChange={(e) => set({ maxConcurrentWindows: e.target.value })}
+            placeholder="one at a time"
+          />
+        )}
+      </LabelledControl>
       <FieldError {...f.errorProps('maxConcurrentWindows')} />
 
       {/* #861 — the two opt-in sub-objects. Blank means absent (no retry, no
           dependency); every range is the write schema's, reported below. */}
-      <label>
-        Retry a failed window N times (blank means no retry)
-        <input
-          type="number"
-          min={1}
-          max={MAX_WINDOW_RETRY_COUNT_CAP}
-          value={value.retryCount}
-          {...f.attrs('retry.count')}
-          onChange={(e) => set({ retryCount: e.target.value })}
-          placeholder="no retry"
-        />
-      </label>
+      <LabelledControl label="Retry a failed window N times (blank means no retry)">
+        {(id) => (
+          <input
+            id={id}
+            type="number"
+            min={1}
+            max={MAX_WINDOW_RETRY_COUNT_CAP}
+            value={value.retryCount}
+            {...f.attrs('retry.count')}
+            onChange={(e) => set({ retryCount: e.target.value })}
+            placeholder="no retry"
+          />
+        )}
+      </LabelledControl>
       <FieldError {...f.errorProps('retry.count')} />
 
-      <label>
-        Seconds between retries
-        <input
-          type="number"
-          min={MIN_WINDOW_RETRY_INTERVAL_SECONDS}
-          max={MAX_WINDOW_RETRY_INTERVAL_SECONDS}
-          value={value.retryIntervalSeconds}
-          {...f.attrs('retry.intervalInSeconds')}
-          onChange={(e) => set({ retryIntervalSeconds: e.target.value })}
-        />
-      </label>
+      <LabelledControl label="Seconds between retries">
+        {(id) => (
+          <input
+            id={id}
+            type="number"
+            min={MIN_WINDOW_RETRY_INTERVAL_SECONDS}
+            max={MAX_WINDOW_RETRY_INTERVAL_SECONDS}
+            value={value.retryIntervalSeconds}
+            {...f.attrs('retry.intervalInSeconds')}
+            onChange={(e) => set({ retryIntervalSeconds: e.target.value })}
+          />
+        )}
+      </LabelledControl>
       <FieldError {...f.errorProps('retry.intervalInSeconds')} />
 
       {/* Deliberately NO `min`: a valid offset is negative, and the form runs
           native constraint validation before its own `role="alert"` path. */}
-      <label>
-        Depend on earlier windows: offset in seconds (negative, before each window&apos;s start)
-        <input
-          type="number"
-          max={-1}
-          value={value.dependencyOffsetSeconds}
-          {...f.attrs('selfDependency.offsetInSeconds')}
-          onChange={(e) => set({ dependencyOffsetSeconds: e.target.value })}
-          placeholder="no dependency"
-        />
-      </label>
+      <LabelledControl
+        label={
+          <>
+            Depend on earlier windows: offset in seconds (negative, before each window&apos;s start)
+          </>
+        }
+      >
+        {(id) => (
+          <input
+            id={id}
+            type="number"
+            max={-1}
+            value={value.dependencyOffsetSeconds}
+            {...f.attrs('selfDependency.offsetInSeconds')}
+            onChange={(e) => set({ dependencyOffsetSeconds: e.target.value })}
+            placeholder="no dependency"
+          />
+        )}
+      </LabelledControl>
       <FieldError {...f.errorProps('selfDependency.offsetInSeconds')} />
 
-      <label>
-        Dependency span in seconds (blank means one window)
-        <input
-          type="number"
-          min={1}
-          value={value.dependencySizeSeconds}
-          {...f.attrs('selfDependency.sizeInSeconds')}
-          onChange={(e) => set({ dependencySizeSeconds: e.target.value })}
-          placeholder="one window"
-        />
-      </label>
+      <LabelledControl label="Dependency span in seconds (blank means one window)">
+        {(id) => (
+          <input
+            id={id}
+            type="number"
+            min={1}
+            value={value.dependencySizeSeconds}
+            {...f.attrs('selfDependency.sizeInSeconds')}
+            onChange={(e) => set({ dependencySizeSeconds: e.target.value })}
+            placeholder="one window"
+          />
+        )}
+      </LabelledControl>
       <FieldError {...f.errorProps('selfDependency.sizeInSeconds')} />
 
       {/* The epoch is an absolute instant; the control is anchored in the

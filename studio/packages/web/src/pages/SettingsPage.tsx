@@ -156,7 +156,9 @@ export function SettingsPage() {
       <PageHeader title="Settings" />
       <p className="page-hint">How this server is configured, and how it looks.</p>
 
-      <section aria-labelledby="settings-appearance" className="home-section">
+      {/* #1594 OR40 S3c — a form: the pickers are label-left rows, and the
+          theme switch lines up with their controls. */}
+      <section aria-labelledby="settings-appearance" className="home-section field-form">
         <h3 id="settings-appearance">Appearance</h3>
         <div className="settings-row">
           <ThemeToggle />
@@ -167,12 +169,8 @@ export function SettingsPage() {
               again. */}
           <span aria-hidden="true">Dark mode</span>
         </div>
-        <div className="settings-row">
-          <DensityPicker />
-        </div>
-        <div className="settings-row">
-          <DisplayTimeZonePicker />
-        </div>
+        <DensityPicker />
+        <DisplayTimeZonePicker />
       </section>
 
       <section aria-labelledby="settings-secrets" className="home-section">

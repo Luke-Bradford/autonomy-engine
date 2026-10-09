@@ -404,19 +404,25 @@ export function TriggerForm({
       }
     >
       <Section heading="Basics" help={FORM_SECTION_HINTS.trigger.basics}>
-        <label>
-          <span>
-            Name
-            <RequiredMark />
-          </span>
-          <input
-            type="text"
-            value={form.name}
-            onChange={(e) => onChange({ ...form, name: e.target.value })}
-            required
-            {...validation.attrsFor('name', nameErrorId)}
-          />
-        </label>
+        <LabelledControl
+          label={
+            <>
+              Name
+              <RequiredMark />
+            </>
+          }
+        >
+          {(id) => (
+            <input
+              id={id}
+              type="text"
+              value={form.name}
+              onChange={(e) => onChange({ ...form, name: e.target.value })}
+              required
+              {...validation.attrsFor('name', nameErrorId)}
+            />
+          )}
+        </LabelledControl>
         <FieldError id={nameErrorId} message={validation.errorFor('name')} />
 
         <label>
@@ -602,35 +608,39 @@ export function TriggerForm({
                 validation={validation}
               />
             ) : (
-              <label>
-                Schedule (cron)
-                <input
-                  type="text"
-                  value={form.schedule}
-                  onChange={(e) => onChange({ ...form, schedule: e.target.value })}
-                  placeholder="0 2 * * *"
-                  spellCheck={false}
-                />
-              </label>
+              <LabelledControl label="Schedule (cron)">
+                {(id) => (
+                  <input
+                    id={id}
+                    type="text"
+                    value={form.schedule}
+                    onChange={(e) => onChange({ ...form, schedule: e.target.value })}
+                    placeholder="0 2 * * *"
+                    spellCheck={false}
+                  />
+                )}
+              </LabelledControl>
             )}
           </>
         )}
 
         {form.mode === 'event' && (
           <>
-            <label>
-              Event
-              <input
-                type="text"
-                value={form.event.name}
-                {...validation.attrsFor('event.name', eventErrorId)}
-                onChange={(e) =>
-                  onChange({ ...form, event: { ...form.event, name: e.target.value } })
-                }
-                placeholder="order.placed"
-                spellCheck={false}
-              />
-            </label>
+            <LabelledControl label="Event">
+              {(id) => (
+                <input
+                  id={id}
+                  type="text"
+                  value={form.event.name}
+                  {...validation.attrsFor('event.name', eventErrorId)}
+                  onChange={(e) =>
+                    onChange({ ...form, event: { ...form.event, name: e.target.value } })
+                  }
+                  placeholder="order.placed"
+                  spellCheck={false}
+                />
+              )}
+            </LabelledControl>
             <FieldError id={eventErrorId} message={validation.errorFor('event.name')} />
             <p className="page-hint">
               Fires when <code>POST /api/events</code> is called with this exact name. An enabled
@@ -711,20 +721,26 @@ export function TriggerForm({
         )}
 
         {form.concurrencyPolicy === 'parallel' && (
-          <label>
-            <span>
-              Max parallel runs
-              <RequiredMark />
-            </span>
-            <input
-              type="number"
-              min={1}
-              value={form.concurrencyMax}
-              onChange={(e) => onChange({ ...form, concurrencyMax: e.target.value })}
-              required
-              {...validation.attrsFor('concurrency.max', maxErrorId)}
-            />
-          </label>
+          <LabelledControl
+            label={
+              <>
+                Max parallel runs
+                <RequiredMark />
+              </>
+            }
+          >
+            {(id) => (
+              <input
+                id={id}
+                type="number"
+                min={1}
+                value={form.concurrencyMax}
+                onChange={(e) => onChange({ ...form, concurrencyMax: e.target.value })}
+                required
+                {...validation.attrsFor('concurrency.max', maxErrorId)}
+              />
+            )}
+          </LabelledControl>
         )}
         {form.concurrencyPolicy === 'parallel' && (
           <FieldError id={maxErrorId} message={validation.errorFor('concurrency.max')} />

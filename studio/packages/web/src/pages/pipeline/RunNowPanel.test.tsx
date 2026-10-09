@@ -48,7 +48,10 @@ describe('RunNowPanel (#1395 OR4)', () => {
     expect(screen.getByLabelText('city')).toHaveValue('Leeds');
     expect(screen.getByLabelText('count')).toHaveValue('');
     // #1396: the hint names the type as every type picker does.
-    expect(screen.getByText(/^Number · required/)).toBeInTheDocument();
+    expect(screen.getByText(/^Number$/)).toBeInTheDocument();
+    // #1594 OR40 S3c: required is the label's `*`, and the control says so.
+    expect(screen.getByLabelText('count')).toHaveAttribute('aria-required', 'true');
+    expect(screen.getByLabelText('city')).not.toHaveAttribute('aria-required');
   });
 
   it('sends typed values for exactly that version, then hands up the new run', async () => {

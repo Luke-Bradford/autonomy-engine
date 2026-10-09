@@ -142,34 +142,48 @@ export function NewPipelineDrawer({
       }
     >
       <Section heading="Basics" help={FORM_SECTION_HINTS.pipeline.basics}>
-        <label>
-          <span>
-            Name
-            <RequiredMark />
-          </span>
-          <input
-            type="text"
-            value={form.name}
-            onChange={(e) => onChange({ ...form, name: e.target.value })}
-            placeholder="My pipeline"
-            required
-            {...validation.attrsFor('name', errorIds.name)}
-          />
-        </label>
+        <LabelledControl
+          label={
+            <>
+              Name
+              <RequiredMark />
+            </>
+          }
+        >
+          {(id) => (
+            <input
+              id={id}
+              type="text"
+              value={form.name}
+              onChange={(e) => onChange({ ...form, name: e.target.value })}
+              placeholder="My pipeline"
+              required
+              {...validation.attrsFor('name', errorIds.name)}
+            />
+          )}
+        </LabelledControl>
         <FieldError id={errorIds.name} message={validation.errorFor('name')} />
-        <label>
-          Folder
-          {/* Picking an existing folder beats retyping it; a different case of
+        <LabelledControl
+          label={
+            <>
+              Folder
+              {/* Picking an existing folder beats retyping it; a different case of
               one is filed under it anyway (`existingFolderSpelling`). */}
-          <input
-            type="text"
-            list={suggestions}
-            value={form.folder}
-            onChange={(e) => onChange({ ...form, folder: e.target.value })}
-            placeholder="None"
-            {...validation.attrsFor('folder', errorIds.folder)}
-          />
-        </label>
+            </>
+          }
+        >
+          {(id) => (
+            <input
+              id={id}
+              type="text"
+              list={suggestions}
+              value={form.folder}
+              onChange={(e) => onChange({ ...form, folder: e.target.value })}
+              placeholder="None"
+              {...validation.attrsFor('folder', errorIds.folder)}
+            />
+          )}
+        </LabelledControl>
         <datalist id={suggestions}>
           {folderNames.map((name) => (
             <option key={name} value={name} />

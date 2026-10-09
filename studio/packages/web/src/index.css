@@ -1306,12 +1306,14 @@ td button + button {
   border-radius: 8px;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: var(--space-2);
   max-width: 480px;
 }
 
 /* `.labelled-control` (#1227) is the wrapper `LabelledControl` puts where a
    wrapping `<label>` used to be, so it takes that label's layout here and below.
+   This is the STACKED row (label over control), in caption type; a form wide
+   enough puts the label left (the form layout, `@container field-form`).
    A `.config-field` is excluded in every context: it is a `LabelledControl` too,
    but it had its own rhythm (`.config-field`, below) before the fold, and these
    rules would otherwise outrank that bare class. */
@@ -1323,8 +1325,8 @@ td button + button {
 .trigger-form .labelled-control:not(.config-field) {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
-  font-size: 0.9rem;
+  gap: var(--space-1);
+  font-size: var(--type-caption-size);
   color: var(--muted);
 }
 
@@ -1339,7 +1341,7 @@ td button + button {
 .trigger-form .binding-kind {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: var(--space-2);
   margin: 0;
   padding: 0.75rem 1rem;
   border: 1px solid var(--border);
@@ -1713,19 +1715,20 @@ td button + button {
 /* The description under a field, then its stored key in code type: the key
    is what errors and expressions cite. */
 .field-hint {
-  margin: 0.15rem 0 0;
-  font-size: 0.8rem;
+  margin: 0;
+  font-size: var(--type-caption-size);
   color: var(--muted);
 }
 
 .secret-field {
   display: flex;
-  align-items: flex-end;
-  gap: 0.5rem;
+  align-items: center;
+  gap: var(--space-2);
 }
 
-.secret-field > label {
+.secret-field > input {
   flex: 1;
+  min-width: 0;
 }
 
 button.primary {
@@ -3000,13 +3003,14 @@ button.danger {
 
 /* The gap only where a label is the column of a label over its control: the
    row labels (a routing outcome, a checkbox, a call mode) keep their own
-   spacing between box or swatch and word. */
+   spacing between box or swatch and word. `row-gap` only: a label-left row's
+   12px column gap (the form layout, below) is not this rule's to set. */
 :root[data-density='compact']
   .property-dock
   .property-panel
   label:not(.edge-outcome, .contract-check, .call-mode label),
 :root[data-density='compact'] .property-dock .property-panel .labelled-control:not(.config-field) {
-  gap: var(--space-1);
+  row-gap: var(--space-1);
 }
 
 :root[data-density='compact'] .property-dock .property-panel .field-hint,
@@ -3029,14 +3033,14 @@ button.danger {
   gap: var(--space-2);
 }
 
-/* #1477 OR29 — CONTROLS SIZED BY TYPE, not stretched (compact dock, any
-   width). A native select's own width is its longest option plus its arrow;
-   a number takes 120px. Free text, paths, expressions and JSON still take the
+/* #1477 OR29, #1594 OR40 S3c — CONTROLS SIZED BY TYPE, not stretched, on every
+   form (the dock, a drawer, a `.field-form`), in both densities and at any
+   width. A native select's own width is its longest option plus its arrow; a
+   number takes 120px. Free text, paths, expressions and JSON still take the
    row. `align-self` for a flex column parent, `justify-self` for the grid.
    Not the run drawer, which is not a form. */
-:root[data-density='compact']
-  .property-dock
-  .property-panel:not(.node-detail-panel)
+:root[data-density]
+  :is(.property-dock .property-panel:not(.node-detail-panel), .form-drawer-body, .field-form)
   .labelled-control
   > select {
   width: auto;
@@ -3045,10 +3049,9 @@ button.danger {
   justify-self: start;
 }
 
-:root[data-density='compact']
-  .property-dock
-  .property-panel:not(.node-detail-panel)
-  input.number-input {
+:root[data-density]
+  :is(.property-dock .property-panel:not(.node-detail-panel), .form-drawer-body, .field-form)
+  :is(input.number-input, .labelled-control > input[type='number']) {
   width: 120px;
   max-width: 100%;
   align-self: flex-start;
@@ -3129,60 +3132,108 @@ button.danger {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* The label column of the dock's label-left rows (below). */
-:root[data-density='compact'] {
-  --dock-label-column: 150px;
-}
+/* #1594 OR40 S3c — THE FORM LAYOUT, one for every form: the property dock,
+   every drawer (`.form-drawer-body`) and a page's `.field-form` (Settings, the
+   Manage import panel). Folded from the dock's own label-left rows (#1477
+   OR29), so there is one set of rules, not one per surface.
 
-/* The query is on the TAB's width, not the window's or the dock's: the dock
-   docks bottom or right, is resizable, and shares its width with the Problems
-   column. Measured (#1477): the bottom dock's tab is 429px at 1280 wide, 589px
-   at 1440 and 1069px at 1920; the right dock's is 302–463px. Rows go
-   label-left from 400px (below); short fields pack side by side from 576px,
-   where two cells of a 150px label, an 8px gap and a 120px number fit beside
-   a 16px gutter: 2 × 278 + 16 = 572.
-   Nothing inside a tab is fixed-position, so the containment this implies
+   A form is label-left once its CONTEXT is at least 400px wide: the label in
+   a 150px column, 12px, then the control with its hint and error under it.
+   Narrower, the label sits over its control. Both densities: comfortable
+   changes sizes (type, control and row heights), not the layout.
+
+   The query is on the context's width, not the window's: the dock docks bottom
+   or right, is resizable, and shares its width with the Problems column.
+   Measured (#1477): the bottom dock's tab is 429px at 1280 wide, 589px at 1440
+   and 1069px at 1920; the right dock's is 302–463px. A drawer's body is 418px
+   at 1440 (a 460px drawer less its border and 20px sides), so a drawer beside
+   its list is label-left; a drawer at its 340px minimum, and the editor's
+   trigger and connection columns (361px at 1440), keep the label over the
+   control. In the dock, short fields also pack side by side from 580px, where
+   two cells of a 150px label, a 12px gap and a 120px number fit beside a 16px
+   gutter: 2 × 282 + 16 = 580.
+   Nothing inside a context is fixed-position, so the containment this implies
    changes no containing block that matters. */
-/* The node's own panel only: the run drawer (`.node-detail-panel`) shares the
-   dock but is a page of data, not a form. The tab itself is uncapped so the
-   grid can widen with the dock; inside it the 56rem readability cap still
-   holds for everything but the grid. */
-:root[data-density='compact']
-  .property-dock__body
-  > .property-panel:not(.node-detail-panel)
-  > .panel-tab {
-  max-width: none;
-  container: dock-tab / inline-size;
+:root {
+  --form-label-column: 150px;
 }
 
-/* #1477 OR29 — label-left from 400px: a 150px label, an 8px gap and a 242px
+/* The dock's context is the node's own panel's tab only: the run drawer
+   (`.node-detail-panel`) shares the dock but is a page of data, not a form.
+   The tab itself is uncapped so the grid can widen with the dock; inside it
+   the 56rem readability cap still holds for everything but the grid. */
+.property-dock__body > .property-panel:not(.node-detail-panel) > .panel-tab {
+  max-width: none;
+  container: field-form / inline-size;
+}
+
+.form-drawer-body,
+.field-form {
+  container: field-form / inline-size;
+}
+
+/* A page's form (Settings' appearance, the import panel): rows 8px apart, its
+   heading's own margin given back to that gap. */
+.field-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.field-form > :is(h3, h4) {
+  margin: 0;
+}
+
+/* #1477 OR29 — label-left from 400px: a 150px label, a 12px gap and a 238px
    control. Measured: at 1280×720 the bottom dock's tab is 429px wide and its
    fields 113px tall under the pinned header, and stacked there Copy File's
    destination path sat 189px below the fold
    (`e2e/activity-required-fit.spec.ts`). Packing short fields side by side
-   still waits for 576px (below). */
-@container dock-tab (min-width: 400px) {
+   still waits for 580px (below). */
+@container field-form (min-width: 400px) {
   /* LABEL-LEFT: the label in a column of its own, the control, its hint and
-     its error in the next. Only a field row of the tab's own sections — not
-     the cells of a row table or a param-override row, which are too narrow. */
-  :root[data-density='compact']
-    .property-dock
-    .property-panel
-    :is(.config-cell, .contract-section, .section__body, .panel-tab)
+     its error in the next. Only a field row of a form's own sections — not the
+     cells of a row table or a param-override row, which are too narrow, nor a
+     dock fieldset of choices. The trigger form's builders are fieldsets of
+     fields, so they are rows' parents too. (0,4,0), over the stacked drawer
+     row (`.connection-form .labelled-control`, 0,3,0). */
+  :root[data-density]
+    :is(
+      .config-cell,
+      .contract-section,
+      .section__body,
+      .panel-tab,
+      .form-drawer-body,
+      .field-form,
+      .recurrence-editor,
+      .window-editor,
+      .binding-kind
+    )
     > .labelled-control {
     display: grid;
-    grid-template-columns: var(--dock-label-column) minmax(0, 1fr);
-    column-gap: var(--space-2);
+    grid-template-columns: var(--form-label-column) minmax(0, 1fr);
+    column-gap: var(--space-3);
     row-gap: var(--space-1);
     align-items: start;
+    /* A parent that packs its children to the start (the import panel) would
+       otherwise shrink the row to its content. */
+    align-self: stretch;
   }
 
-  /* Text and required mark on one line, centred on a 28px control's text (a
-     long label wraps inside its column). */
-  :root[data-density='compact']
-    .property-dock
-    .property-panel
-    :is(.config-cell, .contract-section, .section__body, .panel-tab)
+  /* Text and required mark on one line, centred on a control's text (a long
+     label wraps inside its column). */
+  :root[data-density]
+    :is(
+      .config-cell,
+      .contract-section,
+      .section__body,
+      .panel-tab,
+      .form-drawer-body,
+      .field-form,
+      .recurrence-editor,
+      .window-editor,
+      .binding-kind
+    )
     > .labelled-control
     > label {
     display: block;
@@ -3191,10 +3242,18 @@ button.danger {
     padding-block: calc((var(--control-h) - 16px) / 2);
   }
 
-  :root[data-density='compact']
-    .property-dock
-    .property-panel
-    :is(.config-cell, .contract-section, .section__body, .panel-tab)
+  :root[data-density]
+    :is(
+      .config-cell,
+      .contract-section,
+      .section__body,
+      .panel-tab,
+      .form-drawer-body,
+      .field-form,
+      .recurrence-editor,
+      .window-editor,
+      .binding-kind
+    )
     > .labelled-control
     > :not(label, .labelled-control__head) {
     grid-column: 2;
@@ -3202,65 +3261,80 @@ button.danger {
 
   /* A label with a `?` beside it: the pair in the label column, centred on
      the control's first line like a bare label's text. */
-  :root[data-density='compact']
-    .property-dock
-    .property-panel
-    :is(.config-cell, .contract-section, .section__body, .panel-tab)
+  :root[data-density]
+    :is(
+      .config-cell,
+      .contract-section,
+      .section__body,
+      .panel-tab,
+      .form-drawer-body,
+      .field-form,
+      .recurrence-editor,
+      .window-editor,
+      .binding-kind
+    )
     > .labelled-control
     > .labelled-control__head {
     grid-column: 1;
     min-height: var(--control-h);
   }
 
-  :root[data-density='compact']
-    .property-dock
-    .property-panel
-    :is(.config-cell, .contract-section, .section__body, .panel-tab)
-    > .labelled-control
-    > .labelled-control__head
-    > label {
+  :root[data-density] .labelled-control > .labelled-control__head > label {
     line-height: 16px;
   }
 
-  /* Its note opens under the label column but reads across the tab, not in
+  /* Its note opens under the label column but reads across the form, not in
      150px. */
-  :root[data-density='compact']
-    .property-dock
-    .property-panel
-    .labelled-control__head
-    > .help-disclosure--inline
-    > span {
+  :root[data-density] .labelled-control__head > .help-disclosure--inline > span {
     width: min(36rem, 100cqi);
   }
 
-  /* In a full-width row of a section, a checkbox, and a hint or error slot
-     that is the SIBLING of its control rather than inside it (a checkbox's, a
-     `DraftNumberField`'s), line up with the control column. A field packed into
-     a grid cell (the General tab's policy, since #1477) keeps the cell's whole
-     width. */
-  :root[data-density='compact'] .property-dock .property-panel .section__body > .contract-check,
-  :root[data-density='compact']
-    .property-dock
-    .property-panel
-    :is(.contract-section, .section__body)
-    > :is(.labelled-control, .contract-check)
-    + :is(.page-hint, .field-hint),
-  :root[data-density='compact']
-    .property-dock
-    .property-panel
-    :is(.contract-section, .section__body)
+  /* In a full-width row of a section, a checkbox (or the Settings theme
+     switch), and a hint or error slot that is the SIBLING of its control
+     rather than inside it (a checkbox's, a `DraftNumberField`'s, a drawer
+     field's `FieldError`), line up with the control column. A checkbox keeps
+     its own width: box, 8px, label, never stretched. A field packed into a
+     grid cell (the General tab's policy, since #1477) keeps the cell's whole
+     width, and a fieldset's radios sit under its legend. */
+  :root[data-density]
+    :is(.contract-section, .section__body, .form-drawer-body, .field-form)
+    > :is(.contract-check, label:has(> input[type='checkbox']), .settings-row) {
+    margin-left: calc(var(--form-label-column) + var(--space-3));
+    align-self: flex-start;
+  }
+
+  :root[data-density]
+    :is(
+      .contract-section,
+      .section__body,
+      .form-drawer-body,
+      .field-form,
+      .recurrence-editor,
+      .window-editor
+    )
+    > :is(.labelled-control, .contract-check, label:has(> input[type='checkbox']))
+    + :is(.page-hint, .field-hint, .field-error-slot),
+  :root[data-density]
+    :is(
+      .contract-section,
+      .section__body,
+      .form-drawer-body,
+      .field-form,
+      .recurrence-editor,
+      .window-editor
+    )
     > .labelled-control
     + .page-hint
     + .field-error-slot {
-    margin-left: calc(var(--dock-label-column) + var(--space-2));
+    margin-left: calc(var(--form-label-column) + var(--space-3));
   }
 }
 
-@container dock-tab (min-width: 576px) {
+@container field-form (min-width: 580px) {
   /* In a packed cell the control column is ~130px: its hint and error read
      across the whole cell, under the label too, rather than wrapping a word to
      a line. */
-  :root[data-density='compact']
+  :root[data-density]
     .property-dock
     .property-panel
     .config-cell[data-field-span='short']
@@ -3273,7 +3347,7 @@ button.danger {
      the next; everything else — free text, JSON, row lists, the advisories —
      spans the row. Not `dense`: fields keep their order, left to right then
      down, so the flow of decisions still reads in sequence. */
-  :root[data-density='compact'] .property-dock .property-panel .config-editor {
+  :root[data-density] .property-dock .property-panel .config-editor {
     max-width: none;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3282,18 +3356,18 @@ button.danger {
     align-items: start;
   }
 
-  :root[data-density='compact'] .property-dock .property-panel .config-editor > * {
+  :root[data-density] .property-dock .property-panel .config-editor > * {
     grid-column: 1 / -1;
   }
 
-  :root[data-density='compact'] .property-dock .property-panel .config-editor > .config-cell {
+  :root[data-density] .property-dock .property-panel .config-editor > .config-cell {
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
     min-width: 0;
   }
 
-  :root[data-density='compact']
+  :root[data-density]
     .property-dock
     .property-panel
     .config-editor
@@ -3304,8 +3378,8 @@ button.danger {
 
 /* Three short fields to a row once each cell still holds a label column and
    a 120px number with room to spare; never four. */
-@container dock-tab (min-width: 900px) {
-  :root[data-density='compact'] .property-dock .property-panel .config-editor {
+@container field-form (min-width: 900px) {
+  :root[data-density] .property-dock .property-panel .config-editor {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
@@ -6771,7 +6845,7 @@ button.danger {
 .settings-row {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-2);
 }
 
 /* A warning about the STATE OF THE RUNNING SYSTEM — deliberately a third thing

@@ -148,22 +148,28 @@ export function DuplicatePipelineDrawer({
       }
     >
       <Section heading="Copy" help={FORM_SECTION_HINTS.pipeline.duplicate}>
-        <label>
-          <span>
-            Name
-            <RequiredMark />
-          </span>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => {
-              const typed = e.target.value;
-              update((prev) => ({ ...prev, name: typed }));
-            }}
-            required
-            {...validation.attrsFor('name', nameErrorId)}
-          />
-        </label>
+        <LabelledControl
+          label={
+            <>
+              Name
+              <RequiredMark />
+            </>
+          }
+        >
+          {(id) => (
+            <input
+              id={id}
+              type="text"
+              value={name}
+              onChange={(e) => {
+                const typed = e.target.value;
+                update((prev) => ({ ...prev, name: typed }));
+              }}
+              required
+              {...validation.attrsFor('name', nameErrorId)}
+            />
+          )}
+        </LabelledControl>
         <FieldError id={nameErrorId} message={validation.errorFor('name')} />
         <LabelledControl label="Version">
           {(id) => (
