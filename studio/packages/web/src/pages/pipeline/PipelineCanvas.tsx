@@ -160,7 +160,7 @@ import { PipelineGeneral } from './PipelineGeneral';
 import { DockPasteButton } from './DockPasteButton';
 import { isDockDrawerEscape } from './dockExpand';
 import { isUnhandledEscape } from '../../lib/escape';
-import { pasteAndSay } from './paste';
+import { runCanvasCommand, type CanvasCommand } from './canvasCommands';
 import { ContractSection, OutputRow, ParamRow, VariableRow } from './ContractEditor';
 import { OUTPUT_COLUMNS, PARAM_COLUMNS, VARIABLE_COLUMNS } from './contractColumns';
 import {
@@ -746,67 +746,19 @@ export function PipelineCanvas({
          #1397 — and locked out as the clipboard keys are: behind a preview the
          editor is unmounted but its selection is not (the restore dialog no
          longer swallows the key as `window.confirm` did), and a save or restore
-         in flight would land over the deletion. */
-      if (isDeleteKeystroke(e)) {
+         in flight would land over the deletion.
+         U21 — ⌘C/⌘X/⌘V/⌘D, same document listener and same text-entry guard.
+         Gated on the preview for the reason Save is: a preview REPLACES the
+         editor, so a paste there would edit a working graph the operator cannot
+         see. #1477 — what each one does lives in `runCanvasCommand`, which the
+         canvas context menu runs too. */
+      const cmd = isDeleteKeystroke(e) ? 'delete' : clipboardCommandFor(e);
+      if (cmd !== null) {
         if (previewing !== null || previewLocked) return;
-        if (store.getState().selected.length === 0) return;
+        const result = runCanvasCommand(store, pipelineId, cmd);
+        if (!result.taken) return;
         e.preventDefault();
-        store.getState().deleteSelection();
-        return;
-      }
-      /* U21 — ⌘C/⌘V/⌘D, same document listener and same text-entry guard. Gated
-         on the preview for the reason Save is: a preview REPLACES the editor, so
-         a paste there would edit a working graph the operator cannot see. */
-      const clip = clipboardCommandFor(e);
-      if (clip !== null) {
-        if (previewing !== null || previewLocked) return;
-        if (clip === 'copy' || clip === 'cut') {
-          const box = singleSelection(store.getState().selected);
-          if (box?.kind === 'container') {
-            // #935 — a container copies whole. It is never cut: its only delete
-            // (the ✕) keeps the body, so there is no delete a cut could be.
-            if (clip === 'cut') {
-              e.preventDefault();
-              showCanvasMsg('A container cannot be cut. Copy it with ⌘C.');
-              return;
-            }
-            if (!store.getState().copyContainer(box.id, pipelineId)) return;
-            e.preventDefault();
-            const name = containerLabels(store.getState().containers).get(box.id);
-            showCanvasMsg(`Copied ${name ?? 'container'}.`);
-            return;
-          }
-          const n =
-            clip === 'copy'
-              ? store.getState().copySelection(pipelineId)
-              : store.getState().cutSelection(pipelineId);
-          // Nothing of OURS to copy — leave the key alone so the browser's own
-          // text copy/cut still works for an operator selecting text on the page.
-          if (n === 0) return;
-          e.preventDefault();
-          const what = `${n} ${n === 1 ? 'activity' : 'activities'}`;
-          showCanvasMsg(clip === 'copy' ? `Copied ${what}.` : `Cut ${what}.`);
-          return;
-        }
-        if (clip === 'duplicate') {
-          const box = singleSelection(store.getState().selected);
-          if (box?.kind === 'container') {
-            // A container is selection-EXCLUSIVE, so a selected box is the whole
-            // selection and ⌘D means "another one of these", as it does for nodes.
-            const name = containerLabels(store.getState().containers).get(box.id);
-            if (store.getState().duplicateContainer(box.id) === null) return;
-            e.preventDefault();
-            showCanvasMsg(`Duplicated ${name ?? 'container'}.`);
-            return;
-          }
-          if (store.getState().selected.every((sel) => sel.kind !== 'node')) return;
-          e.preventDefault();
-          const made = store.getState().duplicateSelection();
-          showCanvasMsg(`Duplicated ${made} ${made === 1 ? 'activity' : 'activities'}.`);
-          return;
-        }
-        e.preventDefault();
-        showCanvasMsg(pasteAndSay(store, pipelineId));
+        if (result.notice !== null) showCanvasMsg(result.notice);
         return;
       }
       const command = historyCommandFor(e);
@@ -839,6 +791,26 @@ export function PipelineCanvas({
       : saving
         ? 'Saving — wait for it to finish.'
         : null;
+
+  /* #1477 OR29 — the canvas context menu's items, refused for the reasons the
+     same keystrokes are (the document handler above): a save or restore in
+     flight, and the leave prompt, which is not modal, so the canvas is still
+     reachable while it asks. A preview unmounts the canvas, menu and all. */
+  const canvasCommandReason = leaveGuard.confirming
+    ? 'Answer the unsaved-changes prompt first.'
+    : historyDisabledReason;
+  const onCanvasCommand = useCallback(
+    (cmd: CanvasCommand) => {
+      // Checked here too, so no click can edit past the reason.
+      if (canvasCommandReason !== null) {
+        showCanvasMsg(canvasCommandReason);
+        return;
+      }
+      const result = runCanvasCommand(store, pipelineId, cmd);
+      if (result.taken && result.notice !== null) showCanvasMsg(result.notice);
+    },
+    [canvasCommandReason, store, pipelineId, showCanvasMsg],
+  );
 
   // Initial load: the promise-callback form keeps setState off the synchronous
   // effect body (React's `set-state-in-effect` guidance). The parent keys this
@@ -2369,6 +2341,8 @@ export function PipelineCanvas({
                         measuredSizesRef={measuredSizesRef}
                         datasets={datasets}
                         onNotice={showCanvasMsg}
+                        onCommand={onCanvasCommand}
+                        commandDisabledReason={canvasCommandReason}
                       />
                     </ReactFlowProvider>
                   </div>
