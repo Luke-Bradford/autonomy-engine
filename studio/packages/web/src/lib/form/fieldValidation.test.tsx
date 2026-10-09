@@ -13,6 +13,7 @@ import { FieldError } from './FieldError';
 import { FormErrors } from './FormErrors';
 import { FormDrawer } from './FormDrawer';
 import type { UnsavedChangesGuard } from './useUnsavedChangesGuard';
+import { Section } from '../Section';
 
 describe('splitIssues (#1396)', () => {
   const known = new Set(['name', 'config.timeoutMs', 'config.headers', 'config']);
@@ -88,6 +89,21 @@ describe('focusField (#1396)', () => {
     );
     focusField(document.body, 'deep');
     expect(document.querySelector('details')!.open).toBe(true);
+    expect(screen.getByLabelText('Deep')).toHaveFocus();
+  });
+
+  it('opens a collapsed Section (#1594 OR40) a field sits in, then focuses it', () => {
+    render(
+      <Section heading="Advanced" help="Settings most people never touch." collapsible>
+        <input aria-label="Deep" data-field="deep" />
+      </Section>,
+    );
+    focusField(document.body, 'deep');
+    expect(screen.getByRole('button', { name: 'Advanced' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    expect(screen.getByLabelText('Deep')).toBeVisible();
     expect(screen.getByLabelText('Deep')).toHaveFocus();
   });
 });

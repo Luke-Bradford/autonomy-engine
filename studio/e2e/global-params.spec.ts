@@ -50,7 +50,9 @@ const saved = (page: Page, name: string) =>
 const drawer = (page: Page) => page.getByRole('dialog', { name: /global parameter$/ });
 const form = (page: Page) => page.getByRole('form', { name: 'Global parameter form' });
 const prompt = (page: Page) => page.getByRole('alertdialog', { name: 'Unsaved changes' });
-const field = (page: Page, label: string) => form(page).getByLabel(label, { exact: true });
+/** The FIELD a label names: the Value section is a group named "Value" too. */
+const field = (page: Page, label: string) =>
+  form(page).getByLabel(label, { exact: true }).and(page.locator('input, select, textarea'));
 
 async function open(page: Page) {
   await page.goto('/#/manage/global-params');
@@ -166,7 +168,9 @@ test.describe('#844 GL2 the global-params store has a front end', () => {
       return {
         drawerRightOfTable: aside.left >= table.right,
         rowMenuReachable: hit !== null && del.contains(hit),
-        sections: [...document.querySelectorAll('.form-drawer legend')].map((l) => l.textContent),
+        sections: [...document.querySelectorAll('.form-drawer .section__title')].map(
+          (l) => l.textContent,
+        ),
       };
     }, LOOK);
     expect(geometry).toEqual({

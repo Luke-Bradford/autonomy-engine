@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { FIELD } from '../testing/fieldQuery';
 import type { GlobalParam } from '@autonomy-studio/shared';
 import { GlobalParamsPage } from './GlobalParamsPage';
 import * as api from '../api/globalParams';
@@ -52,7 +53,7 @@ function form() {
 }
 
 function field(label: string) {
-  return within(form()).getByLabelText(label, { exact: true });
+  return within(form()).getByLabelText(label, { ...FIELD, exact: true });
 }
 
 async function openNew(user: ReturnType<typeof userEvent.setup>) {

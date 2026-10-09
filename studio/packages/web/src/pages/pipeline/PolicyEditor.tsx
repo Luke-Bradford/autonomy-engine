@@ -6,7 +6,7 @@ import {
   type NodePolicy,
 } from '@autonomy-studio/shared';
 import { FieldCell, FieldGrid } from '../../lib/form/FieldGrid';
-import { FormSection } from '../../lib/form/FormSection';
+import { Section } from '../../lib/Section';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import { parseWholeNumber } from '../triggers/formFields';
 import { DraftNumberField } from './DraftNumberField';
@@ -76,7 +76,7 @@ export function PolicyEditor({
   }
 
   return (
-    <FormSection title="Run policy" hint={FORM_SECTION_HINTS.node.runPolicy}>
+    <Section heading="Run policy" help={FORM_SECTION_HINTS.node.runPolicy}>
       <FieldGrid className="field-stack">
         <FieldCell span="short">
           <DraftNumberField
@@ -153,6 +153,6 @@ export function PolicyEditor({
           ))}
         </ul>
       )}
-    </FormSection>
+    </Section>
   );
 }

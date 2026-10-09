@@ -91,9 +91,7 @@ test('#890 — a node shows the input it ran with; a secure node withholds it', 
     const shown = await openActivity(page, 'List Directory 1');
     // #1484 M2 — the input is the drawer's Input tab, indented.
     await shown.getByRole('tab', { name: 'Input' }).click();
-    const shownInput = shown.locator('section', {
-      has: page.getByRole('heading', { name: 'Input' }),
-    });
+    const shownInput = shown.getByRole('group', { name: 'Input', exact: true });
     await expect(shownInput.locator('code.node-detail-outputs')).toHaveText([
       JSON.stringify({ path: visible }, null, 2),
       JSON.stringify({ connectionParams: { maxEntries: 50 } }, null, 2),
@@ -106,9 +104,7 @@ test('#890 — a node shows the input it ran with; a secure node withholds it', 
       'aria-selected',
       'true',
     );
-    const secureInput = secure.locator('section', {
-      has: page.getByRole('heading', { name: 'Input' }),
-    });
+    const secureInput = secure.getByRole('group', { name: 'Input', exact: true });
     await expect(secureInput).toContainText('withheld from the run log');
     await expect(secureInput).not.toContainText('hidden-890-dir');
     await expect(secureInput).not.toContainText('4321');

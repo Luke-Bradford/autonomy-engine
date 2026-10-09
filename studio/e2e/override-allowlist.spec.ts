@@ -43,7 +43,7 @@ test.describe('#1305 — the override allowlist is edited on the resource pages'
     // #1396 — the allowlist sits in the Advanced section, closed while the row
     // has none (it opens itself once one is stored, as the re-opens below rely on).
     await expect(allowlist).toBeHidden();
-    await form.locator('summary', { hasText: 'Advanced' }).click();
+    await form.getByRole('button', { name: 'Advanced', exact: true }).click();
     // `roots` is the confinement boundary: never offered.
     await expect(allowlist.getByRole('checkbox')).toHaveCount(2);
     // Laid out as the app's other checkbox sets are: a bordered card of inline
@@ -117,14 +117,14 @@ test.describe('#1305 — the override allowlist is edited on the resource pages'
     await openEdit(page, '/#/manage/datasets', 'Datasets', csv);
     // #1396 — in the Advanced section, closed while the row has no allowlist.
     await expect(allowlist).toBeHidden();
-    await form.locator('summary', { hasText: 'Advanced' }).click();
+    await form.getByRole('button', { name: 'Advanced', exact: true }).click();
     await allowlist.getByLabel('Overridable: path', { exact: true }).check();
     await form.getByRole('button', { name: 'Save changes' }).click();
     await expect(form).toBeHidden();
     expect(await stored(page, `/api/datasets/${csvId}`)).toEqual(['path']);
 
     await openEdit(page, '/#/manage/datasets', 'Datasets', tbl);
-    await form.locator('summary', { hasText: 'Advanced' }).click();
+    await form.getByRole('button', { name: 'Advanced', exact: true }).click();
     await expect(allowlist).toContainText(
       'Database table datasets have no settings a node can override.',
     );

@@ -16,7 +16,7 @@ import { newPipeline } from '../api/pipelines';
 import { LabelledControl } from '../lib/LabelledControl';
 import { AutoGrowTextarea } from '../lib/form/AutoGrowTextarea';
 import { FormDrawer } from '../lib/form/FormDrawer';
-import { FormSection } from '../lib/form/FormSection';
+import { Section } from '../lib/Section';
 import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 import { RequiredMark } from '../lib/form/RequiredMark';
 import { FieldError } from '../lib/form/FieldError';
@@ -141,7 +141,7 @@ export function NewPipelineDrawer({
         </>
       }
     >
-      <FormSection title="Basics" hint={FORM_SECTION_HINTS.pipeline.basics}>
+      <Section heading="Basics" help={FORM_SECTION_HINTS.pipeline.basics}>
         <label>
           <span>
             Name
@@ -187,7 +187,7 @@ export function NewPipelineDrawer({
             />
           )}
         </LabelledControl>
-      </FormSection>
+      </Section>
     </FormDrawer>
   );
 }

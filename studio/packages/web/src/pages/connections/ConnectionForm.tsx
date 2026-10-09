@@ -34,7 +34,7 @@ import { ConfigEditor } from '../pipeline/ConfigEditor';
 import { useConfigEditor } from '../pipeline/useConfigEditor';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { FormDrawer } from '../../lib/form/FormDrawer';
-import { FormSection } from '../../lib/form/FormSection';
+import { Section } from '../../lib/Section';
 import { AutoGrowTextarea } from '../../lib/form/AutoGrowTextarea';
 import { AnnotationRows } from '../../lib/form/AnnotationRows';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
@@ -439,7 +439,7 @@ export function ConnectionForm({
         </>
       }
     >
-      <FormSection title="Basics" hint={FORM_SECTION_HINTS.connection.basics}>
+      <Section heading="Basics" help={FORM_SECTION_HINTS.connection.basics}>
         <label>
           <span>
             Name
@@ -524,9 +524,9 @@ export function ConnectionForm({
             one runs that fail after it, and they are drawn on different
             conditions. */}
         {nodeAdvisory !== null && <p className="contract-advisory">{nodeAdvisory}</p>}
-      </FormSection>
+      </Section>
 
-      <FormSection title="Connection" hint={FORM_SECTION_HINTS.connection.connection}>
+      <Section heading="Connection" help={FORM_SECTION_HINTS.connection.connection}>
         <ConfigEditor
           editor={editor}
           kindLabel={CONNECTION_KIND_LABELS[editor.kind]}
@@ -535,9 +535,9 @@ export function ConnectionForm({
           advisory={advisory}
           errorFor={validation.errorFor}
         />
-      </FormSection>
+      </Section>
 
-      <FormSection title="Authentication" hint={FORM_SECTION_HINTS.connection.authentication}>
+      <Section heading="Authentication" help={FORM_SECTION_HINTS.connection.authentication}>
         <SecretInput
           label="Secret"
           value={form.secret}
@@ -559,7 +559,7 @@ export function ConnectionForm({
             : ''}
           {CONNECTION_SECRET_USE[form.kind]}
         </p>
-      </FormSection>
+      </Section>
 
       <OverridableKeysSection
         subject={connectionAllowlistSubject(form.kind)}
@@ -569,7 +569,7 @@ export function ConnectionForm({
       />
 
       {/* #1477 — last, as in ADF's linked-service form. */}
-      <FormSection title="Annotations" hint={FORM_SECTION_HINTS.connection.annotations}>
+      <Section heading="Annotations" help={FORM_SECTION_HINTS.connection.annotations}>
         <AnnotationRows
           annotations={form.annotations}
           onAdd={() => onChange({ ...form, annotations: [...form.annotations, ''] })}
@@ -593,7 +593,7 @@ export function ConnectionForm({
           }}
         />
         <FieldError id={annotationErrorId} message={validation.errorFor('annotations')} />
-      </FormSection>
+      </Section>
     </FormDrawer>
   );
 }

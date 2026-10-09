@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { FIELD } from '../testing/fieldQuery';
 import { SecretsPage } from './SecretsPage';
 import * as api from '../api/secrets';
 import { ApiError } from '../api/client';
@@ -90,7 +91,7 @@ describe('SecretsPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'New secret' }));
     await user.type(screen.getByLabelText('Name'), 'stripe-key');
-    await user.type(screen.getByLabelText('Value'), 'sk_live_123');
+    await user.type(screen.getByLabelText('Value', FIELD), 'sk_live_123');
     listMock.mockResolvedValue([secret()]);
     await user.click(screen.getByRole('button', { name: 'Create secret' }));
 
@@ -98,7 +99,7 @@ describe('SecretsPage', () => {
     expect(createMock).toHaveBeenCalledWith({ name: 'stripe-key', secret: 'sk_live_123' });
     expect(await screen.findByText('stripe-key')).toBeInTheDocument();
     // The form closed, so the typed credential is no longer on screen.
-    expect(screen.queryByLabelText('Value')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Value', FIELD)).not.toBeInTheDocument();
   });
 
   it('does not let the MOUNT load overwrite the list a create just refreshed', async () => {
@@ -116,7 +117,7 @@ describe('SecretsPage', () => {
     // The mount load is held open; the form is reachable regardless.
     await user.click(screen.getByRole('button', { name: 'New secret' }));
     await user.type(screen.getByLabelText('Name'), 'stripe-key');
-    await user.type(screen.getByLabelText('Value'), 'sk_live_123');
+    await user.type(screen.getByLabelText('Value', FIELD), 'sk_live_123');
 
     // The post-create refresh resolves FIRST, with the secret present.
     listMock.mockResolvedValue([secret()]);
@@ -142,7 +143,7 @@ describe('SecretsPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'New secret' }));
     await user.type(screen.getByLabelText('Name'), 'stripe-key ');
-    await user.type(screen.getByLabelText('Value'), 'sk_live_123');
+    await user.type(screen.getByLabelText('Value', FIELD), 'sk_live_123');
     await user.click(screen.getByRole('button', { name: 'Create secret' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
@@ -165,7 +166,7 @@ describe('SecretsPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'New secret' }));
     await user.type(screen.getByLabelText('Name'), 'Stripe-Key');
-    await user.type(screen.getByLabelText('Value'), 'sk_live_123');
+    await user.type(screen.getByLabelText('Value', FIELD), 'sk_live_123');
     await user.click(screen.getByRole('button', { name: 'Create secret' }));
 
     const alert = await screen.findByRole('alert');
@@ -189,7 +190,7 @@ describe('SecretsPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'New secret' }));
     await user.type(screen.getByLabelText('Name'), 'stripe-key');
-    await user.type(screen.getByLabelText('Value'), 'sk_live_123');
+    await user.type(screen.getByLabelText('Value', FIELD), 'sk_live_123');
     await user.click(screen.getByRole('button', { name: 'Create secret' }));
 
     const alert = await screen.findByRole('alert');
@@ -207,7 +208,7 @@ describe('SecretsPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'New secret' }));
     await user.type(screen.getByLabelText('Name'), 'stripe-key');
-    await user.type(screen.getByLabelText('Value'), 'sk_live_123');
+    await user.type(screen.getByLabelText('Value', FIELD), 'sk_live_123');
     await user.click(screen.getByRole('button', { name: 'Create secret' }));
 
     const alert = await screen.findByRole('alert');
@@ -279,7 +280,7 @@ describe('SecretsPage', () => {
       renderWithDataRouter(<SecretsPage />);
       await user.click(await screen.findByRole('button', { name: 'Replace stripe-key' }));
       expect(screen.getByRole('dialog', { name: 'Replace value for stripe-key' })).toBeVisible();
-      expect(screen.getByLabelText('Value')).toHaveFocus();
+      expect(screen.getByLabelText('Value', FIELD)).toHaveFocus();
     });
 
     it('shows and hides the typed value without it joining the field name', async () => {
@@ -287,7 +288,7 @@ describe('SecretsPage', () => {
       renderWithDataRouter(<SecretsPage />);
       await screen.findByText(/No secrets yet/);
       await user.click(screen.getByRole('button', { name: 'New secret' }));
-      const value = screen.getByLabelText('Value');
+      const value = screen.getByLabelText('Value', FIELD);
       expect(value).toHaveAttribute('type', 'password');
       await user.click(screen.getByRole('button', { name: 'Show secret' }));
       expect(value).toHaveAttribute('type', 'text');
@@ -300,7 +301,7 @@ describe('SecretsPage', () => {
       renderWithDataRouter(<SecretsPage />);
       await screen.findByText(/No secrets yet/);
       await user.click(screen.getByRole('button', { name: 'New secret' }));
-      await user.type(screen.getByLabelText('Value'), 'sk_test');
+      await user.type(screen.getByLabelText('Value', FIELD), 'sk_test');
       await user.click(screen.getByRole('button', { name: 'Cancel' }));
       const prompt = screen.getByRole('alertdialog', { name: 'Unsaved changes' });
       await user.click(within(prompt).getByRole('button', { name: 'Discard changes' }));
@@ -314,7 +315,7 @@ describe('SecretsPage', () => {
       deleteMock.mockResolvedValue(undefined);
       renderWithDataRouter(<SecretsPage />);
       await user.click(await screen.findByRole('button', { name: 'Replace stripe-key' }));
-      await user.type(screen.getByLabelText('Value'), 'half-typed');
+      await user.type(screen.getByLabelText('Value', FIELD), 'half-typed');
       listMock.mockResolvedValue([]);
       await chooseRowAction(user, 'stripe-key', 'Delete');
       await answerConfirm(user, 'accept');
@@ -344,7 +345,7 @@ describe('SecretsPage', () => {
       await screen.findByText('stripe-key');
 
       await user.click(screen.getByRole('button', { name: 'Replace stripe-key' }));
-      await user.type(screen.getByLabelText('Value'), 'sk_live_rotated');
+      await user.type(screen.getByLabelText('Value', FIELD), 'sk_live_rotated');
       await user.click(screen.getByRole('button', { name: 'Replace value' }));
 
       await waitFor(() =>
@@ -387,7 +388,7 @@ describe('SecretsPage', () => {
       await screen.findByText('stripe-key');
 
       await user.click(screen.getByRole('button', { name: 'Replace stripe-key' }));
-      await user.type(screen.getByLabelText('Value'), 'sk_live_rotated');
+      await user.type(screen.getByLabelText('Value', FIELD), 'sk_live_rotated');
       await user.click(screen.getByRole('button', { name: 'Replace value' }));
 
       const alert = await screen.findByRole('alert');
@@ -406,7 +407,7 @@ describe('SecretsPage', () => {
 
       await user.click(screen.getByRole('button', { name: 'New secret' }));
       await user.type(screen.getByLabelText('Name'), 'openai-key');
-      await user.type(screen.getByLabelText('Value'), 'sk_new');
+      await user.type(screen.getByLabelText('Value', FIELD), 'sk_new');
       await user.click(screen.getByRole('button', { name: 'Create secret' }));
 
       await waitFor(() =>
@@ -505,7 +506,7 @@ describe('SecretsPage — inline validation (#1396)', () => {
     await user.type(name, 'x');
     await user.clear(name);
     // Leaving the field for the Value counts; the Show toggle is not part of it.
-    await user.click(screen.getByLabelText('Value'));
+    await user.click(screen.getByLabelText('Value', FIELD));
     expect(name).toHaveAttribute('aria-invalid', 'true');
     expect(name).toHaveAccessibleDescription('Enter a name.');
     // Before a Save, the footer's alert is not used for it.
@@ -524,15 +525,15 @@ describe('SecretsPage — inline validation (#1396)', () => {
     expect(alert).toHaveTextContent('Fix these 2 fields:');
     await waitFor(() => expect(screen.getByLabelText('Name')).toHaveFocus());
     await user.click(within(alert).getByRole('button', { name: 'Value: Enter a value.' }));
-    expect(screen.getByLabelText('Value')).toHaveFocus();
-    expect(screen.getByLabelText('Value')).toHaveAccessibleDescription('Enter a value.');
+    expect(screen.getByLabelText('Value', FIELD)).toHaveFocus();
+    expect(screen.getByLabelText('Value', FIELD)).toHaveAccessibleDescription('Enter a value.');
   });
 
   it('a 409 on create is shown beside the Name', async () => {
     createMock.mockRejectedValue(new ApiError(409, 'conflict', undefined));
     const user = await openNew();
     await user.type(screen.getByLabelText('Name'), 'Stripe-Key');
-    await user.type(screen.getByLabelText('Value'), 'sk_live_123');
+    await user.type(screen.getByLabelText('Value', FIELD), 'sk_live_123');
     await user.click(screen.getByRole('button', { name: 'Create secret' }));
 
     await waitFor(() => expect(screen.getByLabelText('Name')).toHaveFocus());
@@ -556,6 +557,6 @@ describe('SecretsPage — inline validation (#1396)', () => {
     const alert = screen.getByRole('alert');
     expect(alert).toHaveTextContent('Fix this field:');
     expect(within(alert).getByRole('button', { name: 'Value: Enter a value.' })).toBeVisible();
-    await waitFor(() => expect(screen.getByLabelText('Value')).toHaveFocus());
+    await waitFor(() => expect(screen.getByLabelText('Value', FIELD)).toHaveFocus());
   });
 });

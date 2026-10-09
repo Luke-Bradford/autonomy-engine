@@ -23,6 +23,8 @@ import {
 import { LabelledControl } from '../../lib/LabelledControl';
 import { When } from '../../lib/When';
 import { PageHeader } from '../../lib/PageHeader';
+import { Section } from '../../lib/Section';
+import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 
 /**
  * #917 — Monitor → AI activity: what the connected AIs are doing, and how much
@@ -209,19 +211,18 @@ function QuotaPanel() {
   const providers = data === null ? [] : readAccountQuotas(data);
 
   return (
-    <section aria-labelledby="quota-heading" className="monitor-panel">
-      <div className="panel-heading-row">
-        <h3 id="quota-heading">Account quota</h3>
+    <Section
+      heading="Account quota"
+      help={FORM_SECTION_HINTS.monitor.quota}
+      level={3}
+      landmark
+      className="monitor-panel"
+      actions={
         <button type="button" onClick={refresh}>
           Refresh quota
         </button>
-      </div>
-      <p className="page-hint">
-        The subscription windows the AI providers connected to this host draw on. Read on demand
-        rather than on a timer — the provider allows one poller, so this asks only when you ask it
-        to. A provider you have not connected is not listed at all.
-      </p>
-
+      }
+    >
       {error !== null && (
         <p role="alert" className="error">
           Could not reach the quota endpoint: {error}
@@ -243,7 +244,7 @@ function QuotaPanel() {
           Last checked <When ms={lastUpdatedAt} />.
         </p>
       )}
-    </section>
+    </Section>
   );
 }
 
@@ -258,9 +259,13 @@ function QuotaPanel() {
  */
 function ReportedActivityPanel({ external }: { external: ExternalAgentActivity }) {
   return (
-    <section aria-labelledby="reported-activity-heading" className="reported-activity">
-      <h3 id="reported-activity-heading">Reported by external agents</h3>
-
+    <Section
+      heading="Reported by external agents"
+      help={FORM_SECTION_HINTS.monitor.reported}
+      level={3}
+      landmark
+      className="reported-activity"
+    >
       {external.invocations === 0 ? (
         /* Not merely "nothing here": an empty section on a monitoring page reads
            as "nothing is happening", and the whole defect was a reader drawing
@@ -320,7 +325,7 @@ function ReportedActivityPanel({ external }: { external: ExternalAgentActivity }
           )}
         </>
       )}
-    </section>
+    </Section>
   );
 }
 

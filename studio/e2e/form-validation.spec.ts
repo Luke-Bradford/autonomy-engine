@@ -126,7 +126,7 @@ test.describe('#1396 inline validation', () => {
     await page.getByRole('button', { name: 'New secret' }).click();
     const form = page.getByRole('form', { name: 'Secret form' });
     const name = form.getByLabel('Name', { exact: true });
-    const value = form.getByLabel('Value', { exact: true });
+    const value = form.getByRole('textbox', { name: 'Value', exact: true });
 
     await form.getByRole('button', { name: 'Create secret' }).click();
     const alert = form.getByRole('alert');
@@ -156,7 +156,7 @@ test.describe('#1396 inline validation', () => {
     const form = page.getByRole('form', { name: 'Trigger form' });
     const name = form.getByLabel('Name', { exact: true });
 
-    await form.getByLabel('Concurrency', { exact: true }).selectOption('parallel');
+    await form.getByRole('combobox', { name: 'Concurrency', exact: true }).selectOption('parallel');
     await form.getByLabel('Params (JSON)', { exact: true }).fill('[1]');
     await form.getByRole('button', { name: 'Create trigger' }).click();
     const alert = form.getByRole('alert');

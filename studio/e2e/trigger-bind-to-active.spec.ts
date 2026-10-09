@@ -65,7 +65,7 @@ test('binds a new trigger to the active version, resolved once by the server', a
   expect(borders.binding!.radius).toBe('6px');
 
   await form.getByRole('radio', { name: /active published version/i }).check();
-  await form.getByLabel(/^Pipeline/).selectOption(pipelineId);
+  await form.getByRole('combobox', { name: /^Pipeline/ }).selectOption(pipelineId);
 
   // DB-only is the shipped default: no repo, so there is no `active` pointer and
   // the server resolves the LATEST immutable version instead. The form says so
@@ -101,7 +101,7 @@ test('an enabled trigger may bind to the active version', async ({ page }) => {
   const form = triggerForm(page);
   await form.getByLabel('Name').fill('Enabled and active-bound');
   await form.getByRole('radio', { name: /active published version/i }).check();
-  await form.getByLabel(/^Pipeline/).selectOption(pipelineId);
+  await form.getByRole('combobox', { name: /^Pipeline/ }).selectOption(pipelineId);
   await form.getByLabel(/^Enabled/).check();
   await form.getByRole('button', { name: /Create trigger/i }).click();
   await expect(form).toBeHidden();
@@ -144,7 +144,7 @@ test('editing an existing trigger offers no bind-to-active', async ({ page }) =>
   await chooseRowAction(page.getByRole('row', { name: /Already bound/ }), 'Edit');
 
   const form = triggerForm(page);
-  await expect(form.getByLabel(/^Pipeline version/)).toBeVisible();
+  await expect(form.getByRole('combobox', { name: /^Pipeline version/ })).toBeVisible();
   await expect(form.getByRole('radio', { name: /active published version/i })).toHaveCount(0);
 
   await expectQuiet(page, problems);

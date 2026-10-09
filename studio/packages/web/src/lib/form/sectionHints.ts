@@ -1,8 +1,9 @@
 /**
- * #1413 OR22 — the one line under each form section's title, saying what the
- * section holds. Keyed by form, then section, so every section's copy sits in
- * one place and `sectionHints.test.ts` can hold all of it to the house rule
- * catalog descriptions follow: one sentence, not the title, no two the same.
+ * #1413 OR22 — the one line behind each section's `?` (#1594 OR40 `Section`),
+ * saying what the section holds. Keyed by form or surface, then section, so
+ * every section's copy sits in one place and `sectionHints.test.ts` can hold all
+ * of it to the house rule catalog descriptions follow: one sentence, not the
+ * title, no two the same.
  *
  * `advanced` is shared: the connection and dataset forms both end in the same
  * section (`OverridableKeysSection`), whose own note says what overriding means.
@@ -58,6 +59,26 @@ export const FORM_SECTION_HINTS = {
     target:
       'Which pipeline version this activity runs as a child run, and whether it waits for it to finish.',
     parameters: "The values this activity passes to the child pipeline's parameters.",
+  },
+  monitor: {
+    quota: "Each connected AI provider's subscription windows, read only when you ask.",
+    reported:
+      "Runs that agents studio did not launch reported to it, kept apart from studio's own figures.",
+  },
+  run: {
+    diagnostics: 'What the pipeline asked for that did not take effect on this run, and why.',
+    streamedOutput: 'How many output events this activity streamed, and the last one it sent.',
+    failure: 'The error this activity run ended with, and what kind of failure it was.',
+    childRuns: 'The child runs this activity started, each linked to its own run.',
+    dataMovement:
+      "Where this activity's data went, as resolved when it ran; a dataset edited since may point elsewhere.",
+    cost: 'The tokens this activity used and what they cost.',
+    input:
+      'The configuration and parameters this activity ran with, after expressions were resolved.',
+    variableWrite: 'The pipeline variable this activity set, and the value it wrote.',
+    outputs: 'The values this activity returned, which later activities read as its outputs.',
+    toolCalls:
+      'The tools the model called during this activity, with what each was given and returned.',
   },
   advanced: 'Rarely needed: which settings a node using this may override.',
 } as const;

@@ -24,7 +24,7 @@ import { PickableInput } from './PickableInput';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { JsonEditor } from '../../lib/form/JsonEditor';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
-import { DockSection } from '../../lib/form/DockSection';
+import { Section } from '../../lib/Section';
 
 /**
  * #425 — the call-node editor: the authoring surface for `Node.call`.
@@ -157,7 +157,7 @@ export function CallPanel({
   // section that appears only once a fetch resolves reads as a panel that is
   // missing rather than one that is loading.
   return (
-    <DockSection heading="Call target" hint={FORM_SECTION_HINTS.call.target}>
+    <Section heading="Call target" help={FORM_SECTION_HINTS.call.target}>
       {loadError !== null ? (
         // Fail LOUD. A silent empty picker would read as "there are no
         // pipelines", which is a different and much more alarming fact.
@@ -167,7 +167,7 @@ export function CallPanel({
       ) : (
         <CallEditor store={store} nodeId={nodeId} call={call} targets={targets} picker={picker} />
       )}
-    </DockSection>
+    </Section>
   );
 }
 
@@ -401,7 +401,7 @@ function CallEditor({
         </p>
       )}
 
-      <DockSection heading="Parameters" hint={FORM_SECTION_HINTS.call.parameters}>
+      <Section heading="Parameters" help={FORM_SECTION_HINTS.call.parameters}>
         {draft.mode === 'pick' && !chosen ? (
           // Pick mode with nothing chosen yet: the arguments are a property OF the
           // target, so there is nothing honest to offer — and offering the JSON
@@ -464,7 +464,7 @@ function CallEditor({
             )}
           </LabelledControl>
         )}
-      </DockSection>
+      </Section>
 
       {error !== null && <p className="form-error">{error}</p>}
       <button type="button" onClick={apply}>

@@ -53,7 +53,7 @@ import { useConfigEditor } from './pipeline/useConfigEditor';
 import { LabelledControl } from '../lib/LabelledControl';
 import { connectionOptionLabel } from '../lib/resourceOptionLabel';
 import { FormDrawer } from '../lib/form/FormDrawer';
-import { FormSection } from '../lib/form/FormSection';
+import { Section } from '../lib/Section';
 import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 import { RequiredMark } from '../lib/form/RequiredMark';
 import { FieldError } from '../lib/form/FieldError';
@@ -845,7 +845,7 @@ function DatasetForm({
         </>
       }
     >
-      <FormSection title="Basics" hint={FORM_SECTION_HINTS.dataset.basics}>
+      <Section heading="Basics" help={FORM_SECTION_HINTS.dataset.basics}>
         <label>
           <span>
             Name
@@ -933,9 +933,9 @@ function DatasetForm({
         {storeKindAdvisory !== null && (
           <p className="contract-advisory">{`Kind and store disagree: ${storeKindAdvisory}`}</p>
         )}
-      </FormSection>
+      </Section>
 
-      <FormSection title="Dataset" hint={FORM_SECTION_HINTS.dataset.dataset}>
+      <Section heading="Dataset" help={FORM_SECTION_HINTS.dataset.dataset}>
         {/* The mode toggle is hidden, not disabled, for a kind with no reader
             (`kindHasNoReader`): a typed form for a kind every copy refuses at
             dispatch would present a dataset as ready to copy, and a control that
@@ -986,9 +986,9 @@ function DatasetForm({
             </p>
           )}
         </ConfigEditor>
-      </FormSection>
+      </Section>
 
-      <FormSection title="Columns" hint={FORM_SECTION_HINTS.dataset.columns}>
+      <Section heading="Columns" help={FORM_SECTION_HINTS.dataset.columns}>
         <LabelledControl
           label={
             <>
@@ -1016,7 +1016,7 @@ function DatasetForm({
           <code>[]</code> to state that there are none.
         </p>
         <FieldError id={columnsErrorId} message={validation.errorFor('columns')} />
-      </FormSection>
+      </Section>
 
       <OverridableKeysSection
         subject={datasetAllowlistSubject(form.kind)}

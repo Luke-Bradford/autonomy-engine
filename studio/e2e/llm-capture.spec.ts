@@ -148,7 +148,7 @@ test('#605 — a full-capture LLM node shows the prompt it sent and the answer i
   });
 
   const panel = await openDrillIn(page, runId);
-  const section = panel.getByRole('region', { name: 'Prompt & completion' });
+  const section = panel.getByRole('group', { name: 'Prompt & completion' });
   await expect(section).toBeVisible();
   await expect(section.getByText(SYSTEM, { exact: true })).toBeVisible();
   await expect(section.getByText(PROMPT, { exact: true })).toBeVisible();
@@ -178,7 +178,7 @@ test('#605 — a SECURE full-capture node stores and shows only the marker', asy
   });
 
   const panel = await openDrillIn(page, runId);
-  const section = panel.getByRole('region', { name: 'Prompt & completion' });
+  const section = panel.getByRole('group', { name: 'Prompt & completion' });
   await expect(section.getByText(/Secure input or Secure output set/)).toBeVisible();
   await expect(section.getByText(PROMPT)).toHaveCount(0);
   await expect(section.getByText(ANSWER)).toHaveCount(0);
@@ -206,7 +206,7 @@ test('#605 — a node that opted into its reasoning trace shows the model’s su
   });
 
   const panel = await openDrillIn(page, runId);
-  const section = panel.getByRole('region', { name: 'Prompt & completion' });
+  const section = panel.getByRole('group', { name: 'Prompt & completion' });
   await expect(
     section.getByRole('heading', { name: "Reasoning (the model's summary)" }),
   ).toBeVisible();
@@ -244,7 +244,7 @@ test('#605 — a structured node that needed a repair shows BOTH exchanges', asy
   expect(caps[1]!.request.messages.at(-1)!.text).toContain('structured output schema');
 
   const panel = await openDrillIn(page, runId);
-  const section = panel.getByRole('region', { name: 'Prompt & completion' });
+  const section = panel.getByRole('group', { name: 'Prompt & completion' });
   const exchange = (n: number) =>
     section.locator('details', {
       has: page.locator('summary', { hasText: new RegExp(`^Exchange ${n}\\b`) }),
@@ -299,7 +299,7 @@ test('#605 — a tool-using node shows every round, with the calls and results i
   expect(caps[1]!.completion).toMatchObject({ text: TOOL_ANSWER });
 
   const panel = await openDrillIn(page, runId);
-  const section = panel.getByRole('region', { name: 'Prompt & completion' });
+  const section = panel.getByRole('group', { name: 'Prompt & completion' });
   const second = section.locator('details', {
     has: page.locator('summary', { hasText: /^Exchange 2\b/ }),
   });

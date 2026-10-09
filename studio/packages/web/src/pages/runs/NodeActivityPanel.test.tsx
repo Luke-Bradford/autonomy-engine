@@ -329,7 +329,7 @@ describe('NodeActivityPanel — the resolved dataset address', () => {
  */
 describe('NodeActivityPanel — child runs', () => {
   function childSection(panel: HTMLElement): HTMLElement {
-    return within(panel).getByRole('region', { name: 'Child runs' });
+    return within(panel).getByRole('group', { name: 'Child runs' });
   }
 
   it('renders no Child runs section for a node that spawned none', () => {
@@ -757,7 +757,7 @@ describe('NodeActivityPanel — the dispatched input (#890)', () => {
    * would pass whatever the panel rendered. */
   const inputSection = () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Input' }));
-    return screen.queryByRole('heading', { name: 'Input' })?.closest('section');
+    return screen.queryByRole('heading', { name: 'Input' })?.closest<HTMLElement>('.section');
   };
   /** A recorded text as the drawer shows it: indented when it parses. */
   const shown = (section: HTMLElement, id: string) =>
@@ -854,7 +854,7 @@ describe('NodeActivityPanel — the dispatched input (#890)', () => {
 describe('NodeActivityPanel — the variable a writer wrote (#844 V7)', () => {
   function writeSection(panel: HTMLElement): HTMLElement | null {
     const heading = within(panel).queryByRole('heading', { name: 'Variable write' });
-    return heading?.closest('section') ?? null;
+    return heading?.closest<HTMLElement>('.section') ?? null;
   }
 
   it('says a `set` REPLACED the named variable, with the value from its event', () => {

@@ -558,13 +558,13 @@ describe('PipelinePanel (#1 F8a) — General', () => {
   });
 
   // #1413 — the General and Annotations sections each say what they hold, as
-  // the section's accessible description, like every FormSection.
+  // the section's accessible description, like every Section.
   it('names each section and describes it with its hint', () => {
     mountGeneral(version());
-    expect(screen.getByRole('region', { name: 'General' })).toHaveAccessibleDescription(
+    expect(screen.getByRole('group', { name: 'General' })).toHaveAccessibleDescription(
       FORM_SECTION_HINTS.pipeline.general,
     );
-    expect(screen.getByRole('region', { name: 'Annotations' })).toHaveAccessibleDescription(
+    expect(screen.getByRole('group', { name: 'Annotations' })).toHaveAccessibleDescription(
       FORM_SECTION_HINTS.pipeline.annotations,
     );
   });
@@ -612,7 +612,7 @@ describe('PipelinePanel — declarations are a compact table (#1477 OR29)', () =
     expect(table.querySelector('tbody label:not(.contract-check)')).toBeNull();
     expect(screen.getByRole('textbox', { name: 'param 2 name' })).toHaveValue('b');
     // The Default column's hint is in the section's `?` now.
-    expect(screen.getByRole('region', { name: 'Params' })).toHaveAccessibleDescription(
+    expect(screen.getByRole('group', { name: 'Params' })).toHaveAccessibleDescription(
       /Leave a default blank for no default\./,
     );
   });

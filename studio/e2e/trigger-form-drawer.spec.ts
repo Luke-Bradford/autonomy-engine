@@ -88,7 +88,7 @@ test.describe('#1396 the trigger form drawer', () => {
       'Runs once for each fixed-size time window, when that window closes.',
     );
     await expect(
-      form.getByLabel('Concurrency', { exact: true }).locator('option:checked'),
+      form.getByRole('combobox', { name: 'Concurrency', exact: true }).locator('option:checked'),
     ).toHaveText('Queue');
     await expectQuiet(page, problems);
   });

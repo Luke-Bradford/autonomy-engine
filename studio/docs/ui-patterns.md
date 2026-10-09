@@ -66,7 +66,7 @@ required marks and display names; its layout is its own, below.
 
 ## Sections
 
-- The form is grouped into titled sections (`FormSection`, a `fieldset` and `legend`):
+- The form is grouped into titled sections (`Section`, see [Sections everywhere](#sections-everywhere)):
   - for a connection: *Basics* (name, kind), *Connection* (the kind's settings), *Authentication*
     (the secret) and *Advanced*;
   - for a dataset: *Basics* (name, store, kind), *Dataset* (the kind's settings), *Columns* (the
@@ -131,19 +131,17 @@ required marks and display names; its layout is its own, below.
   rule activities follow: one sentence of at most 120 characters, not the name, no two the same. A
   kind that is not built yet says "Planned:" rather than claim a behaviour (`continuous`); the form's
   own note under the picker says why.
-- **Every form section says what it holds, in one line under its title** (#1413): `FormSection`'s
-  `hint` is required, so a section without one does not compile. The copy lives in
-  `FORM_SECTION_HINTS` (`web/src/lib/form/sectionHints.ts`), held to the same house rule by
-  `sectionHints.test.ts`. The line is the group's `aria-describedby`. A hint never restates a note
-  already inside its section, which a screen reader would read twice. A collapsed section's hint
-  shows once it is opened.
-  **In the property dock and the run monitor's node panel (`DockSection`) the hint sits behind a
-  `?` beside the heading, not under it** (#1477 OR29): the dock is a work surface and the UI
-  standard keeps prose off it. The note is still the section's `aria-describedby`; the `?` is
-  beside the `h4`, never inside it, so the region's name stays the heading alone. Drawers keep the
-  line under the title.
-- A field's title must not contain another label on the same form ("Name", "Kind", "Store"):
-  label lookups by substring, in tests and in assistive tech, would then find two controls.
+- **Every section says what it holds** (#1413), in one line behind the `?` beside its heading
+  (#1477 OR29 in the dock; every surface since #1594 OR40 S3): the UI standard keeps prose off the
+  page. `Section`'s `help` is required, so a section without one does not compile. Plain copy lives
+  in `FORM_SECTION_HINTS` (`web/src/lib/form/sectionHints.ts`), held to the same house rule by
+  `sectionHints.test.ts`; a hint with markup (a `${…}` reference in `<code>`) is written inline. The note is the section's `aria-describedby`; the `?` is beside the
+  heading, never inside it, so the section's name stays the heading alone. A hint never restates a
+  note already inside its section, which a screen reader would read twice.
+- A field's title must not contain another field's label on the same form ("Name", "Kind",
+  "Store"): label lookups by substring, in tests and in assistive tech, would then find two
+  controls. A section may share its field's word ("Value"): the section is a group, not a control,
+  but a test's label query then needs `FIELD` (below).
 - **Required fields get an asterisk and `aria-required`** (native `required` on a plain input).
   Optional fields are unmarked: no label carries an "(optional)" suffix. The asterisk is
   `RequiredMark`.
@@ -472,10 +470,38 @@ Every page's title row is `PageHeader` (`lib/PageHeader.tsx`, #1594 OR40 S3). Ne
 - **The content frame** is `.content`'s 16px padding on every page, so every title starts at the
   same left edge (the editor keeps the same sides and drops the top and bottom). There is no
   reading-width cap: grids use the width, and a form caps its controls, not the page.
-- **A panel's heading row** (an `h3` and its one action, inside a page) is `.panel-heading-row`
-  until `Section` replaces it. It is not a page header.
+- **A section's heading row** (its heading and its actions, inside a page) is `Section`'s, below.
+  It is not a page header.
 
 `e2e/page-header.spec.ts` measures every page at 1440x900 in both densities.
+
+## Sections everywhere
+
+Every titled part of a form, a panel or a page is `Section` (`lib/Section.tsx`, #1594 OR40 S3). It
+replaced `FormSection` (a drawer's `fieldset` and `legend`), `DockSection` (the dock's `h4`) and
+`.panel-heading-row`. Never write a section heading by hand.
+
+- **The heading** is in the section type (14/600 compact, 16/600 comfortable), sentence case. It
+  is an `h4` under a drawer or panel title (`h3`) and an `h3` under a page title (`level={3}`).
+- **The heading row** holds the heading, its `?` and, optionally, `actions`: a `Toolbar` at the
+  row's right end (the Monitor's Refresh quota).
+- **Spacing:** the content starts 8px under the heading row, and its fields are 8px apart. Every
+  container that holds sections stacks at 8px (`.form-drawer-body`, `.property-panel`,
+  `.panel-tab`), and a section that follows anything takes 8px more, so sections are 16px apart.
+  No rule is drawn between sections. A page section's own rule (`.monitor-panel`) sets its margin.
+- **Semantics:** a section is a `group` named by its heading. Use `landmark` only for a section
+  that is itself a top-level part of a page (a `region`: the Monitor's account quota, a run's
+  diagnostics). Inside a form or a panel, which is already a named part of the page, another
+  landmark is noise. A field whose label is the same word as its section ("Value") needs a field
+  query in tests (`FIELD` in `web/src/testing/fieldQuery.ts`).
+- **Collapsible** sections (Advanced) are a disclosure button inside the heading, with
+  `aria-expanded`, not a `<details>`: a `<summary>` cannot hold the `?` beside it. They are closed
+  unless `defaultOpen`, and they open if `defaultOpen` turns true after mount (a record that loads
+  late and uses the section).
+- **Still to move:** page sections that are bare `h3`/`h4` headings (Settings, Home, Git, the run
+  page's timeline, variables and cost) move to `Section` page by page in S6.
+
+`e2e/section.spec.ts` measures a drawer, the dock and a page at 1440x900 in both densities.
 
 ## Width, and why a drawer has no two-column grid
 

@@ -17,6 +17,8 @@ import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import { formatTimeOfDay, zoneLabel } from '../../lib/displayTime';
 import type { StreamedLine } from './attemptActivity';
 import { defaultDrawerTab, drawerFileStem, type DrawerTab } from './drawerTab';
+import { Section } from '../../lib/Section';
+import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 
 /**
  * U24 (slice 1) — the per-node drill-in on the run monitor.
@@ -161,17 +163,19 @@ export function NodeActivityPanel({
       aria-label={`Node ${name ?? node.nodeId}`}
       {...(run === undefined ? {} : { tabIndex: -1, 'data-drawer-focus': true })}
     >
-      {/* `.panel-heading-row` is a panel's title-plus-action row. The sibling
-          property panels have no action in their heading, so none of them uses
-          it; this one needs a Close beside the title. */}
-      <div className="panel-heading-row">
+      {/* The panel's title row, the editor's property-panel header: the node,
+          then its one act (Close) at the row's right end. A panel title, not a
+          section, so not a `Section`. */}
+      <div className="property-panel__header">
         <h3>
           Node {name ?? <code>{node.nodeId}</code>}
           {name !== null && <code className="node-id">{node.nodeId}</code>}
         </h3>
-        <button type="button" onClick={onClose}>
-          Close
-        </button>
+        <div className="property-panel__actions">
+          <button type="button" onClick={onClose}>
+            Close
+          </button>
+        </div>
       </div>
 
       <p>
@@ -362,8 +366,7 @@ export function NodeActivityPanel({
             label: 'Logs',
             content: (
               <>
-                <section className="contract-section">
-                  <h4>Streamed output</h4>
+                <Section heading="Streamed output" help={FORM_SECTION_HINTS.run.streamedOutput}>
                   <p>
                     {node.outputs} event{node.outputs === 1 ? '' : 's'}
                     {/* #1299 — the value only for the CURRENT attempt (`lastOutput` is
@@ -382,7 +385,7 @@ export function NodeActivityPanel({
                   <SecureMarkerHint
                     values={[node.lastOutputName, node.lastOutput?.name, node.lastOutput?.value]}
                   />
-                </section>
+                </Section>
                 {lines !== undefined && lines.length > 0 && (
                   <StreamedLines lines={lines} stem={stem} />
                 )}
@@ -462,8 +465,7 @@ function ErrorTab({ node, attempt }: { node: NodeActivity; attempt: number | nul
     return <p className="page-hint">This activity run did not fail.</p>;
   }
   return (
-    <section className="contract-section">
-      <h4>Failure</h4>
+    <Section heading="Failure" help={FORM_SECTION_HINTS.run.failure}>
       {/* Gated on the STATUS, not on the message: a `call.returned` whose
           child RAN and failed sets the row red with no message of its own
           (only a refused spawn carries a `reason`, #796), and gating on
@@ -508,7 +510,7 @@ function ErrorTab({ node, attempt }: { node: NodeActivity; attempt: number | nul
           )}
         </dl>
       )}
-    </section>
+    </Section>
   );
 }
 
@@ -630,8 +632,7 @@ function ChildRuns({ node }: { node: NodeActivity }) {
     );
   }
   return (
-    <section className="contract-section" aria-label="Child runs">
-      <h4>Child runs</h4>
+    <Section heading="Child runs" help={FORM_SECTION_HINTS.run.childRuns}>
       {/* Tense-neutral ON PURPOSE. `childRunIds` is append-only and never
           cleared, so this list outlives the park it was opened for and holds
           finished children as readily as live ones — and nothing on the row
@@ -667,7 +668,7 @@ function ChildRuns({ node }: { node: NodeActivity }) {
           </li>
         ))}
       </ul>
-    </section>
+    </Section>
   );
 }
 
@@ -743,13 +744,7 @@ function DataMovementSection({
     sink !== undefined && sink.object === null ? 'sink' : undefined,
   ].filter((end): end is string => end !== undefined);
   return (
-    <section className="contract-section">
-      <h4>Data movement</h4>
-      <p className="page-hint">
-        Where this dispatch resolved to. A node names a dataset, and a dataset can be edited after
-        the version was minted — so this is where the data actually went, which a rerun may not
-        repeat.
-      </p>
+    <Section heading="Data movement" help={FORM_SECTION_HINTS.run.dataMovement}>
       {instanceId !== undefined && (
         <p className="page-hint">
           The address of <code>{instanceId}</code>: the item whose result is shown, or else the one
@@ -776,7 +771,7 @@ function DataMovementSection({
           {unnamedEnds.join(' and ')}.
         </p>
       )}
-    </section>
+    </Section>
   );
 }
 
@@ -792,8 +787,7 @@ function CostSection({ node }: { node: NodeActivity }) {
   const reading = readCost(node.cost);
   const { cost } = node;
   return (
-    <section className="contract-section">
-      <h4>Cost &amp; usage</h4>
+    <Section heading="Cost & usage" help={FORM_SECTION_HINTS.run.cost}>
       <p>
         <strong>{costFigure(reading)}</strong>
       </p>
@@ -852,7 +846,7 @@ function CostSection({ node }: { node: NodeActivity }) {
            confidence of a settled one. */
         <p className="page-hint">{unsettledSentence(reading, 'node')}</p>
       )}
-    </section>
+    </Section>
   );
 }
 
@@ -886,8 +880,7 @@ function InputSection({
   stem: string;
 }) {
   return (
-    <section className="contract-section">
-      <h4>Input</h4>
+    <Section heading="Input" help={FORM_SECTION_HINTS.run.input}>
       {instanceId !== undefined && (
         <p className="page-hint">
           The input of <code>{instanceId}</code>: the item whose result is shown, or else the one
@@ -915,7 +908,7 @@ function InputSection({
           />
         </>
       )}
-    </section>
+    </Section>
   );
 }
 
@@ -991,8 +984,7 @@ function VariableWriteSection({
   stem: string;
 }) {
   return (
-    <section className="contract-section">
-      <h4>Variable write</h4>
+    <Section heading="Variable write" help={FORM_SECTION_HINTS.run.variableWrite}>
       <p>
         {write.op === 'set' ? (
           <>
@@ -1010,7 +1002,7 @@ function VariableWriteSection({
         what="variable write"
         download={`${stem}-variable-write.json`}
       />
-    </section>
+    </Section>
   );
 }
 
@@ -1018,8 +1010,7 @@ function OutputsSection({ node, stem }: { node: NodeActivity; stem: string }) {
   if (node.outputValues === undefined) return null;
   const names = Object.keys(node.outputValues);
   return (
-    <section className="contract-section">
-      <h4>Outputs</h4>
+    <Section heading="Outputs" help={FORM_SECTION_HINTS.run.outputs}>
       {names.length === 0 ? (
         /* #911 — a statement about the RECORDING, not about the contract.
            It used to read "This node declared no outputs.", which was safe
@@ -1044,7 +1035,7 @@ function OutputsSection({ node, stem }: { node: NodeActivity; stem: string }) {
         />
       )}
       <SecureMarkerHint values={Object.values(node.outputValues)} />
-    </section>
+    </Section>
   );
 }
 
@@ -1078,8 +1069,7 @@ function ToolCallSection({ calls }: { calls: NodeToolCall[] }) {
   const showInstance = calls.some((c) => c.instanceId !== undefined);
   const errors = calls.filter((c) => c.isError).length;
   return (
-    <section className="contract-section">
-      <h4>Tool calls</h4>
+    <Section heading="Tool calls" help={FORM_SECTION_HINTS.run.toolCalls}>
       <p className="page-hint">
         {calls.length} call{calls.length === 1 ? '' : 's'}
         {errors > 0 && <>, {errors} of which returned an error to the model</>}.
@@ -1120,6 +1110,6 @@ function ToolCallSection({ calls }: { calls: NodeToolCall[] }) {
           … showing the most recent {shown.length} of {calls.length} calls.
         </p>
       )}
-    </section>
+    </Section>
   );
 }

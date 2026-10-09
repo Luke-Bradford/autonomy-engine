@@ -1,3 +1,4 @@
+import { flushSync } from 'react-dom';
 import { useCallback, useMemo, useRef, useState, type FocusEvent, type FormEvent } from 'react';
 
 /** A message per field key: `name`, `config.timeoutMs`, `columns`. */
@@ -54,18 +55,29 @@ function controlOf(container: ParentNode, key: string): HTMLElement | null {
 }
 
 /**
- * Focus a field by key, opening any collapsed section it sits in first (an
- * Advanced `<details>` would otherwise swallow the focus).
+ * Focus a field by key, opening any collapsed section it sits in first (a
+ * collapsed Advanced section would otherwise swallow the focus).
  */
 export function focusField(container: ParentNode, key: string): void {
   const control = controlOf(container, key);
   if (control !== null) focusControl(control);
 }
 
-/** Focus a control, opening any collapsed section it sits in first. */
+/**
+ * Focus a control, opening any collapsed section it sits in first: a
+ * `<details>`, or a collapsed `Section` (#1594 OR40), whose body is `hidden`
+ * and whose toggle names it in `aria-controls`. The toggle is clicked inside
+ * `flushSync`, so the body is shown before the focus lands.
+ */
 function focusControl(control: HTMLElement): void {
   for (let el = control.parentElement; el !== null; el = el.parentElement) {
     if (el instanceof HTMLDetailsElement) el.open = true;
+    if (el.hidden && el.id !== '') {
+      const toggle = el.ownerDocument.querySelector<HTMLElement>(
+        `[aria-controls="${CSS.escape(el.id)}"][aria-expanded="false"]`,
+      );
+      if (toggle !== null) flushSync(() => toggle.click());
+    }
   }
   control.focus();
 }

@@ -46,7 +46,7 @@ test.describe('#1477 connection description + annotations', () => {
     const rowInputMatchesName = (await heightOf('annotation 1')) === (await heightOf('Name'));
     const layout = await page.evaluate(() => {
       const root = document.querySelector('form[aria-label="Connection form"]')!;
-      const sections = [...root.querySelectorAll('.form-section-title')].map((h) =>
+      const sections = [...root.querySelectorAll('.section__title')].map((h) =>
         h.textContent?.trim(),
       );
       const row = root.querySelector('table[aria-label="Annotations"] tbody tr')!;

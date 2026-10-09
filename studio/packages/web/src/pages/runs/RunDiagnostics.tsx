@@ -3,6 +3,8 @@ import type { RunDiagnostic } from '@autonomy-studio/shared';
 import { getRunDiagnostics } from '../../api/runs';
 import { usePolledResource } from '../../hooks/usePolledResource';
 import { When } from '../../lib/When';
+import { Section } from '../../lib/Section';
+import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 
 /**
  * #1065 — the reducer's EXPLANATIONS for this run: the WHY beside the what.
@@ -76,14 +78,17 @@ export function RunDiagnostics({ runId, settled }: { runId: string; settled: boo
   const rows = data?.filter((d) => d.phase !== 'cap') ?? [];
 
   return (
-    <section aria-labelledby="run-diagnostics-heading">
-      <div className="panel-heading-row">
-        <h3 id="run-diagnostics-heading">Why this run behaved as it did</h3>
+    <Section
+      heading="Why this run behaved as it did"
+      help={FORM_SECTION_HINTS.run.diagnostics}
+      level={3}
+      landmark
+      actions={
         <button type="button" onClick={refresh}>
           Refresh diagnostics
         </button>
-      </div>
-
+      }
+    >
       {error !== null ? (
         /* Rendered INSTEAD of the list, not beside it: `usePolledResource` leaves
            `data` untouched on a rejection, so a stale list under an error banner
@@ -153,7 +158,7 @@ export function RunDiagnostics({ runId, settled }: { runId: string; settled: boo
           )}
         </>
       )}
-    </section>
+    </Section>
   );
 }
 

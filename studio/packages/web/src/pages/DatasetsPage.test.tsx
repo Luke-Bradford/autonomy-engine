@@ -919,6 +919,7 @@ describe('DatasetsPage', () => {
       await screen.findByText('Orders');
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+      await user.click(within(form()).getByRole('button', { name: 'Advanced' }));
       await user.click(within(allowlist()).getByLabelText('Overridable: path'));
       await user.click(within(allowlist()).getByLabelText('Overridable: header'));
       await user.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -981,6 +982,7 @@ describe('DatasetsPage', () => {
       await screen.findByText('Orders');
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+      await user.click(within(form()).getByRole('button', { name: 'Advanced' }));
       expect(allowlist()).toHaveTextContent(
         'Database table datasets have no settings a node can override.',
       );
@@ -1004,7 +1006,10 @@ describe('the dataset form drawer (#1396)', () => {
     for (const section of ['Basics', 'Dataset', 'Columns']) {
       expect(within(panel).getByRole('group', { name: section })).toBeInTheDocument();
     }
-    expect(panel.querySelector('details.form-section')).not.toHaveAttribute('open');
+    expect(within(panel).getByRole('button', { name: 'Advanced' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
     // Kinds are named for people; the value stays the stored identifier.
     const kind = within(panel).getByLabelText('Kind');
     expect(within(kind).getByRole('option', { name: 'Database table' })).toHaveValue('table');
@@ -1024,7 +1029,10 @@ describe('the dataset form drawer (#1396)', () => {
     const user = userEvent.setup();
     renderWithDataRouter(<DatasetsPage />);
     await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
-    expect(form().querySelector('details.form-section')).toHaveAttribute('open');
+    expect(within(form()).getByRole('button', { name: 'Advanced' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
   });
 
   it('holds a dirty columns draft at the prompt: Keep editing keeps it, Discard closes', async () => {
