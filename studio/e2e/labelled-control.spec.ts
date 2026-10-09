@@ -13,7 +13,7 @@ import { openNewConnection } from './support/newConnection';
  * `getByLabel` resolved while a field was empty and silently stopped matching
  * once it held anything. The trigger form carries both control kinds, so it is
  * where the locator trap is pinned; the lint rule covers every other site. The
- * layout tests pin the three shapes the wrapper takes: a stacked form row, the
+ * layout tests pin the three shapes the wrapper takes: a form row, the
  * AI page's inline picker, and a config field's own tighter rhythm.
  */
 async function openNewTrigger(page: Page): Promise<string[]> {

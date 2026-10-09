@@ -8,7 +8,7 @@ import { fluentRootReady } from './support/theme';
  * least 400px wide — in the property dock (`property-dock-grid.spec.ts`), a
  * drawer, and a page's form (Settings, the Manage import panel), in both
  * densities. Rows are 8px apart; a checkbox, a sibling hint and an error line
- * up with the control column, and a checkbox is never stretched.
+ * up with the control column, and a checkbox's words sit 8px beside its box.
  */
 test.use({ viewport: { width: 1440, height: 900 } });
 
@@ -35,7 +35,11 @@ function rows(scope: Locator, ids: string[]) {
         (l) => l.textContent?.trim() === name,
       )!;
       const control = (label as HTMLLabelElement).control!;
-      return { name, label: box(label), control: box(control), row: box(label.parentElement!) };
+      const row = label.parentElement!;
+      // What starts the control column: the control, or the box holding it
+      // (a kind picker's icon and select).
+      const cell = [...row.children].find((c) => c.contains(control))!;
+      return { name, label: box(label), control: box(control), cell: box(cell), row: box(row) };
     });
   }, ids);
 }
@@ -44,16 +48,19 @@ type Row = Awaited<ReturnType<typeof rows>>[number];
 
 function expectLabelLeft(where: string, row: Row) {
   const label = `${where} '${row.name}'`;
-  expect(row.label.right, `${label}: label left of its control`).toBeLessThanOrEqual(
-    row.control.left,
-  );
-  expect(row.control.left - row.label.left, `${label}: label column + 12px`).toBeCloseTo(
+  expect(row.label.right, `${label}: label left of its control`).toBeLessThanOrEqual(row.cell.left);
+  expect(row.cell.left - row.label.left, `${label}: label column + 12px`).toBeCloseTo(
     LABEL_COLUMN + LABEL_GAP,
     0,
   );
-  const labelMid = (row.label.top + row.label.bottom) / 2;
-  const controlMid = (row.control.top + row.control.bottom) / 2;
-  expect(Math.abs(labelMid - controlMid), `${label}: one line`).toBeLessThanOrEqual(3);
+  // On the control's line: a one-line label is centred on it, and a long one
+  // starts there and wraps inside its column.
+  expect(Math.abs(row.label.top - row.cell.top), `${label}: on the control's line`).toBeLessThan(1);
+  if (row.label.bottom - row.label.top < row.control.bottom - row.control.top + 1) {
+    const labelMid = (row.label.top + row.label.bottom) / 2;
+    const controlMid = (row.control.top + row.control.bottom) / 2;
+    expect(Math.abs(labelMid - controlMid), `${label}: centred`).toBeLessThanOrEqual(1);
+  }
 }
 
 for (const density of ['compact', 'comfortable'] as const) {
@@ -77,9 +84,16 @@ for (const density of ['compact', 'comfortable'] as const) {
       .getByRole('switch', { name: 'Dark mode' })
       .evaluate((el) => el.closest('.settings-row')!.getBoundingClientRect().left);
     expect(switchLeft, 'Settings: theme switch at the control column').toBeCloseTo(
-      densityRow!.control.left,
+      densityRow!.cell.left,
       0,
     );
+
+    // A page's import panel: the export file row. (Before the drawer, whose
+    // edited form would hold a navigation away at its prompt.)
+    await page.goto('/#/manage/connections');
+    await fluentRootReady(page);
+    const [file] = await rows(page.locator('section.field-form'), ['Export file']);
+    expectLabelLeft('Connections import', file!);
 
     // A drawer: a new trigger's Name and Mode, its Enabled checkbox, and a
     // field inside the recurrence builder's fieldset.
@@ -97,35 +111,23 @@ for (const density of ['compact', 'comfortable'] as const) {
       'Time zone (IANA, blank = UTC)',
     ]);
     expectLabelLeft('Recurrence fieldset', zone!);
+    // Box, 8px, words — the words wrap beside the box rather than under it.
     const enabled = await drawer.getByRole('checkbox', { name: /^Enabled/ }).evaluate((el) => {
       const label = el.closest('label')!;
-      const text = document.createRange();
-      text.selectNodeContents(label);
+      const words = [...label.childNodes].find(
+        (n) => n.nodeType === Node.TEXT_NODE && n.textContent?.trim(),
+      )!;
+      const range = document.createRange();
+      range.selectNodeContents(words);
+      const box = el.getBoundingClientRect();
       return {
         left: label.getBoundingClientRect().left,
-        width: label.getBoundingClientRect().width,
-        box: el.getBoundingClientRect().width,
-        contentRight: Math.max(
-          ...[...label.childNodes].map((n) => {
-            const r = document.createRange();
-            r.selectNodeContents(n);
-            return n.nodeType === Node.TEXT_NODE
-              ? r.getBoundingClientRect().right
-              : (n as Element).getBoundingClientRect().right;
-          }),
-        ),
+        boxRight: box.right,
+        wordsLeft: Math.min(...[...range.getClientRects()].map((r) => r.left)),
       };
     });
-    expect(enabled.left, 'Enabled: at the control column').toBeCloseTo(name!.control.left, 0);
-    expect(enabled.left + enabled.width, 'Enabled: never stretched').toBeLessThanOrEqual(
-      enabled.contentRight + 1,
-    );
-
-    // A page's import panel: the export file row.
-    await page.goto('/#/manage/connections');
-    await fluentRootReady(page);
-    const [file] = await rows(page.locator('section.field-form'), ['Export file']);
-    expectLabelLeft('Connections import', file!);
+    expect(enabled.left, 'Enabled: at the control column').toBeCloseTo(name!.cell.left, 0);
+    expect(enabled.wordsLeft - enabled.boxRight, 'Enabled: box, 8px, words').toBeCloseTo(8, 0);
 
     await expectQuiet(page, problems);
   });
