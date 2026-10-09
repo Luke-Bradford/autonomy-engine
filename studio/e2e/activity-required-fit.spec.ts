@@ -42,7 +42,7 @@ function requiredOverflow(page: Page) {
       )) {
         found.set(el, el.getAttribute('aria-label') ?? el.id);
       }
-      for (const label of q('label:has(.required-mark)')) {
+      for (const label of panelEl.querySelectorAll<HTMLLabelElement>('label:has(.required-mark)')) {
         const control = label.htmlFor ? document.getElementById(label.htmlFor) : null;
         if (control !== null) found.set(control, label.textContent ?? '');
       }
