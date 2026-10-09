@@ -1330,6 +1330,14 @@ td button + button {
   color: var(--muted);
 }
 
+/* A row's own label is one line of text and its required mark, not a column
+   of its parts (the rule above would stack the `*` under the word). */
+.connection-form .labelled-control > label,
+.dataset-form .labelled-control > label,
+.trigger-form .labelled-control > label {
+  display: block;
+}
+
 /* #439 U14b / #854 — the recurrence and tumbling-window builders read as
    grouped sub-forms within the trigger form (a bare <fieldset> would otherwise
    inherit the browser default border and collapse its stacked children). Both
@@ -3025,8 +3033,8 @@ button.danger {
   display: contents;
 }
 
-/* #1477 OR29 — a `FieldGrid` where the dock does not pack it (comfortable
-   density, a narrow or right-docked dock): one column, a field's gap apart. */
+/* #1477 OR29 — a `FieldGrid` where the dock does not pack it (a tab under
+   580px: a narrow or right-docked dock): one column, a field's gap apart. */
 .config-editor.field-stack {
   display: flex;
   flex-direction: column;
@@ -3191,8 +3199,9 @@ button.danger {
      its error in the next. Only a field row of a form's own sections — not the
      cells of a row table or a param-override row, which are too narrow, nor a
      dock fieldset of choices. The trigger form's builders are fieldsets of
-     fields, so they are rows' parents too. (0,4,0), over the stacked drawer
-     row (`.connection-form .labelled-control`, 0,3,0). */
+     fields, so they are rows' parents too. `:root[data-density]` (always set)
+     only raises the weight: (0,4,0), over the stacked drawer row
+     (`.connection-form .labelled-control`, 0,3,0). */
   :root[data-density]
     :is(
       .config-cell,
@@ -3203,7 +3212,8 @@ button.danger {
       .field-form,
       .recurrence-editor,
       .window-editor,
-      .binding-kind
+      .run-windows,
+      .run-window-row
     )
     > .labelled-control {
     display: grid;
@@ -3228,7 +3238,8 @@ button.danger {
       .field-form,
       .recurrence-editor,
       .window-editor,
-      .binding-kind
+      .run-windows,
+      .run-window-row
     )
     > .labelled-control
     > label {
@@ -3248,7 +3259,8 @@ button.danger {
       .field-form,
       .recurrence-editor,
       .window-editor,
-      .binding-kind
+      .run-windows,
+      .run-window-row
     )
     > .labelled-control
     > :not(label, .labelled-control__head) {
@@ -3267,7 +3279,8 @@ button.danger {
       .field-form,
       .recurrence-editor,
       .window-editor,
-      .binding-kind
+      .run-windows,
+      .run-window-row
     )
     > .labelled-control
     > .labelled-control__head {
@@ -3288,7 +3301,8 @@ button.danger {
   /* In a full-width row of a section, a checkbox (or the Settings theme
      switch), and a hint or error slot that is the SIBLING of its control
      rather than inside it (a checkbox's, a `DraftNumberField`'s, a drawer
-     field's `FieldError`), line up with the control column. A checkbox keeps
+     field's `FieldError`, and the hints after that), line up with the control
+     column. A checkbox keeps
      its own width: box, 8px, label, never stretched. A field packed into a
      grid cell (the General tab's policy, since #1477) keeps the cell's whole
      width, and a fieldset's radios sit under its legend. */
@@ -3306,22 +3320,18 @@ button.danger {
       .form-drawer-body,
       .field-form,
       .recurrence-editor,
-      .window-editor
+      .window-editor,
+      .run-windows,
+      .run-window-row
     )
-    > :is(.labelled-control, .contract-check, label:has(> input[type='checkbox']))
-    + :is(.page-hint, .field-hint, .field-error-slot),
-  :root[data-density]
-    :is(
-      .contract-section,
-      .section__body,
-      .form-drawer-body,
-      .field-form,
-      .recurrence-editor,
-      .window-editor
+    > :is(
+      .labelled-control,
+      .contract-check,
+      label:has(> input[type='checkbox']),
+      .page-hint,
+      .field-error-slot
     )
-    > .labelled-control
-    + .page-hint
-    + .field-error-slot {
+    + :is(.page-hint, .field-hint, .field-error-slot) {
     margin-left: calc(var(--form-label-column) + var(--space-3));
   }
 }

@@ -216,13 +216,7 @@ export function WindowEditor({
 
       {/* Deliberately NO `min`: a valid offset is negative, and the form runs
           native constraint validation before its own `role="alert"` path. */}
-      <LabelledControl
-        label={
-          <>
-            Depend on earlier windows: offset in seconds (negative, before each window&apos;s start)
-          </>
-        }
-      >
+      <LabelledControl label="Depend on earlier windows: offset in seconds (negative, before each window's start)">
         {(id) => (
           <input
             id={id}

@@ -6,8 +6,10 @@ import type { fieldAttrs } from './fieldValidation';
  * #1396 — a secret's input, with the Show/Hide toggle every secret field has
  * (`studio/docs/ui-patterns.md`). The toggle is named for what it does next,
  * and sits BESIDE the input, never inside the label, so it never joins the
- * input's accessible name. A `LabelledControl` row (#1594 OR40 S3c), so a
- * wide form puts the label left of the input and its toggle. Hidden again whenever the form remounts.
+ * input's accessible name. Hidden again whenever the form remounts.
+ *
+ * A `LabelledControl` row (#1594 OR40 S3c): a wide form puts the label left of
+ * the input and its toggle, which share the control column.
  *
  * `field` makes the input a field of the form's inline validation (`fieldAttrs`);
  * the page renders its `FieldError` after this. Leaving the input for the toggle

@@ -95,6 +95,21 @@ for (const density of ['compact', 'comfortable'] as const) {
     const [file] = await rows(page.locator('section.field-form'), ['Export file']);
     expectLabelLeft('Connections import', file!);
 
+    // A secret drawer: the value row (input and Show in the control column),
+    // and the hint that follows its error slot, lined up with the control.
+    await page.goto('/#/manage/secrets');
+    await fluentRootReady(page);
+    await page.getByRole('button', { name: 'New secret' }).click();
+    const secret = page.locator('.form-drawer-body');
+    const [value] = await rows(secret, ['Value']);
+    expectLabelLeft('Secret drawer', value!);
+    const hintLeft = await secret
+      .getByText(/^Write-only/)
+      .evaluate((el) => el.getBoundingClientRect().left);
+    expect(hintLeft, 'Secret drawer: a hint after the error slot').toBeCloseTo(value!.cell.left, 0);
+    await page.keyboard.press('Escape');
+    await expect(secret).toHaveCount(0);
+
     // A drawer: a new trigger's Name and Mode, its Enabled checkbox, and a
     // field inside the recurrence builder's fieldset.
     await page.goto('/#/manage/triggers');
@@ -149,5 +164,7 @@ test('#1594 OR40 S3c — a form narrower than 400px keeps the label over its con
   expect(width, 'the drawer body is under the 400px threshold').toBeLessThan(400);
   const [name] = await rows(drawer, ['Name']);
   expect(name!.label.bottom, 'Name: label over its control').toBeLessThanOrEqual(name!.control.top);
+  // The word and its required `*` on one line, not stacked.
+  expect(name!.label.bottom - name!.label.top, 'Name: one line').toBeLessThan(20);
   await expectQuiet(page, problems);
 });

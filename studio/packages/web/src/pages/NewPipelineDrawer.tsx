@@ -163,15 +163,9 @@ export function NewPipelineDrawer({
           )}
         </LabelledControl>
         <FieldError id={errorIds.name} message={validation.errorFor('name')} />
-        <LabelledControl
-          label={
-            <>
-              Folder
-              {/* Picking an existing folder beats retyping it; a different case of
-              one is filed under it anyway (`existingFolderSpelling`). */}
-            </>
-          }
-        >
+        {/* Picking an existing folder beats retyping it; a different case of
+            one is filed under it anyway (`existingFolderSpelling`). */}
+        <LabelledControl label="Folder">
           {(id) => (
             <input
               id={id}

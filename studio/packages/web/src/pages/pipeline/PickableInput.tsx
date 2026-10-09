@@ -22,6 +22,7 @@ export function PickableInput({
   pickerName,
   target,
   after,
+  required = false,
   children,
 }: {
   value: string;
@@ -33,6 +34,8 @@ export function PickableInput({
   target: PickerTarget;
   /** Content after the input, still inside the label (a hint that names it). */
   after?: ReactNode;
+  /** The value must be given: `aria-required`, beside the label's `RequiredMark`. */
+  required?: boolean;
   children: ReactNode;
 }) {
   const {
@@ -51,6 +54,7 @@ export function PickableInput({
           onSelect={onSelect}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
+          aria-required={required || undefined}
         />
         {after}
       </label>

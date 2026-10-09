@@ -52,6 +52,10 @@ describe('RunNowPanel (#1395 OR4)', () => {
     // #1594 OR40 S3c: required is the label's `*`, and the control says so.
     expect(screen.getByLabelText('count')).toHaveAttribute('aria-required', 'true');
     expect(screen.getByLabelText('city')).not.toHaveAttribute('aria-required');
+    const markOf = (name: string) =>
+      screen.getByText(name, { selector: 'label' }).querySelector('.required-mark');
+    expect(markOf('count')).not.toBeNull();
+    expect(markOf('city')).toBeNull();
   });
 
   it('sends typed values for exactly that version, then hands up the new run', async () => {

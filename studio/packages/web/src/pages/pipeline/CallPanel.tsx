@@ -426,9 +426,13 @@ function CallEditor({
                       picker={picker}
                       pickerName={`parameter ${name}`}
                       target={paramPosition(name, decl)}
+                      required={decl?.required === true}
                     >
-                      {name}
-                      {decl?.required === true && <RequiredMark />}
+                      {/* One item, so the `*` stays on the name's line. */}
+                      <span>
+                        {name}
+                        {decl?.required === true && <RequiredMark />}
+                      </span>
                       {decl ? (
                         <span className="page-hint">{VALUE_TYPE_TITLES[decl.type]}</span>
                       ) : (

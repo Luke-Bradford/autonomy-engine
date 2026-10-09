@@ -10,6 +10,7 @@ import {
   type RunWindowRow,
   type RunWindowsFormState,
 } from './runWindowsForm';
+import { LabelledControl } from '../../lib/LabelledControl';
 
 /**
  * The modes an automatic fire is actually gated by `isWithinRunWindows`:
@@ -223,35 +224,39 @@ export function RunWindowsEditor({
           role="group"
           aria-label={`Window ${index + 1}`}
         >
-          <label>
-            {`Window ${index + 1} start`}
-            <input
-              type="text"
-              // A TEXT control, not `type="time"`: the native picker cannot hold
-              // `9:00` (which the scheduler reads fine) and — decisively — cannot
-              // hold a malformed legacy bound at all, so it would render the
-              // value that broke the trigger as an empty box. Rule 3 of
-              // `runWindowsForm.ts`: what this editor cannot show, it still
-              // carries.
-              value={row.start}
-              onChange={(e) => setRow(index, { start: e.target.value })}
-              placeholder="HH:MM"
-              spellCheck={false}
-              {...rowField.attrs(`${index}.start`)}
-            />
-          </label>
+          <LabelledControl label={`Window ${index + 1} start`}>
+            {(id) => (
+              <input
+                id={id}
+                type="text"
+                // A TEXT control, not `type="time"`: the native picker cannot hold
+                // `9:00` (which the scheduler reads fine) and — decisively — cannot
+                // hold a malformed legacy bound at all, so it would render the
+                // value that broke the trigger as an empty box. Rule 3 of
+                // `runWindowsForm.ts`: what this editor cannot show, it still
+                // carries.
+                value={row.start}
+                onChange={(e) => setRow(index, { start: e.target.value })}
+                placeholder="HH:MM"
+                spellCheck={false}
+                {...rowField.attrs(`${index}.start`)}
+              />
+            )}
+          </LabelledControl>
           <FieldError {...rowField.errorProps(`${index}.start`)} />
-          <label>
-            {`Window ${index + 1} end`}
-            <input
-              type="text"
-              value={row.end}
-              onChange={(e) => setRow(index, { end: e.target.value })}
-              placeholder="HH:MM"
-              spellCheck={false}
-              {...rowField.attrs(`${index}.end`)}
-            />
-          </label>
+          <LabelledControl label={`Window ${index + 1} end`}>
+            {(id) => (
+              <input
+                id={id}
+                type="text"
+                value={row.end}
+                onChange={(e) => setRow(index, { end: e.target.value })}
+                placeholder="HH:MM"
+                spellCheck={false}
+                {...rowField.attrs(`${index}.end`)}
+              />
+            )}
+          </LabelledControl>
           <FieldError {...rowField.errorProps(`${index}.end`)} />
 
           {(isUnreadableBound(row.start) || isUnreadableBound(row.end)) && (
