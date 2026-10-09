@@ -24,8 +24,9 @@ const boxes = {
   dock: (page: Page) => page.locator('.property-dock'),
   firstField: (page: Page) =>
     properties(page).locator('input:visible, textarea:visible, select:visible').first(),
-  belowRetries: (page: Page) =>
-    properties(page).getByRole('textbox', { name: 'Retry interval (seconds)' }),
+  // #1477 OR29 — Retry interval now packs beside Retries; Secure input is
+  // the first control on the row below.
+  belowRetries: (page: Page) => properties(page).getByRole('checkbox', { name: 'Secure input' }),
   save: (page: Page) => page.getByRole('button', { name: 'Save version' }),
 };
 

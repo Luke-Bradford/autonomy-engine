@@ -83,14 +83,17 @@ test.describe('U23 — container config editing', () => {
     });
 
     await configure(page, 'ForEach 1');
-    await expect(page.getByLabel(/^Items/)).toHaveValue('${createArray(1, 2)}');
+    await expect(page.getByRole('textbox', { name: /^Items/ })).toHaveValue('${createArray(1, 2)}');
     await expect(page.getByLabel(/^Batch count/)).toHaveCount(1);
     // Refused on a foreach by `validateDoc`, so never offered here.
     await expect(page.getByLabel(/^Exit when/)).toHaveCount(0);
     await expect(page.getByLabel(/^Max rounds/)).toHaveCount(0);
     await expect(page.getByLabel(/^Timeout \(seconds\)/)).toHaveCount(0);
 
-    await page.getByLabel(/^Items/).fill('${createArray(1, 2, 3)}');
+    await page.getByRole('textbox', { name: /^Items/ }).fill('${createArray(1, 2, 3)}');
+    // #1477 OR29 — Batch count is on the Concurrency tab; the Items draft
+    // survives the switch.
+    await properties(page).getByRole('tab', { name: 'Concurrency' }).click();
     await page.getByLabel(/^Batch count/).fill('2');
     await page.getByRole('button', { name: 'Apply container settings' }).click();
 
@@ -122,6 +125,7 @@ test.describe('U23 — container config editing', () => {
 
     await configure(page, 'Until 1');
     await page.getByLabel(/^Timeout \(seconds\)/).fill('45');
+    await properties(page).getByRole('tab', { name: 'Settings' }).click();
     await page.getByLabel(/^Join/).selectOption('any');
     await page.getByRole('button', { name: 'Apply container settings' }).click();
 
@@ -415,7 +419,9 @@ test.describe('#864 — the expression flyout on container fields', () => {
     await properties(page)
       .getByRole('button', { name: /→ rows/ })
       .click();
-    await expect(page.getByLabel(/^Items/)).toHaveValue('${nodes.n_src.output.rows}');
+    await expect(page.getByRole('textbox', { name: /^Items/ })).toHaveValue(
+      '${nodes.n_src.output.rows}',
+    );
     await page.getByRole('button', { name: 'Apply container settings' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();

@@ -154,3 +154,57 @@ test('a narrow dock, or comfortable density, keeps the label over its control', 
   expect(comfortable.label.bottom).toBeLessThanOrEqual(comfortable.control.top);
   await expectQuiet(page, problems);
 });
+
+test('the General tab packs its two numbers onto one row, and its two flags onto the next', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  await openLlm(page, 'or29 grid general');
+  await properties(page).getByRole('tab', { name: 'General' }).click();
+  const general = properties(page).getByRole('tabpanel', { name: 'General' });
+  const retries = await geometryOf(general.getByRole('textbox', { name: 'Retries' }));
+  const interval = await geometryOf(
+    general.getByRole('textbox', { name: 'Retry interval (seconds)' }),
+  );
+  const secureIn = await geometryOf(general.getByRole('checkbox', { name: 'Secure input' }));
+  const secureOut = await geometryOf(general.getByRole('checkbox', { name: 'Secure output' }));
+
+  expect(retries.tabWidth).toBeGreaterThanOrEqual(576);
+  expect(Math.abs(interval.control.top - retries.control.top)).toBeLessThanOrEqual(1);
+  expect(retries.cell.right).toBeLessThan(interval.cell.left);
+  expect(Math.abs(secureOut.control.top - secureIn.control.top)).toBeLessThanOrEqual(1);
+  expect(secureIn.cell.right).toBeLessThan(secureOut.cell.left);
+  expect(secureIn.control.top).toBeGreaterThan(retries.control.bottom);
+  expect(Math.round(retries.control.width)).toBe(120);
+  await expectQuiet(page, problems);
+});
+
+test('a ForEach container shows Items · Concurrency · Settings tabs, and packs Concurrency', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  await openSeededCanvas(page, 'or29 grid foreach', {
+    nodes: [{ id: 'n_a', type: 'llm_call', position: { x: 40, y: 40 }, config: { prompt: 'Hi' } }],
+    containers: [{ id: 'fe', kind: 'foreach', children: ['n_a'], items: '${createArray(1, 2)}' }],
+  });
+  await page.getByRole('button', { name: 'Configure ForEach 1' }).click();
+  const panel = properties(page);
+  // By accessible name: Fluent draws a tab's label twice (once hidden, for its width).
+  await expect(panel.getByRole('tab')).toHaveCount(3);
+  for (const [i, name] of ['Items', 'Concurrency', 'Settings'].entries())
+    await expect(panel.getByRole('tab').nth(i)).toHaveAccessibleName(name);
+  await expect(panel.getByRole('textbox', { name: /^Items/ })).toHaveValue('${createArray(1, 2)}');
+
+  await panel.getByRole('tab', { name: 'Concurrency' }).click();
+  const tab = panel.getByRole('tabpanel', { name: 'Concurrency' });
+  const batch = await geometryOf(tab.getByRole('textbox', { name: /^Batch count/ }));
+  const unordered = await geometryOf(
+    tab.getByRole('checkbox', { name: 'Allow unordered variable writes' }),
+  );
+  expect(batch.tabWidth).toBeGreaterThanOrEqual(576);
+  expect(batch.label.right).toBeLessThanOrEqual(batch.control.left);
+  expect(batch.cell.right).toBeLessThan(unordered.cell.left);
+  expect(Math.abs(unordered.cell.top - batch.cell.top)).toBeLessThanOrEqual(1);
+  await expect(panel.getByRole('textbox', { name: /^Items/ })).toBeHidden();
+  await expectQuiet(page, problems);
+});

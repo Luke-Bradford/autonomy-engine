@@ -570,3 +570,100 @@ describe('ContainerPanel — a foreach says whether it runs in parallel', () => 
     expect(screen.queryByText(/^(Sequential|Parallel):/)).toBeNull();
   });
 });
+
+describe('ContainerPanel — properties on tabs (#1477 OR29)', () => {
+  const FOREACH: Container = {
+    id: 'fe_1',
+    kind: 'foreach',
+    children: ['n_a'],
+    items: '${createArray(1)}',
+  };
+  // By key: Fluent draws a tab's label twice (once hidden, to reserve its width).
+  const tabKeys = () => screen.getAllByRole('tab').map((t) => t.id.split('-tab-')[1]);
+
+  it('splits a ForEach into Items · Concurrency · Settings', () => {
+    mount(FOREACH);
+    expect(tabKeys()).toEqual(['items', 'concurrency', 'settings']);
+  });
+
+  it('splits an Until into Condition · Settings', () => {
+    mount(LOOP);
+    expect(tabKeys()).toEqual(['condition', 'settings']);
+  });
+
+  it('shows Batch count only once Concurrency is chosen, and Items no longer', async () => {
+    const user = userEvent.setup();
+    mount(FOREACH);
+    expect(screen.queryByRole('textbox', { name: /^Batch count/ })).toBeNull();
+    await user.click(screen.getByRole('tab', { name: 'Concurrency' }));
+    expect(screen.getByRole('textbox', { name: /^Batch count/ })).toBeDefined();
+    expect(screen.queryByRole('textbox', { name: 'Items' })).toBeNull();
+  });
+
+  it('keeps a draft across a tab switch, marks its tab, and Apply commits it', async () => {
+    const user = userEvent.setup();
+    const onApply = mount(FOREACH);
+    await user.click(screen.getByRole('tab', { name: 'Concurrency' }));
+    await user.type(screen.getByRole('textbox', { name: /^Batch count/ }), '4');
+    await user.click(screen.getByRole('tab', { name: 'Items' }));
+    expect(screen.getByRole('tab', { name: 'Concurrency' })).toHaveAccessibleDescription(
+      'Unapplied changes',
+    );
+    expect(screen.getByRole('tab', { name: 'Items' })).not.toHaveAccessibleDescription(
+      'Unapplied changes',
+    );
+    apply();
+    expect(applied(onApply).batchCount).toBe(4);
+  });
+
+  it('names the tab a refused field is on, when it is not the open one', async () => {
+    const user = userEvent.setup();
+    mount(FOREACH);
+    await user.click(screen.getByRole('tab', { name: 'Concurrency' }));
+    await user.type(screen.getByRole('textbox', { name: /^Batch count/ }), 'abc');
+    await user.click(screen.getByRole('tab', { name: 'Items' }));
+    apply();
+    expect(screen.getByRole('alert').textContent).toMatch(/^On Concurrency: batchCount: /);
+    // Out of the schema's bounds rather than unparseable: the same lead.
+    await user.click(screen.getByRole('tab', { name: 'Concurrency' }));
+    await user.clear(screen.getByRole('textbox', { name: /^Batch count/ }));
+    await user.type(screen.getByRole('textbox', { name: /^Batch count/ }), '99');
+    apply();
+    expect(screen.getByRole('alert').textContent).toMatch(/^batchCount: /);
+    await user.click(screen.getByRole('tab', { name: 'Items' }));
+    apply();
+    expect(screen.getByRole('alert').textContent).toMatch(/^On Concurrency: batchCount: /);
+  });
+
+  it('leaves no unapplied mark after an Apply that normalises the value it stores', async () => {
+    const user = userEvent.setup();
+    const onApply = mount({ ...FOREACH, batchCount: 4 });
+    await user.click(screen.getByRole('tab', { name: 'Concurrency' }));
+    const batch = screen.getByRole('textbox', { name: /^Batch count/ });
+    await user.clear(batch);
+    await user.type(batch, '04');
+    expect(screen.getByRole('tab', { name: 'Concurrency' })).toHaveAccessibleDescription(
+      'Unapplied changes',
+    );
+    apply();
+    expect(applied(onApply).batchCount).toBe(4);
+    expect(screen.getByRole('tab', { name: 'Concurrency' })).not.toHaveAccessibleDescription(
+      'Unapplied changes',
+    );
+  });
+
+  it('no longer says membership is edited on the activity (#1597 moved it to the canvas)', () => {
+    mount(FOREACH);
+    expect(screen.getByText(/^1 activity inside\.$/)).toBeDefined();
+    expect(screen.queryByText(/edited on the activity itself/)).toBeNull();
+  });
+
+  it('shows a field that is dead on this kind whichever tab is open', async () => {
+    const user = userEvent.setup();
+    mount({ ...FOREACH, maxRounds: 3 });
+    for (const name of ['Items', 'Concurrency', 'Settings']) {
+      await user.click(screen.getByRole('tab', { name }));
+      expect(screen.getByRole('textbox', { name: /^Max rounds/ })).toBeDefined();
+    }
+  });
+});

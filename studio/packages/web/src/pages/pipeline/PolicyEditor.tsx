@@ -5,6 +5,7 @@ import {
   MAX_RETRY_INTERVAL_SECONDS,
   type NodePolicy,
 } from '@autonomy-studio/shared';
+import { FieldCell, FieldGrid } from '../../lib/form/FieldGrid';
 import { FormSection } from '../../lib/form/FormSection';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import { parseWholeNumber } from '../triggers/formFields';
@@ -31,6 +32,10 @@ import { readableIssue } from './containerRules';
  * Self-contained over the store (nodes/edges/containers/params), so it mounts
  * unchanged in both of `NodePanel`'s branches, the call panel included: a secure
  * flag on a call is refused, and that refusal is explained here like any other.
+ *
+ * #1477 OR29 — two `FieldGrid`s, the numbers and then the flags, so the compact
+ * dock packs each pair onto one row; one grid of four would leave the fourth
+ * alone on a row once the tab is wide enough for three.
  */
 export function PolicyEditor({
   store,
@@ -72,47 +77,59 @@ export function PolicyEditor({
 
   return (
     <FormSection title="Run policy" hint={FORM_SECTION_HINTS.node.runPolicy}>
-      <DraftNumberField
-        label="Retries"
-        stored={policy?.retry}
-        parse={parseWholeNumber}
-        placeholder="no retry"
-        hint="Times a transient failure is retried after the first attempt. 0 never retries; blank leaves it unset."
-        onCommit={(retry) => set({ retry })}
-      />
-      <DraftNumberField
-        label="Retry interval (seconds)"
-        stored={policy?.retryIntervalSeconds}
-        parse={parseWholeNumber}
-        placeholder={String(DEFAULT_RETRY_INTERVAL_SECONDS)}
-        hint={
-          `Wait between attempts, ${DEFAULT_RETRY_INTERVAL_SECONDS}–${MAX_RETRY_INTERVAL_SECONDS}. ` +
-          `Blank waits ${DEFAULT_RETRY_INTERVAL_SECONDS}s. A provider's Retry-After, when it ` +
-          `sends one, is used instead (never less than ${DEFAULT_RETRY_INTERVAL_SECONDS}s).`
-        }
-        onCommit={(retryIntervalSeconds) => set({ retryIntervalSeconds })}
-      />
-      <label>
-        <input
-          type="checkbox"
-          checked={policy?.secureInput === true}
-          onChange={(e) => set({ secureInput: e.target.checked || undefined })}
-        />
-        Secure input
-      </label>
-      <p className="page-hint">Keep this node&rsquo;s resolved input out of the run log.</p>
-      <label>
-        <input
-          type="checkbox"
-          checked={policy?.secureOutput === true}
-          onChange={(e) => set({ secureOutput: e.target.checked || undefined })}
-        />
-        Secure output
-      </label>
-      <p className="page-hint">
-        Redact this node&rsquo;s outputs before they reach the run log. Nothing downstream can
-        reference them.
-      </p>
+      <FieldGrid className="field-stack">
+        <FieldCell span="short">
+          <DraftNumberField
+            label="Retries"
+            stored={policy?.retry}
+            parse={parseWholeNumber}
+            placeholder="no retry"
+            hint="Times a transient failure is retried after the first attempt. 0 never retries; blank leaves it unset."
+            onCommit={(retry) => set({ retry })}
+          />
+        </FieldCell>
+        <FieldCell span="short">
+          <DraftNumberField
+            label="Retry interval (seconds)"
+            stored={policy?.retryIntervalSeconds}
+            parse={parseWholeNumber}
+            placeholder={String(DEFAULT_RETRY_INTERVAL_SECONDS)}
+            hint={
+              `Wait between attempts, ${DEFAULT_RETRY_INTERVAL_SECONDS}–${MAX_RETRY_INTERVAL_SECONDS}. ` +
+              `Blank waits ${DEFAULT_RETRY_INTERVAL_SECONDS}s. A provider's Retry-After, when it ` +
+              `sends one, is used instead (never less than ${DEFAULT_RETRY_INTERVAL_SECONDS}s).`
+            }
+            onCommit={(retryIntervalSeconds) => set({ retryIntervalSeconds })}
+          />
+        </FieldCell>
+      </FieldGrid>
+      <FieldGrid className="field-stack">
+        <FieldCell span="short">
+          <label className="contract-check">
+            <input
+              type="checkbox"
+              checked={policy?.secureInput === true}
+              onChange={(e) => set({ secureInput: e.target.checked || undefined })}
+            />
+            Secure input
+          </label>
+          <p className="page-hint">Keep this node&rsquo;s resolved input out of the run log.</p>
+        </FieldCell>
+        <FieldCell span="short">
+          <label className="contract-check">
+            <input
+              type="checkbox"
+              checked={policy?.secureOutput === true}
+              onChange={(e) => set({ secureOutput: e.target.checked || undefined })}
+            />
+            Secure output
+          </label>
+          <p className="page-hint">
+            Redact this node&rsquo;s outputs before they reach the run log. Nothing downstream can
+            reference them.
+          </p>
+        </FieldCell>
+      </FieldGrid>
       <p className="page-hint">
         Either flag also withholds this node&rsquo;s failure text and warnings, which could repeat a
         secret.
