@@ -94,3 +94,29 @@ test('every catalog activity shows its required fields without a scroll at 1280Ã
   expect(misses).toEqual([]);
   await expectQuiet(page, problems);
 });
+
+test("a field's explanation is behind the ? beside its label, and still describes the field", async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  await openSeededCanvas(page, 'or29 field help', {
+    nodes: [{ id: 'h', type: 'http_request', position: { x: 0, y: 0 }, config: { url: '/a' } }],
+  });
+  await nodeById(page, 'h').click();
+
+  const url = properties(page).getByRole('textbox', { name: 'Request URL', exact: true });
+  const about = /joined to the connection's base URL/;
+  // Described while the note is CLOSED: Chromium's own accessible description.
+  await expect(url).toHaveAccessibleDescription(about);
+  const note = properties(page).getByRole('note').filter({ hasText: about });
+  await expect(note).toBeHidden();
+  // The label's text and its required mark share one 28px row.
+  const label = properties(page).locator('label', { hasText: /^Request URL$/ });
+  expect((await label.boundingBox())!.height).toBeLessThanOrEqual(28);
+
+  await properties(page).getByRole('button', { name: 'About Request URL' }).click();
+  await expect(note).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(note).toBeHidden();
+  await expectQuiet(page, problems);
+});

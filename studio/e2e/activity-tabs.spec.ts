@@ -160,7 +160,7 @@ test('a tab label shows its problems, an unapplied edit, or that it is complete'
   await expectTabNames(tabs(page), ['General', 'Request', 'Auth']);
   const request = tabs(page).getByRole('tab', { name: 'Request' });
   const auth = tabs(page).getByRole('tab', { name: 'Auth' });
-  const url = properties(page).getByLabel('Request URL');
+  const url = properties(page).getByLabel('Request URL', { exact: true });
   const apply = properties(page).getByRole('button', { name: 'Apply config' });
   // The seed's URL is valid; Request also holds the (unbound, optional)
   // connection, so it is not marked complete either.

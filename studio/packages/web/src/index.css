@@ -3010,10 +3010,11 @@ button.danger {
 }
 
 /* #1477 OR29 — label-left from 400px: a 150px label, an 8px gap and a 242px
-   control. Measured: at 1280×720 the bottom dock's tab is 429px, and stacked
-   there a path field took 4 rows where label-left takes 1 — the tab could not
-   show Copy File's two paths at all. Packing short fields side by side still
-   waits for 576px (below). */
+   control. Measured: at 1280×720 the bottom dock's tab is 429px wide and its
+   fields 113px tall under the pinned header, and stacked there Copy File's
+   destination path sat 189px below the fold
+   (`e2e/activity-required-fit.spec.ts`). Packing short fields side by side
+   still waits for 576px (below). */
 @container dock-tab (min-width: 400px) {
   /* LABEL-LEFT: the label in a column of its own, the control, its hint and
      its error in the next. Only a field row of the tab's own sections — not
@@ -3096,7 +3097,6 @@ button.danger {
     + .field-error-slot {
     margin-left: calc(var(--dock-label-column) + var(--density-space-2));
   }
-
 }
 
 @container dock-tab (min-width: 576px) {
