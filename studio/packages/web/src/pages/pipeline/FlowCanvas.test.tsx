@@ -7,6 +7,7 @@ import { answerConfirm } from '../../testing/confirmDialog';
 import { fakeDataTransfer } from '../../testing/fakeDataTransfer';
 import { FlowCanvas } from './FlowCanvas';
 import { ACTIVITY_DND_MIME } from './activityDnd';
+import { NO_CONTAINER_TO_MOVE_INTO } from './CanvasContextMenu';
 import { createCanvasStore } from './canvasStore';
 import { subjectKey, type SubjectIssue } from './containerRules';
 import { SubjectIssuesContext } from './issueContext';
@@ -1500,7 +1501,14 @@ describe('FlowCanvas context menu (#1477 OR29)', () => {
     fireEvent.contextMenu(node('b'), { clientX: 320, clientY: 20 });
     expect(store.getState().selected).toEqual([{ kind: 'node', id: 'b' }]);
     await waitFor(() =>
-      expect(itemNames()).toEqual(['Copy⌘C', 'Cut⌘X', 'Duplicate⌘D', 'Paste⌘V', 'Delete⌫']),
+      expect(itemNames()).toEqual([
+        'Copy⌘C',
+        'Cut⌘X',
+        'Duplicate⌘D',
+        'Paste⌘V',
+        'Move into',
+        'Delete⌫',
+      ]),
     );
     fireEvent.click(within(document.body).getByRole('menuitem', { name: /Delete/ }));
     expect(calls).toEqual(['delete']);
@@ -1531,7 +1539,7 @@ describe('FlowCanvas context menu (#1477 OR29)', () => {
       reason: 'Saving — wait for it to finish.',
     });
     fireEvent.contextMenu(node('a'), { clientX: 20, clientY: 20 });
-    await waitFor(() => expect(within(document.body).getAllByRole('menuitem')).toHaveLength(5));
+    await waitFor(() => expect(within(document.body).getAllByRole('menuitem')).toHaveLength(6));
     for (const item of within(document.body).getAllByRole('menuitem')) {
       expect(item.getAttribute('aria-disabled'), item.textContent ?? '').toBe('true');
       expect(item.textContent).toContain('Saving — wait for it to finish.');
@@ -1546,10 +1554,111 @@ describe('FlowCanvas context menu (#1477 OR29)', () => {
     const { node } = withGraph({ onCommand: () => {} });
     node('a').focus();
     fireEvent.contextMenu(node('a'), { clientX: 20, clientY: 20 });
-    await waitFor(() => expect(within(document.body).getAllByRole('menuitem')).toHaveLength(5));
+    await waitFor(() => expect(within(document.body).getAllByRole('menuitem')).toHaveLength(6));
     fireEvent.keyDown(within(document.body).getAllByRole('menuitem')[0]!, { key: 'Escape' });
     await waitFor(() => expect(within(document.body).queryAllByRole('menuitem')).toEqual([]));
     await waitFor(() => expect(document.activeElement).toBe(node('a')));
+  });
+
+  /** Open the activity menu on `id`, then its Move into submenu. */
+  async function openMoveInto(node: (id: string) => HTMLElement, id: string) {
+    fireEvent.contextMenu(node(id), { clientX: 20, clientY: 20 });
+    const trigger = await waitFor(() =>
+      within(document.body).getByRole('menuitem', { name: /^Move into/ }),
+    );
+    fireEvent.click(trigger);
+    return waitFor(() => within(document.body).getByRole('menu', { name: 'Move into' }));
+  }
+
+  /** Accept the container-edit confirm, checking it names the act `label`. */
+  async function answer(label: string): Promise<string> {
+    const dialog = await within(document.body).findByRole('alertdialog');
+    expect(await within(dialog).findByRole('button', { name: label })).toBeTruthy();
+    return answerConfirm(userEvent.setup(), 'accept');
+  }
+
+  const childrenOf = (store: ReturnType<typeof createCanvasStore>) =>
+    store.getState().containers.map((c) => [c.id, [...c.children]]);
+
+  it('moves the selection into a container from Move into ▸, as one undoable edit (#1597)', async () => {
+    const { store, node } = withGraph({ onCommand: () => {} });
+    store.getState().setSelection([
+      { kind: 'node', id: 'a' },
+      { kind: 'node', id: 'b' },
+    ]);
+    const submenu = await openMoveInto(node, 'a');
+    expect(
+      within(submenu)
+        .getAllByRole('menuitem')
+        .map((i) => i.textContent),
+    ).toEqual(['Stage 1']);
+    fireEvent.click(within(submenu).getByRole('menuitem', { name: 'Stage 1' }));
+    // Joining changes inferred routing, so it is asked first (#840).
+    await answer('Move');
+    await waitFor(() => expect(childrenOf(store)).toEqual([['c_1', ['in_box', 'a', 'b']]]));
+    await waitFor(() => expect(within(document.body).queryAllByRole('menuitem')).toEqual([]));
+    // The item that asked is gone, so focus goes back to the activity rather
+    // than dropping to the page — a keyboard author carries on from there.
+    await waitFor(() => expect(document.activeElement).toBe(node('a')));
+    // ONE Undo takes the whole selection back out.
+    store.getState().undo();
+    expect(childrenOf(store)).toEqual([['c_1', ['in_box']]]);
+  });
+
+  it('names the container an activity can leave, and offers no box it is already in (#1597)', async () => {
+    const { store, node } = withGraph({ onCommand: () => {} });
+    fireEvent.contextMenu(node('in_box'), { clientX: 20, clientY: 320 });
+    const move = await waitFor(() =>
+      within(document.body).getByRole('menuitem', { name: /^Move into/ }),
+    );
+    // Its one container already holds it: nowhere to go, and it says so.
+    expect(move.getAttribute('aria-disabled')).toBe('true');
+    expect(move.textContent).toContain(NO_CONTAINER_TO_MOVE_INTO);
+    fireEvent.click(within(document.body).getByRole('menuitem', { name: 'Remove from Stage 1' }));
+    await answer('Take it out');
+    await waitFor(() => expect(childrenOf(store)).toEqual([['c_1', []]]));
+  });
+
+  it('moves a mixed selection together and takes out only what is in a box (#1597)', async () => {
+    const { store, node } = withGraph({ onCommand: () => {} });
+    store.getState().setSelection([
+      { kind: 'node', id: 'a' },
+      { kind: 'node', id: 'in_box' },
+    ]);
+    // Not all in one box, so the box that holds part of it is still offered.
+    const submenu = await openMoveInto(node, 'a');
+    expect(within(submenu).getByRole('menuitem', { name: 'Stage 1' })).toBeTruthy();
+    expect(
+      within(document.body).getByRole('menuitem', { name: 'Remove from Stage 1' }),
+    ).toBeTruthy();
+    fireEvent.click(within(submenu).getByRole('menuitem', { name: 'Stage 1' }));
+    await answer('Move');
+    await waitFor(() => expect(childrenOf(store)).toEqual([['c_1', ['in_box', 'a']]]));
+  });
+
+  it('greys Move into and Remove from while the canvas cannot be edited (#1597)', async () => {
+    const { store, node } = withGraph({ onCommand: () => {}, reason: 'Saving.' });
+    fireEvent.contextMenu(node('in_box'), { clientX: 20, clientY: 320 });
+    const remove = await waitFor(() =>
+      within(document.body).getByRole('menuitem', { name: /^Remove from Stage 1/ }),
+    );
+    expect(remove.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(remove);
+    expect(childrenOf(store)).toEqual([['c_1', ['in_box']]]);
+    fireEvent.keyDown(remove, { key: 'Escape' });
+    await waitFor(() => expect(within(document.body).queryAllByRole('menuitem')).toEqual([]));
+
+    // `a` HAS a box to go to, so its Move into is greyed by the save alone —
+    // and says so, rather than the "no other container" reason.
+    fireEvent.contextMenu(node('a'), { clientX: 20, clientY: 20 });
+    const move = await waitFor(() =>
+      within(document.body).getByRole('menuitem', { name: /^Move into/ }),
+    );
+    expect(move.getAttribute('aria-disabled')).toBe('true');
+    expect(move.textContent).toContain('Saving.');
+    expect(move.textContent).not.toContain(NO_CONTAINER_TO_MOVE_INTO);
+    fireEvent.click(move);
+    expect(within(document.body).queryByRole('menu', { name: 'Move into' })).toBeNull();
   });
 
   it('leaves the browser its own menu when the page gives the canvas no commands', () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import {
+  catalog,
   getActivity,
   isStructuralCallActivity,
   type Node,
@@ -1946,11 +1947,7 @@ describe('NodePanel — a single-line field takes a reference at its caret (#852
 });
 
 describe('NodePanel — what each tab holds (#1396, #1477)', () => {
-  const section = (name: string) => screen.getByRole('group', { name });
   const selectedTab = () => tabLabel(screen.getByRole('tab', { selected: true }));
-  // A hidden panel has no accessible name, so reach it through the tab that controls it.
-  const panelOf = (name: string) =>
-    document.getElementById(screen.getByRole('tab', { name }).getAttribute('aria-controls')!)!;
   const follows = (a: Element, b: Element) =>
     (a.compareDocumentPosition(b) & document.DOCUMENT_POSITION_FOLLOWING) ===
     document.DOCUMENT_POSITION_FOLLOWING;
@@ -1968,21 +1965,16 @@ describe('NodePanel — what each tab holds (#1396, #1477)', () => {
     updatedAt: 0,
   } as unknown as Parameters<typeof NodePanel>[0]['connections'][number];
 
-  it('puts bindings, then settings, then Container on the landing tab', () => {
+  it('puts bindings, then settings, on the landing tab', () => {
     mountOver({ ...httpNode({ url: 'https://example.test' }), connectionId: 'c_http' }, [httpConn]);
     expect(selectedTab()).toBe('Request');
     const request = within(screen.getByRole('tabpanel', { name: 'Request' }));
     const connection = request.getByRole('combobox', { name: 'Connection' });
     const overrides = request.getByRole('group', { name: 'Connection overrides' });
     const url = request.getByRole('textbox', { name: /Request URL/ });
-    const container = request.getByRole('group', { name: 'Container' });
-    expect(within(container).getByRole('combobox', { name: 'Container membership' })).toBeTruthy();
-    // Document order: what the step reads from, what it does, where it sits.
+    // Document order: what the step reads from, then what it does.
     expect(follows(connection, overrides)).toBe(true);
     expect(follows(overrides, url)).toBe(true);
-    expect(follows(url, container)).toBe(true);
-    // Container closes the LANDING tab only — Auth does not repeat it.
-    expect(within(panelOf('Auth')).queryByRole('group', { name: 'Container' })).toBeNull();
     // The acts on the whole node are in the header, above the strip and every panel.
     for (const name of ['Apply config', 'More node actions']) {
       const button = screen.getByRole('button', { name });
@@ -2002,13 +1994,6 @@ describe('NodePanel — what each tab holds (#1396, #1477)', () => {
       expect(source.getByRole('combobox', { name: label })).toBeTruthy();
     }
     expect(source.queryByRole('combobox', { name: 'Sink connection' })).toBeNull();
-    // Container closes the landing tab, after its bindings.
-    expect(
-      follows(
-        source.getByRole('combobox', { name: 'Source dataset' }),
-        source.getByRole('group', { name: 'Container' }),
-      ),
-    ).toBe(true);
 
     fireEvent.click(screen.getByRole('tab', { name: 'Sink' }));
     const sink = within(screen.getByRole('tabpanel', { name: 'Sink' }));
@@ -2016,7 +2001,6 @@ describe('NodePanel — what each tab holds (#1396, #1477)', () => {
       expect(sink.getByRole('combobox', { name: label })).toBeTruthy();
     }
     expect(sink.queryByRole('combobox', { name: 'Source connection' })).toBeNull();
-    expect(sink.queryByRole('group', { name: 'Container' })).toBeNull();
   });
 
   it('puts a dataset picker on the Source tab of an unpaired activity', () => {
@@ -2036,29 +2020,49 @@ describe('NodePanel — what each tab holds (#1396, #1477)', () => {
     expect(settings.queryByRole('combobox', { name: /connection|dataset/i })).toBeNull();
     expect(screen.queryByRole('group', { name: 'Bindings' })).toBeNull();
     expect(settings.getByRole('textbox', { name: /Wait time/ })).toBeTruthy();
-    expect(settings.getByRole('combobox', { name: 'Container membership' })).toBeTruthy();
   });
 
-  it('gives a call node’s panel a Container section', () => {
-    render(
-      <NodePanel
-        store={createCanvasStore()}
-        connections={[]}
-        datasets={[]}
-        nodeId="n_ep"
-        nodeType="execute_pipeline"
-        config={{}}
-        connectionId={undefined}
-        call={undefined}
-      />,
-    );
-    expect(tabNames()).toEqual(['General', 'Settings']);
-    // `CallPanel` heads its own parts, so it gets no section around it.
-    expect(screen.getByRole('heading', { name: 'Call target' })).toBeTruthy();
-    expect(screen.queryByRole('group', { name: 'Activity settings' })).toBeNull();
-    expect(
-      within(section('Container')).getByRole('combobox', { name: 'Container membership' }),
-    ).toBeTruthy();
+  /*
+   * #1597 — an activity's properties describe only that activity, as ADF's do.
+   * Which container it sits in is a canvas fact (drag into a box, or the
+   * canvas context menu's Move into ▸), so no tab of any catalog activity, nor
+   * the call node's, carries a Container group, a Kind choice or a Create.
+   */
+  it('gives no activity a Container section on any tab', () => {
+    const types = [...catalog.keys()];
+    expect(types.length).toBeGreaterThan(10);
+    for (const type of types) {
+      if (isStructuralCallActivity(type)) {
+        render(
+          <NodePanel
+            store={createCanvasStore()}
+            connections={[]}
+            datasets={[]}
+            nodeId="n_ep"
+            nodeType={type}
+            config={{}}
+            connectionId={undefined}
+            call={undefined}
+          />,
+        );
+      } else {
+        mountOver(node(`n_${type}`, type, {}));
+      }
+      // Every tab panel is mounted (hidden ones included), so one sweep reads all.
+      expect(screen.getAllByRole('tabpanel', { hidden: true }).length, type).toBeGreaterThan(0);
+      expect(screen.queryAllByRole('group', { name: /container/i, hidden: true }), type).toEqual(
+        [],
+      );
+      expect(
+        screen.queryAllByRole('combobox', { name: /container|^kind$/i, hidden: true }),
+        type,
+      ).toEqual([]);
+      expect(
+        screen.queryAllByRole('button', { name: /create container/i, hidden: true }),
+        type,
+      ).toEqual([]);
+      cleanup();
+    }
   });
 });
 

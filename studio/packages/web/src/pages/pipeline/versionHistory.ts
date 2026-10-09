@@ -301,7 +301,7 @@ export interface DocSnapshot {
  * the edits and re-points `loaded`) and `onRestore`.
  *
  * Every field is checked because each can move alone — `createContainer`
- * and `setNodeContainer` write only `containers`, the param/output actions
+ * and `setNodesContainer` write only `containers`, the param/output actions
  * write only `params`/`outputs`. Checking a subset would let those edits
  * through invisibly.
  */

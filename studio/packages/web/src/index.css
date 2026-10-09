@@ -1967,14 +1967,9 @@ button.danger {
   margin-top: 0;
 }
 
-/* U6d — the "New container" form. Its section is already the flex column the
-   membership `<select>` wants, so only this fieldset needs a rule: it is what
-   visually separates "which container is this activity in" from "make a new
-   one", two different acts reached through one control. */
 /* #1304 — a bound end's parameter overrides share the card idiom, so each
    end's overrides read as belonging to the picker above them. #1305 — so does
    the owner-side allowlist those overrides are drawn from. */
-.container-create,
 .param-overrides,
 .overridable-keys {
   display: flex;
@@ -1986,7 +1981,6 @@ button.danger {
   margin: 0;
 }
 
-.container-create legend,
 .overridable-keys legend {
   font-size: 0.8rem;
   color: var(--muted);

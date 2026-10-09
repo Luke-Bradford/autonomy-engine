@@ -116,8 +116,10 @@ test('every select is as wide as its longest option, not the row', async ({ page
   const problems = collectPageProblems(page);
   await openLlm(page, 'or29 grid selects');
   const selects = await selectWidths(page);
-  // The connection picker and Reasoning effort, at least.
-  expect(selects.length).toBeGreaterThanOrEqual(2);
+  // Reasoning effort, at least. (The connection picker is a Fluent combobox
+  // since OR29 slice 5c, so it is not a native select; this count was held at
+  // two by the Container membership select until #1597 removed it.)
+  expect(selects.map((s) => s.name)).toContainEqual(expect.stringMatching(/^Reasoning effort/));
   for (const select of selects) {
     expect(select.width, `${select.name}`).toBeLessThanOrEqual(Math.min(select.longest + 40, 320));
   }

@@ -58,15 +58,12 @@ test('a Copy node opens on Source; each tab starts on screen and Sink fits whole
   const source = properties(page).getByRole('tabpanel', { name: 'Source' });
   await expect(source.getByRole('combobox', { name: 'Source connection' })).toBeVisible();
   await expect(source.getByRole('combobox', { name: 'Source dataset' })).toBeVisible();
-  await expect(source.getByLabel('Container membership')).toBeVisible();
-  // The tab's required settings — its two pickers — are on screen without a
-  // scroll. Container membership closes the landing tab (U6d): with the
-  // label-left grid, what still runs below the fold is that section's prose
-  // hint and its New container form (the section hints and an Advanced tab are
-  // later OR29 slices).
-  expect(
-    await overflowOf(source.getByRole('combobox', { name: 'Source dataset' })),
-  ).toBeLessThanOrEqual(0);
+  // #1597 — the WHOLE Source tab fits without a scroll. It ran 73px over while
+  // every activity's landing tab closed on a Container section (membership,
+  // its prose hint and a New container form); that section is gone, because
+  // membership is a canvas fact (Move into ▸ on the canvas context menu).
+  await expect(source.getByRole('group', { name: 'Container' })).toHaveCount(0);
+  expect(await overflowOf(source)).toBeLessThanOrEqual(0);
 
   await tabs(page).getByRole('tab', { name: 'Sink' }).click();
   const sink = properties(page).getByRole('tabpanel', { name: 'Sink' });

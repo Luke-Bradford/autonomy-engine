@@ -115,9 +115,8 @@ test.describe('#852 — the bottom property dock', () => {
     await expect(properties(page).getByRole('button', { name: 'Apply config' })).toBeVisible();
     await expect(properties(page).getByRole('group', { name: 'Run policy' })).toHaveCount(0);
 
-    // Membership stays on the landing tab: it is also where a container is CREATED.
     await expect(
-      properties(page).getByRole('combobox', { name: 'Container membership' }),
+      properties(page).getByRole('textbox', { name: 'Request URL', exact: true }),
     ).toBeVisible();
 
     await properties(page).getByRole('tab', { name: 'General' }).click();

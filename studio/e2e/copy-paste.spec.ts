@@ -493,6 +493,8 @@ test.describe('copy/paste on the canvas (U21)', () => {
       'Cut⌘X',
       'Duplicate⌘D',
       'Paste⌘V',
+      // #1597 — greyed here: this canvas has no container to move into.
+      /^Move into/,
       'Delete⌫',
     ]);
     // A key pressed inside the menu is the menu's, not the canvas's: ⌫ here

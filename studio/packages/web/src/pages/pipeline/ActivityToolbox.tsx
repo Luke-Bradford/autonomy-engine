@@ -292,8 +292,8 @@ export function ActivityToolbox({ store, id }: { store: StoreApi<CanvasState>; i
       )}
       {/* #1420 — the containers, last: they hold activities, so an operator
           meets the activities first. A click or a drop adds an EMPTY box that
-          activities are then dragged into; wrapping an existing node stays in
-          its Settings → Container. */}
+          activities are then dragged into, or moved into with the canvas
+          context menu's Move into ▸ (#1597). */}
       {containerEntries.length > 0 &&
         group(
           CONTAINERS_KEY,
