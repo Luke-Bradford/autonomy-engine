@@ -88,7 +88,7 @@ export function ExpressionPicker({
   onSelect,
   functions: functionsProp,
   compact = false,
-  keepFocus: holdFocus = false,
+  keepFocus = false,
 }: {
   fieldName: string;
   /** How a suggestion is NAMED — web-side, because the node labels live here. */
@@ -127,7 +127,7 @@ export function ExpressionPicker({
   keepFocus?: boolean;
 }) {
   const [open, setOpen] = useState<Open | null>(null);
-  const keepFocus = holdFocus ? (e: MouseEvent) => e.preventDefault() : undefined;
+  const onToggleDown = keepFocus ? (e: MouseEvent) => e.preventDefault() : undefined;
   const toggleRef = useRef<HTMLButtonElement>(null);
   const fnToggleRef = useRef<HTMLButtonElement>(null);
   const listId = useId();
@@ -173,7 +173,7 @@ export function ExpressionPicker({
         // is an invalid attribute value, which axe reports.
         aria-controls={options !== null ? listId : undefined}
         aria-label={`Insert reference into ${fieldName}`}
-        onMouseDown={keepFocus}
+        onMouseDown={onToggleDown}
         title={compact ? 'Insert reference' : undefined}
         onClick={() => setOpen(options !== null ? null : { kind: 'refs', options: resolve() })}
       >
@@ -188,7 +188,7 @@ export function ExpressionPicker({
           aria-expanded={functionsOpen}
           aria-controls={functionsOpen ? fnListId : undefined}
           aria-label={`Functions for ${fieldName}`}
-          onMouseDown={keepFocus}
+          onMouseDown={onToggleDown}
           title={compact ? 'Functions' : undefined}
           onClick={() =>
             setOpen(

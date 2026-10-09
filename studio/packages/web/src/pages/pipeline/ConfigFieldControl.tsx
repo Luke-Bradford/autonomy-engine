@@ -750,7 +750,7 @@ export function ObjectListControl({
       ref={groupRef}
     >
       {/* A `div`: the `?` is a `<details>`, which a span may not hold. */}
-      <div className="object-list-label">
+      <div className="object-list-label help-row">
         <span id={labelId}>{label}</span>
         {required && <RequiredMark />}
         {help !== undefined && (

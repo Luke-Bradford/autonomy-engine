@@ -31,7 +31,7 @@ export function DockSection({
   const hintId = useId();
   return (
     <section className="contract-section" aria-labelledby={headingId} aria-describedby={hintId}>
-      <div className="dock-section__head">
+      <div className="dock-section__head help-row">
         <h4 id={headingId}>{heading}</h4>
         <HelpDisclosure label={`About ${heading}`} noteId={hintId} inline>
           {hint}

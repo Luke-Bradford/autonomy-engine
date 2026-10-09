@@ -197,6 +197,34 @@ describe('ConfigFieldControl — human labels and required fields (#1396)', () =
     expect(hint?.textContent).toBe('Number. How long one request may take. timeoutMs');
   });
 
+  // #1477 OR29 — labels, not prose: the hint is the `?`'s note beside the label,
+  // not a paragraph under the control, and it still describes the control.
+  it.each(['text', 'number', 'enum'] as const)(
+    "%s: a titled field's hint is behind a `?` beside its label",
+    (kind) => {
+      const field: ConfigField = {
+        name: 'target',
+        kind,
+        optional: false,
+        ...(kind === 'enum' ? { enumOptions: ['a'] } : {}),
+        label: { title: 'Target', description: 'Where it goes.' },
+      };
+      const { getByLabelText, container } = render(
+        <ConfigFieldControl field={field} value="" onChange={noop} />,
+      );
+      expect(container.querySelector('p.field-hint')).toBeNull();
+      const control = getByLabelText('Target', { exact: true });
+      const note = container.querySelector(
+        `#${CSS.escape(control.getAttribute('aria-describedby')!)}`,
+      );
+      expect(note?.textContent).toContain('Where it goes.');
+      expect(note?.closest('details.help-disclosure')?.parentElement?.className).toBe(
+        'labelled-control__head help-row',
+      );
+      expect(getByLabelText('About Target', { exact: true }).tagName).toBe('SUMMARY');
+    },
+  );
+
   it('an untitled field keeps its key as the label and has no hint', () => {
     const field: ConfigField = { name: 'path', kind: 'text', optional: true, singleLine: true };
     const { getByRole } = render(<ConfigFieldControl field={field} value="" onChange={noop} />);

@@ -16,35 +16,50 @@ test.use({ viewport: { width: 1280, height: 720 } });
 
 const tabs = (page: Page) => properties(page).getByRole('tablist', { name: 'Activity properties' });
 
-/** A control the form marks required: `aria-required`, or a native `required`. */
-const REQUIRED = '[aria-required="true"], input[required], textarea[required], select[required]';
-
 /**
- * One read per tab: each required control's label and how far its FIRST LINE
+ * One read per tab: each REQUIRED control's label and how far its first line
  * (28px, a compact control's height) runs past the panel's visible bottom, with
  * the panel scrolled to the top. A first line is what an author needs to see the
  * field and start typing: a textarea grows with its text, and a whole one need
  * not fit for the field to be found.
+ *
+ * Required is read three ways, so no way of drawing a required field escapes:
+ * `aria-required`/`required` on the control, a label carrying the required mark
+ * (its control by `for`), and a row list whose label carries the mark. A control
+ * with no box at all reports `null`: hidden is not "on screen".
  */
 function requiredOverflow(page: Page) {
   return properties(page)
     .getByRole('tabpanel')
-    .evaluate((panelEl, selector) => {
+    .evaluate((panelEl) => {
       const panel = panelEl.closest<HTMLElement>('.property-panel')!;
       panel.scrollTop = 0;
       const visibleBottom = panel.getBoundingClientRect().top + panel.clientHeight;
-      return [...panelEl.querySelectorAll<HTMLElement>(selector)].map((el) => ({
-        field:
-          el.getAttribute('aria-label') ??
-          (el.id ? document.querySelector(`label[for="${el.id}"]`)?.textContent : null) ??
-          el.tagName,
-        overflow: Math.round(
-          el.getBoundingClientRect().top +
-            Math.min(el.getBoundingClientRect().height, 28) -
-            visibleBottom,
-        ),
-      }));
-    }, REQUIRED);
+      const found = new Map<HTMLElement, string>();
+      const q = (sel: string) => [...panelEl.querySelectorAll<HTMLElement>(sel)];
+      for (const el of q(
+        '[aria-required="true"], input[required], textarea[required], select[required]',
+      )) {
+        found.set(el, el.getAttribute('aria-label') ?? el.id);
+      }
+      for (const label of q('label:has(.required-mark)')) {
+        const control = label.htmlFor ? document.getElementById(label.htmlFor) : null;
+        if (control !== null) found.set(control, label.textContent ?? '');
+      }
+      for (const head of q('.object-list-label:has(.required-mark)')) {
+        found.set(head.closest<HTMLElement>('[role="group"]')!, head.textContent ?? '');
+      }
+      return [...found].map(([el, field]) => {
+        const box = el.getBoundingClientRect();
+        return {
+          field: (field || el.tagName).trim(),
+          overflow:
+            box.height === 0
+              ? null
+              : Math.round(box.top + Math.min(box.height, 28) - visibleBottom),
+        };
+      });
+    });
 }
 
 test('every catalog activity shows its required fields without a scroll at 1280×720', async ({
@@ -74,6 +89,7 @@ test('every catalog activity shows its required fields without a scroll at 1280�
     await nodeById(page, id).click();
 
     const tabCount = await tabs(page).getByRole('tab').count();
+    expect(tabCount, `${name} has property tabs`).toBeGreaterThan(0);
     for (let i = 0; i < tabCount; i += 1) {
       const tab = tabs(page).getByRole('tab').nth(i);
       await tab.click();
@@ -82,7 +98,8 @@ test('every catalog activity shows its required fields without a scroll at 1280�
       const label = (await tab.getAttribute('aria-controls'))?.split('-panel-')[1] ?? String(i);
       for (const { field, overflow } of await requiredOverflow(page)) {
         measured += 1;
-        if (overflow > 0) misses.push(`${name} › ${label} › ${field}: ${overflow}px below`);
+        if (overflow === null) misses.push(`${name} › ${label} › ${field}: not drawn`);
+        else if (overflow > 0) misses.push(`${name} › ${label} › ${field}: ${overflow}px below`);
       }
     }
     await nodeMenuAction(page, 'Delete node');

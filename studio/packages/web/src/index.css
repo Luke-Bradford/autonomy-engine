@@ -1749,21 +1749,27 @@ button.danger {
    of a 228px dock. The name and the type id give way (ellipsis, the whole name
    on hover is the canvas card's) rather than the acts. Below 400px — the
    narrowest right-hand dock — it wraps as before, because there the acts alone
-   fill the row and the name would elide to nothing. */
+   fill the row and the name would elide to nothing; above it the name keeps
+   3rem whatever happens. */
 .panel-tabs-sticky {
   container: panel-head / inline-size;
 }
 
-@container panel-head (min-width: 400px) {
+@container panel-head (min-width: 420px) {
   .property-panel__header {
     flex-wrap: nowrap;
   }
 
   .property-panel__header > :is(h3, .property-panel__type) {
     min-width: 0;
+    flex: 0 1 auto;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .property-panel__header > h3 {
+    min-width: 3rem;
   }
 
   .property-panel__header > :not(h3, .property-panel__type) {
@@ -2992,9 +2998,10 @@ button.danger {
 /* The query is on the TAB's width, not the window's or the dock's: the dock
    docks bottom or right, is resizable, and shares its width with the Problems
    column. Measured (#1477): the bottom dock's tab is 429px at 1280 wide, 589px
-   at 1440 and 1069px at 1920; the right dock's is 302–463px, so it is
-   label-left from 400px and otherwise stacks. 576px is where two cells of a 150px label, an 8px gap and a 120px
-   number fit beside a 16px gutter: 2 × 278 + 16 = 572.
+   at 1440 and 1069px at 1920; the right dock's is 302–463px. Rows go
+   label-left from 400px (below); short fields pack side by side from 576px,
+   where two cells of a 150px label, an 8px gap and a 120px number fit beside
+   a 16px gutter: 2 × 278 + 16 = 572.
    Nothing inside a tab is fixed-position, so the containment this implies
    changes no containing block that matters. */
 /* The node's own panel only: the run drawer (`.node-detail-panel`) shares the
@@ -3074,6 +3081,17 @@ button.danger {
     > .labelled-control__head
     > label {
     line-height: 16px;
+  }
+
+  /* Its note opens under the label column but reads across the tab, not in
+     150px. */
+  :root[data-density='compact']
+    .property-dock
+    .property-panel
+    .labelled-control__head
+    > .help-disclosure--inline
+    > span {
+    width: min(36rem, 100cqi);
   }
 
   /* In a full-width row of a section, a checkbox, and a hint or error slot
@@ -5130,12 +5148,6 @@ button.danger {
   max-height: 8lh;
 }
 
-.row-table .expression-picker {
-  flex-direction: row;
-  flex-wrap: wrap;
-  gap: 2px;
-}
-
 /* #1477 OR29 — a config field's glyph toggles, on one row under its box. */
 .config-field > .expression-picker {
   flex-direction: row;
@@ -5145,6 +5157,13 @@ button.danger {
 
 .config-field > .expression-picker > .expression-picker-list {
   flex-basis: 100%;
+}
+
+/* A cell's own, after the field's: the same specificity, so this wins. */
+.row-table .expression-picker {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 2px;
 }
 
 .config-field > .expression-picker > .expression-picker-toggle {
@@ -5198,25 +5217,23 @@ button.danger {
   font-size: var(--density-label-font);
 }
 
-/* #1477 OR29 — a config field's label and its `?` (the field's explanation,
-   behind the `?` rather than a line under the control). The field is the
-   positioned row its note opens under, at the field's width. */
-.labelled-control__head {
+/* #1477 OR29 — ONE row for a name and the `?` beside it: a dock section's
+   heading (`DockSection`), a row list's label, and a config field's label
+   (`LabelledControl`'s `help`). Positioned, so an inline `?`'s note opens
+   under the row. */
+.help-row {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: var(--density-space-1, 0.25rem);
+  gap: 0.4rem;
   min-width: 0;
 }
 
-.config-field:has(> .labelled-control__head) {
-  position: relative;
-}
-
 /* The label's text and its required mark on ONE line. `.property-panel label`
-   is a column, for the labels that wrap their control; a config field's label
-   only names it, and as a column it put the mark on a second line — 24px a
-   required field, in a dock 228px tall at 1280×720. */
-.property-panel .config-field > label,
+   is a column, for the labels that WRAP their control (`PickableInput`); a
+   `LabelledControl`'s label only names it, and as a column it put the mark on a
+   second line — 24px a required field, in a dock 228px tall at 1280×720. */
+.property-panel .labelled-control.config-field > label,
 .property-panel .labelled-control__head > label {
   display: block;
 }
@@ -5224,11 +5241,6 @@ button.danger {
 .object-list-label {
   font-size: 0.8rem;
   color: var(--muted);
-  /* Positioned, so its `?` note opens at the label row's width (#1477). */
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
 }
 
 .expression-picker {
@@ -5567,13 +5579,6 @@ button.danger {
   right: auto;
   width: 100%;
   max-width: 36rem;
-}
-
-.dock-section__head {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
 }
 
 .dock-section__head > h4 {

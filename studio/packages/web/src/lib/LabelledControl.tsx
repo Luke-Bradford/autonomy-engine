@@ -49,7 +49,7 @@ export function LabelledControl({
       {help === undefined ? (
         <label htmlFor={id}>{label}</label>
       ) : (
-        <div className="labelled-control__head">
+        <div className="labelled-control__head help-row">
           <label htmlFor={id}>{label}</label>
           {help}
         </div>
