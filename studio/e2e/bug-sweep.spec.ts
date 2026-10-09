@@ -510,7 +510,7 @@ test('#1239 — the run page’s back link is a themed chip, not a bare UA link'
                anything inside the provider carries Fluent's. Reds if this ever
                regresses to a button. */
             fontFamily: getComputedStyle(el.parentElement ?? document.body).fontFamily,
-            fontSize: probe({ fontSize: '0.85rem' }).fontSize,
+            fontSize: getComputedStyle(el.parentElement ?? document.body).fontSize,
           },
         };
       } finally {
@@ -526,7 +526,9 @@ test('#1239 — the run page’s back link is a themed chip, not a bare UA link'
     expect(read.fontFamily, `${theme}: inherits its font, unlike a UA control`).toBe(
       read.expected.fontFamily,
     );
-    expect(read.fontSize, `${theme}: at the house control size`).toBe(read.expected.fontSize);
+    expect(read.fontSize, `${theme}: at the body size its sibling buttons inherit`).toBe(
+      read.expected.fontSize,
+    );
   }
 
   await expectQuiet(page, problems);

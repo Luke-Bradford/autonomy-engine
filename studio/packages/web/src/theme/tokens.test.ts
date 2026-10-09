@@ -117,7 +117,7 @@ describe('design tokens', () => {
  * Inline TSX `style={{}}` and Fluent `makeStyles` values are not stylesheets and
  * are not counted here.
  */
-const BASELINE = 555;
+const BASELINE = 550;
 
 describe('design-token literal ratchet', () => {
   const literals = Object.entries(sheets).flatMap(([file, css]) =>

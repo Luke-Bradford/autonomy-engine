@@ -180,6 +180,13 @@ describe('literalDeclarations', () => {
     'border-top-left-radius: 2px',
     'padding: var(--space-2, 12px)',
     'margin: calc(var(--space-1) * 1.5)',
+    'font-size: small',
+    'font-size: larger',
+    'grid-gap: 4px',
+    'grid-column-gap: 4px',
+    'scroll-padding-top: 7rem',
+    'scroll-margin: 2px',
+    'margin: calc(-1 * var(--space-1) - 2px)',
   ])('counts `%s`', (declaration) => {
     expect(found(declaration)).toEqual([declaration]);
   });
@@ -194,6 +201,9 @@ describe('literalDeclarations', () => {
     'font: var(--type-body)',
     'font-size: var(--type-caption-size)',
     'line-height: normal',
+    'font-size: inherit',
+    'margin-top: calc(-1 * var(--space-2))',
+    'margin-left: calc(var(--space-1) * -1)',
     'border-radius: var(--radius-control)',
     // Not a tokenised property, though it has numbers.
     'border: 1px solid var(--border)',

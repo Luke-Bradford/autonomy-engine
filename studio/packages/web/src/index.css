@@ -209,6 +209,9 @@ body {
   font-size: 0.7rem;
   font-weight: 700;
   letter-spacing: 0.06em;
+  /* An h1, so tokens.css gives it the title's 28px line; a 0.7rem wordmark
+     keeps its own. S4 stops it being a heading. */
+  line-height: normal;
   color: var(--muted);
   margin: 0;
   padding-bottom: 0.5rem;
@@ -641,8 +644,8 @@ body {
 /* #1397 — the pipeline editor header's icon buttons (Undo, Redo, the ⋯ menu),
    sized to sit level with the text buttons beside them. The ICON is sized, not
    the button's font: the Fluent icons are `1em`, and growing the button's
-   `font-size` would take it off the UA control size every other header button
-   keeps (#1245). A border-box square, so the hover fill matches a button's. */
+   `font-size` would take it off the body size every other header button
+   inherits (#1245, OR40 S1). A border-box square, so the hover fill matches a button's. */
 .editor-header__icon-button {
   width: 32px;
   height: 32px;
@@ -944,10 +947,8 @@ a {
 
    The box is the global `button` rule's, property for property, so the control
    is visually unchanged where it already sat next to header buttons. The
-   TYPOGRAPHY is not: nothing in this file resets button typography, so the
-   `<button>` was rendering in the UA's own button font while an anchor inherits
-   `:root`'s. Pinning `font: inherit` + `0.85rem` — the same pin
-   `.factory-resources__filter` and the flat icon buttons use — puts it on the
+   TYPOGRAPHY was not at first: the `<button>` rendered in the UA's own button
+   font while an anchor inherits the page's. `font: inherit` puts it on the
    app's font deliberately, rather than letting the family change fall out of
    the element swap unnoticed.
 
@@ -960,12 +961,11 @@ a {
    site at a time, is the point. The container-scoped anchor rules above
    are containers that exist to hold exactly those anchors; this one is not.
 
-   #1245 — the form-control FAMILY reset further down (on `input, select,
-   textarea`, and inside the `button` rule) now puts every button in the app's
-   font too, so the chip no longer differs in family from the header buttons
-   beside it. The size pin stays: without it an anchor would
-   take its container's size, and 0.85rem is what keeps the chip at the house
-   control size (13.6px against the UA button's ~13.33px).
+   #1245, then OR40 S1 — the form-control font reset further down (on `input,
+   select, textarea`, and inside the `button` rule) puts every button in the
+   app's font and the body size, so the chip and the header buttons beside it
+   inherit the same font. Its old 0.85rem pin (13.6px, against the UA button's
+   13.333px) went with S1, as it would now sit off-size beside 13px buttons.
 
    Note an anchor activates on Enter only, where a button also took Space. That
    is correct anchor semantics — this control navigates — and the UA focus ring
@@ -979,7 +979,6 @@ a {
   padding: 0.4rem 0.7rem;
   text-decoration: none;
   font: inherit;
-  font-size: 0.85rem;
 }
 
 .page-back:hover {
@@ -2871,7 +2870,7 @@ button.danger {
 .config-editor.field-stack {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2, 0.5rem);
+  gap: var(--space-2);
 }
 
 /* #1477 OR29 — CONTROLS SIZED BY TYPE, not stretched (compact dock, any
@@ -2954,7 +2953,7 @@ button.danger {
 .connection-picker__listbox {
   min-width: 240px;
   max-width: 480px;
-  font-size: var(--type-body-size, 14px);
+  font-size: var(--type-body-size);
 }
 /* Icon in its own column; the name and its lines share the second. */
 .connection-option {
@@ -2968,7 +2967,7 @@ button.danger {
 }
 .connection-option__line {
   color: var(--muted);
-  font-size: var(--type-caption-size, 12px);
+  font-size: var(--type-caption-size);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5135,7 +5134,7 @@ button.danger {
 .config-field > .expression-picker {
   flex-direction: row;
   flex-wrap: wrap;
-  gap: var(--space-1, 0.25rem);
+  gap: var(--space-1);
 }
 
 .config-field > .expression-picker > .expression-picker-list {
