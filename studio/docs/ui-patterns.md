@@ -423,7 +423,8 @@ One look per control type (#1594 OR40 S2a), from the tokens, in both densities. 
     compact, 20px comfortable; the Fluent icons are `1em`, so the button's font-size is the glyph).
     A call site sets only its rest colour or tone; never a size. The per-family sizes it replaced
     (the editor header's 32px, the dock's 24px, the resource pane's and row menus' 26px, the pane
-    toggle's padded 18px, the toolbox fold's bare glyph) are gone. Give an icon button an `aria-label` and a matching `title`.
+    toggle's padded 18px, the toolbox fold's bare glyph) are gone. Give an icon button an
+    `aria-label` and a matching `title`.
   - **Not icon buttons, so they keep their own box and glyph** (each overrides the square): the
     disclosure twisties (`.factory-resources__disclosure`, `.runs-grid__disclosure`), the
     toolbox's labelled group headings (`.activity-toolbox__disclosure`, `height: auto`), and the

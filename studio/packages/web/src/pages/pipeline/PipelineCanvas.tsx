@@ -2472,9 +2472,8 @@ export function PipelineCanvas({
                         {/* The fold. Its chevron points where the dock goes: down
                         (or right, docked right or expanded) to hide it, up to
                         show it — a folded dock is always a strip under the
-                        canvas. Folded
-                        with a selection, the name carries the count the note
-                        beside the title shows. */}
+                        canvas. Folded with a selection, the name carries the
+                        count the note beside the title shows. */}
                         <button
                           type="button"
                           className="icon-button"
