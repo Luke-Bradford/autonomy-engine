@@ -38,6 +38,7 @@ import { ApiError, messageOf } from '../api/client';
 import { countOf } from '../lib/countOf';
 import { useConfirm } from '../lib/confirm/useConfirm';
 import { When } from '../lib/When';
+import { PageHeader } from '../lib/PageHeader';
 
 /**
  * #3 G10 / U18 slices 1-2 — Manage → Git (#956, #962).
@@ -151,9 +152,7 @@ export function WorkspaceGitPage() {
 
   return (
     <section aria-labelledby="workspace-git-heading">
-      <div className="page-header">
-        <h2 id="workspace-git-heading">Git</h2>
-      </div>
+      <PageHeader title="Git" headingId="workspace-git-heading" />
 
       <p className="page-hint">
         Git is optional. Without a repo this workspace still works — saving a pipeline mints a

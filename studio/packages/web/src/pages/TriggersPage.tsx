@@ -29,6 +29,7 @@ import {
   type BindingOption,
   type PipelineOption,
 } from './triggers/triggerFormState';
+import { PageHeader } from '../lib/PageHeader';
 
 /**
  * The outcome of one "Fire now", kept per TRIGGER (#1247).
@@ -323,8 +324,7 @@ export function TriggersPage() {
 
   return (
     <section aria-labelledby="triggers-heading">
-      <div className="page-header">
-        <h2 id="triggers-heading">Triggers</h2>
+      <PageHeader title="Triggers" headingId="triggers-heading">
         <button
           ref={createRef}
           type="button"
@@ -332,7 +332,7 @@ export function TriggersPage() {
         >
           New trigger
         </button>
-      </div>
+      </PageHeader>
 
       <p className="page-hint">
         A trigger binds one pipeline version to a firing mode (manual, schedule, webhook…) and a

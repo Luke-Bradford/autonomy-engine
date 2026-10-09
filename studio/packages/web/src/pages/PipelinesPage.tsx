@@ -81,6 +81,7 @@ import { useConfirm } from '../lib/confirm/useConfirm';
 import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 import { pipelineDeletePlan, readPipelineDependents } from './pipelineDeleteConfirm';
+import { PageHeader } from '../lib/PageHeader';
 
 /** The folder picker's options: each folder in the list, then "no folder". */
 function folderOptionsOf(pipelines: readonly Pipeline[]): { value: string; label: string }[] {
@@ -771,43 +772,40 @@ export function PipelinesPage({
 
   return (
     <section aria-labelledby="pipelines-heading" className="pipelines-page">
-      <div className="page-header">
-        <h2 id="pipelines-heading">Pipelines</h2>
+      <PageHeader title="Pipelines" headingId="pipelines-heading">
         {/* #1569 slice 3 — the toolbar: each opens the drawer beside the list. */}
-        <div className="pipelines-page__toolbar">
-          <button
-            ref={newButtonRef}
-            type="button"
-            className="primary"
-            aria-disabled={drawerBusy}
-            onClick={(e) =>
-              openFromToolbar(e.currentTarget, {
-                kind: 'new',
-                name: '',
-                folder: '',
-                description: '',
-              })
-            }
-          >
-            + New pipeline
-          </button>
-          <button
-            type="button"
-            aria-disabled={drawerBusy}
-            onClick={(e) => openFromToolbar(e.currentTarget, { kind: 'import' })}
-          >
-            Import
-          </button>
-          <button
-            type="button"
-            aria-disabled={exportWaits !== null}
-            title={exportWaits ?? `Export the ${rows.length} shown as one importable file`}
-            onClick={onExportShown}
-          >
-            Export
-          </button>
-        </div>
-      </div>
+        <button
+          ref={newButtonRef}
+          type="button"
+          className="primary"
+          aria-disabled={drawerBusy}
+          onClick={(e) =>
+            openFromToolbar(e.currentTarget, {
+              kind: 'new',
+              name: '',
+              folder: '',
+              description: '',
+            })
+          }
+        >
+          + New pipeline
+        </button>
+        <button
+          type="button"
+          aria-disabled={drawerBusy}
+          onClick={(e) => openFromToolbar(e.currentTarget, { kind: 'import' })}
+        >
+          Import
+        </button>
+        <button
+          type="button"
+          aria-disabled={exportWaits !== null}
+          title={exportWaits ?? `Export the ${rows.length} shown as one importable file`}
+          onClick={onExportShown}
+        >
+          Export
+        </button>
+      </PageHeader>
 
       {/* #1396 — the list and the drawer side by side; the drawer is a column,
           not an overlay, so the row actions stay reachable while it is open. */}

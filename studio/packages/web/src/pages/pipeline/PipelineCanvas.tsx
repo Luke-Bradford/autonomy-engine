@@ -235,6 +235,7 @@ import { canvasVersion, editingState, gitState, liveState, partText } from './ed
 import { LabelledControl } from '../../lib/LabelledControl';
 import { useConfirm } from '../../lib/confirm/useConfirm';
 import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
+import { PageHeader } from '../../lib/PageHeader';
 
 /**
  * How long a canvas-gesture notice stays up — copy/paste/duplicate, and U9's
@@ -1780,21 +1781,24 @@ export function PipelineCanvas({
           <UnsavedChangesPrompt guard={leavePrompt} keepRef={leaveKeepRef} />
         </div>
       )}
-      <div className="page-header" ref={headerRef}>
-        {/* `title`: the toolbar row truncates a long name (#1475). */}
-        <h2 id="canvas-heading" title={pipelineName}>
-          {pipelineName}
-        </h2>
-        {/* #1476 OR28 — nothing until the load lands: an empty version list
+      <PageHeader
+        title={pipelineName}
+        headingId="canvas-heading"
+        // The toolbar row truncates a long name (#1475); the hover has it whole.
+        headingTitle={pipelineName}
+        ref={headerRef}
+        adornment={
+          <>
+            {/* #1476 OR28 — nothing until the load lands: an empty version list
             before then would read as "Not saved" on every open. */}
-        {ready && (
-          <EditorStateBadge
-            editing={editingBadge}
-            live={liveBadge}
-            git={gitFolded ? null : gitBadge}
-          />
-        )}
-        {/* #907 — an archived pipeline refuses every save, so say it BEFORE the
+            {ready && (
+              <EditorStateBadge
+                editing={editingBadge}
+                live={liveBadge}
+                git={gitFolded ? null : gitBadge}
+              />
+            )}
+            {/* #907 — an archived pipeline refuses every save, so say it BEFORE the
             work happens. Without this the first Save simply bounces with a 409,
             after however long the operator spent editing.
 
@@ -1803,7 +1807,7 @@ export function PipelineCanvas({
             them: this is a standing FACT about the pipeline that must be acted
             on, not a message about the last thing that happened — and it carries
             the act that resolves it. */}
-        {/* #1393 — every notice lives in ONE fixed-height strip, so none of them
+            {/* #1393 — every notice lives in ONE fixed-height strip, so none of them
             resizes the canvas by arriving or leaving. The standing ones keep their
             role, class and buttons unchanged; only where they are drawn moved.
             Order is priority, but at most one of them can hold at a time: an
@@ -1811,132 +1815,140 @@ export function PipelineCanvas({
             failed load has nothing to save.
             #1475 OR27 — the strip is a slot IN this toolbar row, between the
             title and the actions, so it costs the canvas no height of its own. */}
-        <EditorStatusStrip
-          standing={[
-            archived && {
-              key: 'archived',
-              node: (
-                <div className="notice-conflict" role="alert">
-                  {/* The trailing clause is the SHARED constant, not a second copy:
+            <EditorStatusStrip
+              standing={[
+                archived && {
+                  key: 'archived',
+                  node: (
+                    <div className="notice-conflict" role="alert">
+                      {/* The trailing clause is the SHARED constant, not a second copy:
                 the pipelines-list archive confirmation (#1058) states the same
                 contract, and two hand-written copies would drift. */}
-                  {/* `title`: the strip draws this on one line and truncates it. */}
-                  <p
-                    title={`This pipeline is archived, so saving is refused. Unarchive it to edit again — ${TRIGGERS_STAY_DISABLED_NOTE}.`}
-                  >
-                    This pipeline is archived, so saving is refused. Unarchive it to edit again —{' '}
-                    {TRIGGERS_STAY_DISABLED_NOTE}.
-                  </p>
-                  {unarchiveError !== null && (
-                    <p title={`Unarchive failed: ${unarchiveError}`}>
-                      Unarchive failed: {unarchiveError}
-                    </p>
-                  )}
-                  <div className="form-actions">
-                    <button type="button" onClick={() => void onUnarchive()} disabled={unarchiving}>
-                      {unarchiving ? 'Unarchiving…' : 'Unarchive pipeline'}
-                    </button>
-                  </div>
-                </div>
-              ),
-            },
-            /* #904 — a refused save. `role="alert"` because it is the ONE save
+                      {/* `title`: the strip draws this on one line and truncates it. */}
+                      <p
+                        title={`This pipeline is archived, so saving is refused. Unarchive it to edit again — ${TRIGGERS_STAY_DISABLED_NOTE}.`}
+                      >
+                        This pipeline is archived, so saving is refused. Unarchive it to edit again
+                        — {TRIGGERS_STAY_DISABLED_NOTE}.
+                      </p>
+                      {unarchiveError !== null && (
+                        <p title={`Unarchive failed: ${unarchiveError}`}>
+                          Unarchive failed: {unarchiveError}
+                        </p>
+                      )}
+                      <div className="form-actions">
+                        <button
+                          type="button"
+                          onClick={() => void onUnarchive()}
+                          disabled={unarchiving}
+                        >
+                          {unarchiving ? 'Unarchiving…' : 'Unarchive pipeline'}
+                        </button>
+                      </div>
+                    </div>
+                  ),
+                },
+                /* #904 — a refused save. `role="alert"` because it is the ONE save
                outcome that is not self-explanatory and that the operator must act
                on: unannounced, the Save button simply appears to have done nothing.
                Distinct from the `.notice` messages rather than folded into them,
                because this one carries the two acts that resolve it. */
-            conflict && {
-              key: 'conflict',
-              node: (
-                <div className="notice-conflict" role="alert">
-                  <p title={describeSaveConflict(conflict.version)}>
-                    {describeSaveConflict(conflict.version)}
-                  </p>
-                  <div className="form-actions">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        // Show them the version that landed, in the surface that
-                        // already exists for it (#903) — a prose pointer to a panel
-                        // they then have to find is not the same thing.
-                        setHistoryOpen(true);
-                        setPreviewing(conflict.version);
-                        // One side column at a time, as the ⋯ menu's item.
-                        if (!triggerFormDirty) setTriggersColumn(null);
-                        if (!connectionFormDirty) setConnectionColumn(null);
-                      }}
-                      // The same lock every other route into the preview carries: this
-                      // is a fourth one, and the reported bug was precisely a route
-                      // nobody had enumerated.
-                      disabled={previewLocked}
-                      // The NAMED reason, not a second hardcoded sentence: this button
-                      // is locked by `restoring` too, and a fixed "Saving…" would be
-                      // flatly wrong on that arm — reachable, and walked by the e2e.
-                      title={historyDisabledReason ?? undefined}
-                    >
-                      {`Preview v${String(conflict.version)}`}
-                    </button>
-                    <button
-                      type="button"
-                      // Re-declares the CAS basis as the head that refused us — an
-                      // informed assertion, not a bypass. If a THIRD save has landed in
-                      // the meantime, this is refused again and lands right back here
-                      // with the newer head, which is the correct behaviour and not a
-                      // loop to be short-circuited.
-                      onClick={() => void saveWith(conflict.id)}
-                      // EXACTLY the Save button's gate, from the same expression — not a
-                      // second one written to match. Two of its terms are load-bearing
-                      // here. `previewing`, because this writes the WORKING graph, which
-                      // is not what is on screen while a version is previewed, so the
-                      // one route this banner offers would otherwise mint a version of
-                      // something the operator cannot see. And `issues` (#1141), because
-                      // this button used to be the ONE save path that escaped the badge
-                      // gate: an author who hit the 409, then edited the doc into an
-                      // invalid state, found Save dead and this one alive, and clicking
-                      // it threw a raw ZodError out of `PipelineVersionWriteSchema.parse`
-                      // before the request was even made. Refusing here is not a new
-                      // refusal — the write was always going to be refused; it is the
-                      // refusal finally being stated where the author can read it.
-                      //
-                      // It cannot dead-end them, and that is worth saying because it is
-                      // the obvious objection. `conflict` is only ever set from the 409
-                      // branch, which does not touch the store, so reaching this banner
-                      // required a Save — which required `issues` to be empty. Every
-                      // issue on screen is therefore an edit made since, and Undo
-                      // (live: nothing is previewing or in flight) walks back out.
-                      disabled={saveReason !== null}
-                      title={saveReason ?? undefined}
-                    >
-                      {saveAnywayLabel(conflict.version)}
-                    </button>
-                  </div>
-                </div>
-              ),
-            },
-            loadError !== null && {
-              key: 'load',
-              node: <p className="error" role="alert">{`Could not load pipeline: ${loadError}`}</p>,
-            },
-          ].filter((n) => n !== false && n !== null)}
-          transient={[
-            // `role="status"` so a keyboard-driven copy/paste — which changes
-            // nothing an operator is looking at — is still announced.
-            { key: 'canvas', text: canvasMsg, role: 'status' },
-            { key: 'save', text: saveMsg },
-            // `status`, so a failed Export or Archive — chosen from a menu that
-            // has closed by the time it fails — is still announced.
-            { key: 'action', text: actionMsg, role: 'status' },
-            {
-              key: 'run',
-              text: runStarted?.text ?? null,
-              ...(runStarted !== null
-                ? { link: { to: runDetailPath(runStarted.runId), label: 'Open run' } }
-                : {}),
-            },
-          ]}
-        />
-        <div className="form-actions">
-          {/* U17 — undo/redo. Before the Save button because they act on the
+                conflict && {
+                  key: 'conflict',
+                  node: (
+                    <div className="notice-conflict" role="alert">
+                      <p title={describeSaveConflict(conflict.version)}>
+                        {describeSaveConflict(conflict.version)}
+                      </p>
+                      <div className="form-actions">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            // Show them the version that landed, in the surface that
+                            // already exists for it (#903) — a prose pointer to a panel
+                            // they then have to find is not the same thing.
+                            setHistoryOpen(true);
+                            setPreviewing(conflict.version);
+                            // One side column at a time, as the ⋯ menu's item.
+                            if (!triggerFormDirty) setTriggersColumn(null);
+                            if (!connectionFormDirty) setConnectionColumn(null);
+                          }}
+                          // The same lock every other route into the preview carries: this
+                          // is a fourth one, and the reported bug was precisely a route
+                          // nobody had enumerated.
+                          disabled={previewLocked}
+                          // The NAMED reason, not a second hardcoded sentence: this button
+                          // is locked by `restoring` too, and a fixed "Saving…" would be
+                          // flatly wrong on that arm — reachable, and walked by the e2e.
+                          title={historyDisabledReason ?? undefined}
+                        >
+                          {`Preview v${String(conflict.version)}`}
+                        </button>
+                        <button
+                          type="button"
+                          // Re-declares the CAS basis as the head that refused us — an
+                          // informed assertion, not a bypass. If a THIRD save has landed in
+                          // the meantime, this is refused again and lands right back here
+                          // with the newer head, which is the correct behaviour and not a
+                          // loop to be short-circuited.
+                          onClick={() => void saveWith(conflict.id)}
+                          // EXACTLY the Save button's gate, from the same expression — not a
+                          // second one written to match. Two of its terms are load-bearing
+                          // here. `previewing`, because this writes the WORKING graph, which
+                          // is not what is on screen while a version is previewed, so the
+                          // one route this banner offers would otherwise mint a version of
+                          // something the operator cannot see. And `issues` (#1141), because
+                          // this button used to be the ONE save path that escaped the badge
+                          // gate: an author who hit the 409, then edited the doc into an
+                          // invalid state, found Save dead and this one alive, and clicking
+                          // it threw a raw ZodError out of `PipelineVersionWriteSchema.parse`
+                          // before the request was even made. Refusing here is not a new
+                          // refusal — the write was always going to be refused; it is the
+                          // refusal finally being stated where the author can read it.
+                          //
+                          // It cannot dead-end them, and that is worth saying because it is
+                          // the obvious objection. `conflict` is only ever set from the 409
+                          // branch, which does not touch the store, so reaching this banner
+                          // required a Save — which required `issues` to be empty. Every
+                          // issue on screen is therefore an edit made since, and Undo
+                          // (live: nothing is previewing or in flight) walks back out.
+                          disabled={saveReason !== null}
+                          title={saveReason ?? undefined}
+                        >
+                          {saveAnywayLabel(conflict.version)}
+                        </button>
+                      </div>
+                    </div>
+                  ),
+                },
+                loadError !== null && {
+                  key: 'load',
+                  node: (
+                    <p className="error" role="alert">{`Could not load pipeline: ${loadError}`}</p>
+                  ),
+                },
+              ].filter((n) => n !== false && n !== null)}
+              transient={[
+                // `role="status"` so a keyboard-driven copy/paste — which changes
+                // nothing an operator is looking at — is still announced.
+                { key: 'canvas', text: canvasMsg, role: 'status' },
+                { key: 'save', text: saveMsg },
+                // `status`, so a failed Export or Archive — chosen from a menu that
+                // has closed by the time it fails — is still announced.
+                { key: 'action', text: actionMsg, role: 'status' },
+                {
+                  key: 'run',
+                  text: runStarted?.text ?? null,
+                  ...(runStarted !== null
+                    ? { link: { to: runDetailPath(runStarted.runId), label: 'Open run' } }
+                    : {}),
+                },
+              ]}
+            />
+          </>
+        }
+      >
+        {/* U17 — undo/redo. Before the Save button because they act on the
               working graph that Save is about to mint, and in that order.
               `onMouseDown={preventDefault}` keeps the click from moving focus
               off whatever the operator was editing: pressing Undo should not
@@ -1946,286 +1958,285 @@ export function PipelineCanvas({
               Fluent's `Tooltip`: these are DISABLED most of the time, a
               disabled button fires no pointer events, and so a Fluent tooltip
               would never show the one thing worth saying then — why. */}
-          <button
-            type="button"
-            className="icon-button editor-header__icon-button"
-            aria-label="Undo"
-            onClick={() => store.getState().undo()}
-            disabled={undoReason !== null}
-            title={undoReason ?? 'Undo the last edit (⌘Z)'}
-            onMouseDown={(e) => e.preventDefault()}
-          >
-            <ArrowUndoRegular aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="icon-button editor-header__icon-button"
-            aria-label="Redo"
-            onClick={() => store.getState().redo()}
-            disabled={redoReason !== null}
-            title={redoReason ?? 'Redo the last undone edit (⇧⌘Z)'}
-            onMouseDown={(e) => e.preventDefault()}
-          >
-            <ArrowRedoRegular aria-hidden="true" />
-          </button>
-          {/* #1397 — the header's ONE primary act: Save keeps the work. Run and
+        <button
+          type="button"
+          className="icon-button editor-header__icon-button"
+          aria-label="Undo"
+          onClick={() => store.getState().undo()}
+          disabled={undoReason !== null}
+          title={undoReason ?? 'Undo the last edit (⌘Z)'}
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          <ArrowUndoRegular aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className="icon-button editor-header__icon-button"
+          aria-label="Redo"
+          onClick={() => store.getState().redo()}
+          disabled={redoReason !== null}
+          title={redoReason ?? 'Redo the last undone edit (⇧⌘Z)'}
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          <ArrowRedoRegular aria-hidden="true" />
+        </button>
+        {/* #1397 — the header's ONE primary act: Save keeps the work. Run and
               Debug sit beside it as ordinary buttons, so the region never
               offers two equally loud choices. */}
-          <button
-            type="button"
-            className="primary"
-            onClick={() => void onSave()}
-            /* The named reason, not a hand-written copy of the terms: every
+        <button
+          type="button"
+          className="primary"
+          onClick={() => void onSave()}
+          /* The named reason, not a hand-written copy of the terms: every
                refusal this button carries — including "previewing", where Save
                would otherwise mint a version of a graph the operator cannot see
                — is stated once in `saveDisabledReason`. */
-            disabled={saveReason !== null}
-            title={saveReason ?? undefined}
-            /* Both, by id: a present `aria-describedby` REPLACES `title` as the
+          disabled={saveReason !== null}
+          title={saveReason ?? undefined}
+          /* Both, by id: a present `aria-describedby` REPLACES `title` as the
                description, so naming only the dirty note would silence the
                refusal reason on the case that has both — the usual one. */
-            aria-describedby={
-              [dirty ? unsavedId : null, saveReason !== null ? saveReasonId : null]
-                .filter((id) => id !== null)
-                .join(' ') || undefined
-            }
-          >
-            {saving ? 'Saving…' : 'Save version'}
-            {/* #1393 — the dirty state is this dot, not a paragraph under the
+          aria-describedby={
+            [dirty ? unsavedId : null, saveReason !== null ? saveReasonId : null]
+              .filter((id) => id !== null)
+              .join(' ') || undefined
+          }
+        >
+          {saving ? 'Saving…' : 'Save version'}
+          {/* #1393 — the dirty state is this dot, not a paragraph under the
                 canvas that shrank it on the first edit. Always rendered and
                 hidden by `visibility`, so the button does not widen when it
                 appears. Out of the accessible NAME ("Save version" stays
                 stable); the description carries it. */}
-            <span className="dirty-dot" aria-hidden="true" data-dirty={dirty}>
-              •
-            </span>
-          </button>
-          {dirty && (
-            <span id={unsavedId} className="visually-hidden">
-              Unsaved changes
-            </span>
-          )}
-          {saveReason !== null && (
-            <span id={saveReasonId} className="visually-hidden">
-              {saveReason}
-            </span>
-          )}
-          {/* #1476 OR28 — Validate: the save's own check, without saving.
+          <span className="dirty-dot" aria-hidden="true" data-dirty={dirty}>
+            •
+          </span>
+        </button>
+        {dirty && (
+          <span id={unsavedId} className="visually-hidden">
+            Unsaved changes
+          </span>
+        )}
+        {saveReason !== null && (
+          <span id={saveReasonId} className="visually-hidden">
+            {saveReason}
+          </span>
+        )}
+        {/* #1476 OR28 — Validate: the save's own check, without saving.
               In ⋯ instead while the row is too narrow (`validateFolded`). */}
-          {!validateFolded && (
-            <button
-              type="button"
-              disabled={validateReason !== null}
-              title={validateReason ?? VALIDATE_TITLE}
-              onClick={() => void onValidate()}
-            >
-              Validate
-            </button>
-          )}
-          {/* #1395 OR4 — the run forms. The anchor positions them over the
+        {!validateFolded && (
+          <button
+            type="button"
+            disabled={validateReason !== null}
+            title={validateReason ?? VALIDATE_TITLE}
+            onClick={() => void onValidate()}
+          >
+            Validate
+          </button>
+        )}
+        {/* #1395 OR4 — the run forms. The anchor positions them over the
               canvas, so opening one moves nothing (#1393). */}
-          <span className="run-now-anchor">
-            {/* #1395 slice 3 — Debug: run the working graph as it stands, saved
+        <span className="run-now-anchor">
+          {/* #1395 slice 3 — Debug: run the working graph as it stands, saved
                 or not, as a hidden debug version. */}
-            <button
-              type="button"
-              aria-expanded={debugOpen}
-              disabled={debugReason !== null}
-              title={debugReason ?? DEBUG_TITLE}
-              onClick={() => {
-                setRunStarted(null);
-                setRunFor(null);
-                setDebugOpen((o) => !o);
-              }}
-            >
-              Debug
-            </button>
-            {/* #1476 OR28 — Trigger ▾, ADF's: Trigger now is #1395's Run (the
+          <button
+            type="button"
+            aria-expanded={debugOpen}
+            disabled={debugReason !== null}
+            title={debugReason ?? DEBUG_TITLE}
+            onClick={() => {
+              setRunStarted(null);
+              setRunFor(null);
+              setDebugOpen((o) => !o);
+            }}
+          >
+            Debug
+          </button>
+          {/* #1476 OR28 — Trigger ▾, ADF's: Trigger now is #1395's Run (the
                 latest saved version, no trigger); View triggers lists this
                 pipeline's. Always pressable — an item that cannot run says why
                 on its own second line, as the ⋯ menu's do. Fluent's default
                 body portal, as the ⋯ menu (U0: never inside the viewport). */}
-            <Menu>
-              <MenuTrigger disableButtonEnhancement>
-                <button type="button" ref={triggerButtonRef}>
-                  Trigger <ChevronDownRegular aria-hidden="true" />
-                </button>
-              </MenuTrigger>
-              <MenuPopover>
-                <MenuList>
-                  <MenuItem
-                    disabled={runReason !== null}
-                    subText={
-                      runReason ?? (headVersion !== null ? runTitle(headVersion, dirty) : undefined)
-                    }
-                    onClick={() => {
-                      // Like every save opening with `setSaveMsg(null)`: the next
-                      // Run owns the notice, so it always describes the latest run.
-                      setRunStarted(null);
-                      setDebugOpen(false);
-                      setRunFor(head);
-                    }}
-                  >
-                    Trigger now
-                  </MenuItem>
-                  {/* #1476 slice 3 — create and edit this pipeline's triggers in
-                      a column beside the canvas, without leaving the editor. */}
-                  <MenuItem
-                    disabled={newReason !== null || newBinding === null}
-                    subText={
-                      newReason ??
-                      (newBinding !== null && headVersion !== null
-                        ? newTriggerTitle(newBinding, headVersion, gitConnected, dirty)
-                        : undefined)
-                    }
-                    onClick={() => openTriggersColumn(true)}
-                  >
-                    New trigger…
-                  </MenuItem>
-                  <MenuItem onClick={() => openTriggersColumn(false)}>Edit triggers…</MenuItem>
-                  <MenuItem onClick={() => void navigate(triggersPath(pipelineId))}>
-                    View triggers
-                  </MenuItem>
-                </MenuList>
-              </MenuPopover>
-            </Menu>
-            {runFor !== null && runReason === null && (
-              <RunNowPanel
-                key={runFor.id}
-                pipelineId={pipelineId}
-                version={runFor}
-                dirty={dirty}
-                onClose={() => setRunFor(null)}
-                onStarted={(runId) => {
-                  setRunFor(null);
-                  setRunStarted({ text: `Run started from v${String(runFor.version)}.`, runId });
-                  setEditorRun({ runId, version: runFor });
-                }}
-              />
-            )}
-            {debugOpen && debugReason === null && (
-              <DebugRunPanel
-                // Re-seeded when the draft's params change under an open form,
-                // so its rows never describe params the draft no longer has.
-                key={JSON.stringify(params)}
-                pipelineId={pipelineId}
-                params={params}
-                draft={() => draftBody(store.getState())}
-                onClose={() => setDebugOpen(false)}
-                onStarted={(result) => {
-                  setDebugOpen(false);
-                  setRunStarted({
-                    text: debugStartedText(result.retentionDays),
-                    runId: result.runId,
-                  });
-                  setEditorRun({ runId: result.runId, version: result.pipelineVersion });
-                }}
-              />
-            )}
-          </span>
-          {/* #1397 — everything the header does less often, in one ⋯ menu.
-              Fluent's default body portal, like the Factory Resources row
-              menu: the U0 spike forbids reparenting a surface into the React
-              Flow viewport. A disabled item says WHY on its own second line,
-              because a `title` is only ever seen by a mouse. */}
           <Menu>
             <MenuTrigger disableButtonEnhancement>
-              <button
-                id={moreActionsId}
-                type="button"
-                className="icon-button editor-header__icon-button"
-                // #1476 — a git state that needs attention, folded in here,
-                // must not vanish with its pill: the button takes its colour
-                // and says it in words.
-                data-tone={foldedGitAlert?.tone}
-                aria-label={moreActionsLabel}
-                title={moreActionsLabel}
-              >
-                <MoreHorizontalRegular aria-hidden="true" />
+              <button type="button" ref={triggerButtonRef}>
+                Trigger <ChevronDownRegular aria-hidden="true" />
               </button>
             </MenuTrigger>
             <MenuPopover>
               <MenuList>
-                {validateFolded && (
-                  <MenuItem
-                    onClick={() => void onValidate()}
-                    disabled={validateReason !== null}
-                    subText={validateReason ?? undefined}
-                  >
-                    Validate
-                  </MenuItem>
-                )}
-                {/* The git part, folded: its label is the item, its sentence
-                    the second line, and opening it goes where the repo is
-                    managed. */}
-                {gitFolded && gitBadge !== null && (
-                  <MenuItem
-                    data-part="git"
-                    data-tone={gitBadge.tone}
-                    onClick={() => void navigate('/manage/git')}
-                    subText={gitBadge.detail}
-                  >
-                    Git: {partText(gitBadge)}
-                  </MenuItem>
-                )}
-                {/* `partText` leaves the link out, so the folded PR is its own
-                    item; it opens the host's page in a new tab. */}
-                {gitFolded && foldedPrLink !== undefined && (
-                  <MenuItem
-                    onClick={() => window.open(foldedPrLink.href, '_blank', 'noopener,noreferrer')}
-                  >
-                    Open {foldedPrLink.label}
-                  </MenuItem>
-                )}
-                {/* U9 — Arrange moves the DOCUMENT, not the view, so it is not
-                    in React Flow's `<Controls>` (the camera). Undoable with the
-                    Undo button beside this menu. */}
                 <MenuItem
-                  onClick={onArrange}
-                  disabled={arrangeReason !== null}
-                  subText={arrangeReason ?? undefined}
-                >
-                  Arrange
-                </MenuItem>
-                <MenuItem
-                  // `previewLocked` — closing the list also drops the preview
-                  // (below), which would remount the editor mid-restore.
-                  disabled={!ready || previewLocked}
-                  subText={historyDisabledReason ?? undefined}
+                  disabled={runReason !== null}
+                  subText={
+                    runReason ?? (headVersion !== null ? runTitle(headVersion, dirty) : undefined)
+                  }
                   onClick={() => {
-                    if (historyOpen) closeHistory();
-                    else {
-                      setHistoryOpen(true);
-                      // One side column at a time — unless the Triggers column
-                      // holds an unsaved form, which is never closed under it.
-                      if (!triggerFormDirty) setTriggersColumn(null);
-                      if (!connectionFormDirty) setConnectionColumn(null);
-                    }
+                    // Like every save opening with `setSaveMsg(null)`: the next
+                    // Run owns the notice, so it always describes the latest run.
+                    setRunStarted(null);
+                    setDebugOpen(false);
+                    setRunFor(head);
                   }}
                 >
-                  {historyOpen ? 'Hide version history' : 'Show version history'}
+                  Trigger now
                 </MenuItem>
+                {/* #1476 slice 3 — create and edit this pipeline's triggers in
+                      a column beside the canvas, without leaving the editor. */}
                 <MenuItem
-                  onClick={() => void onExport()}
+                  disabled={newReason !== null || newBinding === null}
                   subText={
-                    dirty ? 'The last saved version — unsaved changes are not included.' : undefined
+                    newReason ??
+                    (newBinding !== null && headVersion !== null
+                      ? newTriggerTitle(newBinding, headVersion, gitConnected, dirty)
+                      : undefined)
                   }
+                  onClick={() => openTriggersColumn(true)}
                 >
-                  Export
+                  New trigger…
                 </MenuItem>
-                <MenuDivider />
-                <MenuItem
-                  onClick={() => void onArchive()}
-                  disabled={archiveReason !== null}
-                  subText={archiveReason ?? undefined}
-                >
-                  Archive
+                <MenuItem onClick={() => openTriggersColumn(false)}>Edit triggers…</MenuItem>
+                <MenuItem onClick={() => void navigate(triggersPath(pipelineId))}>
+                  View triggers
                 </MenuItem>
               </MenuList>
             </MenuPopover>
           </Menu>
-        </div>
-      </div>
+          {runFor !== null && runReason === null && (
+            <RunNowPanel
+              key={runFor.id}
+              pipelineId={pipelineId}
+              version={runFor}
+              dirty={dirty}
+              onClose={() => setRunFor(null)}
+              onStarted={(runId) => {
+                setRunFor(null);
+                setRunStarted({ text: `Run started from v${String(runFor.version)}.`, runId });
+                setEditorRun({ runId, version: runFor });
+              }}
+            />
+          )}
+          {debugOpen && debugReason === null && (
+            <DebugRunPanel
+              // Re-seeded when the draft's params change under an open form,
+              // so its rows never describe params the draft no longer has.
+              key={JSON.stringify(params)}
+              pipelineId={pipelineId}
+              params={params}
+              draft={() => draftBody(store.getState())}
+              onClose={() => setDebugOpen(false)}
+              onStarted={(result) => {
+                setDebugOpen(false);
+                setRunStarted({
+                  text: debugStartedText(result.retentionDays),
+                  runId: result.runId,
+                });
+                setEditorRun({ runId: result.runId, version: result.pipelineVersion });
+              }}
+            />
+          )}
+        </span>
+        {/* #1397 — everything the header does less often, in one ⋯ menu.
+              Fluent's default body portal, like the Factory Resources row
+              menu: the U0 spike forbids reparenting a surface into the React
+              Flow viewport. A disabled item says WHY on its own second line,
+              because a `title` is only ever seen by a mouse. */}
+        <Menu>
+          <MenuTrigger disableButtonEnhancement>
+            <button
+              id={moreActionsId}
+              type="button"
+              className="icon-button editor-header__icon-button"
+              // #1476 — a git state that needs attention, folded in here,
+              // must not vanish with its pill: the button takes its colour
+              // and says it in words.
+              data-tone={foldedGitAlert?.tone}
+              aria-label={moreActionsLabel}
+              title={moreActionsLabel}
+            >
+              <MoreHorizontalRegular aria-hidden="true" />
+            </button>
+          </MenuTrigger>
+          <MenuPopover>
+            <MenuList>
+              {validateFolded && (
+                <MenuItem
+                  onClick={() => void onValidate()}
+                  disabled={validateReason !== null}
+                  subText={validateReason ?? undefined}
+                >
+                  Validate
+                </MenuItem>
+              )}
+              {/* The git part, folded: its label is the item, its sentence
+                    the second line, and opening it goes where the repo is
+                    managed. */}
+              {gitFolded && gitBadge !== null && (
+                <MenuItem
+                  data-part="git"
+                  data-tone={gitBadge.tone}
+                  onClick={() => void navigate('/manage/git')}
+                  subText={gitBadge.detail}
+                >
+                  Git: {partText(gitBadge)}
+                </MenuItem>
+              )}
+              {/* `partText` leaves the link out, so the folded PR is its own
+                    item; it opens the host's page in a new tab. */}
+              {gitFolded && foldedPrLink !== undefined && (
+                <MenuItem
+                  onClick={() => window.open(foldedPrLink.href, '_blank', 'noopener,noreferrer')}
+                >
+                  Open {foldedPrLink.label}
+                </MenuItem>
+              )}
+              {/* U9 — Arrange moves the DOCUMENT, not the view, so it is not
+                    in React Flow's `<Controls>` (the camera). Undoable with the
+                    Undo button beside this menu. */}
+              <MenuItem
+                onClick={onArrange}
+                disabled={arrangeReason !== null}
+                subText={arrangeReason ?? undefined}
+              >
+                Arrange
+              </MenuItem>
+              <MenuItem
+                // `previewLocked` — closing the list also drops the preview
+                // (below), which would remount the editor mid-restore.
+                disabled={!ready || previewLocked}
+                subText={historyDisabledReason ?? undefined}
+                onClick={() => {
+                  if (historyOpen) closeHistory();
+                  else {
+                    setHistoryOpen(true);
+                    // One side column at a time — unless the Triggers column
+                    // holds an unsaved form, which is never closed under it.
+                    if (!triggerFormDirty) setTriggersColumn(null);
+                    if (!connectionFormDirty) setConnectionColumn(null);
+                  }
+                }}
+              >
+                {historyOpen ? 'Hide version history' : 'Show version history'}
+              </MenuItem>
+              <MenuItem
+                onClick={() => void onExport()}
+                subText={
+                  dirty ? 'The last saved version — unsaved changes are not included.' : undefined
+                }
+              >
+                Export
+              </MenuItem>
+              <MenuDivider />
+              <MenuItem
+                onClick={() => void onArchive()}
+                disabled={archiveReason !== null}
+                subText={archiveReason ?? undefined}
+              >
+                Archive
+              </MenuItem>
+            </MenuList>
+          </MenuPopover>
+        </Menu>
+      </PageHeader>
 
       {/* #1475 OR27 — the editor (or a preview) and the version-history column
           side by side. History used to be a band ABOVE the editor, so opening it

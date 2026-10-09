@@ -30,6 +30,7 @@ import {
   formForEdit,
   savePayloadSignature,
 } from './connections/connectionFormState';
+import { PageHeader } from '../lib/PageHeader';
 /**
  * Connections page: the first MVP-bar step ("Add a Connection"). Full CRUD
  * over `/api/connections`. Secrets are write-only end to end — the list never
@@ -278,8 +279,7 @@ export function ConnectionsPage() {
 
   return (
     <section aria-labelledby="connections-heading">
-      <div className="page-header">
-        <h2 id="connections-heading">Connections</h2>
+      <PageHeader title="Connections" headingId="connections-heading">
         <button
           ref={createRef}
           type="button"
@@ -293,7 +293,7 @@ export function ConnectionsPage() {
         >
           New connection
         </button>
-      </div>
+      </PageHeader>
 
       <p className="page-hint">
         A connection is a worker: an LLM API key, a local model, an agent CLI, or an HTTP endpoint.

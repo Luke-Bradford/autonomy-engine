@@ -1,0 +1,60 @@
+import type { ReactNode, Ref } from 'react';
+
+/**
+ * #1594 OR40 S3 — the ONE page header: the page's title on the left and its
+ * `Toolbar` on the right, on a single `--header-h` row. Every page renders its
+ * title through this, so the title's type, the row's height and the toolbar's
+ * spacing are decided once (`.page-header` in `index.css`).
+ *
+ * `adornment` sits right after the title, outside the heading so it never
+ * joins the heading's accessible name: the editor's state badge and notices,
+ * the run page's editor link. `children` are the toolbar's controls; a page
+ * with no actions passes none and gets no toolbar.
+ */
+export function PageHeader({
+  title,
+  headingId,
+  headingTitle,
+  adornment,
+  children,
+  ref,
+}: {
+  title: ReactNode;
+  /** For a page section's `aria-labelledby`. */
+  headingId?: string;
+  /** The heading's hover text: the full name where the title may ellipsize. */
+  headingTitle?: string;
+  adornment?: ReactNode;
+  children?: ReactNode;
+  ref?: Ref<HTMLDivElement>;
+}) {
+  return (
+    <div className="page-header" ref={ref}>
+      <h2 id={headingId} title={headingTitle}>
+        {title}
+      </h2>
+      {adornment}
+      {children !== undefined && children !== null && children !== false && (
+        <Toolbar>{children}</Toolbar>
+      )}
+    </div>
+  );
+}
+
+/**
+ * #1594 OR40 S3 — a row of controls: 8px apart, every one `--control-h` tall
+ * and centred on one line, packed to the right of its row. Separate groups
+ * with a `ToolbarDivider`.
+ *
+ * Deliberately not `role="toolbar"`: that role promises one tab stop with
+ * arrow-key movement between the controls, which this row does not implement.
+ * Each control keeps its own tab stop, as any group of buttons does.
+ */
+export function Toolbar({ children }: { children: ReactNode }) {
+  return <div className="toolbar">{children}</div>;
+}
+
+/** A 1px rule between two groups of toolbar controls. Decorative. */
+export function ToolbarDivider() {
+  return <span className="toolbar__divider" aria-hidden="true" />;
+}

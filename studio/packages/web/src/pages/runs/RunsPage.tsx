@@ -74,6 +74,7 @@ import {
   RUNS_LIVE_UPDATING_LABEL,
   useRunsLive,
 } from './useRunsLive';
+import { PageHeader, ToolbarDivider } from '../../lib/PageHeader';
 
 /**
  * U29 (#1015) — which rendering of the SAME filtered rows is on screen. A view,
@@ -569,8 +570,7 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
 
   return (
     <section aria-labelledby="runs-heading" className="runs-page">
-      <div className="page-header">
-        <h2 id="runs-heading">Runs</h2>
+      <PageHeader title="Runs" headingId="runs-heading">
         {/* #1484 — the search box sits on the title row, not in the filter
             bar: measured at 1440×900 beside the hub nav, the bar has ~1080px
             and its widest state (a range of days plus Clear) left the box
@@ -590,6 +590,7 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
             )}
           </LabelledControl>
         </div>
+        <ToolbarDivider />
         {/* #1484 — which columns the grid draws. The Timeline has no columns,
             so it has no picker either. */}
         {view === 'list' && (
@@ -625,6 +626,7 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
             Timeline
           </ToggleButton>
         </div>
+        <ToolbarDivider />
         {/* Drives BOTH panels: the paged run list re-reads its first page (and
             drops any accumulated tail — a refreshed head glued to a stale tail
             would skip whatever was appended in between), and the key bump
@@ -672,6 +674,7 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
                   ? RUNS_LIVE_FAILING_LABEL
                   : RUNS_LIVE_UPDATING_LABEL}
         </span>
+        <ToolbarDivider />
         {/* #1484 — how many runs a page reads. Keyset "load more" stays the
             paging model (#1083); this sizes each step of it. Per viewer, and on
             the title row so it never unmounts while the list reloads under it. */}
@@ -693,7 +696,7 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
             </select>
           )}
         </LabelledControl>
-      </div>
+      </PageHeader>
 
       {/* Worded apart because they are different news: a failed FIRST page
           means there are no runs on screen, while a failed older page means the
