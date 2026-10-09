@@ -164,7 +164,7 @@ test('#1594 OR40 S3c — a form narrower than 400px keeps the label over its con
   expect(width, 'the drawer body is under the 400px threshold').toBeLessThan(400);
   const [name] = await rows(drawer, ['Name']);
   expect(name!.label.bottom, 'Name: label over its control').toBeLessThanOrEqual(name!.control.top);
-  // The word and its required `*` on one line, not stacked.
-  expect(name!.label.bottom - name!.label.top, 'Name: one line').toBeLessThan(20);
+  // The word and its required `*` on one line (20px), not stacked (two lines).
+  expect(name!.label.bottom - name!.label.top, 'Name: one line').toBeLessThan(30);
   await expectQuiet(page, problems);
 });
