@@ -198,3 +198,44 @@ export function customProps(body: string): Map<string, string> {
   }
   return found;
 }
+
+/**
+ * #1594 OR40 S1 — the properties the design tokens own. Padding, margin and gap
+ * take `--space-*`; type takes `--type-*` and `--weight-*`; radius takes
+ * `--radius-*`. The name is anchored to a declaration start, so a custom
+ * property such as `--space-1: 4px` (a token's own definition) never matches,
+ * and `border(-x)*-radius` cannot catch `border: 1px solid`.
+ */
+const TOKENISED_DECLARATION =
+  /(?:^|[;{\s])(font|font-size|font-weight|line-height|padding(?:-[a-z]+)*|margin(?:-[a-z]+)*|gap|row-gap|column-gap|border(?:-[a-z]+)*-radius)\s*:\s*([^;{}]+)/g;
+
+/** A number, with its unit if any. The lookbehind skips digits inside a name. */
+const NUMBER = /(?<![\w-])-?(\d*\.?\d+)[a-z%]*/gi;
+
+/** Font-weight keywords are literals too: `bold` is 700, `normal` is 400. */
+const WEIGHT_KEYWORD = /(?<![\w-])(bold|bolder|lighter|normal)(?![\w-])/i;
+
+/**
+ * Every declaration of a {@link TOKENISED_DECLARATION} property whose value
+ * still holds a literal once its tokens are taken out, as `property: value`.
+ *
+ * Allowed: `0` (in any unit), `auto`, other keywords (`inherit`, a line
+ * height's `normal`), and `var(--token)`. A `var()` FALLBACK is still counted —
+ * `var(--x, 12px)` hardcodes 12px whenever the token is missing — and so is a
+ * calc multiplier, because `calc(var(--space-1) * 1.5)` is an off-scale value
+ * by another name.
+ */
+export function literalDeclarations(css: string): string[] {
+  const found: string[] = [];
+  for (const match of css.matchAll(TOKENISED_DECLARATION)) {
+    const [, property = '', raw = ''] = match;
+    const value = raw.trim();
+    const tokensOut = value.replace(/var\(\s*--[\w-]+\s*,?/g, '(');
+    const numbers = [...tokensOut.matchAll(NUMBER)].filter(([, n = '']) => Number(n) !== 0);
+    const weighted = property === 'font' || property === 'font-weight';
+    if (numbers.length > 0 || (weighted && WEIGHT_KEYWORD.test(tokensOut))) {
+      found.push(`${property}: ${value}`);
+    }
+  }
+  return found;
+}

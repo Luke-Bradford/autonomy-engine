@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { customProps, readCssSource, ruleBody } from './cssSource';
+import { customProps, literalDeclarations, readCssSource, ruleBody } from './cssSource';
 
 /**
  * #1243 — `ruleBody` used to find its rule with `css.indexOf(`${selector} {`)`,
@@ -153,5 +153,63 @@ td {
 
   it('feeds customProps a body it can read', () => {
     expect(customProps(ruleBody(':root { --a: 1px; }', ':root')).get('--a')).toBe('1px');
+  });
+});
+
+/**
+ * #1594 OR40 S1 — the literal detector behind the design-token ratchet
+ * (`theme/tokens.test.ts`). The ratchet only means something if this finds
+ * every literal it should and nothing it should not, so each arm is pinned.
+ */
+describe('literalDeclarations', () => {
+  const found = (body: string) => literalDeclarations(`.x { ${body} }`);
+
+  it.each([
+    'padding: 4px',
+    'padding: var(--space-2) 12px',
+    'margin-top: -0.5rem',
+    'gap: 0.6rem',
+    'column-gap: 3px',
+    'font-size: 0.85rem',
+    'font-weight: 600',
+    'font-weight: bold',
+    'font-weight: normal',
+    'font: 600 12px/1 var(--font-sans)',
+    'line-height: 1.4',
+    'border-radius: 6px',
+    'border-top-left-radius: 2px',
+    'padding: var(--space-2, 12px)',
+    'margin: calc(var(--space-1) * 1.5)',
+  ])('counts `%s`', (declaration) => {
+    expect(found(declaration)).toEqual([declaration]);
+  });
+
+  it.each([
+    'padding: 0',
+    'margin: 0 auto',
+    'padding: 0px',
+    'gap: var(--space-2)',
+    'padding: var(--space-1) var(--space-2)',
+    'font: inherit',
+    'font: var(--type-body)',
+    'font-size: var(--type-caption-size)',
+    'line-height: normal',
+    'border-radius: var(--radius-control)',
+    // Not a tokenised property, though it has numbers.
+    'border: 1px solid var(--border)',
+    'font-family: var(--font-mono)',
+    'width: 120px',
+    // A token's own definition.
+    '--space-1: 4px',
+    '--padding-x: 4px',
+  ])('allows `%s`', (declaration) => {
+    expect(found(declaration)).toEqual([]);
+  });
+
+  it('reads every declaration in a rule, not just the first', () => {
+    expect(literalDeclarations('.a { padding: 4px; color: red; margin: 2px; }')).toEqual([
+      'padding: 4px',
+      'margin: 2px',
+    ]);
   });
 });

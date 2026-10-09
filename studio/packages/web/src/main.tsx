@@ -1,6 +1,9 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
+// The design tokens come first: `index.css` reads them, and its class rules
+// must outrank the element-only base rules at the foot of tokens.css.
+import './theme/tokens.css';
 import './index.css';
 // The bridge remaps React Flow's `--xy-*` chrome vars onto Fluent tokens; it
 // must be keyed on the FluentProvider root class (see fluentTheme.ts).

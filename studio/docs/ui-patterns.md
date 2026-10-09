@@ -391,9 +391,10 @@ pipeline parameter's default. Their refusals still say where the mistake is (bel
 Compact is the default and comfortable is a per-viewer setting (Settings → Appearance → Density,
 `uiStore.density`, mirrored onto `<html data-density>`), per the UI standard and #1477 OR29.
 Compact means 13px field text, 12px labels and section headings (uppercase), 28px single-line
-controls, and 4/8px spacing. Those numbers are tokens on `:root[data-density='compact']`
-(`--density-control-height`, `--density-field-font`, `--density-label-font`, `--density-space-1`,
-`--density-space-2`). Read the tokens rather than repeating the numbers.
+controls, and 4/8px spacing. Those numbers are the design tokens in `theme/tokens.css` (#1594
+OR40 S1), which hold both densities' values: `--control-h`, `--row-h`, `--type-body-size`,
+`--type-caption-size` and `--space-1..6`, plus the `--type-*` font shorthands. Read the tokens
+rather than repeating the numbers; `theme/tokens.test.ts` ratchets the literal count down.
 
 The rules are scoped per surface. Today that is only the property dock's panel. A surface adopts
 compact by adding its selector to that block, and comfortable leaves every surface exactly as it
@@ -454,7 +455,7 @@ list (a Copy mapping, HTTP headers, LLM messages, an output schema) render throu
   as its control's name (`mapping row 2 sink`, `param 1 default`), so specs and screen readers still
   reach each control. A row-list column's header carries what the cell label said: its title, its
   format (`— number`, `— JSON`) and the required mark.
-- **A row is one line.** At compact density it is 32px (`--density-row-height`) of 28px controls. A
+- **A row is one line.** At compact density it is 32px (`--row-h`) of 28px controls. A
   text cell is a one-line textarea that grows with its text. The growing is CSS `field-sizing:
   content`, which only Chromium supports. Elsewhere the cell stays one line and scrolls.
 - **A row's errors and advisories go on a notes row under it** (`RowNotes`, spanning the table), only

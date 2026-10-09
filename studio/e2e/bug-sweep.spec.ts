@@ -627,8 +627,7 @@ test('#1242 — the canvas back control is an anchor, and a bare link takes the 
 });
 
 /**
- * #1245 — every native form control takes the app's font FAMILY, and ONLY the
- * family.
+ * #1245, then #1594 OR40 S1 — every native form control takes the app's font.
  *
  * The canvas header is where the mismatch was visible: `.page-back` (an anchor,
  * so it inherits) sat first in a row of `<button>`s that rendered in the UA's
@@ -636,19 +635,17 @@ test('#1242 — the canvas back control is an anchor, and a bare link takes the 
  * FluentProvider root — `body` is an ancestor of it and still carries the MVP
  * stack, so it would be the wrong reference.
  *
- * The SIZE half is the decision the fix made: family-only, so the buttons keep
- * the UA control size rather than growing to their container's (14px inside
- * the Fluent root). The reference is a bare `<button>` probe, sized by the
- * same engine's UA sheet, so no pixel literal is hard-coded. A `font: inherit`
- * shorthand in place of the family reset would pass the family half and fail
- * this one.
+ * The SIZE half changed with S1. #1245 reset the family only, so buttons kept
+ * the UA's 13.333px rather than growing to the Fluent root's 14px. S1 made
+ * inherited text the body token, so controls now take `font: inherit` and
+ * follow their container's size: the ramp's 13px at compact. The reference is
+ * a bare `<button>` probe in the row, so no pixel literal is hard-coded. The
+ * old family-only reset passes the family half and fails this one.
  *
  * jsdom resolves no cascade and inherits nothing, so no unit test can see
  * either half.
  */
-test('#1245 — form controls take the app font family, and keep the UA control size', async ({
-  page,
-}) => {
+test('#1245 / OR40 S1 — form controls take the app font, family and size', async ({ page }) => {
   const problems = collectPageProblems(page);
   await openCanvas(page, `#1245 control font ${Date.now()}`);
   /* `exact`: the suite shares one SQLite file, so an earlier spec's pipeline
@@ -695,11 +692,10 @@ test('#1245 — form controls take the app font family, and keep the UA control 
     );
   }
   expect(read.probeFamily, 'a bare button inherits the family').toBe(read.expectedFamily);
-  /* Family only: the size did not follow the container. */
-  expect(read.probeSize, 'a bare button keeps the UA control size, not the row size').not.toBe(
-    read.rowSize,
-  );
-  expect(read.saveSize, 'Save version keeps the UA control size').toBe(read.probeSize);
+  /* The size follows the container too: the body token, not the UA's. */
+  expect(read.probeSize, 'a bare button takes the row size').toBe(read.rowSize);
+  expect(read.probeSize, 'which is the compact body size').toBe('13px');
+  expect(read.saveSize, 'Save version takes the row size').toBe(read.rowSize);
 
   /* An input, in the list page's New pipeline drawer (#1569). */
   await page

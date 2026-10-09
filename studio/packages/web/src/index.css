@@ -46,12 +46,6 @@
      `var(--muted)` itself: this palette is one colour literal per variable, which
      is what makes palette.test.ts's non-vacuity check work. */
   --container-fill: rgba(154, 163, 178, 0.1);
-  font-family:
-    system-ui,
-    -apple-system,
-    'Segoe UI',
-    Roboto,
-    sans-serif;
   /* #967 — the token-flow chart's two series, and the repo's FIRST chart hues.
      A CATEGORICAL pair (input vs output are identities, not magnitudes), so they
      are two distinct hues rather than two steps of one ramp. Blue/amber and not
@@ -1016,24 +1010,19 @@ th {
   font-size: 0.85rem;
 }
 
-/* #1245 — form controls take the app's font FAMILY. A form control does not
-   inherit `font` from its ancestors, so without this every `<button>`, input,
-   select and textarea rendered in the UA's own control font (Arial-ish on
-   Chromium/macOS) while the text around it used `:root`'s stack — visible the
-   moment a `.page-back` chip, which does inherit, sat in a row of buttons.
+/* #1245, then #1594 OR40 S1 — form controls take the app's FONT. A form
+   control does not inherit `font` from its ancestors, so without this every
+   `<button>`, input, select and textarea rendered in the UA's own control font
+   (Arial-ish, 13.333px on Chromium/macOS) while the text around it used the
+   app's.
 
-   FAMILY only, deliberately not the `font: inherit` shorthand. The shorthand
-   would also inherit the SIZE — the Fluent root's 14px — and make every
-   control in the app visibly larger at once, reflowing dense rows (table row
-   buttons, the canvas toolbar, the node panel forms) that were laid out against
-   the UA's ~13.33px. With the size untouched, the metric-dependent rules —
-   `.icon-button`'s fixed box, `td button + button`'s spacing — see the same
-   size they were written for; only the glyph shapes change.
-
-   The rules that already opt in to `font: inherit` (the flat icon buttons,
-   `.factory-resources__filter`, `.page-back`) are unaffected: a class selector
-   outranks this element one. Fluent's own controls set their family from a
-   class too, so they keep Fluent's stack.
+   #1245 reset the FAMILY only, because the shorthand would also have taken the
+   Fluent root's 14px and grown every control at once. S1 made inherited text
+   the body token (13px compact, 14px comfortable), so the shorthand now gives
+   compact controls the ramp's 13px rather than the UA's 13.333px, and lets
+   comfortable density reach them at all. The line height stays the UA's
+   `normal`: the shorthand would otherwise bring the body's 20px line and make
+   every padded control taller. Control height is S2's (`--control-h`).
 
    `button` carries it in its own rule below rather than in this list, so the
    element keeps exactly ONE rule — `ruleBody` (`testing/cssSource.ts`) refuses a
@@ -1041,7 +1030,8 @@ th {
 input,
 select,
 textarea {
-  font-family: inherit;
+  font: inherit;
+  line-height: normal;
 }
 
 button {
@@ -1051,8 +1041,9 @@ button {
   border-radius: 6px;
   padding: 0.4rem 0.7rem;
   cursor: pointer;
-  /* #1245 — see the form-control rule directly above. */
-  font-family: inherit;
+  /* #1245 / OR40 S1 — see the form-control rule directly above. */
+  font: inherit;
+  line-height: normal;
 }
 
 button:hover:not(:disabled) {
@@ -1188,7 +1179,7 @@ td button + button {
 .dataset-form textarea,
 .trigger-form textarea,
 .external-wait-complete textarea {
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   resize: vertical;
 }
 
@@ -1422,9 +1413,9 @@ details.form-section > summary.form-section-title {
 :root[data-density='compact'] .kind-gallery input,
 :root[data-density='compact'] .kind-gallery__paste button {
   box-sizing: border-box;
-  height: var(--density-control-height);
-  padding: 0 var(--density-space-2);
-  font-size: var(--density-field-font);
+  height: var(--control-h);
+  padding: 0 var(--space-2);
+  font-size: var(--type-body-size);
 }
 
 /* Empty, the live region takes no height; it stays rendered so it announces. */
@@ -2087,7 +2078,7 @@ button.danger {
 }
 
 .property-panel textarea {
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   resize: vertical;
 }
 
@@ -2096,7 +2087,7 @@ button.danger {
    same face. Scoped by class: a blanket `.config-field input` would also
    restyle PickableInput. */
 .config-field input.config-field-line {
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: var(--font-mono);
 }
 
 /* #1396 — `JsonEditor`, the one control for typing JSON. Two classes so the
@@ -2119,7 +2110,7 @@ button.danger {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 0.45rem 0.55rem;
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 0.85rem;
   line-height: 1.45;
   tab-size: 2;
@@ -2746,35 +2737,27 @@ button.danger {
    rules, so it keeps the dock's spacing as it was. (The section hints behind a
    `?` and the prose removed from the pipeline panel apply in both densities.)
 
-   The tokens are on the root so later rules (sized controls, the label-left
-   grid) read one number rather than repeating it. */
-:root[data-density='compact'] {
-  --density-control-height: 28px;
-  --density-row-height: 32px;
-  --density-field-font: 13px;
-  --density-label-font: 12px;
-  --density-space-1: 4px;
-  --density-space-2: 8px;
-}
-
+   The numbers are the design tokens (`theme/tokens.css`, #1594 OR40 S1), which
+   hold both densities' values. These dock rules stay compact-scoped until S6
+   moves the dock onto the shared primitives. */
 :root[data-density='compact'] .property-dock {
-  gap: var(--density-space-1);
+  gap: var(--space-1);
 }
 
 :root[data-density='compact'] .property-dock .property-panel {
-  --property-panel-pad: var(--density-space-2);
+  --property-panel-pad: var(--space-2);
   padding: var(--property-panel-pad);
-  gap: var(--density-space-2);
-  font-size: var(--density-field-font);
+  gap: var(--space-2);
+  font-size: var(--type-body-size);
 }
 
 :root[data-density='compact'] .property-dock .property-panel .panel-tab:not([hidden]),
 :root[data-density='compact'] .property-dock .property-panel .form-section-body {
-  gap: var(--density-space-2);
+  gap: var(--space-2);
 }
 
 :root[data-density='compact'] .property-dock .property-panel .contract-section {
-  gap: var(--density-space-1);
+  gap: var(--space-1);
   margin-top: 0;
 }
 
@@ -2782,7 +2765,7 @@ button.danger {
    opens its tab or its form section starts at the top (the rule the
    comfortable dock already has for a form section's first field). */
 :root[data-density='compact'] .property-dock .property-panel .contract-section:not(:first-child) {
-  margin-top: var(--density-space-2);
+  margin-top: var(--space-2);
 }
 
 :root[data-density='compact'] .property-dock .property-panel .dock-section__head {
@@ -2795,7 +2778,7 @@ button.danger {
 :root[data-density='compact'] .property-dock .property-panel h3,
 :root[data-density='compact'] .property-dock .property-panel .contract-section h4,
 :root[data-density='compact'] .property-dock .property-panel .form-section-title {
-  font-size: var(--density-label-font);
+  font-size: var(--type-caption-size);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -2809,7 +2792,7 @@ button.danger {
 /* #1477 — the header's h3 is the node's NAME, not a section label: it keeps its
    own case and reads at field size. */
 :root[data-density='compact'] .property-dock .property-panel .property-panel__header h3 {
-  font-size: var(--density-field-font);
+  font-size: var(--type-body-size);
   letter-spacing: normal;
   text-transform: none;
 }
@@ -2817,7 +2800,7 @@ button.danger {
 /* The title is the fieldset's legend, so the body's `gap` does not reach the
    space under it: that is the title's own margin. */
 :root[data-density='compact'] .property-dock .property-panel .form-section-title {
-  margin-bottom: var(--density-space-1);
+  margin-bottom: var(--space-1);
 }
 
 :root[data-density='compact']
@@ -2825,12 +2808,12 @@ button.danger {
   .property-panel
   .form-section:not(:first-child)
   > .form-section-title {
-  padding-top: var(--density-space-2);
+  padding-top: var(--space-2);
 }
 
 :root[data-density='compact'] .property-dock .property-panel label,
 :root[data-density='compact'] .property-dock .property-panel .labelled-control:not(.config-field) {
-  font-size: var(--density-label-font);
+  font-size: var(--type-caption-size);
 }
 
 /* The gap only where a label is the column of a label over its control: the
@@ -2841,12 +2824,12 @@ button.danger {
   .property-panel
   label:not(.edge-outcome, .contract-check, .call-mode label),
 :root[data-density='compact'] .property-dock .property-panel .labelled-control:not(.config-field) {
-  gap: var(--density-space-1);
+  gap: var(--space-1);
 }
 
 :root[data-density='compact'] .property-dock .property-panel .field-hint,
 :root[data-density='compact'] .property-dock .property-panel .page-hint {
-  font-size: var(--density-label-font);
+  font-size: var(--type-caption-size);
 }
 
 /* One height for every single-line control. Checkboxes and radios keep their
@@ -2856,14 +2839,14 @@ button.danger {
   .property-panel
   input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file']),
 :root[data-density='compact'] .property-dock .property-panel select {
-  height: var(--density-control-height);
-  padding: 0 var(--density-space-2);
-  font-size: var(--density-field-font);
+  height: var(--control-h);
+  padding: 0 var(--space-2);
+  font-size: var(--type-body-size);
 }
 
 :root[data-density='compact'] .property-dock .property-panel textarea {
-  padding: var(--density-space-1) var(--density-space-2);
-  font-size: var(--density-field-font);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--type-body-size);
 }
 
 /* The panel's ordinary text buttons (Apply config, Add param, …): the ones with
@@ -2871,9 +2854,9 @@ button.danger {
    expression picker's two-line entries, a JSON editor's Format) is sized by its
    own rule. */
 :root[data-density='compact'] .property-dock .property-panel button:not([class]) {
-  min-height: var(--density-control-height);
-  padding: 0 var(--density-space-2);
-  font-size: var(--density-field-font);
+  min-height: var(--control-h);
+  padding: 0 var(--space-2);
+  font-size: var(--type-body-size);
 }
 
 /* #1477 OR29 — a config field's own box (`ConfigEditor`), for the dock's grid
@@ -2888,7 +2871,7 @@ button.danger {
 .config-editor.field-stack {
   display: flex;
   flex-direction: column;
-  gap: var(--density-space-2, 0.5rem);
+  gap: var(--space-2, 0.5rem);
 }
 
 /* #1477 OR29 — CONTROLS SIZED BY TYPE, not stretched (compact dock, any
@@ -2971,7 +2954,7 @@ button.danger {
 .connection-picker__listbox {
   min-width: 240px;
   max-width: 480px;
-  font-size: var(--density-field-font, 14px);
+  font-size: var(--type-body-size, 14px);
 }
 /* Icon in its own column; the name and its lines share the second. */
 .connection-option {
@@ -2985,7 +2968,7 @@ button.danger {
 }
 .connection-option__line {
   color: var(--muted);
-  font-size: var(--density-label-font, 12px);
+  font-size: var(--type-caption-size, 12px);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3033,8 +3016,8 @@ button.danger {
     > .labelled-control {
     display: grid;
     grid-template-columns: var(--dock-label-column) minmax(0, 1fr);
-    column-gap: var(--density-space-2);
-    row-gap: var(--density-space-1);
+    column-gap: var(--space-2);
+    row-gap: var(--space-1);
     align-items: start;
   }
 
@@ -3049,7 +3032,7 @@ button.danger {
     display: block;
     grid-column: 1;
     line-height: 16px;
-    padding-block: calc((var(--density-control-height) - 16px) / 2);
+    padding-block: calc((var(--control-h) - 16px) / 2);
   }
 
   :root[data-density='compact']
@@ -3070,7 +3053,7 @@ button.danger {
     > .labelled-control
     > .labelled-control__head {
     grid-column: 1;
-    min-height: var(--density-control-height);
+    min-height: var(--control-h);
   }
 
   :root[data-density='compact']
@@ -3113,7 +3096,7 @@ button.danger {
     > .labelled-control
     + .page-hint
     + .field-error-slot {
-    margin-left: calc(var(--dock-label-column) + var(--density-space-2));
+    margin-left: calc(var(--dock-label-column) + var(--space-2));
   }
 }
 
@@ -3138,8 +3121,8 @@ button.danger {
     max-width: none;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    column-gap: calc(2 * var(--density-space-2));
-    row-gap: var(--density-space-2);
+    column-gap: calc(2 * var(--space-2));
+    row-gap: var(--space-2);
     align-items: start;
   }
 
@@ -3150,7 +3133,7 @@ button.danger {
   :root[data-density='compact'] .property-dock .property-panel .config-editor > .config-cell {
     display: flex;
     flex-direction: column;
-    gap: var(--density-space-1);
+    gap: var(--space-1);
     min-width: 0;
   }
 
@@ -5152,7 +5135,7 @@ button.danger {
 .config-field > .expression-picker {
   flex-direction: row;
   flex-wrap: wrap;
-  gap: var(--density-space-1, 0.25rem);
+  gap: var(--space-1, 0.25rem);
 }
 
 .config-field > .expression-picker > .expression-picker-list {
@@ -5167,12 +5150,12 @@ button.danger {
 }
 
 .config-field > .expression-picker > .expression-picker-toggle {
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: var(--font-mono);
 }
 
 .row-table .expression-picker-toggle {
   align-self: stretch;
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: var(--font-mono);
 }
 
 /* An open list is wider than its cell; the table grows into its scroll. */
@@ -5197,24 +5180,24 @@ button.danger {
 /* Compact: a 28px control in a 32px row. */
 :root[data-density='compact'] .row-table td textarea {
   box-sizing: border-box;
-  min-height: var(--density-control-height);
+  min-height: var(--control-h);
   line-height: 16px;
-  padding-block: calc((var(--density-control-height) - 16px - 2px) / 2);
+  padding-block: calc((var(--control-h) - 16px - 2px) / 2);
 }
 
 :root[data-density='compact'] .row-table :is(th, td) {
-  padding: calc((var(--density-row-height) - var(--density-control-height) - 1px) / 2) 2px;
+  padding: calc((var(--row-h) - var(--control-h) - 1px) / 2) 2px;
 }
 
 :root[data-density='compact'] .row-table th {
-  font-size: var(--density-label-font);
+  font-size: var(--type-caption-size);
 }
 
 :root[data-density='compact']
   .row-table
   :is(.row-table__actions button, .expression-picker-toggle) {
-  height: var(--density-control-height);
-  font-size: var(--density-label-font);
+  height: var(--control-h);
+  font-size: var(--type-caption-size);
 }
 
 /* #1477 OR29 — ONE row for a name and the `?` beside it: a dock section's
