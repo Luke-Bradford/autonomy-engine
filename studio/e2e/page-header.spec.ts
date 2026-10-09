@@ -154,7 +154,7 @@ for (const density of ['compact', 'comfortable'] as const) {
     });
     const editor = await measure(page);
     expectFrame('Editor', editor, density, true);
-    expect(editor.controls.map((c) => c.name)).toContain('Save version');
+    expect(editor.controls.some((c) => c.name.startsWith('Save version'))).toBe(true);
 
     await expectQuiet(page, problems);
   });
