@@ -92,9 +92,18 @@ const toFields = () => screen.getByRole('button', { name: 'Edit as fields' });
  * before reaching it by role.
  */
 const openTab = (name: string) => fireEvent.click(screen.getByRole('tab', { name }));
-/** The strip's labels, in order. Fluent's Tab renders its label twice, so read the visible span. */
-const tabNames = () =>
-  screen.getAllByRole('tab').map((t) => t.querySelector('.fui-Tab__content')?.textContent);
+/**
+ * A tab's label. Fluent's Tab renders its label twice, so read the visible span,
+ * without the status mark (#1477) that follows the label in it.
+ */
+const tabLabel = (tab: Element) => {
+  const content = tab.querySelector('.fui-Tab__content')?.cloneNode(true);
+  if (!(content instanceof Element)) return undefined;
+  content.querySelectorAll('.panel-tabs__status').forEach((mark) => mark.remove());
+  return content.textContent;
+};
+/** The strip's labels, in order. */
+const tabNames = () => screen.getAllByRole('tab').map(tabLabel);
 /** The More node actions menu (#1477) — Fluent's, so the item arrives after the click. */
 const chooseNodeAction = async (name: 'Duplicate node' | 'Delete node') => {
   fireEvent.click(screen.getByRole('button', { name: 'More node actions' }));
@@ -1938,8 +1947,7 @@ describe('NodePanel — a single-line field takes a reference at its caret (#852
 
 describe('NodePanel — what each tab holds (#1396, #1477)', () => {
   const section = (name: string) => screen.getByRole('group', { name });
-  const selectedTab = () =>
-    screen.getByRole('tab', { selected: true }).querySelector('.fui-Tab__content')?.textContent;
+  const selectedTab = () => tabLabel(screen.getByRole('tab', { selected: true }));
   // A hidden panel has no accessible name, so reach it through the tab that controls it.
   const panelOf = (name: string) =>
     document.getElementById(screen.getByRole('tab', { name }).getAttribute('aria-controls')!)!;
@@ -2175,5 +2183,105 @@ describe('NodePanel — catalog tabs (#1477)', () => {
 
       expect(panel.store.getState().nodes).toHaveLength(0);
     });
+  });
+});
+
+describe('NodePanel — tab-label status (#1477)', () => {
+  /**
+   * What a tab's mark MEANS, read the way assistive tech reads it: its
+   * description. `getByRole('tab', { name })` matches the name EXACTLY, so every
+   * lookup here also certifies that the mark left the tab's name alone.
+   */
+  const described = (name: string) => {
+    const id = screen.getByRole('tab', { name }).getAttribute('aria-describedby');
+    return id === null ? null : (document.getElementById(id)?.textContent ?? null);
+  };
+
+  it('counts an issue on the tab holding its field, and a policy refusal on General', () => {
+    const store = createCanvasStore();
+    store.setState({ nodes: [httpNode({})] });
+    render(
+      <SubjectIssuesContext.Provider
+        value={
+          new Map([
+            [
+              subjectKey('node', 'n_http'),
+              [
+                { raw: 'nodes.n_http.config.url: bad ref', text: 'readable bad ref' },
+                { raw: "node 'n_http': policy.retry: nope", text: 'readable policy refusal' },
+              ],
+            ],
+          ])
+        }
+      >
+        <NodePanel
+          store={store}
+          connections={[]}
+          datasets={[]}
+          nodeId="n_http"
+          nodeType="http_request"
+          config={{}}
+          connectionId={undefined}
+          call={undefined}
+        />
+      </SubjectIssuesContext.Provider>,
+    );
+    expect(described('Request')).toBe('1 problem');
+    expect(described('General')).toBe('1 problem');
+    expect(described('Auth')).toBeNull();
+  });
+
+  it('marks the tab of an unapplied edit until Apply or Revert', () => {
+    const panel = mountOver(httpNode({ url: 'https://old' }));
+    expect(described('Request')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Request URL'), { target: { value: 'https://new' } });
+    expect(described('Request')).toBe('Unapplied changes');
+    expect(described('Auth')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Revert' }));
+    expect(described('Request')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Request URL'), { target: { value: 'https://new' } });
+    panel.apply();
+    expect(panel.storedConfig()).toMatchObject({ url: 'https://new' });
+    expect(described('Request')).toBeNull();
+  });
+
+  it("marks a paired activity's tab complete once both its bindings are on the node", () => {
+    const copy = node('n_copy', 'copy', {});
+    const unbound = mountOver(copy);
+    expect(described('Source')).toBeNull();
+    // One end picked is on screen, not on the node: pending, on that end's tab.
+    act(() =>
+      unbound.store.setState({ pendingBindings: { n_copy: { connections: { source: 'c1' } } } }),
+    );
+    expect(described('Source')).toBe('Unapplied changes');
+    expect(described('Sink')).toBeNull();
+    act(() =>
+      unbound.store.setState({
+        pendingBindings: {},
+        nodes: [
+          {
+            ...copy,
+            connectionIds: { source: 'c1', sink: 'c2' },
+            datasetIds: { source: 'd1', sink: 'd2' },
+          },
+        ],
+      }),
+    );
+    expect(described('Source')).toBe('Complete');
+  });
+
+  it("names the tab a refused Apply's issue is on, and counts it there", () => {
+    const panel = mountOver(httpNode({ url: 'https://old' }));
+    openTab('Auth');
+    fireEvent.click(toJson());
+    fireEvent.change(screen.getByLabelText('Config (JSON)'), { target: { value: '{"url":5}' } });
+    panel.apply();
+
+    expect(screen.getByRole('alert').textContent).toMatch(/^On Request: /);
+    // The refused value is still in the draft, so the tab is pending as well.
+    expect(described('Request')).toBe('1 problem, unapplied changes');
+    expect(panel.storedConfig()).toMatchObject({ url: 'https://old' });
   });
 });

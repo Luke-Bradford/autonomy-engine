@@ -1692,6 +1692,37 @@ button.danger {
   background: var(--panel);
 }
 
+/* #1477 OR29 — a property tab's marks. After the label, what the applied
+   settings are: "⚠ 2" (problems) or "✓" (complete); they change on Apply and may
+   widen their tab. In the tab's corner, over its padding, "•" for an edit not yet
+   applied: the one mark typing raises, so it takes no width and moves no tab. */
+.panel-tabs__status {
+  margin-left: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.panel-tabs [role='tab'] {
+  position: relative;
+}
+
+.panel-tabs__pending {
+  position: absolute;
+  top: 0;
+  right: 0;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.panel-tabs__status[data-tone='error'] {
+  color: var(--error);
+}
+
+.panel-tabs__status[data-tone='complete'] {
+  color: var(--success);
+}
+
 .property-panel:has(> .panel-tabs-sticky) {
   /* The pinned region's height with the header wrapped onto two rows, as it is
      in the 320px-minimum right-hand dock. Erring high only scrolls a focused

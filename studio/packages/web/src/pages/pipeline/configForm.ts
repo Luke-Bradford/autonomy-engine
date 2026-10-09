@@ -1514,13 +1514,54 @@ export function saveableConfigOf<K extends string>(
   fieldsFor: FieldsFor<K>,
   forcedJson: ForcedJson<K> = neverForced,
 ): unknown {
+  const { view, draft } = readSaveable(form, fieldsFor, forcedJson);
+  return draft.ok ? draft.config : { unreadable: view.jsonMode ? form.jsonText : form.inputs };
+}
+
+function readSaveable<K extends string>(
+  form: ConfigDraft<K>,
+  fieldsFor: FieldsFor<K>,
+  forcedJson: ForcedJson<K>,
+) {
   const view = configEditorView(
     { kind: form.kind, config: form.config, jsonMode: form.jsonMode, inputs: {}, jsonText: '' },
     fieldsFor,
     forcedJson,
   );
-  const draft = readConfigDraft(view.jsonMode, form, view.fields);
-  return draft.ok ? draft.config : { unreadable: view.jsonMode ? form.jsonText : form.inputs };
+  return { view, draft: readConfigDraft(view.jsonMode, form, view.fields) };
+}
+
+/**
+ * #1477 OR29 — WHICH top-level keys `draft` would change against `seed`, read
+ * the way `saveableConfigOf` reads both (so a view switch is no change). A
+ * draft that does not read back (a half-typed value) is still pinned to its
+ * fields when the form is showing — the fields whose input differs — but not in
+ * JSON, where the text is one value: that is `'unreadable'`.
+ */
+export function changedConfigKeys<K extends string>(
+  draft: ConfigDraft<K>,
+  seed: ConfigDraft<K>,
+  fieldsFor: FieldsFor<K>,
+  forcedJson: ForcedJson<K> = neverForced,
+): ReadonlySet<string> | 'unreadable' {
+  const now = readSaveable(draft, fieldsFor, forcedJson);
+  const was = readSaveable(seed, fieldsFor, forcedJson).draft;
+  if (now.draft.ok && was.ok) {
+    const after = now.draft.config;
+    const before = was.config;
+    const keys = new Set([...Object.keys(after), ...Object.keys(before)]);
+    return new Set(
+      [...keys].filter((k) => payloadSignature(after[k]) !== payloadSignature(before[k])),
+    );
+  }
+  if (now.view.jsonMode) return 'unreadable';
+  return new Set(
+    now.view.fields
+      .filter(
+        (f) => payloadSignature(draft.inputs[f.name]) !== payloadSignature(seed.inputs[f.name]),
+      )
+      .map((f) => f.name),
+  );
 }
 
 /** #1396 — a save payload as one comparable string, for an unsaved-changes guard. */

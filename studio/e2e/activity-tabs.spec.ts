@@ -142,3 +142,87 @@ test('a chosen tab is kept for the next node that has it', async ({ page }) => {
   );
   await expectQuiet(page, problems);
 });
+
+/**
+ * #1477 OR29 — each tab label carries its status, so a problem never needs a
+ * scroll hunt. The mark is `aria-hidden`; its meaning is the tab's DESCRIPTION,
+ * so `expectTabNames` (exact names) also certifies the mark left the name alone.
+ */
+test('a tab label shows its problems, an unapplied edit, or that it is complete', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  await openSeededCanvas(page, 'or29 tab status', {
+    nodes: [
+      { id: 'h', type: 'http_request', position: { x: 0, y: 0 }, config: {} },
+      { id: 'w', type: 'wait', position: { x: 300, y: 0 }, config: { seconds: '${1}' } },
+      { ...seed.nodes[0]!, position: { x: 600, y: 0 } },
+    ],
+  });
+  await nodeById(page, 'h').click();
+  await expectTabNames(tabs(page), ['General', 'Request', 'Auth']);
+  const request = tabs(page).getByRole('tab', { name: 'Request' });
+  const auth = tabs(page).getByRole('tab', { name: 'Auth' });
+  const url = properties(page).getByLabel('Request URL');
+  const apply = properties(page).getByRole('button', { name: 'Apply config' });
+  // The seed's URL is valid; Request also holds the (unbound, optional)
+  // connection, so it is not marked complete either.
+  await expect(request).toHaveAccessibleDescription('');
+
+  // Clearing the URL is an edit not yet on the node, and marking it moves no tab.
+  const authLeft = async () => (await auth.boundingBox())!.x;
+  const before = await authLeft();
+  await url.fill('');
+  await expect(request).toHaveAccessibleDescription('Unapplied changes');
+  // The pending dot sits in the tab's corner, over its padding, not after the label.
+  const dot = await request.evaluate((tab) => {
+    const at = tab.querySelector('.fui-Tab__content .panel-tabs__pending')!.getBoundingClientRect();
+    const box = tab.getBoundingClientRect();
+    return at.left >= box.left && at.right <= box.right + 0.5 && at.top >= box.top;
+  });
+  expect(dot).toBe(true);
+  await expect(auth).toHaveAccessibleDescription('');
+  expect(await authLeft()).toBe(before);
+
+  // Applying it is a problem on Request: the URL is required.
+  await apply.click();
+  await expect(request).toHaveAccessibleDescription(/^1 problem/);
+  const mark = request.locator('.fui-Tab__content .panel-tabs__status');
+  await expect(mark).toHaveText('⚠ 1');
+  const tone = await mark.evaluate((el) => {
+    const probe = document.createElement('span');
+    probe.style.color = 'var(--error)';
+    el.appendChild(probe);
+    const error = getComputedStyle(probe).color;
+    probe.remove();
+    return { color: getComputedStyle(el).color, error };
+  });
+  expect(tone.color).toBe(tone.error);
+  await expect(auth).toHaveAccessibleDescription('');
+
+  // Fixed and applied, the mark goes.
+  await url.fill('https://a.example.test');
+  await apply.click();
+  await expect(request).toHaveAccessibleDescription('');
+  expect(await authLeft()).toBe(before);
+
+  // A Wait node's Settings tab: its one required field holds a value.
+  await nodeById(page, 'w').click();
+  const settings = tabs(page).getByRole('tab', { name: 'Settings' });
+  await expect(settings).toHaveAccessibleDescription('Complete');
+  await expect(settings.locator('.fui-Tab__content .panel-tabs__status')).toHaveText('✓');
+
+  // Copy's four tabs, Mapping's ✓ included, fit the dock in its narrower,
+  // right-hand position.
+  await nodeById(page, 'c').click();
+  await page.getByRole('button', { name: 'Dock to right' }).click();
+  await expectTabNames(tabs(page), ['General', 'Source', 'Sink', 'Mapping']);
+  const fit = await tabs(page).evaluate((list) => {
+    const bound = list.getBoundingClientRect();
+    const last = list.querySelector('[role="tab"]:last-of-type')!.getBoundingClientRect();
+    return { overflow: list.scrollWidth - list.clientWidth, gap: bound.right - last.right };
+  });
+  expect(fit.overflow).toBeLessThanOrEqual(0);
+  expect(fit.gap).toBeGreaterThanOrEqual(0);
+  await expectQuiet(page, problems);
+});
