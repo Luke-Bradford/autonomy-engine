@@ -323,7 +323,7 @@ message.
     last tab chosen; a node without that tab opens on its first type tab, and the choice is kept for
     the next node that has it.
   - No tab carries container membership (#1597). It is a canvas fact, as in ADF: drag an activity
-    into a box, or use the activity's context menu, **Move into ▸** / **Remove from <name>** (the
+    into a box, or use the activity's context menu, **Move into ▸** / **Remove from *name*** (the
     keyboard route, raised with the Menu key or Shift+F10). Both go through one confirm-and-apply
     path and one Undo.
   - JSON mode edits the whole config as one document. It shows on the tab the author is on, under

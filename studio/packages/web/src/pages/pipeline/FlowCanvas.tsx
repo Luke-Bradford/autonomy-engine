@@ -535,6 +535,24 @@ function isOverCanvasSurface(event: DragEvent<HTMLDivElement>): boolean {
 /** A STABLE default: a fresh `[]` per render would re-derive every node, every render. */
 const NO_DATASETS: readonly Dataset[] = [];
 
+/** The selection's activities that are still on the canvas, in selection order. */
+function selectedNodeIds(state: {
+  selected: readonly { kind: string; id: string }[];
+  nodes: readonly { id: string }[];
+}): string[] {
+  return state.selected
+    .filter((sel) => sel.kind === 'node' && state.nodes.some((n) => n.id === sel.id))
+    .map((sel) => sel.id);
+}
+
+/**
+ * #1597 — what a selection leaves, as Remove from and its confirm both say it:
+ * the container's name, or "their containers" when it spans several.
+ */
+function leavingName(labels: ReadonlyMap<string, string>, from: string | null): string {
+  return from === null ? 'their containers' : (labels.get(from) ?? 'its container');
+}
+
 /**
  * Renders the working graph with React Flow. The zustand store is the DOMAIN
  * source of truth (Node/Edge schema shapes); React Flow owns the VIEW node
@@ -573,24 +591,6 @@ const NO_DATASETS: readonly Dataset[] = [];
  * of this line, which the spec above
  * pins.
  */
-/** The selection's activities that are still on the canvas, in selection order. */
-function selectedNodeIds(state: {
-  selected: readonly { kind: string; id: string }[];
-  nodes: readonly { id: string }[];
-}): string[] {
-  return state.selected
-    .filter((sel) => sel.kind === 'node' && state.nodes.some((n) => n.id === sel.id))
-    .map((sel) => sel.id);
-}
-
-/**
- * #1597 — what a selection leaves, as Remove from and its confirm both say it:
- * the container's name, or "their containers" when it spans several.
- */
-function leavingName(labels: ReadonlyMap<string, string>, from: string | null): string {
-  return from === null ? 'their containers' : (labels.get(from) ?? 'its container');
-}
-
 export function FlowCanvas({
   store,
   fitSignal = 0,
