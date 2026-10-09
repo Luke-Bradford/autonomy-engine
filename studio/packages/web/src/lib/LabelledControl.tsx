@@ -20,6 +20,7 @@ import type { ReactNode } from 'react';
 export function LabelledControl({
   label,
   hint,
+  help,
   className,
   children,
 }: {
@@ -30,6 +31,13 @@ export function LabelledControl({
    * for the control's `aria-describedby`; `undefined` when there is no hint.
    */
   hint?: string;
+  /**
+   * #1477 OR29 — a `?` (a `HelpDisclosure`) beside the label, for a field whose
+   * explanation sits behind it rather than under the control. A SIBLING of the
+   * label, in a head row with it: inside the label, the `?`'s name would join
+   * the control's, and a `<details>` may not sit in a label anyway.
+   */
+  help?: ReactNode;
   className?: string;
   children: (id: string, hintId: string | undefined) => ReactNode;
 }) {
@@ -38,7 +46,14 @@ export function LabelledControl({
   const shownHintId = hint === undefined ? undefined : hintId;
   return (
     <div className={className === undefined ? 'labelled-control' : `labelled-control ${className}`}>
-      <label htmlFor={id}>{label}</label>
+      {help === undefined ? (
+        <label htmlFor={id}>{label}</label>
+      ) : (
+        <div className="labelled-control__head help-row">
+          <label htmlFor={id}>{label}</label>
+          {help}
+        </div>
+      )}
       {children(id, shownHintId)}
       {hint !== undefined && (
         <p id={hintId} className="field-hint">

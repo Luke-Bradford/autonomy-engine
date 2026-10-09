@@ -262,6 +262,16 @@ export function ConfigFieldControl({
         {hintBody}
       </p>
     );
+  // #1477 OR29 — a labelled field's explanation is behind a `?` beside its label
+  // (labels, not prose), as a row list's already was. The note keeps `hintId`, so
+  // the control's description is unchanged. A checkbox keeps its line: its label
+  // wraps the box, so there is no label row to put a `?` in.
+  const help =
+    hintBody === null ? undefined : (
+      <HelpDisclosure label={`About ${label}`} noteId={hintId} inline>
+        {hintBody}
+      </HelpDisclosure>
+    );
   const errorId = useId();
   const error = validation?.error;
   const shownHintId = hint === null ? undefined : hintId;
@@ -333,6 +343,7 @@ export function ConfigFieldControl({
     return (
       <LabelledControl
         className="config-field"
+        help={help}
         label={
           <>
             {seen(label)}
@@ -357,7 +368,6 @@ export function ConfigFieldControl({
                 </option>
               ))}
             </select>
-            {hint}
             {errorSlot}
           </>
         )}
@@ -374,6 +384,7 @@ export function ConfigFieldControl({
     return (
       <LabelledControl
         className="config-field"
+        help={help}
         label={
           <>
             {seen(numberField ? label : `${label} — number`)}
@@ -396,7 +407,6 @@ export function ConfigFieldControl({
               {...checked}
               onChange={(e) => onChange(e.target.value)}
             />
-            {hint}
             {errorSlot}
           </>
         )}
@@ -409,6 +419,7 @@ export function ConfigFieldControl({
   return (
     <LabelledControl
       className="config-field"
+      help={help}
       label={
         <>
           {seen(format === null ? label : `${label} — ${format}`)}
@@ -467,7 +478,6 @@ export function ConfigFieldControl({
               onChange={(e) => onChange(e.target.value)}
             />
           )}
-          {hint}
           {errorSlot}
           {/* A SIBLING of the label, not a child, because a button INSIDE the label
           contaminates the text box's accessible name — which is exactly why
@@ -552,7 +562,10 @@ export function ConfigFieldControl({
           {picker && field.kind === 'text' && !field.literal && (
             <ExpressionPicker
               fieldName={shown}
-              compact={cell}
+              // #1477 OR29 — glyphs at the top level too: two worded buttons
+              // stacked under every expression box were 44px a field.
+              compact
+              keepFocus={cell}
               describe={picker.describe}
               resolve={() => picker.resolve(target ?? topLevelTarget(field.name))}
               onSelect={(insert, mode) => onChange(insertAtCaret(text, insert, mode))}
@@ -737,7 +750,7 @@ export function ObjectListControl({
       ref={groupRef}
     >
       {/* A `div`: the `?` is a `<details>`, which a span may not hold. */}
-      <div className="object-list-label">
+      <div className="object-list-label help-row">
         <span id={labelId}>{label}</span>
         {required && <RequiredMark />}
         {help !== undefined && (

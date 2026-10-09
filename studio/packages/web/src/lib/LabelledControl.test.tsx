@@ -64,4 +64,25 @@ describe('LabelledControl (#1227)', () => {
     expect(handed).toBeUndefined();
     expect(container.querySelector('.field-hint')).toBeNull();
   });
+
+  // #1477 OR29 — a `?` beside the label: in a head row WITH it, never inside it.
+  it('puts a help slot beside the label, outside it, so the name stays the label alone', () => {
+    const { container } = render(
+      <LabelledControl label="Path" help={<button type="button">About Path</button>}>
+        {(id) => <input id={id} />}
+      </LabelledControl>,
+    );
+    const input = screen.getByLabelText('Path', { exact: true });
+    const label = input.closest('.labelled-control')!.querySelector('label')!;
+    expect(label.textContent).toBe('Path');
+    expect(label.parentElement?.className).toBe('labelled-control__head help-row');
+    expect(label.nextElementSibling).toBe(screen.getByRole('button', { name: 'About Path' }));
+    // Without one, the label is the wrapper's own child, as it always was.
+    const { container: bare } = render(
+      <LabelledControl label="Plain">{(id) => <input id={id} />}</LabelledControl>,
+    );
+    expect(bare.querySelector('.labelled-control > label')).not.toBeNull();
+    expect(bare.querySelector('.labelled-control__head')).toBeNull();
+    expect(container.querySelector('.labelled-control > label')).toBeNull();
+  });
 });

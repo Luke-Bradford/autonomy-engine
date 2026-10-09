@@ -88,6 +88,7 @@ export function ExpressionPicker({
   onSelect,
   functions: functionsProp,
   compact = false,
+  keepFocus = false,
 }: {
   fieldName: string;
   /** How a suggestion is NAMED — web-side, because the node labels live here. */
@@ -108,20 +109,25 @@ export function ExpressionPicker({
    */
   functions?: { value: string; resolve: () => FunctionsOptions };
   /**
-   * #1477 OR29 — the toggles as glyphs (`${}`, `ƒx`), for a table cell, where
-   * two worded buttons under every box would make each row three lines tall.
-   * Their accessible names are unchanged; the glyph's hover says it in words.
-   *
+   * #1477 OR29 — the toggles as glyphs (`${}`, `ƒx`), on one row: for a table
+   * cell, where two worded buttons under every box would make each row three
+   * lines tall, and for a config field in the dock, where they were 44px of a
+   * 228px tab. Their accessible names are unchanged; the glyph's hover says it
+   * in words.
+   */
+  compact?: boolean;
+  /**
    * A cell shows its toggles only while it has focus (index.css), and Safari
    * and Firefox on macOS do not focus a button on click: the box would blur on
    * mousedown, the toggles would hide, and the click would land on nothing. So
-   * a compact toggle's mousedown keeps focus where it is — in the box, which is
-   * also where an insert goes.
+   * a cell's toggle's mousedown keeps focus where it is — in the box, which is
+   * also where an insert goes. A top-level field's toggles are always shown,
+   * and need none of that.
    */
-  compact?: boolean;
+  keepFocus?: boolean;
 }) {
   const [open, setOpen] = useState<Open | null>(null);
-  const keepFocus = compact ? (e: MouseEvent) => e.preventDefault() : undefined;
+  const onToggleDown = keepFocus ? (e: MouseEvent) => e.preventDefault() : undefined;
   const toggleRef = useRef<HTMLButtonElement>(null);
   const fnToggleRef = useRef<HTMLButtonElement>(null);
   const listId = useId();
@@ -167,7 +173,7 @@ export function ExpressionPicker({
         // is an invalid attribute value, which axe reports.
         aria-controls={options !== null ? listId : undefined}
         aria-label={`Insert reference into ${fieldName}`}
-        onMouseDown={keepFocus}
+        onMouseDown={onToggleDown}
         title={compact ? 'Insert reference' : undefined}
         onClick={() => setOpen(options !== null ? null : { kind: 'refs', options: resolve() })}
       >
@@ -182,7 +188,7 @@ export function ExpressionPicker({
           aria-expanded={functionsOpen}
           aria-controls={functionsOpen ? fnListId : undefined}
           aria-label={`Functions for ${fieldName}`}
-          onMouseDown={keepFocus}
+          onMouseDown={onToggleDown}
           title={compact ? 'Functions' : undefined}
           onClick={() =>
             setOpen(
