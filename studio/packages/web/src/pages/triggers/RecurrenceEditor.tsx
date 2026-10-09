@@ -124,7 +124,7 @@ export function RecurrenceEditor({
             {required === 'weekDays' && <RequiredMark />}
           </legend>
           {WEEK_DAY_NAMES.map((name, day) => (
-            <label key={name} className="checkbox">
+            <label key={name}>
               <input
                 type="checkbox"
                 checked={value.weekDays.includes(day)}

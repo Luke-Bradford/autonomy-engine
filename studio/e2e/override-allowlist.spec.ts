@@ -49,7 +49,7 @@ test.describe('#1305 — the override allowlist is edited on the resource pages'
     // Laid out as the app's other checkbox sets are: a bordered card of inline
     // rows, not a browser-default fieldset of stacked label/control pairs.
     const layout = await allowlist.evaluate((set) => {
-      const row = set.querySelector('label.checkbox')!;
+      const row = set.querySelector('label:has(> input[type="checkbox"])')!;
       return {
         border: getComputedStyle(set).borderTopStyle,
         row: getComputedStyle(row).flexDirection,

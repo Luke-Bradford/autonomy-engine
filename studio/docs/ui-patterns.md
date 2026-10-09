@@ -420,8 +420,10 @@ One look per control type (#1594 OR40 S2a), from the tokens, in both densities. 
   label-gap rule excludes it by class.
 - **One focus ring:** 2px `--accent`, 1px outside, `:focus-visible` only, on everything, canvas
   nodes included. An element that fills a clipping container (a rail link, a grid resizer, a
-  splitter) keeps the ring and sets only `outline-offset: var(--focus-ring-inset)`. Never restate
-  the outline itself. Fluent's controls keep Fluent's own indicator.
+  splitter) keeps the ring and sets only `outline-offset: var(--focus-ring-inset)`. Restate the
+  outline itself only where a third-party rule removes it: a canvas node (React Flow, drawn at
+  `--focus-ring-outset` so it clears the node's own selection or issue ring) and the connection
+  picker's Fluent input. Fluent's controls keep Fluent's own indicator.
 
 `e2e/control-layer.spec.ts` measures all of this at 1440x900.
 

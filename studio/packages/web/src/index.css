@@ -570,7 +570,7 @@ body {
    SOURCE ORDER decides: moved below them, `padding: 0` would silently win and
    collapse the toggle.
 
-   The ring is drawn INSIDE the border box (`outline-offset: -2px`) because both
+   The ring is drawn INSIDE the border box (`--focus-ring-inset`) because both
    the pane and the command bar clip their overflow, so a ring at a positive
    offset is sliced off at both edges.
 
@@ -1090,20 +1090,25 @@ th {
   line-height: var(--type-body-line);
 }
 
+/* States, at zero specificity too (a pseudo-class inside `:where()` adds
+   nothing). Invalid comes after hover, so an invalid field stays red under the
+   pointer. */
 :where(
-    input:not([type='checkbox'], [type='radio'], .fui-Combobox__input),
-    select,
-    textarea
-  ):hover:not(:disabled) {
+  :is(
+      input:not([type='checkbox'], [type='radio'], .fui-Combobox__input),
+      select,
+      textarea
+    ):hover:not(:disabled)
+) {
   border-color: var(--accent);
 }
 
-:where(input:not(.fui-Combobox__input), select, textarea):disabled {
+:where(:is(input:not(.fui-Combobox__input), select, textarea):disabled) {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
-:where(input, select, textarea)[aria-invalid='true'] {
+:where(:is(input, select, textarea)[aria-invalid='true']) {
   border-color: var(--error);
 }
 
@@ -1131,10 +1136,13 @@ label > input:is([type='checkbox'], [type='radio']) {
    secondary, not a fourth variant.
 
    The control height is a MIN-height, and only on the buttons the layer owns:
-   an unclassed button and the variants. A classed one-off button (a canvas
-   chip, a 24px icon button) keeps its own size until S3/S6 moves it, because a
-   `height` cannot win against a `min-height`. Those still take this padding,
-   so in comfortable density they sit a few pixels under `--control-h`. */
+   an unclassed button and the variants, which also take body type whatever
+   their container's size. An unclassed button styled by its container's rule
+   (`.run-filters button`, `.inline-name-form button`) is owned too, and grows
+   to the control height. A classed one-off button (a canvas chip, a 24px icon
+   button) keeps its own size until S3/S6 moves it, because a `height` cannot
+   win against a `min-height`. Those still take this padding, so in
+   comfortable density they sit a few pixels under `--control-h`. */
 button {
   background: var(--panel-2);
   color: var(--text);
@@ -1151,6 +1159,7 @@ button:not([class]),
 button.primary,
 button.danger {
   min-height: var(--control-h);
+  font-size: var(--type-body-size);
 }
 
 button:hover:not(:disabled) {
@@ -1167,10 +1176,13 @@ button:hover:not(:disabled) {
 }
 
 /* React Flow's stylesheet removes the outline from a focused node (0,3,0), so
-   a keyboard user could not see which activity they are on. */
+   a keyboard user could not see which activity they are on; restated to beat
+   it. The node box draws its OWN ring at the standard offset when it is
+   selected (accent) or names an issue (error), and that ring would hide or
+   mimic this one, so focus sits one ring further out. */
 .react-flow .react-flow__node.selectable:focus-visible {
   outline: var(--focus-ring-width) solid var(--accent);
-  outline-offset: var(--focus-ring-offset);
+  outline-offset: var(--focus-ring-outset);
 }
 
 button:disabled,
@@ -2170,14 +2182,10 @@ button.danger {
 }
 
 .json-editor > .json-editor-input {
+  /* The box is the control layer's (#1594 S2a); the type is the editor's. */
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.45rem 0.55rem;
   font-family: var(--font-mono);
   font-size: 0.85rem;
   line-height: 1.45;
@@ -2270,7 +2278,9 @@ button.danger {
   background: none;
 }
 
-/* A real outline for keyboard focus, for the reasons `.pane-splitter` gives. */
+/* A real outline for keyboard focus, for the reasons `.pane-splitter` gives:
+   the global ring, drawn inside. It reads apart from hover's 3px bar because it
+   rings the splitter's whole box. */
 .dock-splitter:focus-visible,
 .toolbox-splitter:focus-visible,
 .problems-splitter:focus-visible {

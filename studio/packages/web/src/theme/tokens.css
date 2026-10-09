@@ -79,6 +79,9 @@
   --focus-ring-width: 2px;
   --focus-ring-offset: 1px;
   --focus-ring-inset: calc(-1 * var(--focus-ring-width));
+  /* Clear of a ring an element already draws at the standard offset (a
+     selected or invalid canvas node), so focus is never hidden or mimicked. */
+  --focus-ring-outset: calc(2 * var(--focus-ring-offset) + var(--focus-ring-width));
 }
 
 /* Body text moves up one step and the section heading with it, so a section

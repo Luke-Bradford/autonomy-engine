@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
 import { properties } from './support/panels';
+import { resolvedPaletteColor } from './support/theme';
 
 /**
  * #1594 OR40 S2a — the one control layer, measured in the browser.
@@ -24,43 +25,68 @@ async function openSettings(page: Page, density: Density) {
   await expect(page.locator('html')).toHaveAttribute('data-density', density);
 }
 
-/** The box of each control the layer owns, plus the resolved accent. */
-function readControls(page: Page) {
-  return page.evaluate(() => {
-    const main = document.querySelector('main');
-    const select = document.querySelector<HTMLSelectElement>('main select');
-    if (!main || !select) throw new Error('Settings page did not render');
+const PROBES = [
+  '<button type="button" data-probe="secondary">Secondary</button>',
+  '<button type="button" data-probe="primary" class="primary">Primary</button>',
+  '<input type="text" data-probe="text" aria-label="probe text">',
+  '<input type="text" data-probe="invalid" aria-label="probe invalid" aria-invalid="true">',
+  '<input type="text" data-probe="disabled" aria-label="probe disabled" disabled>',
+  '<textarea data-probe="area" aria-label="probe area"></textarea>',
+  '<label data-probe="radio"><input type="radio" name="probe">Radio words</label>',
+].join('');
+
+/**
+ * Probes for the controls the layer owns, outside React's tree (it reconciles
+ * its own children) and pinned on screen so the pointer can hover them.
+ */
+async function withProbes<T>(page: Page, read: () => Promise<T>): Promise<T> {
+  await page.evaluate((html) => {
     const host = document.createElement('div');
-    host.innerHTML = [
-      '<button type="button">Secondary</button>',
-      '<button type="button" class="primary">Primary</button>',
-      '<input type="text" aria-label="probe text">',
-      '<textarea aria-label="probe area"></textarea>',
-      '<span style="color: var(--accent)">accent</span>',
-    ].join('');
-    main.append(host);
-    try {
-      const [secondary, primary, text, area, accent] = [...host.children] as HTMLElement[];
-      const box = (el: Element) => {
-        const cs = getComputedStyle(el);
-        return {
-          height: Math.round(el.getBoundingClientRect().height),
-          radius: cs.borderTopLeftRadius,
-          border: cs.borderTopWidth,
-          size: cs.fontSize,
-        };
-      };
-      return {
-        accent: getComputedStyle(accent!).color,
-        select: box(select),
-        secondary: box(secondary!),
-        primary: { ...box(primary!), background: getComputedStyle(primary!).backgroundColor },
-        text: box(text!),
-        area: box(area!),
-      };
-    } finally {
-      host.remove();
-    }
+    host.id = 'control-probes';
+    host.style.cssText = 'position:fixed;top:0;left:0;z-index:99999;background:var(--panel)';
+    host.innerHTML = html;
+    document.body.append(host);
+  }, PROBES);
+  try {
+    return await read();
+  } finally {
+    await page.evaluate(() => document.getElementById('control-probes')?.remove());
+  }
+}
+
+/** The box of an element: rendered height plus the computed skin. */
+function boxOf(target: Locator) {
+  return target.evaluate((el) => {
+    const cs = getComputedStyle(el);
+    return {
+      height: Math.round(el.getBoundingClientRect().height),
+      radius: cs.borderTopLeftRadius,
+      border: cs.borderTopWidth,
+      borderColor: cs.borderTopColor,
+      background: cs.backgroundColor,
+      opacity: cs.opacity,
+      size: cs.fontSize,
+    };
+  });
+}
+
+/** Box, gap and words of a checkbox or radio label. */
+function inlineLabelOf(input: Locator) {
+  return input.evaluate((el) => {
+    const label = el.closest('label')!;
+    const words = [...label.childNodes].find(
+      (n) => n.nodeType === Node.TEXT_NODE && n.textContent?.trim(),
+    )!;
+    const range = document.createRange();
+    range.selectNodeContents(words);
+    const text = range.getBoundingClientRect();
+    const box = el.getBoundingClientRect();
+    return {
+      direction: getComputedStyle(label).flexDirection,
+      inputWidth: Math.round(box.width),
+      gap: Math.round(text.left - box.right),
+      centreDelta: Math.abs(box.top + box.height / 2 - (text.top + text.height / 2)),
+    };
   });
 }
 
@@ -87,23 +113,19 @@ async function keyboardFocus(page: Page, target: Locator) {
   await target.focus();
 }
 
-function ringOf(target: Locator) {
-  return target.evaluate((el) => {
+async function ringOf(page: Page, target: Locator) {
+  const accent = await resolvedPaletteColor(page, '--accent');
+  const ring = await target.evaluate((el) => {
     const cs = getComputedStyle(el);
-    const probe = document.createElement('span');
-    probe.style.color = 'var(--accent)';
-    document.body.append(probe);
-    const accent = getComputedStyle(probe).color;
-    probe.remove();
     return {
       focusVisible: el.matches(':focus-visible'),
       style: cs.outlineStyle,
       width: cs.outlineWidth,
       color: cs.outlineColor,
       offset: cs.outlineOffset,
-      accent,
     };
   });
+  return { ...ring, accent };
 }
 
 for (const density of ['compact', 'comfortable'] as const) {
@@ -113,27 +135,52 @@ for (const density of ['compact', 'comfortable'] as const) {
     }) => {
       const problems = collectPageProblems(page);
       await openSettings(page, density);
-      const m = await readControls(page);
       const h = CONTROL_H[density];
+      const accent = await resolvedPaletteColor(page, '--accent');
+      const error = await resolvedPaletteColor(page, '--error');
+      const select = await boxOf(page.getByRole('combobox', { name: 'Density', exact: true }));
 
-      for (const [name, control] of [
-        ['select', m.select],
-        ['text input', m.text],
-      ] as const) {
-        expect(control.height, `a ${name} is --control-h tall`).toBe(h);
-        expect(control.radius, `a ${name} has the control radius`).toBe('4px');
-        expect(control.border, `a ${name} has a 1px border`).toBe('1px');
-      }
-      expect(m.area.radius, 'a textarea has the control radius').toBe('4px');
-      expect(m.area.border).toBe('1px');
-      for (const [name, button] of [
-        ['secondary', m.secondary],
-        ['primary', m.primary],
-      ] as const) {
-        expect(button.height, `a ${name} button is --control-h tall`).toBe(h);
-        expect(button.radius, `a ${name} button has the control radius`).toBe('4px');
-      }
-      expect(m.primary.background, 'primary is filled with the accent').toBe(m.accent);
+      await withProbes(page, async () => {
+        const probe = (name: string) => page.locator(`[data-probe="${name}"]`);
+        const text = await boxOf(probe('text'));
+        for (const [name, control] of [
+          ['select', select],
+          ['text input', text],
+        ] as const) {
+          expect(control.height, `a ${name} is --control-h tall`).toBe(h);
+          expect(control.radius, `a ${name} has the control radius`).toBe('4px');
+          expect(control.border, `a ${name} has a 1px border`).toBe('1px');
+        }
+        const area = await boxOf(probe('area'));
+        expect([area.radius, area.border], 'a textarea has the control skin').toEqual([
+          '4px',
+          '1px',
+        ]);
+        for (const name of ['secondary', 'primary']) {
+          const button = await boxOf(probe(name));
+          expect(button.height, `a ${name} button is --control-h tall`).toBe(h);
+          expect(button.radius, `a ${name} button has the control radius`).toBe('4px');
+        }
+        expect((await boxOf(probe('primary'))).background, 'primary is filled with accent').toBe(
+          accent,
+        );
+
+        // States: hover is accent, invalid is error and stays error under the
+        // pointer, disabled is dimmed.
+        expect(text.borderColor, 'at rest the border is not accent').not.toBe(accent);
+        await probe('text').hover();
+        expect((await boxOf(probe('text'))).borderColor, 'hover').toBe(accent);
+        expect((await boxOf(probe('invalid'))).borderColor, 'invalid').toBe(error);
+        await probe('invalid').hover();
+        expect((await boxOf(probe('invalid'))).borderColor, 'invalid under hover').toBe(error);
+        expect((await boxOf(probe('disabled'))).opacity, 'disabled').toBe('0.6');
+
+        // A radio reads across like a checkbox: box, 8px, words.
+        const radio = await inlineLabelOf(probe('radio').locator('input'));
+        expect(radio.direction).toBe('row');
+        expect(radio.gap).toBe(8);
+        expect(radio.centreDelta).toBeLessThanOrEqual(2);
+      });
 
       // The Runs toolbar's search box and page-size select were unstyled
       // natives (square, 20-22px) before the layer.
@@ -142,11 +189,8 @@ for (const density of ['compact', 'comfortable'] as const) {
       const perPage = page.getByRole('combobox', { name: 'Runs per page' });
       for (const control of [search, perPage]) {
         await expect(control).toBeVisible();
-        const box = await control.evaluate((el) => ({
-          height: Math.round(el.getBoundingClientRect().height),
-          radius: getComputedStyle(el).borderTopLeftRadius,
-        }));
-        expect(box).toEqual({ height: h, radius: '4px' });
+        const box = await boxOf(control);
+        expect({ height: box.height, radius: box.radius }).toEqual({ height: h, radius: '4px' });
       }
       await expectQuiet(page, problems);
     });
@@ -162,7 +206,7 @@ test.describe('#1594 OR40 S2a — one focus ring', () => {
 
     const density = page.getByRole('combobox', { name: 'Density', exact: true });
     await keyboardFocus(page, density);
-    const ring = await ringOf(density);
+    const ring = await ringOf(page, density);
     expect(ring.focusVisible).toBe(true);
     expect(ring).toMatchObject({ style: 'solid', width: '2px', offset: '1px' });
     expect(ring.color).toBe(ring.accent);
@@ -170,7 +214,7 @@ test.describe('#1594 OR40 S2a — one focus ring', () => {
     // A rail link fills the rail, which clips: the same ring, drawn inside.
     const rail = page.locator('.hub-rail__link').first();
     await tabTo(page, rail);
-    const inset = await ringOf(rail);
+    const inset = await ringOf(page, rail);
     expect(inset).toMatchObject({ style: 'solid', width: '2px', offset: '-2px' });
     expect(inset.color).toBe(inset.accent);
 
@@ -179,23 +223,39 @@ test.describe('#1594 OR40 S2a — one focus ring', () => {
     const list = page.getByRole('group', { name: 'Runs view' }).getByRole('button').first();
     await expect(list).toBeVisible();
     await keyboardFocus(page, list);
-    const fluent = await ringOf(list);
+    const fluent = await ringOf(page, list);
     expect(fluent.focusVisible).toBe(true);
     expect(fluent.color === fluent.accent && fluent.style !== 'none').toBe(false);
     await expectQuiet(page, problems);
   });
 
-  test('a canvas node shows the ring under keyboard focus', async ({ page }) => {
+  test('canvas node and splitters: the same ring, placed for each', async ({ page }) => {
     const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'or40 s2 focus', {
       nodes: [{ id: 'w', type: 'wait', position: { x: 0, y: 0 }, config: { seconds: '${1}' } }],
     });
+
+    // Outside the node's own selection/issue ring: 2 x 1px + 2px.
     const node = nodeById(page, 'w');
     await keyboardFocus(page, node);
-    const ring = await ringOf(node);
+    const ring = await ringOf(page, node);
     expect(ring.focusVisible).toBe(true);
-    expect(ring).toMatchObject({ style: 'solid', width: '2px', offset: '1px' });
+    expect(ring).toMatchObject({ style: 'solid', width: '2px', offset: '4px' });
     expect(ring.color).toBe(ring.accent);
+
+    // The pane splitter is not clipped (outside); the dock's is (inside).
+    for (const [selector, offset] of [
+      ['.pane-splitter', '1px'],
+      ['.dock-splitter', '-2px'],
+    ] as const) {
+      const splitter = page.locator(selector).first();
+      await expect(splitter, selector).toHaveCount(1);
+      await keyboardFocus(page, splitter);
+      const r = await ringOf(page, splitter);
+      expect(r.focusVisible, selector).toBe(true);
+      expect(r, selector).toMatchObject({ style: 'solid', width: '2px', offset });
+      expect(r.color, selector).toBe(r.accent);
+    }
     await expectQuiet(page, problems);
   });
 });
@@ -211,34 +271,19 @@ test('a checkbox sits beside its words: box, 8px, label — never stretched', as
   const box = dock.getByRole('checkbox', { name: 'Secure input' });
   await expect(box).toBeVisible();
 
-  const m = await box.evaluate((el) => {
-    const label = el.closest('label')!;
-    const words = [...label.childNodes].find(
-      (n) => n.nodeType === Node.TEXT_NODE && n.textContent?.trim(),
-    )!;
-    const range = document.createRange();
-    range.selectNodeContents(words);
-    const text = range.getBoundingClientRect();
-    const input = el.getBoundingClientRect();
-    return {
-      direction: getComputedStyle(label).flexDirection,
-      inputWidth: Math.round(input.width),
-      gap: Math.round(text.left - input.right),
-      centreDelta: Math.abs(input.top + input.height / 2 - (text.top + text.height / 2)),
-    };
-  });
+  const m = await inlineLabelOf(box);
   expect(m.direction).toBe('row');
   expect(m.inputWidth, 'the box is not stretched').toBeLessThanOrEqual(20);
   expect(m.gap, 'box, then 8px, then the words').toBe(8);
   expect(m.centreDelta, 'box and words share a centre line').toBeLessThanOrEqual(2);
 
-  // A dock field's control is --control-h tall (the layer, not a dock-only rule).
+  // A dock field's control is --control-h tall (the layer, not a dock-only rule;
+  // compact is the default density).
+  await expect(page.locator('html')).toHaveAttribute('data-density', 'compact');
   const field = dock
     .getByRole('tabpanel', { name: 'General' })
-    .locator('input[inputmode="numeric"]');
-  const height = await field
-    .first()
-    .evaluate((el) => Math.round(el.getBoundingClientRect().height));
-  expect(height).toBe(28);
+    .locator('input[inputmode="numeric"]')
+    .first();
+  expect((await boxOf(field)).height).toBe(28);
   await expectQuiet(page, problems);
 });
