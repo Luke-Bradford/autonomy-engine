@@ -1,0 +1,124 @@
+/*
+ * #1594 OR40 S1: the design tokens. This is the one source of truth for type,
+ * spacing, radius and control height. Every later rule reads these variables
+ * instead of repeating a number, and `tokens.test.ts` holds the rest of the
+ * stylesheets to that with a ratchet on literals.
+ *
+ * Density changes the token VALUES for the whole app. Compact is the default
+ * (`uiStore.density`, mirrored onto `<html data-density>`). Comfortable is the
+ * viewer's own setting and overrides only the density-dependent values below.
+ *
+ * The type ramp is the UI standard's, and nothing else:
+ *   compact      12/400 12/600 13/400 13/600 14/600 (section) 20/600 (title)
+ *   comfortable  12/400 12/600 14/400 14/600 16/600 (section) 20/600 (title)
+ * Weights are 400 and 600 only.
+ *
+ * Imported before `index.css` (main.tsx), and the base rules at the foot use
+ * element selectors only, so every existing class rule still wins. S6 moves
+ * those rules onto the tokens page by page.
+ *
+ * Colour is NOT here. The palette stays in `index.css`'s two theme blocks,
+ * where `palette.test.ts` checks it.
+ */
+:root {
+  /* Fluent's own base stack, so native text and Fluent's components share a
+     family. */
+  --font-sans:
+    'Segoe UI', 'Segoe UI Web (West European)', -apple-system, BlinkMacSystemFont, Roboto,
+    'Helvetica Neue', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace;
+
+  /* The rem anchor. */
+  --root-size: 16px;
+
+  --weight-regular: 400;
+  --weight-strong: 600;
+
+  --type-caption-size: 12px;
+  --type-caption-line: 16px;
+  --type-body-size: 13px;
+  --type-body-line: 20px;
+  --type-section-size: 14px;
+  --type-section-line: 20px;
+  --type-title-size: 20px;
+  --type-title-line: 28px;
+
+  /* `font` shorthands. Each names the family: a shorthand without one is
+     invalid at computed-value time, and the declaration would silently fall
+     back to the inherited font. */
+  --type-caption: var(--weight-regular) var(--type-caption-size) / var(--type-caption-line)
+    var(--font-sans);
+  --type-body: var(--weight-regular) var(--type-body-size) / var(--type-body-line) var(--font-sans);
+  --type-body-strong: var(--weight-strong) var(--type-body-size) / var(--type-body-line)
+    var(--font-sans);
+  --type-section: var(--weight-strong) var(--type-section-size) / var(--type-section-line)
+    var(--font-sans);
+  --type-title: var(--weight-strong) var(--type-title-size) / var(--type-title-line)
+    var(--font-sans);
+
+  /* Padding, margin and gap take these values and no others. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius-control: 4px;
+  --radius-surface: 6px;
+  /* Status badges only. */
+  --radius-pill: 999px;
+
+  /* Heights, not spacing. */
+  --control-h: 28px;
+  --row-h: 32px;
+}
+
+/* Body text moves up one step and the section heading with it, so a section
+   heading never shares a size with body text. */
+:root[data-density='comfortable'] {
+  --type-body-size: 14px;
+  --type-section-size: 16px;
+  --type-section-line: 22px;
+  --control-h: 32px;
+  --row-h: 36px;
+}
+
+/* ---- Base rules ---------------------------------------------------------- */
+
+/* rem and px agree: 1rem is 16px whatever the browser default. */
+html {
+  font-size: var(--root-size);
+}
+
+/* Inherited text is body type. The FluentProvider root sets its own 14px from
+   a single generated class, so it is named here at (0,2,0) to outrank it. The
+   `:root` custom properties above are visible to it either way. Fluent's portal
+   roots (menus, tooltips, dialogs) keep Fluent's type until S2. */
+body,
+:root .app-fluent-root {
+  font: var(--type-body);
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--font-mono);
+}
+
+/* A heading with no class rule of its own takes the ramp, so none falls back
+   to the browser default. Page titles are h2 today, so h2 is a title; S5 makes
+   the page title the h1 and moves h2 to sections. */
+h1,
+h2 {
+  font: var(--type-title);
+}
+
+h3 {
+  font: var(--type-section);
+}
+
+h4 {
+  font: var(--type-body-strong);
+}
