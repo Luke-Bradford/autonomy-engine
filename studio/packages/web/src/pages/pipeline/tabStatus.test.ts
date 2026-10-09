@@ -60,6 +60,15 @@ describe('issueTarget (#1477)', () => {
     expect(issueTarget('nodes.n.connectionId: bad', 'n')).toEqual({ slot: 'connection' });
   });
 
+  it("reads the variable guard's quoted field, and never a prose word as a field", () => {
+    expect(
+      issueTarget("node 'n' (set_variable): 'variable' must be a literal variable name", 'n'),
+    ).toEqual({ field: 'variable' });
+    expect(issueTarget('node.n: a wait needs a non-empty ${} seconds expression', 'n')).toBe(
+      undefined,
+    );
+  });
+
   it('names nothing for a message about another node, or with no location to read', () => {
     expect(issueTarget("node 'n' (set_variable) reads variable 'v'", 'n')).toBeUndefined();
     expect(issueTarget("node 'other': config.url: required", 'n')).toBeUndefined();
@@ -94,6 +103,13 @@ describe('tabStatuses (#1477)', () => {
     const statuses = tabStatuses(baseInput({ applyIssues: [['mapping', 0, 'sink'], []] }));
     expect(statuses.get('mapping')?.problems).toBe(1);
     expect([...statuses.keys()]).toEqual(['mapping']);
+  });
+
+  it('counts a field the validator and a refused Apply both name once', () => {
+    const statuses = tabStatuses(
+      baseInput({ issues: ["node 'n': config.mapping: required"], applyIssues: [['mapping']] }),
+    );
+    expect(statuses.get('mapping')?.problems).toBe(1);
   });
 
   it("names the tabs a refused Apply's issues are on, unless that is only the open one", () => {
@@ -133,7 +149,8 @@ describe('tabStatuses (#1477)', () => {
     const pending = tabStatuses(
       base({ tabs: http, config, pendingFields: new Set([required[0]!]) }),
     );
-    expect(pending.get(request.key)).toEqual({ problems: 0, pending: true, complete: false });
+    // The ✓ describes the APPLIED node, so an edit on top of it keeps it.
+    expect(pending.get(request.key)).toEqual({ problems: 0, pending: true, complete: true });
   });
 
   it('calls a tab of bindings complete only once each is bound', () => {
@@ -165,17 +182,24 @@ describe('tabStatuses (#1477)', () => {
 });
 
 describe('tabStatusMark (#1477)', () => {
-  it('shows what to act on next: problems, then pending, then complete', () => {
+  it('puts problems or complete after the label, with the pending dot beside either', () => {
     expect(tabStatusMark({ problems: 2, pending: true, complete: false })).toEqual({
-      glyph: '⚠ 2',
-      tone: 'error',
+      mark: { glyph: '⚠ 2', tone: 'error' },
+      pending: true,
       description: '2 problems, unapplied changes',
     });
     expect(tabStatusMark({ problems: 1, pending: false, complete: false })?.description).toBe(
       '1 problem',
     );
-    expect(tabStatusMark({ problems: 0, pending: true, complete: false })?.glyph).toBe('•');
-    expect(tabStatusMark({ problems: 0, pending: false, complete: true })?.glyph).toBe('✓');
+    expect(tabStatusMark({ problems: 0, pending: true, complete: false })).toEqual({
+      pending: true,
+      description: 'Unapplied changes',
+    });
+    expect(tabStatusMark({ problems: 0, pending: true, complete: true })).toEqual({
+      mark: { glyph: '✓', tone: 'complete' },
+      pending: true,
+      description: 'Complete, unapplied changes',
+    });
     expect(tabStatusMark(undefined)).toBeUndefined();
   });
 });

@@ -2247,6 +2247,31 @@ describe('NodePanel — tab-label status (#1477)', () => {
     expect(described('Request')).toBeNull();
   });
 
+  it("marks a paired activity's tab complete once both its bindings are on the node", () => {
+    const copy = node('n_copy', 'copy', {});
+    const unbound = mountOver(copy);
+    expect(described('Source')).toBeNull();
+    // One end picked is on screen, not on the node: pending, on that end's tab.
+    act(() =>
+      unbound.store.setState({ pendingBindings: { n_copy: { connections: { source: 'c1' } } } }),
+    );
+    expect(described('Source')).toBe('Unapplied changes');
+    expect(described('Sink')).toBeNull();
+    act(() =>
+      unbound.store.setState({
+        pendingBindings: {},
+        nodes: [
+          {
+            ...copy,
+            connectionIds: { source: 'c1', sink: 'c2' },
+            datasetIds: { source: 'd1', sink: 'd2' },
+          },
+        ],
+      }),
+    );
+    expect(described('Source')).toBe('Complete');
+  });
+
   it("names the tab a refused Apply's issue is on, and counts it there", () => {
     const panel = mountOver(httpNode({ url: 'https://old' }));
     openTab('Auth');

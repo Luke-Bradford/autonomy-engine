@@ -1692,24 +1692,31 @@ button.danger {
   background: var(--panel);
 }
 
-/* #1477 OR29 — a property tab's mark: "⚠ 2" (problems), "•" (an edit not yet
-   applied), "✓" (complete). The slot is laid out on every tab of the dock, empty
-   or not, so a mark arriving with the first keystroke moves no tab along. */
+/* #1477 OR29 — a property tab's marks. After the label, what the applied
+   settings are: "⚠ 2" (problems) or "✓" (complete); they change on Apply and may
+   widen their tab. In the tab's corner, over its padding, "•" for an edit not yet
+   applied: the one mark typing raises, so it takes no width and moves no tab. */
 .panel-tabs__status {
-  display: inline-block;
-  min-width: 1em;
   margin-left: 4px;
   font-size: 12px;
   font-weight: 600;
-  text-align: left;
+}
+
+.panel-tabs [role='tab'] {
+  position: relative;
+}
+
+.panel-tabs__pending {
+  position: absolute;
+  top: 0;
+  right: 0;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .panel-tabs__status[data-tone='error'] {
   color: var(--error);
-}
-
-.panel-tabs__status[data-tone='pending'] {
-  color: var(--muted);
 }
 
 .panel-tabs__status[data-tone='complete'] {

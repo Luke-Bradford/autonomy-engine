@@ -3715,10 +3715,15 @@ export function NodePanel({
   // The draft as it was seeded — what Revert returns to, and what each tab's
   // pending mark (#1477 tab-label status) compares against, key by key.
   const [seed, setSeed] = useState(draft);
-  const dirty = signatureOf(draft) !== signatureOf(seed);
+  const seedSignature = useMemo(
+    () => payloadSignature(saveableConfigOf(seed, fieldsFor, forcedJson)),
+    [seed, fieldsFor, forcedJson],
+  );
+  const dirty = signatureOf(draft) !== seedSignature;
   // A refused Apply's pre-check, kept with the paths it named so each tab label
-  // can count its own. It counts only while its message is the one on screen:
-  // an edit, a later error or a re-seed replaces `error`, and the counts go with it.
+  // can count its own. It counts only while its message is the one on screen,
+  // as the message itself does: until the next Apply, Revert, view switch or
+  // re-seed, or another error replaces it.
   const [applyRefusal, setApplyRefusal] = useState<{
     message: string;
     paths: readonly (readonly PropertyKey[])[];
@@ -4010,28 +4015,14 @@ export function NodePanel({
 
   // #1477 OR29 — each tab label's status: its problems (the validator's, and a
   // refused Apply's), an edit not yet on the node, or its required settings filled.
-  const changedKeys = useMemo(
-    () => changedConfigKeys(draft, seed, fieldsFor, forcedJson),
-    [draft, seed, fieldsFor, forcedJson],
-  );
   // Gated on `dirty`, which already discounts a switch between fields and JSON.
-  // A draft that does not read back (a half-typed value) is pinned to its field
-  // in the form; in JSON it cannot be pinned to a key, and marking whichever tab
-  // shows the JSON would move the mark as the author changes tab, so no tab is.
-  const pendingFields: ReadonlySet<string> = !dirty
-    ? new Set()
-    : changedKeys !== 'unreadable'
-      ? changedKeys
-      : editor.jsonMode
-        ? new Set()
-        : new Set(
-            (fields ?? [])
-              .filter(
-                (f) =>
-                  payloadSignature(draft.inputs[f.name]) !== payloadSignature(seed.inputs[f.name]),
-              )
-              .map((f) => f.name),
-          );
+  // Half-typed JSON cannot be pinned to a key, and marking whichever tab shows
+  // the JSON would move the mark as the author changes tab, so no tab is.
+  const changedKeys = useMemo(
+    () => (dirty ? changedConfigKeys(draft, seed, fieldsFor, forcedJson) : 'unreadable'),
+    [dirty, draft, seed, fieldsFor, forcedJson],
+  );
+  const pendingFields: ReadonlySet<string> = changedKeys === 'unreadable' ? new Set() : changedKeys;
   // A half-picked pair is on screen but not on the node (`halfBound`).
   const pendingSlots = new Set<ActivityBindingSlot>();
   if (thisNode?.connectionIds === undefined) {
@@ -4461,7 +4452,6 @@ export function NodePanel({
       <aside className="property-panel" aria-label="Properties">
         <PanelTabs
           label="Activity properties"
-          reserveStatus
           header={header(false)}
           selected={currentTab === 'general' ? 'general' : 'settings'}
           onSelect={chooseTab}
@@ -4507,7 +4497,6 @@ export function NodePanel({
           its required settings are. */}
       <PanelTabs
         label="Activity properties"
-        reserveStatus
         header={header(true)}
         selected={currentTab}
         onSelect={chooseTab}

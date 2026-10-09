@@ -31,6 +31,7 @@ import {
   payloadSignature,
   placeRowCandidate,
   readConfigDraft,
+  changedConfigKeys,
   saveableConfigOf,
   schemaPrecheckCandidate,
   seedFieldInputs,
@@ -1677,6 +1678,34 @@ describe('saveableConfigOf / payloadSignature (#1396)', () => {
   it('is key-order blind, and still a string for a non-finite number', () => {
     expect(payloadSignature({ a: 1, b: 2 })).toBe(payloadSignature({ b: 2, a: 1 }));
     expect(payloadSignature([Number.NaN])).toBe('[null]');
+  });
+});
+
+describe('changedConfigKeys (#1477)', () => {
+  const schema = z.object({ path: z.string().optional(), n: z.number().optional() });
+  const fieldsFor = () => ({ fields: deriveConfigFields(schema) ?? [], carried: [] });
+  const seed: ConfigDraft<'k'> = {
+    kind: 'k',
+    config: { path: 'a', n: 1 },
+    inputs: { path: 'a', n: '1' },
+    jsonText: '{"path":"a","n":1}',
+    jsonMode: false,
+  };
+
+  it('names the keys an edit changes, and none for a switch to JSON', () => {
+    expect(changedConfigKeys({ ...seed, inputs: { path: 'b', n: '1' } }, seed, fieldsFor)).toEqual(
+      new Set(['path']),
+    );
+    expect(changedConfigKeys({ ...seed, jsonMode: true }, seed, fieldsFor)).toEqual(new Set());
+  });
+
+  it('pins a half-typed field to its field, and half-typed JSON to nothing', () => {
+    expect(changedConfigKeys({ ...seed, inputs: { path: 'a', n: '1x' } }, seed, fieldsFor)).toEqual(
+      new Set(['n']),
+    );
+    expect(
+      changedConfigKeys({ ...seed, jsonMode: true, jsonText: '{"path":' }, seed, fieldsFor),
+    ).toBe('unreadable');
   });
 });
 

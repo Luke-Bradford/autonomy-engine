@@ -156,6 +156,7 @@ test('a tab label shows its problems, an unapplied edit, or that it is complete'
     nodes: [
       { id: 'h', type: 'http_request', position: { x: 0, y: 0 }, config: {} },
       { id: 'w', type: 'wait', position: { x: 300, y: 0 }, config: { seconds: '${1}' } },
+      { ...seed.nodes[0]!, position: { x: 600, y: 0 } },
     ],
   });
   await nodeById(page, 'h').click();
@@ -173,6 +174,13 @@ test('a tab label shows its problems, an unapplied edit, or that it is complete'
   const before = await authLeft();
   await url.fill('');
   await expect(request).toHaveAccessibleDescription('Unapplied changes');
+  // The pending dot sits in the tab's corner, over its padding, not after the label.
+  const dot = await request.evaluate((tab) => {
+    const at = tab.querySelector('.fui-Tab__content .panel-tabs__pending')!.getBoundingClientRect();
+    const box = tab.getBoundingClientRect();
+    return at.left >= box.left && at.right <= box.right + 0.5 && at.top >= box.top;
+  });
+  expect(dot).toBe(true);
   await expect(auth).toHaveAccessibleDescription('');
   expect(await authLeft()).toBe(before);
 
@@ -203,5 +211,18 @@ test('a tab label shows its problems, an unapplied edit, or that it is complete'
   const settings = tabs(page).getByRole('tab', { name: 'Settings' });
   await expect(settings).toHaveAccessibleDescription('Complete');
   await expect(settings.locator('.fui-Tab__content .panel-tabs__status')).toHaveText('✓');
+
+  // Copy's four tabs, Mapping's ✓ included, fit the dock in its narrower,
+  // right-hand position.
+  await nodeById(page, 'c').click();
+  await page.getByRole('button', { name: 'Dock to right' }).click();
+  await expectTabNames(tabs(page), ['General', 'Source', 'Sink', 'Mapping']);
+  const fit = await tabs(page).evaluate((list) => {
+    const bound = list.getBoundingClientRect();
+    const last = list.querySelector('[role="tab"]:last-of-type')!.getBoundingClientRect();
+    return { overflow: list.scrollWidth - list.clientWidth, gap: bound.right - last.right };
+  });
+  expect(fit.overflow).toBeLessThanOrEqual(0);
+  expect(fit.gap).toBeGreaterThanOrEqual(0);
   await expectQuiet(page, problems);
 });

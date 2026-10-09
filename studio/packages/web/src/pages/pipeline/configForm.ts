@@ -1533,9 +1533,10 @@ function readSaveable<K extends string>(
 
 /**
  * #1477 OR29 — WHICH top-level keys `draft` would change against `seed`, read
- * the way `saveableConfigOf` reads both (so a view switch is no change), or
- * `'unreadable'` when either does not read back (a half-typed value): the
- * change is real but cannot be pinned to a key.
+ * the way `saveableConfigOf` reads both (so a view switch is no change). A
+ * draft that does not read back (a half-typed value) is still pinned to its
+ * fields when the form is showing — the fields whose input differs — but not in
+ * JSON, where the text is one value: that is `'unreadable'`.
  */
 export function changedConfigKeys<K extends string>(
   draft: ConfigDraft<K>,
@@ -1543,12 +1544,23 @@ export function changedConfigKeys<K extends string>(
   fieldsFor: FieldsFor<K>,
   forcedJson: ForcedJson<K> = neverForced,
 ): ReadonlySet<string> | 'unreadable' {
-  const now = readSaveable(draft, fieldsFor, forcedJson).draft;
+  const now = readSaveable(draft, fieldsFor, forcedJson);
   const was = readSaveable(seed, fieldsFor, forcedJson).draft;
-  if (!now.ok || !was.ok) return 'unreadable';
-  const keys = new Set([...Object.keys(now.config), ...Object.keys(was.config)]);
+  if (now.draft.ok && was.ok) {
+    const after = now.draft.config;
+    const before = was.config;
+    const keys = new Set([...Object.keys(after), ...Object.keys(before)]);
+    return new Set(
+      [...keys].filter((k) => payloadSignature(after[k]) !== payloadSignature(before[k])),
+    );
+  }
+  if (now.view.jsonMode) return 'unreadable';
   return new Set(
-    [...keys].filter((k) => payloadSignature(now.config[k]) !== payloadSignature(was.config[k])),
+    now.view.fields
+      .filter(
+        (f) => payloadSignature(draft.inputs[f.name]) !== payloadSignature(seed.inputs[f.name]),
+      )
+      .map((f) => f.name),
   );
 }
 
