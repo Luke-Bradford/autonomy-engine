@@ -186,10 +186,10 @@ export function tabStatusMark(status: TabStatus | undefined): PanelTabStatus | u
  * issues are on ("On Sink, Mapping: "), or `''` when they are all on the tab the
  * author is looking at, where the message already sits.
  */
-export function refusalLead(
-  tabs: readonly NodeTypeTab[],
+export function refusalLead<K extends string>(
+  tabs: readonly FieldTab<K>[],
   paths: readonly (readonly PropertyKey[])[],
-  current: NodeTab,
+  current: K,
 ): string {
   const tabOfField = fieldTabs(tabs);
   const keys = new Set(
@@ -200,9 +200,16 @@ export function refusalLead(
   return `On ${named.map((t) => t.label).join(', ')}: `;
 }
 
+/** A tab as far as `refusalLead` needs it: a node's type tab, or a container's (#1477). */
+interface FieldTab<K extends string> {
+  readonly key: K;
+  readonly label: string;
+  readonly fields: readonly { readonly name: string }[];
+}
+
 /** Which tab each field is on. */
-function fieldTabs(tabs: readonly NodeTypeTab[]): Map<string, NodeTab> {
-  const out = new Map<string, NodeTab>();
+function fieldTabs<K extends string>(tabs: readonly FieldTab<K>[]): Map<string, K> {
+  const out = new Map<string, K>();
   for (const t of tabs) for (const f of t.fields) out.set(f.name, t.key);
   return out;
 }

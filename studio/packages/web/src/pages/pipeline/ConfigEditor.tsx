@@ -6,6 +6,7 @@ import { LabelledControl } from '../../lib/LabelledControl';
 import { FieldError } from '../../lib/form/FieldError';
 import { JsonEditor } from '../../lib/form/JsonEditor';
 import { fieldAttrs } from '../../lib/form/fieldValidation';
+import { FieldCell, FieldGrid } from '../../lib/form/FieldGrid';
 
 /**
  * The Config group a resource form or a canvas node embeds (#1146, #1088) — the
@@ -73,7 +74,7 @@ export function ConfigEditor<K extends string>({
   const jsonErrorId = useId();
   const jsonError = errorFor?.('config');
   return (
-    <div className={`config-editor ${className}`} role="group" aria-label="Config">
+    <FieldGrid className={className} label="Config">
       {toolbar && (
         <div>
           <span>Config</span>
@@ -118,7 +119,7 @@ export function ConfigEditor<K extends string>({
             // pack or span it. `display: contents` everywhere else, which
             // leaves a resource form's column exactly as it was.
             return (
-              <div key={field.name} className="config-cell" data-field-span={fieldSpan(field)}>
+              <FieldCell key={field.name} span={fieldSpan(field)}>
                 <ConfigFieldControl
                   field={field}
                   value={editor.inputs[field.name] ?? emptyControlValue(field)}
@@ -134,7 +135,7 @@ export function ConfigEditor<K extends string>({
                         },
                       })}
                 />
-              </div>
+              </FieldCell>
             );
           })}
           {fieldModeExtra}
@@ -154,6 +155,6 @@ export function ConfigEditor<K extends string>({
       )}
 
       {children}
-    </div>
+    </FieldGrid>
   );
 }

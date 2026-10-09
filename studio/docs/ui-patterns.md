@@ -290,6 +290,13 @@ message.
   holds every description to one sentence: not blank, not the title, ending in a full stop, at most
   120 characters, and no two the same. A type the catalog does not know gets no `?`. A container's
   panel shows its palette description and its kind (`foreach`, `loop`, `stage`).
+- **A container's settings are on tabs too** (#1477), from `containerTabs.ts`: ForEach is Items ·
+  Concurrency · Settings, Until is Condition · Settings, Stage is Settings (`join`). A field the
+  table does not place lands on the last tab. A field that is not valid on the kind (a repair) stays
+  below the tabs, with Apply, so it is in view from any tab. A tab with an unapplied edit gets the
+  `•`, and a refused Apply names the tab its field is on (`refusalLead`, shared with the node
+  panel). The strip is not pinned and the choice is not kept across containers: the panel is short,
+  and each kind has its own tabs.
 - **Activity config fields are titled like any other form's** (#1396 slice 7). Every field of every
   activity the generic form renders, and every container setting, carries `presented(...)`, pinned
   by `catalog/__tests__/activity-labels.test.ts`. A structural call (`execute_pipeline`) is authored
@@ -420,9 +427,11 @@ it.
   characters or fewer, so they are not clipped) packs two to a row, or three once the tab
   is 900px wide. Everything else spans the row: free text, paths, expressions, JSON, row lists and
   advisories. Fields keep their schema order, left to right and then down. `fieldSpan`
-  (`configForm.ts`) decides which kinds pack. `ConfigEditor` wraps each field in a
-  `.config-cell`, which is `display: contents` everywhere else, so the wrapper changes no resource
-  form. A number field is now `label[for]` beside its input, like every other kind, rather than a
+  (`configForm.ts`) decides which kinds pack. `FieldGrid` and `FieldCell` (`lib/form/FieldGrid.tsx`)
+  are the markup, used by `ConfigEditor`, the container panel and the General tab's policy (numbers
+  in one grid, flags in the next, so neither leaves one alone on a row). A cell is
+  `display: contents` everywhere else, so the wrapper changes no resource form; a grid given
+  `field-stack` keeps a field's gap when it is not packed. A number field is now `label[for]` beside its input, like every other kind, rather than a
   label wrapping it, so its hint sits inside the `.config-field` it belongs to.
 - **The threshold is measured on the tab's width, not the dock's.** The dock shares its width with
   the Problems column. At 1440 wide the bottom dock is 935px, but its tab is 589px. The tab is 429px

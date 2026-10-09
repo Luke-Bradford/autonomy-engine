@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import {
   CONTAINER_KIND_LABELS,
   CONTAINER_CONFIG_FIELDS,
@@ -35,6 +35,11 @@ import { CONTAINER_EDIT_TONE, containerEditQuestion, containerLabels } from './c
 import { useConfirm } from '../../lib/confirm/useConfirm';
 import { useSubjectIssues } from './issueContext';
 import { SubjectIssues } from './SubjectIssues';
+import { PanelTabs, type PanelTab } from './PanelTabs';
+import { containerTabs } from './containerTabs';
+import { refusalLead, tabStatusMark } from './tabStatus';
+import { fieldSpan } from './configForm';
+import { FieldCell, FieldGrid } from '../../lib/form/FieldGrid';
 
 /**
  * U23 (#839) — the container config form.
@@ -290,11 +295,39 @@ export function ContainerPanel({
   }
 
   const [confirm, confirmDialog] = useConfirm();
+  /** The open tab; `undefined` until the author picks one (the first is shown). */
+  const [tabKey, setTabKey] = useState<string>();
+
+  /**
+   * #1477 OR29 — the legal fields on ADF-style tabs (`containerTabs`), in the
+   * table's order. Every tab stays mounted (`PanelTabs`), and the drafts are
+   * this panel's, so a tab switch loses nothing. A tab with an unapplied edit
+   * gets the dock's `•`, and a refused Apply names the tab its field is on.
+   * The choice is not lifted as a node's is: each kind has its own tabs.
+   * The illegal carried fields are NOT on a tab: they are a repair the save may
+   * be blocked on, so they stay in view whichever tab is open.
+   */
+  const legalFields = fields.filter((f) => !illegal.includes(f.name));
+  const illegalFields = fields.filter((f) => illegal.includes(f.name));
+  const tabs = containerTabs(
+    container.kind,
+    legalFields.map((f) => f.name),
+  ).map((tab) => ({
+    ...tab,
+    fields: tab.fields.flatMap((name) => legalFields.filter((f) => f.name === name)),
+  }));
+  const currentTab = tabs.find((t) => t.key === tabKey)?.key ?? tabs[0]?.key ?? '';
+  const leadFor = (paths: readonly (readonly PropertyKey[])[]) =>
+    refusalLead(tabs, paths, currentTab);
 
   async function apply() {
     const assembled = assembleConfig(stored, fields, inputs);
     if (!assembled.ok) {
-      setError(assembled.message);
+      // #1477 OR29 — the refused field may be on a tab the author is not looking at.
+      const refused = fields.filter(
+        (f) => !parseFieldInput(f, inputs[f.name] ?? emptyControlValue(f)).ok,
+      );
+      setError(leadFor(refused.map((f) => [f.name])) + assembled.message);
       return;
     }
     const next = assembled.config as unknown as Container;
@@ -319,7 +352,9 @@ export function ContainerPanel({
     // round-trip to a 400 they were going to get anyway.
     const check = ContainerSchema.safeParse(next);
     if (!check.success) {
-      setError(formatZodIssues(check.error.issues));
+      setError(
+        leadFor(check.error.issues.map((i) => i.path)) + formatZodIssues(check.error.issues),
+      );
       return;
     }
     // The same pre-hoc gate a membership edit goes through. An `exitWhen` edit
@@ -345,7 +380,45 @@ export function ContainerPanel({
     }
     setError(null);
     onApply(next);
+    // Re-seeded from what was applied, so a value Apply normalises ("04" to 4)
+    // leaves no unapplied mark behind when the stored value did not change.
+    setInputs(seedFieldInputs(fields, next as unknown as Record<string, unknown>));
   }
+
+  /** One field's cell. The parallel/sequential line sits under Batch count. */
+  const cell = (field: ConfigField): ReactNode => (
+    <FieldCell key={field.name} span={fieldSpan(field)}>
+      <ConfigFieldControl
+        field={field}
+        value={inputs[field.name] ?? emptyControlValue(field)}
+        onChange={(next) => setInputs((prev) => ({ ...prev, [field.name]: next }))}
+        picker={illegal.includes(field.name) ? undefined : pickers[field.name]}
+      />
+      {container.kind === 'foreach' && field.name === 'batchCount' && (
+        <ForeachModeHint
+          container={container}
+          field={field}
+          input={inputs.batchCount ?? emptyControlValue(field)}
+        />
+      )}
+    </FieldCell>
+  );
+
+  const [firstTab, ...restTabs] = tabs.map(({ key, fields: onTab, ...tab }): PanelTab<string> => {
+    const pending = onTab.some(
+      (f) =>
+        !sameControlValue(
+          inputs[f.name] ?? emptyControlValue(f),
+          syncedSeed[f.name] ?? emptyControlValue(f),
+        ),
+    );
+    return {
+      key,
+      label: tab.label,
+      content: <FieldGrid className="field-stack">{onTab.map(cell)}</FieldGrid>,
+      ...(pending && { status: tabStatusMark({ problems: 0, complete: false, pending }) }),
+    };
+  });
 
   return (
     /* An `<aside className="property-panel">`, like every other top-level panel
@@ -369,7 +442,7 @@ export function ContainerPanel({
       )}
       <p className="page-hint">
         {container.children.length} {container.children.length === 1 ? 'activity' : 'activities'}{' '}
-        inside. Which activity belongs to which container is edited on the activity itself.
+        inside.
       </p>
 
       {unrenderable.length > 0 ? (
@@ -380,42 +453,38 @@ export function ContainerPanel({
           it again.
         </p>
       ) : (
-        <div className="contract-section">
-          {fields.map((field) => (
-            <Fragment key={field.name}>
-              <ConfigFieldControl
-                field={field}
-                value={inputs[field.name] ?? emptyControlValue(field)}
-                onChange={(next) => setInputs((prev) => ({ ...prev, [field.name]: next }))}
-                picker={illegal.includes(field.name) ? undefined : pickers[field.name]}
-              />
-              {container.kind === 'foreach' && field.name === 'batchCount' && (
-                <ForeachModeHint
-                  container={container}
-                  field={field}
-                  input={inputs.batchCount ?? emptyControlValue(field)}
-                />
-              )}
-            </Fragment>
-          ))}
-          {illegal.length > 0 && (
-            <p className="contract-advisory">
-              {illegal.join(', ')} {illegal.length === 1 ? 'is' : 'are'} not valid on {label} and{' '}
-              {illegal.length === 1 ? 'does' : 'do'} nothing.{' '}
-              {illegal.some((name) => blocked.has(name))
-                ? 'Saving is blocked until cleared.'
-                : 'Clearing is the only edit allowed here.'}
-            </p>
+        <>
+          {firstTab !== undefined && (
+            <PanelTabs
+              label="Container properties"
+              tabs={[firstTab, ...restTabs]}
+              selected={currentTab}
+              onSelect={setTabKey}
+            />
           )}
-          {error !== null && (
-            <p className="error" role="alert">
-              {error}
-            </p>
-          )}
-          <button type="button" onClick={() => void apply()}>
-            Apply container settings
-          </button>
-        </div>
+          <div className="contract-section">
+            {illegal.length > 0 && (
+              <>
+                <FieldGrid className="field-stack">{illegalFields.map(cell)}</FieldGrid>
+                <p className="contract-advisory">
+                  {illegal.join(', ')} {illegal.length === 1 ? 'is' : 'are'} not valid on {label}{' '}
+                  and {illegal.length === 1 ? 'does' : 'do'} nothing.{' '}
+                  {illegal.some((name) => blocked.has(name))
+                    ? 'Saving is blocked until cleared.'
+                    : 'Clearing is the only edit allowed here.'}
+                </p>
+              </>
+            )}
+            {error !== null && (
+              <p className="error" role="alert">
+                {error}
+              </p>
+            )}
+            <button type="button" onClick={() => void apply()}>
+              Apply container settings
+            </button>
+          </div>
+        </>
       )}
       {/* U21 (#935). Outside the form on purpose: both copy the container as
           STORED, not the unapplied drafts above — the same rule as `Duplicate

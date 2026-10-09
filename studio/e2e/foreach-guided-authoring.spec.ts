@@ -106,6 +106,7 @@ test('#1420 — a ForEach says whether batchCount runs items one at a time or to
 
   await page.getByRole('button', { name: 'Configure ForEach 1' }).click();
   const panel = properties(page);
+  await panel.getByRole('tab', { name: 'Concurrency' }).click();
   await expect(panel.getByText(/^Sequential: items run one at a time, in order\./)).toBeVisible();
   await panel.getByLabel(/^Batch count/).fill('3');
   await expect(panel.getByText(/^Parallel: up to 3 items run at once\./)).toBeVisible();

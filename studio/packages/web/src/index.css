@@ -2850,6 +2850,14 @@ button.danger {
   display: contents;
 }
 
+/* #1477 OR29 — a `FieldGrid` where the dock does not pack it (comfortable
+   density, a narrow or right-docked dock): one column, a field's gap apart. */
+.config-editor.field-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--density-space-2, 0.5rem);
+}
+
 /* #1477 OR29 — CONTROLS SIZED BY TYPE, not stretched (compact dock, any
    width). A native select's own width is its longest option plus its arrow;
    a number takes 120px. Free text, paths, expressions and JSON still take the
@@ -3025,10 +3033,11 @@ button.danger {
     grid-column: 1 / -1;
   }
 
-  /* In a full-width row (the General tab's policy), a checkbox, and a hint or
-     error slot that is the SIBLING of its control rather than inside it
-     (a checkbox's, a `DraftNumberField`'s), line up with the control column.
-     A checkbox packed into a grid cell keeps the cell's whole width. */
+  /* In a full-width row of a section, a checkbox, and a hint or error slot
+     that is the SIBLING of its control rather than inside it (a checkbox's, a
+     `DraftNumberField`'s), line up with the control column. A field packed into
+     a grid cell (the General tab's policy, since #1477) keeps the cell's whole
+     width. */
   :root[data-density='compact'] .property-dock .property-panel .form-section-body > .contract-check,
   :root[data-density='compact']
     .property-dock
