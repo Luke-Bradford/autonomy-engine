@@ -396,11 +396,34 @@ OR40 S1), which hold both densities' values: `--control-h`, `--row-h`, `--type-b
 `--type-caption-size` and `--space-1..6`, plus the `--type-*` font shorthands. Read the tokens
 rather than repeating the numbers; `theme/tokens.test.ts` ratchets the literal count down.
 
-The rules are scoped per surface. Today that is only the property dock's panel. A surface adopts
-compact by adding its selector to that block, and comfortable leaves every surface exactly as it
-was before density existed. Checkboxes, radios and textareas keep their own size. Icon buttons and
-Fluent's tabs keep their own metrics. `e2e/property-dock-density.spec.ts` measures the numbers at
-1440x900.
+Controls take the density app-wide through the control layer (below). The dock's label and hint
+sizes are still scoped to the property dock's panel. Icon buttons and Fluent's tabs keep their own
+metrics until S2b. `e2e/property-dock-density.spec.ts` measures the dock at 1440x900.
+
+## Controls
+
+One look per control type (#1594 OR40 S2a), from the tokens, in both densities. The layer is in
+`index.css` beside the bare `button` rule.
+
+- **Inputs, selects and textareas:** `--control-h` tall (a textarea sizes to its text), 1px
+  `--border`, `--radius-control`, body type, accent border on hover, `--error` border on
+  `aria-invalid`, 0.6 opacity when disabled. The layer is at zero specificity (`:where()`), so a
+  component rule still wins. Do not add a new per-form skin; delete one when you touch it. Known
+  leftovers for S6: `.json-editor-input`, `.inline-name-form input`, `.run-filters` and the search
+  boxes, which set their own padding or width.
+- **Buttons, three variants:** secondary is a bare `<button>`, primary is `className="primary"`, and
+  subtle (toolbar and icon) arrives with S2b. `danger` is a colour tone of secondary, not a fourth
+  variant. An unclassed button and the variants are at least `--control-h` tall. A classed one-off
+  button keeps its own size until S3/S6 moves it.
+- **Checkboxes and radios** sit beside their words: box, 8px, label. A `<label>` wrapping the input
+  is all it takes. Keep `contract-check` on the dock's checkbox labels, because the compact dock's
+  label-gap rule excludes it by class.
+- **One focus ring:** 2px `--accent`, 1px outside, `:focus-visible` only, on everything, canvas
+  nodes included. An element that fills a clipping container (a rail link, a grid resizer, a
+  splitter) keeps the ring and sets only `outline-offset: var(--focus-ring-inset)`. Never restate
+  the outline itself. Fluent's controls keep Fluent's own indicator.
+
+`e2e/control-layer.spec.ts` measures all of this at 1440x900.
 
 ## Width, and why a drawer has no two-column grid
 
