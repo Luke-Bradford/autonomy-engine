@@ -419,7 +419,7 @@ export function TriggerForm({
         </label>
         <FieldError id={nameErrorId} message={validation.errorFor('name')} />
 
-        <label className="checkbox">
+        <label>
           <input
             type="checkbox"
             checked={form.enabled}

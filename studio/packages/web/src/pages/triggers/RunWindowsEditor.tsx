@@ -180,7 +180,7 @@ export function RunWindowsEditor({
     <fieldset className="run-windows" {...f.groupAttrs('runWindows')}>
       <legend>Run windows (UTC)</legend>
 
-      <label className="checkbox">
+      <label>
         <input
           type="checkbox"
           checked={value.restricted}
@@ -267,7 +267,7 @@ export function RunWindowsEditor({
             </p>
           )}
 
-          <label className="checkbox">
+          <label>
             <input
               type="checkbox"
               checked={row.daysRestricted}
@@ -281,7 +281,7 @@ export function RunWindowsEditor({
               <fieldset className="recurrence-days" {...rowField.groupAttrs(`${index}.days`)}>
                 <legend>{`Window ${index + 1} days (UTC)`}</legend>
                 {WEEK_DAY_NAMES.map((name, day) => (
-                  <label key={name} className="checkbox">
+                  <label key={name}>
                     <input
                       type="checkbox"
                       checked={row.days.includes(day)}

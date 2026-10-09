@@ -42,7 +42,7 @@ button {
      a fixture cannot notice the day someone adds a `…button` rule above it. */
   it('resolves `button` to the element rule in the real stylesheet', () => {
     const body = ruleBody(css, 'button');
-    expect(body).toMatch(/border-radius:\s*6px/);
+    expect(body).toMatch(/border-radius:\s*var\(--radius-control\)/);
     expect(body).toMatch(/background:\s*var\(--panel-2\)/);
   });
 

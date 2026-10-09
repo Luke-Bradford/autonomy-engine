@@ -51,7 +51,7 @@ export function OverridableKeysField({
           : `A pipeline node that uses this ${subject.noun} may set the ticked settings for each run. Nothing else can be overridden.`}
       </p>
       {rows.map((row) => (
-        <label key={row.key} className="checkbox">
+        <label key={row.key}>
           <input
             type="checkbox"
             checked={row.checked}

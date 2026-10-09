@@ -71,6 +71,17 @@ describe('design tokens', () => {
     expect(compact.get('--font-mono')).toMatch(/^ui-monospace, 'Cascadia Code'/);
   });
 
+  /** S2 — one focus ring; the inset form is derived, so the width has one source. */
+  it('declares the focus ring', () => {
+    expect(compact.get('--focus-ring-width')).toBe('2px');
+    expect(compact.get('--focus-ring-offset')).toBe('1px');
+    expect(compact.get('--focus-ring-inset')).toBe('calc(-1 * var(--focus-ring-width))');
+    expect(compact.get('--focus-ring-outset')).toBe(
+      'calc(2 * var(--focus-ring-offset) + var(--focus-ring-width))',
+    );
+    expect([...comfortable.keys()].filter((name) => name.startsWith('--focus-'))).toEqual([]);
+  });
+
   /**
    * A `font` shorthand with no family is invalid at computed-value time, so a
    * `font: var(--type-x)` would silently fall back to the inherited font.
@@ -92,7 +103,7 @@ describe('design tokens', () => {
     for (const [file, css] of Object.entries(sheets)) {
       const read = [
         ...css.matchAll(
-          /var\(\s*(--(?:space|type|weight|radius|font|root)[\w-]*|--control-h|--row-h)/g,
+          /var\(\s*(--(?:space|type|weight|radius|font|root|focus)[\w-]*|--control-h|--row-h)/g,
         ),
       ].map(([, name = '']) => name);
       expect(
@@ -117,7 +128,7 @@ describe('design tokens', () => {
  * Inline TSX `style={{}}` and Fluent `makeStyles` values are not stylesheets and
  * are not counted here.
  */
-const BASELINE = 550;
+const BASELINE = 538;
 
 describe('design-token literal ratchet', () => {
   const literals = Object.entries(sheets).flatMap(([file, css]) =>
