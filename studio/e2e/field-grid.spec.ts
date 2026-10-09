@@ -40,7 +40,10 @@ function rows(scope: Locator, ids: string[]) {
       // What starts the control column: the control, or the box holding it
       // (a kind picker's icon and select).
       const cell = [...row.children].find((c) => c.contains(control))!;
-      return { name, label: box(label), control: box(control), cell: box(cell), row: box(row) };
+      // A label with a `?` is measured as the pair: their head row is the
+      // label column's item.
+      const head = label.closest('.labelled-control__head') ?? label;
+      return { name, label: box(head), control: box(control), cell: box(cell), row: box(row) };
     });
   }, ids);
 }

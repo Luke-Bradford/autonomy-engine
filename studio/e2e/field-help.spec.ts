@@ -11,11 +11,14 @@ import { fluentRootReady } from './support/theme';
  *   the label and left of the control;
  * - the note is not shown until the `?` is opened, and Escape closes it;
  * - the note is still the control's description, so a screen reader hears it.
+ * A section that holds the one field takes its note behind the SECTION's `?`
+ * instead: a field `?` there would repeat the section's name ("About Value").
  */
 test.use({ viewport: { width: 1440, height: 900 } });
 
 async function expectBehindHelp(page: Page, scope: Locator, field: string, note: RegExp) {
-  const control = scope.getByLabel(field, { exact: true });
+  // Within the field's row: a section can share the field's name.
+  const control = scope.locator('.labelled-control').getByLabel(field, { exact: true });
   await expect(control, `${field}: the note describes the control`).toHaveAccessibleDescription(
     note,
   );
@@ -45,6 +48,17 @@ async function expectBehindHelp(page: Page, scope: Locator, field: string, note:
   await expect(text, `${field}: Escape closes it`).toBeHidden();
 }
 
+async function expectInSectionHelp(page: Page, scope: Locator, section: string, note: RegExp) {
+  const group = scope.getByRole('group', { name: section, exact: true });
+  const text = group.getByText(note);
+  await expect(text, `${section}: the note is not a paragraph on the form`).toBeHidden();
+  await expect(group.getByLabel(`About ${section}`, { exact: true })).toHaveCount(1);
+  await group.getByLabel(`About ${section}`, { exact: true }).click();
+  await expect(text, `${section}: the section's ? opens the note`).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(text, `${section}: Escape closes it`).toBeHidden();
+}
+
 test('#1594 OR40 S3c-2 — a drawer field says what it is behind a ? beside its label', async ({
   page,
 }) => {
@@ -55,21 +69,21 @@ test('#1594 OR40 S3c-2 — a drawer field says what it is behind a ? beside its 
   await page.goto('/#/manage/secrets');
   await fluentRootReady(page);
   await page.getByRole('button', { name: 'New secret' }).click();
-  await expectBehindHelp(page, drawer, 'Value', /^Write-only: once saved/);
+  await expectInSectionHelp(page, drawer, 'Value', /once saved it can be replaced but never read/);
   await page.keyboard.press('Escape');
   await expect(drawer).toHaveCount(0);
 
   await page.goto('/#/manage/global-params');
   await fluentRootReady(page);
   await page.getByRole('button', { name: 'New global parameter' }).click();
-  await expectBehindHelp(page, drawer, 'Value', /^Cleartext — never a credential/);
+  await expectInSectionHelp(page, drawer, 'Value', /in cleartext and so never a credential/);
   await page.keyboard.press('Escape');
   await expect(drawer).toHaveCount(0);
 
   await page.goto('/#/manage/datasets');
   await fluentRootReady(page);
   await page.getByRole('button', { name: 'New dataset' }).click();
-  await expectBehindHelp(page, drawer, 'Columns (JSON)', /^The schema this dataset declares/);
+  await expectBehindHelp(page, drawer, 'Columns (JSON)', /^An authoring aid that auto-map matches against/);
   await page.keyboard.press('Escape');
   await expect(drawer).toHaveCount(0);
 

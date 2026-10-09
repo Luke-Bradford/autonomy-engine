@@ -1006,9 +1006,9 @@ function DatasetForm({
             name: 'Columns (JSON)',
             note: (
               <>
-                The schema this dataset declares: an authoring aid that auto-map matches against,
-                never a run input. A copy is gated against the store’s actual columns, not this
-                list. Write <code>[]</code> to state that there are none.
+                An authoring aid that auto-map matches against, never a run input: a copy is gated
+                against the store’s actual columns, not this list. Write <code>[]</code> to state
+                that there are none.
               </>
             ),
           }}

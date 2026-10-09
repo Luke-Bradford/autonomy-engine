@@ -194,7 +194,9 @@ test.describe('U13b per-kind connection config', () => {
     await expect(form(page).getByLabel('API version', { exact: true })).toBeHidden();
     // An agent_cli DOES use a secret without requiring one — "optional" alone
     // would not say where it goes.
-    await expect(form(page).getByText(/environment variable named by/)).toBeVisible();
+    await expect(form(page).getByLabel('Secret', { exact: true })).toHaveAccessibleDescription(
+      /environment variable named by/,
+    );
 
     // The JSON escape hatch is still reachable, and opens on the same config.
     await form(page).getByLabel('Command', { exact: true }).fill('claude');

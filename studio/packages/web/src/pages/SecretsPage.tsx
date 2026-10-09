@@ -475,10 +475,6 @@ function SecretForm({
           onChange={(secret) => onChange({ ...form, secret })}
           required
           field={validation.attrsFor('secret', valueErrorId)}
-          about={{
-            name: 'Value',
-            note: 'Write-only: once saved, the value can be replaced but never read back.',
-          }}
         />
         <FieldError id={valueErrorId} message={validation.errorFor('secret')} />
       </Section>

@@ -526,10 +526,7 @@ describe('SecretsPage — inline validation (#1396)', () => {
     await waitFor(() => expect(screen.getByLabelText('Name')).toHaveFocus());
     await user.click(within(alert).getByRole('button', { name: 'Value: Enter a value.' }));
     expect(screen.getByLabelText('Value', FIELD)).toHaveFocus();
-    // The error first, then what the field is (behind its `?`, #1594 OR40 S3c-2).
-    expect(screen.getByLabelText('Value', FIELD)).toHaveAccessibleDescription(
-      'Enter a value. Write-only: once saved, the value can be replaced but never read back.',
-    );
+    expect(screen.getByLabelText('Value', FIELD)).toHaveAccessibleDescription('Enter a value.');
   });
 
   it('a 409 on create is shown beside the Name', async () => {

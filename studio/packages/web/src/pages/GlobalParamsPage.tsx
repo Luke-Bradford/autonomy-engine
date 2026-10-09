@@ -396,8 +396,7 @@ function GlobalParamForm({
     value: useId(),
     description: useId(),
   };
-  const checkedBy = (key: keyof typeof errorIds, hintId?: string) =>
-    validation.attrsFor(key, errorIds[key], hintId);
+  const checkedBy = (key: keyof typeof errorIds) => validation.attrsFor(key, errorIds[key]);
   const errorLine = (key: keyof typeof errorIds) => (
     <FieldError id={errorIds[key]} message={validation.errorFor(key)} />
   );
@@ -568,11 +567,8 @@ function GlobalParamForm({
 
       <Section heading="Value" help={FORM_SECTION_HINTS.globalParam.value}>
         {/* Not `required`: empty text is a real value for a string global. */}
-        <LabelledControl
-          label="Value"
-          about={{ name: 'Value', note: 'Cleartext — never a credential.' }}
-        >
-          {(id, aboutId) => (
+        <LabelledControl label="Value">
+          {(id) => (
             <input
               id={id}
               type="text"
@@ -580,7 +576,7 @@ function GlobalParamForm({
               onChange={(e) => onChange({ ...form, valueText: e.target.value })}
               placeholder={VALUE_PLACEHOLDER[form.type]}
               spellCheck={false}
-              {...checkedBy('value', aboutId)}
+              {...checkedBy('value')}
             />
           )}
         </LabelledControl>
