@@ -935,10 +935,15 @@ body {
   flex-shrink: 0;
 }
 
-/* On the controls, not on `.toolbar > *`: `white-space` inherits, and a
-   toolbar item can hold a popover (the rerun's `?` note, the Run now panel)
-   whose text must wrap. */
-.toolbar :where(button, a, select, label, [role='status']) {
+/* On the toolbar's own controls only, never on everything inside it:
+   `white-space` inherits, and a toolbar item can hold a popover (the rerun's
+   `?` note, the Run now and Debug panels) whose labels and text must wrap. So
+   a control is either a toolbar child or one level inside a wrapper that
+   groups controls (`.run-now-anchor`, the List/Timeline group, a
+   `LabelledControl`, a `HelpDisclosure`'s summary), and a panel's contents,
+   deeper than that, are untouched. */
+.toolbar > :where(button, a, select, [role='status']),
+.toolbar > * > :where(button, a, label, select, summary) {
   white-space: nowrap;
 }
 
@@ -5909,10 +5914,10 @@ button.danger {
   margin-top: 0;
 }
 
-/* The search box, on the title row. The one toolbar control that gives way: a control added to the row narrows
-   the box rather than wrapping a button's label onto a second line and growing
-   the row (measured: Export CSV did exactly that, pushing the first run past
-   y=200). */
+/* The search box, on the title row. The one toolbar control that gives way: a
+   control added to the row narrows the box rather than wrapping a button's
+   label onto a second line and growing the row (measured: Export CSV did
+   exactly that, pushing the first run past y=200). */
 .toolbar > .runs-search {
   flex: 0 1 24rem;
   min-width: 12rem;

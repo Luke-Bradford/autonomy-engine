@@ -170,6 +170,23 @@ for (const density of ['compact', 'comfortable'] as const) {
     const editor = await measure(page);
     expectFrame('Editor', editor, density, true);
     expect(editor.controls.some((c) => c.name.startsWith('Save version'))).toBe(true);
+    // A control's label never wraps, but a panel opened from the toolbar (Run
+    // now, Debug) is deeper than a control and its labels must.
+    const wrap = await page.evaluate(() => {
+      const anchor = document.querySelector('.page-header > .toolbar .run-now-anchor')!;
+      const panel = document.createElement('div');
+      panel.innerHTML = '<label>probe</label><button type="button">probe</button>';
+      anchor.append(panel);
+      const read = (el: Element) => getComputedStyle(el).whiteSpace;
+      const result = {
+        control: read(anchor.querySelector(':scope > button')!),
+        panelLabel: read(panel.querySelector('label')!),
+        panelButton: read(panel.querySelector('button')!),
+      };
+      panel.remove();
+      return result;
+    });
+    expect(wrap).toEqual({ control: 'nowrap', panelLabel: 'normal', panelButton: 'normal' });
 
     await expectQuiet(page, problems);
   });
