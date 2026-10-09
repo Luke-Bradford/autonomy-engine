@@ -740,6 +740,10 @@ export function PipelineCanvas({
          delete, an Archive, a membership move. Unlike `window.confirm` the
          in-app dialog lets keys bubble here. */
       if (isModalDialogOpen()) return;
+      /* #1477 — nor from inside an open menu (the canvas context menu, Trigger
+         ▾): its items name a selection, and a ⌫ or ⌘X there would change that
+         selection under a menu still offering to act on it. */
+      if (e.target instanceof Element && e.target.closest('[role="menu"]')) return;
       /* U21 — Backspace/Delete, taken off React Flow (`deleteKeyCode={null}`)
          so the whole gesture is ONE undo entry. Read on the same document
          listener and behind the same text-entry guard as the history keys.
@@ -801,15 +805,10 @@ export function PipelineCanvas({
     : historyDisabledReason;
   const onCanvasCommand = useCallback(
     (cmd: CanvasCommand) => {
-      // Checked here too, so no click can edit past the reason.
-      if (canvasCommandReason !== null) {
-        showCanvasMsg(canvasCommandReason);
-        return;
-      }
       const result = runCanvasCommand(store, pipelineId, cmd);
       if (result.taken && result.notice !== null) showCanvasMsg(result.notice);
     },
-    [canvasCommandReason, store, pipelineId, showCanvasMsg],
+    [store, pipelineId, showCanvasMsg],
   );
 
   // Initial load: the promise-callback form keeps setState off the synchronous

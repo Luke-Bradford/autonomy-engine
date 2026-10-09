@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { Menu, MenuDivider, MenuItem, MenuList, MenuPopover } from '@fluentui/react-components';
 import type { CanvasCommand } from './canvasCommands';
 
@@ -12,8 +13,6 @@ export interface CanvasMenuRequest {
   readonly x: number;
   readonly y: number;
   readonly target: 'pane' | 'selection';
-  /** Focused when the menu closes, if it is still on the page. */
-  readonly returnFocus: Element | null;
 }
 
 const SELECTION_ITEMS: readonly { cmd: CanvasCommand; label: string; keys: string }[] = [
@@ -31,7 +30,8 @@ const SELECTION_ITEMS: readonly { cmd: CanvasCommand; label: string; keys: strin
  *
  * A Fluent menu with no trigger, anchored to the pointer through a zero-size
  * virtual element, in Fluent's default body portal (U0: never reparented into
- * the React Flow viewport). `closeOnScroll`, so a wheel-pan does not leave it
+ * the React Flow viewport). Closing hands focus back to what had it before,
+ * which is Fluent's own restore. `closeOnScroll`, so a wheel-pan does not leave it
  * floating over a canvas that has moved. Delete goes last, after a divider, in
  * the danger colour, as in every `⋯` menu (#1397).
  *
@@ -49,20 +49,26 @@ export function CanvasContextMenu({
   onCommand: (cmd: CanvasCommand) => void;
   disabledReason: string | null;
 }) {
-  if (request === null) return null;
-  const { x, y } = request;
-  const at = {
-    getBoundingClientRect: () => ({
-      x,
-      y,
-      top: y,
-      left: x,
-      bottom: y,
-      right: x,
-      width: 0,
-      height: 0,
+  const x = request?.x ?? 0;
+  const y = request?.y ?? 0;
+  // Memoised: Fluent re-creates its position manager whenever the target's
+  // identity changes, and the canvas re-renders often while the menu is open.
+  const at = useMemo(
+    () => ({
+      getBoundingClientRect: () => ({
+        x,
+        y,
+        top: y,
+        left: x,
+        bottom: y,
+        right: x,
+        width: 0,
+        height: 0,
+      }),
     }),
-  };
+    [x, y],
+  );
+  if (request === null) return null;
   const disabled = disabledReason !== null;
   const subText = disabledReason ?? undefined;
   const items =
@@ -71,10 +77,7 @@ export function CanvasContextMenu({
     <Menu
       open
       onOpenChange={(_, data) => {
-        if (data.open) return;
-        onClose();
-        const back = request.returnFocus;
-        if (back instanceof HTMLElement && back.isConnected) back.focus();
+        if (!data.open) onClose();
       }}
       positioning={{ target: at, position: 'below', align: 'start' }}
       closeOnScroll

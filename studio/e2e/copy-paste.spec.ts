@@ -495,6 +495,11 @@ test.describe('copy/paste on the canvas (U21)', () => {
       'Paste⌘V',
       'Delete⌫',
     ]);
+    // A key pressed inside the menu is the menu's, not the canvas's: ⌫ here
+    // must not delete the selection the menu is still offering to act on.
+    await expect(menu.getByRole('menuitem', { name: /Copy/ })).toBeFocused();
+    await page.keyboard.press('Backspace');
+    await expect(canvasNodes(page)).toHaveCount(2);
     await menu.getByRole('menuitem', { name: /Copy/ }).click();
     await expect(page.getByText('Copied 1 activity.')).toBeVisible();
     await expect(menu).toHaveCount(0);

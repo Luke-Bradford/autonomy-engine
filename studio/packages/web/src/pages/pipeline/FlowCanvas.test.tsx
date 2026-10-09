@@ -1540,6 +1540,18 @@ describe('FlowCanvas context menu (#1477 OR29)', () => {
     expect(calls).toEqual([]);
   });
 
+  // Fluent's own focus restore, not code of ours: pinned so a menu rebuilt
+  // without it (or a trigger-less Menu that stops restoring) is caught.
+  it('gives focus back to the right-clicked activity when the menu closes', async () => {
+    const { node } = withGraph({ onCommand: () => {} });
+    node('a').focus();
+    fireEvent.contextMenu(node('a'), { clientX: 20, clientY: 20 });
+    await waitFor(() => expect(within(document.body).getAllByRole('menuitem')).toHaveLength(5));
+    fireEvent.keyDown(within(document.body).getAllByRole('menuitem')[0]!, { key: 'Escape' });
+    await waitFor(() => expect(within(document.body).queryAllByRole('menuitem')).toEqual([]));
+    await waitFor(() => expect(document.activeElement).toBe(node('a')));
+  });
+
   it('leaves the browser its own menu when the page gives the canvas no commands', () => {
     const { pane } = withGraph();
     expect(fireEvent.contextMenu(pane, { clientX: 40, clientY: 40 })).toBe(true);

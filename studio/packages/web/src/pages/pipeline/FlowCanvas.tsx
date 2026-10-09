@@ -1804,6 +1804,19 @@ export function FlowCanvas({
    * passes the pane no `onClick` prop at all (dist:1630), so the ordinary path
    * is already inert.
    */
+  function onPaneClick(event: ReactMouseEvent) {
+    const st = store.getState();
+    if (event.metaKey || event.ctrlKey) {
+      for (const s of st.selected) {
+        if (s.kind === 'node' || s.kind === 'edge') {
+          pendingPaneClear.current.add(`${s.kind}:${s.id}`);
+        }
+      }
+      return;
+    }
+    st.select(null);
+  }
+
   /**
    * #1477 OR29 — the context menu, at the pointer. A keyboard-raised one
    * (Shift+F10, the Menu key) may report 0,0, so it opens below the element it
@@ -1823,7 +1836,7 @@ export function FlowCanvas({
       x = box.left;
       y = box.bottom;
     }
-    setMenu({ x, y, target, returnFocus: document.activeElement });
+    setMenu({ x, y, target });
   }
   function onNodeContextMenu(event: ReactMouseEvent, node: FlowNode) {
     if (node.type === 'container') {
@@ -1837,19 +1850,6 @@ export function FlowCanvas({
       st.select({ kind: 'node', id: node.id });
     }
     openMenu(event, 'selection');
-  }
-
-  function onPaneClick(event: ReactMouseEvent) {
-    const st = store.getState();
-    if (event.metaKey || event.ctrlKey) {
-      for (const s of st.selected) {
-        if (s.kind === 'node' || s.kind === 'edge') {
-          pendingPaneClear.current.add(`${s.kind}:${s.id}`);
-        }
-      }
-      return;
-    }
-    st.select(null);
   }
 
   function onNodesChange(changes: NodeChange[]) {
