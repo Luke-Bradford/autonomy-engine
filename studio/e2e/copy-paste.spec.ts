@@ -466,4 +466,56 @@ test.describe('copy/paste on the canvas (U21)', () => {
 
     await expectQuiet(page, problems);
   });
+  /* #1477 OR29 — the canvas context menu: Paste on the empty canvas, the
+     clipboard acts and Delete on an activity. Each item runs the command its
+     key runs, so what is proven here is the REACH (a right-click opens the
+     right menu at all, its items act, the keyboard can drive it) and that a
+     menu Delete is one undo entry as ⌫ is. */
+  test('the right-click menu copies, pastes and deletes, and one undo restores a delete', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await openSeededCanvas(page, 'or29 context menu', {
+      nodes: [
+        { id: 'a', type: 'http_request', position: { x: 0, y: 0 }, config: {} },
+        { id: 'b', type: 'http_request', position: { x: 240, y: 0 }, config: {} },
+      ],
+      edges: [{ id: 'e1', from: 'a', to: 'b', on: 'success' }],
+    });
+    const menu = page.getByRole('menu');
+    const pane = page.locator('.react-flow__pane');
+    const box = (await pane.boundingBox())!;
+    const emptySpot = { x: box.width / 2, y: box.height * 0.85 };
+
+    await nodeById(page, 'b').click({ button: 'right' });
+    await expect(menu.getByRole('menuitem')).toHaveText([
+      'Copy⌘C',
+      'Cut⌘X',
+      'Duplicate⌘D',
+      'Paste⌘V',
+      'Delete⌫',
+    ]);
+    await menu.getByRole('menuitem', { name: /Copy/ }).click();
+    await expect(page.getByText('Copied 1 activity.')).toBeVisible();
+    await expect(menu).toHaveCount(0);
+
+    // The empty canvas offers Paste alone, and the keyboard can take it.
+    await pane.click({ button: 'right', position: emptySpot });
+    await expect(menu.getByRole('menuitem')).toHaveText(['Paste⌘V']);
+    await expect(menu.getByRole('menuitem', { name: /Paste/ })).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page.getByText('Pasted 1 activity.')).toBeVisible();
+    await expect(canvasNodes(page)).toHaveCount(3);
+
+    // Delete takes the activity and its edge, and ONE undo brings both back.
+    await nodeById(page, 'a').click({ button: 'right' });
+    await menu.getByRole('menuitem', { name: /Delete/ }).click();
+    await expect(nodeById(page, 'a')).toHaveCount(0);
+    await expect(edgeGroup(page)).toHaveCount(0);
+    await page.keyboard.press('Meta+z');
+    await expect(nodeById(page, 'a')).toHaveCount(1);
+    await expect(edgeGroup(page)).toHaveCount(1);
+
+    await expectQuiet(page, problems);
+  });
 });

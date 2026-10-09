@@ -1439,3 +1439,110 @@ describe('FlowCanvas — issues drawn on the box they are about (#863)', () => {
     expect(badge?.getAttribute('role')).toBeNull();
   });
 });
+
+describe('FlowCanvas context menu (#1477 OR29)', () => {
+  function withGraph(props: { onCommand?: (cmd: string) => void; reason?: string | null } = {}) {
+    const store = createCanvasStore();
+    store.getState().loadVersion(
+      PipelineVersionSchema.parse({
+        id: 'plv_1',
+        resourceId: 'res_plv1',
+        pipelineId: 'pl_1',
+        version: 1,
+        params: [],
+        outputs: [],
+        nodes: [
+          { id: 'a', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
+          { id: 'b', type: 'http_request', config: {}, position: { x: 300, y: 0 } },
+          { id: 'in_box', type: 'http_request', config: {}, position: { x: 0, y: 300 } },
+        ],
+        edges: [],
+        containers: [{ id: 'c_1', kind: 'stage', children: ['in_box'] }],
+        catalogVersion: 1,
+        createdAt: 1,
+      }),
+    );
+    const { container } = render(
+      <ReactFlowProvider>
+        <FlowCanvas
+          store={store}
+          {...(props.onCommand === undefined ? {} : { onCommand: props.onCommand })}
+          commandDisabledReason={props.reason ?? null}
+        />
+      </ReactFlowProvider>,
+    );
+    const pane = container.querySelector<HTMLElement>('.react-flow__pane');
+    const node = (id: string) =>
+      container.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"]`)!;
+    expect(pane).not.toBeNull();
+    return { store, pane: pane!, node };
+  }
+
+  const itemNames = () =>
+    within(document.body)
+      .getAllByRole('menuitem')
+      .map((item) => item.textContent);
+
+  it('offers Paste alone on the empty canvas, and runs it', async () => {
+    const calls: string[] = [];
+    const { pane } = withGraph({ onCommand: (cmd) => calls.push(cmd) });
+    const shown = fireEvent.contextMenu(pane, { clientX: 40, clientY: 40 });
+    expect(shown, 'the browser menu was not suppressed').toBe(false);
+    await waitFor(() => expect(itemNames()).toEqual(['Paste⌘V']));
+    fireEvent.click(within(document.body).getByRole('menuitem', { name: /Paste/ }));
+    expect(calls).toEqual(['paste']);
+  });
+
+  it('selects an activity right-clicked outside the selection and offers the clipboard and Delete', async () => {
+    const calls: string[] = [];
+    const { store, node } = withGraph({ onCommand: (cmd) => calls.push(cmd) });
+    store.getState().select({ kind: 'node', id: 'a' });
+    fireEvent.contextMenu(node('b'), { clientX: 320, clientY: 20 });
+    expect(store.getState().selected).toEqual([{ kind: 'node', id: 'b' }]);
+    await waitFor(() =>
+      expect(itemNames()).toEqual(['Copy⌘C', 'Cut⌘X', 'Duplicate⌘D', 'Paste⌘V', 'Delete⌫']),
+    );
+    fireEvent.click(within(document.body).getByRole('menuitem', { name: /Delete/ }));
+    expect(calls).toEqual(['delete']);
+  });
+
+  it('keeps a multi-selection that the right-clicked activity is part of', async () => {
+    const { store, node } = withGraph({ onCommand: () => {} });
+    store.getState().setSelection([
+      { kind: 'node', id: 'a' },
+      { kind: 'node', id: 'b' },
+    ]);
+    fireEvent.contextMenu(node('b'), { clientX: 320, clientY: 20 });
+    await waitFor(() => expect(itemNames()).toContain('Delete⌫'));
+    expect(store.getState().selected).toHaveLength(2);
+  });
+
+  it('offers a container only Paste, as the canvas inside it does', async () => {
+    const { store, node } = withGraph({ onCommand: () => {} });
+    fireEvent.contextMenu(node('c_1'), { clientX: 20, clientY: 320 });
+    await waitFor(() => expect(itemNames()).toEqual(['Paste⌘V']));
+    expect(store.getState().selected).toEqual([]);
+  });
+
+  it('greys every item and says why while the canvas cannot be edited', async () => {
+    const calls: string[] = [];
+    const { node } = withGraph({
+      onCommand: (cmd) => calls.push(cmd),
+      reason: 'Saving — wait for it to finish.',
+    });
+    fireEvent.contextMenu(node('a'), { clientX: 20, clientY: 20 });
+    await waitFor(() => expect(within(document.body).getAllByRole('menuitem')).toHaveLength(5));
+    for (const item of within(document.body).getAllByRole('menuitem')) {
+      expect(item.getAttribute('aria-disabled'), item.textContent ?? '').toBe('true');
+      expect(item.textContent).toContain('Saving — wait for it to finish.');
+    }
+    fireEvent.click(within(document.body).getByRole('menuitem', { name: /Copy/ }));
+    expect(calls).toEqual([]);
+  });
+
+  it('leaves the browser its own menu when the page gives the canvas no commands', () => {
+    const { pane } = withGraph();
+    expect(fireEvent.contextMenu(pane, { clientX: 40, clientY: 40 })).toBe(true);
+    expect(within(document.body).queryAllByRole('menuitem')).toEqual([]);
+  });
+});
