@@ -1692,6 +1692,30 @@ button.danger {
   background: var(--panel);
 }
 
+/* #1477 OR29 — a property tab's mark: "⚠ 2" (problems), "•" (an edit not yet
+   applied), "✓" (complete). The slot is laid out on every tab of the dock, empty
+   or not, so a mark arriving with the first keystroke moves no tab along. */
+.panel-tabs__status {
+  display: inline-block;
+  min-width: 1em;
+  margin-left: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.panel-tabs__status[data-tone='error'] {
+  color: var(--error);
+}
+
+.panel-tabs__status[data-tone='pending'] {
+  color: var(--muted);
+}
+
+.panel-tabs__status[data-tone='complete'] {
+  color: var(--success);
+}
+
 .property-panel:has(> .panel-tabs-sticky) {
   /* The pinned region's height with the header wrapped onto two rows, as it is
      in the 320px-minimum right-hand dock. Erring high only scrolls a focused

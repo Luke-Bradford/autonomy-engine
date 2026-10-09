@@ -136,6 +136,7 @@ import {
   emptyControlValue,
   formatFieldValue,
   parseFieldInput,
+  changedConfigKeys,
   payloadSignature,
   readConfigDraft,
   saveableConfigOf,
@@ -173,6 +174,7 @@ import { SubjectIssues } from './SubjectIssues';
 import { SubjectIssuesContext, useSubjectIssues } from './issueContext';
 import { PolicyEditor } from './PolicyEditor';
 import { PanelTabs } from './PanelTabs';
+import { refusalLead, tabStatusMark, tabStatuses } from './tabStatus';
 import { branchConditionsOf, conditionLabel, declaredConditionsOf } from './ports';
 import {
   completionSibling,
@@ -3710,8 +3712,17 @@ export function NodePanel({
   // between fields and JSON is not an edit, and an unreadable draft counts as one.
   const signatureOf = (d: ConfigDraft<string>) =>
     payloadSignature(saveableConfigOf(d, fieldsFor, forcedJson));
-  const [baseline, setBaseline] = useState(() => signatureOf(draft));
-  const dirty = signatureOf(draft) !== baseline;
+  // The draft as it was seeded — what Revert returns to, and what each tab's
+  // pending mark (#1477 tab-label status) compares against, key by key.
+  const [seed, setSeed] = useState(draft);
+  const dirty = signatureOf(draft) !== signatureOf(seed);
+  // A refused Apply's pre-check, kept with the paths it named so each tab label
+  // can count its own. It counts only while its message is the one on screen:
+  // an edit, a later error or a re-seed replaces `error`, and the counts go with it.
+  const [applyRefusal, setApplyRefusal] = useState<{
+    message: string;
+    paths: readonly (readonly PropertyKey[])[];
+  } | null>(null);
 
   // #844 V6 — a variable writer names its variable from the DECLARED list, the
   // one thing its `variable` field may hold. The chooser only fills the draft,
@@ -3750,7 +3761,7 @@ export function NodePanel({
     setSyncedConfig(config);
     const seeded = seedNodeDraft(nodeType, editable, fields, draft.jsonMode);
     setDraft(seeded);
-    setBaseline(signatureOf(seeded));
+    setSeed(seeded);
     setError(null);
     // The auto-map line describes a DRAFT. A new `config` identity means that
     // draft is gone (usually because Apply just committed it), so a notice still
@@ -3802,11 +3813,16 @@ export function NodePanel({
    * result here does not mean the version will save — it only spares the author a
    * round-trip to a 400 they were going to get anyway.
    */
-  function schemaIssues(candidate: Record<string, unknown>): string | null {
+  function schemaIssues(
+    candidate: Record<string, unknown>,
+  ): { message: string; paths: PropertyKey[][] } | null {
     if (!entry) return null;
     const check = entry.configSchema.safeParse(schemaPrecheckCandidate(candidate, fields));
     if (check.success) return null;
-    return formatZodIssues(check.error.issues);
+    return {
+      message: formatZodIssues(check.error.issues),
+      paths: check.error.issues.map((i) => i.path),
+    };
   }
 
   /**
@@ -3830,8 +3846,9 @@ export function NodePanel({
     // Stripped before the pre-check too: a `.strict()` schema would otherwise
     // refuse a typed `outputs` as an unknown key the author cannot see is dropped.
     const issues = schemaIssues(withoutOutputs(read.owned));
+    setApplyRefusal(issues);
     if (issues) {
-      setError(issues);
+      setError(issues.message);
       return;
     }
     setError(null);
@@ -3991,10 +4008,64 @@ export function NodePanel({
     onTab?.(next);
   };
 
+  // #1477 OR29 — each tab label's status: its problems (the validator's, and a
+  // refused Apply's), an edit not yet on the node, or its required settings filled.
+  const changedKeys = useMemo(
+    () => changedConfigKeys(draft, seed, fieldsFor, forcedJson),
+    [draft, seed, fieldsFor, forcedJson],
+  );
+  // Gated on `dirty`, which already discounts a switch between fields and JSON.
+  // A draft that does not read back (a half-typed value) is pinned to its field
+  // in the form; in JSON it cannot be pinned to a key, and marking whichever tab
+  // shows the JSON would move the mark as the author changes tab, so no tab is.
+  const pendingFields: ReadonlySet<string> = !dirty
+    ? new Set()
+    : changedKeys !== 'unreadable'
+      ? changedKeys
+      : editor.jsonMode
+        ? new Set()
+        : new Set(
+            (fields ?? [])
+              .filter(
+                (f) =>
+                  payloadSignature(draft.inputs[f.name]) !== payloadSignature(seed.inputs[f.name]),
+              )
+              .map((f) => f.name),
+          );
+  // A half-picked pair is on screen but not on the node (`halfBound`).
+  const pendingSlots = new Set<ActivityBindingSlot>();
+  if (thisNode?.connectionIds === undefined) {
+    if (pending?.connections?.source !== undefined) pendingSlots.add('sourceConnection');
+    if (pending?.connections?.sink !== undefined) pendingSlots.add('sinkConnection');
+  }
+  if (thisNode?.datasetIds === undefined) {
+    if (pending?.datasets?.source !== undefined) pendingSlots.add('sourceDataset');
+    if (pending?.datasets?.sink !== undefined) pendingSlots.add('sinkDataset');
+  }
+  const boundSlots = new Set<ActivityBindingSlot>();
+  if (connectionId !== undefined) boundSlots.add('connection');
+  if (thisNode?.connectionIds?.source !== undefined) boundSlots.add('sourceConnection');
+  if (thisNode?.connectionIds?.sink !== undefined) boundSlots.add('sinkConnection');
+  if (thisNode?.datasetIds?.source !== undefined) boundSlots.add('sourceDataset');
+  if (thisNode?.datasetIds?.sink !== undefined) boundSlots.add('sinkDataset');
+  const refusalPaths =
+    applyRefusal !== null && applyRefusal.message === error ? applyRefusal.paths : [];
+  const statuses = tabStatuses({
+    nodeId,
+    tabs: typeTabs,
+    issues: attributed.map((issue) => issue.raw),
+    applyIssues: refusalPaths,
+    pendingFields,
+    pendingSlots,
+    config: editable,
+    boundSlots,
+  });
+  const errorLead = refusalLead(typeTabs, refusalPaths, currentTab);
+
   function revert() {
     const seeded = seedNodeDraft(nodeType, editable, fields, draft.jsonMode);
     setDraft(seeded);
-    setBaseline(signatureOf(seeded));
+    setSeed(seeded);
     setError(null);
     clearAutoMapNotice();
   }
@@ -4372,6 +4443,7 @@ export function NodePanel({
         {/* Under the header, so Apply's refusal shows whichever tab is open. */}
         {editActs && error && (
           <p className="error property-panel__error" role="alert">
+            {errorLead}
             {error}
           </p>
         )}
@@ -4389,6 +4461,7 @@ export function NodePanel({
       <aside className="property-panel" aria-label="Properties">
         <PanelTabs
           label="Activity properties"
+          reserveStatus
           header={header(false)}
           selected={currentTab === 'general' ? 'general' : 'settings'}
           onSelect={chooseTab}
@@ -4396,6 +4469,7 @@ export function NodePanel({
             {
               key: 'general',
               label: 'General',
+              status: tabStatusMark(statuses.get('general')),
               content: (
                 // #1312 — policy: retry applies to a call, and a secure flag is
                 // refused on one, which is explained only if the section is here.
@@ -4433,6 +4507,7 @@ export function NodePanel({
           its required settings are. */}
       <PanelTabs
         label="Activity properties"
+        reserveStatus
         header={header(true)}
         selected={currentTab}
         onSelect={chooseTab}
@@ -4440,9 +4515,15 @@ export function NodePanel({
           {
             key: 'general',
             label: 'General',
+            status: tabStatusMark(statuses.get('general')),
             content: <PolicyEditor store={store} nodeId={nodeId} />,
           },
-          ...typeTabs.map((t) => ({ key: t.key, label: t.label, content: typeTabContent(t) })),
+          ...typeTabs.map((t) => ({
+            key: t.key,
+            label: t.label,
+            status: tabStatusMark(statuses.get(t.key)),
+            content: typeTabContent(t),
+          })),
         ]}
       />
       {/* #1393 — AFTER the fields, not above them: an issue arriving must not push

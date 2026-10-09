@@ -1514,13 +1514,42 @@ export function saveableConfigOf<K extends string>(
   fieldsFor: FieldsFor<K>,
   forcedJson: ForcedJson<K> = neverForced,
 ): unknown {
+  const { view, draft } = readSaveable(form, fieldsFor, forcedJson);
+  return draft.ok ? draft.config : { unreadable: view.jsonMode ? form.jsonText : form.inputs };
+}
+
+function readSaveable<K extends string>(
+  form: ConfigDraft<K>,
+  fieldsFor: FieldsFor<K>,
+  forcedJson: ForcedJson<K>,
+) {
   const view = configEditorView(
     { kind: form.kind, config: form.config, jsonMode: form.jsonMode, inputs: {}, jsonText: '' },
     fieldsFor,
     forcedJson,
   );
-  const draft = readConfigDraft(view.jsonMode, form, view.fields);
-  return draft.ok ? draft.config : { unreadable: view.jsonMode ? form.jsonText : form.inputs };
+  return { view, draft: readConfigDraft(view.jsonMode, form, view.fields) };
+}
+
+/**
+ * #1477 OR29 — WHICH top-level keys `draft` would change against `seed`, read
+ * the way `saveableConfigOf` reads both (so a view switch is no change), or
+ * `'unreadable'` when either does not read back (a half-typed value): the
+ * change is real but cannot be pinned to a key.
+ */
+export function changedConfigKeys<K extends string>(
+  draft: ConfigDraft<K>,
+  seed: ConfigDraft<K>,
+  fieldsFor: FieldsFor<K>,
+  forcedJson: ForcedJson<K> = neverForced,
+): ReadonlySet<string> | 'unreadable' {
+  const now = readSaveable(draft, fieldsFor, forcedJson).draft;
+  const was = readSaveable(seed, fieldsFor, forcedJson).draft;
+  if (!now.ok || !was.ok) return 'unreadable';
+  const keys = new Set([...Object.keys(now.config), ...Object.keys(was.config)]);
+  return new Set(
+    [...keys].filter((k) => payloadSignature(now.config[k]) !== payloadSignature(was.config[k])),
+  );
 }
 
 /** #1396 — a save payload as one comparable string, for an unsaved-changes guard. */

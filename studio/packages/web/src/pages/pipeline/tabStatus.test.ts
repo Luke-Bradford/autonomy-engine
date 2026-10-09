@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { getActivity } from '@autonomy-studio/shared';
 import { nodeTypeTabs } from './activityTabs';
 import { deriveConfigFields } from './configForm';
-import { issueTarget, tabStatusMark, tabStatuses, type TabStatusInput } from './tabStatus';
+import {
+  issueTarget,
+  refusalLead,
+  tabStatusMark,
+  tabStatuses,
+  type TabStatusInput,
+} from './tabStatus';
 
 function tabsOf(type: string) {
   const entry = getActivity(type);
@@ -10,7 +16,7 @@ function tabsOf(type: string) {
   return nodeTypeTabs(entry, deriveConfigFields(entry.configSchema) ?? []);
 }
 
-const base = (over: Partial<TabStatusInput>): TabStatusInput => ({
+const baseInput = (over: Partial<TabStatusInput>): TabStatusInput => ({
   nodeId: 'n',
   tabs: tabsOf('copy'),
   issues: [],
@@ -18,6 +24,7 @@ const base = (over: Partial<TabStatusInput>): TabStatusInput => ({
   pendingFields: new Set(),
   pendingSlots: new Set(),
   config: {},
+  boundSlots: new Set(),
   ...over,
 });
 
@@ -28,6 +35,12 @@ describe('issueTarget (#1477)', () => {
       field: 'mapping',
     });
     expect(issueTarget('nodes.n.config.headers.0.value: bad', 'n')).toEqual({ field: 'headers' });
+    // Per-activity checks name the field with no `config.` (params.ts).
+    expect(issueTarget('node.n.condition: must be a boolean', 'n')).toEqual({ field: 'condition' });
+    expect(issueTarget('node.n.mapping[2].sink: unknown column', 'n')).toEqual({
+      field: 'mapping',
+    });
+    expect(issueTarget('node.n: prompt: required', 'n')).toEqual({ field: 'prompt' });
   });
 
   it('reads the run policy and each binding slot', () => {
@@ -47,8 +60,7 @@ describe('issueTarget (#1477)', () => {
     expect(issueTarget('nodes.n.connectionId: bad', 'n')).toEqual({ slot: 'connection' });
   });
 
-  it('names nothing for a message about the node as a whole, or another node', () => {
-    expect(issueTarget("node 'n': type: unknown activity type 'x'", 'n')).toBeUndefined();
+  it('names nothing for a message about another node, or with no location to read', () => {
     expect(issueTarget("node 'n' (set_variable) reads variable 'v'", 'n')).toBeUndefined();
     expect(issueTarget("node 'other': config.url: required", 'n')).toBeUndefined();
     // An id that merely STARTS with this node's id is another node.
@@ -63,13 +75,12 @@ describe('issueTarget (#1477)', () => {
 describe('tabStatuses (#1477)', () => {
   it('counts an issue on the tab that holds its field or binding, and policy on General', () => {
     const statuses = tabStatuses(
-      base({
+      baseInput({
         issues: [
           "node 'n': config.mode: bad",
           'nodes.n.connectionIds.sink: bad',
           "node 'n': config.mapping: required",
           "node 'n': policy.secureOutput is not supported",
-          "node 'n': type: whole-node issue",
         ],
       }),
     );
@@ -80,14 +91,22 @@ describe('tabStatuses (#1477)', () => {
   });
 
   it("counts a refused Apply's issues on their tabs", () => {
-    const statuses = tabStatuses(base({ applyIssues: [['mapping', 0, 'sink'], []] }));
+    const statuses = tabStatuses(baseInput({ applyIssues: [['mapping', 0, 'sink'], []] }));
     expect(statuses.get('mapping')?.problems).toBe(1);
     expect([...statuses.keys()]).toEqual(['mapping']);
   });
 
+  it("names the tabs a refused Apply's issues are on, unless that is only the open one", () => {
+    const tabs = tabsOf('copy');
+    expect(refusalLead(tabs, [['mapping', 0], ['mode']], 'source')).toBe('On Sink, Mapping: ');
+    expect(refusalLead(tabs, [['mapping', 0]], 'mapping')).toBe('');
+    expect(refusalLead(tabs, [['mapping', 0], ['mode']], 'mapping')).toBe('On Sink, Mapping: ');
+    expect(refusalLead(tabs, [[]], 'source')).toBe('');
+  });
+
   it('marks the tab holding an unapplied field or a half-picked binding as pending', () => {
     const statuses = tabStatuses(
-      base({ pendingFields: new Set(['mode']), pendingSlots: new Set(['sourceConnection']) }),
+      baseInput({ pendingFields: new Set(['mode']), pendingSlots: new Set(['sourceConnection']) }),
     );
     expect(statuses.get('sink')?.pending).toBe(true);
     expect(statuses.get('source')?.pending).toBe(true);
@@ -99,6 +118,8 @@ describe('tabStatuses (#1477)', () => {
     const request = http.find((t) => t.fields.some((f) => !f.optional));
     if (request === undefined) throw new Error('http_request has a required field');
     const required = request.fields.filter((f) => !f.optional).map((f) => f.name);
+    const base = (over: Partial<TabStatusInput>) =>
+      baseInput({ boundSlots: new Set(request.bindings), ...over });
 
     const empty = tabStatuses(base({ tabs: http, config: {} }));
     expect(empty.get(request.key)?.complete).toBeUndefined();
@@ -115,9 +136,31 @@ describe('tabStatuses (#1477)', () => {
     expect(pending.get(request.key)).toEqual({ problems: 0, pending: true, complete: false });
   });
 
-  it('never calls a tab of bindings alone complete', () => {
-    const statuses = tabStatuses(base({ config: {} }));
-    expect(statuses.has('source')).toBe(false);
+  it('calls a tab of bindings complete only once each is bound', () => {
+    expect(tabStatuses(baseInput({})).has('source')).toBe(false);
+    const half = tabStatuses(baseInput({ boundSlots: new Set(['sourceConnection']) }));
+    expect(half.has('source')).toBe(false);
+    const both = tabStatuses(
+      baseInput({ boundSlots: new Set(['sourceConnection', 'sourceDataset']) }),
+    );
+    expect(both.get('source')).toEqual({ problems: 0, pending: false, complete: true });
+  });
+
+  it('withholds every ✓ while an issue sits on no tab', () => {
+    const bound = new Set(['sourceConnection', 'sourceDataset'] as const);
+    for (const issue of [
+      "node 'n': type: unknown activity type 'x'",
+      "node 'n': config.outputs is malformed",
+      "node 'n' (set_variable) reads variable 'v', which it writes",
+    ]) {
+      expect(tabStatuses(baseInput({ boundSlots: bound, issues: [issue] })).has('source')).toBe(
+        false,
+      );
+    }
+    // ...and a refused Apply with no path is such an issue too.
+    expect(tabStatuses(baseInput({ boundSlots: bound, applyIssues: [[]] })).has('source')).toBe(
+      false,
+    );
   });
 });
 

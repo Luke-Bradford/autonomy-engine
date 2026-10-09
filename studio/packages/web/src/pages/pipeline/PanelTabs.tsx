@@ -1,10 +1,24 @@
 import { useId, useState, type ReactNode } from 'react';
 import { Tab, TabList } from '@fluentui/react-components';
 
+/** #1477 OR29 — a tab label's mark and what it means. */
+export interface PanelTabStatus {
+  glyph: string;
+  tone: 'error' | 'pending' | 'complete';
+  description: string;
+}
+
 export interface PanelTab<K extends string> {
   key: K;
   label: string;
   content: ReactNode;
+  /**
+   * #1477 OR29 — a mark after the label ("⚠ 2", "•", "✓") and what it means.
+   * The mark is `aria-hidden` and the meaning is the tab's DESCRIPTION, so the
+   * tab's accessible name stays its label: a name that changed with every
+   * keystroke would be re-announced, and would no longer say which tab it is.
+   */
+  status?: PanelTabStatus;
 }
 
 /**
@@ -30,6 +44,7 @@ export function PanelTabs<K extends string>({
   selected,
   onSelect,
   header,
+  reserveStatus,
 }: {
   label: string;
   tabs: readonly [PanelTab<K>, ...PanelTab<K>[]];
@@ -41,11 +56,14 @@ export function PanelTabs<K extends string>({
    * Apply / Revert / ⋯ stay in reach from the bottom of a long tab.
    */
   header?: ReactNode;
+  /** #1477 — keep the mark slot laid out even while no tab has a mark. */
+  reserveStatus?: boolean;
 }) {
   const baseId = useId();
   const [own, setOwn] = useState<K>(tabs[0].key);
   const current = selected ?? own;
   const tabId = (key: K) => `${baseId}-tab-${key}`;
+
   const panelId = (key: K) => `${baseId}-panel-${key}`;
 
   const strip = (
@@ -64,11 +82,35 @@ export function PanelTabs<K extends string>({
       aria-label={label}
     >
       {tabs.map((t) => (
-        <Tab key={t.key} value={t.key} id={tabId(t.key)} aria-controls={panelId(t.key)}>
+        <Tab
+          key={t.key}
+          value={t.key}
+          id={tabId(t.key)}
+          aria-controls={panelId(t.key)}
+          aria-describedby={t.status ? `${tabId(t.key)}-status` : undefined}
+        >
           {t.label}
+          {/* Reserved, the property dock's slot keeps its width while empty, so a
+              mark arriving with the first keystroke moves no tab along. */}
+          {(reserveStatus === true || t.status !== undefined) && (
+            <span className="panel-tabs__status" data-tone={t.status?.tone} aria-hidden="true">
+              {t.status?.glyph}
+            </span>
+          )}
         </Tab>
       ))}
     </TabList>
+  );
+  // Each mark's meaning, OUTSIDE the tabs: Fluent draws a tab's children twice
+  // (once hidden, to reserve its selected width), and an id must be unique.
+  const meanings = tabs.flatMap((t) =>
+    t.status
+      ? [
+          <span key={t.key} id={`${tabId(t.key)}-status`} className="visually-hidden">
+            {t.status.description}
+          </span>,
+        ]
+      : [],
   );
 
   return (
@@ -81,6 +123,7 @@ export function PanelTabs<K extends string>({
           {strip}
         </div>
       )}
+      {meanings}
       {tabs.map((t) => (
         <div
           key={t.key}
