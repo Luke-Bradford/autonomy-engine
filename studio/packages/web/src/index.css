@@ -913,7 +913,8 @@ body {
 
 /* The toolbar: 8px between controls, every one centred on the row, packed to
    the right. A control keeps its label on one line rather than wrapping and
-   growing the row; a search box is the one thing that gives way (`.runs-search`). */
+   growing the row; a search box is the one thing that gives way
+   (`.runs-search`). */
 .toolbar {
   display: flex;
   flex: 0 1 auto;
@@ -1400,10 +1401,10 @@ td button + button {
   align-items: start;
 }
 
-/* Where the list is too wide for its column, it scrolls inside its own column rather
-   than running under the drawer. A scroll container clips at its padding
-   edge, so a few pixels of padding (cancelled by the margin) keep the focus
-   ring of a button at the list's edge in view. */
+/* Where the list is too wide for its column, it scrolls inside that column
+   rather than running under the drawer. A scroll container clips at its
+   padding edge, so a few pixels of padding (cancelled by the margin) keep the
+   focus ring of a button at the list's edge in view. */
 .drawer-layout-open > :first-child {
   overflow-x: auto;
   padding: 4px;
