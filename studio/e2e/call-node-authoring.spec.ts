@@ -66,12 +66,12 @@ test.describe('#425 — call-node authoring', () => {
     await expect(properties(page).getByRole('heading', { name: 'Call target' })).toBeVisible();
     // #1413 — each section says what it holds, as the region's description.
     await expect(
-      properties(page).getByRole('region', { name: 'Call target', exact: true }),
+      properties(page).getByRole('group', { name: 'Call target', exact: true }),
     ).toHaveAccessibleDescription(
       'Which pipeline version this activity runs as a child run, and whether it waits for it to finish.',
     );
     await expect(
-      properties(page).getByRole('region', { name: 'Parameters', exact: true }),
+      properties(page).getByRole('group', { name: 'Parameters', exact: true }),
     ).toHaveAccessibleDescription(
       "The values this activity passes to the child pipeline's parameters.",
     );

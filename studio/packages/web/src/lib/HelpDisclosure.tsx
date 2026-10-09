@@ -10,7 +10,7 @@ import {
 /**
  * #1484 M2 — a `?` help: a `<details>` whose note floats over the page
  * (`.help-disclosure`), anchored to the `?`'s right edge. `inline` (#1477
- * OR29, `DockSection`) anchors it to the section's heading row instead, at that
+ * OR29, `Section`) anchors it to the section's heading row instead, at that
  * row's width: in a scrolling dock, a note anchored to a `?` at the left would
  * hang off the panel's edge. It dismisses the way a popover does, which native
  * `<details>` does not: on Escape, when focus moves to an element outside it,

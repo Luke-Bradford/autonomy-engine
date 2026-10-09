@@ -3,7 +3,7 @@ import { PIPELINE_DESCRIPTION_MAX_CHARS } from '@autonomy-studio/shared';
 import { LabelledControl } from '../../lib/LabelledControl';
 import type { createCanvasStore } from './canvasStore';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
-import { DockSection } from '../../lib/form/DockSection';
+import { Section } from '../../lib/Section';
 import { AutoGrowTextarea } from '../../lib/form/AutoGrowTextarea';
 import { AnnotationRows } from '../../lib/form/AnnotationRows';
 
@@ -30,7 +30,7 @@ export function PipelineGeneral({ store }: { store: Store }) {
 
   return (
     <>
-      <DockSection heading="General" hint={FORM_SECTION_HINTS.pipeline.general}>
+      <Section heading="General" help={FORM_SECTION_HINTS.pipeline.general}>
         <LabelledControl label="Description">
           {(id) => (
             <AutoGrowTextarea
@@ -42,15 +42,15 @@ export function PipelineGeneral({ store }: { store: Store }) {
             />
           )}
         </LabelledControl>
-      </DockSection>
-      <DockSection heading="Annotations" hint={FORM_SECTION_HINTS.pipeline.annotations}>
+      </Section>
+      <Section heading="Annotations" help={FORM_SECTION_HINTS.pipeline.annotations}>
         <AnnotationRows
           annotations={annotations}
           onAdd={() => store.getState().addAnnotation()}
           onUpdate={(i, text) => store.getState().updateAnnotation(i, text)}
           onRemove={(i) => store.getState().removeAnnotation(i)}
         />
-      </DockSection>
+      </Section>
     </>
   );
 }

@@ -594,7 +594,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await form.getByRole('radio', { name: /active published version/i }).check();
 
   // `pipelineName` was committed and re-imported, but never published.
-  await form.getByLabel(/^Pipeline/).selectOption({ label: pipelineName });
+  await form.getByRole('combobox', { name: /^Pipeline/ }).selectOption({ label: pipelineName });
   await expect(form.getByText(/has no published version/i)).toBeVisible();
   await form.getByRole('button', { name: /Create trigger/i }).click();
   // Refused HERE — the request that would 400 is never sent, and the message
@@ -606,7 +606,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await expect(form).toBeVisible();
 
   // `publishName` was published as v1 immediately above.
-  await form.getByLabel(/^Pipeline/).selectOption({ label: publishName });
+  await form.getByRole('combobox', { name: /^Pipeline/ }).selectOption({ label: publishName });
   /*
    * The id is read off the SELECT rather than looked up in `GET /api/pipelines`:
    * that list is keyset-paginated (`{items, nextCursor}`, #534) and the shared DB
@@ -616,7 +616,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
    * as `bindToActive.pipelineId`, so the pointer below is read for the same
    * pipeline the binding resolved against.
    */
-  const publishedPipelineId = await form.getByLabel(/^Pipeline/).inputValue();
+  const publishedPipelineId = await form.getByRole('combobox', { name: /^Pipeline/ }).inputValue();
   expect(publishedPipelineId, `no pipeline id selected for ${publishName}`).toBeTruthy();
   await expect(form.getByText(/v1/)).toBeVisible();
   await form.getByRole('button', { name: /Create trigger/i }).click();

@@ -30,7 +30,7 @@ function metrics(control: Locator) {
   return control.evaluate((el) => {
     const input = el as HTMLInputElement;
     const label = input.labels?.[0] ?? null;
-    const heading = input.closest('.property-panel')?.querySelector('.form-section-title') ?? null;
+    const heading = input.closest('.property-panel')?.querySelector('.section__title') ?? null;
     return {
       density: document.documentElement.dataset.density ?? null,
       fontSize: parseFloat(getComputedStyle(input).fontSize),
@@ -60,8 +60,9 @@ test.describe('#1477 OR29 — dock density', () => {
     expect(field.fontSize).toBe(13);
     expect(field.height).toBe(28);
     expect(field.labelFontSize).toBe(12);
-    expect(field.headingFontSize).toBe(12);
-    expect(field.headingTransform).toBe('uppercase');
+    // #1594 OR40 S3 — a section heading is in the section type, sentence case.
+    expect(field.headingFontSize).toBe(14);
+    expect(field.headingTransform).toBe('none');
 
     // Every single-line control in the panel shares the height, selects
     // included — not just the one field read above.
@@ -102,7 +103,7 @@ test.describe('#1477 OR29 — dock density', () => {
     expect(first!.y - table!.y).toBeLessThanOrEqual(32);
 
     // The section's help is one click away, not a paragraph on the page.
-    const params = panel.getByRole('region', { name: 'Params', exact: true });
+    const params = panel.getByRole('group', { name: 'Params', exact: true });
     await expect(params).toHaveAccessibleDescription(/typed inputs a run supplies/);
     await params.getByLabel('About Params').click();
     await expect(params.getByRole('note')).toBeVisible();
@@ -127,9 +128,9 @@ test.describe('#1477 OR29 — dock density', () => {
     expect(comfortable.fontSize).toBeGreaterThan(compact.fontSize);
     expect(comfortable.height).toBeGreaterThan(compact.height);
     expect(comfortable.labelFontSize).toBeGreaterThan(compact.labelFontSize ?? 0);
-    // None of the compact rules apply: the section titles are as they were.
+    // The section type steps up with the density (14 → 16).
     expect(comfortable.headingTransform).toBe('none');
-    expect(comfortable.headingFontSize).toBeGreaterThan(compact.headingFontSize ?? 0);
+    expect(comfortable.headingFontSize).toBe(16);
 
     // Per viewer: it survives a reload.
     await page.reload();

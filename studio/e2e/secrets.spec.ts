@@ -43,7 +43,9 @@ test.describe('#1060 the secrets vault has a front end', () => {
 
     await page.getByRole('button', { name: 'New secret' }).click();
     await page.getByLabel('Name').fill(NAME);
-    await page.getByLabel('Value', { exact: true }).fill('e2e-plaintext-never-returned');
+    await page
+      .getByRole('textbox', { name: 'Value', exact: true })
+      .fill('e2e-plaintext-never-returned');
     await page.getByRole('button', { name: 'Create secret' }).click();
 
     // Listed by name — and this row came back from the SERVER, since the form
@@ -77,7 +79,7 @@ test.describe('#1060 the secrets vault has a front end', () => {
 
     await page.getByRole('button', { name: 'New secret' }).click();
     await page.getByLabel('Name').fill(ROTATE_NAME);
-    await page.getByLabel('Value', { exact: true }).fill('first-value');
+    await page.getByRole('textbox', { name: 'Value', exact: true }).fill('first-value');
     await page.getByRole('button', { name: 'Create secret' }).click();
     await expect(page.getByRole('cell', { name: ROTATE_NAME, exact: true })).toBeVisible();
 
@@ -90,7 +92,7 @@ test.describe('#1060 the secrets vault has a front end', () => {
       await expect(nameField).toHaveValue(ROTATE_NAME);
       await expect(nameField).toHaveAttribute('readonly', '');
 
-      await page.getByLabel('Value', { exact: true }).fill('second-value');
+      await page.getByRole('textbox', { name: 'Value', exact: true }).fill('second-value');
 
       // The ONLY browser-observable proof that the rotation reached the
       // server. Everything else on this page — one row, same name, no error —
@@ -139,7 +141,7 @@ test.describe('#1060 the secrets vault has a front end', () => {
 
     await page.getByRole('button', { name: 'New secret' }).click();
     await page.getByLabel('Name').fill(DUP_NAME);
-    await page.getByLabel('Value', { exact: true }).fill('first');
+    await page.getByRole('textbox', { name: 'Value', exact: true }).fill('first');
     await page.getByRole('button', { name: 'Create secret' }).click();
     await expect(page.getByRole('cell', { name: DUP_NAME, exact: true })).toBeVisible();
 
@@ -148,7 +150,7 @@ test.describe('#1060 the secrets vault has a front end', () => {
     // real 409 from the real NOCASE unique index, not a stubbed rejection.
     await page.getByRole('button', { name: 'New secret' }).click();
     await page.getByLabel('Name').fill(DUP_NAME.toUpperCase());
-    await page.getByLabel('Value', { exact: true }).fill('second');
+    await page.getByRole('textbox', { name: 'Value', exact: true }).fill('second');
     await page.getByRole('button', { name: 'Create secret' }).click();
 
     try {
@@ -207,7 +209,9 @@ test.describe('#1060 the secrets vault has a front end', () => {
         return {
           drawerRightOfTable: aside.left >= table.right,
           rowMenuReachable: hit !== null && del.contains(hit),
-          sections: [...document.querySelectorAll('.form-drawer legend')].map((l) => l.textContent),
+          sections: [...document.querySelectorAll('.form-drawer .section__title')].map(
+            (l) => l.textContent,
+          ),
           actions: [...document.querySelectorAll('.form-drawer-footer button')].map(
             (b) => b.textContent,
           ),
@@ -220,7 +224,7 @@ test.describe('#1060 the secrets vault has a front end', () => {
         actions: ['Cancel', 'Replace value'],
       });
 
-      const value = page.getByLabel('Value', { exact: true });
+      const value = page.getByRole('textbox', { name: 'Value', exact: true });
       await expect(value).toBeFocused();
       await page.getByRole('button', { name: 'Show secret' }).click();
       await expect(value).toHaveAttribute('type', 'text');

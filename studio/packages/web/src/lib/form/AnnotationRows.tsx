@@ -16,8 +16,7 @@ export interface AnnotationRowField {
  * #1477 — the annotations list of any resource that carries them: a pipeline's
  * General tab and a connection's form. Controlled, so each owner keeps its own
  * state (the canvas store, the connection draft), and without its section
- * chrome, because those differ (`DockSection` in the dock, `FormSection` in a
- * drawer).
+ * chrome: the `Section` it sits in belongs to the dock or the drawer.
  *
  * One text box per row (ADF's own editor) rather than one textarea split on
  * newlines, so an annotation is never re-cut by the editor; nothing here trims or

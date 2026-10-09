@@ -22,7 +22,7 @@ function exchange(over: Partial<NodeCapture> = {}): NodeCapture {
 describe('CaptureSection (#605)', () => {
   it('shows the system, each turn and the completion, labelled', () => {
     render(<CaptureSection captures={[exchange()]} />);
-    const section = screen.getByRole('region', { name: 'Prompt & completion' });
+    const section = screen.getByRole('group', { name: 'Prompt & completion' });
     // #1413 — the line under the heading is the section's description.
     expect(section).toHaveAccessibleDescription(
       'Stored because this node’s capture setting is full.',
@@ -76,7 +76,7 @@ describe('CaptureSection (#605)', () => {
         ]}
       />,
     );
-    const section = screen.getByRole('region', { name: 'Prompt & completion' });
+    const section = screen.getByRole('group', { name: 'Prompt & completion' });
     const headings = within(section)
       .getAllByRole('heading')
       .map((h) => h.textContent);
@@ -95,7 +95,7 @@ describe('CaptureSection (#605)', () => {
   // secure node like any other captured text.
   it("shows the model's reasoning summary as its own labelled block", () => {
     render(<CaptureSection captures={[exchange({ reasoning: whole('add the two') })]} />);
-    const section = screen.getByRole('region', { name: 'Prompt & completion' });
+    const section = screen.getByRole('group', { name: 'Prompt & completion' });
     const heading = within(section).getByRole('heading', {
       name: "Reasoning (the model's summary)",
     });

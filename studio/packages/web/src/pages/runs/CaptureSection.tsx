@@ -1,4 +1,4 @@
-import { DockSection } from '../../lib/form/DockSection';
+import { Section } from '../../lib/Section';
 import { SECURE_REDACTED } from '@autonomy-studio/shared';
 import type { CapturedText, NodeCapture } from './runSummary';
 
@@ -53,9 +53,9 @@ export function CaptureSection({ captures }: { captures: NodeCapture[] }) {
     [c.system, c.completion, c.reasoning, ...c.messages].some((f) => f?.text === SECURE_REDACTED),
   );
   return (
-    <DockSection
+    <Section
       heading="Prompt & completion"
-      hint={
+      help={
         <>
           Stored because this node&rsquo;s <em>capture</em> setting is <code>full</code>.
         </>
@@ -105,7 +105,7 @@ export function CaptureSection({ captures }: { captures: NodeCapture[] }) {
           … showing the most recent {shown.length} of {captures.length} exchanges.
         </p>
       )}
-    </DockSection>
+    </Section>
   );
 }
 

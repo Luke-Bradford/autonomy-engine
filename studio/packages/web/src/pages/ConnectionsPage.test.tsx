@@ -1600,6 +1600,11 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
       await screen.findByText('Claude');
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+      await user.click(
+        within(screen.getByRole('form', { name: 'Connection form' })).getByRole('button', {
+          name: 'Advanced',
+        }),
+      );
       expect(allowlist()).toHaveTextContent(
         'SQLite connections have no settings a node can override.',
       );
@@ -1625,7 +1630,10 @@ describe('the connection form drawer (#1396)', () => {
       expect(within(drawer).getByRole('group', { name: section })).toBeInTheDocument();
     }
     // Advanced holds rarely-touched settings, so a new form opens it closed.
-    expect(drawer.querySelector('details.form-section')).not.toHaveAttribute('open');
+    expect(within(drawer).getByRole('button', { name: 'Advanced' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
     // Kinds are named for people, while the value stays the stored id.
     const kind = within(drawer).getByLabelText('Kind');
     expect(within(kind).getByRole('option', { name: 'Anthropic API' })).toHaveValue(
@@ -1729,9 +1737,9 @@ describe('the connection form drawer (#1396)', () => {
     const user = userEvent.setup();
     renderWithRouter(<ConnectionsPage />);
     await user.click(await screen.findByRole('button', { name: 'Edit Claude' }));
-    expect(drawerNamed('Edit connection').querySelector('details.form-section')).toHaveAttribute(
-      'open',
-    );
+    expect(
+      within(drawerNamed('Edit connection')).getByRole('button', { name: 'Advanced' }),
+    ).toHaveAttribute('aria-expanded', 'true');
   });
 
   it('shows a typed secret on request', async () => {

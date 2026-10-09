@@ -986,14 +986,6 @@ body {
   height: var(--control-h);
 }
 
-/* A panel's own heading row (an h3 and its one action), until S3b's `Section`
-   takes these over. Not `.page-header`: that row is the page's title row. */
-.panel-heading-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
 /* #1242 — the ONE colour a bare anchor takes.
 
    Until this rule, the only anchor rules in this file were container-scoped
@@ -1460,7 +1452,8 @@ td button + button {
   padding: 1rem 1.25rem;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  /* 8px, and a section takes 8px more above it (`.section`). */
+  gap: var(--space-2);
 }
 
 /* The footer sticks to the bottom of whatever scrolls the page, so Save is in
@@ -1526,40 +1519,73 @@ td button + button {
   box-shadow: 0 8px 20px var(--shadow);
 }
 
-.form-section {
-  margin: 0;
-  padding: 0;
-  border: 0;
+/* #1594 OR40 S3 — the ONE section (`lib/Section.tsx`): its heading in the
+   section type, the `?` and any actions on the heading row, then its content
+   8px below; 8px between its fields. Every container that holds sections
+   stacks at 8px too (`.form-drawer-body`, `.property-panel`, `.panel-tab`), so
+   a section after anything takes 8px more: 16px between sections. Zero
+   specificity on the spacing (all inside `:where`), so a page section's own
+   rule (`.monitor-panel`) decides its margin. */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
   min-width: 0;
 }
 
-.form-section-title {
-  font-weight: 600;
-  font-size: 0.95rem;
+:where(.section:not(:first-child)) {
+  margin-top: var(--space-2);
+}
+
+.section__title {
+  font: var(--type-section);
   color: var(--text);
+  margin: 0;
+  min-width: 0;
+}
+
+/* The heading row's actions sit at its right end. */
+.section__head > .toolbar {
+  margin-left: auto;
+}
+
+/* A collapsible section's heading is its toggle: the heading's own type, no
+   button chrome, the chevron then the words. */
+.section__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 0;
   padding: 0;
-  margin-bottom: 0.5rem;
-}
-
-/* #1413 — the section's one-line hint, between its title and its fields. Inside
-   a collapsible section's body the flex gap already spaces it. */
-.form-section > .form-section-hint {
-  margin: -0.25rem 0 0.5rem;
-}
-
-details.form-section > summary.form-section-title {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
   cursor: pointer;
 }
 
-.form-section-body {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
+.section__chevron {
+  color: var(--muted);
 }
 
-.form-section-body input,
-.form-section-body select,
-.form-section-body textarea {
+/* `:not([hidden])` is load-bearing: a bare `display: flex` would outrank the
+   `hidden` attribute and show a collapsed section's body. */
+.section__body:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* The gap is the rhythm: a paragraph or list directly in a section brings no
+   margin of its own (a flex column does not collapse them). Zero specificity,
+   so a classed paragraph's own margin still wins. */
+:where(.section__body > :is(p, ul, ol, dl)) {
+  margin: 0;
+}
+
+.section__body input,
+.section__body select,
+.section__body textarea {
   max-width: 100%;
 }
 
@@ -1847,7 +1873,7 @@ button.danger {
   padding: var(--property-panel-pad);
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: var(--space-2);
   /* The toolbox sits in a FIXED-width track (the operator's width, #1475). A
      grid item's automatic minimum size is its content's intrinsic minimum, and
      a text input's is its `size`
@@ -2189,26 +2215,9 @@ button.danger {
   color: var(--muted);
 }
 
-/* #1396 — a form section in the property panel (Container, Run policy).
-   The panel's own rhythm, not a drawer's, and a rule between sections so each
-   reads as its own group. */
-.property-panel .form-section-body {
-  gap: 0.6rem;
-}
-
-/* The rule is drawn on the HEADING, not the fieldset: a fieldset's legend sits
-   across its top border and breaks it, so a border there would run through the
-   title instead of above it. `:not(:first-child)` rather than `+`, so a section
-   after a call node's own parts gets its rule too. */
-.property-panel .form-section:not(:first-child) > .form-section-title {
-  width: 100%;
-  border-top: 1px solid var(--border);
-  padding-top: 0.6rem;
-}
-
 /* `contract-section`'s top margin separates it from what comes before it in a
    column. As a section's first field, the heading already does that. */
-.property-panel .form-section-body > .contract-section:first-child {
+.property-panel .section__body > .contract-section:first-child {
   margin-top: 0;
 }
 
@@ -2245,10 +2254,10 @@ button.danger {
   gap: 0.5rem;
 }
 
-/* U16 — the pipeline's typed params/outputs contract, in the nothing-selected
-   property panel. `.property-panel` is already a flex column, so a section only
-   needs the separation between it and the next. Its rows are a `RowTable`
-   (#1477 OR29). */
+/* U16 — a group of a panel's content with no heading of its own (a config
+   form's root, a container's settings, a run's streamed lines); a headed one is
+   a `Section`. `.property-panel` is already a flex column, so it only needs the
+   separation between it and the next. */
 .contract-section {
   display: flex;
   flex-direction: column;
@@ -2924,7 +2933,7 @@ button.danger {
 .panel-tab:not([hidden]) {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: var(--space-2);
 }
 
 /* #1477 OR29 — COMPACT density (the default; `uiStore.density`, mirrored onto
@@ -2949,8 +2958,7 @@ button.danger {
   font-size: var(--type-body-size);
 }
 
-:root[data-density='compact'] .property-dock .property-panel .panel-tab:not([hidden]),
-:root[data-density='compact'] .property-dock .property-panel .form-section-body {
+:root[data-density='compact'] .property-dock .property-panel .panel-tab:not([hidden]) {
   gap: var(--space-2);
 }
 
@@ -2966,24 +2974,14 @@ button.danger {
   margin-top: var(--space-2);
 }
 
-:root[data-density='compact'] .property-dock .property-panel .dock-section__head {
-  min-height: 18px;
-  line-height: 16px;
-}
-
-/* Section headings: small caps-style labels, so a section reads as a group
-   without spending a line of large type on it. */
-:root[data-density='compact'] .property-dock .property-panel h3,
-:root[data-density='compact'] .property-dock .property-panel .contract-section h4,
-:root[data-density='compact'] .property-dock .property-panel .form-section-title {
+/* A panel title that is not the node header (a container's, "N selected",
+   an edge's): small caps-style, until S4 takes the capitals out. Sections are
+   `Section`s, in the section type. */
+:root[data-density='compact'] .property-dock .property-panel h3 {
   font-size: var(--type-caption-size);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-}
-
-:root[data-density='compact'] .property-dock .property-panel h3,
-:root[data-density='compact'] .property-dock .property-panel .contract-section h4 {
   margin: 0;
 }
 
@@ -2993,20 +2991,6 @@ button.danger {
   font-size: var(--type-body-size);
   letter-spacing: normal;
   text-transform: none;
-}
-
-/* The title is the fieldset's legend, so the body's `gap` does not reach the
-   space under it: that is the title's own margin. */
-:root[data-density='compact'] .property-dock .property-panel .form-section-title {
-  margin-bottom: var(--space-1);
-}
-
-:root[data-density='compact']
-  .property-dock
-  .property-panel
-  .form-section:not(:first-child)
-  > .form-section-title {
-  padding-top: var(--space-2);
 }
 
 :root[data-density='compact'] .property-dock .property-panel label,
@@ -3184,7 +3168,7 @@ button.danger {
   :root[data-density='compact']
     .property-dock
     .property-panel
-    :is(.config-cell, .contract-section, .form-section-body, .panel-tab)
+    :is(.config-cell, .contract-section, .section__body, .panel-tab)
     > .labelled-control {
     display: grid;
     grid-template-columns: var(--dock-label-column) minmax(0, 1fr);
@@ -3198,7 +3182,7 @@ button.danger {
   :root[data-density='compact']
     .property-dock
     .property-panel
-    :is(.config-cell, .contract-section, .form-section-body, .panel-tab)
+    :is(.config-cell, .contract-section, .section__body, .panel-tab)
     > .labelled-control
     > label {
     display: block;
@@ -3210,7 +3194,7 @@ button.danger {
   :root[data-density='compact']
     .property-dock
     .property-panel
-    :is(.config-cell, .contract-section, .form-section-body, .panel-tab)
+    :is(.config-cell, .contract-section, .section__body, .panel-tab)
     > .labelled-control
     > :not(label, .labelled-control__head) {
     grid-column: 2;
@@ -3221,7 +3205,7 @@ button.danger {
   :root[data-density='compact']
     .property-dock
     .property-panel
-    :is(.config-cell, .contract-section, .form-section-body, .panel-tab)
+    :is(.config-cell, .contract-section, .section__body, .panel-tab)
     > .labelled-control
     > .labelled-control__head {
     grid-column: 1;
@@ -3231,7 +3215,7 @@ button.danger {
   :root[data-density='compact']
     .property-dock
     .property-panel
-    :is(.config-cell, .contract-section, .form-section-body, .panel-tab)
+    :is(.config-cell, .contract-section, .section__body, .panel-tab)
     > .labelled-control
     > .labelled-control__head
     > label {
@@ -3254,17 +3238,17 @@ button.danger {
      `DraftNumberField`'s), line up with the control column. A field packed into
      a grid cell (the General tab's policy, since #1477) keeps the cell's whole
      width. */
-  :root[data-density='compact'] .property-dock .property-panel .form-section-body > .contract-check,
+  :root[data-density='compact'] .property-dock .property-panel .section__body > .contract-check,
   :root[data-density='compact']
     .property-dock
     .property-panel
-    :is(.contract-section, .form-section-body)
+    :is(.contract-section, .section__body)
     > :is(.labelled-control, .contract-check)
     + :is(.page-hint, .field-hint),
   :root[data-density='compact']
     .property-dock
     .property-panel
-    :is(.contract-section, .form-section-body)
+    :is(.contract-section, .section__body)
     > .labelled-control
     + .page-hint
     + .field-error-slot {
@@ -5364,8 +5348,8 @@ button.danger {
   font-size: var(--type-caption-size);
 }
 
-/* #1477 OR29 — ONE row for a name and the `?` beside it: a dock section's
-   heading (`DockSection`), a row list's label, and a config field's label
+/* #1477 OR29 — ONE row for a name and the `?` beside it: a section's heading
+   row (`Section`), a row list's label, and a config field's label
    (`LabelledControl`'s `help`). Positioned, so an inline `?`'s note opens
    under the row. */
 .help-row {
@@ -5679,11 +5663,10 @@ button.danger {
   font-size: 13px;
 }
 
-/* #1477 OR29 — a section's `?` in the property dock (`DockSection`). The dock
-   scrolls and may be a 320px column on the right, so a note anchored to the
-   `?`'s right edge would hang off the panel's left. Inline, the note anchors to
-   the section's heading row (`.dock-section__head`, positioned) and takes its
-   width instead. */
+/* #1477 OR29 — a section's `?` (`Section`). The dock scrolls and may be a
+   320px column on the right, so a note anchored to the `?`'s right edge would
+   hang off the panel's left. Inline, the note anchors to the section's heading
+   row (`.section__head`, a positioned `.help-row`) and takes its width instead. */
 .help-disclosure--inline {
   position: static;
 }
@@ -5693,10 +5676,6 @@ button.danger {
   right: auto;
   width: 100%;
   max-width: 36rem;
-}
-
-.dock-section__head > h4 {
-  margin: 0;
 }
 
 /* #1484 OR35 M2 — a failed run's banner: one line under the header. */
@@ -6334,9 +6313,9 @@ button.danger {
 }
 
 .monitor-panel {
-  margin-top: 2rem;
+  margin-top: var(--space-6);
   border-top: 1px solid var(--border);
-  padding-top: 0.5rem;
+  padding-top: var(--space-2);
 }
 
 .agent-cli-summary {
@@ -6349,8 +6328,8 @@ button.danger {
    one panel's numbers to cover everything, so the boundary between "what studio
    ran" and "what reported in" should be visible, not merely stated. */
 .reported-activity {
-  margin-top: 1.5rem;
-  padding-top: 1rem;
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
   border-top: 1px solid var(--border);
 }
 

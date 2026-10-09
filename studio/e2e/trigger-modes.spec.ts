@@ -126,7 +126,7 @@ test.describe('#854 tumbling mode', () => {
 
     // `assertWindowConsistent` refuses a tumbling trigger on any other policy,
     // so the form settles it rather than letting the save be rejected.
-    const concurrency = form.getByLabel('Concurrency');
+    const concurrency = form.getByRole('combobox', { name: 'Concurrency', exact: true });
     await expect(concurrency).toHaveValue('queue');
     await expect(concurrency).toBeDisabled();
 

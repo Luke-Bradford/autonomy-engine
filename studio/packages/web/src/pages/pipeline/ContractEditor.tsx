@@ -14,7 +14,7 @@ import {
   VALUE_TYPE_TITLES,
   type ValueTypeName,
 } from '@autonomy-studio/shared';
-import { DockSection } from '../../lib/form/DockSection';
+import { Section } from '../../lib/Section';
 import {
   RemoveRowButton,
   RowActions,
@@ -90,11 +90,11 @@ export function ContractSection({
   children: ReactNode;
 }) {
   return (
-    <DockSection heading={heading} hint={hint}>
+    <Section heading={heading} help={hint}>
       <RowList columns={columns} label={heading} count={count} addLabel={addLabel} onAdd={onAdd}>
         {children}
       </RowList>
-    </DockSection>
+    </Section>
   );
 }
 

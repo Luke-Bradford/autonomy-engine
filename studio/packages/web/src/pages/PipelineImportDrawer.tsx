@@ -1,6 +1,6 @@
 import { useEffect, useState, type RefObject } from 'react';
 import { FormDrawer } from '../lib/form/FormDrawer';
-import { FormSection } from '../lib/form/FormSection';
+import { Section } from '../lib/Section';
 import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 import type { UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { ImportPanel } from './ImportPanel';
@@ -54,17 +54,17 @@ export function PipelineImportDrawer({
       {/* Any export envelope, because `POST /api/import` takes any: a
           connection or trigger file is imported and then reported with a
           pointer to its own section (see `ImportPanel`). */}
-      <FormSection title="From a file" hint={FORM_SECTION_HINTS.pipeline.importFile}>
+      <Section heading="From a file" help={FORM_SECTION_HINTS.pipeline.importFile}>
         <ImportPanel
           listKind="pipeline"
           embedded
           onImported={onChanged}
           onBusyChange={setImporting}
         />
-      </FormSection>
-      <FormSection title="Demo workspace" hint={FORM_SECTION_HINTS.pipeline.demo}>
+      </Section>
+      <Section heading="Demo workspace" help={FORM_SECTION_HINTS.pipeline.demo}>
         <DemoPanel embedded onChanged={onChanged} onBusyChange={setDemoBusy} />
-      </FormSection>
+      </Section>
     </FormDrawer>
   );
 }

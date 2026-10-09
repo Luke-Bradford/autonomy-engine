@@ -171,29 +171,36 @@ test.describe('U7 — per-activity node config form', () => {
     await expect(request.getByRole('group', { name: 'Container' })).toHaveCount(0);
 
     // One read of every computed value, on General: Run policy is the tab's only
-    // form section, drawn without a box, and its body keeps the panel's own gap.
-    // It OPENS the tab, so no rule is drawn above its heading (the rule is for a
-    // section that follows fields; the Container section closing Request was the
-    // one such section in a node panel until #1597 removed it).
+    // section (#1594 OR40 S3 `Section`), drawn without a box or a rule, and its
+    // body keeps the panel's own gap. It OPENS the tab, so it takes no space
+    // above its heading.
     await tabs.getByRole('tab', { name: 'General' }).click();
     const layout = await properties(page).evaluate((panel) => {
       const sections = [
-        ...panel.querySelectorAll<HTMLElement>(
-          '[role="tabpanel"]:not([hidden]) fieldset.form-section',
-        ),
+        ...panel.querySelectorAll<HTMLElement>('[role="tabpanel"]:not([hidden]) .section'),
       ];
       return {
         panelGap: getComputedStyle(panel).rowGap,
-        sections: sections.map((el) => ({
-          title: el.querySelector<HTMLElement>(':scope > legend')!.textContent,
-          fieldsetBorder: getComputedStyle(el).borderTopWidth,
-          ruled: getComputedStyle(el.querySelector<HTMLElement>(':scope > legend')!).borderTopWidth,
-          gap: getComputedStyle(el.querySelector('.form-section-body')!).rowGap,
-        })),
+        sections: sections.map((el) => {
+          const title = el.querySelector<HTMLElement>(':scope > .section__head > .section__title')!;
+          return {
+            title: title.textContent,
+            border: getComputedStyle(el).borderTopWidth,
+            ruled: getComputedStyle(title).borderTopWidth,
+            marginTop: getComputedStyle(el).marginTop,
+            gap: getComputedStyle(el.querySelector(':scope > .section__body')!).rowGap,
+          };
+        }),
       };
     });
     expect(layout.sections).toEqual([
-      { title: 'Run policy', fieldsetBorder: '0px', ruled: '0px', gap: layout.panelGap },
+      {
+        title: 'Run policy',
+        border: '0px',
+        ruled: '0px',
+        marginTop: '0px',
+        gap: layout.panelGap,
+      },
     ]);
 
     await tabs.getByRole('tab', { name: 'Auth' }).click();

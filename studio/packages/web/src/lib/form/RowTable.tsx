@@ -91,7 +91,7 @@ export function RowNotes({ span, children }: { span: number; children: ReactNode
  * otherwise the `RowTable`, then the Add button. Shared by the pipeline contract
  * sections (`ContractSection`) and the annotation lists (`AnnotationRows`), so
  * the empty state and the Add control are one thing, whatever section chrome
- * (`DockSection`, `FormSection`) holds them. `addDisabled` is for a list with a
+ * (a `Section`) holds them. `addDisabled` is for a list with a
  * write-schema limit.
  */
 export function RowList({

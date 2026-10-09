@@ -236,14 +236,14 @@ function mount() {
 
 describe('CallPanel (component)', () => {
   // #1413 — Call target and its Parameters each say what they hold, as the
-  // section's accessible description, like every FormSection.
+  // section's accessible description, like every Section.
   it('names the Call target and Parameters sections and describes each with its hint', async () => {
     mount();
     await waitFor(() => expect(screen.getByLabelText(/Pipeline/)).toBeTruthy());
-    expect(screen.getByRole('region', { name: 'Call target' })).toHaveAccessibleDescription(
+    expect(screen.getByRole('group', { name: 'Call target' })).toHaveAccessibleDescription(
       FORM_SECTION_HINTS.call.target,
     );
-    expect(screen.getByRole('region', { name: 'Parameters' })).toHaveAccessibleDescription(
+    expect(screen.getByRole('group', { name: 'Parameters' })).toHaveAccessibleDescription(
       FORM_SECTION_HINTS.call.parameters,
     );
   });

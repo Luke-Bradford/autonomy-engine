@@ -12,7 +12,7 @@ import type { Pipeline, PipelineVersion } from '@autonomy-studio/shared';
 import { copyName, duplicatePipeline } from '../api/pipelines';
 import { LabelledControl } from '../lib/LabelledControl';
 import { FormDrawer } from '../lib/form/FormDrawer';
-import { FormSection } from '../lib/form/FormSection';
+import { Section } from '../lib/Section';
 import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 import { RequiredMark } from '../lib/form/RequiredMark';
 import { FieldError } from '../lib/form/FieldError';
@@ -147,7 +147,7 @@ export function DuplicatePipelineDrawer({
         </>
       }
     >
-      <FormSection title="Copy" hint={FORM_SECTION_HINTS.pipeline.duplicate}>
+      <Section heading="Copy" help={FORM_SECTION_HINTS.pipeline.duplicate}>
         <label>
           <span>
             Name
@@ -202,7 +202,7 @@ export function DuplicatePipelineDrawer({
             Retry
           </button>
         )}
-      </FormSection>
+      </Section>
     </FormDrawer>
   );
 }

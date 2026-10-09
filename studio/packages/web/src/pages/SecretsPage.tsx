@@ -20,7 +20,7 @@ import {
 } from '../api/secrets';
 import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import { FormDrawer } from '../lib/form/FormDrawer';
-import { FormSection } from '../lib/form/FormSection';
+import { Section } from '../lib/Section';
 import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 import { RequiredMark } from '../lib/form/RequiredMark';
 import { FieldError } from '../lib/form/FieldError';
@@ -430,7 +430,7 @@ function SecretForm({
         </>
       }
     >
-      <FormSection title="Basics" hint={FORM_SECTION_HINTS.secret.basics}>
+      <Section heading="Basics" help={FORM_SECTION_HINTS.secret.basics}>
         <label>
           <span>
             Name
@@ -454,9 +454,9 @@ function SecretForm({
           />
         </label>
         <FieldError id={nameErrorId} message={validation.errorFor('name')} />
-      </FormSection>
+      </Section>
 
-      <FormSection title="Value" hint={FORM_SECTION_HINTS.secret.value}>
+      <Section heading="Value" help={FORM_SECTION_HINTS.secret.value}>
         <SecretInput
           label={
             <span>
@@ -473,7 +473,7 @@ function SecretForm({
         <p className="page-hint">
           Write-only: once saved, the value can be replaced but never read back.
         </p>
-      </FormSection>
+      </Section>
     </FormDrawer>
   );
 }

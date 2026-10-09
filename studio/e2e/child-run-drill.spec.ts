@@ -92,7 +92,7 @@ test('#1231 — a call node names its child run, and the child names its caller'
   expect(callerName).not.toBe('');
   await callRow.getByRole('button').first().click();
 
-  const panel = page.getByRole('region', { name: 'Child runs' });
+  const panel = page.getByRole('group', { name: 'Child runs' });
   await expect(panel.getByText(/own log, its own outputs and its own spend/)).toBeVisible();
 
   /* DOWN. Followed for real — an href assertion would pass against a route that

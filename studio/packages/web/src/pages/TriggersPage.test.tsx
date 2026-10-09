@@ -6,6 +6,7 @@ import { renderWithDataRouter } from '../testing/renderWithRouter';
 import { chooseRowAction, closeRowMenu } from '../testing/rowActions';
 import { answerConfirm } from '../testing/confirmDialog';
 import userEvent from '@testing-library/user-event';
+import { FIELD } from '../testing/fieldQuery';
 import type {
   Pipeline,
   PipelineVersion,
@@ -524,7 +525,7 @@ describe('TriggersPage', () => {
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.type(form.getByLabelText('Name'), 'Fan out');
     await user.selectOptions(form.getByLabelText('Pipeline version'), 'plv_1');
-    await user.selectOptions(form.getByLabelText('Concurrency'), 'parallel');
+    await user.selectOptions(form.getByLabelText('Concurrency', FIELD), 'parallel');
     await user.type(form.getByLabelText(/Max parallel runs/i), '3');
     await user.click(form.getByRole('button', { name: /Create trigger/i }));
 
@@ -539,7 +540,7 @@ describe('TriggersPage', () => {
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.type(form.getByLabelText('Name'), 'One at a time');
     await user.selectOptions(form.getByLabelText('Pipeline version'), 'plv_1');
-    await user.selectOptions(form.getByLabelText('Concurrency'), 'queue');
+    await user.selectOptions(form.getByLabelText('Concurrency', FIELD), 'queue');
     await user.click(form.getByRole('button', { name: /Create trigger/i }));
 
     await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
@@ -896,8 +897,8 @@ describe('#854 — the trigger modes that had no config UI', () => {
 
     // `assertWindowConsistent` refuses a tumbling trigger on any other policy,
     // so the control is settled rather than left to be rejected at save.
-    expect(form.getByLabelText('Concurrency')).toHaveValue('queue');
-    expect(form.getByLabelText('Concurrency')).toBeDisabled();
+    expect(form.getByLabelText('Concurrency', FIELD)).toHaveValue('queue');
+    expect(form.getByLabelText('Concurrency', FIELD)).toBeDisabled();
 
     await user.selectOptions(form.getByLabelText('Window frequency'), 'hour');
     await user.type(form.getByLabelText(/Each window covers/i), '2');
@@ -1076,7 +1077,7 @@ describe('#854 review follow-ups', () => {
       await chooseRowAction(user, 'Imported windows', 'Edit');
       const form = within(screen.getByRole('form', { name: /Trigger form/i }));
 
-      expect(form.getByLabelText('Concurrency')).toHaveValue('queue');
+      expect(form.getByLabelText('Concurrency', FIELD)).toHaveValue('queue');
       // The `parallel`-only control is gone with it, so no orphan `max` survives
       // (`ConcurrencyWriteSchema` forbids `max` off `parallel`).
       expect(form.queryByLabelText(/Max parallel runs/i)).toBeNull();
@@ -1302,7 +1303,7 @@ describe('TriggersPage — binding to the active published version', () => {
   it('offers bind-to-active when creating', async () => {
     const user = userEvent.setup();
     const form = await chooseActive(user);
-    expect(form.getByLabelText('Pipeline')).toBeInTheDocument();
+    expect(form.getByLabelText('Pipeline', FIELD)).toBeInTheDocument();
   });
 
   /* Toggling a radio to look at the other option is not an instruction to
@@ -1453,7 +1454,7 @@ describe('TriggersPage — binding to the active published version', () => {
     const form = await chooseActive(user);
     expect(await form.findByText(/My pipeline.*has no published version/i)).toBeInTheDocument();
 
-    await user.selectOptions(form.getByLabelText('Pipeline'), 'pl_2');
+    await user.selectOptions(form.getByLabelText('Pipeline', FIELD), 'pl_2');
 
     // The stale claim must be gone even though nothing has arrived to replace it.
     await waitFor(() =>
@@ -1487,7 +1488,7 @@ describe('TriggersPage — binding to the active published version', () => {
     const form = await chooseActive(user);
     expect(await form.findByText(/could not check/i)).toBeInTheDocument();
 
-    await user.selectOptions(form.getByLabelText('Pipeline'), 'pl_2');
+    await user.selectOptions(form.getByLabelText('Pipeline', FIELD), 'pl_2');
 
     await waitFor(() => expect(form.queryByText(/could not check/i)).not.toBeInTheDocument());
     expect(form.getByText(/checking/i)).toBeInTheDocument();
@@ -1786,7 +1787,7 @@ describe('TriggersPage — inline validation (#1396)', () => {
   it('a refused Save lists name, binding, max and params, focusing the first', async () => {
     const { user, form } = await openNew();
     await user.click(form.getByLabelText(/Enabled/i));
-    await user.selectOptions(form.getByLabelText('Concurrency'), 'parallel');
+    await user.selectOptions(form.getByLabelText('Concurrency', FIELD), 'parallel');
     await user.type(form.getByLabelText(/Max parallel runs/i), '1.5');
     await user.type(form.getByLabelText('Params (JSON)'), '[[1]');
     await user.click(form.getByRole('button', { name: /Create trigger/i }));
