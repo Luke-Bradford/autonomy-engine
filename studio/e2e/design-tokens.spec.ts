@@ -45,7 +45,7 @@ function read(page: Page) {
 
 async function openSettings(page: Page) {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/settings');
+  await page.goto('/#/settings');
   await expect(page.getByRole('heading', { name: 'Settings', level: 2 })).toBeVisible();
 }
 

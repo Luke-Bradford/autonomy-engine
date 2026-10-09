@@ -162,8 +162,13 @@ test('RS6 — a failed run lists its reruns, and the runs list says which runs a
   // Type column) says so and names its source; the source was a Fire now.
   await page.goto('/#/monitor/runs');
   await fluentRootReady(page);
-  const headers = await page.getByRole('columnheader').allTextContents();
-  const byColumn = headers.indexOf('Triggered by');
+  /* `allTextContents` does not wait, so read the headers once the grid has
+     drawn them: an early read returned [] and failed the full suite once. */
+  const columns = () => page.getByRole('columnheader').allTextContents();
+  await expect
+    .poll(async () => (await columns()).indexOf('Triggered by'))
+    .toBeGreaterThanOrEqual(0);
+  const byColumn = (await columns()).indexOf('Triggered by');
   expect(byColumn, 'the runs list has a Triggered by column').toBeGreaterThanOrEqual(0);
   const triggeredBy = (runId: string) =>
     page.getByRole('row').filter({ hasText: runId }).getByRole('cell').nth(byColumn);
