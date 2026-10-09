@@ -164,7 +164,7 @@ export function NodeActivityPanel({
       {/* `.page-header` is the existing title-plus-action row. The sibling
           property panels have no action in their heading, so none of them uses
           it; this one needs a Close beside the title rather than a new rule. */}
-      <div className="page-header">
+      <div className="panel-heading-row">
         <h3>
           Node {name ?? <code>{node.nodeId}</code>}
           {name !== null && <code className="node-id">{node.nodeId}</code>}

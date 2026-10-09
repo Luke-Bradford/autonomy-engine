@@ -210,7 +210,7 @@ function QuotaPanel() {
 
   return (
     <section aria-labelledby="quota-heading" className="monitor-panel">
-      <div className="page-header">
+      <div className="panel-heading-row">
         <h3 id="quota-heading">Account quota</h3>
         <button type="button" onClick={refresh}>
           Refresh quota

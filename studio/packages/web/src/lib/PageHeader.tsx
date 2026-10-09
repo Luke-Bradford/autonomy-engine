@@ -1,4 +1,4 @@
-import type { ReactNode, Ref } from 'react';
+import { Children, type ReactNode, type Ref } from 'react';
 
 /**
  * #1594 OR40 S3 — the ONE page header: the page's title on the left and its
@@ -34,9 +34,10 @@ export function PageHeader({
         {title}
       </h2>
       {adornment}
-      {children !== undefined && children !== null && children !== false && (
-        <Toolbar>{children}</Toolbar>
-      )}
+      {/* `toArray` drops what renders nothing (`{cond && <x />}` that is
+          false), so a header whose every action is conditional and off draws
+          no empty toolbar. */}
+      {Children.toArray(children).length > 0 && <Toolbar>{children}</Toolbar>}
     </div>
   );
 }

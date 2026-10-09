@@ -15,9 +15,17 @@ describe('PageHeader', () => {
     expect(screen.getByRole('region', { name: 'Things' })).toBeTruthy();
   });
 
-  it('draws no toolbar for a page with no actions', () => {
+  it('draws no toolbar for a page with no actions, or none showing', () => {
     const { container } = render(<PageHeader title="Home" />);
     expect(container.querySelector('.toolbar')).toBeNull();
+    const off = false as boolean;
+    const { container: conditional } = render(
+      <PageHeader title="Runs">
+        {off && <button type="button">Refresh</button>}
+        {null}
+      </PageHeader>,
+    );
+    expect(conditional.querySelector('.toolbar')).toBeNull();
   });
 
   it('puts the controls in the toolbar and the adornment outside the heading', () => {

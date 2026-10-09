@@ -192,8 +192,8 @@ test.describe('U2 hub rail', () => {
   /**
    * The rail is pinned at 48px by the spec's shell diagram, and the workspace
    * beside it must keep the `.content` semantics `index.css` hangs off that
-   * class — in particular `:has(.canvas-page)`, which removes the 900px reading
-   * cap so the authoring canvas is full-bleed. jsdom computes no layout, so
+   * class — the page's content frame, and `:has(.canvas-page)`, which makes
+   * the authoring canvas a full-height column. jsdom computes no layout, so
    * this is only observable here.
    */
   test('the shell is a 48px rail beside the workspace', async ({ page }) => {

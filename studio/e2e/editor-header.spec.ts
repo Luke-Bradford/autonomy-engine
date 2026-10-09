@@ -38,12 +38,12 @@ test.describe('#1397 the editor header', () => {
 
     // The header's OWN row — the Run and Debug forms render inside
     // `.page-header` too, and have primaries of their own.
-    const primaries = page.locator('.canvas-page .page-header > .form-actions > button.primary');
+    const primaries = page.locator('.canvas-page .page-header > .toolbar > button.primary');
     await expect(primaries).toHaveCount(1);
     await expect(primaries).toHaveAccessibleName('Save version');
 
     const read = await page.evaluate(() => {
-      const row = document.querySelector('.canvas-page .page-header > .form-actions');
+      const row = document.querySelector('.canvas-page .page-header > .toolbar');
       const box = (sel: string) => {
         const el = row?.querySelector<HTMLElement>(sel);
         if (!el) return null;

@@ -77,7 +77,7 @@ export function RunDiagnostics({ runId, settled }: { runId: string; settled: boo
 
   return (
     <section aria-labelledby="run-diagnostics-heading">
-      <div className="page-header">
+      <div className="panel-heading-row">
         <h3 id="run-diagnostics-heading">Why this run behaved as it did</h3>
         <button type="button" onClick={refresh}>
           Refresh diagnostics

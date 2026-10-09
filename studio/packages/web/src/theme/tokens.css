@@ -72,6 +72,9 @@
   /* Heights, not spacing. */
   --control-h: 28px;
   --row-h: 32px;
+  /* S3 — a page header's row: the title and its toolbar. One height in both
+     densities, so a page's content starts at the same y either way. */
+  --header-h: 40px;
   /* S2b — a glyph in an icon button (the Fluent icons are 1em). */
   --icon-size: 16px;
 
