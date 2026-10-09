@@ -561,8 +561,21 @@ breakpoint, so no cap is needed. (A 40rem cap was tried and dropped, because it 
 `e2e/field-grid.spec.ts` measures a drawer, a builder fieldset, Settings and the import panel at
 1440x900 in both densities; `e2e/property-dock-grid.spec.ts` measures the dock.
 
-**Still to come:** a field's prose hint moves behind a `?` beside its label (the next #1594 slice);
-the editor's Run popover and the Git page's forms join in S6's page sweep.
+**A field's explanation is behind a `?` beside its label (#1594 OR40 S3c-2).** `LabelledControl`'s
+`about={{ name, note }}` draws it, named "About {name}", and hands the note's id to the control's
+`aria-describedby` (after the error, through `attrsFor`'s third argument), so moving a hint behind
+the `?` leaves what a screen reader hears unchanged. `DraftNumberField` and `SecretInput` take it
+too. What stays a visible line:
+- a note on the field's **state**: a preview, a problem, an advisory, why a control is locked
+  (a tumbling trigger's Concurrency), what an empty list means;
+- the Kind or Mode picker's one line on the chosen kind (`hint`, above);
+- a checkbox's line, since its label wraps the box and there is no label row for a `?`.
+
+A section that holds one field under the same name (a secret's Value) takes the field's note into
+its own `?` line instead, because a second "About Value" would be two controls with one name.
+`e2e/field-help.spec.ts` measures each moved field.
+
+**Still to come:** the editor's Run popover and the Git page's forms join in S6's page sweep.
 
 **Authored rows are tables (#1477 OR29).** Params, variables, outputs, annotations and every row
 list (a Copy mapping, HTTP headers, LLM messages, an output schema) render through `RowTable`

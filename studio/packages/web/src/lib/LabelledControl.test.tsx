@@ -91,7 +91,10 @@ describe('LabelledControl (#1227)', () => {
   // label's text (the control's name) is the label alone.
   it('draws `about` as a ? beside the label whose note describes the control', () => {
     const { container } = render(
-      <LabelledControl label="Value" about={{ name: 'Value', note: 'Cleartext, never a credential' }}>
+      <LabelledControl
+        label="Value"
+        about={{ name: 'Value', note: 'Cleartext, never a credential' }}
+      >
         {(id, describedBy) => <input id={id} aria-describedby={describedBy} />}
       </LabelledControl>,
     );

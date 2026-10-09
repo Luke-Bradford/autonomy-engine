@@ -83,7 +83,12 @@ test('#1594 OR40 S3c-2 — a drawer field says what it is behind a ? beside its 
   await page.goto('/#/manage/datasets');
   await fluentRootReady(page);
   await page.getByRole('button', { name: 'New dataset' }).click();
-  await expectBehindHelp(page, drawer, 'Columns (JSON)', /^An authoring aid that auto-map matches against/);
+  await expectBehindHelp(
+    page,
+    drawer,
+    'Columns (JSON)',
+    /^An authoring aid that auto-map matches against/,
+  );
   await page.keyboard.press('Escape');
   await expect(drawer).toHaveCount(0);
 
