@@ -283,6 +283,20 @@ export function containerLabels(containers: Container[]): Map<string, string> {
 }
 
 /**
+ * #1597 — the container holding EVERY one of `ids`, or `null` when they are
+ * not all in the same one (all outside any container is `null` too). The drag
+ * into a box and the context menu's Move into ▸ both read "where is this
+ * selection" through here, so they agree on which box is already home.
+ */
+export function sharedContainer(
+  owner: ReadonlyMap<string, string>,
+  ids: readonly string[],
+): string | null {
+  const owners = new Set(ids.map((id) => owner.get(id) ?? null));
+  return owners.size === 1 ? ([...owners][0] ?? null) : null;
+}
+
+/**
  * The two UNQUOTED location shapes the validator writes, as regex SOURCE so each
  * reader anchors them its own way: `readableIssue` finds a container location
  * anywhere (pass 1) and a node location at index 0 (pass 2); `issueSubject`

@@ -57,6 +57,7 @@ import {
   containerEditQuestion,
   containerLabels,
   NEW_CONTAINER_CONFIRM,
+  sharedContainer,
   newContainerQuestion,
   routingChangeBetween,
   routingSentence,
@@ -125,7 +126,11 @@ import { useEditorRunNode } from './editorRunContext';
 import type { RunOverlayEntry } from '../runs/runFlow';
 import { subjectKey, type SubjectIssue } from './containerRules';
 import type { CanvasCommand } from './canvasCommands';
-import { CanvasContextMenu, type CanvasMenuRequest } from './CanvasContextMenu';
+import {
+  CanvasContextMenu,
+  type CanvasMenuMoves,
+  type CanvasMenuRequest,
+} from './CanvasContextMenu';
 
 interface ActivityData extends Record<string, unknown> {
   title: string;
@@ -1828,6 +1833,28 @@ export function FlowCanvas({
    * adds to the selection.
    */
   const [menu, setMenu] = useState<CanvasMenuRequest | null>(null);
+  // #1597 — where an activity menu's selection can move, read live while it is
+  // open, so a box added or removed under it is never offered stale.
+  const menuMoves = useMemo((): CanvasMenuMoves | null => {
+    if (menu?.target !== 'selection') return null;
+    const ids = selected.filter((sel) => sel.kind === 'node').map((sel) => sel.id);
+    const { owner } = containerMembership(containers);
+    const labels = containerLabels(containers);
+    const home = sharedContainer(owner, ids);
+    const held = ids.filter((id) => owner.has(id));
+    const leaving = held.length === 0 ? null : sharedContainer(owner, held);
+    return {
+      into: containers
+        .filter((c) => c.id !== home)
+        .map((c) => ({ id: c.id, label: labels.get(c.id) ?? c.id })),
+      removeFrom:
+        held.length === 0
+          ? null
+          : leaving === null
+            ? 'containers'
+            : (labels.get(leaving) ?? 'its container'),
+    };
+  }, [menu, selected, containers]);
   function openMenu(event: ReactMouseEvent | MouseEvent, target: CanvasMenuRequest['target']) {
     event.preventDefault();
     let { clientX: x, clientY: y } = event;
@@ -2313,13 +2340,71 @@ export function FlowCanvas({
     [flowPointOf],
   );
   /**
-   * Every dragged activity joins the box the pointer was released over, as ONE
-   * edit (`setNodesContainer`), gated by `containerEditQuestion` exactly as the
-   * node's Settings → Container select is — a join can orphan an edge or an
-   * `${item}`. The box that already holds EVERY dragged node is excluded (its
-   * box contains them by construction). Dragging OUT stays on that select and
-   * the box's ✕: a box grows with its dragged child, so "outside it" has no
-   * stable meaning at release.
+   * #1597 — the ONE way an activity's container changes from the canvas: the
+   * drag into a box and the context menu's Move into ▸ / Remove from both land
+   * here. The activities already where they are asked to go drop out first, so
+   * a pick that changes nothing does not interrupt (#840). The rest move as ONE
+   * edit (`setNodesContainer`), gated by `containerEditQuestion` — a join or a
+   * leave can orphan an edge or an `${item}`, or change inferred routing — and
+   * one Undo takes the whole move back.
+   */
+  const moveIntoContainer = useCallback(
+    async (ids: readonly string[], target: string | null) => {
+      const state = store.getState();
+      const { owner } = containerMembership(state.containers);
+      const moving = ids.filter(
+        (id) => state.nodes.some((n) => n.id === id) && (owner.get(id) ?? null) !== target,
+      );
+      if (moving.length === 0) return;
+      const next = moving.reduce(
+        (acc, id) => assignContainerChild(acc, id, target),
+        state.containers,
+      );
+      const labels = containerLabels(state.containers);
+      const what =
+        moving.length === 1
+          ? (activityLabels(state.nodes).get(moving[0]!) ?? 'this activity')
+          : `${moving.length} activities`;
+      const from = sharedContainer(owner, moving);
+      const question =
+        target === null
+          ? `Take ${what} out of ${from === null ? 'their containers' : (labels.get(from) ?? 'its container')}?`
+          : `Move ${what} into ${labels.get(target) ?? 'the container'}?`;
+      const message = containerEditQuestion(
+        state,
+        next,
+        target === null ? 'Undo (⌘Z) puts it back.' : 'Undo (⌘Z) takes it back out.',
+        question,
+      );
+      /* A synchronous apply when there is nothing to ask. A selection drag
+         reaches here TWICE (React Flow calls `onNodeDragStop` and then
+         `onSelectionDragStop` for it); the second ask arrives while the first is
+         open, and `useConfirm` answers it `false` at once, so one drag raises
+         one dialog. The first answer is the one that applies. */
+      if (
+        message !== null &&
+        !(await confirm({
+          message,
+          confirmLabel: target === null ? 'Take it out' : 'Move',
+          tone: CONTAINER_EDIT_TONE,
+        }))
+      ) {
+        return;
+      }
+      // `moving` and `target` were read before the dialog. Nothing can change
+      // them while it asks: it blocks the pointer, and `isModalDialogOpen` locks
+      // the editor's shortcuts.
+      store.getState().setNodesContainer(moving, target);
+    },
+    [store, confirm],
+  );
+
+  /**
+   * Every dragged activity joins the box the pointer was released over, through
+   * `moveIntoContainer`. The box that already holds EVERY dragged node is
+   * excluded (its box contains them by construction). Dragging OUT is the
+   * context menu's Remove from, or the box's ✕: a box grows with its dragged
+   * child, so "outside it" has no stable meaning at release.
    */
   const onNodesDragStop = useCallback(
     async (event: MouseEvent | TouchEvent | ReactMouseEvent, dragged: FlowNode[]) => {
@@ -2330,48 +2415,15 @@ export function FlowCanvas({
       const state = store.getState();
       const { owner } = containerMembership(state.containers);
       const ids = dragged.map((n) => n.id).filter((id) => state.nodes.some((n) => n.id === id));
-      const owners = new Set(ids.map((id) => owner.get(id) ?? null));
-      const shared = owners.size === 1 ? ([...owners][0] ?? null) : null;
-      const target = containerAtPoint(containerBoxes, end, shared);
+      const target = containerAtPoint(containerBoxes, end, sharedContainer(owner, ids));
       if (target === null) return;
       const box = containerBoxes.get(target)!;
       if (start !== null && containerAtPoint(new Map([[target, box]]), start, null) === target) {
         return;
       }
-      const joining = ids.filter((id) => owner.get(id) !== target);
-      if (joining.length === 0) return;
-      const next = joining.reduce(
-        (acc, id) => assignContainerChild(acc, id, target),
-        state.containers,
-      );
-      const name = containerLabels(state.containers).get(target) ?? 'the container';
-      const what =
-        joining.length === 1
-          ? (activityLabels(state.nodes).get(joining[0]!) ?? 'this activity')
-          : `${joining.length} activities`;
-      const question = containerEditQuestion(
-        state,
-        next,
-        'Undo (⌘Z) takes it back out.',
-        `Move ${what} into ${name}?`,
-      );
-      /* A synchronous apply when there is nothing to ask. A selection drag
-         reaches here TWICE (React Flow calls `onNodeDragStop` and then
-         `onSelectionDragStop` for it); the second ask arrives while the first is
-         open, and `useConfirm` answers it `false` at once, so one drag raises
-         one dialog. The first answer is the one that applies. */
-      if (
-        question !== null &&
-        !(await confirm({ message: question, confirmLabel: 'Move', tone: CONTAINER_EDIT_TONE }))
-      ) {
-        return;
-      }
-      // `joining` and `target` were read before the dialog. Nothing can change
-      // them while it asks: it blocks the pointer, and `isModalDialogOpen` locks
-      // the editor's shortcuts.
-      store.getState().setNodesContainer(joining, target);
+      await moveIntoContainer(ids, target);
     },
-    [store, containerBoxes, flowPointOf, confirm],
+    [store, containerBoxes, flowPointOf, moveIntoContainer],
   );
 
   /**
@@ -2431,6 +2483,14 @@ export function FlowCanvas({
           onClose={() => setMenu(null)}
           onCommand={onCommand}
           disabledReason={commandDisabledReason}
+          moves={menuMoves}
+          onMove={(target) => {
+            const ids = store
+              .getState()
+              .selected.filter((sel) => sel.kind === 'node')
+              .map((sel) => sel.id);
+            void moveIntoContainer(ids, target);
+          }}
         />
       )}
       <EdgeMarkers />
