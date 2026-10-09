@@ -322,12 +322,14 @@ message.
   - The node opens on its first TYPE tab, where its required settings are. The dock remembers the
     last tab chosen; a node without that tab opens on its first type tab, and the choice is kept for
     the next node that has it.
-  - Container membership (and the New container form) closes the landing tab, because it is also
-    where a container is created (U6d).
+  - No tab carries container membership (#1597). It is a canvas fact, as in ADF: drag an activity
+    into a box, or use the activity's context menu, **Move into ▸** / **Remove from <name>** (the
+    keyboard route, raised with the Menu key or Shift+F10). Both go through one confirm-and-apply
+    path and one Undo.
   - JSON mode edits the whole config as one document. It shows on the tab the author is on, under
     that tab's bindings; Apply always reads every tab's fields.
   - A call node has General and Settings: `CallPanel` heads its parts ("Call target",
-    "Parameters") and applies them itself, followed by the Container section. Its header has no
+    "Parameters") and applies them itself. Its header has no
     Apply, Revert or JSON toggle.
 - **It is not a drawer.** The panel already sits beside the canvas it edits, and it applies each
   change to the editor's draft rather than saving a record, so there is no per-record Save or Cancel

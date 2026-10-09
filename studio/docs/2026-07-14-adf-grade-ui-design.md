@@ -1384,8 +1384,8 @@ stay U23's; see the deferrals below.
 | Piece | Lives in |
 |---|---|
 | Consequence rules + operator-readable issue text | `pages/pipeline/containerRules.ts` |
-| `assignContainerChild` / `containersWithNew` / `buildContainer`, `createContainer` / `setNodeContainer` | `pages/pipeline/canvasStore.ts` |
-| The `ContainerSection` control (membership `<select>` + New-container form) | `pages/pipeline/PipelineCanvas.tsx` |
+| `assignContainerChild` / `containersWithNew` / `buildContainer`, `createContainer` / `setNodeContainer` (now `setNodesContainer`, #1597) | `pages/pipeline/canvasStore.ts` |
+| The `ContainerSection` control (membership `<select>` + New-container form) — **removed by #1597**: membership is the canvas context menu's Move into ▸ / Remove from (`CanvasContextMenu.tsx`), and Wrap in ▸ is #1613 | `pages/pipeline/PipelineCanvas.tsx` |
 | Form styling | `index.css` — `.container-section`, `.container-create` |
 | Browser coverage | `e2e/container-authoring.spec.ts` |
 

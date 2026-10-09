@@ -9,7 +9,7 @@ import { nodeById, openSeededCanvas } from './support/seedDoc';
  * by dragging.
  *
  * The operator could not find ForEach: the only way to make a container was the
- * selected node's Settings → New container. This walks the ADF gesture instead —
+ * selected node's Settings → New container (since removed, #1597). This walks the ADF gesture instead —
  * drop an EMPTY box from the palette, then drag activities into it — through the
  * real canvas, because the pieces it proves are cross-cutting (the palette's drag
  * payload, the drop handler, the anchored empty box in `containerRects`, the
@@ -124,7 +124,8 @@ test.describe('#1420 containers in the Activities palette', () => {
 
     await dragNodeCentreTo(page, 'b', centre(boxRect));
     // A drag that joins a box is confirmed when it changes routing, as the
-    // Settings → Container select is — titled with what moves where.
+    // context menu's Move into ▸ is (one shared path, #1597) — titled with what
+    // moves where.
     expect(await answerConfirm(page, 'accept')).toMatch(/^Move .+ into ForEach 1\?/);
 
     await expect(box).toHaveAttribute('aria-label', /^ForEach 1 container, 1 activity\b/);

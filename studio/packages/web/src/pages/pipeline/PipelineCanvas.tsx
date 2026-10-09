@@ -1360,7 +1360,7 @@ export function PipelineCanvas({
       // three of the checks above it.
       //
       // It is NOT the first such writer, though an earlier draft of this comment
-      // claimed so: `createContainer` and `setNodeContainer` both write
+      // claimed so: `createContainer` and `setNodesContainer` both write
       // `containers` alone. What the checks together now assert is the
       // property that actually matters — they cover every doc field the store
       // owns, and every action mints a fresh array reference, so no concurrent

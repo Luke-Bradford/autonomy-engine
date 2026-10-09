@@ -249,7 +249,7 @@ export function ParamRow({ store, index, param }: { store: Store; index: number;
   function commitDefault(text: string) {
     // A blur that changed nothing must not write. Tabbing THROUGH the field
     // would otherwise mark the canvas dirty on an untouched doc — the same
-    // no-op-write hazard `setNodeContainer` avoids — and, worse, would DELETE a
+    // no-op-write hazard `setNodesContainer` avoids — and, worse, would DELETE a
     // stored default of `''` or whitespace, which `coerceDefaultInput` reads as
     // "no default". An imported doc can legitimately hold one.
     if (text === field.stored) return;

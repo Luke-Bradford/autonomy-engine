@@ -1549,7 +1549,7 @@ describe('canvasStore — container membership (U6d)', () => {
     });
   });
 
-  describe('setNodeContainer', () => {
+  describe('setNodesContainer, one node', () => {
     function withLoop() {
       const s = createCanvasStore();
       s.getState().loadVersion(version({ containers: [LOOP] }));
@@ -1558,35 +1558,35 @@ describe('canvasStore — container membership (U6d)', () => {
 
     it('moves a node in', () => {
       const s = withLoop();
-      s.getState().setNodeContainer('n_b', 'loop_1');
+      s.getState().setNodesContainer(['n_b'], 'loop_1');
       expect(s.getState().containers[0]!.children).toEqual(['n_a', 'n_b']);
       expect(s.getState().dirty).toBe(true);
     });
 
     it('moves a node out', () => {
       const s = withLoop();
-      s.getState().setNodeContainer('n_a', null);
+      s.getState().setNodesContainer(['n_a'], null);
       expect(s.getState().containers[0]!.children).toEqual([]);
       expect(s.getState().dirty).toBe(true);
     });
 
     it('is a no-op for a node that is not on the canvas', () => {
       const s = withLoop();
-      s.getState().setNodeContainer('n_ghost', 'loop_1');
+      s.getState().setNodesContainer(['n_ghost'], 'loop_1');
       expect(s.getState().containers[0]!.children).toEqual(['n_a']);
       expect(s.getState().dirty).toBe(false);
     });
 
     it('is a no-op for a container that does not exist', () => {
       const s = withLoop();
-      s.getState().setNodeContainer('n_b', 'loop_missing');
+      s.getState().setNodesContainer(['n_b'], 'loop_missing');
       expect(s.getState().containers[0]!.children).toEqual(['n_a']);
       expect(s.getState().dirty).toBe(false);
     });
 
     it('does not mark the canvas dirty when the node is already there', () => {
       const s = withLoop();
-      s.getState().setNodeContainer('n_a', 'loop_1');
+      s.getState().setNodesContainer(['n_a'], 'loop_1');
       expect(s.getState().dirty).toBe(false);
     });
 
@@ -1597,8 +1597,8 @@ describe('canvasStore — container membership (U6d)', () => {
      */
     it('applies an edit that leaves the doc invalid, and the badge reports it', () => {
       const s = withLoop();
-      s.getState().setNodeContainer('n_b', 'loop_1');
-      s.getState().setNodeContainer('n_a', null);
+      s.getState().setNodesContainer(['n_b'], 'loop_1');
+      s.getState().setNodesContainer(['n_a'], null);
       const st = s.getState();
       const issues = validateCanvas(
         st.nodes,
@@ -1638,7 +1638,7 @@ describe('canvasStore — container membership (U6d)', () => {
 
     /**
      * Re-applying an identical container must not mark the canvas dirty —
-     * `setNodeContainer`'s rule, for its reason: an unchanged graph that reports
+     * `setNodesContainer`'s rule, for its reason: an unchanged graph that reports
      * itself as edited is how an unsaved-changes prompt loses the operator's
      * trust. Reachable by opening the panel and pressing Apply without typing.
      */
@@ -2364,7 +2364,7 @@ describe('canvasStore — undo/redo (U17)', () => {
     s.getState().createContainer(box);
     expect(s.getState().containers).toHaveLength(1);
 
-    s.getState().setNodeContainer('n_b', box.id);
+    s.getState().setNodesContainer(['n_b'], box.id);
     expect(s.getState().containers[0]!.children).toEqual(['n_a', 'n_b']);
 
     s.getState().undo();
@@ -3201,7 +3201,7 @@ describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
       s.getState().setSelection([{ kind: 'node', id: 'n_c' }]);
       s.getState().cutSelection('pl_1');
       s.getState().undo();
-      s.getState().setNodeContainer('n_c', null);
+      s.getState().setNodesContainer(['n_c'], null);
       s.getState().pasteClipboard('pl_1');
 
       const st = s.getState();

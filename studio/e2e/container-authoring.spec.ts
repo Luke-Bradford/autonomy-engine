@@ -94,8 +94,9 @@ test.describe('#1597 — container membership from the canvas context menu', () 
     expect(joined).toContain('Move HTTP Request 1 into ForEach 1?');
     await expectHolds(page, 'ForEach 1', 2);
 
-    // One Undo takes it back out.
-    await nodeById(page, 'a').focus();
+    // Focus is back on the activity after the dialog, so the keyboard carries
+    // on from there: one Undo takes it back out.
+    await expect(nodeById(page, 'a')).toBeFocused();
     await page.keyboard.press('ControlOrMeta+z');
     await expectHolds(page, 'ForEach 1', 1);
 

@@ -97,10 +97,10 @@ export const CONTAINER_GROUP_LABEL = 'Containers';
 
 /**
  * #1420 — ForEach, Until and Stage in the palette, beside If and Switch where an
- * ADF author looks for them. Before this the only way to make one was the
- * selected node's Settings → New container (removed by #1597). Not catalog activities (a container
- * is a box that holds nodes, not a node), so they are listed here rather than
- * in the shared catalog, in the order an ADF author meets them.
+ * ADF author looks for them; since #1597 they are where a new one is made.
+ * Not catalog activities (a container is a box that holds nodes, not a node),
+ * so they are listed here rather than in the shared catalog, in the order an
+ * ADF author meets them.
  */
 export const CONTAINER_PALETTE: readonly ContainerPaletteEntry[] = [
   {

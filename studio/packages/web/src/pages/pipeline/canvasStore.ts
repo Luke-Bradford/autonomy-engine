@@ -1253,6 +1253,9 @@ export interface CanvasState {
    * admitted (#1420): see `addContainer`. Silent
    * for the same reason `connect` is: the canvas is where a refusal is explained,
    * because it is where the operator is.
+   *
+   * No production caller since #1597 removed the node panel's New container
+   * form; kept as the write for Wrap in ▸ on the canvas context menu (#1613).
    */
   createContainer(container: Container): void;
   /**
@@ -1263,18 +1266,15 @@ export interface CanvasState {
    */
   addContainer(kind: ContainerKind, position?: { x: number; y: number }): void;
   /**
-   * U6d — move a node into `containerId`, or out of every container when it is
-   * `null`.
+   * U6d — move nodes into `containerId`, or out of every container when it is
+   * `null`, as ONE edit (#1420): a selection dragged into a box, or moved by
+   * the canvas context menu (#1597), joins together and one Undo takes it back
+   * out together. Unknown node ids are skipped; an unknown container refuses
+   * the whole call.
    *
    * Deliberately does NOT refuse an edit that leaves the doc invalid — see
-   * `containerRules`. The badge (#444) blocks the save, and the same control
-   * reverses the edit.
-   */
-  setNodeContainer(nodeId: string, containerId: string | null): void;
-  /**
-   * #1420 — `setNodeContainer` for a GROUP, as one edit: a selection dragged
-   * into a box joins together and one Undo takes it back out together. Unknown
-   * node ids are skipped; an unknown container refuses the whole call.
+   * `containerRules`. The badge (#444) blocks the save, and Undo or the menu's
+   * Remove from reverses the edit.
    */
   setNodesContainer(nodeIds: readonly string[], containerId: string | null): void;
   /**
@@ -1296,7 +1296,7 @@ export interface CanvasState {
    * config fields are legal AND how the reducer runs the box, so reclassifying a
    * loop as a stage through a CONFIG action would silently leave `exitWhen`
    * behind on a kind that refuses it. A membership write belongs to
-   * `setNodeContainer`, which alone takes the child out of whatever container
+   * `setNodesContainer`, which alone takes the child out of whatever container
    * held it, and to `deleteNode`, which prunes (#746); routing membership
    * through here would bypass both and could author the duplicate-child doc
    * `validateDoc` refuses.
@@ -1316,7 +1316,7 @@ export interface CanvasState {
    * know about — the same silent-loss shape `assembleConfig` exists to prevent.
    *
    * Deliberately does NOT refuse an edit that leaves the DOC invalid (a blanked
-   * `exitWhen`, say). That is `setNodeContainer`'s posture and it is deliberate:
+   * `exitWhen`, say). That is `setNodesContainer`'s posture and it is deliberate:
    * the badge (#444) blocks the save and the same panel reverses the edit,
    * whereas refusing here would make a half-finished edit unrepresentable.
    */
@@ -1902,7 +1902,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
 
       moveNodes(moves) {
         const nodes = get().nodes;
-        // A drag that lands back where it started is not an edit — `setNodeContainer`'s
+        // A drag that lands back where it started is not an edit — `setNodesContainer`'s
         // rule, for its reason, plus one U17 adds: a no-op that records history is a
         // dead undo press, and a drag returning to its own origin is the easiest one
         // to perform by accident. At set level the same rule reads: record nothing
@@ -2079,10 +2079,6 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         get().select({ kind: 'container', id: c.id });
       },
 
-      setNodeContainer(nodeId, containerId) {
-        get().setNodesContainer([nodeId], containerId);
-      },
-
       setNodesContainer(nodeIds, containerId) {
         const s = get();
         if (containerId !== null && !s.containers.some((c) => c.id === containerId)) return;
@@ -2177,7 +2173,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         const current = get().edges.find((e) => e.id === id);
         if (current === undefined || current.back !== true) return;
         // Re-committing the cap it already holds must not mark the canvas dirty —
-        // `setNodeContainer`'s rule, for its reason: an unchanged graph that
+        // `setNodesContainer`'s rule, for its reason: an unchanged graph that
         // reports itself as edited is how a "you have unsaved changes" prompt
         // loses the operator's trust. The panel (`DraftNumberField`) compares the
         // parsed value too, but the store is the rail: any other caller writing
@@ -2225,7 +2221,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         if (current === undefined) return;
         const { from, to, condition } = target;
         /* Nothing moved. Returning before `edit` keeps a drop-back-where-it-
-           started off the undo stack and out of the dirty flag — `setNodeContainer`'s
+           started off the undo stack and out of the dirty flag — `setNodesContainer`'s
            rule, for its reason: a graph that reports an edit it did not make is
            how an unsaved-changes prompt loses the operator's trust. */
         if (
