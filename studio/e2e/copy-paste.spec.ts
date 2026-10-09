@@ -506,15 +506,17 @@ test.describe('copy/paste on the canvas (U21)', () => {
     await page.keyboard.press('Enter');
     await expect(page.getByText('Pasted 1 activity.')).toBeVisible();
     await expect(canvasNodes(page)).toHaveCount(3);
+    // The copy keeps `b`'s upstream, as a ⌘V paste in the same pipeline does.
+    await expect(edgeGroup(page)).toHaveCount(2);
 
-    // Delete takes the activity and its edge, and ONE undo brings both back.
+    // Delete takes the activity and both its edges, and ONE undo brings all back.
     await nodeById(page, 'a').click({ button: 'right' });
     await menu.getByRole('menuitem', { name: /Delete/ }).click();
     await expect(nodeById(page, 'a')).toHaveCount(0);
     await expect(edgeGroup(page)).toHaveCount(0);
     await page.keyboard.press('Meta+z');
     await expect(nodeById(page, 'a')).toHaveCount(1);
-    await expect(edgeGroup(page)).toHaveCount(1);
+    await expect(edgeGroup(page)).toHaveCount(2);
 
     await expectQuiet(page, problems);
   });
