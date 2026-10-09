@@ -58,6 +58,12 @@ interface DockSplitterProps {
    * other — a height committed as a width.
    */
   position: DockPosition;
+  /**
+   * #1477 OR29 — the dock is expanded over the canvas, and this divider is not
+   * drawn. The dock's box is then the drawer's, so it is not read as the
+   * dock's size; collapsing reads the docked box again.
+   */
+  expanded?: boolean;
 }
 
 /**
@@ -84,7 +90,13 @@ interface DockSplitterProps {
  * from an unmeasured column. jsdom, with no layout and no `ResizeObserver`,
  * only ever gets the track.
  */
-export function DockSplitter({ columnRef, dockRef, dockId, position }: DockSplitterProps) {
+export function DockSplitter({
+  columnRef,
+  dockRef,
+  dockId,
+  position,
+  expanded = false,
+}: DockSplitterProps) {
   const { axis, size, min, maxFor, cssVar } = AXES[position];
   const dockSize = useStore(uiStore, PREFERENCE[position].get);
   const setDockSize = useStore(uiStore, PREFERENCE[position].set);
@@ -97,13 +109,14 @@ export function DockSplitter({ columnRef, dockRef, dockId, position }: DockSplit
   const beforeMaximise = useRef<number | null | undefined>(undefined);
 
   // Re-read after anything that can change the dock's size: a committed
-  // preference, or a new column size (which moves the default share and the cap).
+  // preference, a new column size (which moves the default share and the cap),
+  // or the dock coming back from expanded.
   // Passive, not layout, for `useElementSize`'s reason: `dockRef` is on this
   // component's next sibling, attached only after its layout effects.
   useEffect(() => {
     const el = dockRef.current;
-    if (el) setRendered(Math.round(el.getBoundingClientRect()[size]));
-  }, [dockRef, dockSize, column, size]);
+    if (el && !expanded) setRendered(Math.round(el.getBoundingClientRect()[size]));
+  }, [dockRef, dockSize, column, size, expanded]);
 
   const previewSize = useCallback(
     (next: number) => dockRef.current?.style.setProperty(cssVar, `${next}px`),

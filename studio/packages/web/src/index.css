@@ -2253,6 +2253,40 @@ button.danger {
   max-width: none;
 }
 
+/* #1477 OR29 — the dock EXPANDED: the same element (it holds drafts a remount
+   would drop) taken out of the column's flow as a full-height drawer over the
+   canvas, leaving a strip of canvas clickable on its left. After the right-hand
+   dock's rules and as specific, so their width and cap give way. The surface is
+   the run drawer's (`.run-drawer`). The divider stays mounted, keeping what a
+   double-click maximise restores, but is not drawn. */
+.canvas-main--dock-expanded {
+  position: relative;
+}
+
+.canvas-main--dock-expanded > .property-dock {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  z-index: 15;
+  width: max(320px, min(920px, 100% - 120px));
+  max-width: none;
+  height: auto;
+  max-height: none;
+  padding: 8px;
+  background: var(--panel);
+  border-inline-start: 1px solid var(--border);
+  box-shadow: -4px 0 16px var(--shadow);
+}
+
+/* As in the right-hand dock: wrap rather than clip on a narrow column. */
+.canvas-main--dock-expanded > .property-dock > .property-dock__header {
+  flex-wrap: wrap;
+}
+
+.canvas-main--dock-expanded > .dock-splitter {
+  display: none;
+}
+
 /* Folded: only the toggle remains, and the canvas takes the height back. No
    divider is drawn then, so the dock keeps its own distance from the canvas. */
 .property-dock--collapsed {
@@ -2285,11 +2319,16 @@ button.danger {
   align-items: center;
 }
 
-/* #1477 OR29 — the header's icon acts (Paste), at the row's far end. */
+/* #1477 OR29 — the header's icon acts (Paste, Expand), together at the row's
+   far end, so a wrapped header moves them as one. */
+.property-dock__acts {
+  display: flex;
+  margin-left: auto;
+}
+
 .property-dock__icon-button {
   width: 24px;
   height: 24px;
-  margin-left: auto;
   font-size: 16px;
 }
 
