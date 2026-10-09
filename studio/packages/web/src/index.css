@@ -3154,10 +3154,6 @@ button.danger {
    gutter: 2 × 282 + 16 = 580.
    Nothing inside a context is fixed-position, so the containment this implies
    changes no containing block that matters. */
-:root {
-  --form-label-column: 150px;
-}
-
 /* The dock's context is the node's own panel's tab only: the run drawer
    (`.node-detail-panel`) shares the dock but is a page of data, not a form.
    The tab itself is uncapped so the grid can widen with the dock; inside it

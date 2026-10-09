@@ -75,6 +75,10 @@
   /* S3 — a page header's row: the title and its toolbar. One height in both
      densities, so a page's content starts at the same y either way. */
   --header-h: 40px;
+  /* S3c — the label column of a label-left form row (the form layout,
+     `index.css`). One width in both densities, so every form's controls start
+     at one x. */
+  --form-label-column: 150px;
   /* S2b — a glyph in an icon button (the Fluent icons are 1em). */
   --icon-size: 16px;
 
