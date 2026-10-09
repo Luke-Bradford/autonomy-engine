@@ -102,8 +102,11 @@ test.describe('U13b per-kind connection config', () => {
 
     // A postgres connection cannot dispatch without a password, and the form
     // must say so — this is the visible face of joining
-    // `SECRET_REQUIRING_CONNECTION_KINDS`.
-    await expect(form(page).getByText(/cannot dispatch without a secret/)).toBeVisible();
+    // `SECRET_REQUIRING_CONNECTION_KINDS`. It is the Secret's `?` note (#1594
+    // OR40 S3c-2), so it is the input's description.
+    await expect(form(page).getByLabel('Secret', { exact: true })).toHaveAccessibleDescription(
+      /cannot dispatch without a secret/,
+    );
 
     const sslmode = form(page).getByLabel('TLS mode', { exact: true });
     await expect(sslmode).toHaveRole('combobox');
@@ -182,7 +185,9 @@ test.describe('U13b per-kind connection config', () => {
     // anthropic_api is the first kind: its own header field is present, and the
     // secret note says it cannot dispatch without one.
     await expect(form(page).getByLabel('API version', { exact: true })).toBeVisible();
-    await expect(form(page).getByText(/cannot dispatch without a secret/)).toBeVisible();
+    await expect(form(page).getByLabel('Secret', { exact: true })).toHaveAccessibleDescription(
+      /cannot dispatch without a secret/,
+    );
 
     await form(page).getByLabel('Kind').selectOption('agent_cli');
     await expect(form(page).getByLabel('Command', { exact: true })).toBeVisible();

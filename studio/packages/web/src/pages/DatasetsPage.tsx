@@ -1003,7 +1003,7 @@ function DatasetForm({
             </>
           }
           about={{
-            name: 'Columns',
+            name: 'Columns (JSON)',
             note: (
               <>
                 The schema this dataset declares: an authoring aid that auto-map matches against,

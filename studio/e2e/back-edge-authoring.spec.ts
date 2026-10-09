@@ -128,7 +128,7 @@ test.describe('U6e back-edge authoring', () => {
     await expect(firesOn(page)).toBeVisible();
     const panel = page.getByLabel('Properties');
     await expect(panel.getByRole('heading')).toHaveText('Back-edge');
-    const cap = panel.getByLabel(/Bounce cap/);
+    const cap = panel.getByLabel('Bounce cap', { exact: true });
     await expect(cap).toHaveValue('10');
 
     // A real edit commits on blur, and the canvas label follows it.
