@@ -1855,7 +1855,7 @@ export function FlowCanvas({
   // open, so a box added or removed under it is never offered stale.
   const menuMoves = useMemo((): CanvasMenuMoves | null => {
     if (menu?.target !== 'selection') return null;
-    const ids = selectedNodeIds(store.getState());
+    const ids = selectedNodeIds({ selected, nodes });
     const { owner } = containerMembership(containers);
     const labels = containerLabels(containers);
     const home = sharedContainer(owner, ids);
@@ -1867,9 +1867,7 @@ export function FlowCanvas({
         .map((c) => ({ id: c.id, label: labels.get(c.id) ?? c.id })),
       removeFrom: held.length === 0 ? null : leavingName(labels, leaving),
     };
-    // `selected` and `nodes` are read through the store; they are listed so a
-    // change to either while the menu is open re-derives it.
-  }, [menu, selected, nodes, containers, store]);
+  }, [menu, selected, nodes, containers]);
   function openMenu(event: ReactMouseEvent | MouseEvent, target: CanvasMenuRequest['target']) {
     event.preventDefault();
     let { clientX: x, clientY: y } = event;
