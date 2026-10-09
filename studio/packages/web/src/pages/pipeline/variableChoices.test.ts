@@ -40,7 +40,7 @@ describe('variableWriteChoices (#844 V6)', () => {
     const noArrays = declared.filter((v) => v.type !== 'array');
     expect(variableWriteChoices('append_variable', noArrays)).toMatchObject({
       values: [],
-      emptyHint: expect.stringMatching(/^None of this pipeline’s variables is an array/),
+      emptyHint: expect.stringMatching(/^No array variables/),
     });
   });
 

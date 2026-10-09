@@ -120,7 +120,7 @@ test.describe('#844 V6 — set/append variable config form', () => {
     await nodeById(page, 'a').click();
     await expect(properties(page).getByLabel('Declared variable', { exact: true })).toHaveCount(0);
     await expect(properties(page).locator('.config-field-choices-empty')).toHaveText(
-      /^None of this pipeline’s variables is an array/,
+      /^No array variables/,
     );
     await expect(properties(page)).toContainText('append_variable needs an array variable');
 

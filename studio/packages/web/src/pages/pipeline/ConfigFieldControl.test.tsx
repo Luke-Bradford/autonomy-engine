@@ -480,7 +480,8 @@ describe('ConfigFieldControl — a row list is a compact table (#1477 OR29)', ()
     expect(
       fireEvent.mouseDown(getByRole('button', { name: 'Functions for mapping row 1 source' })),
     ).toBe(false);
-    // A top-level field's toggles are worded and always shown, so they need none of that.
+    // A top-level field's toggles are glyphs too (#1477 OR29: worded, they were
+    // 44px a field), but always shown, so they need none of that.
     const top = render(
       <ConfigFieldControl
         field={{ name: 'url', kind: 'text', optional: true }}
@@ -490,7 +491,7 @@ describe('ConfigFieldControl — a row list is a compact table (#1477 OR29)', ()
       />,
     );
     const worded = top.getByRole('button', { name: 'Insert reference into url' });
-    expect(worded).toHaveTextContent('Insert reference');
+    expect(worded).toHaveTextContent('${}');
     expect(fireEvent.mouseDown(worded)).toBe(true);
   });
 });

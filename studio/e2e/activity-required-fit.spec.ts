@@ -20,8 +20,11 @@ const tabs = (page: Page) => properties(page).getByRole('tablist', { name: 'Acti
 const REQUIRED = '[aria-required="true"], input[required], textarea[required], select[required]';
 
 /**
- * One read per tab: each required control's accessible label and how far it runs
- * past the panel's visible bottom, with the panel scrolled to the top.
+ * One read per tab: each required control's label and how far its FIRST LINE
+ * (28px, a compact control's height) runs past the panel's visible bottom, with
+ * the panel scrolled to the top. A first line is what an author needs to see the
+ * field and start typing: a textarea grows with its text, and a whole one need
+ * not fit for the field to be found.
  */
 function requiredOverflow(page: Page) {
   return properties(page)
@@ -35,7 +38,11 @@ function requiredOverflow(page: Page) {
           el.getAttribute('aria-label') ??
           (el.id ? document.querySelector(`label[for="${el.id}"]`)?.textContent : null) ??
           el.tagName,
-        overflow: Math.round(el.getBoundingClientRect().bottom - visibleBottom),
+        overflow: Math.round(
+          el.getBoundingClientRect().top +
+            Math.min(el.getBoundingClientRect().height, 28) -
+            visibleBottom,
+        ),
       }));
     }, REQUIRED);
 }
@@ -71,7 +78,8 @@ test('every catalog activity shows its required fields without a scroll at 1280�
       const tab = tabs(page).getByRole('tab').nth(i);
       await tab.click();
       await expect(tab).toHaveAttribute('aria-selected', 'true');
-      const label = (await tab.getAttribute('aria-controls')) ?? String(i);
+      // The panel id ends in the tab's catalog key (`…-panel-location`).
+      const label = (await tab.getAttribute('aria-controls'))?.split('-panel-')[1] ?? String(i);
       for (const { field, overflow } of await requiredOverflow(page)) {
         measured += 1;
         if (overflow > 0) misses.push(`${name} › ${label} › ${field}: ${overflow}px below`);
