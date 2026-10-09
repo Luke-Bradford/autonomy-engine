@@ -151,11 +151,9 @@ test.describe('U7 — per-activity node config form', () => {
   });
 
   // #1477 OR29 — an activity's tabs come from its catalog entry. An HTTP node
-  // opens on Request: its connection, its fields, then Container membership,
-  // which closes the landing tab. Secret headers are on Auth.
-  test('an activity opens on its first catalog tab, with Container closing it', async ({
-    page,
-  }) => {
+  // opens on Request: its connection, then its fields. Secret headers are on
+  // Auth. #1597 — no tab carries a Container section any more.
+  test('an activity opens on its first catalog tab', async ({ page }) => {
     const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'or29 panel tabs', {
       nodes: [
@@ -170,11 +168,13 @@ test.describe('U7 — per-activity node config form', () => {
     await expect(request).toBeVisible();
     await expect(request.getByRole('combobox', { name: 'Connection' })).toBeVisible();
     await expect(request.getByRole('textbox', { name: 'Request URL', exact: true })).toBeVisible();
-    await expect(request.getByLabel('Container membership')).toBeVisible();
+    await expect(request.getByRole('group', { name: 'Container' })).toHaveCount(0);
 
-    // One read of every computed value: Container is the tab's only form
-    // section, ruled off on its heading because the fields precede it, and its
-    // body keeps the panel's own gap.
+    // One read of every computed value, on General: Run policy is the tab's only
+    // form section, ruled off on its heading because the fields precede it, and
+    // its body keeps the panel's own gap. (It was read on Request while the
+    // Container section closed that tab, #1597.)
+    await tabs.getByRole('tab', { name: 'General' }).click();
     const layout = await properties(page).evaluate((panel) => {
       const sections = [
         ...panel.querySelectorAll<HTMLElement>(
@@ -198,7 +198,7 @@ test.describe('U7 — per-activity node config form', () => {
     });
     expect(layout.sections).toEqual([
       {
-        title: 'Container',
+        title: 'Run policy',
         fieldsetBorder: '0px',
         ruled: '1px',
         ruleSpansSection: true,

@@ -1,77 +1,141 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { validationIssues } from './support/canvasGraph';
 import { captureConfirm, expectNoConfirm } from './support/confirmDialog';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
 
 /**
- * U6d — authoring a container from the canvas.
+ * #1597 — an activity's container, set from the canvas context menu.
  *
- * Until this ticket a container could only arrive with a version minted through
- * the API, which is why every other container spec has to seed one. This is the
- * first spec that MAKES one the way an operator does: select an activity, pick a
- * kind, click Create.
+ * Until #1597 every activity's properties closed on a Container section: a
+ * membership select plus a New container form (U6d). Since #1420 put ForEach,
+ * Until and Stage on the palette and let activities be dragged into a box, that
+ * section duplicated the canvas in the space the activity's own properties
+ * need, and ADF has nothing like it. It is gone, and the keyboard route to what
+ * a drag does (WCAG 2.5.7) is the activity's context menu: Move into ▸ and
+ * Remove from.
  *
- * The unit suites pin the store actions and the consequence rules. What they
- * cannot pin is the thing the operator actually experiences — a dialog that
- * states what an edit costs before it happens, a box that appears on the canvas,
- * and a save that reaches the server carrying the container. jsdom cannot see
- * the box at all (a container's rect is derived from MEASURED child sizes it
- * reports as 0×0), and no unit test can prove the save BODY.
+ * The unit suites pin the menu's items and the one-edit store write. What they
+ * cannot pin is what the operator experiences: a menu raised from the KEYBOARD,
+ * a dialog that states what the edit costs before it happens, a box on the
+ * canvas that gains and loses the activity, and a save the server accepts.
  */
 
-/** Select an activity so the property panel shows its container controls. */
-async function select(page: Page, id: string): Promise<void> {
-  await nodeById(page, id).click();
-  await expect(page.getByLabel('Container membership')).toBeVisible();
+/** A container box on the canvas, by its label ("Stage 1", "ForEach 1"). */
+function containerBox(page: Page, name: string): Locator {
+  return page.getByRole('group', { name: new RegExp(`^${name} container`) });
 }
 
-test.describe('U6d — creating a container from the canvas', () => {
+/** How many activities a box says it holds, from its accessible name. */
+async function expectHolds(page: Page, name: string, count: number): Promise<void> {
+  const noun = count === 1 ? 'activity' : 'activities';
+  await expect(containerBox(page, name)).toHaveAttribute(
+    'aria-label',
+    new RegExp(`^${name} container, ${count} ${noun}\\b`),
+  );
+}
+
+/** The activity menu's Move into ▸ submenu, opened with the pointer. */
+async function moveInto(page: Page, id: string, target: string): Promise<void> {
+  await nodeById(page, id).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: /^Move into/ }).click();
+  await page
+    .getByRole('menu', { name: 'Move into' })
+    .getByRole('menuitem', { name: target })
+    .click();
+}
+
+/** The activity menu's Remove from, opened with the pointer. */
+async function removeFrom(page: Page, id: string, name: string): Promise<void> {
+  await nodeById(page, id).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: `Remove from ${name}` }).click();
+}
+
+test.describe('#1597 — container membership from the canvas context menu', () => {
   /**
-   * The headline path, end to end: no container exists, the operator makes one,
-   * puts a second activity in it, and saves.
-   *
-   * Asserted by actually SAVING and reading the confirmation rather than by
-   * asserting a button is enabled — minting v2 is the only thing that proves the
-   * body sent to the server carried the container through the real write gate.
+   * The acceptance path, KEYBOARD ONLY: focus the activity, raise its menu with
+   * the ContextMenu key (Playwright's Chromium does not turn Shift+F10 into a
+   * `contextmenu` event on a macOS host, so the key the platform maps it to is
+   * pressed instead), open Move into ▸ with ArrowRight, pick with Enter; then
+   * Undo, then Remove from.
    */
-  test('an operator creates a stage, adds a second activity, and saves it', async ({ page }) => {
+  test('keyboard only: Move into ▸ a ForEach, Undo, then Remove from', async ({ page }) => {
     const problems = collectPageProblems(page);
-    await openSeededCanvas(page, 'u6d-create', {
+    await openSeededCanvas(page, 'membership-keyboard', {
+      nodes: [
+        { id: 'a', position: { x: 0, y: 0 } },
+        { id: 'b', position: { x: 0, y: 260 } },
+      ],
+      containers: [
+        { id: 'foreach_1', kind: 'foreach', items: '${createArray(1, 2)}', children: ['b'] },
+      ],
+    });
+    await expectHolds(page, 'ForEach 1', 1);
+
+    const raiseMenu = async () => {
+      await nodeById(page, 'a').focus();
+      await page.keyboard.press('ContextMenu');
+      const menu = page.getByRole('menu', { name: 'Selection' });
+      await expect(menu).toBeVisible();
+      // The keyboard lands IN the menu, so the arrows that follow drive it.
+      await expect(menu.locator(':focus')).toHaveCount(1);
+      return menu;
+    };
+
+    let menu = await raiseMenu();
+    // Typeahead: Move into is the menu's one item starting with M.
+    await page.keyboard.press('m');
+    await expect(menu.getByRole('menuitem', { name: /^Move into/ })).toBeFocused();
+    await page.keyboard.press('ArrowRight');
+    const into = page.getByRole('menu', { name: 'Move into' });
+    await expect(into.getByRole('menuitem', { name: 'ForEach 1' })).toBeFocused();
+    const joined = await captureConfirm(page, () => page.keyboard.press('Enter'));
+    // A loop body runs once per item: joining one is a routing change, stated.
+    expect(joined).toContain('Move HTTP Request 1 into ForEach 1?');
+    await expectHolds(page, 'ForEach 1', 2);
+
+    // One Undo takes it back out.
+    await nodeById(page, 'a').focus();
+    await page.keyboard.press('ControlOrMeta+z');
+    await expectHolds(page, 'ForEach 1', 1);
+
+    // And Remove from takes out one that is in.
+    await nodeById(page, 'b').focus();
+    await page.keyboard.press('ContextMenu');
+    menu = page.getByRole('menu', { name: 'Selection' });
+    await expect(menu.locator(':focus')).toHaveCount(1);
+    await page.keyboard.press('r');
+    await expect(menu.getByRole('menuitem', { name: 'Remove from ForEach 1' })).toBeFocused();
+    await captureConfirm(page, () => page.keyboard.press('Enter'));
+    await expectHolds(page, 'ForEach 1', 0);
+
+    await expectQuiet(page, problems);
+  });
+
+  /**
+   * The headline path, end to end: an activity joins a stage through the menu
+   * and the pipeline saves. Asserted by actually SAVING — minting v2 is the only
+   * thing that proves the body sent to the server carried the membership
+   * through the real write gate.
+   */
+  test('an activity moved into a stage saves', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await openSeededCanvas(page, 'membership-save', {
       nodes: [
         { id: 'a', position: { x: 0, y: 0 } },
         { id: 'b', position: { x: 260, y: 0 } },
       ],
-    });
-    await expect(page.locator('.flow-container')).toHaveCount(0);
-
-    await select(page, 'a');
-    const message = await captureConfirm(page, async () => {
-      await page.getByRole('button', { name: 'Create container' }).click();
+      containers: [{ id: 'stage_1', kind: 'stage', children: ['a'] }],
     });
 
-    // The consequence NO validator reports: an edge-less doc's routing is
-    // INFERRED, and a container splits that inferred chain into parallel roots.
-    expect(message, 'the routing flip was not stated before it happened').toContain(
-      'parallel roots',
-    );
-    await expect(page.locator('.flow-container')).toHaveCount(1);
-
-    await select(page, 'b');
-    /* #840 — this SECOND edit is now stated too, and it did not used to be. The
-       old comparison read the routing KIND, which is `partitioned` on both sides
-       of it; what actually changes is that `b` stops running after the stage and
-       starts running inside it. Under a `stage` that is subtle, under a `loop` it
-       is the difference between once and once per round. So the dialog has to be
-       READ here rather than left to Playwright's default dismissal, which is what
-       silently declined the edit and turned this into a red spec. */
-    const joined = await captureConfirm(page, async () => {
-      await page.getByLabel('Container membership').selectOption({ label: 'Stage 1' });
-    });
+    /* #840 — the join is stated: the old comparison read the routing KIND,
+       which is `partitioned` on both sides; what changes is that `b` stops
+       running after the stage and starts running inside it. */
+    const joined = await captureConfirm(page, () => moveInto(page, 'b', 'Stage 1'));
     expect(joined, 'joining an existing container went unstated — #840 regressed?').toContain(
       'changes that inferred routing',
     );
-    await expect(page.getByLabel('Container membership')).toHaveValue(/^stage_/);
+    await expectHolds(page, 'Stage 1', 2);
 
     expect(await validationIssues(page), 'the edit left the doc invalid').toEqual([]);
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -81,117 +145,39 @@ test.describe('U6d — creating a container from the canvas', () => {
   });
 
   /**
-   * The case that decided this ticket's POSTURE.
-   *
-   * `a → b` is the commonest doc there is, and putting a container round `b`
-   * makes that edge cross a boundary — a doc `validateDoc` refuses. REFUSING the
-   * membership edit for that reason would make containerising anything already
-   * wired impossible, so the edit is applied and its cost is stated instead.
-   *
-   * What makes that safe rather than a #748-shaped trap is walked here in full:
-   * the operator is told, the badge names the problem, Save is dead — and the
-   * SAME control puts it back.
+   * The case that decided U6d's POSTURE, and it carries over. `a → b` is the
+   * commonest doc there is, and putting `b` in a container makes that edge
+   * cross a boundary — a doc `validateDoc` refuses. Refusing the move would make
+   * containerising anything already wired impossible, so it is applied and its
+   * cost stated instead: the badge names the problem, Save is dead, and Remove
+   * from puts it back.
    */
-  test('containerising an already-wired activity is allowed, stated, and reversible', async ({
-    page,
-  }) => {
+  test('moving an already-wired activity is allowed, stated, and reversible', async ({ page }) => {
     const problems = collectPageProblems(page);
-    await openSeededCanvas(page, 'u6d-wired', {
+    await openSeededCanvas(page, 'membership-wired', {
       nodes: [
         { id: 'a', position: { x: 0, y: 0 } },
         { id: 'b', position: { x: 260, y: 0 } },
+        { id: 'c', position: { x: 0, y: 260 } },
       ],
       edges: [{ from: 'a', to: 'b', on: 'success' }],
+      containers: [{ id: 'stage_1', kind: 'stage', children: ['c'] }],
     });
 
-    await select(page, 'b');
-    const message = await captureConfirm(page, async () => {
-      await page.getByRole('button', { name: 'Create container' }).click();
-    });
-
+    const message = await captureConfirm(page, () => moveInto(page, 'b', 'Stage 1'));
     expect(message).toContain('unsavable');
     expect(message).toContain('crosses a container boundary');
-    // Named by its ENDS, never by the uuid `newLocalId` minted for it — and
-    // since #878 the two ends are TOLD APART. This doc is two `http_request`
-    // nodes, which used to render "HTTP Request → HTTP Request": true, and no
-    // more use to the operator than the two uuids it replaced.
+    // Named by its ENDS (#878), never by a minted id.
     expect(message).toContain('HTTP Request 1 → HTTP Request 2');
-    expect(message).not.toMatch(/'e_[0-9a-f]{8}/);
+    expect(message).toContain('Undo (⌘Z) takes it back out.');
 
     expect((await validationIssues(page)).join('\n')).toContain('crosses a container boundary');
     await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
 
-    // The way back out, through the control that got here.
-    await page.getByLabel('Container membership').selectOption('');
+    // The way back out, from the same menu.
+    await captureConfirm(page, () => removeFrom(page, 'b', 'Stage 1'));
     expect(await validationIssues(page)).toEqual([]);
     await expect(page.getByRole('button', { name: 'Save version' })).toBeEnabled();
-
-    await expectQuiet(page, problems);
-  });
-
-  /**
-   * The same journey for a LOOP, which is where the stage version cannot
-   * discriminate: an emptied stage validates clean, so "set it back to — none —"
-   * looks like a recovery for it. For a loop that instruction makes the doc
-   * WORSE (no children, and an `exitWhen` naming a node outside), so the create
-   * path names the container's own delete instead — and this walks that.
-   */
-  test('the way out of a loop created round a wired activity is the box, not — none —', async ({
-    page,
-  }) => {
-    const problems = collectPageProblems(page);
-    await openSeededCanvas(page, 'u6d-loop-undo', {
-      nodes: [
-        { id: 'a', position: { x: 0, y: 0 } },
-        { id: 'b', position: { x: 260, y: 0 } },
-      ],
-      edges: [{ from: 'a', to: 'b', on: 'success' }],
-    });
-
-    await select(page, 'b');
-    // #1396 — each kind by the palette's name; the option's value is the kind.
-    await expect(page.getByLabel('New container kind').locator('option')).toHaveText([
-      'Until',
-      'Stage',
-      'ForEach',
-    ]);
-    await page.getByLabel('New container kind').selectOption('loop');
-    await page.getByLabel('Exit when').fill('${equals(nodes.b.status, "success")}');
-    const message = await captureConfirm(page, async () => {
-      await page.getByRole('button', { name: 'Create container' }).click();
-    });
-
-    expect(message).toContain('✕ on the container box');
-    expect(message, 'named a recovery that would make the doc worse').not.toContain('— none —');
-
-    expect((await validationIssues(page)).join('\n')).toContain('crosses a container boundary');
-    await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
-
-    // The recovery the dialog actually named.
-    await captureConfirm(page, async () => {
-      await page.getByRole('button', { name: 'Delete Until 1 container' }).click();
-    });
-    await expect(page.locator('.flow-container')).toHaveCount(0);
-    expect(await validationIssues(page)).toEqual([]);
-    await expect(page.getByRole('button', { name: 'Save version' })).toBeEnabled();
-
-    await expectQuiet(page, problems);
-  });
-
-  /** A foreach needs its items expression for the same reason a loop needs an exit. */
-  test('a foreach cannot be created without an items expression', async ({ page }) => {
-    const problems = collectPageProblems(page);
-    await openSeededCanvas(page, 'u6d-foreach-gate', {
-      nodes: [{ id: 'a', position: { x: 0, y: 0 } }],
-    });
-
-    await select(page, 'a');
-    await page.getByLabel('New container kind').selectOption('foreach');
-    const create = page.getByRole('button', { name: 'Create container' });
-    await expect(create).toBeDisabled();
-
-    await page.getByLabel('Items').fill('${run.params.rows}');
-    await expect(create).toBeEnabled();
 
     await expectQuiet(page, problems);
   });
@@ -199,91 +185,25 @@ test.describe('U6d — creating a container from the canvas', () => {
   /** Dismissing the confirmation must leave the graph exactly as it was. */
   test('declining the confirmation applies nothing', async ({ page }) => {
     const problems = collectPageProblems(page);
-    await openSeededCanvas(page, 'u6d-decline', {
+    await openSeededCanvas(page, 'membership-decline', {
       nodes: [
         { id: 'a', position: { x: 0, y: 0 } },
         { id: 'b', position: { x: 260, y: 0 } },
       ],
+      containers: [{ id: 'stage_1', kind: 'stage', children: ['a'] }],
     });
 
-    await select(page, 'a');
-    await captureConfirm(
-      page,
-      async () => {
-        await page.getByRole('button', { name: 'Create container' }).click();
-      },
-      'cancel',
-    );
-
-    await expect(page.locator('.flow-container')).toHaveCount(0);
-    await expectQuiet(page, problems);
-  });
-
-  /**
-   * A loop with no exit condition is a doc `validateDoc` refuses outright, so the
-   * form cannot offer to author one — the gate is the disabled button, before the
-   * doc exists, rather than a badge after it.
-   */
-  test('a loop cannot be created without an exit condition', async ({ page }) => {
-    const problems = collectPageProblems(page);
-    await openSeededCanvas(page, 'u6d-loop-gate', {
-      nodes: [{ id: 'a', position: { x: 0, y: 0 } }],
-    });
-
-    await select(page, 'a');
-    await page.getByLabel('New container kind').selectOption('loop');
-    const create = page.getByRole('button', { name: 'Create container' });
-    await expect(create).toBeDisabled();
-
-    await page.getByLabel('Exit when').fill('${equals(nodes.a.status, "success")}');
-    await expect(create).toBeEnabled();
-
-    await create.click();
-    await expect(page.locator('.flow-container')).toHaveCount(1);
-    await expectNoConfirm(page);
-    await expect(page.locator('.flow-container-label')).toHaveText('Until 1');
-
-    await expectQuiet(page, problems);
-  });
-
-  /**
-   * The gap the canvas's own validation cannot see. `validatePipelineDoc` runs no
-   * schema parse and the server parses the body FIRST, so a `maxRounds` of 0
-   * would clear every canvas check, enable Save, and come back as a raw zod 400
-   * with no badge naming the cause. `buildContainer` refuses it here instead.
-   */
-  test('a maxRounds the schema rejects is refused in the form, not by a 400', async ({ page }) => {
-    const problems = collectPageProblems(page);
-    await openSeededCanvas(page, 'u6d-maxrounds', {
-      nodes: [{ id: 'a', position: { x: 0, y: 0 } }],
-    });
-
-    await select(page, 'a');
-    await page.getByLabel('New container kind').selectOption('loop');
-    await page.getByLabel('Exit when').fill('${equals(nodes.a.status, "success")}');
-    await page.getByLabel('Max rounds').fill('0');
-    await page.getByRole('button', { name: 'Create container' }).click();
-
-    // Scoped by TEXT: `.property-panel .error` alone also matches NodePanel's
-    // config-parse error, so it would stay green if this one never rendered.
-    await expect(page.locator('.property-panel .error')).toContainText('maxRounds');
-    await expect(page.locator('.flow-container')).toHaveCount(0);
-
+    await captureConfirm(page, () => moveInto(page, 'b', 'Stage 1'), 'cancel');
+    await expectHolds(page, 'Stage 1', 1);
     await expectQuiet(page, problems);
   });
 });
 
 /**
  * #840 — a membership edit on a doc that ALREADY has a container states what it
- * changes, before it changes it.
- *
- * The gap this closes is a SILENCE, which is why it needs a spec at this level:
- * the old warning compared only the routing KIND, so both sides of this edit read
- * `partitioned` and no dialog was raised at all. Nothing else on the page said
- * anything either — `validateDoc` accepts both docs, the badge stays empty, Save
- * stays enabled, and the changed routing goes straight into the next IMMUTABLE
- * version. A spec that only asserted the dialog's wording could not have caught
- * that; what makes this one meaningful is that a dialog exists to read.
+ * changes, before it changes it. The gap this closes is a SILENCE: `validateDoc`
+ * accepts both docs, the badge stays empty, Save stays enabled, and the changed
+ * routing would go straight into the next IMMUTABLE version.
  */
 test.describe('#840 — a container edit states the routing it changes', () => {
   test('moving an activity OUT of an existing container is stated first', async ({ page }) => {
@@ -301,36 +221,28 @@ test.describe('#840 — a container edit states the routing it changes', () => {
     // so the dialog is the ONLY thing that can tell the operator anything.
     expect(await validationIssues(page)).toEqual([]);
 
-    await select(page, 'c');
-    const message = await captureConfirm(page, async () => {
-      await page.getByLabel('Container membership').selectOption('');
-    });
-
+    const message = await captureConfirm(page, () => removeFrom(page, 'c', 'Stage 1'));
     expect(
       message,
       'the membership move raised no warning at all — #840 regressed?',
     ).not.toBeNull();
+    expect(message).toContain('out of Stage 1?');
     expect(message).toContain('changes that inferred routing');
     expect(message).toContain('Saving mints');
-    // Qualitative by design. It was once a hard constraint — `activityLabel` is
-    // keyed on TYPE, so naming the activities repeated one word — and since #878
-    // it is a scope decision instead: `activityLabels` could name them, and
-    // `RoutingChange` carries the ids. Deferred to #881; this pins the sentence
-    // that ships today.
-    expect(message).not.toContain('HTTP Request');
 
-    await expect(page.getByLabel('Container membership')).toHaveValue('');
+    await expectHolds(page, 'Stage 1', 1);
     expect(await validationIssues(page), 'the edit left the doc invalid').toEqual([]);
 
     await expectQuiet(page, problems);
   });
 
   /**
-   * The negative half. Re-picking the container an activity is ALREADY in is a
-   * no-op the store short-circuits, and a warning there would train the operator
-   * to dismiss the dialog unread — which is how a pre-hoc warning stops working.
+   * The negative half. The box an activity is ALREADY in is never offered, so
+   * there is no no-op pick to warn about — a warning there would train the
+   * operator to dismiss the dialog unread. With no other box, Move into is
+   * greyed and says why.
    */
-  test('a membership pick that changes nothing does not interrupt', async ({ page }) => {
+  test('the container an activity is already in is not offered', async ({ page }) => {
     const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'routing-change-840-noop', {
       nodes: [
@@ -340,10 +252,13 @@ test.describe('#840 — a container edit states the routing it changes', () => {
       containers: [{ id: 'stage_1', kind: 'stage', children: ['b'] }],
     });
 
-    await select(page, 'b');
-    await page.getByLabel('Container membership').selectOption({ label: 'Stage 1' });
+    await nodeById(page, 'b').click({ button: 'right' });
+    const move = page.getByRole('menuitem', { name: /^Move into/ });
+    await expect(move).toHaveAttribute('aria-disabled', 'true');
+    await expect(move).toContainText('No other container on this canvas');
+    await page.keyboard.press('Escape');
     await expectNoConfirm(page);
-    await expect(page.getByLabel('Container membership')).toHaveValue('stage_1');
+    await expectHolds(page, 'Stage 1', 1);
 
     await expectQuiet(page, problems);
   });

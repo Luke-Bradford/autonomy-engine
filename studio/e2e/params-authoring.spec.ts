@@ -333,7 +333,7 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
 
     // Selecting a node swaps the panel to that node's inspector...
     await page.locator('.react-flow__node[data-id="a"]').click();
-    await expect(page.getByLabel('Container membership')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Apply config' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Add param' })).toHaveCount(0);
 
     // ...and clicking the background brings the pipeline contract back. Without

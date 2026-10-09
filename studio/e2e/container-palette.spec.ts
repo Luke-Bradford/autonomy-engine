@@ -51,13 +51,20 @@ function centre(b: { x: number; y: number; width: number; height: number }) {
   return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
 }
 
-/** The container an activity belongs to, as its Settings → Container select names it. */
-async function membershipOf(page: Page, id: string): Promise<string> {
-  await nodeById(page, id).click();
-  return page
-    .getByRole('combobox', { name: 'Container membership' })
-    .locator('option:checked')
-    .innerText();
+/**
+ * The container an activity belongs to, as its canvas context menu's Remove
+ * from names it (#1597; it was the node panel's Container select), or `null`.
+ */
+async function membershipOf(page: Page, id: string): Promise<string | null> {
+  await nodeById(page, id).click({ button: 'right' });
+  const menu = page.getByRole('menu', { name: 'Selection' });
+  await expect(menu.getByRole('menuitem', { name: /^Delete/ })).toBeVisible();
+  const remove = menu.getByRole('menuitem', { name: /^Remove from / });
+  const name =
+    (await remove.count()) === 0 ? null : (await remove.innerText()).replace(/^Remove from /, '');
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+  return name;
 }
 
 /** The Problems panel's messages, joined — `validationIssues`, for `toContain`. */
@@ -174,7 +181,7 @@ test.describe('#1420 containers in the Activities palette', () => {
     const b = (await nodeById(page, 'b').boundingBox())!;
     await dragNodeCentreTo(page, 'b', { x: centre(b).x + 8, y: centre(b).y + 4 });
 
-    expect(await membershipOf(page, 'b')).toBe('— none —');
+    expect(await membershipOf(page, 'b')).toBeNull();
     await expect(containerBox(page, 'Stage 1')).toHaveAttribute(
       'aria-label',
       /^Stage 1 container, 2 activities\b/,
