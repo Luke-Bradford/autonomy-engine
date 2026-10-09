@@ -268,8 +268,7 @@ body {
    the clip. `:focus-visible`, not `:focus`, so a mouse click does not leave a
    ring behind. */
 .hub-rail__link:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline-offset: var(--focus-ring-inset);
 }
 
 .hub-rail__link--active {
@@ -476,8 +475,7 @@ body {
    drawn OUTSIDE the border box is sliced off at both edges. A negative offset
    draws it inside, where the clip cannot reach it. */
 .secondary-pane__link:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline-offset: var(--focus-ring-inset);
 }
 
 .secondary-pane__link--active {
@@ -525,13 +523,12 @@ body {
    under `forced-colors: active` the UA replaces author background colours
    outright, leaving a control with NO focus indicator at all. This is the one
    control whose keyboard operability is a named spec criterion, so it is the
-   last place to suppress an outline. Positive offset (unlike the rail and pane
-   links, which are clipped by their own `overflow`): the shell does not clip,
-   and a 5px-wide element needs the ring drawn outside it to be visible. */
+   last place to suppress an outline. So it takes the global ring at its
+   positive offset (unlike the rail and pane links, which are clipped by their
+   own `overflow` and draw it inside): the shell does not clip, and a 5px-wide
+   element needs the ring drawn outside it to be visible. */
 .pane-splitter:focus-visible {
   background: var(--accent);
-  outline: 2px solid var(--text);
-  outline-offset: 1px;
 }
 
 /* --- Factory Resources tree (U4) ------------------------------------------ */
@@ -603,8 +600,7 @@ body {
 }
 
 .icon-button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline-offset: var(--focus-ring-inset);
 }
 
 /* #1397 OR6 — a list row's actions cell: the one common action inline, then
@@ -975,8 +971,8 @@ a {
   background: var(--panel-2);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.4rem 0.7rem;
+  border-radius: var(--radius-control);
+  padding: var(--space-1) var(--space-3);
   text-decoration: none;
   font: inherit;
 }
@@ -1033,20 +1029,136 @@ textarea {
   line-height: normal;
 }
 
+/* #1594 OR40 S2 — the ONE control layer: every text input, select and textarea
+   gets one look, from the tokens, in both densities. It replaces the per-form
+   skins (connection/dataset/trigger forms, the property panel) and the
+   compact-dock-only heights that came before it.
+
+   `:where()` keeps it at ZERO specificity, so a component's own rule (a search
+   box, the JSON editor, the run filters) still wins until S6 moves that page
+   onto the layer. The explicit body size outranks inheritance: the compact
+   dock sets its labels to caption size, and a control inside one must not
+   shrink with them. Fluent's Combobox draws its own input, so it is left out. */
+:where(
+  input:not(
+    [type='checkbox'],
+    [type='radio'],
+    [type='range'],
+    [type='color'],
+    [type='file'],
+    .fui-Combobox__input
+  ),
+  select:not([multiple], [size]),
+  textarea
+) {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  font-size: var(--type-body-size);
+}
+
+:where(
+  input:not(
+    [type='checkbox'],
+    [type='radio'],
+    [type='range'],
+    [type='color'],
+    [type='file'],
+    .fui-Combobox__input
+  ),
+  select:not([multiple], [size])
+) {
+  height: var(--control-h);
+  padding: 0 var(--space-2);
+}
+
+/* A textarea (AutoGrowTextarea, JsonEditor) sizes to its text. */
+:where(textarea) {
+  padding: var(--space-1) var(--space-2);
+}
+
+:where(
+    input:not([type='checkbox'], [type='radio'], .fui-Combobox__input),
+    select,
+    textarea
+  ):hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+:where(input:not(.fui-Combobox__input), select, textarea):disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+:where(input, select, textarea)[aria-invalid='true'] {
+  border-color: var(--error);
+}
+
+/* A checkbox or radio reads ACROSS: box, an 8px gap, then its words. Never
+   stretched, never stacked, whatever column rule its form gives labels. Folds
+   the forms' `label.checkbox` and the panel's `.contract-check` rules; keep
+   `.contract-check` in the markup, which the compact dock's label-gap rule
+   excludes by class. */
+label:has(> input[type='checkbox']),
+label:has(> input[type='radio']) {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+label > input:is([type='checkbox'], [type='radio']) {
+  width: auto;
+  margin: 0;
+}
+
+/* Buttons: three variants and no more. SECONDARY is this bare rule, PRIMARY is
+   `.primary`, and SUBTLE (toolbar and icon buttons) arrives with S2b, which
+   folds the icon-button families into it. `.danger` is a colour tone of
+   secondary, not a fourth variant.
+
+   The control height is a MIN-height, and only on the buttons the layer owns:
+   an unclassed button and the variants. A classed one-off button (a canvas
+   chip, a 24px icon button) keeps its own size until S3/S6 moves it, because a
+   `height` cannot win against a `min-height`. Those still take this padding,
+   so in comfortable density they sit a few pixels under `--control-h`. */
 button {
   background: var(--panel-2);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.4rem 0.7rem;
+  border-radius: var(--radius-control);
+  padding: var(--space-1) var(--space-3);
   cursor: pointer;
-  /* #1245 / OR40 S1 — see the form-control rule directly above. */
+  /* #1245 / OR40 S1 — see the form-control rule above. */
   font: inherit;
   line-height: normal;
 }
 
+button:not([class]),
+button.primary,
+button.danger {
+  min-height: var(--control-h);
+}
+
 button:hover:not(:disabled) {
   border-color: var(--accent);
+}
+
+/* The ONE focus ring, on every focusable thing, keyboard focus only. A rule
+   for an element that fills a clipping container keeps this ring and only
+   moves it inside (`--focus-ring-inset`). Fluent's own controls draw Fluent's
+   indicator. */
+:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* React Flow's stylesheet removes the outline from a focused node (0,3,0), so
+   a keyboard user could not see which activity they are on. */
+.react-flow .react-flow__node.selectable:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: var(--focus-ring-offset);
 }
 
 button:disabled,
@@ -1089,17 +1201,6 @@ td button + button {
   gap: 0.3rem;
   font-size: 0.9rem;
   color: var(--muted);
-}
-
-/* A checkbox reads as a single inline row, not a stacked label/control.
-   #1305 — the override allowlist puts checkboxes on the connection and dataset
-   forms too. */
-.trigger-form label.checkbox,
-.connection-form label.checkbox,
-.dataset-form label.checkbox {
-  flex-direction: row;
-  align-items: center;
-  gap: 0.5rem;
 }
 
 /* #439 U14b / #854 — the recurrence and tumbling-window builders read as
@@ -1148,30 +1249,6 @@ td button + button {
   margin: 0;
   padding: 0;
   border: 0;
-}
-
-.connection-form input,
-.connection-form select,
-.connection-form textarea,
-.dataset-form input,
-.dataset-form select,
-.dataset-form textarea,
-.trigger-form input,
-.trigger-form select,
-.trigger-form textarea,
-.external-wait-complete textarea {
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.45rem 0.55rem;
-  font: inherit;
-}
-
-.trigger-form label.checkbox input,
-.connection-form label.checkbox input,
-.dataset-form label.checkbox input {
-  width: auto;
 }
 
 .connection-form textarea,
@@ -1948,8 +2025,7 @@ button.danger {
    Drawn INSIDE the border box, like the rail and the pane, so the toolbox's own
    `overflow-y: auto` cannot clip it. */
 .activity-toolbox__item:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline-offset: var(--focus-ring-inset);
 }
 
 .activity-toolbox__empty {
@@ -2034,14 +2110,6 @@ button.danger {
   margin-top: 0.75rem;
 }
 
-/* A checkbox is the one control here that reads ACROSS rather than down, so it
-   opts out of `.property-panel label`'s column direction. */
-.property-panel .contract-check {
-  flex-direction: row;
-  align-items: center;
-  gap: 0.4rem;
-}
-
 /* A WARNING about something the save will nonetheless accept — deliberately not
    `.error`, which is reserved for something that actually blocked an action.
    Its original user (a param default the server accepted and the run would
@@ -2063,17 +2131,6 @@ button.danger {
 
 .probe-failed {
   color: var(--error);
-}
-
-.property-panel input,
-.property-panel select,
-.property-panel textarea {
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.45rem 0.55rem;
-  font: inherit;
 }
 
 .property-panel textarea {
@@ -2205,8 +2262,7 @@ button.danger {
 .dock-splitter:focus-visible,
 .toolbox-splitter:focus-visible,
 .problems-splitter:focus-visible {
-  outline: 2px solid var(--text);
-  outline-offset: -1px;
+  outline-offset: var(--focus-ring-inset);
 }
 
 .property-dock {
@@ -2831,33 +2887,6 @@ button.danger {
   font-size: var(--type-caption-size);
 }
 
-/* One height for every single-line control. Checkboxes and radios keep their
-   own box, and a textarea (AutoGrowTextarea, JsonEditor) sizes to its text. */
-:root[data-density='compact']
-  .property-dock
-  .property-panel
-  input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file']),
-:root[data-density='compact'] .property-dock .property-panel select {
-  height: var(--control-h);
-  padding: 0 var(--space-2);
-  font-size: var(--type-body-size);
-}
-
-:root[data-density='compact'] .property-dock .property-panel textarea {
-  padding: var(--space-1) var(--space-2);
-  font-size: var(--type-body-size);
-}
-
-/* The panel's ordinary text buttons (Apply config, Add param, …): the ones with
-   no class of their own. A classed button (an icon button, a Fluent tab, the
-   expression picker's two-line entries, a JSON editor's Format) is sized by its
-   own rule. */
-:root[data-density='compact'] .property-dock .property-panel button:not([class]) {
-  min-height: var(--control-h);
-  padding: 0 var(--space-2);
-  font-size: var(--type-body-size);
-}
-
 /* #1477 OR29 — a config field's own box (`ConfigEditor`), for the dock's grid
    below. Everywhere else it generates no box, so the wrapper itself changes no
    resource form's column. */
@@ -2940,8 +2969,7 @@ button.danger {
   text-overflow: ellipsis;
 }
 .connection-picker .connection-picker__combobox > input:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline-offset: var(--focus-ring-inset);
 }
 .connection-picker .connection-picker__combobox > .fui-Combobox__expandIcon {
   position: absolute;
@@ -3900,8 +3928,7 @@ button.danger {
 }
 
 .flow-container-delete:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline-offset: var(--focus-ring-inset);
 }
 
 /*
@@ -3951,8 +3978,7 @@ button.danger {
 }
 
 .flow-container-configure:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline-offset: var(--focus-ring-inset);
 }
 
 /*
@@ -4200,11 +4226,6 @@ button.danger {
 
 .canvas-empty__template:hover {
   border-color: var(--accent);
-}
-
-.canvas-empty__template:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
 }
 
 .canvas-empty__title {
@@ -4884,8 +4905,7 @@ button.danger {
 
 /* Inside the card, clear of the status outline `.run-node` draws outside it. */
 .run-node-open:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline-offset: var(--focus-ring-inset);
 }
 
 .run-node--selected,
@@ -5404,8 +5424,7 @@ button.danger {
 }
 
 .runs-grid__resizer:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline-offset: var(--focus-ring-inset);
 }
 
 /* #1484 — a sortable header is a button that looks like the header text
@@ -6047,7 +6066,7 @@ button.danger {
 
 .version-history-row:focus-visible {
   /* Inside the column's scroll box, which clips a ring drawn outside the row. */
-  outline-offset: -2px;
+  outline-offset: var(--focus-ring-inset);
 }
 
 .version-history-row:hover {
@@ -6742,11 +6761,6 @@ button.danger {
   text-decoration: underline;
 }
 
-.activity-runs__open:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
 /* The row the drawer is showing. A fill, not the outline `Show activity` draws,
    so the two can mark different rows at once and stay told apart. */
 .activity-runs tr[data-open] {
@@ -6784,8 +6798,7 @@ button.danger {
 }
 
 .run-drawer__splitter:focus-visible {
-  outline: 2px solid var(--text);
-  outline-offset: -2px;
+  outline-offset: var(--focus-ring-inset);
 }
 
 .run-drawer__body {
@@ -6810,8 +6823,7 @@ button.danger {
 }
 
 .activity-runs__toggle:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline-offset: var(--focus-ring-inset);
 }
 
 .activity-runs__chevron {
