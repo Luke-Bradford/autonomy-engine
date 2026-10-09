@@ -431,8 +431,9 @@ it.
   are the markup, used by `ConfigEditor`, the container panel and the General tab's policy (numbers
   in one grid, flags in the next, so neither leaves one alone on a row). A cell is
   `display: contents` everywhere else, so the wrapper changes no resource form; a grid given
-  `field-stack` keeps a field's gap when it is not packed. A number field is now `label[for]` beside its input, like every other kind, rather than a
-  label wrapping it, so its hint sits inside the `.config-field` it belongs to.
+  `field-stack` keeps a field's gap when it is not packed. A number field is now `label[for]`
+  beside its input, like every other kind, rather than a label wrapping it, so its hint sits inside
+  the `.config-field` it belongs to.
 - **The threshold is measured on the tab's width, not the dock's.** The dock shares its width with
   the Problems column. At 1440 wide the bottom dock is 935px, but its tab is 589px. The tab is 429px
   at 1280 wide, 1069px at 1920, and 302–463px when docked right, so a right-hand dock always stacks.
