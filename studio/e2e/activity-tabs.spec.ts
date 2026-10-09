@@ -142,3 +142,62 @@ test('a chosen tab is kept for the next node that has it', async ({ page }) => {
   );
   await expectQuiet(page, problems);
 });
+
+/**
+ * #1477 OR29 — each tab label carries its status, so a problem never needs a
+ * scroll hunt. The mark is `aria-hidden`; its meaning is the tab's DESCRIPTION,
+ * so `expectTabNames` (exact names) also certifies the mark left the name alone.
+ */
+test('a tab label shows its problems, an unapplied edit, or that it is complete', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  await openSeededCanvas(page, 'or29 tab status', {
+    nodes: [
+      { id: 'h', type: 'http_request', position: { x: 0, y: 0 }, config: {} },
+      { id: 'l', type: 'llm_call', position: { x: 300, y: 0 }, config: { prompt: 'Hello' } },
+    ],
+  });
+  await nodeById(page, 'h').click();
+  await expectTabNames(tabs(page), ['General', 'Request', 'Auth']);
+  const request = tabs(page).getByRole('tab', { name: 'Request' });
+  const auth = tabs(page).getByRole('tab', { name: 'Auth' });
+
+  // An HTTP node with no URL: the validator's "required" is on Request.
+  await expect(request).toHaveAccessibleDescription('1 problem');
+  const mark = request.locator('.fui-Tab__content .panel-tabs__status');
+  await expect(mark).toHaveText('⚠ 1');
+  const tone = await mark.evaluate((el) => ({
+    color: getComputedStyle(el).color,
+    error: (() => {
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--error)';
+      el.appendChild(probe);
+      const resolved = getComputedStyle(probe).color;
+      probe.remove();
+      return resolved;
+    })(),
+  }));
+  expect(tone.color).toBe(tone.error);
+  await expect(auth).toHaveAccessibleDescription('');
+
+  // Typing marks the edit as unapplied without moving the tabs after it.
+  const authLeft = async () => (await auth.boundingBox())!.x;
+  const before = await authLeft();
+  await properties(page).getByLabel('Request URL').fill('https://a.example.test');
+  await expect(request).toHaveAccessibleDescription('1 problem, unapplied changes');
+  expect(await authLeft()).toBe(before);
+
+  // Applied, the URL is on the node and the problem is gone. Request also holds
+  // the (unbound, optional) connection, so it is not marked complete.
+  await properties(page).getByRole('button', { name: 'Apply config' }).click();
+  await expect(request).toHaveAccessibleDescription('');
+  expect(await authLeft()).toBe(before);
+
+  // An LLM node's Prompt tab: its one required field holds a value.
+  await nodeById(page, 'l').click();
+  await expect(tabs(page).getByRole('tab', { name: 'Prompt' })).toHaveAccessibleDescription(
+    'Complete',
+  );
+  await expectQuiet(page, problems);
+});
