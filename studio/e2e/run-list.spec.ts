@@ -135,7 +135,7 @@ test('#1484 — the runs list is a full-width grid of 32px rows, and a row opens
         document.documentElement.scrollWidth > window.innerWidth,
     };
   });
-  // The 900px reading width is gone: the page and its table use the screen.
+  // No reading-width cap: the page and its table use the screen.
   expect(measured.contentWidth).toBeGreaterThan(1100);
   expect(measured.tableWidth).toBeGreaterThan(1000);
   expect(measured.rowHeight).toBeGreaterThanOrEqual(31);

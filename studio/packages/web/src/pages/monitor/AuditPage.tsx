@@ -4,6 +4,7 @@ import { fetchWorkspaceAuditPage } from '../../api/workspaceAudit';
 import { PAGE_STALLED_LABEL, usePagedList } from '../../hooks/usePagedList';
 import { describeWorkspaceEvent } from './describeWorkspaceEvent';
 import { When } from '../../lib/When';
+import { PageHeader } from '../../lib/PageHeader';
 
 /**
  * #1075 — Monitor › Audit: the workspace's own history.
@@ -51,8 +52,7 @@ export function AuditPage() {
 
   return (
     <section aria-labelledby="audit-heading">
-      <div className="page-header">
-        <h2 id="audit-heading">Audit</h2>
+      <PageHeader title="Audit" headingId="audit-heading">
         {/* Named, like every other refresh control in the app ("Refresh
             quota", "Refresh diagnostics") — a bare "Refresh" makes the reader
             infer the target. Disabled while ANY request is in flight, which
@@ -66,7 +66,7 @@ export function AuditPage() {
           Refresh audit log
         </button>
         <span role="status">{stalled ? PAGE_STALLED_LABEL : ''}</span>
-      </div>
+      </PageHeader>
 
       <p className="page-hint">
         What has happened to this workspace: repositories connected, pipelines archived and

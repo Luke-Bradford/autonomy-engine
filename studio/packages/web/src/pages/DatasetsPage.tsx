@@ -70,6 +70,7 @@ import { DATASET_KIND_ICONS } from '../lib/kindIcons';
 import { useConfirm } from '../lib/confirm/useConfirm';
 import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
+import { PageHeader } from '../lib/PageHeader';
 
 const KINDS = DATASET_KINDS;
 
@@ -429,8 +430,7 @@ export function DatasetsPage() {
 
   return (
     <section aria-labelledby="datasets-heading">
-      <div className="page-header">
-        <h2 id="datasets-heading">Datasets</h2>
+      <PageHeader title="Datasets" headingId="datasets-heading">
         <button
           ref={createRef}
           type="button"
@@ -438,7 +438,7 @@ export function DatasetsPage() {
         >
           New dataset
         </button>
-      </div>
+      </PageHeader>
 
       <p className="page-hint">
         A dataset is a thing in a store, in a shape: which connection it lives in, how it is

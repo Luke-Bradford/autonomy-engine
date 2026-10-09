@@ -9,6 +9,7 @@ import { runDetailPath } from './runs/runPath';
 import { versionLabel } from '../lib/versionLabel';
 import { DemoPanel } from './DemoPanel';
 import { When } from '../lib/When';
+import { PageHeader } from '../lib/PageHeader';
 
 /**
  * How many recent runs Home shows.
@@ -57,9 +58,7 @@ export function HomePage() {
 
   return (
     <>
-      <div className="page-header">
-        <h2>Home</h2>
-      </div>
+      <PageHeader title="Home" />
       <p className="page-hint">
         Author pipelines, watch them run, and manage the connections and triggers that drive them.
       </p>

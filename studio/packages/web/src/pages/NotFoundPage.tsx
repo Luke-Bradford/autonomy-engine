@@ -1,4 +1,5 @@
 import { Link, useLocation } from 'react-router';
+import { PageHeader } from '../lib/PageHeader';
 
 /**
  * #1392 — what an unknown path renders.
@@ -12,9 +13,7 @@ export function NotFoundPage() {
   const { pathname } = useLocation();
   return (
     <section aria-labelledby="not-found-heading">
-      <div className="page-header">
-        <h2 id="not-found-heading">Page not found</h2>
-      </div>
+      <PageHeader title="Page not found" headingId="not-found-heading" />
       <p>
         Nothing lives at <code>{pathname}</code>. The link may be out of date, or the address
         mistyped.

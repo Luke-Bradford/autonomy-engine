@@ -142,6 +142,11 @@ test('a narrow dock, or comfortable density, keeps the label over its control', 
   expect(narrow.label.bottom).toBeLessThanOrEqual(narrow.control.top);
   await page.getByRole('button', { name: 'Dock to bottom' }).click();
 
+  // Wide enough that the tab clears 576px with room to spare, so the label
+  // staying over its control below is the density's doing and not the width's.
+  // (#1594 OR40 S3 gave the editor the one 16px content frame, and at 1440 a
+  // comfortable tab now measures 573px.)
+  await page.setViewportSize({ width: 1600, height: 900 });
   await page.getByRole('link', { name: 'Settings' }).click();
   await page.getByRole('combobox', { name: 'Density', exact: true }).selectOption('comfortable');
   await page.goBack();

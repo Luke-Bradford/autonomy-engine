@@ -15,6 +15,7 @@ import { pipelinePath } from '../author/pipelinePath';
 import { StoreCell } from './StoreCell';
 import { DatasetKindName } from '../../lib/KindName';
 import { useShellLabel } from '../../shell/shellLabel';
+import { PageHeader } from '../../lib/PageHeader';
 
 /**
  * #996 M9 (#1185) — the dataset detail page: which of this owner's pipelines
@@ -97,15 +98,18 @@ export function DatasetDetailPage({ datasetId }: { datasetId: string }) {
 
   return (
     <section aria-labelledby="dataset-detail-heading">
-      <div className="page-header">
-        <h2 id="dataset-detail-heading">{dataset ? dataset.name : 'Dataset'}</h2>
+      <PageHeader
+        title={dataset ? dataset.name : 'Dataset'}
+        headingId="dataset-detail-heading"
+        headingTitle={dataset?.name}
+      >
         {/* #1242 — `page-back` is the ONE treatment for a back link in a
             `page-header`. Without it this anchor took the UA link colour, which
             `color-scheme` resolved differently in each theme. */}
         <Link to="/manage/datasets" className="page-back">
           Back to datasets
         </Link>
-      </div>
+      </PageHeader>
 
       {loadError && (
         <p role="alert" className="error">

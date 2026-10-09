@@ -22,6 +22,7 @@ import {
 } from './quotaReading';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { When } from '../../lib/When';
+import { PageHeader } from '../../lib/PageHeader';
 
 /**
  * #917 — Monitor → AI activity: what the connected AIs are doing, and how much
@@ -209,7 +210,7 @@ function QuotaPanel() {
 
   return (
     <section aria-labelledby="quota-heading" className="monitor-panel">
-      <div className="page-header">
+      <div className="panel-heading-row">
         <h3 id="quota-heading">Account quota</h3>
         <button type="button" onClick={refresh}>
           Refresh quota
@@ -464,8 +465,7 @@ export function AiActivityPage() {
 
   return (
     <section aria-labelledby="ai-activity-heading">
-      <div className="page-header">
-        <h2 id="ai-activity-heading">AI activity</h2>
+      <PageHeader title="AI activity" headingId="ai-activity-heading">
         <LabelledControl label="Window" className="ai-window-picker">
           {(id) => (
             <select
@@ -493,7 +493,7 @@ export function AiActivityPage() {
             </select>
           )}
         </LabelledControl>
-      </div>
+      </PageHeader>
 
       {/* #988 — the scope is now STATED. This page read "AI activity" and meant
           "AI activity studio itself dispatched", which is a narrower claim than

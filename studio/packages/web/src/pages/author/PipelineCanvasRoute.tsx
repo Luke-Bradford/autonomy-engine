@@ -9,6 +9,7 @@ import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore
 import { PipelineCanvas } from '../pipeline/PipelineCanvas';
 import { useShellLabel } from '../../shell/shellLabel';
 import { readOpenNode, readOpenVersion } from './pipelinePath';
+import { PageHeader } from '../../lib/PageHeader';
 
 /** Where "back" goes, and where a missing pipeline sends you. */
 const PIPELINES_PATH = '/author/pipelines';
@@ -103,14 +104,13 @@ function CanvasFor({
   if (error) {
     return (
       <section aria-labelledby="pipeline-missing-heading">
-        <div className="page-header">
-          <h2 id="pipeline-missing-heading">
-            {/* A deleted-or-never-existed pipeline is not a fault, and saying
-                "error" for it would send the user looking for a broken server.
-                Anything else IS a fault and keeps its message. */}
-            {error.missing ? 'Pipeline not found' : 'Could not open pipeline'}
-          </h2>
-        </div>
+        {/* A deleted-or-never-existed pipeline is not a fault, and saying
+            "error" for it would send the user looking for a broken server.
+            Anything else IS a fault and keeps its message. */}
+        <PageHeader
+          title={error.missing ? 'Pipeline not found' : 'Could not open pipeline'}
+          headingId="pipeline-missing-heading"
+        />
         <p className="error" role="alert">
           {error.missing ? `No pipeline with id ${pipelineId}.` : error.message}
         </p>

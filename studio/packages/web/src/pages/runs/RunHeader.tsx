@@ -13,6 +13,7 @@ import { formatRunDuration } from './format';
 import { RunEditorLink } from './RunEditorLink';
 import { triggerRunsPath } from './runFilters';
 import { runDetailPath, runLinkLabel } from './runPath';
+import { PageHeader } from '../../lib/PageHeader';
 
 /** What `/detail` names; `null` on the doc-less fallback, which names nothing. */
 export interface RunHeaderNames {
@@ -107,32 +108,38 @@ export function RunHeader({
           #1566 — plain text: this page IS the run, so the name goes nowhere.
           The editor, at that exact version, is the labelled icon after the
           heading (outside it, so its label never joins the heading's name). */}
-      <h2 id="run-heading">
-        {named ? (
-          <>
-            {/* #1569 OR37 — the hover is what the pipeline is for, as of
-                the version this run is bound to. */}
-            <span title={doc.description.trim() === '' ? undefined : doc.description}>
-              {names.pipeline}
-            </span>{' '}
-            <span className="run-heading__version">{versionLabel(doc.version, names.debug)}</span>
-          </>
-        ) : (
-          <>
-            Run <code>{shortId(runId)}</code>
-          </>
-        )}
-      </h2>
-      {named && (
-        <RunEditorLink pipelineId={doc.pipelineId} version={doc.version} debug={names.debug} />
-      )}
-      <div className="run-header__actions">
+      <PageHeader
+        headingId="run-heading"
+        // The row ellipsizes a long name; the hover has it whole.
+        headingTitle={named ? (names?.pipeline ?? undefined) : undefined}
+        title={
+          named ? (
+            <>
+              {/* #1569 OR37 — the hover is what the pipeline is for, as of
+                  the version this run is bound to. */}
+              <span title={doc.description.trim() === '' ? undefined : doc.description}>
+                {names.pipeline}
+              </span>{' '}
+              <span className="run-heading__version">{versionLabel(doc.version, names.debug)}</span>
+            </>
+          ) : (
+            <>
+              Run <code>{shortId(runId)}</code>
+            </>
+          )
+        }
+        adornment={
+          named && (
+            <RunEditorLink pipelineId={doc.pipelineId} version={doc.version} debug={names.debug} />
+          )
+        }
+      >
         {actions}
         {/* #1239 — an anchor: going somewhere is what an anchor is for. */}
         <Link className="page-back" to="/monitor/runs">
           ← All runs
         </Link>
-      </div>
+      </PageHeader>
       <dl className="run-header__facts">
         <div>
           <dt>Status</dt>

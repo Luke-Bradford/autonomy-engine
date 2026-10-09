@@ -35,6 +35,7 @@ import { useBusyAction } from '../hooks/useBusyAction';
 import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 import { When } from '../lib/When';
+import { PageHeader } from '../lib/PageHeader';
 
 /** `id === null` means creating; otherwise this form REPLACES that secret's
  *  value (#1061). The `id: string | null` discriminator is the shape
@@ -166,8 +167,7 @@ export function SecretsPage() {
 
   return (
     <section aria-labelledby="secrets-heading">
-      <div className="page-header">
-        <h2 id="secrets-heading">Secrets</h2>
+      <PageHeader title="Secrets" headingId="secrets-heading">
         <button
           ref={createRef}
           type="button"
@@ -175,7 +175,7 @@ export function SecretsPage() {
         >
           New secret
         </button>
-      </div>
+      </PageHeader>
 
       <p className="page-hint">
         A secret is a named credential, stored encrypted. A pipeline never contains the value — a

@@ -161,10 +161,10 @@ export function NodeActivityPanel({
       aria-label={`Node ${name ?? node.nodeId}`}
       {...(run === undefined ? {} : { tabIndex: -1, 'data-drawer-focus': true })}
     >
-      {/* `.page-header` is the existing title-plus-action row. The sibling
+      {/* `.panel-heading-row` is a panel's title-plus-action row. The sibling
           property panels have no action in their heading, so none of them uses
-          it; this one needs a Close beside the title rather than a new rule. */}
-      <div className="page-header">
+          it; this one needs a Close beside the title. */}
+      <div className="panel-heading-row">
         <h3>
           Node {name ?? <code>{node.nodeId}</code>}
           {name !== null && <code className="node-id">{node.nodeId}</code>}

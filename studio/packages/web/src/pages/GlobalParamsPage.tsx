@@ -48,6 +48,7 @@ import { payloadSignature } from './pipeline/configForm';
 import { useConfirm } from '../lib/confirm/useConfirm';
 import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
+import { PageHeader } from '../lib/PageHeader';
 
 /**
  * The open form. `stored` is the global as it was when an EDIT opened — what
@@ -203,8 +204,7 @@ export function GlobalParamsPage() {
 
   return (
     <section aria-labelledby="global-params-heading">
-      <div className="page-header">
-        <h2 id="global-params-heading">Global parameters</h2>
+      <PageHeader title="Global parameters" headingId="global-params-heading">
         <button
           ref={createRef}
           type="button"
@@ -212,7 +212,7 @@ export function GlobalParamsPage() {
         >
           New global parameter
         </button>
-      </div>
+      </PageHeader>
 
       <p className="page-hint">
         A global parameter is a named value every pipeline in this workspace shares, to be read as{' '}

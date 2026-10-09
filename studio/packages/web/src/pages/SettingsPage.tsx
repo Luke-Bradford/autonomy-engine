@@ -6,6 +6,7 @@ import { displayTimeZoneName, displayTimeZoneOptions, formatTimestamp } from '..
 import { LabelledControl } from '../lib/LabelledControl';
 import { DENSITIES, uiStore, type Density, type UiStore } from '../stores/uiStore';
 import { ThemeToggle } from '../theme/ThemeToggle';
+import { PageHeader } from '../lib/PageHeader';
 
 /**
  * How the key got here, in a sentence — one per member of the shared union, as
@@ -152,9 +153,7 @@ export function SettingsPage() {
 
   return (
     <>
-      <div className="page-header">
-        <h2>Settings</h2>
-      </div>
+      <PageHeader title="Settings" />
       <p className="page-hint">How this server is configured, and how it looks.</p>
 
       <section aria-labelledby="settings-appearance" className="home-section">

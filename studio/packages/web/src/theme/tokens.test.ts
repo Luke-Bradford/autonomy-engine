@@ -39,6 +39,7 @@ describe('design tokens', () => {
     ['--control-h', '28px', '32px'],
     ['--row-h', '32px', '36px'],
     ['--icon-size', '16px', '20px'],
+    ['--header-h', '40px', '40px'],
   ])('%s is %s compact, %s comfortable', (name, compactValue, comfortableValue) => {
     expect(at('compact', name)).toBe(compactValue);
     expect(at('comfortable', name)).toBe(comfortableValue);
@@ -104,7 +105,7 @@ describe('design tokens', () => {
     for (const [file, css] of Object.entries(sheets)) {
       const read = [
         ...css.matchAll(
-          /var\(\s*(--(?:space|type|weight|radius|font|root|focus)[\w-]*|--control-h|--row-h|--icon-size)/g,
+          /var\(\s*(--(?:space|type|weight|radius|font|root|focus)[\w-]*|--control-h|--row-h|--icon-size|--header-h)/g,
         ),
       ].map(([, name = '']) => name);
       expect(
@@ -129,7 +130,7 @@ describe('design tokens', () => {
  * Inline TSX `style={{}}` and Fluent `makeStyles` values are not stylesheets and
  * are not counted here.
  */
-const BASELINE = 528;
+const BASELINE = 508;
 
 describe('design-token literal ratchet', () => {
   const literals = Object.entries(sheets).flatMap(([file, css]) =>

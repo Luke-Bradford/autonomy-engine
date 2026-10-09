@@ -48,11 +48,11 @@ const PANE_WIDTH_VAR = '--pane-width';
  * pane is `hidden`, i.e. not a grid item. Neither case needs a special value
  * here, which is why this is unconditional.
  *
- * The workspace keeps the `content` class deliberately. `index.css` hangs three
- * behaviours off it — page padding, a 900px reading cap for forms and lists,
- * and `:has(.canvas-page)` which REMOVES that cap so the authoring canvas is
- * full-bleed. Renaming it here would silently re-cap the canvas at 900px, which
- * no unit test can see (jsdom computes no layout).
+ * The workspace keeps the `content` class deliberately. `index.css` hangs the
+ * page's content frame off it — the one page padding (#1594 OR40 S3) — and
+ * `:has(.canvas-page)`, which makes the authoring canvas a full-height flex
+ * column. Renaming it here would silently drop both, which no unit test can see
+ * (jsdom computes no layout).
  */
 export function AppShell() {
   const matches = useMatches();
