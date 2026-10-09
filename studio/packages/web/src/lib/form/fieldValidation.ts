@@ -95,6 +95,11 @@ export function focusFirstInvalid(container: ParentNode): void {
  * hint). `data-invalid` is what focus looks for; `aria-invalid` is left off a
  * row list, because ARIA does not allow it on a `group`.
  */
+/** Ids for an `aria-describedby`, in order, skipping the absent; `undefined` if none. */
+export function joinIds(...ids: (string | undefined)[]): string | undefined {
+  return ids.filter((id) => id !== undefined && id !== '').join(' ') || undefined;
+}
+
 export function fieldAttrs({
   key,
   error,
@@ -114,12 +119,11 @@ export function fieldAttrs({
   'aria-describedby': string | undefined;
 } {
   const invalid = error !== undefined;
-  const ids = [invalid ? errorId : undefined, hintId].filter((id) => id !== undefined);
   return {
     'data-field': key,
     'data-invalid': invalid || undefined,
     ...(group ? {} : { 'aria-invalid': invalid }),
-    'aria-describedby': ids.length === 0 ? undefined : ids.join(' '),
+    'aria-describedby': joinIds(invalid ? errorId : undefined, hintId),
   };
 }
 
@@ -174,8 +178,10 @@ function keyOf(target: EventTarget | null): string | undefined {
 export interface FieldValidation {
   /** What to show beside a field now, or `undefined`. */
   errorFor: (key: string) => string | undefined;
-  /** `fieldAttrs` for a hand-written control: its key, its error now, and its error line's id. */
-  /** `hintId` — the field's hint or `?` note, described after the error. */
+  /**
+   * `fieldAttrs` for a hand-written control: its key, its error now, its error
+   * line's id, and its hint's or `?` note's id (described after the error).
+   */
   attrsFor: (key: string, errorId: string, hintId?: string) => ReturnType<typeof fieldAttrs>;
   /**
    * A refusal of input the browser could not read, in a control that is not

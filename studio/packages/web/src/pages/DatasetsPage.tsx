@@ -1013,7 +1013,7 @@ function DatasetForm({
             ),
           }}
         >
-          {(id, aboutId) => (
+          {(id, describedBy) => (
             <JsonEditor
               id={id}
               label="Columns (JSON)"
@@ -1022,7 +1022,7 @@ function DatasetForm({
               rows={6}
               aria-required
               placeholder='[{ "name": "id", "type": "integer", "nullable": false }]'
-              {...validation.attrsFor('columns', columnsErrorId, aboutId)}
+              {...validation.attrsFor('columns', columnsErrorId, describedBy)}
             />
           )}
         </LabelledControl>

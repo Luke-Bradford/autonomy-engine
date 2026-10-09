@@ -1,6 +1,7 @@
 import { useId } from 'react';
 import type { ReactNode } from 'react';
-import { HelpDisclosure } from './HelpDisclosure';
+import { AboutHelp } from './HelpDisclosure';
+import { joinIds } from './form/fieldValidation';
 
 /**
  * A `<select>` or `<textarea>` with its label, paired by `htmlFor`/`id` rather
@@ -35,7 +36,9 @@ export function LabelledControl({
   hint?: string;
   /**
    * #1477 OR29 — a `?` (a `HelpDisclosure`) beside the label, for a field whose
-   * explanation sits behind it rather than under the control. A SIBLING of the
+   * explanation sits behind it rather than under the control. Built by a caller
+   * that owns the note's id (a config field shares it with its checkbox line and
+   * its `fieldAttrs`); otherwise use `about`, which owns it. A SIBLING of the
    * label, in a head row with it: inside the label, the `?`'s name would join
    * the control's, and a `<details>` may not sit in a label anyway.
    */
@@ -47,6 +50,7 @@ export function LabelledControl({
    * argument, so the control's description is unchanged by the move. A note
    * about the field's current STATE (a preview, a refusal, an advisory) is not
    * this: it stays a visible line, because it is not there to be looked up.
+   * Given with `help`, `about` is the `?` drawn.
    */
   about?: { name: string; note: ReactNode };
   className?: string;
@@ -56,17 +60,17 @@ export function LabelledControl({
   const id = useId();
   const hintId = useId();
   const aboutId = useId();
-  const describedBy =
-    [hint === undefined ? undefined : hintId, about === undefined ? undefined : aboutId]
-      .filter((each) => each !== undefined)
-      .join(' ') || undefined;
+  const describedBy = joinIds(
+    hint === undefined ? undefined : hintId,
+    about === undefined ? undefined : aboutId,
+  );
   const helpSlot =
     about === undefined ? (
       help
     ) : (
-      <HelpDisclosure label={`About ${about.name}`} noteId={aboutId} inline>
+      <AboutHelp name={about.name} noteId={aboutId}>
         {about.note}
-      </HelpDisclosure>
+      </AboutHelp>
     );
   return (
     <div className={className === undefined ? 'labelled-control' : `labelled-control ${className}`}>

@@ -2,6 +2,7 @@ import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { FieldError } from '../../lib/form/FieldError';
+import { joinIds } from '../../lib/form/fieldValidation';
 
 export type DraftNumberParse<V extends number | undefined> =
   { ok: true; value: V } | { ok: false; reason: string };
@@ -85,7 +86,7 @@ export function DraftNumberField<V extends number | undefined>({
   return (
     <>
       <LabelledControl label={label} about={{ name: label, note: about }}>
-        {(id, aboutId) => (
+        {(id, describedBy) => (
           <input
             id={id}
             type="text"
@@ -95,7 +96,7 @@ export function DraftNumberField<V extends number | undefined>({
             placeholder={placeholder}
             value={draft}
             aria-invalid={error !== null}
-            aria-describedby={error !== null ? `${errorId} ${aboutId}` : aboutId}
+            aria-describedby={joinIds(error !== null ? errorId : undefined, describedBy)}
             onChange={(e) => {
               const raw = e.target.value;
               setDraft(raw);

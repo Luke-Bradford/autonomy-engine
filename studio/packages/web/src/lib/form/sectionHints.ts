@@ -36,7 +36,7 @@ export const FORM_SECTION_HINTS = {
     basics: 'The name every pipeline reads this value by, and its type.',
     // The Value field's note too, for the reason the secret's gives.
     value:
-      'The value every pipeline sees, in cleartext and so never a credential, and a note on what it is for.',
+      'The value every pipeline sees, which is cleartext and so never a credential, and a description of what it is for.',
   },
   trigger: {
     basics: 'What this trigger is called, and whether it is switched on.',

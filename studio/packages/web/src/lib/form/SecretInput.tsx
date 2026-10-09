@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { LabelledControl } from '../LabelledControl';
-import type { fieldAttrs } from './fieldValidation';
+import { joinIds, type fieldAttrs } from './fieldValidation';
 
 /**
  * #1396 — a secret's input, with the Show/Hide toggle every secret field has
@@ -48,11 +48,7 @@ export function SecretInput({
             spellCheck={false}
             required={required}
             {...field}
-            aria-describedby={
-              [field?.['aria-describedby'], describedBy]
-                .filter((each) => each !== undefined)
-                .join(' ') || undefined
-            }
+            aria-describedby={joinIds(field?.['aria-describedby'], describedBy)}
           />
           <button
             type="button"

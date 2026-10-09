@@ -242,10 +242,10 @@ export function ImportPanel({
                   }
             }
           >
-            {(id, aboutId) => (
+            {(id, describedBy) => (
               <select
                 id={id}
-                aria-describedby={aboutId}
+                aria-describedby={describedBy}
                 value={chosen}
                 disabled={busy}
                 onChange={(e) => setStore(e.target.value)}

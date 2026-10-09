@@ -1,5 +1,5 @@
 import { useId, useState, type ReactNode } from 'react';
-import { HelpDisclosure } from './HelpDisclosure';
+import { AboutHelp } from './HelpDisclosure';
 import { Toolbar } from './PageHeader';
 
 /**
@@ -79,9 +79,9 @@ export function Section({
           heading
         )}
       </Heading>
-      <HelpDisclosure label={`About ${heading}`} noteId={helpId} inline>
+      <AboutHelp name={heading} noteId={helpId}>
         {help}
-      </HelpDisclosure>
+      </AboutHelp>
       {actions !== undefined && <Toolbar>{actions}</Toolbar>}
     </div>
   );

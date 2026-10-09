@@ -316,6 +316,11 @@ test.describe('#959 portability', () => {
 
     const rows = page.getByRole('row').filter({ hasText: name });
 
+    // #1594 OR40 S3c-2 — what the picker is for is its `?` note, and its description.
+    await expect(page.getByLabel('Store it in', { exact: true })).toHaveAccessibleDescription(
+      /names the connection it was exported from/,
+    );
+
     // 1. Into a CHOSEN store — the cross-workspace path.
     await page
       .getByLabel('Store it in', { exact: true })

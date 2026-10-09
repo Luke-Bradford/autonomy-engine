@@ -226,7 +226,7 @@ import { useShellUnsaved } from '../../shell/shellLabel';
 import { useUnsavedChangesGuard } from '../../lib/form/useUnsavedChangesGuard';
 import { leavesPath } from '../../lib/form/leavesPath';
 import { UnsavedChangesPrompt } from '../../lib/form/UnsavedChangesPrompt';
-import { HelpDisclosure } from '../../lib/HelpDisclosure';
+import { AboutHelp } from '../../lib/HelpDisclosure';
 import { RowMoreMenu } from '../../lib/RowMoreMenu';
 import { claimTicket, readPublishState, takeTicket, type ReadSequence } from './publishState';
 import { readWorkspaceGitPullRequest, readWorkspaceGitSync } from '../../api/workspaceGit';
@@ -4160,9 +4160,9 @@ export function NodePanel({
           <h3>{nodeName}</h3>
           <code className="property-panel__type">{nodeType}</code>
           {entry !== undefined && (
-            <HelpDisclosure label={`About ${entry.title}`} noteId={`${nodeId}-about`} inline>
+            <AboutHelp name={entry.title} noteId={`${nodeId}-about`}>
               {entry.description}
-            </HelpDisclosure>
+            </AboutHelp>
           )}
           <span className="property-panel__actions">
             {editActs && (

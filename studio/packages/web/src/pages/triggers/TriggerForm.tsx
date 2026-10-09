@@ -638,12 +638,12 @@ export function TriggerForm({
                 ),
               }}
             >
-              {(id, aboutId) => (
+              {(id, describedBy) => (
                 <input
                   id={id}
                   type="text"
                   value={form.event.name}
-                  {...validation.attrsFor('event.name', eventErrorId, aboutId)}
+                  {...validation.attrsFor('event.name', eventErrorId, describedBy)}
                   onChange={(e) =>
                     onChange({ ...form, event: { ...form.event, name: e.target.value } })
                   }
