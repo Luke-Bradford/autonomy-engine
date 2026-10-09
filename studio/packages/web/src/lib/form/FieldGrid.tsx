@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
  * #1477 OR29 — a run of form fields that the compact property dock lays out as
  * a grid: a `short` cell (a number, a checkbox, a short choice) packs beside the
  * next, anything else takes the row. Both classes are the dock's
- * (`index.css`, `@container dock-tab`); everywhere else a cell generates no box
+ * (`index.css`, `@container field-form`); everywhere else a cell generates no box
  * and the fields keep their column.
  *
  * The group role and name are OPTIONAL: inside a tab panel, which is already a
