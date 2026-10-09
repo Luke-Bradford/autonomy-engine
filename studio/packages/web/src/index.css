@@ -920,7 +920,10 @@ body {
   display: flex;
   flex: 0 1 auto;
   align-items: center;
-  justify-content: flex-end;
+  /* No `justify-content: flex-end`: `margin-left: auto` already packs the
+     toolbar right, and flex-end would move an absolutely positioned child's
+     static box (a `visually-hidden` status) to the far edge, 1px past the row,
+     which the editor's folding reads as overflow. */
   flex-wrap: nowrap;
   gap: var(--space-2);
   /* No `min-width: 0`: the automatic minimum is what the controls need, so a
@@ -2835,6 +2838,11 @@ button.danger {
    edge so it opens under the button that summoned it. */
 .run-now-anchor {
   position: relative;
+  /* #1594 OR40 S3 — Debug and Trigger are two toolbar controls, so they take
+     the toolbar's gap rather than touching. */
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .run-now-panel {
@@ -5575,7 +5583,7 @@ button.danger {
    link beside it, the actions at the right), so the band is its own line
    under it rather than flowing around a floated action group. */
 .run-header {
-  margin-bottom: var(--space-2);
+  margin-bottom: var(--space-1);
 }
 
 .run-header > .page-header {
