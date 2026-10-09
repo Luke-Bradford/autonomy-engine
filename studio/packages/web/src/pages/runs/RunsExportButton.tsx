@@ -20,7 +20,7 @@ export function RunsExportButton({ exporter }: { exporter: RunsExport }) {
 
 /**
  * What the last export has to say. BELOW the title row, never on it: the row
- * does not wrap (`index.css`, `.runs-page > .page-header`), and a server's error
+ * does not wrap (`index.css`, `.toolbar`), and a server's error
  * message is as long as it likes.
  */
 export function RunsExportNote({ exporter }: { exporter: RunsExport }) {

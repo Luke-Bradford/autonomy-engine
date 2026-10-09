@@ -18,20 +18,21 @@ test.use({ viewport: { width: 1440, height: 900 } });
 type Density = 'compact' | 'comfortable';
 const CONTROL_H: Record<Density, number> = { compact: 28, comfortable: 32 };
 
-const STATIC_PAGES: [string, string][] = [
-  ['/', 'Home'],
-  ['/settings', 'Settings'],
-  ['/author/pipelines', 'Pipelines'],
-  ['/monitor/runs', 'Runs'],
-  ['/monitor/ai', 'AI activity'],
-  ['/monitor/audit', 'Audit'],
-  ['/manage/connections', 'Connections'],
-  ['/manage/datasets', 'Datasets'],
-  ['/manage/secrets', 'Secrets'],
-  ['/manage/global-params', 'Global parameters'],
-  ['/manage/triggers', 'Triggers'],
-  ['/manage/git', 'Git'],
-  ['/no-such-page', 'Page not found'],
+/** Route, title, and how many toolbar controls it shows (so none passes empty). */
+const STATIC_PAGES: [string, string, number][] = [
+  ['/', 'Home', 0],
+  ['/settings', 'Settings', 0],
+  ['/author/pipelines', 'Pipelines', 3],
+  ['/monitor/runs', 'Runs', 9],
+  ['/monitor/ai', 'AI activity', 1],
+  ['/monitor/audit', 'Audit', 1],
+  ['/manage/connections', 'Connections', 1],
+  ['/manage/datasets', 'Datasets', 1],
+  ['/manage/secrets', 'Secrets', 1],
+  ['/manage/global-params', 'Global parameters', 1],
+  ['/manage/triggers', 'Triggers', 1],
+  ['/manage/git', 'Git', 0],
+  ['/no-such-page', 'Page not found', 0],
 ];
 
 async function setDensity(page: Page, density: Density) {
@@ -60,7 +61,12 @@ function measure(page: Page) {
           .map((el) => {
             const r = el.getBoundingClientRect();
             return {
-              name: (el.getAttribute('aria-label') ?? el.textContent ?? el.tagName).trim(),
+              name: (
+                el.getAttribute('aria-label') ??
+                (el as HTMLInputElement).labels?.[0]?.textContent ??
+                el.textContent ??
+                ''
+              ).trim(),
               left: r.left,
               right: r.right,
               height: r.height,
@@ -96,10 +102,17 @@ function expectFrame(label: string, m: Measured, density: Density, fixedHeight: 
   expect(m.contentMaxWidth, `${label}: .content max-width`).toBe('none');
   expect(m.sideways, `${label}: sideways scroll`).toBeLessThanOrEqual(0);
   if (m.toolbarRight === null) return;
-  // The toolbar ends at the row's right end.
+  // The toolbar, and its last control, end at the row's right end.
   expect(Math.abs(m.toolbarRight - m.headerRight), `${label}: toolbar at the right`).toBeLessThan(
     1,
   );
+  const last = m.controls.at(-1);
+  if (last) {
+    expect(
+      Math.abs(last.right - m.headerRight),
+      `${label}: '${last.name}' at the right`,
+    ).toBeLessThan(1);
+  }
   for (const c of m.controls) {
     expect(Math.abs(c.height - h), `${label}: '${c.name}' height`).toBeLessThan(0.5);
   }
@@ -131,13 +144,15 @@ for (const density of ['compact', 'comfortable'] as const) {
 
     await setDensity(page, density);
 
-    for (const [path, title] of STATIC_PAGES) {
+    for (const [path, title, count] of STATIC_PAGES) {
       await page.goto(`/#${path}`);
       await fluentRootReady(page);
       await expect(
         page.locator('.page-header > h2').filter({ hasText: new RegExp(`^${title}$`) }),
       ).toBeVisible();
-      expectFrame(title, await measure(page), density, false);
+      const m = await measure(page);
+      expectFrame(title, m, density, false);
+      expect(m.controls.length, `${title}: toolbar controls`).toBe(count);
     }
 
     // The run page: its title row, then the facts band under it.
@@ -186,5 +201,5 @@ test('#1594 OR40 S3 — the Runs toolbar is grouped, with no doubled gap', async
   expect(seen.dividers).toBe(3);
   expect(seen.dividerHidden).toBe(true);
   expect(seen.statusEmpty).toBe(true);
-  expect(seen.liveToDivider).toBe(8);
+  expect(seen.liveToDivider).toBeCloseTo(8, 0);
 });

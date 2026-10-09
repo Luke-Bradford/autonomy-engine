@@ -110,6 +110,8 @@ export function RunHeader({
           heading (outside it, so its label never joins the heading's name). */}
       <PageHeader
         headingId="run-heading"
+        // The row ellipsizes a long name; the hover has it whole.
+        headingTitle={named ? (names?.pipeline ?? undefined) : undefined}
         title={
           named ? (
             <>

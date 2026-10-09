@@ -56,7 +56,7 @@ test.describe('#1396 the dataset form drawer', () => {
       const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
       return {
         drawerRightOfList: aside.left >= column.right,
-        // Not squeezed into what is left of the 900px reading width.
+        // Not squeezed by the drawer beside it.
         listWidthKept: column.width >= 700,
         editReachable: hit === edit,
         listKind: [...document.querySelectorAll('tbody tr')]

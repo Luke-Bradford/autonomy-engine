@@ -10,9 +10,9 @@ required marks and display names; its layout is its own, below.
 - **Create and edit open in a drawer beside the list** (`FormDrawer`). It is a column of the page,
   not an overlay. The list stays readable, and its row actions stay clickable while a form is open.
   On narrow screens the drawer stacks under the list.
-- While a drawer is open the page widens by the drawer's width (`.content:has(.drawer-layout-open)`),
-  so the list keeps its usual width beside it. Where the window is too narrow even for that, the
-  list scrolls sideways inside its own column. It never runs under the drawer.
+- While a drawer is open the list takes the width beside it (the page has no reading-width cap,
+  #1594 OR40 S3). Where that is too narrow for the list, the list scrolls sideways inside its own
+  column. It never runs under the drawer.
 - The drawer has a header (title and a close button), a body, and a **footer that sticks to the
   bottom of the window**. However long the form is, Save stays in view.
 - **Footer actions are right-aligned, with the primary action last**: `Cancel` · secondary actions

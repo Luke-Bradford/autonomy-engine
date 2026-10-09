@@ -868,10 +868,8 @@ body {
      inside this element). Here, not on `:root`, which holds only the palette
      (`palette.test.ts`).
      #1594 OR40 S3 — ONE content frame: the same 16px on every page, so every
-     page's title starts at one left edge, and no reading-width cap. The list
-     and Monitor pages had already dropped the old 900px one, which left Home,
-     Manage and Settings ~250px short of everything else; grids use the width,
-     and a form caps its controls rather than the page. */
+     page's title starts at one left edge, and no reading-width cap. Grids use
+     the width; a form caps its controls rather than the page. */
   --drawer-width: 460px;
   --drawer-gap: 1.25rem;
   padding: var(--space-4);
@@ -935,7 +933,19 @@ body {
 
 .toolbar > * {
   flex-shrink: 0;
+}
+
+/* On the controls, not on `.toolbar > *`: `white-space` inherits, and a
+   toolbar item can hold a popover (the rerun's `?` note, the Run now panel)
+   whose text must wrap. */
+.toolbar :where(button, a, select, label, [role='status']) {
   white-space: nowrap;
+}
+
+/* An empty status (a live region, mounted before it has news) is still a flex
+   item: give back the gap it would otherwise add. */
+.toolbar > [role='status']:empty {
+  margin-left: calc(-1 * var(--space-2));
 }
 
 /* Groups are separated by a rule with the toolbar's own gap either side. */
@@ -1012,8 +1022,8 @@ a {
    app's font deliberately, rather than letting the family change fall out of
    the element swap unnoticed.
 
-   An explicit class rather than `.page-header a`: `.page-header` is a layout
-   wrapper used on 18 pages and holds whatever a page puts there, so a
+   An explicit class rather than `.page-header a`: `.page-header` is every
+   page's title row and holds whatever toolbar a page puts there, so a
    descendant selector would silently turn a future breadcrumb or docs link into
    a chip. #1242 gave the class its second and third users (the canvas's
    `← Back to pipelines`, the dataset detail page's `Back to datasets`; #1397
@@ -5899,8 +5909,7 @@ button.danger {
   margin-top: 0;
 }
 
-/* The search box, on the title row between the heading and the view toggle. */
-/* The one toolbar control that gives way: a control added to the row narrows
+/* The search box, on the title row. The one toolbar control that gives way: a control added to the row narrows
    the box rather than wrapping a button's label onto a second line and growing
    the row (measured: Export CSV did exactly that, pushing the first run past
    y=200). */
@@ -6515,12 +6524,6 @@ button.danger {
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
-}
-
-/* Empty while Live is off, but still a toolbar item: give back the gap it would
-   otherwise add before the next divider. */
-.toolbar > .runs-live-status:empty {
-  margin-left: calc(-1 * var(--space-2));
 }
 
 /* #967 — the token-flow chart. Hand-rolled bars; see TokenFlowChart.tsx for why

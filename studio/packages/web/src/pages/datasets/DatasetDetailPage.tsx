@@ -98,7 +98,11 @@ export function DatasetDetailPage({ datasetId }: { datasetId: string }) {
 
   return (
     <section aria-labelledby="dataset-detail-heading">
-      <PageHeader title={dataset ? dataset.name : 'Dataset'} headingId="dataset-detail-heading">
+      <PageHeader
+        title={dataset ? dataset.name : 'Dataset'}
+        headingId="dataset-detail-heading"
+        headingTitle={dataset?.name}
+      >
         {/* #1242 — `page-back` is the ONE treatment for a back link in a
             `page-header`. Without it this anchor took the UA link colour, which
             `color-scheme` resolved differently in each theme. */}
