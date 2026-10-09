@@ -114,7 +114,7 @@ test("a field's explanation is behind the ? beside its label, and still describe
   const label = properties(page).locator('label', { hasText: /^Request URL$/ });
   expect((await label.boundingBox())!.height).toBeLessThanOrEqual(28);
 
-  await properties(page).getByRole('button', { name: 'About Request URL' }).click();
+  await properties(page).getByLabel('About Request URL', { exact: true }).click();
   await expect(note).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(note).toBeHidden();
