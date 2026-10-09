@@ -1645,6 +1645,20 @@ describe('FlowCanvas context menu (#1477 OR29)', () => {
     expect(remove.getAttribute('aria-disabled')).toBe('true');
     fireEvent.click(remove);
     expect(childrenOf(store)).toEqual([['c_1', ['in_box']]]);
+    fireEvent.keyDown(remove, { key: 'Escape' });
+    await waitFor(() => expect(within(document.body).queryAllByRole('menuitem')).toEqual([]));
+
+    // `a` HAS a box to go to, so its Move into is greyed by the save alone —
+    // and says so, rather than the "no other container" reason.
+    fireEvent.contextMenu(node('a'), { clientX: 20, clientY: 20 });
+    const move = await waitFor(() =>
+      within(document.body).getByRole('menuitem', { name: /^Move into/ }),
+    );
+    expect(move.getAttribute('aria-disabled')).toBe('true');
+    expect(move.textContent).toContain('Saving.');
+    expect(move.textContent).not.toContain(NO_CONTAINER_TO_MOVE_INTO);
+    fireEvent.click(move);
+    expect(within(document.body).queryByRole('menu', { name: 'Move into' })).toBeNull();
   });
 
   it('leaves the browser its own menu when the page gives the canvas no commands', () => {
