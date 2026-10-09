@@ -932,6 +932,13 @@ body {
   margin-left: auto;
 }
 
+/* A toolbar whose children all rendered nothing (a fragment or component that
+   returned null, which `PageHeader`'s child count cannot see) takes no room
+   and adds no gap. */
+.toolbar:empty {
+  display: none;
+}
+
 .toolbar > * {
   flex-shrink: 0;
 }

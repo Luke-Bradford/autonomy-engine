@@ -205,9 +205,16 @@ test('#1594 OR40 S3 — the Runs toolbar is grouped, with no doubled gap', async
     const kids = [...toolbar.children] as HTMLElement[];
     const dividers = kids.filter((k) => k.classList.contains('toolbar__divider'));
     const status = toolbar.querySelector<HTMLElement>('.runs-live-status')!;
+    // A toolbar whose children all rendered nothing takes no room.
+    const empty = document.createElement('div');
+    empty.className = 'toolbar';
+    toolbar.parentElement!.append(empty);
+    const emptyDisplay = getComputedStyle(empty).display;
+    empty.remove();
     const next = status.nextElementSibling!.getBoundingClientRect();
     const prev = status.previousElementSibling!.getBoundingClientRect();
     return {
+      emptyDisplay,
       dividers: dividers.length,
       dividerHidden: dividers.every((d) => d.getAttribute('aria-hidden') === 'true'),
       statusEmpty: status.textContent === '',
@@ -215,6 +222,7 @@ test('#1594 OR40 S3 — the Runs toolbar is grouped, with no doubled gap', async
       liveToDivider: next.left - prev.right,
     };
   });
+  expect(seen.emptyDisplay).toBe('none');
   expect(seen.dividers).toBe(3);
   expect(seen.dividerHidden).toBe(true);
   expect(seen.statusEmpty).toBe(true);

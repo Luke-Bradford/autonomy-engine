@@ -36,7 +36,8 @@ export function PageHeader({
       {adornment}
       {/* `toArray` drops what renders nothing (`{cond && <x />}` that is
           false), so a header whose every action is conditional and off draws
-          no empty toolbar. */}
+          no toolbar. A child that renders nothing itself (a component returning
+          null) still mounts one, which `.toolbar:empty` hides. */}
       {Children.toArray(children).length > 0 && <Toolbar>{children}</Toolbar>}
     </div>
   );
