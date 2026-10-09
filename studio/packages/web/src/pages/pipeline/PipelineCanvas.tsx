@@ -138,12 +138,7 @@ import {
   type ConfigField,
 } from './configForm';
 import { nodeTypeTabs } from './activityTabs';
-import {
-  containerLabels,
-  issuesBySubject,
-  readableIssue,
-  sameAttribution,
-} from './containerRules';
+import { containerLabels, issuesBySubject, readableIssue, sameAttribution } from './containerRules';
 import { nameIssues, propertyIssues } from './paramRules';
 import { PipelineGeneral } from './PipelineGeneral';
 import { DockPasteButton } from './DockPasteButton';

@@ -1947,11 +1947,7 @@ describe('NodePanel — a single-line field takes a reference at its caret (#852
 });
 
 describe('NodePanel — what each tab holds (#1396, #1477)', () => {
-  const section = (name: string) => screen.getByRole('group', { name });
   const selectedTab = () => tabLabel(screen.getByRole('tab', { selected: true }));
-  // A hidden panel has no accessible name, so reach it through the tab that controls it.
-  const panelOf = (name: string) =>
-    document.getElementById(screen.getByRole('tab', { name }).getAttribute('aria-controls')!)!;
   const follows = (a: Element, b: Element) =>
     (a.compareDocumentPosition(b) & document.DOCUMENT_POSITION_FOLLOWING) ===
     document.DOCUMENT_POSITION_FOLLOWING;
