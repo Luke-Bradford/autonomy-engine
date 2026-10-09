@@ -454,6 +454,29 @@ One look per control type (#1594 OR40 S2a), from the tokens, in both densities. 
 
 `e2e/control-layer.spec.ts` measures all of this at 1440x900, in both densities.
 
+## Page header, toolbar and content frame
+
+Every page's title row is `PageHeader` (`lib/PageHeader.tsx`, #1594 OR40 S3). Never write a
+`.page-header` by hand.
+
+- **The row** is `--header-h` (40px in both densities): the title on the left, then an optional
+  `adornment` (the editor's state badge and notices, the run page's editor link), then the toolbar
+  at the right end. The title is an `h2` in the title type (20/600) and ellipsizes first; pass the
+  full name as `headingTitle` where a name can be long.
+- **The toolbar** is the header's children, wrapped in `Toolbar`. Controls are 8px apart, every one
+  `--control-h` tall, and centred on one line. A Fluent (toggle) button and a `.page-back` link are
+  sized to match inside it. Separate groups with `ToolbarDivider` (a 1px rule with the gap either
+  side). A label never wraps; a search box is the one control that gives way. The toolbar is not a
+  `role="toolbar"`, because it does not implement arrow-key movement; each control keeps its own tab
+  stop.
+- **The content frame** is `.content`'s 16px padding on every page, so every title starts at the
+  same left edge (the editor keeps the same sides and drops the top and bottom). There is no
+  reading-width cap: grids use the width, and a form caps its controls, not the page.
+- **A panel's heading row** (an `h3` and its one action, inside a page) is `.panel-heading-row`
+  until `Section` replaces it. It is not a page header.
+
+`e2e/page-header.spec.ts` measures every page at 1440x900 in both densities.
+
 ## Width, and why a drawer has no two-column grid
 
 #1396 first asked for a two-column grid on wide screens, single column on narrow ones, with a maximum
