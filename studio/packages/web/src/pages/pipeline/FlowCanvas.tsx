@@ -124,6 +124,8 @@ import { issueCountLabel, SubjectIssuesContext, useSubjectIssues } from './issue
 import { useEditorRunNode } from './editorRunContext';
 import type { RunOverlayEntry } from '../runs/runFlow';
 import { subjectKey, type SubjectIssue } from './containerRules';
+import type { CanvasCommand } from './canvasCommands';
+import { CanvasContextMenu, type CanvasMenuRequest } from './CanvasContextMenu';
 
 interface ActivityData extends Record<string, unknown> {
   title: string;
@@ -572,6 +574,8 @@ export function FlowCanvas({
   measuredSizesRef,
   datasets = NO_DATASETS,
   onNotice,
+  onCommand,
+  commandDisabledReason = null,
 }: {
   store: StoreApi<CanvasState>;
   /**
@@ -609,6 +613,14 @@ export function FlowCanvas({
   datasets?: readonly Dataset[];
   /** #1452 — the page's `role="status"` notice, for what an insert added. */
   onNotice?: (message: string) => void;
+  /**
+   * #1477 OR29 — run a clipboard command or a delete, as its shortcut would.
+   * Given, a right-click on the canvas opens `CanvasContextMenu`; without it
+   * the browser's own menu shows, as it always did.
+   */
+  onCommand?: (cmd: CanvasCommand) => void;
+  /** Why the context menu's items cannot run now (a save or restore in flight). */
+  commandDisabledReason?: string | null;
 }) {
   // #1397 — the canvas's own confirmations (a container's delete, a drag that
   // joins one, a dropped new one). Under the app's `ConfirmHost` the host draws
@@ -1805,6 +1817,41 @@ export function FlowCanvas({
     st.select(null);
   }
 
+  /**
+   * #1477 OR29 — the context menu, at the pointer. A keyboard-raised one
+   * (Shift+F10, the Menu key) may report 0,0, so it opens below the element it
+   * was raised on instead.
+   *
+   * On a Mac, Ctrl-click IS the secondary-button gesture (see the
+   * `multiSelectionKeyCode` note below): it used to do nothing on a node, and
+   * now selects it and opens this menu, as a Mac author expects. ⌘-click still
+   * adds to the selection.
+   */
+  const [menu, setMenu] = useState<CanvasMenuRequest | null>(null);
+  function openMenu(event: ReactMouseEvent | MouseEvent, target: CanvasMenuRequest['target']) {
+    event.preventDefault();
+    let { clientX: x, clientY: y } = event;
+    if (x === 0 && y === 0 && event.currentTarget instanceof Element) {
+      const box = event.currentTarget.getBoundingClientRect();
+      x = box.left;
+      y = box.bottom;
+    }
+    setMenu({ x, y, target });
+  }
+  function onNodeContextMenu(event: ReactMouseEvent, node: FlowNode) {
+    if (node.type === 'container') {
+      openMenu(event, 'pane');
+      return;
+    }
+    // As a file manager does: a right-click on an activity outside the
+    // selection acts on that activity alone; inside it, on the whole selection.
+    const st = store.getState();
+    if (!st.selected.some((sel) => sel.kind === 'node' && sel.id === node.id)) {
+      st.select({ kind: 'node', id: node.id });
+    }
+    openMenu(event, 'selection');
+  }
+
   function onNodesChange(changes: NodeChange[]) {
     /* Container changes are dropped before anything sees them (U6c). Container
        nodes are DERIVED, so they are in the `nodes` prop but not in the view
@@ -2378,6 +2425,14 @@ export function FlowCanvas({
   return (
     <>
       {confirmDialog}
+      {onCommand && (
+        <CanvasContextMenu
+          request={menu}
+          onClose={() => setMenu(null)}
+          onCommand={onCommand}
+          disabledReason={commandDisabledReason}
+        />
+      )}
       <EdgeMarkers />
       <ReactFlow
         nodes={renderedNodes}
@@ -2494,6 +2549,8 @@ export function FlowCanvas({
            the container is the one kind whose survival depends on this handler
            alone, since RF never had a deselect to hold back for it. */
         onPaneClick={onPaneClick}
+        onPaneContextMenu={onCommand ? (e) => openMenu(e, 'pane') : undefined}
+        onNodeContextMenu={onCommand ? onNodeContextMenu : undefined}
         onConnectStart={onConnectStart}
         onConnectEnd={onConnectEnd}
         onClickConnectStart={onClickConnectStart}
