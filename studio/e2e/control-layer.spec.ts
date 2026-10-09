@@ -65,7 +65,7 @@ function readControls(page: Page) {
 }
 
 /** Press Tab until `target` holds focus, so `:focus-visible` is the keyboard's. */
-async function tabTo(page: Page, target: Locator, max = 120) {
+async function tabTo(page: Page, target: Locator, max = 40) {
   const handle = await target.elementHandle();
   if (!handle) throw new Error('tab target is not in the page');
   for (let i = 0; i < max; i += 1) {
@@ -73,6 +73,18 @@ async function tabTo(page: Page, target: Locator, max = 120) {
     if (await handle.evaluate((el) => el === document.activeElement)) return;
   }
   throw new Error(`Tab never reached the target in ${max} presses`);
+}
+
+/**
+ * Keyboard modality, then focus `target` directly. A later element can sit
+ * behind hundreds of tab stops (every pipeline the suite has made is a row in
+ * the resource pane), and Chromium matches `:focus-visible` on a scripted focus
+ * that follows keyboard focus. Each caller asserts `focusVisible`, so a focus
+ * that did not count as the keyboard's fails rather than passing on no ring.
+ */
+async function keyboardFocus(page: Page, target: Locator) {
+  await page.keyboard.press('Tab');
+  await target.focus();
 }
 
 function ringOf(target: Locator) {
@@ -149,7 +161,7 @@ test.describe('#1594 OR40 S2a — one focus ring', () => {
     await openSettings(page, 'compact');
 
     const density = page.getByRole('combobox', { name: 'Density', exact: true });
-    await tabTo(page, density);
+    await keyboardFocus(page, density);
     const ring = await ringOf(density);
     expect(ring.focusVisible).toBe(true);
     expect(ring).toMatchObject({ style: 'solid', width: '2px', offset: '1px' });
@@ -166,8 +178,9 @@ test.describe('#1594 OR40 S2a — one focus ring', () => {
     await page.goto('/#/monitor/runs');
     const list = page.getByRole('group', { name: 'Runs view' }).getByRole('button').first();
     await expect(list).toBeVisible();
-    await tabTo(page, list);
+    await keyboardFocus(page, list);
     const fluent = await ringOf(list);
+    expect(fluent.focusVisible).toBe(true);
     expect(fluent.color === fluent.accent && fluent.style !== 'none').toBe(false);
     await expectQuiet(page, problems);
   });
@@ -178,7 +191,7 @@ test.describe('#1594 OR40 S2a — one focus ring', () => {
       nodes: [{ id: 'w', type: 'wait', position: { x: 0, y: 0 }, config: { seconds: '${1}' } }],
     });
     const node = nodeById(page, 'w');
-    await tabTo(page, node, 200);
+    await keyboardFocus(page, node);
     const ring = await ringOf(node);
     expect(ring.focusVisible).toBe(true);
     expect(ring).toMatchObject({ style: 'solid', width: '2px', offset: '1px' });

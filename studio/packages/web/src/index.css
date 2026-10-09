@@ -1021,10 +1021,12 @@ th {
 
    `button` carries it in its own rule below rather than in this list, so the
    element keeps exactly ONE rule — `ruleBody` (`testing/cssSource.ts`) refuses a
-   selector two rules declare, and `palette.test.ts` reads `button` through it. */
-input,
-select,
-textarea {
+   selector two rules declare, and `palette.test.ts` reads `button` through it.
+
+   S2a — at zero specificity, like the control layer that follows it, so the
+   layer's body size and a textarea's line height (equal specificity, later)
+   win over this reset rather than being undone by it. */
+:where(input, select, textarea) {
   font: inherit;
   line-height: normal;
 }
@@ -1038,7 +1040,12 @@ textarea {
    box, the JSON editor, the run filters) still wins until S6 moves that page
    onto the layer. The explicit body size outranks inheritance: the compact
    dock sets its labels to caption size, and a control inside one must not
-   shrink with them. Fluent's Combobox draws its own input, so it is left out. */
+   shrink with them.
+
+   The connection picker's Fluent Combobox input is the one control named
+   OUTSIDE the `:where()`: the picker clears Fluent's own chrome so the input
+   takes this style, and Fluent's classes would outrank a zero-specificity
+   rule. Any other Fluent input keeps Fluent's look. */
 :where(
   input:not(
     [type='checkbox'],
@@ -1050,7 +1057,8 @@ textarea {
   ),
   select:not([multiple], [size]),
   textarea
-) {
+),
+.connection-picker__combobox > input.fui-Combobox__input {
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border);
@@ -1068,14 +1076,18 @@ textarea {
     .fui-Combobox__input
   ),
   select:not([multiple], [size])
-) {
+),
+.connection-picker__combobox > input.fui-Combobox__input {
   height: var(--control-h);
   padding: 0 var(--space-2);
 }
 
-/* A textarea (AutoGrowTextarea, JsonEditor) sizes to its text. */
+/* A textarea (AutoGrowTextarea, JsonEditor) sizes to its text, in whole body
+   lines: AutoGrowTextarea reads the line height to count rows, so it must be a
+   length, not the UA's `normal`. */
 :where(textarea) {
   padding: var(--space-1) var(--space-2);
+  line-height: var(--type-body-line);
 }
 
 :where(
@@ -2940,11 +2952,10 @@ button.danger {
 }
 /* #1477 slice 5c — the picker is a Fluent Combobox, sized to its widest option
    by the component (`--picker-ch`). Its own chrome (border, underline,
-   background) is cleared so the inner input takes the dock's one control style
-   (`.property-panel input` and the compact height), with the app's focus ring in
-   place of the cleared underline, and the chevron over the input's right edge.
-   The input rule is (0,6,1) to outrank the compact density's control rule,
-   (0,5,1), whose padding would otherwise run the text under the chevron. */
+   background) is cleared so the inner input takes the control layer (#1594 S2a,
+   which names it), with the app's focus ring in place of the cleared underline,
+   and the chevron over the input's right edge. The input rule keeps its
+   specificity so its right padding beats the layer's. */
 .connection-picker .connection-picker__combobox {
   position: relative;
   width: calc(var(--picker-ch, 8) * 1ch + 40px);
@@ -2969,6 +2980,9 @@ button.danger {
   text-overflow: ellipsis;
 }
 .connection-picker .connection-picker__combobox > input:focus-visible {
+  /* Restated, unlike the other inset rules: Fluent's input clears the outline
+     at a specificity the global ring does not beat. */
+  outline: var(--focus-ring-width) solid var(--accent);
   outline-offset: var(--focus-ring-inset);
 }
 .connection-picker .connection-picker__combobox > .fui-Combobox__expandIcon {
