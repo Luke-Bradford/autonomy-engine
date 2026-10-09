@@ -396,9 +396,9 @@ OR40 S1), which hold both densities' values: `--control-h`, `--row-h`, `--type-b
 `--type-caption-size` and `--space-1..6`, plus the `--type-*` font shorthands. Read the tokens
 rather than repeating the numbers; `theme/tokens.test.ts` ratchets the literal count down.
 
-Controls take the density app-wide through the control layer (below). The dock's label and hint
-sizes are still scoped to the property dock's panel. Icon buttons and Fluent's tabs keep their own
-metrics until S2b. `e2e/property-dock-density.spec.ts` measures the dock at 1440x900.
+Controls take the density app-wide through the control layer (below), icon buttons and tabs
+included. The dock's label and hint sizes are still scoped to the property dock's panel.
+`e2e/property-dock-density.spec.ts` measures the dock at 1440x900.
 
 ## Controls
 
@@ -411,10 +411,36 @@ One look per control type (#1594 OR40 S2a), from the tokens, in both densities. 
   component rule still wins. Do not add a new per-form skin; delete one when you touch it. Known
   leftovers for S6: `.json-editor-input`, `.inline-name-form input`, `.run-filters` and the search
   boxes, which set their own padding or width.
-- **Buttons, three variants:** secondary is a bare `<button>`, primary is `className="primary"`, and
-  subtle (toolbar and icon) arrives with S2b. `danger` is a colour tone of secondary, not a fourth
+- **Buttons, three variants:** secondary is a bare `<button>`, primary is `className="primary"`,
+  and subtle (toolbar and icon, #1594 OR40 S2b) has two class names for one variant: `subtle` for
+  a text button and `icon-button` for a glyph. `danger` is a colour tone of secondary, not a fourth
   variant. An unclassed button and the variants are at least `--control-h` tall. A classed one-off
   button keeps its own size until S3/S6 moves it.
+  - **Subtle** has no fill and a transparent border at rest (so it is the same box as a secondary
+    beside it), and `--panel-2` on hover. An open disclosure (`aria-expanded="true"`) gets an
+    accent underline, so open never looks merely hovered.
+  - **An icon button** is a `--control-h` square with no border and an `--icon-size` glyph (16px
+    compact, 20px comfortable; the Fluent icons are `1em`, so the button's font-size is the glyph).
+    A call site sets only its rest colour or tone; never a size. The per-family sizes it replaced
+    (the editor header's 32px, the dock's 24px, the resource pane's and row menus' 26px, the pane
+    toggle's padded 18px, the toolbox fold's bare glyph) are gone. Give an icon button an `aria-label` and a matching `title`.
+  - **Not icon buttons, so they keep their own box and glyph** (each overrides the square): the
+    disclosure twisties (`.factory-resources__disclosure`, `.runs-grid__disclosure`), the
+    toolbox's labelled group headings (`.activity-toolbox__disclosure`, `height: auto`), and the
+    icon link `.run-editor-link`. The in-canvas
+    ghosts (`.flow-container-*`, `.canvas-refusal button`) and the link-like buttons (`.sort-button`,
+    `.form-errors-link`) are S6's.
+- **Tabs, one style:** `PanelTabs` (Fluent's `TabList`) is the only tab list; use it, never a
+  look-alike. A tab is body type in a `--control-h` box with `--space-2` side padding; selected is
+  body-strong. Fluent draws a hidden semibold copy of an unselected tab's label to reserve the
+  selected width, and that copy takes body-strong too, so selecting a tab moves no tab.
+- **The property dock's strip** is the dock's name (`Properties`, and `N selected` while folded
+  with a selection), the Problems disclosure as a subtle button, then the icon acts at the far end:
+  Paste, Expand, the dock's position (`Dock to right` / `Dock to bottom`) and its fold (`Hide
+  properties` / `Show properties`, chevron pointing where the dock goes). Properties and Problems
+  are deliberately **not** a tablist: Problems shows *with* the properties (a resizable column
+  beside them, or stacked under them docked right), and tab semantics would say one panel at a
+  time.
 - **Checkboxes and radios** sit beside their words: box, 8px, label. A `<label>` wrapping the input
   is all it takes. Keep `contract-check` on the dock's checkbox labels, because the compact dock's
   label-gap rule excludes it by class.
@@ -425,7 +451,7 @@ One look per control type (#1594 OR40 S2a), from the tokens, in both densities. 
   `--focus-ring-outset` so it clears the node's own selection or issue ring) and the connection
   picker's Fluent input. Fluent's controls keep Fluent's own indicator.
 
-`e2e/control-layer.spec.ts` measures all of this at 1440x900.
+`e2e/control-layer.spec.ts` measures all of this at 1440x900, in both densities.
 
 ## Width, and why a drawer has no two-column grid
 

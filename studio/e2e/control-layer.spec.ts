@@ -287,3 +287,186 @@ test('a checkbox sits beside its words: box, 8px, label — never stretched', as
   expect((await boxOf(field)).height).toBe(28);
   await expectQuiet(page, problems);
 });
+
+/**
+ * #1594 OR40 S2b — the subtle variant, the one tab style and the dock strip.
+ *
+ * Every icon button is the subtle variant's glyph form: a `--control-h` square,
+ * no border, no fill at rest, an `--icon-size` glyph. The families it folded
+ * (editor header, dock, pane toggle, toolbox fold, resource row menu) each
+ * carried their own size before. A tab is body type in a `--control-h` box,
+ * semibold when selected, and selecting one moves no tab. The dock's strip is
+ * its name and the Problems disclosure on the left, its icon acts on the right,
+ * on one centre line with 8px between controls.
+ */
+const ICON_SIZE: Record<Density, number> = { compact: 16, comfortable: 20 };
+const BODY_SIZE: Record<Density, string> = { compact: '13px', comfortable: '14px' };
+
+for (const density of ['compact', 'comfortable'] as const) {
+  test.describe(`#1594 OR40 S2b — subtle, tabs and the dock strip, ${density}`, () => {
+    test('icon buttons, tabs and the dock strip take the tokens', async ({ page }) => {
+      const problems = collectPageProblems(page);
+      await openSettings(page, density);
+      const h = CONTROL_H[density];
+      await openSeededCanvas(page, `or40 s2b ${density}`, {
+        nodes: [{ id: 'w', type: 'wait', position: { x: 0, y: 0 }, config: { seconds: '${1}' } }],
+      });
+      await nodeById(page, 'w').click();
+      const tablist = properties(page).getByRole('tablist').first();
+      await expect(tablist).toBeVisible();
+      const panel2 = await resolvedPaletteColor(page, '--panel-2');
+      const accent = await resolvedPaletteColor(page, '--accent');
+
+      // Icon buttons: one square, one glyph, from every family S2b folded.
+      const icons = {
+        undo: page.getByRole('button', { name: 'Undo', exact: true }),
+        pane: page.getByRole('button', { name: /navigation pane/i }),
+        toolboxFold: page.getByRole('button', { name: 'Collapse activities' }),
+        rowMenu: page.locator('.factory-resources__icon-button').first(),
+        paste: page.locator('.property-dock__header').getByRole('button', { name: 'Paste' }),
+        expand: page.getByRole('button', { name: 'Expand properties' }),
+        position: page.getByRole('button', { name: 'Dock to right' }),
+        fold: page.getByRole('button', { name: 'Hide properties' }),
+      };
+      for (const [name, button] of Object.entries(icons)) {
+        await expect(button, name).toHaveCount(1);
+        const read = await button.evaluate((el) => {
+          const cs = getComputedStyle(el);
+          const r = el.getBoundingClientRect();
+          const glyph = el.querySelector('svg')?.getBoundingClientRect();
+          return {
+            width: Math.round(r.width),
+            height: Math.round(r.height),
+            border: cs.borderTopStyle,
+            background: cs.backgroundColor,
+            glyph: glyph ? Math.round(glyph.width) : null,
+          };
+        });
+        expect(read, name).toEqual({
+          width: h,
+          height: h,
+          border: 'none',
+          background: 'rgba(0, 0, 0, 0)',
+          glyph: ICON_SIZE[density],
+        });
+      }
+
+      // The subtle text button: no fill or border at rest, a fill on hover, an
+      // accent underline once open — never the same as merely hovered.
+      const problemsToggle = page.getByRole('button', { name: /^Problems/ });
+      const subtle = () =>
+        problemsToggle.evaluate((el) => {
+          const cs = getComputedStyle(el);
+          return {
+            height: Math.round(el.getBoundingClientRect().height),
+            background: cs.backgroundColor,
+            border: cs.borderTopColor,
+            shadow: cs.boxShadow,
+            size: cs.fontSize,
+          };
+        });
+      // Problems may open with the dock (a stored preference): start it closed.
+      if ((await problemsToggle.getAttribute('aria-expanded')) === 'true') {
+        await problemsToggle.click();
+      }
+      await expect(problemsToggle).toHaveAttribute('aria-expanded', 'false');
+      await page.mouse.move(0, 0);
+      const rest = await subtle();
+      expect(rest).toMatchObject({
+        height: h,
+        background: 'rgba(0, 0, 0, 0)',
+        border: 'rgba(0, 0, 0, 0)',
+        shadow: 'none',
+        size: BODY_SIZE[density],
+      });
+      await problemsToggle.hover();
+      expect(await subtle()).toMatchObject({ background: panel2, border: 'rgba(0, 0, 0, 0)' });
+      await problemsToggle.click();
+      await expect(problemsToggle).toHaveAttribute('aria-expanded', 'true');
+      expect((await subtle()).shadow).toContain(accent);
+
+      // The strip: name and Problems left, acts right, one centre line, 8px apart.
+      const strip = await page.locator('.property-dock__header').evaluate((header) => {
+        const items = [...header.children]
+          .filter(
+            (el) => getComputedStyle(el).display !== 'none' && el.getAttribute('role') !== 'status',
+          )
+          .flatMap((el) => (el.classList.contains('property-dock__acts') ? [...el.children] : [el]))
+          .map((el) => {
+            const r = el.getBoundingClientRect();
+            return {
+              label: el.getAttribute('aria-label') ?? el.textContent?.trim() ?? '',
+              left: r.left,
+              right: r.right,
+              centre: r.top + r.height / 2,
+            };
+          });
+        return items;
+      });
+      expect(strip.map((i) => i.label)).toEqual([
+        'Properties',
+        'Problems 0',
+        'Paste',
+        'Expand properties',
+        'Dock to right',
+        'Hide properties',
+      ]);
+      // The acts sit at the strip's far end, not after Problems.
+      const end = await page
+        .locator('.property-dock__header')
+        .evaluate(
+          (el) => el.getBoundingClientRect().right - parseFloat(getComputedStyle(el).paddingRight),
+        );
+      expect(end - strip.at(-1)!.right, 'the fold ends the strip').toBeLessThanOrEqual(1);
+      expect(strip[2]!.left - strip[1]!.right, 'acts pushed right').toBeGreaterThan(100);
+      for (let i = 1; i < strip.length; i += 1) {
+        const [a, b] = [strip[i - 1]!, strip[i]!];
+        expect(b.left - a.right, `${a.label} → ${b.label} gap`).toBeGreaterThanOrEqual(8);
+        expect(
+          Math.abs(b.centre - a.centre),
+          `${a.label} / ${b.label} centres`,
+        ).toBeLessThanOrEqual(1);
+      }
+
+      // Tabs: body type in a control-height box; selected is semibold, and the
+      // width it needs is reserved, so selecting another tab moves no tab.
+      const tabs = () =>
+        tablist.getByRole('tab').evaluateAll((els) =>
+          els.map((el) => {
+            const r = el.getBoundingClientRect();
+            const content = el.querySelector('.fui-Tab__content')!;
+            const reserved = el.querySelector('.fui-Tab__content--reserved-space');
+            const font = (e: Element) => {
+              const cs = getComputedStyle(e);
+              return `${cs.fontSize}/${cs.fontWeight}`;
+            };
+            return {
+              selected: el.getAttribute('aria-selected') === 'true',
+              left: r.left,
+              width: r.width,
+              height: Math.round(r.height),
+              content: font(content),
+              reserved: reserved ? font(reserved) : null,
+            };
+          }),
+        );
+      const before = await tabs();
+      expect(before.length, 'the node has more than one tab').toBeGreaterThan(1);
+      const body = BODY_SIZE[density];
+      for (const t of before) {
+        expect(t.height, 'tab height').toBe(h);
+        expect(t.content, 'tab label').toBe(`${body}/${t.selected ? 600 : 400}`);
+        // Fluent reserves on an UNSELECTED tab only (a hidden semibold copy).
+        expect(t.reserved, 'reserved selected width').toBe(t.selected ? null : `${body}/600`);
+      }
+      const other = before.findIndex((t) => !t.selected);
+      await tablist.getByRole('tab').nth(other).click();
+      await expect(tablist.getByRole('tab').nth(other)).toHaveAttribute('aria-selected', 'true');
+      const after = await tabs();
+      expect(after.map((t) => [t.left, t.width])).toEqual(before.map((t) => [t.left, t.width]));
+      expect(after[other]!.content).toBe(`${body}/600`);
+
+      await expectQuiet(page, problems);
+    });
+  });
+}

@@ -28,7 +28,7 @@ export function DockPasteButton({
   return (
     <button
       type="button"
-      className="icon-button property-dock__icon-button"
+      className="icon-button"
       aria-label="Paste"
       title="Paste (⌘V)"
       onClick={() => onNotice(busy ? PASTE_BUSY_NOTICE : pasteAndSay(store, pipelineId))}

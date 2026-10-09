@@ -72,6 +72,8 @@
   /* Heights, not spacing. */
   --control-h: 28px;
   --row-h: 32px;
+  /* S2b — a glyph in an icon button (the Fluent icons are 1em). */
+  --icon-size: 16px;
 
   /* S2 — the one focus ring. It sits outside the element, except where the
      element fills a container that clips it (a rail link, a grid resizer), and
@@ -92,6 +94,7 @@
   --type-section-line: 22px;
   --control-h: 32px;
   --row-h: 36px;
+  --icon-size: 20px;
 }
 
 /* ---- Base rules ---------------------------------------------------------- */

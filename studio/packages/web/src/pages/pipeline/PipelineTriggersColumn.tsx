@@ -214,7 +214,7 @@ export function PipelineTriggersColumn({
           <h3 id="pipeline-triggers-heading">Triggers</h3>
           <button
             type="button"
-            className="icon-button editor-header__icon-button"
+            className="icon-button"
             aria-label="Close triggers"
             title="Close triggers"
             onClick={() => {

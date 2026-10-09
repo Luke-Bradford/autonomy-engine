@@ -96,9 +96,7 @@ export function VersionHistoryPanel({
         <h3 id="version-history-heading">Version history</h3>
         <button
           type="button"
-          /* The editor header's 32px icon-button size, so the hit target is
-             not the bare glyph. */
-          className="icon-button editor-header__icon-button"
+          className="icon-button"
           aria-label="Close version history"
           title={locked ?? 'Close version history'}
           /* Closing leaves the preview, which would remount the editor under a

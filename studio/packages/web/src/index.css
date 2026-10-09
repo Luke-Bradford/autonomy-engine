@@ -562,8 +562,17 @@ body {
    chevron), and the rail, command bar and pane are all on screen at once, so
    the mismatch was directly comparable. This carries everything they genuinely
    share: the reset off the global `button` rule, the hover fill, and the focus
-   ring. Call sites keep ONLY what differs — box size, icon size, and rest
-   colour.
+   ring. Call sites keep ONLY what differs, which since S2b is the rest colour.
+
+   #1594 OR40 S2b — and this is the SUBTLE variant's icon form (`button.subtle`
+   is its text form, below the bare `button` rule). The box is `--control-h`
+   square and the glyph `--icon-size` (the Fluent icons are `1em`, so the
+   button's font-size IS the glyph size; an icon button has no text to keep on
+   the body size). The per-family sizes it replaced (26px, 24px, 32px, an 18px
+   padded toggle) are gone: a call site now keeps only its rest colour. The
+   disclosures are not icon buttons in that sense and keep their own box (and
+   glyph): `.factory-resources__disclosure` and `.runs-grid__disclosure` (a tree
+   or row twisty) and `.activity-toolbox__disclosure` (a labelled heading row).
 
    MUST BE DECLARED BEFORE its call sites. Every rule here is a single class
    (specificity 0,1,0) and so are `.command-bar__pane-toggle` etc., so on a tie
@@ -578,23 +587,31 @@ body {
    down is specificity (0,2,1) and therefore OUTRANKS `.icon-button:hover`
    (0,2,0). It is invisible today only because `border: none` leaves no border
    to colour — reintroduce any border width here and that global rule will
-   start painting an accent edge on hover. */
+   start painting an accent edge on hover. The hover stays at (0,2,0) (the
+   `:disabled` exclusion is in `:where()`), so a call site's tone or rest
+   colour declared later (`.editor-header__icon-button[data-tone]`) still wins
+   on hover. */
 .icon-button {
   display: flex;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
+  width: var(--control-h);
+  height: var(--control-h);
   padding: 0;
   background: none;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-control);
+  font-size: var(--icon-size);
   cursor: pointer;
   /* The Fluent icons are SVGs sized in `em`; without this the line box adds
      stray vertical space inside a fixed-size button. */
   line-height: 0;
 }
 
-.icon-button:hover {
+/* Not on a disabled one, where a fill would read as live (it replaces a
+   per-family `:disabled { background: none }` override). */
+.icon-button:hover:where(:not(:disabled)) {
   background: var(--panel-2);
   color: var(--text);
 }
@@ -619,9 +636,6 @@ body {
 }
 
 .row-actions .row-menu__trigger {
-  width: 26px;
-  height: 26px;
-  font-size: 16px;
   color: var(--text);
 }
 
@@ -637,31 +651,7 @@ body {
   color: var(--error);
 }
 
-/* #1397 — the pipeline editor header's icon buttons (Undo, Redo, the ⋯ menu),
-   sized to sit level with the text buttons beside them. The ICON is sized, not
-   the button's font: the Fluent icons are `1em`, and growing the button's
-   `font-size` would take it off the body size every other header button
-   inherits (#1245, OR40 S1). A border-box square, so the hover fill matches a button's. */
-.editor-header__icon-button {
-  width: 32px;
-  height: 32px;
-}
-
-.editor-header__icon-button > svg {
-  width: 20px;
-  height: 20px;
-}
-
-/* `.icon-button:hover` fills the background whatever the state; on a DISABLED
-   Undo/Redo that fill reads as live. Same specificity, declared later, wins. */
-.editor-header__icon-button:disabled {
-  background: none;
-}
-
 .factory-resources__icon-button {
-  width: 26px;
-  height: 26px;
-  font-size: 16px;
   /* Full-strength rather than `--muted` at rest, unlike the other two: these
      are revealed by row hover/focus (opacity 0 -> 1 below), so by the time one
      is visible the row is already the user's focus and a muted glyph reads as
@@ -827,11 +817,9 @@ body {
         SHRINK inside the flex command bar. That is the wanted behaviour for a
         fixed-size icon target (it previously had `flex-shrink: 1`), but it is a
         real change, not a no-op.
-   `padding` is respecified here because `.icon-button` zeroes it — this button
-   sizes by padding, not by a fixed box like the Factory ones. */
+   #1594 OR40 S2b — its own padding and 18px glyph went: it is the shared
+   `--control-h` square now, like every icon button. */
 .command-bar__pane-toggle {
-  padding: 0.25rem;
-  font-size: 18px;
   color: var(--muted);
 }
 
@@ -1131,8 +1119,8 @@ label > input:is([type='checkbox'], [type='radio']) {
 }
 
 /* Buttons: three variants and no more. SECONDARY is this bare rule, PRIMARY is
-   `.primary`, and SUBTLE (toolbar and icon buttons) arrives with S2b, which
-   folds the icon-button families into it. `.danger` is a colour tone of
+   `.primary`, and SUBTLE (toolbar and icon buttons) is `.subtle` for text and
+   `.icon-button` for a glyph (#1594 OR40 S2b). `.danger` is a colour tone of
    secondary, not a fourth variant.
 
    The control height is a MIN-height, and only on the buttons the layer owns:
@@ -1164,6 +1152,28 @@ button.danger {
 
 button:hover:not(:disabled) {
   border-color: var(--accent);
+}
+
+/* #1594 OR40 S2b — SUBTLE, the text form (`.icon-button` is the glyph form):
+   no fill and no visible border at rest, a fill on hover. The border stays,
+   transparent, so a subtle button is the same box as a secondary one beside it.
+   Its hover outranks the accent border above (0,3,1 over 0,2,1). An open
+   disclosure is marked by an accent underline, so it never looks merely
+   hovered. */
+button.subtle {
+  min-height: var(--control-h);
+  background: transparent;
+  border-color: transparent;
+  font-size: var(--type-body-size);
+}
+
+button.subtle:hover:not(:disabled) {
+  background: var(--panel-2);
+  border-color: transparent;
+}
+
+button.subtle[aria-expanded='true'] {
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 /* The ONE focus ring, on every focusable thing, keyboard focus only. A rule
@@ -1797,6 +1807,28 @@ button.danger {
   position: relative;
 }
 
+/* #1594 OR40 S2b — the ONE tab style (`PanelTabs` is the app's only tab list:
+   the dock's property tabs and the run drawer's). Fluent's `small` tab is 14px
+   type in a 32px box with 6px padding; on the tokens it is body type in a
+   `--control-h` box, so compact tabs are 13px and 28px tall and comfortable ones
+   14px and 32px. Selected is body-strong, and Fluent's hidden copy of the label
+   that reserves the selected width (`--reserved-space`) takes body-strong too,
+   so selecting a tab moves no label. (0,2,0)+, over Fluent's atomic classes. */
+.panel-tabs .fui-Tab {
+  block-size: var(--control-h);
+  padding-block: 0;
+  padding-inline: var(--space-2);
+}
+
+.panel-tabs .fui-Tab__content {
+  font: var(--type-body);
+}
+
+.panel-tabs .fui-Tab[aria-selected='true'] .fui-Tab__content,
+.panel-tabs .fui-Tab__content--reserved-space {
+  font: var(--type-body-strong);
+}
+
 .panel-tabs__pending {
   position: absolute;
   top: 0;
@@ -1977,6 +2009,8 @@ button.danger {
   justify-content: flex-start;
   gap: 0.3rem;
   width: 100%;
+  /* A heading row sized by its text, not the icon button's square. */
+  height: auto;
   padding: 0.2rem 0.15rem;
   /* `.icon-button` zeroes this for a glyph-only button; the label needs it back. */
   line-height: 1.2;
@@ -2352,7 +2386,8 @@ button.danger {
   gap: 0.5rem;
 }
 
-/* Three toggles in a dock that may be 320px wide: wrap rather than clip. */
+/* The strip (name, Problems, four icon acts) in a dock that may be 320px
+   wide: wrap rather than clip. */
 .canvas-main--dock-right .property-dock__header {
   flex-wrap: wrap;
 }
@@ -2421,11 +2456,6 @@ button.danger {
   margin-top: 0.5rem;
 }
 
-.property-dock__toggle {
-  align-self: flex-start;
-  font-size: 0.8rem;
-}
-
 .property-dock__body:not([hidden]) {
   display: flex;
   flex: 1 1 auto;
@@ -2438,24 +2468,28 @@ button.danger {
   overflow-y: auto;
 }
 
-/* #1393 — the dock's header row: the fold toggle and the Problems toggle. */
+/* #1393 — the dock's header row; #1594 OR40 S2b — the dock's name and the
+   Problems disclosure, then its icon acts. */
 .property-dock__header {
   display: flex;
-  gap: 0.5rem;
+  gap: var(--space-2);
   align-items: center;
 }
 
-/* #1477 OR29 — the header's icon acts (Paste, Expand), together at the row's
-   far end, so a wrapped header moves them as one. */
-.property-dock__acts {
-  display: flex;
-  margin-left: auto;
+.property-dock__title {
+  font: var(--type-body-strong);
 }
 
-.property-dock__icon-button {
-  width: 24px;
-  height: 24px;
-  font-size: 16px;
+.property-dock__note {
+  color: var(--muted);
+}
+
+/* #1477 OR29 — the header's icon acts (Paste, Expand, position, fold),
+   together at the row's far end, so a wrapped header moves them as one. */
+.property-dock__acts {
+  display: flex;
+  gap: var(--space-2);
+  margin-left: auto;
 }
 
 /* #1393 — the validation list, as a FIXED-width column beside the properties.
@@ -5755,9 +5789,6 @@ button.danger {
 }
 
 .runs-grid__pipeline-line .row-menu__trigger {
-  width: 24px;
-  height: 24px;
-  font-size: 16px;
   color: var(--muted);
 }
 
@@ -5794,6 +5825,8 @@ button.danger {
   justify-content: center;
   width: 1.5rem;
   height: 1.5rem;
+  /* The cell's text size, not the icon button's glyph token. */
+  font-size: inherit;
   color: inherit;
 }
 
@@ -6141,11 +6174,8 @@ button.danger {
 
 .version-history-item__line .row-menu__trigger {
   flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
   /* Level with the row's first line, which has 0.4rem of padding above it. */
   margin-top: 0.15rem;
-  font-size: 16px;
   color: var(--text);
 }
 

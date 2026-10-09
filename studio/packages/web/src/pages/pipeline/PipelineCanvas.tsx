@@ -27,7 +27,11 @@ import {
   ArrowRedoRegular,
   ArrowUndoRegular,
   ChevronDownRegular,
+  ChevronRightRegular,
+  ChevronUpRegular,
   MoreHorizontalRegular,
+  PanelBottomRegular,
+  PanelRightRegular,
 } from '@fluentui/react-icons';
 import { useNavigate } from 'react-router';
 import { useLatestSearchParams } from '../../lib/useLatestSearchParams';
@@ -956,6 +960,11 @@ export function PipelineCanvas({
   // #852 — read by the folded dock's toggle, so a selection made while the
   // properties are folded away still gets a visible answer.
   const selectedCount = useStore(store, (s) => s.selected.length);
+  const foldLabel = dockOpen
+    ? 'Hide properties'
+    : selectedCount > 0
+      ? `Show properties (${String(selectedCount)} selected)`
+      : 'Show properties';
   const loaded = useStore(store, (s) => s.loaded);
 
   const arrangeReason = arrangeDisabledReason({
@@ -2366,31 +2375,30 @@ export function PipelineCanvas({
                       } as CSSProperties
                     }
                   >
+                    {/* #1594 OR40 S2b — the strip: the dock's name and the
+                    Problems disclosure on the left, its acts as icon buttons on
+                    the right. Properties and Problems are NOT tabs: Problems is
+                    shown WITH the properties (a resizable column beside them,
+                    #1475, or stacked under them in a right-hand dock), so tab
+                    semantics — one panel at a time — would be false. */}
                     <div className="property-dock__header">
-                      <button
-                        type="button"
-                        className="property-dock__toggle"
-                        aria-expanded={dockOpen}
-                        aria-controls={dockBodyId}
-                        onClick={() => setDockOpen(!dockOpen)}
-                      >
-                        {/* Folded, a selection would otherwise change nothing on screen
-                      but the canvas highlight. The dock does NOT reopen by itself:
-                      the operator folded it to look at the graph, and a click or a
-                      drag selects — so the toggle says what is waiting instead. */}
-                        {dockOpen
-                          ? 'Hide properties'
-                          : selectedCount > 0
-                            ? `Show properties (${String(selectedCount)} selected)`
-                            : 'Show properties'}
-                      </button>
+                      <span className="property-dock__title">Properties</span>
+                      {/* Folded, a selection would otherwise change nothing on screen
+                    but the canvas highlight. The dock does NOT reopen by itself:
+                    the operator folded it to look at the graph, and a click or a
+                    drag selects — so the strip says what is waiting instead. */}
+                      {!dockOpen && selectedCount > 0 && (
+                        <span className="property-dock__note" aria-hidden="true">
+                          {String(selectedCount)} selected
+                        </span>
+                      )}
                       {/* #1393 — the count is on the header, so a folded dock still
                     says why Save is refused. Opening Problems from a folded
                     dock opens the dock too: a toggle whose effect is hidden
                     would read as broken. */}
                       <button
                         type="button"
-                        className="property-dock__toggle"
+                        className="subtle"
                         aria-expanded={dockOpen && problemsOpen}
                         aria-controls={problemsId}
                         onClick={() => {
@@ -2409,23 +2417,9 @@ export function PipelineCanvas({
                           {issues.length}
                         </span>
                       </button>
-                      {/* #1475 OR27 — the label names where the dock GOES, so it
-                      needs no pressed state on top. Offered folded too: it
-                      decides where the dock opens. Not while expanded, when
-                      moving it would change nothing on screen. */}
-                      {!dockExpanded && (
-                        <button
-                          type="button"
-                          className="property-dock__toggle"
-                          onClick={() =>
-                            setDockPosition(dockPosition === 'right' ? 'bottom' : 'right')
-                          }
-                        >
-                          {dockPosition === 'right' ? 'Dock to bottom' : 'Dock to right'}
-                        </button>
-                      )}
                       {/* #1477 OR29 — U21's Paste, moved here from a full-width
-                      bar in the nothing-selected panel. */}
+                      bar in the nothing-selected panel; then Expand, the dock's
+                      position and its fold, at the row's far end. */}
                       <span className="property-dock__acts">
                         <DockPasteButton
                           store={store}
@@ -2439,7 +2433,7 @@ export function PipelineCanvas({
                         {dockOpen && (
                           <button
                             type="button"
-                            className="icon-button property-dock__icon-button"
+                            className="icon-button"
                             aria-label={dockExpanded ? 'Back to dock' : 'Expand properties'}
                             title={dockExpanded ? 'Back to dock (Esc)' : 'Expand properties'}
                             aria-controls={dockId}
@@ -2452,6 +2446,52 @@ export function PipelineCanvas({
                             )}
                           </button>
                         )}
+                        {/* #1475 OR27 — the label names where the dock GOES, so it
+                        needs no pressed state on top. Offered folded too: it
+                        decides where the dock opens. Not while expanded, when
+                        moving it would change nothing on screen. */}
+                        {!dockExpanded && (
+                          <button
+                            type="button"
+                            className="icon-button"
+                            aria-label={
+                              dockPosition === 'right' ? 'Dock to bottom' : 'Dock to right'
+                            }
+                            title={dockPosition === 'right' ? 'Dock to bottom' : 'Dock to right'}
+                            onClick={() =>
+                              setDockPosition(dockPosition === 'right' ? 'bottom' : 'right')
+                            }
+                          >
+                            {dockPosition === 'right' ? (
+                              <PanelBottomRegular aria-hidden="true" />
+                            ) : (
+                              <PanelRightRegular aria-hidden="true" />
+                            )}
+                          </button>
+                        )}
+                        {/* The fold. Its chevron points where the dock goes: down
+                        (or right, docked right or expanded) to hide it, up to
+                        show it — a folded dock is always a strip under the
+                        canvas. Folded
+                        with a selection, the name carries the count the note
+                        beside the title shows. */}
+                        <button
+                          type="button"
+                          className="icon-button"
+                          aria-expanded={dockOpen}
+                          aria-controls={dockBodyId}
+                          aria-label={foldLabel}
+                          title={foldLabel}
+                          onClick={() => setDockOpen(!dockOpen)}
+                        >
+                          {!dockOpen ? (
+                            <ChevronUpRegular aria-hidden="true" />
+                          ) : dockPosition === 'right' || dockExpanded ? (
+                            <ChevronRightRegular aria-hidden="true" />
+                          ) : (
+                            <ChevronDownRegular aria-hidden="true" />
+                          )}
+                        </button>
                       </span>
                       {/* The page's ONE announcer of a blocked save (#1249). Here
                       in the always-shown header, not on the list: the list is
