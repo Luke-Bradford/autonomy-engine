@@ -573,6 +573,24 @@ const NO_DATASETS: readonly Dataset[] = [];
  * of this line, which the spec above
  * pins.
  */
+/** The selection's activities that are still on the canvas, in selection order. */
+function selectedNodeIds(state: {
+  selected: readonly { kind: string; id: string }[];
+  nodes: readonly { id: string }[];
+}): string[] {
+  return state.selected
+    .filter((sel) => sel.kind === 'node' && state.nodes.some((n) => n.id === sel.id))
+    .map((sel) => sel.id);
+}
+
+/**
+ * #1597 — what a selection leaves, as Remove from and its confirm both say it:
+ * the container's name, or "their containers" when it spans several.
+ */
+function leavingName(labels: ReadonlyMap<string, string>, from: string | null): string {
+  return from === null ? 'their containers' : (labels.get(from) ?? 'its container');
+}
+
 export function FlowCanvas({
   store,
   fitSignal = 0,
@@ -1837,7 +1855,7 @@ export function FlowCanvas({
   // open, so a box added or removed under it is never offered stale.
   const menuMoves = useMemo((): CanvasMenuMoves | null => {
     if (menu?.target !== 'selection') return null;
-    const ids = selected.filter((sel) => sel.kind === 'node').map((sel) => sel.id);
+    const ids = selectedNodeIds(store.getState());
     const { owner } = containerMembership(containers);
     const labels = containerLabels(containers);
     const home = sharedContainer(owner, ids);
@@ -1847,14 +1865,11 @@ export function FlowCanvas({
       into: containers
         .filter((c) => c.id !== home)
         .map((c) => ({ id: c.id, label: labels.get(c.id) ?? c.id })),
-      removeFrom:
-        held.length === 0
-          ? null
-          : leaving === null
-            ? 'containers'
-            : (labels.get(leaving) ?? 'its container'),
+      removeFrom: held.length === 0 ? null : leavingName(labels, leaving),
     };
-  }, [menu, selected, containers]);
+    // `selected` and `nodes` are read through the store; they are listed so a
+    // change to either while the menu is open re-derives it.
+  }, [menu, selected, nodes, containers, store]);
   function openMenu(event: ReactMouseEvent | MouseEvent, target: CanvasMenuRequest['target']) {
     event.preventDefault();
     let { clientX: x, clientY: y } = event;
@@ -2349,7 +2364,11 @@ export function FlowCanvas({
    * one Undo takes the whole move back.
    */
   const moveIntoContainer = useCallback(
-    async (ids: readonly string[], target: string | null) => {
+    async (
+      ids: readonly string[],
+      target: string | null,
+      restoreFocus?: () => HTMLElement | null,
+    ) => {
       const state = store.getState();
       const { owner } = containerMembership(state.containers);
       const moving = ids.filter(
@@ -2365,10 +2384,9 @@ export function FlowCanvas({
         moving.length === 1
           ? (activityLabels(state.nodes).get(moving[0]!) ?? 'this activity')
           : `${moving.length} activities`;
-      const from = sharedContainer(owner, moving);
       const question =
         target === null
-          ? `Take ${what} out of ${from === null ? 'their containers' : (labels.get(from) ?? 'its container')}?`
+          ? `Take ${what} out of ${leavingName(labels, sharedContainer(owner, moving))}?`
           : `Move ${what} into ${labels.get(target) ?? 'the container'}?`;
       const message = containerEditQuestion(
         state,
@@ -2387,6 +2405,7 @@ export function FlowCanvas({
           message,
           confirmLabel: target === null ? 'Take it out' : 'Move',
           tone: CONTAINER_EDIT_TONE,
+          ...(restoreFocus === undefined ? {} : { restoreFocus }),
         }))
       ) {
         return;
@@ -2485,11 +2504,18 @@ export function FlowCanvas({
           disabledReason={commandDisabledReason}
           moves={menuMoves}
           onMove={(target) => {
-            const ids = store
-              .getState()
-              .selected.filter((sel) => sel.kind === 'node')
-              .map((sel) => sel.id);
-            void moveIntoContainer(ids, target);
+            const ids = selectedNodeIds(store.getState());
+            /* The menu item that asked is gone once the dialog closes, so focus
+               goes back to the activity the menu acted on, as Fluent's own
+               restore does when no dialog is asked. */
+            const first = ids[0];
+            void moveIntoContainer(ids, target, () =>
+              first === undefined
+                ? null
+                : document.querySelector<HTMLElement>(
+                    `.react-flow__node[data-id="${CSS.escape(first)}"]`,
+                  ),
+            );
           }}
         />
       )}

@@ -25,8 +25,8 @@ export interface CanvasMenuRequest {
 /**
  * #1597 — where the selection can go: every container but the one already
  * holding all of it (`into`), and the name of the one it can leave
- * (`removeFrom`: a container's name, `containers` when the selection spans
- * several, `null` when none of it is in one).
+ * (`removeFrom`: a container's name, "their containers" when the selection
+ * spans several, `null` when none of it is in one).
  */
 export interface CanvasMenuMoves {
   readonly into: readonly { id: string; label: string }[];
@@ -143,7 +143,7 @@ export function CanvasContextMenu({
                 <MenuPopover>
                   <MenuList aria-label="Move into">
                     {moves.into.map((c) => (
-                      <MenuItem key={c.id} onClick={() => onMove(c.id)}>
+                      <MenuItem key={c.id} disabled={disabled} onClick={() => onMove(c.id)}>
                         {c.label}
                       </MenuItem>
                     ))}

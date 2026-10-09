@@ -1597,6 +1597,9 @@ describe('FlowCanvas context menu (#1477 OR29)', () => {
     await answer('Move');
     await waitFor(() => expect(childrenOf(store)).toEqual([['c_1', ['in_box', 'a', 'b']]]));
     await waitFor(() => expect(within(document.body).queryAllByRole('menuitem')).toEqual([]));
+    // The item that asked is gone, so focus goes back to the activity rather
+    // than dropping to the page — a keyboard author carries on from there.
+    await waitFor(() => expect(document.activeElement).toBe(node('a')));
     // ONE Undo takes the whole selection back out.
     store.getState().undo();
     expect(childrenOf(store)).toEqual([['c_1', ['in_box']]]);
