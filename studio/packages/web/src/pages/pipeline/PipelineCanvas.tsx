@@ -38,9 +38,6 @@ import { serverOnlyIssues, validationAnnouncement } from './validateDraft';
 import { useElementSize } from './useElementSize';
 import {
   CONTAINER_KIND_LABELS,
-  ContainerKindSchema,
-  ContainerSchema,
-  fieldLabelThrough,
   autoMapMapping,
   checkSinkCoverage,
   checkSourceDrift,
@@ -51,10 +48,8 @@ import {
   authorsCallBlob,
   type ActivePipelineVersion,
   type CallConfig,
-  type Container,
   type ConnectionKind,
   type ConnectionPublic,
-  type ContainerKind,
   type Dataset,
   type Edge,
   type Node,
@@ -105,9 +100,6 @@ import { ConnectionColumn } from './ConnectionColumn';
 import type { ConnectionColumnRequest } from './connectionColumnRequest';
 import { ActivityToolbox } from './ActivityToolbox';
 import {
-  assignContainerChild,
-  buildContainer,
-  containersWithNew,
   createCanvasStore,
   singleSelection,
   type Selection,
@@ -147,10 +139,7 @@ import {
 } from './configForm';
 import { nodeTypeTabs } from './activityTabs';
 import {
-  CONTAINER_EDIT_TONE,
-  containerEditQuestion,
   containerLabels,
-  withArticle,
   issuesBySubject,
   readableIssue,
   sameAttribution,
@@ -238,8 +227,6 @@ import { useShellUnsaved } from '../../shell/shellLabel';
 import { useUnsavedChangesGuard } from '../../lib/form/useUnsavedChangesGuard';
 import { leavesPath } from '../../lib/form/leavesPath';
 import { UnsavedChangesPrompt } from '../../lib/form/UnsavedChangesPrompt';
-import { FormSection } from '../../lib/form/FormSection';
-import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import { HelpDisclosure } from '../../lib/HelpDisclosure';
 import { RowMoreMenu } from '../../lib/RowMoreMenu';
 import { claimTicket, readPublishState, takeTicket, type ReadSequence } from './publishState';
@@ -3235,227 +3222,6 @@ function ConditionChoice({
   );
 }
 
-/**
- * U6d — the selected activity's container membership, and the gesture that
- * wraps an EXISTING activity in a new container (#1420 added the palette's
- * empty-box path beside it).
- *
- * Membership lives on the container (`children: string[]`), but disjointness
- * makes it a per-NODE fact, which is why one `<select>` on the node is the whole
- * control: picking a container joins it, picking `— none —` leaves, and "New
- * container" is the same act against a container that does not exist yet. There
- * is no multi-select to group N nodes at once (U21). Dragging a node INTO a
- * box joins it since #1420 (`FlowCanvas`'s drag-stop hit test); dragging one
- * OUT is still this select, because a derived box grows with its dragged child.
- *
- * THIS path creates a container around the SELECTED node, so a `loop`/`foreach`
- * made here is past its one-child rule the moment it exists. (The palette's
- * empty box, #1420, starts short of it — a save badge until filled.)
- */
-function ContainerSection({
-  store,
-  nodeId,
-}: {
-  store: ReturnType<typeof createCanvasStore>;
-  nodeId: string;
-}) {
-  const nodes = useStore(store, (s) => s.nodes);
-  const edges = useStore(store, (s) => s.edges);
-  const containers = useStore(store, (s) => s.containers);
-  // U16 — the WORKING params, not `loaded`'s. The container-edit consequence is
-  // computed against the doc as it stands on screen, so reading the opened
-  // version here would judge a container against a param contract the operator
-  // has already changed.
-  const params = useStore(store, (s) => s.params);
-  const variables = useStore(store, (s) => s.variables);
-  const globals = useStore(store, (s) => s.globals);
-
-  const [kind, setKind] = useState<ContainerKind>('stage');
-  const [exitWhen, setExitWhen] = useState('');
-  const [items, setItems] = useState('');
-  const [maxRounds, setMaxRounds] = useState('');
-  const [error, setError] = useState<string | null>(null);
-
-  const labels = containerLabels(containers);
-  const ownerId = containers.find((c) => c.children.includes(nodeId))?.id ?? '';
-  const [confirm, confirmDialog] = useConfirm();
-
-  /**
-   * Apply an edit once the operator has seen what it costs.
-   *
-   * ONE evaluation, at the moment of the click, against live state — the
-   * consequence is never stored, so it cannot go stale the way a frozen
-   * `role="alert"` does (`FlowCanvas` documents that failure). It asks through
-   * the shared `useConfirm` dialog (#1397), and only when there is something
-   * to ask: an edit that costs nothing applies on the click, synchronously.
-   */
-  async function withConfirmation(
-    nextContainers: Container[],
-    recovery: string,
-    question: string,
-    confirmLabel: string,
-    apply: () => void,
-  ): Promise<boolean> {
-    // The gate itself is `containerEditQuestion`, hoisted into `containerRules`
-    // when U23's config panel became its second call site. This wrapper is only
-    // the "and then apply it" half, which the two callers below share.
-    const message = containerEditQuestion(
-      { nodes, edges, containers, params, variables, globals },
-      nextContainers,
-      recovery,
-      question,
-    );
-    if (
-      message !== null &&
-      !(await confirm({ message, confirmLabel, tone: CONTAINER_EDIT_TONE }))
-    ) {
-      return false;
-    }
-    apply();
-    return true;
-  }
-
-  function changeOwner(value: string) {
-    const target = value === '' ? null : value;
-    setError(null);
-    void withConfirmation(
-      assignContainerChild(containers, nodeId, target),
-      'You can undo it by setting the activity back to — none —.',
-      target === null
-        ? 'Take this activity out of its container?'
-        : `Move this activity into ${labels.get(target) ?? 'the container'}?`,
-      target === null ? 'Take it out' : 'Move',
-      () => store.getState().setNodeContainer(nodeId, target),
-    );
-  }
-
-  async function create() {
-    const trimmedRounds = maxRounds.trim();
-    const built = buildContainer(kind, nodeId, {
-      ...(kind === 'loop' ? { exitWhen: exitWhen.trim() } : {}),
-      ...(kind === 'foreach' ? { items: items.trim() } : {}),
-      // An empty numeric input is ABSENT, not zero — `Number('')` is 0, which
-      // `ContainerSchema` rejects as non-positive and which no canvas check
-      // would have caught before the server's zod parse 400'd the save.
-      ...(kind === 'loop' && trimmedRounds !== '' ? { maxRounds: Number(trimmedRounds) } : {}),
-    });
-    if ('error' in built) {
-      setError(built.error);
-      return;
-    }
-    setError(null);
-    const applied = await withConfirmation(
-      containersWithNew(containers, built.container),
-      // NOT "set it back to — none —": emptying a freshly-made loop leaves a
-      // worse doc than the one being escaped (see `consequenceMessage`).
-      'You can undo it with the ✕ on the container box.',
-      `Create ${withArticle(CONTAINER_KIND_LABELS[kind])} container around this activity?`,
-      'Create container',
-      () => store.getState().createContainer(built.container),
-    );
-    if (applied) {
-      setExitWhen('');
-      setItems('');
-      setMaxRounds('');
-    }
-  }
-
-  // A loop with no exit condition and a foreach with no items are docs
-  // `validateDoc` refuses outright, so the form cannot offer to author one.
-  const canCreate =
-    kind === 'loop' ? exitWhen.trim() !== '' : kind === 'foreach' ? items.trim() !== '' : true;
-
-  // #1396 / #1477 — the Container section: on the landing tab of an activity's
-  // panel, and on a call node's Settings tab. The section's body is already the flex column these controls want, so no
-  // wrapper of their own is needed.
-  return (
-    <FormSection title="Container" hint={FORM_SECTION_HINTS.node.container}>
-      {confirmDialog}
-      {/* The visible label matches the select's name, so a voice command that
-          reads the label reaches the control (WCAG 2.5.3). */}
-      <LabelledControl label="Container membership">
-        {(id) => (
-          <select
-            id={id}
-            value={ownerId}
-            aria-label="Container membership"
-            onChange={(e) => changeOwner(e.target.value)}
-          >
-            <option value="">— none —</option>
-            {containers.map((c) => (
-              <option key={c.id} value={c.id}>
-                {labels.get(c.id)}
-              </option>
-            ))}
-          </select>
-        )}
-      </LabelledControl>
-      <fieldset className="container-create">
-        <legend>New container</legend>
-        <LabelledControl label="Kind">
-          {(id) => (
-            <select
-              id={id}
-              value={kind}
-              aria-label="New container kind"
-              onChange={(e) => {
-                const parsed = ContainerKindSchema.safeParse(e.target.value);
-                if (parsed.success) setKind(parsed.data);
-              }}
-            >
-              {ContainerKindSchema.options.map((k) => (
-                <option key={k} value={k}>
-                  {CONTAINER_KIND_LABELS[k]}
-                </option>
-              ))}
-            </select>
-          )}
-        </LabelledControl>
-        {kind === 'loop' && (
-          <>
-            <label>
-              {containerSettingTitle('exitWhen')}
-              <input
-                value={exitWhen}
-                spellCheck={false}
-                placeholder="${equals(nodes.x.output.status, 200)}"
-                onChange={(e) => setExitWhen(e.target.value)}
-              />
-            </label>
-            <label>
-              {containerSettingTitle('maxRounds')}
-              <input
-                value={maxRounds}
-                inputMode="numeric"
-                onChange={(e) => setMaxRounds(e.target.value)}
-              />
-            </label>
-          </>
-        )}
-        {kind === 'foreach' && (
-          <label>
-            {containerSettingTitle('items')}
-            <input
-              value={items}
-              spellCheck={false}
-              placeholder="${run.params.rows}"
-              onChange={(e) => setItems(e.target.value)}
-            />
-          </label>
-        )}
-        <button type="button" disabled={!canCreate} onClick={() => void create()}>
-          Create container
-        </button>
-      </fieldset>
-      {error !== null && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-    </FormSection>
-  );
-}
-
 /** A copy of `config` without the `outputs` key — see `NodePanel` for why neither editor holds it. */
 function withoutOutputs(config: Record<string, unknown>): Record<string, unknown> {
   const rest = { ...config };
@@ -3534,14 +3300,6 @@ function DatasetOverrides({
 }
 
 /**
- * #1396 — a container setting's title, from `ContainerSchema`, so the New
- * container fieldset and the container panel cannot name one setting twice.
- */
-function containerSettingTitle(key: 'exitWhen' | 'maxRounds' | 'items'): string {
-  return fieldLabelThrough(ContainerSchema.shape[key])?.title ?? key;
-}
-
-/**
  * Editor for one activity node.
  *
  * Settings are authored through a FORM derived from the activity's own
@@ -3563,7 +3321,8 @@ function containerSettingTitle(key: 'exitWhen' | 'maxRounds' | 'items'): string 
  * `assembleConfig`'s general rule, which `legacyExtra` in the tests exercises.
  *
  * The connection dropdown is filtered to the kinds this activity accepts.
- * Container membership (U6d) is `ContainerSection` above.
+ * Container membership is not here (#1597): it is a canvas fact, authored by
+ * dragging into a box or through the canvas context menu's Move into ▸.
  */
 export function NodePanel({
   store,
@@ -4204,9 +3963,7 @@ export function NodePanel({
   /**
    * A type tab's body: its bindings, then its fields. In JSON mode the WHOLE
    * config is one document, so it is shown on the tab the author is on — and
-   * only there, so one textarea is ever mounted. Container membership closes
-   * the LANDING tab: it is also where a container is CREATED (U6d), which must
-   * not hide behind a second tab.
+   * only there, so one textarea is ever mounted.
    */
   function typeTabContent(t: (typeof typeTabs)[number]) {
     // On General (no config of its own) the JSON sits on the landing tab, so a
@@ -4342,7 +4099,6 @@ export function NodePanel({
             }
           />
         )}
-        {t.key === landing && <ContainerSection store={store} nodeId={nodeId} />}
       </>
     );
   }
@@ -4447,9 +4203,6 @@ export function NodePanel({
                   {/* `CallPanel` heads its own parts ("Call target", "Parameters")
                       and applies them itself ("Apply call"), so the header has no Apply, Revert or JSON toggle here, only its ⋯. */}
                   <CallPanel store={store} nodeId={nodeId} call={call} picker={picker} />
-                  {/* Membership is orthogonal to the call blob: a container is
-                      exactly the construct that puts a call node in one. */}
-                  <ContainerSection store={store} nodeId={nodeId} />
                 </>
               ),
             },

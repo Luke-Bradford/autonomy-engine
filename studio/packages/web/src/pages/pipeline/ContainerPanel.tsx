@@ -349,9 +349,9 @@ export function ContainerPanel({
 
   return (
     /* An `<aside className="property-panel">`, like every other top-level panel
-       (`NodePanel`, `EdgePanel`, `PipelinePanel`) — NOT the bare fragment
-       `ContainerSection` returns. That fragment is right for a section NESTED
-       inside a panel, whose comment says so; copied to a TOP-LEVEL panel the
+       (`NodePanel`, `EdgePanel`, `PipelinePanel`) — NOT the bare fragment a
+       section NESTED inside a panel returns (the old `ContainerSection`, #1597
+       removed it); copied to a TOP-LEVEL panel the
        premise is false, and the children would land as separate items of
        `.canvas-grid` instead of inside the panel card. Everything scoped to
        `.property-panel` — the card itself, the label/control flex column, the

@@ -341,7 +341,8 @@ export function containersWithNew(containers: Container[], container: Container)
 }
 
 /**
- * Build the container a "New container" form describes, or say why it cannot.
+ * Build a container of `kind` — empty (the palette's box) or round one node —
+ * or say why it cannot.
  *
  * The zod parse is the load-bearing half, and it is NOT redundant with the
  * canvas's validation badge. `validatePipelineDoc` runs no schema parse, and the

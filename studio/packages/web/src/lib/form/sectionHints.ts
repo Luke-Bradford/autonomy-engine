@@ -40,7 +40,6 @@ export const FORM_SECTION_HINTS = {
     parameters: "The values this trigger passes to the pipeline's parameters for each run.",
   },
   node: {
-    container: 'Which container this activity runs inside, if any, or a new one to put it in.',
     runPolicy:
       'How this activity retries a transient failure, and what of it is kept out of the run log.',
   },

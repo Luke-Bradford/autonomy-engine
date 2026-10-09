@@ -808,7 +808,9 @@ export function consequenceMessage(
  * short-circuit at the call site — an edit with nothing to confirm applies at
  * once, without waiting a microtask for a dialog that never opens.
  *
- * Hoisted out of `ContainerSection` (U6d) when U23 added the second call site.
+ * Hoisted out of U6d's node-panel Container section when U23 added the second
+ * call site; that section is gone (#1597), and the drag and the canvas context
+ * menu now share one caller in `FlowCanvas` (`moveIntoContainer`).
  * A copy would have been the cheaper edit and the wrong one: this gate decides
  * whether an edit that makes the pipeline UNSAVABLE goes through, and two
  * copies of that decision can drift into disagreeing about what counts — the
@@ -838,7 +840,7 @@ export function containerEditQuestion(
 
 /**
  * How a container-edit confirmation's action button is drawn. The LABEL is the
- * caller's, because it names the act ("Move", "Create container"). Nothing is
+ * caller's, because it names the act ("Move", "Take it out"). Nothing is
  * destroyed and Undo takes it back, so not the danger colour
  * (`ConfirmRequest.tone`).
  */
