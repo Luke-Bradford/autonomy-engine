@@ -171,9 +171,10 @@ test.describe('U7 — per-activity node config form', () => {
     await expect(request.getByRole('group', { name: 'Container' })).toHaveCount(0);
 
     // One read of every computed value, on General: Run policy is the tab's only
-    // form section, ruled off on its heading because the fields precede it, and
-    // its body keeps the panel's own gap. (It was read on Request while the
-    // Container section closed that tab, #1597.)
+    // form section, drawn without a box, and its body keeps the panel's own gap.
+    // It OPENS the tab, so no rule is drawn above its heading (the rule is for a
+    // section that follows fields; the Container section closing Request was the
+    // one such section in a node panel until #1597 removed it).
     await tabs.getByRole('tab', { name: 'General' }).click();
     const layout = await properties(page).evaluate((panel) => {
       const sections = [
@@ -183,27 +184,16 @@ test.describe('U7 — per-activity node config form', () => {
       ];
       return {
         panelGap: getComputedStyle(panel).rowGap,
-        sections: sections.map((el) => {
-          const legend = el.querySelector<HTMLElement>(':scope > legend')!;
-          return {
-            title: legend.textContent,
-            fieldsetBorder: getComputedStyle(el).borderTopWidth,
-            ruled: getComputedStyle(legend).borderTopWidth,
-            ruleSpansSection:
-              Math.abs(legend.getBoundingClientRect().width - el.getBoundingClientRect().width) < 1,
-            gap: getComputedStyle(el.querySelector('.form-section-body')!).rowGap,
-          };
-        }),
+        sections: sections.map((el) => ({
+          title: el.querySelector<HTMLElement>(':scope > legend')!.textContent,
+          fieldsetBorder: getComputedStyle(el).borderTopWidth,
+          ruled: getComputedStyle(el.querySelector<HTMLElement>(':scope > legend')!).borderTopWidth,
+          gap: getComputedStyle(el.querySelector('.form-section-body')!).rowGap,
+        })),
       };
     });
     expect(layout.sections).toEqual([
-      {
-        title: 'Run policy',
-        fieldsetBorder: '0px',
-        ruled: '1px',
-        ruleSpansSection: true,
-        gap: layout.panelGap,
-      },
+      { title: 'Run policy', fieldsetBorder: '0px', ruled: '0px', gap: layout.panelGap },
     ]);
 
     await tabs.getByRole('tab', { name: 'Auth' }).click();

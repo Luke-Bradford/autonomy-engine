@@ -174,8 +174,11 @@ test.describe('#1597 — container membership from the canvas context menu', () 
     expect((await validationIssues(page)).join('\n')).toContain('crosses a container boundary');
     await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
 
-    // The way back out, from the same menu.
-    await captureConfirm(page, () => removeFrom(page, 'b', 'Stage 1'));
+    // The way back out, from the same menu. It makes the doc valid again and
+    // changes no routing an explicit edge does not already fix, so it is not asked.
+    await removeFrom(page, 'b', 'Stage 1');
+    await expectNoConfirm(page);
+    await expectHolds(page, 'Stage 1', 1);
     expect(await validationIssues(page)).toEqual([]);
     await expect(page.getByRole('button', { name: 'Save version' })).toBeEnabled();
 
