@@ -60,7 +60,10 @@ describe('runCanvasCommand (#1477)', () => {
     const store = seeded();
     store.getState().select({ kind: 'node', id: 'b' });
     const before = store.getState().past.length;
-    expect(runCanvasCommand(store, 'pl_1', 'cut')).toEqual({ taken: true, notice: 'Cut 1 activity.' });
+    expect(runCanvasCommand(store, 'pl_1', 'cut')).toEqual({
+      taken: true,
+      notice: 'Cut 1 activity.',
+    });
     expect(store.getState().nodes.map((n) => n.id)).toEqual(['a', 'in_box']);
     expect(store.getState().edges).toEqual([]);
     expect(store.getState().past.length).toBe(before + 1);
@@ -104,7 +107,10 @@ describe('runCanvasCommand (#1477)', () => {
   it('copies and duplicates a container by its label', () => {
     const store = seeded();
     store.getState().select({ kind: 'container', id: 'c_1' });
-    expect(runCanvasCommand(store, 'pl_1', 'copy')).toEqual({ taken: true, notice: 'Copied Stage 1.' });
+    expect(runCanvasCommand(store, 'pl_1', 'copy')).toEqual({
+      taken: true,
+      notice: 'Copied Stage 1.',
+    });
     expect(runCanvasCommand(store, 'pl_1', 'duplicate')).toEqual({
       taken: true,
       notice: 'Duplicated Stage 1.',
