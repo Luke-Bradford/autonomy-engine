@@ -36,6 +36,7 @@ import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 import { When } from '../lib/When';
 import { PageHeader } from '../lib/PageHeader';
+import { LabelledControl } from '../lib/LabelledControl';
 
 /** `id === null` means creating; otherwise this form REPLACES that secret's
  *  value (#1061). The `id: string | null` discriminator is the shape
@@ -431,28 +432,34 @@ function SecretForm({
       }
     >
       <Section heading="Basics" help={FORM_SECTION_HINTS.secret.basics}>
-        <label>
-          <span>
-            Name
-            {/* A name that cannot change asks nothing of the operator. */}
-            {!replacing && <RequiredMark />}
-          </span>
-          <input
-            type="text"
-            value={form.name}
-            onChange={(e) => onChange({ ...form, name: e.target.value })}
-            placeholder="the name a node references, e.g. stripe-key"
-            // Read-only rather than absent when replacing: the operator needs to
-            // see WHICH secret is about to change, and the name genuinely cannot
-            // move (the route 400s a rename), so an editable field would only
-            // offer an error. Read-only, not disabled — a disabled input is
-            // skipped by keyboard navigation and by some screen readers, and
-            // this one is information worth reaching.
-            readOnly={replacing}
-            required
-            {...validation.attrsFor('name', nameErrorId)}
-          />
-        </label>
+        <LabelledControl
+          label={
+            <>
+              Name
+              {/* A name that cannot change asks nothing of the operator. */}
+              {!replacing && <RequiredMark />}
+            </>
+          }
+        >
+          {(id) => (
+            <input
+              id={id}
+              type="text"
+              value={form.name}
+              onChange={(e) => onChange({ ...form, name: e.target.value })}
+              placeholder="the name a node references, e.g. stripe-key"
+              // Read-only rather than absent when replacing: the operator needs to
+              // see WHICH secret is about to change, and the name genuinely cannot
+              // move (the route 400s a rename), so an editable field would only
+              // offer an error. Read-only, not disabled — a disabled input is
+              // skipped by keyboard navigation and by some screen readers, and
+              // this one is information worth reaching.
+              readOnly={replacing}
+              required
+              {...validation.attrsFor('name', nameErrorId)}
+            />
+          )}
+        </LabelledControl>
         <FieldError id={nameErrorId} message={validation.errorFor('name')} />
       </Section>
 

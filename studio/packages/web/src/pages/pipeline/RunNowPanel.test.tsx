@@ -48,7 +48,14 @@ describe('RunNowPanel (#1395 OR4)', () => {
     expect(screen.getByLabelText('city')).toHaveValue('Leeds');
     expect(screen.getByLabelText('count')).toHaveValue('');
     // #1396: the hint names the type as every type picker does.
-    expect(screen.getByText(/^Number · required/)).toBeInTheDocument();
+    expect(screen.getByText(/^Number$/)).toBeInTheDocument();
+    // #1594 OR40 S3c: required is the label's `*`, and the control says so.
+    expect(screen.getByLabelText('count')).toHaveAttribute('aria-required', 'true');
+    expect(screen.getByLabelText('city')).not.toHaveAttribute('aria-required');
+    const markOf = (name: string) =>
+      screen.getByText(name, { selector: 'label' }).querySelector('.required-mark');
+    expect(markOf('count')).not.toBeNull();
+    expect(markOf('city')).toBeNull();
   });
 
   it('sends typed values for exactly that version, then hands up the new run', async () => {
@@ -100,6 +107,21 @@ describe('RunNowPanel (#1395 OR4)', () => {
   it('says nothing about unsaved edits when there are none', () => {
     panel();
     expect(screen.queryByText(/unsaved edits/)).toBeNull();
+  });
+
+  it('marks a required boolean choice and json text area aria-required too (#1594 S3c)', () => {
+    const typed = {
+      ...version,
+      params: [
+        { name: 'dry', type: 'boolean', required: true },
+        { name: 'opts', type: 'json', required: true },
+        { name: 'note', type: 'json', required: false },
+      ],
+    } as unknown as PipelineVersion;
+    panel(vi.fn(), vi.fn(), typed);
+    expect(screen.getByLabelText('dry')).toHaveAttribute('aria-required', 'true');
+    expect(screen.getByLabelText('opts')).toHaveAttribute('aria-required', 'true');
+    expect(screen.getByLabelText('note')).not.toHaveAttribute('aria-required');
   });
 
   it('offers a boolean as a choice and json as a text area, and sends them typed', async () => {

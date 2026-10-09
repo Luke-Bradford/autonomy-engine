@@ -181,9 +181,11 @@ test.describe('#844 GL2 the global-params store has a front end', () => {
 
     for (const theme of ['light', 'dark'] as const) {
       await setTheme(page, theme);
-      // Stacked label-over-control, as on the other Manage forms.
-      const valueLabel = '.form-drawer label:has(> input[placeholder="empty text is a value"])';
-      expect(await computedStyleOf(page, valueLabel, 'flex-direction')).toBe('column');
+      // #1594 OR40 S3c — label-left, as on every form wide enough
+      // (`field-grid.spec.ts`).
+      const valueRow =
+        '.form-drawer .labelled-control:has(> input[placeholder="empty text is a value"])';
+      expect(await computedStyleOf(page, valueRow, 'display')).toBe('grid');
       const input = '.form-drawer input[placeholder="empty text is a value"]';
       const text = await computedStyleOf(page, input, 'color');
       const surface = await surfaceBehind(page, input);

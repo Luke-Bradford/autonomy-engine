@@ -846,19 +846,25 @@ function DatasetForm({
       }
     >
       <Section heading="Basics" help={FORM_SECTION_HINTS.dataset.basics}>
-        <label>
-          <span>
-            Name
-            <RequiredMark />
-          </span>
-          <input
-            type="text"
-            value={form.name}
-            onChange={(e) => onChange({ ...form, name: e.target.value })}
-            required
-            {...validation.attrsFor('name', nameErrorId)}
-          />
-        </label>
+        <LabelledControl
+          label={
+            <>
+              Name
+              <RequiredMark />
+            </>
+          }
+        >
+          {(id) => (
+            <input
+              id={id}
+              type="text"
+              value={form.name}
+              onChange={(e) => onChange({ ...form, name: e.target.value })}
+              required
+              {...validation.attrsFor('name', nameErrorId)}
+            />
+          )}
+        </LabelledControl>
         <FieldError id={nameErrorId} message={validation.errorFor('name')} />
 
         <LabelledControl

@@ -4,8 +4,9 @@ import { nodeById, openSeededCanvas } from './support/seedDoc';
 import { properties } from './support/panels';
 
 /**
- * #1477 OR29 slice 3 — in the property dock, at compact density, a field's
- * label sits LEFT of its control once the tab is at least 576px wide, short
+ * #1477 OR29 slice 3 — in the property dock a field's label sits LEFT of its
+ * control once the tab is at least 400px wide (in both densities since #1594
+ * OR40 S3c, `field-grid.spec.ts`); from 580px short
  * fields (choices, numbers, checkboxes) pack two or three to a row in their
  * schema order, and every control is sized by its type rather than stretched.
  * Measured at the operator's 1440×900.
@@ -75,7 +76,7 @@ test('a wide dock puts labels left and packs short fields into a row, in order',
   const model = await geometryOf(tab.getByRole('textbox', { name: 'Model for this step' }));
 
   // At 1440 the bottom dock shares its width with Problems: two to a row.
-  expect(tokens.tabWidth).toBeGreaterThanOrEqual(576);
+  expect(tokens.tabWidth).toBeGreaterThanOrEqual(580);
   expect(tokens.tabWidth).toBeLessThan(900);
   // Two numbers on a row in schema order, the third starting the next.
   expect(Math.abs(temperature.control.top - tokens.control.top)).toBeLessThanOrEqual(1);
@@ -126,7 +127,7 @@ test('every select is as wide as its longest option, not the row', async ({ page
   await expectQuiet(page, problems);
 });
 
-test('a narrow dock, or comfortable density, keeps the label over its control', async ({
+test('a narrow dock keeps the label over its control; comfortable density puts it left too', async ({
   page,
 }) => {
   const problems = collectPageProblems(page);
@@ -134,19 +135,18 @@ test('a narrow dock, or comfortable density, keeps the label over its control', 
   await page.getByRole('button', { name: 'Dock to right' }).click();
   await expect
     .poll(() => modelTab(page).evaluate((el) => el.getBoundingClientRect().width))
-    .toBeLessThan(576);
+    .toBeLessThan(400);
   const narrow = await geometryOf(
     modelTab(page).getByRole('textbox', { name: 'Max output tokens' }),
   );
-  expect(narrow.tabWidth).toBeLessThan(576);
+  expect(narrow.tabWidth).toBeLessThan(400);
   expect(narrow.label.bottom).toBeLessThanOrEqual(narrow.control.top);
   await page.getByRole('button', { name: 'Dock to bottom' }).click();
 
-  // Wide enough that the tab clears 576px with room to spare, so the label
-  // staying over its control below is the density's doing and not the width's.
-  // (#1594 OR40 S3 gave the editor the one 16px content frame, and at 1440 a
-  // comfortable tab now measures 573px.)
-  await page.setViewportSize({ width: 1600, height: 900 });
+  // #1594 OR40 S3c — comfortable density changes sizes, not the layout: a tab
+  // past 400px puts the label left, a 150px column and 12px before the
+  // control. (At 1440 a comfortable tab measures 573px, under the 580px
+  // packing threshold, so the number stands alone on its row.)
   await page.getByRole('link', { name: 'Settings' }).click();
   await page.getByRole('combobox', { name: 'Density', exact: true }).selectOption('comfortable');
   await page.goBack();
@@ -155,8 +155,9 @@ test('a narrow dock, or comfortable density, keeps the label over its control', 
   const comfortable = await geometryOf(
     modelTab(page).getByRole('textbox', { name: 'Max output tokens' }),
   );
-  expect(comfortable.tabWidth).toBeGreaterThanOrEqual(576);
-  expect(comfortable.label.bottom).toBeLessThanOrEqual(comfortable.control.top);
+  expect(comfortable.tabWidth).toBeGreaterThanOrEqual(400);
+  expect(comfortable.label.right).toBeLessThanOrEqual(comfortable.control.left);
+  expect(comfortable.control.left - comfortable.label.left).toBeCloseTo(162, 0);
   await expectQuiet(page, problems);
 });
 
@@ -174,7 +175,7 @@ test('the General tab packs its two numbers onto one row, and its two flags onto
   const secureIn = await geometryOf(general.getByRole('checkbox', { name: 'Secure input' }));
   const secureOut = await geometryOf(general.getByRole('checkbox', { name: 'Secure output' }));
 
-  expect(retries.tabWidth).toBeGreaterThanOrEqual(576);
+  expect(retries.tabWidth).toBeGreaterThanOrEqual(580);
   expect(Math.abs(interval.control.top - retries.control.top)).toBeLessThanOrEqual(1);
   expect(retries.cell.right).toBeLessThan(interval.cell.left);
   expect(Math.abs(secureOut.control.top - secureIn.control.top)).toBeLessThanOrEqual(1);
@@ -206,7 +207,7 @@ test('a ForEach container shows Items · Concurrency · Settings tabs, and packs
   const unordered = await geometryOf(
     tab.getByRole('checkbox', { name: 'Allow unordered variable writes' }),
   );
-  expect(batch.tabWidth).toBeGreaterThanOrEqual(576);
+  expect(batch.tabWidth).toBeGreaterThanOrEqual(580);
   expect(batch.label.right).toBeLessThanOrEqual(batch.control.left);
   expect(batch.cell.right).toBeLessThan(unordered.cell.left);
   expect(Math.abs(unordered.cell.top - batch.cell.top)).toBeLessThanOrEqual(1);

@@ -503,28 +503,46 @@ replaced `FormSection` (a drawer's `fieldset` and `legend`), `DockSection` (the 
 
 `e2e/section.spec.ts` measures a drawer, the dock and a page at 1440x900 in both densities.
 
-## Width, and why a drawer has no two-column grid
+## The form layout (#1594 OR40 S3c)
 
-#1396 first asked for a two-column grid on wide screens, single column on narrow ones, with a maximum
-field width. Since then the drawer has settled the layout, and a grid would have nothing to fill.
+Every form takes one layout: the property dock, every drawer, and a page's form (Settings' appearance,
+the Manage import panel). It started as the dock's own (#1477 OR29) and is now one rule set in
+`index.css` (`@container field-form`), in both densities. Comfortable changes sizes (type, control and
+row heights), not the layout.
 
-- **The form is a column at every width.** Beside the list, the drawer is 340–460px wide
-  (`--drawer-width`). Two columns there would make controls about 200px wide, which is too narrow for
-  a URL, a JSON box or a time zone. The node property panel is a narrow side column too.
-- **The maximum field width holds when stacked too.** Under 960px the drawer stacks below the list
-  and takes the content column's width. With the nav beside it, Playwright measured 543px in a
-  900px window, so it is about 600px at most at the breakpoint. No form runs full-bleed, and no cap
-  is needed. (A 40rem cap was tried and dropped, because it could never apply.)
+- **Labels sit left once the form is at least 400px wide.** Each field of a form's own sections is a
+  row: the label in a 150px column (`--form-label-column`), 12px, then the control, its hint and its
+  error. A one-line label is centred on its control; a long one wraps inside its column. Narrower, the
+  label sits over its control, 4px above it.
+- **One row markup.** Every field row is a `LabelledControl` (`lib/LabelledControl.tsx`), inputs
+  included, so the layout has one shape to place. `SecretInput` is one too: its input and Show sit
+  together in the control column. A checkbox stays a wrapping label (box, 8px, words) and sits in the
+  control column, as do a sibling hint and a `FieldError`. A row table's cells, a param-override row
+  and a dock fieldset of choices are not rows: they are too narrow for a label column, or their legend
+  is their label. The trigger form's builders (recurrence, window, binding) are fieldsets of fields,
+  so their fields are rows.
+- **Rows are 8px apart**, and required is the `*` after the label (`RequiredMark`), never a word in
+  the hint.
+- **The threshold is measured on the form's context, not the window.** The context is the dock tab,
+  a drawer's body (`.form-drawer-body`) or a `.field-form`.
+  - **Dock:** it shares its width with the Problems column. At 1440 wide the bottom dock is 935px, but
+    its tab is 589px. The tab is 429px at 1280 wide, 1069px at 1920, and 302–463px when docked right.
+  - **Drawer:** beside its list the drawer is 340–460px (`--drawer-width`), which is 460px from about a
+    960px window up, so its body is 418px and label-left. Under 960px it stacks below the list at the
+    content column's width, which a 700px window takes under 400px. The editor's trigger and
+    connection columns are narrower (361px at 1440), so their forms keep the label over the control.
+- **Controls are sized by type at every width**, on every form. A select is as wide as its longest
+  option, capped at 320px. A number (`.number-input`, or an `<input type="number">` row) is 120px. Only
+  free text grows. The run drawer (`.node-detail-panel`) shares the dock and is not a form, so none of
+  this applies to it.
 
-A form wider than the drawer, such as a full-page editor, should revisit this rather than inherit
-it.
+**A drawer has no two-column grid.** #1396 first asked for one on wide screens. At 460px two columns
+would make controls about 100px wide beside their labels, too narrow for a URL, a JSON box or a time
+zone. No form runs full-bleed: a drawer stacked below its list is about 600px at most at the
+breakpoint, so no cap is needed. (A 40rem cap was tried and dropped, because it could never apply.)
 
-**The property dock is that exception (#1477 OR29).** At compact density, once a tab is at least
-576px wide:
+**The dock also packs short fields (#1477 OR29)**, once a tab is at least 580px wide:
 
-- **Labels sit left.** Each field of a tab's own sections is a row: the label in a 150px column, then
-  the control, its hint and its error. A row table's cells (below) and a param-override row's do
-  not, because they are too narrow for a label column.
 - **Short fields pack.** A number, a checkbox, or a choice whose options are all short (16
   characters or fewer, so they are not clipped) packs two to a row, or three once the tab
   is 900px wide. Everything else spans the row: free text, paths, expressions, JSON, row lists and
@@ -533,20 +551,18 @@ it.
   are the markup, used by `ConfigEditor`, the container panel and the General tab's policy (numbers
   in one grid, flags in the next, so neither leaves one alone on a row). A cell is
   `display: contents` everywhere else, so the wrapper changes no resource form; a grid given
-  `field-stack` keeps a field's gap when it is not packed. A number field is now `label[for]`
+  `field-stack` keeps a field's gap when it is not packed. A number field is `label[for]`
   beside its input, like every other kind, rather than a label wrapping it, so its hint sits inside
   the `.config-field` it belongs to.
-- **The threshold is measured on the tab's width, not the dock's.** The dock shares its width with
-  the Problems column. At 1440 wide the bottom dock is 935px, but its tab is 589px. The tab is 429px
-  at 1280 wide, 1069px at 1920, and 302–463px when docked right, so a right-hand dock always stacks.
-  The operator's "dock at least 720px wide" in #1477 is this 576px tab: two cells of a 150px label and
-  a 120px number, plus the gaps, need 572px.
-- **Controls are sized by type at every width.** A select is as wide as its longest option, capped at
-  320px. A number (`.number-input`, on both `ConfigFieldControl` and `DraftNumberField`) is 120px.
-  Only free text grows. The 56rem readability cap is lifted for the grid alone. The run drawer
-  (`.node-detail-panel`) shares the dock and is not a form, so none of this applies to it.
+- **Why 580px.** Two cells of a 150px label, a 12px gap and a 120px number, beside a 16px gutter,
+  need 2 × 282 + 16 = 580px. The operator's "dock at least 720px wide" in #1477 is this tab width.
+  The 56rem readability cap is lifted for the grid alone.
 
-Comfortable density matches none of these rules and keeps the stacked column.
+`e2e/field-grid.spec.ts` measures a drawer, a builder fieldset, Settings and the import panel at
+1440x900 in both densities; `e2e/property-dock-grid.spec.ts` measures the dock.
+
+**Still to come:** a field's prose hint moves behind a `?` beside its label (the next #1594 slice);
+the editor's Run popover and the Git page's forms join in S6's page sweep.
 
 **Authored rows are tables (#1477 OR29).** Params, variables, outputs, annotations and every row
 list (a Copy mapping, HTTP headers, LLM messages, an output schema) render through `RowTable`

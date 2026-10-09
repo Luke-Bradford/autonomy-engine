@@ -25,6 +25,7 @@ import { LabelledControl } from '../../lib/LabelledControl';
 import { JsonEditor } from '../../lib/form/JsonEditor';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import { Section } from '../../lib/Section';
+import { RequiredMark } from '../../lib/form/RequiredMark';
 
 /**
  * #425 — the call-node editor: the authoring surface for `Node.call`.
@@ -425,13 +426,15 @@ function CallEditor({
                       picker={picker}
                       pickerName={`parameter ${name}`}
                       target={paramPosition(name, decl)}
+                      required={decl?.required === true}
                     >
-                      {name}
+                      {/* One item, so the `*` stays on the name's line. */}
+                      <span>
+                        {name}
+                        {decl?.required === true && <RequiredMark />}
+                      </span>
                       {decl ? (
-                        <span className="page-hint">
-                          {VALUE_TYPE_TITLES[decl.type]}
-                          {decl.required ? ' · required' : ''}
-                        </span>
+                        <span className="page-hint">{VALUE_TYPE_TITLES[decl.type]}</span>
                       ) : (
                         <span className="page-hint">
                           not declared by this version — will be sent anyway

@@ -496,21 +496,27 @@ function GlobalParamForm({
             control is skipped by keyboard navigation and by some screen
             readers, and which global this is remains worth reaching. A
             `<select>` has no read-only state, so a stored Type is an input. */}
-        <label>
-          <span>
-            Name
-            {!editing && <RequiredMark />}
-          </span>
-          <input
-            type="text"
-            value={form.name}
-            onChange={(e) => onChange({ ...form, name: e.target.value })}
-            placeholder="read as ${global.<name>}"
-            readOnly={editing}
-            required
-            {...checkedBy('name')}
-          />
-        </label>
+        <LabelledControl
+          label={
+            <>
+              Name
+              {!editing && <RequiredMark />}
+            </>
+          }
+        >
+          {(id) => (
+            <input
+              id={id}
+              type="text"
+              value={form.name}
+              onChange={(e) => onChange({ ...form, name: e.target.value })}
+              placeholder="read as ${global.<name>}"
+              readOnly={editing}
+              required
+              {...checkedBy('name')}
+            />
+          )}
+        </LabelledControl>
         {/* No error line under a read-only field: it has nothing to fix. */}
         {!editing && errorLine('name')}
         <LabelledControl
@@ -561,28 +567,32 @@ function GlobalParamForm({
 
       <Section heading="Value" help={FORM_SECTION_HINTS.globalParam.value}>
         {/* Not `required`: empty text is a real value for a string global. */}
-        <label>
-          Value
-          <input
-            type="text"
-            value={form.valueText}
-            onChange={(e) => onChange({ ...form, valueText: e.target.value })}
-            placeholder={VALUE_PLACEHOLDER[form.type]}
-            spellCheck={false}
-            {...checkedBy('value')}
-          />
-        </label>
+        <LabelledControl label="Value">
+          {(id) => (
+            <input
+              id={id}
+              type="text"
+              value={form.valueText}
+              onChange={(e) => onChange({ ...form, valueText: e.target.value })}
+              placeholder={VALUE_PLACEHOLDER[form.type]}
+              spellCheck={false}
+              {...checkedBy('value')}
+            />
+          )}
+        </LabelledControl>
         {errorLine('value')}
         <p className="page-hint">Cleartext — never a credential.</p>
-        <label>
-          Description
-          <input
-            type="text"
-            value={form.description}
-            onChange={(e) => onChange({ ...form, description: e.target.value })}
-            {...checkedBy('description')}
-          />
-        </label>
+        <LabelledControl label="Description">
+          {(id) => (
+            <input
+              id={id}
+              type="text"
+              value={form.description}
+              onChange={(e) => onChange({ ...form, description: e.target.value })}
+              {...checkedBy('description')}
+            />
+          )}
+        </LabelledControl>
         {errorLine('description')}
       </Section>
     </FormDrawer>

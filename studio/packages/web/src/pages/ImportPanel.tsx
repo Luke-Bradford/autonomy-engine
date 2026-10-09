@@ -214,7 +214,7 @@ export function ImportPanel({
 
   return (
     <section
-      className={embedded ? 'import-panel' : 'connection-form'}
+      className={embedded ? 'import-panel field-form' : 'connection-form field-form'}
       aria-labelledby={embedded ? undefined : 'import-heading'}
     >
       {!embedded && (
@@ -255,23 +255,25 @@ export function ImportPanel({
           </p>
         </>
       )}
-      <label>
-        Export file
-        <input
-          ref={inputRef}
-          type="file"
-          accept="application/json,.json"
-          disabled={busy}
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            // Clear the input's value so picking the SAME file again re-fires
-            // `change` — importing one file twice is a legitimate act (it mints
-            // a second, independent resource) and must not silently do nothing.
-            e.target.value = '';
-            if (file) void onPick(file);
-          }}
-        />
-      </label>
+      <LabelledControl label="Export file">
+        {(id) => (
+          <input
+            id={id}
+            ref={inputRef}
+            type="file"
+            accept="application/json,.json"
+            disabled={busy}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              // Clear the input's value so picking the SAME file again re-fires
+              // `change` — importing one file twice is a legitimate act (it mints
+              // a second, independent resource) and must not silently do nothing.
+              e.target.value = '';
+              if (file) void onPick(file);
+            }}
+          />
+        )}
+      </LabelledControl>
       {busy && <p className="notice">Importing…</p>}
       {error && (
         <p className="error" role="alert">

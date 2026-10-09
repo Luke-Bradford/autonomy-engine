@@ -104,17 +104,19 @@ export function RecurrenceEditor({
         )}
       </LabelledControl>
 
-      <label>
-        {`Repeat every N ${PERIOD_NOUN[value.frequency]}`}
-        <input
-          type="number"
-          min={1}
-          max={MAX_RECURRENCE_INTERVAL}
-          value={value.interval}
-          {...f.attrs('interval')}
-          onChange={(e) => set({ interval: e.target.value })}
-        />
-      </label>
+      <LabelledControl label={`Repeat every N ${PERIOD_NOUN[value.frequency]}`}>
+        {(id) => (
+          <input
+            id={id}
+            type="number"
+            min={1}
+            max={MAX_RECURRENCE_INTERVAL}
+            value={value.interval}
+            {...f.attrs('interval')}
+            onChange={(e) => set({ interval: e.target.value })}
+          />
+        )}
+      </LabelledControl>
       <FieldError {...f.errorProps('interval')} />
 
       {honoured.includes('weekDays') && (
@@ -139,98 +141,126 @@ export function RecurrenceEditor({
 
       {honoured.includes('monthDays') && (
         <>
-          <label>
-            <span>
-              Days of month (1-31, comma-separated)
-              {required === 'monthDays' && <RequiredMark />}
-            </span>
-            <input
-              type="text"
-              value={value.monthDays}
-              aria-required={required === 'monthDays'}
-              {...f.attrs('schedule.monthDays')}
-              onChange={(e) => set({ monthDays: e.target.value })}
-              placeholder="1, 15"
-              spellCheck={false}
-            />
-          </label>
+          <LabelledControl
+            label={
+              <>
+                Days of month (1-31, comma-separated)
+                {required === 'monthDays' && <RequiredMark />}
+              </>
+            }
+          >
+            {(id) => (
+              <input
+                id={id}
+                type="text"
+                value={value.monthDays}
+                aria-required={required === 'monthDays'}
+                {...f.attrs('schedule.monthDays')}
+                onChange={(e) => set({ monthDays: e.target.value })}
+                placeholder="1, 15"
+                spellCheck={false}
+              />
+            )}
+          </LabelledControl>
           <FieldError {...f.errorProps('schedule.monthDays')} />
         </>
       )}
 
       {honoured.includes('hours') && (
         <>
-          <label>
-            Hours (0-23, comma-separated)
-            <input
-              type="text"
-              value={value.hours}
-              {...f.attrs('schedule.hours')}
-              onChange={(e) => set({ hours: e.target.value })}
-              placeholder="9"
-              spellCheck={false}
-            />
-          </label>
+          <LabelledControl label="Hours (0-23, comma-separated)">
+            {(id) => (
+              <input
+                id={id}
+                type="text"
+                value={value.hours}
+                {...f.attrs('schedule.hours')}
+                onChange={(e) => set({ hours: e.target.value })}
+                placeholder="9"
+                spellCheck={false}
+              />
+            )}
+          </LabelledControl>
           <FieldError {...f.errorProps('schedule.hours')} />
         </>
       )}
 
       {honoured.includes('minutes') && (
         <>
-          <label>
-            Minutes (0-59, comma-separated)
-            <input
-              type="text"
-              value={value.minutes}
-              {...f.attrs('schedule.minutes')}
-              onChange={(e) => set({ minutes: e.target.value })}
-              placeholder="0"
-              spellCheck={false}
-            />
-          </label>
+          <LabelledControl label="Minutes (0-59, comma-separated)">
+            {(id) => (
+              <input
+                id={id}
+                type="text"
+                value={value.minutes}
+                {...f.attrs('schedule.minutes')}
+                onChange={(e) => set({ minutes: e.target.value })}
+                placeholder="0"
+                spellCheck={false}
+              />
+            )}
+          </LabelledControl>
           <FieldError {...f.errorProps('schedule.minutes')} />
         </>
       )}
 
-      <label>
-        Time zone (IANA, blank = UTC)
-        <input
-          type="text"
-          value={value.timeZone}
-          {...f.attrs('timeZone')}
-          onChange={(e) => set({ timeZone: e.target.value })}
-          placeholder="Europe/London"
-          spellCheck={false}
-        />
-      </label>
+      <LabelledControl label="Time zone (IANA, blank = UTC)">
+        {(id) => (
+          <input
+            id={id}
+            type="text"
+            value={value.timeZone}
+            {...f.attrs('timeZone')}
+            onChange={(e) => set({ timeZone: e.target.value })}
+            placeholder="Europe/London"
+            spellCheck={false}
+          />
+        )}
+      </LabelledControl>
       <FieldError {...f.errorProps('timeZone')} />
 
       {/* `step={1}` admits seconds, so a stored bound that has them can be both
           shown and re-entered rather than silently rounded to the minute. */}
-      <label>
-        Start time
-        <BoundZoneNote zone={value.boundsZone} />
-        <input
-          type="datetime-local"
-          step={1}
-          value={value.startTime}
-          {...f.attrs('startTime')}
-          onChange={(e) => set({ startTime: e.target.value })}
-        />
-      </label>
+      <LabelledControl
+        label={
+          <>
+            Start time
+            <BoundZoneNote zone={value.boundsZone} />
+          </>
+        }
+      >
+        {(id) => (
+          <input
+            id={id}
+            type="datetime-local"
+            step={1}
+            value={value.startTime}
+            {...f.attrs('startTime')}
+            onChange={(e) => set({ startTime: e.target.value })}
+          />
+        )}
+      </LabelledControl>
       <FieldError {...f.errorProps('startTime')} />
 
-      <label>
-        End time
-        <BoundZoneNote zone={value.boundsZone} />
-        <input
-          type="datetime-local"
-          step={1}
-          value={value.endTime}
-          {...f.attrs('endTime')}
-          onChange={(e) => set({ endTime: e.target.value })}
-        />
-      </label>
+      <LabelledControl
+        label={
+          <>
+            End time
+            <BoundZoneNote zone={value.boundsZone} />
+          </>
+        }
+      >
+        {(id) => (
+          <input
+            id={id}
+            type="datetime-local"
+            step={1}
+            value={value.endTime}
+            {...f.attrs('endTime')}
+            onChange={(e) => set({ endTime: e.target.value })}
+          />
+        )}
+      </LabelledControl>
       <FieldError {...f.errorProps('endTime')} />
 
       {/* The bounds are absolute instants that the time zone above does NOT

@@ -13,7 +13,7 @@ import { openNewConnection } from './support/newConnection';
  * `getByLabel` resolved while a field was empty and silently stopped matching
  * once it held anything. The trigger form carries both control kinds, so it is
  * where the locator trap is pinned; the lint rule covers every other site. The
- * layout tests pin the three shapes the wrapper takes: a stacked form row, the
+ * layout tests pin the three shapes the wrapper takes: a form row, the
  * AI page's inline picker, and a config field's own tighter rhythm.
  */
 async function openNewTrigger(page: Page): Promise<string[]> {
@@ -47,41 +47,36 @@ test.describe('#1227 — a label names its control and nothing else', () => {
     await expectQuiet(page, problems);
   });
 
-  test('the wrapper keeps the layout the wrapping label had', async ({ page }) => {
+  test('every row of the drawer takes the one form layout', async ({ page }) => {
     const problems = await openNewTrigger(page);
     const form = triggerForm(page);
 
-    // The "Name" row is an `<input>`, which keeps its wrapping label — so it is
-    // the reference: a `.labelled-control` row must stack and space the same.
+    // #1594 OR40 S3c — the "Name" row was the last wrapping `<label>` here and
+    // is a `LabelledControl` too now, so the two rows are one shape: at 1440
+    // the drawer is past 400px, so label-left in a grid.
     const layout = await form.evaluate((el) => {
       const pick = (node: Element | null) => {
         if (node === null) return null;
         const s = getComputedStyle(node);
         return {
           display: s.display,
-          direction: s.flexDirection,
-          gap: s.rowGap,
+          columns: s.gridTemplateColumns,
+          gap: s.columnGap,
           fontSize: s.fontSize,
           color: s.color,
+          className: node.className,
         };
       };
-      const nameInput = [...el.querySelectorAll('label')].find((l) =>
-        l.textContent?.trim().startsWith('Name'),
-      );
-      const paramsLabel = [...el.querySelectorAll('label')].find(
-        (l) => l.textContent === 'Params (JSON)',
-      );
-      const wrapper = paramsLabel?.parentElement ?? null;
-      return {
-        reference: pick(nameInput ?? null),
-        converted: pick(wrapper),
-        wrapperClass: wrapper?.className ?? null,
-      };
+      const row = (text: string) =>
+        [...el.querySelectorAll('label')].find((l) => l.textContent?.trim() === text)
+          ?.parentElement ?? null;
+      return { name: pick(row('Name')), params: pick(row('Params (JSON)')) };
     });
-    expect(layout.reference).not.toBeNull();
-    expect(layout.converted).toEqual(layout.reference);
-    expect(layout.converted?.direction).toBe('column');
-    expect(layout.wrapperClass).toBe('labelled-control');
+    expect(layout.name).not.toBeNull();
+    expect(layout.params).toEqual(layout.name);
+    expect(layout.name?.display).toBe('grid');
+    expect(layout.name?.gap).toBe('12px');
+    expect(layout.name?.className).toBe('labelled-control');
     await expectQuiet(page, problems);
   });
 

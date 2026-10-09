@@ -248,6 +248,19 @@ describe('CallPanel (component)', () => {
     );
   });
 
+  it('marks a required param with the `*` after its name and `aria-required` (#1594 S3c)', async () => {
+    mount();
+    await waitFor(() => expect(screen.getByLabelText(/Pipeline/)).toBeTruthy());
+    fireEvent.change(screen.getByLabelText(/Pipeline/), { target: { value: 'p_a' } });
+    fireEvent.change(screen.getByLabelText(/Version/), { target: { value: 'pv_a2' } });
+    await waitFor(() => expect(screen.getByLabelText(/query/)).toBeTruthy());
+    expect(screen.getByLabelText(/query/)).toHaveAttribute('aria-required', 'true');
+    expect(screen.getByLabelText(/limit/)).not.toHaveAttribute('aria-required');
+    const markIn = (input: HTMLElement) => input.closest('label')!.querySelector('.required-mark');
+    expect(markIn(screen.getByLabelText(/query/))).not.toBeNull();
+    expect(markIn(screen.getByLabelText(/limit/))).toBeNull();
+  });
+
   it('writes the chosen target, wait flag and typed params in ONE store write', async () => {
     const { store } = mount();
     // The declared params appear only after the listing resolves — which is the
