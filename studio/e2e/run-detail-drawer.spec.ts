@@ -14,6 +14,11 @@ import { openRunView } from './support/panels';
  * Opening a row shows THAT item's record, beside the table rather than pushing
  * it down, and the drawer is resizable and closes on Escape.
  *
+ * #1594 OR40 S3e — where there is room (≥1280px) the drawer is a named region
+ * that PUSHES the page: nothing of the run page runs under it. Narrower, it is
+ * a non-modal dialog over the page, which then does not move. Either way it is
+ * held inside the viewport, under the command bar.
+ *
  * `file_list` over a local `fs` connection: it is dispatched, so it records the
  * input it ran with, and it needs no network.
  */
@@ -58,7 +63,6 @@ test('#1484 M2 — an activity run opens in a drawer, with its own item’s inpu
     await fluentRootReady(page);
     const opens = page.locator('.activity-runs__table .activity-runs__open');
     await expect(opens).toHaveCount(2);
-    const tableBox = await page.locator('.activity-runs__table').boundingBox();
 
     await opens.nth(1).click();
     const drawer = page.locator('#run-detail-drawer');
@@ -69,16 +73,27 @@ test('#1484 M2 — an activity run opens in a drawer, with its own item’s inpu
     // Every reading in one evaluate: a round trip per assertion is what costs.
     const second = await page.evaluate(() => {
       const d = document.getElementById('run-detail-drawer')!;
-      const style = getComputedStyle(d);
       const box = d.getBoundingClientRect();
-      const t = document.querySelector('.activity-runs__table')!.getBoundingClientRect();
+      const parts = [...document.querySelector('.run-page')!.children].filter(
+        (c) => c !== d && c.getBoundingClientRect().width > 0,
+      );
       return {
         text: d.textContent ?? '',
-        position: style.position,
-        right: Math.round(window.innerWidth - box.right),
+        role: d.getAttribute('role'),
+        name: d.getAttribute('aria-label'),
+        position: getComputedStyle(d).position,
         width: Math.round(box.width),
-        tableTop: t.top,
-        tableHeight: t.height,
+        // The drawer's box against the viewport and the command bar.
+        top: box.top - document.querySelector('.command-bar')!.getBoundingClientRect().bottom,
+        right: window.innerWidth - box.right,
+        bottom: window.innerHeight - box.bottom,
+        // How far the page reaches into the drawer's column (≤ 0 is clear).
+        under: Math.max(...parts.map((c) => c.getBoundingClientRect().right)) - box.left,
+        gridUnder:
+          document.querySelector('.activity-runs__scroll')!.getBoundingClientRect().right -
+          box.left,
+        overflowX: document.documentElement.scrollWidth - window.innerWidth,
+        overflowY: document.documentElement.scrollHeight - window.innerHeight,
         openRows: document.querySelectorAll('.activity-runs__table tr[data-open]').length,
         splitter: d.querySelector('[role="separator"]')?.getAttribute('aria-label') ?? null,
       };
@@ -86,14 +101,19 @@ test('#1484 M2 — an activity run opens in a drawer, with its own item’s inpu
     expect(second.text).toContain('Item 2 of 2');
     expect(second.text).toContain('folder-b');
     expect(second.text).not.toContain('folder-a');
-    // Over the page, on its right edge, and the table did not move.
+    // A named region, held inside the viewport under the command bar.
+    expect(second.role).toBe('region');
+    expect(second.name).toBe('Activity run details');
     expect(second.position).toBe('fixed');
-    expect(second.right).toBe(0);
+    expect([second.top, second.right, second.bottom]).toEqual([0, 0, 0]);
+    expect([second.overflowX, second.overflowY]).toEqual([0, 0]);
     expect(second.width).toBeGreaterThanOrEqual(320);
-    expect(second.tableTop).toBe(tableBox!.y);
-    expect(second.tableHeight).toBe(tableBox!.height);
+    // It pushes: no part of the run page, the activity runs grid included, runs
+    // under it.
+    expect(second.under).toBeLessThanOrEqual(0);
+    expect(second.gridUnder).toBeLessThanOrEqual(0);
     expect(second.openRows).toBe(1);
-    expect(second.splitter).toBe('Resize activity details');
+    expect(second.splitter).toBe('Resize activity run details');
 
     // Another row swaps the record in place.
     await opens.nth(0).click();
@@ -102,7 +122,7 @@ test('#1484 M2 — an activity run opens in a drawer, with its own item’s inpu
     await expect(panel).not.toContainText('folder-b');
 
     // The width is the operator's: the keyboard resizes it, and it is remembered.
-    const splitter = drawer.getByRole('separator', { name: 'Resize activity details' });
+    const splitter = drawer.getByRole('separator', { name: 'Resize activity run details' });
     await splitter.focus();
     await page.keyboard.press('ArrowLeft');
     await page.keyboard.press('ArrowLeft');
@@ -123,6 +143,34 @@ test('#1484 M2 — an activity run opens in a drawer, with its own item’s inpu
     await expect
       .poll(async () => Math.round((await drawer.boundingBox())!.width))
       .toBe(second.width + 32);
+
+    /* Narrower than 1280px there is no room to push: the drawer is a non-modal
+       dialog over the page, which stays where it was, and it is still held
+       inside the viewport. Resizing the window with it open switches it. */
+    await page.setViewportSize({ width: 1200, height: 900 });
+    await expect(drawer).toHaveAttribute('role', 'dialog');
+    const narrow = await page.evaluate(() => {
+      const d = document.getElementById('run-detail-drawer')!;
+      const box = d.getBoundingClientRect();
+      return {
+        modal: d.getAttribute('aria-modal'),
+        name: d.getAttribute('aria-label'),
+        right: window.innerWidth - box.right,
+        bottom: window.innerHeight - box.bottom,
+        overflowX: document.documentElement.scrollWidth - window.innerWidth,
+        page: document.querySelector('.run-page')!.getBoundingClientRect().right,
+        content: document.querySelector('.content')!.getBoundingClientRect().right,
+        padding: getComputedStyle(document.querySelector('.run-page')!).paddingRight,
+      };
+    });
+    expect(narrow.modal).toBe('false');
+    expect(narrow.name).toBe('Activity run details');
+    expect([narrow.right, narrow.bottom, narrow.overflowX]).toEqual([0, 0, 0]);
+    // Over the page: the run page keeps its whole width.
+    expect(narrow.padding).toBe('0px');
+    expect(narrow.page).toBeGreaterThan(narrow.content - 40);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(drawer).toHaveAttribute('role', 'region');
 
     /* The graph opens the same drawer. The node is one box for both items, so
        it opens its last run (neither failed): item 2. That row is the open one
