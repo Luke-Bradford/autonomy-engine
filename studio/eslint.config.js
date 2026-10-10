@@ -101,7 +101,7 @@ export default tseslint.config(
       // pinned and declares a peer of eslint ^3..^9; it loads and runs under
       // eslint 10 and calls none of the context methods eslint 10 removed. A
       // per-line disable states why on the line above it, and an unused one is
-      // an error (`reportUnusedDisableDirectives` below).
+      // an error (`reportUnusedDisableDirectives` above).
       ...jsxA11y.flatConfigs.recommended.rules,
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
       // #1227 — a `<label>` must not WRAP a `<select>`/`<textarea>`. Both render

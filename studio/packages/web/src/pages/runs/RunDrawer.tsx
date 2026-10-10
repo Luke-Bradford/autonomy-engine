@@ -126,6 +126,9 @@ export function RunDrawer({
       id={RUN_DRAWER_ID}
       className="run-drawer"
       aria-label={RUN_DRAWER_LABEL}
+      // Explicit props, not a spread, so jsx-a11y sees a role. A computed role
+      // is not checked for its Escape handler, which closes the dialog as
+      // DrawerShell's does.
       role={push ? 'region' : 'dialog'}
       aria-modal={push ? undefined : false}
       data-push={push ? '' : undefined}
