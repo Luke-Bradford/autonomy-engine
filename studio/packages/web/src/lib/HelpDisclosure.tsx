@@ -65,6 +65,8 @@ export function HelpDisclosure({
   };
 
   return (
+    // The details only catches Escape bubbling up from its summary and note.
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
     <details
       ref={ref}
       className={inline ? 'help-disclosure help-disclosure--inline' : 'help-disclosure'}

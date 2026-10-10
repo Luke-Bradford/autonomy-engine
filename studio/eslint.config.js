@@ -49,6 +49,9 @@ export default tseslint.config(
       '**/blob-report/**',
     ],
   },
+  // #1639 — a disable that no longer suppresses anything fails the lint, so
+  // a stale exemption cannot outlive the code it excused.
+  { linterOptions: { reportUnusedDisableDirectives: 'error' } },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
@@ -94,6 +97,11 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      // #1639 (OR40 S5c-2) — jsx-a11y's recommended rules, at error. 6.10.2 is
+      // pinned and declares a peer of eslint ^3..^9; it loads and runs under
+      // eslint 10 and calls none of the context methods eslint 10 removed. A
+      // per-line disable states why on the line above it, and an unused one is
+      // an error (`reportUnusedDisableDirectives` below).
       ...jsxA11y.flatConfigs.recommended.rules,
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
       // #1227 — a `<label>` must not WRAP a `<select>`/`<textarea>`. Both render

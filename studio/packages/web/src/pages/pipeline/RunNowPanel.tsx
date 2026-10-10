@@ -124,7 +124,9 @@ export function RunParamsFields({
                 value={rows[p.name] ?? ''}
                 onChange={(v) => onChange(p.name, v)}
                 // The fields mount once their version is known, so the first
-                // one is where typing goes, in the panel and in a drawer.
+                // one is where typing goes, in the panel and in a drawer. Focus
+                // follows the click that opened them; this is not page-load focus.
+                // eslint-disable-next-line jsx-a11y/no-autofocus
                 autoFocus={i === 0}
               />
               <span id={`${id}-hint`} className="page-hint">
@@ -169,6 +171,9 @@ function RunParamsForm<R extends FireResult>({
   }
 
   return (
+    // Escape closes a dialog. The plugin exempts keyboard handlers on a dialog,
+    // but matches the <dialog> tag only, not role="dialog".
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
     <form
       className="run-now-panel"
       role="dialog"
@@ -185,7 +190,14 @@ function RunParamsForm<R extends FireResult>({
         </p>
       )}
       <div className="form-actions">
-        <button type="submit" disabled={starting} autoFocus={params.length === 0}>
+        <button
+          type="submit"
+          disabled={starting}
+          // With no fields, focus follows the click that opened the panel to
+          // its one action; this is not page-load focus.
+          // eslint-disable-next-line jsx-a11y/no-autofocus
+          autoFocus={params.length === 0}
+        >
           {starting ? 'Starting…' : 'Start run'}
         </button>
         <button type="button" onClick={onClose}>

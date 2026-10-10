@@ -100,7 +100,13 @@ export function EditorStatusStrip({
         </button>
       )}
       {open && (
-        <div id={listId} className="editor-status-strip__list" onKeyDown={closeOnEscape}>
+        <div
+          id={listId}
+          className="editor-status-strip__list"
+          // Only catches Escape bubbling up from the messages' controls.
+          role="presentation"
+          onKeyDown={closeOnEscape}
+        >
           {standing.slice(1).map((n) => (
             <div key={n.key}>{n.node}</div>
           ))}

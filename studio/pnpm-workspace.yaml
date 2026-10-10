@@ -16,3 +16,11 @@ allowBuilds:
 # (some CI/cloud runners), pnpm's same-volume fallback never leaks a stray
 # `.pnpm-store/` into the parent (engine) repo root. `.pnpm-store/` is gitignored.
 storeDir: .pnpm-store
+
+# #1639 — eslint-plugin-jsx-a11y 6.10.2 (the latest, pinned) declares a peer of
+# eslint ^3..^9 and studio is on eslint 10. It was checked to load and run under
+# eslint 10 and to call none of the context methods eslint 10 removed. Allowed
+# for eslint 10 only, so a later eslint major warns again and is re-checked.
+peerDependencyRules:
+  allowedVersions:
+    eslint-plugin-jsx-a11y>eslint: '10'

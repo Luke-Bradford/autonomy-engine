@@ -132,6 +132,9 @@ export function JsonEditor({
         }}
       />
       <div className="json-editor-tools">
+        {/* aria-description is an ARIA 1.3 global attribute; aria-query 5.3
+            does not list it on button. */}
+        {/* eslint-disable-next-line jsx-a11y/role-supports-aria-props */}
         <button
           type="button"
           className="json-editor-format"
