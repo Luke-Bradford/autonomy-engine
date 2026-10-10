@@ -6,6 +6,8 @@ import { messageOf } from '../api/client';
 import { useBusyAction } from '../hooks/useBusyAction';
 import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import { useConfirm } from '../lib/confirm/useConfirm';
+import { Section } from '../lib/Section';
+import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 
 /** The question Remove asks, then everything it takes — the route's own scope. */
 export const REMOVE_DEMO_QUESTION =
@@ -108,12 +110,8 @@ export function DemoPanel({
       await onChanged?.();
     });
 
-  return (
-    <section
-      aria-labelledby={embedded ? undefined : 'demo-workspace'}
-      className={embedded ? 'demo-panel' : 'home-section'}
-    >
-      {!embedded && <h2 id="demo-workspace">Demo workspace</h2>}
+  const body = (
+    <>
       {readError !== null && (
         <>
           <p role="alert" className="error">
@@ -132,13 +130,6 @@ export function DemoPanel({
       )}
       {status?.loaded === false && (
         <>
-          {!embedded && (
-            <p className="page-hint">
-              Five sample pipelines in folder “Demo” that load a messy orders CSV into a SQLite
-              warehouse, clean and aggregate it, run it all from an orchestrator, and fail once on
-              purpose — with their own connections and datasets, ready to run and watch in Monitor.
-            </p>
-          )}
           <button type="button" className="primary" onClick={onLoad} disabled={busy}>
             Load demo
           </button>
@@ -156,7 +147,7 @@ export function DemoPanel({
             </button>
           </>
         ) : (
-          <p className="page-hint">
+          <p>
             The demo is loaded. <Link to="/author/pipelines">Open the demo pipelines</Link>
           </p>
         ))}
@@ -171,6 +162,22 @@ export function DemoPanel({
         </p>
       )}
       {confirmDialog}
-    </section>
+    </>
+  );
+
+  // #1569 — embedded, the drawer supplies the frame, the heading and the
+  // account of what the demo is. #1594 OR40 S6 — on Home it is a page section,
+  // its account behind the `?` with the same words the drawer's section uses.
+  return embedded ? (
+    <section className="demo-panel">{body}</section>
+  ) : (
+    <Section
+      level={2}
+      landmark
+      heading="Demo workspace"
+      help={FORM_SECTION_HINTS.pipeline.demo}
+    >
+      <div className="demo-panel">{body}</div>
+    </Section>
   );
 }

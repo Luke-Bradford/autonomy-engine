@@ -324,89 +324,32 @@ body {
   font-size: 0.85rem;
 }
 
-/* The Home hub's signposts. There is no global anchor rule in this file — the
-   MVP pages navigate with buttons — so without this the links render in the
-   browser's default blue/purple, which is the one palette in the app that does
-   NOT follow the theme.
-   U15 slice 1 (#1085) built the overview ABOVE these signposts and kept them:
-   they are the one thing the placeholder got right, and both `App.test.tsx` and
-   `e2e/hub-nav.spec.ts` scope around Home naming the same hubs as the rail. */
-.hub-cards {
+/* The Home hub's shortcuts to the other hubs (U15 slice 1, #1085), kept
+   because `App.test.tsx` and `e2e/hub-nav.spec.ts` scope around Home naming
+   the same hubs as the rail. #1594 OR40 S6 — plain links in a row, not cards:
+   a work surface has no tiles. They take the one anchor colour (below).
+
+   Home's recent runs are the one table style (`.recent-runs` is only a hook
+   for the tests); their pipeline cell is cut by `OneLine`. */
+.hub-links {
   list-style: none;
-  margin: 1rem 0 0;
   padding: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.75rem;
+  gap: var(--space-4);
 }
 
-.hub-cards a {
-  display: block;
-  padding: 0.75rem 1.25rem;
-  min-width: 8rem;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel);
-  color: var(--text);
-  text-decoration: none;
-  font-weight: 600;
-}
-
-.hub-cards a:hover {
-  background: var(--panel-2);
-  border-color: var(--accent);
-}
-
-/* A labelled section of a hub-level overview page: the Home hub's (U15 slice 1,
-   #1085) and, since #1094, Settings'. Named for its first consumer; it was
-   never Home-specific, and the second one arrived without needing a single
-   property changed. Colours come from the theme custom properties only —
-   `palette.test.ts` asserts there are no colour literals outside the two
-   palette blocks. */
+/* A labelled section of Settings (#1094; it was Home's until #1594 OR40 S6
+   moved Home onto `Section`, and Settings follows in its own S6 slice). Colours
+   come from the theme custom properties only — `palette.test.ts` asserts there
+   are no colour literals outside the two palette blocks. */
 .home-section {
-  margin-top: 1.5rem;
+  margin-top: var(--space-5);
 }
 
 .home-section h2 {
-  margin: 0 0 0.5rem;
-  font-size: 0.95rem;
-}
-
-.recent-runs {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-
-.recent-runs a {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.6rem 0.9rem;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel);
-  color: var(--text);
-  text-decoration: none;
-}
-
-.recent-runs a:hover {
-  background: var(--panel-2);
-  border-color: var(--accent);
-}
-
-/* The pipeline name takes the slack so the timestamp sits hard right. */
-.recent-runs-pipeline {
-  flex: 1;
-  font-weight: 600;
-}
-
-.recent-runs-when {
-  color: var(--muted);
-  font-size: 0.85rem;
+  margin: 0 0 var(--space-2);
+  font: var(--type-section);
 }
 
 /* --- Secondary pane + splitter + command bar (U3) ------------------------- */
@@ -1006,7 +949,7 @@ body {
 /* #1242 — the ONE colour a bare anchor takes.
 
    Until this rule, the only anchor rules in this file were container-scoped
-   (`.hub-cards a`, `.recent-runs a`, `.command-bar__breadcrumb a`), so every
+   (Home's old card links, `.command-bar__breadcrumb a`), so every
    link OUTSIDE those containers — a row link in the pipelines, datasets, runs
    and triggers tables, the cost-summary links, the run timeline's, the import
    panel's, the error-state "Back to pipelines" — fell through to the UA link
@@ -1631,6 +1574,13 @@ td button + button {
    so a classed paragraph's own margin still wins. */
 :where(.section__body > :is(p, ul, ol, dl)) {
   margin: 0;
+}
+
+/* #1594 OR40 S6 — nor a table: the global `table` rule's top margin spaces a
+   table under a page title, and here it would stack on the gap. Specific, not
+   `:where()`, so it outranks that element rule. */
+.section__body > table {
+  margin-top: 0;
 }
 
 .section__body input,
@@ -7056,13 +7006,14 @@ button.danger {
 }
 
 /* #1569 OR37 slice 3 — the import and demo panels inside the Import drawer,
-   which supplies their frame. */
+   which supplies their frame, and (#1594 OR40 S6) the demo inside Home's
+   section: a column whose buttons keep their own width. */
 .import-panel,
 .demo-panel {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .import-panel p,

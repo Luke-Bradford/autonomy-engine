@@ -49,6 +49,10 @@ export const FORM_SECTION_HINTS = {
     runPolicy:
       'How this activity retries a transient failure, and what of it is kept out of the run log.',
   },
+  home: {
+    recentRuns: 'The newest runs in this workspace. Open one for its activities and log.',
+    goTo: 'Shortcuts to the other hubs, which the rail also reaches.',
+  },
   pipeline: {
     basics: 'What the pipeline is called, the folder it is filed under, and what it is for.',
     importFile:
