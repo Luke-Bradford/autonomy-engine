@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 import { LabelledControl } from '../../lib/LabelledControl';
 
 export interface FilterOption {
@@ -24,6 +24,7 @@ export function FilterPicker({
   value,
   options,
   onChange,
+  selectRef,
 }: {
   /** A node so the runs bar can pass a visually-hidden label (#1484). */
   label: ReactNode;
@@ -31,11 +32,18 @@ export function FilterPicker({
   value: string | undefined;
   options: readonly FilterOption[];
   onChange: (next: string) => void;
+  /** To focus the picker, as the runs bar does with a filter just added. */
+  selectRef?: Ref<HTMLSelectElement>;
 }) {
   return (
     <LabelledControl label={label}>
       {(id) => (
-        <select id={id} value={value ?? ''} onChange={(e) => onChange(e.target.value)}>
+        <select
+          id={id}
+          ref={selectRef}
+          value={value ?? ''}
+          onChange={(e) => onChange(e.target.value)}
+        >
           <option value="">{allLabel}</option>
           {options.map((o) => (
             <option key={o.value} value={o.value}>

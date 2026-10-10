@@ -5957,8 +5957,8 @@ button.danger {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.375rem;
-  margin-bottom: 0.375rem;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
 }
 
 /* Measured at 1440×900 beside the hub nav: the bar has ~1080px, and at the
@@ -5967,9 +5967,9 @@ button.danger {
    selects bring that to ~1050px. */
 .run-filters select,
 .run-filters input,
-.run-filters button {
-  font-size: 13px;
-  padding: 0.2rem 0.35rem;
+.run-filters button:not(.icon-button) {
+  font-size: var(--type-body-size);
+  padding: 0 var(--space-1);
 }
 
 .runs-page > .runs-list > .runs-grid-scroll > table.runs-grid {
@@ -6008,6 +6008,71 @@ button.danger {
 .run-filters .labelled-control:not(.config-field) {
   display: flex;
   align-items: center;
+}
+
+/* #1594 OR40 S3 — a filter as a pill (`lib/FilterPill.tsx`): one rounded
+   frame `--control-h` tall around the axis name and its own control, drawn
+   borderless inside it so the pill is the one box. An applied filter takes
+   the accent edge, so "Status: Failed" reads apart from "Status: All". */
+.filter-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  box-sizing: border-box;
+  height: var(--control-h);
+  padding: 0 var(--space-1) 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--panel);
+}
+
+.filter-pill[data-active] {
+  border-color: var(--accent);
+}
+
+.filter-pill .labelled-control:not(.config-field) {
+  gap: var(--space-1);
+}
+
+/* The axis name, the control's own label. The colon has empty alternative
+   text, so it is drawn and not read: the control's name stays "Status". */
+.filter-pill label {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.filter-pill label::after {
+  content: ':' / '';
+}
+
+/* The controls inside: no box of their own, and no hover edge (the global
+   `button:hover` accent border is 0,2,1; these are 0,3,1). The ring stays on
+   the control that has focus, drawn inside it. */
+.filter-pill select,
+.filter-pill input,
+.filter-pill button.run-filters__menu,
+.filter-pill button.run-filters__menu:hover:not(:disabled) {
+  height: calc(var(--control-h) - 2px);
+  min-height: 0;
+  border-color: transparent;
+  background: transparent;
+}
+
+.filter-pill :focus-visible {
+  outline-offset: var(--focus-ring-inset);
+}
+
+/* The ✕, a glyph button fitted inside the pill's border. */
+.filter-pill .filter-pill__remove {
+  width: calc(var(--control-h) - 8px);
+  height: calc(var(--control-h) - 8px);
+  border-radius: var(--radius-pill);
+}
+
+.run-filters__add {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
 }
 
 /* #1484 — a reversed day range is refused (`readRunFilters`), and each date
