@@ -421,11 +421,11 @@ describe('ConfigFieldControl — a row list is a compact table (#1477 OR29)', ()
     const table = getByRole('table', { name: 'mapping' });
     const ths = Array.from(table.querySelectorAll('th'));
     expect(ths.map((th) => th.textContent)).toEqual([
-      'source',
-      'type',
-      'width — number',
-      'rules — JSON',
-      'nullable',
+      'Source',
+      'Type',
+      'Width — number',
+      'Rules — JSON',
+      'Nullable',
       'Actions',
     ]);
     expect(ths[0]!.querySelector('.required-mark')).not.toBeNull();
@@ -438,10 +438,10 @@ describe('ConfigFieldControl — a row list is a compact table (#1477 OR29)', ()
       <ConfigFieldControl field={mapping} value={[{}]} onChange={noop} />,
     );
     for (const control of [
-      getByRole('textbox', { name: 'mapping row 1 source' }),
-      getByRole('combobox', { name: 'mapping row 1 type' }),
-      getByRole('textbox', { name: 'mapping row 1 width — number' }),
-      getByRole('checkbox', { name: 'mapping row 1 nullable' }),
+      getByRole('textbox', { name: 'Mapping row 1 source' }),
+      getByRole('combobox', { name: 'Mapping row 1 type' }),
+      getByRole('textbox', { name: 'Mapping row 1 width — number' }),
+      getByRole('checkbox', { name: 'Mapping row 1 nullable' }),
     ]) {
       const label = control.closest('td')!.querySelector('label')!;
       expect(label.querySelector('.visually-hidden')).not.toBeNull();

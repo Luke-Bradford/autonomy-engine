@@ -326,10 +326,10 @@ describe('ConnectionsPage', () => {
     const form = screen.getByRole('form', { name: 'Connection form' });
     // A row group, not a JSON blob — derived from the same schema the server reads.
     expect(within(form).getByRole('group', { name: 'Default headers' })).toBeInTheDocument();
-    expect(within(form).getByLabelText('headers row 1 key')).toHaveValue('X-A');
-    await user.click(within(form).getByRole('button', { name: 'Add headers row' }));
-    await user.type(within(form).getByLabelText('headers row 2 key'), 'X-B');
-    await user.type(within(form).getByLabelText('headers row 2 value'), '2');
+    expect(within(form).getByLabelText('Default headers row 1 key')).toHaveValue('X-A');
+    await user.click(within(form).getByRole('button', { name: 'Add default headers row' }));
+    await user.type(within(form).getByLabelText('Default headers row 2 key'), 'X-B');
+    await user.type(within(form).getByLabelText('Default headers row 2 value'), '2');
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
@@ -1559,7 +1559,7 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
       await screen.findByText('Claude');
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
-      expect(within(allowlist()).getByLabelText('Overridable: model')).toBeChecked();
+      expect(within(allowlist()).getByLabelText('Overridable model')).toBeChecked();
       const form = screen.getByRole('form', { name: 'Connection form' });
       await user.clear(within(form).getByLabelText('Name'));
       await user.type(within(form).getByLabelText('Name'), 'Claude v2');
@@ -1579,13 +1579,13 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
       await screen.findByText('Claude');
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
-      await user.click(within(allowlist()).getByLabelText('Overridable: timeoutMs'));
+      await user.click(within(allowlist()).getByLabelText('Overridable timeoutMs'));
       await user.click(screen.getByRole('button', { name: 'Save changes' }));
       await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
       expect(updateMock.mock.calls[0]![1].parameters).toEqual(['model', 'timeoutMs']);
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
-      await user.click(within(allowlist()).getByLabelText('Overridable: model'));
+      await user.click(within(allowlist()).getByLabelText('Overridable model'));
       await user.click(screen.getByRole('button', { name: 'Save changes' }));
       await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(2));
       expect(updateMock.mock.calls[1]![1].parameters).toEqual([]);

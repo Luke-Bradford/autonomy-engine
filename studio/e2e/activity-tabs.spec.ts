@@ -73,7 +73,7 @@ test('a Copy node opens on Source; each tab starts on screen and Sink fits whole
 
   await tabs(page).getByRole('tab', { name: 'Mapping' }).click();
   const mapping = properties(page).getByRole('tabpanel', { name: 'Mapping' });
-  await expect(mapping.getByRole('button', { name: 'Add mapping row' })).toBeVisible();
+  await expect(mapping.getByRole('button', { name: 'Add column mapping row' })).toBeVisible();
   await expect(mapping.getByRole('button', { name: 'Auto-map columns' })).toBeVisible();
   // #1477 OR29 — with the row list a compact table, the whole tab fits.
   expect(await overflowOf(mapping)).toBeLessThanOrEqual(0);

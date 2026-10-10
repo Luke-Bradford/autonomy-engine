@@ -8,6 +8,9 @@ import {
   isRowList,
   numberKeypad,
   placeRowCandidate,
+  rowActionName,
+  rowCellName,
+  rowTitle,
 } from './configForm';
 import type { ConfigField, FieldInput, ObjectListRow } from './configForm';
 import {
@@ -21,6 +24,7 @@ import { useCaretInsert } from './useCaretInsert';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { JsonEditor } from '../../lib/form/JsonEditor';
 import { RequiredMark } from '../../lib/form/RequiredMark';
+import { midSentence } from '../../lib/words';
 import {
   RemoveRowButton,
   RowActions,
@@ -212,7 +216,7 @@ export function ConfigFieldControl({
   choices?: FieldChoices;
   /**
    * What to CALL this control, when the field's own name is not the whole
-   * story. A cell inside a row list is `mapping row 2 sink`, not `sink`: three
+   * story. A cell inside a row list is "Column mapping row 2 sink", not `sink`: three
    * `sink` boxes sharing one accessible name is not a surface anybody can drive
    * by keyboard, or assert on in a spec.
    */
@@ -233,7 +237,7 @@ export function ConfigFieldControl({
   const label = name === undefined ? configFieldTitle(field) : name;
   // #1477 OR29 — a cell sits under its table's column header, which shows what
   // its label said. The label stays, out of sight, as the control's NAME
-  // (`mapping row 2 sink`), so every spec and screen reader still reaches it.
+  // ("Column mapping row 2 sink"), so every spec and screen reader still reaches it.
   const cell = name !== undefined;
   const seen = (text: ReactNode) => (cell ? <span className="visually-hidden">{text}</span> : text);
   const required = !field.optional;
@@ -561,7 +565,9 @@ export function ConfigFieldControl({
             )}
           {picker && field.kind === 'text' && !field.literal && (
             <ExpressionPicker
-              fieldName={shown}
+              // A cell's name opens with its list's title, which reads mid-sentence
+              // in "Insert reference into column mapping row 1 expression".
+              fieldName={cell ? midSentence(shown) : shown}
               // #1477 OR29 — glyphs at the top level too: two worded buttons
               // stacked under every expression box were 44px a field.
               compact
@@ -602,7 +608,7 @@ function cellColumn(cell: ConfigField): RowTableColumn {
     key: cell.name,
     header: (
       <>
-        {format === null ? configFieldTitle(cell) : `${configFieldTitle(cell)} — ${format}`}
+        {format === null ? rowTitle(cell) : `${rowTitle(cell)} — ${format}`}
         {!cell.optional && <RequiredMark />}
       </>
     ),
@@ -620,9 +626,8 @@ function cellColumn(cell: ConfigField): RowTableColumn {
  * 60px each. The dock is wider now (a 589px tab at 1440x900), the table scrolls
  * sideways rather than crushing its cells in a narrow right-hand dock, and a
  * header row replaces a label repeated on every cell. Each cell's control keeps
- * its own name — `` `mapping row 2 sink` ``, its row and its cell. These names
- * are still the schema keys; #1594 OR40 S4b named the pipeline's own rows in
- * words (`Parameter 1 name`) and S4b-2 brings these to their cells' titles.
+ * its own name — "Column mapping row 2 sink", its list, its row and its cell,
+ * in words (#1594 OR40 S4b-2, `rowCellName`), not schema keys.
  *
  * Every cell is a plain `ConfigFieldControl`, and gets the panel's `picker`
  * with a `target` naming the cell's own position (#1178): the candidate is this
@@ -714,15 +719,13 @@ export function ObjectListControl({
     if (target === null) return;
     const byName = (direction: 'up' | 'down') =>
       Array.from(groupRef.current?.querySelectorAll('button') ?? []).find(
-        (b) =>
-          b.getAttribute('aria-label') ===
-          `move ${field.name} row ${target.index + 1} ${direction}`,
+        (b) => b.getAttribute('aria-label') === rowActionName(field, target.index, direction),
       );
     // At either end the same direction is disabled, and a disabled button
     // cannot hold focus; the other direction is the row's only move left.
     const same = byName(target.direction);
     (same && !same.disabled ? same : byName(target.direction === 'up' ? 'down' : 'up'))?.focus();
-  }, [moves, field.name]);
+  }, [moves, field]);
 
   // Each row is read by `parseRowCells`, the reader an apply uses, keeping the
   // cells that parse. An apply refuses the whole list on one bad cell; a
@@ -782,7 +785,7 @@ export function ObjectListControl({
                     <ConfigFieldControl
                       key={`${cell.name}:${rows.length}:${moves}`}
                       field={cell}
-                      name={`${field.name} row ${index + 1} ${cell.name}`}
+                      name={rowCellName(field, index, cell)}
                       value={held ?? emptyControlValue(cell)}
                       picker={picker}
                       target={cellTarget(index, cell.name)}
@@ -804,7 +807,7 @@ export function ObjectListControl({
               <RowActions>
                 <button
                   type="button"
-                  aria-label={`move ${field.name} row ${index + 1} up`}
+                  aria-label={rowActionName(field, index, 'up')}
                   disabled={index === 0}
                   onClick={() => move(index, index - 1)}
                 >
@@ -812,14 +815,14 @@ export function ObjectListControl({
                 </button>
                 <button
                   type="button"
-                  aria-label={`move ${field.name} row ${index + 1} down`}
+                  aria-label={rowActionName(field, index, 'down')}
                   disabled={index === rows.length - 1}
                   onClick={() => move(index, index + 1)}
                 >
                   ↓
                 </button>
                 <RemoveRowButton
-                  label={`remove ${field.name} row ${index + 1}`}
+                  label={rowActionName(field, index, 'remove')}
                   onRemove={() => onChange(rows.filter((_, i) => i !== index))}
                 />
               </RowActions>
@@ -828,7 +831,7 @@ export function ObjectListControl({
         </RowTable>
       ) : null}
       <button type="button" onClick={() => onChange([...rows, {}])}>
-        {`Add ${field.name} row`}
+        {`Add ${midSentence(rowTitle(field))} row`}
       </button>
     </div>
   );

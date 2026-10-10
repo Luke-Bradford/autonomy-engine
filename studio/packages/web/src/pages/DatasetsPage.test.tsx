@@ -903,7 +903,7 @@ describe('DatasetsPage', () => {
       await screen.findByText('Orders');
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
-      expect(within(allowlist()).getByLabelText('Overridable: path')).toBeChecked();
+      expect(within(allowlist()).getByLabelText('Overridable path')).toBeChecked();
       await user.clear(within(form()).getByLabelText('Name'));
       await user.type(within(form()).getByLabelText('Name'), 'Orders v2');
       await user.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -920,8 +920,8 @@ describe('DatasetsPage', () => {
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
       await user.click(within(form()).getByRole('button', { name: 'Advanced' }));
-      await user.click(within(allowlist()).getByLabelText('Overridable: path'));
-      await user.click(within(allowlist()).getByLabelText('Overridable: header'));
+      await user.click(within(allowlist()).getByLabelText('Overridable path'));
+      await user.click(within(allowlist()).getByLabelText('Overridable header'));
       await user.click(screen.getByRole('button', { name: 'Save changes' }));
 
       await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
@@ -935,7 +935,7 @@ describe('DatasetsPage', () => {
       await screen.findByText('Orders');
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
-      await user.click(within(allowlist()).getByLabelText('Overridable: header'));
+      await user.click(within(allowlist()).getByLabelText('Overridable header'));
       await user.click(screen.getByRole('button', { name: 'Save changes' }));
 
       await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
@@ -949,12 +949,12 @@ describe('DatasetsPage', () => {
       await screen.findByText('Orders');
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
-      const stray = within(allowlist()).getByLabelText(/^Overridable: bogus/);
+      const stray = within(allowlist()).getByLabelText(/^Overridable bogus/);
       expect(stray).toBeChecked();
       expect(allowlist()).toHaveTextContent('not a setting of this kind');
 
       await user.click(stray);
-      expect(within(allowlist()).getByLabelText(/^Overridable: bogus/)).not.toBeChecked();
+      expect(within(allowlist()).getByLabelText(/^Overridable bogus/)).not.toBeChecked();
       await user.click(screen.getByRole('button', { name: 'Save changes' }));
       await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
       // Unticking the last key is a deliberate clear, so it is sent as [].
@@ -968,7 +968,7 @@ describe('DatasetsPage', () => {
       await screen.findByText('Orders');
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
-      expect(within(allowlist()).getByLabelText(/^Overridable: table/)).toBeChecked();
+      expect(within(allowlist()).getByLabelText(/^Overridable table/)).toBeChecked();
       expect(allowlist()).toHaveTextContent('never overridable, so a run refuses it');
       expect(allowlist()).toHaveTextContent(
         'Database table datasets have no settings a node can override.',
@@ -1080,7 +1080,7 @@ describe('the dataset form drawer (#1396)', () => {
     await user.click(within(form()).getByRole('button', { name: 'Edit as fields' }));
     await user.selectOptions(within(form()).getByLabelText('Kind'), 'excel');
     await user.selectOptions(within(form()).getByLabelText('Kind'), 'delimited');
-    const tick = within(form()).getByLabelText('Overridable: path');
+    const tick = within(form()).getByLabelText('Overridable path');
     await user.click(tick);
     await user.click(tick);
 

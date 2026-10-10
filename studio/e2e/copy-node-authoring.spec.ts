@@ -119,10 +119,10 @@ test.describe('#1139 — copy-node authoring', () => {
     // palette-dropped copy is refused at save (#1480). One row is enough here;
     // the mapping itself is the next test's subject.
     await copyTab(page, 'Mapping');
-    await properties(page).getByRole('button', { name: 'Add mapping row' }).click();
-    await properties(page).getByRole('textbox', { name: 'mapping row 1 source' }).fill('id');
-    await properties(page).getByRole('textbox', { name: 'mapping row 1 sink' }).fill('id');
-    await properties(page).getByLabel('mapping row 1 type').selectOption('integer');
+    await properties(page).getByRole('button', { name: 'Add column mapping row' }).click();
+    await properties(page).getByRole('textbox', { name: 'Column mapping row 1 source' }).fill('id');
+    await properties(page).getByRole('textbox', { name: 'Column mapping row 1 sink' }).fill('id');
+    await properties(page).getByLabel('Column mapping row 1 type').selectOption('integer');
     await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -225,14 +225,14 @@ test.describe('#1139 — copy-node authoring', () => {
       [2, 'label', 'full_name', 'string'],
     ] as const) {
       await copyTab(page, 'Mapping');
-      await properties(page).getByRole('button', { name: 'Add mapping row' }).click();
+      await properties(page).getByRole('button', { name: 'Add column mapping row' }).click();
       await properties(page)
-        .getByRole('textbox', { name: `mapping row ${row} source` })
+        .getByRole('textbox', { name: `Column mapping row ${row} source` })
         .fill(source);
       await properties(page)
-        .getByRole('textbox', { name: `mapping row ${row} sink` })
+        .getByRole('textbox', { name: `Column mapping row ${row} sink` })
         .fill(sink);
-      await properties(page).getByLabel(`mapping row ${row} type`).selectOption(type);
+      await properties(page).getByLabel(`Column mapping row ${row} type`).selectOption(type);
     }
 
     // Row 2 takes an explicit `onError`; row 1 is left alone. A defaulted enum
@@ -241,7 +241,7 @@ test.describe('#1139 — copy-node authoring', () => {
     // difference between "the author chose 'fail'" and "the author said
     // nothing", which is a distinction §6.2 can still act on later.
     await properties(page)
-      .getByLabel('mapping row 2 onError')
+      .getByLabel('Column mapping row 2 on error')
       .selectOption({ label: 'Write null' });
 
     await properties(page).getByRole('button', { name: 'Apply config' }).click();
@@ -265,10 +265,10 @@ test.describe('#1139 — copy-node authoring', () => {
     await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
     await canvasNodes(page).first().click();
     await copyTab(page, 'Mapping');
-    await expect(properties(page).getByRole('textbox', { name: 'mapping row 2 sink' })).toHaveValue(
-      'full_name',
-    );
-    await expect(properties(page).getByLabel('mapping row 2 type')).toHaveValue('string');
+    await expect(
+      properties(page).getByRole('textbox', { name: 'Column mapping row 2 sink' }),
+    ).toHaveValue('full_name');
+    await expect(properties(page).getByLabel('Column mapping row 2 type')).toHaveValue('string');
 
     await expectQuiet(page, problems);
   });
@@ -340,13 +340,13 @@ test.describe('#1170 — Auto-map and the unmapped advisory', () => {
     ).toBeVisible();
 
     // The rows landed in the real row controls, not in a JSON box.
-    await expect(properties(page).getByRole('textbox', { name: 'mapping row 1 sink' })).toHaveValue(
-      'id',
-    );
-    await expect(properties(page).getByRole('textbox', { name: 'mapping row 2 sink' })).toHaveValue(
-      'label',
-    );
-    await expect(properties(page).getByLabel('mapping row 1 type')).toHaveValue('integer');
+    await expect(
+      properties(page).getByRole('textbox', { name: 'Column mapping row 1 sink' }),
+    ).toHaveValue('id');
+    await expect(
+      properties(page).getByRole('textbox', { name: 'Column mapping row 2 sink' }),
+    ).toHaveValue('label');
+    await expect(properties(page).getByLabel('Column mapping row 1 type')).toHaveValue('integer');
     await expect(properties(page).getByLabel('Config (JSON)')).toHaveCount(0);
 
     // The advisory NARROWS as the mapping covers the sink — it must stop naming
@@ -379,12 +379,12 @@ test.describe('#1170 — Auto-map and the unmapped advisory', () => {
     await copyTab(page, 'Mapping');
     await properties(page).getByRole('button', { name: 'Auto-map columns' }).click();
     await expect(properties(page).getByText(/No new columns matched\./)).toBeVisible();
-    await expect(properties(page).getByRole('textbox', { name: 'mapping row 1 sink' })).toHaveValue(
-      'id',
-    );
-    await expect(properties(page).getByRole('textbox', { name: 'mapping row 3 sink' })).toHaveCount(
-      0,
-    );
+    await expect(
+      properties(page).getByRole('textbox', { name: 'Column mapping row 1 sink' }),
+    ).toHaveValue('id');
+    await expect(
+      properties(page).getByRole('textbox', { name: 'Column mapping row 3 sink' }),
+    ).toHaveCount(0);
 
     await expectQuiet(page, problems);
   });
@@ -424,32 +424,36 @@ test.describe('#1178 — the expression picker on a mapping cell', () => {
     await properties(page).getByRole('combobox', { name: 'Sink dataset' }).selectOption(sinkSet);
 
     await copyTab(page, 'Mapping');
-    await properties(page).getByRole('button', { name: 'Add mapping row' }).click();
-    await properties(page).getByRole('textbox', { name: 'mapping row 1 sink' }).fill('label');
-    await properties(page).getByLabel('mapping row 1 type').selectOption('string');
+    await properties(page).getByRole('button', { name: 'Add column mapping row' }).click();
+    await properties(page)
+      .getByRole('textbox', { name: 'Column mapping row 1 sink' })
+      .fill('label');
+    await properties(page).getByLabel('Column mapping row 1 type').selectOption('string');
 
     // The column-name cell: held to a literal, so nothing is offered. (A
     // cell's toggles show while it has focus, #1477 OR29.)
-    await properties(page).getByRole('textbox', { name: 'mapping row 1 sink' }).focus();
+    await properties(page).getByRole('textbox', { name: 'Column mapping row 1 sink' }).focus();
     await properties(page)
-      .getByRole('button', { name: 'Insert reference into mapping row 1 sink' })
+      .getByRole('button', { name: 'Insert reference into column mapping row 1 sink' })
       .click();
     await expect(
-      properties(page).getByText('No reference in this pipeline fits mapping row 1 sink'),
+      properties(page).getByText('No reference in this pipeline fits column mapping row 1 sink'),
     ).toBeVisible();
     await expect(properties(page).getByRole('button', { name: /^batch/ })).toHaveCount(0);
     await page.keyboard.press('Escape');
 
     // The value cell: the param is offered, and lands in THIS row's expression.
-    await properties(page).getByRole('textbox', { name: 'mapping row 1 expression' }).focus();
     await properties(page)
-      .getByRole('button', { name: 'Insert reference into mapping row 1 expression' })
+      .getByRole('textbox', { name: 'Column mapping row 1 expression' })
+      .focus();
+    await properties(page)
+      .getByRole('button', { name: 'Insert reference into column mapping row 1 expression' })
       .click();
     await properties(page)
       .getByRole('button', { name: /^batch/ })
       .click();
     await expect(
-      properties(page).getByRole('textbox', { name: 'mapping row 1 expression' }),
+      properties(page).getByRole('textbox', { name: 'Column mapping row 1 expression' }),
     ).toHaveValue('${params.batch}');
 
     await properties(page).getByRole('button', { name: 'Apply config' }).click();

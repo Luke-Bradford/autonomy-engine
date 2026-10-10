@@ -9,30 +9,9 @@
  * Shared by the unit test over the label maps and the e2e over rendered text, so
  * the two cannot disagree about what sentence case is.
  */
-export const ACRONYMS: readonly string[] = [
-  'AI',
-  'API',
-  'CLI',
-  'CSV',
-  'HTTP',
-  'ID',
-  'JSON',
-  'LLM',
-  'SQL',
-  'URL',
-];
+import { ACRONYMS, PROPER_NAMES } from '../lib/words';
 
-/** Product, vendor and activity proper names, written as their owners write them. */
-export const PROPER_NAMES: readonly string[] = [
-  'Anthropic',
-  'Autonomy',
-  'Excel',
-  'ForEach',
-  'Ollama',
-  'OpenAI',
-  'PostgreSQL',
-  'SQLite',
-];
+export { ACRONYMS, PROPER_NAMES };
 
 const KEPT = new Set([...ACRONYMS, ...PROPER_NAMES]);
 

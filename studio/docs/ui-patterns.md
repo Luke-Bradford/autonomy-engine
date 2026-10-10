@@ -318,17 +318,18 @@ message.
   `NodePanelLabels.test.tsx`, with one row in every row list and an override row for every setting of
   the bound connection. This is why `prompt` is "User prompt" beside "System prompt", `variable` is
   "Variable name" beside "Declared variable", `url` is "Request URL" beside a "Base URL" override,
-  `model` is "Model for this step" beside "Default model", `tools` is "Tool definitions" beside its
-  `tools row 1 …` cells, and the connection's own `headers` is "Default headers". Buttons are not
-  checked: the ones named by key (below) would always match a title that spells the key.
+  `model` is "Model for this step" beside "Default model", and the connection's own `headers` is
+  "Default headers". A row list's cells open with its title ("Tool definitions row 1 name"); they
+  are the list's own and do not clash with it. Buttons are not checked: the expression picker's are
+  named by key (below) and would always match a title that spells the key.
 - A field that must be a whole `${}` expression says so in its hint. The duration fields (`wait`,
   `webhook`) also give an example the save gate accepts ("e.g. ${30}"), pinned by a test, because a
   bare number there is refused.
 - Connection and dataset pickers read `Name (Display kind)`, from `lib/resourceOptionLabel.ts`; an
   override row and its "Add … override" option use the setting's title, falling back to its key.
-- What still names the KEY: the expression picker's buttons ("Insert reference into url"), a row
-  list's buttons and its cells ("tools row 1 name"). The key is what a `${}` reference and a server
-  message cite.
+- What still names the KEY: a top-level field's expression picker buttons ("Insert reference into
+  url"). The key is what a `${}` reference and a server message cite. A row cell's buttons follow
+  the cell's name ("Insert reference into column mapping row 1 expression").
 - **An activity's tabs are declared in its catalog entry** (#1477 OR29): *General* (run policy)
   first, then the entry's `tabs`, from one fixed vocabulary (`ACTIVITY_TAB_KEYS`: Settings, Source,
   Sink, Mapping, Request, Auth, Model, Prompt, Tools, Output, Location, Content), so a tab is named
@@ -637,7 +638,7 @@ list (a Copy mapping, HTTP headers, LLM messages, an output schema) render throu
 (`lib/form/RowTable.tsx`). It applies at every width and both densities.
 
 - **A header names each column once.** A cell shows no label of its own. It keeps one, out of sight,
-  as its control's name (`mapping row 2 sink`, `Parameter 1 default`), so specs and screen readers still
+  as its control's name ("Column mapping row 2 sink", "Parameter 1 default"), so specs and screen readers still
   reach each control. A row-list column's header carries what the cell label said: its title, its
   format (`— number`, `— JSON`) and the required mark.
 - **A row is one line.** At compact density it is 32px (`--row-h`) of 28px controls. A
@@ -682,8 +683,18 @@ inside running text or a filter pill's value. A row's controls are named by the 
 its position: "Parameter 1 name", "Variable 2 default", "Remove annotation 1", never the key
 (`param 1 name`). `labelProblem` in `testing/sentenceCase.ts` is the rule;
 `PipelinePanel.test.tsx` holds every control on the pipeline's properties to it, and
-`e2e/sentence-case.spec.ts` a rendered parameter row. Config row lists (`mapping row 2 sink`) are
-still named by key; S4b-2 moves them to their cells' titles.
+`e2e/sentence-case.spec.ts` a rendered parameter row.
+
+Config row lists follow the same rule (S4b-2). A cell is named by its list's title, its row and its
+column: "Column mapping row 2 on error", "Request headers row 1 key"; its buttons are "Move column
+mapping row 2 up", "Remove column mapping row 2" and "Add column mapping row"; its column headers
+are the cells' titles ("Source", "On error"). An untitled cell reads its key as words
+(`keyToWords` in `lib/words.ts`: `secret name` is "Secret name"). `NodePanelLabels.test.tsx` holds
+every row list of every activity to `labelProblem`, and `e2e/row-tables.spec.ts` a rendered Copy
+mapping. Two exceptions remain: an override allowlist's checkbox is "Overridable <key>", because
+the key is what an override cites, and a top-level field's expression picker keeps its key. Left
+for S6: the validation messages ("row 2 sink: …"), and the tools list's "parameters" cell, which
+is not the glossary's Parameters.
 
 **One term per concept.** Use the term in the first column on every tab, button, heading and run
 detail. Only "Parameters" has banned variants today, and `e2e/sentence-case.spec.ts` fails on

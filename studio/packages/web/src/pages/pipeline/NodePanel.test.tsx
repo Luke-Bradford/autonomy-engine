@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { midSentence } from '../../lib/words';
 import {
   catalog,
   getActivity,
@@ -402,7 +403,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     const panel = mountOver(agentNode({ task: 'x', outputSchema }));
 
     openTab('Output'); // `outputSchema` is on the agent's Output tab (#1477)
-    fireEvent.change(screen.getByRole('textbox', { name: /outputSchema row 1 constraints/ }), {
+    fireEvent.change(screen.getByRole('textbox', { name: /Output schema row 1 constraints/ }), {
       target: { value: '{not json}' },
     });
     panel.apply();
@@ -415,19 +416,23 @@ describe('NodePanel (U7 per-activity config form)', () => {
     const panel = mountOver(httpNode({ url: 'https://x', headers: { 'X-Keep': '1' } }));
 
     // The stored record renders as a row, so an apply that touches it keeps it.
-    expect((screen.getByLabelText('headers row 1 key') as HTMLTextAreaElement).value).toBe(
+    expect((screen.getByLabelText('Request headers row 1 key') as HTMLTextAreaElement).value).toBe(
       'X-Keep',
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Add headers row' }));
-    fireEvent.change(screen.getByLabelText('headers row 2 key'), { target: { value: 'X-New' } });
-    fireEvent.change(screen.getByLabelText('headers row 2 value'), { target: { value: 'v' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add request headers row' }));
+    fireEvent.change(screen.getByLabelText('Request headers row 2 key'), {
+      target: { value: 'X-New' },
+    });
+    fireEvent.change(screen.getByLabelText('Request headers row 2 value'), {
+      target: { value: 'v' },
+    });
     // `secretHeaders` is on the Auth tab (#1477).
     openTab('Auth');
-    fireEvent.click(screen.getByRole('button', { name: 'Add secretHeaders row' }));
-    fireEvent.change(screen.getByLabelText('secretHeaders row 1 key'), {
+    fireEvent.click(screen.getByRole('button', { name: 'Add secret headers row' }));
+    fireEvent.change(screen.getByLabelText('Secret headers row 1 key'), {
       target: { value: 'Authorization' },
     });
-    fireEvent.change(screen.getByLabelText('secretHeaders row 1 secret name'), {
+    fireEvent.change(screen.getByLabelText('Secret headers row 1 secret name'), {
       target: { value: 'api-token' },
     });
     panel.apply();
@@ -442,9 +447,13 @@ describe('NodePanel (U7 per-activity config form)', () => {
   it('refuses a duplicate header name rather than letting one row overwrite the other', () => {
     const panel = mountOver(httpNode({ url: 'https://x', headers: { 'X-A': '1' } }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Add headers row' }));
-    fireEvent.change(screen.getByLabelText('headers row 2 key'), { target: { value: 'X-A' } });
-    fireEvent.change(screen.getByLabelText('headers row 2 value'), { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add request headers row' }));
+    fireEvent.change(screen.getByLabelText('Request headers row 2 key'), {
+      target: { value: 'X-A' },
+    });
+    fireEvent.change(screen.getByLabelText('Request headers row 2 value'), {
+      target: { value: '2' },
+    });
     panel.apply();
 
     expect(screen.getByRole('alert').textContent).toMatch(/headers: row 2: duplicate key 'X-A'/);
@@ -623,7 +632,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     );
 
     openTab('Output'); // `outputSchema` is on the agent's Output tab (#1477)
-    fireEvent.change(screen.getByRole('textbox', { name: /outputSchema row 1 constraints/ }), {
+    fireEvent.change(screen.getByRole('textbox', { name: /Output schema row 1 constraints/ }), {
       target: { value: '{not json}' },
     });
     fireEvent.click(toJson());
@@ -1034,9 +1043,9 @@ describe('NodePanel (the objectList control, #1169)', () => {
   it('names every cell of every row, instead of one JSON blob for the whole mapping', () => {
     mountMapping({ mapping: oneRow, mode: 'append' });
 
-    expect(screen.getByLabelText('mapping row 1 source')).toBeTruthy();
-    expect(screen.getByLabelText('mapping row 1 sink')).toBeTruthy();
-    expect(screen.getByLabelText('mapping row 1 type')).toBeTruthy();
+    expect(screen.getByLabelText('Column mapping row 1 source')).toBeTruthy();
+    expect(screen.getByLabelText('Column mapping row 1 sink')).toBeTruthy();
+    expect(screen.getByLabelText('Column mapping row 1 type')).toBeTruthy();
     // The JSON textarea it replaces — for the FIELD, and for the whole config.
     expect(screen.queryByLabelText('mapping — JSON')).toBeNull();
     expect(screen.queryByLabelText('Config (JSON)')).toBeNull();
@@ -1050,7 +1059,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
       }),
     );
 
-    fireEvent.change(screen.getByLabelText('mapping row 2 sink'), {
+    fireEvent.change(screen.getByLabelText('Column mapping row 2 sink'), {
       target: { value: 'years' },
     });
     panel.apply();
@@ -1066,12 +1075,14 @@ describe('NodePanel (the objectList control, #1169)', () => {
   it('appends a row and stores it once its required columns are filled', () => {
     const panel = mountMapping({ mapping: oneRow, mode: 'append' });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Add mapping row' }));
-    fireEvent.change(screen.getByLabelText('mapping row 2 source'), {
+    fireEvent.click(screen.getByRole('button', { name: 'Add column mapping row' }));
+    fireEvent.change(screen.getByLabelText('Column mapping row 2 source'), {
       target: { value: 'age' },
     });
-    fireEvent.change(screen.getByLabelText('mapping row 2 sink'), { target: { value: 'years' } });
-    fireEvent.change(screen.getByLabelText('mapping row 2 type'), {
+    fireEvent.change(screen.getByLabelText('Column mapping row 2 sink'), {
+      target: { value: 'years' },
+    });
+    fireEvent.change(screen.getByLabelText('Column mapping row 2 type'), {
       target: { value: 'integer' },
     });
     panel.apply();
@@ -1087,7 +1098,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
       mode: 'append',
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'remove mapping row 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove column mapping row 1' }));
     panel.apply();
 
     expect(panel.storedConfig()).toMatchObject({
@@ -1112,7 +1123,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
   it('edits the row the cell belongs to when it is neither the first nor the second', () => {
     const panel = mountMapping({ mapping: threeRows, mode: 'append' });
 
-    fireEvent.change(screen.getByLabelText('mapping row 3 sink'), {
+    fireEvent.change(screen.getByLabelText('Column mapping row 3 sink'), {
       target: { value: 'municipality' },
     });
     panel.apply();
@@ -1125,7 +1136,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
   it('removes the MIDDLE row, leaving the ones on either side of it', () => {
     const panel = mountMapping({ mapping: threeRows, mode: 'append' });
 
-    fireEvent.click(screen.getByRole('button', { name: 'remove mapping row 2' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove column mapping row 2' }));
     panel.apply();
 
     expect(panel.storedConfig()).toMatchObject({ mapping: [threeRows[0], threeRows[2]] });
@@ -1136,7 +1147,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
   it('moves the MIDDLE row up, swapping it with the row above and no other', () => {
     const panel = mountMapping({ mapping: threeRows, mode: 'append' });
 
-    fireEvent.click(screen.getByRole('button', { name: 'move mapping row 2 up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move column mapping row 2 up' }));
     panel.apply();
 
     expect(panel.storedConfig()).toMatchObject({
@@ -1147,7 +1158,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
   it('moves the MIDDLE row down, swapping it with the row below and no other', () => {
     const panel = mountMapping({ mapping: threeRows, mode: 'append' });
 
-    fireEvent.click(screen.getByRole('button', { name: 'move mapping row 2 down' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move column mapping row 2 down' }));
     panel.apply();
 
     expect(panel.storedConfig()).toMatchObject({
@@ -1156,18 +1167,18 @@ describe('NodePanel (the objectList control, #1169)', () => {
   });
 
   it('keeps focus on the row it moved, so a second press moves it again', () => {
-    // The buttons are index-keyed, so without this the focused `move row 2 up`
+    // The buttons are index-keyed, so without this the focused "Move column mapping row 2 up"
     // would be the row that just shifted DOWN, and a second press would undo
     // the first. At the top the `up` is disabled, so focus takes `down`.
     const panel = mountMapping({ mapping: threeRows, mode: 'append' });
 
-    fireEvent.click(screen.getByRole('button', { name: 'move mapping row 3 up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move column mapping row 3 up' }));
     expect(document.activeElement).toBe(
-      screen.getByRole('button', { name: 'move mapping row 2 up' }),
+      screen.getByRole('button', { name: 'Move column mapping row 2 up' }),
     );
-    fireEvent.click(screen.getByRole('button', { name: 'move mapping row 2 up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move column mapping row 2 up' }));
     expect(document.activeElement).toBe(
-      screen.getByRole('button', { name: 'move mapping row 1 down' }),
+      screen.getByRole('button', { name: 'Move column mapping row 1 down' }),
     );
     panel.apply();
 
@@ -1180,10 +1191,10 @@ describe('NodePanel (the objectList control, #1169)', () => {
     mountMapping({ mapping: threeRows, mode: 'append' });
 
     const button = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement;
-    expect(button('move mapping row 1 up').disabled).toBe(true);
-    expect(button('move mapping row 1 down').disabled).toBe(false);
-    expect(button('move mapping row 3 up').disabled).toBe(false);
-    expect(button('move mapping row 3 down').disabled).toBe(true);
+    expect(button('Move column mapping row 1 up').disabled).toBe(true);
+    expect(button('Move column mapping row 1 down').disabled).toBe(false);
+    expect(button('Move column mapping row 3 up').disabled).toBe(false);
+    expect(button('Move column mapping row 3 down').disabled).toBe(true);
   });
 
   it('refuses a mapping whose LAST row was removed, rather than saving a copy that moves nothing', () => {
@@ -1197,7 +1208,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
     // disabled button hides its reason, and the refusal names it.
     const panel = mountMapping({ mapping: oneRow, mode: 'append' });
 
-    fireEvent.click(screen.getByRole('button', { name: 'remove mapping row 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove column mapping row 1' }));
     panel.apply();
 
     expect(screen.getByText(/a copy maps no columns/)).toBeTruthy();
@@ -1210,14 +1221,16 @@ describe('NodePanel (the objectList control, #1169)', () => {
     // surface that rather than save.
     const panel = mountMapping({ mapping: oneRow, mode: 'append' });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Add mapping row' }));
-    fireEvent.change(screen.getByLabelText('mapping row 2 source'), {
+    fireEvent.click(screen.getByRole('button', { name: 'Add column mapping row' }));
+    fireEvent.change(screen.getByLabelText('Column mapping row 2 source'), {
       target: { value: 'other' },
     });
-    fireEvent.change(screen.getByLabelText('mapping row 2 sink'), {
+    fireEvent.change(screen.getByLabelText('Column mapping row 2 sink'), {
       target: { value: 'full_name' },
     });
-    fireEvent.change(screen.getByLabelText('mapping row 2 type'), { target: { value: 'string' } });
+    fireEvent.change(screen.getByLabelText('Column mapping row 2 type'), {
+      target: { value: 'string' },
+    });
     panel.apply();
 
     expect(screen.getByText(/duplicate sink column/)).toBeTruthy();
@@ -1509,16 +1522,18 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     return panel;
   };
   const open = (cell: string) =>
-    fireEvent.click(screen.getByRole('button', { name: `Insert reference into ${cell}` }));
+    fireEvent.click(
+      screen.getByRole('button', { name: `Insert reference into ${midSentence(cell)}` }),
+    );
   const offered = () => screen.queryByRole('button', { name: /^limit/ });
 
   it("writes a chosen reference into THAT row's expression, and no other row", () => {
     const panel = mountMapping();
 
-    fireEvent.change(screen.getByLabelText('mapping row 2 expression'), {
+    fireEvent.change(screen.getByLabelText('Column mapping row 2 expression'), {
       target: { value: '' },
     });
-    open('mapping row 2 expression');
+    open('Column mapping row 2 expression');
     fireEvent.click(screen.getByRole('button', { name: /^limit/ }));
     panel.apply();
 
@@ -1534,14 +1549,16 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     // a problem the reference did not cause — so the list would be empty.
     mountMapping();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Add mapping row' }));
-    fireEvent.change(screen.getByLabelText('mapping row 4 sink'), { target: { value: 'tag' } });
-    open('mapping row 4 expression');
+    fireEvent.click(screen.getByRole('button', { name: 'Add column mapping row' }));
+    fireEvent.change(screen.getByLabelText('Column mapping row 4 sink'), {
+      target: { value: 'tag' },
+    });
+    open('Column mapping row 4 expression');
     fireEvent.click(screen.getByRole('button', { name: /^limit/ }));
 
-    expect((screen.getByLabelText('mapping row 4 expression') as HTMLTextAreaElement).value).toBe(
-      '${params.limit}',
-    );
+    expect(
+      (screen.getByLabelText('Column mapping row 4 expression') as HTMLTextAreaElement).value,
+    ).toBe('${params.limit}');
   });
 
   it('offers nothing to a column-name cell, which §8 holds to a literal', () => {
@@ -1552,21 +1569,23 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     // Already holding a refused `${}`: the refusal must not become the BASELINE
     // a candidate is compared against, or every candidate would pass as "no new
     // issue".
-    fireEvent.change(screen.getByLabelText('mapping row 3 sink'), {
+    fireEvent.change(screen.getByLabelText('Column mapping row 3 sink'), {
       target: { value: '${run.runId}' },
     });
 
-    open('mapping row 3 sink');
+    open('Column mapping row 3 sink');
 
     expect(offered()).toBeNull();
-    expect(screen.getByText(/No reference in this pipeline fits mapping row 3 sink/)).toBeTruthy();
+    expect(
+      screen.getByText(/No reference in this pipeline fits column mapping row 3 sink/),
+    ).toBeTruthy();
   });
 
   it('offers nothing to the expression of a row that already reads a source column', () => {
     // `source` XOR `expression`: any reference here is refused at save.
     mountMapping();
 
-    open('mapping row 1 expression');
+    open('Column mapping row 1 expression');
 
     expect(offered()).toBeNull();
   });
@@ -1577,9 +1596,9 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     // still open there would write a reference into a row it never checked.
     mountMapping();
 
-    open('mapping row 2 expression');
+    open('Column mapping row 2 expression');
     expect(offered()).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'remove mapping row 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove column mapping row 1' }));
 
     expect(offered()).toBeNull();
   });
@@ -1590,9 +1609,9 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     // a row it was never resolved against.
     mountMapping();
 
-    open('mapping row 2 expression');
+    open('Column mapping row 2 expression');
     expect(offered()).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'move mapping row 1 down' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move column mapping row 1 down' }));
 
     expect(offered()).toBeNull();
   });
@@ -1625,10 +1644,12 @@ describe('the expression picker on a mapping cell (#1178)', () => {
 
     openTab('Tools'); // `tools` is on the llm_call's Tools tab (#1477)
     for (const cell of ['name', 'description', 'expression']) {
-      open(`tools row 1 ${cell}`);
+      open(`Tool definitions row 1 ${cell}`);
       expect(offered(), cell).toBeNull();
       fireEvent.keyDown(
-        screen.getByRole('button', { name: `Insert reference into tools row 1 ${cell}` }),
+        screen.getByRole('button', {
+          name: `Insert reference into tool definitions row 1 ${cell}`,
+        }),
         {
           key: 'Escape',
         },
@@ -1652,7 +1673,7 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     );
 
     openTab('Prompt');
-    open('messages row 1 content');
+    open('Conversation row 1 content');
 
     expect(offered()).toBeTruthy();
   });

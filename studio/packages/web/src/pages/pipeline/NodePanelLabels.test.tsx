@@ -10,7 +10,8 @@ import {
 } from '@autonomy-studio/shared';
 import { NodePanel } from './PipelineCanvas';
 import { createCanvasStore } from './canvasStore';
-import { configFieldTitle, deriveConfigFields } from './configForm';
+import { configFieldTitle, deriveConfigFields, rowTitle } from './configForm';
+import { labelProblem } from '../../testing/sentenceCase';
 
 vi.mock('../../api/pipelines', () => ({
   listAllPipelineVersions: () => Promise.resolve([]),
@@ -54,8 +55,8 @@ const connectionOf = (kind: ConnectionKind): Connection =>
  * gives it, and of every labelled group (a row list is one).
  *
  * Buttons are left out on purpose: the expression picker's ("Insert reference
- * into url") and a row list's ("Add tools row") are named by the KEY, which a
- * title often spells too. `docs/ui-patterns.md` records why they keep it.
+ * into url") is named by the KEY, which a title often spells too.
+ * `docs/ui-patterns.md` records why it keeps it.
  */
 function controlNames(root: HTMLElement): string[] {
   const names: string[] = [];
@@ -117,10 +118,13 @@ describe('node panel labels (#1396)', () => {
       // contain it or be contained by it. A list field's label adds its format
       // ("Cases — one per line"), and that is still its own.
       const isOwn = (title: string, n: string) => n === title || n.startsWith(`${title} — `);
+      // A row list's cells open with its title ("column mapping row 1 sink"):
+      // they are the list's own, so they neither count as it nor clash with it.
+      const isCell = (title: string, n: string) => n.startsWith(`${title} row `);
       const clashes = titles.flatMap((title) => {
         const own = names.filter((n) => isOwn(title, n)).length;
         const others = names.filter(
-          (n) => !isOwn(title, n) && (n.includes(title) || title.includes(n)),
+          (n) => !isOwn(title, n) && !isCell(title, n) && (n.includes(title) || title.includes(n)),
         );
         return own === 1 && others.length === 0 ? [] : [`${title}: ${own}× ${others.join(' | ')}`];
       });
@@ -128,7 +132,28 @@ describe('node panel labels (#1396)', () => {
       // The seeding above is what puts those labels on the panel; prove it did.
       const rowList = fields.find((f) => f.kind === 'objectList');
       if (rowList !== undefined)
-        expect(names.some((n) => n.startsWith(`${rowList.name} row 1 `))).toBe(true);
+        expect(names.some((n) => n.startsWith(`${rowTitle(rowList).toLowerCase()} row 1 `))).toBe(
+          true,
+        );
+      // #1594 OR40 S4b-2 — every name in a row list is words, not keys: its
+      // cells, its column headers, its row buttons and its Add button.
+      const rowNames = [...container.querySelectorAll('.object-list')].flatMap((list) => [
+        ...[...list.querySelectorAll<HTMLInputElement>('input, select, textarea')].flatMap((el) => [
+          el.getAttribute('aria-label') ?? '',
+          ...[...(el.labels ?? [])].map((l) => l.textContent?.trim() ?? ''),
+        ]),
+        ...[...list.querySelectorAll('button')].map(
+          (el) => el.getAttribute('aria-label') ?? el.textContent?.trim() ?? '',
+        ),
+        ...[...list.querySelectorAll('th')].map((th) => th.textContent?.trim() ?? ''),
+      ]);
+      if (rowList !== undefined) expect(rowNames.length).toBeGreaterThan(0);
+      expect(
+        rowNames
+          .filter((n) => n !== '')
+          .map((n) => [n, labelProblem(n)] as const)
+          .filter(([, problem]) => problem !== null),
+      ).toEqual([]);
       if (kind !== undefined) {
         const overrideTitles = (deriveConfigFields(connectionConfigSchema(kind)) ?? []).map((f) =>
           configFieldTitle(f).toLowerCase(),

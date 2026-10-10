@@ -3688,7 +3688,7 @@ export function NodePanel({
   /**
    * The draft rows that actually claim a sink column.
    *
-   * A row whose `sink` is still blank — "Add mapping row" inserts an empty one —
+   * A row whose `sink` is still blank — "Add column mapping row" inserts an empty one —
    * names nothing yet, so counting it would report a column as written before
    * the author has said which.
    *

@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import { describeJsonProblem, notValidJson } from '../../lib/json/jsonText';
+import { keyToWords, midSentence } from '../../lib/words';
 import {
   enumValuesOf,
   SecretRefSchema,
@@ -1383,6 +1384,40 @@ export function configKeyLabel(
 export function configFieldTitle(field: ConfigField): string {
   const base = field.label?.title ?? field.name;
   return field.label?.unit === undefined ? base : `${base} (${field.label.unit})`;
+}
+
+/**
+ * #1594 OR40 S4b-2 — a row list's or a cell's title in words. A schema title
+ * when it has one; otherwise the key read as words (`secret name` → "Secret
+ * name"), because a cell's key is no label. A top-level field keeps showing
+ * its key (`configFieldTitle`): errors and expressions cite it.
+ */
+export function rowTitle(field: ConfigField): string {
+  const base = field.label?.title ?? keyToWords(field.name);
+  return field.label?.unit === undefined ? base : `${base} (${field.label.unit})`;
+}
+
+/**
+ * What a row list's cell control is called: its list, its row and its column,
+ * in words — "Column mapping row 2 on error", never `mapping row 2 onError`.
+ * Each cell needs its own name, or three Sink boxes answer to one.
+ */
+export function rowCellName(field: ConfigField, index: number, cell: ConfigField): string {
+  return `${rowTitle(field)} row ${index + 1} ${midSentence(rowTitle(cell))}`;
+}
+
+/**
+ * A row's move and remove buttons: "Move column mapping row 2 up", "Remove
+ * column mapping row 2". One builder, because the move handler finds the
+ * button it focuses next by this name.
+ */
+export function rowActionName(
+  field: ConfigField,
+  index: number,
+  action: 'up' | 'down' | 'remove',
+): string {
+  const row = `${midSentence(rowTitle(field))} row ${index + 1}`;
+  return action === 'remove' ? `Remove ${row}` : `Move ${row} ${action}`;
 }
 
 /**
