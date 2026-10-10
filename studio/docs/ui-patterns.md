@@ -28,6 +28,19 @@ required marks and display names; its layout is its own, below.
   it. A drawer whose act is a pick rather than a save, such as the kind gallery below, puts its body
   and footer in the shell directly, with no form and no unsaved-changes guard.
 
+### The run page's detail drawer
+
+- An activity run opens in a drawer on the right of the run page (`RunDrawer`), fixed under the
+  command bar and held inside the window, at the operator's width (dragged on its left edge).
+- **From 1280px wide it pushes the page**: the page keeps a gutter the drawer's width, so the grid
+  narrows rather than running under it, and the drawer is a region named "Activity run details".
+  Pushing, it takes at most half the window; dragged wider, it lies over the page instead.
+- **Narrower, it lies over the page** as a non-modal dialog of the same name, and the page keeps its
+  width.
+- Either way it traps no focus. Escape closes it while focus is inside it, and focus goes back to
+  the row or graph node that opened it. It is last in the page, so Tab past its end leaves the
+  document, as it would from the page's last control.
+
 ## New connection: the kind gallery
 
 - **"New connection" opens the kind gallery first** (`ConnectionKindDrawer`), as ADF's "New linked

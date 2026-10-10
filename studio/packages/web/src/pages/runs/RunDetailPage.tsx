@@ -10,6 +10,8 @@ import {
 import { computeRunUsage, TERMINAL_RUN_ROW_STATUS } from '@autonomy-studio/shared';
 import type { PipelineVersion, Run, RunStatus } from '@autonomy-studio/shared';
 import { useNavigate } from 'react-router';
+import { useStore } from 'zustand';
+import { uiStore } from '../../stores/uiStore';
 import { useLatestSearchParams } from '../../lib/useLatestSearchParams';
 import { cancelRun, getRun, getRunDetail, rerunFromFailed } from '../../api/runs';
 import { messageOf } from '../../api/client';
@@ -38,6 +40,7 @@ import { activityOfRow, attemptOutputLines, latestOutputByAttempt } from './atte
 import { iterationLabel } from './activityRunsColumns';
 import { activityRunOfNode } from './activityRunsTree';
 import { RunDrawer } from './RunDrawer';
+import { runDrawerWidthStyle } from './runDrawerFrame';
 import { RunHeader, type RunHeaderNames } from './RunHeader';
 import { RunFailureBanner } from './RunFailureBanner';
 import {
@@ -481,6 +484,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
      keeps it; `null` until they pick one, so each row opens on its error or its
      output (`defaultDrawerTab`). Close keeps it too. */
   const [drawerTab, setDrawerTab] = useState<DrawerTab | null>(null);
+  const drawerWidth = useStore(uiStore, (s) => s.runDrawerWidth);
   const latestOutputs = useMemo(() => latestOutputByAttempt(stream.events), [stream.events]);
   const drawerIteration = (() => {
     const it = drawerRow?.iteration ?? null;
@@ -648,7 +652,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
     );
 
   return (
-    <section aria-labelledby="run-heading" className="run-page">
+    <section
+      aria-labelledby="run-heading"
+      className="run-page"
+      style={runDrawerWidthStyle(drawerWidth)}
+    >
       <RunHeader
         runId={runId}
         run={run}

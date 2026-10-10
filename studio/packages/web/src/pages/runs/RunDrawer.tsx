@@ -1,29 +1,34 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useStore } from 'zustand';
 import { isUnhandledEscape } from '../../lib/escape';
 import { PaneSplitter } from '../../shell/PaneSplitter';
 import { DOCK_MIN_WIDTH, uiStore } from '../../stores/uiStore';
+import {
+  RUN_DRAWER_MAX_SHARE,
+  RUN_DRAWER_WIDTH_VAR,
+  RUN_PAGE_SELECTOR,
+  runDrawerPushes,
+} from './runDrawerFrame';
 
 /** The drawer element, which the rows that open it name in `aria-controls`. */
 export const RUN_DRAWER_ID = 'run-detail-drawer';
-const WIDTH_VAR = '--run-drawer-width';
-/** The widest the drawer may be: most of the window, never all of it. */
-const MAX_SHARE = 0.8;
+/** The drawer's name, as a region or a dialog. */
+export const RUN_DRAWER_LABEL = 'Activity run details';
 const RESIZE_STEP = 16;
 
 /**
  * #1484 OR35 M2 — the run page's detail drawer: what one activity run did, on
- * the right, OVER the page rather than in it. The inline drill-in it replaced
- * pushed everything below it down; this leaves the activity runs where they
- * are, so the operator can step from row to row and read each one.
+ * the right, fixed under the command bar rather than in the page's flow. The
+ * inline drill-in it replaced pushed everything below it down; this leaves the
+ * activity runs where they are, so the operator can step from row to row and
+ * read each one.
+ *
+ * #1594 OR40 S3e — where the window has room (`runDrawerPushes`) it PUSHES
+ * the page sideways: the run page keeps a gutter the drawer's width, so the
+ * grid narrows rather than running under it, and the drawer is a named
+ * `region` beside it. In a narrower window, or dragged past half of it, it
+ * lies over the page as a non-modal `dialog`, and the page keeps its width.
+ * Held inside the viewport either way.
  *
  * Not a modal: the table behind stays live and clickable, so opening another
  * row just swaps the record. Escape closes it while focus is inside it, as the
@@ -31,7 +36,9 @@ const RESIZE_STEP = 16;
  * it. Only while focus is inside: the page behind has its own Escapes (a search
  * box, a confirm), and a page-wide one would close the drawer under them. The
  * owner keys the drawer by each open, so every open, even of the row already
- * shown, is a fresh mount and hands focus in again.
+ * shown, is a fresh mount and hands focus in again. Being non-modal it traps no
+ * focus: it is last in the page, so Tab past its end leaves the document, as it
+ * would from the page's last control.
  *
  * Its width is the operator's (`uiStore.runDrawerWidth`), dragged or set with
  * the arrow keys on its left edge.
@@ -54,7 +61,7 @@ export function RunDrawer({
   const [rendered, setRendered] = useState(0);
 
   // Re-measured on a window resize too: the default width and the cap are
-  // both shares of the window.
+  // both shares of the window, and the width decides push or overlay.
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
   useEffect(() => {
     const onResize = () => setWindowWidth(window.innerWidth);
@@ -82,18 +89,44 @@ export function RunDrawer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const preview = useCallback(
-    (next: number) => ref.current?.style.setProperty(WIDTH_VAR, `${next}px`),
-    [],
+  // On the run page, which carries the width (`runDrawerWidthStyle`), so a
+  // pushed page's gutter follows the drag. The drag's width is held too, so a
+  // drag past half the window stops pushing as it goes, not on release.
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
+  const preview = useCallback((next: number) => {
+    ref.current
+      ?.closest<HTMLElement>(RUN_PAGE_SELECTOR)
+      ?.style.setProperty(RUN_DRAWER_WIDTH_VAR, `${next}px`);
+    setDragWidth(next);
+  }, []);
+  const commit = useCallback(
+    (next: number) => {
+      setDragWidth(null);
+      setWidth(next);
+    },
+    [setWidth],
   );
+  // A drag the drawer closed in the middle of (Escape) never commits, and the
+  // page outlives the drawer: put the operator's width back on it, so the next
+  // open is not at a width the store never held.
+  useEffect(() => {
+    const page = ref.current?.closest<HTMLElement>(RUN_PAGE_SELECTOR);
+    return () => {
+      const kept = uiStore.getState().runDrawerWidth;
+      if (kept === null) page?.style.removeProperty(RUN_DRAWER_WIDTH_VAR);
+      else page?.style.setProperty(RUN_DRAWER_WIDTH_VAR, `${kept}px`);
+    };
+  }, []);
 
-  const max = Math.max(DOCK_MIN_WIDTH, Math.floor(windowWidth * MAX_SHARE));
+  const max = Math.max(DOCK_MIN_WIDTH, Math.floor(windowWidth * RUN_DRAWER_MAX_SHARE));
+  const push = runDrawerPushes(windowWidth, dragWidth ?? width);
   return (
     <div
       ref={ref}
       id={RUN_DRAWER_ID}
       className="run-drawer"
-      style={width === null ? undefined : ({ [WIDTH_VAR]: `${width}px` } as CSSProperties)}
+      aria-label={RUN_DRAWER_LABEL}
+      {...(push ? { role: 'region', 'data-push': '' } : { role: 'dialog', 'aria-modal': false })}
       onKeyDown={(event) => {
         // An Escape a control inside already handled is not a request to close.
         if (!isUnhandledEscape(event)) return;
@@ -110,10 +143,10 @@ export function RunDrawer({
           min={DOCK_MIN_WIDTH}
           max={max}
           step={RESIZE_STEP}
-          label="Resize activity details"
+          label="Resize activity run details"
           controls={RUN_DRAWER_ID}
           onPreview={preview}
-          onCommit={setWidth}
+          onCommit={commit}
         />
       )}
       <div className="run-drawer__body">{children}</div>
