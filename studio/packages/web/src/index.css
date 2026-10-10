@@ -6904,7 +6904,8 @@ button.danger {
 /* #1484 OR35 M2 — the detail drawer: fixed to the right under the command bar,
    out of the page's flow, so opening it moves nothing down.
    #1594 OR40 S3e — its width is the run page's (`runDrawerWidthStyle`): the
-   operator's, else a share of the window, and never more than 80% of it. */
+   operator's, else a share of the window, and never more than 80% of it
+   (`RUN_DRAWER_MAX_SHARE`, the splitter's range: keep the two in step). */
 .run-page {
   --run-drawer-box: min(var(--run-drawer-width, min(36rem, 45vw)), 80vw);
 }

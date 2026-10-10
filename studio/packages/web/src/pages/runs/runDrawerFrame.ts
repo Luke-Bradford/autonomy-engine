@@ -9,6 +9,12 @@ export const RUN_DRAWER_WIDTH_VAR = '--run-drawer-width';
 /** The run page, which carries the width and keeps the pushed gutter. */
 export const RUN_PAGE_SELECTOR = '.run-page';
 
+/**
+ * The widest the drawer may be: most of the window, never all of it. The
+ * splitter's range; `index.css` caps the rendered box at the same `80vw`
+ * (`--run-drawer-box`), for a window narrowed after the width was kept.
+ */
+export const RUN_DRAWER_MAX_SHARE = 0.8;
 /** From this window width there is room to push the page. */
 export const RUN_DRAWER_PUSH_MIN = 1280;
 /**

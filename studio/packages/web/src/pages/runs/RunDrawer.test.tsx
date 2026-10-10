@@ -79,6 +79,10 @@ describe('RunDrawer', () => {
     fireEvent.pointerDown(splitter, { button: 0, clientX: 1000 });
     fireEvent.pointerMove(splitter, { clientX: 960 });
     expect(page.style.getPropertyValue('--run-drawer-width')).toBe('440px');
+    expect(screen.getByRole('region', { name: RUN_DRAWER_LABEL })).toBeTruthy();
+    // Past half the window it stops pushing mid-drag, not on release.
+    fireEvent.pointerMove(splitter, { clientX: 600 });
+    expect(screen.getByRole('dialog', { name: RUN_DRAWER_LABEL })).not.toHaveAttribute('data-push');
 
     // Closed before the drag commits: the page goes back to the kept 400.
     rerender(<section className="run-page" />);

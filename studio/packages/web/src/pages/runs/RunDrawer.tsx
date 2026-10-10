@@ -3,14 +3,17 @@ import { useStore } from 'zustand';
 import { isUnhandledEscape } from '../../lib/escape';
 import { PaneSplitter } from '../../shell/PaneSplitter';
 import { DOCK_MIN_WIDTH, uiStore } from '../../stores/uiStore';
-import { RUN_DRAWER_WIDTH_VAR, RUN_PAGE_SELECTOR, runDrawerPushes } from './runDrawerFrame';
+import {
+  RUN_DRAWER_MAX_SHARE,
+  RUN_DRAWER_WIDTH_VAR,
+  RUN_PAGE_SELECTOR,
+  runDrawerPushes,
+} from './runDrawerFrame';
 
 /** The drawer element, which the rows that open it name in `aria-controls`. */
 export const RUN_DRAWER_ID = 'run-detail-drawer';
 /** The drawer's name, as a region or a dialog. */
 export const RUN_DRAWER_LABEL = 'Activity run details';
-/** The widest the drawer may be: most of the window, never all of it. */
-const MAX_SHARE = 0.8;
 const RESIZE_STEP = 16;
 
 /**
@@ -87,13 +90,21 @@ export function RunDrawer({
   }, []);
 
   // On the run page, which carries the width (`runDrawerWidthStyle`), so a
-  // pushed page's gutter follows the drag.
-  const preview = useCallback(
-    (next: number) =>
-      ref.current
-        ?.closest<HTMLElement>(RUN_PAGE_SELECTOR)
-        ?.style.setProperty(RUN_DRAWER_WIDTH_VAR, `${next}px`),
-    [],
+  // pushed page's gutter follows the drag. The drag's width is held too, so a
+  // drag past half the window stops pushing as it goes, not on release.
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
+  const preview = useCallback((next: number) => {
+    ref.current
+      ?.closest<HTMLElement>(RUN_PAGE_SELECTOR)
+      ?.style.setProperty(RUN_DRAWER_WIDTH_VAR, `${next}px`);
+    setDragWidth(next);
+  }, []);
+  const commit = useCallback(
+    (next: number) => {
+      setDragWidth(null);
+      setWidth(next);
+    },
+    [setWidth],
   );
   // A drag the drawer closed in the middle of (Escape) never commits, and the
   // page outlives the drawer: put the operator's width back on it, so the next
@@ -107,8 +118,8 @@ export function RunDrawer({
     };
   }, []);
 
-  const max = Math.max(DOCK_MIN_WIDTH, Math.floor(windowWidth * MAX_SHARE));
-  const push = runDrawerPushes(windowWidth, width);
+  const max = Math.max(DOCK_MIN_WIDTH, Math.floor(windowWidth * RUN_DRAWER_MAX_SHARE));
+  const push = runDrawerPushes(windowWidth, dragWidth ?? width);
   return (
     <div
       ref={ref}
@@ -135,7 +146,7 @@ export function RunDrawer({
           label="Resize activity run details"
           controls={RUN_DRAWER_ID}
           onPreview={preview}
-          onCommit={setWidth}
+          onCommit={commit}
         />
       )}
       <div className="run-drawer__body">{children}</div>
