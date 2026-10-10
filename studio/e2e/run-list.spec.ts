@@ -285,6 +285,9 @@ test('U26 — the runs list filters by annotation, from a picker of the run anno
   await expect(rowFor(plainRun)).toHaveCount(1);
 
   // Anchored for the reason the Pipeline picker is (see the test above).
+  // Behind "Add filter" until added or set (#1594 OR40 S3).
+  await page.getByRole('button', { name: 'Add filter' }).click();
+  await page.getByRole('menuitem', { name: 'Annotation' }).click();
   const picker = page.getByLabel(/^Annotation/);
   await picker.selectOption({ label: tag });
   await expect(rowFor(taggedRun)).toHaveCount(1);
@@ -480,9 +483,10 @@ test('#1484 — the filter bar searches runs and days, in one row above a dense 
       sideScroll: document.documentElement.scrollWidth > window.innerWidth,
     };
   });
-  // Status, kind, pipeline, trigger, annotation, started, two days, Clear. (The
-  // search box is on the title row.)
-  expect(measured.controlCount).toBe(9);
+  // The pills (#1594 OR40 S3): Status, Pipeline, Triggered by, Started (with
+  // its two days inside it), then Add filter and Clear. (The search box is on
+  // the title row.)
+  expect(measured.controlCount).toBe(6);
   const spread = Math.max(...measured.tops) - Math.min(...measured.tops);
   expect(
     spread,

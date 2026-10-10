@@ -924,6 +924,11 @@ describe('RunsPage — U26 filter pane', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Add filter' }));
       expect(await screen.findByRole('menuitem', { name: 'Annotation' })).toBeInTheDocument();
       expect(screen.queryByRole('menuitem', { name: 'Trigger' })).not.toBeInTheDocument();
+      await userEvent.keyboard('{Escape}');
+
+      // Its ✕ takes it back off the row, though it never narrowed the list.
+      await userEvent.click(screen.getByRole('button', { name: 'Remove Trigger filter' }));
+      expect(screen.queryByLabelText('Trigger')).not.toBeInTheDocument();
     });
 
     it('shows a filter set in the URL without adding it, and its ✕ clears it off the row', async () => {

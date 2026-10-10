@@ -789,9 +789,7 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
           name="Status"
           active={statusFilter !== undefined}
           onRemove={
-            statusFilter === undefined
-              ? undefined
-              : () => setFilter(RUN_FILTER_PARAMS.status, '')
+            statusFilter === undefined ? undefined : () => setFilter(RUN_FILTER_PARAMS.status, '')
           }
         >
           <LabelledControl label="Status">
@@ -816,9 +814,7 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
           name="Pipeline"
           active={pipelineId !== undefined}
           onRemove={
-            pipelineId === undefined
-              ? undefined
-              : () => setFilter(RUN_FILTER_PARAMS.pipelineId, '')
+            pipelineId === undefined ? undefined : () => setFilter(RUN_FILTER_PARAMS.pipelineId, '')
           }
         >
           <FilterPicker
@@ -844,9 +840,7 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
             checked={kinds}
             labelOf={(k) => RUN_TRIGGERED_BY_LABELS[k]}
             countNoun="kinds"
-            onChange={(items) =>
-              setFilter(RUN_FILTER_PARAMS.kind, canonicalKindParam(items) ?? '')
-            }
+            onChange={(items) => setFilter(RUN_FILTER_PARAMS.kind, canonicalKindParam(items) ?? '')}
           />
         </FilterPill>
 
