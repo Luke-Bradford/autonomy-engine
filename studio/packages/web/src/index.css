@@ -5298,6 +5298,9 @@ button.danger {
 
 .row-table th {
   white-space: nowrap;
+  /* As tall as its words, not a row: the dock's fit (#1477 OR29) counts on a
+     header under one compact row. */
+  height: auto;
 }
 
 .row-table th[data-width='long'] {

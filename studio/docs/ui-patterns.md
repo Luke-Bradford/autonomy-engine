@@ -504,7 +504,8 @@ or header type.
   fitting it to the page is S6's.
 - **A form's rows** (`RowTable`) keep their own cell padding: what is left of `--row-h` around a
   bare `--control-h` control, top-aligned. That is a 28px control in a 32px row compact, and 32 in
-  36 comfortable. Their header is the same body-strong as every table's. A row's notes row
+  36 comfortable. Their header is the same body-strong as every table's, but only as tall as its words, so the
+  dock's required fields still fit (#1477 OR29). A row's notes row
   (`RowNotes`) takes its own height, so it hangs under its row as one entry.
 - **An id's Copy** (`CopyableId`) is an icon button, as in ADF, so the Runs grid's ID column holds
   the id and its button without clipping either.

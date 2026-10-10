@@ -278,12 +278,21 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
     label: 'Duration',
     sort: 'duration',
     numeric: true,
-    /* The finish TIMESTAMP is the cell's title (U10 fixed the column set). */
-    cell: (r, { loadedAt, zone }) => (
-      <td className="num" title={formatWhen(r.finishedAt, zone)}>
-        {formatRunDuration(r, loadedAt)}
-      </td>
-    ),
+    /* The finish TIMESTAMP is in the cell's title (U10 fixed the column set),
+       after the duration the narrow column can cut (#1594 OR40 S3d). */
+    cell: (r, { loadedAt, zone }) => {
+      const text = formatRunDuration(r, loadedAt);
+      return (
+        <td
+          className="num"
+          title={
+            r.finishedAt === null ? text : `${text} · finished ${formatWhen(r.finishedAt, zone)}`
+          }
+        >
+          {text}
+        </td>
+      );
+    },
   },
   activities: {
     label: 'Activities',
