@@ -557,8 +557,8 @@ replaced `FormSection` (a drawer's `fieldset` and `legend`), `DockSection` (the 
   `aria-expanded`, not a `<details>`: a `<summary>` cannot hold the `?` beside it. They are closed
   unless `defaultOpen`, and they open if `defaultOpen` turns true after mount (a record that loads
   late and uses the section).
-- **Still to move:** page sections that are bare `h2`/`h3` headings (Settings, Home, Git, the run
-  page's timeline, variables and cost) move to `Section` page by page in S6.
+- **Still to move:** page sections that are bare `h2`/`h3` headings (Settings, Git, the run
+  page's timeline, variables and cost) move to `Section` page by page in S6. Home moved first.
 
 `e2e/section.spec.ts` measures a drawer, the dock and a page at 1440x900 in both densities.
 

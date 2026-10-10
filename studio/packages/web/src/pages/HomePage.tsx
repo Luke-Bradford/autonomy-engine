@@ -13,6 +13,7 @@ import { PageHeader } from '../lib/PageHeader';
 import { Section } from '../lib/Section';
 import { OneLine } from '../lib/OneLine';
 import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
+import { RunStatusPill } from './runs/RunStatusPill';
 
 /**
  * How many recent runs Home shows.
@@ -105,12 +106,8 @@ export function HomePage() {
                         </Link>
                       </OneLine>
                     </td>
-                    {/* The WORD comes from the Monitor's one run-status
-                        vocabulary (#870); the CLASS comes from the status. */}
                     <td title={runStatusLabel(r.status)}>
-                      <span className={`run-status run-status-${r.status}`}>
-                        {runStatusLabel(r.status)}
-                      </span>
+                      <RunStatusPill status={r.status} />
                     </td>
                     {/* Absolute, exactly as the run list renders it. NOT a
                         relative "3m ago": a queued run's `startedAt` is an

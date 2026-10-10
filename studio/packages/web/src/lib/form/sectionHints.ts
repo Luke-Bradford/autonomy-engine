@@ -57,7 +57,7 @@ export const FORM_SECTION_HINTS = {
     basics: 'What the pipeline is called, the folder it is filed under, and what it is for.',
     importFile:
       'A pipeline, connection, trigger, dataset or global parameter export; what it needs rebound is listed after.',
-    demo: 'Five sample pipelines in folder “Demo” with their own connections and datasets, ready to run.',
+    demo: 'Five sample pipelines in folder “Demo”, one failing on purpose, with their own connections and datasets.',
     general: 'A short account of what this pipeline does and why it exists.',
     duplicate:
       'Which saved version the copy starts from; any but Latest is recorded on the copy as an annotation.',

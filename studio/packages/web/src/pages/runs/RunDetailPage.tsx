@@ -31,7 +31,6 @@ import {
 } from './runSummary';
 import { eventGloss } from './format';
 import { activityLabel, activityLabels } from '../pipeline/activityLabel';
-import { runStatusLabel } from './runStatus';
 import { AttemptTimeline } from './AttemptTimeline';
 import { NodeActivityPanel } from './NodeActivityPanel';
 import { drawerFileStem, type DrawerTab } from './drawerTab';
@@ -74,6 +73,7 @@ import { useShellLabel } from '../../shell/shellLabel';
 import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import { formatTimeOfDay, zoneLabel } from '../../lib/displayTime';
 import { OneLine } from '../../lib/OneLine';
+import { RunStatusPill } from './RunStatusPill';
 
 /* The local `message(err)` this file used to declare was one of the twenty-odd
    inline copies `messageOf` was named to replace; `api/client.ts` asks each to
@@ -669,9 +669,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
             {cancelling ? (
               <span className="run-status run-status-cancelling">Cancelling…</span>
             ) : (
-              <span className={`run-status run-status-${status}`}>
-                {runStatusLabel(status, waitingReason)}
-              </span>
+              <RunStatusPill status={status} waitingReason={waitingReason} />
             )}{' '}
             <span className={`stream-phase stream-phase-${stream.phase}`} role="status">
               {phaseLabel(stream.phase)}

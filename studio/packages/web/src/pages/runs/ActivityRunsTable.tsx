@@ -23,7 +23,6 @@ import { useSearchBox } from '../../lib/useSearchBox';
 import { FilterPicker, type FilterOption } from './FilterPicker';
 import { SortButton } from '../../lib/SortButton';
 import { RunDuration } from './RunHeader';
-import { runStatusLabel } from './runStatus';
 import {
   ACTIVITY_RUN_SORT_COLUMNS,
   ACTIVITY_RUNS_PARAMS,
@@ -54,6 +53,7 @@ import { RUN_DRAWER_ID } from './RunDrawer';
 import { activityRunEntries } from './activityRunsTree';
 import { skipReasonText } from './skipReasonText';
 import { OneLine } from '../../lib/OneLine';
+import { RunStatusPill } from './RunStatusPill';
 
 /**
  * Bytes as the activity reported them, saying which way they moved. A copy's
@@ -148,9 +148,7 @@ function ChildRunCell({ child, live }: { child: ActivityRunChild; live: boolean 
     <>
       <Link to={runDetailPath(child.id)}>{child.pipelineName ?? <code>{child.id}</code>}</Link>
       {' · '}
-      <span className={`run-status run-status-${child.status}`}>
-        {runStatusLabel(child.status)}
-      </span>
+      <RunStatusPill status={child.status} />
       {runStartIsReal(child) && (
         <>
           {' · '}

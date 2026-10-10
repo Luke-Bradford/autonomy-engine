@@ -949,7 +949,7 @@ body {
 /* #1242 — the ONE colour a bare anchor takes.
 
    Until this rule, the only anchor rules in this file were container-scoped
-   (Home's old card links, `.command-bar__breadcrumb a`), so every
+   (Home's card links, since retired, and `.command-bar__breadcrumb a`), so every
    link OUTSIDE those containers — a row link in the pipelines, datasets, runs
    and triggers tables, the cost-summary links, the run timeline's, the import
    panel's, the error-state "Back to pipelines" — fell through to the UA link

@@ -119,8 +119,11 @@ describe('HomePage', () => {
     await screen.findByRole('table', { name: 'Recent runs' });
 
     expect(container.querySelector('.page-hint')).toBeNull();
-    expect(container.querySelector('.hub-cards')).toBeNull();
-    expect(screen.getByRole('region', { name: 'Go to' })).toBeInTheDocument();
+    // Each shortcut is a list item holding one link — nothing card-shaped
+    // (the e2e reads the computed border and surface).
+    const items = within(screen.getByRole('region', { name: 'Go to' })).getAllByRole('listitem');
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) expect(within(item).getAllByRole('link')).toHaveLength(1);
   });
 
   it('says the workspace has no runs only when the first page really returned none', async () => {
