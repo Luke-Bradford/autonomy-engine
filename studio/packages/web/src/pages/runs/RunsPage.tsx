@@ -404,6 +404,8 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
    * set one is on the row because its param is in the URL, so this holds only
    * what the URL cannot: "show me this axis at All". View state, like a menu's
    * open state, so a reload drops an unset pill and keeps every set one.
+   * Choosing a value in a pill adds it too, so a filter that arrived on a link
+   * stays on the row when the viewer turns it back to All.
    */
   const [addedFilters, setAddedFilters] = useState<readonly OptionalRunFilter[]>([]);
   const optionalValue: Record<OptionalRunFilter, string | undefined> = {
@@ -412,10 +414,7 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
   };
   const shownFilter = (param: OptionalRunFilter) =>
     addedFilters.includes(param) || optionalValue[param] !== undefined;
-  const optionalRefs = {
-    [RUN_FILTER_PARAMS.triggerId]: useRef<HTMLSelectElement>(null),
-    [RUN_FILTER_PARAMS.annotation]: useRef<HTMLSelectElement>(null),
-  };
+  const optionalSelects = useRef<Partial<Record<OptionalRunFilter, HTMLSelectElement | null>>>({});
   /* The picker a filter just added opens on, so adding one is one step from
      choosing its value. After the menu has closed: it hands focus back to its
      own trigger as it goes, which would otherwise win. */
@@ -423,19 +422,23 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
   useEffect(() => {
     if (focusFilter === null) return;
     const frame = requestAnimationFrame(() => {
-      optionalRefs[focusFilter].current?.focus();
+      optionalSelects.current[focusFilter]?.focus();
       setFocusFilter(null);
     });
     return () => cancelAnimationFrame(frame);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the refs are stable
   }, [focusFilter]);
-  function addFilter(param: OptionalRunFilter) {
+  function keepFilter(param: OptionalRunFilter) {
     setAddedFilters((prev) => (prev.includes(param) ? prev : [...prev, param]));
+  }
+  function addFilter(param: OptionalRunFilter) {
+    keepFilter(param);
     setFocusFilter(param);
   }
   function removeFilter(param: OptionalRunFilter) {
     setAddedFilters((prev) => prev.filter((p) => p !== param));
-    setFilter(param, '');
+    // An unset pill narrows nothing, and an identical URL pushed would be a
+    // Back that does nothing.
+    if (optionalValue[param] !== undefined) setFilter(param, '');
   }
 
   function clearFilters() {
@@ -915,43 +918,37 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
 
         {/* The optional filters, once added or set. Removing one takes it off
             the row as well as off the list. */}
-        {shownFilter(RUN_FILTER_PARAMS.triggerId) && (
+        {OPTIONAL_RUN_FILTERS.filter(({ param }) => shownFilter(param)).map(({ param, label }) => (
           <FilterPill
-            name="Trigger"
-            active={triggerId !== undefined}
-            onRemove={() => removeFilter(RUN_FILTER_PARAMS.triggerId)}
+            key={param}
+            name={label}
+            active={optionalValue[param] !== undefined}
+            onRemove={() => removeFilter(param)}
           >
             <FilterPicker
-              label="Trigger"
+              label={label}
               allLabel="All"
-              value={triggerId}
-              options={triggers.map((t) => ({ value: t.id, label: t.name }))}
-              onChange={(next) => setFilter(RUN_FILTER_PARAMS.triggerId, next)}
-              selectRef={optionalRefs[RUN_FILTER_PARAMS.triggerId]}
+              value={optionalValue[param]}
+              options={
+                param === RUN_FILTER_PARAMS.triggerId
+                  ? triggers.map((t) => ({ value: t.id, label: t.name }))
+                  : annotations.map((a) => ({ value: a, label: a }))
+              }
+              onChange={(next) => {
+                keepFilter(param);
+                setFilter(param, next);
+              }}
+              selectRef={(el) => {
+                optionalSelects.current[param] = el;
+              }}
             />
           </FilterPill>
-        )}
-        {shownFilter(RUN_FILTER_PARAMS.annotation) && (
-          <FilterPill
-            name="Annotation"
-            active={annotation !== undefined}
-            onRemove={() => removeFilter(RUN_FILTER_PARAMS.annotation)}
-          >
-            <FilterPicker
-              label="Annotation"
-              allLabel="All"
-              value={annotation}
-              options={annotations.map((a) => ({ value: a, label: a }))}
-              onChange={(next) => setFilter(RUN_FILTER_PARAMS.annotation, next)}
-              selectRef={optionalRefs[RUN_FILTER_PARAMS.annotation]}
-            />
-          </FilterPill>
-        )}
+        ))}
 
         {OPTIONAL_RUN_FILTERS.some(({ param }) => !shownFilter(param)) && (
           <Menu>
             <MenuTrigger disableButtonEnhancement>
-              <button type="button" className="subtle run-filters__add">
+              <button type="button" className="subtle run-filters__add" data-filter-add="">
                 <AddRegular aria-hidden="true" />
                 Add filter
               </button>

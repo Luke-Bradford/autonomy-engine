@@ -5949,10 +5949,11 @@ button.danger {
   font-variant-numeric: tabular-nums;
 }
 
-/* U26 + #1484 — the runs list's filter bar: ONE row at 1440px. The labels are
-   visually hidden (the "All …" options name each axis), the controls are
-   narrow, and the search box takes whatever width is left. It may still wrap on
-   a narrow window rather than push the page sideways. */
+/* U26 + #1484 — the runs list's filter bar: ONE row at 1440px. The controls
+   are narrow and the search box (on the title row) takes whatever width is
+   left. It may still wrap on a narrow window rather than push the page
+   sideways. Since #1594 OR40 S3 the runs bar's filters are pills (below); the
+   Pipelines page's bar shares these rules without them. */
 .run-filters {
   display: flex;
   flex-wrap: wrap;
@@ -5968,6 +5969,7 @@ button.danger {
 .run-filters select,
 .run-filters input,
 .run-filters button:not(.icon-button) {
+  min-height: var(--control-h);
   font-size: var(--type-body-size);
   padding: 0 var(--space-1);
 }
@@ -6036,17 +6038,17 @@ button.danger {
 
 /* The axis name, the control's own label. The colon has empty alternative
    text, so it is drawn and not read: the control's name stays "Status". */
-.filter-pill label {
+.filter-pill > .labelled-control:first-child > label {
   color: var(--muted);
   white-space: nowrap;
 }
 
-.filter-pill label::after {
+.filter-pill > .labelled-control:first-child > label::after {
   content: ':' / '';
 }
 
 /* The controls inside: no box of their own, and no hover edge (the global
-   `button:hover` accent border is 0,2,1; these are 0,3,1). The ring stays on
+   `button:hover` accent border is 0,2,1; these are 0,3,1 or more). The ring stays on
    the control that has focus, drawn inside it. */
 .filter-pill select,
 .filter-pill input,
@@ -6078,7 +6080,8 @@ button.danger {
   border-radius: var(--radius-pill);
 }
 
-.run-filters__add {
+.run-filters button.run-filters__add {
+  padding: 0 var(--space-2);
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);

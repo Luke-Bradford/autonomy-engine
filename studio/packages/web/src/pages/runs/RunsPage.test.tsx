@@ -946,6 +946,18 @@ describe('RunsPage — U26 filter pane', () => {
         RUNS_PAGE_SIZE,
       );
       expect(screen.queryByLabelText('Annotation')).not.toBeInTheDocument();
+      // The pill has gone, so the keyboard lands on Add filter, not the page.
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Add filter' })).toHaveFocus());
+    });
+
+    it('keeps a filter that arrived on a link on the row when it is turned back to All', async () => {
+      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?annotation=nightly');
+      await screen.findByText(/No runs match these filters/i);
+
+      await userEvent.selectOptions(screen.getByLabelText('Annotation'), '');
+
+      expect(await screen.findByText(/No runs yet/i)).toBeInTheDocument();
+      expect(screen.getByLabelText('Annotation')).toHaveValue('');
     });
 
     it('gives an always-shown pill a ✕ only while it narrows the list', async () => {
@@ -971,6 +983,8 @@ describe('RunsPage — U26 filter pane', () => {
       expect(
         screen.queryByRole('button', { name: 'Remove Status filter' }),
       ).not.toBeInTheDocument();
+      // Its ✕ has gone with the filter, so the keyboard lands on the control.
+      await waitFor(() => expect(screen.getByLabelText('Status')).toHaveFocus());
     });
 
     it("the Started pill's ✕ clears every time bound", async () => {
