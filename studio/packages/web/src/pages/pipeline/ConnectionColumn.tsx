@@ -69,9 +69,12 @@ export function ConnectionColumn({
   onNotice: (message: string) => void;
   onDirtyChange: (dirty: boolean) => void;
 }) {
-  const { form, setForm, openForm, seq, guard, dirty } = useDrawerForm(savePayloadSignature, {
-    holdRoute: false,
-  });
+  const { form, setForm, openForm, seq, isOpen, guard, dirty } = useDrawerForm(
+    savePayloadSignature,
+    {
+      holdRoute: false,
+    },
+  );
   const advisories = useConnectionAdvisories();
   const listLoad = useGuardedLoad();
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -124,6 +127,11 @@ export function ConnectionColumn({
           guard={guard}
           returnFocusTo={returnFocusTo}
           onClose={() => guard.request(onClose)}
+          // #1438 — a column closed while its save ran takes its error line
+          // with it, so a failure then is the editor's notice.
+          onSaveFailed={(message) => {
+            if (!isOpen(seq)) onNotice(message);
+          }}
           onSaved={(saved) => {
             onSaved(saved);
             const refused = request.disabledReason(saved.kind);

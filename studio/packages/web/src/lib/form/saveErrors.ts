@@ -30,3 +30,14 @@ export function saveRefusal(err: unknown, validation: FieldValidation): string |
   const line = formatApiIssues(rest, refused.body);
   return line === '' ? null : line;
 }
+
+/**
+ * #1438 — a failed save, said in full for a page whose form has gone: the
+ * record's name and every reason, since there are no fields left to put the
+ * per-field issues beside. `detail` is the form's own sentence where it has
+ * one (a name conflict), else the error.
+ */
+export function couldNotSave(name: string, detail: unknown): string {
+  const reason = typeof detail === 'string' ? detail : messageOf(detail);
+  return name.trim() === '' ? `Could not save: ${reason}` : `Could not save “${name}”: ${reason}`;
+}

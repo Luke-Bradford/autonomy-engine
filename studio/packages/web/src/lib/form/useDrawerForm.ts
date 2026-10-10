@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -54,6 +55,26 @@ export interface DrawerForm<F> {
    * opened since.
    */
   readonly isLatest: (seq: number) => boolean;
+  /**
+   * #1438 — whether the form opened as `seq` is still on screen: the latest
+   * open, not closed since (`closeWhere` on a delete closes it without a new
+   * open), and its host still mounted. A save that outlives its form asks this
+   * before deciding where its failure goes.
+   */
+  readonly isOpen: (seq: number) => boolean;
+  /**
+   * #1438 — the failure of a save whose form had gone by the time it failed
+   * (Discard while it ran, or the record deleted), for the page to show where
+   * the list's messages go. The form's own error line went with the form.
+   * Cleared when a form next opens.
+   */
+  readonly lostSave: string | null;
+  /**
+   * The form's `onSaveFailed` for the form opened as `seq`: records the message
+   * as `lostSave` only if that form is no longer open, since an open form shows
+   * its own failure.
+   */
+  readonly saveFailedFor: (seq: number) => (message: string) => void;
   readonly guard: UnsavedChangesGuard;
   /** The open form differs from what it opened with. #1476 — a host that holds
    * route changes itself (the editor) folds this into its own guard. */
@@ -95,9 +116,21 @@ export function useDrawerForm<F>(
   const latestSeq = useRef(0);
   const [openedAs, setOpenedAs] = useState<string | null>(null);
   const openerRef = useRef<HTMLElement | null>(null);
+  const [lostSave, setLostSave] = useState<string | null>(null);
+  // Whether a form is on screen, as of the last commit. False once the host
+  // unmounts too: a column that closes takes its form with it, and no state
+  // change says so.
+  const showing = useRef(false);
+  useEffect(() => {
+    showing.current = form !== null;
+    return () => {
+      showing.current = false;
+    };
+  }, [form]);
 
   const openForm = useCallback(
     (next: F, baseline: F = next) => {
+      setLostSave(null);
       setForm(next);
       setOpenedAs(signatureOf(baseline));
       latestSeq.current += 1;
@@ -113,6 +146,13 @@ export function useDrawerForm<F>(
   );
   const guard = useUnsavedChangesGuard(dirty, guardOptions);
   const isLatest = useCallback((s: number) => latestSeq.current === s, []);
+  const isOpen = useCallback((s: number) => latestSeq.current === s && showing.current, []);
+  const saveFailedFor = useCallback(
+    (s: number) => (message: string) => {
+      if (!isOpen(s)) setLostSave(message);
+    },
+    [isOpen],
+  );
   const { request } = guard;
   const openFrom = useCallback(
     (opener: HTMLElement, open: () => void) =>
@@ -139,6 +179,9 @@ export function useDrawerForm<F>(
     openForm,
     seq,
     isLatest,
+    isOpen,
+    lostSave,
+    saveFailedFor,
     guard,
     dirty,
     openerRef,

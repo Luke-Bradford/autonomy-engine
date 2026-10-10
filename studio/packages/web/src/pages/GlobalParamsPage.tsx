@@ -37,9 +37,9 @@ import { Section } from '../lib/Section';
 import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 import { RequiredMark } from '../lib/form/RequiredMark';
 import { FieldError } from '../lib/form/FieldError';
-import { FormErrors } from '../lib/form/FormErrors';
+import { FormErrors, LostSaveAlert } from '../lib/form/FormErrors';
 import { nameCheck, useFieldValidation, type FieldErrors } from '../lib/form/fieldValidation';
-import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
+import { couldNotSave, saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { deleteConfirmText } from './globalParamDeleteText';
 import { ImportPanel } from './ImportPanel';
@@ -126,6 +126,8 @@ export function GlobalParamsPage() {
     setForm,
     openForm,
     seq: formSeq,
+    lostSave,
+    saveFailedFor,
     guard,
     openerRef,
     closeWhere,
@@ -226,6 +228,7 @@ export function GlobalParamsPage() {
         exports and git. Put a credential in <Link to="/manage/secrets">Secrets</Link> instead.
       </p>
 
+      <LostSaveAlert message={lostSave} />
       {loadError && (
         <p role="alert" className="error">
           {loadError}
@@ -319,6 +322,7 @@ export function GlobalParamsPage() {
             guard={guard}
             returnFocusTo={openerRef}
             onClose={drawer.requestClose}
+            onSaveFailed={saveFailedFor(formSeq)}
             onSaved={async () => {
               drawer.closeIfLatest(formSeq);
               await refresh();
@@ -371,6 +375,7 @@ function GlobalParamForm({
   returnFocusTo,
   onClose,
   onSaved,
+  onSaveFailed,
 }: {
   form: FormState;
   onChange: (next: FormState) => void;
@@ -378,6 +383,8 @@ function GlobalParamForm({
   returnFocusTo: RefObject<HTMLElement | null>;
   onClose: () => void;
   onSaved: () => Promise<void>;
+  /** #1438 — every failed save, for the page to show if this form has gone by then. */
+  onSaveFailed?: (message: string) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -455,11 +462,12 @@ function GlobalParamForm({
       // create, so name it (the SecretsPage precedent).
       // The NAME's problem, so it is shown beside the Name (#1396).
       if (!editing && err instanceof ApiError && err.status === 409) {
-        validation.showRefusedFields({
-          name: `A global parameter named “${form.name}” already exists. Names ignore case.`,
-        });
+        const taken = `A global parameter named “${form.name}” already exists. Names ignore case.`;
+        validation.showRefusedFields({ name: taken });
+        onSaveFailed?.(couldNotSave(form.name, taken));
       } else {
         setError(saveRefusal(err, validation));
+        onSaveFailed?.(couldNotSave(form.name, err));
       }
     } finally {
       // After a success this form has usually unmounted (the drawer closed),

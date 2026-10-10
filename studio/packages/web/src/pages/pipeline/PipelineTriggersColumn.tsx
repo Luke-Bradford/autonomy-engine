@@ -4,6 +4,7 @@ import type { TriggerNextFire, TriggerPublic } from '@autonomy-studio/shared';
 import { DismissRegular } from '@fluentui/react-icons';
 import { listTriggerNextFires, listTriggers } from '../../api/triggers';
 import { useGuardedLoad } from '../../hooks/useGuardedLoad';
+import { LostSaveAlert } from '../../lib/form/FormErrors';
 import { useDrawerForm } from '../../lib/form/useDrawerForm';
 import { TriggerModeName } from '../../lib/KindName';
 import { TriggerForm } from '../triggers/TriggerForm';
@@ -86,6 +87,8 @@ export function PipelineTriggersColumn({
     setForm,
     openForm,
     seq: formSeq,
+    lostSave,
+    saveFailedFor,
     guard,
     dirty,
     openerRef,
@@ -225,6 +228,7 @@ export function PipelineTriggersColumn({
             <DismissRegular aria-hidden="true" />
           </button>
         </div>
+        <LostSaveAlert message={lostSave} />
         {loadError !== null && (
           <p role="alert" className="error">
             {loadError}
@@ -285,6 +289,7 @@ export function PipelineTriggersColumn({
           guard={guard}
           returnFocusTo={openerRef}
           onClose={requestClose}
+          onSaveFailed={saveFailedFor(formSeq)}
           onSaved={async () => {
             closeIfLatest(formSeq);
             await refresh();

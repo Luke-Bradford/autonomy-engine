@@ -59,9 +59,9 @@ import { RequiredMark } from '../lib/form/RequiredMark';
 import { FieldError } from '../lib/form/FieldError';
 import { JsonEditor } from '../lib/form/JsonEditor';
 import { describeJsonProblem } from '../lib/json/jsonText';
-import { FormErrors } from '../lib/form/FormErrors';
+import { FormErrors, LostSaveAlert } from '../lib/form/FormErrors';
 import { nameCheck, useFieldValidation } from '../lib/form/fieldValidation';
-import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
+import { couldNotSave, saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { OverridableKeysSection } from './OverridableKeysField';
 import { allowlistChanged, datasetAllowlistSubject } from './overrideAllowlist';
@@ -345,6 +345,8 @@ export function DatasetsPage() {
     setForm,
     openForm,
     seq: formSeq,
+    lostSave,
+    saveFailedFor,
     guard,
     openerRef,
     closeWhere,
@@ -446,6 +448,7 @@ export function DatasetsPage() {
         addressed, and the columns it declares. A copy activity binds one at each end.
       </p>
 
+      <LostSaveAlert message={lostSave} />
       {loadError && (
         <p role="alert" className="error">
           {loadError}
@@ -544,6 +547,7 @@ export function DatasetsPage() {
             guard={guard}
             returnFocusTo={openerRef}
             onClose={drawer.requestClose}
+            onSaveFailed={saveFailedFor(formSeq)}
             onSaved={async () => {
               drawer.closeIfLatest(formSeq);
               await refresh();
@@ -566,6 +570,7 @@ function DatasetForm({
   returnFocusTo,
   onClose,
   onSaved,
+  onSaveFailed,
 }: {
   form: FormState;
   connections: readonly ConnectionPublic[];
@@ -574,6 +579,8 @@ function DatasetForm({
   returnFocusTo: RefObject<HTMLElement | null>;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
+  /** #1438 — every failed save, for the page to show if this form has gone by then. */
+  onSaveFailed?: (message: string) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -784,6 +791,7 @@ function DatasetForm({
       await onSaved();
     } catch (err) {
       setError(saveRefusal(err, validation));
+      onSaveFailed?.(couldNotSave(form.name, err));
       setSaving(false);
     }
   }

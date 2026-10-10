@@ -49,3 +49,17 @@ export function FormErrors({
     </div>
   );
 }
+
+/**
+ * #1438 — the page's line for a save that failed after its drawer had gone
+ * (`useDrawerForm`'s `lostSave`). Its own alert, not the list's error line,
+ * because the list's refresh clears that.
+ */
+export function LostSaveAlert({ message }: { message: string | null }) {
+  if (message === null) return null;
+  return (
+    <p role="alert" className="error">
+      {message}
+    </p>
+  );
+}
