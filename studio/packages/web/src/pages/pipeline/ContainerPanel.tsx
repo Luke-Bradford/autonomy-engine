@@ -421,7 +421,7 @@ export function ContainerPanel({
   });
 
   return (
-    /* An `<aside className="property-panel">`, like every other top-level panel
+    /* A `<section className="property-panel">`, like every other top-level panel
        (`NodePanel`, `EdgePanel`, `PipelinePanel`) — NOT the bare fragment a
        section NESTED inside a panel returns (the old `ContainerSection`, #1597
        removed it); copied to a TOP-LEVEL panel the
@@ -429,10 +429,12 @@ export function ContainerPanel({
        `.canvas-grid` instead of inside the panel card. Everything scoped to
        `.property-panel` — the card itself, the label/control flex column, the
        input styling — would silently stop applying, and the `Properties`
-       landmark four other specs address the panel by would vanish. */
-    <aside className="property-panel" aria-label="Properties">
+       landmark four other specs address the panel by would vanish.
+       A named `section`, so a `region`: an `aside` nested in `main` is no
+       top-level landmark (#1594 OR40 S5). */
+    <section className="property-panel" aria-label="Properties">
       {confirmDialog}
-      <h3>{label}</h3>
+      <h2>{label}</h2>
       {/* #1413 — the palette's hover sentence, kept once the box is placed, as
           the node panel does for an activity. */}
       {kindDescription && (
@@ -500,7 +502,7 @@ export function ContainerPanel({
           the control being edited out from under the pointer. The Problems column
           beside the panel lists it too. */}
       <SubjectIssues issues={ownIssues} />
-    </aside>
+    </section>
   );
 }
 

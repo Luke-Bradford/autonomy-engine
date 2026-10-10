@@ -47,7 +47,7 @@ function capitals(page: Page, acronyms: readonly string[]) {
         found.push(`${el.tagName.toLowerCase()}.${el.className}: text-transform ${t}`);
       }
     }
-    const named = 'h1, h2, h3, h4, button, [role="tab"], th, legend, label';
+    const named = 'h1, h2, h3, h4, h5, button, [role="tab"], th, legend, label';
     for (const el of document.querySelectorAll(named)) {
       if (!visible(el)) continue;
       for (const word of (el.textContent ?? '').split(/[^\p{L}]+/u)) {

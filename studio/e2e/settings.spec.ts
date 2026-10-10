@@ -62,7 +62,7 @@ test('U15 — Settings names the auto-generated key file and says to back it up'
     .getByRole('link', { name: 'Settings' })
     .click();
 
-  await expect(page.getByRole('heading', { name: 'Settings', level: 2 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible();
   await expect(page).toHaveURL(/#\/settings$/);
 
   const secrets = page.getByRole('region', { name: 'Secret encryption' });

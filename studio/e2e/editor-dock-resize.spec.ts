@@ -148,10 +148,10 @@ test('#1475 a folded dock and a closed Problems column stay that way after a rel
   await openSeededCanvas(page, `e2e 1475 dock fold ${Date.now()}`, seed);
 
   await page.getByRole('button', { name: /^Problems/ }).click();
-  await expect(page.getByRole('complementary', { name: 'Problems' })).toBeHidden();
+  await expect(page.getByRole('region', { name: 'Problems', exact: true })).toBeHidden();
   await page.reload();
   await expect(properties(page)).toBeVisible();
-  await expect(page.getByRole('complementary', { name: 'Problems' })).toBeHidden();
+  await expect(page.getByRole('region', { name: 'Problems', exact: true })).toBeHidden();
 
   const open = await heights(page);
   await page.getByRole('button', { name: 'Hide properties' }).click();
@@ -167,7 +167,7 @@ test('#1475 a folded dock and a closed Problems column stay that way after a rel
   await page.getByRole('button', { name: 'Show properties' }).click();
   await expect(properties(page)).toBeVisible();
   await expect(divider(page)).toBeVisible();
-  await expect(page.getByRole('complementary', { name: 'Problems' })).toBeHidden();
+  await expect(page.getByRole('region', { name: 'Problems', exact: true })).toBeHidden();
 
   await expectQuiet(page, problems);
 });

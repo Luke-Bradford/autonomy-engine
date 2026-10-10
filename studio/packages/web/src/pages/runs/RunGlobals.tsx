@@ -35,7 +35,7 @@ export function RunGlobals({
   if (names.length === 0) return empty;
   return (
     <section aria-labelledby="run-globals-heading">
-      <h3 id="run-globals-heading">Global parameters</h3>
+      <h2 id="run-globals-heading">Global parameters</h2>
       <p className="page-hint">
         The values this run read when it started. A later edit to a global does not change them.
       </p>

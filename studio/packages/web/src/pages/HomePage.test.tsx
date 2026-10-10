@@ -152,7 +152,7 @@ describe('HomePage', () => {
     for (const label of ['Author', 'Monitor', 'Manage']) {
       expect(await screen.findByRole('link', { name: label })).toBeInTheDocument();
     }
-    // One `h2`, so `getByRole('heading', {name: 'Home'})` stays unambiguous.
-    expect(screen.getAllByRole('heading', { level: 2 })).toHaveLength(1);
+    // One `h1`, so `getByRole('heading', {name: 'Home'})` stays unambiguous.
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
   });
 });

@@ -46,13 +46,13 @@ async function setDensity(page: Page, density: Density) {
 function measure(page: Page) {
   return page.evaluate(() => {
     const header = document.querySelector('.page-header')!;
-    const h2 = header.querySelector(':scope > h2')!;
+    const h1 = header.querySelector(':scope > h1')!;
     const content = document.querySelector('.content')!;
     const toolbar = header.querySelector(':scope > .toolbar');
     const hb = header.getBoundingClientRect();
-    const tb = h2.getBoundingClientRect();
+    const tb = h1.getBoundingClientRect();
     const cb = content.getBoundingClientRect();
-    const titleStyle = getComputedStyle(h2);
+    const titleStyle = getComputedStyle(h1);
     const contentStyle = getComputedStyle(content);
     // The leaf controls, in order: what a reader sees as one control each.
     const controls = toolbar
@@ -148,7 +148,7 @@ for (const density of ['compact', 'comfortable'] as const) {
       await page.goto(`/#${path}`);
       await fluentRootReady(page);
       await expect(
-        page.locator('.page-header > h2').filter({ hasText: new RegExp(`^${title}$`) }),
+        page.locator('.page-header > h1').filter({ hasText: new RegExp(`^${title}$`) }),
       ).toBeVisible();
       const m = await measure(page);
       expectFrame(title, m, density, false);

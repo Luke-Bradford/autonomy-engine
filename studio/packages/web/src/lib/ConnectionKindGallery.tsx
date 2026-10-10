@@ -65,7 +65,7 @@ export function ConnectionKindGallery({
           className="kind-gallery__group"
           aria-labelledby={`${idBase}-${group.key}`}
         >
-          <h4 id={`${idBase}-${group.key}`}>{group.label}</h4>
+          <h3 id={`${idBase}-${group.key}`}>{group.label}</h3>
           <ul className="kind-gallery__tiles">
             {group.tiles.map(({ kind, disabledReason: reason }) => {
               const descriptionId = `${idBase}-${kind}-d`;

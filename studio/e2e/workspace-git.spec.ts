@@ -92,7 +92,7 @@ function pushNewPipelineFile(bareRepo: string, name: string): void {
 /** The Git page, freshly loaded. */
 async function openGitPage(page: Page): Promise<void> {
   await page.goto('/#/manage/git');
-  await expect(page.getByRole('heading', { name: 'Git', level: 2 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Git', level: 1 })).toBeVisible();
 }
 
 /** The value the fact list shows under `term` — read by PAIRING, not by search. */
@@ -699,7 +699,7 @@ test('the Git section is reachable from the Manage pane', async ({ page }) => {
   const pane = page.getByRole('navigation', { name: 'Manage sections' });
   await pane.getByRole('link', { name: 'Git' }).click();
 
-  await expect(page.getByRole('heading', { name: 'Git', level: 2 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Git', level: 1 })).toBeVisible();
   expect(new URL(page.url()).hash).toBe('#/manage/git');
 
   await expectQuiet(page, problems);

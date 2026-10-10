@@ -128,17 +128,32 @@ pre {
 }
 
 /* A heading with no class rule of its own takes the ramp, so none falls back
-   to the browser default. Page titles are h2 today, so h2 is a title; S5 makes
-   the page title the h1 and moves h2 to sections. */
-h1,
-h2 {
+   to the browser default. The page title is the one h1 (#1594 OR40 S5), its
+   sections are h2, and what sits under a section is h3 or h4.
+
+   The block margins are the ones each heading had from the browser before S5
+   moved every heading up a level (h2 0.83em, h3 1em, h4 1.33em, h5 1.67em), so
+   the move changed no spacing. A class rule that sets its own margin still
+   wins, as it did over the browser's. */
+h1 {
   font: var(--type-title);
+  margin-block: 0.83em;
+}
+
+h2 {
+  font: var(--type-section);
+  margin-block: 1em;
+}
+
+h3,
+h4 {
+  font: var(--type-body-strong);
 }
 
 h3 {
-  font: var(--type-section);
+  margin-block: 1.33em;
 }
 
 h4 {
-  font: var(--type-body-strong);
+  margin-block: 1.67em;
 }

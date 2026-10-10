@@ -66,7 +66,7 @@ test('#1484 M2 — an activity run opens in a drawer, with its own item’s inpu
 
     await opens.nth(1).click();
     const drawer = page.locator('#run-detail-drawer');
-    const panel = drawer.getByRole('complementary');
+    const panel = drawer.getByRole('region', { name: /^Node / });
     await expect(panel).toBeVisible();
     await expect(panel).toBeFocused();
 
@@ -176,7 +176,7 @@ test('#1484 M2 — an activity run opens in a drawer, with its own item’s inpu
        it opens its last run (neither failed): item 2. That row is the open one
        and the node is marked, and opening from the graph leaves the page where
        the operator is, rather than scrolling up to the table. */
-    await drawer.getByRole('complementary').focus();
+    await drawer.getByRole('region', { name: /^Node / }).focus();
     await page.keyboard.press('Escape');
     await expect(drawer).toHaveCount(0);
     await openRunView(page, 'Graph');

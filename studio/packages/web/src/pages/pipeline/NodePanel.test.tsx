@@ -245,7 +245,7 @@ describe('NodePanel heading (#878)', () => {
         call={undefined}
       />,
     );
-    return screen.getAllByRole('heading', { level: 3 })[0]!.textContent ?? '';
+    return screen.getAllByRole('heading', { level: 2 })[0]!.textContent ?? '';
   }
 
   it('names the node its ordinal, not its kind', () => {
@@ -286,7 +286,7 @@ describe('NodePanel says what the activity does (#1413)', () => {
       />,
     );
     const row = screen
-      .getAllByRole('heading', { level: 3 })[0]!
+      .getAllByRole('heading', { level: 2 })[0]!
       .closest<HTMLElement>('.property-panel__header')!;
     return {
       row,

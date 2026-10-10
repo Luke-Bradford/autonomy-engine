@@ -78,7 +78,7 @@ test.describe('#737 keyboard selection', () => {
     await openCanvas(page, 'e2e kbd node');
     // One node is enough, and it keeps the tab order short.
     await page
-      .getByRole('complementary', { name: 'Activities' })
+      .getByRole('region', { name: 'Activities', exact: true })
       .getByRole('button', {
         name: 'HTTP request',
         exact: true,
@@ -120,7 +120,7 @@ test.describe('#737 keyboard selection', () => {
   }) => {
     await openCanvas(page, 'e2e kbd save');
     await page
-      .getByRole('complementary', { name: 'Activities' })
+      .getByRole('region', { name: 'Activities', exact: true })
       .getByRole('button', { name: 'HTTP request', exact: true })
       .click();
     await expect(canvasNodes(page)).toHaveCount(1);

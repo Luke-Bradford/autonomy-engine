@@ -205,7 +205,7 @@ test('#1569 slice 3 — New pipeline and Import are toolbar drawers beside the g
   await expect(page.getByRole('form', { name: 'New pipeline' })).toHaveCount(0);
   await expect(page.getByLabel('Export file')).toHaveCount(0);
   const header = await page.locator('.pipelines-page > .page-header').evaluate((el) => {
-    const title = el.querySelector('h2')?.getBoundingClientRect();
+    const title = el.querySelector('h1')?.getBoundingClientRect();
     const button = el.querySelector('button')?.getBoundingClientRect();
     return {
       height: Math.round(el.getBoundingClientRect().height),

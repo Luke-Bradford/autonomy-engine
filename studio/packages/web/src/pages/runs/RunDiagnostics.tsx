@@ -81,7 +81,7 @@ export function RunDiagnostics({ runId, settled }: { runId: string; settled: boo
     <Section
       heading="Why this run behaved as it did"
       help={FORM_SECTION_HINTS.run.diagnostics}
-      level={3}
+      level={2}
       landmark
       actions={
         <button type="button" onClick={refresh}>

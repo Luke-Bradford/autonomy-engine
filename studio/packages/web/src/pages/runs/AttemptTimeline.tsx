@@ -96,7 +96,7 @@ export function AttemptTimeline({
   if (window === null) {
     return (
       <section aria-labelledby="timeline-heading" className="attempt-timeline">
-        <h3 id="timeline-heading">Timeline</h3>
+        <h2 id="timeline-heading">Timeline</h2>
         <p>
           Nothing measurable yet — no node has both started and finished. Every node is listed below
           with the reason it has no span.
@@ -108,7 +108,7 @@ export function AttemptTimeline({
 
   return (
     <section aria-labelledby="timeline-heading" className="attempt-timeline">
-      <h3 id="timeline-heading">Timeline</h3>
+      <h2 id="timeline-heading">Timeline</h2>
       <p className="timeline-axis-note">
         {formatTimestamp(window.from, zone, 'ms')} →{' '}
         {/* The end in full when its day or zone offset differs from the start's:
@@ -195,7 +195,7 @@ function UntimedList({
   if (nodes.length === 0) return null;
   return (
     <div className="timeline-untimed">
-      <h4>Not on the timeline</h4>
+      <h3>Not on the timeline</h3>
       <ul>
         {nodes.map((node) => (
           <li key={node.nodeId}>

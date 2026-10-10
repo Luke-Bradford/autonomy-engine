@@ -219,7 +219,7 @@ export function ImportPanel({
     >
       {!embedded && (
         <>
-          <h3 id="import-heading">Import</h3>
+          <h2 id="import-heading">Import</h2>
           <p className="page-hint">
             Bring in a pipeline, connection, trigger, dataset or global parameter from an export
             file. Secrets are never exported, and neither is a pipeline&rsquo;s or trigger&rsquo;s

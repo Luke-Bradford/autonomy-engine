@@ -305,7 +305,7 @@ const cellOf = (row: HTMLTableRowElement, column: (typeof ACTIVITY_RUN_COLUMNS)[
 async function openDrawer(name: string, index = 0): Promise<HTMLElement> {
   await screen.findAllByRole('button', { name });
   await userEvent.click(screen.getAllByRole('button', { name })[index]!);
-  return screen.getByRole('complementary', { name: `Node ${name}` });
+  return screen.getByRole('region', { name: `Node ${name}` });
 }
 
 /** The run page's Graph tab panel, to query what the graph itself says. */
@@ -329,7 +329,7 @@ describe('RunDetailPage', () => {
   it('renders run metadata from the R1 read-model fetch', async () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
     expect(
-      await screen.findByRole('heading', { level: 2, name: /^Test pipeline / }),
+      await screen.findByRole('heading', { level: 1, name: /^Test pipeline / }),
     ).toBeInTheDocument();
     expect(screen.getByText('{"greeting":"hi"}')).toBeInTheDocument();
   });
@@ -390,7 +390,7 @@ describe('RunDetailPage', () => {
     });
     renderWithRouter(<RunDetailPage runId="run_1" />);
     expect(await screen.findByText('pv_1')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { level: 2, name: 'Run run_1' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Run run_1' })).toBeInTheDocument();
   });
 
   it('keeps the trigger id when the trigger has no name to give', async () => {
@@ -415,7 +415,7 @@ describe('RunDetailPage', () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
     expect(await screen.findByText('pv_1')).toBeInTheDocument();
     expect(screen.getByText('trg_1')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { level: 2, name: 'Run run_1' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Run run_1' })).toBeInTheDocument();
   });
 
   /**
@@ -476,7 +476,7 @@ describe('RunDetailPage', () => {
     );
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
-    await screen.findByRole('heading', { level: 2, name: /^Test pipeline / });
+    await screen.findByRole('heading', { level: 1, name: /^Test pipeline / });
     const skipped = (await within(timelineSection()).findByText('HTTP request 2')).closest('li')!;
     expect(skipped).toHaveTextContent(/— skipped/);
   });
@@ -533,7 +533,7 @@ describe('RunDetailPage', () => {
     );
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
-    await screen.findByRole('heading', { level: 2, name: /^Test pipeline / });
+    await screen.findByRole('heading', { level: 1, name: /^Test pipeline / });
     const timeline = await screen.findByRole('region', { name: 'Timeline' });
     // The parked node is the fold's, and it says WHICH alarm — one word
     // ("waiting") could not tell a timer from an awaited inbound callback…
@@ -578,7 +578,7 @@ describe('RunDetailPage', () => {
     expect(within(await activityRow('HTTP request 1')).getByText('success')).toBeInTheDocument();
 
     // The run's derived lifecycle overrides the (running) REST status.
-    expect(screen.getByRole('heading', { level: 2, name: 'Test pipeline v1' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Test pipeline v1' })).toBeInTheDocument();
     const hint = screen.getByText('● live').closest('dd')!;
     expect(within(hint).getByText('success')).toBeInTheDocument();
 
@@ -971,7 +971,7 @@ describe('RunDetailPage', () => {
         useRunStreamMock.mockReturnValue(stream({ events }));
         renderWithRouter(<RunDetailPage runId="run_1" />);
 
-        await screen.findByRole('heading', { level: 2, name: /^Test pipeline / });
+        await screen.findByRole('heading', { level: 1, name: /^Test pipeline / });
         expect(await headerPill('running')).toHaveTextContent('running');
       });
     });
@@ -1034,11 +1034,11 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
     renderWithRouter(<RunDetailPage runId="run_1" />);
     await openDrawer('HTTP request 1');
     expect(screen.getByRole('tab', { name: 'Error' })).toHaveAttribute('aria-selected', 'true');
-    expect(within(screen.getByRole('complementary')).getByRole('tabpanel')).toHaveTextContent(
-      'boom',
-    );
+    expect(
+      within(screen.getByRole('region', { name: /^Node / })).getByRole('tabpanel'),
+    ).toHaveTextContent('boom');
     await userEvent.click(screen.getByRole('tab', { name: 'Logs' }));
-    const lines = within(screen.getByRole('complementary'))
+    const lines = within(screen.getByRole('region', { name: /^Node / }))
       .getByRole('tabpanel')
       .querySelectorAll('.node-logs tbody tr');
     expect(lines).toHaveLength(1);
@@ -1050,9 +1050,7 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
     const user = userEvent.setup();
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
-    expect(
-      screen.queryByRole('complementary', { name: /Node HTTP request 1/ }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: /Node HTTP request 1/ })).not.toBeInTheDocument();
 
     const panel = await openDrawer('HTTP request 1');
     // The class the table compresses into one line, spelled out as fields.
@@ -1061,9 +1059,7 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
     expect(within(panel).getByText('boom')).toBeInTheDocument();
 
     await user.click(within(panel).getByRole('button', { name: 'Close' }));
-    expect(
-      screen.queryByRole('complementary', { name: /Node HTTP request 1/ }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: /Node HTTP request 1/ })).not.toBeInTheDocument();
   });
 
   /**
@@ -1169,7 +1165,7 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
       );
 
       renderWithRouter(<RunDetailPage runId="run_1" />);
-      await screen.findByRole('heading', { level: 2, name: /^Test pipeline / });
+      await screen.findByRole('heading', { level: 1, name: /^Test pipeline / });
       // The FOLD key, not the doc id — `x@2`'s events land on row `x`, which
       // `activityLabels` (keyed on `x@2`) cannot name.
       const timeline = await screen.findByRole('region', { name: 'Timeline' });
@@ -1593,7 +1589,7 @@ describe('RunDetailPage — U24 the states a single well-formed failure does not
     );
     // The rows are re-read as the log grows, a throttle step behind it.
     await waitFor(() => {
-      const panel = screen.getByRole('complementary', { name: /Node HTTP request 1/ });
+      const panel = screen.getByRole('region', { name: /Node HTTP request 1/ });
       expect(within(panel).getByText('failure')).toBeInTheDocument();
       expect(within(panel).getByText('auth')).toBeInTheDocument();
     });
@@ -1786,7 +1782,7 @@ describe('RunDetailPage — how long a node took (#867)', () => {
       act(() => {
         screen.getByRole('button', { name: 'HTTP request 1' }).click();
       });
-      const panel = screen.getByRole('complementary');
+      const panel = screen.getByRole('region', { name: /^Node / });
       expect(panel.querySelector('strong')?.textContent).toBe('10s so far');
       expect(within(panel).getByText(/counts up from its start/)).toBeInTheDocument();
 
@@ -2199,7 +2195,7 @@ describe('RunDetailPage — the rerun-from-failed action (RS2)', () => {
       pipelineVersion: version(),
     });
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await screen.findByRole('heading', { level: 2, name: /^Test pipeline / });
+    await screen.findByRole('heading', { level: 1, name: /^Test pipeline / });
   }
 
   /* A BLOCK body, not `() => mock.mockResolvedValue(…)`: that returns the mock,
@@ -2327,7 +2323,7 @@ describe('RunDetailPage — the cancel-run action (CX4)', () => {
       pipelineVersion: version(),
     });
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await screen.findByRole('heading', { level: 2, name: /^Test pipeline / });
+    await screen.findByRole('heading', { level: 1, name: /^Test pipeline / });
   }
 
   beforeEach(() => {
@@ -3157,7 +3153,7 @@ describe('RunDetailPage — the parent a child run was called by', () => {
       pipelineVersion: version(),
     });
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await screen.findByRole('heading', { level: 2, name: /^Test pipeline / });
+    await screen.findByRole('heading', { level: 1, name: /^Test pipeline / });
   }
 
   it('links up to the run that called this one', async () => {
@@ -3369,7 +3365,7 @@ describe('RunDetailPage — the reruns of this run', () => {
       pipelineVersion: version(),
     });
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await screen.findByRole('heading', { level: 2, name: /^Test pipeline / });
+    await screen.findByRole('heading', { level: 1, name: /^Test pipeline / });
   }
 
   function rerun(id: string): RunSummary {
@@ -3623,7 +3619,7 @@ describe('RunDetailPage — the failure banner', () => {
     );
     useRunStreamMock.mockReturnValue(stream({ events: failedLog, phase: 'closed' }));
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await screen.findByRole('heading', { level: 2, name: 'Test pipeline v1' });
+    await screen.findByRole('heading', { level: 1, name: 'Test pipeline v1' });
     await waitFor(() => expect(runsApi.getRunActivityRuns).toHaveBeenCalled());
     expect(screen.queryByRole('group', { name: 'Failure' })).toBeNull();
 
@@ -3643,7 +3639,7 @@ describe('RunDetailPage — the failure banner', () => {
     vi.mocked(runsApi.getRunActivityRuns).mockImplementation(() => new Promise(() => {}));
     useRunStreamMock.mockReturnValue(stream({ events: failedLog, phase: 'closed' }));
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await screen.findByRole('heading', { level: 2, name: 'Test pipeline v1' });
+    await screen.findByRole('heading', { level: 1, name: 'Test pipeline v1' });
     expect(screen.queryByRole('group', { name: 'Failure' })).toBeNull();
     const banner = await screen.findByRole(
       'group',
@@ -3666,7 +3662,7 @@ describe('RunDetailPage — the failure banner', () => {
       stream({ events: failedLog, phase: 'live', replayComplete: false }),
     );
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await screen.findByRole('heading', { level: 2, name: 'Test pipeline v1' });
+    await screen.findByRole('heading', { level: 1, name: 'Test pipeline v1' });
     expect(screen.queryByRole('group', { name: 'Failure' })).toBeNull();
   });
 
@@ -3741,7 +3737,7 @@ describe('RunDetailPage — the activity run detail drawer (#1484 M2)', () => {
   it("shows the item clicked, with that item's own input and outputs", async () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
     const second = await openRow(1);
-    const drawer = screen.getByRole('complementary', { name: 'Node HTTP request 1' });
+    const drawer = screen.getByRole('region', { name: 'Node HTTP request 1' });
     expect(drawer.closest('.run-drawer')).not.toBeNull();
     expect(drawer).toHaveTextContent('attempt 1 · Item 2 of 2 · b.csv');
     expect(drawer).toHaveTextContent('b.csv');
@@ -3753,7 +3749,7 @@ describe('RunDetailPage — the activity run detail drawer (#1484 M2)', () => {
     expect(drawer).toHaveFocus();
 
     await openRow(0);
-    const first = screen.getByRole('complementary', { name: 'Node HTTP request 1' });
+    const first = screen.getByRole('region', { name: 'Node HTTP request 1' });
     expect(first).toHaveTextContent('Item 1 of 2 · a.csv');
     expect(first).not.toHaveTextContent('b.csv');
     expect(second).toHaveAttribute('aria-expanded', 'false');
@@ -3767,9 +3763,9 @@ describe('RunDetailPage — the activity run detail drawer (#1484 M2)', () => {
     await userEvent.click(inputTab());
     await openRow(0);
     expect(inputTab()).toHaveAttribute('aria-selected', 'true');
-    expect(within(screen.getByRole('complementary')).getByRole('tabpanel')).toHaveTextContent(
-      'a.csv',
-    );
+    expect(
+      within(screen.getByRole('region', { name: /^Node / })).getByRole('tabpanel'),
+    ).toHaveTextContent('a.csv');
     await userEvent.keyboard('{Escape}');
     await openRow(1);
     expect(inputTab()).toHaveAttribute('aria-selected', 'true');
@@ -3782,7 +3778,7 @@ describe('RunDetailPage — the activity run detail drawer (#1484 M2)', () => {
     await openRow(1);
     const button = await openRow(0);
     await userEvent.keyboard('{Escape}');
-    expect(screen.queryByRole('complementary')).toBeNull();
+    expect(screen.queryByRole('region', { name: /^Node / })).toBeNull();
     expect(button).toHaveFocus();
   });
 
@@ -3791,7 +3787,7 @@ describe('RunDetailPage — the activity run detail drawer (#1484 M2)', () => {
   it('is the only node panel on the page: there is no Nodes table drill-in beside it', async () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
     await openRow(1);
-    expect(screen.getAllByRole('complementary')).toHaveLength(1);
+    expect(screen.getAllByRole('region', { name: /^Node / })).toHaveLength(1);
     expect(document.querySelector('.run-drawer')).not.toBeNull();
     expect(screen.queryByRole('heading', { name: 'Nodes' })).toBeNull();
     expect(document.querySelector('.node-drill-in')).toBeNull();

@@ -3,13 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { PageHeader, ToolbarDivider } from './PageHeader';
 
 describe('PageHeader', () => {
-  it('titles the page with an h2 that a section can be labelled by', () => {
+  it('titles the page with its one h1, which a section can be labelled by', () => {
     render(
       <section aria-labelledby="things-heading">
         <PageHeader title="Things" headingId="things-heading" headingTitle="All the things" />
       </section>,
     );
-    const heading = screen.getByRole('heading', { level: 2, name: 'Things' });
+    const heading = screen.getByRole('heading', { level: 1, name: 'Things' });
     expect(heading.id).toBe('things-heading');
     expect(heading.title).toBe('All the things');
     expect(screen.getByRole('region', { name: 'Things' })).toBeTruthy();
@@ -39,6 +39,6 @@ describe('PageHeader', () => {
     const toolbar = container.querySelector('.page-header > .toolbar')!;
     expect([...toolbar.children].map((c) => c.textContent)).toEqual(['Refresh', '', 'Export']);
     expect(toolbar.querySelector('.toolbar__divider')!.getAttribute('aria-hidden')).toBe('true');
-    expect(screen.getByRole('heading', { level: 2 }).textContent).toBe('Runs');
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Runs');
   });
 });

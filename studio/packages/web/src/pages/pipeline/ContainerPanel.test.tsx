@@ -74,7 +74,7 @@ describe('ContainerPanel says what the container does (#1413)', () => {
       const description = CONTAINER_PALETTE.find((e) => e.kind === kind)?.description;
       expect(description).toBeDefined();
       mount({ ...LOOP, kind } as Container);
-      const about = screen.getAllByRole('heading', { level: 3 })[0]!.nextElementSibling;
+      const about = screen.getAllByRole('heading', { level: 2 })[0]!.nextElementSibling;
       expect(about?.classList.contains('property-panel__about')).toBe(true);
       expect(about?.textContent).toBe(`${description} ${kind}`);
       // One sentence, like an activity's (registry.test.ts holds those).

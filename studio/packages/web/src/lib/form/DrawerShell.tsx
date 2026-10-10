@@ -76,7 +76,7 @@ export function DrawerShell({
       }}
     >
       <div className="form-drawer-header">
-        <h3 id={titleId}>{title}</h3>
+        <h2 id={titleId}>{title}</h2>
         <button type="button" aria-label="Close" onClick={onClose} disabled={closeDisabled}>
           ✕
         </button>

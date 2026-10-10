@@ -175,7 +175,7 @@ describe('ConnectionColumn, Edit (#1477 slice 5c)', () => {
   it('reads the connection AGAIN and prefills from that row, not the editor’s stale one', async () => {
     const calls = mount({ editId: 'conn_new', connections: [stale] });
     expect(await screen.findByLabelText('Name')).toHaveValue('Fresh name');
-    expect(screen.getByRole('complementary', { name: 'Edit connection' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Edit connection' })).toBeInTheDocument();
     expect(calls.onListed).toHaveBeenCalledWith([fresh]);
     // The edit form's advisories are read for this connection, on open.
     expect(dependentsMock).toHaveBeenCalledWith('conn_new', expect.anything());

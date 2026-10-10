@@ -86,14 +86,14 @@ export function VersionHistoryPanel({
   /* #1475 OR27 — a column beside the editor, so it carries its own name and
      its own way out: the ⋯ menu that opened it is across the page. */
   return (
-    <aside
+    <section
       className="version-history"
       id="version-history-panel"
       data-testid="version-history"
       aria-labelledby="version-history-heading"
     >
       <div className="version-history__header">
-        <h3 id="version-history-heading">Version history</h3>
+        <h2 id="version-history-heading">Version history</h2>
         <button
           type="button"
           className="icon-button"
@@ -121,7 +121,7 @@ export function VersionHistoryPanel({
           onClone={onClone}
         />
       )}
-    </aside>
+    </section>
   );
 }
 

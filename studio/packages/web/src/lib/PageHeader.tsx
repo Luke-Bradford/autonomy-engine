@@ -4,7 +4,8 @@ import { Children, type ReactNode, type Ref } from 'react';
  * #1594 OR40 S3 — the ONE page header: the page's title on the left and its
  * `Toolbar` on the right, on a single `--header-h` row. Every page renders its
  * title through this, so the title's type, the row's height and the toolbar's
- * spacing are decided once (`.page-header` in `index.css`).
+ * spacing are decided once (`.page-header` in `index.css`). The title is the
+ * page's one h1 (#1594 OR40 S5), so every heading under it starts at h2.
  *
  * `adornment` sits right after the title, outside the heading so it never
  * joins the heading's accessible name: the editor's state badge and notices,
@@ -30,9 +31,9 @@ export function PageHeader({
 }) {
   return (
     <div className="page-header" ref={ref}>
-      <h2 id={headingId} title={headingTitle}>
+      <h1 id={headingId} title={headingTitle}>
         {title}
-      </h2>
+      </h1>
       {adornment}
       {/* `toArray` drops what renders nothing (`{cond && <x />}` that is
           false), so a header whose every action is conditional and off draws

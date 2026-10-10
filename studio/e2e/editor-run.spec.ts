@@ -166,7 +166,7 @@ test('#1395 — the run started in the editor plays out on the authoring canvas,
 
   // Selecting a node shows its part in the run in the dock: its outputs included.
   await nodeById(page, 'pick').click();
-  const drawer = page.getByRole('complementary', { name: 'Node Filter 1' });
+  const drawer = page.getByRole('region', { name: 'Node Filter 1', exact: true });
   await expect(drawer).toBeVisible();
   await expect(drawer).toContainText('success');
   await expect(drawer.getByRole('heading', { name: 'Outputs' })).toBeVisible();

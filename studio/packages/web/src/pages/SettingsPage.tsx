@@ -159,7 +159,7 @@ export function SettingsPage() {
       {/* #1594 OR40 S3c — a form: the pickers are label-left rows, and the
           theme switch lines up with their controls. */}
       <section aria-labelledby="settings-appearance" className="home-section field-form">
-        <h3 id="settings-appearance">Appearance</h3>
+        <h2 id="settings-appearance">Appearance</h2>
         <div className="settings-row">
           <ThemeToggle />
           {/* `aria-hidden`, because the switch's own `aria-label` is already
@@ -174,7 +174,7 @@ export function SettingsPage() {
       </section>
 
       <section aria-labelledby="settings-secrets" className="home-section">
-        <h3 id="settings-secrets">Secret encryption</h3>
+        <h2 id="settings-secrets">Secret encryption</h2>
 
         {error !== null && (
           <p role="alert" className="error">

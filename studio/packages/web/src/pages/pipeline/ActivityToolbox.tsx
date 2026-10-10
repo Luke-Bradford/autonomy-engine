@@ -221,14 +221,14 @@ export function ActivityToolbox({ store, id }: { store: StoreApi<CanvasState>; i
   }
 
   return (
-    <aside
+    <section
       id={id}
       className={rail ? 'activity-toolbox activity-toolbox--rail' : 'activity-toolbox'}
       aria-label="Activities"
     >
       {confirmDialog}
       <div className="activity-toolbox__header">
-        {!rail && <h3>Activities</h3>}
+        {!rail && <h2>Activities</h2>}
         {/* ONE toggle in both states, in the same slot, so React keeps the
             element and a keyboard user's focus stays on it across the fold. */}
         <button
@@ -309,6 +309,6 @@ export function ActivityToolbox({ store, id }: { store: StoreApi<CanvasState>; i
             }),
           ),
         )}
-    </aside>
+    </section>
   );
 }

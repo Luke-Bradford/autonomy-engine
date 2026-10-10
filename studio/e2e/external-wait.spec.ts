@@ -192,7 +192,7 @@ test('#901 — an operator completes the wait from the app, sending no token', a
      name usable — unscoped it also matches the graph and, once open, the panel. */
   const approveRow = activityRowById(page, 'approve');
   await approveRow.getByRole('button', { name: 'Webhook (external wait) 1' }).click();
-  const panel = page.getByRole('complementary', { name: /Node Webhook \(external wait\) 1/ });
+  const panel = page.getByRole('region', { name: /Node Webhook \(external wait\) 1/ });
   await expect(panel.getByRole('heading', { name: 'Outputs' })).toBeVisible();
   // Indented in the drawer since #1484 M2.
   await expect(panel.locator('#node-detail-output-values')).toHaveText(

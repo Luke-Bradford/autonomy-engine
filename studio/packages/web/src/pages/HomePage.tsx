@@ -64,10 +64,8 @@ export function HomePage() {
       </p>
 
       <section aria-labelledby="home-recent-runs" className="home-section">
-        {/* An `h3` under the page's one `h2`. A second `h2` would make
-            `getByRole('heading', {name: 'Home'})` ambiguous, which both
-            `App.test.tsx` and `e2e/hub-nav.spec.ts` assert on. */}
-        <h3 id="home-recent-runs">Recent runs</h3>
+        {/* An `h2` under the page's one `h1`, the title. */}
+        <h2 id="home-recent-runs">Recent runs</h2>
 
         {error !== null && (
           <p role="alert" className="error">
@@ -119,7 +117,7 @@ export function HomePage() {
       )}
 
       <section aria-labelledby="home-hubs" className="home-section">
-        <h3 id="home-hubs">Go to</h3>
+        <h2 id="home-hubs">Go to</h2>
         <ul className="hub-cards">
           {hubs.map((hub) => (
             <li key={hub.id}>

@@ -199,7 +199,7 @@ export function PipelineTriggersColumn({
   };
 
   return (
-    <aside
+    <section
       className="pipeline-triggers"
       data-testid="pipeline-triggers"
       // Named by the list's heading even while it is hidden behind a form:
@@ -211,7 +211,7 @@ export function PipelineTriggersColumn({
           that opened it must still be connected for focus to go back to it. */}
       <div className="pipeline-triggers__list-view" hidden={form !== null}>
         <div className="pipeline-triggers__header">
-          <h3 id="pipeline-triggers-heading">Triggers</h3>
+          <h2 id="pipeline-triggers-heading">Triggers</h2>
           <button
             type="button"
             className="icon-button"
@@ -291,6 +291,6 @@ export function PipelineTriggersColumn({
           }}
         />
       )}
-    </aside>
+    </section>
   );
 }

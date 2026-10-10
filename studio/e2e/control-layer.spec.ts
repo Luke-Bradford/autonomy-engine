@@ -20,7 +20,7 @@ const CONTROL_H: Record<Density, number> = { compact: 28, comfortable: 32 };
 
 async function openSettings(page: Page, density: Density) {
   await page.goto('/#/settings');
-  await expect(page.getByRole('heading', { name: 'Settings', level: 2 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible();
   await page.getByRole('combobox', { name: 'Density', exact: true }).selectOption(density);
   await expect(page.locator('html')).toHaveAttribute('data-density', density);
 }

@@ -117,7 +117,7 @@ export function RunTimeline({
   if (window === null) {
     return (
       <section aria-labelledby="run-timeline-heading" className="run-timeline">
-        <h3 id="run-timeline-heading">Timeline</h3>
+        <h2 id="run-timeline-heading">Timeline</h2>
         <GroupByToggle groupBy={groupBy} onGroupByChange={onGroupByChange} />
         <p>
           Nothing to plot — no run in view has a start this chart can believe. Every one is listed
@@ -130,7 +130,7 @@ export function RunTimeline({
 
   return (
     <section aria-labelledby="run-timeline-heading" className="run-timeline">
-      <h3 id="run-timeline-heading">Timeline</h3>
+      <h2 id="run-timeline-heading">Timeline</h2>
       <GroupByToggle groupBy={groupBy} onGroupByChange={onGroupByChange} />
       <p className="timeline-axis-note">
         {formatTimestamp(window.from, zone)} → {formatTimestamp(window.to, zone)} ·{' '}
@@ -143,9 +143,9 @@ export function RunTimeline({
         const headingId = `${idPrefix}-lane-${index}`;
         return (
           <div key={group.key} className="run-timeline-group" data-lane-kind={group.lane.kind}>
-            <h4 id={headingId} className="run-timeline-group-name">
+            <h3 id={headingId} className="run-timeline-group-name">
               {group.label}
-            </h4>
+            </h3>
             {/* The group heading is attached to its list programmatically, not
                 merely placed above it: a screen reader landing on a bar has no
                 other way to learn which lane it is in. */}
@@ -208,7 +208,7 @@ function UnplottableList({
   if (rows.length === 0) return null;
   return (
     <div className="timeline-untimed">
-      <h4>Not on the timeline</h4>
+      <h3>Not on the timeline</h3>
       <ul>
         {rows.map(({ run, reason }) => (
           <li key={run.id}>

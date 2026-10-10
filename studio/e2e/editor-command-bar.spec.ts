@@ -19,7 +19,7 @@ function notice(page: Page) {
 }
 
 function problemsList(page: Page) {
-  return page.getByRole('complementary', { name: 'Problems' });
+  return page.getByRole('region', { name: 'Problems', exact: true });
 }
 
 test('Validate runs the save check, opens Problems and says what it found', async ({ page }) => {

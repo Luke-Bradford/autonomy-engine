@@ -79,7 +79,7 @@ test('#930 — the run monitor totals a run’s spend, and never invents a figur
   /* The RUN-level section, addressed by its landmark rather than by position, so
      it cannot silently match the drill-in's identically-titled one. */
   const section = page.getByRole('region', { name: 'Cost & usage' });
-  await expect(section.getByRole('heading', { name: 'Cost & usage', level: 3 })).toBeVisible();
+  await expect(section.getByRole('heading', { name: 'Cost & usage', level: 2 })).toBeVisible();
 
   // A KNOWN zero, said as one — over the WHOLE run.
   await expect(section.getByText('No marginal cost')).toBeVisible();

@@ -29,7 +29,7 @@ function divider(page: Page) {
 }
 
 function toolbox(page: Page) {
-  return page.getByRole('complementary', { name: 'Activities' });
+  return page.getByRole('region', { name: 'Activities', exact: true });
 }
 
 async function widths(page: Page) {

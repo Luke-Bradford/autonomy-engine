@@ -16,7 +16,7 @@ function read(page: Page) {
   return page.evaluate(() => {
     const root = getComputedStyle(document.documentElement);
     const fluent = document.querySelector('.app-fluent-root');
-    const title = document.querySelector('main h2');
+    const title = document.querySelector('main h1');
     const select = document.querySelector<HTMLSelectElement>('main select');
     if (!fluent || !title || !select) throw new Error('Settings page did not render');
     const probe = document.createElement('button');
@@ -46,7 +46,7 @@ function read(page: Page) {
 async function openSettings(page: Page) {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/#/settings');
-  await expect(page.getByRole('heading', { name: 'Settings', level: 2 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible();
 }
 
 test.describe('#1594 OR40 S1 — design tokens', () => {

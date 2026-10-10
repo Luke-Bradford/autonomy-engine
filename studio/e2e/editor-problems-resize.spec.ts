@@ -29,7 +29,7 @@ function divider(page: Page) {
 }
 
 function problemsList(page: Page) {
-  return page.getByRole('complementary', { name: 'Problems' });
+  return page.getByRole('region', { name: 'Problems', exact: true });
 }
 
 /** Problems, the properties beside it (no run drawer is showing), and the body both share. */

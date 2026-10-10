@@ -75,7 +75,7 @@ function renderPanel(node: NodeActivity, runStatus: RunStatus = 'running'): HTML
       onClose={vi.fn()}
     />,
   );
-  return screen.getByRole('complementary');
+  return screen.getByRole('region', { name: /^Node / });
 }
 
 describe('NodeActivityPanel — why there is no duration', () => {
@@ -675,10 +675,10 @@ describe('NodeActivityPanel — the outputs payload is bounded in the DOM', () =
     renderWithRouter(<Swapper nodes={[bigRow(2000), { ...bigRow(2000), nodeId: 'b' }]} />);
 
     await user.click(screen.getByRole('button', { name: /Show all/ }));
-    expect(screen.getByRole('complementary').textContent).toContain(TAIL);
+    expect(screen.getByRole('region', { name: /^Node / }).textContent).toContain(TAIL);
 
     await user.click(screen.getByRole('button', { name: 'open the next node' }));
-    const panel = screen.getByRole('complementary');
+    const panel = screen.getByRole('region', { name: /^Node / });
     expect(outputsCode(panel).textContent).toHaveLength(CAP);
     expect(panel.textContent).not.toContain(TAIL);
   });
