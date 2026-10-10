@@ -9,6 +9,8 @@ import {
   type PipelineSummary,
 } from '@autonomy-studio/shared';
 import { When } from '../../lib/When';
+import { formatTimestamp, type DisplayTimeZone } from '../../lib/displayTime';
+import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import { GridColumnHeader, GridColumnsMenu } from '../../lib/GridColumns';
 import { useGridColumnWidths } from '../../lib/useGridColumnWidths';
 import { useRowOpen } from '../../lib/useRowOpen';
@@ -93,11 +95,22 @@ function successCell(s: PipelineSummary | undefined): ReactNode {
   );
 }
 
-function lastRunCell(s: PipelineSummary | undefined, asOf: number | undefined): ReactNode {
+function lastRunCell(
+  s: PipelineSummary | undefined,
+  asOf: number | undefined,
+  zone: DisplayTimeZone,
+): ReactNode {
   const run = s?.lastRun;
   if (run === undefined || run === null) return '—';
+  // #1594 OR40 S3d — the column can cut the status and time, so the link's
+  // tooltip says both whole.
+  const started = runStartIsReal(run) ? ` · ${formatTimestamp(run.startedAt, zone)}` : '';
   return (
-    <Link to={runDetailPath(run.runId)} className="pipelines-grid__run">
+    <Link
+      to={runDetailPath(run.runId)}
+      className="pipelines-grid__run"
+      title={`${runStatusLabel(run.status)}${started}`}
+    >
       {/* #870 — the Monitor's one run-status vocabulary and hue. */}
       <span className={`run-status run-status-${run.status}`}>
         {runStatusLabel(run.status)}
@@ -176,6 +189,7 @@ export function PipelinesGrid({
 }) {
   const hidden = useStore(ui, (st) => st.pipelinesGridHidden);
   const widths = useStore(ui, (st) => st.pipelinesGridWidths);
+  const zone = useDisplayTimeZone(ui);
   const setWidth = useStore(ui, (st) => st.setPipelinesGridWidth);
   const shown =
     columns === undefined
@@ -210,7 +224,7 @@ export function PipelinesGrid({
           </td>
         );
       case 'lastRun':
-        return <td key={id}>{lastRunCell(s, loadedAt)}</td>;
+        return <td key={id}>{lastRunCell(s, loadedAt, zone)}</td>;
       case 'successRate':
         return (
           <td key={id} className="num">

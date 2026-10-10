@@ -88,8 +88,11 @@ function measure(page: Page) {
           family: getComputedStyle(c).fontFamily,
         }));
         // A cut cell: anything in a td drawn with an ellipsis whose text does
-        // not fit. Its tooltip is on it or an ancestor inside the cell, and it
-        // holds the visible text (not some other value).
+        // not fit. Its tooltip is on it, on an ancestor inside the cell, or on
+        // the one element inside it that holds all its text (a cell's link),
+        // and it says everything the cell shows: each word of the visible
+        // text, so a tooltip holding some other value (an id) fails.
+        const norm = (v: string) => v.replace(/\s+/g, ' ').trim();
         const cut = [...t.querySelectorAll<HTMLElement>('td, td *')]
           .filter(
             (el) =>
@@ -97,13 +100,23 @@ function measure(page: Page) {
               el.scrollWidth > el.clientWidth + 1,
           )
           .map((el) => {
-            const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
-            let holder: HTMLElement | null = el;
-            while (holder && !holder.title && holder.tagName !== 'TR') {
-              holder = holder.parentElement;
+            const text = norm(el.innerText);
+            const holders: HTMLElement[] = [];
+            for (let up: HTMLElement | null = el; up && up.tagName !== 'TR'; ) {
+              holders.push(up);
+              up = up.parentElement;
             }
-            const title = (holder?.title ?? '').replace(/\s+/g, ' ');
-            return { text: text.slice(0, 60), titled: title !== '' && title.includes(text) };
+            holders.push(
+              ...[...el.querySelectorAll<HTMLElement>('[title]')].filter(
+                (d) => norm(d.innerText) === text,
+              ),
+            );
+            const words = text.split(' ');
+            const titled = holders.some(
+              (h) => h.title !== '' && words.every((w) => norm(h.title).includes(w)),
+            );
+            // The widths name the shortfall in a failure message.
+            return { text: `${text.slice(0, 60)} (${el.scrollWidth}/${el.clientWidth}px)`, titled };
           });
         return { name: name(t, i), headers, rows, cells, nums, codes, cut };
       }),
@@ -188,7 +201,7 @@ async function seed(page: Page, stamp: string): Promise<Seed> {
   expect(secret.status(), await secret.text()).toBe(201);
   const global = await page.request.post('/api/global-params', {
     data: {
-      name: `s3d_global_${stamp}_${LONG.replace(/ /g, '_')}`,
+      name: `s3d_global_${`${stamp}_${LONG}`.replace(/[^A-Za-z0-9]/g, '_')}`,
       type: 'string',
       value: `a value ${LONG}`,
       description: `A description ${LONG}`,

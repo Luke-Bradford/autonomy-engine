@@ -135,8 +135,11 @@ interface RunGridColumn {
  */
 function costTd(run: RunSummary): ReactNode {
   const cell = costCell(run);
+  // #1594 OR40 S3d — the column is narrow and three readings are words, so the
+  // cell can cut its figure: the tooltip leads with it whole, then the note.
+  const figure = `${cell.figure}${cell.unsettled ? ' so far' : ''}`;
   return (
-    <td className="run-cost" {...(cell.note === null ? {} : { title: cell.note })}>
+    <td className="run-cost" title={cell.note === null ? figure : `${figure}\n${cell.note}`}>
       {cell.figure}
       {cell.unsettled ? <span className="run-cost-unsettled"> so far</span> : null}
     </td>
@@ -307,7 +310,14 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
     /* #1484 — the run that called this one, by its pipeline's NAME. The short
        id stands in when the name cannot be read for this viewer. */
     cell: (r) => (
-      <td title={r.parentRunId ?? undefined}>
+      <td
+        title={
+          r.parentRunId === null
+            ? undefined
+            : /* #1594 OR40 S3d — the column can cut the name: whole, then the run. */
+              [r.parentPipelineName, r.parentRunId].filter((v) => v !== null).join(' · ')
+        }
+      >
         {r.parentRunId === null ? (
           '—'
         ) : (

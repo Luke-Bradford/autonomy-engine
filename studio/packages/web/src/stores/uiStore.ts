@@ -248,7 +248,7 @@ export const RUN_GRID_COLUMN_WIDTHS: Record<RunGridColumnId, { min: number; defa
   activities: { min: 80, default: 128 },
   rowsWritten: { min: 56, default: 68 },
   cost: { min: 56, default: 68 },
-  runId: { min: 110, default: 112 },
+  runId: { min: 152, default: 160 },
   parent: { min: 72, default: 100 },
   annotations: { min: 72, default: 120 },
 };
