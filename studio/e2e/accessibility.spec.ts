@@ -10,6 +10,7 @@ import { properties } from './support/panels';
 import { fireAndSettle, nodeById, openSeededCanvas, seedVersion } from './support/seedDoc';
 import { seedConnection, seedDataset } from './support/seedResources';
 import { fluentRootReady } from './support/theme';
+import { disconnectWorkspaceGit, makeBareRepo } from './support/workspaceGit';
 
 /**
  * #1594 OR40 S5b — the accessibility gate.
@@ -29,32 +30,63 @@ import { fluentRootReady } from './support/theme';
  * the lists are scanned with rows in them, not as empty states.
  */
 
-/** One violation, as the failure message prints it. */
+/** One violation on one element, as the failure message prints it. */
 interface Finding {
   view: string;
   rule: string;
   impact: string;
-  targets: string[];
+  target: string;
 }
 
-async function scan(page: Page, view: string, findings: Finding[]): Promise<void> {
+/**
+ * The two violations S5 leaves to its slice S5c, by rule AND by the element
+ * they are on, so the same rule anywhere else still fails. Each must still be
+ * FOUND: when S5c fixes one, its entry stops matching, the gate fails, and
+ * the entry has to be deleted rather than left to hide a later regression.
+ * Never `.exclude()` or `disableRules()`: those would hide every other rule on
+ * those elements too.
+ */
+const LEFT_FOR_S5C = [
+  {
+    name: "Fluent TabList's focusable aria-hidden Tabster dummies",
+    rule: 'aria-hidden-focus',
+    html: /^<i [^>]*data-tabster-dummy/,
+  },
+  {
+    name: 'canvas ports named with aria-label but no role',
+    rule: 'aria-prohibited-attr',
+    html: /^<div [^>]*\bflow-port\b/,
+  },
+] as const;
+
+async function scan(
+  page: Page,
+  view: string,
+  findings: Finding[],
+  leftSeen: Set<string>,
+): Promise<void> {
   const result = await new AxeBuilder({ page }).analyze();
   // A scan that checked nothing would pass vacuously; there is always a page.
   expect(result.passes.length, `axe checked nothing on ${view}`).toBeGreaterThan(0);
   for (const v of result.violations) {
-    findings.push({
-      view,
-      rule: v.id,
-      impact: v.impact ?? 'unknown',
-      targets: v.nodes.map((n) => n.target.join(' ')),
-    });
+    for (const node of v.nodes) {
+      const left = LEFT_FOR_S5C.find((l) => l.rule === v.id && l.html.test(node.html));
+      if (left) {
+        leftSeen.add(left.name);
+        continue;
+      }
+      findings.push({
+        view,
+        rule: v.id,
+        impact: v.impact ?? 'unknown',
+        target: node.target.join(' '),
+      });
+    }
   }
 }
 
 function report(findings: Finding[]): string {
-  return findings
-    .map((f) => `${f.view}: ${f.rule} (${f.impact}) at ${f.targets.join(' | ')}`)
-    .join('\n');
+  return findings.map((f) => `${f.view}: ${f.rule} (${f.impact}) at ${f.target}`).join('\n');
 }
 
 for (const theme of THEMES) {
@@ -120,25 +152,26 @@ for (const theme of THEMES) {
         const runId = await fireAndSettle(page, pipelineVersionId, `${tag} trigger`);
 
         const findings: Finding[] = [];
+        const leftSeen = new Set<string>();
 
         for (const p of TITLED_PAGES) {
           await page.goto(`/#${p.path}`);
           await fluentRootReady(page);
           await expect(page.getByRole('heading', { level: 1, name: p.title })).toBeVisible();
           await expectAppearance(page, theme, density);
-          await scan(page, p.title, findings);
+          await scan(page, p.title, findings, leftSeen);
         }
 
         await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
         await fluentRootReady(page);
         const opens = page.locator('.activity-runs__table .activity-runs__open');
         await expect(opens).toHaveCount(2);
-        await scan(page, 'run detail', findings);
+        await scan(page, 'run detail', findings, leftSeen);
         await opens.first().click();
         await expect(
           page.locator('#run-detail-drawer').getByRole('region', { name: /^Node / }),
         ).toBeVisible();
-        await scan(page, 'run detail, drawer open', findings);
+        await scan(page, 'run detail, drawer open', findings, leftSeen);
 
         // The editor: a Copy bound to the dataset, inside nothing, beside a ForEach.
         await openSeededCanvas(page, `${tag} editor`, {
@@ -157,41 +190,44 @@ for (const theme of THEMES) {
             { id: 'foreach_1', kind: 'foreach', children: ['h'], items: '${createArray(1, 2)}' },
           ],
         });
-        await scan(page, 'editor, pipeline properties', findings);
+        await scan(page, 'editor, pipeline properties', findings, leftSeen);
 
         await nodeById(page, 'copy').click();
         await expect(
           properties(page).getByRole('tab', { name: 'Sink', exact: true }),
         ).toBeVisible();
-        await scan(page, 'editor, Copy selected', findings);
+        await scan(page, 'editor, Copy selected', findings, leftSeen);
 
         await properties(page).getByRole('tab', { name: 'Sink', exact: true }).click();
         const sink = properties(page).getByRole('combobox', { name: 'Sink connection' });
         await expect(sink).toBeVisible();
-        await scan(page, 'editor, Copy selected, Sink tab', findings);
+        await scan(page, 'editor, Copy selected, Sink tab', findings, leftSeen);
 
         await sink.click();
         await expect(page.getByRole('listbox')).toBeVisible();
-        await scan(page, 'editor, connection picker open', findings);
+        await scan(page, 'editor, connection picker open', findings, leftSeen);
         await page.keyboard.press('Escape');
         await expect(page.getByRole('listbox')).toHaveCount(0);
 
         await page.getByRole('button', { name: 'Expand properties' }).click();
         await expect(page.getByRole('button', { name: 'Expand properties' })).toHaveCount(0);
-        await scan(page, 'editor, Expand properties', findings);
+        await scan(page, 'editor, Expand properties', findings, leftSeen);
         await page.keyboard.press('Escape');
 
         await page.getByRole('button', { name: 'Configure ForEach 1' }).click();
         await expect(page.getByRole('heading', { name: 'ForEach 1' })).toBeVisible();
-        await scan(page, 'editor, ForEach selected', findings);
+        await scan(page, 'editor, ForEach selected', findings, leftSeen);
 
         await page.goto('/#/manage/connections');
         await fluentRootReady(page);
         await page.getByRole('button', { name: 'New connection' }).click();
         await expect(page.getByRole('dialog', { name: 'New connection' })).toBeVisible();
-        await scan(page, 'New connection kind gallery', findings);
+        await scan(page, 'New connection kind gallery', findings, leftSeen);
 
         expect(findings, report(findings)).toEqual([]);
+        expect([...leftSeen].sort(), 'an S5c entry no longer occurs: delete it').toEqual(
+          LEFT_FOR_S5C.map((l) => l.name).sort(),
+        );
         await expectQuiet(page, problems);
       } finally {
         rmSync(root, { recursive: true, force: true });
@@ -199,3 +235,38 @@ for (const theme of THEMES) {
     });
   }
 }
+
+/**
+ * The Git page CONNECTED — a different page from the empty state the loop
+ * above scans. Its own test because the connection is workspace-wide state,
+ * undone in `finally` whatever happens.
+ */
+test('axe: 0 violations on the connected Git page, both themes and densities', async ({
+  page,
+  request,
+}) => {
+  const problems = collectPageProblems(page);
+  const repo = makeBareRepo('e2e-axe-git-');
+  try {
+    const connected = await request.post('/api/workspace/git', { data: { repoUrl: repo } });
+    expect(connected.ok(), await connected.text()).toBe(true);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const findings: Finding[] = [];
+    for (const theme of THEMES) {
+      for (const density of DENSITIES) {
+        // Init scripts run in the order added, so the latest pair wins.
+        await preferAppearance(page, theme, density);
+        await page.goto('/#/manage/git');
+        await fluentRootReady(page);
+        await expect(page.getByRole('heading', { name: 'Connected', exact: true })).toBeVisible();
+        await expectAppearance(page, theme, density);
+        await scan(page, `Git connected, ${theme} ${density}`, findings, new Set());
+      }
+    }
+    expect(findings, report(findings)).toEqual([]);
+    await expectQuiet(page, problems);
+  } finally {
+    await disconnectWorkspaceGit(request);
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
