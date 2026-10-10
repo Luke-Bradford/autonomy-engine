@@ -56,7 +56,7 @@ test('R2/U10 — the runs list names the pipeline, times the run, and filters by
   await expect(row).toContainText('v1');
   await expect(page.getByText(pipelineVersionId, { exact: true })).toHaveCount(0);
   // Demoted, not discarded — still reachable for whoever needs the raw key.
-  await expect(row.locator(`[title="${pipelineVersionId}"]`)).toHaveCount(1);
+  await expect(row.locator(`[title$="${pipelineVersionId}"]`)).toHaveCount(1);
 
   // R2 — the trigger's name, joined server-side; #1484 — after what started
   // the run, which the SERVER classifies (fireAndSettle uses Fire now).
@@ -648,9 +648,9 @@ test('#1484 — runs grid columns resize with the pointer, can be hidden, and pe
   // The drag did not sort.
   await expect(header('Status')).not.toHaveAttribute('aria-sort', /.*/);
 
-  // The keyboard path: one step on Run ID (its 112px default + one 16px step).
+  // The keyboard path: one step on Run ID (its 128px default + one 16px step).
   await page.getByRole('separator', { name: 'Resize Run ID column' }).press('ArrowRight');
-  await expect.poll(async () => Math.round((await measure()).runId)).toBe(128);
+  await expect.poll(async () => Math.round((await measure()).runId)).toBe(144);
 
   // Hide Cost from the picker.
   await page.getByRole('button', { name: /^Columns/ }).click();
@@ -665,7 +665,7 @@ test('#1484 — runs grid columns resize with the pointer, can be hidden, and pe
   await expect(header('Cost')).toHaveCount(0);
   const reloaded = await measure();
   expect(reloaded.status).toBeCloseTo(128, 0);
-  expect(reloaded.runId).toBeCloseTo(128, 0);
+  expect(reloaded.runId).toBeCloseTo(144, 0);
 
   // Wider than the page: the GRID scrolls sideways, the page does not.
   await page.getByRole('separator', { name: 'Resize Pipeline column' }).press('End');

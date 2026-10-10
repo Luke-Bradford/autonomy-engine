@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { CopyRegular } from '@fluentui/react-icons';
 import { Link } from 'react-router';
 import { useBusyAction } from '../hooks/useBusyAction';
 import { shortId } from './ids';
@@ -41,6 +42,7 @@ export function CopyableId({
   const [result, setResult] = useState<'copied' | 'failed' | null>(null);
   const copy = useBusyAction();
   const canCopy = typeof navigator !== 'undefined' && navigator.clipboard !== undefined;
+  const copyLabel = link ? `Copy ${noun} id ${shortId(id)}` : `Copy ${noun} id`;
   return (
     <span className="copyable-id">
       {link ? (
@@ -58,8 +60,9 @@ export function CopyableId({
       {canCopy && (
         <button
           type="button"
-          className="copyable-id__copy"
-          aria-label={link ? `Copy ${noun} id ${shortId(id)}` : `Copy ${noun} id`}
+          className="copyable-id__copy icon-button"
+          aria-label={copyLabel}
+          title={copyLabel}
           disabled={copy.active.has(COPY_KEY)}
           onClick={() => {
             void copy.run(COPY_KEY, () =>
@@ -70,7 +73,9 @@ export function CopyableId({
             );
           }}
         >
-          Copy
+          {/* #1594 OR40 S3d — a glyph, as ADF draws it, so a grid's ID column
+              holds the id and its button without clipping either. */}
+          <CopyRegular aria-hidden="true" />
         </button>
       )}
       <span role="status" className="copyable-id__status">

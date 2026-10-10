@@ -579,7 +579,10 @@ describe('RunsPage', () => {
       'Triggered by',
     );
     expect(sourceType).toHaveTextContent('Fire now');
-    expect(sourceType.title).toBe('');
+    // #1594 OR40 S3d — the cell's whole text, which the cell can cut, and no
+    // rerun line on a run that is not a rerun.
+    expect(sourceType.title).toBe(sourceType.textContent);
+    expect(sourceType.title).not.toContain('Rerun of run');
   });
 
   it('the Run ID link navigates to the run detail route', async () => {
@@ -654,8 +657,9 @@ describe('RunsPage', () => {
     expect(await screen.findByText(/Nightly report/)).toBeInTheDocument();
     expect(screen.getByText('v3')).toBeInTheDocument();
     expect(screen.queryByText('pv_opaque')).not.toBeInTheDocument();
-    // Not lost, just demoted: the opaque key stays reachable as the cell title.
-    expect(screen.getByTitle('pv_opaque')).toBeInTheDocument();
+    // Not lost, just demoted: the opaque key stays reachable in the cell's
+    // title, after the whole name and version the cell can cut (#1594 OR40 S3d).
+    expect(screen.getByTitle('Nightly report v3 · pv_opaque')).toBeInTheDocument();
   });
 
   it('says what started each run, and names the trigger when there is one', async () => {

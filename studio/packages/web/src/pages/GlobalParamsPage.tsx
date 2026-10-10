@@ -49,6 +49,7 @@ import { useConfirm } from '../lib/confirm/useConfirm';
 import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 import { PageHeader } from '../lib/PageHeader';
+import { OneLine } from '../lib/OneLine';
 
 /**
  * The open form. `stored` is the global as it was when an EDIT opened — what
@@ -257,21 +258,21 @@ export function GlobalParamsPage() {
                   return (
                     <tr key={global.id}>
                       <td>
-                        <code>{global.name}</code>
+                        <OneLine as="code" title={global.name}>
+                          {global.name}
+                        </OneLine>
                       </td>
                       <td>{VALUE_TYPE_TITLES[global.type]}</td>
                       <td>
                         {/* Cleartext by design (GL-D5), so shown; a long json
                             value (or description) is cut to one line, whole in
                             the tooltip and in the form. */}
-                        <code className="cell-one-line" title={valueText}>
+                        <OneLine as="code" title={valueText}>
                           {valueText}
-                        </code>
+                        </OneLine>
                       </td>
                       <td>
-                        <span className="cell-one-line" title={global.description}>
-                          {global.description}
-                        </span>
+                        <OneLine title={global.description}>{global.description}</OneLine>
                       </td>
                       <td>
                         {/* #1397 — Edit is the row's one inline action; the

@@ -173,7 +173,11 @@ test('RS6 — a failed run lists its reruns, and the runs list says which runs a
   const triggeredBy = (runId: string) =>
     page.getByRole('row').filter({ hasText: runId }).getByRole('cell').nth(byColumn);
   await expect(triggeredBy(rerunId)).toHaveText('Rerun from failed');
-  await expect(triggeredBy(rerunId)).toHaveAttribute('title', `Rerun of run ${sourceRunId}`);
+  // #1594 OR40 S3d — after the cell's whole text, which the cell can cut.
+  await expect(triggeredBy(rerunId)).toHaveAttribute(
+    'title',
+    new RegExp(`\\nRerun of run ${sourceRunId}$`),
+  );
   await expect(triggeredBy(sourceRunId)).toHaveText(/^Fire now · /);
 
   await expectQuiet(page, problems);

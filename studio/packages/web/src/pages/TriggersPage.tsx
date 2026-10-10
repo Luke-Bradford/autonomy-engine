@@ -30,6 +30,7 @@ import {
   type PipelineOption,
 } from './triggers/triggerFormState';
 import { PageHeader } from '../lib/PageHeader';
+import { OneLine } from '../lib/OneLine';
 
 /**
  * The outcome of one "Fire now", kept per TRIGGER (#1247).
@@ -451,11 +452,17 @@ export function TriggersPage() {
               <tbody>
                 {shownTriggers.map((t) => (
                   <tr key={t.id}>
-                    <td>{t.name}</td>
+                    <td>
+                      <OneLine title={t.name}>{t.name}</OneLine>
+                    </td>
                     <td>
                       <TriggerModeName mode={t.mode} />
                     </td>
-                    <td>{labelFor(t.pipelineVersionId)}</td>
+                    <td>
+                      <OneLine title={labelFor(t.pipelineVersionId)}>
+                        {labelFor(t.pipelineVersionId)}
+                      </OneLine>
+                    </td>
                     <td>{t.enabled ? 'yes' : 'no'}</td>
                     <td>
                       <div className="row-actions">

@@ -39,6 +39,7 @@ import { countOf } from '../lib/countOf';
 import { useConfirm } from '../lib/confirm/useConfirm';
 import { When } from '../lib/When';
 import { PageHeader } from '../lib/PageHeader';
+import { OneLine } from '../lib/OneLine';
 
 /**
  * #3 G10 / U18 slices 1-2 — Manage → Git (#956, #962).
@@ -1185,11 +1186,15 @@ function ResourceChangeTable({ rows }: { rows: ResourceChangeRow[] }) {
       <tbody>
         {rows.map((row) => (
           <tr key={row.key}>
-            <td>{row.name}</td>
+            <td>
+              <OneLine title={row.name}>{row.name}</OneLine>
+            </td>
             <td>{row.kind}</td>
             <td>{row.change}</td>
             <td>
-              <code>{row.path}</code>
+              <OneLine as="code" wide title={row.path}>
+                {row.path}
+              </OneLine>
             </td>
           </tr>
         ))}

@@ -240,7 +240,7 @@ export const RUN_GRID_DEFAULT_HIDDEN: readonly RunGridColumnId[] = ['annotations
  * with its Copy button.
  */
 export const RUN_GRID_COLUMN_WIDTHS: Record<RunGridColumnId, { min: number; default: number }> = {
-  pipeline: { min: 120, default: 185 },
+  pipeline: { min: 120, default: 172 },
   status: { min: 72, default: 88 },
   triggeredBy: { min: 96, default: 136 },
   started: { min: 110, default: 124 },
@@ -248,7 +248,7 @@ export const RUN_GRID_COLUMN_WIDTHS: Record<RunGridColumnId, { min: number; defa
   activities: { min: 80, default: 128 },
   rowsWritten: { min: 56, default: 68 },
   cost: { min: 56, default: 68 },
-  runId: { min: 110, default: 112 },
+  runId: { min: 120, default: 128 },
   parent: { min: 72, default: 100 },
   annotations: { min: 72, default: 120 },
 };

@@ -475,6 +475,45 @@ Every page's title row is `PageHeader` (`lib/PageHeader.tsx`, #1594 OR40 S3). Ne
 
 `e2e/page-header.spec.ts` measures every page at 1440x900 in both densities.
 
+## Tables (#1594 OR40 S3d)
+
+Every table in the app, whether a list, a run's facts or a form's rows, takes one style from the
+element rules in `index.css` (`table`, `th, td`). Never give a table its own row height, padding
+or header type.
+
+- **A row** is `--row-h`: 32px compact, 36px comfortable. A cell is 8px either side and vertically
+  centred (a form's rows excepted, below).
+- **A column header** is body-strong (13/600 compact, 14/600 comfortable), muted, and never wraps.
+  A row header (`<th scope="row">`, a variable's name) may wrap.
+- **A number** is `className="num"` on its header and its cells: right-aligned, in tabular
+  figures. A run's cost is one (`num run-cost`).
+- **An id or a value** is `<code>` (or `CopyableId`), so it is in the mono face.
+- **A list's free text is one line.** A cell that can be long (a name, a path, an audit entry, an
+  event's detail, an activity run's error) is wrapped in `OneLine` (`lib/OneLine.tsx`). It cuts at a
+  fixed 18rem (40rem with `wide`, for a table's one long column, but never more than 45% of the
+  window) and puts the whole text in its tooltip. A link inside it draws its focus ring inset. The cap is fixed
+  rather than the column's width, so a name can be cut while its column still has room. A table in
+  automatic layout has no column width to cut to, and that cost is accepted.
+- **The grids** (Runs, Pipelines) cut every cell at its column's width (`table-layout: fixed`). Any
+  `title` a cell sets therefore leads with the cell's whole text, and the secondary detail follows
+  it: a pipeline's version id, a rerun's source run, a cost's caveat.
+- **Exempt from one line, on purpose:** prose, logs and block values, which grow their row instead.
+  These are a diagnostic's explanation, a dataset reference's mapping verdict, a streamed log line's
+  value (the drawer is where it is read), and a variable's or global's capped JSON value on the run
+  page. The activity runs table scrolls sideways in its own box rather than cutting its columns;
+  fitting it to the page is S6's.
+- **A form's rows** (`RowTable`) keep their own cell padding: what is left of `--row-h` around a
+  bare `--control-h` control, top-aligned. That is a 28px control in a 32px row compact, and 32 in
+  36 comfortable. Their header is the same body-strong as every table's, but only as tall as its words, so the
+  dock's required fields still fit (#1477 OR29). A row's notes row
+  (`RowNotes`) takes its own height, so it hangs under its row as one entry.
+- **An id's Copy** (`CopyableId`) is an icon button, as in ADF, so the Runs grid's ID column holds
+  the id and its button without clipping either.
+
+`e2e/table-style.spec.ts` measures the lists, the grids and the run page at 1440x900 in both
+densities: row heights, header type, cell padding, numbers, the mono face, and that every cut cell's
+tooltip holds its whole text.
+
 ## Sections everywhere
 
 Every titled part of a form, a panel or a page is `Section` (`lib/Section.tsx`, #1594 OR40 S3). It

@@ -71,6 +71,7 @@ import { useConfirm } from '../lib/confirm/useConfirm';
 import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 import { PageHeader } from '../lib/PageHeader';
+import { OneLine } from '../lib/OneLine';
 
 const KINDS = DATASET_KINDS;
 
@@ -471,7 +472,9 @@ export function DatasetsPage() {
                   <th scope="col">Name</th>
                   <th scope="col">Kind</th>
                   <th scope="col">Store</th>
-                  <th scope="col">Columns</th>
+                  <th scope="col" className="num">
+                    Columns
+                  </th>
                   <th scope="col">Actions</th>
                 </tr>
               </thead>
@@ -479,7 +482,9 @@ export function DatasetsPage() {
                 {datasets.map((dataset) => (
                   <tr key={dataset.id}>
                     <td>
-                      <Link to={datasetDetailPath(dataset.id)}>{dataset.name}</Link>
+                      <OneLine title={dataset.name}>
+                        <Link to={datasetDetailPath(dataset.id)}>{dataset.name}</Link>
+                      </OneLine>
                     </td>
                     <td>
                       <DatasetKindName kind={dataset.kind} />
@@ -491,7 +496,7 @@ export function DatasetsPage() {
                         datasetKind={dataset.kind}
                       />
                     </td>
-                    <td>{dataset.columns.length}</td>
+                    <td className="num">{dataset.columns.length}</td>
                     <td>
                       {/* #1397 — Edit is the row's one inline action; the rest
                           are in its menu, Delete last. */}

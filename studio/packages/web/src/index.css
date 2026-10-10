@@ -1065,23 +1065,46 @@ a {
   max-width: 60ch;
 }
 
+/* #1594 OR40 S3d — the one table style. Every grid and table in the app
+   takes it from these element rules: a list (Pipelines, Runs, Activity runs,
+   every Manage list), a run's facts (Variables, Globals, Events), and a form's
+   rows (`RowTable`, which keeps only its own cell padding, below).
+
+   A row is `--row-h` (32px compact, 36px comfortable). `height` on a cell is a
+   minimum, so a row whose cell holds a block (a capped JSON value, a
+   diagnostic's sentence) still grows; a list's free text is cut to one line
+   instead (`lib/OneLine.tsx`), whole in its tooltip. Cells are 8px either side
+   and centred. A column header is body-strong and muted and never wraps; a
+   row header (`<th scope="row">`, a variable's name) may. A number is
+   right-aligned in tabular figures (`.num`, header and cells alike). An id is
+   `<code>` or `CopyableId`, so it is in the mono face (`tokens.css`). */
 table {
   width: 100%;
   border-collapse: collapse;
-  margin-top: 1rem;
+  margin-top: var(--space-4);
 }
 
 th,
 td {
+  height: var(--row-h);
   text-align: left;
-  padding: 0.55rem 0.6rem;
+  vertical-align: middle;
+  padding: 0 var(--space-2);
   border-bottom: 1px solid var(--border);
 }
 
 th {
   color: var(--muted);
-  font-weight: 600;
-  font-size: 0.85rem;
+  font: var(--type-body-strong);
+}
+
+thead th {
+  white-space: nowrap;
+}
+
+:is(th, td).num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 /* #1245, then #1594 OR40 S1 — form controls take the app's FONT. A form
@@ -4761,25 +4784,16 @@ button.danger {
    panel rather than dominate it. Capped and scrolled for the same reason
    `.node-detail-outputs` is. */
 .node-tool-calls {
-  /* `width`/`border-collapse` come from the global `table` rule. `display: block`
-     is what makes a <table> scrollable at all, and it is the reason the cells set
-     their own padding rather than inheriting a table layout. */
-  font-size: 0.8rem;
+  /* `display: block` is what makes a <table> scrollable at all. Rows, cells
+     and type are the one table style's (#1594 OR40 S3d), so a row is
+     `--row-h` and the box shows about six of them before it scrolls. */
   display: block;
   max-height: 14rem;
   overflow-y: auto;
 }
 
-.node-tool-calls th,
 .node-tool-calls td {
-  text-align: left;
-  padding: 0.15rem 0.5rem 0.15rem 0;
   white-space: nowrap;
-}
-
-.node-tool-calls th {
-  color: var(--muted);
-  font-weight: 500;
 }
 
 /* An errored tool result is a TOOL-level defect the model saw and carried on
@@ -4973,7 +4987,7 @@ button.danger {
 .copyable-id {
   display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-1);
 }
 
 .copyable-id__status {
@@ -4998,10 +5012,6 @@ button.danger {
   list-style: none;
   margin: 0;
   padding: 0;
-}
-
-.event-feed td {
-  font-size: 0.85rem;
 }
 
 /* ── U11 run overlay ─────────────────────────────────────────────────────────
@@ -5278,14 +5288,19 @@ button.danger {
   margin-top: 0;
 }
 
+/* #1594 OR40 S3d — a form row's cell holds a bare `--control-h` control, so
+   its padding is what is left of `--row-h` rather than the one table style's
+   0 8px: a 28px control in a 32px row compact, 32 in 36 comfortable. */
 .row-table :is(th, td) {
-  padding: 0.2rem 0.3rem;
+  padding: calc((var(--row-h) - var(--control-h) - 1px) / 2) 2px;
   vertical-align: top;
 }
 
 .row-table th {
   white-space: nowrap;
-  font-size: 0.8rem;
+  /* As tall as its words, not a row: the dock's fit (#1477 OR29) counts on a
+     header under one compact row. */
+  height: auto;
 }
 
 .row-table th[data-width='long'] {
@@ -5393,6 +5408,9 @@ button.danger {
 }
 
 .row-table__notes td {
+  /* Not the one table style's row height: a note hangs under its row as one
+     entry (#1594 OR40 S3d). */
+  height: auto;
   padding-top: 0;
 }
 
@@ -5411,14 +5429,6 @@ button.danger {
   min-height: var(--control-h);
   line-height: 16px;
   padding-block: calc((var(--control-h) - 16px - 2px) / 2);
-}
-
-:root[data-density='compact'] .row-table :is(th, td) {
-  padding: calc((var(--row-h) - var(--control-h) - 1px) / 2) 2px;
-}
-
-:root[data-density='compact'] .row-table th {
-  font-size: var(--type-caption-size);
 }
 
 :root[data-density='compact']
@@ -5549,23 +5559,20 @@ button.danger {
 
 /* #1484 OR35 M1 — the runs list is a dense, full-width grid (the Monitor's
    principle 1: data, not decoration). The Timeline view shares the page.
-   32px rows of 13px data, no wrapping, and numbers right-aligned in tabular
+   `--row-h` rows of body type, no wrapping, and numbers right-aligned in tabular
    figures so durations and costs line up digit for digit.
    FIXED layout at the columns' set widths, and every cell ellipsizes: whatever
    a row holds (a 200-character pipeline name, a long trigger name), a column
    never grows past its width. Measured: with automatic layout, the shared e2e
    database's rows pushed the table past the viewport. */
 .runs-grid {
-  font-size: 13px;
   table-layout: fixed;
 }
 
+/* Row height, padding and type are the one table style's (`table`, above). */
 .runs-grid th,
 .runs-grid td {
-  height: 32px;
-  padding: 0 0.6rem;
   white-space: nowrap;
-  vertical-align: middle;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -5590,7 +5597,7 @@ button.danger {
 }
 
 /* The resize handle sits INSIDE the header's right edge (the cell clips
-   overflow), over the 0.6rem padding, so it never covers a label. A
+   overflow), over the cell's padding, so it never covers a label. A
    right-aligned header keeps its arrow and label clear of it too. Drawn only
    on hover and keyboard focus: the line is the affordance, the 8px strip is
    the target. */
@@ -5856,33 +5863,14 @@ button.danger {
 
 .activity-runs__table {
   margin: 0;
-  font-size: 13px;
-  width: 100%;
 }
 
-.activity-runs__table th,
 .activity-runs__table td {
-  height: 32px;
-  padding: 0 0.6rem;
   white-space: nowrap;
-  vertical-align: middle;
 }
 
 .activity-runs__why {
   color: var(--colorNeutralForeground3);
-}
-
-.activity-runs__error {
-  max-width: 32rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.runs-grid .num,
-.runs-grid .run-cost,
-.activity-runs__table .num {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
 }
 
 /* #1566 — the Pipeline cell: the name (which opens the run) takes the room
@@ -5947,11 +5935,6 @@ button.danger {
 .runs-grid__child-count {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
-}
-
-.runs-grid .copyable-id__copy {
-  padding: 0 0.4rem;
-  font-size: 12px;
 }
 
 /* U26 + #1484 — the runs list's filter bar: ONE row at 1440px. The labels are
@@ -6359,18 +6342,7 @@ button.danger {
 
 .quota-table,
 .ai-model-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-top: 0.5rem;
-}
-
-.quota-table th,
-.quota-table td,
-.ai-model-table th,
-.ai-model-table td {
-  text-align: left;
-  padding: 0.35rem 0.5rem;
-  border-bottom: 1px solid var(--border);
+  margin-top: var(--space-2);
 }
 
 /* The reset instant's relative half MODIFIES the instant beside it rather than
@@ -6773,15 +6745,16 @@ button.danger {
 
 /* --- #1075 Monitor › Audit ------------------------------------------------- */
 
-/* The particulars of an entry, beneath its one-line act. A block span rather
-   than a second column: the detail is a full sentence whose length varies by an
-   order of magnitude between variants (a branch name vs a named list of every
-   imported path), and a column sized for the longest would leave the short ones
-   mostly empty. Muted, so the scannable line stays the act itself. */
+/* The particulars of an entry, after its act on the same line. Not a second
+   column: the detail is a full sentence whose length varies by an order of
+   magnitude between variants (a branch name vs a named list of every imported
+   path), and a column sized for the longest would leave the short ones mostly
+   empty. Muted, so the scannable part stays the act itself. #1594 OR40 S3d
+   moved it from a block under the act onto the act's line, so an entry is one
+   `--row-h` row like every list's; the cell is cut to one line (`OneLine`)
+   with the act and detail whole in its tooltip. */
 .audit-detail {
-  display: block;
   color: var(--muted);
-  font-size: 0.9em;
 }
 
 /* The palette row: glyph, then name, on one line — the same reading order the
@@ -6867,8 +6840,12 @@ button.danger {
   max-width: 60ch;
 }
 
-/* #1396 — a list cell cut to one line (a global's value or description). The
-   whole text is in the cell's tooltip and in the edit form. */
+/* #1396, then #1594 OR40 S3d — a table cell's text cut to one line, whole in
+   the cell's tooltip (`lib/OneLine.tsx`). The cap is fixed rather than the
+   column's width, so a name can be cut while its column still has room; that
+   is accepted, because a table in automatic layout has no column width to cut
+   to. `--wide` is for a table's one long column (an audit entry, an event's
+   detail). */
 .cell-one-line {
   display: inline-block;
   max-width: 18rem;
@@ -6876,6 +6853,17 @@ button.danger {
   text-overflow: ellipsis;
   white-space: nowrap;
   vertical-align: bottom;
+}
+
+.cell-one-line--wide {
+  /* Bounded by the window too: the cap is the box's width whenever the text
+     is longer, so a fixed 40rem would push a narrow page sideways. */
+  max-width: min(40rem, 45vw);
+}
+
+/* A link in a cut cell draws its ring inside, where the cut cannot clip it. */
+.cell-one-line :focus-visible {
+  outline-offset: var(--focus-ring-inset);
 }
 
 /* #1484 OR35 M2 — container groups in the activity runs: a group line, an

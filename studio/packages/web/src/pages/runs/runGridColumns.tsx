@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import { Link, useNavigate } from 'react-router';
-import type { RunSortKey, RunSummary } from '@autonomy-studio/shared';
+import { RUN_TRIGGERED_BY_LABELS, type RunSortKey, type RunSummary } from '@autonomy-studio/shared';
 import {
   RUN_GRID_REQUIRED_COLUMNS,
   RUN_GRID_SPEC,
@@ -135,8 +135,11 @@ interface RunGridColumn {
  */
 function costTd(run: RunSummary): ReactNode {
   const cell = costCell(run);
+  // #1594 OR40 S3d — the column is narrow and three readings are words, so the
+  // cell can cut its figure: the tooltip leads with it whole, then the note.
+  const figure = `${cell.figure}${cell.unsettled ? ' so far' : ''}`;
   return (
-    <td className="run-cost" {...(cell.note === null ? {} : { title: cell.note })}>
+    <td className="num run-cost" title={cell.note === null ? figure : `${figure}\n${cell.note}`}>
       {cell.figure}
       {cell.unsettled ? <span className="run-cost-unsettled"> so far</span> : null}
     </td>
@@ -157,6 +160,24 @@ function activitiesTd(run: RunSummary): ReactNode {
   );
 }
 
+/** #1594 OR40 S3d — the Parent cell's tooltip: the name it can cut, then the run. */
+function parentTitle(r: RunSummary): string | undefined {
+  if (r.parentRunId === null) return undefined;
+  return r.parentPipelineName === null
+    ? r.parentRunId
+    : `${r.parentPipelineName} · ${r.parentRunId}`;
+}
+
+/**
+ * #1594 OR40 S3d — the Triggered by cell's tooltip: its whole text (the cell
+ * can cut a long trigger name), then a rerun's source run (RS6).
+ */
+function triggeredByTitle(r: RunSummary): string {
+  const label = RUN_TRIGGERED_BY_LABELS[r.triggeredByKind];
+  const text = r.triggerName !== null ? `${label} · ${r.triggerName}` : label;
+  return r.rerunOf !== null ? `${text}\nRerun of run ${r.rerunOf}` : text;
+}
+
 /**
  * The Pipeline cell. R2 — the pipeline's NAME, the only thing here an operator
  * recognises; the version id stays reachable as its title.
@@ -173,7 +194,13 @@ function PipelineCell({ run: r, ctx }: { run: RunSummary; ctx: CellContext }) {
   return (
     <span className="runs-grid__pipeline-line">
       {ctx.nest && <NestLead run={r} nest={ctx.nest} />}
-      <Link className="runs-grid__pipeline-name" to={ctx.path} title={r.pipelineVersionId}>
+      {/* #1594 OR40 S3d — the cell can cut the name, so the tooltip leads
+          with the whole name and version, then the version id it demotes. */}
+      <Link
+        className="runs-grid__pipeline-name"
+        to={ctx.path}
+        title={`${r.pipelineName} ${versionLabel(r.pipelineVersion, r.debug)} · ${r.pipelineVersionId}`}
+      >
         {r.pipelineName}{' '}
         <span className="run-version">{versionLabel(r.pipelineVersion, r.debug)}</span>
       </Link>
@@ -229,7 +256,7 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
     /* #1484 — the server's `triggeredByKind`, plus the trigger's name when it
        still exists. A rerun names its source run in the title (RS6). */
     cell: (r) => (
-      <td title={r.rerunOf !== null ? `Rerun of run ${r.rerunOf}` : undefined}>
+      <td title={triggeredByTitle(r)}>
         <RunTriggeredByName kind={r.triggeredByKind} />
         {r.triggerName !== null && <span className="runs-grid__trigger"> · {r.triggerName}</span>}
       </td>
@@ -251,12 +278,21 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
     label: 'Duration',
     sort: 'duration',
     numeric: true,
-    /* The finish TIMESTAMP is the cell's title (U10 fixed the column set). */
-    cell: (r, { loadedAt, zone }) => (
-      <td className="num" title={formatWhen(r.finishedAt, zone)}>
-        {formatRunDuration(r, loadedAt)}
-      </td>
-    ),
+    /* The finish TIMESTAMP is in the cell's title (U10 fixed the column set),
+       after the duration the narrow column can cut (#1594 OR40 S3d). */
+    cell: (r, { loadedAt, zone }) => {
+      const text = formatRunDuration(r, loadedAt);
+      return (
+        <td
+          className="num"
+          title={
+            r.finishedAt === null ? text : `${text} · finished ${formatWhen(r.finishedAt, zone)}`
+          }
+        >
+          {text}
+        </td>
+      );
+    },
   },
   activities: {
     label: 'Activities',
@@ -291,7 +327,7 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
     /* #1484 — the run that called this one, by its pipeline's NAME. The short
        id stands in when the name cannot be read for this viewer. */
     cell: (r) => (
-      <td title={r.parentRunId ?? undefined}>
+      <td title={parentTitle(r)}>
         {r.parentRunId === null ? (
           '—'
         ) : (

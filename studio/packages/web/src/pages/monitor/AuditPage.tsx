@@ -5,6 +5,7 @@ import { PAGE_STALLED_LABEL, usePagedList } from '../../hooks/usePagedList';
 import { describeWorkspaceEvent } from './describeWorkspaceEvent';
 import { When } from '../../lib/When';
 import { PageHeader } from '../../lib/PageHeader';
+import { OneLine } from '../../lib/OneLine';
 
 /**
  * #1075 — Monitor › Audit: the workspace's own history.
@@ -141,6 +142,7 @@ export function AuditPage() {
 
 function AuditRow({ row }: { row: WorkspaceEventRow }) {
   const { summary, detail } = describeWorkspaceEvent(row.payload);
+  const hasDetail = detail !== null && detail !== '';
   return (
     <tr>
       <td>
@@ -153,8 +155,10 @@ function AuditRow({ row }: { row: WorkspaceEventRow }) {
           one principal the server currently stamps. */}
       <td>{row.payload.by}</td>
       <td>
-        {summary}
-        {detail !== null && detail !== '' && <span className="audit-detail">{detail}</span>}
+        <OneLine wide title={hasDetail ? `${summary} — ${detail}` : summary}>
+          {summary}
+          {hasDetail && <span className="audit-detail"> — {detail}</span>}
+        </OneLine>
       </td>
     </tr>
   );

@@ -132,7 +132,9 @@ export function RunDiagnostics({ runId, settled }: { runId: string; settled: boo
                       is the whole reason it is shown: a diagnostic is a statement
                       about the log position it was derived at, and that position is
                       how an operator finds the decision it explains. */}
-                  <th scope="col">Seq</th>
+                  <th scope="col" className="num">
+                    Seq
+                  </th>
                   <th scope="col">Explanation</th>
                 </tr>
               </thead>
@@ -185,7 +187,7 @@ export function RunDiagnostics({ runId, settled }: { runId: string; settled: boo
 function DiagnosticRow({ diagnostic }: { diagnostic: RunDiagnostic }) {
   return (
     <tr>
-      <td>{diagnostic.phase === 'start' ? '—' : diagnostic.seq}</td>
+      <td className="num">{diagnostic.phase === 'start' ? '—' : diagnostic.seq}</td>
       <td>
         {diagnostic.message}
         {diagnostic.phase === 'start' && (

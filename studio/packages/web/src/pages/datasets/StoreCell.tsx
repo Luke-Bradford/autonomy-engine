@@ -3,6 +3,7 @@ import {
   type ConnectionPublic,
   type DatasetKind,
 } from '@autonomy-studio/shared';
+import { OneLine } from '../../lib/OneLine';
 
 /**
  * The store a dataset names, by NAME where that resolves and by raw id where it
@@ -72,7 +73,8 @@ export function StoreCell({
   const disagreement = datasetConnectionKindAdvisory(datasetKind, hit.kind);
   return (
     <>
-      {hit.name}
+      {/* #1594 OR40 S3d — a list row is one line, so a long name is cut. */}
+      <OneLine title={hit.name}>{hit.name}</OneLine>
       {disagreement !== null && (
         <>
           {' '}

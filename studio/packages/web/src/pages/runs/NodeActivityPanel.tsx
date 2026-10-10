@@ -569,6 +569,8 @@ function StreamedLines({ lines, stem }: { lines: readonly StreamedLine[]; stem: 
                   <code>{l.name}</code>
                 </td>
                 <td>
+                  {/* A log's value wraps rather than being cut (#1594 OR40 S3d):
+                      this panel is where it is read. */}
                   <code>{formatOutputValue(l.value)}</code>
                 </td>
               </tr>
@@ -1077,20 +1079,30 @@ function ToolCallSection({ calls }: { calls: NodeToolCall[] }) {
       <table className="node-tool-calls">
         <thead>
           <tr>
-            {showAttempt && <th scope="col">Attempt</th>}
+            {showAttempt && (
+              <th scope="col" className="num">
+                Attempt
+              </th>
+            )}
             {showInstance && <th scope="col">Item</th>}
-            <th scope="col">Round</th>
+            <th scope="col" className="num">
+              Round
+            </th>
             <th scope="col">Tool</th>
-            <th scope="col">Args</th>
-            <th scope="col">Result</th>
+            <th scope="col" className="num">
+              Args
+            </th>
+            <th scope="col" className="num">
+              Result
+            </th>
           </tr>
         </thead>
         <tbody>
           {shown.map((call, i) => (
             <tr key={`${call.instanceId ?? ''}#${call.attempt}#${call.round}#${call.callId ?? i}`}>
-              {showAttempt && <td>{call.attempt}</td>}
+              {showAttempt && <td className="num">{call.attempt}</td>}
               {showInstance && <td>{call.instanceId}</td>}
-              <td>{call.round}</td>
+              <td className="num">{call.round}</td>
               <td>
                 {/* A structurally nameless call is answered with an error
                     tool_result and never asserted — so it is named as nameless
@@ -1099,8 +1111,8 @@ function ToolCallSection({ calls }: { calls: NodeToolCall[] }) {
                 {call.toolName === '' ? <em>unnamed</em> : call.toolName}
                 {call.isError && <span className="tool-call-error"> · error</span>}
               </td>
-              <td>{call.argsChars} chars</td>
-              <td>{call.resultChars} chars</td>
+              <td className="num">{call.argsChars} chars</td>
+              <td className="num">{call.resultChars} chars</td>
             </tr>
           ))}
         </tbody>

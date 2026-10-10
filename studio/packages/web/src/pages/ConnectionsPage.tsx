@@ -31,6 +31,7 @@ import {
   savePayloadSignature,
 } from './connections/connectionFormState';
 import { PageHeader } from '../lib/PageHeader';
+import { OneLine } from '../lib/OneLine';
 /**
  * Connections page: the first MVP-bar step ("Add a Connection"). Full CRUD
  * over `/api/connections`. Secrets are write-only end to end — the list never
@@ -329,7 +330,9 @@ export function ConnectionsPage() {
               <tbody>
                 {connections.map((conn) => (
                   <tr key={conn.id}>
-                    <td>{conn.name}</td>
+                    <td>
+                      <OneLine title={conn.name}>{conn.name}</OneLine>
+                    </td>
                     <td>
                       <ConnectionKindName kind={conn.kind} />
                     </td>
