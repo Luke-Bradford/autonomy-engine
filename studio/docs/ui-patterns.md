@@ -637,7 +637,7 @@ list (a Copy mapping, HTTP headers, LLM messages, an output schema) render throu
 (`lib/form/RowTable.tsx`). It applies at every width and both densities.
 
 - **A header names each column once.** A cell shows no label of its own. It keeps one, out of sight,
-  as its control's name (`mapping row 2 sink`, `param 1 default`), so specs and screen readers still
+  as its control's name (`mapping row 2 sink`, `Parameter 1 default`), so specs and screen readers still
   reach each control. A row-list column's header carries what the cell label said: its title, its
   format (`— number`, `— JSON`) and the required mark.
 - **A row is one line.** At compact density it is 32px (`--row-h`) of 28px controls. A

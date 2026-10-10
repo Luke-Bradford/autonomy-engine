@@ -686,7 +686,8 @@ describe('PipelinePanel (#1594 OR40 S4b) — control names', () => {
     return names.filter((n) => n !== '');
   }
 
-  it.each(['Parameters', 'Variables', 'Outputs', 'General'])('%s', (tab) => {
+  // Every tab's panel is mounted (a hidden one too), so one read covers all four.
+  it('on every tab', () => {
     mount(
       version({
         params: [
@@ -699,9 +700,15 @@ describe('PipelinePanel (#1594 OR40 S4b) — control names', () => {
         annotations: ['prod'],
       }),
     );
-    fireEvent.click(screen.getByRole('tab', { name: tab }));
     const names = controlNames();
-    expect(names.length).toBeGreaterThan(2);
+    for (const name of [
+      'Parameter 1 name',
+      'Variable 1 default',
+      'Output 1 optional',
+      'Remove annotation 1',
+    ]) {
+      expect(names).toContain(name);
+    }
     expect(names.map((n) => [n, labelProblem(n)]).filter(([, p]) => p !== null)).toEqual([]);
   });
 });

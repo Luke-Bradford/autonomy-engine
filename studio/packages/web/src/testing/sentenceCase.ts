@@ -72,7 +72,8 @@ export function sentenceCaseProblem(text: string): string | null {
 export function labelProblem(text: string): string | null {
   const about = /^About (.+)$/u.exec(text.trim());
   if (about?.[1] !== undefined) return labelProblem(about[1]);
-  if (/[^.][:.]$|^[:.]$/u.test(text.trim())) return 'ends with a colon or a period';
+  // An ellipsis is the one character "…", so a trailing "..." is refused too.
+  if (/[:.]$/u.test(text.trim())) return 'ends with a colon or a period';
   const banned = text.split(/[^\p{L}]+/u).find((w) => /^params?$/i.test(w));
   if (banned !== undefined) return `"${banned}" should be "parameter"`;
   return sentenceCaseProblem(text);

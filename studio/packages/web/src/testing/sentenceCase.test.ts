@@ -101,6 +101,7 @@ describe('labelProblem', () => {
   it.each([
     ['Duration:', 'ends with a colon or a period'],
     ['None declared.', 'ends with a colon or a period'],
+    ['Save as...', 'ends with a colon or a period'],
     ['param 1 name', '"param" should be "parameter"'],
     ['Remove params', '"params" should be "parameter"'],
     ['annotation 1', '"annotation" should start with a capital'],
