@@ -139,5 +139,5 @@ test('#1594 OR40 S5 — one h1 per page, no skipped heading level, no aside in m
   await expect(page.getByRole('heading', { name: '2 selected' })).toBeVisible();
   expectStructure('editor, two selected', await read(page), name);
 
-  expectQuiet(problems);
+  await expectQuiet(page, problems);
 });
