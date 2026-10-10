@@ -89,17 +89,17 @@ export function focusFirstInvalid(container: ParentNode): void {
   if (key !== undefined) focusField(container, key);
 }
 
+/** Ids for an `aria-describedby`, in order, skipping the absent; `undefined` if none. */
+export function joinIds(...ids: (string | undefined)[]): string | undefined {
+  return ids.filter((id) => id !== undefined && id !== '').join(' ') || undefined;
+}
+
 /**
  * #1396 — the attributes that make a control a field of the form's validation:
  * its key, an invalid mark, and its description (the error first, then any
  * hint). `data-invalid` is what focus looks for; `aria-invalid` is left off a
  * row list, because ARIA does not allow it on a `group`.
  */
-/** Ids for an `aria-describedby`, in order, skipping the absent; `undefined` if none. */
-export function joinIds(...ids: (string | undefined)[]): string | undefined {
-  return ids.filter((id) => id !== undefined && id !== '').join(' ') || undefined;
-}
-
 export function fieldAttrs({
   key,
   error,
