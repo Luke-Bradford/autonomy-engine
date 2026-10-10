@@ -171,5 +171,17 @@ test('#1594 OR40 S3 — Add filter puts an axis on the row, focused; its ✕ tak
   await expect.poll(() => page.url()).not.toContain('status=');
   await expect(page.getByRole('button', { name: 'Remove Status filter' })).toHaveCount(0);
 
+  // A range of days: the colon is the axis name's alone, not drawn before
+  // each date input (whose labels are visually hidden).
+  await page.goto('/#/monitor/runs?from=2000-01-01&to=2100-01-01');
+  await fluentRootReady(page);
+  await expect(page.getByLabel('From day')).toHaveValue('2000-01-01');
+  const colons = await page.evaluate(() =>
+    [...document.querySelectorAll('.filter-pill label')]
+      .filter((l) => getComputedStyle(l, '::after').content !== 'none')
+      .map((l) => l.textContent),
+  );
+  expect(colons).toEqual(['Status', 'Pipeline', 'Started']);
+
   await expectQuiet(page, problems);
 });
