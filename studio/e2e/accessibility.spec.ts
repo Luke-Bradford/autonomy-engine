@@ -55,7 +55,9 @@ const LEFT_FOR_S5C = [
   {
     name: 'canvas ports named with aria-label but no role',
     rule: 'aria-prohibited-attr',
-    html: /^<div [^>]*\bflow-port\b/,
+    // Only a SOURCE port carries a name, so any handle here is one. Matched on
+    // `data-handleid`, which comes first: axe truncates a long snippet.
+    html: /^<div [^>]*\bdata-handleid=/,
   },
 ] as const;
 
@@ -257,6 +259,8 @@ test('axe: 0 violations on the connected Git page, both themes and densities', a
         // Init scripts run in the order added, so the latest pair wins.
         await preferAppearance(page, theme, density);
         await page.goto('/#/manage/git');
+        // The same URL again is a same-document move; a reload reruns the scripts.
+        await page.reload();
         await fluentRootReady(page);
         await expect(page.getByRole('heading', { name: 'Connected', exact: true })).toBeVisible();
         await expectAppearance(page, theme, density);

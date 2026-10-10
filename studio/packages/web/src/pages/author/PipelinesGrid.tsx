@@ -337,7 +337,11 @@ export function PipelinesGrid({
                 />
               );
             })}
-            <th scope="col" aria-label="Actions" />
+            {/* Text, not `aria-label`: a header cell's name is its content, and
+              an empty one is a header with no text (axe `empty-table-header`). */}
+            <th scope="col">
+              <span className="visually-hidden">Actions</span>
+            </th>
           </tr>
         </thead>
         <tbody>
