@@ -49,6 +49,11 @@ export default defineConfig({
      * being created at all.
      */
     include: TEST_INCLUDE,
+    /**
+     * #1632 — one temp root per run, removed at teardown, so a test that
+     * forgets to clean up its `mkdtemp` dir cannot fill the host's disk.
+     */
+    globalSetup: ['./src/__tests__/test-tmp-root.ts'],
     testTimeout: 30_000,
     hookTimeout: 30_000,
   },
