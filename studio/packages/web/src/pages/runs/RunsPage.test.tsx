@@ -220,6 +220,12 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+/** #1594 OR40 S3 — put an optional filter on the runs bar through "Add filter". */
+async function addFilter(name: string) {
+  await userEvent.click(screen.getByRole('button', { name: 'Add filter' }));
+  await userEvent.click(await screen.findByRole('menuitem', { name }));
+}
+
 describe('RunsPage', () => {
   it('shows the empty state after loading', async () => {
     renderWithRouter(<RunsPage />);
@@ -897,6 +903,121 @@ describe('RunsPage — U26 filter pane', () => {
     );
   });
 
+  /**
+   * #1594 OR40 S3 — the filters as pills. Trigger and Annotation wait behind
+   * "Add filter" until added or set; a ✕ takes a filter off the row and off
+   * the list; an always-shown pill has a ✕ only while it narrows the list.
+   */
+  describe('filter pills', () => {
+    it('keeps Trigger and Annotation behind Add filter, and an added one takes focus', async () => {
+      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
+      await screen.findByText(/No runs yet/i);
+      expect(screen.queryByLabelText('Trigger')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Annotation')).not.toBeInTheDocument();
+
+      await addFilter('Trigger');
+
+      const trigger = screen.getByLabelText('Trigger');
+      await waitFor(() => expect(trigger).toHaveFocus());
+      // Added at All: on the row, narrowing nothing, and gone from the menu.
+      expect(trigger).toHaveValue('');
+      await userEvent.click(screen.getByRole('button', { name: 'Add filter' }));
+      expect(await screen.findByRole('menuitem', { name: 'Annotation' })).toBeInTheDocument();
+      expect(screen.queryByRole('menuitem', { name: 'Trigger' })).not.toBeInTheDocument();
+      await userEvent.keyboard('{Escape}');
+
+      // Its ✕ takes it back off the row, though it never narrowed the list.
+      await userEvent.click(screen.getByRole('button', { name: 'Remove Trigger filter' }));
+      expect(screen.queryByLabelText('Trigger')).not.toBeInTheDocument();
+    });
+
+    it('shows a filter set in the URL without adding it, and its ✕ clears it off the row', async () => {
+      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?annotation=nightly');
+      await screen.findByText(/No runs match these filters/i);
+      expect(screen.getByLabelText('Annotation')).toHaveValue('nightly');
+      listMock.mockClear();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Remove Annotation filter' }));
+
+      expect(listMock).toHaveBeenCalledWith(
+        { ...CHILDREN },
+        undefined,
+        expect.anything(),
+        RUNS_PAGE_SIZE,
+      );
+      expect(screen.queryByLabelText('Annotation')).not.toBeInTheDocument();
+      // The pill has gone, so the keyboard lands on Add filter, not the page.
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Add filter' })).toHaveFocus());
+    });
+
+    it('keeps a filter that arrived on a link on the row when it is turned back to All', async () => {
+      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?annotation=nightly');
+      await screen.findByText(/No runs match these filters/i);
+
+      await userEvent.selectOptions(screen.getByLabelText('Annotation'), '');
+
+      expect(await screen.findByText(/No runs yet/i)).toBeInTheDocument();
+      expect(screen.getByLabelText('Annotation')).toHaveValue('');
+    });
+
+    it('gives an always-shown pill a ✕ only while it narrows the list', async () => {
+      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
+      await screen.findByText(/No runs yet/i);
+      for (const name of ['Status', 'Pipeline', 'Triggered by', 'Started'])
+        expect(
+          screen.queryByRole('button', { name: `Remove ${name} filter` }),
+        ).not.toBeInTheDocument();
+
+      await userEvent.selectOptions(screen.getByLabelText('Status'), 'failure');
+      await screen.findByText(/No runs match these filters/i);
+      listMock.mockClear();
+      await userEvent.click(screen.getByRole('button', { name: 'Remove Status filter' }));
+
+      expect(listMock).toHaveBeenCalledWith(
+        { ...CHILDREN },
+        undefined,
+        expect.anything(),
+        RUNS_PAGE_SIZE,
+      );
+      expect(screen.getByLabelText('Status')).toHaveValue('');
+      expect(
+        screen.queryByRole('button', { name: 'Remove Status filter' }),
+      ).not.toBeInTheDocument();
+      // Its ✕ has gone with the filter, so the keyboard lands on the control.
+      await waitFor(() => expect(screen.getByLabelText('Status')).toHaveFocus());
+    });
+
+    it("the Started pill's ✕ clears every time bound", async () => {
+      renderWithRouter(
+        <RunsPage store={storeWith()} />,
+        '/monitor/runs?from=2026-01-01&to=2026-01-07',
+      );
+      await screen.findByText(/No runs match these filters/i);
+      listMock.mockClear();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Remove Started filter' }));
+
+      expect(listMock).toHaveBeenCalledWith(
+        { ...CHILDREN },
+        undefined,
+        expect.anything(),
+        RUNS_PAGE_SIZE,
+      );
+      expect(screen.getByLabelText('Started')).toHaveValue('');
+    });
+
+    it('Clear filters also takes an added pill off the row', async () => {
+      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?status=failure');
+      await screen.findByText(/No runs match these filters/i);
+      await addFilter('Annotation');
+      expect(screen.getByLabelText('Annotation')).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+
+      expect(screen.queryByLabelText('Annotation')).not.toBeInTheDocument();
+    });
+  });
+
   it('writes a chosen status to the URL and refetches with it', async () => {
     renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
     await screen.findByText(/No runs yet/i);
@@ -953,6 +1074,7 @@ describe('RunsPage — U26 filter pane', () => {
     vi.mocked(runsApi.listRunAnnotations).mockResolvedValue(['finance', 'nightly']);
     renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
     await screen.findByText(/No runs yet/i);
+    await addFilter('Annotation');
     const select = screen.getByLabelText<HTMLSelectElement>('Annotation');
     await screen.findByRole('option', { name: 'nightly' });
     listMock.mockClear();
@@ -988,6 +1110,7 @@ describe('RunsPage — U26 filter pane', () => {
     vi.mocked(runsApi.listRunAnnotations).mockRejectedValue(new Error('down'));
     renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
     await screen.findByText(/No runs yet/i);
+    await addFilter('Annotation');
     expect(screen.getByLabelText<HTMLSelectElement>('Annotation').value).toBe('');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });

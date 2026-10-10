@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ToggleButton, Tooltip } from '@fluentui/react-components';
+import {
+  Menu,
+  MenuItem,
+  MenuList,
+  MenuPopover,
+  MenuTrigger,
+  ToggleButton,
+  Tooltip,
+} from '@fluentui/react-components';
+import { AddRegular } from '@fluentui/react-icons';
 import {
   RUN_TRIGGERED_BY_KINDS,
   RUN_SEARCH_MAX_CHARS,
@@ -66,7 +75,7 @@ import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import { withParams } from '../../lib/withParams';
 import { useSearchBox } from '../../lib/useSearchBox';
 import { FilterMenu } from './FilterMenu';
-import { FilterPicker } from './FilterPicker';
+import { FilterPicker, type FilterOption } from './FilterPicker';
 import { RUN_GROUP_BYS, type RunGroupBy } from './runBars';
 import {
   RUNS_LIVE_FAILING_LABEL,
@@ -75,6 +84,7 @@ import {
   useRunsLive,
 } from './useRunsLive';
 import { PageHeader, ToolbarDivider } from '../../lib/PageHeader';
+import { FilterPill } from '../../lib/FilterPill';
 
 /**
  * U29 (#1015) — which rendering of the SAME filtered rows is on screen. A view,
@@ -104,6 +114,61 @@ function withDescendants(page: RunSummaryPage): Paginated<RunSummary> {
     throw new Error('The server did not return the child runs this list asked for.');
   }
   return { items: [...page.items, ...page.descendants], nextCursor: page.nextCursor };
+}
+
+/**
+ * #1594 OR40 S3 — the filters the bar keeps behind "Add filter" until one is
+ * added or its param is in the URL, as the ADF Monitor keeps its rarer axes.
+ * Status, Pipeline, Triggered by and Started are always on the row.
+ */
+const OPTIONAL_RUN_FILTERS = [
+  { param: RUN_FILTER_PARAMS.triggerId, label: 'Trigger' },
+  { param: RUN_FILTER_PARAMS.annotation, label: 'Annotation' },
+] as const;
+type OptionalRunFilter = (typeof OPTIONAL_RUN_FILTERS)[number]['param'];
+
+/** Every Started bound cleared: the "Any time" the picker's choices start from. */
+const STARTED_UNBOUNDED: Record<string, string> = {
+  [RUN_FILTER_PARAMS.since]: '',
+  [RUN_FILTER_PARAMS.on]: '',
+  [RUN_FILTER_PARAMS.from]: '',
+  [RUN_FILTER_PARAMS.to]: '',
+};
+
+/**
+ * #1594 OR40 S3 — an optional filter's pill (Trigger, Annotation): always a ✕,
+ * since that is also how it leaves the row, and its picker registered so an
+ * axis just added can take focus.
+ */
+function OptionalFilterPill({
+  param,
+  label,
+  value,
+  options,
+  onRemove,
+  onChange,
+  registerSelect,
+}: {
+  param: OptionalRunFilter;
+  label: string;
+  value: string | undefined;
+  options: readonly FilterOption[];
+  onRemove: (param: OptionalRunFilter) => void;
+  onChange: (param: OptionalRunFilter, next: string) => void;
+  registerSelect: (param: OptionalRunFilter, select: HTMLSelectElement | null) => void;
+}) {
+  return (
+    <FilterPill name={label} active={value !== undefined} onRemove={() => onRemove(param)}>
+      <FilterPicker
+        label={label}
+        allLabel="All"
+        value={value}
+        options={options}
+        onChange={(next) => onChange(param, next)}
+        selectRef={(el) => registerSelect(param, el)}
+      />
+    </FilterPill>
+  );
 }
 
 function readGroupBy(params: URLSearchParams): RunGroupBy {
@@ -351,16 +416,15 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
    * already a working filter rather than a half-made one.
    */
   const startedMode = startedModeOf(searchParams, since);
+  /** #1594 OR40 S3 — the Started pill's ✕: every time bound off, no clock read. */
+  function clearStarted() {
+    setFilters(STARTED_UNBOUNDED);
+  }
   function selectStartedMode(mode: string) {
     // Today and the week before it in the DISPLAY zone, by calendar arithmetic.
     const today = dayOf(Date.now(), zone);
     const weekAgo = shiftDay(today, -6);
-    const cleared = {
-      [RUN_FILTER_PARAMS.since]: '',
-      [RUN_FILTER_PARAMS.on]: '',
-      [RUN_FILTER_PARAMS.from]: '',
-      [RUN_FILTER_PARAMS.to]: '',
-    };
+    const cleared = STARTED_UNBOUNDED;
     if (mode === 'on') setFilters({ ...cleared, [RUN_FILTER_PARAMS.on]: today });
     else if (mode === 'range')
       setFilters({
@@ -378,7 +442,50 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
 
   const kinds = readKinds(kind);
 
+  /**
+   * #1594 OR40 S3 — the optional filters ADDED to the row and not yet set. A
+   * set one is on the row because its param is in the URL, so this holds only
+   * what the URL cannot: "show me this axis at All". View state, like a menu's
+   * open state, so a reload drops an unset pill and keeps every set one.
+   * Choosing a value in a pill adds it too, so a filter that arrived on a link
+   * stays on the row when the viewer turns it back to All.
+   */
+  const [addedFilters, setAddedFilters] = useState<readonly OptionalRunFilter[]>([]);
+  const optionalValue: Record<OptionalRunFilter, string | undefined> = {
+    [RUN_FILTER_PARAMS.triggerId]: triggerId,
+    [RUN_FILTER_PARAMS.annotation]: annotation,
+  };
+  const shownFilter = (param: OptionalRunFilter) =>
+    addedFilters.includes(param) || optionalValue[param] !== undefined;
+  const optionalSelects = useRef<Partial<Record<OptionalRunFilter, HTMLSelectElement | null>>>({});
+  /* The picker a filter just added opens on, so adding one is one step from
+     choosing its value. After the menu has closed: it hands focus back to its
+     own trigger as it goes, which would otherwise win. */
+  const [focusFilter, setFocusFilter] = useState<OptionalRunFilter | null>(null);
+  useEffect(() => {
+    if (focusFilter === null) return;
+    const frame = requestAnimationFrame(() => {
+      optionalSelects.current[focusFilter]?.focus();
+      setFocusFilter(null);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusFilter]);
+  function keepFilter(param: OptionalRunFilter) {
+    setAddedFilters((prev) => (prev.includes(param) ? prev : [...prev, param]));
+  }
+  function addFilter(param: OptionalRunFilter) {
+    keepFilter(param);
+    setFocusFilter(param);
+  }
+  function removeFilter(param: OptionalRunFilter) {
+    setAddedFilters((prev) => prev.filter((p) => p !== param));
+    // An unset pill narrows nothing, and an identical URL pushed would be a
+    // Back that does nothing.
+    if (optionalValue[param] !== undefined) setFilter(param, '');
+  }
+
   function clearFilters() {
+    setAddedFilters([]);
     setSearchParams((prev) =>
       withParams(prev, Object.fromEntries(Object.values(RUN_FILTER_PARAMS).map((p) => [p, '']))),
     );
@@ -719,118 +826,183 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
           pane that renders only when rows exist would vanish exactly when the
           operator needs it to undo the filter that emptied the list. */}
       <div className="run-filters" role="group" aria-label="Filter runs">
-        {/* #1484 — ONE row. Each control keeps its label for assistive tech but
-            draws none: the "All …" first option names the axis on screen, and
-            a row of stacked labels is what pushed the first run off the top. */}
-        <LabelledControl label={<span className="visually-hidden">Status</span>}>
-          {(id) => (
-            <select
-              id={id}
-              value={statusFilter ?? ''}
-              onChange={(e) => setFilter(RUN_FILTER_PARAMS.status, e.target.value)}
-            >
-              <option value="">All statuses</option>
-              {RunStatusSchema.options.map((s) => (
-                <option key={s} value={s}>
-                  {runStatusLabel(s)}
-                </option>
-              ))}
-            </select>
-          )}
-        </LabelledControl>
-
-        {/* What started the run, several at once (`FilterMenu`). */}
-        <FilterMenu
-          label="Triggered by"
-          name="kind"
-          values={RUN_TRIGGERED_BY_KINDS}
-          checked={kinds}
-          labelOf={(k) => RUN_TRIGGERED_BY_LABELS[k]}
-          countNoun="kinds"
-          onChange={(items) => setFilter(RUN_FILTER_PARAMS.kind, canonicalKindParam(items) ?? '')}
-        />
-
-        <FilterPicker
-          label={<span className="visually-hidden">Pipeline</span>}
-          allLabel="All pipelines"
-          value={pipelineId}
-          options={pipelines.map((p) => ({ value: p.id, label: p.name }))}
-          onChange={(next) => setFilter(RUN_FILTER_PARAMS.pipelineId, next)}
-        />
-
-        <FilterPicker
-          label={<span className="visually-hidden">Trigger</span>}
-          allLabel="All triggers"
-          value={triggerId}
-          options={triggers.map((t) => ({ value: t.id, label: t.name }))}
-          onChange={(next) => setFilter(RUN_FILTER_PARAMS.triggerId, next)}
-        />
-
-        <FilterPicker
-          label={<span className="visually-hidden">Annotation</span>}
-          allLabel="All annotations"
-          value={annotation}
-          options={annotations.map((a) => ({ value: a, label: a }))}
-          onChange={(next) => setFilter(RUN_FILTER_PARAMS.annotation, next)}
-        />
-
-        <LabelledControl label={<span className="visually-hidden">Started</span>}>
-          {(id) => (
-            <select id={id} value={startedMode} onChange={(e) => selectStartedMode(e.target.value)}>
-              <option value="">Any time</option>
-              {RUN_SINCE_OPTIONS.map((w) => (
-                <option key={w} value={w}>
-                  {RUN_SINCE_LABEL[w]}
-                </option>
-              ))}
-              <option value="on">On a day…</option>
-              <option value="range">Between days…</option>
-            </select>
-          )}
-        </LabelledControl>
-
-        {/* The day picker is the browser's own date input: a calendar on every
-            engine, keyboard-typable, and it always yields `YYYY-MM-DD` or ''.
-            A cleared input keeps its place and removes its bound. A reversed
-            range is refused by `readRunFilters`, and `min`/`max` make each
-            input natively `:invalid`, which the bar draws. */}
-        {startedMode === 'on' && (
-          <LabelledControl label={<span className="visually-hidden">Day</span>}>
+        {/* #1484 — ONE row. #1594 OR40 S3 — each filter is a pill, "Status:
+            All", like the ADF Monitor's: the axis named on screen, its own
+            control borderless inside, and a ✕ once it narrows the list. The
+            controls keep their names, so the pill is a frame and not a new
+            widget. */}
+        <FilterPill
+          name="Status"
+          active={statusFilter !== undefined}
+          onRemove={
+            statusFilter === undefined ? undefined : () => setFilter(RUN_FILTER_PARAMS.status, '')
+          }
+        >
+          <LabelledControl label="Status">
             {(id) => (
-              <input
+              <select
                 id={id}
-                type="date"
-                value={on ?? ''}
-                onChange={(e) => setDay(RUN_FILTER_PARAMS.on, e.target.value)}
-              />
+                value={statusFilter ?? ''}
+                onChange={(e) => setFilter(RUN_FILTER_PARAMS.status, e.target.value)}
+              >
+                <option value="">All</option>
+                {RunStatusSchema.options.map((s) => (
+                  <option key={s} value={s}>
+                    {runStatusLabel(s)}
+                  </option>
+                ))}
+              </select>
             )}
           </LabelledControl>
-        )}
-        {startedMode === 'range' && (
-          <>
-            <LabelledControl label={<span className="visually-hidden">From day</span>}>
+        </FilterPill>
+
+        <FilterPill
+          name="Pipeline"
+          active={pipelineId !== undefined}
+          onRemove={
+            pipelineId === undefined ? undefined : () => setFilter(RUN_FILTER_PARAMS.pipelineId, '')
+          }
+        >
+          <FilterPicker
+            label="Pipeline"
+            allLabel="All"
+            value={pipelineId}
+            options={pipelines.map((p) => ({ value: p.id, label: p.name }))}
+            onChange={(next) => setFilter(RUN_FILTER_PARAMS.pipelineId, next)}
+          />
+        </FilterPill>
+
+        {/* What started the run, several at once (`FilterMenu`), whose button
+            already reads "Triggered by: All". */}
+        <FilterPill
+          name="Triggered by"
+          active={kinds.length > 0}
+          onRemove={kinds.length === 0 ? undefined : () => setFilter(RUN_FILTER_PARAMS.kind, '')}
+        >
+          <FilterMenu
+            label="Triggered by"
+            name="kind"
+            values={RUN_TRIGGERED_BY_KINDS}
+            checked={kinds}
+            labelOf={(k) => RUN_TRIGGERED_BY_LABELS[k]}
+            countNoun="kinds"
+            onChange={(items) => setFilter(RUN_FILTER_PARAMS.kind, canonicalKindParam(items) ?? '')}
+          />
+        </FilterPill>
+
+        <FilterPill
+          name="Started"
+          active={startedMode !== ''}
+          onRemove={startedMode === '' ? undefined : clearStarted}
+        >
+          <LabelledControl label="Started">
+            {(id) => (
+              <select
+                id={id}
+                value={startedMode}
+                onChange={(e) => selectStartedMode(e.target.value)}
+              >
+                <option value="">Any time</option>
+                {RUN_SINCE_OPTIONS.map((w) => (
+                  <option key={w} value={w}>
+                    {RUN_SINCE_LABEL[w]}
+                  </option>
+                ))}
+                <option value="on">On a day…</option>
+                <option value="range">Between days…</option>
+              </select>
+            )}
+          </LabelledControl>
+
+          {/* The day picker is the browser's own date input: a calendar on
+              every engine, keyboard-typable, and it always yields `YYYY-MM-DD`
+              or ''. A cleared input keeps its place and removes its bound. A
+              reversed range is refused by `readRunFilters`, and `min`/`max`
+              make each input natively `:invalid`, which the bar draws. */}
+          {startedMode === 'on' && (
+            <LabelledControl label={<span className="visually-hidden">Day</span>}>
               {(id) => (
                 <input
                   id={id}
                   type="date"
-                  value={from ?? ''}
-                  max={to}
-                  onChange={(e) => setDay(RUN_FILTER_PARAMS.from, e.target.value)}
+                  value={on ?? ''}
+                  onChange={(e) => setDay(RUN_FILTER_PARAMS.on, e.target.value)}
                 />
               )}
             </LabelledControl>
-            <LabelledControl label={<span className="visually-hidden">To day</span>}>
-              {(id) => (
-                <input
-                  id={id}
-                  type="date"
-                  value={to ?? ''}
-                  min={from}
-                  onChange={(e) => setDay(RUN_FILTER_PARAMS.to, e.target.value)}
-                />
-              )}
-            </LabelledControl>
-          </>
+          )}
+          {startedMode === 'range' && (
+            <>
+              <LabelledControl label={<span className="visually-hidden">From day</span>}>
+                {(id) => (
+                  <input
+                    id={id}
+                    type="date"
+                    value={from ?? ''}
+                    max={to}
+                    onChange={(e) => setDay(RUN_FILTER_PARAMS.from, e.target.value)}
+                  />
+                )}
+              </LabelledControl>
+              <LabelledControl label={<span className="visually-hidden">To day</span>}>
+                {(id) => (
+                  <input
+                    id={id}
+                    type="date"
+                    value={to ?? ''}
+                    min={from}
+                    onChange={(e) => setDay(RUN_FILTER_PARAMS.to, e.target.value)}
+                  />
+                )}
+              </LabelledControl>
+            </>
+          )}
+        </FilterPill>
+
+        {/* The optional filters, once added or set. Removing one takes it off
+            the row as well as off the list. */}
+        {OPTIONAL_RUN_FILTERS.filter(({ param }) => shownFilter(param)).map(({ param, label }) => (
+          <OptionalFilterPill
+            key={param}
+            param={param}
+            label={label}
+            value={optionalValue[param]}
+            options={
+              param === RUN_FILTER_PARAMS.triggerId
+                ? triggers.map((t) => ({ value: t.id, label: t.name }))
+                : annotations.map((a) => ({ value: a, label: a }))
+            }
+            onRemove={removeFilter}
+            onChange={(p, next) => {
+              keepFilter(p);
+              setFilter(p, next);
+            }}
+            registerSelect={(p, el) => {
+              optionalSelects.current[p] = el;
+            }}
+          />
+        ))}
+
+        {OPTIONAL_RUN_FILTERS.some(({ param }) => !shownFilter(param)) && (
+          <Menu>
+            <MenuTrigger disableButtonEnhancement>
+              <button type="button" className="subtle run-filters__add" data-filter-add="">
+                <AddRegular aria-hidden="true" />
+                Add filter
+              </button>
+            </MenuTrigger>
+            <MenuPopover>
+              <MenuList>
+                {OPTIONAL_RUN_FILTERS.filter(({ param }) => !shownFilter(param)).map(
+                  ({ param, label }) => (
+                    <MenuItem key={param} onClick={() => addFilter(param)}>
+                      {label}
+                    </MenuItem>
+                  ),
+                )}
+              </MenuList>
+            </MenuPopover>
+          </Menu>
         )}
 
         {/* "Clear" on screen to keep the bar one row; the accessible name
