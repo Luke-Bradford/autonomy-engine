@@ -6902,7 +6902,23 @@ button.danger {
 }
 
 /* #1484 OR35 M2 — the detail drawer: fixed to the right under the command bar,
-   OVER the page rather than in its flow, so opening it moves nothing. */
+   out of the page's flow, so opening it moves nothing down.
+   #1594 OR40 S3e — its width is the run page's (`runDrawerWidthStyle`): the
+   operator's, else a share of the window, and never more than 80% of it. */
+.run-page {
+  --run-drawer-box: min(var(--run-drawer-width, min(36rem, 45vw)), 80vw);
+}
+
+/* Where there is room (`RUN_DRAWER_PUSH_MIN`, which sets `data-push`) the
+   drawer PUSHES: the page keeps a gutter its width, so the grid narrows rather
+   than running under it. The drawer covers the content frame's own right
+   padding, so a gutter of its whole width leaves page and drawer one frame
+   (16px) apart. Narrower, the drawer lies over the page and the page keeps its
+   width. */
+.run-page:has(> .run-drawer[data-push]) {
+  padding-right: var(--run-drawer-box);
+}
+
 .run-drawer {
   position: fixed;
   /* Under the command bar (`.command-bar`, 40px), which stays reachable. */
@@ -6910,8 +6926,7 @@ button.danger {
   right: 0;
   bottom: 0;
   z-index: 15;
-  width: var(--run-drawer-width, min(36rem, 45vw));
-  max-width: 80vw;
+  width: var(--run-drawer-box);
   display: flex;
   background: var(--panel);
   border-left: 1px solid var(--border);
