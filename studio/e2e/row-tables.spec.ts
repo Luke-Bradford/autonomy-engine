@@ -110,6 +110,8 @@ test('a Copy mapping is one compact table, whole on its tab, with the row action
   // "Column mapping row 2 on error", "Move column mapping row 2 up".
   const names = await table.evaluate((t) => [
     ...Array.from(t.querySelectorAll('[aria-label]'), (el) => el.getAttribute('aria-label') ?? ''),
+    // A cell's name is its visually hidden `<label>`.
+    ...Array.from(t.querySelectorAll('tbody label'), (l) => l.textContent?.trim() ?? ''),
     ...Array.from(t.querySelectorAll('thead th'), (th) => th.textContent ?? ''),
   ]);
   expect(names).toContain('Column mapping row 2 on error');
