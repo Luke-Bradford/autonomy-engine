@@ -44,6 +44,8 @@ function measure(page: Page) {
       const r = pill.getBoundingClientRect();
       const label = pill.querySelector('label');
       const remove = pill.querySelector('.filter-pill__remove')?.getBoundingClientRect();
+      // Inside the border, not over it.
+      const bw = parseFloat(s.borderTopWidth);
       return {
         // The axis: its label, or the menu button's text before the colon.
         // (Not `innerText`, which carries every option of a select.)
@@ -59,8 +61,17 @@ function measure(page: Page) {
         innerBorders: [
           ...pill.querySelectorAll<HTMLElement>('select, input, button.run-filters__menu'),
         ].map((c) => getComputedStyle(c).borderTopColor),
+        // Every control inside the border, so its focus ring is too.
+        controlsInside: [
+          ...pill.querySelectorAll<HTMLElement>('select, input, button.run-filters__menu'),
+        ].every((c) => {
+          const cr = c.getBoundingClientRect();
+          return cr.top >= r.top + bw && cr.bottom <= r.bottom - bw;
+        }),
         removeInside: remove
-          ? remove.top >= r.top && remove.bottom <= r.bottom && remove.right <= r.right
+          ? remove.top >= r.top + bw &&
+            remove.bottom <= r.bottom - bw &&
+            remove.right <= r.right - bw
           : null,
       };
     });
@@ -91,6 +102,7 @@ for (const density of ['compact', 'comfortable'] as const) {
     ).toEqual(['Status', 'Pipeline', 'Triggered by', 'Started', 'Annotation']);
     expect(m.items).toHaveLength(7);
     for (const pill of m.pills) {
+      expect(pill.controlsInside, `${pill.text}: controls inside the border`).toBe(true);
       expect(pill.height, `${pill.text}: --control-h tall`).toBeCloseTo(CONTROL_H[density], 0);
       expect(pill.radius, `${pill.text}: fully rounded`).toBeGreaterThanOrEqual(pill.height / 2);
       for (const border of pill.innerBorders)
