@@ -326,10 +326,10 @@ describe('ConnectionsPage', () => {
     const form = screen.getByRole('form', { name: 'Connection form' });
     // A row group, not a JSON blob — derived from the same schema the server reads.
     expect(within(form).getByRole('group', { name: 'Default headers' })).toBeInTheDocument();
-    expect(within(form).getByLabelText('headers row 1 key')).toHaveValue('X-A');
-    await user.click(within(form).getByRole('button', { name: 'Add headers row' }));
-    await user.type(within(form).getByLabelText('headers row 2 key'), 'X-B');
-    await user.type(within(form).getByLabelText('headers row 2 value'), '2');
+    expect(within(form).getByLabelText('Default headers row 1 key')).toHaveValue('X-A');
+    await user.click(within(form).getByRole('button', { name: 'Add default headers row' }));
+    await user.type(within(form).getByLabelText('Default headers row 2 key'), 'X-B');
+    await user.type(within(form).getByLabelText('Default headers row 2 value'), '2');
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));

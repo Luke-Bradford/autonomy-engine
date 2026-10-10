@@ -18,10 +18,11 @@ const STRAY_NOTE: Record<StrayReason, string> = {
  * node that uses it may override per run. The canvas's override editor (#1304)
  * offers exactly the keys ticked here.
  *
- * Each checkbox is named `Overridable: <key>`, not the bare key. The config
+ * Each checkbox is named "Overridable <key>", not the bare key. The config
  * fields above it are labelled by the same key, and a shared name would make
  * every "the `path` field" query on the page ambiguous — for a person with a
- * screen reader as much as for a test.
+ * screen reader as much as for a test. No colon (#1594 OR40 S4b-2); the key
+ * stays as written (`maxBytes`), because it is what an override cites.
  *
  * No live-region role: both pages already claim `status` and `alert` in the
  * singular, and nothing here is an interruption.
@@ -57,7 +58,7 @@ export function OverridableKeysField({
             checked={row.checked}
             onChange={(e) => onChange(toggleAllowlistKey(value, row.key, e.target.checked))}
           />
-          <span className="visually-hidden">Overridable: </span>
+          <span className="visually-hidden">Overridable </span>
           <code>{row.key}</code>
           {row.stray !== null && <span className="page-hint"> — {STRAY_NOTE[row.stray]}</span>}
         </label>

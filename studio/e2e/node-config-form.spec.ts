@@ -423,33 +423,33 @@ test.describe('U7 — per-activity node config form', () => {
     const p = properties(page);
     // No JSON blob for either record: a row group per field.
     await expect(p.getByRole('group', { name: 'Request headers', exact: true })).toBeVisible();
-    await expect(p.getByRole('textbox', { name: 'headers row 1 key', exact: true })).toHaveValue(
+    await expect(p.getByRole('textbox', { name: 'Request headers row 1 key', exact: true })).toHaveValue(
       'X-Keep',
     );
 
-    await p.getByRole('button', { name: 'Add headers row', exact: true }).click();
-    await p.getByRole('textbox', { name: 'headers row 2 key', exact: true }).fill('X-Trace');
-    await p.getByRole('textbox', { name: 'headers row 2 value', exact: true }).fill('${run.runId}');
+    await p.getByRole('button', { name: 'Add request headers row', exact: true }).click();
+    await p.getByRole('textbox', { name: 'Request headers row 2 key', exact: true }).fill('X-Trace');
+    await p.getByRole('textbox', { name: 'Request headers row 2 value', exact: true }).fill('${run.runId}');
     // #1477 — secret headers are on the Auth tab.
     await p.getByRole('tab', { name: 'Auth' }).click();
     await expect(p.getByRole('group', { name: 'Secret headers', exact: true })).toBeVisible();
-    await p.getByRole('button', { name: 'Add secretHeaders row', exact: true }).click();
+    await p.getByRole('button', { name: 'Add secret headers row', exact: true }).click();
     await p
-      .getByRole('textbox', { name: 'secretHeaders row 1 key', exact: true })
+      .getByRole('textbox', { name: 'Secret headers row 1 key', exact: true })
       .fill('Authorization');
     await p
-      .getByRole('textbox', { name: 'secretHeaders row 1 secret name', exact: true })
+      .getByRole('textbox', { name: 'Secret headers row 1 secret name', exact: true })
       .fill('api-token');
     // The value cell takes a reference; the key and secret-name cells do not.
     await expect(
       p.getByRole('button', {
-        name: 'Insert reference into secretHeaders row 1 secret name',
+        name: 'Insert reference into secret headers row 1 secret name',
         exact: true,
       }),
     ).toHaveCount(0);
     await p.getByRole('tab', { name: 'Request' }).click();
     await expect(
-      p.getByRole('button', { name: 'Insert reference into headers row 2 value', exact: true }),
+      p.getByRole('button', { name: 'Insert reference into request headers row 2 value', exact: true }),
     ).toBeVisible();
     await p.getByRole('button', { name: 'Apply config', exact: true }).click();
 
@@ -465,12 +465,12 @@ test.describe('U7 — per-activity node config form', () => {
     await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
     await page.locator('.react-flow__renderer').waitFor();
     await canvasNodes(page).first().click();
-    await expect(p.getByRole('textbox', { name: 'headers row 2 value', exact: true })).toHaveValue(
+    await expect(p.getByRole('textbox', { name: 'Request headers row 2 value', exact: true })).toHaveValue(
       '${run.runId}',
     );
     await properties(page).getByRole('tab', { name: 'Auth' }).click();
     await expect(
-      p.getByRole('textbox', { name: 'secretHeaders row 1 secret name', exact: true }),
+      p.getByRole('textbox', { name: 'Secret headers row 1 secret name', exact: true }),
     ).toHaveValue('api-token');
 
     await expectQuiet(page, problems);
@@ -500,29 +500,29 @@ test.describe('U7 — per-activity node config form', () => {
     await properties(page).getByRole('tab', { name: 'Prompt' }).click();
     const p = properties(page);
     await expect(p.getByRole('group', { name: 'Conversation', exact: true })).toBeVisible();
-    await expect(p.getByRole('combobox', { name: 'messages row 1 role', exact: true })).toHaveValue(
+    await expect(p.getByRole('combobox', { name: 'Conversation row 1 role', exact: true })).toHaveValue(
       'user',
     );
     // #1396: a row's enum cell shows the value's name; the value is what saves.
     await expect(
       p
-        .getByRole('combobox', { name: 'messages row 1 role', exact: true })
+        .getByRole('combobox', { name: 'Conversation row 1 role', exact: true })
         .locator('option:checked'),
     ).toHaveText('User');
     await expect(
-      p.getByRole('textbox', { name: 'messages row 1 content', exact: true }),
+      p.getByRole('textbox', { name: 'Conversation row 1 content', exact: true }),
     ).toHaveValue('Summarise this.');
 
-    await p.getByRole('button', { name: 'Add messages row', exact: true }).click();
+    await p.getByRole('button', { name: 'Add conversation row', exact: true }).click();
     await p
-      .getByRole('combobox', { name: 'messages row 2 role', exact: true })
+      .getByRole('combobox', { name: 'Conversation row 2 role', exact: true })
       .selectOption({ label: 'Assistant' });
     await p
-      .getByRole('textbox', { name: 'messages row 2 content', exact: true })
+      .getByRole('textbox', { name: 'Conversation row 2 content', exact: true })
       .fill('Earlier answer for ${run.runId}:\nnone.');
     // Content takes a reference, like the prompt it replaces.
     await expect(
-      p.getByRole('button', { name: 'Insert reference into messages row 2 content', exact: true }),
+      p.getByRole('button', { name: 'Insert reference into conversation row 2 content', exact: true }),
     ).toBeVisible();
     await p.getByRole('button', { name: 'Apply config', exact: true }).click();
 
@@ -540,7 +540,7 @@ test.describe('U7 — per-activity node config form', () => {
     await page.locator('.react-flow__renderer').waitFor();
     await canvasNodes(page).first().click();
     await properties(page).getByRole('tab', { name: 'Prompt' }).click();
-    await expect(p.getByRole('combobox', { name: 'messages row 2 role', exact: true })).toHaveValue(
+    await expect(p.getByRole('combobox', { name: 'Conversation row 2 role', exact: true })).toHaveValue(
       'assistant',
     );
 
@@ -640,10 +640,10 @@ test.describe('U7 — per-activity node config form', () => {
     await properties(page).getByRole('tab', { name: 'Prompt' }).click();
     const p = properties(page);
     await expect(
-      p.getByRole('button', { name: 'move messages row 1 up', exact: true }),
+      p.getByRole('button', { name: 'Move conversation row 1 up', exact: true }),
     ).toBeDisabled();
-    await p.getByRole('button', { name: 'move messages row 2 up', exact: true }).click();
-    await expect(p.getByRole('combobox', { name: 'messages row 1 role', exact: true })).toHaveValue(
+    await p.getByRole('button', { name: 'Move conversation row 2 up', exact: true }).click();
+    await expect(p.getByRole('combobox', { name: 'Conversation row 1 role', exact: true })).toHaveValue(
       'system',
     );
     await p.getByRole('button', { name: 'Apply config', exact: true }).click();
@@ -698,7 +698,7 @@ test.describe('U7 — per-activity node config form', () => {
     await properties(page).getByRole('tab', { name: 'Output' }).click();
     const p = properties(page);
     const cell = (role: 'textbox' | 'combobox' | 'checkbox', row: number, name: string) =>
-      p.getByRole(role, { name: new RegExp(`^outputSchema row ${row} ${name}\\b`) });
+      p.getByRole(role, { name: new RegExp(`^Output schema row ${row} ${name}\\b`) });
     await expect(p.getByRole('group', { name: 'Output schema', exact: true })).toBeVisible();
     await expect(cell('textbox', 1, 'name')).toHaveValue('category');
     await expect(cell('combobox', 1, 'type')).toHaveValue('string');
@@ -706,10 +706,10 @@ test.describe('U7 — per-activity node config form', () => {
     await expect(cell('textbox', 1, 'constraints')).toHaveValue(/"positive"/);
     // A property name is not substituted, so it offers no reference.
     await expect(
-      p.getByRole('button', { name: 'Insert reference into outputSchema row 1 name' }),
+      p.getByRole('button', { name: 'Insert reference into output schema row 1 name' }),
     ).toHaveCount(0);
 
-    await p.getByRole('button', { name: 'Add outputSchema row', exact: true }).click();
+    await p.getByRole('button', { name: 'Add output schema row', exact: true }).click();
     await cell('textbox', 2, 'name').fill('confidence');
     await cell('combobox', 2, 'type').selectOption('number');
     await cell('textbox', 2, 'description').fill('How sure, 0 to 1.');
