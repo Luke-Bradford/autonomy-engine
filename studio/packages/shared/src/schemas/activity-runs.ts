@@ -37,7 +37,7 @@ export const ActivityRunIterationSchema = z.object({
 });
 export type ActivityRunIteration = z.infer<typeof ActivityRunIterationSchema>;
 
-/** The run an Execute Pipeline attempt called, when it exists and is the
+/** The run an Execute pipeline attempt called, when it exists and is the
  * caller's. */
 export const ActivityRunChildSchema = z.object({
   id: z.string(),

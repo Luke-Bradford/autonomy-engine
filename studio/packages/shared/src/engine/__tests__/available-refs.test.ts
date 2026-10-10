@@ -127,7 +127,7 @@ const ABSENT_CONTRACT = doc({
 });
 
 /**
- * #1420 OR26 — the operator's recipe: List Directory → Filter → ForEach. A
+ * #1420 OR26 — the operator's recipe: List directory → Filter → ForEach. A
  * `file_list`'s `entries` elements have a KNOWN shape (`{name, type}`), and a
  * `filter` keeps its input's elements, so both boxes' children are offered
  * `${item.name}`/`${item.type}`. `plainLoop` iterates a param, whose element
@@ -647,7 +647,7 @@ const itemFields = (offers: RefSuggestion[]) =>
   offers.filter((s) => s.kind === 'item' && s.name !== undefined);
 
 describe('availableRefs — item fields from a known element shape (#1420)', () => {
-  it("offers a List Directory entry's fields to a child of a foreach over its entries", () => {
+  it("offers a List directory entry's fields to a child of a foreach over its entries", () => {
     const offered = availableRefs(FOLDER, { kind: 'node', nodeId: 'direct' });
     expect(offered.map((s) => s.ref)).toContain('item');
     expect(itemFields(offered)).toEqual([

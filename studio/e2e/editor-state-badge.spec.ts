@@ -170,7 +170,7 @@ test('a version saved elsewhere reaches the badge and the history on focus', asy
   await reread;
   await expect(part(page, 'editing')).toHaveText(/^v1 · v2 is newer/);
   await expect(part(page, 'editing')).toHaveAttribute('data-tone', 'warning');
-  await expect(history.getByRole('button', { name: /^v2\b/ })).toContainText('latest');
+  await expect(history.getByRole('button', { name: /^v2\b/ })).toContainText('Latest');
   // The canvas was not moved: the operator is still on the version they opened.
   await expect(nodeById(page, 'n_c')).toHaveCount(0);
   await expect(page.locator('.notice-conflict')).toHaveCount(0);

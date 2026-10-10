@@ -29,7 +29,7 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     // A brand-new canvas pipeline: no contract at all. This is the hole.
     await expect(properties(page).getByText('None declared.').first()).toBeVisible();
 
-    await page.getByRole('button', { name: 'Add param' }).click();
+    await page.getByRole('button', { name: 'Add parameter' }).click();
     await page.getByLabel('param 1 name').fill('topic');
     await page.getByLabel('param 1 type').selectOption('number');
     await page.getByLabel('param 1 default').fill('42');
@@ -150,7 +150,7 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
       params: [{ name: 'topic', type: 'string', required: false }],
     });
 
-    await page.getByRole('button', { name: 'Add param' }).click();
+    await page.getByRole('button', { name: 'Add parameter' }).click();
     await page.getByLabel('param 2 name').fill('topic');
 
     // The SERVER refuses this too (`refuseDuplicateNames`), so gating here only
@@ -329,17 +329,17 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
       nodes: [{ id: 'a', position: { x: 0, y: 0 } }],
     });
 
-    await expect(page.getByRole('button', { name: 'Add param' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Add parameter' })).toBeVisible();
 
     // Selecting a node swaps the panel to that node's inspector...
     await page.locator('.react-flow__node[data-id="a"]').click();
     await expect(page.getByRole('button', { name: 'Apply config' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Add param' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Add parameter' })).toHaveCount(0);
 
     // ...and clicking the background brings the pipeline contract back. Without
     // this the editor would have no route to it at all.
     await deselect(page);
-    await expect(page.getByRole('button', { name: 'Add param' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Add parameter' })).toBeVisible();
 
     await expectQuiet(page, problems);
   });

@@ -109,7 +109,7 @@ interface FactoryResourcesProps {
 }
 
 /**
- * Factory Resources — the Author hub's secondary-pane content (U4).
+ * Factory resources — the Author hub's secondary-pane content (U4).
  *
  * A filter, a `+`, and one collapsible group of the workspace's pipelines, each
  * linking to its own canvas route and carrying a `⋯` menu of rename / duplicate

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Node } from '@autonomy-studio/shared';
+import { NodeSchema, type Node } from '@autonomy-studio/shared';
 import { activityLabel, activityLabels } from './activityLabel';
 
 const node = (id: string, type: string): Node => ({
@@ -11,7 +11,7 @@ const node = (id: string, type: string): Node => ({
 
 describe('activityLabel', () => {
   it('names an activity by its catalog title', () => {
-    expect(activityLabel(node('n_a', 'http_request'))).toBe('HTTP Request');
+    expect(activityLabel(node('n_a', 'http_request'))).toBe('HTTP request');
   });
 
   it('falls back to the raw type the catalog does not know', () => {
@@ -25,9 +25,9 @@ describe('activityLabels', () => {
     // rename an untouched box the moment a second one of its type is added, and
     // would print two numbering schemes in one sentence — the #788 advisory's
     // partitioned arm lists nodes and containers together ("Stage 1" is always
-    // numbered), so "HTTP Request, Stage 1" would read as two different kinds of
+    // numbered), so "HTTP request, Stage 1" would read as two different kinds of
     // thing.
-    expect([...activityLabels([node('n_a', 'http_request')])]).toEqual([['n_a', 'HTTP Request 1']]);
+    expect([...activityLabels([node('n_a', 'http_request')])]).toEqual([['n_a', 'HTTP request 1']]);
   });
 
   it('numbers same-named activities in document order', () => {
@@ -36,10 +36,10 @@ describe('activityLabels', () => {
       node('n_b', 'llm_call'),
       node('n_c', 'http_request'),
     ]);
-    expect(labels.get('n_a')).toBe('HTTP Request 1');
-    expect(labels.get('n_c')).toBe('HTTP Request 2');
+    expect(labels.get('n_a')).toBe('HTTP request 1');
+    expect(labels.get('n_c')).toBe('HTTP request 2');
     // A different name counts independently — it is not a doc-wide running total.
-    expect(labels.get('n_b')).toBe('LLM Call 1');
+    expect(labels.get('n_b')).toBe('LLM call 1');
   });
 
   it('numbers a type the catalog does not know by the raw type it falls back to', () => {
@@ -55,9 +55,9 @@ describe('activityLabels', () => {
     // catalog title produce two identical labels — the exact defect this
     // function exists to remove, and the uniqueness `useExpressionPicker`'s
     // deleted `(id)` suffix used to buy by counting rendered titles.
-    const labels = activityLabels([node('n_a', 'http_request'), node('n_b', 'HTTP Request')]);
-    expect(labels.get('n_a')).toBe('HTTP Request 1');
-    expect(labels.get('n_b')).toBe('HTTP Request 2');
+    const labels = activityLabels([node('n_a', 'http_request'), node('n_b', 'HTTP request')]);
+    expect(labels.get('n_a')).toBe('HTTP request 1');
+    expect(labels.get('n_b')).toBe('HTTP request 2');
     expect(new Set(labels.values()).size).toBe(2);
   });
 
@@ -65,5 +65,29 @@ describe('activityLabels', () => {
     const nodes = [node('n_a', 'http_request'), node('n_b', 'llm_call')];
     expect([...activityLabels(nodes).keys()]).toEqual(['n_a', 'n_b']);
     expect(activityLabels([]).size).toBe(0);
+  });
+});
+
+describe('#1594 OR40 S4 — recasing a title rewrites no saved pipeline', () => {
+  it('a node stores no name, so a saved node parses back unchanged and shows the new title', () => {
+    // What a pipeline saved before the recase holds for a Copy data node: no
+    // name, no title. The name the canvas shows is derived at render time.
+    const saved = { id: 'n_copy', type: 'copy', config: {}, position: { x: 40, y: 80 } };
+    const parsed = NodeSchema.parse(saved);
+    expect(parsed).toEqual(saved);
+    expect(JSON.stringify(parsed)).not.toMatch(/copy data/i);
+    expect([...activityLabels([parsed])]).toEqual([['n_copy', 'Copy data 1']]);
+  });
+
+  it('a name key in an imported doc is not kept as the node name', () => {
+    const parsed = NodeSchema.parse({
+      id: 'n_http',
+      type: 'http_request',
+      name: 'HTTP Request 1',
+      config: {},
+      position: { x: 0, y: 0 },
+    });
+    expect(parsed).not.toHaveProperty('name');
+    expect(activityLabel(parsed)).toBe('HTTP request');
   });
 });

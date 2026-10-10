@@ -42,7 +42,7 @@ describe('sectionLabel', () => {
 
   /**
    * A hub whose pane renders CUSTOM content (`PANE_CONTENT` in
-   * `SecondaryPane.tsx`) shows `sections[0]` only — U4's Factory Resources tree
+   * `SecondaryPane.tsx`) shows `sections[0]` only — U4's Factory resources tree
    * uses it as the group header. So a second Author section would not merely
    * look wrong, it would silently disappear from the pane's navigation, which
    * is how `/manage/triggers` became unreachable between U2 and U3.

@@ -157,7 +157,7 @@ test.describe('#1396 inline validation', () => {
     const name = form.getByLabel('Name', { exact: true });
 
     await form.getByRole('combobox', { name: 'Concurrency', exact: true }).selectOption('parallel');
-    await form.getByLabel('Params (JSON)', { exact: true }).fill('[1]');
+    await form.getByLabel('Parameters (JSON)', { exact: true }).fill('[1]');
     await form.getByRole('button', { name: 'Create trigger' }).click();
     const alert = form.getByRole('alert');
     await expect(alert).toContainText('Fix these 3 fields:');
@@ -166,7 +166,7 @@ test.describe('#1396 inline validation', () => {
 
     await name.fill(`e2e-1396-trigger-${Date.now()}`);
     await form.getByLabel('Max parallel runs').fill('2');
-    await form.getByLabel('Params (JSON)', { exact: true }).fill('{}');
+    await form.getByLabel('Parameters (JSON)', { exact: true }).fill('{}');
     await expect(form.getByRole('alert')).toHaveCount(0);
 
     // A real bad input: Chromium keeps `1e` in a number box but reports ''.

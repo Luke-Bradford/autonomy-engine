@@ -839,7 +839,7 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
         base: row.collabBranch,
         head: row.workingBranch,
         title: `Studio changes: ${row.workingBranch}`,
-        body: `Opened by Autonomy Studio from working branch \`${row.workingBranch}\` into \`${row.collabBranch}\`.`,
+        body: `Opened by Autonomy studio from working branch \`${row.workingBranch}\` into \`${row.collabBranch}\`.`,
         token: effectiveToken,
       });
       // The badge's cached "none" is now wrong: ask again on the next read.

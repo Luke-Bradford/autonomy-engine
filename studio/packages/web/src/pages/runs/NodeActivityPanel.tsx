@@ -102,7 +102,7 @@ const PANEL_ID = 'node-activity-panel';
 
 /**
  * `name` is what the graph and the activity runs call this node — the
- * `activityLabels` ordinal, e.g. `HTTP Request 1` (#882). It is `null`, and only
+ * `activityLabels` ordinal, e.g. `HTTP request 1` (#882). It is `null`, and only
  * `null`, when the bound doc does not name this node: the pipeline version will
  * not resolve, or the run carries a row the doc no longer has. The panel then
  * falls back to the raw id, which is what it showed before this and is the one

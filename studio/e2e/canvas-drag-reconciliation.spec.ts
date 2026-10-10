@@ -51,7 +51,7 @@ test.describe('canvas drag reconciliation (P5c invariant)', () => {
     const problems = collectPageProblems(page);
     await openCanvas(page, 'e2e drag reconcile');
 
-    await addActivity(page, 'HTTP Request');
+    await addActivity(page, 'HTTP request');
     await expect(canvasNodes(page)).toHaveCount(1);
 
     // WAIT for React Flow to have measured the node and attached its drag
@@ -93,7 +93,7 @@ test.describe('canvas drag reconciliation (P5c invariant)', () => {
     // the store came to change.
     await page.evaluate(() => {
       const buttons = [...document.querySelectorAll('button')];
-      const add = buttons.find((b) => b.textContent?.includes('HTTP Request'));
+      const add = buttons.find((b) => b.textContent?.includes('HTTP request'));
       if (!add) throw new Error('no toolbox button to click');
       add.click();
     });

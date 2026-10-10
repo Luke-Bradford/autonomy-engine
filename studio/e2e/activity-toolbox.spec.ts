@@ -32,11 +32,11 @@ test.describe('U5 activities toolbox', () => {
     // Groups are present and populated before any filtering.
     await expect(toolbox(page).getByRole('list', { name: 'General', exact: true })).toBeVisible();
     await expect(toolbox(page).getByRole('list', { name: 'AI', exact: true })).toBeVisible();
-    await expect(toolbox(page).getByRole('button', { name: 'HTTP Request' })).toBeVisible();
+    await expect(toolbox(page).getByRole('button', { name: 'HTTP request' })).toBeVisible();
 
     await toolbox(page).getByRole('searchbox', { name: 'Filter activities' }).fill('http');
-    await expect(toolbox(page).getByRole('button', { name: 'HTTP Request' })).toBeVisible();
-    await expect(toolbox(page).getByRole('button', { name: 'LLM Call' })).toHaveCount(0);
+    await expect(toolbox(page).getByRole('button', { name: 'HTTP request' })).toBeVisible();
+    await expect(toolbox(page).getByRole('button', { name: 'LLM call' })).toHaveCount(0);
     // A heading over nothing would be a false "this category has matches" signal.
     await expect(toolbox(page).getByRole('list', { name: 'AI', exact: true })).toHaveCount(0);
     await expect(toolbox(page).getByRole('list', { name: 'General', exact: true })).toBeVisible();
@@ -54,12 +54,12 @@ test.describe('U5 activities toolbox', () => {
     await openCanvas(page, 'e2e u5 collapse search');
 
     await toolbox(page).getByRole('button', { name: 'Collapse General' }).click();
-    await expect(toolbox(page).getByRole('button', { name: 'HTTP Request' })).toHaveCount(0);
+    await expect(toolbox(page).getByRole('button', { name: 'HTTP request' })).toHaveCount(0);
 
     // The match must not stay behind a disclosure closed while looking at a
     // different list — otherwise search appears to return nothing at all.
     await toolbox(page).getByRole('searchbox', { name: 'Filter activities' }).fill('http');
-    await expect(toolbox(page).getByRole('button', { name: 'HTTP Request' })).toBeVisible();
+    await expect(toolbox(page).getByRole('button', { name: 'HTTP request' })).toBeVisible();
     // ...and no disclosure is offered while it has nothing to control, so there
     // is no control whose label disagrees with the screen and whose click would
     // rewrite the saved preference invisibly.
@@ -68,7 +68,7 @@ test.describe('U5 activities toolbox', () => {
     await toolbox(page).getByRole('searchbox', { name: 'Filter activities' }).fill('');
     // Suspended, not discarded.
     await expect(toolbox(page).getByRole('button', { name: 'Expand General' })).toBeVisible();
-    await expect(toolbox(page).getByRole('button', { name: 'HTTP Request' })).toHaveCount(0);
+    await expect(toolbox(page).getByRole('button', { name: 'HTTP request' })).toHaveCount(0);
 
     await expectQuiet(page, problems);
   });
@@ -80,11 +80,11 @@ test.describe('U5 activities toolbox', () => {
     await toolbox(page).getByRole('button', { name: 'Collapse General' }).click();
     // `hidden` on the list, so the items are gone from the a11y tree too, not
     // merely painted out.
-    await expect(toolbox(page).getByRole('button', { name: 'HTTP Request' })).toHaveCount(0);
-    await expect(toolbox(page).getByRole('button', { name: 'LLM Call' })).toBeVisible();
+    await expect(toolbox(page).getByRole('button', { name: 'HTTP request' })).toHaveCount(0);
+    await expect(toolbox(page).getByRole('button', { name: 'LLM call' })).toBeVisible();
 
     await toolbox(page).getByRole('button', { name: 'Expand General' }).click();
-    await expect(toolbox(page).getByRole('button', { name: 'HTTP Request' })).toBeVisible();
+    await expect(toolbox(page).getByRole('button', { name: 'HTTP request' })).toBeVisible();
 
     await expectQuiet(page, problems);
   });
@@ -96,7 +96,7 @@ test.describe('U5 activities toolbox', () => {
     await openCanvas(page, 'e2e u5 keyboard');
 
     await expect(canvasNodes(page)).toHaveCount(0);
-    const item = toolbox(page).getByRole('button', { name: 'HTTP Request' });
+    const item = toolbox(page).getByRole('button', { name: 'HTTP request' });
     await item.focus();
     // The element the browser actually focused, not the one we asked it to —
     // an item that is not a real button would fail here rather than silently
@@ -105,7 +105,7 @@ test.describe('U5 activities toolbox', () => {
     await page.keyboard.press('Enter');
 
     await expect(canvasNodes(page)).toHaveCount(1);
-    await expect(canvasNodes(page)).toContainText('HTTP Request');
+    await expect(canvasNodes(page)).toContainText('HTTP request');
     await expectQuiet(page, problems);
   });
 
@@ -118,7 +118,7 @@ test.describe('U5 activities toolbox', () => {
     const does =
       'Copy rows from a source dataset into a sink dataset, mapping columns between them.';
 
-    const item = toolbox(page).getByRole('button', { name: 'Copy Data', exact: true });
+    const item = toolbox(page).getByRole('button', { name: 'Copy data', exact: true });
     await expect(item).toHaveAttribute('title', does);
     // The description is the item's accessible DESCRIPTION; its name is unchanged.
     await expect(item).toHaveAccessibleDescription(does);
@@ -132,7 +132,7 @@ test.describe('U5 activities toolbox', () => {
       .locator('.property-panel__header');
     await expect(header.locator('code')).toHaveText('copy');
     await expect(header.getByText(does)).toBeHidden();
-    await header.getByLabel('About Copy Data').click();
+    await header.getByLabel('About Copy data').click();
     await expect(header.getByText(does)).toBeVisible();
     await expectQuiet(page, problems);
   });
@@ -154,10 +154,10 @@ test.describe('U5 activities toolbox', () => {
     // Assert WHERE focus landed before asserting how it looks — otherwise a
     // changed tab order would silently move this test onto another element.
     // The name is pinned to whatever sorts FIRST in the first group, which
-    // `activityGroups.ts` orders by `title.localeCompare`: 'Copy Data' (#1139)
-    // took that place from 'Copy File'. Re-pin it when a new general activity
+    // `activityGroups.ts` orders by `title.localeCompare`: 'Copy data' (#1139)
+    // took that place from 'Copy file'. Re-pin it when a new general activity
     // sorts ahead of it — that is this assertion doing its job, not breaking.
-    const item = toolbox(page).getByRole('button', { name: 'Copy Data', exact: true });
+    const item = toolbox(page).getByRole('button', { name: 'Copy data', exact: true });
     await expect(item).toBeFocused();
 
     const ring = await item.evaluate((el) => {
@@ -186,7 +186,7 @@ test.describe('U5 activities toolbox', () => {
     // against a viewport that moves under the assertion. With a node already
     // present the fit has resolved, which is also the state an author is in for
     // every drop after their first.
-    await toolbox(page).getByRole('button', { name: 'LLM Call' }).focus();
+    await toolbox(page).getByRole('button', { name: 'LLM call' }).focus();
     await page.keyboard.press('Enter');
     await expect(canvasNodes(page)).toHaveCount(1);
 
@@ -198,11 +198,11 @@ test.describe('U5 activities toolbox', () => {
     const target = { x: Math.round(paneBox!.width * 0.5), y: Math.round(paneBox!.height * 0.3) };
 
     await toolbox(page)
-      .getByRole('button', { name: 'HTTP Request' })
+      .getByRole('button', { name: 'HTTP request' })
       .dragTo(pane, { targetPosition: target });
 
     await expect(canvasNodes(page)).toHaveCount(2);
-    const dropped = canvasNodes(page).filter({ hasText: 'HTTP Request' });
+    const dropped = canvasNodes(page).filter({ hasText: 'HTTP request' });
     await expect(dropped).toHaveCount(1);
 
     // The node's TOP-LEFT lands under the pointer (see `FlowCanvas.onDrop` for
@@ -229,12 +229,12 @@ test.describe('U5 activities toolbox', () => {
     // corner — a placement the operator never pointed at.
     const minimap = page.locator('.react-flow__minimap');
     await expect(minimap).toBeVisible();
-    await toolbox(page).getByRole('button', { name: 'HTTP Request' }).dragTo(minimap);
+    await toolbox(page).getByRole('button', { name: 'HTTP request' }).dragTo(minimap);
 
     await expect(canvasNodes(page)).toHaveCount(0);
     // And the canvas is still usable afterwards — the refused drag left no
     // stuck state behind.
-    await toolbox(page).getByRole('button', { name: 'HTTP Request' }).click();
+    await toolbox(page).getByRole('button', { name: 'HTTP request' }).click();
     await expect(canvasNodes(page)).toHaveCount(1);
 
     await expectQuiet(page, problems);

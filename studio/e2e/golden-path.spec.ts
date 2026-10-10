@@ -55,9 +55,9 @@ test('#1386 — create a connection, author and bind, trigger it, and read the r
   await connectionForm.getByRole('button', { name: 'Create connection' }).click();
   await expect(rowMenuButton(page, CONNECTION)).toBeVisible();
 
-  // 2. Author → a new pipeline: an Agent Task, then a Wait, wired on success.
+  // 2. Author → a new pipeline: an Agent task, then a Wait, wired on success.
   await openCanvas(page, PIPELINE);
-  await addActivity(page, 'Agent Task');
+  await addActivity(page, 'Agent task');
   await expect(canvasNodes(page)).toHaveCount(1);
   await addActivity(page, 'Wait');
   await fitAndSettle(page, 1);
@@ -66,7 +66,7 @@ test('#1386 — create a connection, author and bind, trigger it, and read the r
   await connectNodes(page, 0, 1);
   await expect(edgeGroup(page)).toHaveCount(1);
 
-  // 3. Configure both nodes, binding the Agent Task to the connection from step 1.
+  // 3. Configure both nodes, binding the Agent task to the connection from step 1.
   await canvasNodes(page).nth(0).click();
   const panel = properties(page);
   await pickConnection(page, 'Connection', { name: CONNECTION });

@@ -27,7 +27,7 @@ import { formatElapsed } from '../runs/format';
  * #1394 OR3 — the one line a card shows under its name, saying what THIS step
  * does: `orders.csv → orders table`, `GET api.example.com/v1/orders`, `wait 30s`.
  *
- * The name says which step it is ("Copy Data 2") and the glyph says what kind; this
+ * The name says which step it is ("Copy data 2") and the glyph says what kind; this
  * says what it is configured to do, so a graph can be read without opening each
  * node. It is derived from the doc alone, so it is the same on every render and
  * changes only when the config does.

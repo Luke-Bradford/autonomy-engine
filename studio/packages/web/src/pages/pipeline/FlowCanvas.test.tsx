@@ -993,7 +993,7 @@ describe('FlowCanvas implicit-chain advisory (#788)', () => {
     /* #878 — the activities are named the way their BOXES are, not by the doc
        ids, which appear nowhere on the canvas. Two `http_request` nodes take
        their ordinals, so the sentence names three distinguishable things. */
-    expect(advisory!.textContent).toContain('HTTP Request 1 → LLM Call 1 → HTTP Request 2');
+    expect(advisory!.textContent).toContain('HTTP request 1 → LLM call 1 → HTTP request 2');
     expect(advisory!.textContent).not.toContain('a → b → c');
   });
 
@@ -1009,13 +1009,13 @@ describe('FlowCanvas implicit-chain advisory (#788)', () => {
 
   /**
    * The TYPES differ deliberately. `activityLabels` numbers in document order, so
-   * a fixture of three same-type activities reads "HTTP Request 1 → 2 → 3" for
+   * a fixture of three same-type activities reads "HTTP request 1 → 2 → 3" for
    * EVERY array order — an assertion that cannot fail. Distinct kinds put the
    * identity of each position back into the sentence.
    */
   it('reports ARRAY order, not id order — that is what the chain is built from', () => {
     const { advisory } = withGraph([{ id: 'c', type: 'llm_call' }, 'a', 'b']);
-    expect(advisory!.textContent).toContain('LLM Call 1 → HTTP Request 1 → HTTP Request 2');
+    expect(advisory!.textContent).toContain('LLM call 1 → HTTP request 1 → HTTP request 2');
   });
 
   /**
@@ -1027,7 +1027,7 @@ describe('FlowCanvas implicit-chain advisory (#788)', () => {
    */
   it('reports array order even when the LAYOUT runs the other way', () => {
     const { advisory } = withGraph(['a', 'b', { id: 'c', type: 'llm_call' }], [], [], 'reversed');
-    expect(advisory!.textContent).toContain('HTTP Request 1 → HTTP Request 2 → LLM Call 1');
+    expect(advisory!.textContent).toContain('HTTP request 1 → HTTP request 2 → LLM call 1');
     expect(advisory!.textContent).toContain('the order they were added');
     expect(advisory!.textContent).not.toContain('canvas order');
   });
@@ -1054,9 +1054,9 @@ describe('FlowCanvas implicit-chain advisory (#788)', () => {
     const ids = ['n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7', 'n8'];
     const { advisory } = withGraph(ids);
     expect(advisory!.textContent).toContain(
-      'HTTP Request 1 → HTTP Request 2 → HTTP Request 3 → HTTP Request 4 → HTTP Request 5 → HTTP Request 6',
+      'HTTP request 1 → HTTP request 2 → HTTP request 3 → HTTP request 4 → HTTP request 5 → HTTP request 6',
     );
-    expect(advisory!.textContent).not.toContain('HTTP Request 7');
+    expect(advisory!.textContent).not.toContain('HTTP request 7');
     expect(advisory!.textContent).toContain('+2 more');
   });
 
@@ -1093,7 +1093,7 @@ describe('FlowCanvas implicit-chain advisory (#788)', () => {
     /* #878 — the ACTIVITY root is named the same way the container root already
        was, so the sentence no longer mixes a name with a raw doc id. #943 — and
        each is quoted, so the `, ` between them is unambiguously the join. */
-    expect(advisory!.textContent).toContain('“HTTP Request 1”, “Stage 1”');
+    expect(advisory!.textContent).toContain('“HTTP request 1”, “Stage 1”');
     expect(advisory!.textContent).not.toContain('c_1');
   });
 
@@ -1117,8 +1117,8 @@ describe('FlowCanvas implicit-chain advisory (#788)', () => {
 
   /**
    * #878, the render half — and the half that makes every message above
-   * actionable. An advisory naming "HTTP Request 2" is worth nothing if the two
-   * rectangles on screen both read "HTTP Request": the operator can read the
+   * actionable. An advisory naming "HTTP request 2" is worth nothing if the two
+   * rectangles on screen both read "HTTP request": the operator can read the
    * sentence and still not know which box it means. #883 has since drawn the
    * CONTAINER ordinal on its box for the same reason, so the two are now the one
    * rule rather than an activity-only property with a documented exception.
@@ -1126,7 +1126,7 @@ describe('FlowCanvas implicit-chain advisory (#788)', () => {
   it('draws the identifying name on the box, not the bare kind', () => {
     const { container } = withGraph(['a', { id: 'b', type: 'llm_call' }, 'c']);
     const titles = [...container.querySelectorAll('.flow-node strong')].map((e) => e.textContent);
-    expect(titles).toEqual(['HTTP Request 1', 'LLM Call 1', 'HTTP Request 2']);
+    expect(titles).toEqual(['HTTP request 1', 'LLM call 1', 'HTTP request 2']);
   });
 
   /**

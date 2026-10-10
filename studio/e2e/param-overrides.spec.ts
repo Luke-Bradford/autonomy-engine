@@ -40,7 +40,7 @@ test.describe('#1304 — parameter overrides on the canvas', () => {
     });
 
     const pipelineId = await openSeededCanvas(page, 'e2e 1304 overrides', { nodes: [] });
-    await addActivity(page, 'Lookup Rows');
+    await addActivity(page, 'Lookup rows');
     await canvasNodes(page).first().click();
 
     // No editor until an end is bound: an override without its binding is refused by the save gate.

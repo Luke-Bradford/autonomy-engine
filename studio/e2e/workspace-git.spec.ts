@@ -316,7 +316,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
 
   // Nothing is published yet, so no row may claim to be active. This is the
   // assertion that would catch an unread pointer being rendered as a fact.
-  await expect(history).not.toContainText('active');
+  await expect(history).not.toContainText('Active');
   // #1476 OR28 — and the toolbar says so at a glance, in git mode only.
   const livePart = page
     .getByRole('group', { name: 'Pipeline state' })
@@ -355,7 +355,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
 
   await expect(page.getByText('Published v1', { exact: false })).toBeVisible();
   // The pointer reached the list, which is the whole visible outcome.
-  await expect(history.getByRole('button', { name: /^v1/ })).toContainText('active');
+  await expect(history.getByRole('button', { name: /^v1/ })).toContainText('Active');
   // The canvas (a preview of v1) IS the live version: green, with the ✓ and
   // its spoken form, never colour alone.
   await expect(livePart).toHaveText(/^Live: v1 ✓ \(on the canvas\)/);
@@ -413,7 +413,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   // #1475 OR27 — the column is remembered open across the reload.
   await expect(
     page.getByTestId('version-history').getByRole('button', { name: /^v1/ }),
-  ).toContainText('active');
+  ).toContainText('Active');
 
   /**
    * #1476 OR28 slice 7 — `PR #n`, linked, when the working branch has an open

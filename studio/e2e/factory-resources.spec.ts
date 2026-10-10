@@ -5,7 +5,7 @@ import { fluentRootReady } from './support/theme';
 import { loadBanner, openRowMenu, pane, tree } from './support/authorPane';
 
 /**
- * U4 — the Factory Resources pane.
+ * U4 — the Factory resources pane.
  *
  * What only a real browser can prove here: that the tree's links actually
  * change the ADDRESS (jsdom has no address bar, so a unit test can only inspect
@@ -40,7 +40,7 @@ async function createInPane(page: Page, name: string): Promise<void> {
 const BROWSER_502 =
   /^console\.error: Failed to load resource: the server responded with a status of 502\b/;
 
-test.describe('U4 Factory Resources pane', () => {
+test.describe('U4 Factory resources pane', () => {
   test('creates a pipeline in the pane and opens it on the canvas by URL', async ({ page }) => {
     const problems = collectPageProblems(page);
     await gotoAuthor(page);

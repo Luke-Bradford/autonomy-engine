@@ -52,9 +52,9 @@ describe('VersionHistoryPanel', () => {
     const rows = rowButtons();
     expect(rows.map((r) => r.textContent?.startsWith('v'))).toEqual([true, true, true]);
     expect(rows[0]!.textContent).toContain('v3');
-    expect(rows[0]!.textContent).toContain('latest');
-    expect(rows[1]!.textContent).toContain('on the canvas');
-    expect(rows[2]!.textContent).not.toContain('latest');
+    expect(rows[0]!.textContent).toContain('Latest');
+    expect(rows[1]!.textContent).toContain('On the canvas');
+    expect(rows[2]!.textContent).not.toContain('Latest');
   });
 
   it('states the shape of each version, so an operator can tell them apart', () => {
@@ -73,7 +73,7 @@ describe('VersionHistoryPanel', () => {
     expect(row.textContent).toContain('4 nodes');
     expect(row.textContent).toContain('3 edges');
     expect(row.textContent).toContain('1 container');
-    expect(row.textContent).toContain('2 params');
+    expect(row.textContent).toContain('2 parameters');
   });
 
   /* The timestamp is how an operator tells two same-shaped versions apart, and
@@ -241,9 +241,9 @@ describe('VersionHistoryPanel — the active tag (#979)', () => {
       />,
     );
     const rows = rowButtons();
-    expect(rows[0]!.textContent).not.toContain('active');
+    expect(rows[0]!.textContent).not.toContain('Active');
     // The whole point of the tag: what is deployed is NOT what is on screen.
-    expect(rows[1]!.textContent).toContain('active');
+    expect(rows[1]!.textContent).toContain('Active');
   });
 
   it('marks nothing when no version is active', () => {
@@ -258,7 +258,7 @@ describe('VersionHistoryPanel — the active tag (#979)', () => {
         onClose={vi.fn()}
       />,
     );
-    expect(screen.getByTestId('version-history').textContent).not.toContain('active');
+    expect(screen.getByTestId('version-history').textContent).not.toContain('Active');
   });
 });
 

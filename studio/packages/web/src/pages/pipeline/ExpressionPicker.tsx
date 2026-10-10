@@ -411,7 +411,7 @@ function FunctionHead({
  */
 const GROUPS: { kind: RefSuggestion['kind']; heading: string }[] = [
   { kind: 'item', heading: 'Loop item' },
-  { kind: 'param', heading: 'Pipeline params' },
+  { kind: 'param', heading: 'Pipeline parameters' },
   { kind: 'variable', heading: 'Pipeline variables' },
   { kind: 'global', heading: 'Global parameters' },
   { kind: 'nodeOutput', heading: 'Upstream outputs' },

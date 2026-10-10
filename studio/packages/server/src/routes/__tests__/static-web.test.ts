@@ -30,7 +30,7 @@ mkdirSync(dbBase, { recursive: true });
 const WEB_PKG = join(import.meta.dirname, '../../../../web');
 const REAL_INDEX_HTML = readFileSync(join(WEB_PKG, 'index.html'), 'utf8');
 const REAL_FAVICON_SVG = readFileSync(join(WEB_PKG, 'public', 'favicon.svg'), 'utf8');
-const APP_JS = 'console.log("autonomy studio web");';
+const APP_JS = 'console.log("Autonomy studio web");';
 
 /** A populated web build: index.html + an assets/ bundle + the #717 favicon. */
 function seedWebRoot(name: string): string {

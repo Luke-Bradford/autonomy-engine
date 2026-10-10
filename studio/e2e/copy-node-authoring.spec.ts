@@ -73,7 +73,7 @@ test.describe('#1139 — copy-node authoring', () => {
     const pipelineId = await openSeededCanvas(page, 'e2e 1139 copy', { nodes: [] });
 
     // The palette offers it — the catalog entry landing is the whole ticket.
-    await addActivity(page, 'Copy Data');
+    await addActivity(page, 'Copy data');
     await expect(canvasNodes(page)).toHaveCount(1);
     await canvasNodes(page).first().click();
 
@@ -202,7 +202,7 @@ test.describe('#1139 — copy-node authoring', () => {
     const sinkSet = await seedDataset(page, 'e2e 1169 people copy', sinkConn, 'people_copy');
 
     const pipelineId = await openSeededCanvas(page, 'e2e 1169 mapping', { nodes: [] });
-    await addActivity(page, 'Copy Data');
+    await addActivity(page, 'Copy data');
     await canvasNodes(page).first().click();
 
     await copyTab(page, 'Source');
@@ -305,7 +305,7 @@ test.describe('#1170 — Auto-map and the unmapped advisory', () => {
     ]);
 
     const pipelineId = await openSeededCanvas(page, 'e2e 1170 auto-map', { nodes: [] });
-    await addActivity(page, 'Copy Data');
+    await addActivity(page, 'Copy data');
     await canvasNodes(page).first().click();
 
     // Before either dataset is bound there is nothing to map FROM, and the
@@ -411,7 +411,7 @@ test.describe('#1178 — the expression picker on a mapping cell', () => {
       nodes: [],
       params: [{ name: 'batch', type: 'string', required: true }],
     });
-    await addActivity(page, 'Copy Data');
+    await addActivity(page, 'Copy data');
     await canvasNodes(page).first().click();
 
     await copyTab(page, 'Source');

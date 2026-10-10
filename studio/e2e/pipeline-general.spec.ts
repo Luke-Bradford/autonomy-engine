@@ -99,7 +99,7 @@ test.describe('#1 F8a — pipeline description + annotations', () => {
       annotations: ['kept'],
     });
 
-    await page.getByRole('button', { name: 'Add param' }).click();
+    await page.getByRole('button', { name: 'Add parameter' }).click();
     await page.getByLabel('param 1 name').fill('topic');
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');

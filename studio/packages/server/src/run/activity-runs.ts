@@ -32,7 +32,7 @@ import type { LoggedEngineEvent } from './events.js';
  * WHAT MAKES A ROW.
  * - An ATTEMPT is a row from the first event that names its `attemptId`. That is
  *   not always `node.dispatched`: If, Switch, Set variable and Fail are settled
- *   by the engine, Execute Pipeline starts at `call.started`, a Wait at
+ *   by the engine, Execute pipeline starts at `call.started`, a Wait at
  *   `timer.waitScheduled`, and a preflight failure is a bare `node.failed`. An
  *   attempt the reducer minted but nothing ever logged is not a row: it never ran.
  * - A SKIP is a row when a node turns `skipped` without an attempt in flight,

@@ -100,7 +100,7 @@ export function TriggerForm({
         case 'concurrency.max':
           return form.concurrencyPolicy === 'parallel' ? 'Max parallel runs' : undefined;
         case 'params':
-          return 'Params (JSON)';
+          return 'Parameters (JSON)';
         default: {
           const fields = modeFields(form);
           return Object.hasOwn(fields, key) ? fields[key] : undefined;
@@ -755,11 +755,11 @@ export function TriggerForm({
       </Section>
 
       <Section heading="Parameters" help={FORM_SECTION_HINTS.trigger.parameters}>
-        <LabelledControl label="Params (JSON)">
+        <LabelledControl label="Parameters (JSON)">
           {(id) => (
             <JsonEditor
               id={id}
-              label="Params (JSON)"
+              label="Parameters (JSON)"
               value={form.paramsText}
               onValueChange={(paramsText) => onChange({ ...form, paramsText })}
               rows={4}

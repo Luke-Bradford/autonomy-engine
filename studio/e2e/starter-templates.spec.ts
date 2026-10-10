@@ -42,7 +42,7 @@ test.describe('starter templates on an empty canvas (#1413)', () => {
        first inserted activity rather than <body>, and the insert is announced. */
     const focused = page.locator('.react-flow__node:focus');
     await expect(focused).toHaveCount(1);
-    await expect(focused).toContainText('List Directory');
+    await expect(focused).toContainText('List directory');
     await expect(
       page.getByRole('status').filter({ hasText: 'Added Load every CSV in a folder into a table' }),
     ).toHaveText('Added Load every CSV in a folder into a table: 3 activities and 1 container.');
@@ -59,9 +59,9 @@ test.describe('starter templates on an empty canvas (#1413)', () => {
     await expect
       .poll(() => validationIssues(page))
       .toEqual([
-        expect.stringMatching(/^node 'List Directory 1': config\.path:/),
-        expect.stringMatching(/^node 'Copy Data 1': config\.mapping:/),
-        expect.stringMatching(/^node 'Copy Data 1': .*bind a dataset/),
+        expect.stringMatching(/^node 'List directory 1': config\.path:/),
+        expect.stringMatching(/^node 'Copy data 1': config\.mapping:/),
+        expect.stringMatching(/^node 'Copy data 1': .*bind a dataset/),
       ]);
 
     await page.getByRole('button', { name: 'Undo', exact: true }).click();
@@ -79,7 +79,7 @@ test.describe('starter templates on an empty canvas (#1413)', () => {
 
     const guide = page.getByRole('region', { name: 'Start this pipeline' });
     const target = guide.getByRole('button', { name: /^Summarise every document/ });
-    await toolbox(page).getByRole('button', { name: 'HTTP Request', exact: true }).dragTo(target);
+    await toolbox(page).getByRole('button', { name: 'HTTP request', exact: true }).dragTo(target);
 
     await expect(canvasNodes(page)).toHaveCount(1);
     await expect(guide).toHaveCount(0);

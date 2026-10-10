@@ -282,7 +282,7 @@ message.
 - **Hand-written controls join with `validation.attrsFor(key, errorId)`** and a `FieldError` under
   them with that id. `fieldAttrs` stays for a control that must say more (a hint, a row list).
 - **The trigger form checks its own fields only**: Name, the binding (an enabled trigger must be
-  bound), Max parallel runs and Params. Max is read as Save reads it (`Number`), so `1e2` passes;
+  bound), Max parallel runs and Parameters. Max is read as Save reads it (`Number`), so `1e2` passes;
   empty, `0`, `-1` and `1.5` do not. Its mode editors (recurrence, tumbling window, event, run
   windows) still refuse with the footer's one message on Save, from their converters. Moving them
   onto field keys is a later slice.
@@ -366,7 +366,7 @@ message.
 ## Typing JSON
 
 Every box for typing JSON uses `JsonEditor` (`lib/form/JsonEditor.tsx`). That covers Config
-(JSON), a node setting of kind JSON, dataset Columns, trigger Params, call Parameters, a JSON run
+(JSON), a node setting of kind JSON, dataset Columns, trigger Parameters, call Parameters, a JSON run
 parameter and a callback body. Two one-line inputs stay inputs: Global params' Value and a
 pipeline parameter's default. Their refusals still say where the mistake is (below).
 
@@ -401,7 +401,7 @@ pipeline parameter's default. Their refusals still say where the mistake is (bel
 
 Compact is the default and comfortable is a per-viewer setting (Settings → Appearance → Density,
 `uiStore.density`, mirrored onto `<html data-density>`), per the UI standard and #1477 OR29.
-Compact means 13px field text, 12px labels and section headings (uppercase), 28px single-line
+Compact means 13px field text, 12px labels, 28px single-line
 controls, and 4/8px spacing. Those numbers are the design tokens in `theme/tokens.css` (#1594
 OR40 S1), which hold both densities' values: `--control-h`, `--row-h`, `--type-body-size`,
 `--type-caption-size` and `--space-1..6`, plus the `--type-*` font shorthands. Read the tokens
@@ -632,7 +632,7 @@ note describes the section's group, not the input.
 
 **Still to come:** the editor's Run popover and the Git page's forms join in S6's page sweep.
 
-**Authored rows are tables (#1477 OR29).** Params, variables, outputs, annotations and every row
+**Authored rows are tables (#1477 OR29).** Parameters, variables, outputs, annotations and every row
 list (a Copy mapping, HTTP headers, LLM messages, an output schema) render through `RowTable`
 (`lib/form/RowTable.tsx`). It applies at every width and both densities.
 
@@ -658,3 +658,37 @@ list (a Copy mapping, HTTP headers, LLM messages, an output schema) render throu
   header `?` would cut off its own note. A row list's hint sits behind a `?` beside its label.
 
 Axe gates on every form (0 violations) belong to OR24 (#1415), which brings axe into the e2e suite.
+
+## Case and terms (#1594 OR40 S4)
+
+**Sentence case everywhere.** A name, label, tab, button or heading capitalises its first word
+and nothing else, except acronyms (ID, CSV, HTTP, JSON, LLM, SQL, AI, API, CLI, URL) and proper
+names (ForEach, SQLite, PostgreSQL, OpenAI, Anthropic, Excel, Ollama, Autonomy). Activity titles
+read "Copy data", "If condition", "Execute pipeline", "HTTP request"; the Author pane is "Factory
+resources"; the brand is "Autonomy studio". No stylesheet sets `text-transform: uppercase`. The
+rule and its word lists are `testing/sentenceCase.ts`. `testing/sentenceCase.test.ts` holds the
+catalog, the nav, the pane titles and every kind label to it, and
+`e2e/sentence-case.spec.ts` holds the rendered pages to it.
+
+A node's name is not stored (`activityLabels` derives it), so recasing a title renames its nodes on
+screen and rewrites no saved pipeline.
+
+Run and node status words ("success", "failure", "running") stay lower case, as the Runs grid has
+always shown them. A status is a value, not a label.
+
+**One term per concept.** Use the term in the first column on every tab, button, heading and run
+detail. Only "Parameters" has banned variants today, and `e2e/sentence-case.spec.ts` fails on
+"Params" in a heading, tab, button or label. The others record the term to use. S6 sweeps the
+strays: "node" in version history's counts, and "param" in validation and server messages
+("param #1 has no name", "trigger param binding could not be resolved").
+
+| Term | Use for | Never |
+| --- | --- | --- |
+| Parameters | A pipeline's typed inputs, and the values a run or trigger supplies for them ("Add parameter", "Parameters (JSON)") | params, Params, PARAMS |
+| Activity | One step on the canvas, of any kind | |
+| Run | One execution of a pipeline version | |
+| Activity run | One activity's execution inside a run, one row per attempt | |
+| Dataset | A named shape of data at a connection (table, query, file) | |
+| Connection | Where and how studio reaches a system, with its secrets | |
+| Trigger | What starts runs: manual, schedule, tumbling window, webhook, event | |
+

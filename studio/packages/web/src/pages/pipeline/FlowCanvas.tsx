@@ -341,7 +341,7 @@ interface ContainerData extends Record<string, unknown> {
  * the box was the one place the name could not be matched to a rectangle. #878
  * settled the question by drawing the activity ordinal on its box: leaving the
  * container's off made a single sentence identify one end and not the other
- * ("'HTTP Request 2' is inside the loop container").
+ * ("'HTTP request 2' is inside the loop container").
  *
  * BOTH handle types, with the ids every edge names. `flowEdges` sets
  * `sourceHandle: 'out'` / `targetHandle: 'in'` on every edge uniformly, so a
@@ -632,7 +632,7 @@ export function FlowCanvas({
    * the read needs.
    */
   measuredSizesRef?: MutableRefObject<MeasuredSizes>;
-  /** #1394 OR3 — the workspace's datasets, so a Copy Data card names its ends. */
+  /** #1394 OR3 — the workspace's datasets, so a Copy data card names its ends. */
   datasets?: readonly Dataset[];
   /** #1452 — the page's `role="status"` notice, for what an insert added. */
   onNotice?: (message: string) => void;
@@ -973,7 +973,7 @@ export function FlowCanvas({
           // DOMAIN is what moved (U17, above).
           position: domainMoved.has(n.id) ? n.position : (existing?.position ?? n.position),
           data: {
-            // #878 — the box carries the IDENTIFYING name ("HTTP Request 2"),
+            // #878 — the box carries the IDENTIFYING name ("HTTP request 2"),
             // not the kind. Every message that points at one activity now names
             // it this way, and a name the canvas cannot show is a name the
             // operator cannot act on. The fallback is unreachable: `nodeLabels`

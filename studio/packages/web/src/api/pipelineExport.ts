@@ -4,7 +4,7 @@ import { exportPipeline, exportPipelines } from './portability';
 /**
  * #1397 — export one pipeline and hand the browser its file.
  *
- * The ONE copy: the pipelines list, the Factory Resources row menu and the
+ * The ONE copy: the pipelines list, the Factory resources row menu and the
  * editor's ⋯ menu all export a pipeline, and the third of those is where two
  * hand-written copies became a helper. Its own module, not `portability.ts`,
  * so the callers' `vi.mock('…/portability')` still intercepts `exportPipeline`

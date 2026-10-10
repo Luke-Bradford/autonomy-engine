@@ -7,7 +7,7 @@ import { withParams } from '../../lib/withParams';
  * the id is `encodeURIComponent`d here because the route reads it back with
  * `useParams`, which DECODES exactly once. Today's ids are `pl_` + a nanoid,
  * whose alphabet needs no escaping, so a missing encode in one of the three
- * builders (the Factory Resources tree, the pipelines page, and any future
+ * builders (the Factory resources tree, the pipelines page, and any future
  * deep-link) would look perfectly correct until the alphabet widened.
  *
  * Its own module rather than a second export from `FactoryResources.tsx`, so

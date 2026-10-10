@@ -53,7 +53,7 @@ function Harness({
       label="Source connection"
       value={value}
       connections={connections}
-      disabledReason={connectionSlotReason(['sqlite'], 'Copy Data', 'source')}
+      disabledReason={connectionSlotReason(['sqlite'], 'Copy data', 'source')}
       onPick={(id) => {
         onPick?.(id);
         setValue(id);
@@ -211,7 +211,7 @@ describe('ConnectionPicker (#1477 slice 5b)', () => {
       render(<Harness connections={MIXED} onPick={onPick} />);
       fireEvent.click(picker());
       expect(option('Files')).toHaveAttribute('aria-disabled', 'true');
-      expect(option('Files')).toHaveTextContent("Can't be a Copy Data source yet");
+      expect(option('Files')).toHaveTextContent("Can't be a Copy data source yet");
       fireEvent.click(option('Files'));
       expect(onPick).not.toHaveBeenCalled();
     });

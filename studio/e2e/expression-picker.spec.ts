@@ -181,8 +181,8 @@ test.describe('U8a — expression insert flyout', () => {
     // TWO `http_request` nodes, and #878's ordinal is what says which box the
     // reference points at; it used to be the raw doc id in brackets, a string
     // shown nowhere on the canvas.
-    const option = properties(page).getByRole('button', { name: /HTTP Request 1 → body/ });
-    await expect(properties(page).getByRole('button', { name: /HTTP Request 2 → / })).toHaveCount(
+    const option = properties(page).getByRole('button', { name: /HTTP request 1 → body/ });
+    await expect(properties(page).getByRole('button', { name: /HTTP request 2 → / })).toHaveCount(
       0,
     );
     await expect(option).toBeVisible();
@@ -326,10 +326,10 @@ test.describe('U8a — expression insert flyout', () => {
     await properties(page).getByRole('button', { name: 'Insert reference into items' }).click();
 
     await expect(
-      properties(page).getByRole('button', { name: /HTTP Request 1 → rows/ }),
+      properties(page).getByRole('button', { name: /HTTP request 1 → rows/ }),
     ).toBeVisible();
     await expect(
-      properties(page).getByRole('button', { name: /HTTP Request 1 → label/ }),
+      properties(page).getByRole('button', { name: /HTTP request 1 → label/ }),
     ).toHaveCount(0);
     await expect(properties(page).getByRole('button', { name: /^runId/ })).toHaveCount(0);
 
@@ -371,7 +371,7 @@ test.describe('U8a — expression insert flyout', () => {
 
     await properties(page).getByRole('button', { name: 'Insert reference into items' }).click();
     await expect(
-      properties(page).getByRole('button', { name: /HTTP Request 1 → rows/ }),
+      properties(page).getByRole('button', { name: /HTTP request 1 → rows/ }),
     ).toBeVisible();
     await expect(item).toHaveCount(0);
 
@@ -412,7 +412,7 @@ test.describe('U8a — expression insert flyout', () => {
     // choice is destructive.
     await expect(properties(page).getByText(/REPLACES its current value/)).toBeVisible();
     await properties(page)
-      .getByRole('button', { name: /HTTP Request 1 → body/ })
+      .getByRole('button', { name: /HTTP request 1 → body/ })
       .click();
     await properties(page).getByRole('button', { name: 'Apply config' }).click();
 

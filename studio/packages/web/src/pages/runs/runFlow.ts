@@ -148,7 +148,7 @@ function sameCard(a: RunCard, b: RunCard): boolean {
 
 /**
  * #1394 OR3 — the numbers a run card shows under its status: the settled
- * duration and, for a Copy Data node, the rows it wrote.
+ * duration and, for a Copy data node, the rows it wrote.
  *
  * Only what THIS run measured. An open span has no duration yet (the activity
  * runs count that one up live), and `formatNodeDuration`'s em-dash is the table's
@@ -358,7 +358,7 @@ export function runFlowNodes(
   const repeated = repeatedNodeIds(doc);
   /* #878 — the run graph names an activity the same way the authoring canvas
      does: kind plus within-kind ordinal. Two `http_request` nodes in one run
-     would otherwise be two boxes reading "HTTP Request", in the view whose job
+     would otherwise be two boxes reading "HTTP request", in the view whose job
      is to say WHICH node failed.
 
      The activity runs and the drawer on this same page read the same

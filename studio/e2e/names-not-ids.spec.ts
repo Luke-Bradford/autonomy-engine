@@ -20,7 +20,7 @@ const trail = (page: Page) => page.getByRole('navigation', { name: 'Breadcrumb' 
 
 async function expectNamed(page: Page, name: string, hub: string, id: string) {
   await expect(trail(page).getByRole('listitem').last()).toContainText(name);
-  await expect(page).toHaveTitle(`${name} — ${hub} — autonomy studio`);
+  await expect(page).toHaveTitle(`${name} — ${hub} — Autonomy studio`);
   await expect(trail(page)).not.toContainText(id);
   expect(await page.title()).not.toContain(id);
 }
@@ -38,7 +38,7 @@ test('a pipeline is named in the breadcrumb and title, and a rename follows', as
   await fluentRootReady(page);
   await expectNamed(page, name, 'Author', pipelineId);
 
-  // Rename it from the Factory Resources pane, which stays mounted beside the
+  // Rename it from the Factory resources pane, which stays mounted beside the
   // canvas: the crumb and title follow without a reload.
   const renamed = `${name} renamed`;
   await openRowMenu(page, name);
@@ -113,7 +113,7 @@ test('an unknown path says so instead of showing Home', async ({ page }) => {
 
   await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
   await expect(page.getByRole('main')).toContainText('/no/such/route');
-  await expect(page).toHaveTitle('Not found — autonomy studio');
+  await expect(page).toHaveTitle('Not found — Autonomy studio');
   expect(new URL(page.url()).hash).toBe('#/no/such/route');
 
   await page.getByRole('link', { name: 'Go to Home' }).click();

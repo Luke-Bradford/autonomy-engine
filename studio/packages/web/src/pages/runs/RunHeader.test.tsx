@@ -143,10 +143,10 @@ describe('RunHeader (#1484 OR35 M2)', () => {
         ...NAMES,
         triggeredByKind: 'call',
         parentPipelineName: 'Orchestrate',
-        parentActivity: 'Execute Pipeline 2',
+        parentActivity: 'Execute pipeline 2',
       },
     );
-    expect(fact('Parent')).toHaveTextContent(/^Orchestrate · Execute Pipeline 2$/);
+    expect(fact('Parent')).toHaveTextContent(/^Orchestrate · Execute pipeline 2$/);
     expect(screen.getByRole('link', { name: 'Orchestrate' })).toHaveAttribute(
       'href',
       '/monitor/runs/run_parent_1',
@@ -204,7 +204,7 @@ describe('RunFailureBanner (#1484 OR35 M2)', () => {
       <MemoryRouter>
         <RunFailureBanner
           failure={failure}
-          nameOf={(id) => ({ copy: 'Copy Data 1', loop: 'Until 1' })[id] ?? null}
+          nameOf={(id) => ({ copy: 'Copy data 1', loop: 'Until 1' })[id] ?? null}
           versionHref="/author/pipelines/pl_1?version=3"
           onShowActivity={onShow}
         />
@@ -217,7 +217,7 @@ describe('RunFailureBanner (#1484 OR35 M2)', () => {
     const row = failedRow();
     const onShow = banner({ kind: 'activity', nodeId: 'copy', activityId: 'copy', row });
     const group = screen.getByRole('group', { name: 'Failure' });
-    expect(group).toHaveTextContent('Failed: Copy Data 1');
+    expect(group).toHaveTextContent('Failed: Copy data 1');
     expect(group).toHaveTextContent('transient');
     expect(group).toHaveTextContent('attempt 2');
     // The first line is the summary; the whole error opens beneath it.

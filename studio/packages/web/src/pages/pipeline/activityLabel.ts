@@ -4,7 +4,7 @@ import { getActivity, type Node } from '@autonomy-studio/shared';
  * What KIND of activity this is: its catalog title, keyed on `node.type`.
  *
  * This names a TYPE, not an instance — three `http_request` nodes all answer
- * "HTTP Request". To name a PARTICULAR one, use `activityLabels` below.
+ * "HTTP request". To name a PARTICULAR one, use `activityLabels` below.
  *
  * It is the ingredient `activityLabels` is built from, and the total fallback at
  * the two map lookups that feed a canvas (`FlowCanvas`, `runFlow`). Those
@@ -29,7 +29,7 @@ export function activityLabel(node: Node): string {
 
 /**
  * How ONE activity is named to the operator (#878): its kind plus a
- * within-kind, document-order ordinal — `HTTP Request 2`.
+ * within-kind, document-order ordinal — `HTTP request 2`.
  *
  * The node-side counterpart to `containerRules.containerLabels`, and the same
  * argument. Until this existed a surface had to choose between a name that does
@@ -61,22 +61,22 @@ export function activityLabel(node: Node): string {
  * THE ORDINAL IS DRAWN ON THE BOX, and since #883 the container ordinal is too —
  * so the rule is now uniform rather than an activity-only property with a
  * documented exception. That symmetry is the point, not a tidiness: a sighted
- * operator reading "HTTP Request 2" in a message must be able to match it to one
+ * operator reading "HTTP request 2" in a message must be able to match it to one
  * of two otherwise identical rectangles, and a message naming one end by a drawn
  * name and the other by a bare kind is only half readable.
  *
- * The ordinal is UNCONDITIONAL — a lone activity is "HTTP Request 1", exactly as
+ * The ordinal is UNCONDITIONAL — a lone activity is "HTTP request 1", exactly as
  * a lone container is "Stage 1". Numbering only on collision was considered and
  * rejected: it renames an UNTOUCHED box the moment a second of its kind is added,
  * and the #788 advisory's partitioned arm lists activities and containers in one
- * sentence, where "HTTP Request, Stage 1" reads as two different kinds of thing.
+ * sentence, where "HTTP request, Stage 1" reads as two different kinds of thing.
  *
  * TWO HONEST COSTS, both shared with `containerLabels`:
  *   - the ordinal is positional, so deleting or reordering an activity renumbers
  *     its siblings. It identifies a box on screen NOW; it is not a stable name to
  *     store, quote in an issue, or key anything on.
  *   - it is DOCUMENT order, not visual order: an imported doc is free to put
- *     "HTTP Request 3" leftmost on the canvas.
+ *     "HTTP request 3" leftmost on the canvas.
  * A stable operator-authored name is a `Node` schema change and is not this.
  *
  * Counted by the RENDERED NAME rather than by `type`, so the result is unique

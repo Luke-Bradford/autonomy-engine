@@ -52,7 +52,7 @@ describe('toolboxGroups', () => {
   });
 
   it('matches on the activity TYPE too, which is what an author who knows the docs types', () => {
-    // "file_" appears in no title (`Read File`, `Write File`, …) — only in the type.
+    // "file_" appears in no title (`Read file`, `Write file`, …) — only in the type.
     const types = typesOf(toolboxGroups('file_'));
     expect(types).toContain('file_read');
     expect(types).toContain('file_write');
@@ -81,6 +81,6 @@ describe('toolboxGroups', () => {
     // Searchable by both, like every other entry: the type is what an export
     // envelope and an error message name, the title is what the toolbox shows.
     expect(typesOf(toolboxGroups('execute_pipeline'))).toEqual(['execute_pipeline']);
-    expect(typesOf(toolboxGroups('Execute Pipeline'))).toEqual(['execute_pipeline']);
+    expect(typesOf(toolboxGroups('Execute pipeline'))).toEqual(['execute_pipeline']);
   });
 });

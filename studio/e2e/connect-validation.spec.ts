@@ -74,9 +74,9 @@ const REFUSAL = '.canvas-refusal';
 
 /** Two nodes, laid out apart, with no edges yet. */
 async function seedTwoNodes(page: Page): Promise<void> {
-  await addActivity(page, 'HTTP Request');
+  await addActivity(page, 'HTTP request');
   await expect(canvasNodes(page)).toHaveCount(1);
-  await addActivity(page, 'Write File');
+  await addActivity(page, 'Write file');
   await fitAndSettle(page, 1);
   await expect(canvasNodes(page)).toHaveCount(2);
   await dragNodeBy(page, 1, 300, 60);
@@ -153,7 +153,7 @@ test.describe('U6b connect-time validation', () => {
        real run can make, because these ids are minted by `newLocalId` and the
        unit fixtures use readable ones. The first draft of this panel read
        "'n_7c44a16f-…' → 'n_9c4bb103-…'" and every unit spec was green. */
-    await expect(refusal).toContainText("'Write File 1' → 'HTTP Request 1'");
+    await expect(refusal).toContainText("'Write file 1' → 'HTTP request 1'");
     await expect(refusal).not.toContainText('n_');
 
     /* U6e — the refusal now also OFFERS the remedy it names. Asserted here, not
@@ -180,7 +180,7 @@ test.describe('U6b connect-time validation', () => {
     await connectNodes(page, 0, 1);
     await expect(edgeGroup(page)).toHaveCount(1);
     await expect(page.locator(REFUSAL)).toContainText(
-      "'HTTP Request 1' → 'Write File 1' already has a 'success' edge",
+      "'HTTP request 1' → 'Write file 1' already has a 'success' edge",
     );
 
     /* The panel states the reason as it is NOW, so removing the obstacle removes
@@ -215,7 +215,7 @@ test.describe('U6b connect-time validation', () => {
     await expect(edgeGroup(page)).toHaveCount(1);
     const refusal = page.locator(REFUSAL);
     await expect(refusal).toContainText(
-      "'HTTP Request 1' → 'Write File 1' already has a 'success' edge, and 'completion' " +
+      "'HTTP request 1' → 'Write file 1' already has a 'success' edge, and 'completion' " +
         'would fire on it too',
     );
     await refusal.getByRole('button', { name: 'Dismiss' }).click();
@@ -273,13 +273,13 @@ test.describe('U6b connect-time validation', () => {
     await connectNodes(page, 0, 1);
     await expect(edgeGroup(page)).toHaveCount(1);
 
-    // Drawing the SAME edge backwards: down on Write File's `in`, up on HTTP
-    // Request's `out`. That is the duplicate `HTTP Request → Write File`.
+    // Drawing the SAME edge backwards: down on Write file's `in`, up on HTTP
+    // request's `out`. That is the duplicate `HTTP request → Write file`.
     await connectNodesBackwards(page, 0, 1);
     await expect(edgeGroup(page)).toHaveCount(1);
     const refusal = page.locator(REFUSAL);
     await expect(refusal).toContainText(
-      "'HTTP Request 1' → 'Write File 1' already has a 'success' edge",
+      "'HTTP request 1' → 'Write file 1' already has a 'success' edge",
     );
     await expect(refusal).not.toContainText('close a loop');
 
@@ -287,7 +287,7 @@ test.describe('U6b connect-time validation', () => {
     await refusal.getByRole('button', { name: 'Dismiss' }).click();
     await connectNodesBackwards(page, 1, 0);
     await expect(edgeGroup(page)).toHaveCount(1);
-    await expect(refusal).toContainText("'Write File 1' → 'HTTP Request 1' would close a loop");
+    await expect(refusal).toContainText("'Write file 1' → 'HTTP request 1' would close a loop");
 
     await expectQuiet(page, problems);
   });
@@ -336,7 +336,7 @@ test.describe('U6b connect-time validation', () => {
 
     await connectNodes(page, 0, 0);
     await expect(edgeGroup(page)).toHaveCount(0);
-    await expect(page.locator(REFUSAL)).toContainText("'HTTP Request 1' cannot connect to itself");
+    await expect(page.locator(REFUSAL)).toContainText("'HTTP request 1' cannot connect to itself");
 
     await expectQuiet(page, problems);
   });

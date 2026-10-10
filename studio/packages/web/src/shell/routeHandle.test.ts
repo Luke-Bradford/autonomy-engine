@@ -187,18 +187,18 @@ describe('documentTitle', () => {
         { label: 'Pipelines', to: '/author/pipelines' },
         { label: 'Test Pipe', to: '/author/pipelines/pipe_x' },
       ]),
-    ).toBe('Test Pipe — Author — autonomy studio');
+    ).toBe('Test Pipe — Author — Autonomy studio');
   });
 
   it('does not repeat a page that IS its hub', () => {
-    expect(documentTitle([{ label: 'Home', to: '/' }])).toBe('Home — autonomy studio');
+    expect(documentTitle([{ label: 'Home', to: '/' }])).toBe('Home — Autonomy studio');
   });
 
   it('leads with a dot while the page holds unsaved work (#1393)', () => {
-    expect(documentTitle([{ label: 'Home', to: '/' }], true)).toBe('• Home — autonomy studio');
+    expect(documentTitle([{ label: 'Home', to: '/' }], true)).toBe('• Home — Autonomy studio');
   });
 
   it('falls back to the app name with no crumbs at all', () => {
-    expect(documentTitle([])).toBe('autonomy studio');
+    expect(documentTitle([])).toBe('Autonomy studio');
   });
 });

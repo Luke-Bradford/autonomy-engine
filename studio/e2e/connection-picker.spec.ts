@@ -38,7 +38,7 @@ async function copyNodeOnSink(page: Page, title: string): Promise<void> {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openSeededCanvas(page, title, { nodes: [] });
   await fluentRootReady(page);
-  await addActivity(page, 'Copy Data');
+  await addActivity(page, 'Copy data');
   await canvasNodes(page).first().click();
   await properties(page).getByRole('tab', { name: 'Sink', exact: true }).click();
 }
@@ -59,7 +59,7 @@ test.describe('#1477 activity connection pickers', () => {
     await sink.click();
     const filesOption = page.getByRole('listbox').getByRole('option').filter({ hasText: files });
     await expect(filesOption).toHaveAttribute('aria-disabled', 'true');
-    await expect(filesOption).toContainText("Can't be a Copy Data sink yet");
+    await expect(filesOption).toContainText("Can't be a Copy data sink yet");
     await sink.press('Escape');
     await expect(page.getByRole('listbox')).toHaveCount(0);
 
@@ -103,7 +103,7 @@ test.describe('#1477 activity connection pickers', () => {
     // The gallery disables what a Copy sink cannot be, with the same reason.
     const fsTile = column(page).getByRole('button', { name: 'File system', exact: true });
     await expect(fsTile).toHaveAttribute('aria-disabled', 'true');
-    await expect(fsTile).toHaveAccessibleDescription(/Can't be a Copy Data sink yet/);
+    await expect(fsTile).toHaveAccessibleDescription(/Can't be a Copy data sink yet/);
 
     await column(page).getByRole('button', { name: 'SQLite', exact: true }).click();
     const form = column(page).getByRole('form', { name: 'Connection form' });
@@ -152,7 +152,7 @@ test.describe('#1477 activity connection pickers', () => {
     const renamed = `e2e 1477 edited ${stamp}`;
     const id = await seedSqliteConnection(page, name);
     await copyNodeOnSink(page, 'e2e 1477 picker edit');
-    await addActivity(page, 'Copy Data');
+    await addActivity(page, 'Copy data');
     await expect(canvasNodes(page)).toHaveCount(2);
     const sink = properties(page).getByRole('combobox', { name: 'Sink connection' });
     const editSink = properties(page).getByRole('button', {
@@ -218,7 +218,7 @@ test.describe('#1477 activity connection pickers', () => {
 
     await paste.fill('/srv/landing/orders.csv');
     await paste.press('Enter');
-    await expect(paste).toHaveAccessibleDescription("File system: Can't be a Copy Data sink yet");
+    await expect(paste).toHaveAccessibleDescription("File system: Can't be a Copy data sink yet");
 
     await paste.fill('/srv/stores/warehouse.sqlite');
     await paste.press('Enter');

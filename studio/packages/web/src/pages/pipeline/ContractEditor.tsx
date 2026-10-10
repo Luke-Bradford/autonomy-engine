@@ -280,7 +280,7 @@ export function ParamRow({ store, index, param }: { store: Store; index: number;
       // than help with the field, so it moved to the notes row with the rest.
       <p key="satisfied" className="contract-advisory">
         Required, but this stored default already satisfies it — a run is never asked for a value.
-        Blank the field to make the param truly required.
+        Blank the field to make the parameter truly required.
       </p>
     ) : null,
     field.error ? (
@@ -352,7 +352,7 @@ export function ParamRow({ store, index, param }: { store: Store; index: number;
       </td>
       <td>
         {param.required && !('default' in param) ? (
-          <span className="page-hint">A run must supply this param.</span>
+          <span className="page-hint">A run must supply this parameter.</span>
         ) : (
           // The field is shown whenever a default EXISTS, required or not.
           //

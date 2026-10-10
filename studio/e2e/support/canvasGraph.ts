@@ -131,8 +131,8 @@ export async function fillSelectedNodeConfig(
 
 /** The fields `fillNodeConfig` needs to make a palette-dropped node of each title savable. */
 export const SAVABLE_CONFIG: Readonly<Record<string, Record<string, string>>> = {
-  'HTTP Request': { 'Request URL': 'https://example.test/e2e' },
-  'Write File': { 'File path': 'out.txt', Content: 'e2e' },
+  'HTTP request': { 'Request URL': 'https://example.test/e2e' },
+  'Write file': { 'File path': 'out.txt', Content: 'e2e' },
 };
 
 /**
@@ -316,13 +316,13 @@ export async function dragNodeBy(page: Page, index: number, dx: number, dy: numb
 
 /**
  * Two nodes with one edge between them, the edge SELECTED so the picker is up.
- * `sourceTitle` chooses what the edge hangs off — an `If Condition` is the one
+ * `sourceTitle` chooses what the edge hangs off — an `If condition` is the one
  * that declares business branches.
  */
-export async function seedSelectedEdge(page: Page, sourceTitle = 'HTTP Request'): Promise<void> {
+export async function seedSelectedEdge(page: Page, sourceTitle = 'HTTP request'): Promise<void> {
   await addActivity(page, sourceTitle);
   await expect(canvasNodes(page)).toHaveCount(1);
-  await addActivity(page, 'Write File');
+  await addActivity(page, 'Write file');
   await fitAndSettle(page, 1);
   await expect(canvasNodes(page)).toHaveCount(2);
 
@@ -634,7 +634,7 @@ export async function selectEdge(page: Page, index = 0): Promise<void> {
  * source ports while a connection is in flight (#997), so the new edge's start
  * is the FANNED port position — and the moment the gesture ends the fan
  * collapses and the endpoint travels back to the middle of the node. MEASURED on
- * `seedSelectedEdge`'s `If Condition`, whose six ports put `success` at the top
+ * `seedSelectedEdge`'s `If condition`, whose six ports put `success` at the top
  * of the column: the midpoint moves 60px within 80ms of the edge appearing.
  * Reading it at the first instant and clicking after the collapse lands on empty
  * pane, which deselects instead of selecting — `edge-typing.spec.ts` failed in

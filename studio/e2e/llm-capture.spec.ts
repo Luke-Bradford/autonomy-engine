@@ -128,7 +128,7 @@ async function runCaptured(
 async function openDrillIn(page: import('@playwright/test').Page, runId: string) {
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
-  return openActivity(page, 'LLM Call 1');
+  return openActivity(page, 'LLM call 1');
 }
 
 test('#605 — a full-capture LLM node shows the prompt it sent and the answer it got', async ({

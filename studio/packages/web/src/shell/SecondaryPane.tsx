@@ -30,12 +30,8 @@ interface SecondaryPaneProps {
  * 'author')` because U10 puts the Monitor filters here next, and a map with a
  * `HubId` key cannot be given a hub that does not exist.
  */
-const PANE_CONTENT: Partial<
-  Record<HubId, { title: string; Content: ComponentType<{ hub: Hub }> }>
-> = {
-  // The Shell diagram labels the Author pane "Factory Resources", not the hub
-  // name — it is a resource tree, not a section list, so it says what it holds.
-  author: { title: 'Factory Resources', Content: FactoryResources },
+const PANE_CONTENT: Partial<Record<HubId, { Content: ComponentType<{ hub: Hub }> }>> = {
+  author: { Content: FactoryResources },
 };
 
 /**
@@ -56,7 +52,7 @@ const PANE_CONTENT: Partial<
  * `/manage/connections-v2` could not light `/manage/connections`.
  *
  * The section list below is the DEFAULT body. A hub with a real surface of its
- * own declares one in `PANE_CONTENT` — U4 gave Author the Factory Resources
+ * own declares one in `PANE_CONTENT` — U4 gave Author the Factory resources
  * tree, which keeps the hub's section as its group header rather than replacing
  * the pane's navigation with a parallel one.
  * Notably NOT `@fluentui/react-nav`'s `Nav`/`NavItem` (which is installed):
@@ -79,7 +75,7 @@ export function SecondaryPane({ hub, collapsed }: SecondaryPaneProps) {
          sections" is the stable answer whatever Author chooses to put in it. */
       aria-label={`${hub.label} sections`}
     >
-      <h2 className="secondary-pane__title">{custom?.title ?? hub.label}</h2>
+      <h2 className="secondary-pane__title">{hub.paneTitle ?? hub.label}</h2>
       {custom ? (
         <custom.Content hub={hub} />
       ) : (

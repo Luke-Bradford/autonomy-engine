@@ -940,7 +940,7 @@ describe('NodeActivityPanel — the drawer tabs (#1484 OR35 M2)', () => {
     renderWithRouter(
       <NodeActivityPanel
         node={row({ nodeId: 'a', status: 'failure', attempts: 1, error: 'boom' })}
-        name="Copy Data 1"
+        name="Copy data 1"
         runStatus="failure"
         live={false}
         onClose={vi.fn()}

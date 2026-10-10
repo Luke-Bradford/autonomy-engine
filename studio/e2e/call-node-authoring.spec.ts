@@ -53,7 +53,7 @@ test.describe('#425 — call-node authoring', () => {
     const parentId = await openSeededCanvas(page, 'e2e 425 parent', { nodes: [] });
 
     // The palette OFFERS it now — this click is the whole retired exclusion.
-    await addActivity(page, 'Execute Pipeline');
+    await addActivity(page, 'Execute pipeline');
     await expect(canvasNodes(page)).toHaveCount(1);
 
     // Added with no `call`, which is a doc the save gate refuses — deliberately,
@@ -151,7 +151,7 @@ test.describe('#425 — call-node authoring', () => {
       params: [{ name: 'target', type: 'string', required: true }],
     });
 
-    await addActivity(page, 'Execute Pipeline');
+    await addActivity(page, 'Execute pipeline');
     await canvasNodes(page).first().click();
     await properties(page).getByRole('radio', { name: 'Expression' }).check();
 

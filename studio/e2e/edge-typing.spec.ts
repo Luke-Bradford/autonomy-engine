@@ -113,7 +113,7 @@ test.describe('U6a typed edge styling', () => {
   test('every condition paints a distinct, readable stroke', async ({ page }) => {
     const problems = collectPageProblems(page);
     await openCanvas(page, 'e2e u6a strokes');
-    await seedSelectedEdge(page, 'If Condition');
+    await seedSelectedEdge(page, 'If condition');
 
     const canvasBg = await canvasBackground(page);
     expect(isOpaque(canvasBg)).toBe(true);
@@ -174,7 +174,7 @@ test.describe('U6a typed edge styling', () => {
    */
   test('a branch edge is labelled by its routing key, visibly and accessibly', async ({ page }) => {
     await openCanvas(page, 'e2e u6a branch label');
-    await seedSelectedEdge(page, 'If Condition');
+    await seedSelectedEdge(page, 'If condition');
     await pick(page, 'branch:false');
 
     await expect(edgeGroup(page)).toHaveAttribute('aria-label', /on branch 'false'$/);
@@ -251,7 +251,7 @@ test.describe('U6a typed edge styling', () => {
   /** Both themes: the LIGHT palette must be readable on the LIGHT canvas. */
   test('every stroke stays readable after the theme toggle', async ({ page }) => {
     await openCanvas(page, 'e2e u6a light');
-    await seedSelectedEdge(page, 'If Condition');
+    await seedSelectedEdge(page, 'If condition');
     // Anchor the baseline — see `container-rendering.spec.ts`: `setTheme` does
     // nothing when the app is already in `theme`, so the dark start is asserted
     // rather than assumed.

@@ -20,7 +20,7 @@ const PIPELINES_PATH = '/author/pipelines';
  *
  * Before U4 the open pipeline was LOCAL state inside `PipelinesPage`, so the
  * canvas had no address: it could not be linked to, bookmarked, or reached from
- * the Factory Resources tree, and Back left it. The route is the same shape
+ * the Factory resources tree, and Back left it. The route is the same shape
  * `runs`/`:runId` already uses, and for the same reasons:
  *
  * 1. `key={pipelineId}` — `PipelineCanvas` holds per-pipeline working state (an
@@ -68,7 +68,7 @@ function CanvasFor({
 
   // #720 — the LIVE name, if the shared list knows this pipeline.
   //
-  // The fetch below answers once, at mount. The Factory Resources pane is
+  // The fetch below answers once, at mount. The Factory resources pane is
   // mounted at the same time over the same list, so renaming there left the two
   // views disagreeing about exactly the fact `pipelinesStore` exists to keep in
   // step — the canvas heading kept the OLD name until a reload. Subscribing here

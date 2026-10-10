@@ -61,10 +61,10 @@ function loopDoc(): SeedDoc {
       { id: 'a', position: { x: 0, y: 0 } },
       { id: 'b', position: { x: 0, y: 160 } },
       // A DIFFERENT activity type. It predates #878 — when every node of one
-      // type shared one name, `'HTTP Request' → 'HTTP Request'` would have passed
+      // type shared one name, `'HTTP request' → 'HTTP request'` would have passed
       // an assertion about naming while proving nothing about which end is which.
       // The ordinal now tells `a` and `b` apart on its own, and the refusal below
-      // asserts `HTTP Request 2` (that is `b`, the enclosed end) precisely to pin
+      // asserts `HTTP request 2` (that is `b`, the enclosed end) precisely to pin
       // WHICH of the two identical-type nodes is named.
       { id: 'after', type: 'file_write', position: { x: 420, y: 80 } },
     ],
@@ -439,7 +439,7 @@ test.describe('U6c container rendering', () => {
         'cross a container boundary',
       );
       await expect(refusal, `${direction}: the enclosed end is named wrong`).toContainText(
-        "'HTTP Request 2' is inside the Until 1 container",
+        "'HTTP request 2' is inside the Until 1 container",
       );
       // The minted id, not the name — `loop_1` (underscore) is the seeded id,
       // `Until 1` (space) is what #883 draws on the box. Near-identical here only

@@ -477,7 +477,7 @@ describe('RunDetailPage', () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
     await screen.findByRole('heading', { level: 2, name: /^Test pipeline / });
-    const skipped = (await within(timelineSection()).findByText('HTTP Request 2')).closest('li')!;
+    const skipped = (await within(timelineSection()).findByText('HTTP request 2')).closest('li')!;
     expect(skipped).toHaveTextContent(/— skipped/);
   });
 
@@ -498,7 +498,7 @@ describe('RunDetailPage', () => {
     );
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
-    const row = await activityRow('HTTP Request 1');
+    const row = await activityRow('HTTP request 1');
     // The engine calls this `dispatched`, which names the ENGINE's act. The
     // operator is asking what the NODE is doing.
     expect(within(row).getByText('running')).toBeInTheDocument();
@@ -537,10 +537,10 @@ describe('RunDetailPage', () => {
     const timeline = await screen.findByRole('region', { name: 'Timeline' });
     // The parked node is the fold's, and it says WHICH alarm — one word
     // ("waiting") could not tell a timer from an awaited inbound callback…
-    expect(within(timeline).getByText('HTTP Request 1')).toBeInTheDocument();
+    expect(within(timeline).getByText('HTTP request 1')).toBeInTheDocument();
     expect(within(timeline).getByText(/^waiting \(timer\)/)).toBeInTheDocument();
     // …and no row was minted for the node the projection would have seeded.
-    expect(within(timeline).queryByText('HTTP Request 2')).not.toBeInTheDocument();
+    expect(within(timeline).queryByText('HTTP request 2')).not.toBeInTheDocument();
   });
 
   it('shows empty activity/event states with no events', async () => {
@@ -575,7 +575,7 @@ describe('RunDetailPage', () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
     // The activity runs show the node lit green.
-    expect(within(await activityRow('HTTP Request 1')).getByText('success')).toBeInTheDocument();
+    expect(within(await activityRow('HTTP request 1')).getByText('success')).toBeInTheDocument();
 
     // The run's derived lifecycle overrides the (running) REST status.
     expect(screen.getByRole('heading', { level: 2, name: 'Test pipeline v1' })).toBeInTheDocument();
@@ -1024,7 +1024,7 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
   it('names the failure CLASS in the activity runs, not just the message', async () => {
     useRunStreamMock.mockReturnValue(failedStream());
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    expect(cellOf(await activityRow('HTTP Request 1'), 'Error')).toHaveTextContent(
+    expect(cellOf(await activityRow('HTTP request 1'), 'Error')).toHaveTextContent(
       'boom (transient · rate_limit)',
     );
   });
@@ -1032,7 +1032,7 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
   it("opens a failed activity run on its Error, with that attempt's streamed lines under Logs", async () => {
     useRunStreamMock.mockReturnValue(failedStream());
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await openDrawer('HTTP Request 1');
+    await openDrawer('HTTP request 1');
     expect(screen.getByRole('tab', { name: 'Error' })).toHaveAttribute('aria-selected', 'true');
     expect(within(screen.getByRole('complementary')).getByRole('tabpanel')).toHaveTextContent(
       'boom',
@@ -1051,10 +1051,10 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
     expect(
-      screen.queryByRole('complementary', { name: /Node HTTP Request 1/ }),
+      screen.queryByRole('complementary', { name: /Node HTTP request 1/ }),
     ).not.toBeInTheDocument();
 
-    const panel = await openDrawer('HTTP Request 1');
+    const panel = await openDrawer('HTTP request 1');
     // The class the table compresses into one line, spelled out as fields.
     expect(within(panel).getByText('transient')).toBeInTheDocument();
     expect(within(panel).getByText('rate_limit')).toBeInTheDocument();
@@ -1062,7 +1062,7 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
 
     await user.click(within(panel).getByRole('button', { name: 'Close' }));
     expect(
-      screen.queryByRole('complementary', { name: /Node HTTP Request 1/ }),
+      screen.queryByRole('complementary', { name: /Node HTTP request 1/ }),
     ).not.toBeInTheDocument();
   });
 
@@ -1070,8 +1070,8 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
    * #882 — the activity runs and the drawer name a node the way the GRAPH beside
    * them does.
    *
-   * The graph has said `HTTP Request 1` since #878 while these two said
-   * `n_7c44a16f-98f1-4958-…`, so an operator reading "HTTP Request 1 failed" off
+   * The graph has said `HTTP request 1` since #878 while these two said
+   * `n_7c44a16f-98f1-4958-…`, so an operator reading "HTTP request 1 failed" off
    * the picture could not find that row in the table directly underneath it, and
    * could not search for it either. One view, two vocabularies — the exact defect
    * #878 exists to prevent, arriving inside the view it was built for.
@@ -1082,7 +1082,7 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
    * would close one lookup by breaking another.
    *
    * It sits OUTSIDE the disclosure button on purpose: text inside a button
-   * becomes part of its accessible name, and `HTTP Request 1 n_7c44a16f-98f1-…`
+   * becomes part of its accessible name, and `HTTP request 1 n_7c44a16f-98f1-…`
    * is what a screen reader would then have to read out on every row. Outside, the
    * button's visible label and its accessible name are the same string, and the id
    * is still on screen to copy. (Both shapes satisfy WCAG 2.5.3, which asks only
@@ -1095,7 +1095,7 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
       renderWithRouter(<RunDetailPage runId="run_1" />);
 
       // The name is the button — the thing the graph says and the operator reads.
-      const button = await screen.findByRole('button', { name: 'HTTP Request 1' });
+      const button = await screen.findByRole('button', { name: 'HTTP request 1' });
       // …and the id is still THERE, on the cell's title (the activity runs'
       // convention, shared with the timeline), just not the label.
       expect(button.closest('td')).toHaveAttribute('title', 'greet');
@@ -1114,7 +1114,7 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
       renderWithRouter(<RunDetailPage runId="run_1" />);
 
       expect(await screen.findByRole('button', { name: 'greet' })).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'HTTP Request 1' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'HTTP request 1' })).not.toBeInTheDocument();
     });
 
     /* #1484 M2 — on the TIMELINE, which still lists the fold's rows. The activity
@@ -1174,14 +1174,14 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
       // `activityLabels` (keyed on `x@2`) cannot name.
       const timeline = await screen.findByRole('region', { name: 'Timeline' });
       expect(within(timeline).getByText('x')).toHaveAttribute('title', 'x');
-      expect(within(timeline).queryByText('HTTP Request 1')).not.toBeInTheDocument();
+      expect(within(timeline).queryByText('HTTP request 1')).not.toBeInTheDocument();
     });
 
     it('names the drawer by the activity, with the id inside it', async () => {
       useRunStreamMock.mockReturnValue(failedStream());
       renderWithRouter(<RunDetailPage runId="run_1" />);
 
-      const panel = await openDrawer('HTTP Request 1');
+      const panel = await openDrawer('HTTP request 1');
       // The id the panel's `${nodes.<id>…}` expressions and the event feed use.
       expect(within(panel).getByText('greet')).toBeInTheDocument();
     });
@@ -1209,7 +1209,7 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
       }),
     );
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    const panel = await openDrawer('HTTP Request 1');
+    const panel = await openDrawer('HTTP request 1');
     expect(panel.querySelector('#node-detail-output-values')?.textContent).toBe(
       JSON.stringify(JSON.parse('{"body":"hello","status":200}'), null, 2),
     );
@@ -1238,7 +1238,7 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
       }),
     );
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    const panel = await openDrawer('HTTP Request 1');
+    const panel = await openDrawer('HTTP request 1');
     expect(within(panel).getByText(/without a machine-readable class/i)).toBeInTheDocument();
   });
 
@@ -1268,9 +1268,9 @@ describe('RunDetailPage — U24 the failure class and the activity run drawer', 
       }),
     );
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    const row = await activityRow('HTTP Request 1');
+    const row = await activityRow('HTTP request 1');
     expect(cellOf(row, 'Activity')).toHaveAttribute('title', 'greet@1');
-    const panel = await openDrawer('HTTP Request 1');
+    const panel = await openDrawer('HTTP request 1');
     expect(panel.querySelector('#node-detail-output-values')?.textContent).toBe(
       JSON.stringify(JSON.parse('{"body":"one item"}'), null, 2),
     );
@@ -1416,7 +1416,7 @@ describe('RunDetailPage — a rerun’s COPIED frontier is named as copied (#918
     useRunStreamMock.mockReturnValue(reseeded());
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
-    const copied = cellOf(await activityRow('HTTP Request 1'), 'Status');
+    const copied = cellOf(await activityRow('HTTP request 1'), 'Status');
     expect(copied).toHaveTextContent('reused');
     expect(copied).not.toHaveTextContent('success');
   });
@@ -1425,7 +1425,7 @@ describe('RunDetailPage — a rerun’s COPIED frontier is named as copied (#918
     useRunStreamMock.mockReturnValue(reseeded());
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
-    const panel = await openDrawer('HTTP Request 1');
+    const panel = await openDrawer('HTTP request 1');
 
     // The defect itself: before #918 there was no Outputs section at all here,
     // over a value `${nodes.greet.output.status}` resolves against downstream.
@@ -1455,11 +1455,11 @@ describe('RunDetailPage — a rerun’s COPIED frontier is named as copied (#918
     serveActivityRuns([skippedRow('never')]);
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
-    const skipped = cellOf(await activityRow('HTTP Request 2'), 'Status');
+    const skipped = cellOf(await activityRow('HTTP request 2'), 'Status');
     expect(skipped).toHaveTextContent('skipped');
     expect(skipped).not.toHaveTextContent('reused');
 
-    const panel = await openDrawer('HTTP Request 2');
+    const panel = await openDrawer('HTTP request 2');
     expect(within(panel).queryByText(/reused its result from run/)).not.toBeInTheDocument();
     /* `never` is downstream of a failure edge the copied `greet` did not take,
        so the reseed leaves it SKIPPED rather than merely unstarted (#1008). */
@@ -1489,7 +1489,7 @@ describe('RunDetailPage — U24 the states a single well-formed failure does not
       }),
     );
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    const panel = await openDrawer('HTTP Request 1');
+    const panel = await openDrawer('HTTP request 1');
     expect(within(panel).getByText(/reports another run/i)).toBeInTheDocument();
   });
 
@@ -1511,7 +1511,7 @@ describe('RunDetailPage — U24 the states a single well-formed failure does not
       }),
     );
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    const panel = await openDrawer('HTTP Request 1');
+    const panel = await openDrawer('HTTP request 1');
     expect(within(panel).getByText('child pipeline is archived')).toBeInTheDocument();
     expect(within(panel).queryByText(/reports another run/i)).not.toBeInTheDocument();
   });
@@ -1547,11 +1547,11 @@ describe('RunDetailPage — U24 the states a single well-formed failure does not
       }),
     );
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    expect(cellOf(await activityRow('HTTP Request 1'), 'Error')).toHaveTextContent(
+    expect(cellOf(await activityRow('HTTP request 1'), 'Error')).toHaveTextContent(
       'throttled (transient · rate_limit)',
     );
     // The held attempt's drawer still spells the class out.
-    const panel = await openDrawer('HTTP Request 1');
+    const panel = await openDrawer('HTTP request 1');
     expect(within(panel).getByText('rate_limit')).toBeInTheDocument();
   });
 
@@ -1568,7 +1568,7 @@ describe('RunDetailPage — U24 the states a single well-formed failure does not
     });
     useRunStreamMock.mockReturnValue(stream({ events: [dispatched] }));
     const { rerender } = renderWithRouter(<RunDetailPage runId="run_1" />);
-    expect(within(await openDrawer('HTTP Request 1')).getByText('running')).toBeInTheDocument();
+    expect(within(await openDrawer('HTTP request 1')).getByText('running')).toBeInTheDocument();
 
     useRunStreamMock.mockReturnValue(
       stream({
@@ -1593,7 +1593,7 @@ describe('RunDetailPage — U24 the states a single well-formed failure does not
     );
     // The rows are re-read as the log grows, a throttle step behind it.
     await waitFor(() => {
-      const panel = screen.getByRole('complementary', { name: /Node HTTP Request 1/ });
+      const panel = screen.getByRole('complementary', { name: /Node HTTP request 1/ });
       expect(within(panel).getByText('failure')).toBeInTheDocument();
       expect(within(panel).getByText('auth')).toBeInTheDocument();
     });
@@ -1635,8 +1635,8 @@ describe('RunDetailPage — how long a node took (#867)', () => {
     serveActivityRuns([skippedRow('never')]);
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
-    expect(cellOf(await activityRow('HTTP Request 1'), 'Duration')).toHaveTextContent('3.2s');
-    expect(cellOf(await activityRow('HTTP Request 2'), 'Duration')).toHaveTextContent(/^$/);
+    expect(cellOf(await activityRow('HTTP request 1'), 'Duration')).toHaveTextContent('3.2s');
+    expect(cellOf(await activityRow('HTTP request 2'), 'Duration')).toHaveTextContent(/^$/);
   });
 
   it('the panel says a node was SKIPPED, not that it has yet to start (#1008)', async () => {
@@ -1678,7 +1678,7 @@ describe('RunDetailPage — how long a node took (#867)', () => {
     serveActivityRuns([skippedRow('never')]);
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
-    const panel = await openDrawer('HTTP Request 2');
+    const panel = await openDrawer('HTTP request 2');
     expect(
       within(panel).getByText(/routed around, so it was never going to run/i),
     ).toBeInTheDocument();
@@ -1718,7 +1718,7 @@ describe('RunDetailPage — how long a node took (#867)', () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
     const timeline = await screen.findByRole('region', { name: 'Timeline' });
-    const pending = (await within(timeline).findByText('HTTP Request 2')).closest('li')!;
+    const pending = (await within(timeline).findByText('HTTP request 2')).closest('li')!;
     expect(pending).toHaveTextContent(/— has not started$/);
     expect(pending).not.toHaveTextContent(/skipped/);
   });
@@ -1742,7 +1742,7 @@ describe('RunDetailPage — how long a node took (#867)', () => {
       }),
     );
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    const panel = await openDrawer('HTTP Request 1');
+    const panel = await openDrawer('HTTP request 1');
     expect(within(panel).getByText(/has not settled yet/i)).toBeInTheDocument();
   });
 
@@ -1768,7 +1768,7 @@ describe('RunDetailPage — how long a node took (#867)', () => {
         1_000,
       ),
     ];
-    const durationCell = async () => cellOf(await activityRow('HTTP Request 1'), 'Duration');
+    const durationCell = async () => cellOf(await activityRow('HTTP request 1'), 'Duration');
 
     beforeEach(() => {
       vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'], now: 11_000 });
@@ -1784,7 +1784,7 @@ describe('RunDetailPage — how long a node took (#867)', () => {
       expect(cell.textContent).toBe('10s so far');
 
       act(() => {
-        screen.getByRole('button', { name: 'HTTP Request 1' }).click();
+        screen.getByRole('button', { name: 'HTTP request 1' }).click();
       });
       const panel = screen.getByRole('complementary');
       expect(panel.querySelector('strong')?.textContent).toBe('10s so far');
@@ -1849,7 +1849,7 @@ describe('RunDetailPage — how long a node took (#867)', () => {
       }),
     );
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    const panel = await openDrawer('HTTP Request 1');
+    const panel = await openDrawer('HTTP request 1');
     expect(within(panel).getByText(/recorded end precedes the start/i)).toBeInTheDocument();
   });
 
@@ -1882,7 +1882,7 @@ describe('RunDetailPage — how long a node took (#867)', () => {
       }),
     );
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    const panel = await openDrawer('HTTP Request 1');
+    const panel = await openDrawer('HTTP request 1');
     // Wall-clock, park-inclusive, retry-hold-exclusive: the three facts that
     // stop this being read as execution time or as an LLM call's latency.
     // One activity run is one attempt, so it says THIS attempt, not the latest.
@@ -1916,7 +1916,7 @@ describe('RunDetailPage — #866 the drawer says what an attempt SPENT and which
   async function openPanel(events: EngineEvent[], index = 0) {
     useRunStreamMock.mockReturnValue(stream({ events: events.map((e) => envelope(e)) }));
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    return openDrawer('HTTP Request 1', index);
+    return openDrawer('HTTP request 1', index);
   }
 
   it('states a priced node’s cost, its model and its token usage', async () => {
@@ -2360,7 +2360,7 @@ describe('RunDetailPage — the cancel-run action (CX4)', () => {
     expect(within(dialog).queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
     expect(cancelRunMock).not.toHaveBeenCalled();
     const text = await answerConfirm(userEvent, 'accept');
-    expect(text).toContain('HTTP Request 1 — running');
+    expect(text).toContain('HTTP request 1 — running');
     expect(text).toContain('is not undone');
     expect(cancelRunMock).toHaveBeenCalledWith('run_1');
   });
@@ -3182,7 +3182,7 @@ describe('RunDetailPage — the parent a child run was called by', () => {
     const link = await screen.findByRole('link', { name: 'Caller pipe' });
     expect(link).toHaveAttribute('href', '/monitor/runs/run_parent');
     expect(link).toHaveAttribute('title', 'run_parent');
-    expect(screen.getByText('Execute Pipeline', { exact: false })).toBeInTheDocument();
+    expect(screen.getByText('Execute pipeline', { exact: false })).toBeInTheDocument();
   });
 
   /* #1541 — and by the activity that called it, named as the PARENT's editor
@@ -3212,7 +3212,7 @@ describe('RunDetailPage — the parent a child run was called by', () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
     await screen.findByRole('link', { name: 'Caller pipe' });
     const parentFact = screen.getByText('Parent', { selector: 'dt' }).nextElementSibling;
-    await waitFor(() => expect(parentFact).toHaveTextContent(/^Caller pipe · HTTP Request 2$/));
+    await waitFor(() => expect(parentFact).toHaveTextContent(/^Caller pipe · HTTP request 2$/));
   });
 
   it("names the calling activity by its id when the parent's version will not read", async () => {
@@ -3289,7 +3289,7 @@ describe('RunDetailPage — a running node shows its latest streamed value (#129
   it('reads the tick on the activity run while it is running', async () => {
     useRunStreamMock.mockReturnValue(stream({ events: events(false) }));
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    const status = cellOf(await activityRow('HTTP Request 1'), 'Status');
+    const status = cellOf(await activityRow('HTTP request 1'), 'Status');
     expect(status).toHaveTextContent('running');
     expect(status).toHaveTextContent(
       'progress: {"rowsRead":1000,"rowsInFlight":1000,"rowsFailed":0}',
@@ -3299,7 +3299,7 @@ describe('RunDetailPage — a running node shows its latest streamed value (#129
   it('drops the tick once the attempt settles — the outputs are the truth', async () => {
     useRunStreamMock.mockReturnValue(stream({ events: events(true) }));
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    expect(cellOf(await activityRow('HTTP Request 1'), 'Status')).toHaveTextContent('success');
+    expect(cellOf(await activityRow('HTTP request 1'), 'Status')).toHaveTextContent('success');
     expect(activityRunsSection()).not.toHaveTextContent(/rowsInFlight/);
   });
 });
@@ -3337,7 +3337,7 @@ describe('RunDetailPage — a secure node says its output is withheld (#1312)', 
   it('says so on the running activity run, and never prints the marker', async () => {
     useRunStreamMock.mockReturnValue(stream({ events: events(false) }));
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    const status = cellOf(await activityRow('HTTP Request 1'), 'Status');
+    const status = cellOf(await activityRow('HTTP request 1'), 'Status');
     expect(status).toHaveTextContent('output withheld: this node is secure');
     // The activity runs, not the raw event log below them, which shows the
     // recorded event verbatim by design.
@@ -3347,7 +3347,7 @@ describe('RunDetailPage — a secure node says its output is withheld (#1312)', 
   it('says nothing streamed once the attempt has settled, and still never prints the marker', async () => {
     useRunStreamMock.mockReturnValue(stream({ events: events(true) }));
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    expect(cellOf(await activityRow('HTTP Request 1'), 'Status')).toHaveTextContent('success');
+    expect(cellOf(await activityRow('HTTP request 1'), 'Status')).toHaveTextContent('success');
     expect(activityRunsSection()).not.toHaveTextContent('output withheld');
     expect(activityRunsSection()).not.toHaveTextContent('[redacted: secure]');
   });
@@ -3597,7 +3597,7 @@ describe('RunDetailPage — the failure banner', () => {
     useRunStreamMock.mockReturnValue(stream({ events: failedLog, phase: 'closed' }));
     renderWithRouter(<RunDetailPage runId="run_1" />);
     const banner = await screen.findByRole('group', { name: 'Failure' });
-    expect(banner).toHaveTextContent('Failed: HTTP Request 1');
+    expect(banner).toHaveTextContent('Failed: HTTP request 1');
     await waitFor(() => expect(banner).toHaveTextContent('boom'));
     await userEvent.click(within(banner).getByRole('button', { name: 'Show activity' }));
     const current = document.querySelector('.activity-runs__table tr[aria-current="true"]');
@@ -3650,7 +3650,7 @@ describe('RunDetailPage — the failure banner', () => {
       { name: 'Failure' },
       { timeout: FAILURE_BANNER_HOLD_MS + 2_000 },
     );
-    expect(banner).toHaveTextContent('Failed: HTTP Request 1');
+    expect(banner).toHaveTextContent('Failed: HTTP request 1');
   });
 
   it('still names what failed when the activity runs will not read', async () => {
@@ -3658,7 +3658,7 @@ describe('RunDetailPage — the failure banner', () => {
     useRunStreamMock.mockReturnValue(stream({ events: failedLog, phase: 'closed' }));
     renderWithRouter(<RunDetailPage runId="run_1" />);
     const banner = await screen.findByRole('group', { name: 'Failure' });
-    expect(banner).toHaveTextContent('Failed: HTTP Request 1');
+    expect(banner).toHaveTextContent('Failed: HTTP request 1');
   });
 
   it('waits for the replay before naming anything', async () => {
@@ -3741,7 +3741,7 @@ describe('RunDetailPage — the activity run detail drawer (#1484 M2)', () => {
   it("shows the item clicked, with that item's own input and outputs", async () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
     const second = await openRow(1);
-    const drawer = screen.getByRole('complementary', { name: 'Node HTTP Request 1' });
+    const drawer = screen.getByRole('complementary', { name: 'Node HTTP request 1' });
     expect(drawer.closest('.run-drawer')).not.toBeNull();
     expect(drawer).toHaveTextContent('attempt 1 · Item 2 of 2 · b.csv');
     expect(drawer).toHaveTextContent('b.csv');
@@ -3753,7 +3753,7 @@ describe('RunDetailPage — the activity run detail drawer (#1484 M2)', () => {
     expect(drawer).toHaveFocus();
 
     await openRow(0);
-    const first = screen.getByRole('complementary', { name: 'Node HTTP Request 1' });
+    const first = screen.getByRole('complementary', { name: 'Node HTTP request 1' });
     expect(first).toHaveTextContent('Item 1 of 2 · a.csv');
     expect(first).not.toHaveTextContent('b.csv');
     expect(second).toHaveAttribute('aria-expanded', 'false');

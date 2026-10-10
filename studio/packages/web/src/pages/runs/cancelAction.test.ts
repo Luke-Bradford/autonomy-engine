@@ -12,12 +12,12 @@ describe('canCancelRun (CX4 #1320)', () => {
 describe('cancelConfirmMessage (CX4 #1320)', () => {
   it('names each node the cancel stops, in the page’s own status words', () => {
     const text = cancelConfirmMessage([
-      { name: 'HTTP Request 1', status: 'dispatched' },
+      { name: 'HTTP request 1', status: 'dispatched' },
       { name: 'Wait 1', status: 'wait_pending' },
       { name: 'Later', status: 'pending' },
       { name: 'Done', status: 'success' },
     ]);
-    expect(text).toContain('HTTP Request 1 — running');
+    expect(text).toContain('HTTP request 1 — running');
     expect(text).toContain('Wait 1 — waiting (timer)');
     // Not in progress: neither is named as something the cancel stops.
     expect(text).not.toContain('Later');

@@ -1,7 +1,7 @@
 import { type Page } from '@playwright/test';
 
 /**
- * The Factory Resources pane (U4), addressed the way a user perceives it.
+ * The Factory resources pane (U4), addressed the way a user perceives it.
  *
  * Promoted out of `factory-resources.spec.ts` when `bug-sweep.spec.ts` became
  * the SECOND spec to need the tree — for the reason `support/theme.ts` and

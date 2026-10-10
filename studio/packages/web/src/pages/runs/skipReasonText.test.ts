@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { skipReasonText } from './skipReasonText';
 
 const NAMES: Record<string, string> = {
-  a: 'Copy Data 1',
+  a: 'Copy data 1',
   c: 'If 1',
   lp: 'Until 1',
   fe: 'ForEach 1',
@@ -12,7 +12,7 @@ const nameOf = (id: string) => NAMES[id] ?? null;
 describe('#1484 M2 skipReasonText', () => {
   it('names the activity that failed, by its name in the version that ran', () => {
     expect(skipReasonText({ kind: 'upstream', from: 'a', outcome: 'failure' }, nameOf)).toBe(
-      'upstream failed: Copy Data 1',
+      'upstream failed: Copy data 1',
     );
   });
 
@@ -24,10 +24,10 @@ describe('#1484 M2 skipReasonText', () => {
 
   it('reads a failure handler that was not needed as such, not as an error', () => {
     expect(skipReasonText({ kind: 'upstream', from: 'a', outcome: 'success' }, nameOf)).toBe(
-      'not needed: Copy Data 1 succeeded',
+      'not needed: Copy data 1 succeeded',
     );
     expect(skipReasonText({ kind: 'upstream', from: 'a', outcome: 'skipped' }, nameOf)).toBe(
-      'upstream skipped: Copy Data 1',
+      'upstream skipped: Copy data 1',
     );
   });
 
@@ -36,10 +36,10 @@ describe('#1484 M2 skipReasonText', () => {
       'loop timed out: Until 1',
     );
     expect(skipReasonText({ kind: 'doomed', containerId: 'fe', blame: 'a@1' }, nameOf)).toBe(
-      'ForEach stopped: Copy Data 1 failed',
+      'ForEach stopped: Copy data 1 failed',
     );
     expect(skipReasonText({ kind: 'doomed', containerId: 'fe', blame: 'a' }, nameOf)).toBe(
-      'ForEach stopped: Copy Data 1 failed',
+      'ForEach stopped: Copy data 1 failed',
     );
   });
 

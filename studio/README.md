@@ -1,4 +1,4 @@
-# Autonomy Studio
+# Autonomy studio
 
 A config-driven, open-source harness for building and running AI-automation
 pipelines — author a pipeline as a graph of activities, connect an LLM or CLI

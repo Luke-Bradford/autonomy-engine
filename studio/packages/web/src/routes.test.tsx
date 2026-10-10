@@ -616,7 +616,7 @@ describe('route tree', () => {
     expect(page().getByText('/nope/not/a/route')).toBeInTheDocument();
     expect(page().getByRole('link', { name: 'Go to Home' })).toBeInTheDocument();
     expect(router.state.location.pathname).toBe('/nope/not/a/route');
-    await waitFor(() => expect(document.title).toBe('Not found — autonomy studio'));
+    await waitFor(() => expect(document.title).toBe('Not found — Autonomy studio'));
   });
 
   /**
@@ -802,10 +802,10 @@ describe('shell chrome over the real route tree', () => {
    * is the NAME the page published, never the id in the URL.
    */
   it.each([
-    ['/', 'Home — autonomy studio'],
-    ['/manage/triggers', 'Triggers — Manage — autonomy studio'],
-    ['/author/pipelines/pl_42', 'Pipeline pl_42 — Author — autonomy studio'],
-    ['/monitor/runs/run_42', 'Nightly load · run run_42 — Monitor — autonomy studio'],
+    ['/', 'Home — Autonomy studio'],
+    ['/manage/triggers', 'Triggers — Manage — Autonomy studio'],
+    ['/author/pipelines/pl_42', 'Pipeline pl_42 — Author — Autonomy studio'],
+    ['/monitor/runs/run_42', 'Nightly load · run run_42 — Monitor — Autonomy studio'],
   ])('titles %s as %j', async (path, expected) => {
     renderAt(path);
     await waitFor(() => expect(document.title).toBe(expected));
@@ -835,7 +835,7 @@ describe('shell chrome over the real route tree', () => {
     expect(leaf()).toBe('Run run_42');
     // AppShell writes the title in an effect, which may run after the heading
     // has committed (#1536).
-    await waitFor(() => expect(document.title).toBe('Run run_42 — Monitor — autonomy studio'));
+    await waitFor(() => expect(document.title).toBe('Run run_42 — Monitor — Autonomy studio'));
   });
 
   /**

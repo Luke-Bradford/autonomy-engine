@@ -67,7 +67,7 @@ test('#866 — a node drill-in states its spend, and never invents a figure', as
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
 
-  const panel = await openActivity(page, 'Agent Task 1');
+  const panel = await openActivity(page, 'Agent task 1');
 
   await expect(panel.getByRole('heading', { name: 'Cost & usage' })).toBeVisible();
   // A KNOWN zero, said as one.

@@ -199,7 +199,7 @@ export const pipelines = sqliteTable(
     // pre-S6b rows are genuinely uncapped, so the nullable ADD COLUMN backfill
     // is truthful, not manufactured (#473's lesson does not apply).
     concurrency: integer('concurrency'),
-    // #1380 — the Factory Resources folder. NULL = top level, which every
+    // #1380 — the Factory resources folder. NULL = top level, which every
     // pre-#1380 pipeline truthfully is. Organisational, never behavioural, so
     // it is on the mutable row: moving a pipeline must not mint a version.
     folder: text('folder'),

@@ -895,7 +895,7 @@ describe('runs routes (read-only)', () => {
   });
 
   describe('#1484 M2 — GET /api/runs/:id/activity-runs', () => {
-    /** A parent whose one Execute Pipeline node called `childId`, as the log
+    /** A parent whose one Execute pipeline node called `childId`, as the log
      * records it. */
     function seedCaller(childVersionId: string) {
       const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'Caller' });
@@ -936,7 +936,7 @@ describe('runs routes (read-only)', () => {
       });
     }
 
-    it("names the run an Execute Pipeline attempt called, from the caller's own runs", async () => {
+    it("names the run an Execute pipeline attempt called, from the caller's own runs", async () => {
       const childPipeline = createPipeline(app.db, { ownerId: 'local', name: 'Load orders' });
       const childVersion = createPipelineVersion(app.db, {
         pipelineId: childPipeline.id,
