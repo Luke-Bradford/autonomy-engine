@@ -84,7 +84,7 @@ export function PolicyEditor({
             stored={policy?.retry}
             parse={parseWholeNumber}
             placeholder="no retry"
-            hint="Times a transient failure is retried after the first attempt. 0 never retries; blank leaves it unset."
+            about="Times a transient failure is retried after the first attempt. 0 never retries; blank leaves it unset."
             onCommit={(retry) => set({ retry })}
           />
         </FieldCell>
@@ -94,7 +94,7 @@ export function PolicyEditor({
             stored={policy?.retryIntervalSeconds}
             parse={parseWholeNumber}
             placeholder={String(DEFAULT_RETRY_INTERVAL_SECONDS)}
-            hint={
+            about={
               `Wait between attempts, ${DEFAULT_RETRY_INTERVAL_SECONDS}–${MAX_RETRY_INTERVAL_SECONDS}. ` +
               `Blank waits ${DEFAULT_RETRY_INTERVAL_SECONDS}s. A provider's Retry-After, when it ` +
               `sends one, is used instead (never less than ${DEFAULT_RETRY_INTERVAL_SECONDS}s).`

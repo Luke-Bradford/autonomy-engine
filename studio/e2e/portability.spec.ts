@@ -316,8 +316,15 @@ test.describe('#959 portability', () => {
 
     const rows = page.getByRole('row').filter({ hasText: name });
 
+    // #1594 OR40 S3c-2 — what the picker is for is its `?` note, and its description.
+    await expect(page.getByLabel('Store it in', { exact: true })).toHaveAccessibleDescription(
+      /names the connection it was exported from/,
+    );
+
     // 1. Into a CHOSEN store — the cross-workspace path.
-    await page.getByLabel('Store it in').selectOption({ label: `${destStore} (File system)` });
+    await page
+      .getByLabel('Store it in', { exact: true })
+      .selectOption({ label: `${destStore} (File system)` });
     await page.getByLabel('Export file').setInputFiles(file as string);
     await expect(page.getByRole('status')).toContainText(`Imported dataset “${name}”`);
     await expect(rows).toHaveCount(2);
@@ -325,7 +332,7 @@ test.describe('#959 portability', () => {
 
     // 2. With no choice — resolved by identity to the store it came from.
     await page
-      .getByLabel('Store it in')
+      .getByLabel('Store it in', { exact: true })
       .selectOption({ label: 'The connection it was exported from' });
     await page.getByLabel('Export file').setInputFiles(file as string);
     await expect(rows).toHaveCount(3);

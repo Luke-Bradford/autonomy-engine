@@ -581,7 +581,6 @@ function GlobalParamForm({
           )}
         </LabelledControl>
         {errorLine('value')}
-        <p className="page-hint">Cleartext — never a credential.</p>
         <LabelledControl label="Description">
           {(id) => (
             <input

@@ -27,7 +27,7 @@ import {
   RowTable,
   type RowTableColumn,
 } from '../../lib/form/RowTable';
-import { HelpDisclosure } from '../../lib/HelpDisclosure';
+import { AboutHelp } from '../../lib/HelpDisclosure';
 import { FieldError } from '../../lib/form/FieldError';
 import { fieldAttrs } from '../../lib/form/fieldValidation';
 
@@ -268,9 +268,9 @@ export function ConfigFieldControl({
   // wraps the box, so there is no label row to put a `?` in.
   const help =
     hintBody === null ? undefined : (
-      <HelpDisclosure label={`About ${label}`} noteId={hintId} inline>
+      <AboutHelp name={label} noteId={hintId}>
         {hintBody}
-      </HelpDisclosure>
+      </AboutHelp>
     );
   const errorId = useId();
   const error = validation?.error;
@@ -754,9 +754,9 @@ export function ObjectListControl({
         <span id={labelId}>{label}</span>
         {required && <RequiredMark />}
         {help !== undefined && (
-          <HelpDisclosure label={`About ${label}`} noteId={help.id} inline>
+          <AboutHelp name={label} noteId={help.id}>
             {help.body}
-          </HelpDisclosure>
+          </AboutHelp>
         )}
       </div>
       {rows.length === 0 ? <p className="page-hint">No rows.</p> : null}

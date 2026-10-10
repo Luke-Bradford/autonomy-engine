@@ -626,13 +626,24 @@ export function TriggerForm({
 
         {form.mode === 'event' && (
           <>
-            <LabelledControl label="Event">
-              {(id) => (
+            <LabelledControl
+              label="Event"
+              about={{
+                name: 'Event',
+                note: (
+                  <>
+                    Fires when <code>POST /api/events</code> is called with this exact name. An
+                    enabled event trigger must carry one.
+                  </>
+                ),
+              }}
+            >
+              {(id, describedBy) => (
                 <input
                   id={id}
                   type="text"
                   value={form.event.name}
-                  {...validation.attrsFor('event.name', eventErrorId)}
+                  {...validation.attrsFor('event.name', eventErrorId, describedBy)}
                   onChange={(e) =>
                     onChange({ ...form, event: { ...form.event, name: e.target.value } })
                   }
@@ -642,10 +653,6 @@ export function TriggerForm({
               )}
             </LabelledControl>
             <FieldError id={eventErrorId} message={validation.errorFor('event.name')} />
-            <p className="page-hint">
-              Fires when <code>POST /api/events</code> is called with this exact name. An enabled
-              event trigger must carry one.
-            </p>
             {/* The subscription schema has a catchall, so one authored through the
               API can carry keys this form has no control for. Say so — otherwise
               it looks like there is nothing else there, and the name field is a

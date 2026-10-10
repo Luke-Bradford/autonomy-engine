@@ -134,7 +134,7 @@ test.describe('#1115 Manage → Datasets', () => {
     // A control that exists ONLY because the form read `table`'s own schema.
     await form(page).getByLabel('Table', { exact: true }).fill('orders');
     await form(page)
-      .getByLabel('Columns (JSON)')
+      .getByLabel('Columns (JSON)', { exact: true })
       .fill(JSON.stringify([{ name: 'id', type: 'integer', nullable: false }]));
     await form(page).getByRole('button', { name: 'Create dataset' }).click();
 

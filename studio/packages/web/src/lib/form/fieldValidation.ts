@@ -89,6 +89,11 @@ export function focusFirstInvalid(container: ParentNode): void {
   if (key !== undefined) focusField(container, key);
 }
 
+/** Ids for an `aria-describedby`, in order, skipping the absent; `undefined` if none. */
+export function joinIds(...ids: (string | undefined)[]): string | undefined {
+  return ids.filter((id) => id !== undefined && id !== '').join(' ') || undefined;
+}
+
 /**
  * #1396 — the attributes that make a control a field of the form's validation:
  * its key, an invalid mark, and its description (the error first, then any
@@ -114,12 +119,11 @@ export function fieldAttrs({
   'aria-describedby': string | undefined;
 } {
   const invalid = error !== undefined;
-  const ids = [invalid ? errorId : undefined, hintId].filter((id) => id !== undefined);
   return {
     'data-field': key,
     'data-invalid': invalid || undefined,
     ...(group ? {} : { 'aria-invalid': invalid }),
-    'aria-describedby': ids.length === 0 ? undefined : ids.join(' '),
+    'aria-describedby': joinIds(invalid ? errorId : undefined, hintId),
   };
 }
 
@@ -174,8 +178,11 @@ function keyOf(target: EventTarget | null): string | undefined {
 export interface FieldValidation {
   /** What to show beside a field now, or `undefined`. */
   errorFor: (key: string) => string | undefined;
-  /** `fieldAttrs` for a hand-written control: its key, its error now, and its error line's id. */
-  attrsFor: (key: string, errorId: string) => ReturnType<typeof fieldAttrs>;
+  /**
+   * `fieldAttrs` for a hand-written control: its key, its error now, its error
+   * line's id, and its hint's or `?` note's id (described after the error).
+   */
+  attrsFor: (key: string, errorId: string, hintId?: string) => ReturnType<typeof fieldAttrs>;
   /**
    * A refusal of input the browser could not read, in a control that is not
    * one of the form's fields (one carrying no `data-field`, or one `labelOf`
@@ -340,7 +347,8 @@ export function useFieldValidation(
   }, []);
 
   const attrsFor = useCallback(
-    (key: string, errorId: string) => fieldAttrs({ key, error: errorFor(key), errorId }),
+    (key: string, errorId: string, hintId?: string) =>
+      fieldAttrs({ key, error: errorFor(key), errorId, hintId }),
     [errorFor],
   );
 

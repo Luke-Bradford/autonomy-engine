@@ -27,11 +27,16 @@ export const FORM_SECTION_HINTS = {
   },
   secret: {
     basics: 'The name a node refers to this secret by.',
-    value: 'The value a node is given wherever it names this secret.',
+    // The field's own note too (#1594 OR40 S3c-2): the section holds the one
+    // field, so a second `?` would repeat the section's name, "About Value".
+    value:
+      'The value a node is given wherever it names this secret; once saved it can be replaced but never read back.',
   },
   globalParam: {
     basics: 'The name every pipeline reads this value by, and its type.',
-    value: 'The value every pipeline sees, and a note on what it is for.',
+    // The Value field's note too, for the reason the secret's gives.
+    value:
+      'The value every pipeline sees, which is cleartext and so never a credential, and a description of what it is for.',
   },
   trigger: {
     basics: 'What this trigger is called, and whether it is switched on.',

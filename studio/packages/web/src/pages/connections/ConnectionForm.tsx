@@ -552,19 +552,25 @@ export function ConnectionForm({
             onChange({ ...form, secret });
           }}
           placeholder={editing ? 'leave blank to keep the current secret' : 'optional'}
+          about={{
+            name: 'Secret',
+            // Never a `required` input: on edit blank means KEEP the stored
+            // secret, and on create the server accepts a secretless row (it
+            // derives `needs_secret` and stores it). This says what the kind
+            // DOES with one.
+            note: (
+              <>
+                {connectionKindRequiresSecret(form.kind)
+                  ? `Required — ${CONNECTION_KIND_LABELS[form.kind]} connections cannot dispatch without a secret. `
+                  : ''}
+                {CONNECTION_SECRET_USE[form.kind]}
+              </>
+            ),
+          }}
         />
         {/* #1605 — no `role`, for the reason the advisories above give: this
             form's single `role="status"` is the probe verdict. */}
         {secretNote !== null && <p className="page-hint">{secretNote}</p>}
-        {/* Never a `required` input: on edit blank means KEEP the stored secret,
-            and on create the server accepts a secretless row (it derives
-            `needs_secret` and stores it). This says what the kind DOES with one. */}
-        <p className="page-hint">
-          {connectionKindRequiresSecret(form.kind)
-            ? `Required — ${CONNECTION_KIND_LABELS[form.kind]} connections cannot dispatch without a secret. `
-            : ''}
-          {CONNECTION_SECRET_USE[form.kind]}
-        </p>
       </Section>
 
       <OverridableKeysSection

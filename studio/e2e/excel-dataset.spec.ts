@@ -159,7 +159,7 @@ test('#1215 — an excel dataset authors through derived controls, and copies in
     // REQUIRED by the form, and deliberately so: `[]` is a claim about the
     // store and never a stand-in for "not described yet".
     await form(page)
-      .getByLabel('Columns (JSON)')
+      .getByLabel('Columns (JSON)', { exact: true })
       .fill(
         '[{"name":"id","type":"integer","nullable":false},{"name":"name","type":"string","nullable":true}]',
       );

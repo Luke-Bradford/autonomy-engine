@@ -477,9 +477,6 @@ function SecretForm({
           field={validation.attrsFor('secret', valueErrorId)}
         />
         <FieldError id={valueErrorId} message={validation.errorFor('secret')} />
-        <p className="page-hint">
-          Write-only: once saved, the value can be replaced but never read back.
-        </p>
       </Section>
     </FormDrawer>
   );

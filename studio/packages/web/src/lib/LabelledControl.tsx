@@ -1,5 +1,7 @@
 import { useId } from 'react';
 import type { ReactNode } from 'react';
+import { AboutHelp } from './HelpDisclosure';
+import { joinIds } from './form/fieldValidation';
 
 /**
  * A `<select>` or `<textarea>` with its label, paired by `htmlFor`/`id` rather
@@ -21,40 +23,66 @@ export function LabelledControl({
   label,
   hint,
   help,
+  about,
   className,
   children,
 }: {
   label: ReactNode;
   /**
    * #1413 — a line under the control saying what the current choice means (a
-   * Kind picker's description). Its id is the render-prop's second argument,
-   * for the control's `aria-describedby`; `undefined` when there is no hint.
+   * Kind picker's description). Its id leads the render-prop's second
+   * argument, the control's `aria-describedby`.
    */
   hint?: string;
   /**
    * #1477 OR29 — a `?` (a `HelpDisclosure`) beside the label, for a field whose
-   * explanation sits behind it rather than under the control. A SIBLING of the
+   * explanation sits behind it rather than under the control. Built by a caller
+   * that owns the note's id (a config field shares it with its checkbox line and
+   * its `fieldAttrs`); otherwise use `about`, which owns it. A SIBLING of the
    * label, in a head row with it: inside the label, the `?`'s name would join
    * the control's, and a `<details>` may not sit in a label anyway.
    */
   help?: ReactNode;
+  /**
+   * #1594 OR40 S3c-2 — what the field is FOR, behind a `?` beside its label
+   * (labels, not prose): the `help` slot built here, named "About {name}", so
+   * a site needs no ids of its own. Its note joins the render-prop's second
+   * argument, so the control's description is unchanged by the move. A note
+   * about the field's current STATE (a preview, a refusal, an advisory) is not
+   * this: it stays a visible line, because it is not there to be looked up.
+   * Given with `help`, `about` is the `?` drawn.
+   */
+  about?: { name: string; note: ReactNode };
   className?: string;
-  children: (id: string, hintId: string | undefined) => ReactNode;
+  /** The second argument is the control's `aria-describedby`: the hint, then the note. */
+  children: (id: string, describedBy: string | undefined) => ReactNode;
 }) {
   const id = useId();
   const hintId = useId();
-  const shownHintId = hint === undefined ? undefined : hintId;
+  const aboutId = useId();
+  const describedBy = joinIds(
+    hint === undefined ? undefined : hintId,
+    about === undefined ? undefined : aboutId,
+  );
+  const helpSlot =
+    about === undefined ? (
+      help
+    ) : (
+      <AboutHelp name={about.name} noteId={aboutId}>
+        {about.note}
+      </AboutHelp>
+    );
   return (
     <div className={className === undefined ? 'labelled-control' : `labelled-control ${className}`}>
-      {help === undefined ? (
+      {helpSlot === undefined ? (
         <label htmlFor={id}>{label}</label>
       ) : (
         <div className="labelled-control__head help-row">
           <label htmlFor={id}>{label}</label>
-          {help}
+          {helpSlot}
         </div>
       )}
-      {children(id, shownHintId)}
+      {children(id, describedBy)}
       {hint !== undefined && (
         <p id={hintId} className="field-hint">
           {hint}

@@ -87,7 +87,10 @@ test.describe('#1396 the dataset form drawer', () => {
     const table = form(page).getByLabel('Table', { exact: true });
     await expect(table).toHaveAttribute('aria-required', 'true');
     await expect(table).toHaveAccessibleDescription(/bare identifier.*table/);
-    await expect(form(page).getByLabel('Columns (JSON)')).toHaveAttribute('aria-required', 'true');
+    await expect(form(page).getByLabel('Columns (JSON)', { exact: true })).toHaveAttribute(
+      'aria-required',
+      'true',
+    );
 
     // Sections, with Advanced closed on a new dataset.
     for (const section of ['Basics', 'Dataset', 'Columns']) {
@@ -195,7 +198,7 @@ test.describe('#1396 the dataset form drawer', () => {
     await form(page).getByLabel('Store').selectOption(store);
     await form(page).getByLabel('Kind').selectOption('table');
     await form(page).getByLabel('Table', { exact: true }).fill('orders');
-    await form(page).getByLabel('Columns (JSON)').fill('[]');
+    await form(page).getByLabel('Columns (JSON)', { exact: true }).fill('[]');
     await form(page).getByRole('button', { name: 'Create dataset' }).click();
     await expect(drawer(page)).toBeHidden();
     await expect(prompt(page)).toBeHidden();

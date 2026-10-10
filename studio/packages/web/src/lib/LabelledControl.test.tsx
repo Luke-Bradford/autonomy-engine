@@ -85,4 +85,39 @@ describe('LabelledControl (#1227)', () => {
     expect(bare.querySelector('.labelled-control__head')).toBeNull();
     expect(container.querySelector('.labelled-control > label')).toBeNull();
   });
+
+  // #1594 OR40 S3c-2 — a field's explanation behind a `?` beside its label: the
+  // note is the control's description, the `?` is named for the field, and the
+  // label's text (the control's name) is the label alone.
+  it('draws `about` as a ? beside the label whose note describes the control', () => {
+    const { container } = render(
+      <LabelledControl
+        label="Value"
+        about={{ name: 'Value', note: 'Cleartext, never a credential' }}
+      >
+        {(id, describedBy) => <input id={id} aria-describedby={describedBy} />}
+      </LabelledControl>,
+    );
+    const input = screen.getByLabelText('Value', { exact: true });
+    expect(input).toHaveAccessibleDescription('Cleartext, never a credential');
+    const summary = container.querySelector('.labelled-control__head > .help-disclosure > summary');
+    expect(summary?.getAttribute('aria-label')).toBe('About Value');
+    expect(container.querySelector('.field-hint')).toBeNull();
+    expect(container.querySelector('.page-hint')).toBeNull();
+  });
+
+  it('describes the control by its hint line and its ? note together', () => {
+    render(
+      <LabelledControl
+        label="Kind"
+        hint="A file on the server"
+        about={{ name: 'Kind', note: 'Fixed once saved' }}
+      >
+        {(id, describedBy) => <select id={id} aria-describedby={describedBy} />}
+      </LabelledControl>,
+    );
+    expect(screen.getByLabelText('Kind', { exact: true })).toHaveAccessibleDescription(
+      'A file on the server Fixed once saved',
+    );
+  });
 });

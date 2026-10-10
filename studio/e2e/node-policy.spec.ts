@@ -52,10 +52,10 @@ test.describe('#1312 — node run policy editor', () => {
     await expect(section).toHaveAccessibleDescription(
       'How this activity retries a transient failure, and what of it is kept out of the run log.',
     );
-    await section.getByLabel('Retries').fill('2');
-    await section.getByLabel('Retries').blur();
-    await section.getByLabel('Retry interval (seconds)').fill('60');
-    await section.getByLabel('Retry interval (seconds)').blur();
+    await section.getByLabel('Retries', { exact: true }).fill('2');
+    await section.getByLabel('Retries', { exact: true }).blur();
+    await section.getByLabel('Retry interval (seconds)', { exact: true }).fill('60');
+    await section.getByLabel('Retry interval (seconds)', { exact: true }).blur();
     await section.getByLabel('Secure output').check();
 
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -71,8 +71,10 @@ test.describe('#1312 — node run policy editor', () => {
     await page.locator('.react-flow__renderer').waitFor();
     await nodeById(page, 'a').click();
     await openGeneralTab(page);
-    await expect(policySection(page).getByLabel('Retries')).toHaveValue('2');
-    await expect(policySection(page).getByLabel('Retry interval (seconds)')).toHaveValue('60');
+    await expect(policySection(page).getByLabel('Retries', { exact: true })).toHaveValue('2');
+    await expect(
+      policySection(page).getByLabel('Retry interval (seconds)', { exact: true }),
+    ).toHaveValue('60');
     await expect(policySection(page).getByLabel('Secure output')).toBeChecked();
     await expect(policySection(page).getByLabel('Secure input')).not.toBeChecked();
 
@@ -91,14 +93,14 @@ test.describe('#1312 — node run policy editor', () => {
     const save = page.getByRole('button', { name: 'Save version' });
     // An interval with no retry: `StrictNodeSchema.policy` refuses it, which
     // `validatePipelineDoc` never checks — this is the gate #1312 adds.
-    await section.getByLabel('Retry interval (seconds)').fill('60');
-    await section.getByLabel('Retry interval (seconds)').blur();
+    await section.getByLabel('Retry interval (seconds)', { exact: true }).fill('60');
+    await section.getByLabel('Retry interval (seconds)', { exact: true }).blur();
     await expect(section.getByText(/has no effect without retry/)).toBeVisible();
     await expect(page.locator('.badge-list')).toContainText('has no effect without retry');
     await expect(save).toBeDisabled();
 
-    await section.getByLabel('Retries').fill('1');
-    await section.getByLabel('Retries').blur();
+    await section.getByLabel('Retries', { exact: true }).fill('1');
+    await section.getByLabel('Retries', { exact: true }).blur();
     await expect(section.getByText(/has no effect without retry/)).toHaveCount(0);
     await expect(save).toBeEnabled();
 

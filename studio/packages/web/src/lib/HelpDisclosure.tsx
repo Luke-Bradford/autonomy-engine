@@ -81,3 +81,25 @@ export function HelpDisclosure({
     </details>
   );
 }
+
+/**
+ * #1594 OR40 S3c-2 — the `?` for a named thing (a section, a field, an
+ * activity): "About {name}", its note anchored to the row it sits in. The one
+ * home of that convention, for `Section`, `LabelledControl`'s `about` and the
+ * config fields.
+ */
+export function AboutHelp({
+  name,
+  noteId,
+  children,
+}: {
+  name: string;
+  noteId: string;
+  children: ReactNode;
+}) {
+  return (
+    <HelpDisclosure label={`About ${name}`} noteId={noteId} inline>
+      {children}
+    </HelpDisclosure>
+  );
+}

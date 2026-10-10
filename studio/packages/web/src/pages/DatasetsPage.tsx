@@ -1002,8 +1002,18 @@ function DatasetForm({
               <RequiredMark />
             </>
           }
+          about={{
+            name: 'Columns (JSON)',
+            note: (
+              <>
+                An authoring aid that auto-map matches against, never a run input: a copy is gated
+                against the store’s actual columns, not this list. Write <code>[]</code> to state
+                that there are none.
+              </>
+            ),
+          }}
         >
-          {(id) => (
+          {(id, describedBy) => (
             <JsonEditor
               id={id}
               label="Columns (JSON)"
@@ -1012,15 +1022,10 @@ function DatasetForm({
               rows={6}
               aria-required
               placeholder='[{ "name": "id", "type": "integer", "nullable": false }]'
-              {...validation.attrsFor('columns', columnsErrorId)}
+              {...validation.attrsFor('columns', columnsErrorId, describedBy)}
             />
           )}
         </LabelledControl>
-        <p className="page-hint">
-          The schema this dataset DECLARES — an authoring aid that auto-map matches against, never a
-          run input. A copy is gated against the store’s actual columns, not this list. Write{' '}
-          <code>[]</code> to state that there are none.
-        </p>
         <FieldError id={columnsErrorId} message={validation.errorFor('columns')} />
       </Section>
 

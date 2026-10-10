@@ -35,11 +35,15 @@ function rows(scope: Locator, ids: string[]) {
         (l) => l.textContent?.trim() === name,
       )!;
       const control = (label as HTMLLabelElement).control!;
-      const row = label.parentElement!;
+      // A label with a `?` sits in a head row; the row is the field's.
+      const row = label.closest('.labelled-control') ?? label.parentElement!;
       // What starts the control column: the control, or the box holding it
       // (a kind picker's icon and select).
       const cell = [...row.children].find((c) => c.contains(control))!;
-      return { name, label: box(label), control: box(control), cell: box(cell), row: box(row) };
+      // A label with a `?` is measured as the pair: their head row is the
+      // label column's item.
+      const head = label.closest('.labelled-control__head') ?? label;
+      return { name, label: box(head), control: box(control), cell: box(cell), row: box(row) };
     });
   }, ids);
 }
@@ -95,18 +99,13 @@ for (const density of ['compact', 'comfortable'] as const) {
     const [file] = await rows(page.locator('section.field-form'), ['Export file']);
     expectLabelLeft('Connections import', file!);
 
-    // A secret drawer: the value row (input and Show in the control column),
-    // and the hint that follows its error slot, lined up with the control.
+    // A secret drawer: the value row (input and Show in the control column).
     await page.goto('/#/manage/secrets');
     await fluentRootReady(page);
     await page.getByRole('button', { name: 'New secret' }).click();
     const secret = page.locator('.form-drawer-body');
     const [value] = await rows(secret, ['Value']);
     expectLabelLeft('Secret drawer', value!);
-    const hintLeft = await secret
-      .getByText(/^Write-only/)
-      .evaluate((el) => el.getBoundingClientRect().left);
-    expect(hintLeft, 'Secret drawer: a hint after the error slot').toBeCloseTo(value!.cell.left, 0);
     await page.keyboard.press('Escape');
     await expect(secret).toHaveCount(0);
 
@@ -143,6 +142,18 @@ for (const density of ['compact', 'comfortable'] as const) {
     });
     expect(enabled.left, 'Enabled: at the control column').toBeCloseTo(name!.cell.left, 0);
     expect(enabled.wordsLeft - enabled.boxRight, 'Enabled: box, 8px, words').toBeCloseTo(8, 0);
+
+    // A note on a field's STATE stays a line (#1594 OR40 S3c-2), and lines up
+    // with the control: a tumbling trigger's locked Concurrency says why.
+    await drawer.getByRole('combobox', { name: 'Mode', exact: true }).selectOption('tumbling');
+    const [concurrency] = await rows(drawer, ['Concurrency']);
+    const noteLeft = await drawer
+      .getByText(/^A tumbling trigger must use Queue/)
+      .evaluate((el) => el.getBoundingClientRect().left);
+    expect(noteLeft, 'Trigger drawer: a sibling note at the control column').toBeCloseTo(
+      concurrency!.cell.left,
+      0,
+    );
 
     await expectQuiet(page, problems);
   });

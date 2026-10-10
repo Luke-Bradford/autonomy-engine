@@ -2,6 +2,7 @@ import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { FieldError } from '../../lib/form/FieldError';
+import { joinIds } from '../../lib/form/fieldValidation';
 
 export type DraftNumberParse<V extends number | undefined> =
   { ok: true; value: V } | { ok: false; reason: string };
@@ -28,20 +29,20 @@ export function DraftNumberField<V extends number | undefined>({
   stored,
   parse,
   onCommit,
-  hint,
+  about,
   placeholder,
 }: {
   label: string;
   stored: number | undefined;
   parse: (raw: string) => DraftNumberParse<V>;
   onCommit: (value: V) => void;
-  hint: ReactNode;
+  /** What the field means, behind a `?` beside its label (#1594 OR40 S3c-2). */
+  about: ReactNode;
   placeholder?: string;
 }) {
   const text = stored === undefined ? '' : String(stored);
   const [draft, setDraft] = useState(text);
   const [error, setError] = useState<string | null>(null);
-  const hintId = useId();
   const errorId = useId();
   /* Re-seed when the STORED value changes underneath the draft. Callers key the
      panel by element id, so switching elements remounts; an undo changes the
@@ -84,8 +85,8 @@ export function DraftNumberField<V extends number | undefined>({
 
   return (
     <>
-      <LabelledControl label={label}>
-        {(id) => (
+      <LabelledControl label={label} about={{ name: label, note: about }}>
+        {(id, describedBy) => (
           <input
             id={id}
             type="text"
@@ -95,7 +96,7 @@ export function DraftNumberField<V extends number | undefined>({
             placeholder={placeholder}
             value={draft}
             aria-invalid={error !== null}
-            aria-describedby={error !== null ? `${errorId} ${hintId}` : hintId}
+            aria-describedby={joinIds(error !== null ? errorId : undefined, describedBy)}
             onChange={(e) => {
               const raw = e.target.value;
               setDraft(raw);
@@ -110,9 +111,6 @@ export function DraftNumberField<V extends number | undefined>({
           />
         )}
       </LabelledControl>
-      <p id={hintId} className="page-hint">
-        {hint}
-      </p>
       {/* #1393 — a RESERVED slot, always mounted and a line tall, so an error
           arriving does not push every field below it down. It used to REPLACE
           the hint, which moved them by the difference in height. The alert is
