@@ -24,9 +24,9 @@ import { Section } from '../lib/Section';
 import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 import { RequiredMark } from '../lib/form/RequiredMark';
 import { FieldError } from '../lib/form/FieldError';
-import { FormErrors } from '../lib/form/FormErrors';
+import { FormErrors, LostSaveAlert } from '../lib/form/FormErrors';
 import { nameCheck, useFieldValidation, type FieldErrors } from '../lib/form/fieldValidation';
-import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
+import { couldNotSave, saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { SecretInput } from '../lib/form/SecretInput';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { payloadSignature } from './pipeline/configForm';
@@ -110,6 +110,8 @@ export function SecretsPage() {
     setForm,
     openForm,
     seq: formSeq,
+    lostSave,
+    saveFailedFor,
     guard,
     openerRef,
     closeWhere,
@@ -186,6 +188,7 @@ export function SecretsPage() {
         never read back.
       </p>
 
+      <LostSaveAlert message={lostSave} />
       {loadError && (
         <p role="alert" className="error">
           {loadError}
@@ -269,6 +272,7 @@ export function SecretsPage() {
             guard={guard}
             returnFocusTo={openerRef}
             onClose={drawer.requestClose}
+            onSaveFailed={saveFailedFor(formSeq)}
             onSaved={async () => {
               drawer.closeIfLatest(formSeq);
               await refresh();
@@ -306,6 +310,7 @@ function SecretForm({
   returnFocusTo,
   onClose,
   onSaved,
+  onSaveFailed,
 }: {
   form: FormState;
   onChange: (next: FormState) => void;
@@ -313,6 +318,8 @@ function SecretForm({
   returnFocusTo: RefObject<HTMLElement | null>;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
+  /** #1438 — every failed save, for the page to show if this form has gone by then. */
+  onSaveFailed?: (message: string) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -399,13 +406,14 @@ function SecretForm({
       // explanation belongs to the create path only. It is the NAME's problem,
       // so it is shown beside the Name (#1396).
       if (!replacing && err instanceof ApiError && err.status === 409) {
-        validation.showRefusedFields({
-          name:
-            `A secret named “${form.name}” already exists. ${caseRule} ` +
-            `Use Replace to change its value.`,
-        });
+        const taken =
+          `A secret named “${form.name}” already exists. ${caseRule} ` +
+          `Use Replace to change its value.`;
+        validation.showRefusedFields({ name: taken });
+        onSaveFailed?.(taken);
       } else {
         setError(saveRefusal(err, validation));
+        onSaveFailed?.(couldNotSave(form.name, err));
       }
       setSaving(false);
     }

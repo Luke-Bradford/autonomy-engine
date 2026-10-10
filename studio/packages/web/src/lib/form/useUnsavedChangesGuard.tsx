@@ -62,15 +62,26 @@ export function useUnsavedChangesGuard(
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [dirty]);
 
-  // A form that goes clean (saved, or closed some other way) has nothing left
-  // to ask about: a prompt held over from it must not greet the next form, and
-  // a route hold that has unmounted has already dropped its navigation.
-  // Reset during render (React's derived-state pattern) rather than in an
-  // effect, so the stale prompt is never painted even once.
-  if (!dirty && (held !== null || blocked !== null)) {
+  // #1438 — a form that goes clean while the prompt is up (its save landed, the
+  // record was deleted, the edits were undone by hand) has nothing left to ask
+  // about, and the prompt existed only to protect those edits. So whatever was
+  // held carries on, as Discard would have carried it on: the link the operator
+  // clicked, the other row they opened. Dropping it left their click doing
+  // nothing at all.
+  //
+  // A held route change is carried on by `RouteHold` itself, which stays
+  // mounted until it has (react-router's `proceed()` on a blocker that has
+  // unregistered throws: the router has forgotten it). A held in-page action
+  // is handed over during render (React's derived-state pattern), so the
+  // prompt is never painted for it, and run by the effect after.
+  const [carry, setCarry] = useState<{ action: () => void } | null>(null);
+  if (!dirty && held !== null) {
+    setCarry(held);
     setHeld(null);
-    setBlocked(null);
   }
+  useEffect(() => {
+    carry?.action();
+  }, [carry]);
 
   const request = useCallback(
     (action: () => void) => {
@@ -95,28 +106,43 @@ export function useUnsavedChangesGuard(
   }, [blocked]);
 
   return {
-    confirming: held !== null || blocked !== null,
+    // Only while dirty: a clean form's held route change is about to carry on
+    // (above), and the prompt must not be painted for it even once.
+    confirming: dirty && (held !== null || blocked !== null),
     request,
     discard,
     keep,
     // `false` mounts no blocker at all: even `useBlocker(false)` registers one,
     // and the router consults only one (#1476 — the editor's own leave guard).
     routeHold:
-      dirty && holdRoute !== false ? <RouteHold when={holdRoute} onBlocked={setBlocked} /> : null,
+      (dirty || blocked !== null) && holdRoute !== false ? (
+        <RouteHold when={holdRoute} release={!dirty} onBlocked={setBlocked} />
+      ) : null,
   };
 }
 
-/** Holds the route changes `when` names while mounted, and hands the held one up. */
+/**
+ * Holds the route changes `when` names while mounted, and hands the held one
+ * up. Once `release` (the form went clean), it lets the held one through and
+ * then reports that nothing is held.
+ */
 function RouteHold({
   when,
+  release,
   onBlocked,
 }: {
   when: boolean | BlockerFunction;
-  onBlocked: (blocker: Blocker) => void;
+  release: boolean;
+  onBlocked: (blocker: Blocker | null) => void;
 }) {
   const blocker = useBlocker(when);
   useEffect(() => {
-    if (blocker.state === 'blocked') onBlocked(blocker);
-  }, [blocker, onBlocked]);
+    if (blocker.state === 'blocked') {
+      if (release) blocker.proceed();
+      else onBlocked(blocker);
+    } else if (release) {
+      onBlocked(null);
+    }
+  }, [blocker, release, onBlocked]);
   return null;
 }

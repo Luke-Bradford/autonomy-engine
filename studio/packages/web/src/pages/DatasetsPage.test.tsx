@@ -612,9 +612,13 @@ describe('DatasetsPage', () => {
     renderWithDataRouter(<DatasetsPage />);
     await user.click(await screen.findByRole('button', { name: 'Edit Orders' }));
     expect(form()).toBeInTheDocument();
+    listMock.mockResolvedValue([]);
     await chooseRowAction(user, 'Orders', 'Delete');
     await answerConfirm(user, 'accept');
     await waitFor(() => expect(screen.queryByRole('form', { name: 'Dataset form' })).toBeNull());
+    // #1438 item 4 (#1470) — the deleted row's opener and ⋯ are gone, so focus
+    // goes to the page's create control rather than to <body>.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New dataset' })).toHaveFocus());
   });
 
   it('says a store is needed at all when there are no connections', async () => {

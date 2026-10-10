@@ -757,9 +757,15 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await user.click(await screen.findByRole('button', { name: 'Edit Doomed' }));
     expect(screen.getByRole('form', { name: 'Connection form' })).toBeInTheDocument();
+    listMock.mockResolvedValue([]);
     await chooseRowAction(user, 'Doomed', 'Delete');
     await answerConfirm(user, 'accept');
     await waitFor(() => expect(screen.queryByRole('form', { name: 'Connection form' })).toBeNull());
+    // #1438 item 4 (#1470) — the deleted row's opener and ⋯ are gone, so focus
+    // goes to the page's create control rather than to <body>.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'New connection' })).toHaveFocus(),
+    );
   });
 
   it('does not delete when confirmation is cancelled', async () => {
@@ -1802,7 +1808,7 @@ describe('the connection form drawer (#1396)', () => {
     expect(screen.getByLabelText('Name')).toHaveValue('Draft');
   });
 
-  it('a prompt raised during a save that then succeeds does not greet the next form', async () => {
+  it('a New held during a save that then succeeds carries on, with no prompt (#1438)', async () => {
     const save = deferred<ConnectionPublic>();
     createMock.mockReturnValue(save.promise);
     const user = userEvent.setup();
@@ -1816,10 +1822,11 @@ describe('the connection form drawer (#1396)', () => {
     expect(prompt()).toBeInTheDocument();
 
     await act(async () => save.resolve(conn({ name: 'Saved' })));
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    expect(prompt()).not.toBeInTheDocument();
-    await user.click(newButton);
-    expect(screen.getByRole('dialog', { name: 'New connection' })).toBeInTheDocument();
+    // The edits it held for are saved, so the operator's New is not dropped.
+    await waitFor(() =>
+      expect(screen.getByRole('dialog', { name: 'New connection' })).toBeInTheDocument(),
+    );
+    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
     expect(prompt()).not.toBeInTheDocument();
   });
 

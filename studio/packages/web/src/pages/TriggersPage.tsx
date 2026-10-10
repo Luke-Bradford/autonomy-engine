@@ -14,6 +14,7 @@ import { runDetailPath, runLinkLabel } from './runs/runPath';
 import { useBusyAction } from '../hooks/useBusyAction';
 import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import { deleteTrigger, fireTrigger, listTriggers, provisionWebhookSecret } from '../api/triggers';
+import { LostSaveAlert } from '../lib/form/FormErrors';
 import { useDrawerForm } from '../lib/form/useDrawerForm';
 import { TriggerModeName } from '../lib/KindName';
 import { useConfirm } from '../lib/confirm/useConfirm';
@@ -88,6 +89,8 @@ export function TriggersPage() {
     setForm,
     openForm,
     seq: formSeq,
+    lostSave,
+    saveFailedFor,
     guard,
     openerRef,
     closeWhere,
@@ -341,6 +344,7 @@ export function TriggersPage() {
         be bound to a pipeline version.
       </p>
 
+      <LostSaveAlert message={lostSave} />
       {loadError && (
         <p role="alert" className="error">
           {loadError}
@@ -540,6 +544,7 @@ export function TriggersPage() {
             guard={guard}
             returnFocusTo={openerRef}
             onClose={drawer.requestClose}
+            onSaveFailed={saveFailedFor(formSeq)}
             onSaved={async () => {
               drawer.closeIfLatest(formSeq);
               await refresh();

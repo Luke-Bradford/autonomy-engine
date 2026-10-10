@@ -1747,6 +1747,9 @@ describe('#1396 the trigger form drawer', () => {
     await waitFor(() => expect(screen.queryByRole('form', { name: 'Trigger form' })).toBeNull());
     expect(deleteMock).toHaveBeenCalledWith('trg_1');
     expect(prompt()).toBeNull();
+    // #1438 item 4 (#1470) — the deleted row's opener and ⋯ are gone, so focus
+    // goes to the page's create control rather than to <body>.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New trigger' })).toHaveFocus());
   });
 
   it('does not count a cron typed and then left for the recurrence builder', async () => {

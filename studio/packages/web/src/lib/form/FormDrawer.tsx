@@ -43,7 +43,12 @@ export function FormDrawer({
   guard: UnsavedChangesGuard;
   onRequestClose: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-  /** A save or test in flight: Close and Escape wait for it, as Cancel does. */
+  /**
+   * A save or test in flight: Close and Escape wait for it, as Cancel does, and
+   * the fields are inert (#1438) — anything typed after Save was pressed would
+   * be dropped when the drawer closes on success, and a test's verdict would
+   * describe values no longer on screen.
+   */
   busy?: boolean;
   /**
    * Where focus goes when the drawer closes. Defaults to whatever had focus
@@ -67,6 +72,19 @@ export function FormDrawer({
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const keepRef = useRef<HTMLButtonElement>(null);
+
+  // #1438 — making the body inert drops focus from the field the operator
+  // pressed Enter in. The last field focused is recorded on every focus, before
+  // inert can move it, and given focus back when the form is live again, unless
+  // focus has gone somewhere real since. Declared before the invalid-field
+  // effect below, so a refused save still lands on its field.
+  const lastFocused = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (busy) return;
+    const field = lastFocused.current;
+    const stranded = document.activeElement === null || document.activeElement === document.body;
+    if (stranded && field !== null && field.isConnected) field.focus();
+  }, [busy]);
 
   // The prompt takes focus while it asks, and gives it back to the form when it
   // goes: its buttons unmount, and focus left on <body> would put the drawer
@@ -117,7 +135,15 @@ export function FormDrawer({
         noValidate={validation !== undefined}
         {...validation?.formHandlers}
       >
-        <div className="form-drawer-body" ref={bodyRef}>
+        <div
+          className="form-drawer-body"
+          ref={bodyRef}
+          inert={busy}
+          aria-busy={busy || undefined}
+          onFocus={(event) => {
+            if (event.target instanceof HTMLElement) lastFocused.current = event.target;
+          }}
+        >
           {children}
         </div>
         <div className="form-drawer-footer">

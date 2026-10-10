@@ -16,6 +16,7 @@ import {
 import { deleteConfirmTriggerClause, type TriggerCheck } from './connections/dependentTriggers';
 import { deleteConfirmNodeClause, nodeCheckOf } from './connections/dependentNodes';
 import { ImportPanel } from './ImportPanel';
+import { LostSaveAlert } from '../lib/form/FormErrors';
 import { useDrawerForm } from '../lib/form/useDrawerForm';
 import { ConnectionKindName } from '../lib/KindName';
 import { ConnectionKindDrawer } from '../lib/ConnectionKindGallery';
@@ -53,6 +54,8 @@ export function ConnectionsPage() {
     setForm,
     openForm,
     seq: formSeq,
+    lostSave,
+    saveFailedFor,
     guard,
     openerRef,
     closeWhere,
@@ -301,6 +304,7 @@ export function ConnectionsPage() {
         Pipelines reference connections; secrets are stored encrypted and never shown again.
       </p>
 
+      <LostSaveAlert message={lostSave} />
       {loadError && (
         <p role="alert" className="error">
           {loadError}
@@ -429,6 +433,7 @@ export function ConnectionsPage() {
             guard={guard}
             returnFocusTo={openerRef}
             onClose={drawer.requestClose}
+            onSaveFailed={saveFailedFor(formSeq)}
             onSaved={async () => {
               drawer.closeIfLatest(formSeq);
               await refresh();

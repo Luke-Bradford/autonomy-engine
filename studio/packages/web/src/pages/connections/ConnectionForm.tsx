@@ -43,7 +43,7 @@ import { RequiredMark } from '../../lib/form/RequiredMark';
 import { FieldError } from '../../lib/form/FieldError';
 import { FormErrors } from '../../lib/form/FormErrors';
 import { nameCheck, useFieldValidation } from '../../lib/form/fieldValidation';
-import { saveRefusal, schemaRefusal } from '../../lib/form/saveErrors';
+import { couldNotSave, saveRefusal, schemaRefusal } from '../../lib/form/saveErrors';
 import { type UnsavedChangesGuard } from '../../lib/form/useDrawerForm';
 import { OverridableKeysSection } from '../OverridableKeysField';
 import { allowlistChanged, connectionAllowlistSubject } from '../overrideAllowlist';
@@ -72,6 +72,7 @@ export function ConnectionForm({
   returnFocusTo,
   onClose,
   onSaved,
+  onSaveFailed,
 }: {
   form: FormState;
   stored: ConnectionPublic | undefined;
@@ -85,6 +86,8 @@ export function ConnectionForm({
   onClose: () => void;
   /** Receives the row the server stored: the editor binds a created one. */
   onSaved: (saved: ConnectionPublic) => void | Promise<void>;
+  /** #1438 — every failed save, for the page to show if this form has gone by then. */
+  onSaveFailed?: (message: string) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -396,6 +399,7 @@ export function ConnectionForm({
       await onSaved(saved);
     } catch (err) {
       setError(saveRefusal(err, validation));
+      onSaveFailed?.(couldNotSave(form.name, err));
       setSaving(false);
     }
   }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { FIELD } from '../testing/fieldQuery';
 import { SecretsPage } from './SecretsPage';
@@ -325,6 +325,38 @@ describe('SecretsPage', () => {
       // delete, so focus goes to New secret rather than to <body>.
       await waitFor(() => expect(screen.getByRole('button', { name: 'New secret' })).toHaveFocus());
     });
+  });
+
+  /**
+   * #1438 — a save keeps running after its form has gone (Edit on another row,
+   * then Discard, while it is in flight). Its failure used to render into the
+   * unmounted form, where nobody saw it.
+   */
+  it('says on the page when a save fails after its drawer was discarded', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([secret(), secret({ id: 'sec_2', name: 'openai-key' })]);
+    let reject!: (err: unknown) => void;
+    rotateMock.mockReturnValue(
+      new Promise((_, rej) => {
+        reject = rej;
+      }),
+    );
+    renderWithDataRouter(<SecretsPage />);
+    await user.click(await screen.findByRole('button', { name: 'Replace stripe-key' }));
+    await user.type(screen.getByLabelText('Value', FIELD), 'sk_live_rotated');
+    await user.click(screen.getByRole('button', { name: 'Replace value' }));
+
+    await user.click(screen.getByRole('button', { name: 'Replace openai-key' }));
+    const prompt = screen.getByRole('alertdialog', { name: 'Unsaved changes' });
+    await user.click(within(prompt).getByRole('button', { name: 'Discard changes' }));
+    expect(screen.getByRole('heading', { name: /Replace value for openai-key/ })).toBeVisible();
+
+    await act(async () => reject(new ApiError(500, 'Internal Server Error', undefined)));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Could not save “stripe-key”: Internal Server Error');
+    // Not in the form now open, which is another secret's.
+    const form = screen.getByRole('form', { name: 'Secret form' });
+    expect(within(form).queryByRole('alert')).toBeNull();
   });
 
   /**

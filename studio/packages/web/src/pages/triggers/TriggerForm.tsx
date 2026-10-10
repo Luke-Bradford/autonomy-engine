@@ -45,7 +45,7 @@ import { FieldError } from '../../lib/form/FieldError';
 import { JsonEditor } from '../../lib/form/JsonEditor';
 import { FormErrors } from '../../lib/form/FormErrors';
 import { useFieldValidation } from '../../lib/form/fieldValidation';
-import { saveRefusal, schemaRefusal } from '../../lib/form/saveErrors';
+import { couldNotSave, saveRefusal, schemaRefusal } from '../../lib/form/saveErrors';
 import { type UnsavedChangesGuard } from '../../lib/form/useDrawerForm';
 import { KindSelect } from '../../lib/KindName';
 import { TRIGGER_MODE_ICONS } from '../../lib/kindIcons';
@@ -72,6 +72,7 @@ export function TriggerForm({
   returnFocusTo,
   onClose,
   onSaved,
+  onSaveFailed,
 }: {
   form: FormState;
   bindings: BindingOption[];
@@ -81,6 +82,8 @@ export function TriggerForm({
   returnFocusTo: React.RefObject<HTMLElement | null>;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
+  /** #1438 — every failed save, for the page to show if this form has gone by then. */
+  onSaveFailed?: (message: string) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -359,6 +362,7 @@ export function TriggerForm({
         await onSaved();
       } catch (err) {
         setError(saveRefusal(err, validation));
+        onSaveFailed?.(couldNotSave(form.name, err));
         setSaving(false);
       }
       return;
@@ -376,6 +380,7 @@ export function TriggerForm({
       await onSaved();
     } catch (err) {
       setError(saveRefusal(err, validation));
+      onSaveFailed?.(couldNotSave(form.name, err));
       setSaving(false);
     }
   }

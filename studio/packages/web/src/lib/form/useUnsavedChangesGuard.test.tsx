@@ -64,26 +64,90 @@ describe('useUnsavedChangesGuard — default hold (the resource forms)', () => {
   });
 });
 
-describe('useUnsavedChangesGuard — a page that goes clean while asking', () => {
-  it('drops the prompt and the held navigation (a save landed)', async () => {
+describe('useUnsavedChangesGuard — a page that goes clean while asking (#1438)', () => {
+  /** A guard whose dirtiness the test flips, as a save landing would. */
+  function mountFlippable(holdRoute?: typeof leavesPath) {
     let latest: UnsavedChangesGuard | null = null;
     let setDirty: (dirty: boolean) => void = () => {};
+    // Every render's prompt state while clean: `act` flushes effects, so the
+    // final state alone cannot show a prompt painted for one frame.
+    const promptedWhileClean: boolean[] = [];
     function Probe() {
       const [dirty, set] = useState(true);
       setDirty = set;
-      latest = useUnsavedChangesGuard(dirty, { holdRoute: leavesPath });
+      latest = useUnsavedChangesGuard(dirty, holdRoute === undefined ? {} : { holdRoute });
+      if (!dirty) promptedWhileClean.push(latest.confirming);
       return latest.routeHold;
     }
     const router = createMemoryRouter([{ path: '*', element: <Probe /> }], {
       initialEntries: ['/pipelines/p1'],
     });
     render(<RouterProvider router={router} />);
+    return {
+      router,
+      guard: () => latest!,
+      setDirty: (d: boolean) => setDirty(d),
+      promptedWhileClean,
+    };
+  }
+
+  it('drops the prompt and carries the held navigation on (a save landed)', async () => {
+    const { router, guard, setDirty, promptedWhileClean } = mountFlippable(leavesPath);
     await act(() => router.navigate('/pipelines'));
-    expect(latest!.confirming).toBe(true);
+    expect(guard().confirming).toBe(true);
+    expect(router.state.location.pathname).toBe('/pipelines/p1');
 
     act(() => setDirty(false));
-    expect(latest!.confirming).toBe(false);
-    expect(router.state.location.pathname).toBe('/pipelines/p1');
+    expect(guard().confirming).toBe(false);
+    await act(async () => {});
+    expect(router.state.location.pathname).toBe('/pipelines');
+    expect(promptedWhileClean.length).toBeGreaterThan(0);
+    expect(promptedWhileClean).not.toContain(true);
+  });
+
+  it('carries on a held navigation under the default hold too', async () => {
+    const { router, guard, setDirty } = mountFlippable();
+    await act(() => router.navigate('/connections'));
+    expect(guard().confirming).toBe(true);
+    act(() => setDirty(false));
+    await act(async () => {});
+    expect(router.state.location.pathname).toBe('/connections');
+    // The hold has let go: no blocker is left registered while clean.
+    expect(guard().routeHold).toBeNull();
+    // Clean now, so the next navigation is not held either.
+    await act(() => router.navigate('/datasets'));
+    expect(guard().confirming).toBe(false);
+    expect(router.state.location.pathname).toBe('/datasets');
+  });
+
+  it('runs a held in-page action once, without painting the prompt', async () => {
+    const { guard, setDirty } = mountFlippable();
+    const ran: string[] = [];
+    act(() => guard().request(() => ran.push('open row 2')));
+    expect(guard().confirming).toBe(true);
+    expect(ran).toEqual([]);
+
+    act(() => setDirty(false));
+    expect(guard().confirming).toBe(false);
+    expect(ran).toEqual(['open row 2']);
+    act(() => setDirty(true));
+    act(() => setDirty(false));
+    expect(ran).toEqual(['open row 2']);
+  });
+
+  it('never runs an action Keep dropped, and Discard runs its action once', () => {
+    const { guard, setDirty } = mountFlippable();
+    const ran: string[] = [];
+    act(() => guard().request(() => ran.push('kept away')));
+    act(() => guard().keep());
+    act(() => setDirty(false));
+    expect(ran).toEqual([]);
+
+    act(() => setDirty(true));
+    act(() => guard().request(() => ran.push('discarded into')));
+    act(() => guard().discard());
+    act(() => setDirty(false));
+    expect(ran).toEqual(['discarded into']);
   });
 });
 
