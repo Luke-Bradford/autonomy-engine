@@ -36,6 +36,14 @@ function pane(page: Page) {
   return page.getByRole('navigation', { name: 'Manage sections' });
 }
 
+/**
+ * The pane's scrolling body: what the pane track's width is. The `nav` itself
+ * also holds the resize separator (#1594 OR40 S5b), so it spans both tracks.
+ */
+function paneBody(page: Page) {
+  return pane(page).locator('.secondary-pane__body');
+}
+
 function paneToggle(page: Page) {
   return page.getByRole('button', { name: /navigation pane/ });
 }
@@ -67,7 +75,11 @@ test.describe('U3 secondary pane', () => {
     expect(tracks[3]).toBeGreaterThan(100);
 
     // The track is not merely reserved — the pane fills it.
-    expect((await pane(page).boundingBox())?.width).toBe(240);
+    expect((await paneBody(page).boundingBox())?.width).toBe(240);
+    // The separator is the nav's own, in the splitter track (#1594 OR40 S5b).
+    const separator = pane(page).getByRole('separator', { name: 'Resize navigation pane' });
+    expect((await separator.boundingBox())?.width).toBe(5);
+    expect((await pane(page).boundingBox())?.width).toBe(245);
     await expectQuiet(page, problems);
   });
 
@@ -160,7 +172,7 @@ test.describe('U3 pane splitter', () => {
     await page.mouse.up();
 
     await expect.poll(() => paneTrack(page)).toBe(300);
-    expect((await pane(page).boundingBox())?.width).toBe(300);
+    expect((await paneBody(page).boundingBox())?.width).toBe(300);
 
     // The POINTER path all the way to storage. The reload test below uses the
     // keyboard; both funnel through the same commit, but "and it sticks" was

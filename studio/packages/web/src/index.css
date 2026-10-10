@@ -161,7 +161,7 @@ body {
    `grid-template-rows` the U0 spike asks for — React Flow needs an explicitly
    sized parent, and a row track is what gives the canvas one.
    Both minimums are load-bearing HERE (unlike on `.content` and
-   `.secondary-pane`, which set `overflow`): a grid item's automatic minimum is
+   `.secondary-pane__body`, which set `overflow`): a grid item's automatic minimum is
    `auto` unless its overflow is other than `visible`, so without these the
    track refuses to shrink below its content and the CONTAINER overflows
    instead of `.content` scrolling. Verified by mutation — deleting either one
@@ -411,8 +411,26 @@ body {
 
 /* --- Secondary pane + splitter + command bar (U3) ------------------------- */
 
+/* #1594 OR40 S5b — the pane's `nav` holds its body AND its resize separator, so
+   the separator is inside a landmark. It spans the shell's pane and splitter
+   tracks as a SUBGRID, so those tracks are sized exactly as they were: the body
+   sizes the pane track, the separator the splitter track. No `overflow` here:
+   the separator's focus ring is drawn outside its 5px and must not be clipped. */
 .secondary-pane {
-  grid-column: 2;
+  grid-column: 2 / span 2;
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+}
+
+/* `display: grid` above beats the UA's `[hidden]`, so a collapsed pane must say
+   so itself (see `.activity-toolbox__list[hidden]`). */
+.secondary-pane[hidden] {
+  display: none;
+}
+
+.secondary-pane__body {
   /* The pane's width lives HERE, on the element, not in the shell's track
      template. Its `auto` track is then sized by this box when the pane exists
      and collapses to 0 by itself when it does not — which is what makes "no
@@ -502,7 +520,8 @@ body {
    measures. No negative margin, for the same reason: the track's size is then
    exactly this width. */
 .pane-splitter {
-  grid-column: 3;
+  /* The second column of the pane's subgrid, i.e. the shell's third track. */
+  grid-column: 2;
   width: 5px;
   cursor: col-resize;
   background: transparent;
@@ -3131,7 +3150,8 @@ button.danger {
   top: 50%;
   transform: translateY(-50%);
 }
-/* Portalled out of the dock, so the density's field font is set here. */
+/* Portalled out of the dock (into `.main-portal`, the end of `main`), so the
+   density's field font is set here. */
 .connection-picker__listbox {
   min-width: 240px;
   max-width: 480px;

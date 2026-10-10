@@ -22,6 +22,7 @@ import {
   type PublishedLabels,
 } from './routeHandle';
 import { ShellLabelContext, withLabel, type ShellLabelApi } from './shellLabel';
+import { MainPortalContext } from './mainPortal';
 import { PANE_MAX_WIDTH, PANE_MIN_WIDTH, PANE_RESIZE_STEP, uiStore } from '../stores/uiStore';
 import { UpdateBanner } from './UpdateBanner';
 
@@ -62,6 +63,9 @@ export function AppShell() {
      api object is created once, so a page's publishing effect does not re-run
      every time the shell re-renders. */
   const [published, setPublished] = useState<PublishedLabels>({});
+  // State, not a ref: a popup that renders before the element exists must
+  // re-render once it does, or it would stay on Fluent's `<body>` default.
+  const [mainPortal, setMainPortal] = useState<HTMLElement | null>(null);
   /* #1393 — the paths holding unsaved work. A path, not a flag, for the same
      reason labels are keyed by one: a page's cleanup and the next page's
      publish can land in either order. */
@@ -125,18 +129,25 @@ export function AppShell() {
         {/* Mounted-but-`hidden` when collapsed, so the toggle's `aria-controls`
           keeps naming an element that exists. `display: none` also takes it out
           of the grid, which is what reclaims its column. */}
-        {hasPane && <SecondaryPane hub={hub!} collapsed={paneCollapsed} />}
-        {paneShown && (
-          <PaneSplitter
-            value={paneWidth}
-            min={PANE_MIN_WIDTH}
-            max={PANE_MAX_WIDTH}
-            step={PANE_RESIZE_STEP}
-            label="Resize navigation pane"
-            className="pane-splitter"
-            onPreview={previewPaneWidth}
-            onCommit={setPaneWidth}
-            controls={PANE_ELEMENT_ID}
+        {hasPane && (
+          <SecondaryPane
+            hub={hub!}
+            collapsed={paneCollapsed}
+            splitter={
+              paneShown && (
+                <PaneSplitter
+                  value={paneWidth}
+                  min={PANE_MIN_WIDTH}
+                  max={PANE_MAX_WIDTH}
+                  step={PANE_RESIZE_STEP}
+                  label="Resize navigation pane"
+                  className="pane-splitter"
+                  onPreview={previewPaneWidth}
+                  onCommit={setPaneWidth}
+                  controls={PANE_ELEMENT_ID}
+                />
+              )
+            }
           />
         )}
 
@@ -160,9 +171,13 @@ export function AppShell() {
             flash on a local-first app whose chunks load in milliseconds. */}
           <UpdateBanner />
           <main className="content">
-            <Suspense fallback={null}>
-              <Outlet />
-            </Suspense>
+            <MainPortalContext.Provider value={mainPortal}>
+              <Suspense fallback={null}>
+                <Outlet />
+              </Suspense>
+            </MainPortalContext.Provider>
+            {/* Last in `main`, so a popup mounted here paints over the page. */}
+            <div className="main-portal" ref={setMainPortal} />
           </main>
         </div>
       </div>

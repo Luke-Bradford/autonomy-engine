@@ -1,4 +1,4 @@
-import type { ComponentType } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 import { NavLink } from 'react-router';
 import { FactoryResources } from '../pages/author/FactoryResources';
 import type { Hub, HubId } from './hubs';
@@ -15,6 +15,13 @@ interface SecondaryPaneProps {
   /** The hub whose sections this pane lists. Never a hub with no sections. */
   hub: Hub;
   collapsed: boolean;
+  /**
+   * #1594 OR40 S5b — the pane's resize separator, drawn after the scrolling
+   * body INSIDE the `nav`. It resizes this pane, and outside every landmark it
+   * was content no landmark held (axe `region`). The nav spans the shell's pane
+   * and splitter tracks as a subgrid, so the tracks are what they were.
+   */
+  splitter?: ReactNode;
 }
 
 /**
@@ -60,7 +67,7 @@ const PANE_CONTENT: Partial<Record<HubId, { Content: ComponentType<{ hub: Hub }>
  * SECOND opinion about where the user is, sitting beside the router's — exactly
  * the parallel matcher U2 wrote, proved inert, and deleted.
  */
-export function SecondaryPane({ hub, collapsed }: SecondaryPaneProps) {
+export function SecondaryPane({ hub, collapsed, splitter }: SecondaryPaneProps) {
   const custom = PANE_CONTENT[hub.id];
 
   return (
@@ -75,25 +82,28 @@ export function SecondaryPane({ hub, collapsed }: SecondaryPaneProps) {
          sections" is the stable answer whatever Author chooses to put in it. */
       aria-label={`${hub.label} sections`}
     >
-      <h2 className="secondary-pane__title">{hub.paneTitle ?? hub.label}</h2>
-      {custom ? (
-        <custom.Content hub={hub} />
-      ) : (
-        <ul className="secondary-pane__list">
-          {hub.sections.map((section) => (
-            <li key={section.path}>
-              <NavLink
-                to={section.path}
-                className={({ isActive }) =>
-                  `secondary-pane__link${isActive ? ' secondary-pane__link--active' : ''}`
-                }
-              >
-                {section.label}
-              </NavLink>
-            </li>
-          ))}
-        </ul>
-      )}
+      <div className="secondary-pane__body">
+        <h2 className="secondary-pane__title">{hub.paneTitle ?? hub.label}</h2>
+        {custom ? (
+          <custom.Content hub={hub} />
+        ) : (
+          <ul className="secondary-pane__list">
+            {hub.sections.map((section) => (
+              <li key={section.path}>
+                <NavLink
+                  to={section.path}
+                  className={({ isActive }) =>
+                    `secondary-pane__link${isActive ? ' secondary-pane__link--active' : ''}`
+                  }
+                >
+                  {section.label}
+                </NavLink>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      {splitter}
     </nav>
   );
 }

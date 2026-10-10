@@ -8,6 +8,7 @@ import { LabelledControl } from '../../lib/LabelledControl';
 import type { ConnectionKindDisabledReason } from '../../lib/connectionKindGroups';
 import { connectionOptionLabel } from '../../lib/resourceOptionLabel';
 import { ProbeVerdict } from '../connections/ProbeVerdict';
+import { useMainPortal } from '../../shell/mainPortal';
 import { connectionPickerGroups, filterConnectionPickerGroups } from './bindingPickers';
 
 /**
@@ -88,6 +89,7 @@ export function ConnectionPicker({
   /** What the author has typed since the list opened; `null` when not searching. */
   const [query, setQuery] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const mainPortal = useMainPortal();
   const shown = query === null ? groups : filterConnectionPickerGroups(groups, query);
   const pickable = groups.some((g) => g.options.some((o) => o.disabledReason === undefined));
   const searching = query !== null && query.trim() !== '';
@@ -156,10 +158,19 @@ export function ConnectionPicker({
               className="connection-picker__combobox"
               style={{ '--picker-ch': Math.min(widest, MAX_WIDTH_CH) } as CSSProperties}
               listbox={{ className: 'connection-picker__listbox' }}
+              // Inside `main`, not at the end of `<body>` (#1594 OR40 S5b), and
+              // `fixed` so `main`, which scrolls and clips, does not cut it off.
+              mountNode={mainPortal ?? undefined}
               // Always below, shortened to the room there. Flipped above, the
               // list landed over the dock's own header, which painted over it
               // and took the clicks meant for its last options (measured, e2e).
-              positioning={{ position: 'below', align: 'start', pinned: true, autoSize: 'height' }}
+              positioning={{
+                position: 'below',
+                align: 'start',
+                pinned: true,
+                autoSize: 'height',
+                strategy: 'fixed',
+              }}
               placeholder={placeholder}
               value={query ?? selectedText}
               onFocus={(e) => e.currentTarget.select()}
