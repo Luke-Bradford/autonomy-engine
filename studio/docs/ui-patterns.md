@@ -683,16 +683,23 @@ to their fields and the single announcer.
 ## Accessibility gate (#1594 OR40 S5b)
 
 `e2e/accessibility.spec.ts` runs axe on every audited view, in both themes and both densities, and
-fails on **any** violation, whatever its impact. The views are every titled page, the run page with
-its five views and its drawer, the editor (pipeline properties, Copy on General and Sink, the connection
-list open, Expand properties, ForEach), the New connection kind gallery, and Git connected. The
-workspace is seeded first, so lists are scanned with rows in them.
+fails on **any** violation, whatever its impact. The views are:
+
+- every titled page;
+- the run page, with its five views and its drawer;
+- the editor: pipeline properties, Copy on General and Sink, the connection list open, Expand
+  properties, and ForEach;
+- the New connection kind gallery;
+- Git, connected.
+
+The workspace is seeded first, so lists are scanned with rows in them.
 
 - A new page or panel state goes into that spec.
 - Two known violations are left to S5c in `LEFT_FOR_S5C`: Fluent `TabList`'s Tabster dummies and
-  the canvas ports' `aria-label` with no role. Each is matched on rule and on the element in the page, and the gate
-  fails when one stops occurring, so the fix that clears it also deletes its entry. Never add an
-  entry to hide a new violation, and never use axe's `exclude` or `disableRules`.
+  the canvas ports' `aria-label` with no role. Each is matched on rule and on the element in the
+  page, and the gate fails when one stops occurring, so the fix that clears it also deletes its
+  entry. Never add an entry to hide a new violation, and never use axe's `exclude` or
+  `disableRules`.
 
 ## Case and terms (#1594 OR40 S4)
 
