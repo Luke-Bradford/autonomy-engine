@@ -4988,7 +4988,7 @@ button.danger {
 .copyable-id {
   display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-1);
 }
 
 .copyable-id__status {
@@ -5936,11 +5936,6 @@ button.danger {
 .runs-grid__child-count {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
-}
-
-.runs-grid .copyable-id__copy {
-  padding: 0 0.4rem;
-  font-size: 12px;
 }
 
 /* U26 + #1484 — the runs list's filter bar: ONE row at 1440px. The labels are
