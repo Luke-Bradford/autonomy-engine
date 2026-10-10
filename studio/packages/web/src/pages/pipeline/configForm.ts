@@ -1393,7 +1393,8 @@ export function configFieldTitle(field: ConfigField): string {
  * its key (`configFieldTitle`): errors and expressions cite it.
  */
 export function rowTitle(field: ConfigField): string {
-  return field.label === undefined ? keyToWords(field.name) : configFieldTitle(field);
+  const base = field.label?.title ?? keyToWords(field.name);
+  return field.label?.unit === undefined ? base : `${base} (${field.label.unit})`;
 }
 
 /**

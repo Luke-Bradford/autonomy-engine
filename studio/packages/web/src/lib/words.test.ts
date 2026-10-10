@@ -9,6 +9,8 @@ describe('keyToWords (#1594 OR40 S4b-2)', () => {
     ['secret name', 'Secret name'],
     ['baseUrl', 'Base URL'],
     ['maxBytes', 'Max bytes'],
+    ['userIds', 'User IDs'],
+    ['HTTPServer', 'HTTP server'],
   ])('reads %s as %s', (key, words) => {
     expect(keyToWords(key)).toBe(words);
     expect(sentenceCaseProblem(words)).toBeNull();
@@ -21,6 +23,7 @@ describe('midSentence (#1594 OR40 S4b-2)', () => {
     ['url', 'url'],
     ['LLM call', 'LLM call'],
     ['ForEach', 'ForEach'],
+    ['MIME type', 'MIME type'],
   ])('reads %s as %s inside a longer name', (title, inside) => {
     expect(midSentence(title)).toBe(inside);
   });

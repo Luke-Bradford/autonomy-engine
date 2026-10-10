@@ -37,11 +37,15 @@ const KEPT = new Set([...ACRONYMS, ...PROPER_NAMES]);
 export function keyToWords(key: string): string {
   const words = key
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
     .split(/[\s_]+/)
     .filter((w) => w !== '')
     .map((w) => {
       const upper = w.toUpperCase();
-      return ACRONYMS.includes(upper) ? upper : w.toLowerCase();
+      if (ACRONYMS.includes(upper)) return upper;
+      // A plural acronym keeps its capitals: `userIds` → "User IDs".
+      if (/s$/i.test(w) && ACRONYMS.includes(upper.slice(0, -1))) return `${upper.slice(0, -1)}s`;
+      return w.toLowerCase();
     });
   const [first = '', ...rest] = words;
   return [first.charAt(0).toUpperCase() + first.slice(1), ...rest].join(' ');
@@ -49,10 +53,11 @@ export function keyToWords(key: string): string {
 
 /**
  * A sentence-case name as it reads inside a longer one: "Column mapping" →
- * "column mapping", while "LLM call" and "ForEach" keep their capitals.
+ * "column mapping", while "LLM call", "ForEach" and any word written in
+ * capitals ("MIME type") keep theirs.
  */
 export function midSentence(text: string): string {
   const first = text.split(' ', 1)[0] ?? '';
-  if (KEPT.has(first)) return text;
+  if (KEPT.has(first) || /^\p{Lu}{2}/u.test(first)) return text;
   return text.charAt(0).toLowerCase() + text.slice(1);
 }

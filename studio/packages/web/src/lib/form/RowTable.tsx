@@ -14,8 +14,8 @@ export interface RowTableColumn {
  * card, which repeated every label on every row and spent five lines on a
  * declaration that reads as one.
  *
- * Each control keeps its OWN accessible name (`Parameter 1 name`, `mapping row 2
- * sink`): a header names the column for a sighted reader and, through table
+ * Each control keeps its OWN accessible name ("Parameter 1 name", "Column mapping
+ * row 2 sink"): a header names the column for a sighted reader and, through table
  * semantics, for a screen reader moving cell to cell, but a spec or a voice user
  * addresses one control, and that name is what tells two `sink` boxes apart.
  *

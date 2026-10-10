@@ -1167,7 +1167,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
   });
 
   it('keeps focus on the row it moved, so a second press moves it again', () => {
-    // The buttons are index-keyed, so without this the focused `move row 2 up`
+    // The buttons are index-keyed, so without this the focused "Move column mapping row 2 up"
     // would be the row that just shifted DOWN, and a second press would undo
     // the first. At the top the `up` is disabled, so focus takes `down`.
     const panel = mountMapping({ mapping: threeRows, mode: 'append' });
