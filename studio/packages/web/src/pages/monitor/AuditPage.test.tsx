@@ -127,7 +127,7 @@ describe('AuditPage (#1075)', () => {
     expect(bodyRows()[0]!.cells[1]!.textContent).toBe('local');
   });
 
-  it('renders the detail line beneath the act', async () => {
+  it('renders the detail after the act, on its line', async () => {
     pageMock.mockResolvedValue(page([row(0, 1_000, CONNECT)]));
 
     renderWithRouter(<AuditPage />);

@@ -42,6 +42,7 @@ export function CopyableId({
   const [result, setResult] = useState<'copied' | 'failed' | null>(null);
   const copy = useBusyAction();
   const canCopy = typeof navigator !== 'undefined' && navigator.clipboard !== undefined;
+  const copyLabel = link ? `Copy ${noun} id ${shortId(id)}` : `Copy ${noun} id`;
   return (
     <span className="copyable-id">
       {link ? (
@@ -60,8 +61,8 @@ export function CopyableId({
         <button
           type="button"
           className="copyable-id__copy icon-button"
-          aria-label={link ? `Copy ${noun} id ${shortId(id)}` : `Copy ${noun} id`}
-          title={`Copy ${noun} id`}
+          aria-label={copyLabel}
+          title={copyLabel}
           disabled={copy.active.has(COPY_KEY)}
           onClick={() => {
             void copy.run(COPY_KEY, () =>

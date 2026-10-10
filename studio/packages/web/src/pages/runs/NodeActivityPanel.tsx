@@ -19,7 +19,6 @@ import type { StreamedLine } from './attemptActivity';
 import { defaultDrawerTab, drawerFileStem, type DrawerTab } from './drawerTab';
 import { Section } from '../../lib/Section';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
-import { OneLine } from '../../lib/OneLine';
 
 /**
  * U24 (slice 1) — the per-node drill-in on the run monitor.
@@ -570,9 +569,9 @@ function StreamedLines({ lines, stem }: { lines: readonly StreamedLine[]; stem: 
                   <code>{l.name}</code>
                 </td>
                 <td>
-                  <OneLine as="code" wide title={formatOutputValue(l.value)}>
-                    {formatOutputValue(l.value)}
-                  </OneLine>
+                  {/* A log's value wraps rather than being cut (#1594 OR40 S3d):
+                      this panel is where it is read. */}
+                  <code>{formatOutputValue(l.value)}</code>
                 </td>
               </tr>
             ))}

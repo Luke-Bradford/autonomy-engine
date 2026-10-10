@@ -150,8 +150,8 @@ function textCell(text: string | undefined): { content: ReactNode; title?: strin
 }
 
 /**
- * #1569 OR37 — the pipelines list as an engineer's grid: dense 32px rows of
- * 13px data (the runs grid's density classes), sortable headers whose order
+ * #1569 OR37 — the pipelines list as an engineer's grid: dense `--row-h` rows
+ * of body type (the one table style, and the runs grid's classes), sortable headers whose order
  * lives in the URL. The row facts come from one batched read
  * (`GET /api/pipelines/summaries`); a cell whose fact is not loaded yet reads
  * as an em-dash, the same as a fact that is absent.

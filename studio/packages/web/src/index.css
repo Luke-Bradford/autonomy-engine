@@ -1102,8 +1102,7 @@ thead th {
   white-space: nowrap;
 }
 
-:is(th, td).num,
-td.run-cost {
+:is(th, td).num {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -4787,7 +4786,7 @@ button.danger {
 .node-tool-calls {
   /* `display: block` is what makes a <table> scrollable at all. Rows, cells
      and type are the one table style's (#1594 OR40 S3d), so a row is
-     `--row-h` and the box shows about seven of them before it scrolls. */
+     `--row-h` and the box shows about six of them before it scrolls. */
   display: block;
   max-height: 14rem;
   overflow-y: auto;
@@ -5406,6 +5405,9 @@ button.danger {
 }
 
 .row-table__notes td {
+  /* Not the one table style's row height: a note hangs under its row as one
+     entry (#1594 OR40 S3d). */
+  height: auto;
   padding-top: 0;
 }
 
@@ -5554,7 +5556,7 @@ button.danger {
 
 /* #1484 OR35 M1 — the runs list is a dense, full-width grid (the Monitor's
    principle 1: data, not decoration). The Timeline view shares the page.
-   32px rows of 13px data, no wrapping, and numbers right-aligned in tabular
+   `--row-h` rows of body type, no wrapping, and numbers right-aligned in tabular
    figures so durations and costs line up digit for digit.
    FIXED layout at the columns' set widths, and every cell ellipsizes: whatever
    a row holds (a 200-character pipeline name, a long trigger name), a column
@@ -5592,7 +5594,7 @@ button.danger {
 }
 
 /* The resize handle sits INSIDE the header's right edge (the cell clips
-   overflow), over the 0.6rem padding, so it never covers a label. A
+   overflow), over the cell's padding, so it never covers a label. A
    right-aligned header keeps its arrow and label clear of it too. Drawn only
    on hover and keyboard focus: the line is the affordance, the 8px strip is
    the target. */
@@ -5866,12 +5868,6 @@ button.danger {
 
 .activity-runs__why {
   color: var(--colorNeutralForeground3);
-}
-
-.activity-runs__error {
-  max-width: 32rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* #1566 — the Pipeline cell: the name (which opens the run) takes the room
@@ -6857,7 +6853,14 @@ button.danger {
 }
 
 .cell-one-line--wide {
-  max-width: 40rem;
+  /* Bounded by the window too: the cap is the box's width whenever the text
+     is longer, so a fixed 40rem would push a narrow page sideways. */
+  max-width: min(40rem, 45vw);
+}
+
+/* A link in a cut cell draws its ring inside, where the cut cannot clip it. */
+.cell-one-line :focus-visible {
+  outline-offset: var(--focus-ring-inset);
 }
 
 /* #1484 OR35 M2 — container groups in the activity runs: a group line, an

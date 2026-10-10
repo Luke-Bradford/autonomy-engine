@@ -443,7 +443,7 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
                       as a measured zero. The header lost its "in / out" because
                       the cell now states each side by name. */}
                   <td>{tokenSummary(m.cost)}</td>
-                  <td className="run-cost">{costFigure(costHeadline(m.cost))}</td>
+                  <td className="num run-cost">{costFigure(costHeadline(m.cost))}</td>
                   <td>
                     <When ms={m.lastAt} />
                   </td>

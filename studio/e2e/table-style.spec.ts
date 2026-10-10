@@ -156,7 +156,11 @@ function expectTableStyle(label: string, m: Measured, density: Density) {
 }
 
 /** The pages, each with the table rows a seed below guarantees and a cut name it shows. */
-function pages(seeded: Seed): { route: string; title: string; cut: boolean }[] {
+/**
+ * `rows: false` is a page whose tables depend on what this machine has run
+ * (AI activity): measured when present, never required.
+ */
+function pages(seeded: Seed): { route: string; title: string; cut: boolean; rows?: false }[] {
   return [
     { route: '/#/author/pipelines', title: 'Pipelines', cut: true },
     { route: '/#/monitor/runs', title: 'Runs', cut: true },
@@ -166,6 +170,7 @@ function pages(seeded: Seed): { route: string; title: string; cut: boolean }[] {
     { route: '/#/manage/secrets', title: 'Secrets', cut: true },
     { route: '/#/manage/global-params', title: 'Global parameters', cut: true },
     { route: '/#/monitor/audit', title: 'Audit', cut: true },
+    { route: '/#/monitor/ai', title: 'AI activity', cut: false, rows: false },
     { route: `/#/monitor/runs/${encodeURIComponent(seeded.runId)}`, title: '', cut: false },
   ];
 }
@@ -236,10 +241,12 @@ for (const density of ['compact', 'comfortable'] as const) {
       if (p.title !== '') {
         await expect(page.getByRole('heading', { name: p.title, exact: true })).toBeVisible();
       }
-      await expect(
-        page.locator('.content table tbody tr').first(),
-        `${p.route}: a table row`,
-      ).toBeVisible();
+      if (p.rows !== false) {
+        await expect(
+          page.locator('.content table tbody tr').first(),
+          `${p.route}: a table row`,
+        ).toBeVisible();
+      }
       const m = await measure(page);
       expectTableStyle(`${p.route} (${density})`, m, density);
       if (p.cut) {

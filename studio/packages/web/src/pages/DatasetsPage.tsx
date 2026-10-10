@@ -472,7 +472,9 @@ export function DatasetsPage() {
                   <th scope="col">Name</th>
                   <th scope="col">Kind</th>
                   <th scope="col">Store</th>
-                  <th scope="col">Columns</th>
+                  <th scope="col" className="num">
+                    Columns
+                  </th>
                   <th scope="col">Actions</th>
                 </tr>
               </thead>

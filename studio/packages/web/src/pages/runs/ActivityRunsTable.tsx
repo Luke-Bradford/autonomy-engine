@@ -53,6 +53,7 @@ import { ACTIVITY_RUN_COLUMNS, iterationLabel, iterationText } from './activityR
 import { RUN_DRAWER_ID } from './RunDrawer';
 import { activityRunEntries } from './activityRunsTree';
 import { skipReasonText } from './skipReasonText';
+import { OneLine } from '../../lib/OneLine';
 
 /**
  * Bytes as the activity reported them, saying which way they moved. A copy's
@@ -513,8 +514,12 @@ export function ActivityRunsTable({
                       {BETWEEN_ITERATION_AND_ERROR.map((c) => (
                         <td key={c} />
                       ))}
-                      <td className="activity-runs__error" title={group.reason ?? undefined}>
-                        {group.reason !== null && <code>{group.reason}</code>}
+                      <td>
+                        {group.reason !== null && (
+                          <OneLine as="code" wide title={group.reason}>
+                            {group.reason}
+                          </OneLine>
+                        )}
                       </td>
                     </tr>
                   );
@@ -645,8 +650,15 @@ export function ActivityRunsTable({
                         <code>{row.childRunId}</code>
                       ) : null}
                     </td>
-                    <td className="activity-runs__error" title={row.error?.message}>
-                      {cls === '' ? errorLine : `${errorLine} (${cls})`}
+                    <td>
+                      {row.error !== null && (
+                        <OneLine
+                          wide
+                          title={cls === '' ? row.error.message : `${row.error.message} (${cls})`}
+                        >
+                          {cls === '' ? errorLine : `${errorLine} (${cls})`}
+                        </OneLine>
+                      )}
                     </td>
                   </tr>
                 );
