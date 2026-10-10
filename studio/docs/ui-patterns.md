@@ -673,6 +673,25 @@ Axe gates on every form (0 violations) belong to OR24 (#1415), which brings axe 
   `complementary` landmark must be top level, and these all sit inside `main`.
 - `e2e/heading-structure.spec.ts` checks every page, the run page with its drawer and views, and
   the editor's selection states.
+- **Nothing outside a landmark.** The pane's resize separator is inside the pane's `nav`. A popup
+  that would portal to `<body>` mounts in `main` instead, through `useMainPortal()` with
+  `strategy: 'fixed'` (`ConnectionPicker` does this).
+- **A header cell has text.** An actions column's header is visually hidden text, not an
+  `aria-label` on an empty `th`.
+
+## Accessibility gate (#1594 OR40 S5b)
+
+`e2e/accessibility.spec.ts` runs axe on every audited view, in both themes and both densities, and
+fails on **any** violation, whatever its impact. The views are every titled page, the run page with
+and without its drawer, the editor (pipeline properties, Copy on General and Sink, the connection
+list open, Expand properties, ForEach), the New connection kind gallery, and Git connected. The
+workspace is seeded first, so lists are scanned with rows in them.
+
+- A new page or panel state goes into that spec.
+- Two known violations are left to S5c in `LEFT_FOR_S5C`: Fluent `TabList`'s Tabster dummies and
+  the canvas ports' `aria-label` with no role. Each is matched on rule and element, and the gate
+  fails when one stops occurring, so the fix that clears it also deletes its entry. Never add an
+  entry to hide a new violation, and never use axe's `exclude` or `disableRules`.
 
 ## Case and terms (#1594 OR40 S4)
 
