@@ -170,7 +170,10 @@ export function ContractRow<R extends Declared>({
           />
         </td>
         <RowActions>
-          <RemoveRowButton label={`Remove ${KIND_TERM[kind].toLowerCase()} ${index + 1}`} onRemove={onRemove} />
+          <RemoveRowButton
+            label={`Remove ${KIND_TERM[kind].toLowerCase()} ${index + 1}`}
+            onRemove={onRemove}
+          />
         </RowActions>
       </tr>
       {notes ? <RowNotes span={columns.length + 1}>{notes}</RowNotes> : null}

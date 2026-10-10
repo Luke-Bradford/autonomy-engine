@@ -183,7 +183,9 @@ describe('PipelinePanel (U16) — params', () => {
 
   it('setting a param description stores it', () => {
     const store = mount(version({ params: [{ name: 'x', type: 'string', required: false }] }));
-    fireEvent.change(screen.getByLabelText('Parameter 1 description'), { target: { value: 'why' } });
+    fireEvent.change(screen.getByLabelText('Parameter 1 description'), {
+      target: { value: 'why' },
+    });
     expect(store.getState().params[0]!.description).toBe('why');
   });
 

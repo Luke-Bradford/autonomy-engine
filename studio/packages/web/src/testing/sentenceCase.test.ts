@@ -87,12 +87,16 @@ describe('no stylesheet capitalises text', () => {
 });
 
 describe('labelProblem', () => {
-  it.each(['Parameter 1 name', 'Remove annotation 2', 'Duration', 'Save as…', 'Run ID', 'About Parameters'])(
-    'accepts %s',
-    (text) => {
-      expect(labelProblem(text)).toBeNull();
-    },
-  );
+  it.each([
+    'Parameter 1 name',
+    'Remove annotation 2',
+    'Duration',
+    'Save as…',
+    'Run ID',
+    'About Parameters',
+  ])('accepts %s', (text) => {
+    expect(labelProblem(text)).toBeNull();
+  });
 
   it.each([
     ['Duration:', 'ends with a colon or a period'],
