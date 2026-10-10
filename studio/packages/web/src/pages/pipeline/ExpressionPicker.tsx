@@ -348,7 +348,7 @@ export function ExpressionPicker({
             if (rows.length === 0) return null;
             return (
               <section key={kind}>
-                <h4>{heading}</h4>
+                <h3>{heading}</h3>
                 <ul>
                   {rows.map((suggestion) => (
                     <li key={suggestion.ref}>

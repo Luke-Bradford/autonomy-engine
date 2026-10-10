@@ -89,7 +89,7 @@ export function RunCostSummary({
 
   return (
     <section aria-labelledby="run-cost-heading">
-      <h3 id="run-cost-heading">Cost &amp; usage</h3>
+      <h2 id="run-cost-heading">Cost &amp; usage</h2>
       {replayComplete ? (
         <>
           <SettledFigure usage={usage} settled={settled} />

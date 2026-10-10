@@ -382,7 +382,7 @@ export function ActivityRunsTable({
   return (
     <section className="activity-runs" aria-labelledby="activity-runs-heading">
       <div className="activity-runs__bar">
-        <h3 id="activity-runs-heading">Activity runs</h3>
+        <h2 id="activity-runs-heading">Activity runs</h2>
         {rows !== null && rows.length > 0 && (
           <>
             <FilterPicker

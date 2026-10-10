@@ -209,7 +209,7 @@ export function PendingCallbacks({
 
   return (
     <>
-      <h3>Waiting on a callback</h3>
+      <h2>Waiting on a callback</h2>
       <p className="page-hint">
         This run is parked until an inbound callback resumes it. Until then nothing below advances;
         if no callback arrives the wait expires and the node fails, which is the path its{' '}

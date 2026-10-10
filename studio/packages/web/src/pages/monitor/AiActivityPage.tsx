@@ -151,7 +151,7 @@ function ProviderQuota({ entry, now }: { entry: ProviderQuotaReading; now: numbe
   const { label, provider, reading } = entry;
   return (
     <div className="quota-provider">
-      <h4>{label}</h4>
+      <h3>{label}</h3>
 
       {/* An UNREADABLE quota says so, in words, and keeps saying so even when a
           last-known number is shown beneath it. It must never render as a
@@ -218,7 +218,7 @@ function QuotaPanel() {
     <Section
       heading="Account quota"
       help={FORM_SECTION_HINTS.monitor.quota}
-      level={3}
+      level={2}
       landmark
       className="monitor-panel"
       actions={
@@ -266,7 +266,7 @@ function ReportedActivityPanel({ external }: { external: ExternalAgentActivity }
     <Section
       heading="Reported by external agents"
       help={FORM_SECTION_HINTS.monitor.reported}
-      level={3}
+      level={2}
       landmark
       className="reported-activity"
     >

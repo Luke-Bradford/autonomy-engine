@@ -201,16 +201,12 @@ body {
   overflow: hidden;
 }
 
-/* Decorative wordmark: the app's identity is carried for real by the document
-   title and the page headings, so this is `aria-hidden` — it exists so the
-   shell is not anonymous now that the 220px sidebar's `Autonomy studio` title
-   is gone. */
+/* The wordmark: a monogram whose real name, `Autonomy studio`, is visually
+   hidden text. Not a heading; each page's title is its h1 (#1594 OR40 S5). */
 .hub-rail__brand {
   font-size: 0.7rem;
   font-weight: 700;
   letter-spacing: 0.06em;
-  /* An h1, so tokens.css gives it the title's 28px line; a 0.7rem wordmark
-     keeps its own. S5 stops it being a heading, once each page title is the h1. */
   line-height: normal;
   color: var(--muted);
   margin: 0;
@@ -371,7 +367,7 @@ body {
   margin-top: 1.5rem;
 }
 
-.home-section h3 {
+.home-section h2 {
   margin: 0 0 0.5rem;
   font-size: 0.95rem;
 }
@@ -437,6 +433,9 @@ body {
 .secondary-pane__title {
   font-size: var(--type-caption-size);
   font-weight: var(--weight-strong);
+  /* The line it had while an h2 took the title type; it kept its h2 when the
+     page title became the h1 (#1594 OR40 S5), and h2 is now the section type. */
+  line-height: var(--type-title-line);
   color: var(--muted);
   margin: 0 0 0.5rem;
   padding: 0 0.9rem;
@@ -899,7 +898,7 @@ body {
   margin-bottom: var(--space-2);
 }
 
-.page-header > h2 {
+.page-header > h1 {
   flex: 0 1 auto;
   min-width: 0;
   margin: 0;
@@ -1463,7 +1462,7 @@ td button + button {
   border-bottom: 1px solid var(--border);
 }
 
-.form-drawer-header h3 {
+.form-drawer-header h2 {
   margin: 0;
 }
 
@@ -1681,7 +1680,7 @@ td button + button {
   margin-top: 4px;
 }
 
-.kind-gallery__group h4 {
+.kind-gallery__group h3 {
   margin: 0 0 4px;
   font-size: 12px;
   font-weight: 600;
@@ -1915,8 +1914,8 @@ button.danger {
   min-width: 0;
 }
 
-.activity-toolbox h3,
-.property-panel h3 {
+.activity-toolbox h2,
+.property-panel h2 {
   margin: 0;
   font-size: 0.95rem;
 }
@@ -2029,7 +2028,7 @@ button.danger {
     flex-wrap: nowrap;
   }
 
-  .property-panel__header > :is(h3, .property-panel__type) {
+  .property-panel__header > :is(h2, .property-panel__type) {
     min-width: 0;
     flex: 0 1 auto;
     overflow: hidden;
@@ -2037,11 +2036,11 @@ button.danger {
     white-space: nowrap;
   }
 
-  .property-panel__header > h3 {
+  .property-panel__header > h2 {
     min-width: 3rem;
   }
 
-  .property-panel__header > :not(h3, .property-panel__type) {
+  .property-panel__header > :not(h2, .property-panel__type) {
     flex: none;
   }
 }
@@ -2725,7 +2724,7 @@ button.danger {
   margin-bottom: 0;
 }
 
-.canvas-page > .page-header > h2 {
+.canvas-page > .page-header > h1 {
   max-width: 30%;
 }
 
@@ -2923,7 +2922,7 @@ button.danger {
   box-shadow: 0 8px 20px var(--shadow);
 }
 
-.run-now-panel h3 {
+.run-now-panel h2 {
   margin: 0;
   font-size: 1rem;
 }
@@ -3005,15 +3004,15 @@ button.danger {
 /* A panel title that is not the node header (a container's, "N selected",
    an edge's): caption-strong, sentence case (#1594 OR40 S4). Sections are
    `Section`s, in the section type. */
-:root[data-density='compact'] .property-dock .property-panel h3 {
+:root[data-density='compact'] .property-dock .property-panel h2 {
   font-size: var(--type-caption-size);
   font-weight: var(--weight-strong);
   margin: 0;
 }
 
-/* #1477 — the header's h3 is the node's NAME, not a section label: it keeps its
+/* #1477 — the header's h2 is the node's NAME, not a section label: it keeps its
    own case and reads at field size. */
-:root[data-density='compact'] .property-dock .property-panel .property-panel__header h3 {
+:root[data-density='compact'] .property-dock .property-panel .property-panel__header h2 {
   font-size: var(--type-body-size);
   letter-spacing: normal;
   text-transform: none;
@@ -3199,7 +3198,7 @@ button.danger {
   gap: var(--space-2);
 }
 
-.field-form > :is(h3, h4) {
+.field-form > :is(h2, h3) {
   margin: 0;
 }
 
@@ -4697,7 +4696,7 @@ button.danger {
    `n_7c44a16f-98f1-4958-…`, too long to sit inline beside it.
 
    `em`, not `rem`: what it has to be is SMALLER THAN WHATEVER NAMES IT, here the
-   activity panel's <h3>. */
+   activity panel's <h2>. */
 .node-id {
   display: block;
   font-size: 0.8em;
@@ -4765,7 +4764,7 @@ button.danger {
   margin: 0.25rem 0;
 }
 
-.node-capture-field h5 {
+.node-capture-field h4 {
   margin: 0.5rem 0 0;
 }
 
@@ -5481,7 +5480,7 @@ button.danger {
   box-shadow: 0 8px 20px var(--shadow);
 }
 
-.expression-picker-list h4 {
+.expression-picker-list h3 {
   margin: 0.5rem 0 0.25rem;
   font-size: var(--type-caption-size);
   font-weight: var(--weight-strong);
@@ -5842,7 +5841,7 @@ button.danger {
   font-size: 13px;
 }
 
-.activity-runs__bar > h3 {
+.activity-runs__bar > h2 {
   margin: 0 0.5rem 0 0;
 }
 
@@ -6173,7 +6172,7 @@ button.danger {
   gap: 0.35rem;
 }
 
-.pipeline-triggers__header h3 {
+.pipeline-triggers__header h2 {
   margin: 0;
   font-size: 0.95rem;
 }
@@ -6240,7 +6239,7 @@ button.danger {
   margin-bottom: 0.25rem;
 }
 
-.version-history__header h3 {
+.version-history__header h2 {
   margin: 0;
   font-size: 0.9rem;
 }
@@ -6582,7 +6581,7 @@ button.danger {
   font-size: 0.9rem;
 }
 
-.timeline-untimed h4 {
+.timeline-untimed h3 {
   margin: 0 0 0.35rem;
   font-size: 0.9rem;
 }

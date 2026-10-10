@@ -112,7 +112,7 @@ export function CaptureSection({ captures }: { captures: NodeCapture[] }) {
 function CapturedBlock({ label, field }: { label: string; field: CapturedText }) {
   return (
     <div className="node-capture-field">
-      <h5>{label}</h5>
+      <h4>{label}</h4>
       {field.text === SECURE_REDACTED ? (
         <code>{SECURE_REDACTED}</code>
       ) : field.text === '' && !field.truncated ? (

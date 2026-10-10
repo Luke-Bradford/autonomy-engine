@@ -58,7 +58,7 @@ test.describe('#852 — the bottom property dock', () => {
     expect(Math.abs(dock.width - canvas.width)).toBeLessThanOrEqual(1);
     // The Properties landmark is IN the dock, not a separate column.
     await expect(
-      page.locator('.property-dock').getByRole('complementary', { name: 'Properties' }),
+      page.locator('.property-dock').getByRole('region', { name: 'Properties', exact: true }),
     ).toBeVisible();
     // The canvas keeps a usable height with the dock open.
     expect(canvas.height).toBeGreaterThan(300);

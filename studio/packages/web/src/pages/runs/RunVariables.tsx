@@ -37,7 +37,7 @@ export function RunVariables({
   if (declared === undefined || declared.length === 0) return empty;
   return (
     <section aria-labelledby="run-variables-heading">
-      <h3 id="run-variables-heading">Variables</h3>
+      <h2 id="run-variables-heading">Variables</h2>
       {!overlay.ready ? (
         /* The overlay's reason names NODE state, so it is prefixed rather than
            shown bare under a Variables heading. */

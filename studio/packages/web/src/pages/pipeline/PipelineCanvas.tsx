@@ -2546,7 +2546,7 @@ export function PipelineCanvas({
                       {/* #1393 — the validation list, moved here from above the
                       canvas, where it grew by one line per issue on every
                       keystroke. Plain text: the header above announces. */}
-                      <aside
+                      <section
                         id={problemsId}
                         className="problems-panel"
                         aria-label="Problems"
@@ -2574,7 +2574,7 @@ export function PipelineCanvas({
                             </ul>
                           </div>
                         )}
-                      </aside>
+                      </section>
                     </div>
                   </div>
                 </div>
@@ -2845,8 +2845,8 @@ export function MultiSelectionPanel({
   ];
 
   return (
-    <aside className="property-panel" aria-label="Properties">
-      <h3>{selection.length} selected</h3>
+    <section className="property-panel" aria-label="Properties">
+      <h2>{selection.length} selected</h2>
       <p className="page-hint">
         {parts.join(', ')}. Editing is one at a time — click a single activity to configure it.
       </p>
@@ -2889,7 +2889,7 @@ export function MultiSelectionPanel({
       <button type="button" onClick={() => store.getState().deleteSelection()}>
         Delete selection
       </button>
-    </aside>
+    </section>
   );
 }
 
@@ -2922,11 +2922,11 @@ export function PipelinePanel({
   const variables = useStore(store, (s) => s.variables);
 
   return (
-    <aside className="property-panel" aria-label="Properties">
+    <section className="property-panel" aria-label="Properties">
       {/* #1477 OR29 — named for assistive tech, not drawn: the tabs below
           (Parameters · Variables · Outputs · General) already say this is the
           pipeline, and the line they would cost puts the first row lower. */}
-      <h3 className="visually-hidden">Pipeline</h3>
+      <h2 className="visually-hidden">Pipeline</h2>
 
       {/* #844 — the U16 contract editor, as the dock's pipeline-level tabs (ADF's
           Parameters / Output). Each section keeps its heading inside its tab, so
@@ -3011,7 +3011,7 @@ export function PipelinePanel({
           },
         ]}
       />
-    </aside>
+    </section>
   );
 }
 
@@ -3096,8 +3096,8 @@ export function EdgePanel({
   const orphanNoteId = `edge-outcome-orphan-${edge.id}`;
 
   return (
-    <aside className="property-panel" aria-label="Properties">
-      <h3>{edge.back === true ? 'Back-edge' : 'Edge'}</h3>
+    <section className="property-panel" aria-label="Properties">
+      <h2>{edge.back === true ? 'Back-edge' : 'Edge'}</h2>
       {edge.back === true && <BounceCapField store={store} edge={edge} />}
       {/**
        * U19 slice 2 — the outcome picker, retired as a `<select>`.
@@ -3165,7 +3165,7 @@ export function EdgePanel({
           the control being edited out from under the pointer. The Problems column
           beside the panel lists it too. */}
       <SubjectIssues issues={edgeIssues} />
-    </aside>
+    </section>
   );
 }
 
@@ -4157,7 +4157,7 @@ export function NodePanel({
     return (
       <>
         <div className="property-panel__header">
-          <h3>{nodeName}</h3>
+          <h2>{nodeName}</h2>
           <code className="property-panel__type">{nodeType}</code>
           {entry !== undefined && (
             <AboutHelp name={entry.title} noteId={`${nodeId}-about`}>
@@ -4223,7 +4223,7 @@ export function NodePanel({
   // what actually dispatches the node, so this cannot drift from the reducer.
   if (authorsCallBlob({ type: nodeType, call })) {
     return (
-      <aside className="property-panel" aria-label="Properties">
+      <section className="property-panel" aria-label="Properties">
         <PanelTabs
           label="Activity properties"
           header={header(false)}
@@ -4256,12 +4256,12 @@ export function NodePanel({
         {/* #1393 — AFTER the fields, not above them: an issue arriving must not push
             the control being edited out from under the pointer. */}
         <SubjectIssues issues={ownIssues} listedElsewhere={policyElsewhere} />
-      </aside>
+      </section>
     );
   }
 
   return (
-    <aside className="property-panel" aria-label="Properties">
+    <section className="property-panel" aria-label="Properties">
       {/* #852 / #1477 — ADF's split: how the activity RUNS (retry, timeout,
           secure input/output) under General, then what it DOES under the tabs
           its catalog entry declares. The node opens on its first type tab, where
@@ -4290,6 +4290,6 @@ export function NodePanel({
           the control being edited out from under the pointer. The Problems column
           beside the panel lists it too. */}
       <SubjectIssues issues={ownIssues} listedElsewhere={policyElsewhere} />
-    </aside>
+    </section>
   );
 }

@@ -156,7 +156,7 @@ export function DatasetDetailPage({ datasetId }: { datasetId: string }) {
             </dd>
           </dl>
 
-          <h3 id="dataset-references-heading">Used by</h3>
+          <h2 id="dataset-references-heading">Used by</h2>
           <p className="page-hint">
             Advisory, not a gate. This compares each pipeline’s pinned column mapping against the
             columns declared above; what a copy is actually checked against at run time is the

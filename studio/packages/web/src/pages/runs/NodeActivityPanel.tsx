@@ -157,7 +157,7 @@ export function NodeActivityPanel({
   const stem = fileStem ?? drawerFileStem([name ?? node.nodeId]);
   const lines = run?.lines;
   return (
-    <aside
+    <section
       id={PANEL_ID}
       className="property-panel node-detail-panel"
       aria-label={`Node ${name ?? node.nodeId}`}
@@ -167,10 +167,10 @@ export function NodeActivityPanel({
           then its one act (Close) at the row's right end. A panel title, not a
           section, so not a `Section`. */}
       <div className="property-panel__header">
-        <h3>
+        <h2>
           Node {name ?? <code>{node.nodeId}</code>}
           {name !== null && <code className="node-id">{node.nodeId}</code>}
-        </h3>
+        </h2>
         <div className="property-panel__actions">
           <button type="button" onClick={onClose}>
             Close
@@ -395,7 +395,7 @@ export function NodeActivityPanel({
           },
         ]}
       />
-    </aside>
+    </section>
   );
 }
 
@@ -899,7 +899,7 @@ function InputSection({
       )}
       {params !== undefined && (
         <>
-          <h5>Parameters</h5>
+          <h4>Parameters</h4>
           <p className="page-hint">
             The connection and dataset parameters this dispatch applied over their stored settings.
           </p>

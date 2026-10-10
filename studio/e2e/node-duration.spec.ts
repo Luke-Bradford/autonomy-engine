@@ -81,7 +81,7 @@ test('#867 — a node row states how long it took, and says nothing where nothin
 
   // The drill-in is the one surface with room to say what the number MEANS.
   await activityRowById(page, 'hold').getByRole('button').first().click();
-  const panel = page.locator('.run-drawer').getByRole('complementary');
+  const panel = page.locator('.run-drawer').getByRole('region', { name: /^Node / });
   await expect(panel).toContainText('wall clock for this attempt');
   // #1594 OR40 S4b — a label takes no colon: "Duration 1.2s, wall clock for…".
   await expect(panel).toContainText(/Duration [^,]+, wall clock/);

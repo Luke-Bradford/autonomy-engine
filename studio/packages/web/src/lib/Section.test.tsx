@@ -16,7 +16,7 @@ describe('Section (#1594 OR40 S3)', () => {
     );
     const group = screen.getByRole('group', { name: 'Basics' });
     expect(group).toHaveAccessibleDescription('What this thing is called.');
-    expect(screen.getByRole('heading', { level: 4, name: 'Basics' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 3, name: 'Basics' })).toBeInTheDocument();
     // Not a paragraph on the page: the note is inside a closed `?`.
     expect(screen.getByText('What this thing is called.')).not.toBeVisible();
   });
@@ -36,7 +36,7 @@ describe('Section (#1594 OR40 S3)', () => {
       <Section
         heading="Account quota"
         help="How much of each account's allowance is used."
-        level={3}
+        level={2}
         landmark
         actions={<button type="button">Refresh quota</button>}
       >
@@ -45,7 +45,7 @@ describe('Section (#1594 OR40 S3)', () => {
     );
     const region = screen.getByRole('region', { name: 'Account quota' });
     expect(region).toHaveAccessibleDescription("How much of each account's allowance is used.");
-    expect(screen.getByRole('heading', { level: 3, name: 'Account quota' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Account quota' })).toBeInTheDocument();
     expect(screen.queryByRole('group', { name: 'Account quota' })).toBeNull();
     expect(region).toContainElement(screen.getByRole('button', { name: 'Refresh quota' }));
   });

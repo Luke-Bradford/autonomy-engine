@@ -113,7 +113,7 @@ export function DemoPanel({
       aria-labelledby={embedded ? undefined : 'demo-workspace'}
       className={embedded ? 'demo-panel' : 'home-section'}
     >
-      {!embedded && <h3 id="demo-workspace">Demo workspace</h3>}
+      {!embedded && <h2 id="demo-workspace">Demo workspace</h2>}
       {readError !== null && (
         <>
           <p role="alert" className="error">

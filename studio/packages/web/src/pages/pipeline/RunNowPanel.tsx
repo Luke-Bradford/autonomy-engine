@@ -176,7 +176,7 @@ function RunParamsForm<R extends FireResult>({
       onSubmit={(e) => void submit(e)}
       onKeyDown={onKeyDown}
     >
-      <h3>{heading}</h3>
+      <h2>{heading}</h2>
       {note !== undefined && <p className="page-hint">{note}</p>}
       <RunParamsFields params={params} rows={rows} onChange={set} />
       {error !== null && (

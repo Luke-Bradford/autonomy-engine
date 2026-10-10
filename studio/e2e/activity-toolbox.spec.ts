@@ -128,7 +128,7 @@ test.describe('U5 activities toolbox', () => {
     // #1477 OR29 — the panel header names the type and keeps the sentence
     // behind its `?` (labels, not prose).
     const header = page
-      .getByRole('complementary', { name: 'Properties' })
+      .getByRole('region', { name: 'Properties', exact: true })
       .locator('.property-panel__header');
     await expect(header.locator('code')).toHaveText('copy');
     await expect(header.getByText(does)).toBeHidden();

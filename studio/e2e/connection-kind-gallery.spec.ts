@@ -33,9 +33,9 @@ test.describe('#1477 the connection kind gallery', () => {
       const tiles = [...root.querySelectorAll<HTMLElement>('.kind-gallery__tile')];
       const footer = root.closest('.form-drawer')!.querySelector('.form-drawer-footer')!;
       const footerTop = footer.getBoundingClientRect().top;
-      const heading = root.querySelector('h4')!;
+      const heading = root.querySelector('h3')!;
       return {
-        groups: [...root.querySelectorAll('h4')].map((h) => h.textContent),
+        groups: [...root.querySelectorAll('h3')].map((h) => h.textContent),
         tiles: tiles.map((t) => t.textContent),
         allAboveFooter: tiles.every((t) => t.getBoundingClientRect().bottom <= footerTop),
         allInViewport: tiles.every((t) => t.getBoundingClientRect().bottom <= window.innerHeight),

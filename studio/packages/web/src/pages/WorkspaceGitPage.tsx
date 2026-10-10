@@ -221,7 +221,7 @@ function ConnectForm({ onConnected }: { onConnected: (git: WorkspaceGitStatus) =
 
   return (
     <form onSubmit={(e) => void onSubmit(e)} aria-label="Connect a repository">
-      <h3>No repository connected</h3>
+      <h2>No repository connected</h2>
 
       <label>
         Repository
@@ -362,7 +362,7 @@ function GitStatusPanel({
 
   return (
     <>
-      <h3>Connected</h3>
+      <h2>Connected</h2>
       <dl className="run-meta">
         <dt>Repository</dt>
         <dd>{status.repoUrl}</dd>
@@ -489,7 +489,7 @@ function TokenForm({
   return (
     <>
       <form onSubmit={(e) => void onSubmit(e)} aria-label="Git token">
-        <h3>Access token</h3>
+        <h2>Access token</h2>
         <p className="page-hint">
           {status.hasStoredToken
             ? 'A token is stored, encrypted. It is never shown again — enter a new one to replace it.'
@@ -612,7 +612,7 @@ function CommitSection({
 
   return (
     <section aria-labelledby="commit-heading">
-      <h3 id="commit-heading">Commit</h3>
+      <h2 id="commit-heading">Commit</h2>
       <p className="page-hint">
         A commit writes the whole workspace — every pipeline, connection, dataset, trigger and
         global parameter — to <code>{status.workingBranch}</code> and pushes it.
@@ -834,7 +834,7 @@ function ImportSection({
 
   return (
     <section aria-labelledby="import-heading">
-      <h3 id="import-heading">Incoming</h3>
+      <h2 id="import-heading">Incoming</h2>
       <p className="page-hint">
         An import applies everything on <code>{status.collabBranch}</code> to this workspace, and it
         is what stamps a version with the git provenance that publishing requires. The branch is
@@ -971,7 +971,7 @@ function ImportPreviewReport({
           difference between an import and a surprise. */}
       {preview.archive.length > 0 && (
         <>
-          <h4>Will be archived</h4>
+          <h3>Will be archived</h3>
           <p>
             These pipelines are not on {collabBranch}. Importing archives them and disables any
             trigger that depends on them. Nothing is deleted.
@@ -1107,7 +1107,7 @@ function ImportOutcomeReport({
 
       {result.archived.length > 0 && (
         <>
-          <h4>Archived</h4>
+          <h3>Archived</h3>
           <ul>
             {result.archived.map((archived) => (
               <li key={archived.resourceId}>
@@ -1129,7 +1129,7 @@ function ImportOutcomeReport({
           answer has already been believed. */}
       {result.deferred.length > 0 && (
         <>
-          <h4>Not applied</h4>
+          <h3>Not applied</h3>
           <p role="alert" className="error">
             The server returned {countResources(result.deferred.length)} it did not apply and did
             not explain. This workspace does not match {collabBranch}.
@@ -1234,7 +1234,7 @@ function ParseDiagnostics({
   if (diagnostics.length === 0) return null;
   return (
     <>
-      <h4>Resources that could not be read, compared or applied</h4>
+      <h3>Resources that could not be read, compared or applied</h3>
       {note !== null && <p>{note}</p>}
       <ul>
         {diagnostics.map((diagnostic) => (

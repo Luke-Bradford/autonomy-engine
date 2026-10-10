@@ -185,7 +185,7 @@ describe('VersionHistoryPanel — the column (#1475 OR27)', () => {
         onClose={onClose}
       />,
     );
-    expect(screen.getByRole('complementary', { name: 'Version history' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Version history' })).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Close version history' }));
     expect(onClose).toHaveBeenCalledTimes(1);
 

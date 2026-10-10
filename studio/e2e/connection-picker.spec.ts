@@ -14,8 +14,9 @@ import { contrastRatio, fluentRootReady, setTheme, surfaceBehind } from './suppo
  * connection in the same column, and a save shows on every node bound to it.
  */
 
-const column = (page: Page) => page.getByRole('complementary', { name: 'New connection' });
-const editColumn = (page: Page) => page.getByRole('complementary', { name: 'Edit connection' });
+const column = (page: Page) => page.getByRole('region', { name: 'New connection', exact: true });
+const editColumn = (page: Page) =>
+  page.getByRole('region', { name: 'Edit connection', exact: true });
 const editing = (page: Page) =>
   page.getByRole('group', { name: 'Pipeline state' }).locator('[data-part="editing"]');
 

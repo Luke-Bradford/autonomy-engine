@@ -269,8 +269,8 @@ test.describe('#483 held/parked node pills', () => {
       const tableSurface = await surfaceBehind(page, '.activity-runs__table .node-status');
       // #1484 M2 — the drill-in is the run drawer, opened from the row.
       await activityRowById(page, 'hold').getByRole('button').first().click();
-      /* Keyed on the panel's CLASS, not `[role="complementary"]`: the panel is
-         an `<aside>`, whose `complementary` role is IMPLICIT, so no `role`
+      /* Keyed on the panel's CLASS, not `[role="region"]`: the panel is a
+         named `<section>`, whose `region` role is IMPLICIT, so no `role`
          attribute exists for a CSS selector to match. `getByRole` computes the
          ARIA role and finds it; `surfaceBehind` takes a CSS selector and cannot.
          The wait is for the click's re-render, not for an async mount: the drawer
@@ -412,7 +412,7 @@ test.describe('#1008 the skipped node', () => {
        opens the drawer. */
     await activityRowById(page, 'stop').getByRole('button').first().click();
 
-    const panel = page.getByRole('complementary');
+    const panel = page.getByRole('region', { name: /^Node / });
     await expect(panel).toContainText('routed around, so it was never going to run');
     /* The defect itself, asserted as the ABSENCE that has to hold. Without it
        the spec would pass on a panel that printed both sentences. */

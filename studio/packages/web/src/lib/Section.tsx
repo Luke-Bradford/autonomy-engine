@@ -7,7 +7,7 @@ import { Toolbar } from './PageHeader';
  * the section type, the `?` that says what the section holds, an optional row of
  * actions at the heading row's right end, then its content 8px below. Spacing
  * and type are decided once (`.section` in `index.css`); it replaces
- * `FormSection`'s legend, `DockSection`'s h4 and the `.panel-heading-row`.
+ * `FormSection`'s legend, `DockSection`'s heading and the `.panel-heading-row`.
  *
  * #1413 — every section says what it holds: `help` is required, and it is the
  * section's accessible description, so a screen reader hears it on entering the
@@ -28,7 +28,7 @@ import { Toolbar } from './PageHeader';
 export function Section({
   heading,
   help,
-  level = 4,
+  level = 3,
   landmark = false,
   collapsible = false,
   defaultOpen = false,
@@ -38,8 +38,8 @@ export function Section({
 }: {
   heading: string;
   help: ReactNode;
-  /** The heading's level: 4 under a drawer or panel title (h3), 3 under a page title. */
-  level?: 3 | 4;
+  /** The heading's level: 3 under a drawer or panel title (h2), 2 under a page title (h1). */
+  level?: 2 | 3;
   landmark?: boolean;
   collapsible?: boolean;
   defaultOpen?: boolean;
@@ -58,7 +58,7 @@ export function Section({
     if (defaultOpen) setOpen(true);
   }
   const shown = !collapsible || open;
-  const Heading = level === 3 ? 'h3' : 'h4';
+  const Heading = level === 2 ? 'h2' : 'h3';
   const head = (
     <div className="section__head help-row">
       <Heading id={headingId} className="section__title">

@@ -88,7 +88,7 @@ describe('RunHeader (#1484 OR35 M2)', () => {
 
   it('names the exact version, what triggered the run, its timing and its id in one band', () => {
     header(RUN);
-    expect(screen.getByRole('heading', { level: 2, name: 'Nightly load v3' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Nightly load v3' })).toBeInTheDocument();
     // #1566 — the name is this page's subject, not a way out of it; the editor
     // is the labelled icon, at the version that ran.
     expect(screen.queryByRole('link', { name: 'Nightly load' })).toBeNull();
@@ -116,7 +116,7 @@ describe('RunHeader (#1484 OR35 M2)', () => {
       'Loads the nightly extract',
     );
     // The heading's name is still the pipeline and version, not the hover.
-    expect(screen.getByRole('heading', { level: 2, name: 'Nightly load v3' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Nightly load v3' })).toBeInTheDocument();
   });
 
   it('#1569 — no description, no hover', () => {

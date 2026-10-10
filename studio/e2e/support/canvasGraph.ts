@@ -53,7 +53,7 @@ export const WIDE_CANVAS = { width: 2000, height: 1000 };
 
 /** The activities toolbox, addressed the way a user perceives it. */
 export function toolbox(page: Page): Locator {
-  return page.getByRole('complementary', { name: 'Activities' });
+  return page.getByRole('region', { name: 'Activities', exact: true });
 }
 
 /** Every rendered activity node on the canvas. */

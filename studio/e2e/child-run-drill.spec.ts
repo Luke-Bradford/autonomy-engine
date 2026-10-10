@@ -171,7 +171,7 @@ test('#796 — a refused call node names its refusal reason on the run page', as
   const callRow = activityRowById(page, 'callRefused');
   await callRow.getByRole('button').first().click();
 
-  const panel = page.getByRole('complementary', { name: /^Node / });
+  const panel = page.getByRole('region', { name: /^Node / });
   await expect(panel.getByRole('heading', { name: 'Failure' })).toBeVisible();
   await expect(panel.getByText('child pipeline is archived')).toBeVisible();
   await expect(panel.getByText(/reports another run/)).toHaveCount(0);

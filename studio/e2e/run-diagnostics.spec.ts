@@ -70,7 +70,7 @@ test('#1065 — the run monitor explains why a container failed, and says which 
   /* Addressed by its landmark rather than by position. */
   const section = page.getByRole('region', { name: 'Why this run behaved as it did' });
   await expect(
-    section.getByRole('heading', { name: 'Why this run behaved as it did', level: 3 }),
+    section.getByRole('heading', { name: 'Why this run behaved as it did', level: 2 }),
   ).toBeVisible();
 
   // The explanation itself, verbatim — the whole point of the section.

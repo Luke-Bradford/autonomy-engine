@@ -76,7 +76,7 @@ test('U24 — a failed node names its failure CLASS, and opens a drill-in', asyn
   await expect(failOne.getByRole('cell').first()).toHaveAttribute('title', 'start');
 
   // No drill-in until one is asked for.
-  await expect(page.getByRole('complementary', { name: 'Node Fail 1' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Node Fail 1', exact: true })).toHaveCount(0);
 
   const panel = await openActivity(page, 'Fail 1');
   await expect(panel).toBeVisible();
@@ -88,7 +88,7 @@ test('U24 — a failed node names its failure CLASS, and opens a drill-in', asyn
      the computed colour of its status pill, because a `--var` that failed to
      resolve is exactly the silent failure a screenshot cannot catch. */
   const seen = await page.evaluate(() => {
-    const el = document.querySelector('aside.node-detail-panel');
+    const el = document.querySelector('.node-detail-panel');
     if (el === null) return null;
     const pill = el.querySelector('.node-status');
     return {
@@ -126,14 +126,14 @@ test('U24 — a failed node names its failure CLASS, and opens a drill-in', asyn
   // Opening a DIFFERENT row swaps the drawer's record rather than stacking one.
   const failTwo = await openActivity(page, 'Fail 2');
   await expect(failTwo).toBeVisible();
-  await expect(page.getByRole('complementary', { name: 'Node Fail 1' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Node Fail 1', exact: true })).toHaveCount(0);
   await expect(page.locator('.run-drawer')).toHaveCount(1);
   await expect(failTwo).toContainText('downstream');
   await expect(failTwo).not.toContainText('planned');
 
   // Close shuts the drawer…
   await failTwo.getByRole('button', { name: 'Close' }).click();
-  await expect(page.getByRole('complementary', { name: 'Node Fail 2' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Node Fail 2', exact: true })).toHaveCount(0);
   await expect(page.locator('.run-drawer')).toHaveCount(0);
 
   /* …and so does Escape from inside it, handing focus back to the row that
@@ -207,7 +207,7 @@ test('#869 — an oversized output is capped in the DOM, and the rest is one cli
   /* ONE evaluate for every collapsed-state assertion — a per-assertion round
      trip is what makes a browser-driven verification expensive. */
   const collapsed = await page.evaluate(() => {
-    const el = document.querySelector('aside.node-detail-panel');
+    const el = document.querySelector('.node-detail-panel');
     const code = el?.querySelector('#node-detail-output-values');
     const button = [...(el?.querySelectorAll('button') ?? [])].find((b) =>
       /^Show all /.test(b.textContent ?? ''),
@@ -262,7 +262,7 @@ test('#869 — an oversized output is capped in the DOM, and the rest is one cli
   await panel.getByRole('button', { name: /^Show all / }).click();
 
   const opened = await page.evaluate(() => {
-    const el = document.querySelector('aside.node-detail-panel');
+    const el = document.querySelector('.node-detail-panel');
     const code = el?.querySelector('#node-detail-output-values');
     const button = [...(el?.querySelectorAll('button') ?? [])].find((b) =>
       /^Show first /.test(b.textContent ?? ''),

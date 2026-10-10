@@ -106,7 +106,7 @@ export function ConnectionColumn({
 
   const title = request.mode === 'edit' ? 'Edit connection' : 'New connection';
   return (
-    <aside className="pipeline-connection-column" aria-label={title}>
+    <section className="pipeline-connection-column" aria-label={title}>
       {guard.routeHold}
       {form !== null ? (
         <ConnectionForm
@@ -164,6 +164,6 @@ export function ConnectionColumn({
           </div>
         </DrawerShell>
       )}
-    </aside>
+    </section>
   );
 }

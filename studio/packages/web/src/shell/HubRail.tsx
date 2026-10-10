@@ -44,17 +44,13 @@ interface HubRailProps {
 export function HubRail({ store }: HubRailProps) {
   return (
     <nav className="hub-rail" aria-label="Primary">
-      {/* The app's `h1`, restored. The 220px sidebar this rail replaced carried
-          `<h1>Autonomy studio</h1>`; dropping it left the whole app with no h1
-          at all and every page starting at h2, which breaks screen-reader
-          heading navigation (and is what axe reports as `page-has-heading-one`).
-          The wordmark is only wide enough for a monogram, so the real name is
-          the accessible text and the glyph is decorative. #1594 OR40 S5 moves the
-          h1 to each page title and stops this being a heading. */}
-      <h1 className="hub-rail__brand">
+      {/* The wordmark, not a heading: #1594 OR40 S5 made each page's title its
+          one h1 (`PageHeader`). The wordmark is only wide enough for a monogram,
+          so the real name is the accessible text and the glyph is decorative. */}
+      <div className="hub-rail__brand">
         <span aria-hidden="true">as</span>
         <span className="visually-hidden">Autonomy studio</span>
-      </h1>
+      </div>
       <ul className="hub-rail__list">
         {HUBS.map((hub) => (
           <li key={hub.id}>

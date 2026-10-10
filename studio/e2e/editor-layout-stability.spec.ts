@@ -110,7 +110,7 @@ test.describe('#1393 the editor does not shift when you edit', () => {
     // 5. A node the validator refuses. The issue list used to grow above the
     // canvas by one line per issue; it is the Problems column now.
     await addActivity(page, 'Execute pipeline');
-    const problemsList = page.getByRole('complementary', { name: 'Problems' });
+    const problemsList = page.getByRole('region', { name: 'Problems', exact: true });
     await expect(problemsList.locator('.badge-list li')).toContainText(['needs a call config']);
     await expect(boxes.save(page)).toBeDisabled();
     // Announced from the dock header, which stays shown when the list folds.

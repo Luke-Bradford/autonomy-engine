@@ -179,7 +179,7 @@ test('#1484 M2 — the activity runs sit under the header: one row per attempt a
   const current = table.locator('tbody tr[aria-current="true"]');
   await expect(current).toHaveAttribute('data-activity-id', 'stop');
   await expect(current).toHaveAttribute('data-open', 'true');
-  const drawerPanel = page.locator('#run-detail-drawer').getByRole('complementary');
+  const drawerPanel = page.locator('#run-detail-drawer').getByRole('region', { name: /^Node / });
   await expect(drawerPanel).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(page.locator('#run-detail-drawer')).toHaveCount(0);

@@ -473,7 +473,7 @@ Every page's title row is `PageHeader` (`lib/PageHeader.tsx`, #1594 OR40 S3). Ne
 
 - **The row** is `--header-h` (40px in both densities): the title on the left, then an optional
   `adornment` (the editor's state badge and notices, the run page's editor link), then the toolbar
-  at the right end. The title is an `h2` in the title type (20/600) and ellipsizes first; pass the
+  at the right end. The title is the page's one `h1`, in the title type (20/600), and ellipsizes first; pass the
   full name as `headingTitle` where a name can be long.
 - **The toolbar** is the header's children, wrapped in `Toolbar`. Controls are 8px apart, every one
   `--control-h` tall, and centred on one line. A Fluent (toggle) button and a `.page-back` link are
@@ -536,7 +536,7 @@ replaced `FormSection` (a drawer's `fieldset` and `legend`), `DockSection` (the 
 `.panel-heading-row`. Never write a section heading by hand.
 
 - **The heading** is in the section type (14/600 compact, 16/600 comfortable), sentence case. It
-  is an `h4` under a drawer or panel title (`h3`) and an `h3` under a page title (`level={3}`).
+  is an `h3` under a drawer or panel title (`h2`) and an `h2` under a page title (`level={2}`).
 - **The heading row** holds the heading, its `?` and, optionally, `actions`: a `Toolbar` at the
   row's right end (the Monitor's Refresh quota).
 - **Spacing:** the content starts 8px under the heading row, and its fields are 8px apart. Every
@@ -552,7 +552,7 @@ replaced `FormSection` (a drawer's `fieldset` and `legend`), `DockSection` (the 
   `aria-expanded`, not a `<details>`: a `<summary>` cannot hold the `?` beside it. They are closed
   unless `defaultOpen`, and they open if `defaultOpen` turns true after mount (a record that loads
   late and uses the section).
-- **Still to move:** page sections that are bare `h3`/`h4` headings (Settings, Home, Git, the run
+- **Still to move:** page sections that are bare `h2`/`h3` headings (Settings, Home, Git, the run
   page's timeline, variables and cost) move to `Section` page by page in S6.
 
 `e2e/section.spec.ts` measures a drawer, the dock and a page at 1440x900 in both densities.
@@ -659,6 +659,20 @@ list (a Copy mapping, HTTP headers, LLM messages, an output schema) render throu
   header `?` would cut off its own note. A row list's hint sits behind a `?` beside its label.
 
 Axe gates on every form (0 violations) belong to OR24 (#1415), which brings axe into the e2e suite.
+
+## Headings and regions (#1594 OR40 S5)
+
+- **One `h1` per page: its title**, rendered by `PageHeader`. The rail's wordmark is not a
+  heading. Under the title, sections are `h2`, a drawer's or panel's title is `h2`, and what sits
+  under those is `h3`, then `h4`. A heading never skips a level going down.
+- **The pane title** is an `h2` inside its own `nav` landmark ("<hub> sections"), not part of the
+  page's outline.
+- **A named part of the page is a `region`**: a `section` with an `aria-label` or
+  `aria-labelledby`. That covers the editor's Activities, Properties and Problems, the run drawer's
+  activity run, version history, the triggers and connection columns. Never an `aside`: a
+  `complementary` landmark must be top level, and these all sit inside `main`.
+- `e2e/heading-structure.spec.ts` checks every page, the run page with its drawer and views, and
+  the editor's selection states.
 
 ## Case and terms (#1594 OR40 S4)
 

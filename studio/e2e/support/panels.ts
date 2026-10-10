@@ -14,7 +14,7 @@ import { expect, type Locator, type Page } from '@playwright/test';
 /** The canvas's right-hand Properties dock: the selected node's inspector,
  *  or the pipeline's own tabs when nothing is selected. */
 export function properties(page: Page): Locator {
-  return page.getByRole('complementary', { name: 'Properties' });
+  return page.getByRole('region', { name: 'Properties', exact: true });
 }
 
 /** Matches text that starts with `prefix`; a substring would also match "store A2". */
@@ -128,7 +128,7 @@ export function activityRowById(page: Page, id: string): Locator {
 
 /**
  * Opens an activity run in the run drawer and returns what it shows: the
- * `complementary` named `Node <name>`, holding that ONE attempt or item (ADF
+ * `region` named `Node <name>`, holding that ONE attempt or item (ADF
  * parity), not the node's latest across items. `nth` as `activityRow`.
  */
 export async function openActivity(
@@ -142,7 +142,7 @@ export async function openActivity(
 
 /** The run drawer's record, named as the row that opened it. */
 export function drawerPanel(page: Page, name: string): Locator {
-  return page.locator('.run-drawer').getByRole('complementary', { name: `Node ${name}` });
+  return page.locator('.run-drawer').getByRole('region', { name: `Node ${name}`, exact: true });
 }
 
 /**

@@ -659,7 +659,7 @@ test.describe('version history column (#1475 OR27)', () => {
     const gridBefore = await box(page, '.canvas-grid');
 
     await (await historyItem(page)).click();
-    const panel = page.getByRole('complementary', { name: 'Version history' });
+    const panel = page.getByRole('region', { name: 'Version history', exact: true });
     await expect(panel).toBeVisible();
     await expect(rows(page)).toHaveCount(3);
 

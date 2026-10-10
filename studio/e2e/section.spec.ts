@@ -107,7 +107,7 @@ for (const density of ['compact', 'comfortable'] as const) {
     await page.goto('/#/monitor/ai');
     await fluentRootReady(page);
     const quota = page.getByRole('region', { name: 'Account quota' });
-    await expect(quota.getByRole('heading', { level: 3, name: 'Account quota' })).toBeVisible();
+    await expect(quota.getByRole('heading', { level: 2, name: 'Account quota' })).toBeVisible();
     const [seen] = await measure(quota);
     expect(seen!.font, 'Account quota: heading type').toBe(SECTION_TYPE[density]);
     expect(seen!.actions, 'Account quota: Refresh').toHaveLength(1);

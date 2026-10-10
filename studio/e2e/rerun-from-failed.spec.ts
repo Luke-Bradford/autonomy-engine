@@ -329,7 +329,7 @@ test("RS4 — a rerun reuses a copied call node's child, and links to it", async
   // #1484 M2 — the copied call node's activity run, by its raw id.
   const callRow = activityRowById(page, 'callChild');
   await callRow.getByRole('button').first().click();
-  const panel = page.getByRole('complementary', { name: /^Node / });
+  const panel = page.getByRole('region', { name: /^Node / });
   await expect(panel.getByText(/reused its result from run/)).toBeVisible();
   await expect(panel.getByText(sourceRunId, { exact: true })).toBeVisible();
   await expect(panel.getByText(/this rerun did not start another/)).toBeVisible();
