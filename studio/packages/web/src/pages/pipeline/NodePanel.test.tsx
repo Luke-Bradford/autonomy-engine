@@ -214,7 +214,7 @@ describe('NodePanel (#4 A9 structural-call routing)', () => {
 /**
  * #878 — the panel heading names the NODE, not its kind.
  *
- * Both review lenses proved this consumer had no guard: reverting both `<h3>`s to
+ * Both review lenses proved this consumer had no guard: reverting both `<h2>`s to
  * the old `entry?.title ?? nodeType` left the whole suite green. The failure it
  * would have hidden is the exact disagreement `activityLabel`'s docblock exists
  * to prevent — the box reads "HTTP request 2" and its own panel reads "HTTP

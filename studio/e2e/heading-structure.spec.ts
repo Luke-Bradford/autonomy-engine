@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, nodeById, openSeededCanvas, seedVersion } from './support/seedDoc';
+import { TITLED_PAGES } from './support/pages';
 import { fluentRootReady } from './support/theme';
 
 /**
@@ -13,28 +14,15 @@ import { fluentRootReady } from './support/theme';
  */
 test.use({ viewport: { width: 1440, height: 900 } });
 
-const STATIC_PAGES: [string, string][] = [
-  ['/', 'Home'],
-  ['/settings', 'Settings'],
-  ['/author/pipelines', 'Pipelines'],
-  ['/monitor/runs', 'Runs'],
-  ['/monitor/ai', 'AI activity'],
-  ['/monitor/audit', 'Audit'],
-  ['/manage/connections', 'Connections'],
-  ['/manage/datasets', 'Datasets'],
-  ['/manage/secrets', 'Secrets'],
-  ['/manage/global-params', 'Global parameters'],
-  ['/manage/triggers', 'Triggers'],
-  ['/manage/git', 'Git'],
-  ['/no-such-page', 'Page not found'],
-];
-
 interface Structure {
   h1s: string[];
   /** Each step down that skips a level: `h2 "Runs" → h4 "Inputs"`. */
   skips: string[];
   firstLevel: number | null;
   asidesInMain: string[];
+  /** Headings outside `main` that are not inside a `nav` (the pane's title is
+   *  an h2 in its own nav, outside the page's outline). */
+  strayHeadings: string[];
   headingsInRail: number;
 }
 
@@ -65,6 +53,9 @@ function read(page: Page): Promise<Structure> {
       asidesInMain: [...document.querySelectorAll('main :is(aside, [role="complementary"])')].map(
         (el) => `${el.tagName.toLowerCase()}.${el.className}`,
       ),
+      strayHeadings: [...document.querySelectorAll(':is(h1, h2, h3, h4, h5, h6)')]
+        .filter((h) => listed(h) && h.closest('main, nav') === null)
+        .map(label),
       headingsInRail: document.querySelectorAll(
         'nav[aria-label="Primary"] :is(h1, h2, h3, h4, h5, h6)',
       ).length,
@@ -74,12 +65,12 @@ function read(page: Page): Promise<Structure> {
 
 function expectStructure(view: string, s: Structure, title: string | RegExp) {
   expect(s.h1s, `${view}: one h1, the page title`).toHaveLength(1);
-  expect(s.h1s[0], `${view}: the h1 is the page title`).toMatch(
-    typeof title === 'string' ? new RegExp(`^${title}$`) : title,
-  );
+  if (typeof title === 'string') expect(s.h1s[0], `${view}: the h1 is the page title`).toBe(title);
+  else expect(s.h1s[0], `${view}: the h1 is the page title`).toMatch(title);
   expect(s.firstLevel, `${view}: main starts at its h1`).toBe(1);
   expect(s.skips, `${view}: no heading skips a level`).toEqual([]);
   expect(s.asidesInMain, `${view}: no aside inside main`).toEqual([]);
+  expect(s.strayHeadings, `${view}: every heading outside main is in a nav`).toEqual([]);
   expect(s.headingsInRail, `${view}: the rail's wordmark is not a heading`).toBe(0);
 }
 
@@ -94,7 +85,7 @@ test('#1594 OR40 S5 — one h1 per page, no skipped heading level, no aside in m
   });
   const runId = await fireAndSettle(page, pipelineVersionId, 'e2e heading structure');
 
-  for (const [path, title] of STATIC_PAGES) {
+  for (const { path, title } of TITLED_PAGES) {
     await page.goto(`/#${path}`);
     await fluentRootReady(page);
     await expect(page.locator('.page-header > h1')).toHaveText(title);
@@ -105,7 +96,7 @@ test('#1594 OR40 S5 — one h1 per page, no skipped heading level, no aside in m
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
   await expect(page.locator('.run-header .run-status')).toHaveText('failure');
-  const runTitle = new RegExp(`^Structure run ${stamp} `);
+  const runTitle = new RegExp(`^Structure run ${stamp} `); // the name, then its version
   expectStructure('run', await read(page), runTitle);
   for (const tab of ['Gantt', 'Variables', 'Cost', 'Events']) {
     await page
@@ -135,9 +126,7 @@ test('#1594 OR40 S5 — one h1 per page, no skipped heading level, no aside in m
   ).toHaveCount(1);
   await nodeById(page, 'n1').click();
   expectStructure('editor, activity', await read(page), name);
-  await page.keyboard.down('Meta');
-  await nodeById(page, 'n2').click();
-  await page.keyboard.up('Meta');
+  await nodeById(page, 'n2').click({ modifiers: ['Meta'] });
   await expect(page.getByRole('heading', { name: '2 selected' })).toBeVisible();
   expectStructure('editor, two selected', await read(page), name);
 

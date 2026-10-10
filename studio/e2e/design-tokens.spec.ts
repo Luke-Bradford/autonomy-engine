@@ -8,8 +8,8 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
  * computes from it: the tokens resolve on the root, inherited text is the body
  * size, native controls take the app's font rather than the UA's 13.333px, and
  * a heading with no class rule of its own is on the ramp rather than the
- * browser default. Settings is the page for it: its title is a bare `<h2>`
- * (21/700 before S1) and it carries the Density select.
+ * browser default. Settings is the page for it: its title is a bare `<h1>`
+ * (an `<h2>` at 21/700 before S1) and it carries the Density select.
  */
 
 function read(page: Page) {

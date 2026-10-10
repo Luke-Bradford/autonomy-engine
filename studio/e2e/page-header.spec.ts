@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, openSeededCanvas, seedVersion } from './support/seedDoc';
+import { TITLED_PAGES } from './support/pages';
 import { fluentRootReady } from './support/theme';
 
 /**
@@ -17,23 +18,6 @@ test.use({ viewport: { width: 1440, height: 900 } });
 
 type Density = 'compact' | 'comfortable';
 const CONTROL_H: Record<Density, number> = { compact: 28, comfortable: 32 };
-
-/** Route, title, and how many toolbar controls it shows (so none passes empty). */
-const STATIC_PAGES: [string, string, number][] = [
-  ['/', 'Home', 0],
-  ['/settings', 'Settings', 0],
-  ['/author/pipelines', 'Pipelines', 3],
-  ['/monitor/runs', 'Runs', 9],
-  ['/monitor/ai', 'AI activity', 1],
-  ['/monitor/audit', 'Audit', 1],
-  ['/manage/connections', 'Connections', 1],
-  ['/manage/datasets', 'Datasets', 1],
-  ['/manage/secrets', 'Secrets', 1],
-  ['/manage/global-params', 'Global parameters', 1],
-  ['/manage/triggers', 'Triggers', 1],
-  ['/manage/git', 'Git', 0],
-  ['/no-such-page', 'Page not found', 0],
-];
 
 async function setDensity(page: Page, density: Density) {
   await page.goto('/#/settings');
@@ -144,7 +128,7 @@ for (const density of ['compact', 'comfortable'] as const) {
 
     await setDensity(page, density);
 
-    for (const [path, title, count] of STATIC_PAGES) {
+    for (const { path, title, controls: count } of TITLED_PAGES) {
       await page.goto(`/#${path}`);
       await fluentRootReady(page);
       await expect(
