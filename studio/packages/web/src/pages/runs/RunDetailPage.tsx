@@ -70,6 +70,7 @@ import { shortId } from '../../lib/ids';
 import { useShellLabel } from '../../shell/shellLabel';
 import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import { formatTimeOfDay, zoneLabel } from '../../lib/displayTime';
+import { OneLine } from '../../lib/OneLine';
 
 /* The local `message(err)` this file used to declare was one of the twenty-odd
    inline copies `messageOf` was named to replace; `api/client.ts` asks each to
@@ -860,7 +861,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
                     <table className="event-feed">
                       <thead>
                         <tr>
-                          <th scope="col">Seq</th>
+                          <th scope="col" className="num">
+                            Seq
+                          </th>
                           {/* Clock times only, so the zone is named once, here. */}
                           <th scope="col">
                             Time{feed.length > 0 ? ` (${zoneLabel(feed[0]!.ts, zone)})` : ''}
@@ -879,12 +882,16 @@ export function RunDetailPage({ runId }: { runId: string }) {
                         )}
                         {feed.map((e) => (
                           <tr key={e.seq}>
-                            <td>{e.seq}</td>
+                            <td className="num">{e.seq}</td>
                             <td>{formatTimeOfDay(e.ts, zone, 'ms')}</td>
                             <td>
                               <code>{e.type}</code>
                             </td>
-                            <td>{eventGloss(e)}</td>
+                            <td>
+                              <OneLine wide title={eventGloss(e)}>
+                                {eventGloss(e)}
+                              </OneLine>
+                            </td>
                           </tr>
                         ))}
                       </tbody>

@@ -56,7 +56,7 @@ test('R2/U10 — the runs list names the pipeline, times the run, and filters by
   await expect(row).toContainText('v1');
   await expect(page.getByText(pipelineVersionId, { exact: true })).toHaveCount(0);
   // Demoted, not discarded — still reachable for whoever needs the raw key.
-  await expect(row.locator(`[title="${pipelineVersionId}"]`)).toHaveCount(1);
+  await expect(row.locator(`[title$="${pipelineVersionId}"]`)).toHaveCount(1);
 
   // R2 — the trigger's name, joined server-side; #1484 — after what started
   // the run, which the SERVER classifies (fireAndSettle uses Fire now).

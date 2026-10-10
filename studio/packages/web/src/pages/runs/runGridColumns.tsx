@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import { Link, useNavigate } from 'react-router';
-import type { RunSortKey, RunSummary } from '@autonomy-studio/shared';
+import { RUN_TRIGGERED_BY_LABELS, type RunSortKey, type RunSummary } from '@autonomy-studio/shared';
 import {
   RUN_GRID_REQUIRED_COLUMNS,
   RUN_GRID_SPEC,
@@ -158,6 +158,16 @@ function activitiesTd(run: RunSummary): ReactNode {
 }
 
 /**
+ * #1594 OR40 S3d — the Triggered by cell's tooltip: its whole text (the cell
+ * can cut a long trigger name), then a rerun's source run (RS6).
+ */
+function triggeredByTitle(r: RunSummary): string {
+  const label = RUN_TRIGGERED_BY_LABELS[r.triggeredByKind];
+  const text = r.triggerName !== null ? `${label} · ${r.triggerName}` : label;
+  return r.rerunOf !== null ? `${text}\nRerun of run ${r.rerunOf}` : text;
+}
+
+/**
  * The Pipeline cell. R2 — the pipeline's NAME, the only thing here an operator
  * recognises; the version id stays reachable as its title.
  *
@@ -173,7 +183,13 @@ function PipelineCell({ run: r, ctx }: { run: RunSummary; ctx: CellContext }) {
   return (
     <span className="runs-grid__pipeline-line">
       {ctx.nest && <NestLead run={r} nest={ctx.nest} />}
-      <Link className="runs-grid__pipeline-name" to={ctx.path} title={r.pipelineVersionId}>
+      {/* #1594 OR40 S3d — the cell can cut the name, so the tooltip leads
+          with the whole name and version, then the version id it demotes. */}
+      <Link
+        className="runs-grid__pipeline-name"
+        to={ctx.path}
+        title={`${r.pipelineName} ${versionLabel(r.pipelineVersion, r.debug)} · ${r.pipelineVersionId}`}
+      >
         {r.pipelineName}{' '}
         <span className="run-version">{versionLabel(r.pipelineVersion, r.debug)}</span>
       </Link>
@@ -229,7 +245,7 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
     /* #1484 — the server's `triggeredByKind`, plus the trigger's name when it
        still exists. A rerun names its source run in the title (RS6). */
     cell: (r) => (
-      <td title={r.rerunOf !== null ? `Rerun of run ${r.rerunOf}` : undefined}>
+      <td title={triggeredByTitle(r)}>
         <RunTriggeredByName kind={r.triggeredByKind} />
         {r.triggerName !== null && <span className="runs-grid__trigger"> · {r.triggerName}</span>}
       </td>

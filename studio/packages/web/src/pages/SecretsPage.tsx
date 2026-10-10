@@ -37,6 +37,7 @@ import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 import { When } from '../lib/When';
 import { PageHeader } from '../lib/PageHeader';
 import { LabelledControl } from '../lib/LabelledControl';
+import { OneLine } from '../lib/OneLine';
 
 /** `id === null` means creating; otherwise this form REPLACES that secret's
  *  value (#1061). The `id: string | null` discriminator is the shape
@@ -215,7 +216,9 @@ export function SecretsPage() {
                 {secrets.map((secret) => (
                   <tr key={secret.id}>
                     <td>
-                      <code>{secret.name}</code>
+                      <OneLine as="code" title={secret.name}>
+                        {secret.name}
+                      </OneLine>
                     </td>
                     <td>
                       <When ms={secret.createdAt} />

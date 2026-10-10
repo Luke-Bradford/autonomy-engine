@@ -16,6 +16,7 @@ import { StoreCell } from './StoreCell';
 import { DatasetKindName } from '../../lib/KindName';
 import { useShellLabel } from '../../shell/shellLabel';
 import { PageHeader } from '../../lib/PageHeader';
+import { OneLine } from '../../lib/OneLine';
 
 /**
  * #996 M9 (#1185) — the dataset detail page: which of this owner's pipelines
@@ -217,7 +218,9 @@ function ReferenceRow({ reference }: { reference: DatasetReference }) {
   return (
     <tr>
       <td>
-        <Link to={pipelinePath(reference.pipelineId)}>{reference.pipelineName}</Link>
+        <OneLine title={reference.pipelineName}>
+          <Link to={pipelinePath(reference.pipelineId)}>{reference.pipelineName}</Link>
+        </OneLine>
         {reference.pipelineArchived && (
           <>
             {' '}

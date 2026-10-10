@@ -100,8 +100,12 @@ function QuotaWindowTable({ windows, now }: { windows: QuotaWindowReading[]; now
       <thead>
         <tr>
           <th scope="col">Window</th>
-          <th scope="col">Used</th>
-          <th scope="col">Headroom</th>
+          <th scope="col" className="num">
+            Used
+          </th>
+          <th scope="col" className="num">
+            Headroom
+          </th>
           <th scope="col">Resets</th>
         </tr>
       </thead>
@@ -109,11 +113,11 @@ function QuotaWindowTable({ windows, now }: { windows: QuotaWindowReading[]; now
         {windows.map((w) => (
           <tr key={w.label}>
             <th scope="row">{w.label}</th>
-            <td>
+            <td className="num">
               {formatPct(w.usedPct)}
               {w.overage && <span className="badge quota-overage"> on overage credit</span>}
             </td>
-            <td>{formatPct(w.headroomPct)}</td>
+            <td className="num">{formatPct(w.headroomPct)}</td>
             {/* The RESET INSTANT, not just a percentage: a bare "96%" is
                 what makes a correctly-working system look hung. */}
             <td>
@@ -290,8 +294,12 @@ function ReportedActivityPanel({ external }: { external: ExternalAgentActivity }
                 <th scope="col">Source</th>
                 <th scope="col">Agent</th>
                 <th scope="col">Model</th>
-                <th scope="col">Invocations</th>
-                <th scope="col">Running</th>
+                <th scope="col" className="num">
+                  Invocations
+                </th>
+                <th scope="col" className="num">
+                  Running
+                </th>
                 <th scope="col">Tokens</th>
                 <th scope="col">Last started</th>
               </tr>
@@ -304,8 +312,8 @@ function ReportedActivityPanel({ external }: { external: ExternalAgentActivity }
                   {/* A model the reporter did not name is said to be unknown, never
                       blanked: an empty cell reads as "no model", which is a claim. */}
                   <td>{r.model ?? 'not reported'}</td>
-                  <td>{r.invocations}</td>
-                  <td>{r.inFlight}</td>
+                  <td className="num">{r.invocations}</td>
+                  <td className="num">{r.inFlight}</td>
                   <td>{reportedTokenSummary(r.tokens, r.invocations)}</td>
                   <td>
                     <When ms={r.lastAt} />
@@ -414,9 +422,13 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
               <tr>
                 <th scope="col">Connection kind</th>
                 <th scope="col">Model</th>
-                <th scope="col">Exchanges</th>
+                <th scope="col" className="num">
+                  Exchanges
+                </th>
                 <th scope="col">Tokens</th>
-                <th scope="col">Spend</th>
+                <th scope="col" className="num">
+                  Spend
+                </th>
                 <th scope="col">Last used</th>
               </tr>
             </thead>
@@ -425,7 +437,7 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
                 <tr key={`${m.provider}/${m.model}`}>
                   <td>{m.provider}</td>
                   <td>{m.model}</td>
-                  <td>{m.cost.responseCount}</td>
+                  <td className="num">{m.cost.responseCount}</td>
                   {/* Per model, the same honesty as the tile above: a row whose
                       provider never sent `usage` reads as not reported rather than
                       as a measured zero. The header lost its "in / out" because
