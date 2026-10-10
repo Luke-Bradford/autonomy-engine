@@ -102,7 +102,7 @@ function measure(page: Page) {
           .map((el) => {
             const text = norm(el.innerText);
             const holders: HTMLElement[] = [];
-            for (let up: HTMLElement | null = el; up && up.tagName !== 'TR'; ) {
+            for (let up: HTMLElement | null = el; up && up.tagName !== 'TR';) {
               holders.push(up);
               up = up.parentElement;
             }
@@ -150,9 +150,7 @@ function expectTableStyle(label: string, m: Measured, density: Density) {
       expect(c.family, `${where}: code '${c.text}' face`).toMatch(/^ui-monospace/);
     }
     for (const c of t.cut) {
-      expect(c.titled, `${where}: cut cell '${c.text}' has its whole text as a tooltip`).toBe(
-        true,
-      );
+      expect(c.titled, `${where}: cut cell '${c.text}' has its whole text as a tooltip`).toBe(true);
     }
   }
 }
@@ -238,7 +236,10 @@ for (const density of ['compact', 'comfortable'] as const) {
       if (p.title !== '') {
         await expect(page.getByRole('heading', { name: p.title, exact: true })).toBeVisible();
       }
-      await expect(page.locator('.content table tbody tr').first(), `${p.route}: a table row`).toBeVisible();
+      await expect(
+        page.locator('.content table tbody tr').first(),
+        `${p.route}: a table row`,
+      ).toBeVisible();
       const m = await measure(page);
       expectTableStyle(`${p.route} (${density})`, m, density);
       if (p.cut) {
