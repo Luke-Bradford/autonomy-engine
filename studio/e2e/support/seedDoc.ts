@@ -423,3 +423,33 @@ export async function waitForRunToSettle(
     )
     .toBe('terminal');
 }
+
+/**
+ * Seed a run REFUSED at start, and return its id once its row reads
+ * `interrupted`. A run-now override naming a param the pipeline does not
+ * declare passes the fire endpoint (the binding is checked there; the override
+ * is not) and is refused inside `startRun`, before any event is written. Shared
+ * by the spec about that refusal's reason (#1367) and the Runs grid's cut
+ * status pill (#1626), which needs an `interrupted` run of its own.
+ */
+export async function seedRefusedStartRun(page: Page, name: string): Promise<string> {
+  const { pipelineVersionId } = await seedVersion(page, name, {
+    /* Never dispatched: the start is refused before any node is reached. */
+    nodes: [
+      { id: 'stop', type: 'fail', config: { message: 'never reached' }, position: { x: 0, y: 0 } },
+    ],
+  });
+  const triggerId = await seedManualTrigger(page, pipelineVersionId, name);
+  const fired = await page.request.post(`/api/triggers/${encodeURIComponent(triggerId)}/fire`, {
+    data: { params: { nope: 1 } },
+  });
+  expect(fired.status(), `firing trigger: ${await fired.text()}`).toBe(202);
+  const { runId } = (await fired.json()) as { runId: string };
+  await expect
+    .poll(async () => {
+      const res = await page.request.get(`/api/runs/${encodeURIComponent(runId)}`);
+      return ((await res.json()) as { status: string }).status;
+    })
+    .toBe('interrupted');
+  return runId;
+}

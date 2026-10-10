@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { fireAndSettle, seedManualTrigger, seedVersion, type SeedDoc } from './support/seedDoc';
+import { fireAndSettle, seedRefusedStartRun, seedVersion, type SeedDoc } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 
 /**
@@ -154,29 +154,11 @@ test('#1367 — a run refused at start shows the refusal reason on the run page'
 }) => {
   const problems = collectPageProblems(page);
 
-  const doc: SeedDoc = {
-    /* Never dispatched: the start is refused before any node is reached. */
-    nodes: [
-      { id: 'stop', type: 'fail', config: { message: 'never reached' }, position: { x: 0, y: 0 } },
-    ],
-  };
-  const { pipelineVersionId } = await seedVersion(page, '#1367 refused start', doc);
-  const triggerId = await seedManualTrigger(page, pipelineVersionId, '#1367 refused');
-  const fired = await page.request.post(`/api/triggers/${encodeURIComponent(triggerId)}/fire`, {
-    data: { params: { nope: 1 } },
-  });
-  expect(fired.status(), `firing trigger: ${await fired.text()}`).toBe(202);
-  const { runId } = (await fired.json()) as { runId: string };
-
+  /* PREMISE, through the API: the run really was refused before it started
+     (the helper waits for its row to read `interrupted`), and the reason
+     really reached the durable table. */
+  const runId = await seedRefusedStartRun(page, '#1367 refused start');
   const reason = "The run did not start: override for undeclared param 'nope'";
-  /* PREMISE, through the API: the run really was refused before it started, and
-     the reason really reached the durable table. */
-  await expect
-    .poll(async () => {
-      const res = await page.request.get(`/api/runs/${encodeURIComponent(runId)}`);
-      return ((await res.json()) as { status: string }).status;
-    })
-    .toBe('interrupted');
   const res = await page.request.get(`/api/runs/${encodeURIComponent(runId)}/diagnostics`);
   expect(res.status()).toBe(200);
   expect(

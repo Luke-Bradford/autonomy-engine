@@ -509,7 +509,8 @@ or header type.
   automatic layout has no column width to cut to, and that cost is accepted.
 - **The grids** (Runs, Pipelines) cut every cell at its column's width (`table-layout: fixed`). Any
   `title` a cell sets therefore leads with the cell's whole text, and the secondary detail follows
-  it: a pipeline's version id, a rerun's source run, a cost's caveat.
+  it: a pipeline's version id, a rerun's source run, a cost's caveat. A status pill in a grid cell
+  ellipsises its own word inside a whole ring, and the cell's `title` says the word (#1626).
 - **Exempt from one line, on purpose:** prose, logs and block values, which grow their row instead.
   These are a diagnostic's explanation, a dataset reference's mapping verdict, a streamed log line's
   value (the drawer is where it is read), and a variable's or global's capped JSON value on the run
