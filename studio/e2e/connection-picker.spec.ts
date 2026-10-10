@@ -311,3 +311,43 @@ test.describe('#1477 activity connection pickers', () => {
     await expectQuiet(page, problems);
   });
 });
+
+/**
+ * #1594 OR40 S5b — the open list is mounted inside `main` (not `<body>`), which
+ * skips Fluent's own on-top layer. Visible is not enough: the point at an
+ * option's centre must be the list itself, docked and with the dock expanded
+ * (the expanded dock is the highest in-page layer).
+ */
+test('the open list is on top, docked and with the dock expanded', async ({ page }) => {
+  const problems = collectPageProblems(page);
+  await seedFsConnection(page, `e2e S5b on top ${String(Date.now())}`);
+  await copyNodeOnSink(page, 'e2e S5b on top');
+
+  const listOnTop = () =>
+    page.evaluate(() => {
+      const list = document.querySelector('[role="listbox"]');
+      const option = list?.querySelector('[role="option"]');
+      if (!list || !option) return 'no open list';
+      const box = option.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+      return {
+        inMain: list.closest('main') !== null,
+        onTop: hit !== null && list.contains(hit),
+      };
+    });
+
+  const sink = properties(page).getByRole('combobox', { name: 'Sink connection' });
+  await sink.click();
+  await expect(page.getByRole('listbox')).toBeVisible();
+  expect(await listOnTop()).toEqual({ inMain: true, onTop: true });
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Expand properties' }).click();
+  await sink.click();
+  await expect(page.getByRole('listbox')).toBeVisible();
+  expect(await listOnTop()).toEqual({ inMain: true, onTop: true });
+  await page.keyboard.press('Escape');
+
+  await expectQuiet(page, problems);
+});

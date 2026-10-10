@@ -337,7 +337,10 @@ export function PipelinesGrid({
                 />
               );
             })}
-            <th scope="col" aria-label="Actions" />
+            {/* Text, not `aria-label`: axe `empty-table-header`. */}
+            <th scope="col">
+              <span className="visually-hidden">Actions</span>
+            </th>
           </tr>
         </thead>
         <tbody>

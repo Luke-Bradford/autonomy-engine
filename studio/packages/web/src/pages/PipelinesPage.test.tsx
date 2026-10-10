@@ -465,7 +465,7 @@ describe('PipelinesPage', () => {
           screen
             .getAllByRole('columnheader')
             .map((h) => h.textContent?.replace(/[▲▼]/g, '').trim()),
-        ).toEqual(['Name', 'Modified', '']);
+        ).toEqual(['Name', 'Modified', 'Actions']);
         // The run filters are not drawn where there are no run facts.
         expect(screen.queryByRole('button', { name: /^Last run:/ })).not.toBeInTheDocument();
         expect(screen.queryByText(/No pipelines yet/i)).not.toBeInTheDocument();
