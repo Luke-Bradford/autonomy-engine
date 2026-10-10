@@ -33,7 +33,8 @@ export function offRampText(
           (n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? '').trim() !== '',
         );
         if (!own || el.getClientRects().length === 0) continue;
-        if (el.closest('.visually-hidden, [hidden]')) continue;
+        // Not drawn: hidden, or the body of a closed `<details>` (a `?` note).
+        if (el.closest('.visually-hidden, [hidden], details:not([open]) > :not(summary)')) continue;
         const s = getComputedStyle(el);
         const pair = `${parseFloat(s.fontSize)}/${s.fontWeight}`;
         if (!allowed.includes(pair)) {

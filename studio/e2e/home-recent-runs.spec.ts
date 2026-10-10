@@ -125,6 +125,10 @@ for (const density of DENSITIES) {
     ).toBeVisible();
 
     expect(await offRampText(page, density)).toEqual([]);
+    // And a section's `?` note, open: the shared help piece is on the ramp too.
+    await page.getByRole('region', { name: 'Recent runs' }).getByText('?', { exact: true }).click();
+    await expect(page.getByRole('note').first()).toBeVisible();
+    expect(await offRampText(page, density)).toEqual([]);
     const shape = await page.evaluate(() => ({
       prose: document.querySelectorAll('.content .page-hint').length,
       cards: [...document.querySelectorAll<HTMLElement>('.content a')].filter((a) => {

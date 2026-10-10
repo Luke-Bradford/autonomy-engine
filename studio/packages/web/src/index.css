@@ -5668,7 +5668,7 @@ button.danger {
   border: 1px solid var(--border);
   border-radius: 50%;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--type-caption-size);
 }
 
 .help-disclosure > summary::-webkit-details-marker {
@@ -5677,14 +5677,15 @@ button.danger {
 
 .help-disclosure > span {
   position: absolute;
-  top: calc(100% + 0.25rem);
+  top: calc(100% + var(--space-1));
   right: 0;
   z-index: 10;
   width: 22rem;
-  padding: 0.5rem 0.75rem;
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
   background: var(--panel);
-  font-size: 13px;
+  /* #1594 OR40 S6 — the body step, so the note is 14px at comfortable. */
+  font-size: var(--type-body-size);
 }
 
 /* #1477 OR29 — a section's `?` (`Section`). The dock scrolls and may be a
