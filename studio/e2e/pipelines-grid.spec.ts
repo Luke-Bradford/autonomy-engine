@@ -300,7 +300,7 @@ test('#1569 slice 5 — a description typed in New pipeline is its first version
   await open.click();
   await page.locator('.react-flow__renderer').waitFor();
   await page.getByRole('tab', { name: 'General' }).click();
-  await expect(page.getByLabel('pipeline description')).toHaveValue(description);
+  await expect(page.getByLabel('Pipeline description')).toHaveValue(description);
 
   await expectQuiet(page, problems);
 });

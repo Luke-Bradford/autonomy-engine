@@ -42,11 +42,11 @@ test.describe('#1 F8a — pipeline description + annotations', () => {
     await expect(
       page.getByRole('group', { name: 'General', exact: true }),
     ).toHaveAccessibleDescription('A short account of what this pipeline does and why it exists.');
-    await page.getByLabel('pipeline description').fill('Loads the nightly batch');
+    await page.getByLabel('Pipeline description').fill('Loads the nightly batch');
     await page.getByRole('button', { name: 'Add annotation' }).click();
-    await page.getByLabel('annotation 1', { exact: true }).fill('prod');
+    await page.getByLabel('Annotation 1', { exact: true }).fill('prod');
     await page.getByRole('button', { name: 'Add annotation' }).click();
-    await page.getByLabel('annotation 2', { exact: true }).fill('finance');
+    await page.getByLabel('Annotation 2', { exact: true }).fill('finance');
 
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
@@ -55,9 +55,9 @@ test.describe('#1 F8a — pipeline description + annotations', () => {
     await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
     await page.locator('.react-flow__renderer').waitFor();
     await openGeneral(page);
-    await expect(page.getByLabel('pipeline description')).toHaveValue('Loads the nightly batch');
-    await expect(page.getByLabel('annotation 1', { exact: true })).toHaveValue('prod');
-    await expect(page.getByLabel('annotation 2', { exact: true })).toHaveValue('finance');
+    await expect(page.getByLabel('Pipeline description')).toHaveValue('Loads the nightly batch');
+    await expect(page.getByLabel('Annotation 1', { exact: true })).toHaveValue('prod');
+    await expect(page.getByLabel('Annotation 2', { exact: true })).toHaveValue('finance');
 
     const latest = await latestVersion(page, id);
     expect(latest.description).toBe('Loads the nightly batch');
@@ -75,7 +75,7 @@ test.describe('#1 F8a — pipeline description + annotations', () => {
 
     await openGeneral(page);
     await page.getByRole('button', { name: 'Add annotation' }).click();
-    await page.getByLabel('annotation 2', { exact: true }).fill('Prod');
+    await page.getByLabel('Annotation 2', { exact: true }).fill('Prod');
 
     await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
     await expect(page.locator('.badge-list li')).toContainText([
@@ -83,7 +83,7 @@ test.describe('#1 F8a — pipeline description + annotations', () => {
     ]);
 
     // Removing the duplicate clears the refusal — the gate follows the doc.
-    await page.getByRole('button', { name: 'remove annotation 2' }).click();
+    await page.getByRole('button', { name: 'Remove annotation 2' }).click();
     await expect(page.locator('.badge-list li')).toHaveCount(0);
 
     await expectQuiet(page, problems);
@@ -100,7 +100,7 @@ test.describe('#1 F8a — pipeline description + annotations', () => {
     });
 
     await page.getByRole('button', { name: 'Add parameter' }).click();
-    await page.getByLabel('param 1 name').fill('topic');
+    await page.getByLabel('Parameter 1 name').fill('topic');
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
 
@@ -118,12 +118,12 @@ test.describe('#1 F8a — pipeline description + annotations', () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openSeededCanvas(page, '1569 grow', { nodes: [{ id: 'a', position: { x: 0, y: 0 } }] });
     await openGeneral(page);
-    const box = page.getByLabel('pipeline description');
+    const box = page.getByLabel('Pipeline description');
 
     const measure = () =>
       page.evaluate(() => {
         const el = document.querySelector<HTMLTextAreaElement>(
-          'textarea[aria-label="pipeline description"]',
+          'textarea[aria-label="Pipeline description"]',
         )!;
         const cs = getComputedStyle(el);
         const canvas = document.querySelector('.react-flow')!.getBoundingClientRect();

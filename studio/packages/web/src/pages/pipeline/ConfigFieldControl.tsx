@@ -621,7 +621,7 @@ function cellColumn(cell: ConfigField): RowTableColumn {
  * sideways rather than crushing its cells in a narrow right-hand dock, and a
  * header row replaces a label repeated on every cell. Each cell's control keeps
  * its own name — `` `mapping row 2 sink` `` — following `ParamRow`'s
- * `` `param ${i + 1} name` `` convention, so the lists read alike to a screen
+ * `` `Parameter ${i + 1} name` `` convention, so the lists read alike to a screen
  * reader and to a spec.
  *
  * Every cell is a plain `ConfigFieldControl`, and gets the panel's `picker`

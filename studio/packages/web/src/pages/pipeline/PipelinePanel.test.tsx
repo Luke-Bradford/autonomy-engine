@@ -4,6 +4,7 @@ import { PipelineVersionSchema, type PipelineVersion } from '@autonomy-studio/sh
 import { PipelinePanel } from './PipelineCanvas';
 import { createCanvasStore } from './canvasStore';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
+import { labelProblem } from '../../testing/sentenceCase';
 
 function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
   return PipelineVersionSchema.parse({
@@ -32,9 +33,9 @@ function mount(v: PipelineVersion) {
 describe('PipelinePanel (U16) — params', () => {
   it('renders a row per declared param, seeded from the version', () => {
     mount(version({ params: [{ name: 'topic', type: 'string', required: true }] }));
-    expect(screen.getByLabelText('param 1 name')).toHaveValue('topic');
-    expect(screen.getByLabelText('param 1 type')).toHaveValue('string');
-    expect(screen.getByLabelText('param 1 required')).toBeChecked();
+    expect(screen.getByLabelText('Parameter 1 name')).toHaveValue('topic');
+    expect(screen.getByLabelText('Parameter 1 type')).toHaveValue('string');
+    expect(screen.getByLabelText('Parameter 1 required')).toBeChecked();
   });
 
   it('says so plainly when nothing is declared', () => {
@@ -51,7 +52,7 @@ describe('PipelinePanel (U16) — params', () => {
 
   it('typing a name writes straight through to the store', () => {
     const store = mount(version({ params: [{ name: 'a', type: 'string', required: false }] }));
-    fireEvent.change(screen.getByLabelText('param 1 name'), { target: { value: 'topic' } });
+    fireEvent.change(screen.getByLabelText('Parameter 1 name'), { target: { value: 'topic' } });
     expect(store.getState().params[0]!.name).toBe('topic');
   });
 
@@ -61,7 +62,7 @@ describe('PipelinePanel (U16) — params', () => {
     const store = mount(
       version({ params: [{ name: 'a', type: 'string', required: false, default: 'abc' }] }),
     );
-    fireEvent.change(screen.getByLabelText('param 1 type'), { target: { value: 'number' } });
+    fireEvent.change(screen.getByLabelText('Parameter 1 type'), { target: { value: 'number' } });
     expect(store.getState().params[0]!).toEqual({
       name: 'a',
       type: 'number',
@@ -75,8 +76,8 @@ describe('PipelinePanel (U16) — params', () => {
     const store = mount(
       version({ params: [{ name: 'a', type: 'string', required: false, default: '{"a":1}' }] }),
     );
-    fireEvent.change(screen.getByLabelText('param 1 type'), { target: { value: 'json' } });
-    const field = screen.getByLabelText('param 1 default');
+    fireEvent.change(screen.getByLabelText('Parameter 1 type'), { target: { value: 'json' } });
+    const field = screen.getByLabelText('Parameter 1 default');
     expect(field).toHaveValue('"{\\"a\\":1}"');
     // Identity, not equality: the no-op guard compares the field against the
     // SAME formatting, so an untouched blur must not write at all.
@@ -100,7 +101,7 @@ describe('PipelinePanel (U16) — params', () => {
   it('holds the DEFAULT note back while the field shows a parse error, but not the name note', () => {
     mount(version({ params: [{ name: 'a b', type: 'json', required: false, default: '${x}' }] }));
     expect(screen.getByText(/used exactly as written/)).toBeInTheDocument();
-    const field = screen.getByLabelText('param 1 default');
+    const field = screen.getByLabelText('Parameter 1 default');
     fireEvent.change(field, { target: { value: '{' } });
     fireEvent.blur(field);
     expect(screen.getByRole('alert')).toHaveTextContent('not valid JSON (line 1');
@@ -116,7 +117,7 @@ describe('PipelinePanel (U16) — params', () => {
     mount(
       version({ params: [{ name: 'x', type: 'number', required: true, default: 'not a number' }] }),
     );
-    expect(screen.getByLabelText('param 1 default')).toHaveValue('not a number');
+    expect(screen.getByLabelText('Parameter 1 default')).toHaveValue('not a number');
     expect(screen.queryByText('A run must supply this parameter.')).toBeNull();
     expect(screen.getByText(/stored default already satisfies it/)).toBeInTheDocument();
     // ...and the defect reaches it, which the old early-out suppressed.
@@ -126,7 +127,7 @@ describe('PipelinePanel (U16) — params', () => {
   it('still says a run must supply a required param that has NO default', () => {
     mount(version({ params: [{ name: 'x', type: 'string', required: true }] }));
     expect(screen.getByText('A run must supply this parameter.')).toBeInTheDocument();
-    expect(screen.queryByLabelText('param 1 default')).toBeNull();
+    expect(screen.queryByLabelText('Parameter 1 default')).toBeNull();
   });
 
   it('a blur that changed nothing does not write — no spurious dirty, no data loss', () => {
@@ -136,7 +137,7 @@ describe('PipelinePanel (U16) — params', () => {
     const store = mount(
       version({ params: [{ name: 'x', type: 'string', required: false, default: '' }] }),
     );
-    fireEvent.blur(screen.getByLabelText('param 1 default'), { target: { value: '' } });
+    fireEvent.blur(screen.getByLabelText('Parameter 1 default'), { target: { value: '' } });
 
     expect(store.getState().dirty).toBe(false);
     expect('default' in store.getState().params[0]!).toBe(true);
@@ -158,16 +159,16 @@ describe('PipelinePanel (U16) — params', () => {
       }),
     );
 
-    const field = screen.getByLabelText('param 1 default');
+    const field = screen.getByLabelText('Parameter 1 default');
     fireEvent.change(field, { target: { value: '9x' } });
     fireEvent.blur(field, { target: { value: '9x' } });
     expect(screen.getByRole('alert')).toBeInTheDocument(); // rejected, nothing stored
 
-    fireEvent.click(screen.getByRole('button', { name: 'remove param 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove parameter 1' }));
 
     // Row 1 is now `b`, and it shows B's default — not `a`'s abandoned draft.
-    expect(screen.getByLabelText('param 1 name')).toHaveValue('b');
-    expect(screen.getByLabelText('param 1 default')).toHaveValue('1');
+    expect(screen.getByLabelText('Parameter 1 name')).toHaveValue('b');
+    expect(screen.getByLabelText('Parameter 1 default')).toHaveValue('1');
     expect(screen.queryByRole('alert')).toBeNull();
     expect(store.getState().params[0]!.default).toBe(1);
   });
@@ -176,13 +177,13 @@ describe('PipelinePanel (U16) — params', () => {
     const store = mount(
       version({ params: [{ name: 'x', type: 'string', required: false, description: 'why' }] }),
     );
-    fireEvent.change(screen.getByLabelText('param 1 description'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Parameter 1 description'), { target: { value: '' } });
     expect('description' in store.getState().params[0]!).toBe(false);
   });
 
   it('setting a param description stores it', () => {
     const store = mount(version({ params: [{ name: 'x', type: 'string', required: false }] }));
-    fireEvent.change(screen.getByLabelText('param 1 description'), { target: { value: 'why' } });
+    fireEvent.change(screen.getByLabelText('Parameter 1 description'), { target: { value: 'why' } });
     expect(store.getState().params[0]!.description).toBe('why');
   });
 
@@ -190,10 +191,10 @@ describe('PipelinePanel (U16) — params', () => {
     const store = mount(
       version({ params: [{ name: 'a', type: 'string', required: false, default: 'x' }] }),
     );
-    fireEvent.click(screen.getByLabelText('param 1 required'));
+    fireEvent.click(screen.getByLabelText('Parameter 1 required'));
 
     expect('default' in store.getState().params[0]!).toBe(false);
-    expect(screen.queryByLabelText('param 1 default')).toBeNull();
+    expect(screen.queryByLabelText('Parameter 1 default')).toBeNull();
     expect(screen.getByText('A run must supply this parameter.')).toBeInTheDocument();
   });
 
@@ -201,7 +202,7 @@ describe('PipelinePanel (U16) — params', () => {
     // Blank means "no default", so without this control an optional string
     // param could not be given `''` — the value that makes `${params.x}`
     // resolve to nothing rather than be absent from the run's context.
-    const box = () => screen.queryByLabelText('param 1 empty-string default');
+    const box = () => screen.queryByLabelText('Parameter 1 empty-string default');
 
     it('ticking it stores `default: ""` — the KEY, not its absence', () => {
       const store = mount(version({ params: [{ name: 's', type: 'string', required: false }] }));
@@ -235,9 +236,9 @@ describe('PipelinePanel (U16) — params', () => {
         }),
       );
       expect(box()).toBeNull();
-      expect(screen.queryByLabelText('param 2 empty-string default')).toBeNull();
+      expect(screen.queryByLabelText('Parameter 2 empty-string default')).toBeNull();
 
-      fireEvent.change(screen.getByLabelText('param 1 default'), { target: { value: '' } });
+      fireEvent.change(screen.getByLabelText('Parameter 1 default'), { target: { value: '' } });
       expect(box()).not.toBeChecked();
     });
 
@@ -248,7 +249,7 @@ describe('PipelinePanel (U16) — params', () => {
       const store = mount(
         version({ params: [{ name: 's', type: 'string', required: false, default: 'x' }] }),
       );
-      const field = screen.getByLabelText('param 1 default');
+      const field = screen.getByLabelText('Parameter 1 default');
       fireEvent.change(field, { target: { value: '' } });
       fireEvent.blur(field, { target: { value: '' } });
       fireEvent.click(box()!);
@@ -270,7 +271,7 @@ describe('PipelinePanel (U16) — params', () => {
 
   it('commits a default on blur, TYPED — not as the raw text', () => {
     const store = mount(version({ params: [{ name: 'n', type: 'number', required: false }] }));
-    const field = screen.getByLabelText('param 1 default');
+    const field = screen.getByLabelText('Parameter 1 default');
     fireEvent.change(field, { target: { value: '42' } });
     // Still uncommitted while typing: half-typed JSON is not JSON.
     expect('default' in store.getState().params[0]!).toBe(false);
@@ -283,13 +284,13 @@ describe('PipelinePanel (U16) — params', () => {
     const store = mount(
       version({ params: [{ name: 'n', type: 'number', required: false, default: 7 }] }),
     );
-    fireEvent.blur(screen.getByLabelText('param 1 default'), { target: { value: '' } });
+    fireEvent.blur(screen.getByLabelText('Parameter 1 default'), { target: { value: '' } });
     expect('default' in store.getState().params[0]!).toBe(false);
   });
 
   it('refuses an unparseable default, keeping the text on screen and the store unchanged', () => {
     const store = mount(version({ params: [{ name: 'n', type: 'number', required: false }] }));
-    const field = screen.getByLabelText('param 1 default');
+    const field = screen.getByLabelText('Parameter 1 default');
     fireEvent.change(field, { target: { value: 'abc' } });
     fireEvent.blur(field, { target: { value: 'abc' } });
 
@@ -320,7 +321,7 @@ describe('PipelinePanel (U16) — params', () => {
         ],
       }),
     );
-    fireEvent.click(screen.getByRole('button', { name: 'remove param 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove parameter 1' }));
     expect(store.getState().params.map((p) => p.name)).toEqual(['b']);
   });
 
@@ -339,25 +340,25 @@ describe('PipelinePanel (U16) — params', () => {
         ],
       }),
     );
-    expect(screen.getByLabelText('param 1 default')).toHaveValue('aaa');
+    expect(screen.getByLabelText('Parameter 1 default')).toHaveValue('aaa');
 
-    fireEvent.click(screen.getByRole('button', { name: 'remove param 1' }));
-    expect(screen.getByLabelText('param 1 name')).toHaveValue('second');
-    expect(screen.getByLabelText('param 1 default')).toHaveValue('bbb');
+    fireEvent.click(screen.getByRole('button', { name: 'Remove parameter 1' }));
+    expect(screen.getByLabelText('Parameter 1 name')).toHaveValue('second');
+    expect(screen.getByLabelText('Parameter 1 default')).toHaveValue('bbb');
   });
 });
 
 describe('PipelinePanel (U16) — outputs', () => {
   it('renders a row per declared output', () => {
     mount(version({ outputs: [{ name: 'result', type: 'json' }] }));
-    expect(screen.getByLabelText('output 1 name')).toHaveValue('result');
-    expect(screen.getByLabelText('output 1 type')).toHaveValue('json');
+    expect(screen.getByLabelText('Output 1 name')).toHaveValue('result');
+    expect(screen.getByLabelText('Output 1 type')).toHaveValue('json');
   });
 
   it('never offers `secret` as an output type — a declared secret output leaks', () => {
     mount(version({ outputs: [{ name: 'result', type: 'string' }] }));
     const options = Array.from(
-      screen.getByLabelText('output 1 type').querySelectorAll('option'),
+      screen.getByLabelText('Output 1 type').querySelectorAll('option'),
     ).map((o) => o.value);
     expect(options).not.toContain('secret');
     expect(options).toContain('string');
@@ -365,7 +366,7 @@ describe('PipelinePanel (U16) — outputs', () => {
 
   it('names each type, and stores the value (#1396)', () => {
     mount(version({ outputs: [{ name: 'result', type: 'json' }] }));
-    const select = screen.getByLabelText('output 1 type') as HTMLSelectElement;
+    const select = screen.getByLabelText('Output 1 type') as HTMLSelectElement;
     const named = Array.from(select.options).map((o) => [o.value, o.textContent]);
     expect(named).toContainEqual(['json', 'JSON']);
     expect(named).toContainEqual(['boolean', 'Boolean']);
@@ -374,13 +375,13 @@ describe('PipelinePanel (U16) — outputs', () => {
 
   it('unchecking Optional REMOVES the key, since absent is what the schema reads as required', () => {
     const store = mount(version({ outputs: [{ name: 'r', type: 'string', optional: true }] }));
-    fireEvent.click(screen.getByLabelText('output 1 optional'));
+    fireEvent.click(screen.getByLabelText('Output 1 optional'));
     expect('optional' in store.getState().outputs[0]!).toBe(false);
   });
 
   it('checking Optional sets it', () => {
     const store = mount(version({ outputs: [{ name: 'r', type: 'string' }] }));
-    fireEvent.click(screen.getByLabelText('output 1 optional'));
+    fireEvent.click(screen.getByLabelText('Output 1 optional'));
     expect(store.getState().outputs[0]!.optional).toBe(true);
   });
 
@@ -396,7 +397,7 @@ describe('PipelinePanel (U16) — outputs', () => {
     const store = mount(
       version({ outputs: [{ name: 'r', type: 'string', description: 'the answer' }] }),
     );
-    fireEvent.change(screen.getByLabelText('output 1 description'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Output 1 description'), { target: { value: '' } });
     expect('description' in store.getState().outputs[0]!).toBe(false);
   });
 });
@@ -422,9 +423,9 @@ describe('PipelinePanel (#844 V3) — variables', () => {
 
   it('renders a row per declared variable, its default shown as text', () => {
     mountVariables(version({ variables: [{ name: 'rows', type: 'array', default: [1, 2] }] }));
-    expect(screen.getByLabelText('variable 1 name')).toHaveValue('rows');
-    expect(screen.getByLabelText('variable 1 type')).toHaveValue('array');
-    expect(screen.getByLabelText('variable 1 default')).toHaveValue('[1,2]');
+    expect(screen.getByLabelText('Variable 1 name')).toHaveValue('rows');
+    expect(screen.getByLabelText('Variable 1 type')).toHaveValue('array');
+    expect(screen.getByLabelText('Variable 1 default')).toHaveValue('[1,2]');
   });
 
   it('"Add variable" puts a row in the store that states its starting value', () => {
@@ -435,7 +436,7 @@ describe('PipelinePanel (#844 V3) — variables', () => {
 
   it('offers exactly the variable types — no json, no secret', () => {
     mountVariables(version({ variables: [{ name: 'v', type: 'string', default: '' }] }));
-    const options = [...(screen.getByLabelText('variable 1 type') as HTMLSelectElement).options];
+    const options = [...(screen.getByLabelText('Variable 1 type') as HTMLSelectElement).options];
     expect(options.map((o) => o.value)).toEqual(['string', 'number', 'boolean', 'array']);
   });
 
@@ -443,7 +444,7 @@ describe('PipelinePanel (#844 V3) — variables', () => {
     const store = mountVariables(
       version({ variables: [{ name: 'n', type: 'number', default: 0 }] }),
     );
-    const field = screen.getByLabelText('variable 1 default');
+    const field = screen.getByLabelText('Variable 1 default');
     fireEvent.change(field, { target: { value: '12' } });
     fireEvent.blur(field);
     expect(store.getState().variables[0]!.default).toBe(12);
@@ -453,7 +454,7 @@ describe('PipelinePanel (#844 V3) — variables', () => {
     const store = mountVariables(
       version({ variables: [{ name: 'n', type: 'number', default: 3 }] }),
     );
-    const field = screen.getByLabelText('variable 1 default');
+    const field = screen.getByLabelText('Variable 1 default');
     fireEvent.change(field, { target: { value: '' } });
     fireEvent.blur(field);
     expect(screen.getByRole('alert')).toHaveTextContent('a number variable needs a starting value');
@@ -464,7 +465,7 @@ describe('PipelinePanel (#844 V3) — variables', () => {
     const store = mountVariables(
       version({ variables: [{ name: 's', type: 'string', default: 'x' }] }),
     );
-    const field = screen.getByLabelText('variable 1 default');
+    const field = screen.getByLabelText('Variable 1 default');
     fireEvent.change(field, { target: { value: '' } });
     fireEvent.blur(field);
     expect(store.getState().variables[0]!.default).toBe('');
@@ -475,7 +476,7 @@ describe('PipelinePanel (#844 V3) — variables', () => {
     const store = mountVariables(
       version({ variables: [{ name: 'n', type: 'number', default: 5 }] }),
     );
-    fireEvent.change(screen.getByLabelText('variable 1 type'), { target: { value: 'string' } });
+    fireEvent.change(screen.getByLabelText('Variable 1 type'), { target: { value: 'string' } });
     expect(store.getState().variables[0]).toEqual({ name: 'n', type: 'string', default: '5' });
   });
 
@@ -488,7 +489,7 @@ describe('PipelinePanel (#844 V3) — variables', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(
       "variable 'n' default must be a number, got string",
     );
-    fireEvent.blur(screen.getByLabelText('variable 1 default'));
+    fireEvent.blur(screen.getByLabelText('Variable 1 default'));
     expect(store.getState().variables[0]!.default).toBe(5);
     expect(screen.queryByRole('alert')).toBeNull();
   });
@@ -497,7 +498,7 @@ describe('PipelinePanel (#844 V3) — variables', () => {
     const store = mountVariables(
       version({ variables: [{ name: 'n', type: 'number', default: 5 }] }),
     );
-    fireEvent.blur(screen.getByLabelText('variable 1 default'));
+    fireEvent.blur(screen.getByLabelText('Variable 1 default'));
     expect(store.getState().dirty).toBe(false);
   });
 
@@ -517,7 +518,7 @@ describe('PipelinePanel (#844 V3) — variables', () => {
         ],
       }),
     );
-    fireEvent.click(screen.getByRole('button', { name: 'remove variable 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove variable 1' }));
     expect(store.getState().variables.map((v) => v.name)).toEqual(['b']);
   });
 });
@@ -552,9 +553,9 @@ describe('PipelinePanel (#1 F8a) — General', () => {
 
   it('shows the version’s description and one row per annotation', () => {
     mountGeneral(version({ description: 'Nightly load', annotations: ['prod', 'finance'] }));
-    expect(screen.getByLabelText('pipeline description')).toHaveValue('Nightly load');
-    expect(screen.getByLabelText('annotation 1')).toHaveValue('prod');
-    expect(screen.getByLabelText('annotation 2')).toHaveValue('finance');
+    expect(screen.getByLabelText('Pipeline description')).toHaveValue('Nightly load');
+    expect(screen.getByLabelText('Annotation 1')).toHaveValue('prod');
+    expect(screen.getByLabelText('Annotation 2')).toHaveValue('finance');
   });
 
   // #1413 — the General and Annotations sections each say what they hold, as
@@ -571,17 +572,17 @@ describe('PipelinePanel (#1 F8a) — General', () => {
 
   it('writes edits straight to the store — no draft that an undo could leave stale', () => {
     const store = mountGeneral(version({ annotations: ['prod'] }));
-    fireEvent.change(screen.getByLabelText('pipeline description'), {
+    fireEvent.change(screen.getByLabelText('Pipeline description'), {
       target: { value: 'Nightly' },
     });
-    fireEvent.change(screen.getByLabelText('annotation 1'), { target: { value: 'staging' } });
+    fireEvent.change(screen.getByLabelText('Annotation 1'), { target: { value: 'staging' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add annotation' }));
     expect(store.getState().description).toBe('Nightly');
     expect(store.getState().annotations).toEqual(['staging', '']);
-    fireEvent.click(screen.getByRole('button', { name: 'remove annotation 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove annotation 1' }));
     expect(store.getState().annotations).toEqual(['']);
     act(() => store.getState().undo());
-    expect(screen.getByLabelText('annotation 1')).toHaveValue('staging');
+    expect(screen.getByLabelText('Annotation 1')).toHaveValue('staging');
   });
 });
 
@@ -610,7 +611,7 @@ describe('PipelinePanel — declarations are a compact table (#1477 OR29)', () =
     expect(table.querySelectorAll('tbody > tr')).toHaveLength(2);
     // The headers say what each cell is; the cells carry no label text of their own.
     expect(table.querySelector('tbody label:not(.contract-check)')).toBeNull();
-    expect(screen.getByRole('textbox', { name: 'param 2 name' })).toHaveValue('b');
+    expect(screen.getByRole('textbox', { name: 'Parameter 2 name' })).toHaveValue('b');
     // The Default column's hint is in the section's `?` now.
     expect(screen.getByRole('group', { name: 'Parameters' })).toHaveAccessibleDescription(
       /Leave a default blank for no default\./,
@@ -634,7 +635,7 @@ describe('PipelinePanel — declarations are a compact table (#1477 OR29)', () =
     expect(cell).toHaveTextContent(/'a b' is not a plain identifier/);
     // It follows the row it is about.
     expect(notes[0]!.previousElementSibling).toContainElement(
-      screen.getByRole('textbox', { name: 'param 2 name' }),
+      screen.getByRole('textbox', { name: 'Parameter 2 name' }),
     );
   });
 
@@ -659,5 +660,46 @@ describe('PipelinePanel — declarations are a compact table (#1477 OR29)', () =
       'Description',
       'Actions',
     ]);
+  });
+});
+
+/**
+ * #1594 OR40 S4b — every control on every tab of the pipeline's properties is
+ * named in words: "Parameter 1 name", "Remove annotation 1", never the key
+ * (`param 1 name`) and never with a trailing colon or period.
+ */
+describe('PipelinePanel (#1594 OR40 S4b) — control names', () => {
+  /** Each control's name, as its `aria-label`, its `<label>` or its own text gives it. */
+  function controlNames(): string[] {
+    const names: string[] = [];
+    document.querySelectorAll('[role="tabpanel"] [aria-label]').forEach((el) => {
+      names.push(el.getAttribute('aria-label') ?? '');
+    });
+    document.querySelectorAll('[role="tabpanel"] :is(input, select, textarea)').forEach((el) => {
+      (el as HTMLInputElement).labels?.forEach((l) => names.push(l.textContent?.trim() ?? ''));
+    });
+    document.querySelectorAll('[role="tabpanel"] button').forEach((el) => {
+      if (!el.hasAttribute('aria-label')) names.push(el.textContent?.trim() ?? '');
+    });
+    return names.filter((n) => n !== '');
+  }
+
+  it.each(['Parameters', 'Variables', 'Outputs', 'General'])('%s', (tab) => {
+    mount(
+      version({
+        params: [
+          { name: 'topic', type: 'string', required: false },
+          { name: 'note', type: 'string', required: false, default: '' },
+        ],
+        variables: [{ name: 'rows', type: 'number', default: 0 }],
+        outputs: [{ name: 'answer', type: 'string' }],
+        description: 'Nightly load',
+        annotations: ['prod'],
+      }),
+    );
+    fireEvent.click(screen.getByRole('tab', { name: tab }));
+    const names = controlNames();
+    expect(names.length).toBeGreaterThan(2);
+    expect(names.map((n) => [n, labelProblem(n)]).filter(([, p]) => p !== null)).toEqual([]);
   });
 });

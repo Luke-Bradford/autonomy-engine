@@ -30,9 +30,9 @@ test.describe('#1477 connection description + annotations', () => {
     await form(page).getByLabel('Name', { exact: true }).fill(name);
     await form(page).getByLabel('Description', { exact: true }).fill('Reads the nightly feed');
     await form(page).getByRole('button', { name: 'Add annotation' }).click();
-    await form(page).getByLabel('annotation 1', { exact: true }).fill('prod');
+    await form(page).getByLabel('Annotation 1', { exact: true }).fill('prod');
     await form(page).getByRole('button', { name: 'Add annotation' }).click();
-    await form(page).getByLabel('annotation 2', { exact: true }).fill('finance');
+    await form(page).getByLabel('Annotation 2', { exact: true }).fill('finance');
 
     const topOf = async (label: string) =>
       (await form(page).getByLabel(label, { exact: true }).boundingBox())!.y;
@@ -43,7 +43,7 @@ test.describe('#1477 connection description + annotations', () => {
     // The labelled controls, not DOM order: a reordered field cannot change what is compared.
     const heightOf = async (label: string) =>
       Math.round((await form(page).getByLabel(label, { exact: true }).boundingBox())!.height);
-    const rowInputMatchesName = (await heightOf('annotation 1')) === (await heightOf('Name'));
+    const rowInputMatchesName = (await heightOf('Annotation 1')) === (await heightOf('Name'));
     const layout = await page.evaluate(() => {
       const root = document.querySelector('form[aria-label="Connection form"]')!;
       const sections = [...root.querySelectorAll('.section__title')].map((h) =>
@@ -75,8 +75,8 @@ test.describe('#1477 connection description + annotations', () => {
     await expect(form(page).getByLabel('Description', { exact: true })).toHaveValue(
       'Reads the nightly feed',
     );
-    await expect(form(page).getByLabel('annotation 1', { exact: true })).toHaveValue('prod');
-    await expect(form(page).getByLabel('annotation 2', { exact: true })).toHaveValue('finance');
+    await expect(form(page).getByLabel('Annotation 1', { exact: true })).toHaveValue('prod');
+    await expect(form(page).getByLabel('Annotation 2', { exact: true })).toHaveValue('finance');
     await expectQuiet(page, problems);
   });
 });

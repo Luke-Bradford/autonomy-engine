@@ -620,13 +620,13 @@ describe('ConnectionsPage', () => {
     await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     const form = screen.getByRole('form', { name: 'Connection form' });
     expect(within(form).getByLabelText('Description')).toHaveValue('Old feed');
-    expect(within(form).getByLabelText('annotation 1')).toHaveValue('prod');
+    expect(within(form).getByLabelText('Annotation 1')).toHaveValue('prod');
 
     await user.clear(within(form).getByLabelText('Description'));
     await user.type(within(form).getByLabelText('Description'), 'Nightly feed');
     await user.click(within(form).getByRole('button', { name: 'Add annotation' }));
-    await user.type(within(form).getByLabelText('annotation 2'), 'finance');
-    await user.click(within(form).getByRole('button', { name: 'remove annotation 1' }));
+    await user.type(within(form).getByLabelText('Annotation 2'), 'finance');
+    await user.click(within(form).getByRole('button', { name: 'Remove annotation 1' }));
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
@@ -644,11 +644,11 @@ describe('ConnectionsPage', () => {
     const form = screen.getByRole('form', { name: 'Connection form' });
     await user.click(within(form).getByRole('button', { name: 'Add annotation' }));
     await user.click(within(form).getByRole('button', { name: 'Add annotation' }));
-    await user.type(within(form).getByLabelText('annotation 3'), 'Prod');
+    await user.type(within(form).getByLabelText('Annotation 3'), 'Prod');
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
 
-    const blank = within(form).getByLabelText('annotation 2');
-    const duplicate = within(form).getByLabelText('annotation 3');
+    const blank = within(form).getByLabelText('Annotation 2');
+    const duplicate = within(form).getByLabelText('Annotation 3');
     expect(blank).toHaveAttribute('aria-invalid', 'true');
     expect(duplicate).toHaveAttribute('aria-invalid', 'true');
     expect(within(form).getByText(/An annotation cannot be empty/)).toBeInTheDocument();
@@ -690,7 +690,7 @@ describe('ConnectionsPage', () => {
     await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     const form = screen.getByRole('form', { name: 'Connection form' });
     expect(within(form).getByRole('button', { name: 'Add annotation' })).toBeDisabled();
-    await user.click(within(form).getByRole('button', { name: 'remove annotation 1' }));
+    await user.click(within(form).getByRole('button', { name: 'Remove annotation 1' }));
     expect(within(form).getByRole('button', { name: 'Add annotation' })).toBeEnabled();
   });
 
@@ -701,9 +701,9 @@ describe('ConnectionsPage', () => {
     await openNewConnection(user);
     const form = screen.getByRole('form', { name: 'Connection form' });
     await user.click(within(form).getByRole('button', { name: 'Add annotation' }));
-    await user.type(within(form).getByLabelText('annotation 1'), ' prod');
+    await user.type(within(form).getByLabelText('Annotation 1'), ' prod');
     await user.tab();
-    expect(within(form).getByLabelText('annotation 1')).toHaveAttribute('aria-invalid', 'true');
+    expect(within(form).getByLabelText('Annotation 1')).toHaveAttribute('aria-invalid', 'true');
     expect(within(form).getByText(/cannot start or end with a space/)).toBeInTheDocument();
     expect(createMock).not.toHaveBeenCalled();
   });

@@ -30,17 +30,17 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     await expect(properties(page).getByText('None declared.').first()).toBeVisible();
 
     await page.getByRole('button', { name: 'Add parameter' }).click();
-    await page.getByLabel('param 1 name').fill('topic');
-    await page.getByLabel('param 1 type').selectOption('number');
-    await page.getByLabel('param 1 default').fill('42');
+    await page.getByLabel('Parameter 1 name').fill('topic');
+    await page.getByLabel('Parameter 1 type').selectOption('number');
+    await page.getByLabel('Parameter 1 default').fill('42');
     // Blur commits the default — the one control that cannot write per keystroke.
-    await page.getByLabel('param 1 name').click();
+    await page.getByLabel('Parameter 1 name').click();
 
     // #844 — outputs are the property dock's second tab.
     await page.getByRole('tab', { name: 'Outputs' }).click();
     await page.getByRole('button', { name: 'Add output' }).click();
-    await page.getByLabel('output 1 name').fill('answer');
-    await page.getByLabel('output 1 type').selectOption('json');
+    await page.getByLabel('Output 1 name').fill('answer');
+    await page.getByLabel('Output 1 type').selectOption('json');
 
     expect(await validationIssues(page), 'the contract left the doc invalid').toEqual([]);
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -52,14 +52,14 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
     await page.locator('.react-flow__renderer').waitFor();
 
-    await expect(page.getByLabel('param 1 name')).toHaveValue('topic');
-    await expect(page.getByLabel('param 1 type')).toHaveValue('number');
+    await expect(page.getByLabel('Parameter 1 name')).toHaveValue('topic');
+    await expect(page.getByLabel('Parameter 1 type')).toHaveValue('number');
     // Typed, not the raw text: the doc stores the NUMBER 42, which formats back
     // to '42' — a stored string would too, so the server body is checked below.
-    await expect(page.getByLabel('param 1 default')).toHaveValue('42');
+    await expect(page.getByLabel('Parameter 1 default')).toHaveValue('42');
     await page.getByRole('tab', { name: 'Outputs' }).click();
-    await expect(page.getByLabel('output 1 name')).toHaveValue('answer');
-    await expect(page.getByLabel('output 1 type')).toHaveValue('json');
+    await expect(page.getByLabel('Output 1 name')).toHaveValue('answer');
+    await expect(page.getByLabel('Output 1 type')).toHaveValue('json');
 
     // What the string check above cannot see: the persisted default is a JSON
     // number. `${params.topic}` types off this declaration (#6 E6), so storing
@@ -86,7 +86,7 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
       params: [{ name: 'suffix', type: 'string', required: false }],
     });
 
-    const box = page.getByLabel('param 1 empty-string default');
+    const box = page.getByLabel('Parameter 1 empty-string default');
     await expect(box).not.toBeChecked();
     await box.check();
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -94,8 +94,8 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
 
     await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
     await page.locator('.react-flow__renderer').waitFor();
-    await expect(page.getByLabel('param 1 empty-string default')).toBeChecked();
-    await expect(page.getByLabel('param 1 default')).toHaveValue('');
+    await expect(page.getByLabel('Parameter 1 empty-string default')).toBeChecked();
+    await expect(page.getByLabel('Parameter 1 default')).toHaveValue('');
 
     const versions = await page.request.get(`/api/pipelines/${encodeURIComponent(id)}/versions`);
     const items = (await versions.json()) as {
@@ -121,12 +121,12 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
       outputs: [{ name: 'also_kept', type: 'string' }],
     });
 
-    await expect(page.getByLabel('param 1 name')).toHaveValue('kept');
+    await expect(page.getByLabel('Parameter 1 name')).toHaveValue('kept');
 
     // #844 — outputs are the property dock's second tab.
     await page.getByRole('tab', { name: 'Outputs' }).click();
     await page.getByRole('button', { name: 'Add output' }).click();
-    await page.getByLabel('output 2 name').fill('added');
+    await page.getByLabel('Output 2 name').fill('added');
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
 
@@ -151,7 +151,7 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     });
 
     await page.getByRole('button', { name: 'Add parameter' }).click();
-    await page.getByLabel('param 2 name').fill('topic');
+    await page.getByLabel('Parameter 2 name').fill('topic');
 
     // The SERVER refuses this too (`refuseDuplicateNames`), so gating here only
     // spares a round-trip to a 400 — and the message is the server's own words.
@@ -160,7 +160,7 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
 
     // The exit, through the control that got here. This is what makes the gate
     // safe: a doc the canvas refuses is one the canvas can also repair.
-    await page.getByLabel('param 2 name').fill('other');
+    await page.getByLabel('Parameter 2 name').fill('other');
     expect(await validationIssues(page)).toEqual([]);
     await expect(page.getByRole('button', { name: 'Save version' })).toBeEnabled();
 
@@ -176,8 +176,8 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
       params: [{ name: 'topic', type: 'string', required: false }],
     });
 
-    await page.getByLabel('param 1 name').fill('topic.id');
-    const dflt = page.getByLabel('param 1 default');
+    await page.getByLabel('Parameter 1 name').fill('topic.id');
+    const dflt = page.getByLabel('Parameter 1 default');
     await dflt.fill('run-${run.runId}');
     await dflt.blur();
 
@@ -188,7 +188,7 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     await expect(page.getByRole('button', { name: 'Save version' })).toBeEnabled();
 
     // A string default carried into a json param now reads as the string it is.
-    await page.getByLabel('param 1 type').selectOption('json');
+    await page.getByLabel('Parameter 1 type').selectOption('json');
     await expect(dflt).toHaveValue('"run-${run.runId}"');
 
     await expectQuiet(page, problems);
@@ -221,7 +221,7 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
       params: [{ name: 'n', type: 'string', required: false, default: 'abc' }],
     });
 
-    await page.getByLabel('param 1 type').selectOption('number');
+    await page.getByLabel('Parameter 1 type').selectOption('number');
 
     // The row names it, and the doc-level badge names it in the SAME words.
     await expect(properties(page).getByText("param 'n': expected a finite number")).toBeVisible();
@@ -229,7 +229,7 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
 
     // The exit, through the control that got here.
-    await page.getByLabel('param 1 type').selectOption('string');
+    await page.getByLabel('Parameter 1 type').selectOption('string');
     expect(await validationIssues(page)).toEqual([]);
     await expect(page.getByRole('button', { name: 'Save version' })).toBeEnabled();
 
@@ -249,19 +249,19 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
 
     await page.getByRole('tab', { name: 'Variables' }).click();
     await page.getByRole('button', { name: 'Add variable' }).click();
-    await page.getByLabel('variable 1 name').fill('count');
+    await page.getByLabel('Variable 1 name').fill('count');
     // A type change converts the new row's '' default to the number's zero, so
     // the doc is legal before the author types a value at all.
-    await page.getByLabel('variable 1 type').selectOption('number');
-    await expect(page.getByLabel('variable 1 default')).toHaveValue('0');
-    await page.getByLabel('variable 1 default').fill('5');
-    await page.getByLabel('variable 1 name').click(); // blur commits the default
+    await page.getByLabel('Variable 1 type').selectOption('number');
+    await expect(page.getByLabel('Variable 1 default')).toHaveValue('0');
+    await page.getByLabel('Variable 1 default').fill('5');
+    await page.getByLabel('Variable 1 name').click(); // blur commits the default
 
     await page.getByRole('button', { name: 'Add variable' }).click();
-    await page.getByLabel('variable 2 name').fill('rows');
-    await page.getByLabel('variable 2 type').selectOption('array');
-    await page.getByLabel('variable 2 default').fill('[1, "a"]');
-    await page.getByLabel('variable 2 name').click();
+    await page.getByLabel('Variable 2 name').fill('rows');
+    await page.getByLabel('Variable 2 type').selectOption('array');
+    await page.getByLabel('Variable 2 default').fill('[1, "a"]');
+    await page.getByLabel('Variable 2 name').click();
 
     expect(await validationIssues(page), 'the variables left the doc invalid').toEqual([]);
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -270,9 +270,9 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
     await page.locator('.react-flow__renderer').waitFor();
     await page.getByRole('tab', { name: 'Variables' }).click();
-    await expect(page.getByLabel('variable 1 name')).toHaveValue('count');
-    await expect(page.getByLabel('variable 1 type')).toHaveValue('number');
-    await expect(page.getByLabel('variable 2 default')).toHaveValue('[1,"a"]');
+    await expect(page.getByLabel('Variable 1 name')).toHaveValue('count');
+    await expect(page.getByLabel('Variable 1 type')).toHaveValue('number');
+    await expect(page.getByLabel('Variable 2 default')).toHaveValue('[1,"a"]');
 
     // The field text cannot tell 5 from '5'; the persisted version can.
     const versions = await page.request.get(`/api/pipelines/${encodeURIComponent(id)}/versions`);
@@ -300,7 +300,7 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     });
     await page.getByRole('tab', { name: 'Variables' }).click();
 
-    await page.getByLabel('variable 1 name').fill('my-total');
+    await page.getByLabel('Variable 1 name').fill('my-total');
     expect((await validationIssues(page)).join('\n')).toContain(
       "variable 'my-total' cannot be referenced",
     );
@@ -310,13 +310,13 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     );
     await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
 
-    await page.getByLabel('variable 1 name').fill('total');
+    await page.getByLabel('Variable 1 name').fill('total');
     await page.getByRole('button', { name: 'Add variable' }).click();
-    await page.getByLabel('variable 2 name').fill('total');
+    await page.getByLabel('Variable 2 name').fill('total');
     expect((await validationIssues(page)).join('\n')).toContain('duplicate variable name');
     await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
 
-    await page.getByLabel('variable 2 name').fill('other');
+    await page.getByLabel('Variable 2 name').fill('other');
     expect(await validationIssues(page)).toEqual([]);
     await expect(page.getByRole('button', { name: 'Save version' })).toBeEnabled();
 

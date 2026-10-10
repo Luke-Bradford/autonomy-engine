@@ -241,13 +241,14 @@ export function NodeActivityPanel({
           event, so nothing ever measured a span for them, and saying so beats
           printing a `0ms` nobody observed. */}
       <p className="page-hint">
-        {/* A COLON, not a dash: the value is itself an em-dash whenever no span
-            was measured, and "Duration — — wall clock…" is what a dash gave. */}
-        Duration:{' '}
+        {/* A COMMA, not a dash: the value is itself an em-dash whenever no span
+            was measured, and "Duration — — wall clock…" is what a dash gave.
+            Nor a colon after the label (#1594 OR40 S4b). */}
+        Duration{' '}
         <strong>
           <NodeDuration node={node} live={live} />
-        </strong>{' '}
-        — wall clock for {run === undefined ? 'the latest' : 'this'} attempt, from start to settle,
+        </strong>
+        , wall clock for {run === undefined ? 'the latest' : 'this'} attempt, from start to settle,
         including any wait it parked on and excluding time held between retries.{' '}
         {node.startedAtMs === undefined &&
           (node.copiedFromRunId !== undefined
