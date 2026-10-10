@@ -658,7 +658,8 @@ list (a Copy mapping, HTTP headers, LLM messages, an output schema) render throu
 - **Column help lives in the section's `?`.** The wrapper's `overflow-x` clips vertically too, so a
   header `?` would cut off its own note. A row list's hint sits behind a `?` beside its label.
 
-Axe gates on every form (0 violations) belong to OR24 (#1415), which brings axe into the e2e suite.
+Axe now gates every audited view: see "Accessibility gate" below. OR24 (#1415) keeps wiring errors
+to their fields and the single announcer.
 
 ## Headings and regions (#1594 OR40 S5)
 
@@ -683,13 +684,13 @@ Axe gates on every form (0 violations) belong to OR24 (#1415), which brings axe 
 
 `e2e/accessibility.spec.ts` runs axe on every audited view, in both themes and both densities, and
 fails on **any** violation, whatever its impact. The views are every titled page, the run page with
-and without its drawer, the editor (pipeline properties, Copy on General and Sink, the connection
+its five views and its drawer, the editor (pipeline properties, Copy on General and Sink, the connection
 list open, Expand properties, ForEach), the New connection kind gallery, and Git connected. The
 workspace is seeded first, so lists are scanned with rows in them.
 
 - A new page or panel state goes into that spec.
 - Two known violations are left to S5c in `LEFT_FOR_S5C`: Fluent `TabList`'s Tabster dummies and
-  the canvas ports' `aria-label` with no role. Each is matched on rule and element, and the gate
+  the canvas ports' `aria-label` with no role. Each is matched on rule and on the element in the page, and the gate
   fails when one stops occurring, so the fix that clears it also deletes its entry. Never add an
   entry to hide a new violation, and never use axe's `exclude` or `disableRules`.
 

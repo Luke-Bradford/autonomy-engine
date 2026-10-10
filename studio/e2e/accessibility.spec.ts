@@ -6,7 +6,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { DENSITIES, THEMES, expectAppearance, preferAppearance } from './support/appearance';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { TITLED_PAGES } from './support/pages';
-import { properties } from './support/panels';
+import { openRunView, properties } from './support/panels';
 import { fireAndSettle, nodeById, openSeededCanvas, seedVersion } from './support/seedDoc';
 import { seedConnection, seedDataset } from './support/seedResources';
 import { fluentRootReady } from './support/theme';
@@ -50,29 +50,64 @@ const LEFT_FOR_S5C = [
   {
     name: "Fluent TabList's focusable aria-hidden Tabster dummies",
     rule: 'aria-hidden-focus',
-    html: /^<i [^>]*data-tabster-dummy/,
+    // A dummy of `PanelTabs`' TabList only: one anywhere else still fails.
+    element: '.panel-tabs > i[data-tabster-dummy]',
   },
   {
     name: 'canvas ports named with aria-label but no role',
     rule: 'aria-prohibited-attr',
-    // Only a SOURCE port carries a name, so any handle here is one. Matched on
-    // `data-handleid`, which comes first: axe truncates a long snippet.
-    html: /^<div [^>]*\bdata-handleid=/,
+    element: '.react-flow__handle.flow-port[aria-label]:not([role])',
   },
 ] as const;
 
+/** The allowlist entry this violation is, checked on the element in the page. */
+async function leftFor(
+  page: Page,
+  rule: string,
+  target: readonly unknown[],
+): Promise<(typeof LEFT_FOR_S5C)[number] | undefined> {
+  const candidates = LEFT_FOR_S5C.filter((l) => l.rule === rule);
+  // A plain selector; an iframe or shadow-root path is never one of these.
+  const [selector] = target;
+  if (candidates.length === 0 || target.length !== 1 || typeof selector !== 'string') return;
+  for (const l of candidates) {
+    const matches = await page.evaluate(
+      ([sel, el]) => document.querySelector(sel)?.matches(el) ?? false,
+      [selector, l.element] as const,
+    );
+    if (matches) return l;
+  }
+}
+
+/**
+ * Waits for every finite animation and transition to finish, so a dialog or
+ * list is scanned at rest and not mid-fade (where contrast is a moving target).
+ */
+async function settled(page: Page): Promise<void> {
+  await page.waitForFunction(() =>
+    document
+      .getAnimations()
+      .every((a) => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity),
+  );
+}
+
+/**
+ * Scans the page as it stands. `leftSeen` collects the S5c entries met; without
+ * it no violation is let through (a view no entry was written for).
+ */
 async function scan(
   page: Page,
   view: string,
   findings: Finding[],
-  leftSeen: Set<string>,
+  leftSeen?: Set<string>,
 ): Promise<void> {
+  await settled(page);
   const result = await new AxeBuilder({ page }).analyze();
   // A scan that checked nothing would pass vacuously; there is always a page.
   expect(result.passes.length, `axe checked nothing on ${view}`).toBeGreaterThan(0);
   for (const v of result.violations) {
     for (const node of v.nodes) {
-      const left = LEFT_FOR_S5C.find((l) => l.rule === v.id && l.html.test(node.html));
+      const left = leftSeen && (await leftFor(page, v.id, node.target));
       if (left) {
         leftSeen.add(left.name);
         continue;
@@ -86,6 +121,9 @@ async function scan(
     }
   }
 }
+
+/** The run page's views below its activity runs, each scanned once. */
+const RUN_VIEWS = ['Gantt', 'Graph', 'Events', 'Variables', 'Cost'] as const;
 
 function report(findings: Finding[]): string {
   return findings.map((f) => `${f.view}: ${f.rule} (${f.impact}) at ${f.target}`).join('\n');
@@ -121,12 +159,13 @@ for (const theme of THEMES) {
             { name: 'name', type: 'string', nullable: true },
           ],
         });
+        const paramName = `${tag.replaceAll('-', '_')}_param`;
         const secret = await page.request.post('/api/secrets', {
           data: { name: `${tag}-secret`, secret: 'x' },
         });
         expect(secret.status(), await secret.text()).toBe(201);
         const param = await page.request.post('/api/global-params', {
-          data: { name: `${tag.replaceAll('-', '_')}_param`, type: 'string', value: 'v' },
+          data: { name: paramName, type: 'string', value: 'v' },
         });
         expect(param.status(), await param.text()).toBe(201);
 
@@ -156,11 +195,26 @@ for (const theme of THEMES) {
         const findings: Finding[] = [];
         const leftSeen = new Set<string>();
 
+        // The seeded row each list must show before it is scanned, so a list
+        // is never scanned while it is still loading or empty.
+        const seededRow: Record<string, string> = {
+          '/author/pipelines': `${tag} run`,
+          '/monitor/runs': `${tag} run`,
+          '/manage/connections': `${tag} files`,
+          '/manage/datasets': `${tag} people`,
+          '/manage/secrets': `${tag}-secret`,
+          '/manage/global-params': paramName,
+          '/manage/triggers': `${tag} trigger`,
+        };
         for (const p of TITLED_PAGES) {
           await page.goto(`/#${p.path}`);
           await fluentRootReady(page);
           await expect(page.getByRole('heading', { level: 1, name: p.title })).toBeVisible();
           await expectAppearance(page, theme, density);
+          const row = seededRow[p.path];
+          if (row !== undefined) {
+            await expect(page.getByRole('row').filter({ hasText: row }).first()).toBeVisible();
+          }
           await scan(page, p.title, findings, leftSeen);
         }
 
@@ -169,6 +223,10 @@ for (const theme of THEMES) {
         const opens = page.locator('.activity-runs__table .activity-runs__open');
         await expect(opens).toHaveCount(2);
         await scan(page, 'run detail', findings, leftSeen);
+        for (const view of RUN_VIEWS) {
+          await openRunView(page, view);
+          await scan(page, `run detail, ${view}`, findings, leftSeen);
+        }
         await opens.first().click();
         await expect(
           page.locator('#run-detail-drawer').getByRole('region', { name: /^Node / }),
@@ -247,6 +305,7 @@ test('axe: 0 violations on the connected Git page, both themes and densities', a
   page,
   request,
 }) => {
+  test.setTimeout(60_000);
   const problems = collectPageProblems(page);
   const repo = makeBareRepo('e2e-axe-git-');
   try {
@@ -264,7 +323,7 @@ test('axe: 0 violations on the connected Git page, both themes and densities', a
         await fluentRootReady(page);
         await expect(page.getByRole('heading', { name: 'Connected', exact: true })).toBeVisible();
         await expectAppearance(page, theme, density);
-        await scan(page, `Git connected, ${theme} ${density}`, findings, new Set());
+        await scan(page, `Git connected, ${theme} ${density}`, findings);
       }
     }
     expect(findings, report(findings)).toEqual([]);

@@ -42,7 +42,7 @@ const PANE_WIDTH_VAR = '--pane-width';
  * a data router.
  *
  * PANE WIDTH. Written here as one inline custom property that the pane ELEMENT
- * consumes (`index.css`: `.secondary-pane { width: var(--pane-width, 240px) }`),
+ * consumes (`index.css`: `.secondary-pane__body { width: var(--pane-width, 240px) }`),
  * NOT as a grid track. That is deliberate: the shell's pane column is `auto`,
  * so it is sized by the pane when there is one and collapses to 0 by itself
  * when there is not — a hub with no sections renders no pane, and a collapsed

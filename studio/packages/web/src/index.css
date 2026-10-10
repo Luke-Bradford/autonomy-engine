@@ -513,9 +513,10 @@ body {
   background: var(--accent);
 }
 
-/* The drag handle. It gets its OWN grid track (the `auto` one) rather than
-   being absolutely positioned over the pane's edge: the pane scrolls and clips
-   its overflow, so an overlaid handle would be sliced off — and a real track
+/* The drag handle. It gets its OWN grid track (the `auto` one; it sits in the
+   pane `nav`'s subgrid, see `.secondary-pane`) rather than being absolutely
+   positioned over the pane's edge: the pane body scrolls and clips its
+   overflow, so an overlaid handle would be sliced off — and a real track
    keeps the grid arithmetic legible, which is what `e2e/shell-pane.spec.ts`
    measures. No negative margin, for the same reason: the track's size is then
    exactly this width. */
@@ -3151,8 +3152,11 @@ button.danger {
   transform: translateY(-50%);
 }
 /* Portalled out of the dock (into `.main-portal`, the end of `main`), so the
-   density's field font is set here. */
+   density's field font is set here. A given mount node skips Fluent's own
+   on-top layer, so the list sets its own: over the expanded dock (15) and every
+   other in-page layer (20 at most). */
 .connection-picker__listbox {
+  z-index: 25;
   min-width: 240px;
   max-width: 480px;
   font-size: var(--type-body-size);
