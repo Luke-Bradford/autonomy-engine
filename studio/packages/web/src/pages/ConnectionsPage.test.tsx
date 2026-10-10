@@ -757,9 +757,15 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await user.click(await screen.findByRole('button', { name: 'Edit Doomed' }));
     expect(screen.getByRole('form', { name: 'Connection form' })).toBeInTheDocument();
+    listMock.mockResolvedValue([]);
     await chooseRowAction(user, 'Doomed', 'Delete');
     await answerConfirm(user, 'accept');
     await waitFor(() => expect(screen.queryByRole('form', { name: 'Connection form' })).toBeNull());
+    // #1438 item 4 (#1470) — the deleted row's opener and ⋯ are gone, so focus
+    // goes to the page's create control rather than to <body>.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'New connection' })).toHaveFocus(),
+    );
   });
 
   it('does not delete when confirmation is cancelled', async () => {

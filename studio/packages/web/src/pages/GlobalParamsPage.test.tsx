@@ -365,6 +365,11 @@ describe('GlobalParamsPage (#844 GL2)', () => {
       expect(screen.queryByRole('form', { name: 'Global parameter form' })).toBeNull(),
     );
     expect(screen.queryByRole('alertdialog', { name: 'Unsaved changes' })).toBeNull();
+    // #1438 item 4 (#1470) — the deleted row's opener and ⋯ are gone, so focus
+    // goes to the page's create control rather than to <body>.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'New global parameter' })).toHaveFocus(),
+    );
   });
 
   // #844 GL3 (GL-D4) — the confirmation names what reads the global.
