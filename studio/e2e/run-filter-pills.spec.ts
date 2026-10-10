@@ -45,14 +45,17 @@ function measure(page: Page) {
       const label = pill.querySelector('label');
       const remove = pill.querySelector('.filter-pill__remove')?.getBoundingClientRect();
       return {
-        text: pill.innerText.replace(/\s+/g, ' ').trim().slice(0, 40),
+        // The axis: its label, or the menu button's text before the colon.
+        // (Not `innerText`, which carries every option of a select.)
+        text:
+          pill.querySelector('label')?.textContent ??
+          pill.querySelector('button')?.textContent?.split(':')[0] ??
+          '',
         height: r.height,
         radius: parseFloat(s.borderTopLeftRadius),
         accentEdge: s.borderTopColor === accent,
         labelFont: label ? getComputedStyle(label).fontSize : null,
-        labelText: label
-          ? `${label.textContent}${getComputedStyle(label, '::after').content}`
-          : null,
+        colon: label ? getComputedStyle(label, '::after').content : null,
         innerBorders: [
           ...pill.querySelectorAll<HTMLElement>('select, input, button.run-filters__menu'),
         ].map((c) => getComputedStyle(c).borderTopColor),
@@ -70,11 +73,10 @@ for (const density of ['compact', 'comfortable'] as const) {
   test(`#1594 OR40 S3 — the runs filter row as pills (${density})`, async ({ page }) => {
     const problems = collectPageProblems(page);
     await setDensity(page, density);
-    // The widest the row gets: an applied status, a range of days (two date
-    // inputs) and an annotation set by the URL (so its optional pill shows).
-    await page.goto(
-      '/#/monitor/runs?status=failure&from=2000-01-01&to=2100-01-01&annotation=e2e-pill',
-    );
+    // An applied status, a window and an annotation set by the URL (so its
+    // optional pill shows). The range of days is the widest state of the
+    // always-shown pills, and `run-list.spec.ts` holds that to one row.
+    await page.goto('/#/monitor/runs?status=failure&since=24h&annotation=e2e-pill');
     await fluentRootReady(page);
     await expect(page.getByRole('combobox', { name: 'Status', exact: true })).toHaveValue(
       'failure',
@@ -97,7 +99,8 @@ for (const density of ['compact', 'comfortable'] as const) {
         expect(pill.labelFont, `${pill.text}: the axis name in body type`).toBe(
           `${BODY[density]}px`,
         );
-        expect(pill.labelText, `${pill.text}: drawn with its colon`).toMatch(/^\w[\w ]*"?:"?/);
+        // A drawn colon with empty alternative text: shown, not read.
+        expect(pill.colon, `${pill.text}: drawn with its colon`).toBe('":" / ""');
       }
     }
     // Applied: Status, Started, Annotation. At All: Pipeline, Triggered by.

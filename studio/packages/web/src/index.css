@@ -6058,6 +6058,15 @@ button.danger {
   background: transparent;
 }
 
+/* A pill says its value, "Status: Failed", so its select is as wide as the
+   chosen option rather than the longest (still capped by `.run-filters
+   select`). Measured: at the longest-option width the row's widest state (a
+   range of days) needed ~1160px of the ~1115 beside the hub nav. The width
+   changes only when the viewer changes the value. */
+.filter-pill select {
+  field-sizing: content;
+}
+
 .filter-pill :focus-visible {
   outline-offset: var(--focus-ring-inset);
 }
