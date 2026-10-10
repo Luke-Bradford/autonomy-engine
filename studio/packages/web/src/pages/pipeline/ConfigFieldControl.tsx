@@ -620,9 +620,9 @@ function cellColumn(cell: ConfigField): RowTableColumn {
  * 60px each. The dock is wider now (a 589px tab at 1440x900), the table scrolls
  * sideways rather than crushing its cells in a narrow right-hand dock, and a
  * header row replaces a label repeated on every cell. Each cell's control keeps
- * its own name — `` `mapping row 2 sink` `` — following `ParamRow`'s
- * `` `param ${i + 1} name` `` convention, so the lists read alike to a screen
- * reader and to a spec.
+ * its own name — `` `mapping row 2 sink` ``, its row and its cell. These names
+ * are still the schema keys; #1594 OR40 S4b named the pipeline's own rows in
+ * words (`Parameter 1 name`) and S4b-2 brings these to their cells' titles.
  *
  * Every cell is a plain `ConfigFieldControl`, and gets the panel's `picker`
  * with a `target` naming the cell's own position (#1178): the candidate is this

@@ -52,14 +52,14 @@ export function AnnotationRows({
           <tr key={`row-${i}`}>
             <td>
               <input
-                aria-label={`annotation ${i + 1}`}
+                aria-label={`Annotation ${i + 1}`}
                 value={text}
                 onChange={(e) => onUpdate(i, e.target.value)}
                 {...wiring?.attrs}
               />
             </td>
             <RowActions>
-              <RemoveRowButton label={`remove annotation ${i + 1}`} onRemove={() => onRemove(i)} />
+              <RemoveRowButton label={`Remove annotation ${i + 1}`} onRemove={() => onRemove(i)} />
             </RowActions>
           </tr>,
           wiring?.error ? (

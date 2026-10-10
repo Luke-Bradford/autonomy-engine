@@ -35,7 +35,7 @@ export function PipelineGeneral({ store }: { store: Store }) {
           {(id) => (
             <AutoGrowTextarea
               id={id}
-              aria-label="pipeline description"
+              aria-label="Pipeline description"
               maxLength={PIPELINE_DESCRIPTION_MAX_CHARS}
               value={description}
               onChange={(e) => store.getState().setDescription(e.target.value)}

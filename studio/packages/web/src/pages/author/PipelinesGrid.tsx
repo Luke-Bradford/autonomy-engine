@@ -337,7 +337,7 @@ export function PipelinesGrid({
                 />
               );
             })}
-            <th scope="col" aria-label="actions" />
+            <th scope="col" aria-label="Actions" />
           </tr>
         </thead>
         <tbody>

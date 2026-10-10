@@ -1,5 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
-import { ACRONYMS, sentenceCaseProblem } from '../packages/web/src/testing/sentenceCase';
+import {
+  ACRONYMS,
+  labelProblem,
+  sentenceCaseProblem,
+} from '../packages/web/src/testing/sentenceCase';
 import { openCanvas } from './support/canvas';
 import { addActivity, canvasNodes, toolbox } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
@@ -120,6 +124,23 @@ for (const density of ['compact', 'comfortable'] as const) {
     await page.getByRole('tab', { name: 'Parameters', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Add parameter', exact: true })).toBeVisible();
     expect(await capitals(page, ACRONYMS), 'pipeline parameters').toEqual([]);
+
+    // #1594 OR40 S4b — a parameter row's controls are named in words, with no
+    // trailing colon: "Parameter 1 name", "Remove parameter 1".
+    await page.getByRole('button', { name: 'Add parameter', exact: true }).click();
+    const first = page.getByRole('textbox', { name: 'Parameter 1 name', exact: true });
+    await expect(first).toBeVisible();
+    const rowNames = await first
+      .locator('xpath=ancestor::table[1]')
+      .evaluate((table) =>
+        [...table.querySelectorAll('[aria-label]')].map(
+          (el) => el.getAttribute('aria-label') ?? '',
+        ),
+      );
+    expect(rowNames).toContain('Remove parameter 1');
+    expect(
+      rowNames.map((n) => [n, labelProblem(n)] as const).filter(([, p]) => p !== null),
+    ).toEqual([]);
 
     const shown = await shownNames(page);
     expect(shown.palette.length, 'palette entries').toBeGreaterThan(10);

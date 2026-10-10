@@ -196,7 +196,7 @@ test('#1395 — Debug runs the UNSAVED draft on the canvas, as a hidden debug ve
 
   // An edit that is NOT saved: the run below must carry it.
   await page.getByRole('tab', { name: 'General' }).click();
-  await page.getByLabel('pipeline description').fill('only in the draft');
+  await page.getByLabel('Pipeline description').fill('only in the draft');
 
   const debug = page.getByRole('button', { name: 'Debug', exact: true });
   await expect(debug).toHaveAttribute(

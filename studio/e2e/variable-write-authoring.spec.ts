@@ -116,7 +116,7 @@ test.describe('#844 V6 — set/append variable config form', () => {
     // The pipeline's tabs are the nothing-selected panel.
     await deselect(page);
     await page.getByRole('tab', { name: 'Variables' }).click();
-    await page.getByLabel('variable 2 type').selectOption('string');
+    await page.getByLabel('Variable 2 type').selectOption('string');
     await nodeById(page, 'a').click();
     await expect(properties(page).getByLabel('Declared variable', { exact: true })).toHaveCount(0);
     await expect(properties(page).locator('.config-field-choices-empty')).toHaveText(

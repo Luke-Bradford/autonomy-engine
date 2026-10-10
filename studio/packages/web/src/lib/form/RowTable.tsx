@@ -14,7 +14,7 @@ export interface RowTableColumn {
  * card, which repeated every label on every row and spent five lines on a
  * declaration that reads as one.
  *
- * Each control keeps its OWN accessible name (`param 1 name`, `mapping row 2
+ * Each control keeps its OWN accessible name (`Parameter 1 name`, `mapping row 2
  * sink`): a header names the column for a sighted reader and, through table
  * semantics, for a screen reader moving cell to cell, but a spec or a voice user
  * addresses one control, and that name is what tells two `sink` boxes apart.
@@ -66,7 +66,7 @@ export function RowActions({ children }: { children: ReactNode }) {
 }
 
 /**
- * A row's ✕. `label` is its whole name (`remove param 1`), which says WHICH
+ * A row's ✕. `label` is its whole name (`Remove parameter 1`), which says WHICH
  * row; the glyph alone is what shows.
  */
 export function RemoveRowButton({ label, onRemove }: { label: string; onRemove: () => void }) {

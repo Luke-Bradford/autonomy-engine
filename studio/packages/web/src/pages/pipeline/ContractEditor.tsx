@@ -45,8 +45,8 @@ import {
  * third-copy rule (2026-08-20) folds them instead: `ContractRow` owns the shared
  * chrome in one DOM order, `ContractSection` the heading/list/add frame, and
  * `useDefaultDraft` the draft-and-commit-on-blur default field params and
- * variables both need. The aria-labels (`param 1 name`, …) are unchanged, so
- * every spec written against the two old rows still addresses the same controls.
+ * variables both need. Every control is named by its row (`Parameter 1 name`,
+ * `Remove variable 2`), in words and sentence case (#1594 OR40 S4b).
  *
  * #1477 OR29 — the rows are a compact table (`RowTable`): the column headers
  * replace the per-row visible labels, and a row's errors and advisories sit on a
@@ -56,6 +56,13 @@ import {
 
 type Store = ReturnType<typeof createCanvasStore>;
 type Kind = 'param' | 'output' | 'variable';
+
+/** How a row's controls name its kind: the glossary's word, never the key (#1594 OR40 S4b). */
+const KIND_TERM: Record<Kind, string> = {
+  param: 'Parameter',
+  output: 'Output',
+  variable: 'Variable',
+};
 
 /** The row fields every declaration kind shares. */
 interface Declared {
@@ -130,20 +137,20 @@ export function ContractRow<R extends Declared>({
   children?: ReactNode;
   notes?: ReactNode;
 }) {
-  const n = index + 1;
+  const rowName = `${KIND_TERM[kind]} ${index + 1}`;
   return (
     <>
       <tr>
         <td>
           <input
-            aria-label={`${kind} ${n} name`}
+            aria-label={`${rowName} name`}
             value={row.name}
             onChange={(e) => onChange({ ...row, name: e.target.value })}
           />
         </td>
         <td>
           <select
-            aria-label={`${kind} ${n} type`}
+            aria-label={`${rowName} type`}
             value={row.type}
             onChange={(e) => onType(e.target.value)}
           >
@@ -157,13 +164,16 @@ export function ContractRow<R extends Declared>({
         {children}
         <td>
           <input
-            aria-label={`${kind} ${n} description`}
+            aria-label={`${rowName} description`}
             value={row.description ?? ''}
             onChange={(e) => onChange(withDescription(row, e.target.value))}
           />
         </td>
         <RowActions>
-          <RemoveRowButton label={`remove ${kind} ${n}`} onRemove={onRemove} />
+          <RemoveRowButton
+            label={`Remove ${KIND_TERM[kind].toLowerCase()} ${index + 1}`}
+            onRemove={onRemove}
+          />
         </RowActions>
       </tr>
       {notes ? <RowNotes span={columns.length + 1}>{notes}</RowNotes> : null}
@@ -345,7 +355,7 @@ export function ParamRow({ store, index, param }: { store: Store; index: number;
       <td data-width="check">
         <input
           type="checkbox"
-          aria-label={`param ${index + 1} required`}
+          aria-label={`Parameter ${index + 1} required`}
           checked={param.required}
           onChange={(e) => update(withRequired(param, e.target.checked))}
         />
@@ -367,7 +377,7 @@ export function ParamRow({ store, index, param }: { store: Store; index: number;
           //
           // "Leave blank for no default" is in the section's `?` now (#1477).
           <input
-            aria-label={`param ${index + 1} default`}
+            aria-label={`Parameter ${index + 1} default`}
             placeholder={DEFAULT_PLACEHOLDER[param.type]}
             value={field.draft}
             onChange={(e) => field.edit(e.target.value)}
@@ -379,7 +389,7 @@ export function ParamRow({ store, index, param }: { store: Store; index: number;
           <label className="contract-check">
             <input
               type="checkbox"
-              aria-label={`param ${index + 1} empty-string default`}
+              aria-label={`Parameter ${index + 1} empty-string default`}
               checked={isEmptyString}
               onChange={(e) =>
                 update(e.target.checked ? { ...param, default: '' } : withoutDefault(param))
@@ -465,7 +475,7 @@ export function VariableRow({
       <td>
         {/* "The value every run starts from" is in the section's `?` (#1477). */}
         <input
-          aria-label={`variable ${index + 1} default`}
+          aria-label={`Variable ${index + 1} default`}
           placeholder={VARIABLE_PLACEHOLDER[variable.type]}
           value={field.draft}
           onChange={(e) => field.edit(e.target.value)}
@@ -507,7 +517,7 @@ export function OutputRow({
       <td data-width="check">
         <input
           type="checkbox"
-          aria-label={`output ${index + 1} optional`}
+          aria-label={`Output ${index + 1} optional`}
           checked={output.optional ?? false}
           onChange={(e) => {
             if (e.target.checked) {

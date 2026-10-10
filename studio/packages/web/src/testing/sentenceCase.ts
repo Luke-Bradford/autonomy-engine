@@ -58,3 +58,23 @@ export function sentenceCaseProblem(text: string): string | null {
   }
   return null;
 }
+
+/**
+ * #1594 OR40 S4b — why a control's NAME (its label, `aria-label` or button text)
+ * breaks the label rules, or `null`. A name is sentence case, ends without a colon
+ * or a period, and says "parameter", never the key `param`.
+ *
+ * A `?`'s name, "About <name>", quotes the name it explains ("About Parameters"),
+ * so the quoted name is what is checked.
+ *
+ * Message text is not held to this: a validation line or a hint is a sentence.
+ */
+export function labelProblem(text: string): string | null {
+  const about = /^About (.+)$/u.exec(text.trim());
+  if (about?.[1] !== undefined) return labelProblem(about[1]);
+  // An ellipsis is the one character "…", so a trailing "..." is refused too.
+  if (/[:.]$/u.test(text.trim())) return 'ends with a colon or a period';
+  const banned = text.split(/[^\p{L}]+/u).find((w) => /^params?$/i.test(w));
+  if (banned !== undefined) return `"${banned}" should be "parameter"`;
+  return sentenceCaseProblem(text);
+}

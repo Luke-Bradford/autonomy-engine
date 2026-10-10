@@ -15,7 +15,7 @@ import {
 import { HUBS } from '../shell/hubs';
 import { APP_TITLE } from '../shell/routeHandle';
 import { readCssSource } from './cssSource';
-import { sentenceCaseProblem } from './sentenceCase';
+import { labelProblem, sentenceCaseProblem } from './sentenceCase';
 
 /**
  * #1594 OR40 S4 — every name the app shows for a kind of thing is in sentence
@@ -83,5 +83,31 @@ describe('no stylesheet capitalises text', () => {
     expect(readCssSource(join(src, sheet))).not.toMatch(
       /text-transform\s*:\s*(uppercase|capitalize)|font-variant[\w-]*\s*:[^;]*caps/i,
     );
+  });
+});
+
+describe('labelProblem', () => {
+  it.each([
+    'Parameter 1 name',
+    'Remove annotation 2',
+    'Duration',
+    'Save as…',
+    'Run ID',
+    'About Parameters',
+  ])('accepts %s', (text) => {
+    expect(labelProblem(text)).toBeNull();
+  });
+
+  it.each([
+    ['Duration:', 'ends with a colon or a period'],
+    ['None declared.', 'ends with a colon or a period'],
+    ['Save as...', 'ends with a colon or a period'],
+    ['param 1 name', '"param" should be "parameter"'],
+    ['Remove params', '"params" should be "parameter"'],
+    ['annotation 1', '"annotation" should start with a capital'],
+    ['Mapping row 2 onError', '"onError" has a capital inside it'],
+    ['About param 1 name', '"param" should be "parameter"'],
+  ])('refuses %s', (text, reason) => {
+    expect(labelProblem(text)).toBe(reason);
   });
 });

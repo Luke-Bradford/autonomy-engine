@@ -83,7 +83,7 @@ test.describe('#1477 OR29 — dock density', () => {
     await openSeededCanvas(page, 'density pipeline panel', seed);
 
     const panel = properties(page);
-    const firstRow = panel.getByRole('textbox', { name: 'param 1 name' });
+    const firstRow = panel.getByRole('textbox', { name: 'Parameter 1 name' });
     await expect(firstRow).toHaveValue('topic');
     await expect(panel.getByText(/Select a node or an edge/)).toHaveCount(0);
     await expect(panel.getByRole('button', { name: 'Paste' })).toHaveCount(0);
