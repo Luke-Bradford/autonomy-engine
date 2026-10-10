@@ -138,7 +138,7 @@ function Toggle({
 const PLAIN_VIEW = activityRunsViewParams({ status: null, type: null, q: null, sort: null });
 
 /**
- * #1484 M2 — an Execute Pipeline row's called run: its pipeline, how it stands
+ * #1484 M2 — an Execute pipeline row's called run: its pipeline, how it stands
  * and how long it took (the child's own row, read with the activity runs). The
  * clock counts only while the page is live and the child unfinished, as the run
  * header's does, so an interrupted child never ticks forever.

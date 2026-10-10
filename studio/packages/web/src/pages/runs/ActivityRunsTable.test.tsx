@@ -24,8 +24,8 @@ function show(rows: ActivityRun[] | null, error: string | null = null, url = '/'
         groups={[]}
         error={error}
         runStatus="failure"
-        nameOf={(id) => ({ a: 'Copy 1', w: 'HTTP Request 1' })[id] ?? null}
-        typeOf={(id) => ({ a: 'Copy', w: 'HTTP Request' })[id] ?? null}
+        nameOf={(id) => ({ a: 'Copy 1', w: 'HTTP request 1' })[id] ?? null}
+        typeOf={(id) => ({ a: 'Copy', w: 'HTTP request' })[id] ?? null}
         containerNameOf={() => null}
       />
     </MemoryRouter>,
@@ -83,7 +83,7 @@ describe('#1484 M2 ActivityRunsTable', () => {
     ]);
     const cells = cellsOf(screen.getAllByRole('row')[1]!);
     expect(cells).toMatchObject({
-      Activity: 'HTTP Request 1',
+      Activity: 'HTTP request 1',
       Status: 'failure',
       Attempt: '2',
       Iteration: '2 of 2 · orders.csv',
@@ -376,7 +376,7 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
         groups={[group]}
         error={null}
         runStatus="failure"
-        nameOf={(id) => ({ w: 'HTTP Request 1' })[id] ?? null}
+        nameOf={(id) => ({ w: 'HTTP request 1' })[id] ?? null}
         typeOf={() => null}
         containerNameOf={(id) => ({ fe: 'ForEach 1' })[id] ?? null}
         selected={selected}
@@ -398,7 +398,7 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
       iterations: [],
     });
     expect(cellsOf(screen.getAllByRole('row')[1]!).Status).toBe(
-      'skipped · upstream failed: HTTP Request 1',
+      'skipped · upstream failed: HTTP request 1',
     );
   });
 
@@ -500,8 +500,8 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
   it('sorts into one list that says which container each row ran in', () => {
     render(table(null, GROUP, '/?arSort=activity'));
     expect(bodyRows().map((tr) => within(tr).getAllByRole('cell')[0]?.textContent)).toEqual([
-      'HTTP Request 1 · in ForEach 1',
-      'HTTP Request 1 · in ForEach 1',
+      'HTTP request 1 · in ForEach 1',
+      'HTTP request 1 · in ForEach 1',
     ]);
   });
 

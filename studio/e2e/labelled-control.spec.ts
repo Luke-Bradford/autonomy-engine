@@ -32,12 +32,15 @@ test.describe('#1227 — a label names its control and nothing else', () => {
     const problems = await openNewTrigger(page);
     const form = triggerForm(page);
 
-    const params = form.getByLabel('Params (JSON)', { exact: true });
+    const params = form.getByLabel('Parameters (JSON)', { exact: true });
     await params.fill('{"region":"eu"}');
     // Re-resolved AFTER the fill: the wrapped form stopped matching here.
-    await expect(form.getByLabel('Params (JSON)', { exact: true })).toHaveValue('{"region":"eu"}', {
-      timeout: 3_000,
-    });
+    await expect(form.getByLabel('Parameters (JSON)', { exact: true })).toHaveValue(
+      '{"region":"eu"}',
+      {
+        timeout: 3_000,
+      },
+    );
 
     const mode = form.getByLabel('Mode', { exact: true });
     await mode.selectOption('event');
@@ -70,7 +73,7 @@ test.describe('#1227 — a label names its control and nothing else', () => {
       const row = (text: string) =>
         [...el.querySelectorAll('label')].find((l) => l.textContent?.trim() === text)
           ?.parentElement ?? null;
-      return { name: pick(row('Name')), params: pick(row('Params (JSON)')) };
+      return { name: pick(row('Name')), params: pick(row('Parameters (JSON)')) };
     });
     expect(layout.name).not.toBeNull();
     expect(layout.params).toEqual(layout.name);

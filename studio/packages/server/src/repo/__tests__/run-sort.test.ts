@@ -117,8 +117,8 @@ function seed(db: TestDb) {
     status: 'cancelled',
     extra: { triggerId: trigger },
   });
-  // An Execute Pipeline child: slug `call` (first A–Z) but label "Execute
-  // Pipeline", which reads AFTER "Editor run".
+  // An Execute pipeline child: slug `call` (first A–Z) but label "Execute
+  // pipeline", which reads AFTER "Editor run".
   make({
     version: gamma,
     started: 7000,
@@ -237,7 +237,7 @@ describe('#1484 — the runs list sorts server side, across every page', () => {
       'success',
       'success',
     ]);
-    // By label: "Editor run" < "Execute Pipeline" < "Fire now" < "Rerun from
+    // By label: "Editor run" < "Execute pipeline" < "Fire now" < "Rerun from
     // failed" < "Schedule". A slug sort would open on `call`.
     expect(onePage(db, { key: 'triggeredBy', dir: 'asc' }).map((r) => r.triggeredByKind)).toEqual([
       'editor',

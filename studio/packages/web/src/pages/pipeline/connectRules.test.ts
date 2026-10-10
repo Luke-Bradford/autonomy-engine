@@ -83,13 +83,13 @@ describe('connectRejection', () => {
       expect(message).not.toBe('');
       for (const id of ids) expect(message, `leaks ${id}`).not.toContain(id);
     }
-    expect(reject(g, ids[1], ids[0])?.message).toContain("'HTTP Request 1'");
-    expect(reject(g, ids[1], ids[0])?.message).toContain("'Write File 1'");
-    expect(reject(g, ids[0], ids[0])?.message).toContain("'HTTP Request 1'");
+    expect(reject(g, ids[1], ids[0])?.message).toContain("'HTTP request 1'");
+    expect(reject(g, ids[1], ids[0])?.message).toContain("'Write file 1'");
+    expect(reject(g, ids[0], ids[0])?.message).toContain("'HTTP request 1'");
   });
 
   /**
-   * #878 — the same defect one turn on. Naming both ends "HTTP Request" is
+   * #878 — the same defect one turn on. Naming both ends "HTTP request" is
    * literally true and no more actionable than the two uuids the label replaced,
    * and a chain of same-type activities is a graph an operator really builds.
    */
@@ -100,8 +100,8 @@ describe('connectRejection', () => {
       [edge(ids[0], ids[1])],
     );
     const message = reject(g, ids[1], ids[0])?.message ?? '';
-    expect(message).toContain("'HTTP Request 1'");
-    expect(message).toContain("'HTTP Request 2'");
+    expect(message).toContain("'HTTP request 1'");
+    expect(message).toContain("'HTTP request 2'");
     for (const id of ids) expect(message, `leaks ${id}`).not.toContain(id);
   });
 
@@ -782,7 +782,7 @@ describe('connectRejection — overlapping outcomes (#1064)', () => {
     const r = judge(two([edge('a', 'b', 'completion')]), 'success');
     expect(r?.reason).toBe('overlapping-outcome');
     expect(r?.message).toBe(
-      "'Agent Task 1' → 'Agent Task 2' already has a 'completion' edge, which fires on " +
+      "'Agent task 1' → 'Agent task 2' already has a 'completion' edge, which fires on " +
         "'success' as well — a second edge would add nothing",
     );
   });

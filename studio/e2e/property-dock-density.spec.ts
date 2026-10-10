@@ -96,16 +96,16 @@ test.describe('#1477 OR29 — dock density', () => {
     // the first row card did), and the first row follows its column headers
     // directly — its name box sits higher than a card's did under its "Name"
     // label.
-    const table = await panel.getByRole('table', { name: 'Params' }).boundingBox();
+    const table = await panel.getByRole('table', { name: 'Parameters' }).boundingBox();
     const first = await firstRow.boundingBox();
     expect(table!.y - header.bottom).toBeLessThanOrEqual(80);
     // The header row is under one compact row (32px) tall.
     expect(first!.y - table!.y).toBeLessThanOrEqual(32);
 
     // The section's help is one click away, not a paragraph on the page.
-    const params = panel.getByRole('group', { name: 'Params', exact: true });
+    const params = panel.getByRole('group', { name: 'Parameters', exact: true });
     await expect(params).toHaveAccessibleDescription(/typed inputs a run supplies/);
-    await params.getByLabel('About Params').click();
+    await params.getByLabel('About Parameters').click();
     await expect(params.getByRole('note')).toBeVisible();
 
     await expectQuiet(page, problems);

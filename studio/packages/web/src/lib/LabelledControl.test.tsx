@@ -5,17 +5,17 @@ import { LabelledControl } from './LabelledControl';
 describe('LabelledControl (#1227)', () => {
   it('pairs the label with its textarea by for/id, so the label text never absorbs the value', () => {
     render(
-      <LabelledControl label="Params (JSON)">
+      <LabelledControl label="Parameters (JSON)">
         {(id) => <textarea id={id} defaultValue="" />}
       </LabelledControl>,
     );
-    const box = screen.getByLabelText<HTMLTextAreaElement>('Params (JSON)', { exact: true });
+    const box = screen.getByLabelText<HTMLTextAreaElement>('Parameters (JSON)', { exact: true });
     fireEvent.change(box, { target: { value: '{"a":1}' } });
     // The trap a wrapping label sets: its text becomes `name + value`, so an
     // exact label lookup stops resolving the moment the field has content.
-    expect(screen.getByLabelText('Params (JSON)', { exact: true })).toBe(box);
+    expect(screen.getByLabelText('Parameters (JSON)', { exact: true })).toBe(box);
     const label = box.labels?.[0];
-    expect(label?.textContent).toBe('Params (JSON)');
+    expect(label?.textContent).toBe('Parameters (JSON)');
     expect(label?.contains(box)).toBe(false);
   });
 

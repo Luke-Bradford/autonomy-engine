@@ -216,8 +216,8 @@ describe('NodePanel (#4 A9 structural-call routing)', () => {
  * Both review lenses proved this consumer had no guard: reverting both `<h3>`s to
  * the old `entry?.title ?? nodeType` left the whole suite green. The failure it
  * would have hidden is the exact disagreement `activityLabel`'s docblock exists
- * to prevent — the box reads "HTTP Request 2" and its own panel reads "HTTP
- * Request", with nothing to say they are the same activity.
+ * to prevent — the box reads "HTTP request 2" and its own panel reads "HTTP
+ * request", with nothing to say they are the same activity.
  */
 describe('NodePanel heading (#878)', () => {
   const http = (id: string): Node => ({
@@ -248,7 +248,7 @@ describe('NodePanel heading (#878)', () => {
   }
 
   it('names the node its ordinal, not its kind', () => {
-    expect(heading([http('n_1'), http('n_2')], 'n_2')).toBe('HTTP Request 2');
+    expect(heading([http('n_1'), http('n_2')], 'n_2')).toBe('HTTP request 2');
   });
 
   /* The call arm is a SECOND copy of the heading, behind an early `return` — a
@@ -260,7 +260,7 @@ describe('NodePanel heading (#878)', () => {
       config: {},
       position: { x: 0, y: 0 },
     };
-    expect(heading([http('n_1'), call], 'n_ep')).toBe('Execute Pipeline 1');
+    expect(heading([http('n_1'), call], 'n_ep')).toBe('Execute pipeline 1');
   });
 });
 
@@ -297,7 +297,7 @@ describe('NodePanel says what the activity does (#1413)', () => {
   it('shows the type id in the header, and the description behind the About ?', () => {
     const { row, type, help } = about('http_request');
     expect(type).toBe('http_request');
-    const summary = within(row).getByLabelText('About HTTP Request');
+    const summary = within(row).getByLabelText('About HTTP request');
     expect(summary.tagName).toBe('SUMMARY');
     expect(summary.textContent).toBe('?');
     // Behind the `?`: the note is there to read once opened, and it is closed now.
@@ -312,7 +312,7 @@ describe('NodePanel says what the activity does (#1413)', () => {
   it('shows the same header in the call-editor arm too, without an Apply of its own', () => {
     const { row, type } = about('execute_pipeline');
     expect(type).toBe('execute_pipeline');
-    expect(within(row).getByLabelText('About Execute Pipeline')).toBeTruthy();
+    expect(within(row).getByLabelText('About Execute pipeline')).toBeTruthy();
     expect(within(row).getByRole('note').textContent).toContain(
       getActivity('execute_pipeline')!.description,
     );
@@ -867,12 +867,12 @@ describe('paired binding pickers (#1139)', () => {
     expect(options).toEqual([
       { disabled: false, text: 'Source store' },
       // Listed, so the picker says what exists, but not pickable as a sink.
-      { disabled: true, text: "FilesCan't be a Copy Data sink yet" },
+      { disabled: true, text: "FilesCan't be a Copy data sink yet" },
     ]);
     // Grouped by kind, in the gallery's order.
     expect(list.getAllByRole('group').map((g) => g.textContent)).toEqual([
       'SQLiteSource store',
-      "File systemFilesCan't be a Copy Data sink yet",
+      "File systemFilesCan't be a Copy data sink yet",
     ]);
   });
 
@@ -884,7 +884,7 @@ describe('paired binding pickers (#1139)', () => {
     expect(asked).toHaveLength(1);
     const request = asked[0]!;
     if (request.mode !== 'new') throw new Error(`asked for ${request.mode}`);
-    expect(request.disabledReason('fs')).toBe("Can't be a Copy Data sink yet");
+    expect(request.disabledReason('fs')).toBe("Can't be a Copy data sink yet");
     expect(request.disabledReason('postgres')).toBeUndefined();
     // Binding goes to the SINK end of THIS node — the end the author asked from.
     expect(request.bind('c_new')).toBe(true);
@@ -918,7 +918,7 @@ describe('paired binding pickers (#1139)', () => {
     const request = asked[0]!;
     if (request.mode !== 'edit') throw new Error(`asked for ${request.mode}`);
     expect(request.connectionId).toBe('c_src');
-    expect(request.disabledReason('fs')).toBe("Can't be a Copy Data sink yet");
+    expect(request.disabledReason('fs')).toBe("Can't be a Copy data sink yet");
   });
 
   it('offers no ＋ New and no Edit when no editor hosts the column', () => {

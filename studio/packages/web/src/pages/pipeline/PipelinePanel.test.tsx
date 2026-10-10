@@ -43,9 +43,9 @@ describe('PipelinePanel (U16) — params', () => {
     expect(screen.getAllByText('None declared.')).toHaveLength(4);
   });
 
-  it('"Add param" puts a new row in the store', () => {
+  it('"Add parameter" puts a new row in the store', () => {
     const store = mount(version());
-    fireEvent.click(screen.getByRole('button', { name: 'Add param' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add parameter' }));
     expect(store.getState().params).toHaveLength(1);
   });
 
@@ -117,7 +117,7 @@ describe('PipelinePanel (U16) — params', () => {
       version({ params: [{ name: 'x', type: 'number', required: true, default: 'not a number' }] }),
     );
     expect(screen.getByLabelText('param 1 default')).toHaveValue('not a number');
-    expect(screen.queryByText('A run must supply this param.')).toBeNull();
+    expect(screen.queryByText('A run must supply this parameter.')).toBeNull();
     expect(screen.getByText(/stored default already satisfies it/)).toBeInTheDocument();
     // ...and the defect reaches it, which the old early-out suppressed.
     expect(screen.getByText("param 'x': expected a finite number")).toBeInTheDocument();
@@ -125,7 +125,7 @@ describe('PipelinePanel (U16) — params', () => {
 
   it('still says a run must supply a required param that has NO default', () => {
     mount(version({ params: [{ name: 'x', type: 'string', required: true }] }));
-    expect(screen.getByText('A run must supply this param.')).toBeInTheDocument();
+    expect(screen.getByText('A run must supply this parameter.')).toBeInTheDocument();
     expect(screen.queryByLabelText('param 1 default')).toBeNull();
   });
 
@@ -194,7 +194,7 @@ describe('PipelinePanel (U16) — params', () => {
 
     expect('default' in store.getState().params[0]!).toBe(false);
     expect(screen.queryByLabelText('param 1 default')).toBeNull();
-    expect(screen.getByText('A run must supply this param.')).toBeInTheDocument();
+    expect(screen.getByText('A run must supply this parameter.')).toBeInTheDocument();
   });
 
   describe('#844 4c — the empty-string default', () => {
@@ -264,7 +264,7 @@ describe('PipelinePanel (U16) — params', () => {
       fireEvent.click(box()!);
 
       expect('default' in store.getState().params[0]!).toBe(false);
-      expect(screen.getByText('A run must supply this param.')).toBeInTheDocument();
+      expect(screen.getByText('A run must supply this parameter.')).toBeInTheDocument();
     });
   });
 
@@ -598,7 +598,7 @@ describe('PipelinePanel — declarations are a compact table (#1477 OR29)', () =
         ],
       }),
     );
-    const table = screen.getByRole('table', { name: 'Params' });
+    const table = screen.getByRole('table', { name: 'Parameters' });
     expect(headers(table)).toEqual([
       'Name',
       'Type',
@@ -612,7 +612,7 @@ describe('PipelinePanel — declarations are a compact table (#1477 OR29)', () =
     expect(table.querySelector('tbody label:not(.contract-check)')).toBeNull();
     expect(screen.getByRole('textbox', { name: 'param 2 name' })).toHaveValue('b');
     // The Default column's hint is in the section's `?` now.
-    expect(screen.getByRole('group', { name: 'Params' })).toHaveAccessibleDescription(
+    expect(screen.getByRole('group', { name: 'Parameters' })).toHaveAccessibleDescription(
       /Leave a default blank for no default\./,
     );
   });
@@ -626,7 +626,7 @@ describe('PipelinePanel — declarations are a compact table (#1477 OR29)', () =
         ],
       }),
     );
-    const table = screen.getByRole('table', { name: 'Params' });
+    const table = screen.getByRole('table', { name: 'Parameters' });
     const notes = table.querySelectorAll('tr.row-table__notes');
     expect(notes).toHaveLength(1);
     const cell = notes[0]!.querySelector('td')!;

@@ -308,7 +308,7 @@ describe('#1484 — the runs grid sort ranks', () => {
       'Debug',
       'Editor run',
       'Event',
-      'Execute Pipeline',
+      'Execute pipeline',
       'Fire now',
       'Rerun from failed',
       'Schedule',

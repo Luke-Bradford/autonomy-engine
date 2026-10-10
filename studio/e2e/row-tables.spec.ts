@@ -77,7 +77,7 @@ test('params are one compact table: headers once, a 32px row per param, nothing 
 }) => {
   const problems = collectPageProblems(page);
   await openSeededCanvas(page, 'or29 param table', seed);
-  const table = properties(page).getByRole('table', { name: 'Params' });
+  const table = properties(page).getByRole('table', { name: 'Parameters' });
   await expect(table.getByRole('textbox', { name: 'param 3 name' })).toHaveValue('dry');
 
   const m = await measure(table);

@@ -149,7 +149,7 @@ test.describe('#1420 containers in the Activities palette', () => {
     await expect(box).toHaveAttribute('aria-label', /^Stage 1 container, 0 activities\b/);
 
     const boxRect = (await box.boundingBox())!;
-    await dropFromPalette(page, 'HTTP Request', { x: boxRect.x + 30, y: boxRect.y + 40 });
+    await dropFromPalette(page, 'HTTP request', { x: boxRect.x + 30, y: boxRect.y + 40 });
 
     await expect(box).toHaveAttribute('aria-label', /^Stage 1 container, 1 activity\b/);
 

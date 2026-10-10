@@ -16,7 +16,7 @@ import * as demoApi from '../api/demo';
 
 // Mock only the network layer. Since U4 the LIST lives in `pipelinesStore`, so
 // each case gets its own store — the app's singleton is shared with the Factory
-// Resources pane, and a shared store shared across test cases leaks state.
+// resources pane, and a shared store shared across test cases leaks state.
 vi.mock('../api/demo', async () => (await import('../testing/apiModuleMocks')).demoModuleMock());
 
 vi.mock('../api/pipelines', async (importActual) => {
@@ -1072,7 +1072,7 @@ describe('PipelinesPage', () => {
       expect(createMock).toHaveBeenCalledWith({ name: 'Fresh', folder: null }, ''),
     );
     // Refresh after create: listPipelines called again (mount + post-create).
-    // That refresh is also what keeps the Factory Resources pane — mounted
+    // That refresh is also what keeps the Factory resources pane — mounted
     // beside this page over the same store — from showing a stale tree.
     await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
     await waitFor(() =>
@@ -1177,7 +1177,7 @@ describe('PipelinesPage', () => {
       expect(asked).toMatch(/run history are KEPT/i);
       expect(asked).toContain('triggers stay disabled');
       expect(asked).toMatch(/Commit will delete its file/);
-      // The live list refreshes: the row has left it, and the Factory Resources
+      // The live list refreshes: the row has left it, and the Factory resources
       // pane shares that store.
       await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
     });

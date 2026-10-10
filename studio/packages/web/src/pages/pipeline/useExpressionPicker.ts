@@ -81,7 +81,7 @@ export function useExpressionPicker(
     // #878 — an activity is offered under the SAME name its box carries, which
     // is what lets the author match an option to a rectangle. This replaced a
     // hand-rolled disambiguator that appended the raw doc id where two producers
-    // rendered the same title ("HTTP Request (n_7c44a16f-…)"). It bought
+    // rendered the same title ("HTTP request (n_7c44a16f-…)"). It bought
     // uniqueness with a string the canvas shows nowhere; `activityLabels` is
     // unique too — it counts by rendered name, so two types cannot collide into
     // one label — and it is readable.

@@ -6,7 +6,7 @@ import { properties } from './support/panels';
 /**
  * #1420 OR26 part 2 — ForEach authoring that guides you.
  *
- * The operator's recipe is List Directory → Filter (files only) → ForEach
+ * The operator's recipe is List directory → Filter (files only) → ForEach
  * { Copy each file }. Writing it meant knowing that a listed entry is
  * `{name, type}` and that `${item.name}` reaches into one. Nothing in the app
  * said so. Now the picker offers the element's known fields wherever `${item}`

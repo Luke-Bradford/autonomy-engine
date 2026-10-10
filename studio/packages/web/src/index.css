@@ -203,14 +203,14 @@ body {
 
 /* Decorative wordmark: the app's identity is carried for real by the document
    title and the page headings, so this is `aria-hidden` — it exists so the
-   shell is not anonymous now that the 220px sidebar's `autonomy studio` title
+   shell is not anonymous now that the 220px sidebar's `Autonomy studio` title
    is gone. */
 .hub-rail__brand {
   font-size: 0.7rem;
   font-weight: 700;
   letter-spacing: 0.06em;
   /* An h1, so tokens.css gives it the title's 28px line; a 0.7rem wordmark
-     keeps its own. S4 stops it being a heading. */
+     keeps its own. S5 stops it being a heading, once each page title is the h1. */
   line-height: normal;
   color: var(--muted);
   margin: 0;
@@ -435,10 +435,8 @@ body {
 }
 
 .secondary-pane__title {
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: var(--type-caption-size);
+  font-weight: var(--weight-strong);
   color: var(--muted);
   margin: 0 0 0.5rem;
   padding: 0 0.9rem;
@@ -531,7 +529,7 @@ body {
   background: var(--accent);
 }
 
-/* --- Factory Resources tree (U4) ------------------------------------------ */
+/* --- Factory resources tree (U4) ------------------------------------------ */
 
 .factory-resources__toolbar {
   display: flex;
@@ -558,7 +556,7 @@ body {
 
 /* #721 — the ONE flat icon-button treatment.
    Three of these had been written out independently (the U3 command-bar pane
-   toggle, the U4 Factory Resources row actions, and the Factory Resources group
+   toggle, the U4 Factory resources row actions, and the Factory resources group
    chevron), and the rail, command bar and pane are all on screen at once, so
    the mismatch was directly comparable. This carries everything they genuinely
    share: the reset off the global `button` rule, the hover fill, and the focus
@@ -2162,10 +2160,8 @@ button.danger {
   padding: 0.2rem 0.15rem;
   /* `.icon-button` zeroes this for a glyph-only button; the label needs it back. */
   line-height: 1.2;
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: var(--type-caption-size);
+  font-weight: var(--weight-strong);
   color: var(--muted);
 }
 
@@ -2178,10 +2174,8 @@ button.danger {
   margin: 0;
   padding: 0.2rem 0.15rem 0.2rem 1.3rem;
   line-height: 1.2;
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: var(--type-caption-size);
+  font-weight: var(--weight-strong);
   color: var(--muted);
 }
 
@@ -3009,13 +3003,11 @@ button.danger {
 }
 
 /* A panel title that is not the node header (a container's, "N selected",
-   an edge's): small caps-style, until S4 takes the capitals out. Sections are
+   an edge's): caption-strong, sentence case (#1594 OR40 S4). Sections are
    `Section`s, in the section type. */
 :root[data-density='compact'] .property-dock .property-panel h3 {
   font-size: var(--type-caption-size);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-weight: var(--weight-strong);
   margin: 0;
 }
 
@@ -3213,7 +3205,7 @@ button.danger {
 
 /* #1477 OR29 — label-left from 400px: a 150px label, a 12px gap and a 238px
    control. Measured: at 1280×720 the bottom dock's tab is 429px wide and its
-   fields 113px tall under the pinned header, and stacked there Copy File's
+   fields 113px tall under the pinned header, and stacked there Copy file's
    destination path sat 189px below the fold
    (`e2e/activity-required-fit.spec.ts`). Packing short fields side by side
    still waits for 580px (below). */
@@ -3426,7 +3418,7 @@ button.danger {
  * It was once a stacked title with a grey second line repeating a per-node
  * config STATE ("connection bound") on every box — the same words eight times,
  * which is a wall of text. Then it was an icon and an eliding name, and the
- * operator could not tell steps apart: "Copy Data 1" and "Copy Data 2" said
+ * operator could not tell steps apart: "Copy data 1" and "Copy data 2" said
  * nothing about which file went where. The summary line is different from the
  * old state line because it differs per node — `orders.csv → orders table`,
  * `wait 30s` — which is exactly what makes a graph readable without opening
@@ -3439,7 +3431,7 @@ button.danger {
   /* A FIXED width, not a minimum, and it is load-bearing rather than cosmetic.
      The summary line is `nowrap` so it can elide, which means an unconstrained box
      would GROW with its content — and when the title was `nowrap` too, "HTTP
-     Request 1" measured 188 flow units wide. Wide nodes pushed the right-hand
+     request 1" measured 188 flow units wide. Wide nodes pushed the right-hand
      one's source port PAST the canvas pane, where a reverse drag lands on the
      property panel and starts nothing at all — the exact failure
      `connect-validation.spec.ts` documents at its `WIDE_CANVAS` constant.
@@ -4082,9 +4074,7 @@ button.danger {
   top: 4px;
   left: 10px;
   color: var(--muted);
-  font-size: 0.72rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: var(--type-caption-size);
 }
 
 /*
@@ -4175,7 +4165,7 @@ button.danger {
  * mis-aimed click lands on the harmless one. 30px = the ✕'s 22px target plus its
  * 4px right offset plus a 4px gap, so the two targets do not overlap. The
  * narrowest real box is one 150px node plus 2 × 20px padding = 190px, which
- * leaves the uppercase kind label (~60px at 0.72rem) clear of both.
+ * leaves the kind label (~60px at 12px) clear of both.
  *
  * `--muted` at rest, `--accent` on hover/focus and while PRESSED: unlike the ✕,
  * this control has a state — it is `aria-pressed` while its container is the
@@ -5162,9 +5152,7 @@ button.danger {
 }
 
 .run-node-status {
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-size: 0.7rem;
+  font-size: var(--type-caption-size);
 }
 
 /* #1395 OR4 — the run the editor started, under each AUTHORING card. Absolute,
@@ -5495,9 +5483,8 @@ button.danger {
 
 .expression-picker-list h4 {
   margin: 0.5rem 0 0.25rem;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: var(--type-caption-size);
+  font-weight: var(--weight-strong);
   color: var(--muted);
 }
 
@@ -6301,9 +6288,7 @@ button.danger {
 }
 
 .version-history-tag {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: var(--type-caption-size);
   padding: 0.05rem 0.35rem;
   border: 1px solid var(--border);
   border-radius: 999px;

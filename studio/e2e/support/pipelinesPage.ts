@@ -2,7 +2,7 @@ import { expect, type Locator, type Page } from '@playwright/test';
 
 /**
  * #1569 OR37 slice 3 — the Pipelines page creates and imports through its
- * toolbar's drawers. By its exact `+ New pipeline` name: the Factory Resources
+ * toolbar's drawers. By its exact `+ New pipeline` name: the Factory resources
  * pane beside the page has its own icon button named "New pipeline".
  */
 export function newPipelineButton(page: Page): Locator {

@@ -64,7 +64,7 @@ export function toolboxGroups(query: string): ToolboxGroup[] {
       .filter((e) => e.category === category)
       // Title AND type: the title is what the toolbox shows, but the type is what
       // the docs, an export envelope and an error message all name, so an author
-      // who knows `file_read` should not have to guess it is called "Read File".
+      // who knows `file_read` should not have to guess it is called "Read file".
       .filter(
         (e) =>
           needle === '' ||

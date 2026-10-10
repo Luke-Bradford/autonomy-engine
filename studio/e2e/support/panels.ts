@@ -106,7 +106,7 @@ export async function activityCell(page: Page, row: Locator, column: string): Pr
 }
 
 /**
- * An activity's row, found by its accessible name (`HTTP Request 1`), the
+ * An activity's row, found by its accessible name (`HTTP request 1`), the
  * button that opens it. `nth` picks among its attempts and items in table
  * order; `-1` is the last. Without it the locator matches every row of that
  * activity, so a strict action on a retried or iterated one fails loudly

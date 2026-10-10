@@ -51,7 +51,7 @@ export interface StarterTemplate {
 }
 
 /**
- * The `List Directory → Filter` head two templates share. The filter drops the
+ * The `List directory → Filter` head two templates share. The filter drops the
  * folder's sub-directories, and whatever `keep` adds on top: a directory handed
  * to a read or a copy fails the run rather than being skipped.
  */

@@ -1789,7 +1789,7 @@ describe('TriggersPage — inline validation (#1396)', () => {
     await user.click(form.getByLabelText(/Enabled/i));
     await user.selectOptions(form.getByLabelText('Concurrency', FIELD), 'parallel');
     await user.type(form.getByLabelText(/Max parallel runs/i), '1.5');
-    await user.type(form.getByLabelText('Params (JSON)'), '[[1]');
+    await user.type(form.getByLabelText('Parameters (JSON)'), '[[1]');
     await user.click(form.getByRole('button', { name: /Create trigger/i }));
 
     expect(createMock).not.toHaveBeenCalled();
@@ -1805,7 +1805,7 @@ describe('TriggersPage — inline validation (#1396)', () => {
       }),
     );
     expect(form.getByLabelText(/Max parallel runs/i)).toHaveFocus();
-    expect(form.getByLabelText('Params (JSON)')).toHaveAttribute('aria-invalid', 'true');
+    expect(form.getByLabelText('Parameters (JSON)')).toHaveAttribute('aria-invalid', 'true');
 
     // Turning Enabled off is a fix for the binding: its line goes at once.
     await user.click(form.getByLabelText(/Enabled/i));
@@ -1824,8 +1824,8 @@ describe('TriggersPage — inline validation (#1396)', () => {
     await user.type(form.getByLabelText('Name'), 'Nightly');
     await user.click(form.getByRole('button', { name: /Create trigger/i }));
 
-    await waitFor(() => expect(form.getByLabelText('Params (JSON)')).toHaveFocus());
-    expect(form.getByLabelText('Params (JSON)')).toHaveAccessibleDescription(/^Unknown param/);
+    await waitFor(() => expect(form.getByLabelText('Parameters (JSON)')).toHaveFocus());
+    expect(form.getByLabelText('Parameters (JSON)')).toHaveAccessibleDescription(/^Unknown param/);
   });
 
   it('refuses a control the browser could not read, rather than reading it as blank', async () => {

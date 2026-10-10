@@ -171,7 +171,7 @@ describe('EditorRunDrawer', () => {
     ],
     status: 'success',
     live: false,
-    nameOf: (id) => (id === 'n_a' ? 'HTTP Request 1' : null),
+    nameOf: (id) => (id === 'n_a' ? 'HTTP request 1' : null),
     typeOf: (id) => (id === 'n_a' ? 'http_request' : null),
   });
 
@@ -189,7 +189,7 @@ describe('EditorRunDrawer', () => {
 
   it('shows the selected node’s part in the run, and the way to the whole run', () => {
     mountDrawer(run, 'n_a');
-    expect(screen.getByRole('complementary', { name: 'Node HTTP Request 1' })).toBeTruthy();
+    expect(screen.getByRole('complementary', { name: 'Node HTTP request 1' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open full run' }).getAttribute('href')).toContain(
       'run_1',
     );

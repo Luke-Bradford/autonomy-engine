@@ -241,7 +241,7 @@ describe('readableIssue', () => {
       [],
       containers,
     );
-    expect(out).toBe(`container 'Stage 1': child 'HTTP Request 1' is not a node in this pipeline`);
+    expect(out).toBe(`container 'Stage 1': child 'HTTP request 1' is not a node in this pipeline`);
   });
 
   it('names an edge by its ENDS, since an edge has no name of its own', () => {
@@ -251,7 +251,7 @@ describe('readableIssue', () => {
       [AB],
       containers,
     );
-    expect(out).toBe(`edge 'HTTP Request 1 → LLM Call 1': crosses a container boundary`);
+    expect(out).toBe(`edge 'HTTP request 1 → LLM call 1': crosses a container boundary`);
   });
 
   /**
@@ -262,7 +262,7 @@ describe('readableIssue', () => {
    */
   it('tells two activities of the SAME type apart', () => {
     const out = readableIssue(`edge 'n_a' → 'n_d' is broken`, [A, B, C, D], [], containers);
-    expect(out).toBe(`edge 'HTTP Request 1' → 'HTTP Request 2' is broken`);
+    expect(out).toBe(`edge 'HTTP request 1' → 'HTTP request 2' is broken`);
   });
 
   it('leaves a quoted token that resolves to nothing exactly as it was', () => {
@@ -308,7 +308,7 @@ describe('readableIssue', () => {
       containers,
     );
     expect(out).toBe(
-      "node 'HTTP Request 1' condition: ${nodes.ghost.output.body} does not name an upstream node",
+      "node 'HTTP request 1' condition: ${nodes.ghost.output.body} does not name an upstream node",
     );
   });
 
@@ -325,7 +325,7 @@ describe('readableIssue', () => {
    * CONTAINER-located one is the real shape: `validateExitWhen` writes
    * `container.<id>.exitWhen` and the operator's own `exitWhen` expression follows
    * it. Without the anchor that expression is corrupted into
-   * `${node 'HTTP Request 1' output.done}` — a string that appears nowhere in
+   * `${node 'HTTP request 1' output.done}` — a string that appears nowhere in
    * their config and is not even valid expression syntax.
    */
   it('never REWRITES a ${nodes.<id>...} reference in the message BODY', () => {
@@ -338,7 +338,7 @@ describe('readableIssue', () => {
     // The span survives byte-identical — the property the anchor exists for.
     // #887's gloss is APPENDED after it and changes none of it.
     expect(out).toBe(
-      "container 'Stage 1' exitWhen: ${nodes.n_a.output.done} (“HTTP Request 1”) " +
+      "container 'Stage 1' exitWhen: ${nodes.n_a.output.done} (“HTTP request 1”) " +
         'does not name an upstream node',
     );
   });
@@ -352,7 +352,7 @@ describe('readableIssue', () => {
     const msg = 'the graph is unsound near ${nodes.n_a.output.done}';
     // Every byte of the original survives — the unanchored pass would have
     // corrupted the body; #887's gloss only ever adds after it.
-    expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(`${msg} (“HTTP Request 1”)`);
+    expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(`${msg} (“HTTP request 1”)`);
   });
 
   /**
@@ -362,12 +362,12 @@ describe('readableIssue', () => {
    */
   it('rewrites a bare node.<id> location without stranding a space before the colon', () => {
     const out = readableIssue('node.n_a: connectionParams have no effect', [A], [], []);
-    expect(out).toBe("node 'HTTP Request 1': connectionParams have no effect");
+    expect(out).toBe("node 'HTTP request 1': connectionParams have no effect");
   });
 
   it('rewrites the PLURAL nodes.<id>.config location the LLM validators write', () => {
     const out = readableIssue('nodes.n_a.config.history: must be an array', [A], [], []);
-    expect(out).toBe("node 'HTTP Request 1' config.history: must be an array");
+    expect(out).toBe("node 'HTTP request 1' config.history: must be an array");
   });
 
   it('leaves a location whose id resolves to nothing exactly as it was', () => {
@@ -391,7 +391,7 @@ describe('readableIssue', () => {
       containers,
     );
     expect(out).toBe(
-      'forward cycle detected involving {“HTTP Request 1”, “HTTP Request 2”, “Stage 1”} — ' +
+      'forward cycle detected involving {“HTTP request 1”, “HTTP request 2”, “Stage 1”} — ' +
         'the forward graph must be a DAG',
     );
   });
@@ -423,7 +423,7 @@ describe('readableIssue', () => {
       [],
       [],
     );
-    expect(out).toContain('{“legacy, imported 1”, “HTTP Request 1”}');
+    expect(out).toContain('{“legacy, imported 1”, “HTTP request 1”}');
   });
 
   it('keeps a comma-BEARING name readable as one name, in the expression gloss', () => {
@@ -441,7 +441,7 @@ describe('readableIssue', () => {
    * other by a raw uuid. Pass 5 names both without editing either: the `${…}`
    * span is byte-identical and the name arrives as a parenthetical after it.
    *
-   * Glossing rather than rewriting is the whole point — `${nodes.HTTP Request
+   * Glossing rather than rewriting is the whole point — `${nodes.HTTP request
    * 2.output.body}` would name a string that is in nobody's config and is not
    * valid syntax.
    */
@@ -454,7 +454,7 @@ describe('readableIssue', () => {
       containers,
     );
     expect(out).toBe(
-      "node 'HTTP Request 1' config.url: ${nodes.n_d.output.body} (“HTTP Request 2”) " +
+      "node 'HTTP request 1' config.url: ${nodes.n_d.output.body} (“HTTP request 2”) " +
         'does not name an upstream node (a self, downstream, or unrelated node has no output here)',
     );
   });
@@ -478,8 +478,8 @@ describe('readableIssue', () => {
       containers,
     );
     expect(out).toBe(
-      'node \'HTTP Request 1\' config.url: ${default(nodes.n_d.output.body, "{}")} ' +
-        '(“HTTP Request 2”) is not guaranteed here',
+      'node \'HTTP request 1\' config.url: ${default(nodes.n_d.output.body, "{}")} ' +
+        '(“HTTP request 2”) is not guaranteed here',
     );
   });
 
@@ -488,8 +488,8 @@ describe('readableIssue', () => {
     const msg = 'nodes.n_a.config.url: ${default(nodes.n_d.output.body, "x")} is malformed';
     expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(
       msg
-        .replace('nodes.n_a.config.url', "node 'HTTP Request 1' config.url")
-        .replace('"x")}', '"x")} (“HTTP Request 2”)'),
+        .replace('nodes.n_a.config.url', "node 'HTTP request 1' config.url")
+        .replace('"x")}', '"x")} (“HTTP request 2”)'),
     );
   });
 
@@ -502,14 +502,14 @@ describe('readableIssue', () => {
   it('adds no gloss when the referenced id resolves to nothing', () => {
     const msg = 'nodes.n_a.config.url: ${nodes.ghost.output.body} does not name an upstream node';
     expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(
-      msg.replace('nodes.n_a.config.url', "node 'HTTP Request 1' config.url"),
+      msg.replace('nodes.n_a.config.url', "node 'HTTP request 1' config.url"),
     );
   });
 
   it('leaves a non-node expression root alone', () => {
     const msg = 'nodes.n_a.config.url: ${params.endpoint} is malformed';
     expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(
-      msg.replace('nodes.n_a.config.url', "node 'HTTP Request 1' config.url"),
+      msg.replace('nodes.n_a.config.url', "node 'HTTP request 1' config.url"),
     );
   });
 
@@ -521,8 +521,8 @@ describe('readableIssue', () => {
       containers,
     );
     expect(out).toBe(
-      "node 'HTTP Request 1' config.url: ${nodes.n_b.output.v} (“LLM Call 1”) and " +
-        '${nodes.n_d.output.v} (“HTTP Request 2”) are both unreachable',
+      "node 'HTTP request 1' config.url: ${nodes.n_b.output.v} (“LLM call 1”) and " +
+        '${nodes.n_d.output.v} (“HTTP request 2”) are both unreachable',
     );
   });
 
@@ -533,7 +533,7 @@ describe('readableIssue', () => {
       [],
       containers,
     );
-    expect(out).toContain('(“LLM Call 1”, “HTTP Request 2”)');
+    expect(out).toContain('(“LLM call 1”, “HTTP request 2”)');
   });
 
   /**
@@ -553,8 +553,8 @@ describe('readableIssue', () => {
       containers,
     );
     expect(out).toBe(
-      "node 'HTTP Request 1' config.url: ${nodes.n_d.status} (“HTTP Request 2”) is not " +
-        "settled here — 'HTTP Request 2' may still be running",
+      "node 'HTTP request 1' config.url: ${nodes.n_d.status} (“HTTP request 2”) is not " +
+        "settled here — 'HTTP request 2' may still be running",
     );
   });
 
@@ -573,7 +573,7 @@ describe('readableIssue', () => {
   it('adds nothing to an ESCAPED $${…}, which references nothing', () => {
     const msg = 'nodes.n_a.config.url: $${nodes.n_d.output.body} is literal text';
     expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(
-      msg.replace('nodes.n_a.config.url', "node 'HTTP Request 1' config.url"),
+      msg.replace('nodes.n_a.config.url', "node 'HTTP request 1' config.url"),
     );
   });
 
@@ -586,7 +586,7 @@ describe('readableIssue', () => {
   it('does not read a mid-path .nodes. as a node reference', () => {
     const msg = 'nodes.n_a.config.url: ${params.nodes.n_d} is malformed';
     expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(
-      msg.replace('nodes.n_a.config.url', "node 'HTTP Request 1' config.url"),
+      msg.replace('nodes.n_a.config.url', "node 'HTTP request 1' config.url"),
     );
   });
 
@@ -606,7 +606,7 @@ describe('readableIssue', () => {
       [],
       containers,
     );
-    expect(out).toContain('${nodes.n_d[0]} (“HTTP Request 2”)');
+    expect(out).toContain('${nodes.n_d[0]} (“HTTP request 2”)');
   });
 
   /** One node named twice in one span is named ONCE — the gloss dedups. */
@@ -617,8 +617,8 @@ describe('readableIssue', () => {
       [],
       containers,
     );
-    expect(out).toContain('(“HTTP Request 2”)');
-    expect(out).not.toContain('(“HTTP Request 2”, “HTTP Request 2”)');
+    expect(out).toContain('(“HTTP request 2”)');
+    expect(out).not.toContain('(“HTTP request 2”, “HTTP request 2”)');
   });
 
   /**
@@ -631,7 +631,7 @@ describe('readableIssue', () => {
   it('does not name a CONTAINER that appears after nodes.', () => {
     const msg = 'nodes.n_a.config.url: ${nodes.stage_1.output.v} does not name an upstream node';
     expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(
-      msg.replace('nodes.n_a.config.url', "node 'HTTP Request 1' config.url"),
+      msg.replace('nodes.n_a.config.url', "node 'HTTP request 1' config.url"),
     );
   });
 
@@ -648,7 +648,7 @@ describe('readableIssue', () => {
       containers,
     );
     expect(out).toBe(
-      "node 'HTTP Request 1' config.url: ${nodes.n_d.output.v} (“HTTP Request 2”) " +
+      "node 'HTTP request 1' config.url: ${nodes.n_d.output.v} (“HTTP request 2”) " +
         'then ${nodes.n_b.output',
     );
   });
@@ -671,7 +671,7 @@ describe('readableIssue', () => {
       [],
       containers,
     );
-    expect(out).toContain('(“HTTP Request 2”)');
+    expect(out).toContain('(“HTTP request 2”)');
   });
 });
 
@@ -718,7 +718,7 @@ describe('consequenceMessage', () => {
       'undo me',
     );
     expect(msg).toContain('changes that inferred routing');
-    expect(msg).not.toContain('HTTP Request');
+    expect(msg).not.toContain('HTTP request');
   });
 
   it('states the flip back to a single sequence when the last container goes', () => {
@@ -742,7 +742,7 @@ describe('consequenceMessage', () => {
       containers,
       'You can undo it by setting the activity back to — none —.',
     );
-    expect(msg).toContain('HTTP Request 1 → LLM Call 1');
+    expect(msg).toContain('HTTP request 1 → LLM call 1');
     expect(msg).not.toContain('e_ab');
     expect(msg).toContain('— none —');
   });
@@ -824,7 +824,7 @@ describe('issuesBySubject (#863)', () => {
     expect(located.length).toBeGreaterThan(0);
     const own = map.get(subjectKey('node', 'n_a'));
     expect(own?.map((i) => i.raw)).toEqual(located.map((i) => i.raw));
-    expect(own?.[0]?.text).toMatch(/^node 'HTTP Request 1' config\.url:/);
+    expect(own?.[0]?.text).toMatch(/^node 'HTTP request 1' config\.url:/);
     expect(map.has(subjectKey('node', 'n_b'))).toBe(false);
   });
 

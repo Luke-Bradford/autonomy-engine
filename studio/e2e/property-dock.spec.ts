@@ -108,7 +108,7 @@ test.describe('#852 — the bottom property dock', () => {
     await openSeededCanvas(page, 'dock tabs', seed);
 
     await nodeById(page, 'a').click();
-    await expect(properties(page).getByRole('heading', { name: /HTTP Request/ })).toBeVisible();
+    await expect(properties(page).getByRole('heading', { name: /HTTP request/ })).toBeVisible();
     // #1477 — an HTTP node's first type tab is Request.
     await expect(properties(page).getByRole('tab', { name: 'Request' })).toHaveAttribute(
       'aria-selected',
@@ -141,10 +141,10 @@ test.describe('#852 — the bottom property dock', () => {
       'aria-selected',
       'true',
     );
-    await expect(properties(page).getByRole('button', { name: 'Add param' })).toBeVisible();
+    await expect(properties(page).getByRole('button', { name: 'Add parameter' })).toBeVisible();
     await properties(page).getByRole('tab', { name: 'Outputs' }).click();
     await expect(properties(page).getByRole('button', { name: 'Add output' })).toBeVisible();
-    await expect(properties(page).getByRole('button', { name: 'Add param' })).toBeHidden();
+    await expect(properties(page).getByRole('button', { name: 'Add parameter' })).toBeHidden();
 
     await expectQuiet(page, problems);
   });

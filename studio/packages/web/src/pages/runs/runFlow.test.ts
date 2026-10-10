@@ -143,21 +143,21 @@ describe('runFlowNodes', () => {
 
   /**
    * #878 — `DOC` is three `http_request` nodes, which is exactly the graph that
-   * used to draw three boxes reading "HTTP Request". A monitor whose job is to
+   * used to draw three boxes reading "HTTP request". A monitor whose job is to
    * say WHICH node failed cannot name them identically, and the name it uses is
    * the one the authoring canvas draws.
    */
   it('names each activity distinctly, in the label and in the accessible name', () => {
     const nodes = runFlowNodes(DOC, null);
     expect(nodes.map((n) => n.data.title)).toEqual([
-      'HTTP Request 1',
-      'HTTP Request 2',
-      'HTTP Request 3',
+      'HTTP request 1',
+      'HTTP request 2',
+      'HTTP request 3',
     ]);
     expect(nodes.map((n) => n.ariaLabel)).toEqual([
-      `HTTP Request 1, ${NO_STATUS_LABEL}`,
-      `HTTP Request 2, ${NO_STATUS_LABEL}`,
-      `HTTP Request 3, ${NO_STATUS_LABEL}`,
+      `HTTP request 1, ${NO_STATUS_LABEL}`,
+      `HTTP request 2, ${NO_STATUS_LABEL}`,
+      `HTTP request 3, ${NO_STATUS_LABEL}`,
     ]);
   });
 
@@ -165,7 +165,7 @@ describe('runFlowNodes', () => {
     const nodes = runFlowNodes(DOC, projected());
     // The label is the activity's identifying name (the author canvas's own
     // rule, #878), not its id.
-    expect(nodes.find((n) => n.id === 'a')!.ariaLabel).toBe('HTTP Request 1, success');
+    expect(nodes.find((n) => n.id === 'a')!.ariaLabel).toBe('HTTP request 1, success');
   });
 
   it('renders every node UNDRAGGABLE and UNSELECTABLE — this is a monitor', () => {
@@ -605,7 +605,7 @@ describe('runFlowNodes — statusless', () => {
   it('suppresses a status even when a run state IS supplied', () => {
     const nodes = runFlowNodes(DOC, projected(), { showStatus: false });
     expect(nodes.map((n) => n.data.status)).toEqual([null, null, null]);
-    expect(nodes[0]!.ariaLabel).toBe('HTTP Request 1');
+    expect(nodes[0]!.ariaLabel).toBe('HTTP request 1');
   });
 
   /* The regression the flag must not cause: every existing caller passes no

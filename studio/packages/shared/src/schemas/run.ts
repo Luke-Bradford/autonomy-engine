@@ -152,7 +152,7 @@ export function runStartIsReal(run: Pick<Run, 'status'>): boolean {
  * - `rerun`: a rerun from failed (RS). F11's plain rerun, when it lands, needs
  *   its own discriminator rather than reusing `rerunOf`, or it will read as
  *   this kind;
- * - `call`: a child run an Execute Pipeline node spawned.
+ * - `call`: a child run an Execute pipeline node spawned.
  */
 export const RUN_TRIGGERED_BY_KINDS = [
   ...TRIGGER_FIRE_KINDS,
@@ -174,7 +174,7 @@ export const RUN_TRIGGERED_BY_LABELS: Record<RunTriggeredByKind, string> = {
   editor: 'Editor run',
   debug: 'Debug',
   rerun: 'Rerun from failed',
-  call: 'Execute Pipeline',
+  call: 'Execute pipeline',
 };
 
 /**
@@ -739,7 +739,7 @@ export const RUN_STATUS_SORT_RANK: Record<RunStatus, number> = {
 /**
  * The Triggered by column's order: A–Z by the LABEL the grid draws, not by the
  * stored slug (`call` would otherwise sort first while reading "Execute
- * Pipeline"). Derived from `RUN_TRIGGERED_BY_LABELS`, so renaming a label
+ * pipeline"). Derived from `RUN_TRIGGERED_BY_LABELS`, so renaming a label
  * re-ranks it.
  */
 export const RUN_TRIGGERED_BY_SORT_RANK: Record<RunTriggeredByKind, number> = Object.fromEntries(

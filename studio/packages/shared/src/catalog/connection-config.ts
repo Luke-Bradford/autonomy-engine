@@ -440,8 +440,8 @@ export const agentConnectionConfigSchema = z.object({
               // The catalog's own activity titles; `registry.ts` imports this
               // module, so a test pins the two equal instead of an import.
               options: optionTitles(quotaActivityTypeSchema, {
-                [LLM_CALL_ACTIVITY_TYPE]: 'LLM Call',
-                [AGENT_TASK_ACTIVITY_TYPE]: 'Agent Task',
+                [LLM_CALL_ACTIVITY_TYPE]: 'LLM call',
+                [AGENT_TASK_ACTIVITY_TYPE]: 'Agent task',
               }),
             }),
           )

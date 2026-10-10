@@ -23,11 +23,11 @@ describe('Section (#1594 OR40 S3)', () => {
 
   it('shows the help from the ? on demand', async () => {
     render(
-      <Section heading="Params" help="The typed inputs a run supplies.">
+      <Section heading="Parameters" help="The typed inputs a run supplies.">
         <p>rows</p>
       </Section>,
     );
-    await userEvent.click(screen.getByLabelText('About Params'));
+    await userEvent.click(screen.getByLabelText('About Parameters'));
     expect(screen.getByText('The typed inputs a run supplies.')).toBeVisible();
   });
 

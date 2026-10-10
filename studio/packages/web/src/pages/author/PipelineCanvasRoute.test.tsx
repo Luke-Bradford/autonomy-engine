@@ -317,7 +317,7 @@ describe('PipelineCanvasRoute — the name stays in step with a rename (#720)', 
 
   it('re-renders the heading when the pipeline is renamed in the tree while open', async () => {
     // The defect: the canvas took its name from a ONE-SHOT `getPipeline`, so
-    // renaming in the Factory Resources pane left the two mounted views
+    // renaming in the Factory resources pane left the two mounted views
     // disagreeing about the very fact the shared store exists to keep in step —
     // until a full reload.
     const store = storeWith([{ id: 'pl_1', name: 'Nightly digest' }]);

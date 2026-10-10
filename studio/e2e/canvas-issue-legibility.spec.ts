@@ -39,7 +39,7 @@ async function mintedId(page: Page, index: number): Promise<string> {
  * THE CARVE-OUT, made explicit rather than dodged. `readableIssue` deliberately
  * leaves an expression body verbatim — it is the literal string the operator has
  * to go and edit, and a message telling them to fix
- * `${nodes.HTTP Request 2.output.body}` would name something that appears nowhere
+ * `${nodes.HTTP request 2.output.body}` would name something that appears nowhere
  * in their config and is not even valid syntax. So a minted id CAN legitimately
  * appear inside a `${…}`, and "no `n_` anywhere in the list" is not a property of
  * the code.
@@ -90,11 +90,11 @@ test.describe('#884 — a canvas-authored issue names its subject', () => {
     await openSeededCanvas(page, 'e2e 884 legible issues', { nodes: [] });
 
     // Built by the GESTURE, so the ids are `newLocalId` uuids. Two of the same
-    // type, because one is not enough: 'HTTP Request' alone would be satisfied by
+    // type, because one is not enough: 'HTTP request' alone would be satisfied by
     // the type name, and #878's whole point is that the ordinal is what tells two
     // otherwise identical boxes apart.
-    await addActivity(page, 'HTTP Request');
-    await addActivity(page, 'HTTP Request');
+    await addActivity(page, 'HTTP request');
+    await addActivity(page, 'HTTP request');
     await expect(canvasNodes(page)).toHaveCount(2);
 
     // A reference to a node that does not exist — `scanNodeRefs`, which writes the
@@ -112,7 +112,7 @@ test.describe('#884 — a canvas-authored issue names its subject', () => {
 
     const all = issues.join('\n');
     // The SECOND one — the ordinal, not just the type.
-    expect(all).toContain("node 'HTTP Request 2' config.url:");
+    expect(all).toContain("node 'HTTP request 2' config.url:");
     // The operator's own expression text, untouched.
     expect(all).toContain('${nodes.ghost.output.body}');
     // The guard: no minted id in the PROSE.
@@ -146,7 +146,7 @@ test.describe('#884 — a canvas-authored issue names its subject', () => {
    * All three properties are pinned together here, because each one is how the
    * other two could be broken while still looking fixed: the prose names the
    * activity; the expression survives verbatim (a "fix" that rewrote the body
-   * would corrupt it into `${nodes.HTTP Request 2.output.body}`, which is in
+   * would corrupt it into `${nodes.HTTP request 2.output.body}`, which is in
    * nobody's config and is not valid syntax); and the gloss names the PRODUCER,
    * not merely some name.
    */
@@ -156,8 +156,8 @@ test.describe('#884 — a canvas-authored issue names its subject', () => {
     const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'e2e 884 real producer', { nodes: [] });
 
-    await addActivity(page, 'HTTP Request');
-    await addActivity(page, 'HTTP Request');
+    await addActivity(page, 'HTTP request');
+    await addActivity(page, 'HTTP request');
     await expect(canvasNodes(page)).toHaveCount(2);
 
     // The SECOND node's minted id, referenced from the FIRST — which is upstream
@@ -170,7 +170,7 @@ test.describe('#884 — a canvas-authored issue names its subject', () => {
     await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
     const all = (await validationIssues(page)).join('\n');
-    expect(all).toContain("node 'HTTP Request 1' config.url:");
+    expect(all).toContain("node 'HTTP request 1' config.url:");
     // Verbatim inside the expression — the string the operator must go and edit.
     expect(all).toContain(`\${nodes.${second}.output.body}`);
     // ...and nowhere else. This is what makes the guard behaviour-shaped rather
@@ -179,10 +179,10 @@ test.describe('#884 — a canvas-authored issue names its subject', () => {
     expect(outsideExpressions(all)).not.toContain('n_');
     // #887 — the far end is named too, immediately after the span it explains.
     // Asserted as one contiguous string so it cannot pass on a gloss that landed
-    // somewhere else in the sentence, and it names the SECOND HTTP Request
-    // specifically: 'HTTP Request 1' is the node being edited, so a gloss that
-    // echoed the wrong end would still contain 'HTTP Request'.
-    expect(all).toContain(`\${nodes.${second}.output.body} (“HTTP Request 2”)`);
+    // somewhere else in the sentence, and it names the SECOND HTTP request
+    // specifically: 'HTTP request 1' is the node being edited, so a gloss that
+    // echoed the wrong end would still contain 'HTTP request'.
+    expect(all).toContain(`\${nodes.${second}.output.body} (“HTTP request 2”)`);
 
     await expectQuiet(page, problems);
   });
@@ -205,8 +205,8 @@ test.describe('#863 — an issue is shown on the node it is about', () => {
       await openSeededCanvas(page, `e2e 863 node issues ${theme}`, { nodes: [] });
       await setTheme(page, theme);
 
-      await addActivity(page, 'HTTP Request');
-      await addActivity(page, 'HTTP Request');
+      await addActivity(page, 'HTTP request');
+      await addActivity(page, 'HTTP request');
       await expect(canvasNodes(page)).toHaveCount(2);
 
       const [first, second] = [canvasNodes(page).nth(0), canvasNodes(page).nth(1)];
@@ -225,7 +225,7 @@ test.describe('#863 — an issue is shown on the node it is about', () => {
       await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
       const issues = await validationIssues(page);
-      const own = issues.filter((m) => m.startsWith("node 'HTTP Request 2' "));
+      const own = issues.filter((m) => m.startsWith("node 'HTTP request 2' "));
       expect(own.length, 'the refusal is about the second node').toBeGreaterThan(0);
 
       // The badge: on the second box only, counting exactly its own issues.

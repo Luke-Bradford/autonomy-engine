@@ -64,7 +64,7 @@ test.describe('implicit-chain advisory (#788)', () => {
        (`a`, `b`, `c`) appear nowhere on the canvas, so naming them here pointed
        at nothing the operator could see; for a canvas-authored doc they are
        `n_7c44a16f-…` uuids. */
-    await expect(advisory).toContainText('HTTP Request 1 → HTTP Request 2 → HTTP Request 3');
+    await expect(advisory).toContainText('HTTP request 1 → HTTP request 2 → HTTP request 3');
     await expect(advisory).not.toContainText('a → b → c');
     // And what it COSTS: the inferred routing is what the next Save mints into a
     // version that cannot be edited afterwards.
@@ -81,7 +81,7 @@ test.describe('implicit-chain advisory (#788)', () => {
     // so it is the one they are least likely to have reasoned about.
     /* The MIDDLE activity is a different type on purpose. `activityLabels`
        numbers within a kind and in document order, so three same-type activities
-       read "HTTP Request 1 → 2 → 3" for EVERY possible array order — an
+       read "HTTP request 1 → 2 → 3" for EVERY possible array order — an
        assertion that cannot fail. A distinct kind in the middle puts the
        identity of each position back into the sentence. */
     await openSeededCanvas(page, 'implicit chain — seeded', {
@@ -93,7 +93,7 @@ test.describe('implicit-chain advisory (#788)', () => {
     });
 
     await expect(page.locator(ADVISORY)).toContainText(
-      'HTTP Request 1 → Write File 1 → HTTP Request 2',
+      'HTTP request 1 → Write file 1 → HTTP request 2',
     );
     await expect(page.locator(ADVISORY)).not.toContainText('first → second → third');
     await expectQuiet(page, problems);
@@ -124,7 +124,7 @@ test.describe('implicit-chain advisory (#788)', () => {
     // between them is unambiguously the join and not part of a name; the
     // sentence states a COUNT, so an ambiguous join makes the count and the
     // list disagree.
-    await expect(advisory).toContainText('“HTTP Request 1”, “Stage 1”');
+    await expect(advisory).toContainText('“HTTP request 1”, “Stage 1”');
     await expect(advisory).not.toContainText('run in one sequence');
     await expect(advisory).toContainText('Saving mints');
 

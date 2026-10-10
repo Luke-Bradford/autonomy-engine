@@ -380,7 +380,7 @@ function pipelineDoc(key: PipelineKey, c: DocContext): Doc {
   switch (key) {
     case '1':
       return doc(
-        'Copy Data: one messy CSV (orders_2026-09.csv) into stg_orders, every column as text. ' +
+        'Copy data: one messy CSV (orders_2026-09.csv) into stg_orders, every column as text. ' +
           'Overwrite mode, so staging holds exactly this file afterwards.',
         [copy('load_csv', 0, 'csv', 'stg', staging('orders_2026-09.csv'), 'overwrite', 'fs')],
       );
@@ -426,8 +426,8 @@ function pipelineDoc(key: PipelineKey, c: DocContext): Doc {
       const n = '${nodes.count_rejects.output.rows[0].n}';
       return doc(
         'ELT via query-as-source: a cleaning SELECT into orders_clean, then an aggregate into ' +
-          'sales_by_country, then a validation SELECT into rejects, counted by Lookup Rows and ' +
-          'branched on by If Condition. Serial, because parallel copies into one SQLite file lock.',
+          'sales_by_country, then a validation SELECT into rejects, counted by Lookup rows and ' +
+          'branched on by If condition. Serial, because parallel copies into one SQLite file lock.',
         [
           copy('clean', 0, 'q_clean', 'clean', same(CLEAN_COLS), 'overwrite', 'warehouse'),
           copy('aggregate', 300, 'q_sales', 'sales', same(SALES_COLS), 'overwrite', 'warehouse'),

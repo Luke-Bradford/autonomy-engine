@@ -33,10 +33,15 @@ interface SecondaryPaneProps {
 const PANE_CONTENT: Partial<
   Record<HubId, { title: string; Content: ComponentType<{ hub: Hub }> }>
 > = {
-  // The Shell diagram labels the Author pane "Factory Resources", not the hub
+  // The Shell diagram labels the Author pane "Factory resources", not the hub
   // name — it is a resource tree, not a section list, so it says what it holds.
-  author: { title: 'Factory Resources', Content: FactoryResources },
+  author: { title: 'Factory resources', Content: FactoryResources },
 };
+
+/** The titles of the panes that name themselves, for the sentence-case test (#1594 OR40 S4). */
+export const PANE_TITLES: Partial<Record<HubId, string>> = Object.fromEntries(
+  Object.entries(PANE_CONTENT).map(([id, c]) => [id, c.title]),
+);
 
 /**
  * The shell's secondary pane (U3): the active hub's own navigation, one level
@@ -56,7 +61,7 @@ const PANE_CONTENT: Partial<
  * `/manage/connections-v2` could not light `/manage/connections`.
  *
  * The section list below is the DEFAULT body. A hub with a real surface of its
- * own declares one in `PANE_CONTENT` — U4 gave Author the Factory Resources
+ * own declares one in `PANE_CONTENT` — U4 gave Author the Factory resources
  * tree, which keeps the hub's section as its group header rather than replacing
  * the pane's navigation with a parallel one.
  * Notably NOT `@fluentui/react-nav`'s `Nav`/`NavItem` (which is installed):

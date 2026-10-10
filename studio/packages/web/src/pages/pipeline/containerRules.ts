@@ -474,15 +474,15 @@ export function readableIssue(
   // The other four passes exist because a location is the validator's own
   // rendering of an id. An expression body is NOT: it is the string the operator
   // has to go and edit, so pass 2 is anchored precisely to keep out of it, and
-  // `${nodes.HTTP Request 2.output.body}` would name something that appears
+  // `${nodes.HTTP request 2.output.body}` would name something that appears
   // nowhere in their config and is not valid syntax. The cost was that the
   // commonest reference error named one end the way the canvas draws it and the
   // other as a raw uuid — and the uuid is usually MACHINE-inserted, spliced in by
   // U8a's expression picker, so the operator never typed it and cannot recognise
   // it. Glossing is the way to name both ends without touching the text:
   //
-  //   node 'HTTP Request 1' config.url: ${nodes.n_7c4….output.body} (HTTP
-  //   Request 2) does not name an upstream node (…)
+  //   node 'HTTP request 1' config.url: ${nodes.n_7c4….output.body} (HTTP
+  //   request 2) does not name an upstream node (…)
   //
   // The gloss is deliberately UNCONDITIONAL where it resolves, including on the
   // two message shapes that also quote the id (`:3823` "declares no output",
@@ -709,8 +709,8 @@ export function issuesBySubject(
  *
  * Every arm is QUALITATIVE — it names no activity — and since #878 that is a
  * SCOPE decision rather than the constraint it used to be. The blocker was that
- * `activityLabel` names a TYPE, so "these now start in parallel: HTTP Request,
- * HTTP Request" was a confident claim the operator could not act on;
+ * `activityLabel` names a TYPE, so "these now start in parallel: HTTP request,
+ * HTTP request" was a confident claim the operator could not act on;
  * `activityLabels` now mints an identifying name, and `RoutingChange` already
  * carries the ids (`chain.order`, `partition.roots`/`follows`) — so enumerating
  * is a wording change with its own test surface, not a data change. Deferred to

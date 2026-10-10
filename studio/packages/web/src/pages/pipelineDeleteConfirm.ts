@@ -38,7 +38,7 @@ export async function readPipelineDependents(id: string): Promise<PipelineDepend
 
 /**
  * #1397 OR6 — the ONE pipeline-delete confirmation, shared by the Pipelines
- * page and the Factory Resources pane, whose two hand-written copies had
+ * page and the Factory resources pane, whose two hand-written copies had
  * already drifted (straight vs curly quotes).
  *
  * The consequences it names are the ones the schema makes real: the triggers

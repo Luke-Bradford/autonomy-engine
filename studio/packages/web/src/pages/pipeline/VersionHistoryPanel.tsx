@@ -69,7 +69,7 @@ function count(n: number, word: string): string {
 function shapeSummary(e: VersionEntry): string {
   const parts = [count(e.nodeCount, 'node'), count(e.edgeCount, 'edge')];
   if (e.containerCount > 0) parts.push(count(e.containerCount, 'container'));
-  if (e.paramCount > 0) parts.push(count(e.paramCount, 'param'));
+  if (e.paramCount > 0) parts.push(count(e.paramCount, 'parameter'));
   if (e.outputCount > 0) parts.push(count(e.outputCount, 'output'));
   return parts.join(' · ');
 }
@@ -203,13 +203,13 @@ function VersionList({
               }}
             >
               <strong>v{e.version}</strong>
-              {e.isHead && <span className="version-history-tag">latest</span>}
+              {e.isHead && <span className="version-history-tag">Latest</span>}
               {/* Two different facts, and they part company the moment a
                  preview is open: `current` is what the EDITOR is based on. */}
-              {e.isCurrent && <span className="version-history-tag">on the canvas</span>}
+              {e.isCurrent && <span className="version-history-tag">On the canvas</span>}
               {/* #979 — a THIRD fact, and the only one that describes what is
                  deployed: what a new `active`-bound trigger will resolve to. */}
-              {e.isActive && <span className="version-history-tag is-active">active</span>}
+              {e.isActive && <span className="version-history-tag is-active">Active</span>}
               <span className="version-history-when">
                 <When ms={e.createdAt} />
               </span>

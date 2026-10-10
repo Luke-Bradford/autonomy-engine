@@ -6,7 +6,7 @@ import { properties } from './support/panels';
 /**
  * #1475 OR27 slice 2 — the property dock is the operator's to size.
  *
- * Measured on `202f288d`: with "Copy Data 1" selected at 1440×900 the dock's
+ * Measured on `202f288d`: with "Copy data 1" selected at 1440×900 the dock's
  * fixed `clamp(200px, 42%, 460px)` hid 1013 of 1272px of its properties, and
  * it could be folded but not resized; neither the fold nor the Problems toggle
  * survived a reload.

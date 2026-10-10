@@ -88,7 +88,7 @@ test('#890 — a node shows the input it ran with; a secure node withholds it', 
     await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
     await fluentRootReady(page);
 
-    const shown = await openActivity(page, 'List Directory 1');
+    const shown = await openActivity(page, 'List directory 1');
     // #1484 M2 — the input is the drawer's Input tab, indented.
     await shown.getByRole('tab', { name: 'Input' }).click();
     const shownInput = shown.getByRole('group', { name: 'Input', exact: true });
@@ -98,7 +98,7 @@ test('#890 — a node shows the input it ran with; a secure node withholds it', 
     ]);
     await expect(shownInput.getByRole('heading', { name: 'Parameters' })).toBeVisible();
 
-    const secure = await openActivity(page, 'List Directory 2');
+    const secure = await openActivity(page, 'List directory 2');
     // The tab chosen above stays chosen from row to row.
     await expect(secure.getByRole('tab', { name: 'Input' })).toHaveAttribute(
       'aria-selected',

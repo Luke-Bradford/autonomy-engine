@@ -47,10 +47,10 @@ describe('ActivityToolbox', () => {
     // Each group heading comes from the shared label SSOT, and each activity sits
     // INSIDE its own group's list — not merely somewhere on the page.
     const general = screen.getByRole('list', { name: ACTIVITY_CATEGORY_LABELS.general });
-    expect(within(general).getByRole('button', { name: 'HTTP Request' })).toBeTruthy();
+    expect(within(general).getByRole('button', { name: 'HTTP request' })).toBeTruthy();
     const ai = screen.getByRole('list', { name: ACTIVITY_CATEGORY_LABELS.ai });
-    expect(within(ai).getByRole('button', { name: 'LLM Call' })).toBeTruthy();
-    expect(within(general).queryByRole('button', { name: 'LLM Call' })).toBeNull();
+    expect(within(ai).getByRole('button', { name: 'LLM call' })).toBeTruthy();
+    expect(within(general).queryByRole('button', { name: 'LLM call' })).toBeNull();
   });
 
   it('the hover on every activity says what it does (#1413)', () => {
@@ -69,7 +69,7 @@ describe('ActivityToolbox', () => {
     // the whole catalog and nothing is left unreachable from the canvas.
     const store = renderToolbox();
     expect(offeredNames()).toHaveLength(catalog.size + CONTAINER_PALETTE.length);
-    fireEvent.click(screen.getByRole('button', { name: 'Execute Pipeline' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Execute pipeline' }));
     expect(store.getState().nodes[0]!.type).toBe('execute_pipeline');
   });
 
@@ -78,7 +78,7 @@ describe('ActivityToolbox', () => {
     // single-pointer, non-drag alternative. It is also the only path a keyboard
     // user has, since HTML5 drag has no keyboard equivalent at all.
     const store = renderToolbox();
-    fireEvent.click(screen.getByRole('button', { name: 'HTTP Request' }));
+    fireEvent.click(screen.getByRole('button', { name: 'HTTP request' }));
     expect(store.getState().nodes).toHaveLength(1);
     expect(store.getState().nodes[0]!.type).toBe('http_request');
   });
@@ -86,7 +86,7 @@ describe('ActivityToolbox', () => {
   it('is reachable and activatable by KEYBOARD alone', async () => {
     const user = userEvent.setup();
     const store = renderToolbox();
-    const item = screen.getByRole('button', { name: 'HTTP Request' });
+    const item = screen.getByRole('button', { name: 'HTTP request' });
     item.focus();
     expect(document.activeElement).toBe(item);
     await user.keyboard('{Enter}');
@@ -99,7 +99,7 @@ describe('ActivityToolbox', () => {
       setData: vi.fn(),
       effectAllowed: 'uninitialized',
     } as unknown as DataTransfer;
-    fireEvent.dragStart(screen.getByRole('button', { name: 'HTTP Request' }), { dataTransfer });
+    fireEvent.dragStart(screen.getByRole('button', { name: 'HTTP request' }), { dataTransfer });
     expect(dataTransfer.setData).toHaveBeenCalledWith(ACTIVITY_DND_MIME, 'http_request');
     expect(dataTransfer.effectAllowed).toBe('copy');
   });
@@ -117,8 +117,8 @@ describe('ActivityToolbox', () => {
     const user = userEvent.setup();
     renderToolbox();
     await user.type(filterBox(), 'http');
-    expect(screen.getByRole('button', { name: 'HTTP Request' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'LLM Call' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'HTTP request' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'LLM call' })).toBeNull();
   });
 
   it('HIDES a category heading once the filter empties its group', async () => {
@@ -156,14 +156,14 @@ describe('ActivityToolbox', () => {
     expect(document.getElementById(controlled!)).toBeTruthy();
 
     await user.click(disclosure);
-    expect(screen.queryByRole('button', { name: 'HTTP Request' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'HTTP request' })).toBeNull();
     const collapsed = screen.getByRole('button', {
       name: `Expand ${ACTIVITY_CATEGORY_LABELS.general}`,
     });
     expect(collapsed.getAttribute('aria-expanded')).toBe('false');
 
     await user.click(collapsed);
-    expect(screen.getByRole('button', { name: 'HTTP Request' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'HTTP request' })).toBeTruthy();
   });
 
   it('a SEARCH overrides a collapsed group, so results are never hidden behind it', async () => {
@@ -176,10 +176,10 @@ describe('ActivityToolbox', () => {
     await user.click(
       screen.getByRole('button', { name: `Collapse ${ACTIVITY_CATEGORY_LABELS.general}` }),
     );
-    expect(screen.queryByRole('button', { name: 'HTTP Request' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'HTTP request' })).toBeNull();
 
     await user.type(filterBox(), 'http');
-    expect(screen.getByRole('button', { name: 'HTTP Request' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'HTTP request' })).toBeTruthy();
   });
 
   it('restores the collapse once the search is cleared, rather than discarding it', async () => {
@@ -191,10 +191,10 @@ describe('ActivityToolbox', () => {
       screen.getByRole('button', { name: `Collapse ${ACTIVITY_CATEGORY_LABELS.general}` }),
     );
     await user.type(filterBox(), 'http');
-    expect(screen.getByRole('button', { name: 'HTTP Request' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'HTTP request' })).toBeTruthy();
 
     await user.clear(filterBox());
-    expect(screen.queryByRole('button', { name: 'HTTP Request' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'HTTP request' })).toBeNull();
     expect(
       screen.getByRole('button', { name: `Expand ${ACTIVITY_CATEGORY_LABELS.general}` }),
     ).toBeTruthy();
@@ -246,13 +246,13 @@ describe('ActivityToolbox', () => {
     await user.type(filterBox(), 'http');
     // Whatever the user does with the toolbox mid-search, no disclosure exists
     // to corrupt the preference.
-    await user.click(screen.getByRole('button', { name: 'HTTP Request' }));
+    await user.click(screen.getByRole('button', { name: 'HTTP request' }));
     await user.clear(filterBox());
 
     expect(
       screen.getByRole('button', { name: `Expand ${ACTIVITY_CATEGORY_LABELS.general}` }),
     ).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'HTTP Request' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'HTTP request' })).toBeNull();
   });
 
   it('collapsing one group leaves the others open', async () => {
@@ -261,8 +261,8 @@ describe('ActivityToolbox', () => {
     await user.click(
       screen.getByRole('button', { name: `Collapse ${ACTIVITY_CATEGORY_LABELS.general}` }),
     );
-    expect(screen.queryByRole('button', { name: 'HTTP Request' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'LLM Call' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'HTTP request' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'LLM call' })).toBeTruthy();
   });
 
   describe('the Containers group (#1420) — ForEach, Until and Stage', () => {

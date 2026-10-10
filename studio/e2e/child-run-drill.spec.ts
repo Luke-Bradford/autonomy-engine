@@ -81,7 +81,7 @@ test('#1231 — a call node names its child run, and the child names its caller'
   expect(childRunCell).toMatch(/^#1231 child · success · \d+(\.\d+)?s$/);
 
   /* Open the drill-in by ROW rather than by the button's label: the button is
-     named by the activity's ordinal label (`Execute Pipeline 1`), which is a
+     named by the activity's ordinal label (`Execute pipeline 1`), which is a
      presentation fact this spec has no stake in, while the raw node id the row
      carries is what the doc and the event feed are keyed on. */
   const callRow = activityRowById(page, 'callChild');

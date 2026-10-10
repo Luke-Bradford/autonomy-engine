@@ -251,7 +251,7 @@ export function archivePipeline(id: string): Promise<Pipeline> {
  * `listPipelines` is the injected `fetchList` seam of `pipelinesStore`, so
  * widening its signature would change the store's contract for a list the store
  * must never hold. The store is the LIVE list and is shared with the
- * simultaneously-mounted Factory Resources pane; archived rows appearing in it
+ * simultaneously-mounted Factory resources pane; archived rows appearing in it
  * would leak into that pane's tree.
  */
 export function listArchivedPipelines(signal?: AbortSignal): Promise<Pipeline[]> {
@@ -700,7 +700,7 @@ export function validatePipelineDraft(
  * The refusal a pipeline with run history gets, before the confirmation
  * (`pipelineDeletePlan`) or after a 409 from a delete that raced a new run.
  * Runs are immutable audit history (`runs.pipeline_version_id` is FK-restrict),
- * so the way out is an archive — named by WHERE, because the Factory Resources
+ * so the way out is an archive — named by WHERE, because the Factory resources
  * pane that also shows this has no Archive of its own.
  */
 export function pipelineHasRunsMessage(name: string): string {
@@ -718,7 +718,7 @@ export const ARCHIVE_INSTEAD = `Archive it instead, ${ARCHIVE_WHERE} — archivi
  *
  * The 409 (`pipeline_has_runs`) is a real, explainable REFUSAL rather than a
  * fault, so it gets its own sentence. Shared because both delete surfaces — the
- * Factory Resources row menu and the pipelines page — face the same refusal,
+ * Factory resources row menu and the pipelines page — face the same refusal,
  * and two hand-written copies of the sentence had already drifted apart
  * typographically before this was extracted.
  */

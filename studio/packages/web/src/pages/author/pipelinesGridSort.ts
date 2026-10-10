@@ -94,7 +94,7 @@ const byName = (a: Pipeline, b: Pipeline) => a.name.localeCompare(b.name, 'en');
 
 /**
  * The rows in the chosen order, as a NEW array — the list is the shared store's,
- * which the Factory Resources pane reads too. Rows with no value (never run,
+ * which the Factory resources pane reads too. Rows with no value (never run,
  * nothing scheduled, summaries not loaded yet) sit at the bottom in either
  * direction; ties fall back to the name.
  */

@@ -121,7 +121,7 @@ function lastRunFilterLabel(v: LastRunFilter): string {
  * Pipelines: list / create / delete, and open one on the authoring canvas.
  *
  * Since U4 this page is one of TWO views of the same list — the Factory
- * Resources pane beside it is the other, and both are mounted at once — so the
+ * resources pane beside it is the other, and both are mounted at once — so the
  * list lives in `pipelinesStore` rather than in this component. A create here
  * has to appear in the tree, and a delete in the tree has to disappear from
  * here; two independent `useState` copies could only be kept in step by luck.
@@ -333,7 +333,7 @@ export function PipelinesPage({
   /**
    * #1058 — the ARCHIVED list, held here and deliberately NOT in
    * `pipelinesStore`. That store is the LIVE list, and it is shared with the
-   * Factory Resources pane mounted beside this page; archived rows placed in it
+   * Factory resources pane mounted beside this page; archived rows placed in it
    * would appear in that pane's tree as though they were still live.
    *
    * Its own status, not a bare array, for the reason the live list above is
@@ -421,7 +421,7 @@ export function PipelinesPage({
           await refresh();
         } catch (err) {
           forget();
-          // Shared with the Factory Resources row menu, which faces the same
+          // Shared with the Factory resources row menu, which faces the same
           // 409 refusal — two hand-written copies had already drifted apart.
           setActionMsg(describeDeleteFailure(p.name, err));
         }
@@ -818,7 +818,7 @@ export function PipelinesPage({
             </p>
           )}
           {/* The page needs its OWN recovery control. `ensureFresh` deliberately
-          does not retry from `error`, and the Factory Resources pane's Retry
+          does not retry from `error`, and the Factory resources pane's Retry
           can be put away — pane collapse is a persisted GLOBAL preference, and
           a collapsed pane is `hidden`, so it is neither clickable nor
           focusable. Without this, a failed first load with a collapsed pane
@@ -1013,7 +1013,7 @@ export function PipelinesPage({
                  in its menu. #1058: Archive stays in the same menu as Delete on
                  purpose. Delete is refused with a 409 the moment the pipeline
                  has run history, and `pipelineHasRunsMessage` (shared with the
-                 Factory Resources pane, which has no Archive) names where
+                 Factory resources pane, which has no Archive) names where
                  Archive is. Here it is the item above Delete. */
                   <RowMoreMenu
                     name={p.name}

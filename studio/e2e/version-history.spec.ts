@@ -112,9 +112,9 @@ test.describe('pipeline version history', () => {
 
     // The head is BOTH the latest and what the editor is based on, until a
     // preview parts them.
-    await expect(rows(page).nth(0)).toContainText('latest');
-    await expect(rows(page).nth(0)).toContainText('on the canvas');
-    await expect(rows(page).nth(2)).not.toContainText('latest');
+    await expect(rows(page).nth(0)).toContainText('Latest');
+    await expect(rows(page).nth(0)).toContainText('On the canvas');
+    await expect(rows(page).nth(2)).not.toContainText('Latest');
 
     // The shape summary is what an operator picks between — v1 had two nodes,
     // the head has three.
@@ -361,7 +361,7 @@ test.describe('pipeline version history', () => {
     await seedThreeVersions(page, 'history-refusal');
 
     // A palette-dropped HTTP node needs its URL before the doc saves (#1480).
-    await addSavableActivity(page, 'HTTP Request');
+    await addSavableActivity(page, 'HTTP request');
     // #1393 — dirty is the mark on Save (its description), not a paragraph.
     await expect(page.locator('.dirty-dot')).toHaveCSS('visibility', 'visible');
     await expect(page.getByRole('button', { name: 'Save version' })).toHaveAccessibleDescription(
@@ -413,7 +413,7 @@ test.describe('pipeline version history', () => {
 
     // This tab, still based on v1, makes an edit and saves.
     // A palette-dropped HTTP node needs its URL before the doc saves (#1480).
-    await addSavableActivity(page, 'HTTP Request');
+    await addSavableActivity(page, 'HTTP request');
     await page.getByRole('button', { name: 'Save version' }).click();
 
     const banner = page.locator('.notice-conflict');
@@ -500,7 +500,7 @@ test.describe('pipeline version history', () => {
     // Raise the banner: another writer lands v2, this tab saves from v1.
     await mintVersion(page, pipelineId, V3, pipelineVersionId, name);
     // A palette-dropped HTTP node needs its URL before the doc saves (#1480).
-    await addSavableActivity(page, 'HTTP Request');
+    await addSavableActivity(page, 'HTTP request');
     await page.getByRole('button', { name: 'Save version' }).click();
 
     const override = page.getByRole('button', { name: 'Save as v3 anyway' });
@@ -512,7 +512,7 @@ test.describe('pipeline version history', () => {
     // Now the edit that invalidates the doc. A call node added with no `call`
     // has no honest default target, so the validator refuses it and the canvas
     // badges — the same recipe `call-node-authoring.spec.ts` uses.
-    await addActivity(page, 'Execute Pipeline');
+    await addActivity(page, 'Execute pipeline');
     await expect(page.locator('.badge-list li')).toContainText('needs a call config');
 
     // Both buttons dead, for the SAME stated reason: that is the property, not
@@ -566,7 +566,7 @@ test.describe('pipeline version history', () => {
 
     const v2 = await mintVersion(page, pipelineId, V3, pipelineVersionId, name);
     // A palette-dropped HTTP node needs its URL before the doc saves (#1480).
-    await addSavableActivity(page, 'HTTP Request');
+    await addSavableActivity(page, 'HTTP request');
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.getByRole('button', { name: 'Save as v3 anyway' })).toBeEnabled();
 

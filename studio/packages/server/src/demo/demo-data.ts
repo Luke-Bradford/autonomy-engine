@@ -111,7 +111,7 @@ ORD-100011,2026-10-22,Fable Books,de ,Doohickey,3,1299.00,PENDING
 ORD-100021,2026-10-18,"Smith, J",DE,Gizmo,5,45.00,PENDING
 `;
 
-export const LANDING_README_TXT = `Landing folder for the autonomy studio demo.
+export const LANDING_README_TXT = `Landing folder for the Autonomy studio demo.
 Not a CSV: the ingest pipeline's Filter must skip this file.
 `;
 

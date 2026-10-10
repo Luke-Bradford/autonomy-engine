@@ -910,7 +910,7 @@ export const PipelineSchema = z.object({
    */
   concurrency: z.number().nullable().default(null),
   /**
-   * #1380 — the folder the Factory Resources pane files this pipeline under;
+   * #1380 — the folder the Factory resources pane files this pipeline under;
    * `null` = top level. One flat label (see `PipelineFolderSchema`).
    *
    * On the MUTABLE row, beside `name`, and NOT on the immutable version doc

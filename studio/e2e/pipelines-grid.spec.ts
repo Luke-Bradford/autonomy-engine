@@ -497,7 +497,7 @@ test('#1569 slice 7 — the row opens the editor; ⋯ triggers it now, opens its
     await expect(triggersLink()).toBeVisible();
   };
   const choose = async (item: string) => {
-    // The row's own ⋯: the Factory Resources pane has one for it too.
+    // The row's own ⋯: the Factory resources pane has one for it too.
     await row()
       .getByRole('button', { name: `Actions for ${name}` })
       .click();

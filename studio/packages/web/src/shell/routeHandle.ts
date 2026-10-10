@@ -139,11 +139,11 @@ export function crumbsFrom(matches: readonly ShellMatch[], pageLabel?: string): 
 }
 
 /** The product name as a browser tab shows it. */
-export const APP_TITLE = 'autonomy studio';
+export const APP_TITLE = 'Autonomy studio';
 
 /**
  * #1392 — the browser tab's title for a breadcrumb trail: the page, then its
- * hub, then the app (`Test Pipe — Author — autonomy studio`). The middle crumbs
+ * hub, then the app (`Test Pipe — Author — Autonomy studio`). The middle crumbs
  * are left out — a tab title is truncated from the right, so only the words
  * that tell two tabs apart earn a place — and a page that IS its hub (Home) is
  * named once.

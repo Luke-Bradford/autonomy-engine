@@ -68,7 +68,7 @@ test.describe('#1221 — lookup-node authoring', () => {
     const pipelineId = await openSeededCanvas(page, 'e2e 1221 lookup', { nodes: [] });
 
     // The palette offers it — the catalog entry landing is half the ticket.
-    await addActivity(page, 'Lookup Rows');
+    await addActivity(page, 'Lookup rows');
     await expect(canvasNodes(page)).toHaveCount(1);
     await canvasNodes(page).first().click();
 

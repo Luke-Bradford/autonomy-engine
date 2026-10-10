@@ -143,9 +143,9 @@ describe('SecondaryPane — per-hub content', () => {
 
   it('titles the Author pane for what it HOLDS, not for the hub', () => {
     renderAuthor();
-    // The Shell diagram labels this pane "Factory Resources": it is a resource
+    // The Shell diagram labels this pane "Factory resources": it is a resource
     // tree, not a section list.
-    expect(screen.getByRole('heading', { name: 'Factory Resources' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Factory resources' })).toBeInTheDocument();
   });
 
   it('renders the resources tree instead of a bare section list', () => {

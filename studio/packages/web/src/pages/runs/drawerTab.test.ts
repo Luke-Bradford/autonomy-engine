@@ -4,7 +4,7 @@ import { drawerFileStem } from './drawerTab';
 describe('drawerFileStem (#1484 M2 downloads)', () => {
   it('names the run, activity, attempt and item, slugged', () => {
     expect(
-      drawerFileStem(['run', 'ab12cd34', 'Copy Data 1', 'attempt 2', 'Item 2 of 2 · b.csv']),
+      drawerFileStem(['run', 'ab12cd34', 'Copy data 1', 'attempt 2', 'Item 2 of 2 · b.csv']),
     ).toBe('run-ab12cd34-copy-data-1-attempt-2-item-2-of-2-b-csv');
   });
 

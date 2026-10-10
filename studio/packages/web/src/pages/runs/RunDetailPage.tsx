@@ -813,7 +813,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
           run that the header has no room for, below the activity runs. */}
       {run && (
         <dl className="run-meta">
-          <dt>Params</dt>
+          <dt>Parameters</dt>
           <dd>
             <code>{JSON.stringify(run.params)}</code>
           </dd>

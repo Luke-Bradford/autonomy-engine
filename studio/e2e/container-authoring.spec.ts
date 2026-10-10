@@ -91,7 +91,7 @@ test.describe('#1597 — container membership from the canvas context menu', () 
     await expect(into.getByRole('menuitem', { name: 'ForEach 1' })).toBeFocused();
     const joined = await captureConfirm(page, () => page.keyboard.press('Enter'));
     // A loop body runs once per item: joining one is a routing change, stated.
-    expect(joined).toContain('Move HTTP Request 1 into ForEach 1?');
+    expect(joined).toContain('Move HTTP request 1 into ForEach 1?');
     await expectHolds(page, 'ForEach 1', 2);
 
     // Focus is back on the activity after the dialog, so the keyboard carries
@@ -169,7 +169,7 @@ test.describe('#1597 — container membership from the canvas context menu', () 
     expect(message).toContain('unsavable');
     expect(message).toContain('crosses a container boundary');
     // Named by its ENDS (#878), never by a minted id.
-    expect(message).toContain('HTTP Request 1 → HTTP Request 2');
+    expect(message).toContain('HTTP request 1 → HTTP request 2');
     expect(message).toContain('Undo (⌘Z) takes it back out.');
 
     expect((await validationIssues(page)).join('\n')).toContain('crosses a container boundary');

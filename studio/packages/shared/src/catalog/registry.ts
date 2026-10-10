@@ -105,7 +105,7 @@ export const httpRequestInputSchema = z.object({
 const ENTRIES: ActivityCatalogEntry[] = [
   {
     type: HTTP_REQUEST_ACTIVITY_TYPE,
-    title: 'HTTP Request',
+    title: 'HTTP request',
     description: 'Send a request to a URL over an HTTP connection and capture the response.',
     kind: 'execution',
     category: 'general',
@@ -150,7 +150,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
   },
   {
     type: LLM_CALL_ACTIVITY_TYPE,
-    title: 'LLM Call',
+    title: 'LLM call',
     description: 'Send a prompt to a language model and use its reply in later activities.',
     kind: 'execution',
     category: 'ai',
@@ -185,7 +185,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
   },
   {
     type: AGENT_TASK_ACTIVITY_TYPE,
-    title: 'Agent Task',
+    title: 'Agent task',
     description:
       'Hand a task to a coding agent such as Claude Code or Codex and capture its result.',
     kind: 'execution',
@@ -221,7 +221,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // bumped `CATALOG_VERSION` 2→3 so an older build refuses an if-doc it cannot
     // route rather than silently stranding its branch edges.
     type: IF_ACTIVITY_TYPE,
-    title: 'If Condition',
+    title: 'If condition',
     description: 'Run one branch when a condition is true and another when it is false.',
     kind: 'control',
     category: 'control',
@@ -493,7 +493,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // `CATALOG_VERSION` (structural routing = no older build mis-runs it; see
     // `schemas/version.ts` + `catalog/types.ts`).
     type: EXECUTE_PIPELINE_ACTIVITY_TYPE,
-    title: 'Execute Pipeline',
+    title: 'Execute pipeline',
     description: 'Run another pipeline as a step of this one.',
     kind: 'control',
     category: 'control',
@@ -516,7 +516,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // (`${}`-substituted) `path` with it, and the save gate a literal one
     // (#1480). No `secretSinkFields` — `fs` is credential-less.
     type: FILE_READ_ACTIVITY_TYPE,
-    title: 'Read File',
+    title: 'Read file',
     description: 'Read the contents of a file on a file system connection.',
     kind: 'execution',
     category: 'general',
@@ -538,7 +538,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // `dispatchConfigSchema`, as the save gate does a literal one (#1480). No
     // `secretSinkFields` — `fs` is credential-less.
     type: FILE_WRITE_ACTIVITY_TYPE,
-    title: 'Write File',
+    title: 'Write file',
     description: 'Write text to a file on a file system connection.',
     kind: 'execution',
     category: 'general',
@@ -562,7 +562,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // live `${}`-substituted request against `dispatchConfigSchema`, as the save
     // gate does a literal one (#1480).
     type: FILE_COPY_ACTIVITY_TYPE,
-    title: 'Copy File',
+    title: 'Copy file',
     description: 'Copy a file to another path on a file system connection.',
     kind: 'execution',
     category: 'general',
@@ -581,7 +581,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // `EXDEV` → `permanent` (the operator composes `file_copy`+`file_delete` for
     // that); documented same-filesystem-only. Outputs the canonical source/dest.
     type: FILE_MOVE_ACTIVITY_TYPE,
-    title: 'Move File',
+    title: 'Move file',
     description: 'Move or rename a file on a file system connection.',
     kind: 'execution',
     category: 'general',
@@ -599,7 +599,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // re-run it. The target-symlink guard means a symlink AT the path is refused,
     // not followed. Outputs the canonical `path` deleted.
     type: FILE_DELETE_ACTIVITY_TYPE,
-    title: 'Delete File',
+    title: 'Delete file',
     description: 'Delete a file on a file system connection.',
     kind: 'execution',
     category: 'general',
@@ -620,7 +620,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // is REPORTED, never followed). Outputs the `entries` array (json) + the
     // canonical `path` listed.
     type: FILE_LIST_ACTIVITY_TYPE,
-    title: 'List Directory',
+    title: 'List directory',
     description: 'List the files and folders in a directory on a file system connection.',
     kind: 'execution',
     category: 'general',
@@ -688,7 +688,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
      * right — nothing had been counted yet.
      */
     type: COPY_ACTIVITY_TYPE,
-    title: 'Copy Data',
+    title: 'Copy data',
     description:
       'Copy rows from a source dataset into a sink dataset, mapping columns between them.',
     kind: 'execution',
@@ -812,7 +812,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
      * guarantee protects against.
      */
     type: LOOKUP_ACTIVITY_TYPE,
-    title: 'Lookup Rows',
+    title: 'Lookup rows',
     description: 'Read a bounded set of rows from a dataset so later activities can use them.',
     kind: 'execution',
     category: 'general',

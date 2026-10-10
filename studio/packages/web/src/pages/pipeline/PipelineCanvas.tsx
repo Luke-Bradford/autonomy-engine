@@ -2136,7 +2136,7 @@ export function PipelineCanvas({
           )}
         </span>
         {/* #1397 — everything the header does less often, in one ⋯ menu.
-              Fluent's default body portal, like the Factory Resources row
+              Fluent's default body portal, like the Factory resources row
               menu: the U0 spike forbids reparenting a surface into the React
               Flow viewport. A disabled item says WHY on its own second line,
               because a `title` is only ever seen by a mouse. */}
@@ -2941,7 +2941,7 @@ export function PipelinePanel({
             label: 'Parameters',
             content: (
               <ContractSection
-                heading="Params"
+                heading="Parameters"
                 hint={
                   <>
                     The typed inputs a run supplies. Referenced as <code>{'${params.name}'}</code>,
@@ -2950,7 +2950,7 @@ export function PipelinePanel({
                 }
                 columns={PARAM_COLUMNS}
                 count={params.length}
-                addLabel="Add param"
+                addLabel="Add parameter"
                 onAdd={() => store.getState().addParam()}
               >
                 {params.map((p, i) => (
@@ -3446,8 +3446,8 @@ export function NodePanel({
    *
    * It used to read `entry?.title` — a fourth hand-rolled copy of
    * `activityLabel`, and one that names the activity's KIND. With two
-   * `http_request` nodes on the canvas the box now reads "HTTP Request 2" while
-   * its own panel said "HTTP Request", which is the disagreement `activityLabel`'s
+   * `http_request` nodes on the canvas the box now reads "HTTP request 2" while
+   * its own panel said "HTTP request", which is the disagreement `activityLabel`'s
    * docblock exists to prevent. Falls back to the catalog title, then the raw
    * type, for a node the doc no longer holds.
    */
