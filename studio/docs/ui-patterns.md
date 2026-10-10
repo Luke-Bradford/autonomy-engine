@@ -34,6 +34,7 @@ required marks and display names; its layout is its own, below.
   command bar and held inside the window, at the operator's width (dragged on its left edge).
 - **From 1280px wide it pushes the page**: the page keeps a gutter the drawer's width, so the grid
   narrows rather than running under it, and the drawer is a region named "Activity run details".
+  Pushing, it takes at most half the window; dragged wider, it lies over the page instead.
 - **Narrower, it lies over the page** as a non-modal dialog of the same name, and the page keeps its
   width.
 - Either way it traps no focus. Escape closes it while focus is inside it, and focus goes back to

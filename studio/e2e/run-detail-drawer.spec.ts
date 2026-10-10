@@ -92,8 +92,8 @@ test('#1484 M2 — an activity run opens in a drawer, with its own item’s inpu
         gridUnder:
           document.querySelector('.activity-runs__scroll')!.getBoundingClientRect().right -
           box.left,
-        overflowX: document.documentElement.scrollWidth - window.innerWidth,
-        overflowY: document.documentElement.scrollHeight - window.innerHeight,
+        // The page's scroller (`.content`) has nothing to scroll sideways.
+        overflowX: ((c) => c.scrollWidth - c.clientWidth)(document.querySelector('.content')!),
         openRows: document.querySelectorAll('.activity-runs__table tr[data-open]').length,
         splitter: d.querySelector('[role="separator"]')?.getAttribute('aria-label') ?? null,
       };
@@ -106,7 +106,7 @@ test('#1484 M2 — an activity run opens in a drawer, with its own item’s inpu
     expect(second.name).toBe('Activity run details');
     expect(second.position).toBe('fixed');
     expect([second.top, second.right, second.bottom]).toEqual([0, 0, 0]);
-    expect([second.overflowX, second.overflowY]).toEqual([0, 0]);
+    expect(second.overflowX).toBe(0);
     expect(second.width).toBeGreaterThanOrEqual(320);
     // It pushes: no part of the run page, the activity runs grid included, runs
     // under it.
@@ -157,7 +157,7 @@ test('#1484 M2 — an activity run opens in a drawer, with its own item’s inpu
         name: d.getAttribute('aria-label'),
         right: window.innerWidth - box.right,
         bottom: window.innerHeight - box.bottom,
-        overflowX: document.documentElement.scrollWidth - window.innerWidth,
+        overflowX: ((c) => c.scrollWidth - c.clientWidth)(document.querySelector('.content')!),
         page: document.querySelector('.run-page')!.getBoundingClientRect().right,
         content: document.querySelector('.content')!.getBoundingClientRect().right,
         padding: getComputedStyle(document.querySelector('.run-page')!).paddingRight,

@@ -6,9 +6,25 @@ import type { CSSProperties } from 'react';
  * the drawer pushes the page rather than lying over it.
  */
 export const RUN_DRAWER_WIDTH_VAR = '--run-drawer-width';
+/** The run page, which carries the width and keeps the pushed gutter. */
+export const RUN_PAGE_SELECTOR = '.run-page';
 
 /** From this window width there is room to push the page. */
 export const RUN_DRAWER_PUSH_MIN = 1280;
+/**
+ * Pushing, the drawer takes at most this share of the window. Dragged wider, it
+ * lies over the page instead, which a push would otherwise leave a sliver.
+ */
+export const RUN_DRAWER_PUSH_MAX_SHARE = 0.5;
+
+/** Whether the drawer pushes the page: the window has room for both. */
+export function runDrawerPushes(windowWidth: number, width: number | null): boolean {
+  // The default width is under half the window (`index.css`, 45vw at most).
+  return (
+    windowWidth >= RUN_DRAWER_PUSH_MIN &&
+    (width === null || width <= windowWidth * RUN_DRAWER_PUSH_MAX_SHARE)
+  );
+}
 
 /**
  * The operator's drawer width, as the run page carries it (`.run-page`). On the

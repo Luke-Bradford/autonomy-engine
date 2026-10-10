@@ -6909,7 +6909,7 @@ button.danger {
   --run-drawer-box: min(var(--run-drawer-width, min(36rem, 45vw)), 80vw);
 }
 
-/* Where there is room (`RUN_DRAWER_PUSH_MIN`, which sets `data-push`) the
+/* Where there is room (`runDrawerPushes`, which sets `data-push`) the
    drawer PUSHES: the page keeps a gutter its width, so the grid narrows rather
    than running under it. The drawer covers the content frame's own right
    padding, so a gutter of its whole width leaves page and drawer one frame

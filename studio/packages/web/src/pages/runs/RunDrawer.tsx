@@ -3,7 +3,7 @@ import { useStore } from 'zustand';
 import { isUnhandledEscape } from '../../lib/escape';
 import { PaneSplitter } from '../../shell/PaneSplitter';
 import { DOCK_MIN_WIDTH, uiStore } from '../../stores/uiStore';
-import { RUN_DRAWER_PUSH_MIN, RUN_DRAWER_WIDTH_VAR } from './runDrawerFrame';
+import { RUN_DRAWER_WIDTH_VAR, RUN_PAGE_SELECTOR, runDrawerPushes } from './runDrawerFrame';
 
 /** The drawer element, which the rows that open it name in `aria-controls`. */
 export const RUN_DRAWER_ID = 'run-detail-drawer';
@@ -20,11 +20,12 @@ const RESIZE_STEP = 16;
  * activity runs where they are, so the operator can step from row to row and
  * read each one.
  *
- * #1594 OR40 S3e — where the window has room (`RUN_DRAWER_PUSH_MIN`) it PUSHES
+ * #1594 OR40 S3e — where the window has room (`runDrawerPushes`) it PUSHES
  * the page sideways: the run page keeps a gutter the drawer's width, so the
  * grid narrows rather than running under it, and the drawer is a named
- * `region` beside it. Narrower, it lies over the page as a non-modal `dialog`,
- * and the page keeps its width. Held inside the viewport either way.
+ * `region` beside it. In a narrower window, or dragged past half of it, it
+ * lies over the page as a non-modal `dialog`, and the page keeps its width.
+ * Held inside the viewport either way.
  *
  * Not a modal: the table behind stays live and clickable, so opening another
  * row just swaps the record. Escape closes it while focus is inside it, as the
@@ -90,13 +91,24 @@ export function RunDrawer({
   const preview = useCallback(
     (next: number) =>
       ref.current
-        ?.closest<HTMLElement>('.run-page')
+        ?.closest<HTMLElement>(RUN_PAGE_SELECTOR)
         ?.style.setProperty(RUN_DRAWER_WIDTH_VAR, `${next}px`),
     [],
   );
+  // A drag the drawer closed in the middle of (Escape) never commits, and the
+  // page outlives the drawer: put the operator's width back on it, so the next
+  // open is not at a width the store never held.
+  useEffect(() => {
+    const page = ref.current?.closest<HTMLElement>(RUN_PAGE_SELECTOR);
+    return () => {
+      const kept = uiStore.getState().runDrawerWidth;
+      if (kept === null) page?.style.removeProperty(RUN_DRAWER_WIDTH_VAR);
+      else page?.style.setProperty(RUN_DRAWER_WIDTH_VAR, `${kept}px`);
+    };
+  }, []);
 
   const max = Math.max(DOCK_MIN_WIDTH, Math.floor(windowWidth * MAX_SHARE));
-  const push = windowWidth >= RUN_DRAWER_PUSH_MIN;
+  const push = runDrawerPushes(windowWidth, width);
   return (
     <div
       ref={ref}
