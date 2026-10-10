@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { fireAndSettle, seedVersion } from './support/seedDoc';
+import { fireAndSettle, seedRefusedStartRun, seedVersion } from './support/seedDoc';
 import { seedConnection, seedDataset } from './support/seedResources';
 import { fluentRootReady } from './support/theme';
 
@@ -286,3 +286,53 @@ for (const density of ['compact', 'comfortable'] as const) {
     await expectQuiet(page, problems);
   });
 }
+
+/**
+ * #1626 — a status pill cut by its column keeps its whole ring and carries its
+ * word as the cell's tooltip.
+ *
+ * Found order-dependent: the check above met an `interrupted` run only when an
+ * earlier spec had left one in the shared database, and only on fonts where the
+ * pill outgrows the 88px default. So this seeds its own `interrupted` run (a
+ * start refused for an undeclared param, `seedRefusedStartRun`) and
+ * narrows the Status column to its floor, where the word is cut on any font.
+ */
+test('#1626 — a cut run status keeps its ring and its word as a tooltip', async ({ page }) => {
+  const problems = collectPageProblems(page);
+  const runId = await seedRefusedStartRun(page, `#1626 refused ${Date.now()}`);
+
+  await page.goto('/#/monitor/runs');
+  await fluentRootReady(page);
+  const row = page
+    .locator('tr.runs-grid__row')
+    .filter({ has: page.locator(`a[href*="${runId}"]`) });
+  await expect(row, 'the seeded run is on the first page').toHaveCount(1);
+  // The floor, by keyboard: the separator's Home is the column's minimum. The
+  // press commits to the store, so wait for the cell to take the width.
+  await page.getByRole('separator', { name: 'Resize Status column' }).press('Home');
+  const cell = row.locator('td:has(> .run-status)');
+  await expect
+    .poll(() => cell.evaluate((td) => Math.round(td.getBoundingClientRect().width)))
+    .toBe(72);
+
+  const m = await cell.evaluate((td) => {
+    const pill = td.querySelector<HTMLElement>(':scope > .run-status')!;
+    const box = td.getBoundingClientRect();
+    const padRight = parseFloat(getComputedStyle(td).paddingRight);
+    return {
+      word: pill.textContent,
+      title: td.getAttribute('title'),
+      cut: pill.scrollWidth > pill.clientWidth + 1,
+      ellipsis: getComputedStyle(pill).textOverflow,
+      // The pill's right edge against the cell's content edge: past it, the
+      // cell clips the ring.
+      overrun: Math.round(pill.getBoundingClientRect().right - (box.right - padRight)),
+    };
+  });
+  expect(m.word).toBe('interrupted');
+  expect(m.cut, 'the word is cut at the floor, so the checks below are not vacuous').toBe(true);
+  expect(m.ellipsis, 'the pill ellipsises its own word').toBe('ellipsis');
+  expect(m.overrun, 'the pill ends inside the cell, its ring whole').toBeLessThanOrEqual(1);
+  expect(m.title, 'the cell says the whole word as a tooltip').toBe('interrupted');
+  await expectQuiet(page, problems);
+});

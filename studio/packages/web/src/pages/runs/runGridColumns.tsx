@@ -242,8 +242,10 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
   status: {
     label: 'Status',
     sort: 'status',
+    /* #1626 — a narrow column cuts the pill's word (`waiting (callback)` is
+       wider than the default), so the cell says it whole as its tooltip. */
     cell: (r) => (
-      <td>
+      <td title={runStatusLabel(r.status)}>
         {/* #870 — the WORD comes from the Monitor's one run-status vocabulary;
             the CLASS from the status itself, so hue and label cannot drift. */}
         <span className={`run-status run-status-${r.status}`}>{runStatusLabel(r.status)}</span>
