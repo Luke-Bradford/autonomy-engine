@@ -75,7 +75,7 @@ import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import { withParams } from '../../lib/withParams';
 import { useSearchBox } from '../../lib/useSearchBox';
 import { FilterMenu } from './FilterMenu';
-import { FilterPicker } from './FilterPicker';
+import { FilterPicker, type FilterOption } from './FilterPicker';
 import { RUN_GROUP_BYS, type RunGroupBy } from './runBars';
 import {
   RUNS_LIVE_FAILING_LABEL,
@@ -126,6 +126,50 @@ const OPTIONAL_RUN_FILTERS = [
   { param: RUN_FILTER_PARAMS.annotation, label: 'Annotation' },
 ] as const;
 type OptionalRunFilter = (typeof OPTIONAL_RUN_FILTERS)[number]['param'];
+
+/** Every Started bound cleared: the "Any time" the picker's choices start from. */
+const STARTED_UNBOUNDED: Record<string, string> = {
+  [RUN_FILTER_PARAMS.since]: '',
+  [RUN_FILTER_PARAMS.on]: '',
+  [RUN_FILTER_PARAMS.from]: '',
+  [RUN_FILTER_PARAMS.to]: '',
+};
+
+/**
+ * #1594 OR40 S3 — an optional filter's pill (Trigger, Annotation): always a ✕,
+ * since that is also how it leaves the row, and its picker registered so an
+ * axis just added can take focus.
+ */
+function OptionalFilterPill({
+  param,
+  label,
+  value,
+  options,
+  onRemove,
+  onChange,
+  registerSelect,
+}: {
+  param: OptionalRunFilter;
+  label: string;
+  value: string | undefined;
+  options: readonly FilterOption[];
+  onRemove: (param: OptionalRunFilter) => void;
+  onChange: (param: OptionalRunFilter, next: string) => void;
+  registerSelect: (param: OptionalRunFilter, select: HTMLSelectElement | null) => void;
+}) {
+  return (
+    <FilterPill name={label} active={value !== undefined} onRemove={() => onRemove(param)}>
+      <FilterPicker
+        label={label}
+        allLabel="All"
+        value={value}
+        options={options}
+        onChange={(next) => onChange(param, next)}
+        selectRef={(el) => registerSelect(param, el)}
+      />
+    </FilterPill>
+  );
+}
 
 function readGroupBy(params: URLSearchParams): RunGroupBy {
   const raw = params.get(GROUP_PARAM);
@@ -372,16 +416,15 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
    * already a working filter rather than a half-made one.
    */
   const startedMode = startedModeOf(searchParams, since);
+  /** #1594 OR40 S3 — the Started pill's ✕: every time bound off, no clock read. */
+  function clearStarted() {
+    setFilters(STARTED_UNBOUNDED);
+  }
   function selectStartedMode(mode: string) {
     // Today and the week before it in the DISPLAY zone, by calendar arithmetic.
     const today = dayOf(Date.now(), zone);
     const weekAgo = shiftDay(today, -6);
-    const cleared = {
-      [RUN_FILTER_PARAMS.since]: '',
-      [RUN_FILTER_PARAMS.on]: '',
-      [RUN_FILTER_PARAMS.from]: '',
-      [RUN_FILTER_PARAMS.to]: '',
-    };
+    const cleared = STARTED_UNBOUNDED;
     if (mode === 'on') setFilters({ ...cleared, [RUN_FILTER_PARAMS.on]: today });
     else if (mode === 'range')
       setFilters({
@@ -850,7 +893,7 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
         <FilterPill
           name="Started"
           active={startedMode !== ''}
-          onRemove={startedMode === '' ? undefined : () => selectStartedMode('')}
+          onRemove={startedMode === '' ? undefined : clearStarted}
         >
           <LabelledControl label="Started">
             {(id) => (
@@ -919,30 +962,25 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
         {/* The optional filters, once added or set. Removing one takes it off
             the row as well as off the list. */}
         {OPTIONAL_RUN_FILTERS.filter(({ param }) => shownFilter(param)).map(({ param, label }) => (
-          <FilterPill
+          <OptionalFilterPill
             key={param}
-            name={label}
-            active={optionalValue[param] !== undefined}
-            onRemove={() => removeFilter(param)}
-          >
-            <FilterPicker
-              label={label}
-              allLabel="All"
-              value={optionalValue[param]}
-              options={
-                param === RUN_FILTER_PARAMS.triggerId
-                  ? triggers.map((t) => ({ value: t.id, label: t.name }))
-                  : annotations.map((a) => ({ value: a, label: a }))
-              }
-              onChange={(next) => {
-                keepFilter(param);
-                setFilter(param, next);
-              }}
-              selectRef={(el) => {
-                optionalSelects.current[param] = el;
-              }}
-            />
-          </FilterPill>
+            param={param}
+            label={label}
+            value={optionalValue[param]}
+            options={
+              param === RUN_FILTER_PARAMS.triggerId
+                ? triggers.map((t) => ({ value: t.id, label: t.name }))
+                : annotations.map((a) => ({ value: a, label: a }))
+            }
+            onRemove={removeFilter}
+            onChange={(p, next) => {
+              keepFilter(p);
+              setFilter(p, next);
+            }}
+            registerSelect={(p, el) => {
+              optionalSelects.current[p] = el;
+            }}
+          />
         ))}
 
         {OPTIONAL_RUN_FILTERS.some(({ param }) => !shownFilter(param)) && (
