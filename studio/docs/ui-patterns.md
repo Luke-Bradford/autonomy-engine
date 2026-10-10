@@ -676,6 +676,15 @@ screen and rewrites no saved pipeline.
 Run and node status words ("success", "failure", "running") stay lower case, as the Runs grid has
 always shown them. A status is a value, not a label.
 
+**Labels end without punctuation and are words, not keys (S4b).** A label, button, heading or
+control name takes no trailing colon or period ("Duration", not "Duration:"); a colon belongs only
+inside running text or a filter pill's value. A row's controls are named by the glossary term and
+its position: "Parameter 1 name", "Variable 2 default", "Remove annotation 1", never the key
+(`param 1 name`). `labelProblem` in `testing/sentenceCase.ts` is the rule;
+`PipelinePanel.test.tsx` holds every control on the pipeline's properties to it, and
+`e2e/sentence-case.spec.ts` a rendered parameter row. Config row lists (`mapping row 2 sink`) are
+still named by key; S4b-2 moves them to their cells' titles.
+
 **One term per concept.** Use the term in the first column on every tab, button, heading and run
 detail. Only "Parameters" has banned variants today, and `e2e/sentence-case.spec.ts` fails on
 "Params" in a heading, tab, button or label. The others record the term to use. S6 sweeps the
