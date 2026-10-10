@@ -162,6 +162,9 @@ export function PaneSplitter({
   }
 
   return (
+    // A focusable separator with a value is the WAI-ARIA window splitter, a
+    // widget; aria-query 5.3 files every separator as non-interactive.
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
     <div
       className={className}
       role="separator"
@@ -173,6 +176,8 @@ export function PaneSplitter({
       aria-valuenow={value}
       aria-valuemin={min}
       aria-valuemax={max}
+      // The window splitter must be focusable to be moved from the keyboard.
+      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
       tabIndex={0}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}

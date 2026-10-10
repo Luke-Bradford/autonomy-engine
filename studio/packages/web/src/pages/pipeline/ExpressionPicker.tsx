@@ -154,6 +154,8 @@ export function ExpressionPicker({
   return (
     <div
       className="expression-picker"
+      // Only catches Escape bubbling up from the toggles and the lists.
+      role="presentation"
       onKeyDown={(e) => {
         // `preventDefault` marks the Escape as handled, so a form drawer around
         // the picker does not also read it as "close the whole form" (#1396).

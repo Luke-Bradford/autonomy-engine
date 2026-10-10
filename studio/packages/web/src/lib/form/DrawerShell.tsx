@@ -61,6 +61,9 @@ export function DrawerShell({
   }, []);
 
   return (
+    // Escape closes a dialog. The plugin exempts keyboard handlers on a dialog,
+    // but matches the <dialog> tag only, not role="dialog".
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
     <div
       ref={rootRef}
       className="form-drawer"

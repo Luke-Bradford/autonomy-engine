@@ -1772,6 +1772,8 @@ export function PipelineCanvas({
       {leaveGuard.confirming && (
         <div
           className="editor-leave-prompt"
+          // Only catches Escape bubbling up from the alertdialog inside.
+          role="presentation"
           onKeyDown={(e) => {
             if (!isUnhandledEscape(e)) return;
             e.preventDefault();
@@ -2364,7 +2366,9 @@ export function PipelineCanvas({
                       dockOpen ? 'property-dock' : 'property-dock property-dock--collapsed'
                     }
                     /* #1477 OR29 — Escape returns an expanded dock to its place,
-                     with the same tree and so the same drafts. */
+                     with the same tree and so the same drafts. The dock only
+                     catches that Escape as it bubbles up from its controls. */
+                    role="presentation"
                     onKeyDown={(e) => {
                       if (!dockExpanded || !isDockDrawerEscape(e)) {
                         return;

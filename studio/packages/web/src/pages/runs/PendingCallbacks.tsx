@@ -347,6 +347,7 @@ export function PendingCallbacks({
                          and a keyboard user is left on a button that no longer
                          exists. Safe from stealing focus on a background remount:
                          this element only MOUNTS when the draft opens. */
+                      // eslint-disable-next-line jsx-a11y/no-autofocus
                       autoFocus
                       value={draft}
                       placeholder={'{\n  "decision": "approve"\n}'}

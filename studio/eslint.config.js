@@ -3,6 +3,7 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
+import jsxA11y from 'eslint-plugin-jsx-a11y';
 import globals from 'globals';
 
 // #897 — vitest runs a function RETURNED from `beforeEach`/`beforeAll` as that
@@ -48,6 +49,9 @@ export default tseslint.config(
       '**/blob-report/**',
     ],
   },
+  // #1639 — a disable that no longer suppresses anything fails the lint, so
+  // a stale exemption cannot outlive the code it excused.
+  { linterOptions: { reportUnusedDisableDirectives: 'error' } },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
@@ -89,9 +93,16 @@ export default tseslint.config(
     plugins: {
       'react-hooks': reactHooks,
       'react-refresh': reactRefresh,
+      'jsx-a11y': jsxA11y,
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      // #1639 (OR40 S5c-2) — jsx-a11y's recommended rules, at error. 6.10.2 is
+      // pinned and declares a peer of eslint ^3..^9; it loads and runs under
+      // eslint 10 and calls none of the context methods eslint 10 removed. A
+      // per-line disable states why on the line above it, and an unused one is
+      // an error (`reportUnusedDisableDirectives` above).
+      ...jsxA11y.flatConfigs.recommended.rules,
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
       // #1227 — a `<label>` must not WRAP a `<select>`/`<textarea>`. Both render
       // their content (option text, the controlled value) as child text nodes,

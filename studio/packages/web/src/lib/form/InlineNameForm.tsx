@@ -70,6 +70,9 @@ export function InlineNameForm({
            and a refused submit leaves the row open to be corrected. */
         readOnly={busy}
         aria-busy={busy}
+        // The row mounts when the operator asks to name something, so focus
+        // follows that click; this is not page-load focus.
+        // eslint-disable-next-line jsx-a11y/no-autofocus
         autoFocus
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {

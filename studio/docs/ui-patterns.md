@@ -701,6 +701,9 @@ The workspace is seeded first, so lists are scanned with rows in them.
 
 - A new page or panel state goes into that spec.
 - There is no allowlist. Fix a violation; never hide it with axe's `exclude` or `disableRules`.
+- `eslint-plugin-jsx-a11y`'s recommended rules lint `packages/web` at error (#1639). It is pinned
+  at 6.10.2, whose peer range stops at eslint 9; `pnpm-workspace.yaml` allows eslint 10. A per-line
+  disable carries its reason on the line above, and an unused disable fails the lint.
 - A canvas port is `role="img"`, named by its routing key: it is drawn and named but not
   keyboard-operable, and an `aria-label` on an element with no role is prohibited.
 
