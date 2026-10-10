@@ -93,6 +93,13 @@ function measure(page: Page) {
         // and it says everything the cell shows: each word of the visible
         // text, so a tooltip holding some other value (an id) fails.
         const norm = (v: string) => v.replace(/\s+/g, ' ').trim();
+        // What is drawn: a screen reader's own words (`.visually-hidden`) are
+        // not part of what the cut hides.
+        const visible = (el: HTMLElement) => {
+          const copy = el.cloneNode(true) as HTMLElement;
+          copy.querySelectorAll('.visually-hidden').forEach((h) => h.remove());
+          return norm(copy.textContent ?? '');
+        };
         const cut = [...t.querySelectorAll<HTMLElement>('td, td *')]
           .filter(
             (el) =>
@@ -100,7 +107,7 @@ function measure(page: Page) {
               el.scrollWidth > el.clientWidth + 1,
           )
           .map((el) => {
-            const text = norm(el.innerText);
+            const text = visible(el);
             const holders: HTMLElement[] = [];
             for (let up: HTMLElement | null = el; up && up.tagName !== 'TR';) {
               holders.push(up);
@@ -108,10 +115,11 @@ function measure(page: Page) {
             }
             holders.push(
               ...[...el.querySelectorAll<HTMLElement>('[title]')].filter(
-                (d) => norm(d.innerText) === text,
+                (d) => visible(d) === text,
               ),
             );
-            const words = text.split(' ');
+            // Words and numbers; a glyph (✓, ·) is said in words in a title.
+            const words = text.split(' ').filter((w) => /[\p{L}\p{N}]/u.test(w));
             const titled = holders.some(
               (h) => h.title !== '' && words.every((w) => norm(h.title).includes(w)),
             );
@@ -211,8 +219,15 @@ async function seed(page: Page, stamp: string): Promise<Seed> {
     },
   });
   expect(global.status(), await global.text()).toBe(201);
+  // Two failures and the activity after one of them skipped: the Activities
+  // cell's figure ("0 ✓ · 2 ✗ · 1 skipped") is wider than its column.
   const { pipelineVersionId } = await seedVersion(page, `S3d pipeline ${stamp} ${LONG}`, {
-    nodes: [{ id: 'n1', type: 'fail', config: { message: 'expected' }, position: { x: 0, y: 0 } }],
+    nodes: [
+      { id: 'n1', type: 'fail', config: { message: 'expected' }, position: { x: 0, y: 0 } },
+      { id: 'n2', type: 'fail', config: { message: 'expected' }, position: { x: 0, y: 120 } },
+      { id: 'n3', type: 'fail', config: { message: 'unreached' }, position: { x: 240, y: 0 } },
+    ],
+    edges: [{ from: 'n1', to: 'n3', on: 'success' }],
   });
   const runId = await fireAndSettle(page, pipelineVersionId, `S3d trigger ${stamp} ${LONG}`);
   // An audit entry whose line is too long for the column: archive and restore.
