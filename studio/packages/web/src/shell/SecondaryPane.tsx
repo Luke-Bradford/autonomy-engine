@@ -30,18 +30,9 @@ interface SecondaryPaneProps {
  * 'author')` because U10 puts the Monitor filters here next, and a map with a
  * `HubId` key cannot be given a hub that does not exist.
  */
-const PANE_CONTENT: Partial<
-  Record<HubId, { title: string; Content: ComponentType<{ hub: Hub }> }>
-> = {
-  // The Shell diagram labels the Author pane "Factory resources", not the hub
-  // name — it is a resource tree, not a section list, so it says what it holds.
-  author: { title: 'Factory resources', Content: FactoryResources },
+const PANE_CONTENT: Partial<Record<HubId, { Content: ComponentType<{ hub: Hub }> }>> = {
+  author: { Content: FactoryResources },
 };
-
-/** The titles of the panes that name themselves, for the sentence-case test (#1594 OR40 S4). */
-export const PANE_TITLES: Partial<Record<HubId, string>> = Object.fromEntries(
-  Object.entries(PANE_CONTENT).map(([id, c]) => [id, c.title]),
-);
 
 /**
  * The shell's secondary pane (U3): the active hub's own navigation, one level
@@ -84,7 +75,7 @@ export function SecondaryPane({ hub, collapsed }: SecondaryPaneProps) {
          sections" is the stable answer whatever Author chooses to put in it. */
       aria-label={`${hub.label} sections`}
     >
-      <h2 className="secondary-pane__title">{custom?.title ?? hub.label}</h2>
+      <h2 className="secondary-pane__title">{hub.paneTitle ?? hub.label}</h2>
       {custom ? (
         <custom.Content hub={hub} />
       ) : (

@@ -66,6 +66,12 @@ export interface Hub {
   /** The hub's entry path. Its route redirects on to the default child. */
   path: string;
   /**
+   * The secondary pane's title when it is not the hub's label. The Shell diagram
+   * labels the Author pane "Factory resources": it is a resource tree, not a
+   * section list, so it says what it holds.
+   */
+  paneTitle?: string;
+  /**
    * The hub's pane entries, in display order. `sections[0]` is the hub's
    * landing page — the route tree's index redirect must agree with it, which
    * `routes.test.tsx` asserts rather than leaving to two literals in two files.
@@ -102,6 +108,7 @@ export const HUBS: readonly Hub[] = [
     id: 'author',
     label: 'Author',
     path: '/author',
+    paneTitle: 'Factory resources',
     sections: [{ label: 'Pipelines', path: '/author/pipelines' }],
     Icon: FlowchartRegular,
     IconActive: FlowchartFilled,

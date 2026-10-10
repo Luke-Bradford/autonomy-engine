@@ -13,7 +13,6 @@ import {
   TRIGGER_MODE_LABELS,
 } from '@autonomy-studio/shared';
 import { HUBS } from '../shell/hubs';
-import { PANE_TITLES } from '../shell/SecondaryPane';
 import { APP_TITLE } from '../shell/routeHandle';
 import { readCssSource } from './cssSource';
 import { sentenceCaseProblem } from './sentenceCase';
@@ -33,6 +32,7 @@ describe('sentenceCaseProblem', () => {
     'ForEach',
     'Run ID',
     'Copy run IDs',
+    'Export CSVs',
   ])('accepts %s', (text) => {
     expect(sentenceCaseProblem(text)).toBeNull();
   });
@@ -42,6 +42,7 @@ describe('sentenceCaseProblem', () => {
     ['copy data', '"copy" should start with a capital'],
     ['PARAMS', '"PARAMS" has a capital inside it'],
     ['Webhook (External wait)', '"External" should be lower case'],
+    ['Two ForEachs', '"ForEachs" has a capital inside it'],
   ])('refuses %s', (text, reason) => {
     expect(sentenceCaseProblem(text)).toBe(reason);
   });
@@ -59,7 +60,7 @@ describe('UI names are sentence case', () => {
     'concurrency policies': Object.values(CONCURRENCY_POLICY_LABELS),
     'run triggered-by labels': Object.values(RUN_TRIGGERED_BY_LABELS),
     'hubs and their sections': HUBS.flatMap((h) => [h.label, ...h.sections.map((s) => s.label)]),
-    'pane titles': Object.values(PANE_TITLES),
+    'pane titles': HUBS.flatMap((h) => (h.paneTitle === undefined ? [] : [h.paneTitle])),
     'app title': [APP_TITLE],
   };
 

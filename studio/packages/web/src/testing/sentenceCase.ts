@@ -46,7 +46,8 @@ export function sentenceCaseProblem(text: string): string | null {
     .map((w) => w.replace(/[^\p{L}\p{N}'-]/gu, ''))
     .filter((w) => w.length > 0);
   for (const [i, word] of words.entries()) {
-    if (KEPT.has(word) || KEPT.has(word.replace(/s$/, ''))) continue; // "IDs", "URLs"
+    if (KEPT.has(word)) continue;
+    if (ACRONYMS.includes(word.replace(/s$/, ''))) continue; // "IDs", "URLs"
     if (!/\p{L}/u.test(word)) continue; // "2", "1440"
     const rest = word.slice(1);
     if (rest !== rest.toLowerCase()) return `"${word}" has a capital inside it`;
