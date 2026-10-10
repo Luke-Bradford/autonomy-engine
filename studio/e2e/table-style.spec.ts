@@ -300,7 +300,9 @@ for (const density of ['compact', 'comfortable'] as const) {
 test('#1626 — a cut run status keeps its ring and its word as a tooltip', async ({ page }) => {
   const problems = collectPageProblems(page);
   const { pipelineVersionId } = await seedVersion(page, `#1626 refused ${Date.now()}`, {
-    nodes: [{ id: 'n1', type: 'fail', config: { message: 'never reached' }, position: { x: 0, y: 0 } }],
+    nodes: [
+      { id: 'n1', type: 'fail', config: { message: 'never reached' }, position: { x: 0, y: 0 } },
+    ],
   });
   const triggerId = await seedManualTrigger(page, pipelineVersionId, '#1626 refused');
   const fired = await page.request.post(`/api/triggers/${encodeURIComponent(triggerId)}/fire`, {
