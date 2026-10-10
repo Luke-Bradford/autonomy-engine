@@ -719,8 +719,7 @@ export function ObjectListControl({
     if (target === null) return;
     const byName = (direction: 'up' | 'down') =>
       Array.from(groupRef.current?.querySelectorAll('button') ?? []).find(
-        (b) =>
-          b.getAttribute('aria-label') === rowActionName(field, target.index, direction),
+        (b) => b.getAttribute('aria-label') === rowActionName(field, target.index, direction),
       );
     // At either end the same direction is disabled, and a disabled button
     // cannot hold focus; the other direction is the row's only move left.

@@ -59,20 +59,20 @@ test.describe('#1305 — the override allowlist is edited on the resource pages'
     expect(layout.border).toBe('solid');
     expect(layout.row).toBe('row');
     expect(parseFloat(layout.box)).toBeLessThan(40);
-    await allowlist.getByLabel('Overridable: maxBytes', { exact: true }).check();
+    await allowlist.getByLabel('Overridable maxBytes', { exact: true }).check();
     await form.getByRole('button', { name: 'Save changes' }).click();
     await expect(form).toBeHidden();
     expect(await stored(page, `/api/connections/${id}`)).toEqual(['maxBytes']);
 
     await openEdit(page, '/#/manage/connections', 'Connections', name);
-    await expect(allowlist.getByLabel('Overridable: maxBytes', { exact: true })).toBeChecked();
+    await expect(allowlist.getByLabel('Overridable maxBytes', { exact: true })).toBeChecked();
     await form.getByLabel('Name', { exact: true }).fill(`${name}-v2`);
     await form.getByRole('button', { name: 'Save changes' }).click();
     await expect(form).toBeHidden();
     expect(await stored(page, `/api/connections/${id}`)).toEqual(['maxBytes']);
 
     await openEdit(page, '/#/manage/connections', 'Connections', `${name}-v2`);
-    await allowlist.getByLabel('Overridable: maxBytes', { exact: true }).uncheck();
+    await allowlist.getByLabel('Overridable maxBytes', { exact: true }).uncheck();
     await form.getByRole('button', { name: 'Save changes' }).click();
     await expect(form).toBeHidden();
     expect(await stored(page, `/api/connections/${id}`)).toEqual([]);
@@ -118,7 +118,7 @@ test.describe('#1305 — the override allowlist is edited on the resource pages'
     // #1396 — in the Advanced section, closed while the row has no allowlist.
     await expect(allowlist).toBeHidden();
     await form.getByRole('button', { name: 'Advanced', exact: true }).click();
-    await allowlist.getByLabel('Overridable: path', { exact: true }).check();
+    await allowlist.getByLabel('Overridable path', { exact: true }).check();
     await form.getByRole('button', { name: 'Save changes' }).click();
     await expect(form).toBeHidden();
     expect(await stored(page, `/api/datasets/${csvId}`)).toEqual(['path']);

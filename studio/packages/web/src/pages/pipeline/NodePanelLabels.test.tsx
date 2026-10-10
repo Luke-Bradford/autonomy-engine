@@ -124,8 +124,7 @@ describe('node panel labels (#1396)', () => {
       const clashes = titles.flatMap((title) => {
         const own = names.filter((n) => isOwn(title, n)).length;
         const others = names.filter(
-          (n) =>
-            !isOwn(title, n) && !isCell(title, n) && (n.includes(title) || title.includes(n)),
+          (n) => !isOwn(title, n) && !isCell(title, n) && (n.includes(title) || title.includes(n)),
         );
         return own === 1 && others.length === 0 ? [] : [`${title}: ${own}× ${others.join(' | ')}`];
       });
@@ -139,12 +138,10 @@ describe('node panel labels (#1396)', () => {
       // #1594 OR40 S4b-2 — every name in a row list is words, not keys: its
       // cells, its column headers, its row buttons and its Add button.
       const rowNames = [...container.querySelectorAll('.object-list')].flatMap((list) => [
-        ...[...list.querySelectorAll<HTMLInputElement>('input, select, textarea')].flatMap(
-          (el) => [
-            el.getAttribute('aria-label') ?? '',
-            ...[...(el.labels ?? [])].map((l) => l.textContent?.trim() ?? ''),
-          ],
-        ),
+        ...[...list.querySelectorAll<HTMLInputElement>('input, select, textarea')].flatMap((el) => [
+          el.getAttribute('aria-label') ?? '',
+          ...[...(el.labels ?? [])].map((l) => l.textContent?.trim() ?? ''),
+        ]),
         ...[...list.querySelectorAll('button')].map(
           (el) => el.getAttribute('aria-label') ?? el.textContent?.trim() ?? '',
         ),

@@ -1559,7 +1559,7 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
       await screen.findByText('Claude');
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
-      expect(within(allowlist()).getByLabelText('Overridable: model')).toBeChecked();
+      expect(within(allowlist()).getByLabelText('Overridable model')).toBeChecked();
       const form = screen.getByRole('form', { name: 'Connection form' });
       await user.clear(within(form).getByLabelText('Name'));
       await user.type(within(form).getByLabelText('Name'), 'Claude v2');
@@ -1579,13 +1579,13 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
       await screen.findByText('Claude');
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
-      await user.click(within(allowlist()).getByLabelText('Overridable: timeoutMs'));
+      await user.click(within(allowlist()).getByLabelText('Overridable timeoutMs'));
       await user.click(screen.getByRole('button', { name: 'Save changes' }));
       await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
       expect(updateMock.mock.calls[0]![1].parameters).toEqual(['model', 'timeoutMs']);
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
-      await user.click(within(allowlist()).getByLabelText('Overridable: model'));
+      await user.click(within(allowlist()).getByLabelText('Overridable model'));
       await user.click(screen.getByRole('button', { name: 'Save changes' }));
       await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(2));
       expect(updateMock.mock.calls[1]![1].parameters).toEqual([]);

@@ -421,11 +421,11 @@ describe('ConfigFieldControl — a row list is a compact table (#1477 OR29)', ()
     const table = getByRole('table', { name: 'mapping' });
     const ths = Array.from(table.querySelectorAll('th'));
     expect(ths.map((th) => th.textContent)).toEqual([
-      'source',
-      'type',
-      'width — number',
-      'rules — JSON',
-      'nullable',
+      'Source',
+      'Type',
+      'Width — number',
+      'Rules — JSON',
+      'Nullable',
       'Actions',
     ]);
     expect(ths[0]!.querySelector('.required-mark')).not.toBeNull();

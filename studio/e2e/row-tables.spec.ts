@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
 import { properties } from './support/panels';
+import { labelProblem } from '../packages/web/src/testing/sentenceCase';
 
 /**
  * #1477 OR29 — authored rows are compact tables: params, variables, outputs and
@@ -98,11 +99,22 @@ test('a Copy mapping is one compact table, whole on its tab, with the row action
   await openSeededCanvas(page, 'or29 mapping table', seed);
   const mapping = await openMapping(page);
   const table = mapping.getByRole('table', { name: 'mapping' });
-  await expect(table.getByRole('textbox', { name: 'Column mapping row 3 source' })).toHaveValue('amount');
+  await expect(table.getByRole('textbox', { name: 'Column mapping row 3 source' })).toHaveValue(
+    'amount',
+  );
 
   const m = await measure(table);
-  expect(m.headers.slice(0, 2)).toEqual(['source', 'sink']);
+  expect(m.headers.slice(0, 2)).toEqual(['Source', 'Sink']);
   expect(m.headers.at(-1)).toBe('Actions');
+  // #1594 OR40 S4b-2 — every name in the table is words, not schema keys:
+  // "Column mapping row 2 on error", "Move column mapping row 2 up".
+  const names = await table.evaluate((t) => [
+    ...Array.from(t.querySelectorAll('[aria-label]'), (el) => el.getAttribute('aria-label') ?? ''),
+    ...Array.from(t.querySelectorAll('thead th'), (th) => th.textContent ?? ''),
+  ]);
+  expect(names).toContain('Column mapping row 2 on error');
+  expect(names).toContain('Move column mapping row 2 up');
+  expect(names.map((n) => [n, labelProblem(n)] as const).filter(([, p]) => p !== null)).toEqual([]);
   for (const h of m.rowHeights) expect(h).toBeLessThanOrEqual(32);
   for (const h of m.controlHeights) expect(h).toBe(28);
   expect(m.labelsDrawn).toBe(0);

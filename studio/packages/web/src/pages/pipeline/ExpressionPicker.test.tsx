@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { useStore } from 'zustand';
+import { midSentence } from '../../lib/words';
 import {
   functionDoc,
   listFunctions,
@@ -63,9 +64,11 @@ function mount(
     /** An inactive tab's panel is `hidden`, so a control on it is reached by role only once its tab is open (#1477). */
     tab: (name: string) => fireEvent.click(screen.getByRole('tab', { name })),
     open: (field: string) =>
-      fireEvent.click(screen.getByRole('button', { name: `Insert reference into ${field}` })),
+      fireEvent.click(
+        screen.getByRole('button', { name: `Insert reference into ${midSentence(field)}` }),
+      ),
     openFunctions: (field: string) =>
-      fireEvent.click(screen.getByRole('button', { name: `Functions for ${field}` })),
+      fireEvent.click(screen.getByRole('button', { name: `Functions for ${midSentence(field)}` })),
     /** The functions the open list offers, by name. */
     offered: () =>
       screen
@@ -377,7 +380,9 @@ describe('ExpressionPicker in NodePanel', () => {
     ] as const) {
       ui.tab(tab);
       expect(screen.getByRole('textbox', { name: cell })).toBeTruthy();
-      expect(screen.queryByRole('button', { name: `Insert reference into ${cell}` })).toBeNull();
+      expect(
+        screen.queryByRole('button', { name: `Insert reference into ${midSentence(cell)}` }),
+      ).toBeNull();
     }
     ui.tab('Request');
 

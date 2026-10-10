@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { midSentence } from '../../lib/words';
 import {
   catalog,
   getActivity,
@@ -419,8 +420,12 @@ describe('NodePanel (U7 per-activity config form)', () => {
       'X-Keep',
     );
     fireEvent.click(screen.getByRole('button', { name: 'Add request headers row' }));
-    fireEvent.change(screen.getByLabelText('Request headers row 2 key'), { target: { value: 'X-New' } });
-    fireEvent.change(screen.getByLabelText('Request headers row 2 value'), { target: { value: 'v' } });
+    fireEvent.change(screen.getByLabelText('Request headers row 2 key'), {
+      target: { value: 'X-New' },
+    });
+    fireEvent.change(screen.getByLabelText('Request headers row 2 value'), {
+      target: { value: 'v' },
+    });
     // `secretHeaders` is on the Auth tab (#1477).
     openTab('Auth');
     fireEvent.click(screen.getByRole('button', { name: 'Add secret headers row' }));
@@ -443,8 +448,12 @@ describe('NodePanel (U7 per-activity config form)', () => {
     const panel = mountOver(httpNode({ url: 'https://x', headers: { 'X-A': '1' } }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Add request headers row' }));
-    fireEvent.change(screen.getByLabelText('Request headers row 2 key'), { target: { value: 'X-A' } });
-    fireEvent.change(screen.getByLabelText('Request headers row 2 value'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('Request headers row 2 key'), {
+      target: { value: 'X-A' },
+    });
+    fireEvent.change(screen.getByLabelText('Request headers row 2 value'), {
+      target: { value: '2' },
+    });
     panel.apply();
 
     expect(screen.getByRole('alert').textContent).toMatch(/headers: row 2: duplicate key 'X-A'/);
@@ -1070,7 +1079,9 @@ describe('NodePanel (the objectList control, #1169)', () => {
     fireEvent.change(screen.getByLabelText('Column mapping row 2 source'), {
       target: { value: 'age' },
     });
-    fireEvent.change(screen.getByLabelText('Column mapping row 2 sink'), { target: { value: 'years' } });
+    fireEvent.change(screen.getByLabelText('Column mapping row 2 sink'), {
+      target: { value: 'years' },
+    });
     fireEvent.change(screen.getByLabelText('Column mapping row 2 type'), {
       target: { value: 'integer' },
     });
@@ -1217,7 +1228,9 @@ describe('NodePanel (the objectList control, #1169)', () => {
     fireEvent.change(screen.getByLabelText('Column mapping row 2 sink'), {
       target: { value: 'full_name' },
     });
-    fireEvent.change(screen.getByLabelText('Column mapping row 2 type'), { target: { value: 'string' } });
+    fireEvent.change(screen.getByLabelText('Column mapping row 2 type'), {
+      target: { value: 'string' },
+    });
     panel.apply();
 
     expect(screen.getByText(/duplicate sink column/)).toBeTruthy();
@@ -1509,7 +1522,9 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     return panel;
   };
   const open = (cell: string) =>
-    fireEvent.click(screen.getByRole('button', { name: `Insert reference into ${cell}` }));
+    fireEvent.click(
+      screen.getByRole('button', { name: `Insert reference into ${midSentence(cell)}` }),
+    );
   const offered = () => screen.queryByRole('button', { name: /^limit/ });
 
   it("writes a chosen reference into THAT row's expression, and no other row", () => {
@@ -1535,13 +1550,15 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     mountMapping();
 
     fireEvent.click(screen.getByRole('button', { name: 'Add column mapping row' }));
-    fireEvent.change(screen.getByLabelText('Column mapping row 4 sink'), { target: { value: 'tag' } });
+    fireEvent.change(screen.getByLabelText('Column mapping row 4 sink'), {
+      target: { value: 'tag' },
+    });
     open('Column mapping row 4 expression');
     fireEvent.click(screen.getByRole('button', { name: /^limit/ }));
 
-    expect((screen.getByLabelText('Column mapping row 4 expression') as HTMLTextAreaElement).value).toBe(
-      '${params.limit}',
-    );
+    expect(
+      (screen.getByLabelText('Column mapping row 4 expression') as HTMLTextAreaElement).value,
+    ).toBe('${params.limit}');
   });
 
   it('offers nothing to a column-name cell, which §8 holds to a literal', () => {
@@ -1559,7 +1576,9 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     open('Column mapping row 3 sink');
 
     expect(offered()).toBeNull();
-    expect(screen.getByText(/No reference in this pipeline fits column mapping row 3 sink/)).toBeTruthy();
+    expect(
+      screen.getByText(/No reference in this pipeline fits column mapping row 3 sink/),
+    ).toBeTruthy();
   });
 
   it('offers nothing to the expression of a row that already reads a source column', () => {
@@ -1628,7 +1647,9 @@ describe('the expression picker on a mapping cell (#1178)', () => {
       open(`Tool definitions row 1 ${cell}`);
       expect(offered(), cell).toBeNull();
       fireEvent.keyDown(
-        screen.getByRole('button', { name: `Insert reference into tool definitions row 1 ${cell}` }),
+        screen.getByRole('button', {
+          name: `Insert reference into tool definitions row 1 ${cell}`,
+        }),
         {
           key: 'Escape',
         },
