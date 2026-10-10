@@ -160,9 +160,15 @@ for (const theme of THEMES) {
         await scan(page, 'editor, pipeline properties', findings);
 
         await nodeById(page, 'copy').click();
+        await expect(
+          properties(page).getByRole('tab', { name: 'Sink', exact: true }),
+        ).toBeVisible();
+        await scan(page, 'editor, Copy selected', findings);
+
+        await properties(page).getByRole('tab', { name: 'Sink', exact: true }).click();
         const sink = properties(page).getByRole('combobox', { name: 'Sink connection' });
         await expect(sink).toBeVisible();
-        await scan(page, 'editor, Copy selected', findings);
+        await scan(page, 'editor, Copy selected, Sink tab', findings);
 
         await sink.click();
         await expect(page.getByRole('listbox')).toBeVisible();
