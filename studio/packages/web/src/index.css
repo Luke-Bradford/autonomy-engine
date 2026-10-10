@@ -5577,6 +5577,18 @@ button.danger {
   text-overflow: ellipsis;
 }
 
+/* #1626 — a status pill cut by its column ellipsises its own word inside a
+   whole ring, rather than the cell clipping the ring off. `middle`, since an
+   `overflow: hidden` inline-block's baseline is its bottom edge and the pill
+   would otherwise ride high. The cell's `title` holds the whole word. */
+.runs-grid td > .run-status {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+
 /* #1484 — column widths are the `<col>`s' own, set inline from the column
    definitions and the viewer's resizes (`useGridColumnWidths`), no longer positional
    shares here. The grid scrolls sideways in its own box once the columns
