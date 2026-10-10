@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { act, cleanup, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRef } from 'react';
@@ -180,6 +180,37 @@ describe('ConnectionColumn, Edit (#1477 slice 5c)', () => {
     // The edit form's advisories are read for this connection, on open.
     expect(dependentsMock).toHaveBeenCalledWith('conn_new', expect.anything());
     expect(datasetsMock).toHaveBeenCalled();
+  });
+
+  /**
+   * #1438 — the editor can close the column while its save runs, and the
+   * form's error line goes with it. A failure then is the editor's notice;
+   * one while the form is still open stays in the form.
+   */
+  it('a save that fails after the column closed is the editor’s notice', async () => {
+    let reject!: (err: unknown) => void;
+    updateMock.mockReturnValue(
+      new Promise((_, rej) => {
+        reject = rej;
+      }),
+    );
+    const user = userEvent.setup();
+    const calls = mount({ editId: 'conn_new', connections: [fresh] });
+    await user.type(await screen.findByLabelText('Name'), ' 2');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    cleanup();
+    await act(async () => reject(new Error('store unavailable')));
+    expect(calls.onNotice).toHaveBeenCalledWith('Could not save “Fresh name 2”: store unavailable');
+  });
+
+  it('a save that fails with the column open says so in the form only', async () => {
+    updateMock.mockRejectedValue(new Error('store unavailable'));
+    const user = userEvent.setup();
+    const calls = mount({ editId: 'conn_new', connections: [fresh] });
+    await user.type(await screen.findByLabelText('Name'), ' 2');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('store unavailable');
+    expect(calls.onNotice).not.toHaveBeenCalled();
   });
 
   it('Save updates the row, hands it back, binds nothing, and closes', async () => {

@@ -410,7 +410,7 @@ function SecretForm({
           `A secret named “${form.name}” already exists. ${caseRule} ` +
           `Use Replace to change its value.`;
         validation.showRefusedFields({ name: taken });
-        onSaveFailed?.(couldNotSave(form.name, taken));
+        onSaveFailed?.(taken);
       } else {
         setError(saveRefusal(err, validation));
         onSaveFailed?.(couldNotSave(form.name, err));

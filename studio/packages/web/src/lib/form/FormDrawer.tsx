@@ -74,10 +74,10 @@ export function FormDrawer({
   const keepRef = useRef<HTMLButtonElement>(null);
 
   // #1438 — making the body inert drops focus from the field the operator
-  // pressed Enter in. The last field focused is remembered (as it happens, so
-  // nothing has moved it yet) and given focus back when the form is live again,
-  // unless focus has gone somewhere real since. Declared before the
-  // invalid-field effect below, so a refused save still lands on its field.
+  // pressed Enter in. The last field focused is recorded on every focus, before
+  // inert can move it, and given focus back when the form is live again, unless
+  // focus has gone somewhere real since. Declared before the invalid-field
+  // effect below, so a refused save still lands on its field.
   const lastFocused = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (busy) return;

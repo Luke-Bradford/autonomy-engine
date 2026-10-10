@@ -51,8 +51,9 @@ export function FormErrors({
 }
 
 /**
- * #1438 — the page's line for a save that failed after its drawer had gone
- * (`useDrawerForm`'s `lostSave`). Its own alert, not the list's error line,
+ * #1438 — the PAGE's line for a save that failed after its drawer had gone
+ * (`useDrawerForm`'s `lostSave`), not a form error: `FormErrors` above is the
+ * open form's one alert. Its own line rather than the list's error line,
  * because the list's refresh clears that.
  */
 export function LostSaveAlert({ message }: { message: string | null }) {

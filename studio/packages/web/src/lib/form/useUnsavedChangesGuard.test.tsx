@@ -112,6 +112,8 @@ describe('useUnsavedChangesGuard — a page that goes clean while asking (#1438)
     act(() => setDirty(false));
     await act(async () => {});
     expect(router.state.location.pathname).toBe('/connections');
+    // The hold has let go: no blocker is left registered while clean.
+    expect(guard().routeHold).toBeNull();
     // Clean now, so the next navigation is not held either.
     await act(() => router.navigate('/datasets'));
     expect(guard().confirming).toBe(false);
@@ -131,6 +133,21 @@ describe('useUnsavedChangesGuard — a page that goes clean while asking (#1438)
     act(() => setDirty(true));
     act(() => setDirty(false));
     expect(ran).toEqual(['open row 2']);
+  });
+
+  it('never runs an action Keep dropped, and Discard runs its action once', () => {
+    const { guard, setDirty } = mountFlippable();
+    const ran: string[] = [];
+    act(() => guard().request(() => ran.push('kept away')));
+    act(() => guard().keep());
+    act(() => setDirty(false));
+    expect(ran).toEqual([]);
+
+    act(() => setDirty(true));
+    act(() => guard().request(() => ran.push('discarded into')));
+    act(() => guard().discard());
+    act(() => setDirty(false));
+    expect(ran).toEqual(['discarded into']);
   });
 });
 

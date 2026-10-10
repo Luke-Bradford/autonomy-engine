@@ -464,7 +464,7 @@ function GlobalParamForm({
       if (!editing && err instanceof ApiError && err.status === 409) {
         const taken = `A global parameter named “${form.name}” already exists. Names ignore case.`;
         validation.showRefusedFields({ name: taken });
-        onSaveFailed?.(couldNotSave(form.name, taken));
+        onSaveFailed?.(taken);
       } else {
         setError(saveRefusal(err, validation));
         onSaveFailed?.(couldNotSave(form.name, err));
