@@ -100,11 +100,11 @@ describe('HomePage', () => {
     renderHome();
 
     const table = await screen.findByRole('table', { name: 'Recent runs' });
-    expect(within(table).getAllByRole('columnheader').map((th) => th.textContent)).toEqual([
-      'Pipeline',
-      'Status',
-      'Started',
-    ]);
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((th) => th.textContent),
+    ).toEqual(['Pipeline', 'Status', 'Started']);
     const [, first, second] = within(table).getAllByRole('row');
     expect(within(first!).getByRole('link')).toHaveTextContent('Nightly report v3');
     expect(within(second!).getByRole('link')).toHaveTextContent('Digest v1');

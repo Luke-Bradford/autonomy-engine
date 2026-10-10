@@ -171,12 +171,7 @@ export function DemoPanel({
   return embedded ? (
     <section className="demo-panel">{body}</section>
   ) : (
-    <Section
-      level={2}
-      landmark
-      heading="Demo workspace"
-      help={FORM_SECTION_HINTS.pipeline.demo}
-    >
+    <Section level={2} landmark heading="Demo workspace" help={FORM_SECTION_HINTS.pipeline.demo}>
       <div className="demo-panel">{body}</div>
     </Section>
   );

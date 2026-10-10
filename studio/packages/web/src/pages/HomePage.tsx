@@ -66,12 +66,7 @@ export function HomePage() {
       {/* #1594 OR40 S6 — Home's sections are the one `Section`, a named
           region each (the e2e reaches them by name), and the runs are a row
           of the one table style rather than a stack of cards. */}
-      <Section
-        level={2}
-        landmark
-        heading="Recent runs"
-        help={FORM_SECTION_HINTS.home.recentRuns}
-      >
+      <Section level={2} landmark heading="Recent runs" help={FORM_SECTION_HINTS.home.recentRuns}>
         {error !== null && (
           <p role="alert" className="error">
             {error.message}
@@ -139,12 +134,7 @@ export function HomePage() {
         <DemoPanel allowRemove={false} onChanged={() => void navigate('/author/pipelines')} />
       )}
 
-      <Section
-        level={2}
-        landmark
-        heading="Go to"
-        help={FORM_SECTION_HINTS.home.goTo}
-      >
+      <Section level={2} landmark heading="Go to" help={FORM_SECTION_HINTS.home.goTo}>
         <ul className="hub-links">
           {hubs.map((hub) => (
             <li key={hub.id}>

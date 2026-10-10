@@ -170,6 +170,8 @@ function expectTableStyle(label: string, m: Measured, density: Density) {
  */
 function pages(seeded: Seed): { route: string; title: string; cut: boolean; rows?: false }[] {
   return [
+    // #1594 OR40 S6 — Home's recent runs; the seed's run is the newest.
+    { route: '/#/', title: 'Home', cut: true },
     { route: '/#/author/pipelines', title: 'Pipelines', cut: true },
     { route: '/#/monitor/runs', title: 'Runs', cut: true },
     { route: '/#/manage/connections', title: 'Connections', cut: true },
