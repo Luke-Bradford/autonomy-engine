@@ -293,7 +293,7 @@ test.describe('#1060 the secrets vault has a front end', () => {
     await expect(name).toHaveValue(INERT_NAME);
 
     release();
-    await expect(page.getByRole('alert')).toContainText('store unavailable');
+    await expect(page.getByRole('alert')).toContainText('request failed (503)');
     await expect(value).toBeFocused();
     await value.press('End');
     await page.keyboard.type('-editable');
