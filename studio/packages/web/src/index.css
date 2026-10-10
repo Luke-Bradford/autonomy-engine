@@ -3262,68 +3262,30 @@ button.danger {
     /* A parent that packs its children to the start (the import panel) would
        otherwise shrink the row to its content. */
     align-self: stretch;
-  }
 
-  /* Text and required mark on one line, centred on a control's text (a long
-     label wraps inside its column). */
-  :root[data-density]
-    :is(
-      .config-cell,
-      .contract-section,
-      .section__body,
-      .panel-tab,
-      .form-drawer-body,
-      .field-form,
-      .recurrence-editor,
-      .window-editor,
-      .run-windows,
-      .run-window-row
-    )
-    > .labelled-control
-    > label {
-    display: block;
-    grid-column: 1;
-    line-height: 16px;
-    padding-block: calc((var(--control-h) - 16px) / 2);
-  }
+    /* Nested so the parent list above is written once (#1623): a new form
+       context added there gets the label, the control column and the `?` head
+       together. `&` keeps the old specificity, (0,4,1) and (0,5,0). */
 
-  :root[data-density]
-    :is(
-      .config-cell,
-      .contract-section,
-      .section__body,
-      .panel-tab,
-      .form-drawer-body,
-      .field-form,
-      .recurrence-editor,
-      .window-editor,
-      .run-windows,
-      .run-window-row
-    )
-    > .labelled-control
-    > :not(label, .labelled-control__head) {
-    grid-column: 2;
-  }
+    /* Text and required mark on one line, centred on a control's text (a long
+       label wraps inside its column). */
+    & > label {
+      display: block;
+      grid-column: 1;
+      line-height: 16px;
+      padding-block: calc((var(--control-h) - 16px) / 2);
+    }
 
-  /* A label with a `?` beside it: the pair in the label column, centred on
-     the control's first line like a bare label's text. */
-  :root[data-density]
-    :is(
-      .config-cell,
-      .contract-section,
-      .section__body,
-      .panel-tab,
-      .form-drawer-body,
-      .field-form,
-      .recurrence-editor,
-      .window-editor,
-      .run-windows,
-      .run-window-row
-    )
-    > .labelled-control
-    > .labelled-control__head {
-    grid-column: 1;
-    min-height: var(--control-h);
+    & > :not(label, .labelled-control__head) {
+      grid-column: 2;
+    }
+
+    /* A label with a `?` beside it: the pair in the label column, centred on
+       the control's first line like a bare label's text. */
+    & > .labelled-control__head {
+      grid-column: 1;
+      min-height: var(--control-h);
+    }
   }
 
   :root[data-density] .labelled-control > .labelled-control__head > label {
@@ -3343,7 +3305,9 @@ button.danger {
      column. A checkbox keeps
      its own width: box, 8px, label, never stretched. A field packed into a
      grid cell (the General tab's policy, since #1477) keeps the cell's whole
-     width, and a fieldset's radios sit under its legend. */
+     width, and a fieldset's radios sit under its legend. This list and the
+     hint list below are narrower than the label-left one on purpose;
+     `formLayout.test.ts` makes a new parent pick a side in each. */
   :root[data-density]
     :is(.contract-section, .section__body, .form-drawer-body, .field-form)
     > :is(.contract-check, label:has(> input[type='checkbox']), .settings-row) {
