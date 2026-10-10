@@ -1802,7 +1802,7 @@ describe('the connection form drawer (#1396)', () => {
     expect(screen.getByLabelText('Name')).toHaveValue('Draft');
   });
 
-  it('a prompt raised during a save that then succeeds does not greet the next form', async () => {
+  it('a New held during a save that then succeeds carries on, with no prompt (#1438)', async () => {
     const save = deferred<ConnectionPublic>();
     createMock.mockReturnValue(save.promise);
     const user = userEvent.setup();
@@ -1816,10 +1816,11 @@ describe('the connection form drawer (#1396)', () => {
     expect(prompt()).toBeInTheDocument();
 
     await act(async () => save.resolve(conn({ name: 'Saved' })));
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    expect(prompt()).not.toBeInTheDocument();
-    await user.click(newButton);
-    expect(screen.getByRole('dialog', { name: 'New connection' })).toBeInTheDocument();
+    // The edits it held for are saved, so the operator's New is not dropped.
+    await waitFor(() =>
+      expect(screen.getByRole('dialog', { name: 'New connection' })).toBeInTheDocument(),
+    );
+    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
     expect(prompt()).not.toBeInTheDocument();
   });
 
