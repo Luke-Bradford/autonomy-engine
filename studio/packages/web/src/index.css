@@ -4736,7 +4736,9 @@ button.danger {
 .node-status,
 .stream-phase,
 .editor-state-badge__part {
-  font-size: 0.72rem;
+  /* #1594 OR40 S6 — the ramp's caption, not 11.52px. The size only: the
+     line height stays inherited, so no pill grows a row. */
+  font-size: var(--type-caption-size);
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 0.05rem 0.5rem;
@@ -6030,7 +6032,7 @@ button.danger {
    the name, which is what the operator is actually scanning for. */
 .run-version {
   color: var(--muted);
-  font-size: 0.8rem;
+  font-size: var(--type-caption-size);
 }
 
 /* #931 (U27 slice 2) — the run list's Cost cell. The figure itself keeps the

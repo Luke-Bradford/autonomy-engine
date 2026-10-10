@@ -65,7 +65,7 @@ test('U15 — Home names the workspace’s recent runs and links each to its det
   // The status WORD, from the Monitor's one vocabulary, in our run's row. The
   // seeded run fails by construction, so this also proves Home reports an
   // outcome rather than painting every row the same.
-  await expect(recent.getByRole('row').filter({ has: ours })).toContainText('failure');
+  await expect(recent.getByRole('row').filter({ hasText: pipelineName })).toContainText('failure');
 
   // Exactly one page, and it asked for Home's own size rather than a reader's
   // screenful of 50. `limit` reaching the wire is the whole point of the
