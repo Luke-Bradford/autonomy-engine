@@ -82,4 +82,35 @@ describe('useDrawerForm (#1396)', () => {
     expect(hook.current().form).toBe('a edited');
     expect(hook.current().openerRef.current).toBe(first);
   });
+
+  describe('a save that outlives its form (#1438)', () => {
+    it('isOpen is false once the form is replaced, closed, or closed by a delete', () => {
+      const hook = mountHook();
+      act(() => hook.current().openForm('first'));
+      const first = hook.current().seq;
+      expect(hook.current().isOpen(first)).toBe(true);
+      act(() => hook.current().openForm('second'));
+      expect(hook.current().isOpen(first)).toBe(false);
+      const second = hook.current().seq;
+      // A delete closes without a new open, so the seq alone would still match.
+      act(() => hook.current().closeWhere(() => true));
+      expect(hook.current().isLatest(second)).toBe(true);
+      expect(hook.current().isOpen(second)).toBe(false);
+    });
+
+    it('records a failure only for a form that has gone, until a form next opens', () => {
+      const hook = mountHook();
+      act(() => hook.current().openForm('first'));
+      const first = hook.current().seq;
+      act(() => hook.current().saveFailedFor(first)('shown in the form'));
+      expect(hook.current().lostSave).toBeNull();
+
+      act(() => hook.current().openForm('second'));
+      act(() => hook.current().saveFailedFor(first)('Could not save “first”: boom'));
+      expect(hook.current().lostSave).toBe('Could not save “first”: boom');
+
+      act(() => hook.current().openForm('third'));
+      expect(hook.current().lostSave).toBeNull();
+    });
+  });
 });

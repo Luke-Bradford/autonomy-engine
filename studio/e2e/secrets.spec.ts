@@ -28,6 +28,7 @@ const NAME = 'e2e-1060-vault-key';
 const DUP_NAME = 'e2e-1060-duplicate-key';
 const ROTATE_NAME = 'e2e-1061-rotate-key';
 const DRAWER_NAME = 'e2e-1396-secret-drawer';
+const INERT_NAME = 'e2e-1438-inert-while-saving';
 
 test.describe('#1060 the secrets vault has a front end', () => {
   test('creates a secret, lists it, and deletes it', async ({ page }) => {
@@ -239,5 +240,64 @@ test.describe('#1060 the secrets vault has a front end', () => {
       expect((await request.delete(`/api/secrets/${id}`)).ok()).toBe(true);
     }
     await expectQuiet(page, problems);
+  });
+
+  /**
+   * #1438 — anything typed while a save is in flight used to be dropped when
+   * the drawer closed on success. The body is inert while busy: only a browser
+   * can show that keystrokes and focus are refused there, and that focus comes
+   * back to the field when a failed save hands the form back.
+   */
+  test('the form is inert while its save is in flight, and live again after a failure', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route('**/api/secrets', async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      await held;
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'store unavailable' }),
+      });
+    });
+
+    await page.goto('/#/manage/secrets');
+    await page.getByRole('heading', { name: 'Secrets' }).waitFor();
+    await fluentRootReady(page);
+    await page.getByRole('button', { name: 'New secret' }).click();
+    const name = page.getByLabel('Name');
+    const value = page.getByRole('textbox', { name: 'Value', exact: true });
+    await name.fill(INERT_NAME);
+    await value.fill('typed-before-save');
+    await value.press('Enter');
+    await expect(page.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+
+    const whileSaving = await page.evaluate(() => {
+      const body = document.querySelector<HTMLElement>('.form-drawer-body')!;
+      const field = body.querySelector<HTMLInputElement>('input')!;
+      field.focus();
+      return {
+        inert: body.inert,
+        busy: body.getAttribute('aria-busy'),
+        took: document.activeElement === field,
+      };
+    });
+    expect(whileSaving).toEqual({ inert: true, busy: 'true', took: false });
+    await page.keyboard.type('-typed-during-save');
+    await expect(value).toHaveValue('typed-before-save');
+    await expect(name).toHaveValue(INERT_NAME);
+
+    release();
+    await expect(page.getByRole('alert')).toContainText('store unavailable');
+    await expect(value).toBeFocused();
+    await value.press('End');
+    await page.keyboard.type('-editable');
+    await expect(value).toHaveValue('typed-before-save-editable');
+    await expectQuiet(page, problems, [/503/]);
   });
 });
