@@ -260,6 +260,47 @@ test.describe('#1594 OR40 S2a — one focus ring', () => {
   });
 });
 
+test('#1594 OR40 S5c — a tab strip without Tabster dummies: one tab stop, arrows move a visible focus, Enter selects', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  await openSeededCanvas(page, 'or40 s5c tabs', {
+    nodes: [{ id: 'w', type: 'wait', position: { x: 0, y: 0 }, config: { seconds: '${1}' } }],
+  });
+  await nodeById(page, 'w').click();
+  // A wait's strip is General then Settings; start from General.
+  const general = properties(page).getByRole('tab', { name: 'General', exact: true });
+  const settings = properties(page).getByRole('tab', { name: 'Settings', exact: true });
+  await expect(properties(page).getByRole('tab')).toHaveCount(2);
+  await general.click();
+  await expect(general).toHaveAttribute('aria-selected', 'true');
+  // Tabster's mover put focusable aria-hidden dummies beside the tabs; they are gone.
+  await expect(properties(page).locator('[data-tabster-dummy]')).toHaveCount(0);
+  await expect(general).toHaveAttribute('tabindex', '0');
+  await expect(settings).toHaveAttribute('tabindex', '-1');
+
+  await keyboardFocus(page, general);
+  await page.keyboard.press('ArrowRight');
+  await expect(settings).toBeFocused();
+  expect((await ringOf(page, settings)).focusVisible).toBe(true);
+  await page.keyboard.press('ArrowRight');
+  await expect(general).toBeFocused();
+  await page.keyboard.press('ArrowLeft');
+  await expect(settings).toBeFocused();
+  await page.keyboard.press('Home');
+  await expect(general).toBeFocused();
+  await page.keyboard.press('End');
+  await expect(settings).toBeFocused();
+  // Passing over the tabs selected none of them.
+  await expect(general).toHaveAttribute('aria-selected', 'true');
+
+  await page.keyboard.press('Enter');
+  await expect(settings).toHaveAttribute('aria-selected', 'true');
+  await expect(settings).toHaveAttribute('tabindex', '0');
+  await expect(general).toHaveAttribute('tabindex', '-1');
+  await expectQuiet(page, problems);
+});
+
 test('a checkbox sits beside its words: box, 8px, label — never stretched', async ({ page }) => {
   const problems = collectPageProblems(page);
   await openSeededCanvas(page, 'or40 s2 checkbox', {

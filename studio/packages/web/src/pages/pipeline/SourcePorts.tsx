@@ -65,6 +65,10 @@ export function SourcePorts({ ports }: { ports: readonly SourcePort[] }) {
               style={style}
               className={`flow-port flow-port--${port.orphaned ? 'orphaned' : port.condition.on}`}
               title={name}
+              // #1594 OR40 S5c — a named GRAPHIC: the dot is drawn and named by
+              // its routing key, but it is not keyboard-operable, so it is not
+              // a button. `aria-label` on an element with no role is prohibited.
+              role="img"
               aria-label={name}
             />
             <span className="flow-port-label" style={style} aria-hidden="true">

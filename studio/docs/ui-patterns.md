@@ -447,6 +447,11 @@ One look per control type (#1594 OR40 S2a), from the tokens, in both densities. 
   look-alike. A tab is body type in a `--control-h` box with `--space-2` side padding; selected is
   body-strong. Fluent draws a hidden semibold copy of an unselected tab's label to reserve the
   selected width, and that copy takes body-strong too, so selecting a tab moves no tab.
+- **Tabs, one keyboard model (#1594 OR40 S5c):** `PanelTabs` keeps Fluent's look but not its
+  keyboard handling. Only the selected tab is a tab stop; the arrows move along the strip and wrap
+  (flipped right to left), Home and End go to its ends, and Enter, Space or a click selects.
+  Tabster's arrow-navigation mover is switched off, because its focusable `aria-hidden` dummies
+  fail axe's `aria-hidden-focus`.
 - **The property dock's strip** is the dock's name (`Properties`, and `N selected` while folded
   with a selection), the Problems disclosure as a subtle button, then the icon acts at the far end:
   Paste, Expand, the dock's position (`Dock to right` / `Dock to bottom`) and its fold (`Hide
@@ -695,11 +700,9 @@ fails on **any** violation, whatever its impact. The views are:
 The workspace is seeded first, so lists are scanned with rows in them.
 
 - A new page or panel state goes into that spec.
-- Two known violations are left to S5c in `LEFT_FOR_S5C`: Fluent `TabList`'s Tabster dummies and
-  the canvas ports' `aria-label` with no role. Each is matched on rule and on the element in the
-  page, and the gate fails when one stops occurring, so the fix that clears it also deletes its
-  entry. Never add an entry to hide a new violation, and never use axe's `exclude` or
-  `disableRules`.
+- There is no allowlist. Fix a violation; never hide it with axe's `exclude` or `disableRules`.
+- A canvas port is `role="img"`, named by its routing key: it is drawn and named but not
+  keyboard-operable, and an `aria-label` on an element with no role is prohibited.
 
 ## Case and terms (#1594 OR40 S4)
 
