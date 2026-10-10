@@ -28,6 +28,12 @@ async function setDensity(page: Page, density: Density) {
 function capitals(page: Page, acronyms: readonly string[]) {
   return page.evaluate((acronyms) => {
     const kept = new Set(acronyms);
+    // A time column names the viewer's zone ("Started GMT+1", "BST"): a value,
+    // not a label, so the browser's own short zone name is kept.
+    const zone = new Intl.DateTimeFormat('en', { timeZoneName: 'short' })
+      .formatToParts(new Date())
+      .find((p) => p.type === 'timeZoneName')?.value;
+    for (const w of (zone ?? '').split(/[^\p{L}]+/u)) kept.add(w);
     const found: string[] = [];
     // `getClientRects`, not `offsetParent`: a fixed-position element has no offset parent.
     const visible = (el: Element) => el.getClientRects().length > 0;
