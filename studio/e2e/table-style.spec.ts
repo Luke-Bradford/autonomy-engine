@@ -167,7 +167,7 @@ function pages(seeded: Seed): { route: string; title: string; cut: boolean }[] {
     { route: '/#/manage/triggers', title: 'Triggers', cut: true },
     { route: '/#/manage/secrets', title: 'Secrets', cut: true },
     { route: '/#/manage/global-params', title: 'Global parameters', cut: true },
-    { route: '/#/monitor/audit', title: 'Audit', cut: false },
+    { route: '/#/monitor/audit', title: 'Audit', cut: true },
     { route: `/#/monitor/runs/${encodeURIComponent(seeded.runId)}`, title: '', cut: false },
   ];
 }
@@ -212,6 +212,14 @@ async function seed(page: Page, stamp: string): Promise<Seed> {
     nodes: [{ id: 'n1', type: 'fail', config: { message: 'expected' }, position: { x: 0, y: 0 } }],
   });
   const runId = await fireAndSettle(page, pipelineVersionId, `S3d trigger ${stamp} ${LONG}`);
+  // An audit entry whose line is too long for the column: archive and restore.
+  const { pipelineId } = await seedVersion(page, `S3d archived ${stamp} ${LONG} ${LONG}`, {
+    nodes: [{ id: 'n1', type: 'fail', config: { message: 'expected' }, position: { x: 0, y: 0 } }],
+  });
+  for (const act of ['archive', 'restore']) {
+    const res = await page.request.post(`/api/pipelines/${pipelineId}/${act}`);
+    expect(res.status(), await res.text()).toBe(200);
+  }
   return { runId };
 }
 
@@ -230,7 +238,7 @@ for (const density of ['compact', 'comfortable'] as const) {
       if (p.title !== '') {
         await expect(page.getByRole('heading', { name: p.title, exact: true })).toBeVisible();
       }
-      await expect(page.locator('.content table tbody tr').first()).toBeVisible();
+      await expect(page.locator('.content table tbody tr').first(), `${p.route}: a table row`).toBeVisible();
       const m = await measure(page);
       expectTableStyle(`${p.route} (${density})`, m, density);
       if (p.cut) {
