@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { readCssSource } from './testing/cssSource';
+import { readCssSource, ruleBody } from './testing/cssSource';
 
 /**
  * #1623 — the label-left form layout (`@container field-form`, #1477 / #1622)
@@ -31,18 +31,15 @@ function listsBefore(follow: string): string[][] {
   return [...css.matchAll(pattern)].map(([, list = '']) => classes(list));
 }
 
-/** The brace-balanced body of the rule whose head contains the match at `at`. */
-function bodyAfter(at: number): string {
-  const open = css.indexOf('{', at);
-  let depth = 0;
-  for (let i = open; i < css.length; i += 1) {
-    if (css[i] === '{') depth += 1;
-    else if (css[i] === '}') {
-      depth -= 1;
-      if (depth === 0) return css.slice(open + 1, i);
-    }
-  }
-  throw new Error('unbalanced braces after the label-left parent list');
+/**
+ * The body of the rule whose head holds the match at `at`, read through
+ * `ruleBody` so quoted values cannot unbalance it. A rule head runs from the
+ * previous `{`, `}` or `;` to its own `{`, as `ruleBody` parses it.
+ */
+function bodyOfHeadAt(at: number): string {
+  const start =
+    Math.max(css.lastIndexOf('{', at), css.lastIndexOf('}', at), css.lastIndexOf(';', at)) + 1;
+  return ruleBody(css, css.slice(start, css.indexOf('{', at)));
 }
 
 const ROW = '\\.labelled-control(?![\\w-])';
@@ -51,10 +48,10 @@ const ROW = '\\.labelled-control(?![\\w-])';
 const NOT_CHECKBOX_ALIGNED = new Map([
   ['.config-cell', 'a field packed into a grid cell keeps the whole cell'],
   ['.panel-tab', 'decided in #1622: a tab holds sections, not bare checkboxes'],
-  ['.recurrence-editor', "a builder fieldset's radios sit under its legend"],
-  ['.window-editor', "a builder fieldset's radios sit under its legend"],
-  ['.run-windows', "a builder fieldset's radios sit under its legend"],
-  ['.run-window-row', "a builder fieldset's radios sit under its legend"],
+  ['.recurrence-editor', "a builder fieldset's checkboxes and radios sit under its legend"],
+  ['.window-editor', "a builder fieldset's checkboxes and radios sit under its legend"],
+  ['.run-windows', "a builder fieldset's checkboxes and radios sit under its legend"],
+  ['.run-window-row', "a builder fieldset's checkboxes and radios sit under its legend"],
 ]);
 
 /** Parents whose sibling hint or error does NOT line up with the control column. */
@@ -70,18 +67,17 @@ describe('the label-left form layout (#1623)', () => {
 
   it('nests the label, control-column and `?`-head placements under that one list', () => {
     const at = css.search(new RegExp(`:is\\([^()]*\\)\\s*>\\s*${ROW}`));
-    const body = bodyAfter(at);
-    expect(body).toMatch(/&\s*>\s*label\s*\{[^}]*grid-column:\s*1;/);
-    expect(body).toMatch(
-      /&\s*>\s*:not\(label, \.labelled-control__head\)\s*\{[^}]*grid-column:\s*2;/,
-    );
-    expect(body).toMatch(/&\s*>\s*\.labelled-control__head\s*\{[^}]*grid-column:\s*1;/);
+    expect(at).toBeGreaterThan(-1);
+    const body = bodyOfHeadAt(at);
+    expect(ruleBody(body, '& > label')).toMatch(/grid-column:\s*1;/);
+    expect(ruleBody(body, '& > :not(label, .labelled-control__head)')).toMatch(/grid-column:\s*2;/);
+    expect(ruleBody(body, '& > .labelled-control__head')).toMatch(/grid-column:\s*1;/);
   });
 
   it('places every parent in the checkbox and hint lists, or excludes it by name', () => {
     const [parents = []] = listsBefore(ROW);
-    const [checkbox = []] = listsBefore(':is\\(\\.contract-check');
-    const [hint = []] = listsBefore(`:is\\(\\s*${ROW},`);
+    const [checkbox = []] = listsBefore(':is\\([^{]*?\\.contract-check[^{]*?\\)\\s*\\{');
+    const [hint = []] = listsBefore(`:is\\([^{]*?${ROW}[^{]*?\\)\\s*\\+`);
     expect(parents.length).toBeGreaterThan(0);
     expect(checkbox.length).toBeGreaterThan(0);
     expect(hint.length).toBeGreaterThan(0);

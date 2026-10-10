@@ -3239,7 +3239,9 @@ button.danger {
      dock fieldset of choices. The trigger form's builders are fieldsets of
      fields, so they are rows' parents too. `:root[data-density]` (always set)
      only raises the weight: (0,4,0), over the stacked drawer row
-     (`.connection-form .labelled-control`, 0,3,0). */
+     (`.connection-form .labelled-control`, 0,3,0). The label, the control
+     column and the `?` head are nested so this parent list is written once
+     (#1623); `&` keeps their old weights, (0,4,1) and (0,5,0). */
   :root[data-density]
     :is(
       .config-cell,
@@ -3262,10 +3264,6 @@ button.danger {
     /* A parent that packs its children to the start (the import panel) would
        otherwise shrink the row to its content. */
     align-self: stretch;
-
-    /* Nested so the parent list above is written once (#1623): a new form
-       context added there gets the label, the control column and the `?` head
-       together. `&` keeps the old specificity, (0,4,1) and (0,5,0). */
 
     /* Text and required mark on one line, centred on a control's text (a long
        label wraps inside its column). */
@@ -3305,9 +3303,10 @@ button.danger {
      column. A checkbox keeps
      its own width: box, 8px, label, never stretched. A field packed into a
      grid cell (the General tab's policy, since #1477) keeps the cell's whole
-     width, and a fieldset's radios sit under its legend. This list and the
-     hint list below are narrower than the label-left one on purpose;
-     `formLayout.test.ts` makes a new parent pick a side in each. */
+     width, and a builder fieldset's checkboxes and radios sit under its
+     legend. This list and the hint list below are narrower than the
+     label-left one on purpose; `formLayout.test.ts` makes a new parent pick a
+     side in each. */
   :root[data-density]
     :is(.contract-section, .section__body, .form-drawer-body, .field-form)
     > :is(.contract-check, label:has(> input[type='checkbox']), .settings-row) {
