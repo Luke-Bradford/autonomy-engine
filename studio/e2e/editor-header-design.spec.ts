@@ -1,10 +1,16 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady, resolvedPaletteColor } from './support/theme';
-import { CONTROL_H, DENSITIES, expectAppearance, preferAppearance } from './support/appearance';
+import {
+  CONTROL_H,
+  DENSITIES,
+  drawnHeights,
+  expectAppearance,
+  preferAppearance,
+} from './support/appearance';
 import { triggerMenuItem } from './support/canvas';
 import { dragNodeBy } from './support/canvasGraph';
-import { expectInlineRow } from './support/inlineRow';
+import { expectInlineRow, inlineItems } from './support/inlineRow';
 import { offRampText } from './support/typeRamp';
 import { openSeededCanvas, type SeedDoc } from './support/seedDoc';
 
@@ -29,7 +35,8 @@ const RUNS = [
   { density: 'comfortable', theme: 'dark' },
 ] as const;
 
-/** The section step per density, as `typeRamp.ts` publishes the ramp. */
+/** The body and section steps per density, as `typeRamp.ts` publishes the ramp. */
+const BODY_PX: Record<Density, number> = { compact: 13, comfortable: 14 };
 const SECTION_PX: Record<Density, number> = { compact: 14, comfortable: 16 };
 
 const HEADER = '.canvas-page > .page-header';
@@ -48,6 +55,7 @@ function doc(): SeedDoc {
     params: [
       { name: 'region', type: 'string', required: true, description: 'Where to read from' },
       { name: 'limit', type: 'number', required: false, default: 10 },
+      { name: 'dryRun', type: 'boolean', required: false },
       { name: 'filter', type: 'json', required: false },
     ],
   };
@@ -66,39 +74,6 @@ function styles(page: Page, selectors: readonly string[], props: readonly string
         }),
       ),
     [selectors, props] as const,
-  );
-}
-
-/** Each drawn match's rounded height, named, so a failure says which control. */
-function heights(page: Page, selector: string) {
-  return page.evaluate(
-    (sel) =>
-      [...document.querySelectorAll(sel)]
-        .filter((el) => el.getClientRects().length > 0)
-        .map((el) => ({
-          name: el.getAttribute('aria-label') || (el.textContent ?? '').trim().slice(0, 24),
-          h: Math.round(el.getBoundingClientRect().height),
-        })),
-    selector,
-  );
-}
-
-/** Each drawn control under `selector`, as `expectInlineRow` reads a row. */
-function inlineItems(page: Page, selector: string) {
-  return page.evaluate(
-    (sel) =>
-      [...document.querySelectorAll(sel)]
-        .filter((el) => el.getClientRects().length > 0)
-        .map((el) => {
-          const r = el.getBoundingClientRect();
-          return {
-            name: el.getAttribute('aria-label') || (el.textContent ?? '').trim() || el.tagName,
-            left: r.left,
-            right: r.right,
-            centre: r.top + r.height / 2,
-          };
-        }),
-    selector,
   );
 }
 
@@ -132,6 +107,13 @@ async function expectPanel(page: Page, d: Density, label: string): Promise<void>
     'row-gap': '4px',
   });
   expect(s[`${PANEL} .form-actions`]?.['row-gap'], `${label}: actions`).toBe('8px');
+  // A JSON value's text lives in the box's `value`, which the ramp scan cannot see.
+  expect(
+    await page
+      .locator(`${PANEL} .json-editor-input`)
+      .evaluate((el) => getComputedStyle(el).fontSize),
+    `${label}: JSON text`,
+  ).toBe(`${BODY_PX[d]}px`);
   // No paragraph brings the browser's 1em margin into the column's gap.
   const margins = await page.evaluate(
     (sel) => [...document.querySelectorAll(`${sel} p`)].map((p) => getComputedStyle(p).marginTop),
@@ -140,7 +122,7 @@ async function expectPanel(page: Page, d: Density, label: string): Promise<void>
   expect(margins.length, `${label}: hints`).toBeGreaterThan(0);
   expect(new Set(margins), `${label}: hint margins`).toEqual(new Set(['0px']));
   // Single-line controls only: a JSON value is a multi-line box.
-  for (const { name, h } of await heights(page, `${PANEL} :is(input, select, button)`)) {
+  for (const { name, h } of await drawnHeights(page, `${PANEL} :is(input, select, button)`)) {
     expect(h, `${label}: ${name}`).toBe(CONTROL_H[d]);
   }
   expectInlineRow(`${label} actions`, await inlineItems(page, `${PANEL} .form-actions > button`));
@@ -177,6 +159,9 @@ for (const { density, theme } of RUNS) {
     await (await triggerMenuItem(page, /^Trigger now/)).click();
     await expectPanel(page, d, 'Trigger now');
     await page.locator(PANEL).getByLabel('filter').fill('{');
+    // Format on text that is not JSON shows the editor's problem line.
+    await page.locator(PANEL).getByRole('button', { name: 'Format JSON' }).click();
+    await expect(page.locator(`${PANEL} .json-editor-problem`)).not.toBeEmpty();
     await page.locator(PANEL).getByRole('button', { name: 'Start run' }).click();
     const error = page.locator(`${PANEL} .form-error`);
     await expect(error).toBeVisible();
@@ -202,8 +187,11 @@ for (const { density, theme } of RUNS) {
     await expect(more).toBeVisible();
     expect(await offRampText(page, d, STRIP), 'strip: ramp').toEqual([]);
     const strip = await styles(page, [STRIP], ['column-gap', 'font-size']);
-    expect(strip[STRIP]?.['column-gap'], 'strip gap').toBe('12px');
-    expect(await heights(page, `${STRIP} button`), 'strip controls').toEqual([
+    expect(strip[STRIP], 'strip').toEqual({
+      'column-gap': '12px',
+      'font-size': `${BODY_PX[d]}px`,
+    });
+    expect(await drawnHeights(page, `${STRIP} button`), 'strip controls').toEqual([
       { name: '+1 more', h: CONTROL_H[d] },
     ]);
     await more.click();
@@ -217,7 +205,8 @@ for (const { density, theme } of RUNS) {
       'padding-top': '12px',
       'border-top-left-radius': '6px',
     });
-    await more.click();
+    // Not closed again: the copy notice lapses after 6s, taking `+1 more` with
+    // it, and the reload below closes the list anyway.
 
     // The standing banner: an archived pipeline's.
     const archived = await page.request.post(`/api/pipelines/${pipelineId}/archive`);
@@ -230,7 +219,7 @@ for (const { density, theme } of RUNS) {
       (await styles(page, [BANNER], ['column-gap', 'padding-left', 'padding-top']))[BANNER],
       'banner',
     ).toEqual({ 'column-gap': '12px', 'padding-left': '8px', 'padding-top': '0px' });
-    for (const { name, h } of await heights(page, `${BANNER} button`)) {
+    for (const { name, h } of await drawnHeights(page, `${BANNER} button`)) {
       expect(h, `banner: ${name}`).toBe(CONTROL_H[d]);
     }
 

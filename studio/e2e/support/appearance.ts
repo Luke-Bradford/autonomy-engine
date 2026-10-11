@@ -58,3 +58,21 @@ export async function expectAppearance(
   expect(await documentTheme(page)).toBe(theme);
   expect(await page.evaluate(() => document.documentElement.dataset.density)).toBe(density);
 }
+
+/**
+ * Each drawn match of `selector` and its rounded height, named by its
+ * `aria-label` or the start of its text, so a failure says which control is off
+ * `--control-h` or `--row-h`. Read in ONE evaluate.
+ */
+export function drawnHeights(page: Page, selector: string): Promise<{ name: string; h: number }[]> {
+  return page.evaluate(
+    (sel) =>
+      [...document.querySelectorAll(sel)]
+        .filter((el) => el.getClientRects().length > 0)
+        .map((el) => ({
+          name: el.getAttribute('aria-label') || (el.textContent ?? '').trim().slice(0, 24),
+          h: Math.round(el.getBoundingClientRect().height),
+        })),
+    selector,
+  );
+}
