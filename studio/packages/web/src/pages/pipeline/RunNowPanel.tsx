@@ -192,6 +192,7 @@ function RunParamsForm<R extends FireResult>({
       <div className="form-actions">
         <button
           type="submit"
+          className="primary"
           disabled={starting}
           // With no fields, focus follows the click that opened the panel to
           // its one action; this is not page-load focus.

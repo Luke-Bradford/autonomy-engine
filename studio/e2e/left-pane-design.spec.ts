@@ -5,11 +5,12 @@ import {
   CONTROL_H,
   DENSITIES,
   ROW_H,
+  drawnHeights,
   expectAppearance,
   preferAppearance,
 } from './support/appearance';
 import { openRowMenu, pane, tree } from './support/authorPane';
-import { expectInlineRow } from './support/inlineRow';
+import { expectInlineRow, inlineItems } from './support/inlineRow';
 import { offRampText } from './support/typeRamp';
 import { openSeededCanvas, seedVersion } from './support/seedDoc';
 import { toolbox as toolboxRegion } from './support/canvasGraph';
@@ -55,19 +56,6 @@ function textLefts(page: Page, selector: string) {
   }, selector);
 }
 
-function heights(page: Page, selector: string) {
-  return page.evaluate(
-    (sel) =>
-      [...document.querySelectorAll(sel)]
-        .filter((el) => el.getClientRects().length > 0)
-        .map((el) => ({
-          name: el.getAttribute('aria-label') || (el.textContent ?? '').trim().slice(0, 24),
-          h: Math.round(el.getBoundingClientRect().height),
-        })),
-    selector,
-  );
-}
-
 function sideways(page: Page) {
   return page.evaluate(() => {
     const root = document.scrollingElement!;
@@ -77,25 +65,6 @@ function sideways(page: Page) {
       pane ? pane.scrollWidth - pane.clientWidth : 0,
     );
   });
-}
-
-/** Each drawn control under `selector`, as `expectInlineRow` reads a row. */
-function inlineItems(page: Page, selector: string) {
-  return page.evaluate(
-    (sel) =>
-      [...document.querySelectorAll(sel)]
-        .filter((el) => el.getClientRects().length > 0)
-        .map((el) => {
-          const r = el.getBoundingClientRect();
-          return {
-            name: el.getAttribute('aria-label') || (el.textContent ?? '').trim() || el.tagName,
-            left: r.left,
-            right: r.right,
-            centre: r.top + r.height / 2,
-          };
-        }),
-    selector,
-  );
 }
 
 function left(page: Page, selector: string) {
@@ -130,7 +99,7 @@ for (const { density, theme } of RUNS) {
       await expectAppearance(page, theme, d);
       await expect(page.locator('.secondary-pane__link--active')).toBeVisible();
       expect(await offRampText(page, d, '.secondary-pane__body'), route).toEqual([]);
-      for (const row of await heights(page, '.secondary-pane__link'))
+      for (const row of await drawnHeights(page, '.secondary-pane__link'))
         expect(row.h, `${route} ${row.name}`).toBe(ROW_H[d]);
       const title = (await textLefts(page, '.secondary-pane__title'))[0]!;
       for (const link of await textLefts(page, '.secondary-pane__link'))
@@ -148,12 +117,12 @@ for (const { density, theme } of RUNS) {
     ).toBeVisible();
     await expect(tree(page).getByRole('link', { name: `S6i filed ${density}` })).toBeVisible();
     expect(await offRampText(page, d, '.secondary-pane__body'), 'tree').toEqual([]);
-    for (const row of await heights(
+    for (const row of await drawnHeights(
       page,
       '.factory-resources__row .secondary-pane__link, .factory-resources__folder-header',
     ))
       expect(row.h, `tree row ${row.name}`).toBe(ROW_H[d]);
-    for (const c of await heights(page, '.factory-resources__toolbar :is(input, button)'))
+    for (const c of await drawnHeights(page, '.factory-resources__toolbar :is(input, button)'))
       expect(c.h, `${c.name} height`).toBe(CONTROL_H[d]);
     expectInlineRow(
       'pane toolbar',
@@ -192,7 +161,7 @@ for (const { density, theme } of RUNS) {
     await pane(page).getByRole('button', { name: 'New pipeline' }).click();
     const nameRow = pane(page).locator('.factory-resources__name-row');
     await expect(nameRow.locator('input')).toBeFocused();
-    for (const c of await heights(page, '.factory-resources__name-row :is(input, button)'))
+    for (const c of await drawnHeights(page, '.factory-resources__name-row :is(input, button)'))
       expect(c.h, `name row ${c.name} height`).toBe(CONTROL_H[d]);
     expectInlineRow(
       'name row buttons',
@@ -216,7 +185,7 @@ for (const { density, theme } of RUNS) {
     const alert = pane(page).getByRole('alert');
     await expect(alert).toBeVisible();
     expect(await offRampText(page, d, '.secondary-pane__body'), 'action error').toEqual([]);
-    for (const c of await heights(page, '.factory-resources__error button'))
+    for (const c of await drawnHeights(page, '.factory-resources__error button'))
       expect(c.h, `${c.name} height`).toBe(CONTROL_H[d]);
     await alert.getByRole('button', { name: 'Dismiss' }).click();
     await expect(alert).toHaveCount(0);
@@ -294,7 +263,7 @@ for (const { density, theme } of RUNS) {
       if (i.lines === 1) expect(i.h, `${i.name} height`).toBe(CONTROL_H[d]);
       else expect(i.h, `${i.name} (wrapped) height`).toBeGreaterThan(CONTROL_H[d]);
     }
-    for (const c of await heights(page, '.activity-toolbox__filter'))
+    for (const c of await drawnHeights(page, '.activity-toolbox__filter'))
       expect(c.h, `${c.name} height`).toBe(CONTROL_H[d]);
 
     // A search swaps each group's disclosure for a static heading; the label stays put.

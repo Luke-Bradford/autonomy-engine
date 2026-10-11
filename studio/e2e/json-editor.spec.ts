@@ -86,14 +86,14 @@ test.describe('#1396 JSON editor', () => {
       // The connection form's own textarea rule also paints a background, and
       // Chrome's UA sheet already maps `wrap="off"` to `white-space: pre`, so
       // the face is asserted on what only `.json-editor-input` sets: the
-      // two-space tab stop and the smaller code size (0.85rem).
+      // two-space tab stop and the ramp's body size (#1594 OR40 S6j; it was
+      // 0.85rem, off the ramp), 13px in the default compact density.
       const style = await box.evaluate((el) => {
         const s = getComputedStyle(el);
-        const root = parseFloat(getComputedStyle(document.documentElement).fontSize);
         return {
           font: s.fontFamily,
           tabSize: s.tabSize,
-          sizeInRem: Math.round((parseFloat(s.fontSize) / root) * 100) / 100,
+          size: s.fontSize,
           wrap: el.getAttribute('wrap'),
           spellcheck: el.getAttribute('spellcheck'),
           background: s.backgroundColor,
@@ -102,7 +102,7 @@ test.describe('#1396 JSON editor', () => {
       });
       expect(style.font).toMatch(/monospace/);
       expect(style.tabSize).toBe('2');
-      expect(style.sizeInRem).toBe(0.85);
+      expect(style.size).toBe('13px');
       expect(style.wrap).toBe('off');
       expect(style.spellcheck).toBe('false');
       expect(style.background).toBe(await resolvedPaletteColor(page, '--bg'));

@@ -1,4 +1,4 @@
-import { expect } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 
 /** One control in a row, as a spec measured it in the page. */
 export interface InlineItem {
@@ -25,4 +25,26 @@ export function expectInlineRow(label: string, items: readonly InlineItem[], min
       `${label}: centres '${a.name}'/'${b.name}'`,
     ).toBeLessThanOrEqual(1);
   }
+}
+
+/**
+ * Each drawn control under `selector`, as {@link expectInlineRow} reads a row:
+ * named by its `aria-label` or its text. Read in ONE evaluate.
+ */
+export function inlineItems(page: Page, selector: string): Promise<InlineItem[]> {
+  return page.evaluate(
+    (sel) =>
+      [...document.querySelectorAll(sel)]
+        .filter((el) => el.getClientRects().length > 0)
+        .map((el) => {
+          const r = el.getBoundingClientRect();
+          return {
+            name: el.getAttribute('aria-label') || (el.textContent ?? '').trim() || el.tagName,
+            left: r.left,
+            right: r.right,
+            centre: r.top + r.height / 2,
+          };
+        }),
+    selector,
+  );
 }
