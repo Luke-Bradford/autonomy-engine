@@ -15,6 +15,12 @@ export const CONTROL_H: Record<(typeof DENSITIES)[number], number> = {
   comfortable: 32,
 };
 
+/** The published table and list row height per density, held the same way as {@link CONTROL_H}. */
+export const ROW_H: Record<(typeof DENSITIES)[number], number> = {
+  compact: 32,
+  comfortable: 36,
+};
+
 /**
  * The viewer's stored preferences, as the shipped app reads them. Hard-coded
  * rather than imported from `uiStore.ts`, for the reason `theme.ts` gives for
