@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { openSeededCanvas } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
+import { CONTROL_H } from './support/appearance';
 
 /**
  * #1594 OR40 S3 — the one `Section`, measured where it is used: a resource
@@ -20,7 +21,6 @@ const SECTION_TYPE: Record<Density, string> = {
   compact: '14px/600/20px',
   comfortable: '16px/600/22px',
 };
-const CONTROL_H: Record<Density, number> = { compact: 28, comfortable: 32 };
 
 async function setDensity(page: Page, density: Density) {
   await page.goto('/#/settings');

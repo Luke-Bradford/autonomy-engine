@@ -54,6 +54,18 @@ export const FORM_SECTION_HINTS = {
     secretEncryption:
       'Where the master key that encrypts every stored secret comes from, and the file holding it when there is one.',
   },
+  // #1594 OR40 S6c — the Git page. The branches are named by the facts list's
+  // own terms (Collaboration branch, Working branch) so the two can be matched.
+  git: {
+    notConnected:
+      'Optional: a repository to commit this workspace to; without one, saving still mints a version.',
+    connected: 'The repository this workspace commits to, as recorded at the last check, not live.',
+    accessToken: 'A token for a remote your environment cannot reach on its own, stored encrypted.',
+    commit:
+      'Writes every pipeline, connection, dataset, trigger and global parameter to the working branch and pushes it.',
+    incoming:
+      'What is on the collaboration branch; importing applies it and records the git provenance publishing requires.',
+  },
   home: {
     recentRuns: 'The newest runs in this workspace, each opening on its activities and log.',
     goTo: 'Shortcuts to the other hubs, which the rail also reaches.',

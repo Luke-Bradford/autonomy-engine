@@ -3,6 +3,8 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
 import { properties } from './support/panels';
 import { resolvedPaletteColor } from './support/theme';
+import { CONTROL_H } from './support/appearance';
+import { expectInlineRow } from './support/inlineRow';
 
 /**
  * #1594 OR40 S2a — the one control layer, measured in the browser.
@@ -16,7 +18,6 @@ import { resolvedPaletteColor } from './support/theme';
 test.use({ viewport: { width: 1440, height: 900 } });
 
 type Density = 'compact' | 'comfortable';
-const CONTROL_H: Record<Density, number> = { compact: 28, comfortable: 32 };
 
 async function openSettings(page: Page, density: Density) {
   await page.goto('/#/settings');
@@ -436,7 +437,7 @@ for (const density of ['compact', 'comfortable'] as const) {
           .map((el) => {
             const r = el.getBoundingClientRect();
             return {
-              label: el.getAttribute('aria-label') ?? el.textContent?.trim() ?? '',
+              name: el.getAttribute('aria-label') ?? el.textContent?.trim() ?? '',
               left: r.left,
               right: r.right,
               centre: r.top + r.height / 2,
@@ -444,7 +445,7 @@ for (const density of ['compact', 'comfortable'] as const) {
           });
         return items;
       });
-      expect(strip.map((i) => i.label)).toEqual([
+      expect(strip.map((i) => i.name)).toEqual([
         'Properties',
         'Problems 0',
         'Paste',
@@ -460,14 +461,7 @@ for (const density of ['compact', 'comfortable'] as const) {
         );
       expect(end - strip.at(-1)!.right, 'the fold ends the strip').toBeLessThanOrEqual(1);
       expect(strip[2]!.left - strip[1]!.right, 'acts pushed right').toBeGreaterThan(100);
-      for (let i = 1; i < strip.length; i += 1) {
-        const [a, b] = [strip[i - 1]!, strip[i]!];
-        expect(b.left - a.right, `${a.label} → ${b.label} gap`).toBeGreaterThanOrEqual(8);
-        expect(
-          Math.abs(b.centre - a.centre),
-          `${a.label} / ${b.label} centres`,
-        ).toBeLessThanOrEqual(1);
-      }
+      expectInlineRow('dock strip', strip);
 
       // Tabs: body type in a control-height box; selected is semibold, and the
       // width it needs is reserved, so selecting another tab moves no tab.

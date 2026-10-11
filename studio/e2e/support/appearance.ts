@@ -6,6 +6,16 @@ export const THEMES = ['light', 'dark'] as const;
 export const DENSITIES = ['compact', 'comfortable'] as const;
 
 /**
+ * #1594 OR40 — the published control height per density (Acceptance,
+ * "Controls"). Hard-coded rather than read from `tokens.css`: a token that
+ * drifts fails the spec instead of moving the check with it.
+ */
+export const CONTROL_H: Record<(typeof DENSITIES)[number], number> = {
+  compact: 28,
+  comfortable: 32,
+};
+
+/**
  * The viewer's stored preferences, as the shipped app reads them. Hard-coded
  * rather than imported from `uiStore.ts`, for the reason `theme.ts` gives for
  * `FLUENT_ROOT`: a spec observes the shipped contract from outside, so a renamed

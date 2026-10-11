@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { documentTheme, fluentRootReady, resolvedPaletteColor, themeSwitch } from './support/theme';
-import { DENSITIES, expectAppearance, preferAppearance } from './support/appearance';
+import { CONTROL_H, DENSITIES, expectAppearance, preferAppearance } from './support/appearance';
 import { offRampText } from './support/typeRamp';
 
 /**
@@ -183,10 +183,7 @@ for (const density of DENSITIES) {
       };
     });
     expect(fit.factsGap).toBe(8);
-    // The published heights, not read from the token: a token that drifts
-    // fails here instead of moving the check with it.
-    const controlH = { compact: 28, comfortable: 32 }[density];
-    expect(fit.selects).toEqual([controlH, controlH]);
+    expect(fit.selects).toEqual([CONTROL_H[density], CONTROL_H[density]]);
 
     await expectQuiet(page, problems);
   });
