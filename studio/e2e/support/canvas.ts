@@ -99,3 +99,17 @@ export async function triggerMenuItem(page: Page, name: RegExp): Promise<Locator
   await item.waitFor();
   return item;
 }
+
+/**
+ * Start a run of v1 from the editor: Trigger ▾ → Trigger now → Start run, with
+ * no params typed. Shared by the specs that only need a run on the canvas
+ * (#1594 OR40 S6m, S6n); `editor-run.spec.ts` drives the dialog itself because
+ * the dialog is what it tests.
+ */
+export async function runFromEditor(page: Page): Promise<void> {
+  await (await triggerMenuItem(page, /^Trigger now/)).click();
+  await page
+    .getByRole('dialog', { name: 'Run v1' })
+    .getByRole('button', { name: 'Start run' })
+    .click();
+}

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { triggerMenuItem } from './support/canvas';
+import { runFromEditor } from './support/canvas';
 import {
   computedStyles as styles,
   DENSITIES,
@@ -232,11 +232,7 @@ for (const { density, theme } of RUNS) {
     });
     await expectAppearance(page, theme, d);
 
-    await (await triggerMenuItem(page, /^Trigger now/)).click();
-    await page
-      .getByRole('dialog', { name: 'Run v1' })
-      .getByRole('button', { name: 'Start run' })
-      .click();
+    await runFromEditor(page);
     const status = nodeById(page, 'pick').getByTestId('node-run-status');
     await expect(status).toContainText('success', { timeout: 20_000 });
 
