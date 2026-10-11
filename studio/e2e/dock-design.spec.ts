@@ -100,7 +100,7 @@ for (const { density, theme } of RUNS) {
     await expectAppearance(page, theme, d);
 
     // An activity with nothing filled in, so Problems has an issue to list.
-    await addActivity(page, 'Lookup rows');
+    await addActivity(page, 'HTTP request');
     await expect.poll(() => validationIssues(page)).not.toEqual([]);
     await deselect(page);
 
@@ -152,28 +152,6 @@ for (const { density, theme } of RUNS) {
     await properties(page).getByRole('tab', { name: 'Request' }).click();
     await expectControlHeights(page, `${DOCK} .expression-picker-toggle`, d, 'ƒx toggles');
 
-    // A lookup bound to a connection that declares a parameter: its overrides
-    // are the bordered group too, spaced as a group of fields.
-    await canvasNodes(page).last().click();
-    await pickConnection(page, 'Connection', { id: connId });
-    await expect(
-      properties(page).getByRole('group', { name: 'Connection overrides' }),
-    ).toBeVisible();
-    expect(await offRampText(page, d, DOCK), 'overrides: ramp').toEqual([]);
-    const overrides = await styles(
-      page,
-      ['.param-overrides', '.param-overrides > legend'],
-      ['padding-top', 'padding-left', 'border-top-left-radius', 'row-gap', 'font-size'],
-    );
-    expect(overrides['.param-overrides'], 'overrides').toMatchObject({
-      ...GROUP_BOX,
-      'row-gap': '8px',
-    });
-    expect(overrides['.param-overrides > legend'], 'overrides: legend').toMatchObject({
-      'padding-left': '4px',
-      'font-size': '12px',
-    });
-
     // A call: its target mode is the bordered group, its options control-tall rows.
     await nodeById(page, 'call').click();
     await expectTabsOnRamp(page, 'Activity properties', d);
@@ -207,5 +185,36 @@ for (const { density, theme } of RUNS) {
     await expectControlHeights(page, '.edge-outcome', d, 'edge outcome');
 
     await expectQuiet(page, problems);
+
+    // A lookup bound to a connection that declares a parameter: its overrides
+    // are the bordered group too, spaced as a group of fields. In a page of its
+    // own, so leaving the edited canvas above raises no unsaved-changes block.
+    const lookup = await page.context().newPage();
+    const lookupProblems = collectPageProblems(lookup);
+    await lookup.setViewportSize({ width: 1440, height: 900 });
+    await preferAppearance(lookup, theme, d);
+    await openSeededCanvas(lookup, `S6l overrides ${density} ${Date.now()}`, { nodes: [] });
+    await addActivity(lookup, 'Lookup rows');
+    await canvasNodes(lookup).first().click();
+    await pickConnection(lookup, 'Connection', { id: connId });
+    await expect(
+      properties(lookup).getByRole('group', { name: 'Connection overrides' }),
+    ).toBeVisible();
+    expect(await offRampText(lookup, d, DOCK), 'overrides: ramp').toEqual([]);
+    const overrides = await styles(
+      lookup,
+      ['.param-overrides', '.param-overrides > legend'],
+      ['padding-top', 'padding-left', 'border-top-left-radius', 'row-gap', 'font-size'],
+    );
+    expect(overrides['.param-overrides'], 'overrides').toMatchObject({
+      ...GROUP_BOX,
+      'row-gap': '8px',
+    });
+    expect(overrides['.param-overrides > legend'], 'overrides: legend').toMatchObject({
+      'padding-left': '4px',
+      'font-size': '12px',
+    });
+
+    await expectQuiet(lookup, lookupProblems);
   });
 }
