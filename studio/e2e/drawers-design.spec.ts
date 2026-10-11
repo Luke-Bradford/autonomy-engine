@@ -137,6 +137,11 @@ for (const { density, theme } of RUNS) {
     expect(errors['.form-errors p']).toMatchObject({ 'margin-bottom': '4px' });
     expect(errors['.form-errors ul']).toMatchObject({ 'padding-left': '16px' });
     expect(await offRampText(page, d, '.form-drawer'), 'drawer with its alert: ramp').toEqual([]);
+    // Closed through the app, not left open under a navigation: an edited form
+    // guards the route, and a hash change outside the router warns.
+    await form.getByRole('button', { name: 'Close' }).click();
+    await page.getByRole('button', { name: 'Discard changes' }).click();
+    await expect(form).toHaveCount(0);
 
     // --- Pipelines → ⋯ → Trigger now… ---------------------------------------
     const name = `e2e_s6q_${density}`;
@@ -148,8 +153,11 @@ for (const { density, theme } of RUNS) {
       .getByRole('row')
       .filter({ has: page.getByRole('link', { name: `Open ${name}`, exact: true }) });
     await chooseRowAction(row, 'Trigger now…', name);
-    await expect(page.getByRole('dialog', { name: `Trigger now — ${name}` })).toBeVisible();
+    const runDrawer = page.getByRole('dialog', { name: `Trigger now — ${name}` });
+    await expect(runDrawer).toBeVisible();
     await expectDrawerChrome(page, d);
+    await runDrawer.getByRole('button', { name: 'Close' }).click();
+    await expect(runDrawer).toHaveCount(0);
 
     // --- A typed-name confirmation ------------------------------------------
     const conn = `e2e_s6q_conn_${density}`;

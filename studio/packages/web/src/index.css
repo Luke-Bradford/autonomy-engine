@@ -1298,19 +1298,10 @@ td button + button {
   margin-left: 0.4rem;
 }
 
-.connection-form,
-.dataset-form,
-.trigger-form {
-  margin-top: var(--space-6);
-  padding: var(--space-4);
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-surface);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  max-width: 480px;
-}
+/* A resource form (`.connection-form`, `.dataset-form`, `.trigger-form`) has
+   no box of its own: every one is a `FormDrawer`'s `<form>`, so the drawer is
+   the panel and `.form-drawer-body` lays out its fields. #1594 OR40 S6q dropped
+   the form's own panel skin and the reset that cancelled it in the drawer. */
 
 /* `.labelled-control` (#1227) is the wrapper `LabelledControl` puts where a
    wrapping `<label>` used to be, so it takes that label's layout here and below.
@@ -1449,18 +1440,6 @@ td button + button {
   margin: 0;
 }
 
-/* The drawer owns the layout; a resource form's own box styles (panel,
-   border, max width) belong to the drawer here, not the form inside it. */
-.form-drawer > form {
-  display: block;
-  margin: 0;
-  padding: 0;
-  max-width: none;
-  background: none;
-  border: 0;
-  border-radius: 0;
-}
-
 .form-drawer-body {
   padding: var(--space-4);
   display: flex;
@@ -1505,6 +1484,12 @@ td button + button {
   flex-direction: column;
   gap: var(--space-1);
   margin-top: var(--space-3);
+}
+
+/* #1594 OR40 S6q — the dialog's text in body type: Fluent's `DialogContent`
+   sets 14px, which is off the compact ramp. Two classes, to outrank its one. */
+.confirm-dialog :is(.confirm-dialog-paragraph, .confirm-dialog-typed) {
+  font: var(--type-body);
 }
 
 /* #1466 — a name that is only whitespace still shows as a gap to type; a
