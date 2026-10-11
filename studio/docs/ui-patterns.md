@@ -646,6 +646,24 @@ The boxes on the authoring canvas and on the run page's Graph tab.
 grid's pieces at 1440x900, compact light and comfortable dark; `run-list.spec.ts` measures a child
 run's indent. The small print is held by the literal ratchet only.
 
+## The shell: rail, version, update banner and command bar (#1594 OR40 S6p)
+
+- **Hub rail:** 8px above the wordmark and 4px below the foot. The wordmark is caption type at 600,
+  8px above the links. A link's glyph is `--icon-size-nav`, Fluent's 20px navigation size, in both
+  densities: the rail is a fixed 48px and its links 44px, so it does not take `--icon-size`. The
+  active link's bar is 8px from the link's top and bottom with a `--radius-control` right edge.
+- **Version badge:** caption type, 4px in. A version is wider than the rail, so it wraps and is
+  centred; `VersionBadge` offers a break after each `.` and `-` (`0.10.` / `12`), never
+  mid-number. Its tooltip and accessible name carry it whole.
+- **Update banner:** body type, `4px 16px`, so its text starts at the content frame's x. It has its
+  own row in the workspace (command bar, banner, page), so the page under it still starts where it
+  ends and fills the rest of the viewport. With no banner, that row is 0px.
+- **Command bar:** `--header-h` tall, 16px in like the content frame, its parts 8px apart. The
+  breadcrumb is body type, its crumbs 4px either side of the `›`, the current page body strong.
+
+`e2e/shell-design.spec.ts` measures all of these at 1440x900, compact light and comfortable dark,
+with an update mocked in, on a page short enough that a banner on the wrong track would grow.
+
 ## Tables (#1594 OR40 S3d)
 
 Every table in the app, whether a list, a run's facts or a form's rows, takes one style from the
