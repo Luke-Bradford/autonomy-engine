@@ -54,29 +54,32 @@ export function offRampText(
 }
 
 /**
- * The type ramp with every shown `?` under `.content` closed, then with each one
+ * The type ramp with every shown `?` under `root` closed, then with each one
  * open in turn (#1594 OR40 S6c, shared from S6g). `:visible`, so a `?` in a
  * hidden tab panel that `PanelTabs` keeps mounted is not clicked. `label` names
- * the view in a failure.
+ * the view in a failure. `root` narrows both to one part of the page (S6h: the
+ * run drawer, whose page behind is another slice's).
  */
 export async function expectOnRampWithEachHelp(
   page: Page,
   density: (typeof DENSITIES)[number],
   label = 'page',
+  root = '.content',
 ): Promise<void> {
-  expect(await offRampText(page, density), `${label}: ? closed`).toEqual([]);
-  const helps = page.locator('.content summary:visible');
+  expect(await offRampText(page, density, root), `${label}: ? closed`).toEqual([]);
+  const helps = page.locator(`${root} summary:visible`);
   const count = await helps.count();
   expect(count, `${label}: ? count`).toBeGreaterThan(0);
   for (let i = 0; i < count; i += 1) {
     await helps.nth(i).click();
-    await expect(page.locator('.content details[open]')).toHaveCount(1);
-    expect(await offRampText(page, density), `${label}: with ? ${i + 1} of ${count} open`).toEqual(
-      [],
-    );
+    await expect(page.locator(`${root} details[open]`)).toHaveCount(1);
+    expect(
+      await offRampText(page, density, root),
+      `${label}: with ? ${i + 1} of ${count} open`,
+    ).toEqual([]);
     // Closed before the next: an open section note spans its heading row and
     // can sit over the next `?`.
     await page.keyboard.press('Escape');
-    await expect(page.locator('.content details[open]')).toHaveCount(0);
+    await expect(page.locator(`${root} details[open]`)).toHaveCount(0);
   }
 }
