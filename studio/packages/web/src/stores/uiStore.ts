@@ -240,20 +240,20 @@ export const RUN_GRID_DEFAULT_HIDDEN: readonly RunGridColumnId[] = ['annotations
  * with its Copy button.
  */
 export const RUN_GRID_COLUMN_WIDTHS: Record<RunGridColumnId, { min: number; default: number }> = {
-  pipeline: { min: 120, default: 152 },
+  pipeline: { min: 120, default: 144 },
   status: { min: 72, default: 88 },
-  triggeredBy: { min: 96, default: 116 },
+  triggeredBy: { min: 96, default: 112 },
   // #1594 OR40 S6f — Started, Duration and Rows written are wide enough for
-  // their whole header label in comfortable density ("Started GMT+1" with its
-  // sort arrow), paid for by Pipeline, Triggered by and Parent, whose cut cells
+  // their whole header label in comfortable density (Started with its sort
+  // arrow and a long zone name, "Started GMT+5:30▼"), paid for by Pipeline, Triggered by and Parent, whose cut cells
   // carry the whole value as their tooltip.
-  started: { min: 110, default: 132 },
+  started: { min: 110, default: 152 },
   duration: { min: 56, default: 76 },
   activities: { min: 80, default: 128 },
-  rowsWritten: { min: 56, default: 108 },
+  rowsWritten: { min: 56, default: 104 },
   cost: { min: 56, default: 68 },
   runId: { min: 120, default: 128 },
-  parent: { min: 72, default: 84 },
+  parent: { min: 72, default: 80 },
   annotations: { min: 72, default: 120 },
 };
 
