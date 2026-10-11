@@ -85,6 +85,8 @@ import {
 } from './useRunsLive';
 import { PageHeader, ToolbarDivider } from '../../lib/PageHeader';
 import { FilterPill } from '../../lib/FilterPill';
+import { pageHelpId } from '../../lib/pageHelpId';
+import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 
 /**
  * U29 (#1015) — which rendering of the SAME filtered rows is on screen. A view,
@@ -676,8 +678,12 @@ function RunsList({ store, ui }: { store: PipelinesStore; ui: UiStore }) {
   }, []);
 
   return (
-    <section aria-labelledby="runs-heading" className="runs-page">
-      <PageHeader title="Runs" headingId="runs-heading">
+    <section
+      aria-labelledby="runs-heading"
+      aria-describedby={pageHelpId('runs-heading')}
+      className="runs-page"
+    >
+      <PageHeader title="Runs" headingId="runs-heading" help={FORM_SECTION_HINTS.run.page}>
         {/* #1484 — the search box sits on the title row, not in the filter
             bar: measured at 1440×900 beside the hub nav, the bar has ~1080px
             and its widest state (a range of days plus Clear) left the box

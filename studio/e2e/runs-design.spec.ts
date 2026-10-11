@@ -93,7 +93,15 @@ function measure(page: Page) {
         .filter((a) => (a.textContent ?? '').trim())
         .map((a) => (a.closest('th')!.textContent ?? '').trim()),
       clipped,
-      filters: [...bar.querySelectorAll('button, input, select')].filter(shown).map(box),
+      // A pill is the control-h frame; its own select or input sits borderless
+      // inside it (`run-filter-pills.spec.ts`), so the pill is what is measured.
+      filters: [
+        ...bar.querySelectorAll(
+          '.filter-pill, button:not(.filter-pill *), input:not(.filter-pill *), select:not(.filter-pill *)',
+        ),
+      ]
+        .filter(shown)
+        .map(box),
       sideways: Math.max(
         root.scrollWidth - root.clientWidth,
         content.scrollWidth - content.clientWidth,
