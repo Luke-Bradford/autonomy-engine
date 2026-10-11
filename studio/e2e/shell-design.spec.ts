@@ -33,8 +33,12 @@ const RUNS = [
 
 const BODY = (d: Density) => `${BODY_SIZE[d]}px`;
 
-/** A release-style version: no hyphen, so only the badge's own breaks can wrap it well. */
-const VERSION = '2026.07.30';
+/**
+ * A version the browser alone would break mid-number (`0.10.1` / `2`, measured):
+ * only the badge's own breaks after each `.` give `0.10.` / `12`. A date version
+ * such as `2026.07.30` happens to break well either way, so it proves nothing.
+ */
+const VERSION = '0.10.12';
 const BUILD = (version: string) => ({
   version,
   commit: 'e93ebf8',
@@ -146,41 +150,42 @@ for (const { density, theme } of RUNS) {
       NAV_ICON_SIZE,
     ]);
 
-    // The version: every line of it inside the rail, broken after its `.`.
+    // The version: every line of it inside the rail and centred on it, broken
+    // after its `.`.
+    // Read as rendered: each character's line, so the text of each line is the
+    // browser's own break, not how the markup happens to split it.
     const badge = await page.evaluate(() => {
       const rail = document.querySelector('.hub-rail')!.getBoundingClientRect();
       const el = document.querySelector('.version-badge')!;
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      const rects = [...range.getClientRects()].filter((r) => r.width > 0);
-      const tops = [...new Set(rects.map((r) => Math.round(r.top)))];
-      const lines = tops.map((top) =>
-        rects
-          .filter((r) => Math.round(r.top) === top)
-          .reduce(
-            (acc, r) => ({ left: Math.min(acc.left, r.left), right: Math.max(acc.right, r.right) }),
-            {
-              left: Infinity,
-              right: -Infinity,
-            },
-          ),
-      );
+      const lines = new Map<number, { text: string; left: number; right: number }>();
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        for (let i = 0; i < (node.textContent ?? '').length; i += 1) {
+          const range = document.createRange();
+          range.setStart(node, i);
+          range.setEnd(node, i + 1);
+          const r = range.getBoundingClientRect();
+          const top = Math.round(r.top);
+          const line = lines.get(top) ?? { text: '', left: Infinity, right: -Infinity };
+          line.text += node.textContent![i];
+          line.left = Math.min(line.left, r.left);
+          line.right = Math.max(line.right, r.right);
+          lines.set(top, line);
+        }
+      }
+      const ordered = [...lines.entries()].sort(([a], [b]) => a - b).map(([, l]) => l);
       return {
-        lines: lines.length,
-        inside: lines.every((l) => l.left >= rail.left && l.right <= rail.right),
-        firstLine: (() => {
-          // The first line's text: the `<wbr>` splits it into text nodes.
-          const first = [...el.childNodes].find((n) => n.nodeType === Node.TEXT_NODE)!;
-          const r = document.createRange();
-          r.selectNodeContents(first);
-          return { text: first.textContent, top: Math.round(r.getBoundingClientRect().top) };
-        })(),
-        top: tops[0],
+        lines: ordered.map((l) => l.text),
+        inside: ordered.every((l) => l.left >= rail.left && l.right <= rail.right),
+        // Centred on the rail's content box (its 1px right rule excluded).
+        centred: ordered.every(
+          (l) => Math.abs((l.left + l.right) / 2 - (rail.left + rail.right - 1) / 2) <= 1,
+        ),
       };
     });
+    expect(badge.lines, 'version: its lines').toEqual(['0.10.', '12']);
     expect(badge.inside, 'version: inside the rail').toBe(true);
-    expect(badge.lines, 'version: two lines').toBe(2);
-    expect(badge.firstLine).toEqual({ text: '2026.', top: badge.top });
+    expect(badge.centred, 'version: centred').toBe(true);
 
     // --- The breadcrumb, two crumbs deep --------------------------------------
     await page.goto('/#/manage/connections');

@@ -11,9 +11,9 @@ import { getVersion } from '../api/version';
  *
  * WRAPPING. At caption type a version is wider than the 48px rail (#1594 OR40
  * S6p; it was 9.6px and clipped), so it may break onto a second line after
- * each `.` and `-`: `2026.` / `07.30`, `0.0.0-` / `dev`. A release version
- * has no hyphen, so without the `<wbr>`s it would break wherever the line ran
- * out, mid-number. The text is unchanged; only break points are added.
+ * each `.` and `-`: `0.10.` / `12`, `0.0.0-` / `dev`. Without the `<wbr>`s
+ * the browser breaks wherever the line runs out, mid-number (`0.10.1` / `2`).
+ * The text is unchanged; only break points are added.
  *
  * ACCESSIBLE NAME. A version is still read more easily whole, and the
  * SIGHTED case is served by the Fluent `Tooltip` (with

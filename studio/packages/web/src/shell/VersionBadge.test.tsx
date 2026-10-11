@@ -26,8 +26,8 @@ describe('VersionBadge', () => {
   });
 
   // #1594 OR40 S6p — at caption type a version is wider than the 48px rail, so
-  // it wraps, and only after a `.` or `-`: a release version has no hyphen and
-  // would otherwise break mid-number. The text itself is unchanged.
+  // it wraps, and only after a `.` or `-`, never mid-number. The text itself is
+  // unchanged.
   it('offers a line break after each dot and hyphen, and nowhere else', async () => {
     vi.spyOn(api, 'getVersion').mockResolvedValue({
       version: '2026.07.30-rc1',

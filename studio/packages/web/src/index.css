@@ -322,13 +322,13 @@ body {
 
 /* #1594 OR40 S6p — caption type, on the ramp; it was 9.6px so that a version
    fitted the 48px rail on one line. At 12px a version is wider than the rail,
-   which clips, so the badge is held inside it and WRAPS: `VersionBadge` offers
-   a break after each `.` and `-` (`2026.` / `07.30`, `0.0.0-` / `dev`).
+   which clips, so it WRAPS, centred: `VersionBadge` offers a break after each
+   `.` and `-` (`0.10.` / `12`, where the browser alone gives `0.10.1` / `2`).
+   As a flex item of the rail's foot it is already no wider than the rail;
    `overflow-wrap` is the backstop for a part still wider than the line. */
 .version-badge {
   font: var(--type-caption);
   color: var(--muted);
-  max-width: 100%;
   padding: 0 var(--space-1) var(--space-1);
   text-align: center;
   overflow-wrap: anywhere;
