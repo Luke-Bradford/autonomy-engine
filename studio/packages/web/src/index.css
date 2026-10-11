@@ -160,6 +160,12 @@ body {
 /* The workspace column: command bar over the routed page. This is the explicit
    `grid-template-rows` the U0 spike asks for — React Flow needs an explicitly
    sized parent, and a row track is what gives the canvas one.
+   #1594 OR40 S6p — three rows, each child naming its own (like the shell's
+   columns): command bar, the update banner, then the page. The banner is only
+   rendered when an update is out, and with two rows it then took the `1fr`
+   track — on a short page it grew to fill the viewport and pushed the page to
+   the bottom. An empty `auto` row is 0px, so with no banner the page starts
+   straight under the command bar. Measured in `e2e/shell-design.spec.ts`.
    Both minimums are load-bearing HERE (unlike on `.content` and
    `.secondary-pane__body`, which set `overflow`): a grid item's automatic minimum is
    `auto` unless its overflow is other than `visible`, so without these the
@@ -169,9 +175,13 @@ body {
 .workspace {
   grid-column: 4;
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto auto 1fr;
   min-height: 0;
   min-width: 0;
+}
+
+.workspace > .content {
+  grid-row: 3;
 }
 
 .hub-rail {
@@ -194,7 +204,7 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 0.5rem 0 0.35rem;
+  padding: var(--space-2) 0 var(--space-1);
   position: sticky;
   top: 0;
   height: 100vh;
@@ -204,13 +214,13 @@ body {
 /* The wordmark: a monogram whose real name, `Autonomy studio`, is visually
    hidden text. Not a heading; each page's title is its h1 (#1594 OR40 S5). */
 .hub-rail__brand {
-  font-size: 0.7rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  line-height: normal;
+  /* #1594 OR40 S6p — caption type at 600, on the ramp; it was 11.2/700 with
+     its own letter-spacing. */
+  font: var(--type-caption);
+  font-weight: var(--weight-strong);
   color: var(--muted);
   margin: 0;
-  padding-bottom: 0.5rem;
+  padding-bottom: var(--space-2);
 }
 
 /* Present to assistive tech, absent from the layout. The clip-rect form rather
@@ -248,8 +258,9 @@ body {
   height: 44px;
   color: var(--muted);
   text-decoration: none;
-  /* The Fluent icon is an SVG sized in `em`, so the glyph size is set here. */
-  font-size: 20px;
+  /* The Fluent icon is an SVG sized in `em`, so the glyph size is set here:
+     the navigation size, not a button's `--icon-size` (#1594 OR40 S6p). */
+  font-size: var(--icon-size-nav);
 }
 
 .hub-rail__link:hover {
@@ -280,10 +291,10 @@ body {
   content: '';
   position: absolute;
   left: 0;
-  top: 8px;
-  bottom: 8px;
+  top: var(--space-2);
+  bottom: var(--space-2);
   width: 3px;
-  border-radius: 0 3px 3px 0;
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
   background: var(--accent);
 }
 
@@ -309,19 +320,31 @@ body {
   min-width: 0;
 }
 
+/* #1594 OR40 S6p — caption type, on the ramp; it was 9.6px so that a version
+   fitted the 48px rail on one line. At 12px a version is wider than the rail,
+   which clips, so it WRAPS, centred: `VersionBadge` offers a break after each
+   `.` and `-` (`0.10.` / `12`, where the browser alone gives `0.10.1` / `2`),
+   never mid-number.
+   As a flex item of the rail's foot it is already no wider than the rail;
+   `overflow-wrap` is the backstop for a part still wider than the line. */
 .version-badge {
-  font-size: 0.6rem;
+  font: var(--type-caption);
   color: var(--muted);
-  padding-bottom: 0.35rem;
+  padding: 0 var(--space-1) var(--space-1);
+  text-align: center;
+  overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
 }
 
 .update-banner {
+  /* #1594 OR40 S6p — its own row of the workspace (above), body type, 16px in
+     like the content frame. */
+  grid-row: 2;
   background: var(--panel-2);
   border-bottom: 1px solid var(--border);
   color: var(--text);
-  padding: 0.4rem 2rem;
-  font-size: 0.85rem;
+  padding: var(--space-1) var(--space-4);
+  font: var(--type-body);
 }
 
 /* The Home hub's shortcuts to the other hubs (U15 slice 1, #1085), kept
@@ -746,11 +769,14 @@ body {
 }
 
 .command-bar {
+  /* #1594 OR40 S6p — a page header's row, 16px in like the content frame, so
+     the first crumb and the page title start at one x. */
+  grid-row: 1;
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0 0.75rem;
-  min-height: 40px;
+  gap: var(--space-2);
+  padding: 0 var(--space-4);
+  min-height: var(--header-h);
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
@@ -776,10 +802,10 @@ body {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 0.35rem;
+  gap: var(--space-1);
   margin: 0;
   padding: 0;
-  font-size: 0.9rem;
+  font: var(--type-body);
 }
 
 /* The crumb separator, with the `content: <string> / <alt-text>` form.
@@ -793,7 +819,7 @@ body {
 .command-bar__breadcrumb li + li::before {
   content: '›' / '';
   color: var(--muted);
-  margin-right: 0.35rem;
+  margin-right: var(--space-1);
 }
 
 .command-bar__breadcrumb a {
@@ -808,7 +834,7 @@ body {
 
 .command-bar__breadcrumb [aria-current='page'] {
   color: var(--text);
-  font-weight: 600;
+  font-weight: var(--weight-strong);
 }
 
 .content {
@@ -6869,8 +6895,10 @@ button.danger {
 
 .run-drawer {
   position: fixed;
-  /* Under the command bar (`.command-bar`, 40px), which stays reachable. */
-  top: 40px;
+  /* Under the command bar (`.command-bar`, `--header-h` unless its breadcrumb
+     wraps), which stays reachable. It covers the update banner when one is
+     shown. */
+  top: var(--header-h);
   right: 0;
   bottom: 0;
   z-index: 15;
