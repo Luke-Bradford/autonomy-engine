@@ -139,7 +139,7 @@ for (const { density, theme } of RUNS) {
     expect(await offRampText(page, d, '.form-drawer'), 'drawer with its alert: ramp').toEqual([]);
     // Closed through the app, not left open under a navigation: an edited form
     // guards the route, and a hash change outside the router warns.
-    await form.getByRole('button', { name: 'Close' }).click();
+    await page.locator('.form-drawer-header').getByRole('button', { name: 'Close' }).click();
     await page.getByRole('button', { name: 'Discard changes' }).click();
     await expect(form).toHaveCount(0);
 
