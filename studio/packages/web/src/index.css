@@ -4651,6 +4651,17 @@ button.danger {
   margin-top: var(--space-3);
 }
 
+/* #1594 OR40 S6h — the Duration line: the figure and its `?` on one row, then
+   any sentence about this record's state. A `div` (the `?` is a `<details>`),
+   spaced as the paragraphs around it are. */
+.node-duration {
+  margin: var(--space-3) 0;
+}
+
+.node-duration > .help-row {
+  display: inline-flex;
+}
+
 /* A `JSON.stringify` dump has no spaces to break on, so it needs an explicit
    break opportunity or it pushes the panel sideways — the same fix `.run-meta
    dd` already carries — plus a cap, since an agent node's output is unbounded.

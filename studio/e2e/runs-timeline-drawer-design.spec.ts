@@ -109,6 +109,9 @@ for (const { density, theme } of RUNS) {
         await opens.nth(row).click();
         const drawer = page.locator(DRAWER);
         await expect(drawer.getByRole('heading', { level: 2, name: /^Node / })).toBeVisible();
+        // Labels, not prose: what Duration measures is its `?`.
+        await expect(drawer.locator('summary[aria-label="About duration"]')).toBeVisible();
+        await expect(drawer.getByText(/wall clock for this attempt/)).toBeHidden();
         const tabs = drawer.getByRole('tablist', { name: 'Activity run details' });
         for (const name of TABS) {
           const tab = tabs.getByRole('tab', { name, exact: true });

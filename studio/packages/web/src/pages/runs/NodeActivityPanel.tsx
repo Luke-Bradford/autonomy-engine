@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { describeDatasetAddress, SECURE_REDACTED, TERMINAL_NODE } from '@autonomy-studio/shared';
 import type { DatasetAddress, DispatchInput, RunStatus } from '@autonomy-studio/shared';
@@ -6,6 +6,7 @@ import { nodeStatusLabel, nodeStatusPillClass, nodeStoppedByCancel } from './nod
 import { runDetailPath, runLinkLabel } from './runPath';
 import { formatOutputValue, jsonText, liveSpanStart, prettyStoredJson } from './format';
 import { NodeDuration } from './NodeDuration';
+import { HelpDisclosure } from '../../lib/HelpDisclosure';
 import { costFigure, costSentence, readCost, tokenSummary, unsettledSentence } from './costReading';
 import type { NodeActivity, NodeToolCall } from './runSummary';
 import { SecureMarkerHint } from './SecureMarkerHint';
@@ -153,6 +154,7 @@ export function NodeActivityPanel({
   fileStem?: string;
 }) {
   const [ownTab, setOwnTab] = useState<DrawerTab | null>(null);
+  const durationNoteId = useId();
   const chosen = onTab === undefined ? ownTab : (tab ?? null);
   const stem = fileStem ?? drawerFileStem([name ?? node.nodeId]);
   const lines = run?.lines;
@@ -240,16 +242,21 @@ export function NodeActivityPanel({
           `filter` and a `call_pipeline` are started and settled by a SINGLE
           event, so nothing ever measured a span for them, and saying so beats
           printing a `0ms` nobody observed. */}
-      <p className="page-hint">
-        {/* A COMMA, not a dash: the value is itself an em-dash whenever no span
-            was measured, and "Duration — — wall clock…" is what a dash gave.
-            Nor a colon after the label (#1594 OR40 S4b). */}
-        Duration{' '}
-        <strong>
-          <NodeDuration node={node} live={live} />
-        </strong>
-        , wall clock for {run === undefined ? 'the latest' : 'this'} attempt, from start to settle,
-        including any wait it parked on and excluding time held between retries.{' '}
+      {/* #1594 OR40 S6h — labels, not prose: what the figure measures is its
+          `?`, and only a sentence about THIS record's state stays on the page.
+          A `div`, because the `?` is a `<details>`, which a `<p>` cannot hold. */}
+      <div className="page-hint node-duration">
+        <span className="help-row">
+          {/* No colon after the label (#1594 OR40 S4b). */}
+          Duration{' '}
+          <strong>
+            <NodeDuration node={node} live={live} />
+          </strong>
+          <HelpDisclosure label="About duration" noteId={durationNoteId}>
+            Wall clock for {run === undefined ? 'the latest' : 'this'} attempt, from start to
+            settle, including any wait it parked on and excluding time held between retries.
+          </HelpDisclosure>
+        </span>
         {node.startedAtMs === undefined &&
           (node.copiedFromRunId !== undefined
             ? /* #918 — a copied node hits the `attempts === 0` arm exactly, and
@@ -312,7 +319,7 @@ export function NodeActivityPanel({
           node.endedAtMs !== undefined &&
           node.endedAtMs < node.startedAtMs &&
           'The recorded end precedes the start, so the log’s clock is inconsistent and no span can be stated.'}
-      </p>
+      </div>
 
       {/* One activity run is already one item's record, so the fold's
           most-recent-wins caveat does not apply to it. */}
@@ -882,6 +889,7 @@ function InputSection({
   instanceId: string | undefined;
   stem: string;
 }) {
+  const paramsNoteId = useId();
   return (
     <Section heading="Input" help={FORM_SECTION_HINTS.run.input}>
       {instanceId !== undefined && (
@@ -899,10 +907,13 @@ function InputSection({
       )}
       {params !== undefined && (
         <>
-          <h4>Parameters</h4>
-          <p className="page-hint">
-            The connection and dataset parameters this dispatch applied over their stored settings.
-          </p>
+          <div className="help-row">
+            <h4>Parameters</h4>
+            <HelpDisclosure label="About parameters" noteId={paramsNoteId}>
+              The connection and dataset parameters this dispatch applied over their stored
+              settings.
+            </HelpDisclosure>
+          </div>
           <RecordedText
             record={params}
             id={INPUT_PARAMS_ID}
