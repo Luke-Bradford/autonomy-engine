@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { documentTheme, fluentRootReady, resolvedPaletteColor, themeSwitch } from './support/theme';
+import { DENSITIES, expectAppearance, preferAppearance } from './support/appearance';
+import { offRampText } from './support/typeRamp';
 
 /**
  * U15 slice 2 (#1094) — `#/settings`.
@@ -132,3 +134,60 @@ test('U15 — the Settings theme switch and the rail’s are one control', async
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * #1594 OR40 S6 — Settings on the design system, in both densities: every
+ * piece of its text on the type ramp (the facts list and the key path
+ * included, with a `?` note open as well as closed), each section the one
+ * `Section` (a named region with its `?`), and no paragraph of prose under the
+ * title. The harness is in the generated state (see the first spec), so the
+ * key file row and the advisory are both on screen to be measured.
+ */
+for (const density of DENSITIES) {
+  test(`#1594 OR40 S6 — Settings' text is on the type ramp, with sections and no prose (${density})`, async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await preferAppearance(page, 'light', density);
+    await page.goto('/#/settings');
+    await fluentRootReady(page);
+    await expectAppearance(page, 'light', density);
+    const secrets = page.getByRole('region', { name: 'Secret encryption' });
+    await expect(secrets.getByText('Key file', { exact: true })).toBeVisible();
+    await expect(secrets.getByText(/permanently undecryptable/i)).toBeVisible();
+
+    expect(await offRampText(page, density)).toEqual([]);
+    await secrets.getByText('?', { exact: true }).click();
+    await expect(secrets.getByRole('note')).toBeVisible();
+    expect(await offRampText(page, density)).toEqual([]);
+
+    const shape = await page.evaluate(() => ({
+      prose: document.querySelectorAll('.content .page-hint').length,
+      sections: [...document.querySelectorAll('.content section.section')].map(
+        (el) => el.querySelector('.section__title')?.textContent,
+      ),
+    }));
+    expect(shape).toEqual({ prose: 0, sections: ['Appearance', 'Secret encryption'] });
+
+    /* Measured: the facts list sits 8px under its heading row, as `Section`
+       documents (`.run-meta`'s own margin would make it 24px), and both
+       pickers are the one control height. */
+    const fit = await secrets.evaluate((region) => {
+      const head = region.querySelector('.section__head')!.getBoundingClientRect();
+      const facts = region.querySelector('dl')!.getBoundingClientRect();
+      return {
+        factsGap: Math.round(facts.top - head.bottom),
+        selects: [...document.querySelectorAll('.content select')].map((el) =>
+          Math.round(el.getBoundingClientRect().height),
+        ),
+      };
+    });
+    expect(fit.factsGap).toBe(8);
+    // The published heights, not read from the token: a token that drifts
+    // fails here instead of moving the check with it.
+    const controlH = { compact: 28, comfortable: 32 }[density];
+    expect(fit.selects).toEqual([controlH, controlH]);
+
+    await expectQuiet(page, problems);
+  });
+}

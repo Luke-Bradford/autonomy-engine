@@ -70,7 +70,10 @@ describe('SettingsPage — secret encryption', () => {
     getSettingsMock.mockRejectedValue(new Error('offline'));
     render(<SettingsPage />);
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('offline');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('offline');
+    // Inside its section, so the failure is read as the key's, not the page's.
+    expect(screen.getByRole('region', { name: 'Secret encryption' })).toContainElement(alert);
     expect(screen.queryByText('Master key')).not.toBeInTheDocument();
   });
 });
@@ -133,5 +136,28 @@ describe('SettingsPage — display time zone (#1484)', () => {
     uiStore.getState().setDisplayTimeZone('Etc/GMT+5');
     render(<SettingsPage />);
     expect(screen.getByLabelText<HTMLSelectElement>('Display time zone').value).toBe('Etc/GMT+5');
+  });
+});
+
+/*
+ * #1594 OR40 S6 — Settings on the design system: labels, not prose. Each
+ * section is the one `Section`, a named region whose `?` says what it holds,
+ * and no paragraph sits under the page title.
+ */
+describe('SettingsPage — design system', () => {
+  it('has no prose under the title, and each section is a region described by its ?', async () => {
+    getSettingsMock.mockResolvedValue(settings('env', null));
+    const { container } = render(<SettingsPage />);
+    await screen.findByText(/AUTONOMY_MASTER_KEY environment variable/);
+
+    expect(container.querySelector('.page-hint')).toBeNull();
+    for (const [name, about] of [
+      ['Appearance', /theme, density and time zone/i],
+      ['Secret encryption', /master key/i],
+    ] as const) {
+      const region = screen.getByRole('region', { name });
+      expect(region).toHaveClass('section');
+      expect(region).toHaveAccessibleDescription(about);
+    }
   });
 });

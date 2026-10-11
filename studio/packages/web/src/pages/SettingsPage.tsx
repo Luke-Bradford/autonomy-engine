@@ -7,6 +7,8 @@ import { LabelledControl } from '../lib/LabelledControl';
 import { DENSITIES, uiStore, type Density, type UiStore } from '../stores/uiStore';
 import { ThemeToggle } from '../theme/ThemeToggle';
 import { PageHeader } from '../lib/PageHeader';
+import { Section } from '../lib/Section';
+import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 
 /**
  * How the key got here, in a sentence — one per member of the shared union, as
@@ -154,28 +156,38 @@ export function SettingsPage() {
   return (
     <>
       <PageHeader title="Settings" />
-      <p className="page-hint">How this server is configured, and how it looks.</p>
 
-      {/* #1594 OR40 S3c — a form: the pickers are label-left rows, and the
-          theme switch lines up with their controls. */}
-      <section aria-labelledby="settings-appearance" className="home-section field-form">
-        <h2 id="settings-appearance">Appearance</h2>
-        <div className="settings-row">
-          <ThemeToggle />
-          {/* `aria-hidden`, because the switch's own `aria-label` is already
-              this exact string — the rail shows it as a tooltip, and a page
-              with room for it shows it as text. Left readable by AT, a screen
-              reader would announce "Dark mode, switch" and then "Dark mode"
-              again. */}
-          <span aria-hidden="true">Dark mode</span>
+      {/* #1594 OR40 S6 — the page's sections are the one `Section`, a named
+          region whose `?` says what it holds; no prose under the title.
+          Appearance is a form (#1594 OR40 S3c): the pickers are label-left
+          rows, and the theme switch lines up with their controls. */}
+      <Section
+        level={2}
+        landmark
+        heading="Appearance"
+        help={FORM_SECTION_HINTS.settings.appearance}
+      >
+        <div className="field-form">
+          <div className="settings-row">
+            <ThemeToggle />
+            {/* `aria-hidden`, because the switch's own `aria-label` is already
+                this exact string — the rail shows it as a tooltip, and a page
+                with room for it shows it as text. Left readable by AT, a screen
+                reader would announce "Dark mode, switch" and then "Dark mode"
+                again. */}
+            <span aria-hidden="true">Dark mode</span>
+          </div>
+          <DensityPicker />
+          <DisplayTimeZonePicker />
         </div>
-        <DensityPicker />
-        <DisplayTimeZonePicker />
-      </section>
+      </Section>
 
-      <section aria-labelledby="settings-secrets" className="home-section">
-        <h2 id="settings-secrets">Secret encryption</h2>
-
+      <Section
+        level={2}
+        landmark
+        heading="Secret encryption"
+        help={FORM_SECTION_HINTS.settings.secretEncryption}
+      >
         {error !== null && (
           <p role="alert" className="error">
             {error.message}
@@ -220,7 +232,7 @@ export function SettingsPage() {
             )}
           </>
         )}
-      </section>
+      </Section>
     </>
   );
 }

@@ -339,19 +339,6 @@ body {
   gap: var(--space-4);
 }
 
-/* A labelled section of Settings (#1094; it was Home's until #1594 OR40 S6
-   moved Home onto `Section`, and Settings follows in its own S6 slice). Colours
-   come from the theme custom properties only — `palette.test.ts` asserts there
-   are no colour literals outside the two palette blocks. */
-.home-section {
-  margin-top: var(--space-5);
-}
-
-.home-section h2 {
-  margin: 0 0 var(--space-2);
-  font: var(--type-section);
-}
-
 /* --- Secondary pane + splitter + command bar (U3) ------------------------- */
 
 /* #1594 OR40 S5b — the pane's `nav` holds its body AND its resize separator, so
@@ -1581,6 +1568,13 @@ td button + button {
    `:where()`, so it outranks that element rule. */
 .section__body > table {
   margin-top: 0;
+}
+
+/* #1594 OR40 S6 — nor a list of facts (Settings' master key): `.run-meta`'s
+   own margin spaces it in a run page's flow, and here it would stack on the
+   gap too. */
+.section__body > .run-meta {
+  margin: 0;
 }
 
 .section__body input,
@@ -3164,8 +3158,9 @@ button.danger {
   container: field-form / inline-size;
 }
 
-/* A page's form (Settings' appearance, the import panel): rows 8px apart, its
-   heading's own margin given back to that gap. */
+/* A page's form (Settings' appearance, the import panel): rows 8px apart. A
+   heading inside it (the import panel's) gives its own margin back to that
+   gap; Settings' heading is its `Section`'s, outside the form. */
 .field-form {
   display: flex;
   flex-direction: column;
@@ -4866,16 +4861,18 @@ button.danger {
   }
 }
 
+/* #1594 OR40 S6 — a list of facts (a run's, the Settings master key's): the
+   label in the caption type, 4px between rows and 16px to the value. */
 .run-meta {
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: 0.35rem 1rem;
-  margin: 1rem 0;
+  gap: var(--space-1) var(--space-4);
+  margin: var(--space-4) 0;
 }
 
 .run-meta dt {
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: var(--type-caption-size);
 }
 
 .run-meta dd {
