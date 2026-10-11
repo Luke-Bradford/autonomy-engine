@@ -1301,11 +1301,11 @@ td button + button {
 .connection-form,
 .dataset-form,
 .trigger-form {
-  margin-top: 1.5rem;
-  padding: 1rem 1.25rem;
+  margin-top: var(--space-6);
+  padding: var(--space-4);
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-surface);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -1347,9 +1347,12 @@ td button + button {
    collapse its stacked children). The trigger form's builders (#439 U14b,
    #854, #981), a bound end's parameter overrides and the allowlist they are
    drawn from (#1304, #1305), and an edge's outcome and a call's target mode
-   (#425) — #1594 OR40 S6l folded their three copies of this skin into one. A
-   new group adds itself to these selector lists. */
-.trigger-form :is(.recurrence-editor, .window-editor, .run-windows, .binding-kind),
+   (#425) — #1594 OR40 S6l folded their three copies of this skin into one, and
+   S6q a run window's (#1090), so a multi-window restriction reads as a list of
+   windows rather than a wall of time fields. A new group adds itself to these
+   selector lists. */
+.trigger-form
+  :is(.recurrence-editor, .window-editor, .run-windows, .run-window-row, .binding-kind),
 .param-overrides,
 .overridable-keys,
 .edge-outcomes,
@@ -1374,22 +1377,11 @@ td button + button {
   color: var(--muted);
 }
 
-/* #1090 — one run window's controls, kept visually grouped so a multi-window
-   restriction reads as a list of windows rather than a wall of time fields. */
-.trigger-form .run-window-row {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.6rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-
 /* The seven day checkboxes wrap as one row rather than stacking seven deep. */
 .trigger-form .recurrence-days {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem 1rem;
+  gap: var(--space-1) var(--space-4);
   margin: 0;
   padding: 0;
   border: 0;
@@ -1425,8 +1417,8 @@ td button + button {
    focus ring of a button at the list's edge in view. */
 .drawer-layout-open > :first-child {
   overflow-x: auto;
-  padding: 4px;
-  margin: -4px;
+  padding: var(--space-1);
+  margin: calc(-1 * var(--space-1));
 }
 
 /* Narrow screens stack the drawer under the list. */
@@ -1439,15 +1431,17 @@ td button + button {
 .form-drawer {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-surface);
 }
 
+/* #1594 OR40 S6q — the page header's row: the title and its Close, 16px in. */
 .form-drawer-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.75rem 1.25rem;
+  gap: var(--space-2);
+  min-height: var(--header-h);
+  padding: 0 var(--space-4);
   border-bottom: 1px solid var(--border);
 }
 
@@ -1468,7 +1462,7 @@ td button + button {
 }
 
 .form-drawer-body {
-  padding: 1rem 1.25rem;
+  padding: var(--space-4);
   display: flex;
   flex-direction: column;
   /* 8px, and a section takes 8px more above it (`.section`). */
@@ -1484,9 +1478,9 @@ td button + button {
   position: sticky;
   bottom: 0;
   z-index: 1;
-  padding: 0.75rem 1.25rem;
+  padding: var(--space-2) var(--space-4);
   border-top: 1px solid var(--border);
-  border-radius: 0 0 8px 8px;
+  border-radius: 0 0 var(--radius-surface) var(--radius-surface);
   background: var(--panel);
 }
 
@@ -1502,15 +1496,15 @@ td button + button {
    builders put list items on single-newline lines inside one paragraph
    ("Read by the latest version of:\n  • Nightly (v3)"), so newlines are kept. */
 .confirm-dialog-paragraph {
-  margin: 0 0 0.5rem;
+  margin: 0 0 var(--space-2);
   white-space: pre-line;
 }
 
 .confirm-dialog-typed {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  margin-top: 0.75rem;
+  gap: var(--space-1);
+  margin-top: var(--space-3);
 }
 
 /* #1466 — a name that is only whitespace still shows as a gap to type; a
@@ -2670,16 +2664,16 @@ button.danger {
 .form-errors {
   max-height: 9rem;
   overflow-y: auto;
-  margin: 0 0 0.5rem;
+  margin: 0 0 var(--space-2);
 }
 
 .form-errors p {
-  margin: 0 0 0.25rem;
+  margin: 0 0 var(--space-1);
 }
 
 .form-errors ul {
   margin: 0;
-  padding-left: 1.25rem;
+  padding-left: var(--space-4);
 }
 
 /* A summary line is a button (it moves focus, it goes nowhere) drawn as a link. */
