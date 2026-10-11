@@ -71,6 +71,18 @@ async function expectDrawerChrome(page: Page, d: Density): Promise<void> {
     ...pads(8, 16),
     'border-bottom-right-radius': '6px',
   });
+  // A resource form has no box of its own: the drawer is its panel.
+  const form = await styles(
+    page,
+    ['.form-drawer > form'],
+    ['padding-top', 'margin-top', 'border-top-width', 'max-width'],
+  );
+  expect(form['.form-drawer > form'] ?? {}).toMatchObject({
+    'padding-top': '0px',
+    'margin-top': '0px',
+    'border-top-width': '0px',
+    'max-width': 'none',
+  });
   // The header is the page header's row, with its Close button centred on the title.
   const row = await headerRow(page);
   expect(row.height, 'drawer header: one 40px row').toBe(40);

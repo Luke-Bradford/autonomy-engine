@@ -27,6 +27,8 @@ required marks and display names; its layout is its own, below.
 - The chrome (header, Escape, focus in and out) is `DrawerShell`. `FormDrawer` puts a `<form>` in
   it. A drawer whose act is a pick rather than a save, such as the kind gallery below, puts its body
   and footer in the shell directly, with no form and no unsaved-changes guard.
+- Its measurements (header row, body and footer padding) are in "Drawers and the confirmation
+  dialog" below.
 
 ### The run page's detail drawer
 
@@ -664,6 +666,26 @@ run's indent. The small print is held by the literal ratchet only.
 `e2e/shell-design.spec.ts` measures all of these at 1440x900, compact light and comfortable dark,
 with an update mocked in, on a page short enough that a banner on the wrong track would grow.
 
+## Drawers and the confirmation dialog (#1594 OR40 S6q)
+
+- **Drawer chrome** (`DrawerShell`, so every side drawer and the kind gallery): `--radius-surface`.
+  The header is the page header's `--header-h` row, 16px in, with its Close centred on the title.
+  The body is 16px in on every side; the sticky footer is 8px by 16px.
+- **A resource form has no box of its own.** `.connection-form`, `.dataset-form` and
+  `.trigger-form` are always a `FormDrawer`'s `<form>`, so the drawer is the panel. Their old panel
+  skin, and the reset that cancelled it inside the drawer, are gone.
+- **A run window** (`.run-window-row`) is the one bordered group, like the trigger form's other
+  builders. Its day checkboxes wrap 4px by 16px apart.
+- **The footer's alert** (`.form-errors`): 8px above the actions, 4px under its message line, its
+  list 16px in.
+- **The confirmation dialog**: its message and typed-name prompt are body type (Fluent's
+  `DialogContent` sets 14px, off the compact ramp). Paragraphs are 8px apart, the typed-name field
+  12px under them with its label 4px above it.
+
+`e2e/drawers-design.spec.ts` measures the trigger form (with a run window and a refused Create),
+the Trigger now drawer and a typed-name confirmation at 1440x900, compact light and comfortable
+dark.
+
 ## Tables (#1594 OR40 S3d)
 
 Every table in the app, whether a list, a run's facts or a form's rows, takes one style from the
@@ -939,23 +961,3 @@ strays: "node" in version history's counts, and "param" in validation and server
 | Dataset | A named shape of data at a connection (table, query, file) | |
 | Connection | Where and how studio reaches a system, with its secrets | |
 | Trigger | What starts runs: manual, schedule, tumbling window, webhook, event | |
-
-## Drawers and the confirmation dialog (#1594 OR40 S6q)
-
-- **Drawer chrome** (`DrawerShell`, so every side drawer and the kind gallery): `--radius-surface`.
-  The header is the page header's `--header-h` row, 16px in, with its Close centred on the title.
-  The body is 16px in on every side; the sticky footer is 8px by 16px.
-- **A resource form has no box of its own.** `.connection-form`, `.dataset-form` and
-  `.trigger-form` are always a `FormDrawer`'s `<form>`, so the drawer is the panel. Their old panel
-  skin, and the reset that cancelled it inside the drawer, are gone.
-- **A run window** (`.run-window-row`) is the one bordered group, like the trigger form's other
-  builders. Its day checkboxes wrap 4px by 16px apart.
-- **The footer's alert** (`.form-errors`): 8px above the actions, 4px under its message line, its
-  list 16px in.
-- **The confirmation dialog**: its message and typed-name prompt are body type (Fluent's
-  `DialogContent` sets 14px, off the compact ramp). Paragraphs are 8px apart, the typed-name field
-  12px under them with its label 4px above it.
-
-`e2e/drawers-design.spec.ts` measures the trigger form (with a run window and a refused Create),
-the Trigger now drawer and a typed-name confirmation at 1440x900, compact light and comfortable
-dark.
