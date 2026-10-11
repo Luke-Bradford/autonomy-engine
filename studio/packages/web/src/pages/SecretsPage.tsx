@@ -35,7 +35,8 @@ import { useBusyAction } from '../hooks/useBusyAction';
 import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 import { When } from '../lib/When';
-import { PageHeader, pageHelpId } from '../lib/PageHeader';
+import { PageHeader } from '../lib/PageHeader';
+import { pageHelpId } from '../lib/pageHelpId';
 import { LabelledControl } from '../lib/LabelledControl';
 import { OneLine } from '../lib/OneLine';
 

@@ -1,14 +1,6 @@
 import { Children, type ReactNode, type Ref } from 'react';
 import { AboutHelp } from './HelpDisclosure';
-
-/**
- * #1594 OR40 S6d — the id of a page's `?` note, from its heading's id, so the
- * page's own `<section aria-labelledby>` can take it as `aria-describedby`, the
- * way a `Section` is described by its note.
- */
-export function pageHelpId(headingId: string): string {
-  return `${headingId}-about`;
-}
+import { pageHelpId } from './pageHelpId';
 
 /**
  * #1594 OR40 S3 — the ONE page header: the page's title on the left and its

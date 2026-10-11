@@ -31,7 +31,8 @@ import {
   formForEdit,
   savePayloadSignature,
 } from './connections/connectionFormState';
-import { PageHeader, pageHelpId } from '../lib/PageHeader';
+import { PageHeader } from '../lib/PageHeader';
+import { pageHelpId } from '../lib/pageHelpId';
 import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 import { OneLine } from '../lib/OneLine';
 /**

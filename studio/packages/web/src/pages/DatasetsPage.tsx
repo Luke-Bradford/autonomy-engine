@@ -70,7 +70,8 @@ import { DATASET_KIND_ICONS } from '../lib/kindIcons';
 import { useConfirm } from '../lib/confirm/useConfirm';
 import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
-import { PageHeader, pageHelpId } from '../lib/PageHeader';
+import { PageHeader } from '../lib/PageHeader';
+import { pageHelpId } from '../lib/pageHelpId';
 import { OneLine } from '../lib/OneLine';
 
 const KINDS = DATASET_KINDS;
