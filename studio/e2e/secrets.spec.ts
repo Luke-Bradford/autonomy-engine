@@ -39,8 +39,11 @@ test.describe('#1060 the secrets vault has a front end', () => {
     await fluentRootReady(page);
 
     // The page has to say how a node references what it creates — a vault
-    // whose contents cannot be addressed is not a usable core path.
-    await expect(page.getByText('{"$secret": "<name>"}')).toBeVisible();
+    // whose contents cannot be addressed is not a usable core path. Said by
+    // the title's `?` (#1594 OR40 S6d), labels not prose.
+    await page.getByRole('region', { name: 'Secrets' }).getByTitle('About Secrets').click();
+    await expect(page.getByText('{"$secret": "<name>"}', { exact: false })).toBeVisible();
+    await page.keyboard.press('Escape');
 
     await page.getByRole('button', { name: 'New secret' }).click();
     await page.getByLabel('Name').fill(NAME);

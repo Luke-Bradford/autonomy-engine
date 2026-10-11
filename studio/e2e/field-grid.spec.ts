@@ -96,7 +96,10 @@ for (const density of ['compact', 'comfortable'] as const) {
     // edited form would hold a navigation away at its prompt.)
     await page.goto('/#/manage/connections');
     await fluentRootReady(page);
-    const [file] = await rows(page.locator('section.field-form'), ['Export file']);
+    const [file] = await rows(
+      page.getByRole('region', { name: 'Import' }).locator('.field-form'),
+      ['Export file'],
+    );
     expectLabelLeft('Connections import', file!);
 
     // A secret drawer: the value row (input and Show in the control column).
