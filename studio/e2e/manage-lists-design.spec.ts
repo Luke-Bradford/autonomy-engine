@@ -61,12 +61,16 @@ function measure(page: Page) {
     const imports = [...content.querySelectorAll('section.section')]
       .filter((s) => s.querySelector('.section__title')?.textContent === 'Import')
       .map((s) => {
-        const row = s.querySelector('.field-form > .labelled-control')!;
-        const label = row.firstElementChild!.getBoundingClientRect();
-        const file = row.querySelector('input[type=file]')!.getBoundingClientRect();
+        // Each row's gap, label (or its head with a `?`) to control: the file
+        // field, and on Datasets the store picker before it.
+        const gaps = [...s.querySelectorAll('.field-form > .labelled-control')].map((row) => {
+          const label = row.firstElementChild!.getBoundingClientRect();
+          const control = row.querySelector('input, select')!.getBoundingClientRect();
+          return Math.round(control.left - label.right);
+        });
         return {
           level: s.querySelector('.section__title')!.tagName,
-          labelGap: Math.round(file.left - label.right),
+          labelGaps: [...new Set(gaps)],
         };
       });
     const root = document.scrollingElement!;
@@ -124,7 +128,7 @@ for (const { density, theme } of RUNS) {
         createH: CONTROL_H[density as Density],
         note: null,
         sideways: 0,
-        imports: p.imports ? [{ level: 'H2', labelGap: 12 }] : [],
+        imports: p.imports ? [{ level: 'H2', labelGaps: [12] }] : [],
       });
       expectInlineRow(`${p.title} header`, closed.row);
       expect(await offRampText(page, density as Density), `${p.title}, ? closed`).toEqual([]);
