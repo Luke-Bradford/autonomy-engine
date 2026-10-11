@@ -36,6 +36,9 @@ export const ICON_SIZE: Record<(typeof DENSITIES)[number], number> = {
   comfortable: 20,
 };
 
+/** The published `--icon-size-nav`, a hub rail glyph: one size in both densities (#1594 OR40 S6p). */
+export const NAV_ICON_SIZE = 20;
+
 /**
  * The viewer's stored preferences, as the shipped app reads them. Hard-coded
  * rather than imported from `uiStore.ts`, for the reason `theme.ts` gives for
