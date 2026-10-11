@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import type { RunState } from '@autonomy-studio/shared';
 import { InlineJsonValue } from './CappedValue';
+import { Section } from '../../lib/Section';
+import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 
 /**
  * #844 GL5 — the workspace globals this run read, as the ENGINE holds them.
@@ -34,11 +36,7 @@ export function RunGlobals({
   const names = Object.keys(overlay.state.globals).sort((a, b) => a.localeCompare(b, 'en'));
   if (names.length === 0) return empty;
   return (
-    <section aria-labelledby="run-globals-heading">
-      <h2 id="run-globals-heading">Global parameters</h2>
-      <p className="page-hint">
-        The values this run read when it started. A later edit to a global does not change them.
-      </p>
+    <Section heading="Global parameters" help={FORM_SECTION_HINTS.run.globals} level={2} landmark>
       <table>
         <thead>
           <tr>
@@ -59,6 +57,6 @@ export function RunGlobals({
           ))}
         </tbody>
       </table>
-    </section>
+    </Section>
   );
 }

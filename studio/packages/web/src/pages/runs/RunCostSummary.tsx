@@ -10,6 +10,8 @@ import {
   unsettledSentence,
 } from './costReading';
 import { runDetailPath } from './runPath';
+import { Section } from '../../lib/Section';
+import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 
 /**
  * U27 slice 1 (#930) — what the WHOLE RUN spent.
@@ -88,8 +90,7 @@ export function RunCostSummary({
   const children = childSpend(nodes);
 
   return (
-    <section aria-labelledby="run-cost-heading">
-      <h2 id="run-cost-heading">Cost &amp; usage</h2>
+    <Section heading="Cost & usage" help={FORM_SECTION_HINTS.run.runCost} level={2} landmark>
       {replayComplete ? (
         <>
           <SettledFigure usage={usage} settled={settled} />
@@ -135,7 +136,7 @@ export function RunCostSummary({
           and on any sub-pipelines it called.
         </p>
       )}
-    </section>
+    </Section>
   );
 }
 

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { RunGlobals } from './RunGlobals';
@@ -29,11 +30,8 @@ describe('RunGlobals (#844 GL5)', () => {
       ['flags', '[1,2]'],
       ['region', '"eu"'],
     ]);
-    expect(
-      within(region()).getByText(
-        'The values this run read when it started. A later edit to a global does not change them.',
-      ),
-    ).toBeTruthy();
+    // #1594 OR40 S6g — what the values are is the section's `?`, not prose.
+    expect(region()).toHaveAccessibleDescription(FORM_SECTION_HINTS.run.globals);
   });
 
   it('quotes a string, so an empty one is not a blank cell', () => {

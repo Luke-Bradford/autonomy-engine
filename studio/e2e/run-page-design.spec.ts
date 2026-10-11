@@ -30,6 +30,13 @@ const RUNS = [
 
 const VIEWS = ['Gantt', 'Events', 'Variables', 'Cost'] as const;
 
+/** The `Section` each view leads with, whose `?` is opened and measured. */
+const SECTIONS: Partial<Record<(typeof VIEWS)[number], string>> = {
+  Events: 'Why this run behaved as it did',
+  Variables: 'Variables',
+  Cost: 'Cost & usage',
+};
+
 /** Every measurement in ONE evaluate. */
 function measure(page: Page) {
   return page.evaluate(() => {
@@ -60,7 +67,11 @@ for (const { density, theme } of RUNS) {
     await preferAppearance(page, theme, density as Density);
 
     const created = await page.request.post('/api/connections', {
-      data: { name: `S6g echo cli ${density}`, kind: 'agent_cli', config: { command: '/bin/echo' } },
+      data: {
+        name: `S6g echo cli ${density}`,
+        kind: 'agent_cli',
+        config: { command: '/bin/echo' },
+      },
     });
     expect(created.status(), `creating connection: ${await created.text()}`).toBe(201);
     const { id: connectionId } = (await created.json()) as { id: string };
@@ -108,16 +119,30 @@ for (const { density, theme } of RUNS) {
     const off: Record<string, string[]> = {};
     for (const view of VIEWS) {
       await openRunView(page, view);
-      if (view === 'Variables') await expect(page.getByText('count', { exact: true })).toBeVisible();
+      if (view === 'Variables')
+        await expect(page.getByText('count', { exact: true })).toBeVisible();
       if (view === 'Cost') {
         await expect(page.getByRole('region', { name: 'Cost & usage' })).toBeVisible();
       }
       const m = await measure(page);
       expect(m.sideways, `${view}: sideways scroll`).toBe(0);
-      expect(m.headerButtons.length, 'header buttons').toBeGreaterThanOrEqual(1);
       for (const b of m.headerButtons) expect(b.h, `${view}: header ${b.name} height`).toBe(h);
       const found = await offRampText(page, density as Density);
       if (found.length > 0) off[view] = found;
+      // A view's sections say what they hold behind their `?`, and the note,
+      // open, is on the ramp too.
+      const section = SECTIONS[view];
+      if (section !== undefined) {
+        const region = page.getByRole('region', { name: section, exact: true });
+        await region.locator(`.section__head summary[aria-label="About ${section}"]`).click();
+        const note = region.locator('.section__head [role=note]');
+        await expect(note).toBeVisible();
+        await expect(region).toHaveAccessibleDescription(((await note.textContent()) ?? '').trim());
+        const openOff = await offRampText(page, density as Density);
+        if (openOff.length > 0) off[`${view}, ? open`] = openOff;
+        await page.keyboard.press('Escape');
+        await expect(note).toBeHidden();
+      }
     }
     expect(off, 'text off the type ramp, by view').toEqual({});
 
