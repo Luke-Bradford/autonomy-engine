@@ -1887,7 +1887,9 @@ button.danger {
 .activity-toolbox h2,
 .property-panel h2 {
   margin: 0;
-  font-size: 0.95rem;
+  /* #1594 OR40 S6h — the section size: a panel title is the run drawer's h2,
+     above its `Section`s' h3s, which are the same size. */
+  font-size: var(--type-section-size);
 }
 
 /* #1477 OR29 — a node's header row and its tab strip, pinned together while the
@@ -4633,18 +4635,20 @@ button.danger {
    `display: block` puts it on its own line under the name: a minted id is
    `n_7c44a16f-98f1-4958-…`, too long to sit inline beside it.
 
-   `em`, not `rem`: what it has to be is SMALLER THAN WHATEVER NAMES IT, here the
-   activity panel's <h2>. */
+   #1594 OR40 S6h — the caption on the ramp, which is smaller than every size
+   that names it (the activity panel's <h2> is the section or body size), and
+   regular, so the name beside it is the strong one. */
 .node-id {
   display: block;
-  font-size: 0.8em;
+  font-size: var(--type-caption-size);
+  font-weight: var(--weight-regular);
   color: var(--muted);
 }
 
 /* The activity panel's gap from what sits above it in the editor's run drawer;
    the run page's drawer resets it below. */
 .node-detail-panel {
-  margin-top: 0.75rem;
+  margin-top: var(--space-3);
 }
 
 /* A `JSON.stringify` dump has no spaces to break on, so it needs an explicit
@@ -4668,7 +4672,7 @@ button.danger {
 .capped-value-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: var(--space-2);
 }
 
 /* #1484 M2 — an error verbatim: its own line breaks, wrapped, and scrolled
@@ -4679,13 +4683,13 @@ button.danger {
   overflow-wrap: anywhere;
   max-height: 14rem;
   overflow-y: auto;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
 }
 
 /* #1484 M2 — the Logs tab's lines, bounded like the tool calls, but on a
    wrapper, so the table stays a table to assistive tech. */
 .node-logs {
-  font-size: 0.8rem;
+  font-size: var(--type-caption-size);
   max-height: 20rem;
   overflow-y: auto;
 }
@@ -4699,11 +4703,11 @@ button.danger {
   overflow-wrap: anywhere;
   max-height: 14rem;
   overflow-y: auto;
-  margin: 0.25rem 0;
+  margin: var(--space-1) 0;
 }
 
 .node-capture-field h4 {
-  margin: 0.5rem 0 0;
+  margin: var(--space-2) 0 0;
 }
 
 /* #866 — the per-node tool-call list. Dense by design: it is a log, and an
