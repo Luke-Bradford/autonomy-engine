@@ -208,7 +208,9 @@ describe('#1016 RunTimeline grouped by annotation', () => {
   it('says in its ? that a multi-tag run appears in each lane, and the axis note is the window alone', () => {
     renderTimeline([run({ id: 'r1', annotations: ['a'] })], 'annotation');
     const timeline = screen.getByRole('region', { name: 'Timeline' });
-    expect(within(timeline).getByText(/a run with several appears in each lane/)).toBeInTheDocument();
+    expect(
+      within(timeline).getByText(/a run with several appears in each lane/),
+    ).toBeInTheDocument();
     expect(document.querySelector('.timeline-axis-note')?.textContent).not.toMatch(/lane/);
   });
 
