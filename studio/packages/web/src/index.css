@@ -1299,7 +1299,8 @@ td button + button {
 .trigger-form label,
 .connection-form .labelled-control:not(.config-field),
 .dataset-form .labelled-control:not(.config-field),
-.trigger-form .labelled-control:not(.config-field) {
+.trigger-form .labelled-control:not(.config-field),
+.run-now-panel .labelled-control:not(.config-field) {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -1311,7 +1312,8 @@ td button + button {
    of its parts (the rule above would stack the `*` under the word). */
 .connection-form .labelled-control > label,
 .dataset-form .labelled-control > label,
-.trigger-form .labelled-control > label {
+.trigger-form .labelled-control > label,
+.run-now-panel .labelled-control > label {
   display: block;
 }
 
@@ -1373,7 +1375,7 @@ td button + button {
 
 .form-actions {
   display: flex;
-  gap: 0.6rem;
+  gap: var(--space-2);
 }
 
 /* #1396 — the shared form pattern (studio/docs/ui-patterns.md). */
@@ -1742,7 +1744,10 @@ button.danger {
   color: var(--error);
 }
 
-.error {
+/* `.form-error` is the run panels' and drawers' refusal line (#1594 OR40 S6j:
+   it had no rule at all, so it drew in body colour). */
+.error,
+.form-error {
   color: var(--error);
 }
 
@@ -1769,12 +1774,12 @@ button.danger {
 .notice-conflict {
   color: var(--text);
   border: 1px solid var(--warning);
-  border-radius: 6px;
-  padding: 0.75rem 1rem;
+  border-radius: var(--radius-surface);
+  padding: var(--space-3) var(--space-4);
 }
 
 .notice-conflict p {
-  margin: 0 0 0.5rem;
+  margin: 0 0 var(--space-2);
 }
 
 /* --- Pipeline authoring canvas (P5c) ------------------------------------- */
@@ -2314,7 +2319,7 @@ button.danger {
 .json-editor {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: var(--space-1);
   min-width: 0;
 }
 
@@ -2324,8 +2329,9 @@ button.danger {
   width: 100%;
   max-width: 100%;
   font-family: var(--font-mono);
-  font-size: 0.85rem;
-  line-height: 1.45;
+  /* #1594 OR40 S6j — the ramp's body step in the mono stack, not 13.6px. */
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line);
   tab-size: 2;
   white-space: pre;
   overflow: auto;
@@ -2337,14 +2343,13 @@ button.danger {
 .json-editor-tools {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  min-height: 1.9rem;
+  gap: var(--space-2);
+  min-height: var(--control-h);
 }
 
+/* A `subtle` button from the control layer; only its place in the row here. */
 .json-editor-format {
   flex: none;
-  font-size: 0.8rem;
-  padding: 0.2rem 0.6rem;
 }
 
 .json-editor-problem {
@@ -2354,7 +2359,7 @@ button.danger {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--error);
-  font-size: 0.8rem;
+  font-size: var(--type-caption-size);
 }
 
 /* React Flow needs a parent with a resolved height — but DEFINITE is not the
@@ -2636,7 +2641,7 @@ button.danger {
 /* #1393 — Save's dirty mark. Always laid out, shown by `visibility`, so the
    button keeps one width whether or not there is unsaved work. */
 .dirty-dot {
-  margin-left: 0.35em;
+  margin-left: var(--space-1);
   visibility: hidden;
 }
 
@@ -2714,7 +2719,7 @@ button.danger {
 .editor-state-badge {
   display: flex;
   flex: 0 0 auto;
-  gap: 0.35rem;
+  gap: var(--space-1);
   align-items: center;
 }
 
@@ -2791,13 +2796,13 @@ button.danger {
 .editor-status-strip {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: var(--space-3);
   height: 2.25rem;
   /* The minimum holds a standing banner's buttons ("Preview vN" and "Save as
      vN+1 anyway" are about 230px) with a little of its text beside them. */
   flex: 1 1 18rem;
   min-width: 18rem;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
 }
 
 .editor-status-strip__standing {
@@ -2830,7 +2835,7 @@ button.danger {
 .editor-status-strip__transient > .notice,
 .editor-status-strip__list > .notice {
   display: flex;
-  gap: 0.3em;
+  gap: var(--space-1);
 }
 
 .editor-status-strip__text {
@@ -2848,8 +2853,8 @@ button.danger {
 .editor-status-strip__standing > .notice-conflict {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.2rem 0.6rem;
+  gap: var(--space-3);
+  padding: 0 var(--space-2);
 }
 
 .editor-status-strip__standing > .notice-conflict p {
@@ -2868,7 +2873,6 @@ button.danger {
 
 .editor-status-strip__more {
   flex: 0 0 auto;
-  font-size: 0.8rem;
 }
 
 /* #1395 OR4 — the editor's Run form, OVER the canvas like the notice list
@@ -2885,25 +2889,27 @@ button.danger {
 
 .run-now-panel {
   position: absolute;
-  top: calc(100% + 0.4rem);
+  top: calc(100% + var(--space-1));
   right: 0;
   z-index: 20;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--space-2);
   width: min(22rem, 90vw);
   max-height: 60vh;
   overflow-y: auto;
-  padding: 0.75rem;
+  padding: var(--space-3);
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-surface);
   box-shadow: 0 8px 20px var(--shadow);
 }
 
-.run-now-panel h2 {
+/* The heading is the global h2, the section step. No paragraph (its note, a
+   field's hint, the error) brings the browser's 1em margin into the gap. */
+.run-now-panel h2,
+.run-now-panel p {
   margin: 0;
-  font-size: 1rem;
 }
 
 /* The full list OVER the canvas, not in the flow: opening it moves nothing. */
@@ -2915,13 +2921,13 @@ button.danger {
   z-index: 20;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--space-2);
   max-height: 50vh;
   overflow-y: auto;
-  padding: 0.75rem;
+  padding: var(--space-3);
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-surface);
   box-shadow: 0 8px 20px var(--shadow);
 }
 
@@ -4759,8 +4765,8 @@ button.danger {
      line height stays inherited, so no pill grows a row. */
   font-size: var(--type-caption-size);
   border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0.05rem 0.5rem;
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-2);
   white-space: nowrap;
 }
 

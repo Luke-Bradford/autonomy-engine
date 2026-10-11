@@ -90,7 +90,7 @@ export function EditorStatusStrip({
       {hidden > 0 && (
         <button
           type="button"
-          className="editor-status-strip__more"
+          className="subtle editor-status-strip__more"
           aria-expanded={open}
           aria-controls={open ? listId : undefined}
           onClick={() => setOpen((o) => !o)}

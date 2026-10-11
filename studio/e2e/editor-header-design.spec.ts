@@ -133,8 +133,8 @@ async function expectPanel(page: Page, d: Density, label: string): Promise<void>
   );
   expect(margins.length, `${label}: hints`).toBeGreaterThan(0);
   expect(new Set(margins), `${label}: hint margins`).toEqual(new Set(['0px']));
-  for (const { name, h } of await heights(page, `${PANEL} :is(input, textarea, button)`)) {
-    if (name === '' && h > CONTROL_H[d]) continue; // a multi-line JSON box
+  // Single-line controls only: a JSON value is a multi-line box.
+  for (const { name, h } of await heights(page, `${PANEL} :is(input, select, button)`)) {
     expect(h, `${label}: ${name}`).toBe(CONTROL_H[d]);
   }
   expectInlineRow(`${label} actions`, await inlineItems(page, `${PANEL} .form-actions > button`));
@@ -171,7 +171,7 @@ for (const { density, theme } of RUNS) {
     await (await triggerMenuItem(page, /^Trigger now/)).click();
     await expectPanel(page, d, 'Trigger now');
     await page.locator(PANEL).getByLabel('filter').fill('{');
-    await page.locator(PANEL).getByRole('button', { name: /^Trigger now|^Run/ }).click();
+    await page.locator(PANEL).getByRole('button', { name: 'Start run' }).click();
     const error = page.locator(`${PANEL} .form-error`);
     await expect(error).toBeVisible();
     expect(await error.evaluate((el) => getComputedStyle(el).color), 'error colour').toBe(

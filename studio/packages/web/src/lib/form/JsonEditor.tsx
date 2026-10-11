@@ -137,7 +137,7 @@ export function JsonEditor({
         {/* eslint-disable-next-line jsx-a11y/role-supports-aria-props */}
         <button
           type="button"
-          className="json-editor-format"
+          className="subtle json-editor-format"
           aria-description={`Lays out ${label} with two-space indents`}
           disabled={textarea.disabled === true || textarea.readOnly === true}
           onClick={format}
