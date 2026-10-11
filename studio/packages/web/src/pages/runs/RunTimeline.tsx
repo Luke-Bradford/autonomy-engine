@@ -11,6 +11,8 @@ import { versionLabel } from '../../lib/versionLabel';
 import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import type { DisplayTimeZone } from '../../lib/displayTime';
 import { formatTimeOfDay, formatTimestamp } from '../../lib/displayTime';
+import { Section } from '../../lib/Section';
+import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 
 /**
  * U29 (#1015) — the runs list on ONE shared time axis, grouped by pipeline or,
@@ -87,11 +89,11 @@ function GroupByToggle({
   );
 }
 
-/** What the axis note says a lane is — the one sentence that differs by key. */
-const LANE_SENTENCE: Record<RunGroupBy, string> = {
-  pipeline: 'One lane per pipeline',
-  annotation:
-    'One lane per annotation of the version each run bound, so a run carrying several appears in each of their lanes, and runs carrying none share the last lane',
+/** The `?` (#1594 OR40 S6h: labels, not prose): what a lane is, which is what
+ * differs by key, and what an overlap and the figure beside a bar mean. */
+const TIMELINE_HELP: Record<RunGroupBy, string> = {
+  pipeline: FORM_SECTION_HINTS.run.runsTimelineByPipeline,
+  annotation: FORM_SECTION_HINTS.run.runsTimelineByAnnotation,
 };
 
 /** What a bar states about itself, in one phrase, for the title and SR text. */
@@ -114,30 +116,40 @@ export function RunTimeline({
      the wrong elements (or none) — the lane's accessible name silently lost. */
   const idPrefix = useId();
 
+  const toggle = <GroupByToggle groupBy={groupBy} onGroupByChange={onGroupByChange} />;
   if (window === null) {
     return (
-      <section aria-labelledby="run-timeline-heading" className="run-timeline">
-        <h2 id="run-timeline-heading">Timeline</h2>
-        <GroupByToggle groupBy={groupBy} onGroupByChange={onGroupByChange} />
+      <Section
+        heading="Timeline"
+        help={TIMELINE_HELP[groupBy]}
+        level={2}
+        landmark
+        actions={toggle}
+        className="run-timeline"
+      >
         <p>
           Nothing to plot — no run in view has a start this chart can believe. Every one is listed
           below with the reason.
         </p>
         <UnplottableList rows={unplottable} />
-      </section>
+      </Section>
     );
   }
 
   return (
-    <section aria-labelledby="run-timeline-heading" className="run-timeline">
-      <h2 id="run-timeline-heading">Timeline</h2>
-      <GroupByToggle groupBy={groupBy} onGroupByChange={onGroupByChange} />
+    <Section
+      heading="Timeline"
+      help={TIMELINE_HELP[groupBy]}
+      level={2}
+      landmark
+      actions={toggle}
+      className="run-timeline"
+    >
+      {/* The window, as data; what a lane and an overlap mean is the `?`. */}
       <p className="timeline-axis-note">
         {formatTimestamp(window.from, zone)} → {formatTimestamp(window.to, zone)} ·{' '}
         {formatElapsed(Math.max(0, window.to - window.from))} of measured wall clock, as of the last
-        refresh. {LANE_SENTENCE[groupBy]}. All lanes are on the same axis, so two bars that overlap
-        horizontally were running at the same time. A very wide axis floors short bars at a few
-        pixels — the length beside each bar is the measurement.
+        refresh
       </p>
       {groups.map((group, index) => {
         const headingId = `${idPrefix}-lane-${index}`;
@@ -196,7 +208,7 @@ export function RunTimeline({
         );
       })}
       <UnplottableList rows={unplottable} />
-    </section>
+    </Section>
   );
 }
 

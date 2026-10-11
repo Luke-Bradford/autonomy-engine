@@ -1883,6 +1883,13 @@ describe('RunDetailPage — how long a node took (#867)', () => {
     // stop this being read as execution time or as an LLM call's latency.
     // One activity run is one attempt, so it says THIS attempt, not the latest.
     expect(within(panel).getByText(/wall clock for this attempt/i)).toBeInTheDocument();
+    // #1594 OR40 S6h — behind the figure's `?`, not prose on the panel.
+    expect(
+      within(panel)
+        .getByText(/wall clock for this attempt/i)
+        .closest('details')
+        ?.querySelector('summary'),
+    ).toHaveAccessibleName('About Duration');
     expect(within(panel).getByText(/including any wait it parked on/i)).toBeInTheDocument();
     expect(within(panel).getByText(/excluding time held between retries/i)).toBeInTheDocument();
   });

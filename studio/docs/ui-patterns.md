@@ -569,8 +569,10 @@ replaced `FormSection` (a drawer's `fieldset` and `legend`), `DockSection` (the 
 - **Moved in S6:** Home first, then Settings, Git, the Manage lists' Import panel, and the run
   page's Timeline, Variables, Global parameters and Cost & usage (S6g). A static explanation is
   the section's `?`; a line that reports state (a run's "Final values.", an unsettled run's
-  caveat, an empty state) stays as a hint in the body. The cross-run timeline (`RunTimeline`)
-  is still a bare `h2`. A section's own acts (Git's Refresh, Disconnect and each check) go in its `actions`,
+  caveat, an empty state) stays as a hint in the body. S6h moved the Runs page's cross-run
+  Timeline (its lane-key toggle in `actions`) and the run drawer: a figure's explanation, such as
+  the drawer's Duration, is an `AboutHelp` `?` on the figure's row, with any state sentence on the
+  line under it. A section's own acts (Git's Refresh, Disconnect and each check) go in its `actions`,
   the heading row's `Toolbar`; a form's submit stays at the form's foot. A page form inside a
   `Section` is a `.field-form` wrapper in its body, so the label-left layout keeps its container;
   a `.run-meta` facts list there drops its own margin.

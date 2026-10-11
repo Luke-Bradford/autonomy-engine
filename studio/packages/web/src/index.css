@@ -1887,7 +1887,7 @@ button.danger {
 .activity-toolbox h2,
 .property-panel h2 {
   margin: 0;
-  font-size: 0.95rem;
+  /* #1594 OR40 S6h — no size of its own: the ramp's h2 (the section type). */
 }
 
 /* #1477 OR29 — a node's header row and its tab strip, pinned together while the
@@ -1974,7 +1974,7 @@ button.danger {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-2);
 }
 
 .property-panel__type {
@@ -4633,18 +4633,27 @@ button.danger {
    `display: block` puts it on its own line under the name: a minted id is
    `n_7c44a16f-98f1-4958-…`, too long to sit inline beside it.
 
-   `em`, not `rem`: what it has to be is SMALLER THAN WHATEVER NAMES IT, here the
-   activity panel's <h2>. */
+   #1594 OR40 S6h — the caption on the ramp, which is smaller than every size
+   that names it (the activity panel's <h2> is the section or body size), and
+   regular, so the name beside it is the strong one. */
 .node-id {
   display: block;
-  font-size: 0.8em;
+  font-size: var(--type-caption-size);
+  font-weight: var(--weight-regular);
   color: var(--muted);
 }
 
 /* The activity panel's gap from what sits above it in the editor's run drawer;
    the run page's drawer resets it below. */
 .node-detail-panel {
-  margin-top: 0.75rem;
+  margin-top: var(--space-3);
+}
+
+/* #1594 OR40 S6h — the Duration line: the figure and its `?` on one row, then
+   any sentence about this record's state. A `div` (the `?` is a `<details>`),
+   spaced as the paragraphs around it are. */
+.node-duration {
+  margin: var(--space-3) 0;
 }
 
 /* A `JSON.stringify` dump has no spaces to break on, so it needs an explicit
@@ -4668,7 +4677,7 @@ button.danger {
 .capped-value-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: var(--space-2);
 }
 
 /* #1484 M2 — an error verbatim: its own line breaks, wrapped, and scrolled
@@ -4679,13 +4688,13 @@ button.danger {
   overflow-wrap: anywhere;
   max-height: 14rem;
   overflow-y: auto;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
 }
 
 /* #1484 M2 — the Logs tab's lines, bounded like the tool calls, but on a
    wrapper, so the table stays a table to assistive tech. */
 .node-logs {
-  font-size: 0.8rem;
+  font-size: var(--type-caption-size);
   max-height: 20rem;
   overflow-y: auto;
 }
@@ -4699,11 +4708,11 @@ button.danger {
   overflow-wrap: anywhere;
   max-height: 14rem;
   overflow-y: auto;
-  margin: 0.25rem 0;
+  margin: var(--space-1) 0;
 }
 
 .node-capture-field h4 {
-  margin: 0.5rem 0 0;
+  margin: var(--space-2) 0 0;
 }
 
 /* #866 — the per-node tool-call list. Dense by design: it is a log, and an
@@ -6539,21 +6548,17 @@ button.danger {
   color: var(--text);
 }
 
-/* U29 (#1015) — the cross-run timeline. Its own container class rather than
-   `.attempt-timeline`, whose name and e2e scope belong to the per-run chart;
-   everything inside reuses U12a's `.timeline-*` rules unchanged, so the two
-   charts cannot drift apart on what a bar or an open span looks like. */
-.run-timeline {
-  margin-top: 0.5rem;
-}
-
+/* U29 (#1015) — the cross-run timeline (`.run-timeline`, a hook with no rule
+   of its own since #1594 OR40 S6h made it a `Section`, whose frame and heading
+   are the primitive's). Everything inside reuses U12a's `.timeline-*` rules
+   unchanged, so the two charts cannot drift apart on what a bar or an open
+   span looks like. A lane's name is the ramp's h3, with no size of its own. */
 .run-timeline-group + .run-timeline-group {
-  margin-top: 1.25rem;
+  margin-top: var(--space-4);
 }
 
 .run-timeline-group-name {
-  margin: 0 0 0.4rem;
-  font-size: 0.95rem;
+  margin: 0 0 var(--space-1);
 }
 
 /* A third column for the measured length. The bar owns POSITION on the axis and
@@ -6566,7 +6571,7 @@ button.danger {
 
 .run-timeline-length {
   color: var(--muted);
-  font-size: 0.85rem;
+  font: var(--type-caption);
   font-variant-numeric: tabular-nums;
   text-align: right;
 }

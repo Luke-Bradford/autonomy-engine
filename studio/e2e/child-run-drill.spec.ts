@@ -93,7 +93,9 @@ test('#1231 — a call node names its child run, and the child names its caller'
   await callRow.getByRole('button').first().click();
 
   const panel = page.getByRole('group', { name: 'Child runs' });
-  await expect(panel.getByText(/own log, its own outputs and its own spend/)).toBeVisible();
+  // #1594 OR40 S6h — what a child run is, is the section's `?`.
+  await expect(panel.locator('summary[aria-label="About Child runs"]')).toBeVisible();
+  await expect(panel.getByText(/own log, outputs and spend/)).toHaveCount(1);
 
   /* DOWN. Followed for real — an href assertion would pass against a route that
      does not exist. */

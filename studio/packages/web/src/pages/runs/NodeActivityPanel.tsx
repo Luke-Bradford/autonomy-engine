@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { describeDatasetAddress, SECURE_REDACTED, TERMINAL_NODE } from '@autonomy-studio/shared';
 import type { DatasetAddress, DispatchInput, RunStatus } from '@autonomy-studio/shared';
@@ -6,6 +6,7 @@ import { nodeStatusLabel, nodeStatusPillClass, nodeStoppedByCancel } from './nod
 import { runDetailPath, runLinkLabel } from './runPath';
 import { formatOutputValue, jsonText, liveSpanStart, prettyStoredJson } from './format';
 import { NodeDuration } from './NodeDuration';
+import { AboutHelp } from '../../lib/HelpDisclosure';
 import { costFigure, costSentence, readCost, tokenSummary, unsettledSentence } from './costReading';
 import type { NodeActivity, NodeToolCall } from './runSummary';
 import { SecureMarkerHint } from './SecureMarkerHint';
@@ -153,6 +154,7 @@ export function NodeActivityPanel({
   fileStem?: string;
 }) {
   const [ownTab, setOwnTab] = useState<DrawerTab | null>(null);
+  const durationNoteId = useId();
   const chosen = onTab === undefined ? ownTab : (tab ?? null);
   const stem = fileStem ?? drawerFileStem([name ?? node.nodeId]);
   const lines = run?.lines;
@@ -240,16 +242,24 @@ export function NodeActivityPanel({
           `filter` and a `call_pipeline` are started and settled by a SINGLE
           event, so nothing ever measured a span for them, and saying so beats
           printing a `0ms` nobody observed. */}
-      <p className="page-hint">
-        {/* A COMMA, not a dash: the value is itself an em-dash whenever no span
-            was measured, and "Duration — — wall clock…" is what a dash gave.
-            Nor a colon after the label (#1594 OR40 S4b). */}
-        Duration{' '}
-        <strong>
-          <NodeDuration node={node} live={live} />
-        </strong>
-        , wall clock for {run === undefined ? 'the latest' : 'this'} attempt, from start to settle,
-        including any wait it parked on and excluding time held between retries.{' '}
+      {/* #1594 OR40 S6h — labels, not prose: what the figure measures is its
+          `?`, and only a sentence about THIS record's state stays on the page.
+          A `div`, because the `?` is a `<details>`, which a `<p>` cannot hold. */}
+      <div className="page-hint node-duration">
+        {/* The row the note anchors to, at its width; any state sentence is
+            the line under it. No colon after the label (#1594 OR40 S4b). The
+            note stays here, not in `FORM_SECTION_HINTS`: it names THIS attempt
+            or the latest, which a fixed hint cannot. */}
+        <div className="help-row">
+          Duration
+          <strong>
+            <NodeDuration node={node} live={live} />
+          </strong>
+          <AboutHelp name="Duration" noteId={durationNoteId}>
+            Wall clock for {run === undefined ? 'the latest' : 'this'} attempt, from start to
+            settle, including any wait it parked on and excluding time held between retries.
+          </AboutHelp>
+        </div>
         {node.startedAtMs === undefined &&
           (node.copiedFromRunId !== undefined
             ? /* #918 — a copied node hits the `attempts === 0` arm exactly, and
@@ -312,7 +322,7 @@ export function NodeActivityPanel({
           node.endedAtMs !== undefined &&
           node.endedAtMs < node.startedAtMs &&
           'The recorded end precedes the start, so the log’s clock is inconsistent and no span can be stated.'}
-      </p>
+      </div>
 
       {/* One activity run is already one item's record, so the fold's
           most-recent-wins caveat does not apply to it. */}
@@ -643,20 +653,16 @@ function ChildRuns({ node }: { node: NodeActivity }) {
           `skipped` call node (a container timeout via `abandonLiveChildren`)
           can be holding a child that still is, and a `success` one is holding
           children that are not. The child's own page is the authority. */}
-      <p className="page-hint">
-        {node.childRunIds.length === 1 ? 'The run' : 'The runs'} this node spawned.{' '}
-        {node.childRunIds.length === 1 ? 'It has' : 'Each has'} its own log, its own outputs and its
-        own spend, so this node&apos;s duration and cost are not{' '}
-        {node.childRunIds.length === 1 ? 'its' : 'theirs'}.
-        {node.childRunIds.length > 1 && (
-          <>
-            {' '}
-            One node holds several because it ran several times: a back-edge loop round spawns an
-            ADDITIONAL child rather than replacing the last, and a parallel foreach folds its item
-            instances onto the one node you drew.
-          </>
-        )}
-      </p>
+      {/* #1594 OR40 S6h — what a child run is (its own log, outputs and
+          spend) is the section's `?`; why THIS node holds several is about the
+          record, so it stays. */}
+      {node.childRunIds.length > 1 && (
+        <p className="page-hint">
+          One node holds several because it ran several times: a back-edge loop round spawns an
+          ADDITIONAL child rather than replacing the last, and a parallel foreach folds its item
+          instances onto the one node you drew.
+        </p>
+      )}
       {/* A LIST, not comma-separated spans: the count is then announced, and
           each id is an item rather than a run-on sentence. `aria-label` carries
           the name because the visible text is the raw id and stays that way —
@@ -882,6 +888,7 @@ function InputSection({
   instanceId: string | undefined;
   stem: string;
 }) {
+  const paramsNoteId = useId();
   return (
     <Section heading="Input" help={FORM_SECTION_HINTS.run.input}>
       {instanceId !== undefined && (
@@ -899,10 +906,12 @@ function InputSection({
       )}
       {params !== undefined && (
         <>
-          <h4>Parameters</h4>
-          <p className="page-hint">
-            The connection and dataset parameters this dispatch applied over their stored settings.
-          </p>
+          <div className="help-row">
+            <h4>Parameters</h4>
+            <AboutHelp name="Parameters" noteId={paramsNoteId}>
+              {FORM_SECTION_HINTS.run.inputParameters}
+            </AboutHelp>
+          </div>
           <RecordedText
             record={params}
             id={INPUT_PARAMS_ID}

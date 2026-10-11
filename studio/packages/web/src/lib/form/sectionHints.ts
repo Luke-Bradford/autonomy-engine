@@ -115,13 +115,22 @@ export const FORM_SECTION_HINTS = {
     timeline:
       "Each activity's attempts on one time axis; a gap between two bars is a retry hold or a wait for its turn.",
     variables: "The pipeline's variables and the values this run wrote to them.",
+    // #1594 OR40 S6h — the Runs page's cross-run Timeline, one per lane key.
+    runsTimelineByPipeline:
+      'One time axis, a lane per pipeline: overlapping bars ran at once, and the figure beside a bar is its length.',
+    runsTimelineByAnnotation:
+      'One time axis, a lane per annotation: a run with several appears in each lane, and one with none in the last.',
     globals:
       'The global parameters this run read when it started; a later edit does not change them.',
     runCost:
       "What this run's own activities spent, in tokens and money; a child run bills its own.",
     streamedOutput: 'How many output events this activity streamed, and the last one it sent.',
     failure: 'The error this activity run ended with, and what kind of failure it was.',
-    childRuns: 'The child runs this activity started, each linked to its own run.',
+    // #1594 OR40 S6h — what was the drawer's paragraph under the heading.
+    childRuns:
+      "The child runs this activity started; each has its own log, outputs and spend, which this activity's leave out.",
+    inputParameters:
+      'The connection and dataset parameters this dispatch applied over their stored settings.',
     dataMovement:
       "Where this activity's data went, as resolved when it ran; a dataset edited since may point elsewhere.",
     cost: 'The tokens this activity used and what they cost.',
