@@ -186,7 +186,10 @@ for (const { density, theme } of RUNS) {
       ['margin-bottom', 'margin-top', 'row-gap'],
     );
     expect(confirm['.confirm-dialog-paragraph']).toMatchObject({ 'margin-bottom': '8px' });
-    expect(confirm['.confirm-dialog-typed']).toMatchObject({ 'margin-top': '12px', 'row-gap': '4px' });
+    expect(confirm['.confirm-dialog-typed']).toMatchObject({
+      'margin-top': '12px',
+      'row-gap': '4px',
+    });
     expect(await offRampText(page, d, '.confirm-dialog'), 'confirm dialog: ramp').toEqual([]);
     await dialog.getByRole('button', { name: 'Cancel' }).click();
     await expect(dialog).toHaveCount(0);

@@ -1342,8 +1342,7 @@ td button + button {
    S6q a run window's (#1090), so a multi-window restriction reads as a list of
    windows rather than a wall of time fields. A new group adds itself to these
    selector lists. */
-.trigger-form
-  :is(.recurrence-editor, .window-editor, .run-windows, .run-window-row, .binding-kind),
+.trigger-form :is(.recurrence-editor, .window-editor, .run-windows, .run-window-row, .binding-kind),
 .param-overrides,
 .overridable-keys,
 .edge-outcomes,
