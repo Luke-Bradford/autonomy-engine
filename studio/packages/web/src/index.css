@@ -6543,17 +6543,14 @@ button.danger {
    `.attempt-timeline`, whose name and e2e scope belong to the per-run chart;
    everything inside reuses U12a's `.timeline-*` rules unchanged, so the two
    charts cannot drift apart on what a bar or an open span looks like. */
-.run-timeline {
-  margin-top: 0.5rem;
-}
-
+/* #1594 OR40 S6h — a `Section`, so its frame and heading are the primitive's;
+   a lane's name is the ramp's h3, with no size of its own. */
 .run-timeline-group + .run-timeline-group {
-  margin-top: 1.25rem;
+  margin-top: var(--space-4);
 }
 
 .run-timeline-group-name {
-  margin: 0 0 0.4rem;
-  font-size: 0.95rem;
+  margin: 0 0 var(--space-1);
 }
 
 /* A third column for the measured length. The bar owns POSITION on the axis and
@@ -6566,7 +6563,7 @@ button.danger {
 
 .run-timeline-length {
   color: var(--muted);
-  font-size: 0.85rem;
+  font: var(--type-caption);
   font-variant-numeric: tabular-nums;
   text-align: right;
 }

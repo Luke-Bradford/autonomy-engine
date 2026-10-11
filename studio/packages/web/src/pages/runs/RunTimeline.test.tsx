@@ -205,11 +205,11 @@ describe('#1016 RunTimeline grouped by annotation', () => {
     expect(screen.getByRole('link', { name: /^v1 · / })).toBeInTheDocument();
   });
 
-  it('says in the axis note that a multi-tag run appears in each lane', () => {
+  it('says in its ? that a multi-tag run appears in each lane, and the axis note is the window alone', () => {
     renderTimeline([run({ id: 'r1', annotations: ['a'] })], 'annotation');
-    expect(document.querySelector('.timeline-axis-note')?.textContent).toMatch(
-      /a run carrying several appears in each of their lanes/,
-    );
+    const timeline = screen.getByRole('region', { name: 'Timeline' });
+    expect(within(timeline).getByText(/a run with several appears in each lane/)).toBeInTheDocument();
+    expect(document.querySelector('.timeline-axis-note')?.textContent).not.toMatch(/lane/);
   });
 
   it('reports a lane-key choice, and offers it even when nothing is plottable', async () => {

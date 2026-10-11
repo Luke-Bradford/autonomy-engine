@@ -115,6 +115,11 @@ export const FORM_SECTION_HINTS = {
     timeline:
       "Each activity's attempts on one time axis; a gap between two bars is a retry hold or a wait for its turn.",
     variables: "The pipeline's variables and the values this run wrote to them.",
+    // #1594 OR40 S6h — the Runs page's cross-run Timeline, one per lane key.
+    runsTimelineByPipeline:
+      'Every run in view on one time axis, a lane per pipeline; bars that overlap ran at the same time.',
+    runsTimelineByAnnotation:
+      "Every run in view on one time axis, a lane per its version's annotation; a run with several appears in each lane.",
     globals:
       'The global parameters this run read when it started; a later edit does not change them.',
     runCost:
