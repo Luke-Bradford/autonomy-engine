@@ -32,6 +32,8 @@ import {
   savePayloadSignature,
 } from './connections/connectionFormState';
 import { PageHeader } from '../lib/PageHeader';
+import { pageHelpId } from '../lib/pageHelpId';
+import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 import { OneLine } from '../lib/OneLine';
 /**
  * Connections page: the first MVP-bar step ("Add a Connection"). Full CRUD
@@ -282,8 +284,15 @@ export function ConnectionsPage() {
   );
 
   return (
-    <section aria-labelledby="connections-heading">
-      <PageHeader title="Connections" headingId="connections-heading">
+    <section
+      aria-labelledby="connections-heading"
+      aria-describedby={pageHelpId('connections-heading')}
+    >
+      <PageHeader
+        title="Connections"
+        headingId="connections-heading"
+        help={FORM_SECTION_HINTS.connection.page}
+      >
         <button
           ref={createRef}
           type="button"
@@ -298,11 +307,6 @@ export function ConnectionsPage() {
           New connection
         </button>
       </PageHeader>
-
-      <p className="page-hint">
-        A connection is a worker: an LLM API key, a local model, an agent CLI, or an HTTP endpoint.
-        Pipelines reference connections; secrets are stored encrypted and never shown again.
-      </p>
 
       <LostSaveAlert message={lostSave} />
       {loadError && (

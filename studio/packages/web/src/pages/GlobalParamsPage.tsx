@@ -8,7 +8,6 @@ import {
   type FormEvent,
   type RefObject,
 } from 'react';
-import { Link } from 'react-router';
 import {
   GlobalParamCreateBodySchema,
   GlobalParamTypeSchema,
@@ -49,6 +48,7 @@ import { useConfirm } from '../lib/confirm/useConfirm';
 import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 import { PageHeader } from '../lib/PageHeader';
+import { pageHelpId } from '../lib/pageHelpId';
 import { OneLine } from '../lib/OneLine';
 
 /**
@@ -206,8 +206,19 @@ export function GlobalParamsPage() {
   );
 
   return (
-    <section aria-labelledby="global-params-heading">
-      <PageHeader title="Global parameters" headingId="global-params-heading">
+    <section
+      aria-labelledby="global-params-heading"
+      aria-describedby={pageHelpId('global-params-heading')}
+    >
+      <PageHeader
+        title="Global parameters"
+        headingId="global-params-heading"
+        help={
+          <>
+            {FORM_SECTION_HINTS.globalParam.page} <code>{'${global.<name>}'}</code>
+          </>
+        }
+      >
         <button
           ref={createRef}
           type="button"
@@ -216,17 +227,6 @@ export function GlobalParamsPage() {
           New global parameter
         </button>
       </PageHeader>
-
-      <p className="page-hint">
-        A global parameter is a named value every pipeline in this workspace shares, to be read as{' '}
-        <code>{'${global.<name>}'}</code>. A run records the values it read, so editing a global
-        changes later runs, never one already started. A name and type are fixed once created: to
-        change either, delete the global and create it again.
-      </p>
-      <p className="page-hint">
-        Values are <strong>cleartext</strong>: they are shown here and will be copied into run logs,
-        exports and git. Put a credential in <Link to="/manage/secrets">Secrets</Link> instead.
-      </p>
 
       <LostSaveAlert message={lostSave} />
       {loadError && (
@@ -576,8 +576,8 @@ function GlobalParamForm({
 
       <Section heading="Value" help={FORM_SECTION_HINTS.globalParam.value}>
         {/* Not `required`: empty text is a real value for a string global. */}
-        <LabelledControl label="Value">
-          {(id) => (
+        <LabelledControl label="Value" hint={FORM_SECTION_HINTS.globalParam.cleartext}>
+          {(id, describedBy) => (
             <input
               id={id}
               type="text"
@@ -585,7 +585,7 @@ function GlobalParamForm({
               onChange={(e) => onChange({ ...form, valueText: e.target.value })}
               placeholder={VALUE_PLACEHOLDER[form.type]}
               spellCheck={false}
-              {...checkedBy('value')}
+              {...validation.attrsFor('value', errorIds.value, describedBy)}
             />
           )}
         </LabelledControl>

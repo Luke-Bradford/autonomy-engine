@@ -67,7 +67,10 @@ describe('SecretsPage', () => {
 
   it('says how a node references a secret — the marker is the whole point of the page', async () => {
     renderWithDataRouter(<SecretsPage />);
-    expect(await screen.findByText(/\{"\$secret": "<name>"\}/)).toBeInTheDocument();
+    // #1594 OR40 S6d — said by the title's `?`, the page's description.
+    expect(await screen.findByRole('region', { name: 'Secrets' })).toHaveAccessibleDescription(
+      /references as \{"\$secret": "<name>"\}/,
+    );
   });
 
   it('reports a failed load AS a failure, never as an empty vault', async () => {

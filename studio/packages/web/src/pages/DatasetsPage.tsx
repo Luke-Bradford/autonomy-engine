@@ -71,6 +71,7 @@ import { useConfirm } from '../lib/confirm/useConfirm';
 import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 import { PageHeader } from '../lib/PageHeader';
+import { pageHelpId } from '../lib/pageHelpId';
 import { OneLine } from '../lib/OneLine';
 
 const KINDS = DATASET_KINDS;
@@ -432,8 +433,12 @@ export function DatasetsPage() {
   );
 
   return (
-    <section aria-labelledby="datasets-heading">
-      <PageHeader title="Datasets" headingId="datasets-heading">
+    <section aria-labelledby="datasets-heading" aria-describedby={pageHelpId('datasets-heading')}>
+      <PageHeader
+        title="Datasets"
+        headingId="datasets-heading"
+        help={FORM_SECTION_HINTS.dataset.page}
+      >
         <button
           ref={createRef}
           type="button"
@@ -442,11 +447,6 @@ export function DatasetsPage() {
           New dataset
         </button>
       </PageHeader>
-
-      <p className="page-hint">
-        A dataset is a thing in a store, in a shape: which connection it lives in, how it is
-        addressed, and the columns it declares. A copy activity binds one at each end.
-      </p>
 
       <LostSaveAlert message={lostSave} />
       {loadError && (

@@ -480,6 +480,13 @@ Every page's title row is `PageHeader` (`lib/PageHeader.tsx`, #1594 OR40 S3). Ne
   `adornment` (the editor's state badge and notices, the run page's editor link), then the toolbar
   at the right end. The title is the page's one `h1`, in the title type (20/600), and ellipsizes first; pass the
   full name as `headingTitle` where a name can be long.
+- **The page's `?`** (`help`, #1594 OR40 S6d) sits right after the title: "About {title}", one
+  sentence saying what the page holds, in place of a paragraph under the title. Its note opens under
+  the header row, at the row's width. It needs a plain-text title and a `headingId`; the page's
+  `<section aria-labelledby>` takes `aria-describedby={pageHelpId(headingId)}`, so the note is the
+  page's description. The five Manage lists use it. A page whose sections each have a `?` (Home,
+  Settings, Git) needs none. A warning an operator must see stays visible where it applies (the
+  global parameter Value field's cleartext hint), never behind a `?`.
 - **The toolbar** is the header's children, wrapped in `Toolbar`. Controls are 8px apart, every one
   `--control-h` tall, and centred on one line. A Fluent (toggle) button and a `.page-back` link are
   sized to match inside it. Separate groups with `ToolbarDivider` (a 1px rule with the gap either
@@ -559,7 +566,7 @@ replaced `FormSection` (a drawer's `fieldset` and `legend`), `DockSection` (the 
   late and uses the section).
 - **Still to move:** page sections that are bare `h2`/`h3` headings (the run page's timeline,
   variables and cost) move to `Section` page by page in S6. Home moved first, then Settings,
-  then Git. A section's own acts (Git's Refresh, Disconnect and each check) go in its `actions`,
+  then Git, then the Manage lists' Import panel. A section's own acts (Git's Refresh, Disconnect and each check) go in its `actions`,
   the heading row's `Toolbar`; a form's submit stays at the form's foot. A page form inside a
   `Section` is a `.field-form` wrapper in its body, so the label-left layout keeps its container;
   a `.run-meta` facts list there drops its own margin.

@@ -86,7 +86,7 @@ test.describe('#844 GL2 the global-params store has a front end', () => {
         name: 'Global parameters',
       }),
     ).toHaveAttribute('href', '#/manage/global-params');
-    await expect(page.getByText('cleartext', { exact: true })).toBeVisible();
+    // The cleartext warning is the Value field's hint: `manage-lists-design.spec.ts`.
 
     await create(page, STR, 'string', 'https://example.test');
     await create(page, JSON_NAME, 'json', '{"retries": 3}');

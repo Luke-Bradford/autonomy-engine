@@ -208,13 +208,17 @@ test.describe('#1396 inline validation', () => {
     // A bad Hours entry shows on leaving the field, in a slot that moves nothing.
     const hours = form.getByLabel(/^Hours/);
     const below = form.getByLabel(/^End time/);
-    const before = await below.boundingBox();
+    // Measured from the form's top, not the viewport's: leaving Hours can
+    // scroll the page to the next field, which moves both by the same amount.
+    const offset = async () =>
+      ((await below.boundingBox())?.y ?? NaN) - ((await form.boundingBox())?.y ?? NaN);
+    const before = await offset();
     await hours.fill('9, x');
     await expect(hours).toHaveAttribute('aria-invalid', 'false');
     await hours.press('Tab');
     await expect(hours).toHaveAttribute('aria-invalid', 'true');
     await expect(hours).toHaveAccessibleDescription(/'x' is not a whole number/);
-    expect((await below.boundingBox())?.y).toBe(before?.y);
+    expect(await offset()).toBe(before);
 
     await hours.fill('9');
     await hours.press('Tab');

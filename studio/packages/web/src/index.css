@@ -848,6 +848,12 @@ body {
   margin-bottom: var(--space-2);
 }
 
+/* #1594 OR40 S6d — a page's `?` (`PageHeader`'s `help`) opens its note under
+   the header row, at the row's width, so the row is the note's anchor. */
+.page-header:has(> .help-disclosure--inline) {
+  position: relative;
+}
+
 .page-header > h1 {
   flex: 0 1 auto;
   min-width: 0;

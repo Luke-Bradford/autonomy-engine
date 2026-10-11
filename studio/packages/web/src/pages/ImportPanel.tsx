@@ -16,6 +16,8 @@ import {
   type ImportAttentionItem,
 } from '@autonomy-studio/shared';
 import { LabelledControl } from '../lib/LabelledControl';
+import { Section } from '../lib/Section';
+import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 import { connectionOptionLabel } from '../lib/resourceOptionLabel';
 import { pipelinePath } from './author/pipelinePath';
 
@@ -212,22 +214,8 @@ export function ImportPanel({
     [listKind, onImported, chosen],
   );
 
-  return (
-    <section
-      className={embedded ? 'import-panel field-form' : 'connection-form field-form'}
-      aria-labelledby={embedded ? undefined : 'import-heading'}
-    >
-      {!embedded && (
-        <>
-          <h2 id="import-heading">Import</h2>
-          <p className="page-hint">
-            Bring in a pipeline, connection, trigger, dataset or global parameter from an export
-            file. Secrets are never exported, and neither is a pipeline&rsquo;s or trigger&rsquo;s
-            binding to anything else, so an imported resource usually needs something rebound —
-            whatever that is will be listed here.
-          </p>
-        </>
-      )}
+  const content = (
+    <>
       {stores !== undefined && (
         <>
           {/* #1143 — chosen BEFORE the file: picking the file IS the import. */}
@@ -302,7 +290,18 @@ export function ImportPanel({
         </p>
       )}
       {outcomes && <ImportOutcomes outcomes={outcomes} />}
-    </section>
+    </>
+  );
+  // #1594 OR40 S6d — on a Manage list the panel is the one `Section`, a named
+  // region whose `?` says what an import brings in (labels, not prose); its
+  // fields are the label-left form. In the pipeline import drawer it is that
+  // drawer's own section's content.
+  return embedded ? (
+    <section className="import-panel field-form">{content}</section>
+  ) : (
+    <Section level={2} landmark heading="Import" help={FORM_SECTION_HINTS.manage.import}>
+      <div className="field-form">{content}</div>
+    </Section>
   );
 }
 

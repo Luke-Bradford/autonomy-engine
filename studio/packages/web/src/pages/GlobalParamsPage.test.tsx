@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { FIELD } from '../testing/fieldQuery';
 import type { GlobalParam } from '@autonomy-studio/shared';
 import { GlobalParamsPage } from './GlobalParamsPage';
+import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 import * as api from '../api/globalParams';
 import { ApiError } from '../api/client';
 import * as download from '../api/download';
@@ -93,12 +94,21 @@ describe('GlobalParamsPage (#844 GL2)', () => {
     expect(await screen.findByText('No global parameters yet.')).toBeInTheDocument();
     // #844 GL3 — pipelines read them now, and a run keeps the values it read.
     expect(screen.queryByText(/cannot read them yet/)).toBeNull();
-    expect(screen.getByText(/A run records the values it read/)).toBeInTheDocument();
-    expect(screen.getByText('cleartext')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Secrets' })).toHaveAttribute(
-      'href',
-      '/manage/secrets',
+    // #1594 OR40 S6d — that is the title's `?`, the page's description, not a
+    // paragraph under the title.
+    const page = screen.getByRole('region', { name: 'Global parameters' });
+    expect(page).toHaveAccessibleDescription(
+      /a run records the values it read\. \$\{global\.<name>\}$/,
     );
+    expect(screen.getByTitle('About Global parameters')).toBeInTheDocument();
+    expect(page.querySelector('.page-hint')).toBeNull();
+    // The cleartext warning is on screen wherever a value is typed: the Value
+    // field's visible hint, and the field's description.
+    await userEvent.click(screen.getByRole('button', { name: 'New global parameter' }));
+    const value = await screen.findByLabelText('Value', { selector: 'input' });
+    const cleartext = FORM_SECTION_HINTS.globalParam.cleartext;
+    expect(screen.getByText(cleartext)).toBeVisible();
+    expect(value).toHaveAccessibleDescription(cleartext);
   });
 
   it('reports a failed load', async () => {
@@ -548,7 +558,9 @@ describe('GlobalParamsPage export and import (#844 GL6)', () => {
   it('offers an import from a file', async () => {
     renderWithDataRouter(<GlobalParamsPage />);
     expect(await screen.findByText(/No global parameters yet/)).toBeVisible();
-    expect(screen.getByLabelText(/import/i)).toBeInTheDocument();
+    // #1594 OR40 S6d — the one `Section`, a named region, with its file field.
+    const panel = screen.getByRole('region', { name: 'Import' });
+    expect(within(panel).getByLabelText('Export file')).toBeInTheDocument();
   });
 });
 

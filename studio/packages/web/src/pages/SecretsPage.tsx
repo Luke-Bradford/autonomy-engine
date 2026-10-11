@@ -36,6 +36,7 @@ import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 import { When } from '../lib/When';
 import { PageHeader } from '../lib/PageHeader';
+import { pageHelpId } from '../lib/pageHelpId';
 import { LabelledControl } from '../lib/LabelledControl';
 import { OneLine } from '../lib/OneLine';
 
@@ -170,8 +171,8 @@ export function SecretsPage() {
   );
 
   return (
-    <section aria-labelledby="secrets-heading">
-      <PageHeader title="Secrets" headingId="secrets-heading">
+    <section aria-labelledby="secrets-heading" aria-describedby={pageHelpId('secrets-heading')}>
+      <PageHeader title="Secrets" headingId="secrets-heading" help={FORM_SECTION_HINTS.secret.page}>
         <button
           ref={createRef}
           type="button"
@@ -180,13 +181,6 @@ export function SecretsPage() {
           New secret
         </button>
       </PageHeader>
-
-      <p className="page-hint">
-        A secret is a named credential, stored encrypted. A pipeline never contains the value — a
-        node references it by name as <code>{'{"$secret": "<name>"}'}</code>, and it is decrypted
-        only at dispatch. Values are write-only: once saved, a secret can be replaced or deleted,
-        never read back.
-      </p>
 
       <LostSaveAlert message={lostSave} />
       {loadError && (
