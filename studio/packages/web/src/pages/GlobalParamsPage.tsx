@@ -8,7 +8,6 @@ import {
   type FormEvent,
   type RefObject,
 } from 'react';
-import { Link } from 'react-router';
 import {
   GlobalParamCreateBodySchema,
   GlobalParamTypeSchema,
@@ -48,7 +47,7 @@ import { payloadSignature } from './pipeline/configForm';
 import { useConfirm } from '../lib/confirm/useConfirm';
 import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
-import { PageHeader } from '../lib/PageHeader';
+import { PageHeader, pageHelpId } from '../lib/PageHeader';
 import { OneLine } from '../lib/OneLine';
 
 /**
@@ -81,6 +80,10 @@ function formForEdit(global: GlobalParam): FormState {
 function savePayloadSignature(form: FormState): string {
   return payloadSignature([form.name, form.type, form.valueText, form.description]);
 }
+
+/** Exported for the page's test, which reads it as the operator does. */
+export const CLEARTEXT_HINT =
+  'Cleartext: shown here and copied into run logs, exports and git, so never a credential.';
 
 const VALUE_PLACEHOLDER: Record<GlobalParamType, string> = {
   string: 'empty text is a value',
@@ -206,8 +209,15 @@ export function GlobalParamsPage() {
   );
 
   return (
-    <section aria-labelledby="global-params-heading">
-      <PageHeader title="Global parameters" headingId="global-params-heading">
+    <section
+      aria-labelledby="global-params-heading"
+      aria-describedby={pageHelpId('global-params-heading')}
+    >
+      <PageHeader
+        title="Global parameters"
+        headingId="global-params-heading"
+        help={FORM_SECTION_HINTS.globalParam.page}
+      >
         <button
           ref={createRef}
           type="button"
@@ -216,17 +226,6 @@ export function GlobalParamsPage() {
           New global parameter
         </button>
       </PageHeader>
-
-      <p className="page-hint">
-        A global parameter is a named value every pipeline in this workspace shares, to be read as{' '}
-        <code>{'${global.<name>}'}</code>. A run records the values it read, so editing a global
-        changes later runs, never one already started. A name and type are fixed once created: to
-        change either, delete the global and create it again.
-      </p>
-      <p className="page-hint">
-        Values are <strong>cleartext</strong>: they are shown here and will be copied into run logs,
-        exports and git. Put a credential in <Link to="/manage/secrets">Secrets</Link> instead.
-      </p>
 
       <LostSaveAlert message={lostSave} />
       {loadError && (
@@ -575,9 +574,12 @@ function GlobalParamForm({
       </Section>
 
       <Section heading="Value" help={FORM_SECTION_HINTS.globalParam.value}>
-        {/* Not `required`: empty text is a real value for a string global. */}
-        <LabelledControl label="Value">
-          {(id) => (
+        {/* Not `required`: empty text is a real value for a string global.
+            #1594 OR40 S6d — the cleartext warning is the field's visible hint,
+            not a `?`: it is what makes an operator put a credential elsewhere,
+            so it is on screen wherever a value is typed. */}
+        <LabelledControl label="Value" hint={CLEARTEXT_HINT}>
+          {(id, describedBy) => (
             <input
               id={id}
               type="text"
@@ -585,7 +587,7 @@ function GlobalParamForm({
               onChange={(e) => onChange({ ...form, valueText: e.target.value })}
               placeholder={VALUE_PLACEHOLDER[form.type]}
               spellCheck={false}
-              {...checkedBy('value')}
+              {...validation.attrsFor('value', errorIds.value, describedBy)}
             />
           )}
         </LabelledControl>

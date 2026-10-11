@@ -11,7 +11,9 @@
  * would otherwise read twice.
  */
 export const FORM_SECTION_HINTS = {
+  // #1594 OR40 S6d — each Manage list's `page` is its title's `?`.
   connection: {
+    page: 'The systems a pipeline reaches: LLM APIs, local models, agent CLIs and HTTP endpoints.',
     basics: 'What this connection is called, and the kind of system it reaches.',
     connection: 'How to reach the system; the settings follow from the kind chosen above.',
     authentication:
@@ -19,6 +21,7 @@ export const FORM_SECTION_HINTS = {
     annotations: 'Tags that describe this connection, such as an environment, a team or a system.',
   },
   dataset: {
+    page: 'Data in a store, in a shape: the connection it lives in, how it is addressed, and its columns.',
     basics:
       'What this dataset is called, the connection that stores it, and what kind of data it is.',
     dataset:
@@ -26,6 +29,7 @@ export const FORM_SECTION_HINTS = {
     columns: 'The columns this dataset declares, each with its name and type.',
   },
   secret: {
+    page: 'Named credentials, stored encrypted and never read back, that a node references as {"$secret": "<name>"}.',
     basics: 'The name a node refers to this secret by.',
     // The field's own note too (#1594 OR40 S3c-2): the section holds the one
     // field, so a second `?` would repeat the section's name, "About Value".
@@ -33,12 +37,14 @@ export const FORM_SECTION_HINTS = {
       'The value a node is given wherever it names this secret; once saved it can be replaced but never read back.',
   },
   globalParam: {
+    page: 'Named values every pipeline in this workspace shares; a run records the values it read.',
     basics: 'The name every pipeline reads this value by, and its type.',
     // The Value field's note too, for the reason the secret's gives.
     value:
       'The value every pipeline sees, which is cleartext and so never a credential, and a description of what it is for.',
   },
   trigger: {
+    page: "What starts a pipeline version's runs (by hand, on a schedule or by webhook) and how they may overlap.",
     basics: 'What this trigger is called, and whether it is switched on.',
     pipeline: 'Which pipeline this trigger runs, and which version of it.',
     firing: "What starts this trigger's runs, and the days and hours it may start them in.",

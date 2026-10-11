@@ -30,7 +30,8 @@ import {
   type BindingOption,
   type PipelineOption,
 } from './triggers/triggerFormState';
-import { PageHeader } from '../lib/PageHeader';
+import { PageHeader, pageHelpId } from '../lib/PageHeader';
+import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 import { OneLine } from '../lib/OneLine';
 
 /**
@@ -327,8 +328,12 @@ export function TriggersPage() {
   );
 
   return (
-    <section aria-labelledby="triggers-heading">
-      <PageHeader title="Triggers" headingId="triggers-heading">
+    <section aria-labelledby="triggers-heading" aria-describedby={pageHelpId('triggers-heading')}>
+      <PageHeader
+        title="Triggers"
+        headingId="triggers-heading"
+        help={FORM_SECTION_HINTS.trigger.page}
+      >
         <button
           ref={createRef}
           type="button"
@@ -337,12 +342,6 @@ export function TriggersPage() {
           New trigger
         </button>
       </PageHeader>
-
-      <p className="page-hint">
-        A trigger binds one pipeline version to a firing mode (manual, schedule, webhook…) and a
-        concurrency policy. Fire it now, or enable it to fire automatically. An enabled trigger must
-        be bound to a pipeline version.
-      </p>
 
       <LostSaveAlert message={lostSave} />
       {loadError && (
