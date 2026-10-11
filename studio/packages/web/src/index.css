@@ -370,7 +370,7 @@ body {
   width: var(--pane-width, 240px);
   background: var(--panel);
   border-right: 1px solid var(--border);
-  padding: 0.75rem 0;
+  padding: var(--space-3) 0;
   /* The pane scrolls itself rather than growing the shell — the shell is
      viewport-height so the rail, pane and command bar all stay put. Setting
      `overflow` also zeroes this item's automatic minimum size, so no explicit
@@ -385,8 +385,8 @@ body {
      page title became the h1 (#1594 OR40 S5), and h2 is now the section type. */
   line-height: var(--type-title-line);
   color: var(--muted);
-  margin: 0 0 0.5rem;
-  padding: 0 0.9rem;
+  margin: 0 0 var(--space-2);
+  padding: 0 var(--space-3);
   /* The pane can be dragged down to `PANE_MIN_WIDTH`; a long hub name must
      clip rather than force the track wider than the user asked for. */
   overflow: hidden;
@@ -403,10 +403,13 @@ body {
 .secondary-pane__link {
   position: relative;
   display: block;
-  padding: 0.45rem 0.9rem;
+  /* #1594 OR40 S6i — one `--row-h` row per link, by line height rather than
+     flex centring: a flex box would stop the name's ellipsis applying. */
+  padding: 0 var(--space-3);
+  line-height: var(--row-h);
   color: var(--text);
   text-decoration: none;
-  font-size: 0.92rem;
+  font-size: var(--type-body-size);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -429,7 +432,7 @@ body {
   /* Weight is a SHAPE channel, so "you are here" survives greyscale and
      forced-colours mode alongside the accent bar below — the spec's
      non-colour-status criterion, as on the rail. */
-  font-weight: 600;
+  font-weight: var(--weight-strong);
 }
 
 .secondary-pane__link--active::before {
@@ -439,7 +442,7 @@ body {
   top: 6px;
   bottom: 6px;
   width: 3px;
-  border-radius: 0 3px 3px 0;
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
   background: var(--accent);
 }
 
@@ -483,8 +486,8 @@ body {
 .factory-resources__toolbar {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0 0.6rem 0.5rem;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-2);
 }
 
 .factory-resources__filter {
@@ -494,13 +497,7 @@ body {
      than the pane and force a horizontal scrollbar the user never asked for. */
   flex: 1 1 auto;
   min-width: 0;
-  font: inherit;
-  font-size: 0.85rem;
-  padding: 0.25rem 0.4rem;
-  color: var(--text);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  /* #1594 OR40 S6i — no skin of its own: the one control layer draws it. */
 }
 
 /* #721 — the ONE flat icon-button treatment.
@@ -615,8 +612,8 @@ body {
   /* The group header's own link fills the rest of the row, so the whole strip
      beside the chevron is the target rather than just the word. */
   flex: 1 1 auto;
-  padding-left: 0.25rem;
-  font-weight: 600;
+  padding-left: var(--space-1);
+  font-weight: var(--weight-strong);
 }
 
 /* #721 — folded onto `.icon-button` with the other two. It gains a hover fill
@@ -627,15 +624,21 @@ body {
 .factory-resources__disclosure {
   width: 20px;
   height: 24px;
-  margin-left: 0.5rem;
-  font-size: 12px;
+  /* #1594 OR40 S6i — the pane's content edge, so the chevron lines up under
+     the pane title and the filter. */
+  margin-left: var(--space-3);
+  /* The GLYPH on that edge, not just its box: the 20px stays as the target. */
+  justify-content: flex-start;
+  /* The chevron glyph is 1em: a twisty, so the caption size, not the icon size. */
+  font-size: var(--type-caption-size);
   color: var(--muted);
 }
 
 .factory-resources__list {
   /* Indented under the group header, so nesting is a SHAPE channel and not
-     just a colour one. */
-  padding-left: 1.1rem;
+     just a colour one. 24px puts a name's text exactly under its group's
+     label (12px edge + 20px chevron + 4px, against 24px + the link's 12px). */
+  padding-left: var(--space-5);
 }
 
 .factory-resources__row {
@@ -648,8 +651,9 @@ body {
 .factory-resources__folder-header {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
-  min-height: 24px;
+  gap: var(--space-1);
+  /* One tree row, like the pipeline rows around it. */
+  min-height: var(--row-h);
 }
 
 .factory-resources__folder-header .factory-resources__disclosure {
@@ -665,11 +669,11 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 600;
+  font-weight: var(--weight-strong);
 }
 
 .factory-resources__folder-list {
-  padding-left: 1.1rem;
+  padding-left: var(--space-5);
 }
 
 /* See `.activity-toolbox__list[hidden]` below: any author `display` beats the
@@ -704,44 +708,41 @@ body {
 
 .factory-resources__name-row {
   display: flex;
+  /* Wrapped rather than scrolled sideways: the field takes its own line (see
+     `.inline-name-form input`) and the buttons share the next. At the pane's
+     180px minimum in comfortable density, Duplicate and Cancel no longer fit
+     side by side and take a line each; nothing scrolls. */
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.2rem 0.5rem 0.2rem 0;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2) var(--space-1) 0;
 }
 
+/* #1594 OR40 S6i — the one control layer draws the field and the buttons; the
+   field keeps only the accent edge that says it is being edited in place. Both
+   consumers (the tree's name row, the version history's clone form) sit in a
+   narrow column, so the field takes a line of its own and the buttons stay
+   together under it rather than wrapping one at a time. */
 .inline-name-form input {
-  flex: 1 1 auto;
+  flex: 1 1 100%;
   min-width: 0;
-  font: inherit;
-  font-size: 0.85rem;
-  padding: 0.2rem 0.35rem;
-  color: var(--text);
-  background: var(--bg);
-  border: 1px solid var(--accent);
-  border-radius: 4px;
+  border-color: var(--accent);
 }
 
 .inline-name-form button {
   flex: 0 0 auto;
-  padding: 0.2rem 0.4rem;
-  font-size: 0.75rem;
 }
 
 .factory-resources__empty,
 .factory-resources__error {
-  margin: 0.4rem 0 0;
-  padding: 0 0.9rem;
-  font-size: 0.82rem;
+  margin: var(--space-2) 0 0;
+  padding: 0 var(--space-3);
+  font-size: var(--type-body-size);
   color: var(--muted);
 }
 
 .factory-resources__error {
   color: var(--error);
-}
-
-.factory-resources__dismiss {
-  padding: 0 0.3rem;
-  font-size: 0.72rem;
 }
 
 .command-bar {
@@ -1867,10 +1868,10 @@ button.danger {
 .activity-toolbox,
 .property-panel {
   /* #1477 — named, so the pinned header can reach across it. */
-  --property-panel-pad: 0.75rem;
+  --property-panel-pad: var(--space-3);
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-surface);
   padding: var(--property-panel-pad);
   display: flex;
   flex-direction: column;
@@ -2070,14 +2071,14 @@ button.danger {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.35rem;
+  gap: var(--space-2);
 }
 
 /* #1475 — the rail: tight padding so a 32px glyph button fits the 48px track.
    No scrollbar drawn: a classic one would take 8-15px of a 38px content box and
    clip every button. It still scrolls by wheel, touch, and focus moving into view. */
 .activity-toolbox--rail {
-  padding: 4px;
+  padding: var(--space-1);
   align-items: center;
   overflow-x: hidden;
   scrollbar-width: none;
@@ -2086,7 +2087,7 @@ button.danger {
 /* Groups have no headings on the rail; a rule between them keeps the grouping. */
 .activity-toolbox--rail .activity-toolbox__group + .activity-toolbox__group {
   border-top: 1px solid var(--border);
-  padding-top: 0.3rem;
+  padding-top: var(--space-1);
 }
 
 .activity-toolbox--rail .activity-toolbox__item {
@@ -2099,13 +2100,10 @@ button.danger {
 }
 
 .activity-toolbox__filter {
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.35rem 0.5rem;
-  font: inherit;
-  font-size: 0.85rem;
+  /* #1594 OR40 S6i — no skin of its own: the one control layer draws it. And
+     not shrunk: the toolbox is a scrolling flex column, so with a long catalog
+     a shrinkable field is squeezed below `--control-h` (measured 18px). */
+  flex: none;
   /* See the `min-width: 0` note above — the input needs it in its own right, as
      a flex item, not only via its container. */
   min-width: 0;
@@ -2114,7 +2112,7 @@ button.danger {
 .activity-toolbox__group {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: var(--space-1);
 }
 
 /* The disclosure inherits `.icon-button` (#721's one flat icon-button
@@ -2122,13 +2120,13 @@ button.danger {
    centred glyph. */
 .activity-toolbox__disclosure {
   justify-content: flex-start;
-  gap: 0.3rem;
+  gap: var(--space-1);
   width: 100%;
   /* A heading row sized by its text, not the icon button's square. */
   height: auto;
-  padding: 0.2rem 0.15rem;
+  padding: var(--space-1) 0;
   /* `.icon-button` zeroes this for a glyph-only button; the label needs it back. */
-  line-height: 1.2;
+  line-height: var(--type-caption-line);
   font-size: var(--type-caption-size);
   font-weight: var(--weight-strong);
   color: var(--muted);
@@ -2137,12 +2135,13 @@ button.danger {
 /* The same heading, rendered STATIC while a search suspends the collapses (see
    `ActivityToolbox.tsx`). Matched to the disclosure's type treatment so the
    groups do not visibly reflow as the user starts typing — only the chevron
-   goes. The left padding replaces the chevron's width so the labels stay on the
-   same optical line. */
+   goes. The left padding is the chevron (1em of the caption size) plus the
+   disclosure's gap, so the labels stay on exactly the same line
+   (`left-pane-design.spec.ts` measures it). */
 .activity-toolbox__heading {
   margin: 0;
-  padding: 0.2rem 0.15rem 0.2rem 1.3rem;
-  line-height: 1.2;
+  padding: var(--space-1) 0 var(--space-1) calc(var(--type-caption-size) + var(--space-1));
+  line-height: var(--type-caption-line);
   font-size: var(--type-caption-size);
   font-weight: var(--weight-strong);
   color: var(--muted);
@@ -2154,7 +2153,7 @@ button.danger {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: var(--space-1);
 }
 
 /* Load-bearing, and it was a REAL bug for one commit: `display: flex` above
@@ -2172,11 +2171,21 @@ button.danger {
   display: none;
 }
 
+/* The palette row: glyph, then name, on one line — the same reading order the
+   node on the canvas uses, so the two surfaces teach each other. */
 .activity-toolbox__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   width: 100%;
   text-align: left;
-  font-size: 0.85rem;
-  padding: 0.35rem 0.5rem;
+  /* #1594 OR40 S6i — a `--control-h` row in the body type, like every control. */
+  min-height: var(--control-h);
+  font-size: var(--type-body-size);
+  /* Vertical padding only shows on a long name that wraps (one line is under
+     `--control-h`): wrapped rather than cut, since the tooltip holds the
+     description, not the name. */
+  padding: var(--space-1) var(--space-2);
   /* The affordance for the drag half of the interaction. `grab` (not `move`):
      nothing leaves the toolbox — the drop COPIES the activity onto the canvas. */
   cursor: grab;
@@ -2199,7 +2208,7 @@ button.danger {
 
 .activity-toolbox__empty {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   color: var(--muted);
 }
 
@@ -6286,12 +6295,8 @@ button.danger {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.25rem 0.5rem;
-}
-
-.version-history-clone input {
-  flex-basis: 100%;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
 }
 
 .version-history-clone-status {
@@ -6777,15 +6782,6 @@ button.danger {
    with the act and detail whole in its tooltip. */
 .audit-detail {
   color: var(--muted);
-}
-
-/* The palette row: glyph, then name, on one line — the same reading order the
-   node on the canvas uses, so the two surfaces teach each other. */
-.activity-toolbox__item {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  text-align: left;
 }
 
 .activity-toolbox__icon {

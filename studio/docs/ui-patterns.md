@@ -423,8 +423,9 @@ One look per control type (#1594 OR40 S2a), from the tokens, in both densities. 
   `--border`, `--radius-control`, body type, accent border on hover, `--error` border on
   `aria-invalid`, 0.6 opacity when disabled. The layer is at zero specificity (`:where()`), so a
   component rule still wins. Do not add a new per-form skin; delete one when you touch it. Known
-  leftovers for S6: `.json-editor-input`, `.inline-name-form input`, `.run-filters` and the search
-  boxes, which set their own padding or width.
+  leftovers for S6: `.json-editor-input`, `.run-filters` and the page search boxes, which set
+  their own padding or width. S6i moved the left panes' filters and the inline name form onto
+  the layer; the name form keeps only its accent edge.
 - **Buttons, three variants:** secondary is a bare `<button>`, primary is `className="primary"`,
   and subtle (toolbar and icon, #1594 OR40 S2b) has two class names for one variant: `subtle` for
   a text button and `icon-button` for a glyph. `danger` is a colour tone of secondary, not a fourth
@@ -502,6 +503,17 @@ Every page's title row is `PageHeader` (`lib/PageHeader.tsx`, #1594 OR40 S3). Ne
   It is not a page header.
 
 `e2e/page-header.spec.ts` measures every page at 1440x900 in both densities.
+
+## Left panes (#1594 OR40 S6i)
+
+The hub pane, Factory resources and the Activities toolbox. A pane or tree row is `--row-h`; a
+filter, a palette row and the inline name form's controls are `--control-h` from the control
+layer, with no skin of their own. The pane's title, filter and first-level chevron glyph share its
+12px edge, and each tree level indents 24px, so a name sits under its parent's label. The inline name form puts its field on a line of its own and its
+buttons together under it. A long palette name wraps rather than truncating, because the row's
+tooltip holds the description, not the name. The action error's Dismiss is a `subtle` button.
+
+`e2e/left-pane-design.spec.ts` measures them at 1440x900, compact light and comfortable dark.
 
 ## Tables (#1594 OR40 S3d)
 

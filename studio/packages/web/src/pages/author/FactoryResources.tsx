@@ -713,11 +713,7 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
               clear this: the pane outlives every route change inside the hub,
               and the message would sit there indefinitely — including after the
               pipeline it names has been filtered out of view. */}
-          <button
-            type="button"
-            className="factory-resources__dismiss"
-            onClick={() => setActionError(null)}
-          >
+          <button type="button" className="subtle" onClick={() => setActionError(null)}>
             Dismiss
           </button>
         </p>
