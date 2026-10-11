@@ -175,7 +175,10 @@ for (const { density, theme } of RUNS) {
       { name: 'Make it a back-edge', h: CONTROL_H[d] },
       { name: 'Dismiss', h: CONTROL_H[d] },
     ]);
-    await refusal.getByRole('button', { name: 'Dismiss' }).click();
+    // The dismiss is the shared icon button: a square glyph, not a text button.
+    const dismiss = refusal.getByRole('button', { name: 'Dismiss' });
+    expect((await dismiss.boundingBox())?.width, 'refusal: dismiss is square').toBe(CONTROL_H[d]);
+    await dismiss.click();
     await expect(refusal).toHaveCount(0);
 
     // Leaving with that edge unsaved asks first.

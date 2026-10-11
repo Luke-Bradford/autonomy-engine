@@ -221,11 +221,13 @@ for (const { density, theme } of RUNS) {
       );
     }, BANNER);
     expect(clearance, 'banner: button clearance').toBeGreaterThanOrEqual(2);
-    // And the banner stays inside the header row it lives in.
-    const [stripBox, headerBox] = await Promise.all([
+    // The banner fills the strip exactly, and the strip stays inside the header row.
+    const [bannerBox, stripBox, headerBox] = await Promise.all([
+      page.locator(BANNER).boundingBox(),
       page.locator(STRIP).boundingBox(),
       page.locator(HEADER).boundingBox(),
     ]);
+    expect(bannerBox!.height, 'banner: the strip height').toBe(stripBox!.height);
     expect(stripBox!.y, 'strip: top in the header').toBeGreaterThanOrEqual(headerBox!.y);
     expect(stripBox!.y + stripBox!.height, 'strip: bottom in the header').toBeLessThanOrEqual(
       headerBox!.y + headerBox!.height,
