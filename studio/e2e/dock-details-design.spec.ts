@@ -7,6 +7,7 @@ import {
   drawnHeights,
   expectAppearance,
   expectControlHeights,
+  ICON_SIZE,
   preferAppearance,
 } from './support/appearance';
 import { properties } from './support/panels';
@@ -30,9 +31,6 @@ const RUNS = [
   { density: 'compact', theme: 'light' },
   { density: 'comfortable', theme: 'dark' },
 ] as const;
-
-/** `--icon-size` per density, hard-coded as `CONTROL_H` is, so a drifting token fails here. */
-const ICON: Record<Density, number> = { compact: 16, comfortable: 20 };
 
 const DOCK = '.property-dock';
 
@@ -135,12 +133,23 @@ for (const { density, theme } of RUNS) {
           h: Math.round(r.height),
           radius: parseFloat(s.borderTopLeftRadius),
           size: s.fontSize,
+          // The glyph's own box against the circle's: centred within a pixel.
+          off: (() => {
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            const g = range.getBoundingClientRect();
+            return Math.max(
+              Math.abs(g.left + g.width / 2 - (r.left + r.width / 2)),
+              Math.abs(g.top + g.height / 2 - (r.top + r.height / 2)),
+            );
+          })(),
         };
       });
-    expect(help.w, '? width').toBe(ICON[d]);
-    expect(help.h, '? height').toBe(ICON[d]);
-    expect(help.radius, '? radius').toBeGreaterThanOrEqual(ICON[d] / 2);
+    expect(help.w, '? width').toBe(ICON_SIZE[d]);
+    expect(help.h, '? height').toBe(ICON_SIZE[d]);
+    expect(help.radius, '? radius').toBeGreaterThanOrEqual(ICON_SIZE[d] / 2);
     expect(help.size, '? type').toBe('12px');
+    expect(help.off, '? glyph centred').toBeLessThanOrEqual(1);
 
     // A cell's list: no reference fits a mapping column, so it is the box and
     // its two notes, measured where the cell's own rules apply.
@@ -237,12 +246,7 @@ for (const { density, theme } of RUNS) {
     await expect(page.getByRole('link', { name: 'Open full run' })).toBeVisible();
 
     expect(await offRampText(page, d, DOCK), 'run drawer: ramp').toEqual([]);
-    await expectControlHeights(
-      page,
-      `${DOCK} .node-detail-panel button:not(summary)`,
-      d,
-      'drawer acts',
-    );
+    await expectControlHeights(page, `${DOCK} .node-detail-panel button`, d, 'drawer acts');
     const gaps = await styles(page, [`${DOCK} .node-detail-panel`], ['margin-top']);
     expect(gaps[`${DOCK} .node-detail-panel`]?.['margin-top'], 'drawer').toBe('12px');
 

@@ -4033,7 +4033,7 @@ button.danger {
   background: none;
   color: var(--muted);
   font-size: 0.85rem;
-  line-height: var(--type-caption-line);
+  line-height: 1;
   cursor: pointer;
   pointer-events: all;
 }
@@ -4082,7 +4082,7 @@ button.danger {
   background: none;
   color: var(--muted);
   font-size: 0.85rem;
-  line-height: var(--type-caption-line);
+  line-height: 1;
   cursor: pointer;
   pointer-events: all;
 }

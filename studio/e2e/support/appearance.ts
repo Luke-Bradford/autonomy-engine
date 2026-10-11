@@ -21,6 +21,12 @@ export const ROW_H: Record<(typeof DENSITIES)[number], number> = {
   comfortable: 36,
 };
 
+/** The published `--icon-size` per density, held the same way as {@link CONTROL_H}. */
+export const ICON_SIZE: Record<(typeof DENSITIES)[number], number> = {
+  compact: 16,
+  comfortable: 20,
+};
+
 /**
  * The viewer's stored preferences, as the shipped app reads them. Hard-coded
  * rather than imported from `uiStore.ts`, for the reason `theme.ts` gives for

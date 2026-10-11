@@ -3,7 +3,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
 import { properties } from './support/panels';
 import { resolvedPaletteColor } from './support/theme';
-import { CONTROL_H } from './support/appearance';
+import { CONTROL_H, ICON_SIZE } from './support/appearance';
 import { expectInlineRow } from './support/inlineRow';
 
 /**
@@ -341,7 +341,6 @@ test('a checkbox sits beside its words: box, 8px, label — never stretched', as
  * its name and the Problems disclosure on the left, its icon acts on the right,
  * on one centre line with 8px between controls.
  */
-const ICON_SIZE: Record<Density, number> = { compact: 16, comfortable: 20 };
 const BODY_SIZE: Record<Density, string> = { compact: '13px', comfortable: '14px' };
 
 for (const density of ['compact', 'comfortable'] as const) {
