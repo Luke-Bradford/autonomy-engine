@@ -92,8 +92,9 @@ export const REVEAL_MARGIN = 24;
  * against, because canvas chrome is drawn there INSIDE the pane.
  *
  * `<MiniMap>` sits bottom-right in a `.react-flow__panel` with `pointer-events:
- * all`, at React Flow's default 200x150 plus a panel margin of 16px (`index.css`),
- * so it owns roughly the last 215 x 165 of the pane; `<Controls>` occupies the
+ * all`. It was sized for React Flow's default 200x150 plus a 15px panel margin
+ * (215 x 165); the map is now 160x120 with a 16px margin (`index.css`), so the
+ * inset over-reserves, the safe direction. `<Controls>` occupies the
  * same bottom band on the left. A box landed flush against those edges can have
  * its delete control — which is at the box's TOP-RIGHT — underneath the minimap:
  * revealed, and still unclickable. That is #785's trap intact, so the reveal

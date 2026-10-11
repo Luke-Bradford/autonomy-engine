@@ -2798,7 +2798,7 @@ button.danger {
   gap: var(--space-3);
   /* #1594 OR40 S6k — a control and 4px above and below it, so a standing
      banner's buttons never touch its border: 36px compact, 40px comfortable,
-     which is the header row's own height (`--header-h`), so it still fits. */
+     both inside the 40px header row (`--header-h`). */
   --editor-strip-h: calc(var(--control-h) + var(--space-2));
   height: var(--editor-strip-h);
   /* The minimum holds a standing banner's buttons ("Preview vN" and "Save as
@@ -4407,8 +4407,9 @@ button.danger {
 }
 
 /*
- * #788 — the implicit-routing advisory. Shares `.canvas-refusal`'s panel surface
- * below deliberately (same shape, same metrics), and diverges only in TONE: a
+ * #788 — the implicit-routing advisory. Shares one panel surface with
+ * `.canvas-refusal` (this rule), and the refusal's own rule below diverges only
+ * in TONE (and lays out its buttons): a
  * refusal answers a gesture the operator just made and takes `--error`, while
  * this is a standing description of a graph that is not wrong, only easy to
  * misread — so it takes the neutral border and muted text.
@@ -4421,7 +4422,8 @@ button.danger {
  * removed the routing and is about to re-author it. Nothing opts back in — unlike
  * the refusal, this carries no control.
  */
-.canvas-advisory {
+.canvas-advisory,
+.canvas-refusal {
   pointer-events: none;
   max-width: 46rem;
   padding: var(--space-2) var(--space-3);
@@ -4450,17 +4452,11 @@ button.danger {
  * nothing" surface inside the feature built to remove the first. Made
  * transparent to hit-testing instead, with the dismiss button opted back in. */
 .canvas-refusal {
-  pointer-events: none;
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  max-width: 46rem;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--error);
-  border-radius: var(--radius-surface);
-  background: var(--panel-2);
+  border-color: var(--error);
   color: var(--text);
-  font: var(--type-body);
 }
 
 .canvas-refusal button {
@@ -6799,7 +6795,7 @@ button.danger {
    React Flow's own `.react-flow__panel` sets 15px, and its stylesheet loads
    with the lazy canvas chunk, AFTER this one: a rule here at the same
    specificity loses (the minimap's old `margin: 10px` never applied). Hence
-   the extra class. 16px keeps the minimap inside `CANVAS_CHROME_INSET`. */
+   the extra class. The 160x120 map plus 16px stays inside `CANVAS_CHROME_INSET`. */
 .react-flow .react-flow__panel {
   margin: var(--space-4);
 }

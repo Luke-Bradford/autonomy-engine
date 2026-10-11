@@ -540,8 +540,9 @@ connect refusal, the minimap and zoom controls, the version preview bar and the 
 
 - **Panels:** every React Flow panel (minimap, controls, advisory, refusal) sits 16px in from the
   pane's edge. React Flow's own 15px loses to `.react-flow .react-flow__panel`. The advisory and the
-  refusal are `8px 12px` in body type at `--radius-surface`, and they differ only in tone: muted
-  text and border for the advisory, `--error` border for the refusal.
+  refusal share one surface, `8px 12px` in body type at `--radius-surface`, and differ only in tone:
+  muted text and border for the advisory, `--error` border for the refusal. The zoom controls'
+  buttons are still React Flow's own; only their panel's inset is on the scale.
 - **Refusal:** the back-edge offer is a secondary button and the dismiss is an `.icon-button`, both
   `--control-h`. Neither shrinks or wraps beside a long reason.
 - **Empty-canvas guide:** a 12px card in body type at `--radius-surface`, 8px between the lead and

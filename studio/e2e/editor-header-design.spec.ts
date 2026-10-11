@@ -209,18 +209,17 @@ for (const { density, theme } of RUNS) {
     }
     // S6k — the buttons sit inside the banner's border with room to spare, in
     // comfortable density too, where a 32px button once filled it edge to edge.
-    const clearance = await page.evaluate((sel) => {
+    const clearances = await page.evaluate((sel) => {
       const banner = document.querySelector(sel)!;
       const box = banner.getBoundingClientRect();
       const border = parseFloat(getComputedStyle(banner).borderTopWidth);
-      return Math.min(
-        ...[...banner.querySelectorAll('button')].map((b) => {
-          const r = b.getBoundingClientRect();
-          return Math.min(r.top - box.top - border, box.bottom - border - r.bottom);
-        }),
-      );
+      return [...banner.querySelectorAll('button')].map((b) => {
+        const r = b.getBoundingClientRect();
+        return Math.min(r.top - box.top - border, box.bottom - border - r.bottom);
+      });
     }, BANNER);
-    expect(clearance, 'banner: button clearance').toBeGreaterThanOrEqual(2);
+    expect(clearances.length, 'banner: buttons').toBeGreaterThan(0);
+    expect(Math.min(...clearances), 'banner: button clearance').toBeGreaterThanOrEqual(2);
     // The banner fills the strip exactly, and the strip stays inside the header row.
     const [bannerBox, stripBox, headerBox] = await Promise.all([
       page.locator(BANNER).boundingBox(),
