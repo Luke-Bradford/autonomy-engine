@@ -34,15 +34,24 @@ function measure(page: Page) {
   return page.evaluate(() => {
     const content = document.querySelector('.content')!;
     const table = content.querySelector('table')!;
+    // A label is cut when it needs more than its cell's content box. Not the
+    // button's own scrollWidth: in some fonts the ▲ glyph spills a pixel or two
+    // past its fixed-width box (CI's did, on a 240px Name column), which is no cut.
     const clipped = [...table.querySelectorAll<HTMLElement>('thead th')]
       // The ⋯ column's name is for assistive tech only.
       .filter((th) => !th.querySelector('.visually-hidden') && (th.textContent ?? '').trim())
-      .map((th) => th.querySelector<HTMLElement>('.sort-button') ?? th)
-      .filter((label) => label.scrollWidth > label.clientWidth + 1)
-      .map(
-        (label) =>
-          `${(label.textContent ?? '').trim()} (${label.scrollWidth}/${label.clientWidth}px)`,
-      );
+      .map((th) => {
+        const s = getComputedStyle(th);
+        const room = th.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight);
+        const label = th.querySelector<HTMLElement>('.sort-button');
+        return {
+          text: (th.textContent ?? '').trim(),
+          need: label?.scrollWidth ?? th.scrollWidth,
+          room: label ? room : th.clientWidth,
+        };
+      })
+      .filter(({ need, room }) => need > room + 1)
+      .map(({ text, need, room }) => `${text} (${need}/${Math.round(room)}px)`);
     const bar = content.querySelector('[role=group][aria-label="Filter pipelines"]')!;
     const controls = [...bar.querySelectorAll('button, input, select')]
       .filter((c) => c.getClientRects().length > 0)
