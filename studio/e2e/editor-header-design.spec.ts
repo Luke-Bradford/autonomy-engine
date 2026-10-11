@@ -7,6 +7,7 @@ import {
   DENSITIES,
   drawnHeights,
   expectAppearance,
+  expectControlHeights,
   preferAppearance,
 } from './support/appearance';
 import { triggerMenuItem } from './support/canvas';
@@ -107,9 +108,7 @@ async function expectPanel(page: Page, d: Density, label: string): Promise<void>
   expect(margins.length, `${label}: hints`).toBeGreaterThan(0);
   expect(new Set(margins), `${label}: hint margins`).toEqual(new Set(['0px']));
   // Single-line controls only: a JSON value is a multi-line box.
-  for (const { name, h } of await drawnHeights(page, `${PANEL} :is(input, select, button)`)) {
-    expect(h, `${label}: ${name}`).toBe(CONTROL_H[d]);
-  }
+  await expectControlHeights(page, `${PANEL} :is(input, select, button)`, d, label);
   expectInlineRow(`${label} actions`, await inlineItems(page, `${PANEL} .form-actions > button`));
 }
 
