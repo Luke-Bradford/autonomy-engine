@@ -310,7 +310,7 @@ export const PIPELINE_GRID_COLUMN_WIDTHS: Record<
   name: { min: 120, default: 240 },
   description: { min: 96, default: 240 },
   lastRun: { min: 110, default: 168 },
-  successRate: { min: 80, default: 112 },
+  successRate: { min: 80, default: 128 },
   runs: { min: 56, default: 88 },
   duration: { min: 88, default: 128 },
   nextRun: { min: 96, default: 128 },

@@ -85,6 +85,8 @@ export const FORM_SECTION_HINTS = {
       "An export of this list's kind; secrets and bindings are never exported, so what needs rebinding is listed after.",
   },
   pipeline: {
+    // #1594 OR40 S6e — the Pipelines list's title `?`.
+    page: 'Each pipeline in this workspace, with its last run, its recent success rate and its triggers.',
     basics: 'What the pipeline is called, the folder it is filed under, and what it is for.',
     importFile:
       'A pipeline, connection, trigger, dataset or global parameter export; what it needs rebound is listed after.',

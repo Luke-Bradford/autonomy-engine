@@ -7,7 +7,9 @@ import { offRampText } from './support/typeRamp';
 
 /**
  * #1594 OR40 S6d — the five Manage lists on the design system, measured at
- * 1440x900 in compact light and comfortable dark.
+ * 1440x900 in compact light and comfortable dark. S6e adds the Pipelines list,
+ * whose header is the same: its title's `?`, no prose, the create button. Its
+ * Import is a drawer, not a section; its grid is `pipelines-design.spec.ts`'s.
  *
  * On each page: no paragraph of prose under the title, which says what the page
  * holds through its `?` instead ("About Secrets"), the page's description; the
@@ -26,12 +28,13 @@ import { offRampText } from './support/typeRamp';
 type Density = (typeof DENSITIES)[number];
 
 const PAGES = [
-  { path: 'connections', title: 'Connections', create: 'New connection', imports: true },
-  { path: 'datasets', title: 'Datasets', create: 'New dataset', imports: true },
-  { path: 'triggers', title: 'Triggers', create: 'New trigger', imports: true },
-  { path: 'secrets', title: 'Secrets', create: 'New secret', imports: false },
+  { path: 'author/pipelines', title: 'Pipelines', create: '+ New pipeline', imports: false },
+  { path: 'manage/connections', title: 'Connections', create: 'New connection', imports: true },
+  { path: 'manage/datasets', title: 'Datasets', create: 'New dataset', imports: true },
+  { path: 'manage/triggers', title: 'Triggers', create: 'New trigger', imports: true },
+  { path: 'manage/secrets', title: 'Secrets', create: 'New secret', imports: false },
   {
-    path: 'global-params',
+    path: 'manage/global-params',
     title: 'Global parameters',
     create: 'New global parameter',
     imports: true,
@@ -114,7 +117,7 @@ for (const { density, theme } of RUNS) {
     await preferAppearance(page, theme, density as Density);
 
     for (const p of PAGES) {
-      await page.goto(`/#/manage/${p.path}`);
+      await page.goto(`/#/${p.path}`);
       await fluentRootReady(page);
       await expectAppearance(page, theme, density as Density);
       const region = page.getByRole('region', { name: p.title, exact: true });

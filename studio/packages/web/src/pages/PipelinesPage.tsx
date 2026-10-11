@@ -82,6 +82,8 @@ import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 import { pipelineDeletePlan, readPipelineDependents } from './pipelineDeleteConfirm';
 import { PageHeader } from '../lib/PageHeader';
+import { pageHelpId } from '../lib/pageHelpId';
+import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 
 /** The folder picker's options: each folder in the list, then "no folder". */
 function folderOptionsOf(pipelines: readonly Pipeline[]): { value: string; label: string }[] {
@@ -771,8 +773,16 @@ export function PipelinesPage({
   };
 
   return (
-    <section aria-labelledby="pipelines-heading" className="pipelines-page">
-      <PageHeader title="Pipelines" headingId="pipelines-heading">
+    <section
+      aria-labelledby="pipelines-heading"
+      aria-describedby={pageHelpId('pipelines-heading')}
+      className="pipelines-page"
+    >
+      <PageHeader
+        title="Pipelines"
+        headingId="pipelines-heading"
+        help={FORM_SECTION_HINTS.pipeline.page}
+      >
         {/* #1569 slice 3 — the toolbar: each opens the drawer beside the list. */}
         <button
           ref={newButtonRef}
