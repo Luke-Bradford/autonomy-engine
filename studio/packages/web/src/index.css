@@ -1170,9 +1170,8 @@ thead th {
 
 /* A checkbox or radio reads ACROSS: box, an 8px gap, then its words. Never
    stretched, never stacked, whatever column rule its form gives labels. Folds
-   the forms' `label.checkbox` and the panel's `.contract-check` rules; keep
-   `.contract-check` in the markup, which the compact dock's label-gap rule
-   excludes by class. */
+   the forms' `label.checkbox` and the panel's `.contract-check` rules, and
+   outranks `.property-panel label`'s column. */
 label:has(> input[type='checkbox']),
 label:has(> input[type='radio']) {
   display: inline-flex;
@@ -1317,30 +1316,34 @@ td button + button {
   display: block;
 }
 
-/* #439 U14b / #854 — the recurrence and tumbling-window builders read as
-   grouped sub-forms within the trigger form (a bare <fieldset> would otherwise
-   inherit the browser default border and collapse its stacked children). Both
-   share one rule; a THIRD builder has to add itself to these selector lists.
-   #981 added the fourth, `.binding-kind`. */
-.trigger-form .recurrence-editor,
-.trigger-form .window-editor,
-.trigger-form .run-windows,
-.trigger-form .binding-kind {
+/* The ONE bordered group: a fieldset gathering a few related controls under
+   its legend (a bare <fieldset> would otherwise take the browser's border and
+   collapse its stacked children). The trigger form's builders (#439 U14b,
+   #854, #981), a bound end's parameter overrides and the allowlist they are
+   drawn from (#1304, #1305), and an edge's outcome and a call's target mode
+   (#425) — #1594 OR40 S6l folded their three copies of this skin into one. A
+   new group adds itself to these selector lists. */
+.trigger-form :is(.recurrence-editor, .window-editor, .run-windows, .binding-kind),
+.param-overrides,
+.overridable-keys,
+.edge-outcomes,
+.call-mode {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   margin: 0;
-  padding: 0.75rem 1rem;
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-surface);
 }
 
-.trigger-form .recurrence-editor legend,
-.trigger-form .window-editor legend,
-.trigger-form .run-windows legend,
-.trigger-form .binding-kind legend {
-  padding: 0 0.35rem;
-  font-size: 0.85rem;
+.trigger-form :is(.recurrence-editor, .window-editor, .run-windows, .binding-kind) > legend,
+.param-overrides > legend,
+.overridable-keys > legend,
+.edge-outcomes > legend,
+.call-mode > legend {
+  padding: 0 var(--space-1);
+  font-size: var(--type-caption-size);
   color: var(--muted);
 }
 
@@ -1710,7 +1713,7 @@ td button + button {
 .required-mark::after {
   content: '*';
   color: var(--error);
-  margin-left: 0.2rem;
+  margin-left: var(--space-1);
 }
 
 /* The description under a field, then its stored key in code type: the key
@@ -1910,7 +1913,7 @@ button.danger {
   z-index: 2;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: var(--space-1);
   background: var(--panel);
 }
 
@@ -1919,9 +1922,9 @@ button.danger {
    widen their tab. In the tab's corner, over its padding, "•" for an edit not yet
    applied: the one mark typing raises, so it takes no width and moves no tab. */
 .panel-tabs__status {
-  margin-left: 4px;
-  font-size: 12px;
-  font-weight: 600;
+  margin-left: var(--space-1);
+  font-size: var(--type-caption-size);
+  font-weight: var(--weight-strong);
 }
 
 .panel-tabs [role='tab'] {
@@ -1954,9 +1957,10 @@ button.danger {
   position: absolute;
   top: 0;
   right: 0;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1;
+  font-size: var(--type-caption-size);
+  font-weight: var(--weight-strong);
+  /* One glyph tall, so the mark sits in the tab's corner and not a line below it. */
+  line-height: var(--type-caption-size);
 }
 
 .panel-tabs__status[data-tone='error'] {
@@ -1985,7 +1989,7 @@ button.danger {
 
 .property-panel__type {
   color: var(--muted);
-  font-size: 0.8rem;
+  font-size: var(--type-caption-size);
 }
 
 /* #1477 OR29 — the header is ONE row wherever the actions leave the name room:
@@ -2024,7 +2028,7 @@ button.danger {
 .property-panel__actions {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: var(--space-2);
   margin-left: auto;
 }
 
@@ -2221,8 +2225,8 @@ button.danger {
 .property-panel .labelled-control:not(.config-field) {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
-  font-size: 0.9rem;
+  gap: var(--space-1);
+  font-size: var(--type-caption-size);
   color: var(--muted);
 }
 
@@ -2230,26 +2234,6 @@ button.danger {
    column. As a section's first field, the heading already does that. */
 .property-panel .section__body > .contract-section:first-child {
   margin-top: 0;
-}
-
-/* #1304 — a bound end's parameter overrides share the card idiom, so each
-   end's overrides read as belonging to the picker above them. #1305 — so does
-   the owner-side allowlist those overrides are drawn from. */
-.param-overrides,
-.overridable-keys {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.6rem;
-  margin: 0;
-}
-
-.overridable-keys legend {
-  font-size: 0.8rem;
-  color: var(--muted);
-  padding: 0 0.3rem;
 }
 
 /* #425 — a call node's argument rows. A list, because the arguments ARE a list
@@ -2262,7 +2246,7 @@ button.danger {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--space-2);
 }
 
 /* U16 — a group of a panel's content with no heading of its own (a config
@@ -2272,8 +2256,8 @@ button.danger {
 .contract-section {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  margin-top: 0.75rem;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
 }
 
 /* A WARNING about something the save will nonetheless accept — deliberately not
@@ -2431,7 +2415,7 @@ button.danger {
 .property-dock {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: var(--space-1);
   /* A share of the column, bounded both ways: enough rows to edit a form in on
      a short screen, never so much that the canvas drops under the 200px
      `canvas-fills-viewport.spec.ts` guards. The percentage resolves against
@@ -2490,7 +2474,7 @@ button.danger {
    the bottom dock and is ignored here. */
 .canvas-main--dock-right .property-dock__body {
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--space-2);
 }
 
 /* The strip (name, Problems, four icon acts) in a dock that may be 320px
@@ -2540,7 +2524,7 @@ button.danger {
   max-width: none;
   height: auto;
   max-height: none;
-  padding: 8px;
+  padding: var(--space-2);
   background: var(--panel);
   border-inline-start: 1px solid var(--border);
   box-shadow: -4px 0 16px var(--shadow);
@@ -2560,7 +2544,7 @@ button.danger {
 .property-dock--collapsed {
   height: auto;
   max-height: none;
-  margin-top: 0.5rem;
+  margin-top: var(--space-2);
 }
 
 .property-dock__body:not([hidden]) {
@@ -2618,17 +2602,13 @@ button.danger {
   min-height: 0;
 }
 
-.problems-panel .badge-list {
-  margin-top: 0;
-}
-
 .count-badge {
   display: inline-block;
   min-width: 1.4em;
-  padding: 0 0.35em;
-  border-radius: 999px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
   background: var(--border);
-  font-size: 0.75rem;
+  font-size: var(--type-caption-size);
   text-align: center;
 }
 
@@ -2956,12 +2936,9 @@ button.danger {
    `?` and the prose removed from the pipeline panel apply in both densities.)
 
    The numbers are the design tokens (`theme/tokens.css`, #1594 OR40 S1), which
-   hold both densities' values. These dock rules stay compact-scoped until S6
-   moves the dock onto the shared primitives. */
-:root[data-density='compact'] .property-dock {
-  gap: var(--space-1);
-}
-
+   hold both densities' values. #1594 OR40 S6l moved the dock's type and the
+   label gap onto the base rules for both densities; what stays here is the
+   compact panel's tighter spacing. */
 :root[data-density='compact'] .property-dock .property-panel {
   --property-panel-pad: var(--space-2);
   padding: var(--property-panel-pad);
@@ -3000,23 +2977,6 @@ button.danger {
   font-size: var(--type-body-size);
   letter-spacing: normal;
   text-transform: none;
-}
-
-:root[data-density='compact'] .property-dock .property-panel label,
-:root[data-density='compact'] .property-dock .property-panel .labelled-control:not(.config-field) {
-  font-size: var(--type-caption-size);
-}
-
-/* The gap only where a label is the column of a label over its control: the
-   row labels (a routing outcome, a checkbox, a call mode) keep their own
-   spacing between box or swatch and word. `row-gap` only: a label-left row's
-   12px column gap (the form layout, below) is not this rule's to set. */
-:root[data-density='compact']
-  .property-dock
-  .property-panel
-  label:not(.edge-outcome, .contract-check, .call-mode label),
-:root[data-density='compact'] .property-dock .property-panel .labelled-control:not(.config-field) {
-  row-gap: var(--space-1);
 }
 
 :root[data-density='compact'] .property-dock .property-panel .field-hint,
@@ -3069,7 +3029,7 @@ button.danger {
 .connection-picker {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   align-self: flex-start;
   justify-self: start;
   max-width: 100%;
@@ -3100,7 +3060,7 @@ button.danger {
   > input.fui-Combobox__input {
   width: 100%;
   min-width: 0;
-  padding-right: 28px;
+  padding-right: var(--control-h);
   text-overflow: ellipsis;
 }
 .connection-picker .connection-picker__combobox > input:focus-visible {
@@ -3129,7 +3089,7 @@ button.danger {
 .connection-option {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  column-gap: 8px;
+  column-gap: var(--space-2);
   align-items: center;
 }
 .connection-option > :not(.kind-icon) {
@@ -3235,8 +3195,8 @@ button.danger {
     & > label {
       display: block;
       grid-column: 1;
-      line-height: 16px;
-      padding-block: calc((var(--control-h) - 16px) / 2);
+      line-height: var(--type-caption-line);
+      padding-block: var(--form-label-inset);
     }
 
     & > :not(label, .labelled-control__head) {
@@ -3252,7 +3212,7 @@ button.danger {
   }
 
   :root[data-density] .labelled-control > .labelled-control__head > label {
-    line-height: 16px;
+    line-height: var(--type-caption-line);
   }
 
   /* Its note opens under the label column but reads across the form, not in
@@ -3323,7 +3283,7 @@ button.danger {
     max-width: none;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    column-gap: calc(2 * var(--space-2));
+    column-gap: var(--space-4);
     row-gap: var(--space-2);
     align-items: start;
   }
@@ -3520,7 +3480,7 @@ button.danger {
 }
 
 .subject-issues {
-  margin-top: 0.75rem;
+  margin-top: var(--space-3);
 }
 
 .flow-node.selected .flow-node-icon {
@@ -3756,49 +3716,30 @@ button.danger {
  */
 .edge-outcomes,
 .call-mode {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.5rem 0.6rem 0.6rem;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-}
-
-.edge-outcomes legend,
-.call-mode legend {
-  padding: 0 0.3rem;
-  font-size: 0.72rem;
-  color: var(--muted);
+  /* The bordered group's skin; its options sit closer than its fields would. */
+  gap: var(--space-1);
 }
 
 /* #425 — the call-node target-mode toggle shares the edge-outcome fieldset's
    look for the reason it shares its shape: a small group of radios inside the
    property panel, one tab stop with arrow-key movement inside it. A second set
    of near-identical rules would be two answers to one question. */
-/* SCOPED TO THE PANEL so it outranks `.property-panel label`, which is a column
-   because most fields in this panel stack their caption above their control. An
-   outcome is not that shape: it is a swatch, a radio and a word that read
-   ACROSS. Without the extra class the panel rule won on specificity (0,1,1
-   against 0,1,0) and each option rendered as a centred three-line stack — a
-   radio, a coloured dot and a word, one per line, which reads as a broken list
-   rather than a picker. `.contract-check` opts out of the same rule for the same
-   reason; this is that idiom, not a new one. */
+/* An outcome is a swatch, a radio and a word that read ACROSS: the radio rule
+   (`label:has(> input[type='radio'])`) lays it out and gaps it. This only makes
+   each option a full-width, control-tall row, so the whole row is the target.
+   SCOPED TO THE PANEL as well, to outrank `.property-panel label`. */
 .property-panel .edge-outcome,
 .property-panel .call-mode label,
 .edge-outcome,
 .call-mode label {
   display: flex;
-  flex-direction: row;
-  align-items: center;
   justify-content: flex-start;
   text-align: left;
-  gap: 0.5rem;
-  font-size: 0.8rem;
+  font-size: var(--type-caption-size);
   cursor: pointer;
-  min-height: 1.75rem;
-  padding: 0 0.35rem;
-  border-radius: 4px;
+  min-height: var(--control-h);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-control);
 }
 
 /* The whole row is the target — a 13px radio is not a pointer target on a panel
@@ -3814,7 +3755,7 @@ button.danger {
 .property-panel .edge-outcome:has(input:checked) {
   background: var(--panel-2);
   color: var(--text);
-  font-weight: 600;
+  font-weight: var(--weight-strong);
 }
 
 /* A taken outcome is shown, not hidden: the operator needs to know the choice
@@ -3829,7 +3770,7 @@ button.danger {
   width: 8px;
   height: 8px;
   flex: none;
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   background: var(--outcome-color, var(--muted));
 }
 
@@ -3857,14 +3798,14 @@ button.danger {
    panel because the group below cannot express it — a radio for an outcome that
    is not offered would be a choice, and this is a fact. */
 .edge-outcome-orphan {
-  margin: 0 0 0.3rem;
-  font-size: 0.72rem;
+  margin: 0 0 var(--space-1);
+  font-size: var(--type-caption-size);
   color: var(--warning, var(--muted));
 }
 
 .edge-rewire-hint {
-  margin: 0.1rem 0 0;
-  font-size: 0.72rem;
+  margin: 0;
+  font-size: var(--type-caption-size);
   color: var(--muted);
 }
 
@@ -4539,18 +4480,17 @@ button.danger {
 }
 
 .badge-list {
-  margin-top: 1rem;
-  padding: 0.6rem 0.9rem;
+  padding: var(--space-2) var(--space-3);
   background: var(--panel);
   border: 1px solid var(--border);
   border-left: 3px solid var(--error);
-  border-radius: 8px;
-  font-size: 0.85rem;
+  border-radius: var(--radius-surface);
+  font-size: var(--type-body-size);
 }
 
 .badge-list ul {
-  margin: 0.4rem 0 0;
-  padding-left: 1.1rem;
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
   color: var(--muted);
 }
 
@@ -5165,13 +5105,13 @@ button.danger {
 .config-field {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: var(--space-1);
 }
 
 /* #1169 — an array-of-objects config field: its label, its `RowTable`, and its
    Add button, spaced the way a `<label>` names a control. */
 .object-list {
-  gap: 0.5rem;
+  gap: var(--space-2);
 }
 
 /* #1304 — Remove sits under its input, and the flag under that. */
@@ -5179,7 +5119,7 @@ button.danger {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.25rem;
+  gap: var(--space-1);
 }
 
 .param-override-row > .config-field {
@@ -5362,7 +5302,7 @@ button.danger {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-1);
   min-width: 0;
 }
 
@@ -5376,7 +5316,7 @@ button.danger {
 }
 
 .object-list-label {
-  font-size: 0.8rem;
+  font-size: var(--type-caption-size);
   color: var(--muted);
 }
 
@@ -5387,8 +5327,8 @@ button.danger {
 
 .expression-picker-toggle {
   align-self: flex-start;
-  font-size: 0.8rem;
-  padding: 0.15rem 0.45rem;
+  font-size: var(--type-caption-size);
+  padding: 0 var(--space-2);
 }
 
 /* IN-FLOW, not an overlay — it pushes the form below it down rather than

@@ -79,6 +79,9 @@
      `index.css`). One width in both densities, so every form's controls start
      at one x. */
   --form-label-column: 150px;
+  /* S6l — the space above and below a label-left row's caption line, so its
+     text sits on the centre of a `--control-h` control beside it. */
+  --form-label-inset: calc((var(--control-h) - var(--type-caption-line)) / 2);
   /* S2b — a glyph in an icon button (the Fluent icons are 1em). */
   --icon-size: 16px;
 

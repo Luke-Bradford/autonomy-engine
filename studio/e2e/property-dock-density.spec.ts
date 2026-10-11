@@ -127,7 +127,10 @@ test.describe('#1477 OR29 — dock density', () => {
     expect(comfortable.density).toBe('comfortable');
     expect(comfortable.fontSize).toBeGreaterThan(compact.fontSize);
     expect(comfortable.height).toBeGreaterThan(compact.height);
-    expect(comfortable.labelFontSize).toBeGreaterThan(compact.labelFontSize ?? 0);
+    // #1594 OR40 S6l — a label is caption type in both densities; the field
+    // text and the control are what grow.
+    expect(comfortable.labelFontSize).toBe(12);
+    expect(compact.labelFontSize).toBe(12);
     // The section type steps up with the density (14 → 16).
     expect(comfortable.headingTransform).toBe('none');
     expect(comfortable.headingFontSize).toBe(16);
