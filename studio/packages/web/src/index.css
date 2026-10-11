@@ -1868,8 +1868,8 @@ button.danger {
    height, which React Flow needs. */
 .canvas-body {
   display: flex;
-  gap: 0.5rem;
-  margin-top: 0.25rem;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
   flex: 1 1 auto;
   min-height: 0;
 }
@@ -2359,7 +2359,7 @@ button.danger {
    is a real check rather than a declaration that merely looks like one. */
 .canvas-wrap {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-surface);
   overflow: hidden;
   /* #852 — now a FLEX item of `.canvas-main` rather than a grid item, so the
      definite height React Flow needs comes from here: `.canvas-main` is
@@ -3339,8 +3339,8 @@ button.danger {
 .flow-node {
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-surface);
+  padding: var(--space-2) var(--space-3);
   /* A FIXED width, not a minimum, and it is load-bearing rather than cosmetic.
      The summary line is `nowrap` so it can elide, which means an unconstrained box
      would GROW with its content — and when the title was `nowrap` too, "HTTP
@@ -3365,9 +3365,9 @@ button.danger {
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-2);
   color: var(--text);
-  font-size: 0.85rem;
+  font: var(--type-body);
   box-sizing: border-box;
 }
 
@@ -3378,8 +3378,8 @@ button.danger {
 }
 
 .flow-node-icon svg {
-  width: 18px;
-  height: 18px;
+  width: var(--icon-size);
+  height: var(--icon-size);
 }
 
 /* #1394 OR3 — the name, its summary line and the badges, stacked beside the glyph. */
@@ -3387,7 +3387,7 @@ button.danger {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: var(--space-1);
   min-width: 0;
 }
 
@@ -3402,8 +3402,7 @@ button.danger {
   line-clamp: 2;
   overflow: hidden;
   overflow-wrap: anywhere;
-  line-height: 1.25;
-  font-weight: 600;
+  font: var(--type-body-strong);
 }
 
 /* The summary row is RESERVED at a FIXED height — drawn when there is nothing
@@ -3414,11 +3413,11 @@ button.danger {
 .flow-node-meta {
   display: flex;
   align-items: center;
-  gap: 0.3rem;
-  height: 1.25rem;
-  line-height: 1.25rem;
+  gap: var(--space-1);
+  /* One body line tall, so a caption and a bordered badge both sit inside it. */
+  height: var(--type-body-line);
   color: var(--muted);
-  font-size: 0.72rem;
+  font: var(--type-caption);
 }
 
 .flow-node-summary {
@@ -3431,10 +3430,9 @@ button.danger {
 
 .flow-node-badge {
   flex: none;
-  padding: 0 0.25rem;
+  padding: 0 var(--space-1);
   border: 1px solid var(--border);
-  border-radius: 3px;
-  line-height: 1.3;
+  border-radius: var(--radius-control);
   white-space: nowrap;
 }
 
@@ -3466,18 +3464,20 @@ button.danger {
    absolutely positioned and which both boxes fill. */
 .flow-issue-badge {
   position: absolute;
-  top: -8px;
-  right: -8px;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 4px;
+  /* A circle at `--icon-size` centred on the corner, growing into a pill only
+     for a two-digit count. */
+  top: calc(var(--icon-size) / -2);
+  right: calc(var(--icon-size) / -2);
+  min-width: var(--icon-size);
+  height: var(--icon-size);
+  padding: 0 var(--space-1);
   box-sizing: border-box;
-  border-radius: 9px;
+  border-radius: var(--radius-pill);
   background: var(--error);
   color: var(--bg);
-  font-size: 0.7rem;
-  font-weight: 700;
-  line-height: 18px;
+  font: var(--type-caption);
+  font-weight: var(--weight-strong);
+  line-height: var(--icon-size);
   text-align: center;
 }
 
@@ -3837,11 +3837,9 @@ button.danger {
   color: var(--text);
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 1px 4px;
-  font-size: 0.62rem;
-  line-height: 1.2;
-  letter-spacing: 0.01em;
+  border-radius: var(--radius-control);
+  padding: 0 var(--space-1);
+  font: var(--type-caption);
   /* Wider than the bare word's old 4rem by the chip's padding and border, so
      `completion` and a short switch case still fit whole. */
   max-width: 6rem;
@@ -3954,7 +3952,7 @@ button.danger {
   height: 100%;
   box-sizing: border-box;
   border: 1px dashed var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-surface);
   background: var(--container-fill);
   pointer-events: none;
 }
@@ -3965,10 +3963,10 @@ button.danger {
 
 .flow-container-label {
   position: absolute;
-  top: 4px;
-  left: 10px;
+  top: var(--space-1);
+  left: var(--space-3);
   color: var(--muted);
-  font-size: var(--type-caption-size);
+  font: var(--type-caption);
 }
 
 /*
@@ -4032,8 +4030,7 @@ button.danger {
   border: 0;
   background: none;
   color: var(--muted);
-  font-size: 0.85rem;
-  line-height: 1;
+  font: var(--type-body);
   cursor: pointer;
   pointer-events: all;
 }
@@ -4081,8 +4078,7 @@ button.danger {
   border: 0;
   background: none;
   color: var(--muted);
-  font-size: 0.85rem;
-  line-height: 1;
+  font: var(--type-body);
   cursor: pointer;
   pointer-events: all;
 }
@@ -4223,6 +4219,12 @@ button.danger {
   .react-flow__edge .react-flow__edge-textwrapper {
     transition: none;
   }
+}
+
+/* #1594 OR40 S6n — the label's type on the ramp. React Flow's own sheet draws
+   it at 10px; two classes outrank its one whichever sheet loads last. */
+.react-flow__edge .react-flow__edge-text {
+  font: var(--type-caption);
 }
 
 .edge-marker-defs {
@@ -4478,7 +4480,6 @@ button.danger {
 
 .flow-node-sub {
   color: var(--muted);
-  font-size: 0.72rem;
 }
 
 .badge-list {
@@ -4895,7 +4896,7 @@ button.danger {
   height: 60vh;
   min-height: 320px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-surface);
   overflow: hidden;
 }
 
@@ -4923,23 +4924,27 @@ button.danger {
   flex-direction: column;
   align-items: stretch;
   justify-content: center;
-  gap: 0.25rem;
+  gap: var(--space-1);
 }
 
 .run-node-card {
   display: flex;
   align-items: flex-start;
-  gap: 0.5rem;
+  gap: var(--space-2);
   min-width: 0;
 }
 
+/* Caption type ONCE, here, so the status and the facts both take its 16px
+   line: the card is drawn at a fixed `RUN_NODE_BASE_HEIGHT`, and a child that
+   kept the body's 20px line would push the foot out of it. */
 .run-node-foot {
   display: flex;
   align-items: baseline;
-  gap: 0.5rem;
-  height: 1.1rem;
+  gap: var(--space-2);
+  height: var(--type-caption-line);
   min-width: 0;
   white-space: nowrap;
+  font: var(--type-caption);
 }
 
 .run-node-status {
@@ -4948,7 +4953,6 @@ button.danger {
 
 .run-node-facts {
   color: var(--muted);
-  font-size: 0.72rem;
   font-variant-numeric: tabular-nums;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5021,10 +5025,6 @@ button.danger {
   outline-style: dashed;
 }
 
-.run-node-status {
-  font-size: var(--type-caption-size);
-}
-
 /* #1395 OR4 — the run the editor started, under each AUTHORING card. Absolute,
    so it is outside the box's measured size: a run arriving moves no node and
    re-routes no edge (#1393). The tone is a left rule rather than the monitor's
@@ -5037,9 +5037,10 @@ button.danger {
   right: 0;
   display: flex;
   align-items: baseline;
-  gap: 0.5rem;
-  padding-left: 0.4rem;
+  gap: var(--space-2);
+  padding-left: var(--space-2);
   border-left: 3px solid transparent;
+  font: var(--type-caption);
   white-space: nowrap;
   overflow: hidden;
   pointer-events: none;
