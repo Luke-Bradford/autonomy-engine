@@ -4887,10 +4887,10 @@ button.danger {
 }
 
 /* #1392 — the version beside the pipeline's name in the run heading reads as a
-   qualifier, not as part of the name. */
+   qualifier, not as part of the name: muted, in the title's own type (#1594
+   OR40 S6g — it was 20/400, which is off the ramp). */
 .run-heading__version {
   color: var(--muted);
-  font-weight: normal;
 }
 
 /* #1566 — a run's secondary way into the editor: a small muted icon with a
@@ -6420,13 +6420,15 @@ button.danger {
    percentages come from `placeSpans`, which owns the arithmetic (and the
    divide-by-zero floor that keeps a degenerate window from emitting `NaN%`). */
 .attempt-timeline {
-  margin-top: 1.5rem;
+  margin-top: var(--space-5);
 }
 
+/* #1594 OR40 S6g — the timeline's text is caption (the axis note) or the
+   inherited body; it was 0.9rem, 14.4px, off the ramp. */
 .timeline-axis-note {
   color: var(--muted);
-  font-size: 0.9rem;
-  margin: 0 0 0.75rem;
+  font: var(--type-caption);
+  margin: 0 0 var(--space-3);
 }
 
 .timeline-rows {
@@ -6435,21 +6437,20 @@ button.danger {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: var(--space-1);
 }
 
 .timeline-row {
   display: grid;
   grid-template-columns: minmax(6rem, 12rem) 1fr;
   align-items: center;
-  gap: 0.75rem;
+  gap: var(--space-3);
 }
 
 .timeline-row-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.9rem;
 }
 
 .timeline-track {
@@ -6457,14 +6458,14 @@ button.danger {
   display: block;
   height: 1.1rem;
   background: var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-control);
 }
 
 .timeline-span {
   position: absolute;
   top: 0;
   bottom: 0;
-  border-radius: 3px;
+  border-radius: var(--radius-control);
   background: var(--muted);
   /* A measured span shorter than a pixel of the axis still HAPPENED, and a bar
      with no width reads as a missing node rather than a fast one. */
@@ -6521,19 +6522,17 @@ button.danger {
 }
 
 .timeline-untimed {
-  margin-top: 1rem;
+  margin-top: var(--space-4);
   color: var(--muted);
-  font-size: 0.9rem;
 }
 
 .timeline-untimed h3 {
-  margin: 0 0 0.35rem;
-  font-size: 0.9rem;
+  margin: 0 0 var(--space-1);
 }
 
 .timeline-untimed ul {
   margin: 0;
-  padding-left: 1.1rem;
+  padding-left: var(--space-4);
 }
 
 .timeline-untimed-name {

@@ -127,6 +127,12 @@ pre {
   font-family: var(--font-mono);
 }
 
+/* The browser's `bolder` draws these at 700, off the ramp's two weights. */
+b,
+strong {
+  font-weight: var(--weight-strong);
+}
+
 /* A heading with no class rule of its own takes the ramp, so none falls back
    to the browser default. The page title is the one h1 (#1594 OR40 S5), its
    sections are h2, and what sits under a section is h3 or h4.
