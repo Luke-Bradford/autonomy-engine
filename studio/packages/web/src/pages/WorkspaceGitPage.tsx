@@ -40,6 +40,9 @@ import { useConfirm } from '../lib/confirm/useConfirm';
 import { When } from '../lib/When';
 import { PageHeader } from '../lib/PageHeader';
 import { OneLine } from '../lib/OneLine';
+import { Section } from '../lib/Section';
+import { LabelledControl } from '../lib/LabelledControl';
+import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 
 /**
  * #3 G10 / U18 slices 1-2 — Manage → Git (#956, #962).
@@ -153,13 +156,10 @@ export function WorkspaceGitPage() {
 
   return (
     <section aria-labelledby="workspace-git-heading">
+      {/* #1594 OR40 S6c — no prose under the title: that git is optional is
+          the not-connected section's `?`, and each section below is the one
+          `Section`, a named region with its own `?`. */}
       <PageHeader title="Git" headingId="workspace-git-heading" />
-
-      <p className="page-hint">
-        Git is optional. Without a repo this workspace still works — saving a pipeline mints a
-        version in the database either way. Connecting one lets you commit the whole workspace to a
-        branch and review it like any other code.
-      </p>
 
       {loadError && (
         <p role="alert" className="error">
@@ -220,51 +220,63 @@ function ConnectForm({ onConnected }: { onConnected: (git: WorkspaceGitStatus) =
   }
 
   return (
-    <form onSubmit={(e) => void onSubmit(e)} aria-label="Connect a repository">
-      <h2>No repository connected</h2>
+    // "Not connected", the mirror of "Connected", rather than "Repository":
+    // the section and the field would then share one name, and so would their
+    // two "About Repository" `?`s.
+    <Section level={2} landmark heading="Not connected" help={FORM_SECTION_HINTS.git.notConnected}>
+      <form
+        className="field-form"
+        onSubmit={(e) => void onSubmit(e)}
+        aria-label="Connect a repository"
+      >
+        {/* Stated at the point of entry rather than left to a rejection: the
+            shared schema REFUSES a credential embedded in the URL, because the
+            URL is stored in plaintext and quoted back in error messages. */}
+        <LabelledControl
+          label="Repository"
+          about={{
+            name: 'Repository',
+            note: 'Authentication comes from your own environment (an SSH agent or a git credential helper), or from a token stored once connected. Do not put a password in the URL: it is stored as written and will be refused.',
+          }}
+        >
+          {(id, describedBy) => (
+            <input
+              id={id}
+              aria-describedby={describedBy}
+              type="text"
+              value={repoUrl}
+              onChange={(e) => setRepoUrl(e.target.value)}
+              placeholder="https://github.com/owner/repo.git, git@host:owner/repo.git, or a local path"
+              required
+            />
+          )}
+        </LabelledControl>
 
-      <label>
-        Repository
-        <input
-          type="text"
-          value={repoUrl}
-          onChange={(e) => setRepoUrl(e.target.value)}
-          placeholder="https://github.com/owner/repo.git, git@host:owner/repo.git, or a local path"
-          required
-        />
-      </label>
+        <LabelledControl label="Collaboration branch">
+          {(id) => (
+            <input
+              id={id}
+              type="text"
+              value={collabBranch}
+              onChange={(e) => setCollabBranch(e.target.value)}
+              placeholder="main"
+            />
+          )}
+        </LabelledControl>
 
-      <label>
-        Collaboration branch
-        <input
-          type="text"
-          value={collabBranch}
-          onChange={(e) => setCollabBranch(e.target.value)}
-          placeholder="main"
-        />
-      </label>
+        {error && (
+          <p role="alert" className="error">
+            {error}
+          </p>
+        )}
 
-      {/* Stated at the point of entry rather than left to a rejection: the
-          shared schema REFUSES a credential embedded in the URL, because the
-          URL is stored in plaintext and quoted back in error messages. */}
-      <p className="page-hint">
-        Authentication comes from your own environment (an SSH agent or a git credential helper), or
-        from a token stored below once connected. Do not put a password in the URL — it is stored as
-        written and will be refused.
-      </p>
-
-      {error && (
-        <p role="alert" className="error">
-          {error}
-        </p>
-      )}
-
-      <div className="form-actions">
-        <button type="submit" disabled={saving}>
-          {saving ? 'Connecting…' : 'Connect'}
-        </button>
-      </div>
-    </form>
+        <div className="form-actions">
+          <button type="submit" disabled={saving}>
+            {saving ? 'Connecting…' : 'Connect'}
+          </button>
+        </div>
+      </form>
+    </Section>
   );
 }
 
@@ -362,48 +374,51 @@ function GitStatusPanel({
 
   return (
     <>
-      <h2>Connected</h2>
-      <dl className="run-meta">
-        <dt>Repository</dt>
-        <dd>{status.repoUrl}</dd>
-        <dt>Collaboration branch</dt>
-        <dd>{status.collabBranch}</dd>
-        <dt>Working branch</dt>
-        <dd>{status.workingBranch}</dd>
-        <dt>State</dt>
-        <dd>{describeState(status)}</dd>
-        <dt>Last checked</dt>
-        <dd>
-          <When ms={status.lastFetchAt} />
-        </dd>
-        <dt>Collaboration branch head</dt>
-        <dd>{shortSha(status.observedCollabHead)}</dd>
-        <dt>Imported from</dt>
-        <dd>{shortSha(status.importedFromCommit)}</dd>
-      </dl>
+      {/* The facts are a pure DB read — every one is what the LAST sync
+          recorded, so a repo that went unreachable an hour ago still reads
+          `ready` until something re-observes it. The `?` says so; Refresh, in
+          the heading row, re-observes. */}
+      <Section
+        level={2}
+        landmark
+        heading="Connected"
+        help={FORM_SECTION_HINTS.git.connected}
+        actions={
+          <>
+            <button type="button" onClick={() => void onRefresh()} disabled={busy}>
+              {busy ? 'Working…' : 'Refresh'}
+            </button>
+            <button type="button" onClick={() => void onDisconnect()} disabled={busy}>
+              Disconnect
+            </button>
+          </>
+        }
+      >
+        <dl className="run-meta">
+          <dt>Repository</dt>
+          <dd>{status.repoUrl}</dd>
+          <dt>Collaboration branch</dt>
+          <dd>{status.collabBranch}</dd>
+          <dt>Working branch</dt>
+          <dd>{status.workingBranch}</dd>
+          <dt>State</dt>
+          <dd>{describeState(status)}</dd>
+          <dt>Last checked</dt>
+          <dd>
+            <When ms={status.lastFetchAt} />
+          </dd>
+          <dt>Collaboration branch head</dt>
+          <dd>{shortSha(status.observedCollabHead)}</dd>
+          <dt>Imported from</dt>
+          <dd>{shortSha(status.importedFromCommit)}</dd>
+        </dl>
 
-      {/* The panel above is a pure DB read — every one of those fields is what
-          the LAST sync recorded, so a repo that went unreachable an hour ago
-          still reads `ready` until something re-observes it. */}
-      <p className="page-hint">
-        These are the values recorded at the last check, not a live reading. Refresh to re-observe
-        the remote.
-      </p>
-
-      {error && (
-        <p role="alert" className="error">
-          {error}
-        </p>
-      )}
-
-      <div className="form-actions">
-        <button type="button" onClick={() => void onRefresh()} disabled={busy}>
-          {busy ? 'Working…' : 'Refresh'}
-        </button>
-        <button type="button" onClick={() => void onDisconnect()} disabled={busy}>
-          Disconnect
-        </button>
-      </div>
+        {error && (
+          <p role="alert" className="error">
+            {error}
+          </p>
+        )}
+      </Section>
 
       <TokenForm status={status} onStatus={onStatus} busy={busy} runExclusive={runExclusive} />
       <CommitSection
@@ -488,42 +503,51 @@ function TokenForm({
 
   return (
     <>
-      <form onSubmit={(e) => void onSubmit(e)} aria-label="Git token">
-        <h2>Access token</h2>
-        <p className="page-hint">
-          {status.hasStoredToken
-            ? 'A token is stored, encrypted. It is never shown again — enter a new one to replace it.'
-            : 'No token stored. One is only needed if your environment cannot authenticate to the remote on its own.'}
-        </p>
+      <Section level={2} landmark heading="Access token" help={FORM_SECTION_HINTS.git.accessToken}>
+        <form className="field-form" onSubmit={(e) => void onSubmit(e)} aria-label="Git token">
+          {/* Whether one is stored is the field's STATE, so it stays a visible
+              line under the control rather than going behind a `?`. */}
+          <LabelledControl
+            label="Token"
+            hint={
+              status.hasStoredToken
+                ? 'A token is stored, encrypted, and is never shown again; enter a new one to replace it.'
+                : 'No token stored.'
+            }
+          >
+            {(id, describedBy) => (
+              <input
+                id={id}
+                aria-describedby={describedBy}
+                type="password"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder={
+                  status.hasStoredToken ? 'enter a new token to replace the stored one' : ''
+                }
+                autoComplete="off"
+              />
+            )}
+          </LabelledControl>
 
-        <label>
-          Token
-          <input
-            type="password"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder={status.hasStoredToken ? 'enter a new token to replace the stored one' : ''}
-            autoComplete="off"
-          />
-        </label>
-
-        {error && (
-          <p role="alert" className="error">
-            {error}
-          </p>
-        )}
-
-        <div className="form-actions">
-          <button type="submit" disabled={busy}>
-            {busy ? 'Saving…' : status.hasStoredToken ? 'Replace token' : 'Store token'}
-          </button>
-          {status.hasStoredToken && (
-            <button type="button" onClick={() => void onClear()} disabled={busy}>
-              Remove stored token
-            </button>
+          {error && (
+            <p role="alert" className="error">
+              {error}
+            </p>
           )}
-        </div>
-      </form>
+
+          <div className="form-actions">
+            <button type="submit" disabled={busy}>
+              {busy ? 'Saving…' : status.hasStoredToken ? 'Replace token' : 'Store token'}
+            </button>
+            {status.hasStoredToken && (
+              <button type="button" onClick={() => void onClear()} disabled={busy}>
+                Remove stored token
+              </button>
+            )}
+          </div>
+        </form>
+      </Section>
       {confirmDialog}
     </>
   );
@@ -611,32 +635,36 @@ function CommitSection({
   }
 
   return (
-    <section aria-labelledby="commit-heading">
-      <h2 id="commit-heading">Commit</h2>
-      <p className="page-hint">
-        A commit writes the whole workspace — every pipeline, connection, dataset, trigger and
-        global parameter — to <code>{status.workingBranch}</code> and pushes it.
-      </p>
-
-      <div className="form-actions">
+    <Section
+      level={2}
+      landmark
+      heading="Commit"
+      help={FORM_SECTION_HINTS.git.commit}
+      actions={
         <button type="button" onClick={() => void onCheck()} disabled={busy}>
           {busy ? 'Working…' : 'Check for changes'}
         </button>
-      </div>
-
+      }
+    >
       {drift !== null && <DriftReport drift={drift} />}
 
-      <form onSubmit={(e) => void onCommit(e)} aria-label="Commit the workspace">
-        <label>
-          Message
-          <input
-            type="text"
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            placeholder="what changed, and why"
-            required
-          />
-        </label>
+      <form
+        className="field-form"
+        onSubmit={(e) => void onCommit(e)}
+        aria-label="Commit the workspace"
+      >
+        <LabelledControl label="Message">
+          {(id) => (
+            <input
+              id={id}
+              type="text"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="what changed, and why"
+              required
+            />
+          )}
+        </LabelledControl>
 
         {error && (
           <p role="alert" className="error">
@@ -661,7 +689,7 @@ function CommitSection({
           </button>
         </div>
       </form>
-    </section>
+    </Section>
   );
 }
 
@@ -833,20 +861,19 @@ function ImportSection({
   }
 
   return (
-    <section aria-labelledby="import-heading">
-      <h2 id="import-heading">Incoming</h2>
-      <p className="page-hint">
-        An import applies everything on <code>{status.collabBranch}</code> to this workspace, and it
-        is what stamps a version with the git provenance that publishing requires. The branch is
-        re-read when you import, so what lands can differ from what is shown below.
-      </p>
-
-      <div className="form-actions">
+    // That the branch is re-read at import, so what lands can differ from
+    // the preview, is said where it matters: in the import's confirmation.
+    <Section
+      level={2}
+      landmark
+      heading="Incoming"
+      help={FORM_SECTION_HINTS.git.incoming}
+      actions={
         <button type="button" onClick={() => void onCheck()} disabled={busy}>
           {busy ? 'Working…' : 'Check for incoming'}
         </button>
-      </div>
-
+      }
+    >
       {readings !== null && (
         <div aria-label="Incoming changes">
           <p>{describeDivergence(readings.divergence, status.collabBranch)}</p>
@@ -884,11 +911,11 @@ function ImportSection({
           <button type="button" onClick={() => void onImport()} disabled={busy || blocked !== null}>
             {busy ? 'Importing…' : 'Import'}
           </button>
-          {blocked !== null && <span className="page-hint">{blocked}</span>}
+          {blocked !== null && <span className="field-hint">{blocked}</span>}
         </div>
       )}
       {confirmDialog}
-    </section>
+    </Section>
   );
 }
 

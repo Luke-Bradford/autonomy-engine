@@ -11,6 +11,7 @@ import type {
   WorkspaceGitStatus,
 } from '@autonomy-studio/shared';
 import { WorkspaceGitPage } from './WorkspaceGitPage';
+import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 import { answerConfirm } from '../testing/confirmDialog';
 import { ApiError } from '../api/client';
 import * as api from '../api/workspaceGit';
@@ -157,7 +158,7 @@ function incoming(): HTMLElement {
  * The value the fact list shows under a given term.
  *
  * Read by PAIRING rather than by searching the page for the text: a branch name
- * also appears in the commit hint, so a bare `getByText` both collides and
+ * also appears in the incoming readings, so a bare `getByText` both collides and
  * would pass even if the value were rendered under the wrong label.
  */
 function fact(term: string): string {
@@ -182,6 +183,51 @@ afterEach(() => {
 });
 
 describe('WorkspaceGitPage', () => {
+  /**
+   * #1594 OR40 S6c — the page on the design system: no prose under the title,
+   * and each section the one `Section`, a level-2 named region with its `?`.
+   * Refresh and Disconnect sit in Connected's heading row; the not-connected
+   * section is not named "Repository", which its field already is.
+   */
+  it('lays the connected page out as named sections with no prose', async () => {
+    await renderConnected();
+    expect(document.body.querySelectorAll('.page-hint')).toHaveLength(0);
+    const sections: [string, string][] = [
+      ['Connected', FORM_SECTION_HINTS.git.connected],
+      ['Access token', FORM_SECTION_HINTS.git.accessToken],
+      ['Commit', FORM_SECTION_HINTS.git.commit],
+      ['Incoming', FORM_SECTION_HINTS.git.incoming],
+    ];
+    expect(
+      screen
+        .getAllByRole('region')
+        .filter((region) => region.classList.contains('section'))
+        .map((region) => region.querySelector('.section__title')?.textContent),
+    ).toEqual(sections.map(([name]) => name));
+    for (const [name, about] of sections) {
+      const region = screen.getByRole('region', { name });
+      expect(within(region).getByRole('heading', { level: 2, name })).toBeInTheDocument();
+      expect(region).toHaveAccessibleDescription(about);
+    }
+    const head = screen
+      .getByRole('region', { name: 'Connected' })
+      .querySelector('.section__head') as HTMLElement;
+    expect(within(head).getByRole('button', { name: 'Refresh' })).toBeInTheDocument();
+    expect(within(head).getByRole('button', { name: 'Disconnect' })).toBeInTheDocument();
+  });
+
+  it('lays the not-connected page out as one named section with no prose', async () => {
+    getMock.mockResolvedValue(null);
+    render(<WorkspaceGitPage />);
+    const region = await screen.findByRole('region', { name: 'Not connected' });
+    expect(region).toHaveAccessibleDescription(FORM_SECTION_HINTS.git.notConnected);
+    expect(document.body.querySelectorAll('.page-hint')).toHaveLength(0);
+    expect(within(region).getByRole('form', { name: 'Connect a repository' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Repository' })).toHaveAccessibleDescription(
+      /Do not put a password in the URL/,
+    );
+  });
+
   /**
    * #1097 — the mount load's success branch must drop an answer whose
    * controller was aborted.
