@@ -96,7 +96,7 @@ test('#1569 — the pipelines grid: last run, success %, next run, triggers; sor
   expect(headers.slice(0, 7)).toEqual([
     'Name',
     'Last run',
-    'Success % (7d)',
+    'Success (7d)',
     'Next run',
     'Triggers',
     'Live state',

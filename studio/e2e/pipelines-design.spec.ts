@@ -50,7 +50,10 @@ function measure(page: Page) {
         const r = c.getBoundingClientRect();
         return {
           name:
-            c.getAttribute('aria-label') ?? (c.textContent ?? '').trim().slice(0, 20) ?? c.tagName,
+            c.getAttribute('aria-label') ||
+            (c as HTMLInputElement).labels?.[0]?.textContent?.trim() ||
+            (c.textContent ?? '').trim().slice(0, 20) ||
+            c.tagName,
           left: r.left,
           right: r.right,
           centre: r.top + r.height / 2,
@@ -87,7 +90,9 @@ for (const { density, theme } of RUNS) {
     await page.goto('/#/author/pipelines');
     await fluentRootReady(page);
     await expectAppearance(page, theme, density as Density);
-    await expect(page.getByRole('link', { name: `S6e pipeline ${density}` })).toBeVisible();
+    await expect(
+      page.locator('.content table').getByRole('link', { name: `S6e pipeline ${density}` }),
+    ).toBeVisible();
 
     const m = await measure(page);
     // Every column is drawn (13 and the ⋯), so the check is not over a subset.

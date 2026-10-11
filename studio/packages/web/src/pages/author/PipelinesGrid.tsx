@@ -45,7 +45,8 @@ const PIPELINE_GRID_COLUMN_DEFS: Record<PipelineGridColumnId, Column> = {
   description: { label: 'Description' },
   lastRun: { label: 'Last run', sort: 'lastRun' },
   successRate: {
-    label: `Success % (${DAYS}d)`,
+    // #1594 OR40 S6e — no `%`: the cells carry it, and with it the label was cut.
+    label: `Success (${DAYS}d)`,
     sort: 'successRate',
     numeric: true,
     title: `Succeeded ÷ (succeeded + failed) over the runs started in the last ${DAYS} days. Cancelled and skipped runs are not counted; Debug runs are not included.`,
