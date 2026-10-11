@@ -117,7 +117,7 @@ test.describe('#941 click-to-connect', () => {
     // U6e's offer is reachable from the click gesture too. It has to be: a click
     // is never a rewire, so the offer's `rewiring` guard cannot suppress it, and
     // accepting AUTHORS the loop the operator was reaching for.
-    const offer = page.locator(`${REFUSAL} .canvas-refusal-action`);
+    const offer = page.locator(REFUSAL).getByRole('button', { name: 'Make it a back-edge' });
     await expect(offer).toBeVisible();
     await offer.click();
 

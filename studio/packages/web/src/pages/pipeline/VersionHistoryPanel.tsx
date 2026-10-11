@@ -310,7 +310,7 @@ export function VersionPreviewBar({
   const busy = restoring || publishing;
   return (
     <div className="version-preview-bar" data-testid="version-preview-bar" role="status">
-      <strong>Viewing v{version} — read-only.</strong>
+      <strong>Viewing v{version} — read-only</strong>
       {refusal !== null && <span className="version-preview-refusal">{refusal}</span>}
       <div className="form-actions">
         <button

@@ -35,6 +35,7 @@ import {
   type NodeChange,
   type NodeProps,
 } from '@xyflow/react';
+import { DismissRegular } from '@fluentui/react-icons';
 import '@xyflow/react/dist/style.css';
 import {
   CONTAINER_KIND_LABELS,
@@ -2802,7 +2803,6 @@ export function FlowCanvas({
             {backOffer !== null && (
               <button
                 type="button"
-                className="canvas-refusal-action"
                 onClick={() => {
                   store
                     .getState()
@@ -2817,8 +2817,14 @@ export function FlowCanvas({
                 Make it a back-edge
               </button>
             )}
-            <button type="button" onClick={() => setAttempted(null)} aria-label="Dismiss">
-              ✕
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => setAttempted(null)}
+              aria-label="Dismiss"
+              title="Dismiss"
+            >
+              <DismissRegular aria-hidden="true" />
             </button>
           </Panel>
         )}
