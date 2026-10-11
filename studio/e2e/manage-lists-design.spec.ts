@@ -108,7 +108,7 @@ function measure(page: Page) {
 }
 
 for (const { density, theme } of RUNS) {
-  test(`#1594 OR40 S6d — the Manage lists: no prose, the title's ?, Import as a section (${density} ${theme})`, async ({
+  test(`#1594 OR40 S6d/S6e — the Manage lists and Pipelines: no prose, the title's ?, Import as a section (${density} ${theme})`, async ({
     page,
   }) => {
     test.setTimeout(90_000);

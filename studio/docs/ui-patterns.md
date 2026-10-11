@@ -484,8 +484,8 @@ Every page's title row is `PageHeader` (`lib/PageHeader.tsx`, #1594 OR40 S3). Ne
   sentence saying what the page holds, in place of a paragraph under the title. Its note opens under
   the header row, at the row's width. It needs a plain-text title and a `headingId`; the page's
   `<section aria-labelledby>` takes `aria-describedby={pageHelpId(headingId)}`, so the note is the
-  page's description. The five Manage lists and Pipelines (S6e) use it. A page whose sections each have a `?` (Home,
-  Settings, Git) needs none. A warning an operator must see stays visible where it applies (the
+  page's description. The five Manage lists and Pipelines use it. A page whose sections each have
+  a `?` (Home, Settings, Git) needs none. A warning an operator must see stays visible where it applies (the
   global parameter Value field's cleartext hint), never behind a `?`.
 - **The toolbar** is the header's children, wrapped in `Toolbar`. Controls are 8px apart, every one
   `--control-h` tall, and centred on one line. A Fluent (toggle) button and a `.page-back` link are

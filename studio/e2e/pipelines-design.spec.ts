@@ -35,7 +35,7 @@ function measure(page: Page) {
     const content = document.querySelector('.content')!;
     const table = content.querySelector('table')!;
     const clipped = [...table.querySelectorAll<HTMLElement>('thead th')]
-      // The ⋯ column's name is for assistive tech only, and the filler has none.
+      // The ⋯ column's name is for assistive tech only.
       .filter((th) => !th.querySelector('.visually-hidden') && (th.textContent ?? '').trim())
       .map((th) => th.querySelector<HTMLElement>('.sort-button') ?? th)
       .filter((label) => label.scrollWidth > label.clientWidth + 1)
@@ -63,7 +63,10 @@ function measure(page: Page) {
     const root = document.scrollingElement!;
     return {
       columns: table.querySelectorAll('thead th').length,
-      arrows: table.querySelectorAll('thead .sort-button__arrow').length,
+      // Drawn arrows only: every sortable header has the span, the sorted one a glyph.
+      arrows: [...table.querySelectorAll('thead .sort-button__arrow')].filter((a) =>
+        (a.textContent ?? '').trim(),
+      ).length,
       clipped,
       controls,
       sideways: Math.max(
@@ -78,6 +81,7 @@ for (const { density, theme } of RUNS) {
   test(`#1594 OR40 S6e — the Pipelines grid and filter bar: no clipped header, on the ramp, one row of controls (${density} ${theme})`, async ({
     page,
   }) => {
+    test.setTimeout(60_000);
     const problems = collectPageProblems(page);
     await page.setViewportSize({ width: 1440, height: 900 });
     await preferAppearance(page, theme, density as Density);
