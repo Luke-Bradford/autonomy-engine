@@ -62,7 +62,7 @@ test('#1484 — a display time zone chosen in Settings dates the runs grid and t
   // The compact cell carries no zone, so the header names it.
   await expect(page.getByRole('columnheader', { name: 'Started' })).toContainText('Started UTC');
 
-  // The compact form fits the 124px column without clipping.
+  // The compact form fits the Started column without clipping.
   const fits = await started.evaluate((td) => td.scrollWidth <= td.clientWidth);
   expect(fits).toBe(true);
 

@@ -4,6 +4,7 @@ import { fluentRootReady } from './support/theme';
 import { CONTROL_H, DENSITIES, expectAppearance, preferAppearance } from './support/appearance';
 import { expectInlineRow } from './support/inlineRow';
 import { offRampText } from './support/typeRamp';
+import { clippedHeaderLabels } from './support/clippedHeaders';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
 
 /**
@@ -14,13 +15,23 @@ import { fireAndSettle, seedVersion } from './support/seedDoc';
  * its `?` ("About Runs", the page's description, its note opening under the
  * header row), and every control in it `--control-h` tall. The grid: no
  * column's header label is clipped (the S6e audit found "Duration" cut, and
- * "Started GMT+1" in comfortable) with the default sort's arrow drawn on
+ * "Started GMT+1" in comfortable; "Rows written" was cut too) with the default sort's arrow drawn on
  * Started. The filter bar is one row of `--control-h` controls, 8px apart on
  * one centre line, and every piece of text is on the type ramp. A seeded,
  * settled run gives the grid a row.
+ *
+ * "No prose" is the S6 rule for the header: no `.page-hint` paragraph outside a
+ * section or form. The list's state lines (loading, the two empty states, a
+ * failed read) are feedback, not prose, and stay.
+ *
+ * The browser's zone is India's because its short name, "GMT+5:30", is among
+ * the longest Started's header carries; a UTC runner's "UTC" would measure the
+ * easy case.
  */
 
 type Density = (typeof DENSITIES)[number];
+
+test.use({ timezoneId: 'Asia/Kolkata' });
 
 const RUNS = [
   { density: 'compact', theme: 'light' },
@@ -53,22 +64,6 @@ function measure(page: Page) {
     const note = header.querySelector<HTMLElement>(':scope > details[open] > [role=note]');
     const noteRect = note?.getBoundingClientRect();
     const table = content.querySelector('table.runs-grid')!;
-    // A label is cut when it needs more than its cell's content box (as in
-    // `pipelines-design.spec.ts`: the ▲ glyph spilling its own box is no cut).
-    const clipped = [...table.querySelectorAll<HTMLElement>('thead th')]
-      .filter((th) => !th.querySelector('.visually-hidden') && (th.textContent ?? '').trim())
-      .map((th) => {
-        const s = getComputedStyle(th);
-        const room = th.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight);
-        const label = th.querySelector<HTMLElement>('.sort-button');
-        return {
-          text: (th.textContent ?? '').trim(),
-          need: label?.scrollWidth ?? th.scrollWidth,
-          room: label ? room : th.clientWidth,
-        };
-      })
-      .filter(({ need, room }) => need > room + 1)
-      .map(({ text, need, room }) => `${text} (${need}/${Math.round(room)}px)`);
     const bar = content.querySelector('[role=group][aria-label="Filter runs"]')!;
     const root = document.scrollingElement!;
     return {
@@ -94,7 +89,6 @@ function measure(page: Page) {
       arrows: [...table.querySelectorAll('thead .sort-button__arrow')]
         .filter((a) => (a.textContent ?? '').trim())
         .map((a) => (a.closest('th')!.textContent ?? '').trim()),
-      clipped,
       // A pill is the control-h frame; its own select or input sits borderless
       // inside it (`run-filter-pills.spec.ts`), so the pill is what is measured.
       filters: [
@@ -142,7 +136,7 @@ for (const { density, theme } of RUNS) {
     // The default columns (all but Annotations, and the ⋯), sorted by Started.
     expect(closed.columns).toBeGreaterThanOrEqual(10);
     expect(closed.arrows).toEqual([expect.stringMatching(/^Started/)]);
-    expect(closed.clipped, 'clipped header labels').toEqual([]);
+    expect(await clippedHeaderLabels(page, 'table.runs-grid'), 'clipped header labels').toEqual([]);
     expect(closed.filters.length).toBeGreaterThanOrEqual(4);
     for (const c of closed.filters) expect(c.h, `filter ${c.name} height`).toBe(h);
     expectInlineRow('filter bar', closed.filters);

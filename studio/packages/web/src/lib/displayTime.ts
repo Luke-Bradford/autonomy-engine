@@ -164,7 +164,7 @@ export function formatTimeOfDay(
 }
 
 /**
- * The runs grid's Started cell, which is 124px: `10-04 13:05:07` for a time in
+ * The runs grid's Started cell, at its default width: `10-04 13:05:07` for a time in
  * the same year as `now` (in the display zone), else `2025-10-04 13:05`. The
  * zone and the full form are the cell's hover title (`When`), so the compact
  * text drops nothing that is not one hover away.

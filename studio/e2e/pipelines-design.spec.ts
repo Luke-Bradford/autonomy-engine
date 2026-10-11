@@ -4,6 +4,7 @@ import { fluentRootReady } from './support/theme';
 import { CONTROL_H, DENSITIES, expectAppearance, preferAppearance } from './support/appearance';
 import { expectInlineRow } from './support/inlineRow';
 import { offRampText } from './support/typeRamp';
+import { clippedHeaderLabels } from './support/clippedHeaders';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
 
 /**
@@ -34,24 +35,6 @@ function measure(page: Page) {
   return page.evaluate(() => {
     const content = document.querySelector('.content')!;
     const table = content.querySelector('table')!;
-    // A label is cut when it needs more than its cell's content box. Not the
-    // button's own scrollWidth: in some fonts the ▲ glyph spills a pixel or two
-    // past its fixed-width box (CI's did, on a 240px Name column), which is no cut.
-    const clipped = [...table.querySelectorAll<HTMLElement>('thead th')]
-      // The ⋯ column's name is for assistive tech only.
-      .filter((th) => !th.querySelector('.visually-hidden') && (th.textContent ?? '').trim())
-      .map((th) => {
-        const s = getComputedStyle(th);
-        const room = th.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight);
-        const label = th.querySelector<HTMLElement>('.sort-button');
-        return {
-          text: (th.textContent ?? '').trim(),
-          need: label?.scrollWidth ?? th.scrollWidth,
-          room: label ? room : th.clientWidth,
-        };
-      })
-      .filter(({ need, room }) => need > room + 1)
-      .map(({ text, need, room }) => `${text} (${need}/${Math.round(room)}px)`);
     const bar = content.querySelector('[role=group][aria-label="Filter pipelines"]')!;
     const controls = [...bar.querySelectorAll('button, input, select')]
       .filter((c) => c.getClientRects().length > 0)
@@ -76,7 +59,6 @@ function measure(page: Page) {
       arrows: [...table.querySelectorAll('thead .sort-button__arrow')].filter((a) =>
         (a.textContent ?? '').trim(),
       ).length,
-      clipped,
       controls,
       sideways: Math.max(
         root.scrollWidth - root.clientWidth,
@@ -111,7 +93,7 @@ for (const { density, theme } of RUNS) {
     // Every column is drawn (13 and the ⋯), so the check is not over a subset.
     expect(m.columns).toBeGreaterThanOrEqual(14);
     expect(m.arrows).toBeGreaterThan(0);
-    expect(m.clipped, 'clipped header labels').toEqual([]);
+    expect(await clippedHeaderLabels(page, '.content table'), 'clipped header labels').toEqual([]);
     expect(m.sideways).toBe(0);
     expect(m.controls.length).toBeGreaterThanOrEqual(7);
     for (const c of m.controls) expect(c.h, `${c.name} height`).toBe(CONTROL_H[density as Density]);

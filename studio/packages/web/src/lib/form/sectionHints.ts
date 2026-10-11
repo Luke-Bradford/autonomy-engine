@@ -109,7 +109,7 @@ export const FORM_SECTION_HINTS = {
   },
   run: {
     // #1594 OR40 S6f — the Runs list's title `?`.
-    page: 'Every run in this workspace, updated live, with its status, trigger, duration and cost.',
+    page: 'Every run in this workspace, with its status, trigger, duration and cost.',
     diagnostics: 'What the pipeline asked for that did not take effect on this run, and why.',
     streamedOutput: 'How many output events this activity streamed, and the last one it sent.',
     failure: 'The error this activity run ended with, and what kind of failure it was.',

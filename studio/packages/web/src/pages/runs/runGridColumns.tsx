@@ -268,7 +268,7 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
   started: {
     label: 'Started',
     sort: 'started',
-    /* #1484 — compact (`10-04 13:05:07`) to fit the 124px column; the full
+    /* #1484 — compact (`10-04 13:05:07`) to fit the Started column; the full
        form, the zone and the relative time are the hover title. */
     zoned: true,
     cell: (r, { zone, loadedAt }) => (
