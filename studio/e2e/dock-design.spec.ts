@@ -90,7 +90,7 @@ for (const { density, theme } of RUNS) {
         },
       ],
       edges: [{ from: 'a', to: 'b', on: 'success' }],
-      params: [{ name: 'topic', type: 'string' }],
+      params: [{ name: 'topic', type: 'string', required: false }],
     });
     await expectAppearance(page, theme, d);
 
@@ -131,17 +131,16 @@ for (const { density, theme } of RUNS) {
 
     // The pipeline's own properties, every tab.
     expect(await expectTabsOnRamp(page, 'Pipeline properties', d)).toBeGreaterThan(1);
-    const pipelineTabs = await styles(page, ['.panel-tabs-sticky'], ['row-gap']);
-    expect(pipelineTabs['.panel-tabs-sticky']?.['row-gap'], 'tab strip').toBe('4px');
 
     // An activity, every tab, with its acts in the header row.
     await nodeById(page, 'a').click();
     expect(await expectTabsOnRamp(page, 'Activity properties', d)).toBeGreaterThan(1);
     const activity = await styles(
       page,
-      ['.property-panel__actions', '.property-panel__type'],
-      ['column-gap', 'font-size'],
+      ['.property-panel__actions', '.property-panel__type', '.panel-tabs-sticky'],
+      ['column-gap', 'row-gap', 'font-size'],
     );
+    expect(activity['.panel-tabs-sticky']?.['row-gap'], 'header over its tabs').toBe('4px');
     expect(activity['.property-panel__actions']?.['column-gap'], 'acts').toBe('8px');
     expect(activity['.property-panel__type']?.['font-size'], 'type').toBe('12px');
     await expectControlTall(page, '.property-panel__actions button', d, 'acts');
