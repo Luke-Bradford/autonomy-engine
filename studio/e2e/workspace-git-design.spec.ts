@@ -54,7 +54,8 @@ function measure(page: Page) {
     const labelGaps = [...content.querySelectorAll('.field-form > .labelled-control')]
       .filter(shown)
       .map((row) => {
-        const label = row.querySelector('label')!.getBoundingClientRect();
+        // The label column: the label, or the head holding it and its `?`.
+        const label = row.firstElementChild!.getBoundingClientRect();
         const control = row.querySelector('input')!.getBoundingClientRect();
         return Math.round(control.left - label.right);
       });
@@ -106,8 +107,11 @@ async function expectOnRamp(page: Page, density: Density) {
     await helps.nth(i).click();
     await expect(page.locator('.content details[open]')).toHaveCount(1);
     expect(await offRampText(page, density), `with ? ${i + 1} of ${count} open`).toEqual([]);
+    // Closed before the next: an open section note spans its heading row and
+    // can sit over the next `?`.
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.content details[open]')).toHaveCount(0);
   }
-  await page.keyboard.press('Escape');
 }
 
 for (const density of DENSITIES) {
@@ -152,8 +156,9 @@ for (const density of DENSITIES) {
       await expectOnRamp(page, density);
       const m = await measure(page);
       expectMeasured(m, density, ['Connected', 'Access token', 'Commit', 'Incoming'], [8]);
-      // Connected's Refresh and Disconnect are the one pair; measure that it is there.
-      expect(m.toolbars.map((row) => row.length)).toEqual([2, 1, 1, 1]);
+      // Connected's Refresh and Disconnect are the one pair; measure that it is
+      // there. Access token's acts are its form's, at the form's foot.
+      expect(m.toolbars.map((row) => row.length)).toEqual([2, 0, 1, 1]);
 
       await expectQuiet(page, problems);
     } finally {
