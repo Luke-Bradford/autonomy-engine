@@ -5,7 +5,7 @@ import { fluentRootReady } from './support/theme';
 import { CONTROL_H, DENSITIES, expectAppearance, preferAppearance } from './support/appearance';
 import { expectInlineRow, type InlineItem } from './support/inlineRow';
 import { seedVersion } from './support/seedDoc';
-import { offRampText } from './support/typeRamp';
+import { expectOnRampWithEachHelp } from './support/typeRamp';
 import { disconnectWorkspaceGit, makeBareRepo } from './support/workspaceGit';
 
 /**
@@ -97,23 +97,6 @@ function expectMeasured(
   m.toolbars.forEach((row: InlineItem[], i) => expectInlineRow(`${sections[i]} heading row`, row));
 }
 
-/** The type ramp with every `?` closed, then with each one open in turn. */
-async function expectOnRamp(page: Page, density: Density) {
-  expect(await offRampText(page, density)).toEqual([]);
-  const helps = page.locator('.content summary');
-  const count = await helps.count();
-  expect(count).toBeGreaterThan(0);
-  for (let i = 0; i < count; i += 1) {
-    await helps.nth(i).click();
-    await expect(page.locator('.content details[open]')).toHaveCount(1);
-    expect(await offRampText(page, density), `with ? ${i + 1} of ${count} open`).toEqual([]);
-    // Closed before the next: an open section note spans its heading row and
-    // can sit over the next `?`.
-    await page.keyboard.press('Escape');
-    await expect(page.locator('.content details[open]')).toHaveCount(0);
-  }
-}
-
 for (const density of DENSITIES) {
   const theme = density === 'compact' ? 'light' : 'dark';
   test(`#1594 OR40 S6c — the Git page is on the design system (${density}, ${theme})`, async ({
@@ -134,7 +117,7 @@ for (const density of DENSITIES) {
       // Not connected.
       const notConnected = page.getByRole('region', { name: 'Not connected', exact: true });
       await expect(notConnected.getByRole('form', { name: 'Connect a repository' })).toBeVisible();
-      await expectOnRamp(page, density);
+      await expectOnRampWithEachHelp(page, density);
       expectMeasured(await measure(page), density, ['Not connected'], []);
 
       // Connected, with a pipeline to commit and both checks run.
@@ -153,7 +136,7 @@ for (const density of DENSITIES) {
       await expect(incoming.getByLabel('Incoming changes')).toBeVisible();
       await expect(incoming.getByRole('button', { name: 'Import' })).toBeVisible();
 
-      await expectOnRamp(page, density);
+      await expectOnRampWithEachHelp(page, density);
       const m = await measure(page);
       expectMeasured(m, density, ['Connected', 'Access token', 'Commit', 'Incoming'], [8]);
       // Connected's Refresh and Disconnect are the one pair; measure that it is

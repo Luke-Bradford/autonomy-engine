@@ -407,6 +407,8 @@ controls, and 4/8px spacing. Those numbers are the design tokens in `theme/token
 OR40 S1), which hold both densities' values: `--control-h`, `--row-h`, `--type-body-size`,
 `--type-caption-size` and `--space-1..6`, plus the `--type-*` font shorthands. Read the tokens
 rather than repeating the numbers; `theme/tokens.test.ts` ratchets the literal count down.
+Weights are 400 and 600 only: `tokens.css` sets `b` and `strong` to `--weight-strong`, since the
+browser's `bolder` draws them at 700 (#1594 OR40 S6g).
 
 Controls take the density app-wide through the control layer (below), icon buttons and tabs
 included. The dock's label and hint sizes are still scoped to the property dock's panel.
@@ -564,9 +566,11 @@ replaced `FormSection` (a drawer's `fieldset` and `legend`), `DockSection` (the 
   `aria-expanded`, not a `<details>`: a `<summary>` cannot hold the `?` beside it. They are closed
   unless `defaultOpen`, and they open if `defaultOpen` turns true after mount (a record that loads
   late and uses the section).
-- **Still to move:** page sections that are bare `h2`/`h3` headings (the run page's timeline,
-  variables and cost) move to `Section` page by page in S6. Home moved first, then Settings,
-  then Git, then the Manage lists' Import panel. A section's own acts (Git's Refresh, Disconnect and each check) go in its `actions`,
+- **Moved in S6:** Home first, then Settings, Git, the Manage lists' Import panel, and the run
+  page's Timeline, Variables, Global parameters and Cost & usage (S6g). A static explanation is
+  the section's `?`; a line that reports state (a run's "Final values.", an unsettled run's
+  caveat, an empty state) stays as a hint in the body. The cross-run timeline (`RunTimeline`)
+  is still a bare `h2`. A section's own acts (Git's Refresh, Disconnect and each check) go in its `actions`,
   the heading row's `Toolbar`; a form's submit stays at the form's foot. A page form inside a
   `Section` is a `.field-form` wrapper in its body, so the label-left layout keeps its container;
   a `.run-meta` facts list there drops its own margin.

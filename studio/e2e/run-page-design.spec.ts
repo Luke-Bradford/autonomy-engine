@@ -1,24 +1,27 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
-import { CONTROL_H, DENSITIES, expectAppearance, preferAppearance } from './support/appearance';
-import { offRampText } from './support/typeRamp';
+import { DENSITIES, expectAppearance, preferAppearance } from './support/appearance';
+import { expectOnRampWithEachHelp } from './support/typeRamp';
 import { fireAndSettle, seedVersion, type SeedDoc } from './support/seedDoc';
 import { openRunView } from './support/panels';
 
 /**
  * #1594 OR40 S6g — the run page on the design system, at 1440x900 in compact
- * light and comfortable dark: the header, the activity runs, the run's facts
- * and every secondary view (Gantt, Events, Variables, Cost).
+ * light and comfortable dark: its secondary views (Gantt, Events, Variables,
+ * Cost) each measured with its tab open, because `PanelTabs` keeps the others
+ * mounted but hidden and a hidden panel draws no text.
  *
- * Each view is measured with its tab open, because `PanelTabs` keeps the
- * others mounted but hidden and a hidden panel draws no text. On every view:
- * all text is on the type ramp, the header's buttons are `--control-h` tall,
- * and nothing scrolls the page sideways.
+ * On every view: each of its sections is the `Section` primitive (a named
+ * region whose `?` is its description, so no static prose), all text is on the
+ * type ramp with every `?` closed and then with each open in turn, and nothing
+ * scrolls the page sideways. The header and the activity runs above the tabs
+ * are on screen in every one of those readings.
  *
- * The seeded run has something to show in every view: a variable written and
- * appended (Variables), a CLI exchange with a known zero cost (Cost) and a
- * parameter (the facts list).
+ * The seeded run has something to show in every view: a timed activity (the
+ * Gantt's bar) and two untimed ones (its "Not on the timeline" list), a variable
+ * written from a global parameter (Variables and Global parameters) and a CLI
+ * exchange at a known zero cost (Cost, whose figure is a `<strong>`).
  */
 
 type Density = (typeof DENSITIES)[number];
@@ -28,37 +31,25 @@ const RUNS = [
   { density: 'comfortable', theme: 'dark' },
 ] as const;
 
-const VIEWS = ['Gantt', 'Events', 'Variables', 'Cost'] as const;
+/** Each view, and the sections it must show. */
+const VIEWS = [
+  { view: 'Gantt', sections: ['Timeline'] },
+  { view: 'Events', sections: ['Why this run behaved as it did'] },
+  { view: 'Variables', sections: ['Variables', 'Global parameters'] },
+  { view: 'Cost', sections: ['Cost & usage'] },
+] as const;
 
-/** The `Section` each view leads with, whose `?` is opened and measured. */
-const SECTIONS: Partial<Record<(typeof VIEWS)[number], string>> = {
-  Events: 'Why this run behaved as it did',
-  Variables: 'Variables',
-  Cost: 'Cost & usage',
-};
-
-/** Every measurement in ONE evaluate. */
-function measure(page: Page) {
+/** The page's sideways overflow, in ONE evaluate. */
+function sideways(page: Page) {
   return page.evaluate(() => {
     const content = document.querySelector('.content')!;
-    const header = content.querySelector('.run-page .page-header')!;
-    const shown = (c: Element) => c.getClientRects().length > 0;
     const root = document.scrollingElement!;
-    return {
-      headerButtons: [...header.querySelectorAll('button')].filter(shown).map((b) => ({
-        name: b.getAttribute('aria-label') || (b.textContent ?? '').trim().slice(0, 20),
-        h: Math.round(b.getBoundingClientRect().height),
-      })),
-      sideways: Math.max(
-        root.scrollWidth - root.clientWidth,
-        content.scrollWidth - content.clientWidth,
-      ),
-    };
+    return Math.max(root.scrollWidth - root.clientWidth, content.scrollWidth - content.clientWidth);
   });
 }
 
 for (const { density, theme } of RUNS) {
-  test(`#1594 OR40 S6g — the run page: every view on the ramp, header controls at --control-h, no sideways scroll (${density} ${theme})`, async ({
+  test(`#1594 OR40 S6g — the run page: every view in Sections, on the ramp with each ? open, no sideways scroll (${density} ${theme})`, async ({
     page,
   }) => {
     test.setTimeout(90_000);
@@ -66,6 +57,12 @@ for (const { density, theme } of RUNS) {
     await page.setViewportSize({ width: 1440, height: 900 });
     await preferAppearance(page, theme, density as Density);
 
+    const globalName = `s6g_region_${density}`;
+    const global = await page.request.post('/api/global-params', {
+      data: { name: globalName, type: 'string', value: 'eu' },
+    });
+    expect(global.status(), await global.text()).toBe(201);
+    const { id: globalId } = (await global.json()) as { id: string };
     const created = await page.request.post('/api/connections', {
       data: {
         name: `S6g echo cli ${density}`,
@@ -80,7 +77,7 @@ for (const { density, theme } of RUNS) {
         {
           id: 's',
           type: 'set_variable',
-          config: { variable: 'count', value: '5' },
+          config: { variable: 'label', value: `\${global.${globalName}}` },
           position: { x: 0, y: 0 },
         },
         {
@@ -102,7 +99,7 @@ for (const { density, theme } of RUNS) {
         { id: 'e2', from: 'a', to: 'c', on: 'success' },
       ],
       variables: [
-        { name: 'count', type: 'number', default: 0 },
+        { name: 'label', type: 'string', default: '' },
         { name: 'rows', type: 'array', default: [] },
       ],
     };
@@ -113,39 +110,25 @@ for (const { density, theme } of RUNS) {
     await fluentRootReady(page);
     await expectAppearance(page, theme, density as Density);
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
-    await expect(page.getByRole('tablist', { name: 'Run views' })).toBeVisible();
 
-    const h = CONTROL_H[density as Density];
-    const off: Record<string, string[]> = {};
-    for (const view of VIEWS) {
+    for (const { view, sections } of VIEWS) {
       await openRunView(page, view);
-      if (view === 'Variables')
-        await expect(page.getByText('count', { exact: true })).toBeVisible();
-      if (view === 'Cost') {
-        await expect(page.getByRole('region', { name: 'Cost & usage' })).toBeVisible();
+      for (const name of sections) {
+        const region = page.getByRole('region', { name, exact: true });
+        await expect(region.getByRole('heading', { level: 2, name, exact: true })).toBeVisible();
+        await expect(region.locator(`summary[aria-label="About ${name}"]`)).toBeVisible();
       }
-      const m = await measure(page);
-      expect(m.sideways, `${view}: sideways scroll`).toBe(0);
-      for (const b of m.headerButtons) expect(b.h, `${view}: header ${b.name} height`).toBe(h);
-      const found = await offRampText(page, density as Density);
-      if (found.length > 0) off[view] = found;
-      // A view's sections say what they hold behind their `?`, and the note,
-      // open, is on the ramp too.
-      const section = SECTIONS[view];
-      if (section !== undefined) {
-        const region = page.getByRole('region', { name: section, exact: true });
-        await region.locator(`.section__head summary[aria-label="About ${section}"]`).click();
-        const note = region.locator('.section__head [role=note]');
-        await expect(note).toBeVisible();
-        await expect(region).toHaveAccessibleDescription(((await note.textContent()) ?? '').trim());
-        const openOff = await offRampText(page, density as Density);
-        if (openOff.length > 0) off[`${view}, ? open`] = openOff;
-        await page.keyboard.press('Escape');
-        await expect(note).toBeHidden();
+      if (view === 'Gantt') {
+        // A bar and the untimed list both draw, so their type is measured.
+        await expect(page.locator('.timeline-row-label').first()).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Not on the timeline' })).toBeVisible();
       }
+      if (view === 'Cost') await expect(page.locator('.section__body strong')).toBeVisible();
+      expect(await sideways(page), `${view}: sideways scroll`).toBe(0);
+      await expectOnRampWithEachHelp(page, density as Density, view);
     }
-    expect(off, 'text off the type ramp, by view').toEqual({});
 
     await expectQuiet(page, problems);
+    expect((await page.request.delete(`/api/global-params/${globalId}`)).ok()).toBe(true);
   });
 }
