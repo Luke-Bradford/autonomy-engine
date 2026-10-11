@@ -1,6 +1,11 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { fireAndSettle, openSeededCanvas, seedVersion } from './support/seedDoc';
+import {
+  fireAndSettle,
+  openSeededCanvas,
+  seedVersion,
+  STAGED_WAIT_THEN_FAIL as DOC,
+} from './support/seedDoc';
 import { fluentRootReady, resolvedPaletteColor, setTheme } from './support/theme';
 
 /**
@@ -10,22 +15,9 @@ import { fluentRootReady, resolvedPaletteColor, setTheme } from './support/theme
  *
  * Egress-free: a one-second `wait` (a real, measured span) into a `fail` (a
  * single terminal event, so no span at all), both inside a stage so the card's
- * fixed height is checked against the box drawn around it.
+ * fixed height is checked against the box drawn around it
+ * (`STAGED_WAIT_THEN_FAIL`).
  */
-const DOC = {
-  nodes: [
-    {
-      id: 'hold',
-      type: 'wait',
-      config: { seconds: '${1}' },
-      policy: { retry: 2 },
-      position: { x: 0, y: 0 },
-    },
-    { id: 'stop', type: 'fail', config: { message: 'planned' }, position: { x: 300, y: 0 } },
-  ],
-  edges: [{ from: 'hold', to: 'stop', on: 'success' as const }],
-  containers: [{ id: 'stg', kind: 'stage' as const, children: ['hold', 'stop'] }],
-};
 
 test('a run card says what the step does and what the run measured, inside its box', async ({
   page,

@@ -453,3 +453,24 @@ export async function seedRefusedStartRun(page: Page, name: string): Promise<str
     .toBe('interrupted');
   return runId;
 }
+
+/**
+ * Two activities in a stage, joined by an edge, egress-free: a one-second
+ * `wait` with a retry badge (a real, measured span) into a `fail` (a single
+ * terminal event, so no span at all). Shared by `run-cards.spec.ts` (#1394 OR3)
+ * and `canvas-nodes-design.spec.ts` (#1594 OR40 S6n).
+ */
+export const STAGED_WAIT_THEN_FAIL: SeedDoc = {
+  nodes: [
+    {
+      id: 'hold',
+      type: 'wait',
+      config: { seconds: '${1}' },
+      policy: { retry: 2 },
+      position: { x: 0, y: 0 },
+    },
+    { id: 'stop', type: 'fail', config: { message: 'planned' }, position: { x: 300, y: 0 } },
+  ],
+  edges: [{ from: 'hold', to: 'stop', on: 'success' }],
+  containers: [{ id: 'stg', kind: 'stage', children: ['hold', 'stop'] }],
+};

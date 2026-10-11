@@ -3826,7 +3826,7 @@ button.danger {
    drawn ABOVE a neighbour, not moved around it. */
 .flow-port-label {
   position: absolute;
-  left: calc(100% + 0.6rem);
+  left: calc(100% + var(--space-2));
   /* #997 — the label tracks its port's fanned position, from the same
      `--port-offset` the handle reads. At rest the port is at the middle and the
      label is hidden anyway, so there is no second geometry to keep in step. */

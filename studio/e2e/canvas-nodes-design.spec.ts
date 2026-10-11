@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { addActivity } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { triggerMenuItem } from './support/canvas';
+import { runFromEditor } from './support/canvas';
 import {
   computedStyles as styles,
   DENSITIES,
@@ -9,7 +9,13 @@ import {
   ICON_SIZE,
   preferAppearance,
 } from './support/appearance';
-import { fireAndSettle, nodeById, openSeededCanvas, seedVersion } from './support/seedDoc';
+import {
+  fireAndSettle,
+  nodeById,
+  openSeededCanvas,
+  seedVersion,
+  STAGED_WAIT_THEN_FAIL as STAGED,
+} from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 import { offRampText } from './support/typeRamp';
 
@@ -34,22 +40,6 @@ const RUNS = [
 
 const CANVAS = '.canvas-wrap';
 const RUN_CANVAS = '[data-testid="run-canvas"]';
-
-/** Two activities in a stage, one with a retry badge, joined by an edge. */
-const STAGED = {
-  nodes: [
-    {
-      id: 'hold',
-      type: 'wait',
-      config: { seconds: '${1}' },
-      policy: { retry: 2 },
-      position: { x: 0, y: 0 },
-    },
-    { id: 'stop', type: 'fail', config: { message: 'planned' }, position: { x: 300, y: 0 } },
-  ],
-  edges: [{ from: 'hold', to: 'stop', on: 'success' as const }],
-  containers: [{ id: 'stg', kind: 'stage' as const, children: ['hold', 'stop'] }],
-};
 
 for (const { density, theme } of RUNS) {
   const d = density as Density;
@@ -125,19 +115,22 @@ for (const { density, theme } of RUNS) {
     expect(s[CANVAS]?.['border-top-left-radius'], 'canvas frame').toBe('6px');
 
     // The glyph and the issue count are both `--icon-size`; the count is a
-    // circle centred on the card's corner.
+    // circle centred on the card's corner. Sizes are layout boxes (the canvas's
+    // zoom scales a client rect); the corner offset is a ratio of two client
+    // rects, so the zoom cancels out of it.
     const shape = await page.evaluate(() => {
       const badge = document.querySelector('.flow-issue-badge')!;
       const card = badge.closest('.react-flow__node')!.getBoundingClientRect();
       const r = badge.getBoundingClientRect();
-      const glyph = document.querySelector('.flow-node-icon svg')!.getBoundingClientRect();
+      const zoom = r.width / (badge as HTMLElement).offsetWidth;
+      const glyph = document.querySelector('.flow-node-icon svg')!;
       return {
-        w: Math.round(r.width),
-        h: Math.round(r.height),
+        w: (badge as HTMLElement).offsetWidth,
+        h: (badge as HTMLElement).offsetHeight,
         radius: parseFloat(getComputedStyle(badge).borderTopLeftRadius),
-        cornerX: Math.round(r.left + r.width / 2 - card.right),
-        cornerY: Math.round(r.top + r.height / 2 - card.top),
-        glyph: Math.round(glyph.width),
+        cornerX: Math.round((r.left + r.width / 2 - card.right) / zoom),
+        cornerY: Math.round((r.top + r.height / 2 - card.top) / zoom),
+        glyph: parseFloat(getComputedStyle(glyph).width),
       };
     });
     expect(shape.w, 'issue count width').toBe(ICON_SIZE[d]);
@@ -171,10 +164,11 @@ for (const { density, theme } of RUNS) {
 
     const s = await styles(
       page,
-      ['.run-canvas', '.run-node', '.run-node-card', '.run-node-foot'],
+      ['.run-canvas', '.run-container', '.run-node', '.run-node-card', '.run-node-foot'],
       ['border-top-left-radius', 'row-gap', 'column-gap', 'height', 'font-size'],
     );
     expect(s['.run-canvas']?.['border-top-left-radius'], 'graph frame').toBe('6px');
+    expect(s['.run-container']?.['border-top-left-radius'], 'run container').toBe('6px');
     expect(s['.run-node']?.['row-gap'], 'card to foot').toBe('4px');
     expect(s['.run-node-card']?.['column-gap'], 'glyph to name').toBe('8px');
     expect(s['.run-node-foot']?.['column-gap'], 'status to facts').toBe('8px');
@@ -187,7 +181,11 @@ for (const { density, theme } of RUNS) {
       [...document.querySelectorAll('.run-node')].map((node) => {
         const r = node.getBoundingClientRect();
         const bottom = Math.max(
-          ...[...node.querySelectorAll('*')].map((c) => c.getBoundingClientRect().bottom),
+          ...[...node.querySelectorAll('*')]
+            // The open button is laid over the whole card (`inset: 0`), so its
+            // bottom IS the card's and would make this check vacuous.
+            .filter((c) => !c.classList.contains('run-node-open'))
+            .map((c) => c.getBoundingClientRect().bottom),
         );
         return {
           id: node.closest('.react-flow__node')?.getAttribute('data-id'),
@@ -219,11 +217,7 @@ for (const { density, theme } of RUNS) {
     });
     await expectAppearance(page, theme, d);
 
-    await (await triggerMenuItem(page, /^Trigger now/)).click();
-    await page
-      .getByRole('dialog', { name: 'Run v1' })
-      .getByRole('button', { name: 'Start run' })
-      .click();
+    await runFromEditor(page);
     await expect(nodeById(page, 'w').getByTestId('node-run-status')).toContainText('success', {
       timeout: 20_000,
     });

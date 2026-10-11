@@ -611,7 +611,9 @@ The boxes on the authoring canvas and on the run page's Graph tab.
 - **Issue count:** a circle at `--icon-size`, centred on the card's top-right corner, caption type
   at strong weight; a two-digit count grows it into a pill.
 - **Port and edge labels:** caption type. A port label is a chip, `0 4px` at `--radius-control`.
-  React Flow draws an edge label at 10px; `index.css` puts it on the ramp.
+  React Flow draws an edge label at 10px; `index.css` puts it on the ramp. Both are drawn at opacity
+  0 until hover, focus or selection, so the ramp check measures them without a hover. A port label
+  sits 8px past the card's edge.
 - **Container:** a dashed box at `--radius-surface`. Its kind label sits 4px down and 12px in, in
   caption type; its configure and delete buttons are body type and keep their 22px targets, because
   the 26px header band (`CONTAINER_HEADER_HEIGHT`) has no room for `--control-h`.
@@ -622,7 +624,6 @@ The boxes on the authoring canvas and on the run page's Graph tab.
   parts.
 
 `e2e/canvas-nodes-design.spec.ts` measures them at 1440x900, compact light and comfortable dark.
-
 
 ## Tables (#1594 OR40 S3d)
 
