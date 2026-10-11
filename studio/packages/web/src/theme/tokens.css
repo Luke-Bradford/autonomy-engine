@@ -82,6 +82,17 @@
   /* S6l — the space above and below a label-left row's caption line, so its
      text sits on the centre of a `--control-h` control beside it. */
   --form-label-inset: calc((var(--control-h) - var(--type-caption-line)) / 2);
+  /* S6m — a control's or a table rule's border. Only the derived insets below
+     read it; a `border` shorthand is not on the ratchet and keeps its `1px`. */
+  --border-width: 1px;
+  /* S6m — a row table's text box: one line of this leading centred in a
+     bordered `--control-h` box, growing a line at a time. The caption's 16px
+     compact, so a long cell stays dense; the body's 20px comfortable. */
+  --cell-text-line: var(--type-caption-line);
+  --cell-text-inset: calc((var(--control-h) - var(--cell-text-line)) / 2 - var(--border-width));
+  /* S6m — a row table's cell above and below its bare `--control-h` control,
+     so control, padding and the row's rule make `--row-h`. */
+  --row-cell-inset: calc((var(--row-h) - var(--control-h) - var(--border-width)) / 2);
   /* S2b — a glyph in an icon button (the Fluent icons are 1em). */
   --icon-size: 16px;
 
@@ -104,6 +115,7 @@
   --type-section-line: 22px;
   --control-h: 32px;
   --row-h: 36px;
+  --cell-text-line: var(--type-body-line);
   --icon-size: 20px;
 }
 

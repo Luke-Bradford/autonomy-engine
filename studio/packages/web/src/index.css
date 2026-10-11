@@ -4033,7 +4033,7 @@ button.danger {
   background: none;
   color: var(--muted);
   font-size: 0.85rem;
-  line-height: 1;
+  line-height: var(--type-caption-line);
   cursor: pointer;
   pointer-events: all;
 }
@@ -4082,7 +4082,7 @@ button.danger {
   background: none;
   color: var(--muted);
   font-size: 0.85rem;
-  line-height: 1;
+  line-height: var(--type-caption-line);
   cursor: pointer;
   pointer-events: all;
 }
@@ -5150,7 +5150,7 @@ button.danger {
    its padding is what is left of `--row-h` rather than the one table style's
    0 8px: a 28px control in a 32px row compact, 32 in 36 comfortable. */
 .row-table :is(th, td) {
-  padding: calc((var(--row-h) - var(--control-h) - 1px) / 2) 2px;
+  padding: var(--row-cell-inset) var(--space-1);
   vertical-align: top;
 }
 
@@ -5178,11 +5178,11 @@ button.danger {
 
 .row-table__actions button {
   min-width: 24px;
-  padding-inline: 0.3rem;
+  padding-inline: var(--space-1);
 }
 
 .row-table__actions button + button {
-  margin-left: 2px;
+  margin-left: var(--space-1);
 }
 
 /* A bare text box fills its cell (a select keeps its content width). */
@@ -5199,7 +5199,7 @@ button.danger {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .row-table td > .labelled-control > label {
@@ -5247,7 +5247,7 @@ button.danger {
 .row-table .expression-picker {
   flex-direction: row;
   flex-wrap: wrap;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .config-field > .expression-picker > .expression-picker-toggle {
@@ -5281,12 +5281,13 @@ button.danger {
   margin: 0;
 }
 
-/* Compact: a 28px control in a 32px row. */
-:root[data-density='compact'] .row-table td textarea {
+/* A `--control-h` text box in a `--row-h` row, in both densities: the global
+   textarea's 20px line and 4px padding made it 30px tall comfortable (S6m). */
+.row-table td textarea {
   box-sizing: border-box;
   min-height: var(--control-h);
-  line-height: 16px;
-  padding-block: calc((var(--control-h) - 16px - 2px) / 2);
+  line-height: var(--cell-text-line);
+  padding-block: var(--cell-text-inset);
 }
 
 :root[data-density='compact']
@@ -5342,18 +5343,18 @@ button.danger {
    property panel's own scrolling reaches the list. The shadow and border stay so
    it still reads as a distinct surface. */
 .expression-picker-list {
-  margin-top: 0.25rem;
+  margin-top: var(--space-1);
   max-height: 20rem;
   overflow-y: auto;
-  padding: 0.5rem 0.6rem;
+  padding: var(--space-2);
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-surface);
   box-shadow: 0 8px 20px var(--shadow);
 }
 
 .expression-picker-list h3 {
-  margin: 0.5rem 0 0.25rem;
+  margin: var(--space-2) 0 var(--space-1);
   font-size: var(--type-caption-size);
   font-weight: var(--weight-strong);
   color: var(--muted);
@@ -5365,7 +5366,7 @@ button.danger {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: 0;
 }
 
 .expression-picker-list li button {
@@ -5373,11 +5374,11 @@ button.danger {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.1rem;
+  gap: 0;
   text-align: left;
   background: none;
   border: 1px solid transparent;
-  padding: 0.3rem 0.4rem;
+  padding: var(--space-1) var(--space-2);
 }
 
 .expression-picker-list li button:hover,
@@ -5386,7 +5387,7 @@ button.danger {
 }
 
 .expression-picker-type {
-  font-size: 0.72rem;
+  font-size: var(--type-caption-size);
   color: var(--muted);
 }
 
@@ -5396,22 +5397,22 @@ button.danger {
 .expression-picker-list li.expression-picker-example {
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
-  padding: 0.3rem 0.4rem;
+  gap: 0;
+  padding: var(--space-1) var(--space-2);
 }
 
 .expression-picker-list li.expression-picker-example button {
   flex-direction: row;
   align-items: baseline;
   flex-wrap: wrap;
-  gap: 0.4rem;
+  gap: var(--space-2);
 }
 
 /* The `default()` wrapping is a real property of the author's graph, not a
    detail to hide behind a longer string — so it is stated, and warning-coloured
    for the same reason `.contract-advisory` is. */
 .expression-picker-note {
-  font-size: 0.72rem;
+  font-size: var(--type-caption-size);
   color: var(--warning);
 }
 
@@ -5596,13 +5597,23 @@ button.danger {
 }
 
 .help-disclosure > summary {
+  /* #1594 OR40 S6m — a circle at `--icon-size`, the glyph centred in it. A
+     flex box, not inline: inside the block `<details>` an inline box would sit
+     on the parent's line box and its strut, and drift off-centre. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  inline-size: var(--icon-size);
+  block-size: var(--icon-size);
   cursor: pointer;
   list-style: none;
-  padding: 0 0.4rem;
+  padding: 0;
   border: 1px solid var(--border);
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   color: var(--muted);
   font-size: var(--type-caption-size);
+  line-height: var(--type-caption-line);
 }
 
 .help-disclosure > summary::-webkit-details-marker {

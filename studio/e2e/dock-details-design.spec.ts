@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { triggerMenuItem } from './support/canvas';
 import {
@@ -49,9 +49,25 @@ const mappingSeed = {
         ],
       },
     },
+    { id: 'w', type: 'wait', position: { x: 320, y: 0 }, config: { seconds: '${5}' } },
   ],
-  params: [{ name: 'region', type: 'string' as const, required: false, default: 'eu' }],
+  params: [{ name: 'secs', type: 'number' as const, required: false, default: 3 }],
 };
+
+/** The open list's box: 4px under its toggle, 8px inside a 6px radius. */
+async function expectListBox(page: Page, label: string): Promise<void> {
+  const list = (
+    await styles(
+      page,
+      ['.expression-picker-list'],
+      ['margin-top', 'padding-top', 'padding-left', 'border-top-left-radius'],
+    )
+  )['.expression-picker-list'];
+  expect(list?.['margin-top'], label).toBe('4px');
+  expect(list?.['padding-top'], label).toBe('8px');
+  expect(list?.['padding-left'], label).toBe('8px');
+  expect(list?.['border-top-left-radius'], label).toBe('6px');
+}
 
 for (const { density, theme } of RUNS) {
   const d = density as Density;
@@ -93,7 +109,10 @@ for (const { density, theme } of RUNS) {
     expect(cells['.row-table__actions button + button']?.['margin-left'], 'row acts').toBe('4px');
     await expectControlHeights(page, '.row-table__actions button', d, 'row acts');
     // A one-line text box is still a control tall.
-    for (const { name, h } of await drawnHeights(page, '.row-table td :is(input, textarea)')) {
+    for (const { name, h } of await drawnHeights(
+      page,
+      '.row-table td :is(input:not([type=checkbox]), textarea)',
+    )) {
       expect(h, `cell control ${name}`).toBe(d === 'compact' ? 28 : 32);
     }
 
@@ -116,36 +135,35 @@ for (const { density, theme } of RUNS) {
     expect(help.radius, '? radius').toBeGreaterThanOrEqual(ICON[d] / 2);
     expect(help.size, '? type').toBe('12px');
 
-    // The references list, opened from a cell.
+    // A cell's list: no reference fits a mapping column, so it is the box and
+    // its two notes, measured where the cell's own rules apply.
     const source = table.getByRole('textbox', { name: 'Column mapping row 1 source' });
     await source.focus();
-    const refs = table.getByRole('button', { name: /^Insert reference into Column mapping row 1 source/ });
+    const cellRefs = table.getByRole('button', {
+      name: /^Insert reference into column mapping row 1 source$/i,
+    });
+    await cellRefs.click();
+    await expect(cellRefs).toHaveAttribute('aria-expanded', 'true');
+    await expectListBox(page, 'cell list');
+    expect(await offRampText(page, d, DOCK), 'cell list open: ramp').toEqual([]);
+
+    // A config field that takes the number parameter, so each list has rows.
+    await nodeById(page, 'w').click();
+    await properties(page).getByRole('tab', { name: 'Settings' }).click();
+    const refs = properties(page).getByRole('button', { name: /^Insert reference into seconds$/i });
     await refs.click();
     await expect(refs).toHaveAttribute('aria-expanded', 'true');
+    await expectListBox(page, 'references');
     const open = await styles(
       page,
       [
-        '.expression-picker-list',
         '.expression-picker-list h3',
         '.expression-picker-list ul',
         '.expression-picker-list li button',
         '.expression-picker-type',
       ],
-      [
-        'margin-top',
-        'margin-bottom',
-        'padding-top',
-        'padding-left',
-        'border-top-left-radius',
-        'row-gap',
-        'font-size',
-      ],
+      ['margin-top', 'margin-bottom', 'padding-top', 'padding-left', 'row-gap', 'font-size'],
     );
-    const list = open['.expression-picker-list'];
-    expect(list?.['margin-top'], 'list').toBe('4px');
-    expect(list?.['padding-top'], 'list').toBe('8px');
-    expect(list?.['padding-left'], 'list').toBe('8px');
-    expect(list?.['border-top-left-radius'], 'list').toBe('6px');
     expect(open['.expression-picker-list h3']?.['margin-top'], 'group heading').toBe('8px');
     expect(open['.expression-picker-list h3']?.['margin-bottom'], 'group heading').toBe('4px');
     expect(open['.expression-picker-list ul']?.['row-gap'], 'items').toBe('0px');
@@ -157,11 +175,13 @@ for (const { density, theme } of RUNS) {
     await page.keyboard.press('Escape');
     await expect(refs).toHaveAttribute('aria-expanded', 'false');
 
-    // The functions list: a function's text, then one button per example.
-    await source.focus();
-    const fns = table.getByRole('button', { name: /^Functions for Column mapping row 1 source/ });
+    // The functions list: a function's text, then one button per example. Its
+    // examples are offered for an empty field; inside `${5}` it would wrap.
+    await properties(page).getByRole('textbox', { name: 'Wait time (seconds)' }).fill('');
+    const fns = properties(page).getByRole('button', { name: /^Functions for seconds$/i });
     await fns.click();
     await expect(fns).toHaveAttribute('aria-expanded', 'true');
+    await expectListBox(page, 'functions');
     const examples = await styles(
       page,
       ['li.expression-picker-example', 'li.expression-picker-example button'],
@@ -210,7 +230,12 @@ for (const { density, theme } of RUNS) {
     await expect(page.getByRole('link', { name: 'Open full run' })).toBeVisible();
 
     expect(await offRampText(page, d, DOCK), 'run drawer: ramp').toEqual([]);
-    await expectControlHeights(page, `${DOCK} .node-detail-panel button:not(summary)`, d, 'drawer acts');
+    await expectControlHeights(
+      page,
+      `${DOCK} .node-detail-panel button:not(summary)`,
+      d,
+      'drawer acts',
+    );
     const gaps = await styles(page, [`${DOCK} .node-detail-panel`], ['margin-top']);
     expect(gaps[`${DOCK} .node-detail-panel`]?.['margin-top'], 'drawer').toBe('12px');
 
