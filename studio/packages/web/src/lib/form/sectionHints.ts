@@ -111,6 +111,14 @@ export const FORM_SECTION_HINTS = {
     // #1594 OR40 S6f — the Runs list's title `?`.
     page: 'Every run in this workspace, with its status, trigger, duration and cost.',
     diagnostics: 'What the pipeline asked for that did not take effect on this run, and why.',
+    // #1594 OR40 S6g — the run page's Gantt, Variables and Cost views.
+    timeline:
+      "Each activity's attempts on one time axis; a gap between two bars is a retry hold or a wait for its turn.",
+    variables: "The pipeline's variables and the values this run wrote to them.",
+    globals:
+      'The global parameters this run read when it started; a later edit does not change them.',
+    runCost:
+      "What this run's own activities spent, in tokens and money; a child run bills its own.",
     streamedOutput: 'How many output events this activity streamed, and the last one it sent.',
     failure: 'The error this activity run ended with, and what kind of failure it was.',
     childRuns: 'The child runs this activity started, each linked to its own run.',

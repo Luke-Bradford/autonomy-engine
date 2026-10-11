@@ -102,9 +102,8 @@ test('#844 GL3/GL5 — a run reads a global, logs the value, and shows it after 
   /* #844 GL5 — the run page's Global parameters section shows the SNAPSHOT,
      not the live store: the global now holds "dev". */
   const globals = page.getByRole('region', { name: 'Global parameters' });
-  await expect(
-    globals.getByText('A later edit to a global does not change them.', { exact: false }),
-  ).toBeVisible();
+  // #1594 OR40 S6g — said by the section's `?`, its description.
+  await expect(globals).toHaveAccessibleDescription(/a later edit does not change them/);
   expect(
     await globals
       .locator('tbody tr')

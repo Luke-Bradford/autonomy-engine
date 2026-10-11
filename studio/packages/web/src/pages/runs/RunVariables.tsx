@@ -2,6 +2,8 @@ import { VALUE_TYPE_TITLES } from '@autonomy-studio/shared';
 import type { ReactNode } from 'react';
 import type { RunState, VariableDef } from '@autonomy-studio/shared';
 import { InlineJsonValue } from './CappedValue';
+import { Section } from '../../lib/Section';
+import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 
 /**
  * #844 V7 (spec V-D9) — the run's pipeline variables, as the ENGINE holds them.
@@ -36,8 +38,7 @@ export function RunVariables({
 }) {
   if (declared === undefined || declared.length === 0) return empty;
   return (
-    <section aria-labelledby="run-variables-heading">
-      <h2 id="run-variables-heading">Variables</h2>
+    <Section heading="Variables" help={FORM_SECTION_HINTS.run.variables} level={2} landmark>
       {!overlay.ready ? (
         /* The overlay's reason names NODE state, so it is prefixed rather than
            shown bare under a Variables heading. */
@@ -78,6 +79,6 @@ export function RunVariables({
           </table>
         </>
       )}
-    </section>
+    </Section>
   );
 }

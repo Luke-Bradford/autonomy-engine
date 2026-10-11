@@ -5,6 +5,8 @@ import { formatElapsed } from './format';
 import { placeSpans, timelineWindow, untimedReason } from './attemptSpans';
 import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import { dayOf, formatTimeOfDay, formatTimestamp, zoneLabel } from '../../lib/displayTime';
+import { Section } from '../../lib/Section';
+import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 
 /**
  * U12a (#1007) — the run's spans drawn against one shared time axis, so an
@@ -95,20 +97,32 @@ export function AttemptTimeline({
 
   if (window === null) {
     return (
-      <section aria-labelledby="timeline-heading" className="attempt-timeline">
-        <h2 id="timeline-heading">Timeline</h2>
+      <Section
+        heading="Timeline"
+        help={FORM_SECTION_HINTS.run.timeline}
+        level={2}
+        landmark
+        className="attempt-timeline"
+      >
         <p>
           Nothing measurable yet — no node has both started and finished. Every node is listed below
           with the reason it has no span.
         </p>
         <UntimedList nodes={untimed} nameOf={nameOf} runStatus={runStatus} />
-      </section>
+      </Section>
     );
   }
 
   return (
-    <section aria-labelledby="timeline-heading" className="attempt-timeline">
-      <h2 id="timeline-heading">Timeline</h2>
+    <Section
+      heading="Timeline"
+      help={FORM_SECTION_HINTS.run.timeline}
+      level={2}
+      landmark
+      className="attempt-timeline"
+    >
+      {/* The window, as data. What a bar and a gap mean is the `?` (#1594
+          OR40 S6g: labels, not prose). */}
       <p className="timeline-axis-note">
         {formatTimestamp(window.from, zone, 'ms')} →{' '}
         {/* The end in full when its day or zone offset differs from the start's:
@@ -118,9 +132,7 @@ export function AttemptTimeline({
         zoneLabel(window.from, zone) === zoneLabel(window.to, zone)
           ? formatTimeOfDay(window.to, zone, 'ms')
           : formatTimestamp(window.to, zone, 'ms')}{' '}
-        · {formatElapsed(Math.max(0, window.to - window.from))} of measured wall clock. A node that
-        ran more than once has one bar per run, and the gap between two bars is time the node was
-        not running — a retry hold, or simply waiting its turn.
+        · {formatElapsed(Math.max(0, window.to - window.from))} of measured wall clock
       </p>
       <ol className="timeline-rows">
         {timed.map((node) => {
@@ -179,7 +191,7 @@ export function AttemptTimeline({
         })}
       </ol>
       <UntimedList nodes={untimed} nameOf={nameOf} runStatus={runStatus} />
-    </section>
+    </Section>
   );
 }
 
