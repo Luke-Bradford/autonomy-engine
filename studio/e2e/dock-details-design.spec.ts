@@ -108,6 +108,13 @@ for (const { density, theme } of RUNS) {
     expect(cells['.row-table__actions button']?.['padding-left'], 'row act').toBe('4px');
     expect(cells['.row-table__actions button + button']?.['margin-left'], 'row acts').toBe('4px');
     await expectControlHeights(page, '.row-table__actions button', d, 'row acts');
+    // A text box's one line is centred in its control: the caption's 16px
+    // leading compact, the body's 20px comfortable, 5px above and below either way.
+    const box = (await styles(page, ['.row-table td textarea'], ['line-height', 'padding-top']))[
+      '.row-table td textarea'
+    ];
+    expect(box?.['line-height'], 'cell text box').toBe(d === 'compact' ? '16px' : '20px');
+    expect(box?.['padding-top'], 'cell text box').toBe('5px');
     // A one-line text box is still a control tall.
     for (const { name, h } of await drawnHeights(
       page,

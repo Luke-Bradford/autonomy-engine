@@ -580,6 +580,26 @@ Problems column.
 
 `e2e/dock-design.spec.ts` measures them at 1440x900, compact light and comfortable dark.
 
+## The dock's details (#1594 OR40 S6m)
+
+The pieces inside the dock's fields: a row table's cells, the `${}` and `ƒx` lists, the `?`, and the
+editor's run drawer.
+
+- **Row tables:** a cell's control and the note or list under it are 4px apart; a row's acts are
+  `--control-h` with 4px between them. A cell's text box is one line centred in `--control-h`
+  (`--cell-text-line`: the caption's 16px leading compact, the body's 20px comfortable, with
+  `--cell-text-inset` above and below) and grows a line at a time.
+- **The `${}` and `ƒx` lists** open 4px under their toggle, `8px` inside a 1px border at
+  `--radius-surface`. A group heading is 8px above and 4px under; rows are `4px 8px` with no gap
+  between them, and every line in them is on the ramp (a type or a note is caption, never smaller).
+  A function's examples are 8px apart.
+- **The `?`** (`HelpDisclosure`) is a circle at `--icon-size` (16px compact, 20px comfortable) with
+  the glyph in caption type at its centre. Its note is unchanged.
+- **The editor's run drawer** is the run page's activity panel (`.node-detail-panel`) 12px under the
+  node's properties; it measured clean, so it has no rules of its own.
+
+`e2e/dock-details-design.spec.ts` measures them at 1440x900, compact light and comfortable dark.
+
 ## Tables (#1594 OR40 S3d)
 
 Every table in the app, whether a list, a run's facts or a form's rows, takes one style from the
@@ -608,8 +628,8 @@ or header type.
   value (the drawer is where it is read), and a variable's or global's capped JSON value on the run
   page. The activity runs table scrolls sideways in its own box rather than cutting its columns;
   fitting it to the page is S6's.
-- **A form's rows** (`RowTable`) keep their own cell padding: what is left of `--row-h` around a
-  bare `--control-h` control, top-aligned. That is a 28px control in a 32px row compact, and 32 in
+- **A form's rows** (`RowTable`) keep their own cell padding: `--row-cell-inset` (what is left of
+  `--row-h` around a bare `--control-h` control) above and below, 4px either side, top-aligned. That is a 28px control in a 32px row compact, and 32 in
   36 comfortable. Their header is the same body-strong as every table's, but only as tall as its words, so the
   dock's required fields still fit (#1477 OR29). A row's notes row
   (`RowNotes`) takes its own height, so it hangs under its row as one entry.
