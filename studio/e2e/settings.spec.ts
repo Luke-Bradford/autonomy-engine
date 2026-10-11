@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { documentTheme, fluentRootReady, resolvedPaletteColor, themeSwitch } from './support/theme';
+import { DENSITIES, expectAppearance, preferAppearance } from './support/appearance';
+import { offRampText } from './support/typeRamp';
 
 /**
  * U15 slice 2 (#1094) — `#/settings`.
@@ -132,3 +134,41 @@ test('U15 — the Settings theme switch and the rail’s are one control', async
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * #1594 OR40 S6 — Settings on the design system, in both densities: every
+ * piece of its text on the type ramp (the facts list and the key path
+ * included, with a `?` note open as well as closed), each section the one
+ * `Section` (a named region with its `?`), and no paragraph of prose under the
+ * title. The harness is in the generated state (see the first spec), so the
+ * key file row and the advisory are both on screen to be measured.
+ */
+for (const density of DENSITIES) {
+  test(`#1594 OR40 S6 — Settings' text is on the type ramp, with sections and no prose (${density})`, async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await preferAppearance(page, 'light', density);
+    await page.goto('/#/settings');
+    await fluentRootReady(page);
+    await expectAppearance(page, 'light', density);
+    const secrets = page.getByRole('region', { name: 'Secret encryption' });
+    await expect(secrets.getByText('Key file', { exact: true })).toBeVisible();
+    await expect(secrets.getByText(/permanently undecryptable/i)).toBeVisible();
+
+    expect(await offRampText(page, density)).toEqual([]);
+    await secrets.getByText('?', { exact: true }).click();
+    await expect(secrets.getByRole('note')).toBeVisible();
+    expect(await offRampText(page, density)).toEqual([]);
+
+    const shape = await page.evaluate(() => ({
+      prose: document.querySelectorAll('.content .page-hint').length,
+      sections: [...document.querySelectorAll('.content section.section')].map(
+        (el) => el.querySelector('.section__title')?.textContent,
+      ),
+    }));
+    expect(shape).toEqual({ prose: 0, sections: ['Appearance', 'Secret encryption'] });
+
+    await expectQuiet(page, problems);
+  });
+}
