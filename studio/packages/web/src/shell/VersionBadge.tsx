@@ -3,6 +3,15 @@ import { Fragment, useEffect, useState } from 'react';
 import { getVersion } from '../api/version';
 
 /**
+ * `version` cut after each `.` and `-`: `0.10.12-rc1` is `0.10.` `12-` `rc1`.
+ * A `match`, not a lookbehind `split`: a lookbehind in a regex literal is a
+ * parse error on Safari before 16.4, which would take the whole bundle down.
+ */
+function versionParts(version: string): string[] {
+  return version.match(/[^.-]*[.-]|[^.-]+$/g) ?? [version];
+}
+
+/**
  * The running build, in the rail foot beside the theme switch.
  *
  * Renders NOTHING on failure. This sits in the chrome of every page, so an error
@@ -25,15 +34,6 @@ import { getVersion } from '../api/version';
  * politely narrate the version to a screen reader) and no `tabIndex` (a
  * non-actionable tab stop in the global Tab sequence, present on every page).
  */
-/**
- * `version` cut after each `.` and `-`: `0.10.12-rc1` is `0.10.` `12-` `rc1`.
- * A `match`, not a lookbehind `split`: a lookbehind in a regex literal is a
- * parse error on Safari before 16.4, which would take the whole bundle down.
- */
-function versionParts(version: string): string[] {
-  return version.match(/[^.-]*[.-]|[^.-]+$/g) ?? [version];
-}
-
 export function VersionBadge(): React.JSX.Element | null {
   const [version, setVersion] = useState<string | null>(null);
 
