@@ -1570,6 +1570,13 @@ td button + button {
   margin-top: 0;
 }
 
+/* #1594 OR40 S6 — nor a list of facts (Settings' master key): `.run-meta`'s
+   own margin spaces it in a run page's flow, and here it would stack on the
+   gap too. */
+.section__body > .run-meta {
+  margin: 0;
+}
+
 .section__body input,
 .section__body select,
 .section__body textarea {
@@ -3151,8 +3158,9 @@ button.danger {
   container: field-form / inline-size;
 }
 
-/* A page's form (Settings' appearance, the import panel): rows 8px apart, its
-   heading's own margin given back to that gap. */
+/* A page's form (Settings' appearance, the import panel): rows 8px apart. A
+   heading inside it (the import panel's) gives its own margin back to that
+   gap; Settings' heading is its `Section`'s, outside the form. */
 .field-form {
   display: flex;
   flex-direction: column;

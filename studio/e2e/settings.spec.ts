@@ -169,6 +169,25 @@ for (const density of DENSITIES) {
     }));
     expect(shape).toEqual({ prose: 0, sections: ['Appearance', 'Secret encryption'] });
 
+    /* Measured: the facts list sits 8px under its heading row, as `Section`
+       documents (`.run-meta`'s own margin would make it 24px), and both
+       pickers are the one control height. */
+    const fit = await page.evaluate(() => {
+      const region = [...document.querySelectorAll('.content section.section')][1]!;
+      const head = region.querySelector('.section__head')!.getBoundingClientRect();
+      const facts = region.querySelector('dl')!.getBoundingClientRect();
+      const controlH = getComputedStyle(document.documentElement).getPropertyValue('--control-h');
+      return {
+        factsGap: Math.round(facts.top - head.bottom),
+        selects: [...document.querySelectorAll('.content select')].map(
+          (el) => `${Math.round(el.getBoundingClientRect().height)}px`,
+        ),
+        controlH: controlH.trim(),
+      };
+    });
+    expect(fit.factsGap).toBe(8);
+    expect(fit.selects).toEqual([fit.controlH, fit.controlH]);
+
     await expectQuiet(page, problems);
   });
 }
