@@ -533,6 +533,31 @@ The pipeline editor's header row, its status strip and the Trigger now and Debug
 
 `e2e/editor-header-design.spec.ts` measures them at 1440x900, compact light and comfortable dark.
 
+## Canvas chrome (#1594 OR40 S6k)
+
+What the editor draws over the canvas: the empty-canvas guide, the implicit-chain advisory, the
+connect refusal, the minimap and zoom controls, the version preview bar and the leave prompt.
+
+- **Panels:** every React Flow panel (minimap, controls, advisory, refusal) sits 16px in from the
+  pane's edge. React Flow's own 15px loses to `.react-flow .react-flow__panel`. The advisory and the
+  refusal share one surface, `8px 12px` in body type at `--radius-surface`, and differ only in tone:
+  muted text and border for the advisory, `--error` border for the refusal. The zoom controls'
+  buttons are still React Flow's own; only their panel's inset is on the scale.
+- **Refusal:** the back-edge offer is a secondary button and the dismiss is an `.icon-button`, both
+  `--control-h`. Neither shrinks or wraps beside a long reason.
+- **Empty-canvas guide:** a 12px card in body type at `--radius-surface`, 8px between the lead and
+  the templates and between templates. Each template is a `8px 12px` button with its title in
+  strong body and its description in caption. The lead ends on a colon because it is a sentence
+  introducing the list, not a label.
+- **Version preview:** 12px between the bar and the canvas. The bar is `8px 12px` with 12px between
+  its parts, and its label has no trailing period. Its refusal line is body type in `--warning`.
+- **Leave prompt:** a 12px surface at `--radius-surface`, 8px under its message.
+- **Status strip:** one control plus 4px above and below (`--editor-strip-h`: 36px compact, 40px
+  comfortable, inside the 40px header row). A standing banner takes the strip's height, so its
+  buttons never touch its border.
+
+`e2e/canvas-chrome-design.spec.ts` measures them at 1440x900, compact light and comfortable dark.
+
 ## Tables (#1594 OR40 S3d)
 
 Every table in the app, whether a list, a run's facts or a form's rows, takes one style from the

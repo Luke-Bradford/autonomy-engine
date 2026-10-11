@@ -763,7 +763,7 @@ test('#1484 — the runs grid links the version that ran, a child names its pare
   await expect(page).toHaveURL(
     new RegExp(`/author/pipelines/${encodeURIComponent(pipelineId)}\\?version=1$`),
   );
-  await expect(page.getByTestId('version-preview-bar')).toContainText('Viewing v1 — read-only.');
+  await expect(page.getByTestId('version-preview-bar')).toContainText('Viewing v1 — read-only');
 
   // Annotations, turned on: the tags of the version the child bound.
   await page.goBack();

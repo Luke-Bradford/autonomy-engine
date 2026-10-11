@@ -1465,7 +1465,7 @@ td button + button {
 }
 
 .unsaved-confirm p {
-  margin: 0 0 0.5rem;
+  margin: 0 0 var(--space-2);
 }
 
 /* #1397 — the confirmation dialog (lib/confirm/useConfirm). Its message
@@ -1501,9 +1501,9 @@ td button + button {
   transform: translateX(-50%);
   z-index: 20;
   max-width: min(28rem, calc(100vw - 2rem));
-  padding: 0.75rem 1rem;
+  padding: var(--space-3);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-surface);
   background: var(--panel);
   box-shadow: 0 8px 20px var(--shadow);
 }
@@ -2796,7 +2796,11 @@ button.danger {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  height: 2.25rem;
+  /* #1594 OR40 S6k — a control and 4px above and below it, so a standing
+     banner's buttons never touch its border: 36px compact, 40px comfortable,
+     both inside the 40px header row (`--header-h`). */
+  --editor-strip-h: calc(var(--control-h) + var(--space-2));
+  height: var(--editor-strip-h);
   /* The minimum holds a standing banner's buttons ("Preview vN" and "Save as
      vN+1 anyway" are about 230px) with a little of its text beside them. */
   flex: 1 1 18rem;
@@ -2853,6 +2857,7 @@ button.danger {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  height: var(--editor-strip-h);
   padding: 0 var(--space-2);
 }
 
@@ -4346,23 +4351,22 @@ button.danger {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 1rem;
+  padding: var(--space-4);
   pointer-events: none;
 }
 
 .canvas-empty__card {
   max-width: 34rem;
-  padding: 0.9rem 1rem;
+  padding: var(--space-3);
   border: 1px dashed var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-surface);
   background: var(--panel-2);
   color: var(--muted);
-  font-size: 0.85rem;
-  line-height: 1.4;
+  font: var(--type-body);
 }
 
 .canvas-empty__lead {
-  margin: 0 0 0.6rem;
+  margin: 0 0 var(--space-2);
 }
 
 .canvas-empty__lead strong {
@@ -4371,19 +4375,20 @@ button.danger {
 
 .canvas-empty__templates {
   display: grid;
-  gap: 0.4rem;
+  gap: var(--space-2);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
+/* The title over its caption, each on its own line height: no gap between. */
 .canvas-empty__template {
   display: grid;
-  gap: 0.15rem;
+  gap: 0;
   width: 100%;
-  padding: 0.45rem 0.6rem;
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   background: var(--panel);
   color: var(--text);
   font: inherit;
@@ -4392,22 +4397,19 @@ button.danger {
   pointer-events: auto;
 }
 
-.canvas-empty__template:hover {
-  border-color: var(--accent);
-}
-
 .canvas-empty__title {
-  font-weight: 600;
+  font-weight: var(--weight-strong);
 }
 
 .canvas-empty__description {
   color: var(--muted);
-  font-size: 0.8rem;
+  font: var(--type-caption);
 }
 
 /*
- * #788 — the implicit-routing advisory. Shares `.canvas-refusal`'s panel surface
- * below deliberately (same shape, same metrics), and diverges only in TONE: a
+ * #788 — the implicit-routing advisory. Shares one panel surface with
+ * `.canvas-refusal` (this rule), and the refusal's own rule below diverges only
+ * in TONE (and lays out its buttons): a
  * refusal answers a gesture the operator just made and takes `--error`, while
  * this is a standing description of a graph that is not wrong, only easy to
  * misread — so it takes the neutral border and muted text.
@@ -4420,22 +4422,22 @@ button.danger {
  * removed the routing and is about to re-author it. Nothing opts back in — unlike
  * the refusal, this carries no control.
  */
-.canvas-advisory {
+.canvas-advisory,
+.canvas-refusal {
   pointer-events: none;
   max-width: 46rem;
-  padding: 0.45rem 0.7rem;
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-surface);
   background: var(--panel-2);
   color: var(--muted);
-  font-size: 0.8rem;
-  line-height: 1.35;
+  font: var(--type-body);
 }
 
 .canvas-advisory strong {
   /* The sequence itself is the payload — the surrounding sentence is framing. */
   color: var(--text);
-  font-weight: 600;
+  font-weight: var(--weight-strong);
 }
 
 /* The refused-connection message. Sits in an RF `Panel`, so it is already
@@ -4450,54 +4452,21 @@ button.danger {
  * nothing" surface inside the feature built to remove the first. Made
  * transparent to hit-testing instead, with the dismiss button opted back in. */
 .canvas-refusal {
-  pointer-events: none;
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  max-width: 46rem;
-  padding: 0.45rem 0.7rem;
-  border: 1px solid var(--error);
-  border-radius: 6px;
-  background: var(--panel-2);
+  gap: var(--space-2);
+  border-color: var(--error);
   color: var(--text);
-  font-size: 0.8rem;
-  line-height: 1.35;
 }
 
 .canvas-refusal button {
-  /* Opted back into hit-testing — see the `pointer-events: none` above. */
+  /* Opted back into hit-testing — see the `pointer-events: none` above. Never
+     shrunk or wrapped beside a long reason (it names both endpoints), so each
+     stays one `--control-h` line. The look is the shared control layer's: the
+     back-edge offer is a secondary button, the dismiss an `.icon-button`. */
   pointer-events: auto;
   flex: none;
-  padding: 0 0.3rem;
-  border: none;
-  background: none;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 0.85rem;
-}
-
-.canvas-refusal button:hover {
-  color: var(--text);
-}
-
-/*
- * U6e — the back-edge OFFER, which is an action rather than the dismiss glyph
- * the rule above styles. It reads as a button (border, full-contrast text) so
- * the panel does not present its one constructive control as decoration.
- * `pointer-events: auto` is inherited from `.canvas-refusal button`.
- */
-.canvas-refusal-action {
-  padding: 0.2rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--panel);
-  color: var(--text);
-  font-size: 0.75rem;
   white-space: nowrap;
-}
-
-.canvas-refusal-action:hover {
-  border-color: var(--accent);
 }
 
 /*
@@ -6308,7 +6277,7 @@ button.danger {
 .canvas-preview {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: var(--space-3);
   /* Takes the leftover width exactly as `.canvas-grid` does — swapping between
      the editor and a preview must not resize the page. */
   flex: 1 1 0;
@@ -6327,12 +6296,12 @@ button.danger {
 .version-preview-bar {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: var(--space-3);
   flex-wrap: wrap;
-  padding: 0.5rem 0.75rem;
+  padding: var(--space-2) var(--space-3);
   background: var(--panel);
   border: 1px solid var(--accent);
-  border-radius: 8px;
+  border-radius: var(--radius-surface);
 }
 
 .version-preview-bar .form-actions {
@@ -6341,7 +6310,6 @@ button.danger {
 
 .version-preview-refusal {
   color: var(--warning);
-  font-size: 0.85rem;
 }
 
 /* --- #917 Monitor › AI activity ------------------------------------------- */
@@ -6819,8 +6787,17 @@ button.danger {
 .react-flow__minimap {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  margin: 10px;
+  border-radius: var(--radius-surface);
+}
+
+/* #1594 OR40 S6k — every canvas panel (the minimap, the zoom controls, the
+   advisory, the refusal) sits one step of the scale in from the pane's edge.
+   React Flow's own `.react-flow__panel` sets 15px, and its stylesheet loads
+   with the lazy canvas chunk, AFTER this one: a rule here at the same
+   specificity loses (the minimap's old `margin: 10px` never applied). Hence
+   the extra class. The 160x120 map plus 16px stays inside `CANVAS_CHROME_INSET`. */
+.react-flow .react-flow__panel {
+  margin: var(--space-4);
 }
 
 /* The mask is the "you are here" rectangle. RF paints it as a dark fill over the

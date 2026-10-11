@@ -3,6 +3,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady, resolvedPaletteColor } from './support/theme';
 import {
   CONTROL_H,
+  computedStyles as styles,
   DENSITIES,
   drawnHeights,
   expectAppearance,
@@ -59,22 +60,6 @@ function doc(): SeedDoc {
       { name: 'filter', type: 'json', required: false },
     ],
   };
-}
-
-/** The computed `props` of the first drawn match of each selector, in ONE evaluate. */
-function styles(page: Page, selectors: readonly string[], props: readonly string[]) {
-  return page.evaluate(
-    ([sels, names]) =>
-      Object.fromEntries(
-        sels.map((sel) => {
-          const el = [...document.querySelectorAll(sel)].find((e) => e.getClientRects().length > 0);
-          if (!el) return [sel, null];
-          const s = getComputedStyle(el);
-          return [sel, Object.fromEntries(names.map((n) => [n, s.getPropertyValue(n)]))];
-        }),
-      ),
-    [selectors, props] as const,
-  );
 }
 
 /** The open run panel, measured: ramp, spacing, heading, stacked fields, controls. */
@@ -222,6 +207,30 @@ for (const { density, theme } of RUNS) {
     for (const { name, h } of await drawnHeights(page, `${BANNER} button`)) {
       expect(h, `banner: ${name}`).toBe(CONTROL_H[d]);
     }
+    // S6k — the buttons sit inside the banner's border with room to spare, in
+    // comfortable density too, where a 32px button once filled it edge to edge.
+    const clearances = await page.evaluate((sel) => {
+      const banner = document.querySelector(sel)!;
+      const box = banner.getBoundingClientRect();
+      const border = parseFloat(getComputedStyle(banner).borderTopWidth);
+      return [...banner.querySelectorAll('button')].map((b) => {
+        const r = b.getBoundingClientRect();
+        return Math.min(r.top - box.top - border, box.bottom - border - r.bottom);
+      });
+    }, BANNER);
+    expect(clearances.length, 'banner: buttons').toBeGreaterThan(0);
+    expect(Math.min(...clearances), 'banner: button clearance').toBeGreaterThanOrEqual(2);
+    // The banner fills the strip exactly, and the strip stays inside the header row.
+    const [bannerBox, stripBox, headerBox] = await Promise.all([
+      page.locator(BANNER).boundingBox(),
+      page.locator(STRIP).boundingBox(),
+      page.locator(HEADER).boundingBox(),
+    ]);
+    expect(bannerBox!.height, 'banner: the strip height').toBe(stripBox!.height);
+    expect(stripBox!.y, 'strip: top in the header').toBeGreaterThanOrEqual(headerBox!.y);
+    expect(stripBox!.y + stripBox!.height, 'strip: bottom in the header').toBeLessThanOrEqual(
+      headerBox!.y + headerBox!.height,
+    );
 
     await expectQuiet(page, problems);
   });

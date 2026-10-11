@@ -76,3 +76,26 @@ export function drawnHeights(page: Page, selector: string): Promise<{ name: stri
     selector,
   );
 }
+
+/**
+ * The computed `props` of the first DRAWN match of each selector (`null` when
+ * none is drawn), in ONE evaluate: `{ [selector]: { [prop]: value } }`.
+ */
+export function computedStyles(
+  page: Page,
+  selectors: readonly string[],
+  props: readonly string[],
+): Promise<Record<string, Record<string, string> | null>> {
+  return page.evaluate(
+    ([sels, names]) =>
+      Object.fromEntries(
+        sels.map((sel) => {
+          const el = [...document.querySelectorAll(sel)].find((e) => e.getClientRects().length > 0);
+          if (!el) return [sel, null];
+          const s = getComputedStyle(el);
+          return [sel, Object.fromEntries(names.map((n) => [n, s.getPropertyValue(n)]))];
+        }),
+      ),
+    [selectors, props] as const,
+  );
+}
