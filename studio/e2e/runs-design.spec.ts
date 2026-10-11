@@ -17,7 +17,8 @@ import { fireAndSettle, seedVersion } from './support/seedDoc';
  * column's header label is clipped (the S6e audit found "Duration" cut, and
  * "Started GMT+1" in comfortable; "Rows written" was cut too) with the default sort's arrow drawn on
  * Started. The filter bar is one row of `--control-h` controls, 8px apart on
- * one centre line, and every piece of text is on the type ramp. A seeded,
+ * one centre line, and every piece of text is on the type ramp, the lifetime
+ * spend line a pipeline filter adds included. A seeded,
  * settled run gives the grid a row.
  *
  * "No prose" is the S6 rule for the header: no `.page-hint` paragraph outside a
@@ -115,7 +116,7 @@ for (const { density, theme } of RUNS) {
     await page.setViewportSize({ width: 1440, height: 900 });
     await preferAppearance(page, theme, density as Density);
     const name = `S6f pipeline ${density}`;
-    const { pipelineVersionId } = await seedVersion(page, name, {
+    const { pipelineId, pipelineVersionId } = await seedVersion(page, name, {
       nodes: [{ id: 'w', type: 'wait', position: { x: 0, y: 0 }, config: { seconds: '${0}' } }],
     });
     await fireAndSettle(page, pipelineVersionId);
@@ -155,6 +156,11 @@ for (const { density, theme } of RUNS) {
     expect(await offRampText(page, density as Density), '? open').toEqual([]);
     await page.keyboard.press('Escape');
     await expect(note).toBeHidden();
+
+    // A pipeline filter adds that pipeline's lifetime spend, on the ramp too.
+    await page.goto(`/#/monitor/runs?pipeline=${pipelineId}`);
+    await expect(page.getByRole('region', { name: 'Lifetime spend' })).toBeVisible();
+    expect(await offRampText(page, density as Density), 'one pipeline').toEqual([]);
 
     await expectQuiet(page, problems);
   });
