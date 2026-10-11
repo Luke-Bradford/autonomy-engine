@@ -73,7 +73,8 @@
   --control-h: 28px;
   --row-h: 32px;
   /* S3 — a page header's row: the title and its toolbar. One height in both
-     densities, so a page's content starts at the same y either way. */
+     densities, so a page's content starts at the same y either way. S6p — the
+     command bar above every page is the same row. */
   --header-h: 40px;
   /* S3c — the label column of a label-left form row (the form layout,
      `index.css`). One width in both densities, so every form's controls start
@@ -95,6 +96,9 @@
   --row-cell-inset: calc((var(--row-h) - var(--control-h) - var(--border-width)) / 2);
   /* S2b — a glyph in an icon button (the Fluent icons are 1em). */
   --icon-size: 16px;
+  /* S6p — a hub rail link's glyph: Fluent's 20px navigation size. One value in
+     both densities, like the rail's fixed 48px and its links' 44px. */
+  --icon-size-nav: 20px;
 
   /* S2 — the one focus ring. It sits outside the element, except where the
      element fills a container that clips it (a rail link, a grid resizer), and

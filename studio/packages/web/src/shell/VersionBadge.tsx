@@ -1,5 +1,5 @@
 import { Tooltip } from '@fluentui/react-components';
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { getVersion } from '../api/version';
 
 /**
@@ -9,11 +9,14 @@ import { getVersion } from '../api/version';
  * state here would follow the user everywhere for something that is purely
  * informational — the app works identically without it.
  *
- * ACCESSIBLE NAME. The visible text clips inside the 48px rail (it measures
- * wider than the rail at 0.6rem). Clipping is purely visual — it does not
- * remove the text node from the accessibility tree — so the string was
- * already reachable by AT without any extra role or tab stop; what clipping
- * actually breaks is the SIGHTED case, which the Fluent `Tooltip` (with
+ * WRAPPING. At caption type a version is wider than the 48px rail (#1594 OR40
+ * S6p; it was 9.6px and clipped), so it may break onto a second line after
+ * each `.` and `-`: `2026.` / `07.30`, `0.0.0-` / `dev`. A release version
+ * has no hyphen, so without the `<wbr>`s it would break wherever the line ran
+ * out, mid-number. The text is unchanged; only break points are added.
+ *
+ * ACCESSIBLE NAME. A version is still read more easily whole, and the
+ * SIGHTED case is served by the Fluent `Tooltip` (with
  * `relationship="label"` for a pinned accessible name, matching
  * `ThemeToggle`'s pattern) fixes on its own. The span stays a plain,
  * non-interactive `generic` element: no `role="status"` (this is not a live
@@ -37,7 +40,12 @@ export function VersionBadge(): React.JSX.Element | null {
   return (
     <Tooltip content={version} relationship="label" positioning="after">
       <span className="version-badge" aria-label={version}>
-        {version}
+        {version.split(/(?<=[.-])/).map((part, i) => (
+          <Fragment key={i}>
+            {i > 0 && <wbr />}
+            {part}
+          </Fragment>
+        ))}
       </span>
     </Tooltip>
   );

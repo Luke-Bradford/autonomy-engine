@@ -25,8 +25,28 @@ describe('VersionBadge', () => {
     await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
 
-  // Pins the accessible name, not just the visible text. The badge is ~55px
-  // of text in a 48px rail and clips visually — a `title` attribute alone (the
+  // #1594 OR40 S6p — at caption type a version is wider than the 48px rail, so
+  // it wraps, and only after a `.` or `-`: a release version has no hyphen and
+  // would otherwise break mid-number. The text itself is unchanged.
+  it('offers a line break after each dot and hyphen, and nowhere else', async () => {
+    vi.spyOn(api, 'getVersion').mockResolvedValue({
+      version: '2026.07.30-rc1',
+      commit: 'e93ebf8',
+      builtAt: '2026-07-30T09:12:44.000Z',
+      arch: 'arm64',
+    });
+    const { container } = render(<VersionBadge />);
+    const badge = await waitFor(() => {
+      const el = container.querySelector('.version-badge');
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    expect(badge.textContent).toBe('2026.07.30-rc1');
+    expect(badge.innerHTML).toBe('2026.<wbr>07.<wbr>30-<wbr>rc1');
+  });
+
+  // Pins the accessible name, not just the visible text. The badge is wider
+  // than the 48px rail and wraps — a `title` attribute alone (the
   // original implementation) is not reliably exposed to screen readers, so the
   // full string must travel some other way (here, an explicit `aria-label`).
   // Queries by accessible name via `getByLabelText` — a plain `generic` span

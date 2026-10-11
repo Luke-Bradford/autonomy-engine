@@ -160,6 +160,7 @@ export function AppShell() {
                 : undefined
             }
           />
+          <UpdateBanner />
           {/* #698 — the code-splitting boundary sits INSIDE `<main>`, not around
             the shell. Two reasons. Rendered: the rail, command bar and pane stay
             painted while a lazy route's chunk loads, so only the workspace
@@ -169,7 +170,6 @@ export function AppShell() {
             the boundary above `AppShell` would suspend the chrome those tests
             query. The fallback is deliberately empty — a spinner here would
             flash on a local-first app whose chunks load in milliseconds. */}
-          <UpdateBanner />
           <main className="content">
             <MainPortalContext.Provider value={mainPortal}>
               <Suspense fallback={null}>
