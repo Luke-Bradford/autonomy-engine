@@ -422,7 +422,6 @@ function GitStatusPanel({
 
       <TokenForm status={status} onStatus={onStatus} busy={busy} runExclusive={runExclusive} />
       <CommitSection
-        status={status}
         syncStatus={syncStatus}
         onWorkspaceChanged={() => setReadings(null)}
         busy={busy}
@@ -555,13 +554,11 @@ function TokenForm({
 
 /** Drift (what a commit would change) and the commit itself. */
 function CommitSection({
-  status,
   syncStatus,
   onWorkspaceChanged,
   busy,
   runExclusive,
 }: {
-  status: WorkspaceGitStatus;
   /** Resolves to whether the panel above was actually re-read; ignored here. */
   syncStatus: () => Promise<boolean>;
   /** A commit rewrote the working copy — anything derived from it is now stale. */
