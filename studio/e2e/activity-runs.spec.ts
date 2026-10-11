@@ -1,41 +1,18 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { fireAndSettle, mintVersion, seedVersion } from './support/seedDoc';
+import {
+  fireAndSettle,
+  IF_FOREACH_THEN_FAIL as DOC,
+  mintVersion,
+  seedVersion,
+} from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 import { openRunView } from './support/panels';
 
 /**
  * #1484 OR35 M2 — the run page's activity runs, read from the server's
- * projection of a REAL run: an If that takes `true` into a two-item ForEach,
- * and a Fail on the `false` branch that is therefore skipped. Then a Fail after
- * the ForEach, so the run ends failed with a reason on its row, and two waits
- * after that Fail, skipped because it failed.
+ * projection of a REAL run (`IF_FOREACH_THEN_FAIL`).
  */
-const DOC = {
-  nodes: [
-    { id: 'pick', type: 'if', config: { condition: '${equals(1, 1)}' }, position: { x: 0, y: 0 } },
-    { id: 'hold', type: 'wait', config: { seconds: '${1}' }, position: { x: 260, y: 0 } },
-    { id: 'never', type: 'fail', config: { message: 'not taken' }, position: { x: 260, y: 200 } },
-    { id: 'stop', type: 'fail', config: { message: 'planned stop' }, position: { x: 520, y: 0 } },
-    { id: 'after1', type: 'wait', config: { seconds: '${1}' }, position: { x: 780, y: 0 } },
-    { id: 'after2', type: 'wait', config: { seconds: '${1}' }, position: { x: 1040, y: 0 } },
-  ],
-  edges: [
-    { from: 'pick', to: 'fe', on: 'branch' as const, branch: 'true' },
-    { from: 'pick', to: 'never', on: 'branch' as const, branch: 'false' },
-    { from: 'fe', to: 'stop', on: 'success' as const },
-    { from: 'stop', to: 'after1', on: 'success' as const },
-    { from: 'after1', to: 'after2', on: 'success' as const },
-  ],
-  containers: [
-    {
-      id: 'fe',
-      kind: 'foreach' as const,
-      children: ['hold'],
-      items: "${createArray('orders_a.csv', 'orders_b.csv')}",
-    },
-  ],
-};
 
 test('#1484 M2 — the activity runs sit under the header: one row per attempt and item', async ({
   page,
