@@ -34,11 +34,12 @@ const RUNS = [
 const BODY = (d: Density) => `${BODY_SIZE[d]}px`;
 
 /**
- * A version the browser alone would break mid-number (`0.10.1` / `2`, measured):
- * only the badge's own breaks after each `.` give `0.10.` / `12`. A date version
- * such as `2026.07.30` happens to break well either way, so it proves nothing.
+ * A version wider than the rail in any font, with both a `.` and a `-` to break
+ * after. The browser alone breaks it mid-number and before the hyphen (measured:
+ * `2026.` / `07.30` / `-rc1`); the badge's own breaks put every line end on a
+ * `.` or `-`. How many lines that is depends on the font, so it is not asserted.
  */
-const VERSION = '0.10.12';
+const VERSION = '2026.07.30-rc1';
 const BUILD = (version: string) => ({
   version,
   commit: 'e93ebf8',
@@ -183,7 +184,12 @@ for (const { density, theme } of RUNS) {
         ),
       };
     });
-    expect(badge.lines, 'version: its lines').toEqual(['0.10.', '12']);
+    expect(badge.lines.join(''), 'version: its lines').toBe(VERSION);
+    expect(badge.lines.length, 'version: wraps').toBeGreaterThan(1);
+    expect(
+      badge.lines.slice(0, -1).filter((line) => !/[.-]$/.test(line)),
+      `version: a line ends mid-part in ${JSON.stringify(badge.lines)}`,
+    ).toEqual([]);
     expect(badge.inside, 'version: inside the rail').toBe(true);
     expect(badge.centred, 'version: centred').toBe(true);
 
@@ -227,9 +233,12 @@ test('#1594 OR40 S6p — with no update out, the page starts straight under the 
 }) => {
   const problems = collectPageProblems(page);
   await page.setViewportSize({ width: 1440, height: 900 });
+  // Read after the check has answered, so a banner it would show is already up.
+  const checked = page.waitForResponse('**/api/update/available');
   await page.goto('/#/s6p-nowhere');
   await fluentRootReady(page);
   await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
+  await checked;
   // The dev build is the latest there is, so no banner (e2e/version-badge.spec.ts).
   await expect(page.locator('.update-banner')).toHaveCount(0);
   const boxes = await workspaceBoxes(page);
