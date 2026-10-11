@@ -383,10 +383,11 @@ test('#931 — the run list states what a whole pipeline has cost, across every 
   await expect(spend.getByText('Cost unknown')).toHaveCount(0);
 
   // The SUM across runs, and the scope that stops it reading as the rows' total —
-  // #1484 moved these caveats off the page into the `?` button's tooltip, which
-  // opens on keyboard focus as well as hover.
-  await spend.getByRole('button', { name: 'About lifetime spend' }).focus();
-  const caveats = page.getByRole('tooltip');
+  // #1484 moved these caveats off the page behind the `?`, and #1594 OR40 S6o
+  // made that `?` the shared one: a disclosure, opened from the keyboard here.
+  await spend.getByTitle('About lifetime spend').focus();
+  await page.keyboard.press('Enter');
+  const caveats = spend.getByRole('note');
   await expect(caveats).toContainText(/Across all 2 runs, every version/);
   await expect(caveats).toContainText(/not just the runs listed below/);
   await expect(caveats).toContainText(/2 billed exchanges, every one a subscription or CLI call/);
