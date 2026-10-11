@@ -299,7 +299,7 @@ export function ImportPanel({
   return embedded ? (
     <section className="import-panel field-form">{content}</section>
   ) : (
-    <Section level={2} landmark heading="Import" help={FORM_SECTION_HINTS.pipeline.importFile}>
+    <Section level={2} landmark heading="Import" help={FORM_SECTION_HINTS.manage.import}>
       <div className="field-form">{content}</div>
     </Section>
   );

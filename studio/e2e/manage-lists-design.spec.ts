@@ -135,7 +135,9 @@ for (const { density, theme } of RUNS) {
 
       // The note is the page's description, and it opens under the header row.
       const note = page.locator('.page-header [role=note]');
-      await expect(region).toHaveAccessibleDescription((await note.textContent()) ?? '');
+      const said = ((await note.textContent()) ?? '').trim();
+      expect(said, `${p.title} note`).not.toBe('');
+      await expect(region).toHaveAccessibleDescription(said);
       await page.locator('.page-header > details > summary').click();
       await expect(note).toBeVisible();
       const open = await measure(page);

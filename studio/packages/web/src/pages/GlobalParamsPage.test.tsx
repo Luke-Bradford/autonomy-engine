@@ -3,7 +3,8 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { FIELD } from '../testing/fieldQuery';
 import type { GlobalParam } from '@autonomy-studio/shared';
-import { CLEARTEXT_HINT, GlobalParamsPage } from './GlobalParamsPage';
+import { GlobalParamsPage } from './GlobalParamsPage';
+import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 import * as api from '../api/globalParams';
 import { ApiError } from '../api/client';
 import * as download from '../api/download';
@@ -96,15 +97,18 @@ describe('GlobalParamsPage (#844 GL2)', () => {
     // #1594 OR40 S6d — that is the title's `?`, the page's description, not a
     // paragraph under the title.
     const page = screen.getByRole('region', { name: 'Global parameters' });
-    expect(page).toHaveAccessibleDescription(/a run records the values it read/);
+    expect(page).toHaveAccessibleDescription(
+      /a run records the values it read\. \$\{global\.<name>\}$/,
+    );
     expect(screen.getByTitle('About Global parameters')).toBeInTheDocument();
     expect(page.querySelector('.page-hint')).toBeNull();
     // The cleartext warning is on screen wherever a value is typed: the Value
     // field's visible hint, and the field's description.
     await userEvent.click(screen.getByRole('button', { name: 'New global parameter' }));
     const value = await screen.findByLabelText('Value', { selector: 'input' });
-    expect(screen.getByText(CLEARTEXT_HINT)).toBeVisible();
-    expect(value).toHaveAccessibleDescription(CLEARTEXT_HINT);
+    const cleartext = FORM_SECTION_HINTS.globalParam.cleartext;
+    expect(screen.getByText(cleartext)).toBeVisible();
+    expect(value).toHaveAccessibleDescription(cleartext);
   });
 
   it('reports a failed load', async () => {

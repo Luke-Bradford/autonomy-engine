@@ -76,7 +76,7 @@ test('#1594 OR40 S3c-2 — a drawer field says what it is behind a ? beside its 
   await page.goto('/#/manage/global-params');
   await fluentRootReady(page);
   await page.getByRole('button', { name: 'New global parameter' }).click();
-  await expectInSectionHelp(page, drawer, 'Value', /is cleartext and so never a credential/);
+  await expectInSectionHelp(page, drawer, 'Value', /every pipeline sees, and a description/);
   await page.keyboard.press('Escape');
   await expect(drawer).toHaveCount(0);
 

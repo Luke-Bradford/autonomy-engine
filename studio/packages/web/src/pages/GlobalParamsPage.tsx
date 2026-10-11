@@ -81,10 +81,6 @@ function savePayloadSignature(form: FormState): string {
   return payloadSignature([form.name, form.type, form.valueText, form.description]);
 }
 
-/** Exported for the page's test, which reads it as the operator does. */
-export const CLEARTEXT_HINT =
-  'Cleartext: shown here and copied into run logs, exports and git, so never a credential.';
-
 const VALUE_PLACEHOLDER: Record<GlobalParamType, string> = {
   string: 'empty text is a value',
   number: '42',
@@ -216,7 +212,11 @@ export function GlobalParamsPage() {
       <PageHeader
         title="Global parameters"
         headingId="global-params-heading"
-        help={FORM_SECTION_HINTS.globalParam.page}
+        help={
+          <>
+            {FORM_SECTION_HINTS.globalParam.page} <code>{'${global.<name>}'}</code>
+          </>
+        }
       >
         <button
           ref={createRef}
@@ -574,11 +574,8 @@ function GlobalParamForm({
       </Section>
 
       <Section heading="Value" help={FORM_SECTION_HINTS.globalParam.value}>
-        {/* Not `required`: empty text is a real value for a string global.
-            #1594 OR40 S6d — the cleartext warning is the field's visible hint,
-            not a `?`: it is what makes an operator put a credential elsewhere,
-            so it is on screen wherever a value is typed. */}
-        <LabelledControl label="Value" hint={CLEARTEXT_HINT}>
+        {/* Not `required`: empty text is a real value for a string global. */}
+        <LabelledControl label="Value" hint={FORM_SECTION_HINTS.globalParam.cleartext}>
           {(id, describedBy) => (
             <input
               id={id}
