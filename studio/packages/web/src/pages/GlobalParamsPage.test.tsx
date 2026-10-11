@@ -102,7 +102,7 @@ describe('GlobalParamsPage (#844 GL2)', () => {
     // The cleartext warning is on screen wherever a value is typed: the Value
     // field's visible hint, and the field's description.
     await userEvent.click(screen.getByRole('button', { name: 'New global parameter' }));
-    const value = await screen.findByLabelText('Value');
+    const value = await screen.findByLabelText('Value', { selector: 'input' });
     expect(screen.getByText(CLEARTEXT_HINT)).toBeVisible();
     expect(value).toHaveAccessibleDescription(CLEARTEXT_HINT);
   });
@@ -554,7 +554,9 @@ describe('GlobalParamsPage export and import (#844 GL6)', () => {
   it('offers an import from a file', async () => {
     renderWithDataRouter(<GlobalParamsPage />);
     expect(await screen.findByText(/No global parameters yet/)).toBeVisible();
-    expect(screen.getByLabelText(/import/i)).toBeInTheDocument();
+    // #1594 OR40 S6d — the one `Section`, a named region, with its file field.
+    const panel = screen.getByRole('region', { name: 'Import' });
+    expect(within(panel).getByLabelText('Export file')).toBeInTheDocument();
   });
 });
 
