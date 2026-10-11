@@ -21,6 +21,15 @@ export const ROW_H: Record<(typeof DENSITIES)[number], number> = {
   comfortable: 36,
 };
 
+/**
+ * The published body text size per density (`--type-body-size`), held the same
+ * way as {@link CONTROL_H}. A section heading is never this size (#1594 OR40).
+ */
+export const BODY_SIZE: Record<(typeof DENSITIES)[number], number> = {
+  compact: 13,
+  comfortable: 14,
+};
+
 /** The published `--icon-size` per density, held the same way as {@link CONTROL_H}. */
 export const ICON_SIZE: Record<(typeof DENSITIES)[number], number> = {
   compact: 16,

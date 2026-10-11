@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import {
+  BODY_SIZE,
   computedStyles as styles,
   DENSITIES,
   expectAppearance,
@@ -32,7 +33,7 @@ const RUNS = [
   { density: 'comfortable', theme: 'dark' },
 ] as const;
 
-const BODY: Record<Density, string> = { compact: '13px', comfortable: '14px' };
+const BODY = (d: Density) => `${BODY_SIZE[d]}px`;
 
 const DEPTH_1 = ".activity-runs__table tr[data-depth='1'] > td:first-child";
 const DEPTH_2 = ".activity-runs__table tr[data-depth='2'] > td:first-child";
@@ -69,7 +70,6 @@ for (const { density, theme } of RUNS) {
         '.run-failure',
         '.run-failure__actions',
         '.activity-runs__bar',
-        '.activity-runs__bar > h2',
         '.activity-runs__search input',
         DEPTH_1,
         DEPTH_2,
@@ -82,7 +82,6 @@ for (const { density, theme } of RUNS) {
         'row-gap',
         'column-gap',
         'margin-top',
-        'margin-right',
         'margin-bottom',
         'font-size',
         'font-weight',
@@ -94,16 +93,23 @@ for (const { density, theme } of RUNS) {
       'row-gap': '4px',
       'column-gap': '12px',
       'margin-bottom': '8px',
-      'font-size': BODY[d],
+      'font-size': BODY(d),
     });
     expect(run['.run-failure__actions']).toMatchObject({ 'column-gap': '12px' });
     expect(run['.activity-runs__bar']).toMatchObject({
       'column-gap': '8px',
       'margin-top': '4px',
-      'font-size': BODY[d],
+      'font-size': BODY(d),
     });
-    expect(run['.activity-runs__bar > h2']).toMatchObject({ 'margin-right': '8px' });
-    expect(run['.activity-runs__search input']).toMatchObject({ 'font-size': BODY[d] });
+    // The heading to its first filter: the bar's gap, and nothing on top of it.
+    const headingGap = await page.evaluate(() => {
+      const h = document.querySelector('.activity-runs__bar > h2')!;
+      return Math.round(
+        h.nextElementSibling!.getBoundingClientRect().left - h.getBoundingClientRect().right,
+      );
+    });
+    expect(headingGap, 'activity runs: heading to filter').toBe(8);
+    expect(run['.activity-runs__search input']).toMatchObject({ 'font-size': BODY(d) });
     expect(run[DEPTH_1]).toMatchObject({ 'padding-left': '24px' });
     expect(run[DEPTH_2]).toMatchObject({ 'padding-left': '40px' });
     expect(run['.activity-runs__group > td']).toMatchObject({ 'font-weight': '600' });

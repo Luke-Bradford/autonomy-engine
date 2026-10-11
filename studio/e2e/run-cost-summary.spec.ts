@@ -380,8 +380,8 @@ test('#931 — the run list states what a whole pipeline has cost, across every 
   // A KNOWN covered zero — not a priced $0.00, and not a measurement gap.
   // The figure itself: the `?`'s note sits in the line too, closed (#1594 OR40 S6o).
   await expect(spend.locator('.run-cost')).toHaveText('No marginal cost');
-  await expect(spend.getByText('$0.00', { exact: true })).toHaveCount(0);
-  await expect(spend.getByText('Cost unknown')).toHaveCount(0);
+  await expect(spend.locator('.run-cost').getByText('$0.00', { exact: true })).toHaveCount(0);
+  await expect(spend.locator('.run-cost').getByText('Cost unknown')).toHaveCount(0);
 
   // The SUM across runs, and the scope that stops it reading as the rows' total —
   // #1484 moved these caveats off the page behind the `?`, and #1594 OR40 S6o

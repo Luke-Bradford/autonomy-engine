@@ -74,7 +74,10 @@ function childRuns(n: number): string {
 function NestLead({ run, nest }: { run: RunSummary; nest: RunNest }) {
   const cut = nest.shown < nest.total;
   return (
-    <span className="runs-grid__nest" style={{ paddingInlineStart: `${nest.depth}rem` }}>
+    <span
+      className="runs-grid__nest"
+      style={{ paddingInlineStart: `calc(${nest.depth} * var(--space-4))` }}
+    >
       {nest.shown > 0 ? (
         <button
           type="button"

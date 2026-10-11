@@ -630,18 +630,21 @@ The boxes on the authoring canvas and on the run page's Graph tab.
 - **Failure banner:** `4px 12px` in body type, 8px above the activity runs, its parts 4px apart
   vertically and 12px across, and its acts 12px apart. "Show activity" is the shared button at
   `--control-h`.
-- **Activity runs:** the bar's heading and filters are 8px apart, 4px above and under it, in body
+- **Activity runs:** the bar's heading and filters are 8px apart, with 4px above them, in body
   type. A nested line is indented 16px a level on the cell's own 8px (24px, then 40px), a group
   line is body strong, and a toggle's chevron is 4px from its label.
-- **Lifetime spend:** one flex line with its parts 4px apart. Its `?` is the shared one
+- **Lifetime spend:** one flex line with its parts 4px apart, wrapping as a whole at a narrow width. Its `?` is the shared one
   (`HelpDisclosure`, inline), so its caveats are a note anchored to the line, opened by a click or
   the keyboard. It was a Fluent tooltip, the app's one other `?` look.
 - **Runs grid:** the editor icon is `--icon-size` in its 24px target at `--radius-control`, 4px from
-  the pipeline's name; a time column's zone is regular weight in its body-strong header.
+  the pipeline's name; a time column's zone is regular weight in its body-strong header. A child
+  run is indented 16px (`--space-4`) a level, its disclosure 4px from its name.
 - **Small print:** a copy result, a rerun's start time and the Trigger now drawer's version are
   caption type.
 
-`e2e/run-details-design.spec.ts` measures them at 1440x900, compact light and comfortable dark.
+`e2e/run-details-design.spec.ts` measures the banner, the activity runs, the spend line and the
+grid's pieces at 1440x900, compact light and comfortable dark; `run-list.spec.ts` measures a child
+run's indent. The small print is held by the literal ratchet only.
 
 ## Tables (#1594 OR40 S3d)
 

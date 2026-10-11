@@ -195,6 +195,8 @@ function PipelineSpend({ summary }: { summary: PipelineCostSummary }) {
     .join(' ');
   return (
     <section className="runs-summary-line" aria-label="Lifetime spend">
+      {/* The line is a flex row, so the space draws nothing; it keeps the
+          region's text a sentence. */}
       <span className="runs-summary-line__label">Lifetime spend</span>{' '}
       {/* A pipeline that has never run has no figure: a dash, never a $0.00
           that would read as a measurement. */}
