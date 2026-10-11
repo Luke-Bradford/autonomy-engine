@@ -3,7 +3,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
 import { properties } from './support/panels';
 import { resolvedPaletteColor } from './support/theme';
-import { CONTROL_H, ICON_SIZE } from './support/appearance';
+import { BODY_SIZE, CONTROL_H, ICON_SIZE } from './support/appearance';
 import { expectInlineRow } from './support/inlineRow';
 
 /**
@@ -341,7 +341,6 @@ test('a checkbox sits beside its words: box, 8px, label — never stretched', as
  * its name and the Problems disclosure on the left, its icon acts on the right,
  * on one centre line with 8px between controls.
  */
-const BODY_SIZE: Record<Density, string> = { compact: '13px', comfortable: '14px' };
 
 for (const density of ['compact', 'comfortable'] as const) {
   test.describe(`#1594 OR40 S2b — subtle, tabs and the dock strip, ${density}`, () => {
@@ -418,7 +417,7 @@ for (const density of ['compact', 'comfortable'] as const) {
         background: 'rgba(0, 0, 0, 0)',
         border: 'rgba(0, 0, 0, 0)',
         shadow: 'none',
-        size: BODY_SIZE[density],
+        size: `${BODY_SIZE[density]}px`,
       });
       await problemsToggle.hover();
       expect(await subtle()).toMatchObject({ background: panel2, border: 'rgba(0, 0, 0, 0)' });
@@ -486,7 +485,7 @@ for (const density of ['compact', 'comfortable'] as const) {
         );
       const before = await tabs();
       expect(before.length, 'the node has more than one tab').toBeGreaterThan(1);
-      const body = BODY_SIZE[density];
+      const body = `${BODY_SIZE[density]}px`;
       for (const t of before) {
         expect(t.height, 'tab height').toBe(h);
         expect(t.content, 'tab label').toBe(`${body}/${t.selected ? 600 : 400}`);

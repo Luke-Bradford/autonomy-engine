@@ -4833,9 +4833,10 @@ button.danger {
   width: 24px;
   height: 24px;
   vertical-align: middle;
-  font-size: 16px;
+  /* #1594 OR40 S6o — the glyph is 1em, so this is the icon's size. */
+  font-size: var(--icon-size);
   color: var(--muted);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
 }
 
 .run-editor-link:hover,
@@ -4853,14 +4854,14 @@ button.danger {
 
 .copyable-id__status {
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: var(--type-caption-size);
 }
 
 /* RS6 — the start time beside each link in the run detail page's `Reruns` row:
    secondary to the link, the same weight as the `<dt>` labels. */
 .rerun-history-when {
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: var(--type-caption-size);
 }
 
 /* #996 M9 (#1185) — an unbulleted, unindented list used inside a table cell, a
@@ -5539,7 +5540,7 @@ button.danger {
 
 /* #1484 — the display zone after a time column's label: quieter than the label. */
 .runs-grid__zone {
-  font-weight: normal;
+  font-weight: var(--weight-regular);
   color: var(--colorNeutralForeground3);
 }
 
@@ -5654,18 +5655,13 @@ button.danger {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 0.25rem 0.75rem;
-  margin-bottom: 0.5rem;
-  padding: 0.25rem 0.75rem;
+  gap: var(--space-1) var(--space-3);
+  margin-bottom: var(--space-2);
+  padding: var(--space-1) var(--space-3);
   border-left: 3px solid var(--error);
   background: var(--panel-2);
-  font-size: 13px;
-}
-
-/* Compact controls, so the banner stays one 13px line. */
-.run-failure button {
-  padding: 0.1rem 0.6rem;
-  font-size: 13px;
+  /* #1594 OR40 S6o — body type; its button is the shared one, `--control-h`. */
+  font-size: var(--type-body-size);
 }
 
 .run-failure strong {
@@ -5683,13 +5679,13 @@ button.danger {
 }
 
 .run-failure__message pre {
-  margin: 0.25rem 0 0;
+  margin: var(--space-1) 0 0;
   white-space: pre-wrap;
 }
 
 .run-failure__actions {
   display: inline-flex;
-  gap: 0.75rem;
+  gap: var(--space-3);
   align-items: center;
   margin-left: auto;
 }
@@ -5700,8 +5696,8 @@ button.danger {
   outline-offset: -2px;
 }
 
-/* #1484 OR35 M2 — the run's activity runs: the runs grid's density (32px rows,
-   13px text, tabular right-aligned numbers), with columns sized by content and
+/* #1484 OR35 M2 — the run's activity runs: the runs grid's density (`--row-h` rows,
+   body text, tabular right-aligned numbers), with columns sized by content and
    a sideways scroll of its own so the page never scrolls sideways. */
 .activity-runs__scroll {
   overflow-x: auto;
@@ -5711,8 +5707,8 @@ button.danger {
 .activity-runs__basis {
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin: 0 0 8px;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-2);
   color: var(--muted);
 }
 
@@ -5722,13 +5718,14 @@ button.danger {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
-  margin: 0.25rem 0;
-  font-size: 13px;
+  gap: var(--space-2);
+  margin: var(--space-1) 0;
+  font-size: var(--type-body-size);
 }
 
 .activity-runs__bar > h2 {
-  margin: 0 0.5rem 0 0;
+  /* #1594 OR40 S6o — the bar's 8px gap alone; a margin here doubled it. */
+  margin: 0;
 }
 
 .activity-runs__bar select {
@@ -5742,7 +5739,6 @@ button.danger {
 
 .activity-runs__search input {
   width: 100%;
-  font-size: 13px;
 }
 
 .activity-runs__table {
@@ -5763,7 +5759,7 @@ button.danger {
 .runs-grid__pipeline-line {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
   min-width: 0;
 }
 
@@ -5792,14 +5788,14 @@ button.danger {
   color: var(--muted);
 }
 
-/* #1484 — "Include child runs": a child is indented 1rem per level under its
+/* #1484 — "Include child runs": a child is indented 16px (`--space-4`) per level under its
    parent. Every nested row reserves the disclosure slot, so names line up whether
    or not a run called anything. */
 .runs-grid__nest {
   display: inline-flex;
   align-items: center;
-  gap: 0.15rem;
-  margin-inline-end: 0.25rem;
+  gap: var(--space-1);
+  margin-inline-end: var(--space-1);
   vertical-align: middle;
 }
 
@@ -5998,21 +5994,21 @@ button.danger {
   font-size: var(--type-caption-size);
 }
 
-/* #931 + #1484 — the filtered pipeline's lifetime spend, as one dense line. */
+/* #931 + #1484 — the filtered pipeline's lifetime spend, as one dense line.
+   #1594 OR40 S6o: a flex row, so the block `<details>` of its `?` sits on the
+   line, and positioned, so that `?`'s inline note anchors to the line. */
 .runs-summary-line {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
   font-size: var(--type-body-size);
   margin-bottom: var(--space-2);
 }
 
 .runs-summary-line__label {
   color: var(--muted);
-}
-
-.runs-summary-line__help {
-  margin-left: var(--space-2);
-  padding: 0 var(--space-1);
-  font-size: var(--type-caption-size);
-  line-height: 1.2;
 }
 
 /* --- #1476 OR28: the editor's Triggers column ------------------------------ */
@@ -6818,17 +6814,18 @@ button.danger {
 
 /* #1484 OR35 M2 — container groups in the activity runs: a group line, an
    item or round line under it, and the activities under those, indented by
-   depth on the Activity cell only so every other column stays aligned. */
+   depth on the Activity cell only so every other column stays aligned. #1594
+   OR40 S6o: 16px a level, on the cell's own 8px. */
 .activity-runs__table tr[data-depth='1'] > td:first-child {
-  padding-left: 1.6rem;
+  padding-left: calc(var(--space-2) + var(--space-4));
 }
 
 .activity-runs__table tr[data-depth='2'] > td:first-child {
-  padding-left: 2.6rem;
+  padding-left: calc(var(--space-2) + var(--space-6));
 }
 
 .activity-runs__group > td {
-  font-weight: 600;
+  font-weight: var(--weight-strong);
   background: var(--panel-2);
 }
 
@@ -6918,7 +6915,7 @@ button.danger {
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: var(--space-1);
 }
 
 .activity-runs__toggle:focus-visible {
@@ -6977,7 +6974,7 @@ button.danger {
    run it started; the status line is empty (and flat) until then. */
 .run-drawer__version {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--type-caption-size);
   color: var(--muted);
 }
 

@@ -6,7 +6,6 @@ import {
   MenuPopover,
   MenuTrigger,
   ToggleButton,
-  Tooltip,
 } from '@fluentui/react-components';
 import { AddRegular } from '@fluentui/react-icons';
 import {
@@ -70,6 +69,7 @@ import {
   startedModeOf,
 } from './runFilters';
 import { dayOf, shiftDay } from '../../lib/displayTime';
+import { HelpDisclosure } from '../../lib/HelpDisclosure';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import { withParams } from '../../lib/withParams';
@@ -186,8 +186,8 @@ function readGroupBy(params: URLSearchParams): RunGroupBy {
  *
  * The line LEADS with "Lifetime", which is the part of the old scope sentence
  * that stops the figure being read as the total of the rows underneath; the rest
- * of the caveats (what the figure covers, what it leaves out) are the `?`
- * button's description, reachable by keyboard focus as well as hover.
+ * of the caveats (what the figure covers, what it leaves out) are the `?`'s
+ * note: the shared `HelpDisclosure`, one `?` look app-wide (#1594 OR40 S6o).
  */
 function PipelineSpend({ summary }: { summary: PipelineCostSummary }) {
   const caveats = [summary.scope, summary.reading, summary.incomplete, summary.excludes]
@@ -195,16 +195,16 @@ function PipelineSpend({ summary }: { summary: PipelineCostSummary }) {
     .join(' ');
   return (
     <section className="runs-summary-line" aria-label="Lifetime spend">
+      {/* The line is a flex row, so the space draws nothing; it keeps the
+          region's text a sentence. */}
       <span className="runs-summary-line__label">Lifetime spend</span>{' '}
       {/* A pipeline that has never run has no figure: a dash, never a $0.00
           that would read as a measurement. */}
       <span className="run-cost">{summary.figure ?? '—'}</span>
       {summary.tokens !== null && <span> · {summary.tokens}</span>}
-      <Tooltip content={caveats} relationship="description">
-        <button type="button" className="runs-summary-line__help" aria-label="About lifetime spend">
-          ?
-        </button>
-      </Tooltip>
+      <HelpDisclosure label="About lifetime spend" noteId="runs-lifetime-spend-note" inline>
+        {caveats}
+      </HelpDisclosure>
     </section>
   );
 }

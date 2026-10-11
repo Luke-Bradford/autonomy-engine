@@ -930,7 +930,8 @@ test('#1484 — a trigger filter shows the runs its run called, nested and colla
     .nth(1)
     .locator('.runs-grid__nest')
     .evaluate((el) => getComputedStyle(el).paddingInlineStart);
-  expect(indent).not.toBe('0px');
+  // #1594 OR40 S6o — one level is `--space-4`.
+  expect(indent).toBe('16px');
 
   // Collapse, then expand: the child row goes and comes back, and the click on
   // the disclosure never opens the run.

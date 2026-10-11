@@ -378,15 +378,17 @@ test('#931 — the run list states what a whole pipeline has cost, across every 
   await expect(spend).toHaveText(/^Lifetime spend No marginal cost/);
 
   // A KNOWN covered zero — not a priced $0.00, and not a measurement gap.
-  await expect(spend.getByText('No marginal cost')).toBeVisible();
-  await expect(spend.getByText('$0.00', { exact: true })).toHaveCount(0);
-  await expect(spend.getByText('Cost unknown')).toHaveCount(0);
+  // The figure itself: the `?`'s note sits in the line too, closed (#1594 OR40 S6o).
+  await expect(spend.locator('.run-cost')).toHaveText('No marginal cost');
+  await expect(spend.locator('.run-cost').getByText('$0.00', { exact: true })).toHaveCount(0);
+  await expect(spend.locator('.run-cost').getByText('Cost unknown')).toHaveCount(0);
 
   // The SUM across runs, and the scope that stops it reading as the rows' total —
-  // #1484 moved these caveats off the page into the `?` button's tooltip, which
-  // opens on keyboard focus as well as hover.
-  await spend.getByRole('button', { name: 'About lifetime spend' }).focus();
-  const caveats = page.getByRole('tooltip');
+  // #1484 moved these caveats off the page behind the `?`, and #1594 OR40 S6o
+  // made that `?` the shared one: a disclosure, opened from the keyboard here.
+  await spend.getByTitle('About lifetime spend').focus();
+  await page.keyboard.press('Enter');
+  const caveats = spend.getByRole('note');
   await expect(caveats).toContainText(/Across all 2 runs, every version/);
   await expect(caveats).toContainText(/not just the runs listed below/);
   await expect(caveats).toContainText(/2 billed exchanges, every one a subscription or CLI call/);
@@ -403,7 +405,7 @@ test('#931 — the run list states what a whole pipeline has cost, across every 
   await page.goto(`/#/monitor/runs?pipeline=${encodeURIComponent(pipelineId)}&status=failure`);
   await fluentRootReady(page);
   await expect(page.getByText(/No runs match these filters/)).toBeVisible();
-  await expect(spend.getByText('No marginal cost')).toBeVisible();
+  await expect(spend.locator('.run-cost')).toHaveText('No marginal cost');
 
   await expectQuiet(page, problems);
 });

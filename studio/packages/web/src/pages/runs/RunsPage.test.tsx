@@ -1137,8 +1137,9 @@ describe('RunsPage — U26 filter pane', () => {
 
     /* The sentence that stops the figure being read as the total of the rows
        below it — which it is not, under ANY of the filters or the tab. */
-    /* #1484 — one dense line, and the caveats are the `?` button's
-       description rather than a paragraph on the page. */
+    /* #1484 — one dense line, and the caveats are the `?`'s note rather than
+       a paragraph on the page. #1594 OR40 S6o: the shared `?`, closed until
+       asked. */
     it('says the figure covers every run of the pipeline, not the rows on screen', async () => {
       renderWithRouter(
         <RunsPage store={storeWith(pipeline('pl_1', 'Reports'))} />,
@@ -1146,11 +1147,13 @@ describe('RunsPage — U26 filter pane', () => {
       );
       const section = await screen.findByRole('region', { name: 'Lifetime spend' });
       expect(section).toHaveTextContent(/^Lifetime spend \$2\.50/);
-      expect(section).not.toHaveTextContent(/not just the runs listed below/);
-      await userEvent.hover(within(section).getByRole('button', { name: 'About lifetime spend' }));
-      const tip = await screen.findByRole('tooltip');
-      expect(tip).toHaveTextContent(/Across all 2 runs, every version/);
-      expect(tip).toHaveTextContent(/not just the runs listed below/);
+      const help = within(section).getByTitle('About lifetime spend');
+      expect(help.closest('details')).not.toHaveAttribute('open');
+      fireEvent.click(help);
+      expect(help.closest('details')).toHaveAttribute('open');
+      const note = within(section).getByRole('note');
+      expect(note).toHaveTextContent(/Across all 2 runs, every version/);
+      expect(note).toHaveTextContent(/not just the runs listed below/);
     });
 
     it('does not fetch or render it when no pipeline is selected', async () => {
