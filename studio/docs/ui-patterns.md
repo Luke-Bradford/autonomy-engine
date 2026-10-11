@@ -515,6 +515,24 @@ tooltip holds the description, not the name. The action error's Dismiss is a `su
 
 `e2e/left-pane-design.spec.ts` measures them at 1440x900, compact light and comfortable dark.
 
+## Editor header (#1594 OR40 S6j)
+
+The pipeline editor's header row, its status strip and the Trigger now and Debug panels.
+
+- **State badge:** its pills are the shared status pill (`--radius-pill`, `0 8px`), 4px apart. Save's
+  dirty mark sits 4px after the label.
+- **Status strip:** body type, 12px between its slots. `+N more` is a `subtle` button, and its list
+  is a surface (12px padding, 8px between messages, `--radius-surface`). The standing banner in
+  the strip is one line: `0 8px` padding, 12px before its actions.
+- **Run panels:** a surface with 12px padding and 8px between its parts. The heading is the global
+  h2 (the section step), and no paragraph inside carries a margin. Parameters are stacked fields,
+  the same rule as the connection, dataset and trigger forms. The refusal line is `.form-error`,
+  in `--error`, which also colours every other form's error line.
+- **Shared with every form:** `.form-actions` is 8px apart. The JSON editor's text is the body step
+  in the mono stack, its Format button is `subtle`, and its problem line is caption.
+
+`e2e/editor-header-design.spec.ts` measures them at 1440x900, compact light and comfortable dark.
+
 ## Tables (#1594 OR40 S3d)
 
 Every table in the app, whether a list, a run's facts or a form's rows, takes one style from the

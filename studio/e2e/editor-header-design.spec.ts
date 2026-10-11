@@ -110,7 +110,14 @@ async function expectPanel(page: Page, d: Density, label: string): Promise<void>
   const s = await styles(
     page,
     [PANEL, `${PANEL} > h2`, `${PANEL} .labelled-control`, `${PANEL} .form-actions`],
-    ['row-gap', 'padding-top', 'padding-left', 'border-top-left-radius', 'font-size', 'flex-direction'],
+    [
+      'row-gap',
+      'padding-top',
+      'padding-left',
+      'border-top-left-radius',
+      'font-size',
+      'flex-direction',
+    ],
   );
   expect(s[PANEL], `${label}: panel`).toMatchObject({
     'row-gap': '8px',
@@ -127,8 +134,7 @@ async function expectPanel(page: Page, d: Density, label: string): Promise<void>
   expect(s[`${PANEL} .form-actions`]?.['row-gap'], `${label}: actions`).toBe('8px');
   // No paragraph brings the browser's 1em margin into the column's gap.
   const margins = await page.evaluate(
-    (sel) =>
-      [...document.querySelectorAll(`${sel} p`)].map((p) => getComputedStyle(p).marginTop),
+    (sel) => [...document.querySelectorAll(`${sel} p`)].map((p) => getComputedStyle(p).marginTop),
     PANEL,
   );
   expect(margins.length, `${label}: hints`).toBeGreaterThan(0);
@@ -203,7 +209,10 @@ for (const { density, theme } of RUNS) {
     await more.click();
     await expect(page.locator(LIST)).toBeVisible();
     expect(await offRampText(page, d, LIST), 'list: ramp').toEqual([]);
-    expect((await styles(page, [LIST], ['row-gap', 'padding-top', 'border-top-left-radius']))[LIST], 'list').toEqual({
+    expect(
+      (await styles(page, [LIST], ['row-gap', 'padding-top', 'border-top-left-radius']))[LIST],
+      'list',
+    ).toEqual({
       'row-gap': '8px',
       'padding-top': '12px',
       'border-top-left-radius': '6px',
