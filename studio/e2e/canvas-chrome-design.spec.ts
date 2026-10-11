@@ -156,6 +156,9 @@ for (const { density, theme } of RUNS) {
     }
     await page.locator(BAR).getByRole('button', { name: 'Back to editing' }).click();
     await expect(page.locator(BAR)).toHaveCount(0);
+    await (await editorMenuItem(page, /^Hide version history/)).click();
+    await expect(rows).toHaveCount(0);
+    await viewportSettled(page);
 
     // A forward edge that would close a loop: refused, with the back-edge offer.
     await connectById(page, 'a', 'b');
