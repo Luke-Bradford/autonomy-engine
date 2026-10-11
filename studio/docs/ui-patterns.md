@@ -557,10 +557,12 @@ replaced `FormSection` (a drawer's `fieldset` and `legend`), `DockSection` (the 
   `aria-expanded`, not a `<details>`: a `<summary>` cannot hold the `?` beside it. They are closed
   unless `defaultOpen`, and they open if `defaultOpen` turns true after mount (a record that loads
   late and uses the section).
-- **Still to move:** page sections that are bare `h2`/`h3` headings (Git, the run page's
-  timeline, variables and cost) move to `Section` page by page in S6. Home moved first, then
-  Settings. A page form inside a `Section` is a `.field-form` wrapper in its body, so the
-  label-left layout keeps its container; a `.run-meta` facts list there drops its own margin.
+- **Still to move:** page sections that are bare `h2`/`h3` headings (the run page's timeline,
+  variables and cost) move to `Section` page by page in S6. Home moved first, then Settings,
+  then Git. A section's own acts (Git's Refresh, Disconnect and each check) go in its `actions`,
+  the heading row's `Toolbar`; a form's submit stays at the form's foot. A page form inside a
+  `Section` is a `.field-form` wrapper in its body, so the label-left layout keeps its container;
+  a `.run-meta` facts list there drops its own margin.
 
 `e2e/section.spec.ts` measures a drawer, the dock and a page at 1440x900 in both densities.
 
@@ -638,7 +640,9 @@ its own `?` line instead, because a second "About Value" would be two controls w
 note describes the section's group, not the input.
 `e2e/field-help.spec.ts` measures each moved field.
 
-**Still to come:** the editor's Run popover and the Git page's forms join in S6's page sweep.
+**Still to come:** the editor's Run popover joins in S6's page sweep. The Git page's forms moved
+in S6c: the repository URL's credential warning is its `?`, and whether a token is stored is the
+Token field's `hint`, because it is the field's state.
 
 **Authored rows are tables (#1477 OR29).** Parameters, variables, outputs, annotations and every row
 list (a Copy mapping, HTTP headers, LLM messages, an output schema) render through `RowTable`
