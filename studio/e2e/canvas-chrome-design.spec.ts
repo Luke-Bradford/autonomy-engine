@@ -7,6 +7,7 @@ import {
   DENSITIES,
   drawnHeights,
   expectAppearance,
+  expectControlHeights,
   preferAppearance,
 } from './support/appearance';
 import { editorMenuItem, openCanvas } from './support/canvas';
@@ -68,13 +69,6 @@ async function openTwoVersions(page: Page, name: string): Promise<void> {
   await page.locator('.react-flow__renderer').waitFor();
   for (const n of V2.nodes) await expect(nodeById(page, n.id)).toHaveClass(/\bdraggable\b/);
   await viewportSettled(page);
-}
-
-/** Every drawn button under `selector` is `--control-h` tall. */
-async function expectControls(page: Page, selector: string, d: Density, label: string) {
-  const heights = await drawnHeights(page, `${selector} button`);
-  expect(heights.length, `${label}: buttons`).toBeGreaterThan(0);
-  for (const { name, h } of heights) expect(h, `${label}: ${name}`).toBe(CONTROL_H[d]);
 }
 
 for (const { density, theme } of RUNS) {
@@ -148,7 +142,7 @@ for (const { density, theme } of RUNS) {
         'column-gap': '12px',
         ...PANEL_BOX,
       });
-      await expectControls(page, BAR, d, label);
+      await expectControlHeights(page, `${BAR} button`, d, label);
       if (label === 'preview') {
         await rows.nth(0).click();
         await expect(page.locator('.version-preview-refusal')).toBeVisible();
@@ -201,7 +195,7 @@ for (const { density, theme } of RUNS) {
     expect(leave[`${LEAVE} .unsaved-confirm p`]?.['margin-bottom'], 'leave prompt: text').toBe(
       '8px',
     );
-    await expectControls(page, LEAVE, d, 'leave prompt');
+    await expectControlHeights(page, `${LEAVE} button`, d, 'leave prompt');
     await page.getByRole('button', { name: 'Keep editing' }).click();
     await expect(page.locator(LEAVE)).toHaveCount(0);
 

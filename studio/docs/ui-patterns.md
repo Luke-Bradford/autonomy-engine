@@ -411,7 +411,8 @@ Weights are 400 and 600 only: `tokens.css` sets `b` and `strong` to `--weight-st
 browser's `bolder` draws them at 700 (#1594 OR40 S6g).
 
 Controls take the density app-wide through the control layer (below), icon buttons and tabs
-included. The dock's label and hint sizes are still scoped to the property dock's panel.
+included. A dock label is caption type in both densities (#1594 OR40 S6l); its hint sizes are
+still scoped to the compact dock's panel.
 `e2e/property-dock-density.spec.ts` measures the dock at 1440x900.
 
 ## Controls
@@ -463,8 +464,8 @@ One look per control type (#1594 OR40 S2a), from the tokens, in both densities. 
   beside them, or stacked under them docked right), and tab semantics would say one panel at a
   time.
 - **Checkboxes and radios** sit beside their words: box, 8px, label. A `<label>` wrapping the input
-  is all it takes. Keep `contract-check` on the dock's checkbox labels, because the compact dock's
-  label-gap rule excludes it by class.
+  is all it takes. Keep `contract-check` on the dock's checkbox labels: the form layout lists it
+  among the labels that sit under the label column (`formLayout.test.ts`).
 - **One focus ring:** 2px `--accent`, 1px outside, `:focus-visible` only, on everything, canvas
   nodes included. An element that fills a clipping container (a rail link, a grid resizer, a
   splitter) keeps the ring and sets only `outline-offset: var(--focus-ring-inset)`. Restate the
@@ -557,6 +558,27 @@ connect refusal, the minimap and zoom controls, the version preview bar and the 
   buttons never touch its border.
 
 `e2e/canvas-chrome-design.spec.ts` measures them at 1440x900, compact light and comfortable dark.
+
+## Property dock and Problems (#1594 OR40 S6l)
+
+The editor's properties dock (every tab of the pipeline, an activity, a call and an edge) and its
+Problems column.
+
+- **One bordered group:** a fieldset gathering a few related controls under a legend is `8px 12px`
+  inside a 1px border at `--radius-surface`, with its legend in muted caption type, `0 4px`. The
+  trigger form's builders, a bound end's parameter overrides and their allowlist, an edge's outcome
+  and a call's target share this one rule in `index.css`; a new group adds itself to its selector
+  lists rather than copying the skin.
+- **Option rows:** an edge's outcomes and a call's target modes are full-width rows at `--control-h`,
+  `0 8px` at `--radius-control`, in caption type, the chosen one in strong.
+- **Labels:** caption type in both densities; the field text and the controls are what grow with
+  comfortable. The panel's acts are `--control-h` with 8px between them, and the node's type code is
+  caption.
+- **Problems:** the list is `8px 12px` in body type at `--radius-surface`, its items 4px under the
+  heading and indented 16px. The count beside the Problems toggle is a caption pill.
+- **The `ƒx` toggle** under a field is a `--control-h` button in caption type.
+
+`e2e/dock-design.spec.ts` measures them at 1440x900, compact light and comfortable dark.
 
 ## Tables (#1594 OR40 S3d)
 

@@ -106,7 +106,7 @@ describe('design tokens', () => {
     for (const [file, css] of Object.entries(sheets)) {
       const read = [
         ...css.matchAll(
-          /var\(\s*(--(?:space|type|weight|radius|font|root|focus)[\w-]*|--control-h|--row-h|--icon-size|--header-h|--form-label-column)/g,
+          /var\(\s*(--(?:space|type|weight|radius|font|root|focus)[\w-]*|--control-h|--row-h|--icon-size|--header-h|--form-label-column|--form-label-inset)/g,
         ),
       ].map(([, name = '']) => name);
       expect(

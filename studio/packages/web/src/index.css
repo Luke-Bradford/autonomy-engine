@@ -1094,9 +1094,9 @@ thead th {
 
    `:where()` keeps it at ZERO specificity, so a component's own rule (a search
    box, the JSON editor, the run filters) still wins until S6 moves that page
-   onto the layer. The explicit body size outranks inheritance: the compact
-   dock sets its labels to caption size, and a control inside one must not
-   shrink with them.
+   onto the layer. The explicit body size outranks inheritance: the dock sets
+   its labels to caption size, and a control inside one must not shrink with
+   them.
 
    The connection picker's Fluent Combobox input is the one control named
    OUTSIDE the `:where()`: the picker clears Fluent's own chrome so the input
@@ -1341,7 +1341,8 @@ td button + button {
 .param-overrides > legend,
 .overridable-keys > legend,
 .edge-outcomes > legend,
-.call-mode > legend {
+.call-mode > legend,
+.trigger-form .recurrence-days > legend {
   padding: 0 var(--space-1);
   font-size: var(--type-caption-size);
   color: var(--muted);
@@ -3060,7 +3061,8 @@ button.danger {
   > input.fui-Combobox__input {
   width: 100%;
   min-width: 0;
-  padding-right: var(--control-h);
+  /* Room for the chevron (an icon at 8px from the edge) and 4px clear of it. */
+  padding-right: calc(var(--icon-size) + var(--space-3));
   text-overflow: ellipsis;
 }
 .connection-picker .connection-picker__combobox > input:focus-visible {
@@ -3716,15 +3718,15 @@ button.danger {
  */
 .edge-outcomes,
 .call-mode {
-  /* The bordered group's skin; its options sit closer than its fields would. */
+  /* The bordered group's skin (above); its options sit closer than its fields
+     would. Same specificity as the group rule, so this wins by coming later. */
   gap: var(--space-1);
 }
 
-/* #425 — the call-node target-mode toggle shares the edge-outcome fieldset's
-   look for the reason it shares its shape: a small group of radios inside the
-   property panel, one tab stop with arrow-key movement inside it. A second set
-   of near-identical rules would be two answers to one question. */
-/* An outcome is a swatch, a radio and a word that read ACROSS: the radio rule
+/* #425 — a call's target mode is shaped like an edge's outcome (a small group
+   of radios, one tab stop with arrow-key movement inside it), so its options
+   share these rows. An outcome is a swatch, a radio and a word that read
+   ACROSS: the radio rule
    (`label:has(> input[type='radio'])`) lays it out and gaps it. This only makes
    each option a full-width, control-tall row, so the whole row is the target.
    SCOPED TO THE PANEL as well, to outrank `.property-panel label`. */
@@ -5327,6 +5329,7 @@ button.danger {
 
 .expression-picker-toggle {
   align-self: flex-start;
+  min-height: var(--control-h);
   font-size: var(--type-caption-size);
   padding: 0 var(--space-2);
 }

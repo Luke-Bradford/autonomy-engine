@@ -78,6 +78,22 @@ export function drawnHeights(page: Page, selector: string): Promise<{ name: stri
 }
 
 /**
+ * Every drawn match of `selector` is `--control-h` tall at `density`, and at
+ * least one is drawn. `label` names the view in a failure (#1594 OR40; shared
+ * from S6k, S6j and S6l).
+ */
+export async function expectControlHeights(
+  page: Page,
+  selector: string,
+  density: (typeof DENSITIES)[number],
+  label: string,
+): Promise<void> {
+  const heights = await drawnHeights(page, selector);
+  expect(heights.length, `${label}: drawn`).toBeGreaterThan(0);
+  for (const { name, h } of heights) expect(h, `${label}: ${name}`).toBe(CONTROL_H[density]);
+}
+
+/**
  * The computed `props` of the first DRAWN match of each selector (`null` when
  * none is drawn), in ONE evaluate: `{ [selector]: { [prop]: value } }`.
  */
