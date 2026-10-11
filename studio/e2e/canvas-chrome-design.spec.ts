@@ -38,6 +38,7 @@ const CARD = '.canvas-empty__card';
 const ADVISORY = '.canvas-advisory';
 const REFUSAL = '.canvas-refusal';
 const MINIMAP = '.react-flow__minimap';
+const CONTROLS = '.react-flow__controls';
 const PREVIEW = '[data-testid="canvas-preview"]';
 const BAR = '[data-testid="version-preview-bar"]';
 const LEAVE = '.editor-leave-prompt';
@@ -118,15 +119,16 @@ for (const { density, theme } of RUNS) {
     expect(await offRampText(page, d, ADVISORY), 'advisory: ramp').toEqual([]);
     const chrome = await styles(
       page,
-      [ADVISORY, MINIMAP],
-      ['padding-top', 'padding-left', 'border-top-left-radius', 'margin-right', 'margin-bottom'],
+      [ADVISORY, MINIMAP, CONTROLS],
+      ['padding-top', 'padding-left', 'border-top-left-radius', 'margin-top', 'margin-right'],
     );
-    expect(chrome[ADVISORY], 'advisory').toMatchObject(PANEL_BOX);
+    expect(chrome[ADVISORY], 'advisory').toMatchObject({ ...PANEL_BOX, 'margin-top': '16px' });
     expect(chrome[MINIMAP], 'minimap').toMatchObject({
-      'margin-right': '8px',
-      'margin-bottom': '8px',
+      'margin-right': '16px',
       'border-top-left-radius': '6px',
     });
+    // The zoom controls share the minimap's bottom band, at the same inset.
+    expect(chrome[CONTROLS]?.['margin-top'], 'controls').toBe('16px');
 
     // The preview of an older version, then of the head, which it refuses to restore.
     await (await editorMenuItem(page, /^(Show|Hide) version history/)).click();

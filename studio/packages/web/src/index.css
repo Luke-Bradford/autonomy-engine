@@ -6792,7 +6792,16 @@ button.danger {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-surface);
-  margin: var(--space-2);
+}
+
+/* #1594 OR40 S6k — every canvas panel (the minimap, the zoom controls, the
+   advisory, the refusal) sits one step of the scale in from the pane's edge.
+   React Flow's own `.react-flow__panel` sets 15px, and its stylesheet loads
+   with the lazy canvas chunk, AFTER this one: a rule here at the same
+   specificity loses (the minimap's old `margin: 10px` never applied). Hence
+   the extra class. 16px keeps the minimap inside `CANVAS_CHROME_INSET`. */
+.react-flow .react-flow__panel {
+  margin: var(--space-4);
 }
 
 /* The mask is the "you are here" rectangle. RF paints it as a dark fill over the

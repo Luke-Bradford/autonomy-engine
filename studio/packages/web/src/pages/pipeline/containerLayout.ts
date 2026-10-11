@@ -92,7 +92,7 @@ export const REVEAL_MARGIN = 24;
  * against, because canvas chrome is drawn there INSIDE the pane.
  *
  * `<MiniMap>` sits bottom-right in a `.react-flow__panel` with `pointer-events:
- * all`, at React Flow's default 200x150 plus the stylesheet's 15px panel margin,
+ * all`, at React Flow's default 200x150 plus a panel margin of 16px (`index.css`),
  * so it owns roughly the last 215 x 165 of the pane; `<Controls>` occupies the
  * same bottom band on the left. A box landed flush against those edges can have
  * its delete control — which is at the box's TOP-RIGHT — underneath the minimap:
