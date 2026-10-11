@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
+import { CONTROL_H } from './support/appearance';
 
 /**
  * #1594 OR40 S3 — the Monitor's filter row as pills, like the ADF Monitor's
@@ -16,7 +17,6 @@ import { fluentRootReady } from './support/theme';
 test.use({ viewport: { width: 1440, height: 900 } });
 
 type Density = 'compact' | 'comfortable';
-const CONTROL_H: Record<Density, number> = { compact: 28, comfortable: 32 };
 const BODY: Record<Density, number> = { compact: 13, comfortable: 14 };
 
 async function setDensity(page: Page, density: Density) {

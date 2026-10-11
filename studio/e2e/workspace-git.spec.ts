@@ -157,9 +157,9 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await page.getByRole('button', { name: 'Connect' }).click();
 
   // `exact`, because Playwright matches an accessible name by SUBSTRING: the
-  // not-connected form's own heading is "No repository connected", which a
-  // loose 'Connected' matches — so the teardown assertion below would never be
-  // able to fail.
+  // not-connected section's own heading is "Not connected", which a loose
+  // 'Connected' matches — so the teardown assertion below would never be able
+  // to fail.
   await expect(page.getByRole('heading', { name: 'Connected', exact: true })).toBeVisible();
   await expect(fact(page, 'Repository')).toHaveText(repoDir);
   await expect(fact(page, 'Working branch')).toHaveText('studio/local/work');

@@ -3,6 +3,8 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, openSeededCanvas, seedVersion } from './support/seedDoc';
 import { TITLED_PAGES } from './support/pages';
 import { fluentRootReady } from './support/theme';
+import { CONTROL_H } from './support/appearance';
+import { expectInlineRow } from './support/inlineRow';
 
 /**
  * #1594 OR40 S3 — the one page header, its toolbar, and the one content frame,
@@ -17,7 +19,6 @@ import { fluentRootReady } from './support/theme';
 test.use({ viewport: { width: 1440, height: 900 } });
 
 type Density = 'compact' | 'comfortable';
-const CONTROL_H: Record<Density, number> = { compact: 28, comfortable: 32 };
 
 async function setDensity(page: Page, density: Density) {
   await page.goto('/#/settings');
@@ -100,14 +101,7 @@ function expectFrame(label: string, m: Measured, density: Density, fixedHeight: 
   for (const c of m.controls) {
     expect(Math.abs(c.height - h), `${label}: '${c.name}' height`).toBeLessThan(0.5);
   }
-  for (let i = 1; i < m.controls.length; i++) {
-    const [a, b] = [m.controls[i - 1]!, m.controls[i]!];
-    expect(b.left - a.right, `${label}: gap '${a.name}' → '${b.name}'`).toBeGreaterThanOrEqual(7.5);
-    expect(
-      Math.abs(b.centre - a.centre),
-      `${label}: centres '${a.name}'/'${b.name}'`,
-    ).toBeLessThanOrEqual(1);
-  }
+  expectInlineRow(label, m.controls, 7.5);
 }
 
 for (const density of ['compact', 'comfortable'] as const) {

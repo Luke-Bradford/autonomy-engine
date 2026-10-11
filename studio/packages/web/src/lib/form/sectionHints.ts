@@ -64,7 +64,7 @@ export const FORM_SECTION_HINTS = {
     commit:
       'Writes every pipeline, connection, dataset, trigger and global parameter to the working branch and pushes it.',
     incoming:
-      'What is on the collaboration branch; importing applies it, stamping the provenance publishing needs.',
+      'What is on the collaboration branch; importing applies it and records the git provenance publishing requires.',
   },
   home: {
     recentRuns: 'The newest runs in this workspace, each opening on its activities and log.',
