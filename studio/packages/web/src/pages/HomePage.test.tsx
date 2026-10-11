@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import type { RunSummary } from '@autonomy-studio/shared';
 import { HomePage, HOME_RECENT_RUNS } from './HomePage';
@@ -62,8 +62,8 @@ describe('HomePage', () => {
     });
     renderHome();
 
-    expect(await screen.findByText('Nightly report v3')).toBeInTheDocument();
-    expect(screen.getByText('Digest v1')).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Nightly report v3' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Digest v1' })).toBeInTheDocument();
     // `queued` deliberately, and it is the only status that makes this
     // assertion mean anything: its LABEL is "queued (slot)" while its enum
     // value is "queued", so rendering `r.status` raw fails here. Asserted with
@@ -89,6 +89,43 @@ describe('HomePage', () => {
     expect(link.getAttribute('href')).toContain(runDetailPath('run_abc'));
   });
 
+  it('#1594 OR40 S6 — lays the runs out as the one table style, each status in its own row', async () => {
+    listRunsMock.mockResolvedValue({
+      items: [
+        runRow({ id: 'run_a', pipelineName: 'Nightly report', pipelineVersion: 3 }),
+        runRow({ id: 'run_b', pipelineName: 'Digest', pipelineVersion: 1, status: 'queued' }),
+      ],
+      nextCursor: null,
+    });
+    renderHome();
+
+    const table = await screen.findByRole('table', { name: 'Recent runs' });
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((th) => th.textContent),
+    ).toEqual(['Pipeline', 'Status', 'Started']);
+    const [, first, second] = within(table).getAllByRole('row');
+    expect(within(first!).getByRole('link')).toHaveTextContent('Nightly report v3');
+    expect(within(second!).getByRole('link')).toHaveTextContent('Digest v1');
+    expect(second).toHaveTextContent(runStatusLabel('queued'));
+    // A cut name is whole in its tooltip.
+    expect(within(second!).getByTitle('Digest v1')).toBeInTheDocument();
+  });
+
+  it('#1594 OR40 S6 — puts no prose under the title, and no cards', async () => {
+    listRunsMock.mockResolvedValue({ items: [runRow({ id: 'run_a' })], nextCursor: null });
+    const { container } = renderHome();
+    await screen.findByRole('table', { name: 'Recent runs' });
+
+    expect(container.querySelector('.page-hint')).toBeNull();
+    // Each shortcut is a list item holding one link — nothing card-shaped
+    // (the e2e reads the computed border and surface).
+    const items = within(screen.getByRole('region', { name: 'Go to' })).getAllByRole('listitem');
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) expect(within(item).getAllByRole('link')).toHaveLength(1);
+  });
+
   it('says the workspace has no runs only when the first page really returned none', async () => {
     listRunsMock.mockResolvedValue({ items: [], nextCursor: null });
     renderHome();
@@ -106,15 +143,8 @@ describe('HomePage', () => {
 
     expect(screen.getByText('Loading runs…')).toBeInTheDocument();
     expect(screen.queryByText(/No runs yet/)).not.toBeInTheDocument();
-    // The runs list itself must be absent — checked across ALL lists on the
-    // page. `queryByRole('list', {name: ''})` cannot express this: neither `ul`
-    // carries a naming attribute (a `section`'s `aria-labelledby` is NOT
-    // inherited by its descendants), so the empty-name query resolves to the
-    // ALWAYS-mounted hub-cards list, and asserting that one lacks the
-    // `recent-runs` class is true no matter what the runs list does.
-    expect(screen.queryAllByRole('list').some((el) => el.classList.contains('recent-runs'))).toBe(
-      false,
-    );
+    // The runs table itself must be absent: no rows while the page is pending.
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
   it('surfaces a failed load instead of showing an empty workspace', async () => {
@@ -133,7 +163,7 @@ describe('HomePage', () => {
       nextCursor: 'cur_1',
     });
     renderHome();
-    await screen.findByText('Nightly report v3');
+    await screen.findByRole('link', { name: 'Nightly report v3' });
 
     expect(listRunsMock).toHaveBeenCalledTimes(1);
     // The ARGUMENTS matter, not just the count — a reader that fetched page two

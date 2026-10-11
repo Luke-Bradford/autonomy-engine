@@ -414,7 +414,7 @@ describe('the global anchor colour', () => {
     expect(body).not.toMatch(/text-decoration/);
   });
 
-  it.each(['.hub-cards a', '.recent-runs a', '.command-bar__breadcrumb a'])(
+  it.each(['.command-bar__breadcrumb a'])(
     '%s still declares its own colour, so the global rule cannot capture it',
     (selector) => {
       expect(ruleBody(css, selector)).toMatch(/(^|[\s;]) ?color:\s*var\(--[a-z-]+\)/);

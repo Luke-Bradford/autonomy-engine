@@ -2,6 +2,8 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
+import { DENSITIES, expectAppearance, preferAppearance } from './support/appearance';
+import { offRampText } from './support/typeRamp';
 
 /**
  * U15 slice 1 (#1085) — the Home hub stops being a placeholder.
@@ -60,10 +62,10 @@ test('U15 — Home names the workspace’s recent runs and links each to its det
   await expect(ours).toHaveCount(1);
   await expect(ours).toHaveAttribute('href', new RegExp(`/monitor/runs/${runId}$`));
 
-  // The status WORD, from the Monitor's one vocabulary. The seeded run fails by
-  // construction, so this also proves Home reports an outcome rather than
-  // painting every row the same.
-  await expect(ours).toContainText('failure');
+  // The status WORD, from the Monitor's one vocabulary, in our run's row. The
+  // seeded run fails by construction, so this also proves Home reports an
+  // outcome rather than painting every row the same.
+  await expect(recent.getByRole('row').filter({ hasText: pipelineName })).toContainText('failure');
 
   // Exactly one page, and it asked for Home's own size rather than a reader's
   // screenful of 50. `limit` reaching the wire is the whole point of the
@@ -95,3 +97,47 @@ test('U15 — Home names the workspace’s recent runs and links each to its det
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * #1594 OR40 S6 — Home on the design system, in both densities: every piece of
+ * its text on the type ramp, its runs a table (the one table style, which
+ * `table-style.spec.ts` measures) rather than a stack of cards, its shortcuts
+ * plain links, and no paragraph of prose under the title.
+ */
+for (const density of DENSITIES) {
+  test(`#1594 OR40 S6 — Home's text is on the type ramp, with no cards or prose (${density})`, async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    // A run, so the table (not the empty line) is what is measured.
+    const { pipelineVersionId } = await seedVersion(page, `S6 Home ${density} ${Date.now()}`, {
+      nodes: [
+        { id: 'n1', type: 'fail', config: { message: 'expected' }, position: { x: 0, y: 0 } },
+      ],
+    });
+    await fireAndSettle(page, pipelineVersionId, `S6 Home ${density}`);
+    await preferAppearance(page, 'light', density);
+    await page.goto('/#/');
+    await fluentRootReady(page);
+    await expectAppearance(page, 'light', density);
+    await expect(
+      page.getByRole('table', { name: 'Recent runs' }).getByRole('row').nth(1),
+    ).toBeVisible();
+
+    expect(await offRampText(page, density)).toEqual([]);
+    // And a section's `?` note, open: the shared help piece is on the ramp too.
+    await page.getByRole('region', { name: 'Recent runs' }).getByText('?', { exact: true }).click();
+    await expect(page.getByRole('note').first()).toBeVisible();
+    expect(await offRampText(page, density)).toEqual([]);
+    const shape = await page.evaluate(() => ({
+      prose: document.querySelectorAll('.content .page-hint').length,
+      cards: [...document.querySelectorAll<HTMLElement>('.content a')].filter((a) => {
+        const s = getComputedStyle(a);
+        return s.borderTopWidth !== '0px' || s.backgroundColor !== 'rgba(0, 0, 0, 0)';
+      }).length,
+    }));
+    expect(shape).toEqual({ prose: 0, cards: 0 });
+
+    await expectQuiet(page, problems);
+  });
+}

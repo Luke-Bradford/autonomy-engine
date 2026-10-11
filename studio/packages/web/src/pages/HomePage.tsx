@@ -10,6 +10,10 @@ import { versionLabel } from '../lib/versionLabel';
 import { DemoPanel } from './DemoPanel';
 import { When } from '../lib/When';
 import { PageHeader } from '../lib/PageHeader';
+import { Section } from '../lib/Section';
+import { OneLine } from '../lib/OneLine';
+import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
+import { RunStatusPill } from './runs/RunStatusPill';
 
 /**
  * How many recent runs Home shows.
@@ -59,14 +63,11 @@ export function HomePage() {
   return (
     <>
       <PageHeader title="Home" />
-      <p className="page-hint">
-        Author pipelines, watch them run, and manage the connections and triggers that drive them.
-      </p>
 
-      <section aria-labelledby="home-recent-runs" className="home-section">
-        {/* An `h2` under the page's one `h1`, the title. */}
-        <h2 id="home-recent-runs">Recent runs</h2>
-
+      {/* #1594 OR40 S6 — Home's sections are the one `Section`, a named
+          region each (the e2e reaches them by name), and the runs are a row
+          of the one table style rather than a stack of cards. */}
+      <Section level={2} landmark heading="Recent runs" help={FORM_SECTION_HINTS.home.recentRuns}>
         {error !== null && (
           <p role="alert" className="error">
             {error.message}
@@ -83,31 +84,45 @@ export function HomePage() {
         {runs !== null && runs.length === 0 && error === null && <p>{NO_RUNS_YET}</p>}
 
         {runs !== null && runs.length > 0 && (
-          <ul className="recent-runs">
-            {runs.map((r) => (
-              <li key={r.id}>
-                <Link to={runDetailPath(r.id)}>
-                  {/* The WORD comes from the Monitor's one run-status
-                      vocabulary (#870); the CLASS comes from the status. */}
-                  <span className={`run-status run-status-${r.status}`}>
-                    {runStatusLabel(r.status)}
-                  </span>
-                  <span className="recent-runs-pipeline">
-                    {r.pipelineName} {versionLabel(r.pipelineVersion, r.debug)}
-                  </span>
-                  {/* Absolute, exactly as the run list renders it. NOT a
-                      relative "3m ago": a queued run's `startedAt` is an
-                      enqueue placeholder that admission re-stamps, so a
-                      relative string would print queue age as a start time. */}
-                  <span className="recent-runs-when">
-                    <When ms={r.startedAt} />
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
+          <table className="recent-runs" aria-label="Recent runs">
+            <thead>
+              <tr>
+                <th scope="col">Pipeline</th>
+                <th scope="col">Status</th>
+                <th scope="col">Started</th>
+              </tr>
+            </thead>
+            <tbody>
+              {runs.map((r) => {
+                const version = versionLabel(r.pipelineVersion, r.debug);
+                return (
+                  <tr key={r.id}>
+                    <td>
+                      {/* The cell can cut a long name, so the tooltip holds
+                          it whole — the Runs grid's pipeline cell does the same. */}
+                      <OneLine title={`${r.pipelineName} ${version}`}>
+                        <Link to={runDetailPath(r.id)}>
+                          {r.pipelineName} <span className="run-version">{version}</span>
+                        </Link>
+                      </OneLine>
+                    </td>
+                    <td title={runStatusLabel(r.status)}>
+                      <RunStatusPill status={r.status} />
+                    </td>
+                    {/* Absolute, exactly as the run list renders it. NOT a
+                        relative "3m ago": a queued run's `startedAt` is an
+                        enqueue placeholder that admission re-stamps, so a
+                        relative string would print queue age as a start time. */}
+                    <td>
+                      <When ms={r.startedAt} />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         )}
-      </section>
+      </Section>
 
       {/* #1481 OR32 — a workspace that has never run anything is offered the
           demo, and taken to the pipelines it loaded. Load only: Remove lives on
@@ -116,16 +131,15 @@ export function HomePage() {
         <DemoPanel allowRemove={false} onChanged={() => void navigate('/author/pipelines')} />
       )}
 
-      <section aria-labelledby="home-hubs" className="home-section">
-        <h2 id="home-hubs">Go to</h2>
-        <ul className="hub-cards">
+      <Section level={2} landmark heading="Go to" help={FORM_SECTION_HINTS.home.goTo}>
+        <ul className="hub-links">
           {hubs.map((hub) => (
             <li key={hub.id}>
               <Link to={hub.path}>{hub.label}</Link>
             </li>
           ))}
         </ul>
-      </section>
+      </Section>
     </>
   );
 }

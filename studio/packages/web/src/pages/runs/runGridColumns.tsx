@@ -24,6 +24,7 @@ import { When } from '../../lib/When';
 import { withParams } from '../../lib/withParams';
 import { RUN_FILTER_PARAMS, triggerRunsPath } from './runFilters';
 import type { DisplayTimeZone } from '../../lib/displayTime';
+import { RunStatusPill } from './RunStatusPill';
 
 /** What a cell needs besides its run. */
 export interface CellContext {
@@ -248,7 +249,7 @@ export const RUN_GRID_COLUMN_DEFS: Record<RunGridColumnId, RunGridColumn> = {
       <td title={runStatusLabel(r.status)}>
         {/* #870 — the WORD comes from the Monitor's one run-status vocabulary;
             the CLASS from the status itself, so hue and label cannot drift. */}
-        <span className={`run-status run-status-${r.status}`}>{runStatusLabel(r.status)}</span>
+        <RunStatusPill status={r.status} />
       </td>
     ),
   },

@@ -23,6 +23,7 @@ import { triggersPath } from '../triggers/triggersPath';
 import { pipelinePath } from './pipelinePath';
 import { percentOf } from './successPercent';
 import type { PipelineSort, PipelineSortKey } from './pipelinesGridSort';
+import { RunStatusPill } from '../runs/RunStatusPill';
 
 const DAYS = String(PIPELINE_SUMMARY_WINDOW_DAYS);
 
@@ -112,9 +113,7 @@ function lastRunCell(
       title={`${runStatusLabel(run.status)}${started}`}
     >
       {/* #870 — the Monitor's one run-status vocabulary and hue. */}
-      <span className={`run-status run-status-${run.status}`}>
-        {runStatusLabel(run.status)}
-      </span>{' '}
+      <RunStatusPill status={run.status} />{' '}
       {/* A queued run's start is an enqueue placeholder, not a start. */}
       {runStartIsReal(run) && <When ms={run.startedAt} compact asOf={asOf} />}
     </Link>
