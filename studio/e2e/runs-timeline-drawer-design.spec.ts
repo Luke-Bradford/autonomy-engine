@@ -109,9 +109,30 @@ for (const { density, theme } of RUNS) {
         await opens.nth(row).click();
         const drawer = page.locator(DRAWER);
         await expect(drawer.getByRole('heading', { level: 2, name: /^Node / })).toBeVisible();
-        // Labels, not prose: what Duration measures is its `?`.
-        await expect(drawer.locator('summary[aria-label="About duration"]')).toBeVisible();
-        await expect(drawer.getByText(/wall clock for this attempt/)).toBeHidden();
+        // Labels, not prose: what Duration measures is its `?`, and its note
+        // opens inside the drawer, not clipped by its edge.
+        const about = drawer.locator('summary[aria-label="About Duration"]');
+        await expect(about).toBeVisible();
+        const note = drawer.getByText(/wall clock for this attempt/i);
+        await expect(note).toHaveCount(1);
+        await expect(note).toBeHidden();
+        await about.click();
+        await expect(note).toBeVisible();
+        const clip = await page.evaluate((selector) => {
+          const d = document.querySelector(selector)!.querySelector('.run-drawer__body')!;
+          const box = d.getBoundingClientRect();
+          const n = d.querySelector('details[open] > span')!.getBoundingClientRect();
+          return {
+            left: n.left - box.left,
+            right: box.right - n.right,
+            scroll: d.scrollWidth - d.clientWidth,
+          };
+        }, DRAWER);
+        expect(clip.left, 'Duration note: past the drawer left').toBeGreaterThanOrEqual(0);
+        expect(clip.right, 'Duration note: past the drawer right').toBeGreaterThanOrEqual(0);
+        expect(clip.scroll, 'Duration note: drawer scrolls sideways').toBe(0);
+        await page.keyboard.press('Escape');
+        await expect(note).toBeHidden();
         const tabs = drawer.getByRole('tablist', { name: 'Activity run details' });
         for (const name of TABS) {
           const tab = tabs.getByRole('tab', { name, exact: true });

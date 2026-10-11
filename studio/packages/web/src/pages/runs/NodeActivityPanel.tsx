@@ -6,7 +6,7 @@ import { nodeStatusLabel, nodeStatusPillClass, nodeStoppedByCancel } from './nod
 import { runDetailPath, runLinkLabel } from './runPath';
 import { formatOutputValue, jsonText, liveSpanStart, prettyStoredJson } from './format';
 import { NodeDuration } from './NodeDuration';
-import { HelpDisclosure } from '../../lib/HelpDisclosure';
+import { AboutHelp } from '../../lib/HelpDisclosure';
 import { costFigure, costSentence, readCost, tokenSummary, unsettledSentence } from './costReading';
 import type { NodeActivity, NodeToolCall } from './runSummary';
 import { SecureMarkerHint } from './SecureMarkerHint';
@@ -246,17 +246,20 @@ export function NodeActivityPanel({
           `?`, and only a sentence about THIS record's state stays on the page.
           A `div`, because the `?` is a `<details>`, which a `<p>` cannot hold. */}
       <div className="page-hint node-duration">
-        <span className="help-row">
-          {/* No colon after the label (#1594 OR40 S4b). */}
-          Duration{' '}
+        {/* The row the note anchors to, at its width; any state sentence is
+            the line under it. No colon after the label (#1594 OR40 S4b). The
+            note stays here, not in `FORM_SECTION_HINTS`: it names THIS attempt
+            or the latest, which a fixed hint cannot. */}
+        <div className="help-row">
+          Duration
           <strong>
             <NodeDuration node={node} live={live} />
           </strong>
-          <HelpDisclosure label="About duration" noteId={durationNoteId}>
+          <AboutHelp name="Duration" noteId={durationNoteId}>
             Wall clock for {run === undefined ? 'the latest' : 'this'} attempt, from start to
             settle, including any wait it parked on and excluding time held between retries.
-          </HelpDisclosure>
-        </span>
+          </AboutHelp>
+        </div>
         {node.startedAtMs === undefined &&
           (node.copiedFromRunId !== undefined
             ? /* #918 — a copied node hits the `attempts === 0` arm exactly, and
@@ -650,20 +653,16 @@ function ChildRuns({ node }: { node: NodeActivity }) {
           `skipped` call node (a container timeout via `abandonLiveChildren`)
           can be holding a child that still is, and a `success` one is holding
           children that are not. The child's own page is the authority. */}
-      <p className="page-hint">
-        {node.childRunIds.length === 1 ? 'The run' : 'The runs'} this node spawned.{' '}
-        {node.childRunIds.length === 1 ? 'It has' : 'Each has'} its own log, its own outputs and its
-        own spend, so this node&apos;s duration and cost are not{' '}
-        {node.childRunIds.length === 1 ? 'its' : 'theirs'}.
-        {node.childRunIds.length > 1 && (
-          <>
-            {' '}
-            One node holds several because it ran several times: a back-edge loop round spawns an
-            ADDITIONAL child rather than replacing the last, and a parallel foreach folds its item
-            instances onto the one node you drew.
-          </>
-        )}
-      </p>
+      {/* #1594 OR40 S6h — what a child run is (its own log, outputs and
+          spend) is the section's `?`; why THIS node holds several is about the
+          record, so it stays. */}
+      {node.childRunIds.length > 1 && (
+        <p className="page-hint">
+          One node holds several because it ran several times: a back-edge loop round spawns an
+          ADDITIONAL child rather than replacing the last, and a parallel foreach folds its item
+          instances onto the one node you drew.
+        </p>
+      )}
       {/* A LIST, not comma-separated spans: the count is then announced, and
           each id is an item rather than a run-on sentence. `aria-label` carries
           the name because the visible text is the raw id and stays that way —
@@ -909,10 +908,9 @@ function InputSection({
         <>
           <div className="help-row">
             <h4>Parameters</h4>
-            <HelpDisclosure label="About parameters" noteId={paramsNoteId}>
-              The connection and dataset parameters this dispatch applied over their stored
-              settings.
-            </HelpDisclosure>
+            <AboutHelp name="Parameters" noteId={paramsNoteId}>
+              {FORM_SECTION_HINTS.run.inputParameters}
+            </AboutHelp>
           </div>
           <RecordedText
             record={params}

@@ -1889,7 +1889,7 @@ describe('RunDetailPage — how long a node took (#867)', () => {
         .getByText(/wall clock for this attempt/i)
         .closest('details')
         ?.querySelector('summary'),
-    ).toHaveAccessibleName('About duration');
+    ).toHaveAccessibleName('About Duration');
     expect(within(panel).getByText(/including any wait it parked on/i)).toBeInTheDocument();
     expect(within(panel).getByText(/excluding time held between retries/i)).toBeInTheDocument();
   });

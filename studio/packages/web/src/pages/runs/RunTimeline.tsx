@@ -89,8 +89,8 @@ function GroupByToggle({
   );
 }
 
-/** The `?` (#1594 OR40 S6h: labels, not prose): what a lane is, which is the
- * one thing that differs by key, and what an overlap and a bar's length mean. */
+/** The `?` (#1594 OR40 S6h: labels, not prose): what a lane is, which is what
+ * differs by key, and what an overlap and the figure beside a bar mean. */
 const TIMELINE_HELP: Record<RunGroupBy, string> = {
   pipeline: FORM_SECTION_HINTS.run.runsTimelineByPipeline,
   annotation: FORM_SECTION_HINTS.run.runsTimelineByAnnotation,

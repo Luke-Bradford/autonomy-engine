@@ -82,11 +82,18 @@ test('#867 — a node row states how long it took, and says nothing where nothin
   // The drill-in is the one surface with room to say what the number MEANS.
   await activityRowById(page, 'hold').getByRole('button').first().click();
   const panel = page.locator('.run-drawer').getByRole('region', { name: /^Node / });
-  await expect(panel).toContainText('wall clock for this attempt');
-  // #1594 OR40 S4b — a label takes no colon: "Duration 1.2s, wall clock for…".
-  await expect(panel).toContainText(/Duration [^,]+, wall clock/);
+  // #1594 OR40 S6h — what the figure means is its `?`, not prose on the panel.
+  const about = panel.locator('summary[aria-label="About Duration"]');
+  await expect(about).toBeVisible();
+  const note = panel.getByText(/wall clock for this attempt/i);
+  await expect(note).toHaveCount(1);
+  await expect(note).toBeHidden();
+  await about.click();
+  await expect(note).toBeVisible();
+  await expect(note).toContainText('including any wait it parked on');
+  // #1594 OR40 S4b — a label takes no colon: "Duration 1.2s".
+  await expect(panel.locator('.node-duration > .help-row')).toContainText(/^Duration\s*[^\s:]/);
   await expect(panel).not.toContainText('Duration:');
-  await expect(panel).toContainText('including any wait it parked on');
 
   await expectQuiet(page, problems);
 });

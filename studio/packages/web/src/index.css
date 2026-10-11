@@ -1887,9 +1887,7 @@ button.danger {
 .activity-toolbox h2,
 .property-panel h2 {
   margin: 0;
-  /* #1594 OR40 S6h — the section size: a panel title is the run drawer's h2,
-     above its `Section`s' h3s, which are the same size. */
-  font-size: var(--type-section-size);
+  /* #1594 OR40 S6h — no size of its own: the ramp's h2 (the section type). */
 }
 
 /* #1477 OR29 — a node's header row and its tab strip, pinned together while the
@@ -1976,7 +1974,7 @@ button.danger {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-2);
 }
 
 .property-panel__type {
@@ -4658,10 +4656,6 @@ button.danger {
   margin: var(--space-3) 0;
 }
 
-.node-duration > .help-row {
-  display: inline-flex;
-}
-
 /* A `JSON.stringify` dump has no spaces to break on, so it needs an explicit
    break opportunity or it pushes the panel sideways — the same fix `.run-meta
    dd` already carries — plus a cap, since an agent node's output is unbounded.
@@ -6554,12 +6548,11 @@ button.danger {
   color: var(--text);
 }
 
-/* U29 (#1015) — the cross-run timeline. Its own container class rather than
-   `.attempt-timeline`, whose name and e2e scope belong to the per-run chart;
-   everything inside reuses U12a's `.timeline-*` rules unchanged, so the two
-   charts cannot drift apart on what a bar or an open span looks like. */
-/* #1594 OR40 S6h — a `Section`, so its frame and heading are the primitive's;
-   a lane's name is the ramp's h3, with no size of its own. */
+/* U29 (#1015) — the cross-run timeline (`.run-timeline`, a hook with no rule
+   of its own since #1594 OR40 S6h made it a `Section`, whose frame and heading
+   are the primitive's). Everything inside reuses U12a's `.timeline-*` rules
+   unchanged, so the two charts cannot drift apart on what a bar or an open
+   span looks like. A lane's name is the ramp's h3, with no size of its own. */
 .run-timeline-group + .run-timeline-group {
   margin-top: var(--space-4);
 }
