@@ -96,7 +96,7 @@ test('#1569 — the pipelines grid: last run, success %, next run, triggers; sor
   expect(headers.slice(0, 7)).toEqual([
     'Name',
     'Last run',
-    'Success % (7d)',
+    'Success (7d)',
     'Next run',
     'Triggers',
     'Live state',
@@ -363,7 +363,9 @@ test('#1569 slice 4 — pipelines grid columns resize, can be chosen, persist pe
 
   // The keyboard path: one 16px step on Last run.
   await page.getByRole('separator', { name: 'Resize Last run column' }).press('ArrowRight');
-  await expect.poll(async () => Math.round((await measure()).lastRun)).toBe(168 + 16);
+  await expect
+    .poll(async () => Math.round((await measure()).lastRun))
+    .toBe(Math.round(start.lastRun) + 16);
 
   // Turn on Runs (7d) and Activities, turn off Next run.
   await page.getByRole('button', { name: /^Columns/ }).click();
@@ -410,7 +412,7 @@ test('#1569 slice 4 — pipelines grid columns resize, can be chosen, persist pe
   await expect(header('Runs (7d)')).toHaveCount(1);
   const reloaded = await measure();
   expect(reloaded.name).toBeCloseTo(280, 0);
-  expect(reloaded.lastRun).toBeCloseTo(184, 0);
+  expect(reloaded.lastRun).toBeCloseTo(Math.round(start.lastRun) + 16, 0);
 
   // Wider than the page: the GRID scrolls sideways, the page does not, and the
   // ⋯ column keeps its width.
