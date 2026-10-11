@@ -5919,13 +5919,13 @@ button.danger {
 
 /* #1484 — what the last CSV export has to say, under the title row. */
 .runs-export-note {
-  margin: 0 0 0.375rem;
-  font-size: 13px;
+  margin: 0 0 var(--space-2);
+  font-size: var(--type-body-size);
 }
 
 .runs-search input {
   width: 100%;
-  font-size: 13px;
+  font-size: var(--type-body-size);
 }
 
 /* Capped like the selects: one long kind label ("Tumbling window") must not
@@ -6050,15 +6050,16 @@ button.danger {
   white-space: nowrap;
 }
 
+/* #1594 OR40 S6f — caption type: it was 0.8rem, 12.8px, off the ramp. */
 .run-cost-unsettled {
   color: var(--muted);
-  font-size: 0.8rem;
+  font-size: var(--type-caption-size);
 }
 
 /* #931 + #1484 — the filtered pipeline's lifetime spend, as one dense line. */
 .runs-summary-line {
-  font-size: 13px;
-  margin-bottom: 0.375rem;
+  font-size: var(--type-body-size);
+  margin-bottom: var(--space-2);
 }
 
 .runs-summary-line__label {
@@ -6066,9 +6067,9 @@ button.danger {
 }
 
 .runs-summary-line__help {
-  margin-left: 0.4rem;
-  padding: 0 0.4rem;
-  font-size: 12px;
+  margin-left: var(--space-2);
+  padding: 0 var(--space-1);
+  font-size: var(--type-caption-size);
   line-height: 1.2;
 }
 
@@ -6583,7 +6584,7 @@ button.danger {
    removed: a live region must already exist when its text first changes. */
 .runs-live-status {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--type-caption-size);
   white-space: nowrap;
 }
 
