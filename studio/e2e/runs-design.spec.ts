@@ -77,7 +77,9 @@ function measure(page: Page) {
       ).length,
       helpName: help?.getAttribute('aria-label') ?? null,
       title: [box(h1), ...(help ? [{ ...box(help), name: '?' }] : [])],
-      headerControls: [...header.querySelectorAll('.toolbar button, .toolbar input, .toolbar select')]
+      headerControls: [
+        ...header.querySelectorAll('.toolbar button, .toolbar input, .toolbar select'),
+      ]
         .filter(shown)
         .map(box),
       note:
