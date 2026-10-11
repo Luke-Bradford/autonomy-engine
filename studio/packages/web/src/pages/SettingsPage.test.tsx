@@ -70,7 +70,10 @@ describe('SettingsPage — secret encryption', () => {
     getSettingsMock.mockRejectedValue(new Error('offline'));
     render(<SettingsPage />);
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('offline');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('offline');
+    // Inside its section, so the failure is read as the key's, not the page's.
+    expect(screen.getByRole('region', { name: 'Secret encryption' })).toContainElement(alert);
     expect(screen.queryByText('Master key')).not.toBeInTheDocument();
   });
 });

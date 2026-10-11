@@ -172,21 +172,21 @@ for (const density of DENSITIES) {
     /* Measured: the facts list sits 8px under its heading row, as `Section`
        documents (`.run-meta`'s own margin would make it 24px), and both
        pickers are the one control height. */
-    const fit = await page.evaluate(() => {
-      const region = [...document.querySelectorAll('.content section.section')][1]!;
+    const fit = await secrets.evaluate((region) => {
       const head = region.querySelector('.section__head')!.getBoundingClientRect();
       const facts = region.querySelector('dl')!.getBoundingClientRect();
-      const controlH = getComputedStyle(document.documentElement).getPropertyValue('--control-h');
       return {
         factsGap: Math.round(facts.top - head.bottom),
-        selects: [...document.querySelectorAll('.content select')].map(
-          (el) => `${Math.round(el.getBoundingClientRect().height)}px`,
+        selects: [...document.querySelectorAll('.content select')].map((el) =>
+          Math.round(el.getBoundingClientRect().height),
         ),
-        controlH: controlH.trim(),
       };
     });
     expect(fit.factsGap).toBe(8);
-    expect(fit.selects).toEqual([fit.controlH, fit.controlH]);
+    // The published heights, not read from the token: a token that drifts
+    // fails here instead of moving the check with it.
+    const controlH = { compact: 28, comfortable: 32 }[density];
+    expect(fit.selects).toEqual([controlH, controlH]);
 
     await expectQuiet(page, problems);
   });

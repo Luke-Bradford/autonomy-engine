@@ -50,9 +50,9 @@ export const FORM_SECTION_HINTS = {
       'How this activity retries a transient failure, and what of it is kept out of the run log.',
   },
   settings: {
-    appearance: 'How the app looks to you in this browser: theme, density and time zone.',
+    appearance: 'How this browser shows the app; its theme, density and time zone.',
     secretEncryption:
-      'Where the master key that encrypts every stored secret comes from, and the file holding it.',
+      'Where the master key that encrypts every stored secret comes from, and the file holding it when there is one.',
   },
   home: {
     recentRuns: 'The newest runs in this workspace, each opening on its activities and log.',
