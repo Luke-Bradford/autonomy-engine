@@ -68,6 +68,8 @@ Sources: [pipelines and activities](https://learn.microsoft.com/azure/data-facto
 
 Containers (ForEach, Until, Stage) get Name, Description, State and their own settings, but no retry or secure flags (as today).
 
+**Built (C0a, 2026-10-12):** the timeout is enforced per attempt on execution activities, entered in seconds, with no default. It is refused at save on activities that cannot honour it. Details are in the framework spec's F3 built-block. Still open in C0: the 12 h workspace default, the `D.HH:MM:SS` input, Description, Activity state with *Mark as*, and User properties.
+
 ---
 
 ## 4. Each activity
