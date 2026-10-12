@@ -35,8 +35,9 @@ export function issueTarget(raw: string, nodeId: string): IssueTarget | undefine
   }
   const rest = afterLocation(raw, nodeId);
   if (rest === undefined) return undefined;
-  // The General tab: the run policy, and (#1600 C0b) the description above it.
-  if (/^(policy|description)\b/.test(rest)) return { general: true };
+  // The General tab: the run policy, (#1600 C0b) the description above it,
+  // and (#1600 C0d) the user properties below it.
+  if (/^(policy|description|userProperties)\b/.test(rest)) return { general: true };
   const paired = /^(connectionIds|datasetIds|datasetParams)\.(source|sink)\b/.exec(rest);
   if (paired) {
     const side = paired[2] === 'source' ? 'source' : 'sink';

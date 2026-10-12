@@ -29,6 +29,7 @@ export function activityRun(over: Partial<ActivityRun> = {}): ActivityRun {
     childRun: null,
     error: null,
     skipReason: null,
+    userProperties: null,
     ...over,
   };
 }

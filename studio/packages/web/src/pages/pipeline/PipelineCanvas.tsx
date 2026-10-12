@@ -155,6 +155,7 @@ import { OUTPUT_COLUMNS, PARAM_COLUMNS, VARIABLE_COLUMNS } from './contractColum
 import {
   isOwnPolicyIssue,
   descriptionIssues,
+  userPropertiesIssues,
   policyIssues,
   saveDisabledReason,
   toVersionBody,
@@ -1128,6 +1129,7 @@ export function PipelineCanvas({
         ...validateCanvas(nodes, edges, containers, params, variables, globals, advisories),
         ...policyIssues(nodes),
         ...descriptionIssues(nodes),
+        ...userPropertiesIssues(nodes),
       ].map(rewrite),
       warnings: advisories.map((raw) => readableIssue(raw, nodes, edges, containers)),
     };
@@ -4316,7 +4318,7 @@ export function NodePanel({
             key: 'general',
             label: 'General',
             status: tabStatusMark(statuses.get('general')),
-            content: <NodeGeneral store={store} nodeId={nodeId} />,
+            content: <NodeGeneral store={store} nodeId={nodeId} picker={picker} />,
           },
           ...typeTabs.map((t) => ({
             key: t.key,

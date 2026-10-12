@@ -58,6 +58,8 @@ export const FORM_SECTION_HINTS = {
     basics: 'What this activity is for, and whether it runs.',
     runPolicy:
       'How long one attempt may run, how a transient failure is retried, and what is kept out of the run log.',
+    userProperties:
+      'Up to five name and value pairs, shown as columns in the activity runs grid. A value can be dynamic content, resolved when the activity runs. Withheld from the run log on a secure activity.',
   },
   settings: {
     appearance: 'How this browser shows the app; its theme, density and time zone.',

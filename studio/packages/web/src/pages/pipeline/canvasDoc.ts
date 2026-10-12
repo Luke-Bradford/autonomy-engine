@@ -151,6 +151,29 @@ export function descriptionIssues(nodes: Node[]): string[] {
 }
 
 /**
+ * #1600 OR41 C0d — the same twin for an activity's user properties: a sixth
+ * row, an empty or duplicate name, or over-long text becomes a badge naming the
+ * node and the row, read through `StrictNodeSchema.shape.userProperties`. The
+ * row is its index (`userProperties[1].name`), as the ref check names it.
+ */
+export function userPropertiesIssues(nodes: Node[]): string[] {
+  const schema = StrictNodeSchema.shape.userProperties;
+  return nodes.flatMap((n) => {
+    const check = schema.safeParse(n.userProperties);
+    return check.success
+      ? []
+      : check.error.issues.map((issue) => {
+          const [row, ...field] = issue.path;
+          const where =
+            row === undefined
+              ? 'userProperties'
+              : `userProperties[${String(row)}]${field.map((f) => `.${String(f)}`).join('')}`;
+          return `node '${n.id}': ${where}: ${issue.message}`;
+        });
+  });
+}
+
+/**
  * #1312 — the issues the node panel's policy section explains: this node's own
  * policy refusals, and every downstream ref refused because this node's outputs
  * are secure — or those of a container it sits in, which a secure child makes
