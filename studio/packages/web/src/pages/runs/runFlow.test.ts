@@ -690,6 +690,15 @@ describe('#1394 OR3 — run cards', () => {
     expect(data.card).toBe(cards.get('cp'));
   });
 
+  it("#1600 C0b — carries the version's description, null when it has none", () => {
+    const described: RunDoc = {
+      ...COPY_DOC,
+      nodes: COPY_DOC.nodes.map((n) => ({ ...n, description: 'Loads the orders' })),
+    };
+    expect(runCards(described).get('cp')?.description).toBe('Loads the orders');
+    expect(runCards(COPY_DOC).get('cp')?.description).toBeNull();
+  });
+
   it('reuses an equal card from the previous build, and replaces a changed one', () => {
     const doc: RunDoc = {
       ...COPY_DOC,

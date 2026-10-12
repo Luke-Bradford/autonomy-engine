@@ -106,6 +106,8 @@ export interface RunCard {
   type: string;
   summary: string | null;
   badges: readonly ActivityBadge[];
+  /** #1600 OR41 C0b — the version's description of the step, for the hover. */
+  description: string | null;
 }
 
 /**
@@ -122,6 +124,7 @@ export function runCards(
         type: n.type,
         summary: activitySummary(n, datasetName),
         badges: activityBadges(n),
+        description: n.description ?? null,
       };
       /* Reuse this node's last card when it is equal: the dataset names arrive
          AFTER the first paint, and a fresh object for every node would re-render
@@ -141,6 +144,7 @@ function sameCard(a: RunCard, b: RunCard): boolean {
   return (
     a.type === b.type &&
     a.summary === b.summary &&
+    a.description === b.description &&
     a.badges.length === b.badges.length &&
     a.badges.every((x, i) => x.key === b.badges[i]!.key && x.label === b.badges[i]!.label)
   );
@@ -404,7 +408,7 @@ export function runFlowNodes(
       selected: n.id === options.selectedId,
       portIds: portIdsOf(portsOf(n.id, n)),
       // Unreachable fallback: `runCards` is built from this very array.
-      card: cards.get(n.id) ?? { type: n.type, summary: null, badges: [] },
+      card: cards.get(n.id) ?? { type: n.type, summary: null, badges: [], description: null },
       /* Only on a SETTLED node: a held, re-opened or skipped node's row can
            still carry an earlier attempt's span, which is not this state's. */
       facts:

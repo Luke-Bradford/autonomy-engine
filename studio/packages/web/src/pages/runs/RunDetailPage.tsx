@@ -328,6 +328,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
      which is the defect this closes rather than a smaller version of it. */
   const nodeNames = useMemo(() => (doc === null ? null : activityLabels(doc.nodes)), [doc]);
   const nameOf = (nodeId: string) => nodeNames?.get(nodeId) ?? null;
+  // #1600 C0b — the drawer's description, off the same bound doc as the name.
+  const descriptionOf = (nodeId: string) =>
+    doc?.nodes.find((n) => n.id === nodeId)?.description ?? null;
   const nodeTypes = useMemo(
     () => (doc === null ? null : new Map(doc.nodes.map((n) => [n.id, activityLabel(n)]))),
     [doc],
@@ -971,6 +974,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
           <NodeActivityPanel
             node={drawerNode}
             name={nameOf(drawerRow.activityId)}
+            description={descriptionOf(drawerRow.activityId)}
             runStatus={status}
             live={countingLive}
             onClose={closeDrawer}

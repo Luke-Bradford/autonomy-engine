@@ -57,6 +57,7 @@ function view(over: Partial<EditorRunView> = {}): EditorRunView {
     live: true,
     nameOf: () => null,
     typeOf: () => null,
+    descriptionOf: () => null,
     ...over,
   };
 }
@@ -173,6 +174,7 @@ describe('EditorRunDrawer', () => {
     live: false,
     nameOf: (id) => (id === 'n_a' ? 'HTTP request 1' : null),
     typeOf: (id) => (id === 'n_a' ? 'http_request' : null),
+    descriptionOf: (id) => (id === 'n_a' ? 'Fetches the orders' : null),
   });
 
   function mountDrawer(
@@ -193,6 +195,12 @@ describe('EditorRunDrawer', () => {
     expect(screen.getByRole('link', { name: 'Open full run' }).getAttribute('href')).toContain(
       'run_1',
     );
+  });
+
+  it("#1600 C0b — shows the run version's description of the node", () => {
+    mountDrawer(run, 'n_a');
+    const panel = screen.getByRole('region', { name: 'Node HTTP request 1' });
+    expect(panel.textContent).toContain('Fetches the orders');
   });
 
   it('shows nothing for a node the run has no row for, or with no run', () => {

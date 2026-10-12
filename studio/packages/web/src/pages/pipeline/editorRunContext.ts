@@ -23,6 +23,8 @@ export interface EditorRunView {
   nameOf: (nodeId: string) => string | null;
   /** The run version's type for a node, or `null` where it has no such node. */
   typeOf: (nodeId: string) => string | null;
+  /** #1600 C0b — the run version's description of a node, or `null` where it has none. */
+  descriptionOf: (nodeId: string) => string | null;
 }
 
 export const EditorRunContext = createContext<EditorRunView | null>(null);
