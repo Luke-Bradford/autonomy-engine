@@ -893,3 +893,14 @@ export function authorsCallBlob(node: Pick<Node, 'type' | 'call'>): boolean {
   if (isStructuralCallActivity(node.type)) return true;
   return node.call !== undefined && getActivity(node.type)?.kind !== 'control';
 }
+
+/**
+ * #1600 OR41 C0a (#1 F3) — can `policy.timeoutSeconds` hold on this node? Only an
+ * `execution` activity's attempt runs an adapter the executor can abort, so a
+ * call (the child is a run of its own) and every `control` activity cannot. The
+ * ONE statement of the rule: `validateDoc` refuses a timeout where it is false,
+ * and the property dock offers the field only where it is true.
+ */
+export function timeoutApplies(node: Pick<Node, 'type' | 'call'>): boolean {
+  return node.call === undefined && getActivity(node.type)?.kind === 'execution';
+}

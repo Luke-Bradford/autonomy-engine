@@ -326,6 +326,15 @@ describe('policyIssues + nodePolicyIssues (#1312)', () => {
     expect(nodePolicyIssues(issues, 'x', [])).toEqual([]);
   });
 
+  it('#1600 C0a — picks out the timeout refusal validateDoc raises for this node', () => {
+    const nodes = [withPolicy('i', { timeoutSeconds: 60 }, 'if'), node('x')];
+    const issues = validateCanvas(nodes, [], [], [], [], []);
+    expect(nodePolicyIssues(issues, 'i', [])).toEqual([
+      expect.stringMatching(/^node 'i': policy\.timeoutSeconds is not supported on 'if'/),
+    ]);
+    expect(nodePolicyIssues(issues, 'x', [])).toEqual([]);
+  });
+
   it('picks out a downstream ref refused because this node (or its container) is secure', () => {
     const producer = withPolicy('p', { secureOutput: true });
     const consumer = node('c', { url: '${nodes.p.output.body}' });

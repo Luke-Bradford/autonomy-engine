@@ -6,6 +6,7 @@ import sodium from 'libsodium-wrappers';
 import { z } from 'zod';
 import {
   BUILTIN_PRICE_TABLE_VERSION,
+  buildDedupeKey,
   CATALOG_VERSION,
   SECURE_REDACTED,
   type ActivityCatalog,
@@ -34,6 +35,12 @@ import { until } from '../../__tests__/poll-until.js';
 import { DatasetIoError } from '../../connectors/dataset-io-error.js';
 import { createExecutor, PREFLIGHT_STORE_CONCURRENCY } from '../executor.js';
 import { createRunCancels } from '../cancel.js';
+import { ACTIVITY_TIMEOUT_REASON } from '../timeout.js';
+import { createRunDrives } from '../drives.js';
+import { createAlarmClock } from '../../scheduler/alarms.js';
+import { createRetryAlarmHandler } from '../../scheduler/retry-alarm.js';
+import { silentLog } from '../../scheduler/__tests__/testLog.js';
+import { getWakeupByKey } from '../../repo/scheduled-wakeups.js';
 import type { ChildRuns } from '../child.js';
 import { createConnectorRegistry, type ConnectorRegistry } from '../../connectors/registry.js';
 import { connections } from '../../db/schema.js';
@@ -153,6 +160,7 @@ function deps(
     catalog?: ActivityCatalog;
     now?: () => number;
     alarms?: RetryAlarms;
+    armDeadline?: (ms: number, fire: () => void) => () => void;
   } = {},
 ) {
   const resolveDoc = resolveDocFor(db);
@@ -167,6 +175,7 @@ function deps(
       concurrency: over.concurrency,
       catalog: over.catalog,
       now: over.now,
+      armDeadline: over.armDeadline,
     }),
     // The same clock the executor gate reads also drives a retry's `dueAt`, so a
     // gate-armed retry lands deterministically in the `now`-injecting tests.
@@ -5105,5 +5114,270 @@ describe('createExecutor — node.dispatched.input, the input a node ran with (#
     expect(JSON.parse(dispatchedParams(db, run.id, 'full')!.text)).toEqual({
       connectionParams: { model: 'claude-shared-model' },
     });
+  });
+});
+
+// ===========================================================================
+// #1600 OR41 C0a (#1 F3) — `policy.timeoutSeconds` is enforced: on expiry the
+// attempt is aborted and fails `transient` with the reserved `timeout` code, so
+// D4's retry policy applies to it like any other transient failure.
+// ===========================================================================
+
+describe('createExecutor — #1600 C0a: the activity timeout', () => {
+  /** Resolves when `signal` aborts. */
+  const aborted = (signal: AbortSignal) =>
+    new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()));
+
+  const failureOf = (db: Db, runId: string) =>
+    loadEngineEvents(db, runId).find(
+      (e): e is Extract<EngineEvent, { type: 'node.failed' }> => e.type === 'node.failed',
+    );
+
+  /**
+   * A hand-driven deadline: records each arm's delay, and `expire()` fires the
+   * live one. Time is driven explicitly so the test needs no fake timers under
+   * p-limit and the pump's async generators.
+   */
+  function manualDeadlines() {
+    const armed: { ms: number; fire: () => void; cancelled: boolean }[] = [];
+    return {
+      armed,
+      armDeadline: (ms: number, fire: () => void) => {
+        const entry = { ms, fire, cancelled: false };
+        armed.push(entry);
+        return () => {
+          entry.cancelled = true;
+        };
+      },
+      expire() {
+        const live = armed.filter((a) => !a.cancelled);
+        expect(live).toHaveLength(1);
+        live[0]!.fire();
+      },
+    };
+  }
+
+  const timedNode = (id: string, connId: string, timeoutSeconds: number, retry?: number): Node => ({
+    ...httpNode(id, connId, { url: 'https://x' }),
+    policy: { timeoutSeconds, ...(retry !== undefined ? { retry } : {}) },
+  });
+
+  async function runTimedOut(
+    adapter: ConnectorAdapter['runActivity'],
+    { retry }: { retry?: number } = {},
+  ) {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const run = seedRun(db, seedVersion(db, [timedNode('n1', connId, 90, retry)]));
+    const started = gate();
+    const deadlines = manualDeadlines();
+    const alarms = stubAlarms();
+    const adapters = fakeHttpAdapter(async function* (ctx): AsyncIterable<ActivityEvent> {
+      started.open();
+      yield* adapter(ctx, null);
+    });
+    const done = startRun(deps(db, { adapters, armDeadline: deadlines.armDeadline, alarms }), run);
+    await started.held;
+    expect(deadlines.armed.map((a) => a.ms)).toEqual([90_000]);
+    deadlines.expire();
+    const state = await done;
+    return { db, run, state, alarms, deadlines };
+  }
+
+  const timedOut = {
+    kind: 'transient',
+    code: FAILURE_CODES.TIMEOUT,
+    error: 'activity timed out after 90s',
+  };
+
+  it('an adapter that reports the abort as its own `cancelled` failure ends `transient` / `timeout`', async () => {
+    const { db, run, state } = await runTimedOut(async function* (ctx) {
+      await aborted(ctx.signal);
+      yield { type: 'failed', kind: 'cancelled', error: 'http request aborted' };
+    });
+    expect(state.status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject(timedOut);
+  });
+
+  it('a transient failure after the timeout is the timeout too', async () => {
+    const { db, run } = await runTimedOut(async function* (ctx) {
+      await aborted(ctx.signal);
+      yield { type: 'failed', kind: 'transient', error: 'socket hang up' };
+    });
+    expect(failureOf(db, run.id)).toMatchObject(timedOut);
+  });
+
+  it('a PERMANENT failure the adapter still reached is kept: a retry would only repeat it', async () => {
+    const { db, run } = await runTimedOut(
+      async function* (ctx) {
+        await aborted(ctx.signal);
+        yield { type: 'failed', kind: 'permanent', error: 'http 400' };
+      },
+      { retry: 1 },
+    );
+    expect(failureOf(db, run.id)).toMatchObject({ kind: 'permanent', error: 'http 400' });
+    expect(failureOf(db, run.id)?.code).not.toBe(FAILURE_CODES.TIMEOUT);
+  });
+
+  it('an adapter that THROWS on the abort ends `timeout`, not permanent ADAPTER_THREW', async () => {
+    // eslint-disable-next-line require-yield -- this adapter's whole point is that it only throws
+    const { db, run } = await runTimedOut(async function* (ctx) {
+      await aborted(ctx.signal);
+      throw new Error('The operation was aborted');
+    });
+    expect(failureOf(db, run.id)).toMatchObject(timedOut);
+  });
+
+  it('an adapter that just stops on the abort, with no terminal, ends `timeout`', async () => {
+    // eslint-disable-next-line require-yield -- ends without a terminal on purpose
+    const { db, run } = await runTimedOut(async function* (ctx) {
+      await aborted(ctx.signal);
+    });
+    expect(failureOf(db, run.id)).toMatchObject(timedOut);
+  });
+
+  it('a success that still lands after the abort is kept: the work completed', async () => {
+    const { db, run, state } = await runTimedOut(async function* (ctx) {
+      await aborted(ctx.signal);
+      yield { type: 'succeeded', outputs: { status: 200, body: '', headers: {} } };
+    });
+    expect(state.status).toBe('success');
+    expect(failureOf(db, run.id)).toBeUndefined();
+  });
+
+  it('with retries left, a timed-out attempt is HELD for a retry (D4), not terminal', async () => {
+    const { db, run, state, alarms } = await runTimedOut(
+      async function* (ctx) {
+        await aborted(ctx.signal);
+        yield { type: 'failed', kind: 'cancelled', error: 'aborted' };
+      },
+      { retry: 1 },
+    );
+    expect(failureOf(db, run.id)).toMatchObject(timedOut);
+    expect(state.status).not.toBe('failure');
+    expect(eventTypes(db, run.id)).toContain('node.retryScheduled');
+    expect(alarms.armed).toHaveLength(1);
+  });
+
+  it('each retry gets a FRESH budget: the retried attempt arms its own deadline, and times out again', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const run = seedRun(db, seedVersion(db, [timedNode('n1', connId, 90, 1)]));
+    const deadlines = manualDeadlines();
+    const adapters = fakeHttpAdapter(async function* (ctx): AsyncIterable<ActivityEvent> {
+      await aborted(ctx.signal);
+      yield { type: 'failed', kind: 'cancelled', error: 'aborted' };
+    });
+    let t = 1_700_000_000_000;
+    const resolveDoc = resolveDocFor(db);
+    // The production wiring in miniature (as `retry-alarm.test.ts`): the driver's
+    // alarms ARE the clock, and the clock's retry handler drives that driver.
+    const d = {
+      db,
+      resolveDoc,
+      executor: createExecutor({
+        db,
+        masterKey: KEY,
+        resolveDoc,
+        adapters,
+        armDeadline: deadlines.armDeadline,
+      }),
+      alarms: {
+        arm: (input: Parameters<RetryAlarms['arm']>[0]) => clock.arm(input),
+        find: (input: Parameters<RetryAlarms['find']>[0]) =>
+          getWakeupByKey(db, input.kind, buildDedupeKey(input)),
+      },
+      drives: createRunDrives(),
+      now: () => t,
+    };
+    const clock = createAlarmClock({
+      db,
+      handlers: [createRetryAlarmHandler(d)],
+      now: () => t,
+      log: silentLog(),
+    });
+
+    const first = startRun(d, run);
+    await until(() => deadlines.armed.length === 1, 'the first attempt armed its deadline');
+    deadlines.expire();
+    await first;
+    t += 30_000;
+    clock.tick();
+    await until(() => deadlines.armed.length === 2, 'the retried attempt armed its own deadline');
+    deadlines.expire();
+    await until(() => getRun(db, run.id)?.status === 'failure', 'the run failed');
+
+    expect(deadlines.armed.map((a) => a.ms)).toEqual([90_000, 90_000]);
+    const failures = loadEngineEvents(db, run.id).filter((e) => e.type === 'node.failed');
+    expect(failures).toHaveLength(2);
+    for (const f of failures) expect(f).toMatchObject(timedOut);
+  });
+
+  it('an attempt that finishes in time cancels its deadline and is never aborted by it', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const run = seedRun(db, seedVersion(db, [timedNode('n1', connId, 90)]));
+    const deadlines = manualDeadlines();
+    let signal: AbortSignal | undefined;
+    const adapters = fakeHttpAdapter(async function* (ctx): AsyncIterable<ActivityEvent> {
+      signal = ctx.signal;
+      yield { type: 'succeeded', outputs: { status: 200, body: '', headers: {} } };
+    });
+    const state = await startRun(deps(db, { adapters, armDeadline: deadlines.armDeadline }), run);
+    expect(state.status).toBe('success');
+    expect(deadlines.armed).toHaveLength(1);
+    expect(deadlines.armed[0]!.cancelled).toBe(true);
+    // Aborted by `runAdapter`'s own `finally`, never by the deadline.
+    expect(signal?.aborted).toBe(true);
+    expect(signal?.reason).not.toBe(ACTIVITY_TIMEOUT_REASON);
+  });
+
+  it('a cancel that lands first owns the outcome: the attempt fails `cancelled`, and a later expiry changes nothing', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const run = seedRun(db, seedVersion(db, [timedNode('n1', connId, 90)]));
+    const started = gate();
+    const deadlines = manualDeadlines();
+    const adapters = fakeHttpAdapter(async function* (ctx): AsyncIterable<ActivityEvent> {
+      started.open();
+      await aborted(ctx.signal);
+      deadlines.armed[0]!.fire();
+      yield { type: 'failed', kind: 'cancelled', error: 'http request aborted' };
+    });
+    const cancels = createRunCancels();
+    const d = { ...deps(db, { adapters, armDeadline: deadlines.armDeadline }), cancels };
+    const done = startRun(d, run);
+    await started.held;
+    cancels.request(run.id, { kind: 'operator' });
+    cancels.poke(run.id);
+    const state = await done;
+    expect(state.status).toBe('cancelled');
+    expect(failureOf(db, run.id)).toMatchObject({ kind: 'cancelled' });
+    expect(failureOf(db, run.id)?.code).not.toBe(FAILURE_CODES.TIMEOUT);
+  });
+
+  it('a node with no timeout arms no deadline', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const run = seedRun(db, seedVersion(db, [httpNode('n1', connId, { url: 'https://x' })]));
+    const deadlines = manualDeadlines();
+    const adapters = fakeHttpAdapter(async function* (): AsyncIterable<ActivityEvent> {
+      yield { type: 'succeeded', outputs: { status: 200, body: '', headers: {} } };
+    });
+    await startRun(deps(db, { adapters, armDeadline: deadlines.armDeadline }), run);
+    expect(deadlines.armed).toEqual([]);
+  });
+
+  it('the default deadline is the real timer: a 1s timeout aborts a hung adapter', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const run = seedRun(db, seedVersion(db, [timedNode('n1', connId, 1)]));
+    const adapters = fakeHttpAdapter(async function* (ctx): AsyncIterable<ActivityEvent> {
+      await aborted(ctx.signal);
+      yield { type: 'failed', kind: 'cancelled', error: 'aborted' };
+    });
+    const state = await startRun(deps(db, { adapters }), run);
+    expect(state.status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({ code: FAILURE_CODES.TIMEOUT, kind: 'transient' });
   });
 });

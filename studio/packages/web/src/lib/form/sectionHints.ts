@@ -56,7 +56,7 @@ export const FORM_SECTION_HINTS = {
   },
   node: {
     runPolicy:
-      'How this activity retries a transient failure, and what of it is kept out of the run log.',
+      'How long one attempt may run, how a transient failure is retried, and what is kept out of the run log.',
   },
   settings: {
     appearance: 'How this browser shows the app; its theme, density and time zone.',

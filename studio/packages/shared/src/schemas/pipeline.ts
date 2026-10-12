@@ -285,7 +285,8 @@ export function callDetaches(call: CallConfig): boolean {
  * keyed off F0's failure `kind`) + F2c (driver durable scheduling via S1's
  * `scheduled_wakeups` outbox); `timeoutSeconds` → F3. This mirrors F9a, which
  * shipped `ActivityDefinition.kind` as honest metadata with a ZERO production
- * delta rather than guessing its consumer's shape.
+ * delta rather than guessing its consumer's shape. (All three consumers have
+ * since shipped — F2b/F2c, and F3 with #1600 C0a — so no knob here is inert.)
  *
  * `secureInput`/`secureOutput` — which spec #1 D4 lists in this object — were
  * held back by F2a and shipped with **F4**, together with the emit-time
@@ -323,11 +324,19 @@ export const NodePolicySchema = z.object({
    * (`StrictNodePolicySchema`), where a bound can move freely in either
    * direction without making a stored row unreadable.
    *
-   * SEAM FOR F3 (a named question, not a discovery): connection-level
-   * `config.timeoutMs` already bounds a single HTTP/LLM exchange
-   * (`connectors/http.ts`, `connectors/llm-shared.ts`). Which one wins, and
-   * whether this bounds the attempt or the whole node, is `timeoutScope` — the
-   * field F9a explicitly declined to declare ahead of its consumer.
+   * ENFORCED since #1600 C0a (#1 F3), by the executor
+   * (`server/src/run/timeout.ts`). It bounds ONE ATTEMPT, from the moment its
+   * adapter starts, and each retry gets a fresh budget (ADF's per-attempt
+   * timeout). Expiry aborts the attempt's signal and ends it
+   * `node.failed{kind:'transient', code:'timeout'}`, so retry applies.
+   * Enforcement is cooperative: an adapter that cannot stop mid-call (a
+   * synchronous SQLite statement, one long Postgres batch) overruns it.
+   * Execution activities only — `validateDoc` refuses it elsewhere.
+   *
+   * A connection-level `config.timeoutMs` still bounds a single HTTP/LLM
+   * exchange (`connectors/http.ts`, `connectors/llm-shared.ts`). Both apply and
+   * the smaller wins; the exchange's own timeout surfaces as a plain connector
+   * `transient` with no `timeout` code.
    */
   timeoutSeconds: z.number().int().positive().optional(),
   /**
@@ -414,8 +423,9 @@ export const DEFAULT_RETRY_INTERVAL_SECONDS = 30;
  *
  * WHY this is a write-path rule and not a `.max()` on `NodePolicySchema`: a
  * range on the read path can only ever be widened, so a ceiling there would be a
- * guess F3 could never take back. Here it costs F3 nothing — a write-path bound
- * can tighten or relax freely, because no stored row becomes unreadable.
+ * guess that could never be taken back. F3 (#1600 C0a) shipped with no bound
+ * beyond this one; a write-path bound can tighten or relax freely, because no
+ * stored row becomes unreadable.
  */
 const TIMEOUT_SECONDS_SANITY_CEILING = 31_536_000;
 

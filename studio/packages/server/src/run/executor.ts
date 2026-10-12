@@ -35,6 +35,7 @@ import {
   isNonOverridableConnectionConfigKey,
 } from '@autonomy-studio/shared';
 import { RUN_CANCELLED_REASON, runCancelledFailure } from './cancel.js';
+import { ACTIVITY_TIMEOUT_REASON, activityTimeoutFailure, armDeadline } from './timeout.js';
 import { getRun } from '../repo/runs.js';
 import { connectionNotReadyReason, getConnection } from '../repo/connections.js';
 import { getDataset } from '../repo/datasets.js';
@@ -131,6 +132,12 @@ export interface ExecutorDeps {
    * clock, mirroring `DriverDeps.now`/`AlarmClockDeps.now`. Injected in tests for
    * determinism. Read only on a LIVE pre-flight (never on replay). */
   now?: () => number;
+  /**
+   * #1600 C0a — the timer seam for `policy.timeoutSeconds`: call `fire` once, `ms`
+   * from now, and return a cancel. Defaults to `armDeadline` (real timers);
+   * injected in tests so an expiry can be driven by hand.
+   */
+  armDeadline?: (ms: number, fire: () => void) => () => void;
 }
 
 /**
@@ -1046,6 +1053,13 @@ export function createExecutor(deps: ExecutorDeps): Executor {
      * reaches the log while it runs.
      */
     emit: (event: EngineEvent) => void,
+    /**
+     * #1600 C0a — the node's `policy.timeoutSeconds`, or `undefined` for none.
+     * The deadline is armed HERE, when the adapter starts, so queue time behind
+     * the global limiter is not counted, and it is cleared in this function's
+     * `finally`, so the whole lifetime of the timer sits in one place.
+     */
+    timeoutSeconds: number | undefined,
   ): Promise<void> {
     // #2 L5 — the per-connection price-table override, parsed ONCE per dispatch
     // (fail-safe: a malformed override → null → the built-in table is used, and
@@ -1108,6 +1122,31 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         ...(usage.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
         ...priceFields,
       };
+    };
+    // #1600 C0a — once the deadline has aborted this attempt, it ends as the
+    // timeout however the adapter then reports the abort: as its own `cancelled`
+    // (every adapter maps an abort to it), a `transient`, a throw, or no terminal
+    // at all. An outcome the adapter still REACHED is kept: a `succeeded` (the
+    // work completed) and a `permanent` failure (a real verdict, which a retry
+    // would only repeat). Cancel and timeout cannot both claim an attempt: an
+    // `AbortController` aborts once, so the first one owns `signal.reason`.
+    const timeoutTerminal =
+      timeoutSeconds === undefined
+        ? undefined
+        : activityTimeoutFailure(runId, nodeId, attemptId, timeoutSeconds);
+    const cancelDeadline =
+      timeoutSeconds === undefined
+        ? undefined
+        : (deps.armDeadline ?? armDeadline)(timeoutSeconds * 1000, () =>
+            controller.abort(ACTIVITY_TIMEOUT_REASON),
+          );
+    /** Emit the timeout terminal if the deadline aborted this attempt; true if it did. */
+    const endedByTimeout = (): boolean => {
+      if (timeoutTerminal === undefined || controller.signal.reason !== ACTIVITY_TIMEOUT_REASON) {
+        return false;
+      }
+      emit(timeoutTerminal);
+      return true;
     };
     try {
       for await (const ev of adapter.runActivity(ctx, secret, secretFields, sinkSecret)) {
@@ -1248,6 +1287,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           // reached, and L6 summed a run cost that silently omitted the exchange —
           // the same silent-loss shape #708 closed at the price-table door.
           if (ev.spendFact !== undefined) emit(meteredEvent(ev.spendFact));
+          if (ev.kind !== 'permanent' && endedByTimeout()) return;
           emit(
             nodeFailed(runId, nodeId, attemptId, {
               error: ev.error,
@@ -1267,6 +1307,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           return;
         }
       }
+      if (endedByTimeout()) return;
       // Stream ended with no terminal — an adapter contract violation.
       emit(
         nodeFailed(runId, nodeId, attemptId, {
@@ -1285,6 +1326,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         emit(runCancelledFailure(runId, nodeId, attemptId));
         return;
       }
+      if (endedByTimeout()) return;
       const message = err instanceof Error ? err.message : String(err);
       // An unexpected throw is an adapter BUG of unknown cause, not a classified
       // failure — adapters signal a real cancel/transient by yielding a terminal
@@ -1300,6 +1342,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       );
       return;
     } finally {
+      cancelDeadline?.();
       controller.abort();
     }
   }
@@ -1877,6 +1920,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           pending.push(ev);
           signal();
         },
+        node.policy?.timeoutSeconds,
       );
     })
       // Captured rather than left rejecting: nothing awaits this promise until

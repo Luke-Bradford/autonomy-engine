@@ -13,7 +13,7 @@ built here, in the engine, and U28 consumes it.
   obvious answer: does the node's failure edge fire, or does the run treat the node as skipped? It is
   a separate design question, and ADF itself offers cancel at run level only. Deferred. Nothing below
   prevents adding it later.
-- **A per-node or per-run TIMEOUT.** `policy.timeoutSeconds` stays F3's (`FAILURE_CODES.TIMEOUT` is
+- **A per-node or per-run TIMEOUT.** (The per-attempt timeout shipped with #1600 C0a and reuses this registry; see the F3 built-block.) `policy.timeoutSeconds` stays F3's (`FAILURE_CODES.TIMEOUT` is
   reserved there). CX builds the run-scoped abort registry a timeout would reuse, and stops there.
 - **Force-kill of an adapter that ignores its signal.** Every shipped adapter honours `ctx.signal`
   (below). One that does not is breaking its contract, and that is the defect to fix. CX does not add

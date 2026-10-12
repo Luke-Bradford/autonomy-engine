@@ -107,14 +107,38 @@ describe('PolicyEditor (#1312)', () => {
     expect(policy()).toEqual({ timeoutSeconds: 60, secureOutput: true, retry: 1 });
   });
 
-  it('a stored timeout is said to be unenforced, and can be removed', () => {
-    const { policy, section } = mount([
-      node('a', 'http_request', { policy: { timeoutSeconds: 40_000_000, retry: 1 } }),
+  it('#1600 C0a — the timeout is a field on an execution activity, written as timeoutSeconds', () => {
+    const { field, policy } = mount([node('a', 'http_request', { policy: { retry: 1 } })]);
+    expect(field('Timeout (seconds)')).toHaveProperty('value', '');
+    enter(field('Timeout (seconds)'), ' 300 ');
+    expect(policy()).toEqual({ retry: 1, timeoutSeconds: 300 });
+    enter(field('Timeout (seconds)'), '');
+    expect(policy()).toEqual({ retry: 1 });
+  });
+
+  it('#1600 C0a — a stored timeout above the write ceiling shows in the field, named, until fixed', () => {
+    const { field, section } = mount([
+      node('a', 'http_request', { policy: { timeoutSeconds: 40_000_000 } }),
     ]);
-    expect(within(section).getByText(/not enforced/)).toBeTruthy();
+    expect(field('Timeout (seconds)')).toHaveProperty('value', '40000000');
+    expect(within(section).getByText(/timeoutSeconds: .*one year/)).toBeTruthy();
+    expect(within(section).queryByText(/not enforced/)).toBeNull();
+  });
+
+  it('#1600 C0a — no timeout field where nothing would enforce it; a stored one is refused and removable', () => {
+    const { policy, section } = mount([
+      node('a', 'webhook', {
+        config: { timeoutSeconds: '${600}' },
+        policy: { timeoutSeconds: 60, retry: 1 },
+      }),
+    ]);
+    expect(within(section).queryByLabelText('Timeout (seconds)')).toBeNull();
+    expect(
+      within(section).getByText(/policy\.timeoutSeconds is not supported on 'webhook'/),
+    ).toBeTruthy();
     fireEvent.click(within(section).getByRole('button', { name: 'Remove the timeout' }));
     expect(policy()).toEqual({ retry: 1 });
-    expect(within(section).queryByText(/not enforced/)).toBeNull();
+    expect(within(section).queryByText(/timeoutSeconds/)).toBeNull();
   });
 
   it('explains why a secure flag is refused on an if node, by name', () => {
