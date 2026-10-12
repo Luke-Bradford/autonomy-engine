@@ -13,9 +13,15 @@ import { toStr } from './functions.js';
 import type { ResolvedUserProperty } from './types.js';
 
 function bounded(text: string): { text: string; truncated?: true } {
-  return text.length > USER_PROPERTY_VALUE_MAX_CHARS
-    ? { text: text.slice(0, USER_PROPERTY_VALUE_MAX_CHARS), truncated: true }
-    : { text };
+  if (text.length <= USER_PROPERTY_VALUE_MAX_CHARS) return { text };
+  // Never end on the first half of a surrogate pair: a lone surrogate is not
+  // text, and it would be written into the run log.
+  const last = text.charCodeAt(USER_PROPERTY_VALUE_MAX_CHARS - 1);
+  const end =
+    last >= 0xd800 && last <= 0xdbff
+      ? USER_PROPERTY_VALUE_MAX_CHARS - 1
+      : USER_PROPERTY_VALUE_MAX_CHARS;
+  return { text: text.slice(0, end), truncated: true };
 }
 
 /**

@@ -81,6 +81,17 @@ describe('#1600 C0d — user properties resolved at dispatch', () => {
 });
 
 describe('resolveUserProperties', () => {
+  it('never cuts a surrogate pair in half', () => {
+    // An emoji (two UTF-16 units) straddling the bound is dropped whole.
+    const text = 'x'.repeat(USER_PROPERTY_VALUE_MAX_CHARS - 1) + '😀' + 'tail';
+    const [prop] = resolveUserProperties([{ name: 'v', value: '' }], () => text);
+    expect(prop).toEqual({
+      name: 'v',
+      value: 'x'.repeat(USER_PROPERTY_VALUE_MAX_CHARS - 1),
+      truncated: true,
+    });
+  });
+
   it('records a value that cannot be written as text as an error, never throwing', () => {
     // `JSON.stringify` throws on a bigint: that throw must not escape to `prepFailure`.
     const [prop] = resolveUserProperties([{ name: 'n', value: '' }], () => ({ n: 10n }));
