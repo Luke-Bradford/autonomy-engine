@@ -2856,6 +2856,15 @@ describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
     });
   });
 
+  it('#1600 C0b — a ${} in a DESCRIPTION is prose, not a read, and does not refuse the paste', () => {
+    const s = loaded();
+    s.getState().setSelection([{ kind: 'node', id: 'n_c' }]);
+    s.getState().updateNodeConfig('n_c', { prompt: 'plain' });
+    s.getState().setNodeDescription('n_c', 'Summarises ${nodes.n_a.output.body}');
+    s.getState().copySelection('pl_1');
+    expect(otherPipeline().getState().pasteClipboard('pl_2').ok).toBe(true);
+  });
+
   it('refuses a read ANYWHERE in the node — a call param, not only config', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(

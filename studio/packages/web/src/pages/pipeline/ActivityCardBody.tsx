@@ -29,6 +29,8 @@ export function ActivityCardBody({
    */
   description?: string | null;
 }) {
+  // Whitespace alone describes nothing; it must not draw a blank paragraph.
+  const about = description?.trim() ? description : undefined;
   return (
     <>
       {/* The glyph is DECORATIVE and says so: the name beside it is the
@@ -44,8 +46,8 @@ export function ActivityCardBody({
       <span className="flow-node-body">
         <strong
           className="flow-node-title"
-          title={description ? `${title}\n\n${description}` : title}
-          aria-description={description || undefined}
+          title={about === undefined ? title : `${title}\n\n${about}`}
+          aria-description={about}
         >
           {title}
         </strong>

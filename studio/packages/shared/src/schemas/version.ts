@@ -493,8 +493,9 @@
 // reducer and the readiness gate never look at it — so a pre-C0b build strips it
 // and dispatches the doc exactly as authored: descriptive metadata lost, nothing
 // mis-run. The inert shape M1, M3 and #1477 did not bump for. Not evaluated, so
-// a `${nodes.<id>…}` inside one is text; `remapNodeRefs` still rewrites it on a
-// duplicate or paste, which keeps such a mention pointing at the copied node.
+// a `${nodes.<id>…}` inside one is text: the paste guard does not count it as a
+// read (`uncopiedReads`), while `remapNodeRefs` still rewrites it on a duplicate
+// or paste, which keeps such a mention pointing at the copied node.
 export const CATALOG_VERSION = 33;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did

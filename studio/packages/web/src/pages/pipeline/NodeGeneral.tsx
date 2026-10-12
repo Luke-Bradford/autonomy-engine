@@ -30,7 +30,7 @@ export function NodeGeneral({
   );
   return (
     <>
-      <Section heading="Activity" help={FORM_SECTION_HINTS.node.activity}>
+      <Section heading="Basics" help={FORM_SECTION_HINTS.node.basics}>
         <LabelledControl label="Description">
           {(id) => (
             <AutoGrowTextarea

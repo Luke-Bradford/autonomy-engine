@@ -35,9 +35,9 @@ test('a description typed on the General tab survives a save and reload, and is 
 
   await nodeById(page, 'w').click();
   await properties(page).getByRole('tab', { name: 'General' }).click();
-  const section = properties(page).getByRole('group', { name: 'Activity' });
+  const section = properties(page).getByRole('group', { name: 'Basics' });
   await expect(section).toHaveAccessibleDescription(
-    'What this activity is for, in your words; it shows on hover on the canvas and in the monitor.',
+    'What this activity is for, shown on hover on the canvas and in the monitor.',
   );
   const field = section.getByLabel('Activity description');
   await expect(field).toHaveAttribute('maxlength', '4000');
@@ -55,7 +55,7 @@ test('a description typed on the General tab survives a save and reload, and is 
   expect(latest.nodes[0]?.description).toBe(TEXT);
 
   // A reload re-fetches, so what renders is what persisted.
-  await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
+  await page.reload();
   await page.locator('.react-flow__renderer').waitFor();
   await expect(title).toHaveAttribute('title', `Wait 1\n\n${TEXT}`);
   await nodeById(page, 'w').click();

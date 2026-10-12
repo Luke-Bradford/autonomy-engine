@@ -683,7 +683,11 @@ function uncopiedReads(
       ...target.containers.map((c) => c.id),
     ]),
   ].filter((id) => !copied.has(id));
-  const read = new Set(carried.flatMap((v) => referencedNodeIds(v, outside)));
+  // #1600 C0b — a description is prose: a `${nodes.x}` in one is never
+  // evaluated, so it reads nothing and must not refuse the paste.
+  const read = new Set(
+    carried.flatMap((v) => referencedNodeIds({ ...v, description: undefined }, outside)),
+  );
   return outside.filter((id) => read.has(id));
 }
 

@@ -185,7 +185,8 @@ export function NodeActivityPanel({
           </button>
         </div>
       </div>
-      {description ? <p className="page-hint">{description}</p> : null}
+      {/* The author's line breaks are kept (`white-space: pre-wrap`). */}
+      {description?.trim() ? <p className="page-hint node-description">{description}</p> : null}
 
       <p>
         {/* U25 — one status vocabulary for the whole Monitor: the same word
