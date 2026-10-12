@@ -104,6 +104,10 @@ export interface SeedContainer {
   items?: string;
   batchCount?: number;
   join?: 'all' | 'any';
+  /** #1600 C0e — the container's General fields. */
+  description?: string;
+  state?: 'inactive';
+  onInactiveMarkAs?: 'success' | 'failure' | 'skipped';
 }
 
 /**
