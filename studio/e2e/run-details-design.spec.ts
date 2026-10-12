@@ -4,6 +4,7 @@ import {
   BODY_SIZE,
   computedStyles as styles,
   DENSITIES,
+  DESIGN_RUNS,
   expectAppearance,
   expectControlHeights,
   ICON_SIZE,
@@ -28,17 +29,12 @@ import { offRampText } from './support/typeRamp';
 
 type Density = (typeof DENSITIES)[number];
 
-const RUNS = [
-  { density: 'compact', theme: 'light' },
-  { density: 'comfortable', theme: 'dark' },
-] as const;
-
 const BODY = (d: Density) => `${BODY_SIZE[d]}px`;
 
 const DEPTH_1 = ".activity-runs__table tr[data-depth='1'] > td:first-child";
 const DEPTH_2 = ".activity-runs__table tr[data-depth='2'] > td:first-child";
 
-for (const { density, theme } of RUNS) {
+for (const { density, theme } of DESIGN_RUNS) {
   const d = density as Density;
 
   test(`#1594 OR40 S6o — the run page's banner and activity runs, and the Runs page's spend, on the ramp and the scale (${density} ${theme})`, async ({

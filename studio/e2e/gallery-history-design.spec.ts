@@ -1,11 +1,14 @@
 import { expect, test, type Page } from '@playwright/test';
 import { allCapsText } from './support/allCaps';
 import {
-  CONTROL_H,
   computedStyles as styles,
+  CONTROL_H,
   DENSITIES,
+  DESIGN_RUNS,
   expectAppearance,
   ICON_SIZE,
+  PAD,
+  pads,
   preferAppearance,
   ROW_H,
 } from './support/appearance';
@@ -30,21 +33,6 @@ import { offRampText } from './support/typeRamp';
  */
 
 type Density = (typeof DENSITIES)[number];
-
-const RUNS = [
-  { density: 'compact', theme: 'light' },
-  { density: 'comfortable', theme: 'dark' },
-] as const;
-
-const PAD = ['padding-top', 'padding-right', 'padding-bottom', 'padding-left'] as const;
-
-/** All four paddings, as one string per side, for one `toMatchObject`. */
-const pads = (top: number, right: number, bottom = top, left = right) => ({
-  'padding-top': `${top}px`,
-  'padding-right': `${right}px`,
-  'padding-bottom': `${bottom}px`,
-  'padding-left': `${left}px`,
-});
 
 const V1: SeedDoc = {
   nodes: [
@@ -74,7 +62,7 @@ function menuOffCentre(page: Page) {
   );
 }
 
-for (const { density, theme } of RUNS) {
+for (const { density, theme } of DESIGN_RUNS) {
   const d = density as Density;
 
   test(`#1594 OR40 S6s — the kind gallery and the version history on the ramp and the scale (${density} ${theme})`, async ({
@@ -110,7 +98,7 @@ for (const { density, theme } of RUNS) {
     const paste = gallery.getByRole('textbox', { name: 'Paste a path or URL' });
     await paste.fill('not a path or a url');
     await paste.press('Enter');
-    await expect(gallery.locator('.kind-gallery__reason')).not.toBeEmpty();
+    await expect(gallery.locator('.kind-gallery__paste .kind-gallery__reason')).not.toBeEmpty();
 
     const g = await styles(
       page,

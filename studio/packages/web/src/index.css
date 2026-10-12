@@ -1630,7 +1630,7 @@ td button + button {
   box-sizing: border-box;
 }
 
-/* Paste-to-detect, above the search: one 28px row, the field stretches. */
+/* Paste-to-detect, above the search: one control-height row, the field stretches. */
 .kind-gallery__paste {
   display: flex;
   flex-wrap: wrap;
@@ -6173,7 +6173,7 @@ button.danger {
 .version-history-tag {
   font-size: var(--type-caption-size);
   padding: 0 var(--space-1);
-  border: 1px solid var(--border);
+  border: var(--border-width) solid var(--border);
   border-radius: var(--radius-pill);
   color: var(--muted);
 }

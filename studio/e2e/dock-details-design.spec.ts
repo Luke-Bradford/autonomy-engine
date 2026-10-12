@@ -4,6 +4,7 @@ import { runFromEditor } from './support/canvas';
 import {
   computedStyles as styles,
   DENSITIES,
+  DESIGN_RUNS,
   drawnHeights,
   expectAppearance,
   expectControlHeights,
@@ -26,11 +27,6 @@ import { offRampText } from './support/typeRamp';
  */
 
 type Density = (typeof DENSITIES)[number];
-
-const RUNS = [
-  { density: 'compact', theme: 'light' },
-  { density: 'comfortable', theme: 'dark' },
-] as const;
 
 const DOCK = '.property-dock';
 
@@ -67,7 +63,7 @@ async function expectListBox(page: Page, label: string): Promise<void> {
   expect(list?.['border-top-left-radius'], label).toBe('6px');
 }
 
-for (const { density, theme } of RUNS) {
+for (const { density, theme } of DESIGN_RUNS) {
   const d = density as Density;
 
   test(`#1594 OR40 S6m — row tables, the expression lists and the ? on the scale (${density} ${theme})`, async ({

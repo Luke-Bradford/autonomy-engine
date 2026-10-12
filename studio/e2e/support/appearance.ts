@@ -40,6 +40,26 @@ export const ICON_SIZE: Record<(typeof DENSITIES)[number], number> = {
 export const NAV_ICON_SIZE = 20;
 
 /**
+ * The two appearances an OR40 design spec measures at: the default (compact
+ * light) and its opposite on both axes (comfortable dark).
+ */
+export const DESIGN_RUNS = [
+  { density: 'compact', theme: 'light' },
+  { density: 'comfortable', theme: 'dark' },
+] as const;
+
+/** The four padding properties, for {@link computedStyles}. */
+export const PAD = ['padding-top', 'padding-right', 'padding-bottom', 'padding-left'] as const;
+
+/** All four paddings, as one string per side, for one `toMatchObject`. */
+export const pads = (top: number, right: number, bottom = top, left = right) => ({
+  'padding-top': `${String(top)}px`,
+  'padding-right': `${String(right)}px`,
+  'padding-bottom': `${String(bottom)}px`,
+  'padding-left': `${String(left)}px`,
+});
+
+/**
  * The viewer's stored preferences, as the shipped app reads them. Hard-coded
  * rather than imported from `uiStore.ts`, for the reason `theme.ts` gives for
  * `FLUENT_ROOT`: a spec observes the shipped contract from outside, so a renamed

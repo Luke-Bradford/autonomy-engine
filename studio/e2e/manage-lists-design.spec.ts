@@ -1,7 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
-import { CONTROL_H, DENSITIES, expectAppearance, preferAppearance } from './support/appearance';
+import {
+  CONTROL_H,
+  DENSITIES,
+  DESIGN_RUNS,
+  expectAppearance,
+  preferAppearance,
+} from './support/appearance';
 import { expectInlineRow } from './support/inlineRow';
 import { offRampText } from './support/typeRamp';
 
@@ -39,11 +45,6 @@ const PAGES = [
     create: 'New global parameter',
     imports: true,
   },
-] as const;
-
-const RUNS = [
-  { density: 'compact', theme: 'light' },
-  { density: 'comfortable', theme: 'dark' },
 ] as const;
 
 /** The page's shape and measurements, read in ONE evaluate. */
@@ -107,7 +108,7 @@ function measure(page: Page) {
   });
 }
 
-for (const { density, theme } of RUNS) {
+for (const { density, theme } of DESIGN_RUNS) {
   test(`#1594 OR40 S6d/S6e — the Manage lists and Pipelines: no prose, the title's ?, Import as a section (${density} ${theme})`, async ({
     page,
   }) => {

@@ -1,10 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import {
-  CONTROL_H,
   computedStyles as styles,
+  CONTROL_H,
   DENSITIES,
+  DESIGN_RUNS,
   expectAppearance,
+  PAD,
+  pads,
   preferAppearance,
 } from './support/appearance';
 import { triggerForm } from './support/panels';
@@ -26,21 +29,6 @@ import { offRampText } from './support/typeRamp';
  */
 
 type Density = (typeof DENSITIES)[number];
-
-const RUNS = [
-  { density: 'compact', theme: 'light' },
-  { density: 'comfortable', theme: 'dark' },
-] as const;
-
-const PAD = ['padding-top', 'padding-right', 'padding-bottom', 'padding-left'] as const;
-
-/** All four paddings, as one string per side, for one `toMatchObject`. */
-const pads = (top: number, right: number, bottom = top, left = right) => ({
-  'padding-top': `${top}px`,
-  'padding-right': `${right}px`,
-  'padding-bottom': `${bottom}px`,
-  'padding-left': `${left}px`,
-});
 
 /** The drawer's header row: its height, and the Close button's centre against the title's. */
 function headerRow(page: Page) {
@@ -92,7 +80,7 @@ async function expectDrawerChrome(page: Page, d: Density): Promise<void> {
   expect(await offRampText(page, d, '.form-drawer'), 'drawer: ramp').toEqual([]);
 }
 
-for (const { density, theme } of RUNS) {
+for (const { density, theme } of DESIGN_RUNS) {
   const d = density as Density;
 
   test(`#1594 OR40 S6q — the drawers and the confirmation dialog on the ramp and the scale (${density} ${theme})`, async ({

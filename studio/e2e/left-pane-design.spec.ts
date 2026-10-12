@@ -4,10 +4,11 @@ import { fluentRootReady } from './support/theme';
 import {
   CONTROL_H,
   DENSITIES,
-  ROW_H,
+  DESIGN_RUNS,
   drawnHeights,
   expectAppearance,
   preferAppearance,
+  ROW_H,
 } from './support/appearance';
 import { openRowMenu, pane, tree } from './support/authorPane';
 import { expectInlineRow, inlineItems } from './support/inlineRow';
@@ -31,11 +32,6 @@ import { toolbox as toolboxRegion } from './support/canvasGraph';
  */
 
 type Density = (typeof DENSITIES)[number];
-
-const RUNS = [
-  { density: 'compact', theme: 'light' },
-  { density: 'comfortable', theme: 'dark' },
-] as const;
 
 /** The left edge of an element's first drawn text, which is where a reader's eye lands. */
 function textLefts(page: Page, selector: string) {
@@ -74,7 +70,7 @@ function left(page: Page, selector: string) {
     .evaluate((el) => el.getBoundingClientRect().left);
 }
 
-for (const { density, theme } of RUNS) {
+for (const { density, theme } of DESIGN_RUNS) {
   const d = density as Density;
 
   test(`#1594 OR40 S6i — the hub pane and Factory resources: on the ramp, rows and controls to size, one left edge (${density} ${theme})`, async ({

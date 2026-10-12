@@ -1,7 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
-import { CONTROL_H, DENSITIES, expectAppearance, preferAppearance } from './support/appearance';
+import {
+  CONTROL_H,
+  DENSITIES,
+  DESIGN_RUNS,
+  expectAppearance,
+  preferAppearance,
+} from './support/appearance';
 import { expectInlineRow } from './support/inlineRow';
 import { offRampText } from './support/typeRamp';
 import { clippedHeaderLabels } from './support/clippedHeaders';
@@ -33,11 +39,6 @@ import { fireAndSettle, seedVersion } from './support/seedDoc';
 type Density = (typeof DENSITIES)[number];
 
 test.use({ timezoneId: 'Asia/Kolkata' });
-
-const RUNS = [
-  { density: 'compact', theme: 'light' },
-  { density: 'comfortable', theme: 'dark' },
-] as const;
 
 /** Every measurement in ONE evaluate. */
 function measure(page: Page) {
@@ -107,7 +108,7 @@ function measure(page: Page) {
   });
 }
 
-for (const { density, theme } of RUNS) {
+for (const { density, theme } of DESIGN_RUNS) {
   test(`#1594 OR40 S6f — the Runs list: the title's ?, no clipped header, on the ramp, one row of filters (${density} ${theme})`, async ({
     page,
   }) => {

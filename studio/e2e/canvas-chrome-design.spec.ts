@@ -2,9 +2,10 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 import {
-  CONTROL_H,
   computedStyles as styles,
+  CONTROL_H,
   DENSITIES,
+  DESIGN_RUNS,
   drawnHeights,
   expectAppearance,
   expectControlHeights,
@@ -28,11 +29,6 @@ import { mintVersion, nodeById, seedVersion, type SeedDoc } from './support/seed
  */
 
 type Density = (typeof DENSITIES)[number];
-
-const RUNS = [
-  { density: 'compact', theme: 'light' },
-  { density: 'comfortable', theme: 'dark' },
-] as const;
 
 const EMPTY = '.canvas-empty';
 const CARD = '.canvas-empty__card';
@@ -71,7 +67,7 @@ async function openTwoVersions(page: Page, name: string): Promise<void> {
   await viewportSettled(page);
 }
 
-for (const { density, theme } of RUNS) {
+for (const { density, theme } of DESIGN_RUNS) {
   const d = density as Density;
 
   test(`#1594 OR40 S6k — the canvas chrome: guide, advisory, minimap, preview, refusal and leave prompt on the ramp and the scale (${density} ${theme})`, async ({

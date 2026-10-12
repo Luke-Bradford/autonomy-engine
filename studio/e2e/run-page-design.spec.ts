@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
-import { DENSITIES, expectAppearance, preferAppearance } from './support/appearance';
+import { DENSITIES, DESIGN_RUNS, expectAppearance, preferAppearance } from './support/appearance';
 import { expectOnRampWithEachHelp } from './support/typeRamp';
 import { fireAndSettle, seedVersion, type SeedDoc } from './support/seedDoc';
 import { openRunView } from './support/panels';
@@ -26,11 +26,6 @@ import { openRunView } from './support/panels';
 
 type Density = (typeof DENSITIES)[number];
 
-const RUNS = [
-  { density: 'compact', theme: 'light' },
-  { density: 'comfortable', theme: 'dark' },
-] as const;
-
 /** Each view, and the sections it must show. */
 const VIEWS = [
   { view: 'Gantt', sections: ['Timeline'] },
@@ -48,7 +43,7 @@ function sideways(page: Page) {
   });
 }
 
-for (const { density, theme } of RUNS) {
+for (const { density, theme } of DESIGN_RUNS) {
   test(`#1594 OR40 S6g — the run page: every view in Sections, on the ramp with each ? open, no sideways scroll (${density} ${theme})`, async ({
     page,
   }) => {
