@@ -51,7 +51,7 @@ describe('#1600 C0a — armDeadline', () => {
 });
 
 describe('#1600 C0a — activityTimeoutFailure', () => {
-  it('is D4\'s transient failure with the reserved timeout code', () => {
+  it("is D4's transient failure with the reserved timeout code", () => {
     expect(activityTimeoutFailure('r', 'n', 'n#1', 90)).toEqual({
       type: 'node.failed',
       runId: 'r',

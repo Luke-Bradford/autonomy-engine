@@ -4846,7 +4846,10 @@ function validateTimeoutPolicy(node: Node, errors: string[]): void {
   const refuse = (where: string, why: string) =>
     errors.push(`node '${node.id}': policy.timeoutSeconds is not supported on ${where} — ${why}`);
   if (node.call !== undefined) {
-    refuse('a pipeline call', "the child is a run of its own; set timeouts on the child pipeline's activities");
+    refuse(
+      'a pipeline call',
+      "the child is a run of its own; set timeouts on the child pipeline's activities",
+    );
     return;
   }
   if (getActivity(node.type)?.kind !== 'control') return;

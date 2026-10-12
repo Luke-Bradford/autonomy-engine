@@ -14,7 +14,9 @@ function node(id: string, over: Partial<Node>): Node {
   return { id, type: 'agent_task', config: { task: 't' }, position: { x: seq, y: 0 }, ...over };
 }
 const errs = (n: Node) =>
-  validatePipelineDoc({ params: [], variables: [], nodes: [n], edges: [], containers: [] }).join('\n');
+  validatePipelineDoc({ params: [], variables: [], nodes: [n], edges: [], containers: [] }).join(
+    '\n',
+  );
 const TIMEOUT = { policy: { timeoutSeconds: 60 } } as const;
 
 describe('#1600 C0a — validateDoc refuses a timeout nothing would enforce', () => {
@@ -44,7 +46,9 @@ describe('#1600 C0a — validateDoc refuses a timeout nothing would enforce', ()
       call: { pipelineVersionId: 'pv2', params: {} },
       ...TIMEOUT,
     });
-    expect(errs(n)).toContain("node 'c': policy.timeoutSeconds is not supported on a pipeline call");
+    expect(errs(n)).toContain(
+      "node 'c': policy.timeoutSeconds is not supported on a pipeline call",
+    );
   });
 
   it('accepts it on an execution activity', () => {

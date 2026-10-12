@@ -5183,7 +5183,7 @@ describe('createExecutor — #1600 C0a: the activity timeout', () => {
     error: 'activity timed out after 90s',
   };
 
-  it("an adapter that reports the abort as its own `cancelled` failure ends `transient` / `timeout`", async () => {
+  it('an adapter that reports the abort as its own `cancelled` failure ends `transient` / `timeout`', async () => {
     const { db, run, state } = await runTimedOut(async function* (ctx) {
       await aborted(ctx.signal);
       yield { type: 'failed', kind: 'cancelled', error: 'http request aborted' };
@@ -5259,7 +5259,7 @@ describe('createExecutor — #1600 C0a: the activity timeout', () => {
     expect(String(signal?.reason)).not.toContain('activityTimedOut');
   });
 
-  it("a cancel that lands first owns the outcome: the attempt fails `cancelled`, and a later expiry changes nothing", async () => {
+  it('a cancel that lands first owns the outcome: the attempt fails `cancelled`, and a later expiry changes nothing', async () => {
     const db = freshDb().db;
     const connId = await seedConnection(db, 'http', {}, null);
     const run = seedRun(db, seedVersion(db, [timedNode('n1', connId, 90)]));

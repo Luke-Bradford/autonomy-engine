@@ -76,9 +76,9 @@ test.describe('#1312 — node run policy editor', () => {
     await page.locator('.react-flow__renderer').waitFor();
     await nodeById(page, 'a').click();
     await openGeneralTab(page);
-    await expect(
-      policySection(page).getByLabel('Timeout (seconds)', { exact: true }),
-    ).toHaveValue('300');
+    await expect(policySection(page).getByLabel('Timeout (seconds)', { exact: true })).toHaveValue(
+      '300',
+    );
     await expect(policySection(page).getByLabel('Retries', { exact: true })).toHaveValue('2');
     await expect(
       policySection(page).getByLabel('Retry interval (seconds)', { exact: true }),
