@@ -1600,20 +1600,20 @@ td button + button {
   max-width: 100%;
 }
 
-/* #1396 — a kind shown as its name with an icon: the glyph is unsized, so it
-   takes the text's size and a table row is no taller for it. Muted, so the name
-   stays the thing read. */
+/* #1396 — a kind shown as its name with an icon: the glyph at the icon size,
+   which a table row's height already allows for. Muted, so the name stays the
+   thing read. */
 .kind-name {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-1);
 }
 
 .kind-icon {
   display: inline-flex;
   flex: none;
   color: var(--muted);
-  font-size: 1.1em;
+  font-size: var(--icon-size);
 }
 
 /* #1477 — the New-connection kind gallery (lib/ConnectionKindGallery). Two
@@ -1622,7 +1622,7 @@ td button + button {
 .kind-gallery {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .kind-gallery__search input {
@@ -1630,11 +1630,11 @@ td button + button {
   box-sizing: border-box;
 }
 
-/* Paste-to-detect, above the search: one 28px row, the field stretches. */
+/* Paste-to-detect, above the search: one control-height row, the field stretches. */
 .kind-gallery__paste {
   display: flex;
   flex-wrap: wrap;
-  gap: 0 8px;
+  gap: 0 var(--space-2);
 }
 
 .kind-gallery__paste input {
@@ -1658,20 +1658,20 @@ td button + button {
 
 /* Empty, the live region takes no height; it stays rendered so it announces. */
 .kind-gallery__paste .kind-gallery__reason:not(:empty) {
-  margin-top: 4px;
+  margin-top: var(--space-1);
 }
 
 .kind-gallery__group h3 {
-  margin: 0 0 4px;
-  font-size: 12px;
-  font-weight: 600;
+  margin: 0 0 var(--space-1);
+  font: var(--type-caption);
+  font-weight: var(--weight-strong);
   color: var(--muted);
 }
 
 .kind-gallery__tiles {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px;
+  gap: var(--space-1);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1680,7 +1680,7 @@ td button + button {
 .kind-gallery__tiles li {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
 }
 
@@ -1688,17 +1688,19 @@ td button + button {
   display: flex;
   align-items: center;
   width: 100%;
-  min-height: 28px;
-  padding: 4px 8px;
-  font-size: 13px;
-  font-weight: 400;
+  min-height: var(--control-h);
+  padding: var(--space-1) var(--space-2);
+  /* Size and weight only: the button's normal line height keeps a one-line
+     tile at the control height, which the body type's 20px line would not. */
+  font-size: var(--type-body-size);
+  font-weight: var(--weight-regular);
   text-align: left;
 }
 
 .kind-gallery__reason,
 .kind-gallery__empty {
   margin: 0;
-  font-size: 12px;
+  font: var(--type-caption);
   color: var(--muted);
 }
 
@@ -1707,7 +1709,7 @@ td button + button {
 .kind-select {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-2);
 }
 
 .kind-select > select {
@@ -1879,7 +1881,8 @@ button.danger {
 }
 
 .activity-toolbox,
-.property-panel {
+.property-panel,
+.version-history {
   /* #1477 — named, so the pinned header can reach across it. */
   --property-panel-pad: var(--space-3);
   background: var(--panel);
@@ -1899,7 +1902,8 @@ button.danger {
 }
 
 .activity-toolbox h2,
-.property-panel h2 {
+.property-panel h2,
+.version-history h2 {
   margin: 0;
   /* #1594 OR40 S6h — no size of its own: the ramp's h2 (the section type). */
 }
@@ -6112,23 +6116,10 @@ button.danger {
   flex: 0 1 clamp(240px, 22vw, 300px);
   /* Yields to `.canvas-grid`'s floor first, down to a still-readable list. */
   min-width: 180px;
-  display: flex;
-  flex-direction: column;
   min-height: 0;
   overflow-y: auto;
-  padding: 0.5rem;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-
-.version-history__header {
-  margin-bottom: 0.25rem;
-}
-
-.version-history__header h2 {
-  margin: 0;
-  font-size: 0.9rem;
+  /* #1594 OR40 S6s — its panel, padding, gap and heading are the Activities
+     column's (the rule shared with `.activity-toolbox`). */
 }
 
 .version-history-list {
@@ -6137,7 +6128,7 @@ button.danger {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: var(--space-1);
 }
 
 .version-history-row {
@@ -6147,14 +6138,20 @@ button.danger {
      rather than being squeezed into one line. */
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 0.5rem;
-  padding: 0.4rem 0.5rem;
+  gap: var(--space-1) var(--space-2);
+  /* No top padding: the first line is the version number's control-height
+     line, so the row's ⋯ beside it lines up by construction. */
+  padding: 0 var(--space-2) var(--space-1);
   text-align: left;
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-control);
   color: var(--text);
   cursor: pointer;
+}
+
+.version-history-row > strong {
+  line-height: var(--control-h);
 }
 
 .version-history-row:focus-visible {
@@ -6175,16 +6172,16 @@ button.danger {
 
 .version-history-tag {
   font-size: var(--type-caption-size);
-  padding: 0.05rem 0.35rem;
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  padding: 0 var(--space-1);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-pill);
   color: var(--muted);
 }
 
 .version-history-when,
 .version-history-shape {
   color: var(--muted);
-  font-size: 0.8rem;
+  font-size: var(--type-caption-size);
 }
 
 /* Pushes the shape summary to the right edge, so the version numbers and the
@@ -6198,7 +6195,7 @@ button.danger {
 .version-history-item__line {
   display: flex;
   align-items: flex-start;
-  gap: 0.15rem;
+  gap: var(--space-1);
 }
 
 .version-history-item__line .version-history-row {
@@ -6208,8 +6205,9 @@ button.danger {
 
 .version-history-item__line .row-menu__trigger {
   flex: 0 0 auto;
-  /* Level with the row's first line, which has 0.4rem of padding above it. */
-  margin-top: 0.15rem;
+  /* Level with the row's first line: both are a control tall, and the row's
+     line starts inside its border. */
+  margin-top: var(--border-width);
   color: var(--text);
 }
 
@@ -6224,8 +6222,8 @@ button.danger {
 }
 
 .version-history-clone-status {
-  margin: 0.15rem 0.5rem 0.25rem;
-  font-size: 12px;
+  margin: 0 var(--space-2) var(--space-1);
+  font: var(--type-caption);
   overflow-wrap: anywhere;
 }
 

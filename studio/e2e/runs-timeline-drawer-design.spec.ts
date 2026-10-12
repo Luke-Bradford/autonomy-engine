@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
-import { DENSITIES, expectAppearance, preferAppearance } from './support/appearance';
+import { DENSITIES, DESIGN_RUNS, expectAppearance, preferAppearance } from './support/appearance';
 import { expectOnRampWithEachHelp, offRampText } from './support/typeRamp';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
 import { seedConnection } from './support/seedResources';
@@ -25,11 +25,6 @@ import { seedConnection } from './support/seedResources';
 
 type Density = (typeof DENSITIES)[number];
 
-const RUNS = [
-  { density: 'compact', theme: 'light' },
-  { density: 'comfortable', theme: 'dark' },
-] as const;
-
 const DRAWER = '#run-detail-drawer';
 const TABS = ['Input', 'Output', 'Error', 'Logs'] as const;
 
@@ -42,7 +37,7 @@ function sideways(page: Page) {
   });
 }
 
-for (const { density, theme } of RUNS) {
+for (const { density, theme } of DESIGN_RUNS) {
   test(`#1594 OR40 S6h — the cross-run timeline and the run drawer: Sections, on the ramp with each ? open, no sideways scroll (${density} ${theme})`, async ({
     page,
   }) => {

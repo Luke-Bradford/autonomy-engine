@@ -4,6 +4,7 @@ import {
   BODY_SIZE,
   computedStyles as styles,
   DENSITIES,
+  DESIGN_RUNS,
   expectAppearance,
   NAV_ICON_SIZE,
   preferAppearance,
@@ -25,11 +26,6 @@ import { offRampText } from './support/typeRamp';
  */
 
 type Density = (typeof DENSITIES)[number];
-
-const RUNS = [
-  { density: 'compact', theme: 'light' },
-  { density: 'comfortable', theme: 'dark' },
-] as const;
 
 const BODY = (d: Density) => `${BODY_SIZE[d]}px`;
 
@@ -79,7 +75,7 @@ function workspaceBoxes(page: Page) {
   });
 }
 
-for (const { density, theme } of RUNS) {
+for (const { density, theme } of DESIGN_RUNS) {
   const d = density as Density;
 
   test(`#1594 OR40 S6p — the shell on the ramp and the scale, the banner in its own row (${density} ${theme})`, async ({

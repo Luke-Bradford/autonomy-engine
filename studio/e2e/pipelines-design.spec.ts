@@ -1,7 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
-import { CONTROL_H, DENSITIES, expectAppearance, preferAppearance } from './support/appearance';
+import {
+  CONTROL_H,
+  DENSITIES,
+  DESIGN_RUNS,
+  expectAppearance,
+  preferAppearance,
+} from './support/appearance';
 import { expectInlineRow } from './support/inlineRow';
 import { offRampText } from './support/typeRamp';
 import { clippedHeaderLabels } from './support/clippedHeaders';
@@ -25,11 +31,6 @@ type Density = (typeof DENSITIES)[number];
 
 /** Read as the shipped app reads it: a renamed key fails here (see `appearance.ts`). */
 const HIDDEN_KEY = 'autonomy-studio.pipelines-grid-hidden';
-
-const RUNS = [
-  { density: 'compact', theme: 'light' },
-  { density: 'comfortable', theme: 'dark' },
-] as const;
 
 function measure(page: Page) {
   return page.evaluate(() => {
@@ -68,7 +69,7 @@ function measure(page: Page) {
   });
 }
 
-for (const { density, theme } of RUNS) {
+for (const { density, theme } of DESIGN_RUNS) {
   test(`#1594 OR40 S6e — the Pipelines grid and filter bar: no clipped header, on the ramp, one row of controls (${density} ${theme})`, async ({
     page,
   }) => {

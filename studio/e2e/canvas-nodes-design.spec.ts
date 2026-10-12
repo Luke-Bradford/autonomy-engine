@@ -5,6 +5,7 @@ import { runFromEditor } from './support/canvas';
 import {
   computedStyles as styles,
   DENSITIES,
+  DESIGN_RUNS,
   expectAppearance,
   ICON_SIZE,
   preferAppearance,
@@ -33,15 +34,10 @@ import { offRampText } from './support/typeRamp';
 
 type Density = (typeof DENSITIES)[number];
 
-const RUNS = [
-  { density: 'compact', theme: 'light' },
-  { density: 'comfortable', theme: 'dark' },
-] as const;
-
 const CANVAS = '.canvas-wrap';
 const RUN_CANVAS = '[data-testid="run-canvas"]';
 
-for (const { density, theme } of RUNS) {
+for (const { density, theme } of DESIGN_RUNS) {
   const d = density as Density;
 
   test(`#1594 OR40 S6n — the authoring canvas's cards, ports and containers on the ramp and the scale (${density} ${theme})`, async ({

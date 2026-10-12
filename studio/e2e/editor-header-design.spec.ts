@@ -2,9 +2,10 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady, resolvedPaletteColor } from './support/theme';
 import {
-  CONTROL_H,
   computedStyles as styles,
+  CONTROL_H,
   DENSITIES,
+  DESIGN_RUNS,
   drawnHeights,
   expectAppearance,
   expectControlHeights,
@@ -31,11 +32,6 @@ import { openSeededCanvas, type SeedDoc } from './support/seedDoc';
  */
 
 type Density = (typeof DENSITIES)[number];
-
-const RUNS = [
-  { density: 'compact', theme: 'light' },
-  { density: 'comfortable', theme: 'dark' },
-] as const;
 
 /** The body and section steps per density, as `typeRamp.ts` publishes the ramp. */
 const BODY_PX: Record<Density, number> = { compact: 13, comfortable: 14 };
@@ -112,7 +108,7 @@ async function expectPanel(page: Page, d: Density, label: string): Promise<void>
   expectInlineRow(`${label} actions`, await inlineItems(page, `${PANEL} .form-actions > button`));
 }
 
-for (const { density, theme } of RUNS) {
+for (const { density, theme } of DESIGN_RUNS) {
   const d = density as Density;
 
   test(`#1594 OR40 S6j — the editor header: badge, strip and run panels on the ramp and the scale (${density} ${theme})`, async ({

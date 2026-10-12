@@ -1,7 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
-import { CONTROL_H, DENSITIES, expectAppearance, preferAppearance } from './support/appearance';
+import {
+  CONTROL_H,
+  DENSITIES,
+  DESIGN_RUNS,
+  expectAppearance,
+  preferAppearance,
+} from './support/appearance';
 import { expectInlineRow } from './support/inlineRow';
 import { offRampText } from './support/typeRamp';
 import { allCapsText } from './support/allCaps';
@@ -24,11 +30,6 @@ import { seriesSnapshot, stubActivity } from './support/aiActivity';
  */
 
 type Density = (typeof DENSITIES)[number];
-
-const RUNS = [
-  { density: 'compact', theme: 'light' },
-  { density: 'comfortable', theme: 'dark' },
-] as const;
 
 const NOW_S = Math.floor(Date.now() / 1000);
 const RESETS_AT_SECONDS = Math.floor(Date.UTC(2099, 0, 1) / 1000);
@@ -141,7 +142,7 @@ function measure(page: Page) {
   });
 }
 
-for (const { density, theme } of RUNS) {
+for (const { density, theme } of DESIGN_RUNS) {
   test(`#1594 OR40 S6r — AI activity: the title's ?, facts not tiles, on the ramp, no capitals (${density} ${theme})`, async ({
     page,
   }) => {

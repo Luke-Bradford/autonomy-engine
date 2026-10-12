@@ -3,6 +3,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import {
   computedStyles as styles,
   DENSITIES,
+  DESIGN_RUNS,
   expectAppearance,
   expectControlHeights,
   preferAppearance,
@@ -33,11 +34,6 @@ import { nodeById, openSeededCanvas, seedVersion } from './support/seedDoc';
 
 type Density = (typeof DENSITIES)[number];
 
-const RUNS = [
-  { density: 'compact', theme: 'light' },
-  { density: 'comfortable', theme: 'dark' },
-] as const;
-
 const DOCK = '.property-dock';
 
 /** The one bordered group: 8px by 12px inside a 6px radius, its legend in caption type. */
@@ -62,7 +58,7 @@ async function expectTabsOnRamp(page: Page, name: string, d: Density): Promise<n
   return count;
 }
 
-for (const { density, theme } of RUNS) {
+for (const { density, theme } of DESIGN_RUNS) {
   const d = density as Density;
 
   test(`#1594 OR40 S6l — the dock's tabs and Problems on the ramp and the scale (${density} ${theme})`, async ({
