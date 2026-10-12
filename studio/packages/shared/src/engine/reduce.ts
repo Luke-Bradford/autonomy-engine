@@ -41,12 +41,7 @@ import {
 } from '../catalog/types.js';
 import { outputContract, storeOutputs, validateOutputs } from './outputs.js';
 import { hasSecureOutput, redactSecureEvent, secureEventNodeId } from './secure.js';
-import {
-  callDetaches,
-  inactiveMarkAs,
-  isInactive,
-  type VariableDef,
-} from '../schemas/pipeline.js';
+import { callDetaches, inactiveMarkAs, isInactive, type VariableDef } from '../schemas/pipeline.js';
 import {
   backEdgeResetBody,
   coerceVariableValue,

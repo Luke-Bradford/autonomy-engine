@@ -151,7 +151,9 @@ describe('#1484 activity runs — one row per attempt', () => {
     // Nothing ran: no error, and no measured span.
     expect(a).toMatchObject({ attemptId: 'a#0', error: null, durationMs: null });
     expect(
-      loadEngineLog(db, runId).some((e) => e.type === 'node.dispatched' && e.nodeId === 'a'),
+      loadEngineLog(db, runId).some(
+        ({ event: e }) => e.type === 'node.dispatched' && e.nodeId === 'a',
+      ),
     ).toBe(false);
   });
 

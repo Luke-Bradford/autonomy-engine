@@ -1,4 +1,9 @@
-import { NodeSchema, TERMINAL_CONTAINER, TERMINAL_NODE, fieldLabelOf } from '@autonomy-studio/shared';
+import {
+  NodeSchema,
+  TERMINAL_CONTAINER,
+  TERMINAL_NODE,
+  fieldLabelOf,
+} from '@autonomy-studio/shared';
 import type { ContainerRunStatus, NodeRunStatus, RunStatus } from '@autonomy-studio/shared';
 
 /**

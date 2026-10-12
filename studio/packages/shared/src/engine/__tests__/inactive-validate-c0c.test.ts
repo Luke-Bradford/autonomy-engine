@@ -36,7 +36,13 @@ describe('validation skips an inactive node (#1600 C0c)', () => {
     ],
     [
       'a timeout on a control node',
-      { id: 'x', type: 'fail', config: { message: 'm' }, position: pos, policy: { timeoutSeconds: 5 } },
+      {
+        id: 'x',
+        type: 'fail',
+        config: { message: 'm' },
+        position: pos,
+        policy: { timeoutSeconds: 5 },
+      },
     ],
   ];
   for (const [what, n] of unfinished) {
