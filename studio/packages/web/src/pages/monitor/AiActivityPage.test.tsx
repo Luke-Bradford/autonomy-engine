@@ -993,7 +993,12 @@ describe('AiActivityPage', () => {
 
       render(<AiActivityPage />);
 
-      await waitFor(() => expect(screen.getByText(/in THIS workspace's runs/)).toBeInTheDocument());
+      // #1594 OR40 S6r — the page's description, through the title's `?`.
+      await waitFor(() =>
+        expect(screen.getByRole('region', { name: 'AI activity' })).toHaveAccessibleDescription(
+          /in this workspace's runs/,
+        ),
+      );
     });
     /**
      * A group is MANY invocations, so "some reported" is a state a single row

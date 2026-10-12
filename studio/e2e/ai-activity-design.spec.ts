@@ -92,9 +92,7 @@ function measure(page: Page) {
       const r = c.getBoundingClientRect();
       return {
         name:
-          c.getAttribute('aria-label') ||
-          (c.textContent ?? '').trim().slice(0, 20) ||
-          c.tagName,
+          c.getAttribute('aria-label') || (c.textContent ?? '').trim().slice(0, 20) || c.tagName,
         left: r.left,
         right: r.right,
         centre: r.top + r.height / 2,
@@ -163,7 +161,9 @@ for (const { density, theme } of RUNS) {
     // Everything the page can draw is on it before it is measured.
     await expect(page.locator('.token-flow')).toBeVisible();
     await expect(page.getByText(/2 agent CLI subprocesses/)).toBeVisible();
-    await expect(page.getByText('Showing the busiest reporters only', { exact: false })).toBeVisible();
+    await expect(
+      page.getByText('Showing the busiest reporters only', { exact: false }),
+    ).toBeVisible();
     await expect(page.getByText('Codex quota unreadable.')).toBeVisible();
     await expect(page.getByText('treat it as out of date', { exact: false })).toBeVisible();
 

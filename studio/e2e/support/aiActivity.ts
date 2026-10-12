@@ -124,7 +124,10 @@ export function seriesSnapshot() {
   };
 }
 
-export async function stubActivity(page: Page, snapshot: unknown = seriesSnapshot()): Promise<void> {
+export async function stubActivity(
+  page: Page,
+  snapshot: unknown = seriesSnapshot(),
+): Promise<void> {
   await page.route('**/api/monitor/ai-activity*', (route) =>
     route.fulfill({
       status: 200,
