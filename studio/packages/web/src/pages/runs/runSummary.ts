@@ -292,9 +292,10 @@ export interface NodeActivity {
    * #1600 OR41 C0c — `true` iff this node's status was RECORDED by a
    * `node.inactive` placeholder: the activity is switched off and never ran, so
    * `status` is its *Mark as* outcome, not something it did. Cleared with every
-   * other result field when the node starts again (a loop round).
+   * other result field when the node starts again (a loop round). `undefined`,
+   * never `false`, otherwise, as every other absent fact on the row is.
    */
-  inactive: boolean;
+  inactive: true | undefined;
   /**
    * RS4 — the child run a COPIED `call_pipeline` node's result came from, off
    * `run.reseeded.childLinks`. Set only alongside `copiedFromRunId` and cleared
@@ -721,7 +722,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         outputValues: undefined,
         copiedFromRunId: undefined,
         copiedChildRunId: undefined,
-        inactive: false,
+        inactive: undefined,
         variableWrite: undefined,
         instanceId: undefined,
         startedAtMs: undefined,
@@ -772,7 +773,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
     n.outputValues = undefined;
     n.copiedFromRunId = undefined;
     n.copiedChildRunId = undefined;
-    n.inactive = false;
+    n.inactive = undefined;
     n.variableWrite = undefined;
     n.instanceId = undefined;
   };
@@ -1629,7 +1630,7 @@ export function blankNodeActivity(nodeId: string, status: NodeRunStatus): NodeAc
        them showing no Outputs. */
     copiedFromRunId: undefined,
     copiedChildRunId: undefined,
-    inactive: false,
+    inactive: undefined,
     variableWrite: undefined,
     instanceId: undefined,
     /* No event, so no stamp — the row exists BECAUSE the fold never saw one.

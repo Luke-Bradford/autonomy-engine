@@ -717,6 +717,32 @@ describe('deriveNodeActivity — the non-dispatch node lifecycles (#483)', () =>
       idempotent: true,
     });
 
+  it('#1600 C0c — node.inactive settles on its Mark as, flagged inactive, with no attempt and no span', () => {
+    const [x] = deriveNodeActivity([
+      envelope({
+        type: 'node.inactive',
+        runId: 'r',
+        nodeId: 'x',
+        attemptId: 'x#0',
+        markAs: 'failure',
+      }),
+    ]);
+    expect(x).toMatchObject({ status: 'failure', inactive: true, attempts: 0, error: undefined });
+    expect(x!.spans).toEqual([]);
+    // A later real run of the node (a loop round once re-activated) clears the flag.
+    const [y] = deriveNodeActivity([
+      envelope({
+        type: 'node.inactive',
+        runId: 'r',
+        nodeId: 'x',
+        attemptId: 'x#0',
+        markAs: 'success',
+      }),
+      dispatched('x', 1),
+    ]);
+    expect(y!.inactive).toBeUndefined();
+  });
+
   it('a HELD node reads `retry_pending`, not the red `failure` its node.failed set', () => {
     // The defect: `node.retryScheduled` fell through `default:`, so a node
     // waiting out its retry interval kept the RED pill for the whole hold
@@ -1795,7 +1821,7 @@ describe('reconcileNodeActivity', () => {
       outputValues: undefined,
       copiedFromRunId: undefined,
       copiedChildRunId: undefined,
-      inactive: false,
+      inactive: undefined,
       instanceId: undefined,
       startedAtMs: undefined,
       endedAtMs: undefined,
