@@ -1,7 +1,13 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { activityRowById, properties } from './support/panels';
-import { fireAndSettle, nodeById, openSeededCanvas, seedVersion } from './support/seedDoc';
+import {
+  fireAndSettle,
+  nodeById,
+  openSeededCanvas,
+  seedVersion,
+  waitForRunToSettle,
+} from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 
 /**
@@ -132,6 +138,43 @@ test('an inactive Fail never runs: the run succeeds, the monitor says inactive, 
   await expect(
     page.locator('.react-flow__node[data-id="f"] .flow-node-badge--inactive'),
   ).toHaveText('inactive · skipped');
+
+  await expectQuiet(page, problems);
+});
+
+test('#1669 — a rerun keeps a copied inactive activity inactive, and the grid filters to Inactive', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  // `w` is switched off and marked Succeeded; the Fail after it fails R1, so
+  // the rerun copies `w` (its reseed frontier) and runs the Fail again.
+  const { pipelineVersionId } = await seedVersion(page, 'inactive rerun', {
+    nodes: [{ ...wait('w', 0), state: 'inactive' }, fail({ position: { x: 300, y: 0 } })],
+    edges: [{ id: 'e1', from: 'w', to: 'f', on: 'success' }],
+  });
+  const source = await fireAndSettle(page, pipelineVersionId, 'inactive rerun');
+  const res = await page.request.post(`/api/runs/${encodeURIComponent(source)}/rerun-from-failed`);
+  expect(res.status()).toBe(202);
+  const { runId } = (await res.json()) as { runId: string };
+  await waitForRunToSettle(page, runId);
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await fluentRootReady(page);
+  await expect(activityRowById(page, 'w').locator('.node-status')).toHaveText(
+    'inactive · succeeded',
+  );
+  await expect(activityRowById(page, 'f')).toHaveCount(1);
+
+  await page.getByRole('combobox', { name: 'Status' }).selectOption('inactive');
+  await expect(activityRowById(page, 'w')).toHaveCount(1);
+  await expect(activityRowById(page, 'f')).toHaveCount(0);
+
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}?rdTab=graph`);
+  await fluentRootReady(page);
+  await expect(page.locator('.react-flow__node[data-id="w"] .run-node-status')).toHaveText(
+    'inactive · succeeded',
+  );
 
   await expectQuiet(page, problems);
 });
