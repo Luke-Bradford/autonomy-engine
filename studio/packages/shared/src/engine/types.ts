@@ -403,6 +403,9 @@ export const TERMINAL_CONTAINER: ReadonlySet<ContainerRunStatus> = new Set<Conta
   TerminalContainerStatusSchema.options satisfies readonly ContainerRunStatus[],
 );
 
+/** #1600 C0e — the `reason` an inactive container marked Failed records. */
+export const INACTIVE_CONTAINER_REASON = 'inactive';
+
 export const ContainerRunStateSchema = z.object({
   status: ContainerRunStatusSchema,
   round: z.number().int().nonnegative(),

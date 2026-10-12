@@ -20,6 +20,7 @@ import type {
 import {
   FAILURE_CODES,
   SubstituteError,
+  INACTIVE_CONTAINER_REASON,
   TERMINAL_CONTAINER,
   TERMINAL_NODE,
   VARIABLE_MAX_BYTES,
@@ -3163,7 +3164,7 @@ export function createEngine(doc: EngineDoc): Engine {
             state = withContainer(state, id, {
               status: markAs,
               inactive: true,
-              ...(markAs === 'failure' && { reason: 'inactive' }),
+              ...(markAs === 'failure' && { reason: INACTIVE_CONTAINER_REASON }),
             });
             changed = true;
           } else if (r === 'ready') {
