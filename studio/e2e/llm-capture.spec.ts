@@ -5,6 +5,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 import { openActivity } from './support/panels';
+import { seedConnection } from './support/seedResources';
 
 /**
  * #605 L9b — an `llm_call` with `capture: 'full'` shows the prompt it sent and
@@ -104,11 +105,11 @@ async function runCaptured(
   policy?: Record<string, boolean>,
   config: Record<string, unknown> = { prompt: PROMPT, system: SYSTEM, capture: 'full' },
 ): Promise<string> {
-  const created = await page.request.post('/api/connections', {
-    data: { name: `${name} ollama`, kind: 'ollama', config: { baseUrl: stubUrl, model: 'stub' } },
+  const connectionId = await seedConnection(page, {
+    name: `${name} ollama`,
+    kind: 'ollama',
+    config: { baseUrl: stubUrl, model: 'stub' },
   });
-  expect(created.status(), `creating connection: ${await created.text()}`).toBe(201);
-  const { id: connectionId } = (await created.json()) as { id: string };
   const doc = {
     nodes: [
       {

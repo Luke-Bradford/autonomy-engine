@@ -1,7 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
-import { fireAndSettle, mintVersion, seedVersion, type SeedDoc } from './support/seedDoc';
+import {
+  fireAndSettle,
+  mintVersion,
+  seedTrigger,
+  seedVersion,
+  type SeedDoc,
+} from './support/seedDoc';
 import { newPipelineButton, openImportDrawer } from './support/pipelinesPage';
 
 /**
@@ -23,20 +29,10 @@ const BROKEN: SeedDoc = {
 };
 
 async function createScheduleTrigger(page: Page, pipelineVersionId: string): Promise<void> {
-  const res = await page.request.post('/api/triggers', {
-    data: {
-      name: 'e2e 1569 hourly',
-      pipelineVersionId,
-      params: {},
-      mode: 'schedule',
-      schedule: '17 * * * *',
-      webhook: null,
-      concurrency: { policy: 'skip_if_running' },
-      runWindows: null,
-      enabled: true,
-    },
+  await seedTrigger(page, pipelineVersionId, 'e2e 1569 hourly', {
+    mode: 'schedule',
+    schedule: '17 * * * *',
   });
-  expect(res.status(), await res.text()).toBe(201);
 }
 
 test('#1569 — the pipelines grid: last run, success %, next run, triggers; sorted in the URL; dense at 1440×900', async ({

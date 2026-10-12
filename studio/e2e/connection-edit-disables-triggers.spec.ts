@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { seedConnection } from './support/seedResources';
-import { seedVersion } from './support/seedDoc';
+import { seedTrigger, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 
 /**
@@ -57,21 +57,7 @@ test('names the enabled trigger a kind change would switch off, and then switche
       },
     ],
   });
-  const created = await page.request.post('/api/triggers', {
-    data: {
-      name: triggerName,
-      pipelineVersionId,
-      params: {},
-      mode: 'manual',
-      schedule: null,
-      webhook: null,
-      runWindows: null,
-      concurrency: { policy: 'skip_if_running' },
-      enabled: true,
-    },
-  });
-  expect(created.status(), `seeding the trigger: ${await created.text()}`).toBe(201);
-  const triggerId = ((await created.json()) as { id: string }).id;
+  const triggerId = await seedTrigger(page, pipelineVersionId, triggerName);
 
   await page.goto('/#/manage/connections');
   await page.getByRole('heading', { name: 'Connections' }).waitFor();

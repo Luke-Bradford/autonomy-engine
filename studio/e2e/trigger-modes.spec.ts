@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
+import { seedTrigger } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 import { triggerForm } from './support/panels';
 import { chooseRowAction } from './support/rowMenu';
@@ -67,21 +68,11 @@ test.describe('#854 event mode', () => {
 
   test('lets a configured event trigger leave the mode', async ({ page }) => {
     // Seeded through the API, so this is a row the new form did not create.
-    const seeded = await page.request.post('/api/triggers', {
-      data: {
-        name: 'Seeded subscription',
-        pipelineVersionId: null,
-        params: {},
-        mode: 'event',
-        schedule: null,
-        event: { name: 'order.placed' },
-        webhook: null,
-        concurrency: { policy: 'skip_if_running' },
-        runWindows: null,
-        enabled: false,
-      },
+    await seedTrigger(page, null, 'Seeded subscription', {
+      mode: 'event',
+      event: { name: 'order.placed' },
+      enabled: false,
     });
-    expect(seeded.status()).toBe(201);
 
     const problems = await openTriggers(page);
     const row = page.getByRole('row', { name: /Seeded subscription/ });
@@ -212,21 +203,12 @@ test.describe('#854 tumbling mode', () => {
     // Seeded with params that carry NO `${trigger.windowStart}` binding: those
     // are refused off tumbling by `assertWindowBindingsConsistent`, which is a
     // separate rule this ticket does not clear (see the PR body).
-    const seeded = await page.request.post('/api/triggers', {
-      data: {
-        name: 'Seeded windows',
-        pipelineVersionId: null,
-        params: {},
-        mode: 'tumbling',
-        schedule: null,
-        window: { frequency: 'hour', interval: 1, startTime: '2026-08-01T08:00:00.000Z' },
-        webhook: null,
-        concurrency: { policy: 'queue' },
-        runWindows: null,
-        enabled: false,
-      },
+    await seedTrigger(page, null, 'Seeded windows', {
+      mode: 'tumbling',
+      window: { frequency: 'hour', interval: 1, startTime: '2026-08-01T08:00:00.000Z' },
+      concurrency: { policy: 'queue' },
+      enabled: false,
     });
-    expect(seeded.status()).toBe(201);
 
     const problems = await openTriggers(page);
     const row = page.getByRole('row', { name: /Seeded windows/ });

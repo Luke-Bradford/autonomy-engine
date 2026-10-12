@@ -3,6 +3,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { addActivity, canvasNodes } from './support/canvasGraph';
 import { openSeededCanvas } from './support/seedDoc';
 import { properties, pickConnection } from './support/panels';
+import { seedConnection, seedDataset } from './support/seedResources';
 
 /**
  * #996 M12 slice 2 (#1221) — authoring a `lookup` node on the canvas.
@@ -26,31 +27,23 @@ import { properties, pickConnection } from './support/panels';
  *    test's `toEqual` cannot see.
  */
 
-async function seedConnection(page: Page, name: string, path: string): Promise<string> {
-  const res = await page.request.post('/api/connections', {
-    data: { name, kind: 'sqlite', config: { path, writable: true } },
-  });
-  expect(res.status(), `creating connection '${name}': ${await res.text()}`).toBe(201);
-  return ((await res.json()) as { id: string }).id;
+async function seedStore(page: Page, name: string, path: string): Promise<string> {
+  return seedConnection(page, { name, kind: 'sqlite', config: { path, writable: true } });
 }
 
-async function seedDataset(
+async function seedTable(
   page: Page,
   name: string,
   connectionId: string,
   table: string,
 ): Promise<string> {
-  const res = await page.request.post('/api/datasets', {
-    data: {
-      name,
-      kind: 'table',
-      connectionId,
-      config: { table },
-      columns: [{ name: 'id', type: 'integer', nullable: false }],
-    },
+  return seedDataset(page, {
+    name,
+    kind: 'table',
+    connectionId,
+    config: { table },
+    columns: [{ name: 'id', type: 'integer', nullable: false }],
   });
-  expect(res.status(), `creating dataset '${name}': ${await res.text()}`).toBe(201);
-  return ((await res.json()) as { id: string }).id;
 }
 
 test.describe('#1221 — lookup-node authoring', () => {
@@ -60,10 +53,10 @@ test.describe('#1221 — lookup-node authoring', () => {
     // TWO stores, one dataset each. The second exists only so the source-dataset
     // list has something it must EXCLUDE — without it the narrowing assertion
     // below would pass on a list that was never narrowed at all.
-    const connA = await seedConnection(page, 'e2e 1221 store A', 'e2e-1221-a.db');
-    const connB = await seedConnection(page, 'e2e 1221 store B', 'e2e-1221-b.db');
-    const setA = await seedDataset(page, 'e2e 1221 people', connA, 'people');
-    const setB = await seedDataset(page, 'e2e 1221 elsewhere', connB, 'elsewhere');
+    const connA = await seedStore(page, 'e2e 1221 store A', 'e2e-1221-a.db');
+    const connB = await seedStore(page, 'e2e 1221 store B', 'e2e-1221-b.db');
+    const setA = await seedTable(page, 'e2e 1221 people', connA, 'people');
+    const setB = await seedTable(page, 'e2e 1221 elsewhere', connB, 'elsewhere');
 
     const pipelineId = await openSeededCanvas(page, 'e2e 1221 lookup', { nodes: [] });
 

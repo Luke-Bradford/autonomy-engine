@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { triggerMenuItem } from './support/canvas';
 import { dragNodeBy } from './support/canvasGraph';
-import { openSeededCanvas, seedVersion, type SeedDoc } from './support/seedDoc';
+import { openSeededCanvas, seedTrigger, seedVersion, type SeedDoc } from './support/seedDoc';
 
 /**
  * #1476 OR28 slice 2 — the editor's command bar: Validate, and Trigger ▾ →
@@ -89,20 +89,7 @@ test('Trigger ▾ → View triggers lists this pipeline’s triggers, and Show a
     [`mine-${stamp}`, pipelineVersionId],
     [`theirs-${stamp}`, other.pipelineVersionId],
   ] as const) {
-    const created = await page.request.post('/api/triggers', {
-      data: {
-        name,
-        pipelineVersionId: versionId,
-        params: {},
-        mode: 'manual',
-        schedule: null,
-        webhook: null,
-        concurrency: { policy: 'skip_if_running' },
-        runWindows: null,
-        enabled: false,
-      },
-    });
-    expect(created.status()).toBe(201);
+    await seedTrigger(page, versionId, name, { enabled: false });
   }
   await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
 
@@ -189,42 +176,21 @@ test('the Triggers column says when each trigger is next due (#1476 slice 4)', a
   const problems = collectPageProblems(page);
   const stamp = String(Date.now());
   const { pipelineId, pipelineVersionId } = await seedVersion(page, `e2e 1476 s4 ${stamp}`, DOC);
-  const base = {
-    pipelineVersionId,
-    params: {},
-    webhook: null,
-    runWindows: null,
-  };
-  for (const data of [
-    // New Year's midnight: armed, and never due while this spec runs.
-    {
-      ...base,
-      name: `yearly-${stamp}`,
-      mode: 'schedule',
-      schedule: '0 0 1 1 *',
-      concurrency: { policy: 'skip_if_running' },
-      enabled: true,
-    },
-    {
-      ...base,
-      name: `windows-${stamp}`,
-      mode: 'tumbling',
-      schedule: null,
-      window: { frequency: 'minute', interval: 15, startTime: '2030-01-01T00:00:00.000Z' },
-      concurrency: { policy: 'queue' },
-      enabled: true,
-    },
-    {
-      ...base,
-      name: `paused-${stamp}`,
-      mode: 'schedule',
-      schedule: '0 0 1 1 *',
-      concurrency: { policy: 'skip_if_running' },
-      enabled: false,
-    },
-  ]) {
-    expect((await page.request.post('/api/triggers', { data })).status()).toBe(201);
-  }
+  // New Year's midnight: armed, and never due while this spec runs.
+  await seedTrigger(page, pipelineVersionId, `yearly-${stamp}`, {
+    mode: 'schedule',
+    schedule: '0 0 1 1 *',
+  });
+  await seedTrigger(page, pipelineVersionId, `windows-${stamp}`, {
+    mode: 'tumbling',
+    window: { frequency: 'minute', interval: 15, startTime: '2030-01-01T00:00:00.000Z' },
+    concurrency: { policy: 'queue' },
+  });
+  await seedTrigger(page, pipelineVersionId, `paused-${stamp}`, {
+    mode: 'schedule',
+    schedule: '0 0 1 1 *',
+    enabled: false,
+  });
   await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
   await (await triggerMenuItem(page, /^Edit triggers…/)).click();
   const column = page.getByTestId('pipeline-triggers');

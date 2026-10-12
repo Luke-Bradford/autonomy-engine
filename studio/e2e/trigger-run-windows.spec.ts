@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
+import { seedTrigger } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 import { triggerForm } from './support/panels';
 import { chooseRowAction } from './support/rowMenu';
@@ -29,7 +30,10 @@ async function openTriggers(page: Page): Promise<string[]> {
   return problems;
 }
 
-/** The trigger write body, with `runWindows` left to the caller. */
+/**
+ * The trigger write body for the API's own run-window checks, with
+ * `runWindows` left to the caller.
+ */
 function triggerBody(name: string, runWindows: unknown) {
   return {
     name,
@@ -151,10 +155,13 @@ test.describe('U14c run-window editor', () => {
     // legitimate thing to mean. An editor that rendered it as "no rows" and
     // wrote back `null` would silently convert never-fires into always-open on
     // a rename. This is that guard, end to end.
-    const seeded = await page.request.post('/api/triggers', {
-      data: triggerBody('Held closed', []),
+    await seedTrigger(page, null, 'Held closed', {
+      mode: 'schedule',
+      schedule: '0 * * * *',
+      recurrence: null,
+      runWindows: [],
+      enabled: false,
     });
-    expect(seeded.status()).toBe(201);
 
     const problems = await openTriggers(page);
     await chooseRowAction(page.getByRole('row', { name: /Held closed/ }), 'Edit');

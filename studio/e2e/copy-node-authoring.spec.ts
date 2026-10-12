@@ -3,6 +3,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { addActivity, canvasNodes } from './support/canvasGraph';
 import { openSeededCanvas } from './support/seedDoc';
 import { properties, pickConnection } from './support/panels';
+import { seedConnection, seedDataset } from './support/seedResources';
 
 /**
  * #996 M5 slice 4c (#1139) — authoring a `copy` node on the canvas.
@@ -26,12 +27,8 @@ import { properties, pickConnection } from './support/panels';
  */
 
 /** A `sqlite` store connection, minted through the real route. */
-async function seedConnection(page: Page, name: string, path: string): Promise<string> {
-  const res = await page.request.post('/api/connections', {
-    data: { name, kind: 'sqlite', config: { path, writable: true } },
-  });
-  expect(res.status(), `creating connection '${name}': ${await res.text()}`).toBe(201);
-  return ((await res.json()) as { id: string }).id;
+async function seedStore(page: Page, name: string, path: string): Promise<string> {
+  return seedConnection(page, { name, kind: 'sqlite', config: { path, writable: true } });
 }
 
 /**
@@ -39,7 +36,7 @@ async function seedConnection(page: Page, name: string, path: string): Promise<s
  * deliberately, per the dataset schema: an empty column list is a fact about the
  * table, never a stand-in for "not described yet".
  */
-async function seedDataset(
+async function seedTable(
   page: Page,
   name: string,
   connectionId: string,
@@ -49,11 +46,7 @@ async function seedDataset(
     { name: 'label', type: 'string', nullable: true },
   ],
 ) {
-  const res = await page.request.post('/api/datasets', {
-    data: { name, kind: 'table', connectionId, config: { table }, columns },
-  });
-  expect(res.status(), `creating dataset '${name}': ${await res.text()}`).toBe(201);
-  return ((await res.json()) as { id: string }).id;
+  return seedDataset(page, { name, kind: 'table', connectionId, config: { table }, columns });
 }
 
 /** #1477 OR29 — a copy node's Source, Sink and Mapping are tabs of its panel. */
@@ -65,10 +58,10 @@ test.describe('#1139 — copy-node authoring', () => {
   test('a copy node is bound on all four ends and SURVIVES a save and reload', async ({ page }) => {
     const problems = collectPageProblems(page);
 
-    const srcConn = await seedConnection(page, 'e2e 1139 source store', 'e2e-1139-src.db');
-    const sinkConn = await seedConnection(page, 'e2e 1139 sink store', 'e2e-1139-sink.db');
-    const srcSet = await seedDataset(page, 'e2e 1139 people', srcConn, 'people');
-    const sinkSet = await seedDataset(page, 'e2e 1139 people copy', sinkConn, 'people_copy');
+    const srcConn = await seedStore(page, 'e2e 1139 source store', 'e2e-1139-src.db');
+    const sinkConn = await seedStore(page, 'e2e 1139 sink store', 'e2e-1139-sink.db');
+    const srcSet = await seedTable(page, 'e2e 1139 people', srcConn, 'people');
+    const sinkSet = await seedTable(page, 'e2e 1139 people copy', sinkConn, 'people_copy');
 
     const pipelineId = await openSeededCanvas(page, 'e2e 1139 copy', { nodes: [] });
 
@@ -196,10 +189,10 @@ test.describe('#1139 — copy-node authoring', () => {
   }) => {
     const problems = collectPageProblems(page);
 
-    const srcConn = await seedConnection(page, 'e2e 1169 source store', 'e2e-1169-src.db');
-    const sinkConn = await seedConnection(page, 'e2e 1169 sink store', 'e2e-1169-sink.db');
-    const srcSet = await seedDataset(page, 'e2e 1169 people', srcConn, 'people');
-    const sinkSet = await seedDataset(page, 'e2e 1169 people copy', sinkConn, 'people_copy');
+    const srcConn = await seedStore(page, 'e2e 1169 source store', 'e2e-1169-src.db');
+    const sinkConn = await seedStore(page, 'e2e 1169 sink store', 'e2e-1169-sink.db');
+    const srcSet = await seedTable(page, 'e2e 1169 people', srcConn, 'people');
+    const sinkSet = await seedTable(page, 'e2e 1169 people copy', sinkConn, 'people_copy');
 
     const pipelineId = await openSeededCanvas(page, 'e2e 1169 mapping', { nodes: [] });
     await addActivity(page, 'Copy data');
@@ -295,10 +288,10 @@ test.describe('#1170 — Auto-map and the unmapped advisory', () => {
   }) => {
     const problems = collectPageProblems(page);
 
-    const srcConn = await seedConnection(page, 'e2e 1170 source store', 'e2e-1170-src.db');
-    const sinkConn = await seedConnection(page, 'e2e 1170 sink store', 'e2e-1170-sink.db');
-    const srcSet = await seedDataset(page, 'e2e 1170 people', srcConn, 'people');
-    const sinkSet = await seedDataset(page, 'e2e 1170 people copy', sinkConn, 'people_copy', [
+    const srcConn = await seedStore(page, 'e2e 1170 source store', 'e2e-1170-src.db');
+    const sinkConn = await seedStore(page, 'e2e 1170 sink store', 'e2e-1170-sink.db');
+    const srcSet = await seedTable(page, 'e2e 1170 people', srcConn, 'people');
+    const sinkSet = await seedTable(page, 'e2e 1170 people copy', sinkConn, 'people_copy', [
       { name: 'id', type: 'integer', nullable: false },
       { name: 'label', type: 'string', nullable: true },
       { name: 'imported_by', type: 'string', nullable: false },
@@ -402,10 +395,10 @@ test.describe('#1178 — the expression picker on a mapping cell', () => {
   test('a reference picked into a row expression reaches the saved version', async ({ page }) => {
     const problems = collectPageProblems(page);
 
-    const srcConn = await seedConnection(page, 'e2e 1178 source store', 'e2e-1178-src.db');
-    const sinkConn = await seedConnection(page, 'e2e 1178 sink store', 'e2e-1178-sink.db');
-    const srcSet = await seedDataset(page, 'e2e 1178 people', srcConn, 'people');
-    const sinkSet = await seedDataset(page, 'e2e 1178 people copy', sinkConn, 'people_copy');
+    const srcConn = await seedStore(page, 'e2e 1178 source store', 'e2e-1178-src.db');
+    const sinkConn = await seedStore(page, 'e2e 1178 sink store', 'e2e-1178-sink.db');
+    const srcSet = await seedTable(page, 'e2e 1178 people', srcConn, 'people');
+    const sinkSet = await seedTable(page, 'e2e 1178 people copy', sinkConn, 'people_copy');
 
     const pipelineId = await openSeededCanvas(page, 'e2e 1178 mapping expression', {
       nodes: [],

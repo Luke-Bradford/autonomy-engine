@@ -4,6 +4,7 @@ import { fireManualTrigger, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 import { answerConfirm } from './support/confirmDialog';
 import { activityRowById, activityRuns, openRunView } from './support/panels';
+import { seedConnection } from './support/seedResources';
 
 /**
  * CX4 (#1320) — an operator can stop a run from its page.
@@ -86,15 +87,11 @@ test('CX4 — cancelling a run with work IN FLIGHT stops it, and the page says c
 }) => {
   const problems = collectPageProblems(page);
 
-  const created = await page.request.post('/api/connections', {
-    data: {
-      name: 'e2e sleeper cli',
-      kind: 'agent_cli',
-      config: { command: '/bin/sh', args: ['-c', 'sleep 120'] },
-    },
+  const connectionId = await seedConnection(page, {
+    name: 'e2e sleeper cli',
+    kind: 'agent_cli',
+    config: { command: '/bin/sh', args: ['-c', 'sleep 120'] },
   });
-  expect(created.status(), `creating connection: ${await created.text()}`).toBe(201);
-  const { id: connectionId } = (await created.json()) as { id: string };
   const doc = {
     nodes: [
       {

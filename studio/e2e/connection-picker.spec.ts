@@ -4,6 +4,7 @@ import { addActivity, canvasNodes } from './support/canvasGraph';
 import { openSeededCanvas } from './support/seedDoc';
 import { pickConnection, properties } from './support/panels';
 import { contrastRatio, fluentRootReady, setTheme, surfaceBehind } from './support/theme';
+import { seedConnection } from './support/seedResources';
 
 /**
  * #1477 OR29 slice 5b — an activity's connection pickers: every connection
@@ -20,21 +21,6 @@ const editColumn = (page: Page) =>
 const editing = (page: Page) =>
   page.getByRole('group', { name: 'Pipeline state' }).locator('[data-part="editing"]');
 
-async function seedFsConnection(page: Page, name: string): Promise<void> {
-  const res = await page.request.post('/api/connections', {
-    data: { name, kind: 'fs', config: { roots: ['/tmp'] } },
-  });
-  expect(res.status(), await res.text()).toBe(201);
-}
-
-async function seedSqliteConnection(page: Page, name: string): Promise<string> {
-  const res = await page.request.post('/api/connections', {
-    data: { name, kind: 'sqlite', config: { path: 'e2e-1477-edit.db', writable: true } },
-  });
-  expect(res.status(), await res.text()).toBe(201);
-  return ((await res.json()) as { id: string }).id;
-}
-
 async function copyNodeOnSink(page: Page, title: string): Promise<void> {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openSeededCanvas(page, title, { nodes: [] });
@@ -50,7 +36,7 @@ test.describe('#1477 activity connection pickers', () => {
   }) => {
     const problems = collectPageProblems(page);
     const files = `e2e 1477 files ${String(Date.now())}`;
-    await seedFsConnection(page, files);
+    await seedConnection(page, { name: files, kind: 'fs', config: { roots: ['/tmp'] } });
     await copyNodeOnSink(page, 'e2e 1477 picker');
     // The added activity is the canvas draft this flow must not disturb.
     await expect(editing(page)).toHaveText(/^Draft/);
@@ -151,7 +137,11 @@ test.describe('#1477 activity connection pickers', () => {
     const stamp = String(Date.now());
     const name = `e2e 1477 edit ${stamp}`;
     const renamed = `e2e 1477 edited ${stamp}`;
-    const id = await seedSqliteConnection(page, name);
+    const id = await seedConnection(page, {
+      name,
+      kind: 'sqlite',
+      config: { path: 'e2e-1477-edit.db', writable: true },
+    });
     await copyNodeOnSink(page, 'e2e 1477 picker edit');
     await addActivity(page, 'Copy data');
     await expect(canvasNodes(page)).toHaveCount(2);
@@ -236,7 +226,11 @@ test.describe('#1477 activity connection pickers', () => {
     const problems = collectPageProblems(page);
     const stamp = String(Date.now());
     const name = `e2e 1477 search ${stamp}`;
-    const id = await seedSqliteConnection(page, name);
+    const id = await seedConnection(page, {
+      name,
+      kind: 'sqlite',
+      config: { path: 'e2e-1477-edit.db', writable: true },
+    });
     await copyNodeOnSink(page, 'e2e 1477 picker search');
     const sink = properties(page).getByRole('combobox', { name: 'Sink connection' });
     const list = page.getByRole('listbox');
@@ -320,7 +314,11 @@ test.describe('#1477 activity connection pickers', () => {
  */
 test('the open list is on top, docked and with the dock expanded', async ({ page }) => {
   const problems = collectPageProblems(page);
-  await seedFsConnection(page, `e2e S5b on top ${String(Date.now())}`);
+  await seedConnection(page, {
+    name: `e2e S5b on top ${String(Date.now())}`,
+    kind: 'fs',
+    config: { roots: ['/tmp'] },
+  });
   await copyNodeOnSink(page, 'e2e S5b on top');
 
   const listOnTop = () =>

@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
+import { seedConnection, seedDataset } from './support/seedResources';
 
 /**
  * #1115 — Manage → Datasets.
@@ -24,7 +25,9 @@ async function gotoDatasets(page: Page): Promise<void> {
 }
 
 /**
- * Any connection, minted through the real route.
+ * A `sqlite` store connection, minted through the real route — what most of
+ * this file needs. The naming rule below covers EVERY connection this file
+ * seeds, through this, `seedFileStore` or `seedConnection` directly.
  *
  * A CONNECTION NAME MUST NOT CONTAIN THE LABEL TEXT OF ANY OTHER CONTROL ON THE
  * DATASET FORM — 'Kind', 'Name', 'Columns'. Every connection this suite mints
@@ -43,27 +46,17 @@ async function gotoDatasets(page: Page): Promise<void> {
  * the test that seeded it — this cost six failures across two files once
  * (#1167), and the name is the only thing that prevents it.
  */
-async function seedConnection(
-  page: Page,
-  name: string,
-  kind: string,
-  config: Record<string, unknown>,
-): Promise<string> {
-  const res = await page.request.post('/api/connections', {
-    data: { name, kind, config },
-  });
-  expect(res.status(), `creating ${kind} connection '${name}': ${await res.text()}`).toBe(201);
-  return ((await res.json()) as { id: string }).id;
-}
-
-/** A `sqlite` store — what most of this file needs. */
 async function seedStore(page: Page, name: string): Promise<string> {
-  return seedConnection(page, name, 'sqlite', { path: `/tmp/${name}.db`, writable: true });
+  return seedConnection(page, {
+    name,
+    kind: 'sqlite',
+    config: { path: `/tmp/${name}.db`, writable: true },
+  });
 }
 
 /** An `fs` store — where a `delimited` dataset lives (#1167). */
 async function seedFileStore(page: Page, name: string): Promise<string> {
-  return seedConnection(page, name, 'fs', { roots: ['/tmp'] });
+  return seedConnection(page, { name, kind: 'fs', config: { roots: ['/tmp'] } });
 }
 
 function form(page: Page) {
@@ -188,7 +181,7 @@ test.describe('#1115 Manage → Datasets', () => {
     page,
   }) => {
     const problems = collectPageProblems(page);
-    // NOT `…-kinds-…`: see `seedConnection`'s naming rule.
+    // NOT `…-kinds-…`: see `seedStore`'s naming rule.
     const storeId = await seedStore(page, `e2e-ds-swap-${Date.now()}`);
     await gotoDatasets(page);
     await page.getByRole('button', { name: 'New dataset' }).click();
@@ -289,8 +282,10 @@ test.describe('#1115 Manage → Datasets', () => {
     const stamp = Date.now();
     // `http` rather than `anthropic_api`: it is a real non-store connection and
     // is credential-less, so it needs no secret dance to exist.
-    const nonStoreId = await seedConnection(page, `e2e-ds-nonstore-${stamp}`, 'http', {
-      baseUrl: 'https://example.com',
+    const nonStoreId = await seedConnection(page, {
+      name: `e2e-ds-nonstore-${stamp}`,
+      kind: 'http',
+      config: { baseUrl: 'https://example.com' },
     });
     // BOTH stores are seeded before the page loads, like every other test here.
     // The form's Store picker is rendered from the connections the page fetched
@@ -339,16 +334,13 @@ test.describe('#1115 Manage → Datasets', () => {
     // was true and invisible until somebody opened that dataset.
     const problems = collectPageProblems(page);
     const storeId = await seedStore(page, 'e2e-ds-strand-store');
-    const created = await page.request.post('/api/datasets', {
-      data: {
-        name: 'e2e-ds-strand',
-        connectionId: storeId,
-        kind: 'table',
-        config: { table: 'orders' },
-        columns: [{ name: 'id', type: 'integer', nullable: false }],
-      },
+    await seedDataset(page, {
+      name: 'e2e-ds-strand',
+      connectionId: storeId,
+      kind: 'table',
+      config: { table: 'orders' },
+      columns: [{ name: 'id', type: 'integer', nullable: false }],
     });
-    expect(created.status(), `seeding dataset: ${await created.text()}`).toBe(201);
 
     // The mutation itself, through the API an operator's own edit would use.
     const stranded = await page.request.patch(`/api/connections/${storeId}`, {

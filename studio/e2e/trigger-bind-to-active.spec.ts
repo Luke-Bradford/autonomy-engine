@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
-import { mintVersion, seedVersion } from './support/seedDoc';
+import { mintVersion, seedTrigger, seedVersion } from './support/seedDoc';
 import { triggerForm } from './support/panels';
 import { chooseRowAction } from './support/rowMenu';
 
@@ -123,20 +123,7 @@ test('editing an existing trigger offers no bind-to-active', async ({ page }) =>
   // PATCH is concrete-only by design, so a patch can never silently re-resolve a
   // pinned binding. The control must therefore not exist on the edit form.
   const { pipelineVersionId } = await seedVersion(page, 'Edit target', DOC);
-  const created = await page.request.post('/api/triggers', {
-    data: {
-      name: 'Already bound',
-      pipelineVersionId,
-      params: {},
-      mode: 'manual',
-      schedule: null,
-      webhook: null,
-      runWindows: null,
-      concurrency: { policy: 'skip_if_running' },
-      enabled: false,
-    },
-  });
-  expect(created.status(), await created.text()).toBe(201);
+  await seedTrigger(page, pipelineVersionId, 'Already bound', { enabled: false });
 
   const problems = collectPageProblems(page);
   await page.goto('/#/manage/triggers');
