@@ -178,3 +178,62 @@ test('#1669 — a rerun keeps a copied inactive activity inactive, and the grid 
 
   await expectQuiet(page, problems);
 });
+
+test('#1669 — Problems warns about a read of an inactive output and an inactive If, without refusing the save', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openSeededCanvas(page, 'inactive warnings', {
+    nodes: [
+      {
+        id: 'src',
+        type: 'agent_task',
+        config: { task: 't', outputs: [{ name: 'v', type: 'string' }] },
+        position: { x: 0, y: 0 },
+        state: 'inactive',
+      },
+      {
+        id: 'r',
+        type: 'agent_task',
+        config: { task: '${nodes.src.output.v}' },
+        position: { x: 300, y: 0 },
+      },
+      {
+        id: 'c',
+        type: 'if',
+        config: { condition: '${true}' },
+        position: { x: 600, y: 0 },
+        state: 'inactive',
+      },
+      wait('w', 900),
+    ],
+    edges: [
+      { id: 'e1', from: 'src', to: 'r', on: 'success' },
+      { id: 'e2', from: 'r', to: 'c', on: 'success' },
+      { id: 'e3', from: 'c', to: 'w', on: 'branch', branch: 'true' },
+    ],
+  });
+
+  const panel = page.getByRole('region', { name: 'Problems', exact: true });
+  const warnings = panel.locator('.badge-list--warning');
+  await expect(warnings.locator('strong')).toHaveText('2 warning(s)');
+  await expect(warnings.locator('li')).toHaveCount(2);
+  await expect(warnings.locator('li').nth(0)).toContainText(
+    "is inactive, so it has no outputs and this read fails when it runs; make it default()'s first argument",
+  );
+  await expect(warnings.locator('li').nth(1)).toContainText(
+    'inactive, so it records no branch and every activity on its branch edges is skipped',
+  );
+  // Warnings never join the errors: no error list, and the toggle's error count stays 0.
+  await expect(panel.locator('.badge-list:not(.badge-list--warning)')).toHaveCount(0);
+  const toggle = page.getByRole('button', { name: /^Problems/ });
+  await expect(toggle.locator('.count-badge').first()).toHaveText('0');
+  await expect(toggle.locator('.count-badge--warning')).toHaveText('2');
+  // UI STANDARD rule 7 — the list is on screen at 1440x900 without scrolling.
+  const box = await warnings.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.y + box!.height).toBeLessThanOrEqual(900);
+
+  await expectQuiet(page, problems);
+});
