@@ -256,7 +256,7 @@ test.describe('#917 Monitor › AI activity', () => {
     await expect(fiveHour).toContainText(/\(in .+\)/);
 
     // A reading is a reading: no "unreadable" wording anywhere near it.
-    await expect(panel).not.toContainText('UNREADABLE');
+    await expect(panel).not.toContainText(/unreadable/i);
 
     await expectQuiet(page, problems);
   });
@@ -301,7 +301,7 @@ test.describe('#917 Monitor › AI activity', () => {
     // No relative countdown computed against an instant we do not have.
     await expect(sevenDay).not.toContainText('(in ');
     // Still a reading. The whole defect was this saying UNREADABLE.
-    await expect(panel).not.toContainText('UNREADABLE');
+    await expect(panel).not.toContainText(/unreadable/i);
 
     await expectQuiet(page, problems);
   });
@@ -322,7 +322,7 @@ test.describe('#917 Monitor › AI activity', () => {
     await fluentRootReady(page);
 
     const panel = quotaPanel(page);
-    await expect(panel).toContainText('Claude quota UNREADABLE.');
+    await expect(panel).toContainText('Claude quota unreadable.');
     // The REASON, in the operator's terms — a contended account is not a broken
     // reader, and the panel has to be able to tell them that.
     await expect(panel).toContainText(/rate-limiting/i);
@@ -352,7 +352,7 @@ test.describe('#917 Monitor › AI activity', () => {
 
     await page.goto('/#/monitor/ai');
     await fluentRootReady(page);
-    await expect(quotaPanel(page)).toContainText('Claude quota UNREADABLE.');
+    await expect(quotaPanel(page)).toContainText('Claude quota unreadable.');
     const afterMount = quotaCalls;
 
     // Long enough for several activity polls (5s) to have gone out. The quota
@@ -527,7 +527,7 @@ test.describe('#917 Monitor › AI activity', () => {
       const panel = quotaPanel(page);
       // BOTH facts on screen at once: it is unreadable NOW, and this is what it
       // was. Neither displaces the other.
-      await expect(panel).toContainText('Claude quota UNREADABLE.');
+      await expect(panel).toContainText('Claude quota unreadable.');
       await expect(panel).toContainText('Last known reading');
       await expect(panel).toContainText('12m 30s ago');
       await expect(panel).toContainText('not a current figure');
@@ -560,7 +560,7 @@ test.describe('#917 Monitor › AI activity', () => {
       await fluentRootReady(page);
 
       const panel = quotaPanel(page);
-      await expect(panel).toContainText('Claude quota UNREADABLE.');
+      await expect(panel).toContainText('Claude quota unreadable.');
       // No last-known block, no manufactured percentage. "Nothing has been
       // read" is a real state and stays representable.
       await expect(panel).not.toContainText('Last known reading');
@@ -629,7 +629,7 @@ test.describe('#917 Monitor › AI activity', () => {
 
       await expect(panel).toContainText('Claude');
       await expect(panel).not.toContainText('Codex');
-      await expect(panel).not.toContainText('UNREADABLE');
+      await expect(panel).not.toContainText(/unreadable/i);
       await expectQuiet(page, problems);
     });
 
@@ -644,7 +644,7 @@ test.describe('#917 Monitor › AI activity', () => {
       await page.goto('/#/monitor/ai');
       const panel = quotaPanel(page);
 
-      await expect(panel).toContainText('Codex quota UNREADABLE.');
+      await expect(panel).toContainText('Codex quota unreadable.');
       await expect(panel).toContainText('has not run recently enough');
       // Neither provider has a reading, and neither may show a percentage —
       // "0%" would read as wide open, the opposite of "unknown".
