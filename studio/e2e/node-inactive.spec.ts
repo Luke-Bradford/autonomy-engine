@@ -74,6 +74,11 @@ test('Activity state and Mark as on the General tab: the card greys, the doc sto
   expect(await versions()).toMatchObject({ state: 'inactive', onInactiveMarkAs: 'failure' });
 
   // Back on: `state` is REMOVED (never `'active'`), and Mark as is kept, as ADF does.
+  // A save reloads the version, which clears the selection, so re-open the node.
+  await card.click();
+  await properties(page).getByRole('tab', { name: 'General' }).click();
+  await expect(state).toHaveValue('inactive');
+  await expect(markAs).toHaveValue('failure');
   await state.selectOption('active');
   await expect(card.locator('.flow-node')).not.toHaveClass(/flow-node--inactive/);
   await expect(markAs).toBeDisabled();
