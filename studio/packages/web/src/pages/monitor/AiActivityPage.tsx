@@ -156,9 +156,9 @@ function ProviderQuota({ entry, now }: { entry: ProviderQuotaReading; now: numbe
 
       {/* An unreadable quota says so, in words, and keeps saying so even when a
           last-known number is shown beneath it. In sentence case (#1594 OR40
-          S6r): the word carries the meaning, and capitals only shouted it. It must never render as a
-          CURRENT percentage: "0%" would mean "wide open", the opposite of
-          "unknown". */}
+          S6r): the word carries the meaning, and capitals only shouted it. It
+          must never render as a CURRENT percentage: "0%" would mean "wide
+          open", the opposite of "unknown". */}
       {reading.kind === 'unreadable' && (
         <>
           <p role="status" className="notice quota-unreadable">
