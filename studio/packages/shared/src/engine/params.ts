@@ -5411,10 +5411,11 @@ function checkRefRoot(
       // dominates + succeeded → available. #1669 — but an inactive node records
       // no outputs, so this read fails at run: a warning, since `default()` fixes it.
       if (!softOk && scope.inactiveSucceededIds?.has(id)) {
-        scope.advisories?.push(
+        const msg =
           `${where}: \${nodes.${id}.output.${name}} — node '${id}' is inactive, so it ` +
-            "has no outputs and this read fails when it runs; make it default()'s first argument",
-        );
+          "has no outputs and this read fails when it runs; make it default()'s first argument";
+        // Once per field and ref: the same read twice in a field is one thing to fix.
+        if (scope.advisories?.includes(msg) === false) scope.advisories.push(msg);
       }
       return;
     }

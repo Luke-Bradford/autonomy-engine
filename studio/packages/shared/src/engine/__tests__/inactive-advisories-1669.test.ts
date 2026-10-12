@@ -56,6 +56,13 @@ describe("a read of an inactive node's output (#1669)", () => {
     expect(w[0]).toContain("default()'s first argument");
   });
 
+  it('the same read twice in one field warns once', () => {
+    const w = warn(
+      doc([off(src), reader('${nodes.src.output.v} and ${nodes.src.output.v}')], [ok('src', 'r')]),
+    );
+    expect(w).toHaveLength(1);
+  });
+
   it("as default()'s first argument it does not warn", () => {
     expect(
       warn(doc([off(src), reader("${default(nodes.src.output.v, 'fb')}")], [ok('src', 'r')])),
