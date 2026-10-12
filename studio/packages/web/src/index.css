@@ -1374,8 +1374,7 @@ td button + button {
 
 .connection-form textarea,
 .dataset-form textarea,
-.trigger-form textarea,
-.external-wait-complete textarea {
+.trigger-form textarea {
   font-family: var(--font-mono);
   resize: vertical;
 }
@@ -4508,16 +4507,31 @@ button.danger {
 /* One-time reveal of a freshly-minted webhook secret, and (#901) the in-place
    editor for completing a wait. Both expand ONE list item into a thing to act on,
    and both can be open at once, so they share the card rather than each having a
-   near-identical one — the earlier cut of `.external-wait-complete` was a verbatim
-   copy of this block but for its `margin-top`. */
+   near-identical one. */
 .secret-reveal,
 .external-wait-complete {
-  margin-top: 1rem;
-  padding: 0.75rem 1rem;
+  padding: var(--space-3);
   background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-surface);
   max-width: 640px;
+  /* #1594 OR40 S6t — a column at the scale's gap, so its paragraphs need no
+     margin of their own (the browser's 1em is off the 4px scale). */
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.secret-reveal > p,
+.external-wait-complete > p {
+  margin: 0;
+}
+
+/* Dismiss and Hide callback URL keep their own width rather than stretching.
+   No margin: on the Triggers page the page header's margin is above it and the
+   table's own margin below. */
+.secret-reveal {
+  align-items: flex-start;
 }
 
 .secret-reveal code {
@@ -4534,22 +4548,30 @@ button.danger {
   padding: 0;
 }
 
+/* #1594 OR40 S6t — each wait's parts at the scale's gap: no paragraph or card
+   margin (a margin would add to the gap). A grid, not a wrapping flex row: each
+   part spans its own row however narrow its `max-width` leaves it, and the Show
+   callback URL and Complete wait buttons share one. */
+.external-waits > li {
+  display: grid;
+  grid-template-columns: repeat(2, max-content) 1fr;
+  justify-items: start;
+  gap: var(--space-2);
+}
+
+.external-waits > li > * {
+  margin: 0;
+}
+
+.external-waits > li > :not(button) {
+  grid-column: 1 / -1;
+  justify-self: stretch;
+}
+
 .external-waits > li + li {
-  margin-top: 1rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--border);
-}
-
-/* #901 — the editor's own layout. Everything else about it (the card, the input
-   chrome, the monospace textarea, the button row) is borrowed from the rules
-   above, which is why this block is four lines rather than thirty. */
-.external-wait-complete label {
-  display: block;
-  margin-bottom: 0.35rem;
-}
-
-.external-wait-complete textarea {
-  width: 100%;
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: var(--border-width) solid var(--border);
 }
 
 /* ── P6 live run monitor ─────────────────────────────────────────────────── */
@@ -6033,8 +6055,8 @@ button.danger {
   min-height: 0;
   overflow-y: auto;
   background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-surface);
 }
 
 /* The column is the panel; the form inside it needs no second frame.
@@ -6048,8 +6070,13 @@ button.danger {
 .pipeline-triggers__list-view {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.5rem;
+  /* #1594 OR40 S6t — the Activities and version-history columns' padding and gap. */
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.pipeline-triggers__list-view > p {
+  margin: 0;
 }
 
 .pipeline-triggers__list-view[hidden] {
@@ -6060,12 +6087,12 @@ button.danger {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.35rem;
+  gap: var(--space-1);
 }
 
 .pipeline-triggers__header h2 {
   margin: 0;
-  font-size: 0.95rem;
+  /* No size of its own: the ramp's h2 (the section type). */
 }
 
 .pipeline-triggers__list {
@@ -6074,17 +6101,17 @@ button.danger {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: var(--space-1);
 }
 
 .pipeline-triggers__row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.4rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-control);
 }
 
 .pipeline-triggers__summary {
@@ -6095,7 +6122,7 @@ button.danger {
 }
 
 .pipeline-triggers__meta {
-  font-size: 0.8rem;
+  font: var(--type-caption);
   color: var(--muted);
 }
 
@@ -6104,7 +6131,7 @@ button.danger {
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: var(--space-2);
 }
 
 /* --- U22 slice 1: pipeline version history (#903) ------------------------- */
