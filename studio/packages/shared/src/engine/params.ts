@@ -15,7 +15,7 @@ import type {
   VariableDef,
   VariableType,
 } from '../schemas/pipeline.js';
-import { callDetaches, isAddressableOutputName } from '../schemas/pipeline.js';
+import { callDetaches, isAddressableOutputName, isInactive } from '../schemas/pipeline.js';
 import type { OutputContract } from './outputs.js';
 import { containerOutputContract, outputContract } from './outputs.js';
 import { hasSecureOutput } from './secure.js';
@@ -1510,6 +1510,10 @@ export function validateRefs(
   }
 
   for (const node of doc.nodes) {
+    // #1600 C0c — an inactive node never runs, so nothing in its config is ever
+    // resolved: its refs are neither checked nor counted as reads (ADF leaves an
+    // inactive activity out of validation, so it can hold an unfinished config).
+    if (isInactive(node)) continue;
     const guaranteed = graph.guaranteed.get(node.id) ?? new Set<string>();
     const settled = graph.settled.get(node.id) ?? new Set<string>();
     const reachable = graph.reachable.get(node.id) ?? new Set<string>();
@@ -2843,6 +2847,13 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     if (contract?.kind === 'invalid') {
       errors.push(`node '${node.id}': config.outputs is malformed (${contract.reason})`);
     }
+    // #1600 C0c — an inactive node is left out of every per-node rule below, the
+    // #1480 run-ability check included: it never runs, so an unfinished or
+    // unknown config is legal while it is switched off (ADF's placeholder use).
+    // The structural checks (ids, edges, containers, cycles) and the parse-level
+    // `StrictNodeSchema` rules still hold, and so does the output contract above:
+    // a downstream ref validates against it whether or not the node is active.
+    if (isInactive(node)) continue;
     // #1 F4 — where a secure flag cannot be honoured, refuse it rather than accept
     // a promise the run would break.
     validateSecurePolicy(node, errors);
@@ -4444,10 +4455,11 @@ function forwardReach(
  * silently exempting it from the cycle + depth checks. `literal` mode also means
  * the target is the UNESCAPED text, which is the id the run would actually call.
  */
-function literalCallTargets(nodes: Pick<Node, 'call'>[]): string[] {
+function literalCallTargets(nodes: Pick<Node, 'call' | 'state'>[]): string[] {
   const out: string[] = [];
   for (const n of nodes) {
-    if (n.call === undefined) continue;
+    // #1600 C0c — an inactive call node starts no child, so it is no call edge.
+    if (n.call === undefined || isInactive(n)) continue;
     const mode = interpolationMode(n.call.pipelineVersionId);
     if (mode.mode === 'literal') out.push(restoreEscapes(mode.scanned));
   }
@@ -4494,7 +4506,7 @@ function validateCallGraph(
   // `depth` counts call HOPS from this version (root = 0). `maxDepth` hops are
   // allowed; entering a version deeper than that is an error.
   const path: string[] = [selfId];
-  const dfs = (pvId: string, nodes: Pick<Node, 'call'>[], depth: number): void => {
+  const dfs = (pvId: string, nodes: Pick<Node, 'call' | 'state'>[], depth: number): void => {
     if (depth > maxDepth) {
       errors.push(`call_pipeline depth exceeds ${maxDepth} at version '${pvId}'`);
       return;

@@ -485,6 +485,17 @@ export const PIPELINE_DESCRIPTION_MAX_CHARS = DESCRIPTION_MAX_CHARS;
  * activity node and a call node coexist via this OPTIONAL discriminant, so
  * existing docs (no `call`) still parse unchanged.
  */
+/** #1600 OR41 C0c — the one stored value of `Node.state` (absent = active). */
+export const INACTIVE_STATE = 'inactive';
+
+/**
+ * #1600 C0c — what an inactive activity records. The engine's terminal words
+ * (`TerminalNodeStatusSchema` in `engine/types.ts`, pinned equal there), not
+ * ADF's display words, so the recorded outcome IS the node's status.
+ */
+export const InactiveMarkAsSchema = z.enum(['success', 'failure', 'skipped']);
+export type InactiveMarkAs = z.infer<typeof InactiveMarkAsSchema>;
+
 export const NodeSchema = z.object({
   id: z.string().min(1),
   type: z.string().min(1),
@@ -642,8 +653,50 @@ export const NodeSchema = z.object({
    * editing it is drift a commit should carry.
    */
   description: z.string().optional(),
+  /**
+   * #1600 OR41 C0c (catalogue spec §3; ADF "deactivate an activity") — an
+   * INACTIVE activity never runs. When the walk reaches it, the run records a
+   * `node.inactive` placeholder whose outcome is `onInactiveMarkAs`, and that
+   * outcome alone drives its outgoing edges. It is also left out of validation
+   * (`validateDoc`, `validateRefs`) and of trigger connection readiness, so it
+   * can stand in for an activity whose config is not finished.
+   *
+   * ABSENT means active: `'active'` is never stored, so an active doc is
+   * byte-identical to a pre-C0c doc.
+   */
+  state: presented(z.literal(INACTIVE_STATE).optional(), {
+    title: 'Activity state',
+    description:
+      'An inactive activity never runs. The run records it as inactive with the outcome in Mark as, and validation skips it.',
+  }),
+  /**
+   * The outcome an inactive activity's run records — the engine's own terminal
+   * words, so it IS the node's status (ADF: Succeeded · Failed · Skipped). ABSENT
+   * means `success`. Kept when the activity is re-activated, as ADF does; inert
+   * while it is active.
+   */
+  onInactiveMarkAs: presented(InactiveMarkAsSchema.optional(), {
+    title: 'Mark as',
+    description:
+      'The outcome an inactive activity records. It decides which outgoing edges run. Defaults to Succeeded.',
+    options: optionTitles(InactiveMarkAsSchema, {
+      success: 'Succeeded',
+      failure: 'Failed',
+      skipped: 'Skipped',
+    }),
+  }),
 });
 export type Node = z.infer<typeof NodeSchema>;
+
+/** `true` iff the node is switched off (#1600 C0c). The one reading of `state`. */
+export function isInactive(node: Pick<Node, 'state'>): boolean {
+  return node.state === INACTIVE_STATE;
+}
+
+/** An inactive node's recorded outcome (#1600 C0c); absent ⇒ `success`. */
+export function inactiveMarkAs(node: Pick<Node, 'onInactiveMarkAs'>): InactiveMarkAs {
+  return node.onInactiveMarkAs ?? 'success';
+}
 
 /**
  * `NodeSchema` + the semantic checks a node must pass to be SAVED (#1 F13a).

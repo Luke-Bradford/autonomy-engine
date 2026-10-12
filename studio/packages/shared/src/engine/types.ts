@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { MAX_RETRY_INTERVAL_SECONDS } from '../schemas/pipeline.js';
+import { InactiveMarkAsSchema, MAX_RETRY_INTERVAL_SECONDS } from '../schemas/pipeline.js';
 import { TriggerContextSchema } from '../schemas/trigger-context.js';
 import { DatasetAddressSchema } from '../datamove/address.js';
 import type {
@@ -194,6 +194,13 @@ export type NodeRunStatus = z.infer<typeof NodeRunStatusSchema>;
  */
 export const TerminalNodeStatusSchema = z.enum(['success', 'failure', 'skipped']);
 export type TerminalNodeStatus = z.infer<typeof TerminalNodeStatusSchema>;
+// #1600 C0c — an inactive node's `onInactiveMarkAs` IS its terminal status, so the
+// two vocabularies must stay equal (each direction a compile error if one drifts).
+type _InactiveMarkAsIsTerminal = [
+  z.infer<typeof InactiveMarkAsSchema> extends TerminalNodeStatus ? true : never,
+  TerminalNodeStatus extends z.infer<typeof InactiveMarkAsSchema> ? true : never,
+];
+export const INACTIVE_MARK_AS_IS_TERMINAL: _InactiveMarkAsIsTerminal = [true, true];
 
 /**
  * Runtime membership test for `TerminalNodeStatusSchema`. Derived from the
@@ -267,6 +274,13 @@ export const NodeRunStateSchema = z.object({
   /** #1484 M2 — why it is `skipped` (`SkipReasonSchema`); set only with that
    * status, and removed when a loop round resets the node. */
   skipReason: SkipReasonSchema.optional(),
+  /**
+   * #1600 OR41 C0c — `true` iff this node's terminal `status` was RECORDED by a
+   * `node.inactive` placeholder (the node is switched off and never ran), not
+   * produced by running it. Set only with a terminal status; removed when a loop
+   * round resets the node, like `skipReason`.
+   */
+  inactive: z.boolean().optional(),
   /**
    * F2b — POLICY retries taken for this node in the CURRENT loop round, and the
    * ONLY counter retry-eligibility reads (`retries < policy.retry`).
@@ -1288,6 +1302,21 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     nodeId: z.string(),
     attemptId: z.string(),
     outputs: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
+    /**
+     * #1600 OR41 C0c — an INACTIVE node's placeholder run (ADF "deactivate an
+     * activity"). The node never ran: no adapter, no outputs, no error. `markAs`
+     * is the node's `onInactiveMarkAs` at the time the walk reached it, and it
+     * becomes the node's terminal status, so its outgoing edges evaluate exactly
+     * as for an activity that ended that way. Recorded, not derived, so the
+     * monitor has a timestamped row and a doc-free fold can tell it apart.
+     */
+    type: z.literal('node.inactive'),
+    runId: z.string(),
+    nodeId: z.string(),
+    attemptId: z.string(),
+    markAs: InactiveMarkAsSchema,
   }),
   z.object({
     type: z.literal('node.failed'),
@@ -2438,6 +2467,23 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     nodeId: z.string(),
     attemptId: z.string(),
     outputs: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
+    /**
+     * #1600 OR41 C0c — "this INACTIVE node records its placeholder run." A
+     * driver-OWN command like `failNode` (no executor, no connector): the driver
+     * appends `node.inactive` with this `markAs`. The reducer holds the node
+     * `ready` until then, and boot recovery re-emits THIS for a `ready` inactive
+     * node, never `dispatchNode`, so a crash cannot run a switched-off activity.
+     *
+     * `ExecutorCommand` excludes it, so forgetting the pump branch is a COMPILE
+     * error. The `attemptId` is the node's current attempt, so a stale re-emit
+     * folds as a no-op.
+     */
+    type: z.literal('inactivateNode'),
+    nodeId: z.string(),
+    attemptId: z.string(),
+    markAs: InactiveMarkAsSchema,
   }),
   z.object({
     /**

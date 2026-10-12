@@ -496,7 +496,12 @@
 // a `${nodes.<id>…}` inside one is text: the paste guard does not count it as a
 // read (`uncopiedReads`), while `remapNodeRefs` still rewrites it on a duplicate
 // or paste, which keeps such a mention pointing at the copied node.
-export const CATALOG_VERSION = 33;
+// BUMP 33→34 for #1600 OR41 C0c: `NodeSchema.state` + `onInactiveMarkAs`, an
+// activity switched off. NOT the inert shape C0b rode in on: a pre-C0c build
+// strips `state` (plain `z.object`) and DISPATCHES the node for real — a
+// deactivated `file_delete` would delete. That is bump 32's silently-wrong
+// case, so an older build must refuse the doc rather than run it.
+export const CATALOG_VERSION = 34;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the
