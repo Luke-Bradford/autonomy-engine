@@ -86,13 +86,15 @@ test("the monitor shows the run version's description: the graph card's hover an
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
-  const card = page.locator('.react-flow__node[data-id="w"] .flow-node-title');
-  await expect(card).toHaveAttribute('title', `Wait 1\n\n${TEXT}`);
-  await expect(card).toHaveAttribute('aria-description', TEXT);
-
   await activityRowById(page, 'w').getByRole('button', { name: 'Wait 1', exact: true }).click();
   const drawer = page.locator('#run-detail-drawer').getByRole('region', { name: 'Node Wait 1' });
   await expect(drawer.getByText(TEXT, { exact: true })).toBeVisible();
+
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}?rdTab=graph`);
+  await fluentRootReady(page);
+  const card = page.locator('.react-flow__node[data-id="w"] .flow-node-title');
+  await expect(card).toHaveAttribute('title', `Wait 1\n\n${TEXT}`);
+  await expect(card).toHaveAttribute('aria-description', TEXT);
 
   await expectQuiet(page, problems);
 });
