@@ -495,6 +495,14 @@ export function AiActivityPage() {
         headingId="ai-activity-heading"
         help={FORM_SECTION_HINTS.monitor.page}
       >
+        {/* #1594 OR40 S6r — the freshness of the figures below, in the toolbar
+            ahead of the window it is for, as Runs states its own ahead of Live
+            (S6f): the picker stays the row's last control (S3). */}
+        {lastUpdatedAt !== null && (
+          <span className="runs-live-status">
+            Activity as of <When ms={lastUpdatedAt} />
+          </span>
+        )}
         <LabelledControl label="Window" className="ai-window-picker">
           {(id) => (
             <select
@@ -522,13 +530,6 @@ export function AiActivityPage() {
             </select>
           )}
         </LabelledControl>
-        {/* #1594 OR40 S6r — the freshness of the figures below, in the toolbar
-            beside the window it is for, as Runs states its own (S6f). */}
-        {lastUpdatedAt !== null && (
-          <span className="runs-live-status">
-            Activity as of <When ms={lastUpdatedAt} />
-          </span>
-        )}
       </PageHeader>
 
       {error !== null && (
