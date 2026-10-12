@@ -278,8 +278,9 @@ export const NodeRunStateSchema = z.object({
   /**
    * #1600 OR41 C0c — `true` iff this node's terminal `status` was RECORDED by a
    * `node.inactive` placeholder (the node is switched off and never ran), not
-   * produced by running it. Set only with a terminal status; removed when a loop
-   * round resets the node, like `skipReason`.
+   * produced by running it, or COPIED by a rerun's `run.reseeded` from a source
+   * run where it was (`copiedInactive`, #1669). Set only with a terminal status;
+   * removed when a loop round resets the node, like `skipReason`.
    */
   inactive: z.boolean().optional(),
   /**
@@ -1244,6 +1245,13 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * is literally "no copied writes". Every new reseed writes it (`reseed.ts`).
      */
     copiedVariableWrites: z.array(VariableWriteSchema).optional(),
+    /**
+     * #1600 C0c / #1669 — the frontier nodes that are INACTIVE in the pinned
+     * version: their `success` was recorded by Mark as, not by running, so the
+     * rerun says `inactive · succeeded` for them as the source run did. A subset
+     * of `frontier`. Absent on older logs and on a reseed that copied none.
+     */
+    copiedInactive: z.array(z.string()).optional(),
   }),
   z.object({
     type: z.literal('node.dispatched'),

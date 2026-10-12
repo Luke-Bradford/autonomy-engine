@@ -6,6 +6,7 @@ import {
   activityRunsViewParams,
   nextActivityRunSort,
   readActivityRunsView,
+  statusKeyOf,
   viewEntries,
   type ActivityRunsView,
   type RowFacts,
@@ -172,6 +173,15 @@ describe('#1484 M2 viewEntries', () => {
     expect(
       viewEntries(entries, { ...NONE, status: 'ready' }, byWording, alike).map((e) => e.key),
     ).toEqual(['a', 'b']);
+  });
+
+  it('#1669 — keeps "inactive" as a status too, and it wins over "reused"', () => {
+    const params = new URLSearchParams({ [ACTIVITY_RUNS_PARAMS.status]: 'inactive' });
+    expect(readActivityRunsView(params).status).toBe('inactive');
+    expect(statusKeyOf(row('a', { inactive: true, status: 'failure' }))).toBe('inactive');
+    expect(statusKeyOf(row('b', { inactive: true, reused: true }))).toBe('inactive');
+    expect(statusKeyOf(row('c', { reused: true }))).toBe('reused');
+    expect(statusKeyOf(row('d', { status: 'failure' }))).toBe('failure');
   });
 
   it('tells a reused row from one that ran', () => {

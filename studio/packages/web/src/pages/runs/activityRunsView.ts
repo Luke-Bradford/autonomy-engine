@@ -32,19 +32,28 @@ export const ACTIVITY_RUNS_PARAMS = {
 
 /** A row's status as the filter knows it: the engine's, or `reused` for a row
  * a rerun carried over, which the table shows as its own pill. */
-export const ActivityRunStatusKeySchema = z.union([NodeRunStatusSchema, z.literal('reused')]);
+export const ActivityRunStatusKeySchema = z.union([
+  NodeRunStatusSchema,
+  z.literal('reused'),
+  z.literal('inactive'),
+]);
 export type ActivityRunStatusKey = z.infer<typeof ActivityRunStatusKeySchema>;
 
 export const REUSED_STATUS = 'reused' satisfies ActivityRunStatusKey;
+/** #1669 — ADF's grid has a distinct Inactive status; so does this filter,
+ * whatever the node was marked as. */
+export const INACTIVE_STATUS = 'inactive' satisfies ActivityRunStatusKey;
 
+/** Inactive wins over reused: a rerun's copy of an inactive activity reads
+ * `inactive · succeeded`, as it did in the run it was copied from. */
 export const statusKeyOf = (row: ActivityRun): ActivityRunStatusKey =>
-  row.reused ? REUSED_STATUS : row.status;
+  row.inactive ? INACTIVE_STATUS : row.reused ? REUSED_STATUS : row.status;
 
 /** A status key as the table's pill words it. Two keys can read alike (under a
  * cancel, `pending` and `ready` both say the node did not run), and the filter
  * goes by what the operator SEES, so it matches on this. */
 export const statusKeyLabel = (key: ActivityRunStatusKey, runStatus: RunStatus): string =>
-  key === REUSED_STATUS ? REUSED_STATUS : nodeStatusLabel(key, runStatus);
+  key === REUSED_STATUS || key === INACTIVE_STATUS ? key : nodeStatusLabel(key, runStatus);
 
 /** A status filter's value from a picker, or `null` for "All" or a value the
  * page does not know. */

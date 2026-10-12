@@ -145,6 +145,15 @@ describe('a call_pipeline pin to a debug version (#1395 OR4)', () => {
     expect(createPipelineVersion(db, caller(pipeline.id, saved.id)).version).toBe(1);
   });
 
+  it('#1669 — allows the pin on an INACTIVE call node, which starts no child', () => {
+    const { db, pipeline } = setup();
+    const callee = createPipeline(db, { ownerId: 'local', name: 'Callee' });
+    const debugCallee = createPipelineVersion(db, doc(callee.id), { debug: true });
+    const off = caller(pipeline.id, debugCallee.id);
+    off.nodes = off.nodes.map((n) => ({ ...n, state: 'inactive' as const }));
+    expect(createPipelineVersion(db, off).version).toBe(1);
+  });
+
   it('never classifies ANOTHER owner’s version, so the refusal is no existence oracle', () => {
     const { db, pipeline } = setup();
     const foreign = createPipeline(db, { ownerId: 'someone-else', name: 'Theirs' });

@@ -4,7 +4,7 @@ import type { ActivityRun, ActivityRunGroup } from '@autonomy-studio/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActivityRunsTable } from './ActivityRunsTable';
 import { ACTIVITY_RUN_COLUMNS, iterationText } from './activityRunsColumns';
-import { nodeStatusLabel } from './nodeStatus';
+import { inactiveStatusLabel, nodeStatusLabel } from './nodeStatus';
 import { activityRun } from '../../testing/activityRun';
 
 const BASE: ActivityRun = activityRun({
@@ -259,6 +259,44 @@ describe('#1484 M2 ActivityRunsTable — filter and sort', () => {
     expect(bodyKeys()).toEqual(['w:1']);
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
     expect(bodyKeys()).toHaveLength(3);
+  });
+
+  it('#1669 — offers Inactive as its own status, a reused inactive copy included', () => {
+    show([
+      ...ROWS,
+      { ...BASE, key: 'i#0', nodeId: 'i', activityId: 'i', attemptId: 'i#0', inactive: true },
+      {
+        ...BASE,
+        key: 'reused:r',
+        nodeId: 'r',
+        activityId: 'r',
+        attemptId: null,
+        reused: true,
+        inactive: true,
+      },
+    ]);
+    const status = screen.getByRole('combobox', { name: 'Status' });
+    expect(
+      within(status)
+        .getAllByRole('option')
+        .map((o) => o.textContent),
+    ).toContain('inactive');
+    fireEvent.change(status, { target: { value: 'inactive' } });
+    expect(bodyKeys().map((k) => k.split(':')[0])).toEqual(['i', 'r']);
+    // The reused copy reads as the source run did, not as `reused`.
+    expect(cellsOf(screen.getAllByRole('row')[2]!).Status).toBe(inactiveStatusLabel('success'));
+  });
+
+  it('#1669 — a search for the word an inactive pill shows finds that row', () => {
+    show(
+      [
+        { ...BASE, key: 'i#0', nodeId: 'i', activityId: 'i', attemptId: 'i#0', inactive: true },
+        { ...BASE, key: 'w#0', nodeId: 'w', activityId: 'w', attemptId: 'w#0', status: 'failure' },
+      ],
+      null,
+      '/?arQ=succeeded',
+    );
+    expect(bodyKeys().map((k) => k.split(':')[0])).toEqual(['i']);
   });
 
   it('reads its filters from the URL', () => {

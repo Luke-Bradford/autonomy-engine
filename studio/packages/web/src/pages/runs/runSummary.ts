@@ -1271,6 +1271,9 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
           n.copiedFromRunId = e.sourceRunId;
           /* RS4 — see `copiedChildRunId`. */
           n.copiedChildRunId = e.childLinks?.find((l) => l.callNodeId === nodeId)?.sourceChildRunId;
+          /* #1669 — a copy the source run recorded through Mark as reads
+             `inactive · succeeded` here too. Absent on older logs. */
+          n.inactive = e.copiedInactive?.includes(nodeId) === true ? true : undefined;
           /* #844 V7 — a copied writer's write. The LAST one for this node, since
              the list is in the source run's log order and a writer re-run by a
              loop round wrote once per round. Absent on old logs (no writes). */

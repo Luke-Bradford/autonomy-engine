@@ -228,7 +228,11 @@ export function NodeActivityPanel({
       {node.copiedFromRunId !== undefined && (
         <p className="page-hint">
           This node did not run in this run. The rerun reused its result from run{' '}
-          <code>{node.copiedFromRunId}</code>, so its outputs were computed there.
+          <code>{node.copiedFromRunId}</code>
+          {/* #1669 — an inactive copy did not run there either, and has no outputs. */}
+          {node.inactive
+            ? ', where the activity was inactive, so it did not run there either.'
+            : ', so its outputs were computed there.'}
           {/* RS4 — a copied call node did not start a child either; say which
               child it is standing on, and give the way down to it. Worded to
               stay true in two cases: after a rerun OF a rerun the child's parent

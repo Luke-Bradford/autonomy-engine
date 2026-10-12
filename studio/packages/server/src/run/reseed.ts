@@ -163,7 +163,7 @@ export function createReseedService(deps: DriveDeps): ReseedService {
 
       // 3. The PURE frontier over R1's projection (strict successful prefix).
       const reseed = engine.reseedFrontier(sourceState);
-      const { frontier, copiedOutputs, copiedContainers, childLinks } = reseed;
+      const { frontier, copiedOutputs, copiedContainers, childLinks, copiedInactive } = reseed;
       // #844 V5 (spec V-D7) — exactly the COPIED nodes' variable writes, in R1's
       // log order (R1's own carried writes first, for a rerun of a rerun).
       const copiedVariableWrites = copiedVariableWritesOf(
@@ -226,6 +226,8 @@ export function createReseedService(deps: DriveDeps): ReseedService {
           // logs exactly the shape it did before the field existed.
           ...(childLinks.length > 0 ? { childLinks } : {}),
           copiedVariableWrites,
+          // #1669 — likewise omitted when no copied node is inactive.
+          ...(copiedInactive.length > 0 ? { copiedInactive } : {}),
         };
 
         const { records: recs } = foldOutOfBand(

@@ -299,6 +299,8 @@ export function ActivityRunsTable({
       row.nodeId,
       type,
       statusLabel,
+      // #1669 — what the pill says, so `succeeded` finds an inactive row too.
+      row.inactive ? inactiveStatusLabel(row.status) : null,
       iterationText(row.iteration),
       row.branch,
       row.error?.message,
@@ -607,12 +609,12 @@ export function ActivityRunsTable({
                     </td>
                     <td>{typeOf(row.activityId) ?? ''}</td>
                     <td>
-                      {row.reused ? (
-                        <span className={nodeStatusPillClass('success', runStatus)}>reused</span>
-                      ) : row.inactive ? (
+                      {row.inactive ? (
                         <span className={nodeStatusPillClass(INACTIVE_TONE_STATUS, runStatus)}>
                           {inactiveStatusLabel(row.status)}
                         </span>
+                      ) : row.reused ? (
+                        <span className={nodeStatusPillClass('success', runStatus)}>reused</span>
                       ) : (
                         <span className={nodeStatusPillClass(row.status, runStatus)}>
                           {nodeStatusLabel(row.status, runStatus)}

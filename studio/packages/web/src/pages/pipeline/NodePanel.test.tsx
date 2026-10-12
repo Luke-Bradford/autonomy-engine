@@ -479,6 +479,18 @@ describe('NodePanel (U7 per-activity config form)', () => {
     expect(panel.storedConfig()).toEqual({ url: 'https://x' });
   });
 
+  it('#1669 — applies an unfinished config on an INACTIVE activity, as the save gate does', () => {
+    const panel = mountOver({ ...httpNode({ url: 'https://x' }), state: 'inactive' });
+
+    // The same violation the test above refuses: an inactive activity may hold a
+    // placeholder config (ADF's use), so Apply writes it.
+    fireEvent.change(screen.getByLabelText('Request URL'), { target: { value: '' } });
+    panel.apply();
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(panel.storedConfig()).toEqual({ url: '' });
+  });
+
   it('falls back to the JSON editor when a saved value cannot be shown in its control', () => {
     // The kind comes from the SCHEMA, the value from the DOC, and they can
     // legitimately disagree. Rendering an object into `url`'s text box would apply

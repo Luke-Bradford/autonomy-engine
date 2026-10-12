@@ -520,7 +520,12 @@ export function projectActivityRuns(
 
   const carried = doc.nodes
     .filter((n) => reused.has(n.id))
-    .map((n) => ({ ...blank(`reused:${n.id}`, n.id, 'success', null), reused: true }));
+    .map((n) => ({
+      ...blank(`reused:${n.id}`, n.id, 'success', null),
+      reused: true,
+      // #1669 — the fold carried a copied inactive node's flag from the reseed.
+      inactive: state.nodes[n.id]?.inactive === true,
+    }));
   // The carried rows lead, so every group made while stepping moves down past
   // them; a reused group leads with them.
   for (const group of groups.values()) {
@@ -568,8 +573,14 @@ export function projectActivityRunsFromLog(
   const byAttempt = new Map<string, ProjectedActivityRun>();
   const open = new Set<ProjectedActivityRun>();
   let frontier: readonly string[] = [];
+  let copiedInactive: ReadonlySet<string> = new Set();
   for (const { event: e, ts, payload } of log) {
-    if (e.type === 'run.reseeded') frontier = e.frontier;
+    if (e.type === 'run.reseeded') {
+      frontier = e.frontier;
+      // Trusted as logged, like `frontier`: this path has no doc to apply the
+      // reducer's "inactive in the pinned version" guard against (#1669).
+      copiedInactive = new Set(e.copiedInactive);
+    }
     const ref = attemptOf(e);
     let opened: ProjectedActivityRun | undefined;
     if (ref !== null && !byAttempt.has(ref.attemptId)) {
@@ -601,6 +612,7 @@ export function projectActivityRunsFromLog(
   const carried = frontier.map((id) => ({
     ...emptyRow(`reused:${id}`, id, 'success', null),
     reused: true,
+    inactive: copiedInactive.has(id),
   }));
   return { rows: [...carried, ...rows], groups: [] };
 }

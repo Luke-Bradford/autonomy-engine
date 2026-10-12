@@ -53,6 +53,7 @@ function reseeded(fields: {
   copiedContainers?: Record<string, RunState['containers'][string]>;
   sourceRunId?: string;
   childLinks?: { callNodeId: string; sourceChildRunId: string }[];
+  copiedInactive?: string[];
 }): EngineEvent {
   return {
     type: 'run.reseeded',
@@ -62,6 +63,7 @@ function reseeded(fields: {
     copiedOutputs: fields.copiedOutputs ?? {},
     copiedContainers: fields.copiedContainers ?? {},
     ...(fields.childLinks !== undefined ? { childLinks: fields.childLinks } : {}),
+    ...(fields.copiedInactive !== undefined ? { copiedInactive: fields.copiedInactive } : {}),
   };
 }
 
@@ -351,5 +353,62 @@ describe('RS4 — run.reseeded childLinks fold', () => {
     expect(r2Child).toBeDefined();
     if (r1Child?.type !== 'startChild' || r2Child?.type !== 'startChild') throw new Error('shape');
     expect(r2Child.childRunId).not.toBe(r1Child.childRunId);
+  });
+});
+
+describe('#1669 — run.reseeded copiedInactive fold', () => {
+  const off = (id: string): Node => ({ ...node(id), state: 'inactive' });
+
+  it('keeps a copied inactive node inactive, and dispatches beyond it as before', () => {
+    const eng = engine(
+      [node('a'), off('b'), node('c')],
+      [edge('a', 'b', 'success'), edge('b', 'c', 'success')],
+    );
+    const log = [startedRerun(), reseeded({ frontier: ['a', 'b'], copiedInactive: ['b'] })];
+    const { state, lastCommands, allDiagnostics } = fold(eng, log);
+    expect(allDiagnostics).toEqual([]);
+    expect(state.nodes.b).toEqual({ status: 'success', attempts: 0, retries: 0, inactive: true });
+    expect(state.nodes.a!.inactive).toBeUndefined();
+    expect(dispatchIds(lastCommands)).toEqual(['c']);
+    // CP1: the log alone reproduces it.
+    expect(eng.projectRunState(log)).toEqual(state);
+  });
+
+  it('an older log without the field folds the copy as plain success', () => {
+    const eng = engine([off('b')]);
+    const { state } = fold(eng, [startedRerun(), reseeded({ frontier: ['b'] })]);
+    expect(state.nodes.b).toEqual({ status: 'success', attempts: 0, retries: 0 });
+  });
+
+  it('a mark for a node not copied, or active in the pinned doc, is refused', () => {
+    const eng = engine([node('a'), off('b'), off('c')]);
+    const { state, allDiagnostics } = fold(eng, [
+      startedRerun(),
+      reseeded({ frontier: ['a', 'b'], copiedInactive: ['a', 'c', 'b'] }),
+    ]);
+    expect(allDiagnostics).toEqual([
+      "impossible run.reseeded: inactive mark for 'a', which is not inactive in the pinned version",
+      "impossible run.reseeded: inactive mark for 'c', which is not a copied frontier node",
+    ]);
+    expect(state.nodes.a!.inactive).toBeUndefined();
+    expect(state.nodes.b!.inactive).toBe(true);
+  });
+
+  it('a copied inactive `if` raises no dead-branch diagnostic for its skipped arm', () => {
+    const cond: Node = {
+      ...off('cond'),
+      type: 'if',
+      config: { expression: '${true}' },
+    };
+    const eng = engine(
+      [cond, node('t')],
+      [{ id: 'cond->t:branch:true', from: 'cond', to: 't', on: 'branch', branch: 'true' }],
+    );
+    const { state, allDiagnostics } = fold(eng, [
+      startedRerun(),
+      reseeded({ frontier: ['cond'], copiedInactive: ['cond'] }),
+    ]);
+    expect(state.nodes.t!.status).toBe('skipped');
+    expect(allDiagnostics).toEqual([]);
   });
 });
