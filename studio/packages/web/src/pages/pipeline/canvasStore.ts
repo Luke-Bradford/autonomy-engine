@@ -1460,6 +1460,17 @@ export interface CanvasState {
   /** #1600 C0c — an inactive activity's recorded outcome; `success` (the default) removes the key. */
   setNodeMarkAs(id: string, markAs: InactiveMarkAs): void;
   /**
+   * #1600 OR41 C0e — a container's General fields, the three an activity has,
+   * written through as the node setters above do (never via the panel's
+   * draft-and-Apply form): `description: ''` removes the key, `inactive: false`
+   * removes `state`, `markAs: 'success'` removes `onInactiveMarkAs`. A typing
+   * burst in the description is one undo step; every other change is its own.
+   */
+  setContainerGeneral(
+    id: string,
+    patch: { description?: string; inactive?: boolean; markAs?: InactiveMarkAs },
+  ): void;
+  /**
    * U16 — the pipeline's typed contract. Each takes a WHOLE replacement row
    * rather than a field patch, for the same reason `createContainer` takes a
    * whole `Container`: `default` is an absent-or-present key (not a nullable
@@ -2378,6 +2389,34 @@ export function createCanvasStore(): StoreApi<CanvasState> {
             return next;
           }),
         }));
+      },
+
+      setContainerGeneral(id, patch) {
+        const c = get().containers.find((x) => x.id === id);
+        if (c === undefined) return;
+        const next: Container = { ...c };
+        if (patch.description !== undefined) {
+          if (patch.description === '') delete next.description;
+          else next.description = patch.description;
+        }
+        if (patch.inactive !== undefined) {
+          if (patch.inactive) next.state = INACTIVE_STATE;
+          else delete next.state;
+        }
+        if (patch.markAs !== undefined) {
+          if (patch.markAs === 'success') delete next.onInactiveMarkAs;
+          else next.onInactiveMarkAs = patch.markAs;
+        }
+        if (
+          next.description === c.description &&
+          next.state === c.state &&
+          next.onInactiveMarkAs === c.onInactiveMarkAs
+        )
+          return;
+        edit(
+          (s) => ({ containers: s.containers.map((x) => (x.id === id ? next : x)) }),
+          patch.description !== undefined ? `container:${id}:description` : undefined,
+        );
       },
 
       setNodeDescription(id, text) {

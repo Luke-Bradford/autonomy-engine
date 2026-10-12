@@ -4909,3 +4909,50 @@ describe('setNodeInactive / setNodeMarkAs (#1600 OR41 C0c)', () => {
     expect(store.getState().dirty).toBe(false);
   });
 });
+
+describe('setContainerGeneral (#1600 OR41 C0e)', () => {
+  const setup = (extra: Partial<Container> = {}) => {
+    const store = createCanvasStore();
+    store.setState({
+      nodes: [{ id: 'n', type: 'http_request', config: {}, position: { x: 0, y: 0 } } as Node],
+      containers: [{ id: 'c', kind: 'stage', children: ['n'], ...extra }],
+    });
+    return store;
+  };
+  const box = (store: ReturnType<typeof createCanvasStore>) => store.getState().containers[0]!;
+
+  it('switches off, marks and describes; the defaults REMOVE their keys', () => {
+    const store = setup();
+    store.getState().setContainerGeneral('c', { inactive: true });
+    store.getState().setContainerGeneral('c', { markAs: 'failure' });
+    store.getState().setContainerGeneral('c', { description: 'Loads' });
+    expect(box(store)).toMatchObject({
+      state: 'inactive',
+      onInactiveMarkAs: 'failure',
+      description: 'Loads',
+    });
+    store.getState().setContainerGeneral('c', { inactive: false });
+    store.getState().setContainerGeneral('c', { markAs: 'success' });
+    store.getState().setContainerGeneral('c', { description: '' });
+    expect(box(store)).toEqual({ id: 'c', kind: 'stage', children: ['n'] });
+  });
+
+  it('a description typing burst is one undo step; a toggle is its own', () => {
+    const store = setup();
+    store.getState().setContainerGeneral('c', { inactive: true });
+    store.getState().setContainerGeneral('c', { description: 'L' });
+    store.getState().setContainerGeneral('c', { description: 'Lo' });
+    store.getState().undo();
+    expect('description' in box(store)).toBe(false);
+    expect(box(store).state).toBe('inactive');
+    store.getState().undo();
+    expect('state' in box(store)).toBe(false);
+  });
+
+  it('is a no-op for an unknown container, and for an unchanged value', () => {
+    const store = setup({ state: 'inactive' });
+    store.getState().setContainerGeneral('missing', { inactive: true });
+    store.getState().setContainerGeneral('c', { inactive: true, markAs: 'success' });
+    expect(store.getState().dirty).toBe(false);
+  });
+});

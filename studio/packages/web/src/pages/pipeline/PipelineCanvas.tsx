@@ -48,7 +48,7 @@ import {
   projectMappingRows,
   splitUnwritten,
   formatZodIssues,
-  isInactive,
+  switchedOffNodeIds,
   getActivity,
   authorsCallBlob,
   type ActivePipelineVersion,
@@ -2775,6 +2775,7 @@ function PropertyPanel({
         variables={variables}
         globals={globals}
         onApply={(next) => store.getState().updateContainer(container.id, next)}
+        onGeneral={(patch) => store.getState().setContainerGeneral(container.id, patch)}
         onCopy={() => {
           if (store.getState().copyContainer(container.id, pipelineId)) {
             onNotice(
@@ -3640,7 +3641,9 @@ export function NodePanel({
     if (!entry) return null;
     // #1600 C0c — an inactive activity may hold an unfinished config (ADF's
     // placeholder use): the save gate skips it, so Apply must not refuse it.
-    if (thisNode !== undefined && isInactive(thisNode)) return null;
+    // #1600 C0e — and so may one inside an inactive container.
+    if (thisNode !== undefined && switchedOffNodeIds(docNodes, docContainers).has(thisNode.id))
+      return null;
     const check = entry.configSchema.safeParse(schemaPrecheckCandidate(candidate, fields));
     if (check.success) return null;
     return {

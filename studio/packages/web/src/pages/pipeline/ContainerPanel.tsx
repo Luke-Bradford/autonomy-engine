@@ -5,8 +5,11 @@ import {
   CONTAINER_CONFIG_FIELD_NAMES,
   ContainerSchema,
   formatZodIssues,
+  inactiveMarkAs,
+  isInactive,
   isParallelForeach,
   type Container,
+  type InactiveMarkAs,
   type ContainerConfigField,
   type Edge,
   type Node,
@@ -37,6 +40,7 @@ import { useSubjectIssues } from './issueContext';
 import { SubjectIssues } from './SubjectIssues';
 import { PanelTabs, type PanelTab } from './PanelTabs';
 import { containerTabs } from './containerTabs';
+import { GeneralBasics } from './NodeGeneral';
 import { refusalLead, tabStatusMark } from './tabStatus';
 import { fieldSpan } from './configForm';
 import { FieldCell, FieldGrid } from '../../lib/form/FieldGrid';
@@ -107,6 +111,9 @@ function sameSeededInputs(a: Record<string, FieldInput>, b: Record<string, Field
   return keys.every((k) => k in b && sameControlValue(a[k], b[k]));
 }
 
+/** #1600 C0e — the General tab's key: not a config tab, so not in `containerTabs`. */
+const GENERAL_TAB = 'general';
+
 export function ContainerPanel({
   container,
   nodes,
@@ -116,6 +123,7 @@ export function ContainerPanel({
   variables,
   globals,
   onApply,
+  onGeneral,
   onCopy,
   onDuplicate,
 }: {
@@ -128,6 +136,9 @@ export function ContainerPanel({
   /** #844 GL3 — the workspace's global parameters, for the validator. */
   globals: GlobalRead[];
   onApply: (next: Container) => void;
+  /** #1600 C0e — write the General tab's fields through (`setContainerGeneral`),
+   * outside the config form's draft-and-Apply. */
+  onGeneral: (patch: { description?: string; inactive?: boolean; markAs?: InactiveMarkAs }) => void;
   /** #935 — put this container and its body on the canvas clipboard. */
   onCopy: () => void;
   /** U21 (#935) — copy this container and its body; the store owns every rule. */
@@ -316,7 +327,8 @@ export function ContainerPanel({
     ...tab,
     fields: tab.fields.flatMap((name) => legalFields.filter((f) => f.name === name)),
   }));
-  const currentTab = tabs.find((t) => t.key === tabKey)?.key ?? tabs[0]?.key ?? '';
+  // #1600 C0e — General leads, as on an activity, and is the tab first shown.
+  const currentTab = tabs.find((t) => t.key === tabKey)?.key ?? GENERAL_TAB;
   const leadFor = (paths: readonly (readonly PropertyKey[])[]) =>
     refusalLead(tabs, paths, currentTab);
 
@@ -404,7 +416,22 @@ export function ContainerPanel({
     </FieldCell>
   );
 
-  const [firstTab, ...restTabs] = tabs.map(({ key, fields: onTab, ...tab }): PanelTab<string> => {
+  const generalTab: PanelTab<string> = {
+    key: GENERAL_TAB,
+    label: 'General',
+    content: (
+      <GeneralBasics
+        descriptionLabel="Container description"
+        description={container.description ?? ''}
+        onDescription={(description) => onGeneral({ description })}
+        inactive={isInactive(container)}
+        onInactive={(inactive) => onGeneral({ inactive })}
+        markAs={inactiveMarkAs(container)}
+        onMarkAs={(markAs) => onGeneral({ markAs })}
+      />
+    ),
+  };
+  const configTabs = tabs.map(({ key, fields: onTab, ...tab }): PanelTab<string> => {
     const pending = onTab.some(
       (f) =>
         !sameControlValue(
@@ -456,14 +483,12 @@ export function ContainerPanel({
         </p>
       ) : (
         <>
-          {firstTab !== undefined && (
-            <PanelTabs
-              label="Container properties"
-              tabs={[firstTab, ...restTabs]}
-              selected={currentTab}
-              onSelect={setTabKey}
-            />
-          )}
+          <PanelTabs
+            label="Container properties"
+            tabs={[generalTab, ...configTabs]}
+            selected={currentTab}
+            onSelect={setTabKey}
+          />
           <div className="contract-section">
             {illegal.length > 0 && (
               <>

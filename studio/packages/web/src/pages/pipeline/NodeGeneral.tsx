@@ -8,6 +8,7 @@ import {
   inactiveMarkAs,
   isInactive,
   userPropertiesApply,
+  type InactiveMarkAs,
 } from '@autonomy-studio/shared';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { Section } from '../../lib/Section';
@@ -73,70 +74,101 @@ export function NodeGeneral({
   });
   return (
     <>
-      <Section heading="Basics" help={FORM_SECTION_HINTS.node.basics}>
-        <LabelledControl label="Description">
-          {(id) => (
-            <AutoGrowTextarea
-              id={id}
-              aria-label="Activity description"
-              maxRows={2}
-              maxLength={DESCRIPTION_MAX_CHARS}
-              value={description}
-              onChange={(e) => store.getState().setNodeDescription(nodeId, e.target.value)}
-            />
-          )}
-        </LabelledControl>
-        <FieldGrid className="field-stack">
-          <FieldCell span="short">
-            <LabelledControl
-              label={STATE_LABEL.title}
-              about={{ name: STATE_LABEL.title, note: STATE_LABEL.description }}
-            >
-              {(id, describedBy) => (
-                <select
-                  id={id}
-                  aria-describedby={describedBy}
-                  value={inactive ? INACTIVE_STATE : ACTIVE}
-                  onChange={(e) =>
-                    store.getState().setNodeInactive(nodeId, e.target.value === INACTIVE_STATE)
-                  }
-                >
-                  <option value={ACTIVE}>Active</option>
-                  <option value={INACTIVE_STATE}>Inactive</option>
-                </select>
-              )}
-            </LabelledControl>
-          </FieldCell>
-          <FieldCell span="short">
-            <LabelledControl
-              label={MARK_AS_LABEL.title}
-              about={{ name: MARK_AS_LABEL.title, note: MARK_AS_LABEL.description }}
-            >
-              {(id, describedBy) => (
-                <select
-                  id={id}
-                  aria-describedby={describedBy}
-                  disabled={!inactive}
-                  value={markAs}
-                  onChange={(e) =>
-                    store
-                      .getState()
-                      .setNodeMarkAs(nodeId, InactiveMarkAsSchema.parse(e.target.value))
-                  }
-                >
-                  {InactiveMarkAsSchema.options.map((v) => (
-                    <option key={v} value={v}>
-                      {MARK_AS_LABEL.options?.[v] ?? v}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </LabelledControl>
-          </FieldCell>
-        </FieldGrid>
-      </Section>
+      <GeneralBasics
+        descriptionLabel="Activity description"
+        description={description}
+        onDescription={(text) => store.getState().setNodeDescription(nodeId, text)}
+        inactive={inactive}
+        onInactive={(off) => store.getState().setNodeInactive(nodeId, off)}
+        markAs={markAs}
+        onMarkAs={(v) => store.getState().setNodeMarkAs(nodeId, v)}
+      />
       <PolicyEditor store={store} nodeId={nodeId} />
       {showUserProperties && <NodeUserProperties store={store} nodeId={nodeId} picker={picker} />}
     </>
+  );
+}
+
+/**
+ * #1600 OR41 C0e — the General tab's Basics: Description, Activity state and
+ * Mark as. Presentational, so an activity (`NodeGeneral`) and a container
+ * (`ContainerPanel`) show the same three controls; each owner writes through
+ * to its own store action.
+ */
+export function GeneralBasics({
+  descriptionLabel,
+  description,
+  onDescription,
+  inactive,
+  onInactive,
+  markAs,
+  onMarkAs,
+}: {
+  /** The description field's accessible name (`Activity description`). */
+  descriptionLabel: string;
+  description: string;
+  onDescription: (text: string) => void;
+  inactive: boolean;
+  onInactive: (inactive: boolean) => void;
+  markAs: InactiveMarkAs;
+  onMarkAs: (markAs: InactiveMarkAs) => void;
+}) {
+  return (
+    <Section heading="Basics" help={FORM_SECTION_HINTS.node.basics}>
+      <LabelledControl label="Description">
+        {(id) => (
+          <AutoGrowTextarea
+            id={id}
+            aria-label={descriptionLabel}
+            maxRows={2}
+            maxLength={DESCRIPTION_MAX_CHARS}
+            value={description}
+            onChange={(e) => onDescription(e.target.value)}
+          />
+        )}
+      </LabelledControl>
+      <FieldGrid className="field-stack">
+        <FieldCell span="short">
+          <LabelledControl
+            label={STATE_LABEL.title}
+            about={{ name: STATE_LABEL.title, note: STATE_LABEL.description }}
+          >
+            {(id, describedBy) => (
+              <select
+                id={id}
+                aria-describedby={describedBy}
+                value={inactive ? INACTIVE_STATE : ACTIVE}
+                onChange={(e) => onInactive(e.target.value === INACTIVE_STATE)}
+              >
+                <option value={ACTIVE}>Active</option>
+                <option value={INACTIVE_STATE}>Inactive</option>
+              </select>
+            )}
+          </LabelledControl>
+        </FieldCell>
+        <FieldCell span="short">
+          <LabelledControl
+            label={MARK_AS_LABEL.title}
+            about={{ name: MARK_AS_LABEL.title, note: MARK_AS_LABEL.description }}
+          >
+            {(id, describedBy) => (
+              <select
+                id={id}
+                aria-describedby={describedBy}
+                disabled={!inactive}
+                value={markAs}
+                onChange={(e) => onMarkAs(InactiveMarkAsSchema.parse(e.target.value))}
+              >
+                {InactiveMarkAsSchema.options.map((v) => (
+                  <option key={v} value={v}>
+                    {MARK_AS_LABEL.options?.[v] ?? v}
+                  </option>
+                ))}
+              </select>
+            )}
+          </LabelledControl>
+        </FieldCell>
+      </FieldGrid>
+    </Section>
   );
 }

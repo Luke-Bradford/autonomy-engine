@@ -48,6 +48,7 @@ function mount(container: Container, before: Container[] = []) {
       variables={[]}
       globals={[]}
       onApply={onApply}
+      onGeneral={() => {}}
       onCopy={() => {}}
       onDuplicate={() => {}}
     />,
@@ -358,6 +359,7 @@ describe('ContainerPanel — following an undo without losing a draft (U17)', ()
         variables={[]}
         globals={[]}
         onApply={onApply}
+        onGeneral={() => {}}
         onCopy={() => {}}
         onDuplicate={() => {}}
       />,
@@ -373,6 +375,7 @@ describe('ContainerPanel — following an undo without losing a draft (U17)', ()
           variables={[]}
           globals={[]}
           onApply={onApply}
+          onGeneral={() => {}}
           onCopy={() => {}}
           onDuplicate={() => {}}
         />,
@@ -440,10 +443,13 @@ describe('ContainerPanel — the expression flyout on exitWhen and items (#864)'
         variables={[]}
         globals={[]}
         onApply={onApply}
+        onGeneral={() => {}}
         onCopy={() => {}}
         onDuplicate={() => {}}
       />,
     );
+    // #1600 C0e — General opens first; these fields are on the first config tab.
+    fireEvent.click(screen.getAllByRole('tab')[1]!);
     return onApply;
   }
   const open = (field: string) =>
@@ -501,7 +507,7 @@ describe('ContainerPanel — the expression flyout on exitWhen and items (#864)'
 
 describe('ContainerPanel — Copy and Duplicate container (U21 #935)', () => {
   function panel() {
-    const handlers = { onApply: vi.fn(), onCopy: vi.fn(), onDuplicate: vi.fn() };
+    const handlers = { onApply: vi.fn(), onGeneral: vi.fn(), onCopy: vi.fn(), onDuplicate: vi.fn() };
     render(
       <ContainerPanel
         container={LOOP}
@@ -583,12 +589,12 @@ describe('ContainerPanel — properties on tabs (#1477 OR29)', () => {
 
   it('splits a ForEach into Items · Concurrency · Settings', () => {
     mount(FOREACH);
-    expect(tabKeys()).toEqual(['items', 'concurrency', 'settings']);
+    expect(tabKeys()).toEqual(['general', 'items', 'concurrency', 'settings']);
   });
 
   it('splits an Until into Condition · Settings', () => {
     mount(LOOP);
-    expect(tabKeys()).toEqual(['condition', 'settings']);
+    expect(tabKeys()).toEqual(['general', 'condition', 'settings']);
   });
 
   it('shows Batch count only once Concurrency is chosen, and Items no longer', async () => {
@@ -665,5 +671,56 @@ describe('ContainerPanel — properties on tabs (#1477 OR29)', () => {
       await user.click(screen.getByRole('tab', { name }));
       expect(screen.getByRole('textbox', { name: /^Max rounds/ })).toBeDefined();
     }
+  });
+});
+
+describe('ContainerPanel — the General tab (#1600 C0e)', () => {
+  function mountGeneral(container: Container) {
+    const onGeneral = vi.fn();
+    render(
+      <ContainerPanel
+        container={container}
+        nodes={NODES}
+        edges={[]}
+        containers={[container]}
+        params={[]}
+        variables={[]}
+        globals={[]}
+        onApply={() => {}}
+        onGeneral={onGeneral}
+        onCopy={() => {}}
+        onDuplicate={() => {}}
+      />,
+    );
+    return onGeneral;
+  }
+
+  it('opens on General, with Description, Activity state and Mark as', () => {
+    mountGeneral({ ...LOOP, description: 'Retries the export' });
+    expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('textbox', { name: 'Container description' })).toHaveValue(
+      'Retries the export',
+    );
+    expect(screen.getByRole('combobox', { name: 'Activity state' })).toHaveValue('active');
+    expect(screen.getByRole('combobox', { name: 'Mark as' })).toBeDisabled();
+  });
+
+  it('writes each field through, outside Apply', () => {
+    const onGeneral = mountGeneral({ ...LOOP, state: 'inactive', onInactiveMarkAs: 'skipped' });
+    expect(screen.getByRole('combobox', { name: 'Mark as' })).toHaveValue('skipped');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Mark as' }), {
+      target: { value: 'failure' },
+    });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Activity state' }), {
+      target: { value: 'active' },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Container description' }), {
+      target: { value: 'x' },
+    });
+    expect(onGeneral.mock.calls).toEqual([
+      [{ markAs: 'failure' }],
+      [{ inactive: false }],
+      [{ description: 'x' }],
+    ]);
   });
 });
