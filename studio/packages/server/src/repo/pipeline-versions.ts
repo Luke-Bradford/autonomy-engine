@@ -14,6 +14,7 @@ import {
   type PipelineVersion,
   summarizeIssueList,
   isInactive,
+  switchedOffNodeIds,
 } from '@autonomy-studio/shared';
 import { pipelineVersions } from '../db/schema.js';
 import { listOwnerGlobalTypes } from './global-params.js';
@@ -292,9 +293,11 @@ function gatePipelineVersion(
   // existing missing-version path.
   // OWNER-SCOPED like `resolvePipeline` below: another owner's version is never
   // classified, so the refusal can never confirm that someone else's id exists.
+  // #1600 C0e — nor does one inside an inactive container.
+  const switchedOff = switchedOffNodeIds(lowered.nodes, lowered.containers);
   const debugCallees = lowered.nodes
     // #1600 C0c — an inactive call node starts no child (`literalCallTargets`).
-    .filter((n) => !isInactive(n))
+    .filter((n) => !switchedOff.has(n.id))
     .map((n) => n.call?.pipelineVersionId)
     .filter((id): id is string => id !== undefined && !id.includes('${'))
     .filter((id) => {

@@ -161,3 +161,31 @@ describe('an inactive container never enters and records its Mark as (#1600 C0e)
     expect(replay).toEqual(state);
   });
 });
+
+describe('rerun-from-failed copies an inactive container as inactive (#1600 C0e)', () => {
+  const copied = { status: 'success' as const, round: 0, outputs: {}, inactive: true as const };
+  const reseed = { sourceRunId: 'src', frontier: [], copiedOutputs: {}, copiedContainers: { c: copied } };
+
+  it('keeps the mark and projects no outputs when the pinned doc has it inactive', () => {
+    const { state, order, diagnostics } = driveRun(fan(offForeach()), {
+      resolve: simpleResolve(),
+      reseed,
+    });
+    expect(state.containers.c).toMatchObject({ status: 'success', inactive: true });
+    expect(state.outputs.c).toBeUndefined();
+    expect(order).not.toContain('body');
+    expect(diagnostics.filter((d) => d.includes('inactive mark'))).toEqual([]);
+  });
+
+  it('drops a mark the pinned doc does not back, and says so', () => {
+    const { state, diagnostics } = driveRun(
+      fan({ id: 'c', kind: 'foreach', children: ['body'], items: '${params.list}' }),
+      { params: { list: [1] }, resolve: simpleResolve(), reseed },
+    );
+    expect(state.containers.c!.inactive).toBeUndefined();
+    expect(state.containers.c!.status).toBe('success');
+    expect(diagnostics).toContain(
+      "impossible run.reseeded: inactive mark for container 'c', which is not inactive in the pinned version",
+    );
+  });
+});

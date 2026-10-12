@@ -20,6 +20,7 @@ import {
   inactiveMarkAs,
   isAddressableOutputName,
   isInactive,
+  switchedOffNodeIds,
 } from '../schemas/pipeline.js';
 import type { OutputContract } from './outputs.js';
 import { containerOutputContract, outputContract } from './outputs.js';
@@ -1514,11 +1515,13 @@ export function validateRefs(
     if (c.kind === 'foreach') for (const ch of c.children) foreachChildIds.add(ch);
   }
 
+  // #1600 C0e — and so is everything inside an inactive container.
+  const switchedOff = switchedOffNodeIds(doc.nodes, doc.containers ?? []);
   for (const node of doc.nodes) {
     // #1600 C0c — an inactive node never runs, so nothing in its config is ever
     // resolved: its refs are neither checked nor counted as reads (ADF leaves an
     // inactive activity out of validation, so it can hold an unfinished config).
-    if (isInactive(node)) continue;
+    if (switchedOff.has(node.id)) continue;
     const guaranteed = graph.guaranteed.get(node.id) ?? new Set<string>();
     const settled = graph.settled.get(node.id) ?? new Set<string>();
     const reachable = graph.reachable.get(node.id) ?? new Set<string>();
@@ -2745,6 +2748,14 @@ export const CONTAINER_CONFIG_FIELD_NAMES = [
 export type ContainerConfigField = (typeof CONTAINER_CONFIG_FIELD_NAMES)[number];
 
 /**
+ * #1600 OR41 C0e — a container's General fields, the ones every activity has
+ * too (catalogue spec §3). Not config: the panel's General tab edits them
+ * write-through, outside the derived config form, so they are not in
+ * `CONTAINER_CONFIG_FIELD_NAMES` and no kind refuses them.
+ */
+export const CONTAINER_GENERAL_FIELD_NAMES = ['description', 'state', 'onInactiveMarkAs'] as const;
+
+/**
  * Which config fields are meaningful on a container of each kind.
  *
  * `ContainerSchema` is a FLAT object with no kind cross-checks — a `stage` with
@@ -2895,6 +2906,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
   // `${nodes.<id>.output.*}` ref against a corrupt contract has the same one
   // root cause, so per-ref errors would just bury it.
   const nodeById = new Map<string, Node>(doc.nodes.map((n) => [n.id, n]));
+  const switchedOff = switchedOffNodeIds(doc.nodes, containers);
   for (const node of doc.nodes) {
     const beforeNode = errors.length;
     const contract = outputsById.get(node.id);
@@ -2908,7 +2920,8 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     // `StrictNodeSchema` rules still hold, and so does the output contract above:
     // a downstream ref validates against it whether or not the node is active.
     // (#1669's warning for an inactive `if`/`switch` is in the branch-edge loop.)
-    if (isInactive(node)) continue;
+    // #1600 C0e — a child of an inactive container never runs either.
+    if (switchedOff.has(node.id)) continue;
     // #1 F4 — where a secure flag cannot be honoured, refuse it rather than accept
     // a promise the run would break.
     validateSecurePolicy(node, errors);
@@ -3100,7 +3113,14 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
         );
       }
     }
-    if (c.kind === 'loop' && c.exitWhen === undefined) {
+    // #1600 OR41 C0e — an INACTIVE container never enters, so the rules that only
+    // a run needs (a loop's exitWhen and body, a foreach's items and body, and
+    // the `${}` scans of exitWhen/items) are left out, as for an inactive
+    // activity: it can stand in for an unfinished one. Shape rules still hold —
+    // children exist and are disjoint, a dead field is refused, and the parallel
+    // `@`-id and back-edge rules apply — as an inactive node keeps its parse rules.
+    const live = !isInactive(c);
+    if (live && c.kind === 'loop' && c.exitWhen === undefined) {
       errors.push(
         `container '${c.id}': a loop needs an exitWhen ` +
           '(maxRounds is only the round cap, not the exit condition)',
@@ -3119,7 +3139,11 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     // loop whose only child is a container id is empty to the reducer. Testing
     // raw `children.length` here would let exactly that doc — the one that makes
     // #487 and this fix inseparable — pass the validator and still fail the run.
-    if (c.kind === 'loop' && c.children.filter((ch) => nodeIdSet.has(ch)).length === 0) {
+    if (
+      live &&
+      c.kind === 'loop' &&
+      c.children.filter((ch) => nodeIdSet.has(ch)).length === 0
+    ) {
       errors.push(
         `container '${c.id}': makes no progress — a loop needs at least one child ` +
           '(an empty loop re-rounds forever: a round resets nothing, so exitWhen never changes)',
@@ -3194,7 +3218,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     // terminates (it is not the loop's infinite-re-round hazard) but is useless,
     // so it is refused for parity with the loop child-count rule.
     if (c.kind === 'foreach') {
-      if (c.items === undefined) {
+      if (live && c.items === undefined) {
         errors.push(
           `container '${c.id}': a foreach needs an items expression ` +
             '(the ${} array the body iterates)',
@@ -3206,10 +3230,10 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
       // `maxRounds` was refused HERE until #859; it is now the generic
       // `kind !== 'loop'` rule above, which covers a stage too and emits the
       // identical message for a foreach.
-      if (c.children.filter((ch) => nodeIdSet.has(ch)).length === 0) {
+      if (live && c.children.filter((ch) => nodeIdSet.has(ch)).length === 0) {
         errors.push(`container '${c.id}': a foreach needs at least one child (its per-item body)`);
       }
-      if (c.items !== undefined)
+      if (live && c.items !== undefined)
         validateForeachItems(
           c,
           declared,
@@ -3253,7 +3277,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
         }
       }
     }
-    if (c.exitWhen !== undefined) {
+    if (live && c.exitWhen !== undefined) {
       validateExitWhen(
         c,
         declared,

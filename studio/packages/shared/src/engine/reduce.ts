@@ -3681,6 +3681,18 @@ export function createEngine(doc: EngineDoc): Engine {
       // Fresh object, not the aliased event payload — matches the node branch's
       // immutable style (the fold never stores a reference into event data).
       containers[containerId] = { ...copied };
+      // #1600 C0e — a copied inactive container stays inactive, guarded like
+      // `copiedInactive` above: the pinned doc must have it switched off, or the
+      // mark is a malformed manifest and is dropped rather than trusted. It has
+      // no outputs to mirror, exactly as a live inactive container projects none.
+      if (copied.inactive === true) {
+        if (isInactive(containerById.get(containerId) ?? {})) continue;
+        diagnostics.push(
+          `impossible run.reseeded: inactive mark for container '${containerId}', which is not inactive in the pinned version`,
+        );
+        const { inactive: _dropped, ...executed } = containers[containerId]!;
+        containers[containerId] = executed;
+      }
       // Mirror the container's outputs into `state.outputs` — the SOLE source
       // `buildCtx` reads for `${nodes.<container>.output.*}`, exactly as
       // `exitContainer` does on a live completion. Without this a downstream
