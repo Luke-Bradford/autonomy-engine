@@ -1577,6 +1577,20 @@ describe("deriveNodeActivity — a rerun's COPIED frontier (#918)", () => {
     ];
   }
 
+  it('#1669 — a copied inactive node keeps its inactive flag, alongside its provenance', () => {
+    const rows = deriveNodeActivity(
+      reseededLog({
+        frontier: ['a', 'b'],
+        copiedOutputs: { a: {}, b: {} },
+        copiedInactive: ['b'],
+      }),
+    );
+    expect(rows.map((r) => [r.nodeId, r.status, r.inactive, r.copiedFromRunId])).toEqual([
+      ['a', 'success', undefined, 'r1'],
+      ['b', 'success', true, 'r1'],
+    ]);
+  });
+
   it('makes a row per frontier node carrying the copied outputs and the source run', () => {
     const rows = deriveNodeActivity(
       reseededLog({
