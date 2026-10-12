@@ -126,7 +126,7 @@ for (const { density, theme } of RUNS) {
       [...PAD, 'row-gap', 'column-gap', 'margin-top', 'margin-bottom', 'min-height'],
     );
     expect(g['.kind-gallery']).toMatchObject({ 'row-gap': '12px' });
-    expect(g['.kind-gallery__paste']).toMatchObject({ 'row-gap': 'normal', 'column-gap': '8px' });
+    expect(g['.kind-gallery__paste']).toMatchObject({ 'row-gap': '0px', 'column-gap': '8px' });
     expect(g['.kind-gallery__paste .kind-gallery__reason']).toMatchObject({ 'margin-top': '4px' });
     expect(g['.kind-gallery__group h3']).toMatchObject({
       'margin-top': '0px',
