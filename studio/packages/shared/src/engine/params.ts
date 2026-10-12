@@ -1875,7 +1875,7 @@ export function availableRefs(
   const secureOutputIds = secureOutputIdsOf(doc.nodes, containers);
   const declared = new Map(doc.params.map((p) => [p.name, p]));
   const variables = variableMapOf(doc.variables);
-  const globals = globalScopeOf(options);
+  const globals = globalScopeOf(options, doc.nodes);
 
   if (site.kind === 'container') {
     const c = containers.find((x) => x.id === site.containerId);
@@ -2634,7 +2634,10 @@ export interface ValidateDocOptions {
  * #1669 — also the doc-wide warning sink and the inactive ids it checks, which
  * ride here because this is the one part every scan scope spreads.
  */
-type GlobalScope = Pick<ScanScope, 'globals' | 'globalReads' | 'advisories' | 'inactiveIds'>;
+type GlobalScope = Pick<
+  ScanScope,
+  'globals' | 'globalReads' | 'advisories' | 'inactiveSucceededIds'
+>;
 
 /**
  * No globals: a trigger binding and a tool expression, whose closed root sets
@@ -2644,13 +2647,13 @@ const NO_GLOBALS: GlobalScope = { globals: new Map() };
 
 function globalScopeOf(
   options: Pick<ValidateDocOptions, 'globals' | 'globalReads' | 'advisories'>,
-  nodes: readonly Node[] = [],
+  nodes: readonly Node[],
 ): GlobalScope {
   return {
     globals: options.globals ?? new Map(),
     ...(options.globalReads !== undefined ? { globalReads: options.globalReads } : {}),
     ...(options.advisories !== undefined
-      ? { advisories: options.advisories, inactiveIds: inactiveSucceededIds(nodes) }
+      ? { advisories: options.advisories, inactiveSucceededIds: inactiveSucceededIds(nodes) }
       : {}),
   };
 }
@@ -3310,14 +3313,17 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     // #1669 — an inactive `if`/`switch` records no branch, so every branch edge
     // off it skips (C0c silences the run's dead-branch diagnostic for it). Said
     // once per node, as a warning: it is what Mark as decides, not a fault.
-    if (src !== undefined && branches !== undefined && isInactive(src)) {
-      if (g.advisories !== undefined && !inactiveBranchWarned.has(src.id)) {
-        inactiveBranchWarned.add(src.id);
-        g.advisories.push(
-          `node '${src.id}': inactive, so it records no branch and every activity on ` +
-            'its branch edges is skipped',
-        );
-      }
+    if (
+      g.advisories !== undefined &&
+      src !== undefined &&
+      branches !== undefined &&
+      isInactive(src) &&
+      !inactiveBranchWarned.has(src.id)
+    ) {
+      inactiveBranchWarned.add(src.id);
+      g.advisories.push(
+        `node '${src.id}': inactive, so it records no branch and none of its branch edges fires`,
+      );
     }
     if (branches === undefined) {
       errors.push(
@@ -4601,7 +4607,7 @@ interface ScanScope {
   /** #1669 — a side output: the non-blocking warnings (`ValidateDocOptions.advisories`). */
   advisories?: string[];
   /** #1669 — the inactive nodes marked Succeeded; set only with `advisories`. */
-  inactiveIds?: ReadonlySet<string>;
+  inactiveSucceededIds?: ReadonlySet<string>;
   /** Node ids whose SUCCESS (outputs) is guaranteed on every path here. */
   guaranteed: Set<string>;
   /**
@@ -5402,12 +5408,9 @@ function checkRefRoot(
       return;
     }
     if (scope.guaranteed.has(id)) {
-      // dominates + succeeded → available. #1669 — except from an inactive
-      // node marked Succeeded: it records no outputs, so this read saves and
-      // then fails at the reader's dispatch (ADF's limitation). A warning, not
-      // an error: `default()`'s first argument (`softOk`) is the fix, and
-      // refusing it would brick a version that runs once re-activated.
-      if (!softOk && scope.inactiveIds?.has(id)) {
+      // dominates + succeeded → available. #1669 — but an inactive node records
+      // no outputs, so this read fails at run: a warning, since `default()` fixes it.
+      if (!softOk && scope.inactiveSucceededIds?.has(id)) {
         scope.advisories?.push(
           `${where}: \${nodes.${id}.output.${name}} — node '${id}' is inactive, so it ` +
             "has no outputs and this read fails when it runs; make it default()'s first argument",

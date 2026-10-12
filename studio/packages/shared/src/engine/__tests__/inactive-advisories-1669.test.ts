@@ -118,10 +118,18 @@ describe("a read of an inactive node's output (#1669)", () => {
     expect(w[0]).toContain("node 'src' is inactive");
   });
 
-  it('without a sink nothing is collected and the errors are unchanged', () => {
-    expect(
-      validatePipelineDoc(doc([off(src), reader('${nodes.src.output.v}')], [ok('src', 'r')])),
-    ).toEqual([]);
+  it('the sink never changes the errors, of a clean doc or a refused one', () => {
+    const clean = doc([off(src), reader('${nodes.src.output.v}')], [ok('src', 'r')]);
+    const refused = doc(
+      [off(src), reader('${nodes.src.output.v} ${params.nope}')],
+      [ok('src', 'r')],
+    );
+    for (const d of [clean, refused]) {
+      const advisories: string[] = [];
+      expect(validatePipelineDoc(d, { advisories })).toEqual(validatePipelineDoc(d));
+      expect(advisories).toHaveLength(1);
+    }
+    expect(validatePipelineDoc(refused).length).toBeGreaterThan(0);
   });
 });
 
@@ -139,7 +147,7 @@ describe('an inactive if/switch (#1669)', () => {
   it('an inactive if with branch edges warns once, not once per edge', () => {
     const w = warn(doc([off(ifNode), a, b], [branch('c', 'a', 'true'), branch('c', 'b', 'false')]));
     expect(w).toEqual([
-      "node 'c': inactive, so it records no branch and every activity on its branch edges is skipped",
+      "node 'c': inactive, so it records no branch and none of its branch edges fires",
     ]);
   });
 

@@ -4527,6 +4527,7 @@ button.danger {
   font-size: var(--type-body-size);
 }
 
+/* #1669 — the warnings' list, under the errors' when both show. */
 .badge-list--warning {
   border-left-color: var(--warning);
 }

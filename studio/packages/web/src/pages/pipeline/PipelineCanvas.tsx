@@ -161,7 +161,7 @@ import {
   validateCanvas,
 } from './canvasDoc';
 import { SubjectIssues } from './SubjectIssues';
-import { SubjectIssuesContext, useSubjectIssues } from './issueContext';
+import { SubjectIssuesContext, useSubjectIssues, warningCountLabel } from './issueContext';
 import { NodeGeneral } from './NodeGeneral';
 import { PanelTabs } from './PanelTabs';
 import { refusalLead, tabStatusMark, tabStatuses } from './tabStatus';
@@ -1111,8 +1111,10 @@ export function PipelineCanvas({
   // string, because the raw form is what `issuesBySubject` attributes on (the
   // rewrite replaces the ids it reads). `nameIssues` names no element, so it is
   // never attributed and joins the full list only.
-  // #1669 — the warnings (a read that saves but fails when it runs) come out of
+  //
+  // #1669 — the warnings (a doc that saves but fails or skips at run) come out of
   // the same validation pass and are kept apart: they never refuse Save or Debug.
+  // Unattributed, so a card and its panel show only the issues that block.
   const { located, warnings } = useMemo(() => {
     const advisories: string[] = [];
     const rewrite = (raw: string) => ({
@@ -1127,7 +1129,7 @@ export function PipelineCanvas({
         ...policyIssues(nodes),
         ...descriptionIssues(nodes),
       ].map(rewrite),
-      warnings: advisories.map((raw) => rewrite(raw).text),
+      warnings: advisories.map((raw) => readableIssue(raw, nodes, edges, containers)),
     };
   }, [nodes, edges, containers, params, variables, globals]);
   const clientIssues = useMemo(
@@ -2440,15 +2442,13 @@ export function PipelineCanvas({
                           {issues.length}
                         </span>
                         {warnings.length > 0 && (
-                          <>
-                            {' '}
-                            <span
-                              className="count-badge count-badge--warning"
-                              aria-label={`${String(warnings.length)} warning(s)`}
-                            >
-                              {warnings.length}
+                          <span className="count-badge count-badge--warning">
+                            {warnings.length}
+                            <span className="visually-hidden">
+                              {' '}
+                              {warnings.length === 1 ? 'warning' : 'warnings'}
                             </span>
-                          </>
+                          </span>
                         )}
                       </button>
                       {/* #1477 OR29 — U21's Paste, moved here from a full-width
@@ -2602,8 +2602,8 @@ export function PipelineCanvas({
                         {/* #1669 — these save; they say what fails at run. */}
                         {warnings.length > 0 && (
                           <div className="badge-list badge-list--warning">
-                            <strong>{warnings.length} warning(s)</strong> — these save, but fail or
-                            skip at run.
+                            <strong>{warningCountLabel(warnings.length)}</strong> — these save, but
+                            fail or skip at run.
                             <ul>
                               {warnings.map((msg, i) => (
                                 <li key={`${String(i)}-${msg}`}>{msg}</li>

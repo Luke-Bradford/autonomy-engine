@@ -217,12 +217,12 @@ test('#1669 — Problems warns about a read of an inactive output and an inactiv
 
   const panel = page.getByRole('region', { name: 'Problems', exact: true });
   const warnings = panel.locator('.badge-list--warning');
-  await expect(warnings.locator('strong')).toHaveText('2 warning(s)');
+  await expect(warnings.locator('strong')).toHaveText('2 warnings');
   await expect(warnings.locator('li')).toHaveCount(2);
   // The branch rule runs before the reads, so the If's warning is first, and
   // each names the activity, not its id.
   await expect(warnings.locator('li').nth(0)).toContainText(
-    "node 'If condition 1': inactive, so it records no branch",
+    "node 'If condition 1': inactive, so it records no branch and none of its branch edges fires",
   );
   await expect(warnings.locator('li').nth(1)).toContainText(
     "is inactive, so it has no outputs and this read fails when it runs; make it default()'s first argument",
@@ -231,7 +231,8 @@ test('#1669 — Problems warns about a read of an inactive output and an inactiv
   await expect(panel.locator('.badge-list:not(.badge-list--warning)')).toHaveCount(0);
   const toggle = page.getByRole('button', { name: /^Problems/ });
   await expect(toggle.locator('.count-badge').first()).toHaveText('0');
-  await expect(toggle.locator('.count-badge--warning')).toHaveText('2');
+  await expect(toggle.locator('.count-badge--warning')).toHaveText('2 warnings');
+  await expect(toggle).toHaveAccessibleName('Problems 0 2 warnings');
   // UI STANDARD rule 7 — the list is on screen at 1440x900 without scrolling.
   const box = await warnings.boundingBox();
   expect(box).not.toBeNull();
