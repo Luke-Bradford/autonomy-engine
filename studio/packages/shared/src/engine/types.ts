@@ -195,12 +195,13 @@ export type NodeRunStatus = z.infer<typeof NodeRunStatusSchema>;
 export const TerminalNodeStatusSchema = z.enum(['success', 'failure', 'skipped']);
 export type TerminalNodeStatus = z.infer<typeof TerminalNodeStatusSchema>;
 // #1600 C0c — an inactive node's `onInactiveMarkAs` IS its terminal status, so the
-// two vocabularies must stay equal (each direction a compile error if one drifts).
-type _InactiveMarkAsIsTerminal = [
-  z.infer<typeof InactiveMarkAsSchema> extends TerminalNodeStatus ? true : never,
-  TerminalNodeStatus extends z.infer<typeof InactiveMarkAsSchema> ? true : never,
-];
-export const INACTIVE_MARK_AS_IS_TERMINAL: _InactiveMarkAsIsTerminal = [true, true];
+// two vocabularies must stay equal: a drift in either direction fails to compile.
+// Type-only, so it adds nothing to the runtime surface.
+type SameUnion<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+type MustHold<T extends true> = T;
+export type InactiveMarkAsIsTerminal = MustHold<
+  SameUnion<z.infer<typeof InactiveMarkAsSchema>, TerminalNodeStatus>
+>;
 
 /**
  * Runtime membership test for `TerminalNodeStatusSchema`. Derived from the
