@@ -364,6 +364,7 @@ export function projectActivityRuns(
    * same before/after pair:
    * - a container the rerun's `run.reseeded` copied is REUSED, with no times;
    * - one that went straight from pending to `skipped` never started: no times;
+   * - nor did an inactive one (#1600 C0e), whatever its Mark as;
    * - otherwise it started at this event, and if it is now terminal it ended
    *   here too.
    */
@@ -376,6 +377,7 @@ export function projectActivityRuns(
         const copied = e.type === 'run.reseeded' && reused.has(c.id);
         const unstarted =
           copied ||
+          now.inactive === true ||
           ((before.containers[c.id] === undefined ||
             before.containers[c.id]?.status === 'pending') &&
             now.status === 'skipped');
@@ -386,6 +388,7 @@ export function projectActivityRuns(
           reason: null,
           skipReason: null,
           reused: copied,
+          inactive: now.inactive === true,
           startedAt: unstarted ? null : ts,
           finishedAt: null,
           durationMs: null,

@@ -5,6 +5,7 @@ import {
   CATALOG_VERSION,
   type ActivityCatalogEntry,
   type NewTrigger,
+  type Container,
   type Node,
 } from '@autonomy-studio/shared';
 import { connections } from '../../db/schema.js';
@@ -41,7 +42,12 @@ function ifNode(id: string, connectionId?: string): Node {
   };
 }
 
-function versionWithNodes(db: Db, ownerId: string, nodes: Node[]): string {
+function versionWithNodes(
+  db: Db,
+  ownerId: string,
+  nodes: Node[],
+  containers: Container[] = [],
+): string {
   const pipeline = createPipeline(db, { ownerId, name: 'P' });
   return createPipelineVersion(
     db,
@@ -54,6 +60,7 @@ function versionWithNodes(db: Db, ownerId: string, nodes: Node[]): string {
       outputs: [],
       nodes,
       edges: [],
+      containers,
       catalogVersion: CATALOG_VERSION,
     },
     { catalog: STUB_SAVE_CATALOG },
@@ -271,6 +278,18 @@ describe('unreadyConnectionsForVersion (#3 G8b enable-time gate)', () => {
     ]);
     const onlyOff = versionWithNodes(db, 'local', [off]);
     expect(unreadyConnectionsForVersion(db, 'local', onlyOff)).toEqual([]);
+  });
+
+  it('#1600 C0e — skips a node inside an INACTIVE container, and only that', () => {
+    const { db } = freshDb();
+    const connId = needsSecretConnection(db);
+    const stage: Container = { id: 'c', kind: 'stage', children: ['n1'] };
+    const off = versionWithNodes(db, 'local', [llmNode('n1', connId)], [
+      { ...stage, state: 'inactive' },
+    ]);
+    expect(unreadyConnectionsForVersion(db, 'local', off)).toEqual([]);
+    const on = versionWithNodes(db, 'local', [llmNode('n1', connId)], [stage]);
+    expect(unreadyConnectionsForVersion(db, 'local', on)).toHaveLength(1);
   });
 
   it('folds a CROSS-OWNER connection to missing (never confirms another owner’s connection)', () => {

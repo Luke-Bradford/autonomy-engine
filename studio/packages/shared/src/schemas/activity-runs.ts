@@ -149,8 +149,11 @@ export const ActivityRunGroupSchema = z.object({
   skipReason: SkipReasonSchema.nullable(),
   /** Carried over from the run this one reran, not executed here. */
   reused: z.boolean(),
+  /** #1600 C0e — switched off: it never entered, and `status` is its *Mark as*
+   * outcome. Its body has no rows. */
+  inactive: z.boolean(),
   /** Epoch ms of the event that started it; `null` when it never started (it
-   * was skipped) or was reused. */
+   * was skipped or is inactive) or was reused. */
   startedAt: z.number().int().nullable(),
   finishedAt: z.number().int().nullable(),
   durationMs: count,
