@@ -18,6 +18,18 @@ export const ACTIVITY_RUN_COLUMNS = [
   'Error',
 ] as const;
 
+/**
+ * #1600 OR41 C0d — the user-property columns that follow the fixed ones: each
+ * distinct name any row of the run carries, in first-seen order. Read from every
+ * row, not the filtered view, so a column does not come and go as filters
+ * change.
+ */
+export function userPropertyColumns(rows: readonly ActivityRun[]): string[] {
+  const names = new Set<string>();
+  for (const row of rows) for (const p of row.userProperties ?? []) names.add(p.name);
+  return [...names];
+}
+
 /** An iteration named by its container's kind: `Item 2 of 2 · orders_b.csv`,
  * or `Round 3`. */
 export function iterationLabel(

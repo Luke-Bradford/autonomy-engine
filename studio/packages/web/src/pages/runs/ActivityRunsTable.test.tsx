@@ -4,6 +4,7 @@ import type { ActivityRun, ActivityRunGroup } from '@autonomy-studio/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActivityRunsTable } from './ActivityRunsTable';
 import { ACTIVITY_RUN_COLUMNS, iterationText } from './activityRunsColumns';
+import { SECURE_REDACTED } from '@autonomy-studio/shared';
 import { inactiveStatusLabel, nodeStatusLabel } from './nodeStatus';
 import { activityRun } from '../../testing/activityRun';
 
@@ -423,6 +424,28 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
   );
   const showGroups = (group: ActivityRunGroup = GROUP) => render(table(null, group));
 
+  it('#1600 C0d — pads group and iteration lines under the user-property columns', () => {
+    const withProp = { ...item(0), userProperties: [{ name: 'File', value: 'a.csv' }] };
+    render(
+      <MemoryRouter>
+        <ActivityRunsTable
+          rows={[withProp, item(1)]}
+          groups={[GROUP]}
+          error={null}
+          runStatus="failure"
+          nameOf={() => null}
+          typeOf={() => null}
+          containerNameOf={() => null}
+        />
+      </MemoryRouter>,
+    );
+    const width = screen.getAllByRole('columnheader').length;
+    expect(width).toBe(ACTIVITY_RUN_COLUMNS.length + 1);
+    for (const row of screen.getAllByRole('row').slice(1)) {
+      expect(within(row).getAllByRole('cell')).toHaveLength(width);
+    }
+  });
+
   it('says why a skipped container was skipped, after its status', () => {
     showGroups({
       ...GROUP,
@@ -764,5 +787,50 @@ describe('#1557 ActivityRunsTable — rows from the run log alone', () => {
     expect(screen.queryByText(/Rows from the run log only/)).toBeNull();
     showBased();
     expect(screen.queryByText(/Rows from the run log only/)).toBeNull();
+  });
+});
+
+describe('#1600 C0d ActivityRunsTable — user properties as columns', () => {
+  const props = (userProperties: ActivityRun['userProperties']) => ({ ...BASE, userProperties });
+  const extra = (row: HTMLElement) =>
+    within(row)
+      .getAllByRole('cell')
+      .slice(ACTIVITY_RUN_COLUMNS.length)
+      .map((c) => c.textContent);
+
+  it("adds one column per name any row carries, in first-seen order, with each row's value", () => {
+    show([
+      props([
+        { name: 'File', value: 'orders.csv' },
+        { name: 'Batch', error: "int('abc') is not a number" },
+      ]),
+      { ...props([{ name: 'Owner', value: 'finance' }]), key: 'a#1', attemptId: 'a#1' },
+      { ...BASE, key: 'w#0', activityId: 'w', nodeId: 'w', attemptId: 'w#0' },
+    ]);
+    expect(
+      screen
+        .getAllByRole('columnheader')
+        .slice(ACTIVITY_RUN_COLUMNS.length)
+        .map((h) => h.textContent),
+    ).toEqual(['File', 'Batch', 'Owner']);
+    const [, first, second, plain] = screen.getAllByRole('row');
+    expect(extra(first!)).toEqual(['orders.csv', "Not resolved: int('abc') is not a number", '']);
+    expect(extra(second!)).toEqual(['', '', 'finance']);
+    expect(extra(plain!)).toEqual(['', '', '']);
+  });
+
+  it('shows the secure marker as the run log holds it, and marks a cut value', () => {
+    show([
+      props([
+        { name: 'Secret', value: SECURE_REDACTED },
+        { name: 'Long', value: 'abc', truncated: true },
+      ]),
+    ]);
+    expect(extra(screen.getAllByRole('row')[1]!)).toEqual([SECURE_REDACTED, 'abc…']);
+  });
+
+  it('adds no column when no row has a user property', () => {
+    show([BASE]);
+    expect(screen.getAllByRole('columnheader')).toHaveLength(ACTIVITY_RUN_COLUMNS.length);
   });
 });

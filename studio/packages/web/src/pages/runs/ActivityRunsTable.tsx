@@ -7,6 +7,7 @@ import {
   TERMINAL_RUN_ROW_STATUS,
   runStartIsReal,
   type ActivityRun,
+  type ResolvedUserProperty,
   type ActivityRunChild,
   type ActivityRunGroup,
   type ActivityRunsBasis,
@@ -50,7 +51,12 @@ import {
   nodeStatusPillClass,
 } from './nodeStatus';
 import { runDetailPath } from './runPath';
-import { ACTIVITY_RUN_COLUMNS, iterationLabel, iterationText } from './activityRunsColumns';
+import {
+  ACTIVITY_RUN_COLUMNS,
+  iterationLabel,
+  iterationText,
+  userPropertyColumns,
+} from './activityRunsColumns';
 import { RUN_DRAWER_ID } from './RunDrawer';
 import { activityRunEntries } from './activityRunsTree';
 import { skipReasonText } from './skipReasonText';
@@ -194,6 +200,31 @@ const BETWEEN_ITERATION_AND_ERROR = ACTIVITY_RUN_COLUMNS.slice(
   ACTIVITY_RUN_COLUMNS.indexOf('Error'),
 );
 
+/** #1600 C0d — one user property's cell: its resolved value, the error it
+ * could not be resolved with, or the secure marker; empty when the row has no
+ * property of that name. */
+function UserPropertyCell({ prop }: { prop: ResolvedUserProperty | undefined }) {
+  if (prop === undefined) return null;
+  if (prop.error !== undefined) {
+    const text = isSecureMarker(prop.error) ? prop.error : `Not resolved: ${prop.error}`;
+    return (
+      <OneLine className="activity-runs__prop-error" title={text}>
+        {text}
+      </OneLine>
+    );
+  }
+  const value = prop.value ?? '';
+  if (isSecureMarker(value)) {
+    return (
+      <OneLine as="code" title="Withheld from the run log: the activity is secure">
+        {value}
+      </OneLine>
+    );
+  }
+  const shown = prop.truncated === true ? `${value}…` : value;
+  return <OneLine title={shown}>{shown}</OneLine>;
+}
+
 /** #1557 — what a log-only account leaves out (`projectActivityRunsFromLog`). */
 const LOG_BASIS_NOTE =
   'The version this run used can no longer be read, so these rows come from the run log alone. ' +
@@ -273,6 +304,8 @@ export function ActivityRunsTable({
     () => (rows === null ? [] : activityRunEntries(rows, groups)),
     [rows, groups],
   );
+  const propColumns = useMemo(() => userPropertyColumns(rows ?? []), [rows]);
+  const propPadding = propColumns.map((name) => <td key={`up:${name}`} />);
   const [searchParams, setSearchParams] = useLatestSearchParams();
   const view = readActivityRunsView(searchParams);
   /* Each control writes only its OWN params, so two quick changes cannot undo
@@ -475,6 +508,12 @@ export function ActivityRunsTable({
                     </th>
                   );
                 })}
+                {/* #1600 C0d — the user properties, after the fixed columns. */}
+                {propColumns.map((name) => (
+                  <th key={`up:${name}`} scope="col" title={`User property ${name}`}>
+                    {name}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -523,6 +562,7 @@ export function ActivityRunsTable({
                           </OneLine>
                         )}
                       </td>
+                      {propPadding}
                     </tr>
                   );
                 }
@@ -558,6 +598,7 @@ export function ActivityRunsTable({
                         <td key={c} />
                       ))}
                       <td />
+                      {propPadding}
                     </tr>
                   );
                 }
@@ -666,6 +707,13 @@ export function ActivityRunsTable({
                         </OneLine>
                       )}
                     </td>
+                    {propColumns.map((name) => (
+                      <td key={`up:${name}`}>
+                        <UserPropertyCell
+                          prop={row.userProperties?.find((p) => p.name === name)}
+                        />
+                      </td>
+                    ))}
                   </tr>
                 );
               })}
