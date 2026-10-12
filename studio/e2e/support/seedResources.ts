@@ -7,9 +7,10 @@ import { expect, type Page } from '@playwright/test';
  * ONE authority, because there had already been several. Specs each grew their
  * own "POST it, assert 201, return the id" — most of them hard-wired to the one
  * `kind` that spec happened to need, so the next spec could not reuse them and
- * wrote another (#1181 folded nine). That is the shape #1021/#1106/#1088 complain about, and the
- * fix is a general helper rather than another specific one: both of these take
- * the body verbatim, so no kind is privileged and no spec has to widen them.
+ * wrote another (#1181 folded nine). That is the shape #1021/#1106/#1088
+ * complain about, and the fix is a general helper rather than another specific
+ * one: both of these take the body verbatim, so no kind is privileged and no
+ * spec has to widen them.
  *
  * The FAILURE MESSAGE is the reason these are worth extracting beyond the
  * duplication argument. A seed that 400s reports the server's own reason, so a

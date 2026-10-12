@@ -30,7 +30,10 @@ async function openTriggers(page: Page): Promise<string[]> {
   return problems;
 }
 
-/** The trigger write body for the API's own run-window checks, with `runWindows` left to the caller. */
+/**
+ * The trigger write body for the API's own run-window checks, with
+ * `runWindows` left to the caller.
+ */
 function triggerBody(name: string, runWindows: unknown) {
   return {
     name,
