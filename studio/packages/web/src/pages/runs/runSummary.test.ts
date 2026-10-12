@@ -1795,6 +1795,7 @@ describe('reconcileNodeActivity', () => {
       outputValues: undefined,
       copiedFromRunId: undefined,
       copiedChildRunId: undefined,
+      inactive: false,
       instanceId: undefined,
       startedAtMs: undefined,
       endedAtMs: undefined,

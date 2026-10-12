@@ -1,6 +1,7 @@
 import {
   catalog,
   interpolationMode,
+  isInactive,
   type ActivityCatalogEntry,
   type ConnectionDependentsResponse,
   type ConnectionKind,
@@ -150,6 +151,11 @@ function connectionRefsForVersion(
   const seen = new Set<string>();
   const seenDynamicNodes = new Set<string>();
   for (const node of version.nodes) {
+    // #1600 OR41 C0c — an inactive node never runs, so it reaches no connection:
+    // an unfinished one behind it (ADF's placeholder use) must not stop the
+    // pipeline's triggers enabling. It stays in the DEPENDENTS lists (where a
+    // connection is used), because re-activating it would need that connection.
+    if (isInactive(node)) continue;
     // Every ref this node contributes — one, or a pair's two. The per-ref skips
     // below apply per END: a paired node may legitimately have a literal source
     // and a `${}`-dynamic sink, and reporting the dynamic one as `missing`

@@ -84,6 +84,7 @@ function attemptOf(e: EngineEvent): { nodeId: string; attemptId: string } | null
     case 'node.dispatched':
     case 'node.succeeded':
     case 'node.failed':
+    case 'node.inactive':
     case 'condition.evaluated':
     case 'switch.evaluated':
     case 'variable.set':
@@ -116,6 +117,9 @@ function resultOf(
       return { attemptId: e.attemptId, status: 'success' };
     case 'node.failed':
       return { attemptId: e.attemptId, status: 'failure' };
+    case 'node.inactive':
+      // #1600 C0c — a switched-off node settles on its recorded *Mark as*.
+      return { attemptId: e.attemptId, status: e.markAs };
     case 'call.returned':
       return e.childOutcome === 'success'
         ? { attemptId: e.attemptId, status: 'success' }
@@ -175,6 +179,7 @@ function emptyRow(
     attempt: null,
     status,
     reused: false,
+    inactive: false,
     startedAt: null,
     finishedAt: null,
     durationMs: null,
@@ -219,6 +224,9 @@ function fillDetail(row: ProjectedActivityRun, e: EngineEvent, payload: unknown)
       row.rowsWritten = loggedCount(e.outputs.rowsWritten);
       row.bytesRead = loggedCount(e.outputs.bytesRead);
       row.bytesWritten = loggedCount(e.outputs.bytesWritten);
+      return;
+    case 'node.inactive':
+      row.inactive = true;
       return;
     case 'node.failed':
       row.error = {
