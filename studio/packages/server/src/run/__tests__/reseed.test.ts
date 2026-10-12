@@ -321,9 +321,29 @@ describe('RS4 producer — a copied call node links its child; a re-run one gets
     const reseeded = r2Events[1] as Extract<EngineEvent, { type: 'run.reseeded' }>;
     expect(reseeded.frontier).toEqual(['a']);
     expect('childLinks' in reseeded).toBe(false);
+    // #1669 — no inactive node was copied, so the logged shape is unchanged.
+    expect('copiedInactive' in reseeded).toBe(false);
     const [r2Call] = returned(r2Events, 'call');
     expect(r2Call!.childOutcome).toBe('success');
     expect(r2Call!.childRunId).not.toBe(r1Call!.childRunId);
+  });
+});
+
+describe('#1669 — a copied inactive node stays inactive in the rerun', () => {
+  it('logs copiedInactive and folds the copy as inactive', async () => {
+    const { db } = freshDb();
+    // a (inactive, Mark as Succeeded) → b, b fails in R1.
+    const pvId = seedVersion(db, [{ ...node('a'), state: 'inactive' }, node('b')], [edge('a', 'b')]);
+    const r1 = await seedRun(db, pvId, { nodes: { b: { outcome: 'failure' } } });
+    expect(getRun(db, r1)!.status).toBe('failure');
+
+    const { runId: r2, drive } = await createReseedService(deps(db, {})).rerunFromFailed(r1);
+    await drive;
+    const r2Events = loadEngineEvents(db, r2);
+    const reseeded = r2Events[1] as Extract<EngineEvent, { type: 'run.reseeded' }>;
+    expect(reseeded.frontier).toEqual(['a']);
+    expect(reseeded.copiedInactive).toEqual(['a']);
+    expect(getRun(db, r2)!.status).toBe('success');
   });
 });
 

@@ -3616,7 +3616,7 @@ export function createEngine(doc: EngineDoc): Engine {
     for (const nodeId of new Set(event.copiedInactive ?? [])) {
       const why = !applied.has(nodeId)
         ? 'which is not a copied frontier node'
-        : !isInactive(docNodeFor(nodeId))
+        : !isInactive(docNodeFor(nodeId) ?? {})
           ? 'which is not inactive in the pinned version'
           : null;
       if (why !== null) {
@@ -5259,7 +5259,10 @@ export function createEngine(doc: EngineDoc): Engine {
           : ns.sourceChildRunId;
       if (sourceChildRunId !== undefined) childLinks.push({ callNodeId: id, sourceChildRunId });
     }
-    const copiedInactive = frontier.filter((id) => isInactive(nodeById.get(id)));
+    const copiedInactive = frontier.filter((id) => {
+      const n = nodeById.get(id);
+      return n !== undefined && isInactive(n);
+    });
     return { frontier, copiedOutputs, copiedContainers, childLinks, copiedInactive };
   }
 

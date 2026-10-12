@@ -477,6 +477,36 @@ describe('#1484 activity runs — one row per attempt', () => {
     ]);
   });
 
+  it('#1669 — a reused row is inactive when the rerun copied an inactive activity', () => {
+    const doc = {
+      nodes: [node('a', { state: 'inactive' }), node('b')],
+      edges: [edge('a', 'b')],
+      containers: [],
+      variables: [],
+    } as never as Parameters<typeof buildEngine>[0];
+    const at = (ts: number, event: EngineEvent) => ({ ts, event, payload: event });
+    const log = [
+      at(1, {
+        type: 'run.started',
+        runId: 'R2',
+        pipelineVersionId: 'pv',
+        params: {},
+        rerunOf: 'R1',
+      } satisfies EngineEvent),
+      at(2, {
+        type: 'run.reseeded',
+        runId: 'R2',
+        sourceRunId: 'R1',
+        frontier: ['a'],
+        copiedOutputs: { a: {} },
+        copiedContainers: {},
+        copiedInactive: ['a'],
+      } satisfies EngineEvent),
+    ];
+    const rows = projectActivityRuns(doc, buildEngine(doc), log).rows;
+    expect(rows[0]).toMatchObject({ key: 'reused:a', reused: true, inactive: true, status: 'success' });
+  });
+
   it('shows what a rerun reused, and the refusal of a called pipeline as its error', () => {
     const doc = {
       nodes: [
@@ -1218,6 +1248,25 @@ describe('#1557 activity runs from the log alone — the version no longer resol
       ['hold#0', 'success', 5, null],
       ['x#0', 'failure', 4, 'stuck'],
       ['x#1', 'dispatched', null, null],
+    ]);
+  });
+
+  it('#1669 — a reused row is inactive when the reseed copied it as inactive', () => {
+    const { rows } = projectActivityRunsFromLog([
+      at(1, { ...started, rerunOf: 'R0' }),
+      at(2, {
+        type: 'run.reseeded',
+        runId: 'R',
+        sourceRunId: 'R0',
+        frontier: ['a', 'b'],
+        copiedOutputs: { a: {}, b: {} },
+        copiedContainers: {},
+        copiedInactive: ['b'],
+      }),
+    ]);
+    expect(rows.map((r) => [r.key, r.reused, r.inactive])).toEqual([
+      ['reused:a', true, false],
+      ['reused:b', true, true],
     ]);
   });
 
