@@ -153,6 +153,7 @@ import { ContractSection, OutputRow, ParamRow, VariableRow } from './ContractEdi
 import { OUTPUT_COLUMNS, PARAM_COLUMNS, VARIABLE_COLUMNS } from './contractColumns';
 import {
   isOwnPolicyIssue,
+  descriptionIssues,
   policyIssues,
   saveDisabledReason,
   toVersionBody,
@@ -1116,6 +1117,7 @@ export function PipelineCanvas({
       [
         ...validateCanvas(nodes, edges, containers, params, variables, globals),
         ...policyIssues(nodes),
+        ...descriptionIssues(nodes),
       ].map((raw) => ({
         raw,
         text: readableIssue(raw, nodes, edges, containers),

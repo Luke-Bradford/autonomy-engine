@@ -4720,3 +4720,56 @@ describe('insertTemplate (#1413 OR22)', () => {
     expect(s.getState().edges[1]).toMatchObject({ on: 'branch', branch: 'true' });
   });
 });
+
+describe('setNodeDescription (#1600 OR41 C0b)', () => {
+  const setup = (description?: string) => {
+    const store = createCanvasStore();
+    store.setState({
+      nodes: [
+        {
+          id: 'n',
+          type: 'http_request',
+          config: { url: 'https://example.test/x' },
+          position: { x: 0, y: 0 },
+          ...(description === undefined ? {} : { description }),
+        } as Node,
+        { id: 'm', type: 'http_request', config: {}, position: { x: 0, y: 0 } } as Node,
+      ],
+    });
+    return store;
+  };
+  const node = (store: ReturnType<typeof createCanvasStore>) => store.getState().nodes[0]!;
+
+  it('writes the text, dirties the doc, and a typing burst is ONE undo step', () => {
+    const store = setup();
+    store.getState().setNodeDescription('n', 'L');
+    store.getState().setNodeDescription('n', 'Lo');
+    store.getState().setNodeDescription('n', 'Loads');
+    expect(node(store).description).toBe('Loads');
+    expect(store.getState().dirty).toBe(true);
+    store.getState().undo();
+    expect('description' in node(store)).toBe(false);
+  });
+
+  it("another node's burst is its own undo step", () => {
+    const store = setup();
+    store.getState().setNodeDescription('n', 'one');
+    store.getState().setNodeDescription('m', 'two');
+    store.getState().undo();
+    expect(node(store).description).toBe('one');
+    expect('description' in store.getState().nodes[1]!).toBe(false);
+  });
+
+  it('clearing it removes the key, so the doc is what it was before', () => {
+    const store = setup('Loads');
+    store.getState().setNodeDescription('n', '');
+    expect('description' in node(store)).toBe(false);
+  });
+
+  it('is a no-op for an unknown node, and for unchanged text', () => {
+    const store = setup('Loads');
+    store.getState().setNodeDescription('missing', 'x');
+    store.getState().setNodeDescription('n', 'Loads');
+    expect(store.getState().dirty).toBe(false);
+  });
+});

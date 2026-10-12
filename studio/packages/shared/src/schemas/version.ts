@@ -488,6 +488,13 @@
 // so the older build loses descriptive metadata and nothing else — the inert
 // additive shape M1 and M3 did not bump for, and the one #1 F8a's pipeline
 // description/annotations rode in without a bump.
+// NO BUMP for #1600 OR41 C0b: `NodeSchema.description`, an activity's free-text
+// description. Additive and read by nothing a run does — the executor, the
+// reducer and the readiness gate never look at it — so a pre-C0b build strips it
+// and dispatches the doc exactly as authored: descriptive metadata lost, nothing
+// mis-run. The inert shape M1, M3 and #1477 did not bump for. Not evaluated, so
+// a `${nodes.<id>…}` inside one is text; `remapNodeRefs` still rewrites it on a
+// duplicate or paste, which keeps such a mention pointing at the copied node.
 export const CATALOG_VERSION = 33;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did

@@ -45,7 +45,11 @@ describe('issueTarget (#1477)', () => {
 
   it('reads the run policy and each binding slot', () => {
     expect(issueTarget("node 'n': policy.secureInput is not supported", 'n')).toEqual({
-      policy: true,
+      general: true,
+    });
+    // #1600 C0b — the description sits on General too, above the run policy.
+    expect(issueTarget("node 'n': description: the description can be at most 4000", 'n')).toEqual({
+      general: true,
     });
     expect(issueTarget('nodes.n.connectionIds.sink: unknown function', 'n')).toEqual({
       slot: 'sinkConnection',
@@ -90,12 +94,13 @@ describe('tabStatuses (#1477)', () => {
           'nodes.n.connectionIds.sink: bad',
           "node 'n': config.mapping: required",
           "node 'n': policy.secureOutput is not supported",
+          "node 'n': description: the description can be at most 4000 characters",
         ],
       }),
     );
     expect(statuses.get('sink')?.problems).toBe(2);
     expect(statuses.get('mapping')?.problems).toBe(1);
-    expect(statuses.get('general')?.problems).toBe(1);
+    expect(statuses.get('general')?.problems).toBe(2);
     expect(statuses.has('source')).toBe(false);
   });
 

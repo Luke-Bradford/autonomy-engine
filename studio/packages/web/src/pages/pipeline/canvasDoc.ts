@@ -129,6 +129,23 @@ export function policyIssues(nodes: Node[]): string[] {
 }
 
 /**
+ * #1600 OR41 C0b — `policyIssues`' twin for an activity's description: an
+ * over-long one (an import or the API can carry it past the field's
+ * `maxLength`) becomes a badge naming the node instead of a raw ZodError at
+ * save. Read through `StrictNodeSchema.shape.description`, so the bound and the
+ * words are the schema's own.
+ */
+export function descriptionIssues(nodes: Node[]): string[] {
+  const schema = StrictNodeSchema.shape.description;
+  return nodes.flatMap((n) => {
+    const check = schema.safeParse(n.description);
+    return check.success
+      ? []
+      : check.error.issues.map((issue) => `node '${n.id}': description: ${issue.message}`);
+  });
+}
+
+/**
  * #1312 — the issues the node panel's policy section explains: this node's own
  * policy refusals, and every downstream ref refused because this node's outputs
  * are secure — or those of a container it sits in, which a secure child makes

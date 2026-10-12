@@ -9,6 +9,7 @@ import {
 import { PipelineVersionWriteSchema } from '../../api/pipelines';
 import {
   canSave,
+  descriptionIssues,
   nodePolicyIssues,
   policyIssues,
   saveDisabledReason,
@@ -354,5 +355,15 @@ describe('policyIssues + nodePolicyIssues (#1312)', () => {
     const issues = policyIssues([withPolicy('a', { retryIntervalSeconds: 60 })]);
     expect(nodePolicyIssues(issues, 'a', [])).toEqual(issues);
     expect(nodePolicyIssues(issues, 'ab', [])).toEqual([]);
+  });
+});
+
+describe('descriptionIssues (#1600 OR41 C0b)', () => {
+  it("names the node whose description the write schema would refuse, in the schema's words", () => {
+    const at = (id: string, description: string): Node => ({ ...node(id), description });
+    expect(descriptionIssues([at('a', 'x'.repeat(4000)), node('b')])).toEqual([]);
+    expect(descriptionIssues([at('a', 'x'.repeat(4001))])).toEqual([
+      "node 'a': description: the description can be at most 4000 characters",
+    ]);
   });
 });
