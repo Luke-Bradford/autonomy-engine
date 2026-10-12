@@ -86,9 +86,13 @@ describe('resolveUserProperties', () => {
       resolveUserProperties([{ name: 'e', value: '' }], () => {
         throw new Error(long);
       }),
-    ).toEqual([{ name: 'e', error: long.slice(0, USER_PROPERTY_VALUE_MAX_CHARS), truncated: true }]);
+    ).toEqual([
+      { name: 'e', error: long.slice(0, USER_PROPERTY_VALUE_MAX_CHARS), truncated: true },
+    ]);
     expect(
-      resolveUserProperties([{ name: 'v', value: '' }], () => 'x'.repeat(USER_PROPERTY_VALUE_MAX_CHARS)),
+      resolveUserProperties([{ name: 'v', value: '' }], () =>
+        'x'.repeat(USER_PROPERTY_VALUE_MAX_CHARS),
+      ),
     ).toEqual([{ name: 'v', value: 'x'.repeat(USER_PROPERTY_VALUE_MAX_CHARS) }]);
   });
 });

@@ -11,7 +11,10 @@ import { variableReadsOf } from '../params.js';
 
 const pos = { x: 0, y: 0 };
 const PROPS: Partial<Node> = { userProperties: [{ name: 'Source', value: 'orders.csv' }] };
-const doc = (nodes: Node[], variables: { name: string; type: 'string'; default: string }[] = []) => ({
+const doc = (
+  nodes: Node[],
+  variables: { name: string; type: 'string'; default: string }[] = [],
+) => ({
   params: [{ name: 'file', type: 'string' as const, required: false }],
   variables,
   nodes,
@@ -43,9 +46,9 @@ describe('#1600 C0d — user properties at save', () => {
   });
 
   it('refuses a bad ref, naming the row', () => {
-    expect(
-      errs(agent({ userProperties: [{ name: 'File', value: '${params.nope}' }] })),
-    ).toContain('nodes.a.userProperties[0].value');
+    expect(errs(agent({ userProperties: [{ name: 'File', value: '${params.nope}' }] }))).toContain(
+      'nodes.a.userProperties[0].value',
+    );
   });
 
   it('refuses a read of a secure output, as every other field does', () => {
@@ -64,13 +67,17 @@ describe('#1600 C0d — user properties at save', () => {
 
   it('counts a variable read in a user property', () => {
     const n = agent({ userProperties: [{ name: 'V', value: '${vars.v}' }] });
-    const { reads, validatorErrors } = variableReadsOf(doc([n], [{ name: 'v', type: 'string', default: '' }]));
+    const { reads, validatorErrors } = variableReadsOf(
+      doc([n], [{ name: 'v', type: 'string', default: '' }]),
+    );
     expect(validatorErrors).toEqual([]);
     expect([...(reads.get('a') ?? [])]).toContain('v');
   });
 
   it('refuses them on an activity the engine evaluates, which would never record them', () => {
-    expect(errs(agent({ id: 'i', type: 'if', config: { condition: '${true}' }, ...PROPS }))).toContain(
+    expect(
+      errs(agent({ id: 'i', type: 'if', config: { condition: '${true}' }, ...PROPS })),
+    ).toContain(
       "node 'i': userProperties are not supported on 'if' — only activities that run record them",
     );
   });

@@ -1,12 +1,7 @@
 import { useStore } from 'zustand';
 import { MAX_USER_PROPERTIES, type UserProperty } from '@autonomy-studio/shared';
 import { Section } from '../../lib/Section';
-import {
-  RemoveRowButton,
-  RowActions,
-  RowList,
-  type RowTableColumn,
-} from '../../lib/form/RowTable';
+import { RemoveRowButton, RowActions, RowList, type RowTableColumn } from '../../lib/form/RowTable';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import type { FieldPicker, PickerTarget } from './ConfigFieldControl';
 import type { createCanvasStore } from './canvasStore';
@@ -35,10 +30,7 @@ export function NodeUserProperties({
   nodeId: string;
   picker: FieldPicker | undefined;
 }) {
-  const rows = useStore(
-    store,
-    (s) => s.nodes.find((n) => n.id === nodeId)?.userProperties ?? NONE,
-  );
+  const rows = useStore(store, (s) => s.nodes.find((n) => n.id === nodeId)?.userProperties ?? NONE);
   const write = (next: readonly UserProperty[], coalesceKey?: string) =>
     store.getState().setNodeUserProperties(nodeId, next, coalesceKey);
   const update = (i: number, patch: Partial<UserProperty>, cell: 'name' | 'value') =>

@@ -67,9 +67,9 @@ test('user properties: authored on the General tab, resolved at run time, shown 
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
     const res = await page.request.get(`/api/pipelines/${encodeURIComponent(id)}/versions`);
-    const latest = ((await res.json()) as { id: string; version: number; nodes: unknown[] }[]).reduce(
-      (a, b) => (a.version > b.version ? a : b),
-    );
+    const latest = (
+      (await res.json()) as { id: string; version: number; nodes: unknown[] }[]
+    ).reduce((a, b) => (a.version > b.version ? a : b));
     expect(latest.nodes[0]).toMatchObject({
       userProperties: [
         { name: 'Folder', value: 'in ${params.dir}' },

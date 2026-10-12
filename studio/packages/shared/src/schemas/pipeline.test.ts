@@ -1029,14 +1029,26 @@ describe("#1600 OR41 C0d — an activity's user properties", () => {
   it('refuses an empty name, a duplicate name and over-long text on WRITE, naming the row', () => {
     const issue = (userProperties: { name: string; value: string }[]) => {
       const r = StrictNodeSchema.safeParse({ ...node, userProperties });
-      return r.success ? undefined : { path: r.error.issues[0]?.path, message: r.error.issues[0]?.message };
+      return r.success
+        ? undefined
+        : { path: r.error.issues[0]?.path, message: r.error.issues[0]?.message };
     };
     expect(issue([{ name: 'ok', value: '' }])).toBeUndefined();
-    expect(issue([{ name: 'ok', value: 'x' }, { name: '  ', value: 'y' }])).toEqual({
+    expect(
+      issue([
+        { name: 'ok', value: 'x' },
+        { name: '  ', value: 'y' },
+      ]),
+    ).toEqual({
       path: ['userProperties', 1, 'name'],
       message: 'a user property needs a name',
     });
-    expect(issue([{ name: 'a', value: 'x' }, { name: 'a', value: 'y' }])).toEqual({
+    expect(
+      issue([
+        { name: 'a', value: 'x' },
+        { name: 'a', value: 'y' },
+      ]),
+    ).toEqual({
       path: ['userProperties', 1, 'name'],
       message:
         "duplicate user property name 'a' (user property names must be unique within the activity)",

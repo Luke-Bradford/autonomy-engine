@@ -709,9 +709,7 @@ export function ActivityRunsTable({
                     </td>
                     {propColumns.map((name) => (
                       <td key={`up:${name}`}>
-                        <UserPropertyCell
-                          prop={row.userProperties?.find((p) => p.name === name)}
-                        />
+                        <UserPropertyCell prop={row.userProperties?.find((p) => p.name === name)} />
                       </td>
                     ))}
                   </tr>
