@@ -48,6 +48,7 @@ import {
   projectMappingRows,
   splitUnwritten,
   formatZodIssues,
+  isInactive,
   getActivity,
   authorsCallBlob,
   type ActivePipelineVersion,
@@ -3605,6 +3606,9 @@ export function NodePanel({
     candidate: Record<string, unknown>,
   ): { message: string; paths: PropertyKey[][] } | null {
     if (!entry) return null;
+    // #1600 C0c — an inactive activity may hold an unfinished config (ADF's
+    // placeholder use): the save gate skips it, so Apply must not refuse it.
+    if (thisNode !== undefined && isInactive(thisNode)) return null;
     const check = entry.configSchema.safeParse(schemaPrecheckCandidate(candidate, fields));
     if (check.success) return null;
     return {

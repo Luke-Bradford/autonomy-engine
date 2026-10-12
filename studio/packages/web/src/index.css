@@ -3463,6 +3463,18 @@ button.danger {
   outline-offset: 1px;
 }
 
+/* #1600 OR41 C0c — a switched-off activity, greyed as ADF draws it: a dashed
+   border and a faded face. The `inactive · …` badge carries the words, so the
+   fade is never the only signal. */
+.flow-node--inactive {
+  border-style: dashed;
+}
+
+.flow-node--inactive .flow-node-icon,
+.flow-node--inactive .flow-node-body {
+  opacity: 0.6;
+}
+
 /* #863 — a box the validator names as the subject of an issue. `outline`, not
    `border-color`, for the reason the run canvas records: `.flow-node.selected`
    owns the border (and a selected box's accent outline wins over this one — the

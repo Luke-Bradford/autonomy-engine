@@ -221,6 +221,8 @@ const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProp
   const boxRef = useRef<HTMLDivElement>(null);
   const { expanded, named, handlers } = useNodeFan(boxRef);
   const issues = useSubjectIssues('node', id);
+  // #1600 C0c — a switched-off step is greyed, as ADF draws it; the badge says why.
+  const inactive = d.badges.some((b) => b.key === 'inactive');
   /* #1395 OR4 — the run the editor started, over this card. Only while the
      draft's node is still the TYPE the run's version had under this id: a
      node re-typed since would otherwise wear another activity's facts. */
@@ -255,7 +257,7 @@ const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProp
   return (
     <div
       ref={boxRef}
-      className={`flow-node${selected ? ' selected' : ''}${issues.length > 0 ? ' flow-node--invalid' : ''}`}
+      className={`flow-node${selected ? ' selected' : ''}${issues.length > 0 ? ' flow-node--invalid' : ''}${inactive ? ' flow-node--inactive' : ''}`}
       /* The stylesheet reads this to choose the ports' geometry and opacity.
          An ATTRIBUTE rather than a class so the e2e spec can assert the state
          directly, and so the collapsed case stays the plain default. */

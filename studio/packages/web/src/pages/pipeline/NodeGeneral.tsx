@@ -1,11 +1,23 @@
 import { useStore } from 'zustand';
-import { DESCRIPTION_MAX_CHARS } from '@autonomy-studio/shared';
+import {
+  DESCRIPTION_MAX_CHARS,
+  InactiveMarkAsSchema,
+  NodeSchema,
+  fieldLabelOf,
+  inactiveMarkAs,
+  isInactive,
+} from '@autonomy-studio/shared';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { Section } from '../../lib/Section';
 import { AutoGrowTextarea } from '../../lib/form/AutoGrowTextarea';
+import { FieldCell, FieldGrid } from '../../lib/form/FieldGrid';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import type { createCanvasStore } from './canvasStore';
 import { PolicyEditor } from './PolicyEditor';
+
+/** #1600 C0c — the two fields' label, `?` text and option names, from the schema. */
+const STATE_LABEL = fieldLabelOf(NodeSchema.shape.state)!;
+const MARK_AS_LABEL = fieldLabelOf(NodeSchema.shape.onInactiveMarkAs)!;
 
 /**
  * #1600 OR41 C0b (catalogue spec §3) — an activity's General tab: what the
@@ -16,6 +28,11 @@ import { PolicyEditor } from './PolicyEditor';
  * The description is two lines, as the spec draws it, and writes straight
  * through to the store (no Apply), as the pipeline's description does: a typing
  * burst is one undo step (`setNodeDescription`).
+ *
+ * #1600 C0c — Activity state and Mark as (ADF's General tab). Both write
+ * straight through too. Mark as stays visible but disabled while the activity
+ * is active: the stored value is kept (ADF keeps it), and a kept value the form
+ * hid would be config nobody could see.
  */
 export function NodeGeneral({
   store,
@@ -28,6 +45,14 @@ export function NodeGeneral({
     store,
     (s) => s.nodes.find((n) => n.id === nodeId)?.description ?? '',
   );
+  const inactive = useStore(store, (s) => {
+    const n = s.nodes.find((x) => x.id === nodeId);
+    return n !== undefined && isInactive(n);
+  });
+  const markAs = useStore(store, (s) => {
+    const n = s.nodes.find((x) => x.id === nodeId);
+    return n === undefined ? 'success' : inactiveMarkAs(n);
+  });
   return (
     <>
       <Section heading="Basics" help={FORM_SECTION_HINTS.node.basics}>
@@ -43,6 +68,54 @@ export function NodeGeneral({
             />
           )}
         </LabelledControl>
+        <FieldGrid className="field-stack">
+          <FieldCell span="short">
+            <LabelledControl
+              label={STATE_LABEL.title}
+              about={{ name: STATE_LABEL.title, note: STATE_LABEL.description }}
+            >
+              {(id, describedBy) => (
+                <select
+                  id={id}
+                  aria-describedby={describedBy}
+                  value={inactive ? 'inactive' : 'active'}
+                  onChange={(e) =>
+                    store.getState().setNodeInactive(nodeId, e.target.value === 'inactive')
+                  }
+                >
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                </select>
+              )}
+            </LabelledControl>
+          </FieldCell>
+          <FieldCell span="short">
+            <LabelledControl
+              label={MARK_AS_LABEL.title}
+              about={{ name: MARK_AS_LABEL.title, note: MARK_AS_LABEL.description }}
+            >
+              {(id, describedBy) => (
+                <select
+                  id={id}
+                  aria-describedby={describedBy}
+                  disabled={!inactive}
+                  value={markAs}
+                  onChange={(e) =>
+                    store
+                      .getState()
+                      .setNodeMarkAs(nodeId, InactiveMarkAsSchema.parse(e.target.value))
+                  }
+                >
+                  {InactiveMarkAsSchema.options.map((v) => (
+                    <option key={v} value={v}>
+                      {MARK_AS_LABEL.options?.[v] ?? v}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </LabelledControl>
+          </FieldCell>
+        </FieldGrid>
       </Section>
       <PolicyEditor store={store} nodeId={nodeId} />
     </>
