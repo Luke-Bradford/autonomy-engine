@@ -333,7 +333,11 @@ describe('#1669 — a copied inactive node stays inactive in the rerun', () => {
   it('logs copiedInactive and folds the copy as inactive', async () => {
     const { db } = freshDb();
     // a (inactive, Mark as Succeeded) → b, b fails in R1.
-    const pvId = seedVersion(db, [{ ...node('a'), state: 'inactive' }, node('b')], [edge('a', 'b')]);
+    const pvId = seedVersion(
+      db,
+      [{ ...node('a'), state: 'inactive' }, node('b')],
+      [edge('a', 'b')],
+    );
     const r1 = await seedRun(db, pvId, { nodes: { b: { outcome: 'failure' } } });
     expect(getRun(db, r1)!.status).toBe('failure');
 

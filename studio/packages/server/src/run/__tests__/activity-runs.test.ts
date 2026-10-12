@@ -504,7 +504,12 @@ describe('#1484 activity runs — one row per attempt', () => {
       } satisfies EngineEvent),
     ];
     const rows = projectActivityRuns(doc, buildEngine(doc), log).rows;
-    expect(rows[0]).toMatchObject({ key: 'reused:a', reused: true, inactive: true, status: 'success' });
+    expect(rows[0]).toMatchObject({
+      key: 'reused:a',
+      reused: true,
+      inactive: true,
+      status: 'success',
+    });
   });
 
   it('shows what a rerun reused, and the refusal of a called pipeline as its error', () => {

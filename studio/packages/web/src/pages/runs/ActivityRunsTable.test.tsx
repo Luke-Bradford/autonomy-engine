@@ -276,7 +276,11 @@ describe('#1484 M2 ActivityRunsTable — filter and sort', () => {
       },
     ]);
     const status = screen.getByRole('combobox', { name: 'Status' });
-    expect(within(status).getAllByRole('option').map((o) => o.textContent)).toContain('inactive');
+    expect(
+      within(status)
+        .getAllByRole('option')
+        .map((o) => o.textContent),
+    ).toContain('inactive');
     fireEvent.change(status, { target: { value: 'inactive' } });
     expect(bodyKeys().map((k) => k.split(':')[0])).toEqual(['i', 'r']);
     // The reused copy reads as the source run did, not as `reused`.

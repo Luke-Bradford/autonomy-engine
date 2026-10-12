@@ -360,14 +360,11 @@ describe('#1669 — run.reseeded copiedInactive fold', () => {
   const off = (id: string): Node => ({ ...node(id), state: 'inactive' });
 
   it('keeps a copied inactive node inactive, and dispatches beyond it as before', () => {
-    const eng = engine([node('a'), off('b'), node('c')], [
-      edge('a', 'b', 'success'),
-      edge('b', 'c', 'success'),
-    ]);
-    const log = [
-      startedRerun(),
-      reseeded({ frontier: ['a', 'b'], copiedInactive: ['b'] }),
-    ];
+    const eng = engine(
+      [node('a'), off('b'), node('c')],
+      [edge('a', 'b', 'success'), edge('b', 'c', 'success')],
+    );
+    const log = [startedRerun(), reseeded({ frontier: ['a', 'b'], copiedInactive: ['b'] })];
     const { state, lastCommands, allDiagnostics } = fold(eng, log);
     expect(allDiagnostics).toEqual([]);
     expect(state.nodes.b).toEqual({ status: 'success', attempts: 0, retries: 0, inactive: true });
