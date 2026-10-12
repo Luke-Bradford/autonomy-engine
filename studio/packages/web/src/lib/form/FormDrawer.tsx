@@ -38,7 +38,10 @@ export function FormDrawer({
   title: string;
   /** The form's accessible name. */
   formLabel: string;
-  /** Extra class on the `<form>`, for the form's own field styles. */
+  /**
+   * Extra class on the `<form>`, for the form's own field styles. The form has
+   * no box of its own: the drawer is its panel (#1594 OR40 S6q).
+   */
   className?: string;
   guard: UnsavedChangesGuard;
   onRequestClose: () => void;
