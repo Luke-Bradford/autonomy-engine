@@ -966,7 +966,10 @@ describe("#1600 OR41 C0b — an activity's description", () => {
 
   it('is bounded on WRITE at the pipeline limit, in the same words, and tolerated on read', () => {
     const long = { ...node, description: 'x'.repeat(DESCRIPTION_MAX_CHARS + 1) };
-    expect(StrictNodeSchema.safeParse({ ...node, description: 'x'.repeat(DESCRIPTION_MAX_CHARS) }).success).toBe(true);
+    expect(
+      StrictNodeSchema.safeParse({ ...node, description: 'x'.repeat(DESCRIPTION_MAX_CHARS) })
+        .success,
+    ).toBe(true);
     const refused = StrictNodeSchema.safeParse(long);
     expect(refused.success).toBe(false);
     expect(refused.error?.issues[0]?.path).toEqual(['description']);
