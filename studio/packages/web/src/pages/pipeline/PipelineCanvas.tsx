@@ -2602,8 +2602,8 @@ export function PipelineCanvas({
                         {/* #1669 — these save; they say what fails at run. */}
                         {warnings.length > 0 && (
                           <div className="badge-list badge-list--warning">
-                            <strong>{warnings.length} warning(s)</strong> — these save, but fail
-                            or skip at run.
+                            <strong>{warnings.length} warning(s)</strong> — these save, but fail or
+                            skip at run.
                             <ul>
                               {warnings.map((msg, i) => (
                                 <li key={`${String(i)}-${msg}`}>{msg}</li>

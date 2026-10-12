@@ -219,11 +219,13 @@ test('#1669 — Problems warns about a read of an inactive output and an inactiv
   const warnings = panel.locator('.badge-list--warning');
   await expect(warnings.locator('strong')).toHaveText('2 warning(s)');
   await expect(warnings.locator('li')).toHaveCount(2);
+  // The branch rule runs before the reads, so the If's warning is first, and
+  // each names the activity, not its id.
   await expect(warnings.locator('li').nth(0)).toContainText(
-    "is inactive, so it has no outputs and this read fails when it runs; make it default()'s first argument",
+    "node 'If condition 1': inactive, so it records no branch",
   );
   await expect(warnings.locator('li').nth(1)).toContainText(
-    'inactive, so it records no branch and every activity on its branch edges is skipped',
+    "is inactive, so it has no outputs and this read fails when it runs; make it default()'s first argument",
   );
   // Warnings never join the errors: no error list, and the toggle's error count stays 0.
   await expect(panel.locator('.badge-list:not(.badge-list--warning)')).toHaveCount(0);
