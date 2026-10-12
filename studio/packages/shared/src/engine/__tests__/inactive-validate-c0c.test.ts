@@ -84,7 +84,7 @@ describe('validation skips an inactive node (#1600 C0c)', () => {
       type: 'call_pipeline',
       config: {},
       position: pos,
-      call: { pipelineVersionId: 'pv_self' },
+      call: { pipelineVersionId: 'pv_self', params: {} },
     };
     const refused = validatePipelineDoc(doc([self]), { selfId: 'pv_self' });
     expect(refused.some((e) => e.includes('pv_self'))).toBe(true);
