@@ -6480,9 +6480,9 @@ button.danger {
 
 /* #1484 — Live's one-line status beside the toggle: quiet, and never wrapping
    the title row. Empty (and so zero-width) while Live is off, but never
-   removed: a live region must already exist when its text first changes. */
-/* #1594 OR40 S6r — AI activity's "Activity as of" line is the same quiet
-   status beside its window picker. */
+   removed: a live region must already exist when its text first changes.
+   #1594 OR40 S6r — AI activity's "Activity as of" line is the same quiet
+   status, beside its window picker. */
 .runs-live-status {
   color: var(--muted);
   font-size: var(--type-caption-size);

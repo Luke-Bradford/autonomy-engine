@@ -413,7 +413,7 @@ describe('AiActivityPage', () => {
       render(<AiActivityPage />);
 
       const panel = await screen.findByRole('region', { name: 'Account quota' });
-      // The UNREADABLE statement STAYS. The number is an addition to it, never
+      // The unreadable statement stays. The number is an addition to it, never
       // a replacement for it — an old figure presented as live is the fail-open
       // failure this surface exists to prevent.
       await waitFor(() => expect(panel).toHaveTextContent('Claude quota unreadable.'));
