@@ -157,8 +157,8 @@ td {
 });
 
 /**
- * #1594 OR40 S1 — the literal detector behind the design-token ratchet
- * (`theme/tokens.test.ts`). The ratchet only means something if this finds
+ * #1594 OR40 S1 — the literal detector behind the design-token literal rule
+ * (`theme/tokens.test.ts`). The rule only means something if this finds
  * every literal it should and nothing it should not, so each arm is pinned.
  */
 describe('literalDeclarations', () => {

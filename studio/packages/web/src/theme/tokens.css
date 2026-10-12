@@ -2,7 +2,7 @@
  * #1594 OR40 S1: the design tokens. This is the one source of truth for type,
  * spacing, radius and control height. Every later rule reads these variables
  * instead of repeating a number, and `tokens.test.ts` holds the rest of the
- * stylesheets to that with a ratchet on literals.
+ * stylesheets to that: a literal outside this sheet fails it.
  *
  * Density changes the token VALUES for the whole app. Compact is the default
  * (`uiStore.density`, mirrored onto `<html data-density>`). Comfortable is the
@@ -90,7 +90,7 @@
      text sits on the centre of a `--control-h` control beside it. */
   --form-label-inset: calc((var(--control-h) - var(--type-caption-line)) / 2);
   /* S6m — a control's or a table rule's border. Only the derived insets below
-     read it; a `border` shorthand is not on the ratchet and keeps its `1px`. */
+     read it; a `border` shorthand is not on the literal rule and keeps its `1px`. */
   --border-width: 1px;
   /* S6m — a row table's text box: one line of this leading centred in a
      bordered `--control-h` box, growing a line at a time. The caption's 16px

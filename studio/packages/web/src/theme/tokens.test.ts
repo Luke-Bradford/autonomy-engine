@@ -127,32 +127,20 @@ describe('design tokens', () => {
 });
 
 /**
- * The literal RATCHET. Every font size, weight, line height, padding, margin,
- * gap and radius outside a token is counted. The count may only fall: S6 moves
- * each page onto the tokens and brings it to 0, and then it becomes a hard rule.
+ * The literal rule, once a RATCHET. Every font size, weight, line height,
+ * padding, margin, gap and radius outside a token is refused: S1 counted 550
+ * of them and S6 moved each page onto the tokens until none were left, so a new
+ * one is a regression. Use a token from theme/tokens.css.
  *
  * Inline TSX `style={{}}` and Fluent `makeStyles` values are not stylesheets and
  * are not counted here.
  */
-const BASELINE = 5;
-
-describe('design-token literal ratchet', () => {
-  const literals = Object.entries(sheets).flatMap(([file, css]) =>
-    literalDeclarations(css).map((declaration) => `${file}: ${declaration}`),
-  );
-
-  it('adds no literal outside the tokens', () => {
-    expect(
-      literals.length,
-      `${literals.length} literals against a baseline of ${BASELINE}. Use a token from theme/tokens.css instead.`,
-    ).toBeLessThanOrEqual(BASELINE);
-  });
-
-  it('records each literal removed, so the baseline only falls', () => {
-    expect(
-      literals.length,
-      `Literals fell to ${literals.length}. Lower BASELINE in theme/tokens.test.ts to match.`,
-    ).toBeGreaterThanOrEqual(BASELINE);
+describe('design-token literal rule', () => {
+  it('has no literal outside the tokens', () => {
+    const literals = Object.entries(sheets).flatMap(([file, css]) =>
+      literalDeclarations(css).map((declaration) => `${file}: ${declaration}`),
+    );
+    expect(literals).toEqual([]);
   });
 
   it('keeps the token sheet itself literal-free', () => {
