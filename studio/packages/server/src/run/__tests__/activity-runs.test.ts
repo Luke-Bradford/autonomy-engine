@@ -131,6 +131,30 @@ describe('#1484 activity runs — one row per attempt', () => {
     expect(a!.skipReason).toBeNull();
   });
 
+  it('#1600 C0c — an INACTIVE activity is a row marked inactive, settled on its Mark as, and never reaches the executor', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('a', { state: 'inactive', onInactiveMarkAs: 'skipped' }), node('b'), node('c')],
+      [edge('a', 'b'), { id: 'a->c:skipped', from: 'a', to: 'c', on: 'skipped' }],
+    );
+    // Were `a` dispatched, the stub would fail it, and the run would show it.
+    const runId = await drive(db, pvId, stub({ a: { outcome: 'failure', error: 'ran' } }));
+
+    const rows = project(db, pvId, runId);
+    expect(rows.map((r) => [r.activityId, r.status, r.inactive])).toEqual([
+      ['a', 'skipped', true],
+      ['b', 'skipped', false],
+      ['c', 'success', false],
+    ]);
+    const a = rows[0]!;
+    // Nothing ran: no error, and no measured span.
+    expect(a).toMatchObject({ attemptId: 'a#0', error: null, durationMs: null });
+    expect(
+      loadEngineLog(db, runId).some((e) => e.type === 'node.dispatched' && e.nodeId === 'a'),
+    ).toBe(false);
+  });
+
   it('records the branch an If took, and the branch it did not take as a skip', async () => {
     const { db } = freshDb();
     const pvId = seedVersion(
@@ -209,6 +233,24 @@ describe('#1484 activity runs — one row per attempt', () => {
     expect(rows.map((r) => [r.activityId, r.status, r.attempt, r.iteration])).toEqual([
       ['inner', 'success', 1, { containerId: 'fe', index: 0, count: 2, item: '10' }],
       ['inner', 'success', 1, { containerId: 'fe', index: 1, count: 2, item: 'b.csv' }],
+    ]);
+  });
+
+  it('#1600 C0c — an inactive body node ending each ForEach item gets one inactive row per item', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('first'), node('last', { state: 'inactive', onInactiveMarkAs: 'skipped' })],
+      [edge('first', 'last')],
+      [{ id: 'fe', kind: 'foreach', children: ['first', 'last'], items: '${params.list}' }],
+      [1, 2],
+    );
+    const runId = await drive(db, pvId, stub());
+
+    const rows = project(db, pvId, runId).filter((r) => r.activityId === 'last');
+    expect(rows.map((r) => [r.status, r.inactive, r.iteration?.index])).toEqual([
+      ['skipped', true, 0],
+      ['skipped', true, 1],
     ]);
   });
 

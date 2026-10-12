@@ -453,6 +453,9 @@ export function projectActivityRuns(
     if (state.nodes !== before.nodes) {
       for (const [nodeId, entry] of Object.entries(state.nodes)) {
         if (entry.status !== 'skipped' || before.nodes[nodeId]?.status === 'skipped') continue;
+        // #1600 C0c — an inactive node marked Skipped already has its row: the
+        // `node.inactive` placeholder's, settled above.
+        if (entry.inactive === true) continue;
         // Rule 4: an attempt in flight that the engine abandoned is that row.
         const live = before.nodes[nodeId]?.currentAttemptId ?? entry.currentAttemptId;
         const abandoned = live === undefined ? undefined : byAttempt.get(live);
