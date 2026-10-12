@@ -1142,6 +1142,17 @@ describe('#1557 activity runs from the log alone — the version no longer resol
     error: r.error,
   });
 
+  it('#1600 C0d — carries the user properties each dispatch recorded', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [
+      node('a', { userProperties: [{ name: 'Run', value: '${run.runId}' }] }),
+    ]);
+    const runId = await drive(db, pvId, stub());
+    expect(fromLog(db, runId).rows.map((r) => r.userProperties)).toEqual([
+      [{ name: 'Run', value: runId }],
+    ]);
+  });
+
   it("gives every attempt the full account's times, status, branch, counts and error", async () => {
     const { db } = freshDb();
     const pvId = seedVersion(

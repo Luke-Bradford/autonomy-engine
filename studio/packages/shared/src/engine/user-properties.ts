@@ -29,14 +29,17 @@ export function resolveUserProperties(
   evaluate: (template: string) => unknown,
 ): ResolvedUserProperty[] {
   return props.map(({ name, value }) => {
-    let resolved: unknown;
+    // The stringifying is inside the `try` too: nothing about one property may
+    // escape to `prepFailure` and fail the run.
     try {
-      resolved = evaluate(value);
+      const resolved = evaluate(value);
+      const { text, truncated } = bounded(
+        typeof resolved === 'string' ? resolved : toStr(resolved),
+      );
+      return { name, value: text, ...(truncated ? { truncated } : {}) };
     } catch (err) {
       const { text, truncated } = bounded(err instanceof Error ? err.message : String(err));
       return { name, error: text, ...(truncated ? { truncated } : {}) };
     }
-    const { text, truncated } = bounded(typeof resolved === 'string' ? resolved : toStr(resolved));
-    return { name, value: text, ...(truncated ? { truncated } : {}) };
   });
 }

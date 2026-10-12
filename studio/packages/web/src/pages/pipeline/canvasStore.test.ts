@@ -2876,6 +2876,28 @@ describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
     expect(otherPipeline().getState().pasteClipboard('pl_2').ok).toBe(false);
   });
 
+  it('#1600 C0d — a pasted user property reading a copied node is pointed at its copy', () => {
+    const s = loaded();
+    s.getState().setSelection([
+      { kind: 'node', id: 'n_a' },
+      { kind: 'node', id: 'n_c' },
+    ]);
+    s.getState().updateNodeConfig('n_c', { prompt: 'plain' });
+    s.getState().setNodeUserProperties('n_c', [
+      { name: 'Body', value: '${nodes.n_a.output.body}' },
+    ]);
+    s.getState().copySelection('pl_1');
+    const target = otherPipeline();
+    expect(target.getState().pasteClipboard('pl_2').ok).toBe(true);
+    const pasted = target.getState().nodes;
+    const reader = pasted.find((n) => n.userProperties !== undefined)!;
+    const read = /^\$\{nodes\.(.+)\.output\.body\}$/.exec(reader.userProperties![0]!.value)?.[1];
+    // The read now names a node pasted alongside it, not the source's `n_a`.
+    expect(read).toBeDefined();
+    expect(read).not.toBe('n_a');
+    expect(pasted.some((n) => n.id === read && n.id !== reader.id)).toBe(true);
+  });
+
   it('refuses a read ANYWHERE in the node — a call param, not only config', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(

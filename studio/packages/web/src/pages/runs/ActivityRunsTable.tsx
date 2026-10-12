@@ -206,7 +206,8 @@ const BETWEEN_ITERATION_AND_ERROR = ACTIVITY_RUN_COLUMNS.slice(
 function UserPropertyCell({ prop }: { prop: ResolvedUserProperty | undefined }) {
   if (prop === undefined) return null;
   if (prop.error !== undefined) {
-    const text = isSecureMarker(prop.error) ? prop.error : `Not resolved: ${prop.error}`;
+    const cut = prop.truncated === true ? `${prop.error}…` : prop.error;
+    const text = isSecureMarker(prop.error) ? prop.error : `Not resolved: ${cut}`;
     return (
       <OneLine className="activity-runs__prop-error" title={text}>
         {text}
@@ -338,6 +339,8 @@ export function ActivityRunsTable({
       row.branch,
       row.error?.message,
       row.childRun?.pipelineName,
+      // #1600 C0d — what the user-property cells say.
+      ...(row.userProperties ?? []).map((p) => p.value ?? p.error),
       row.childRunId,
       row.skipReason === null ? null : skipReasonText(row.skipReason, anyNameOf),
       row.containerId === null ? null : containerNameOf(row.containerId),

@@ -51,6 +51,27 @@ describe('#1600 C0d — user properties at save', () => {
     );
   });
 
+  it('refuses a secret-typed parameter, which would put the secret in the run log', () => {
+    expect(
+      validatePipelineDoc({
+        ...doc([agent({ userProperties: [{ name: 'Key', value: '${params.key}' }] })]),
+        params: [{ name: 'key', type: 'secret' as const, required: false }],
+      }).join('\n'),
+    ).toContain('nodes.a.userProperties[0].value');
+  });
+
+  it('binds ${item} in a ForEach body, and refuses it outside one', () => {
+    const inBody = agent({ id: 'b', userProperties: [{ name: 'Item', value: 'file ${item}' }] });
+    const forEach = {
+      id: 'fe',
+      kind: 'foreach' as const,
+      children: ['b'],
+      items: '${createArray(1, 2)}',
+    };
+    expect(validatePipelineDoc({ ...doc([inBody]), containers: [forEach] }).join('\n')).toBe('');
+    expect(errs(inBody)).toContain('nodes.b.userProperties[0].value');
+  });
+
   it('refuses a read of a secure output, as every other field does', () => {
     const secure = agent({ id: 's', policy: { secureInput: true, secureOutput: true } });
     const reader = agent({

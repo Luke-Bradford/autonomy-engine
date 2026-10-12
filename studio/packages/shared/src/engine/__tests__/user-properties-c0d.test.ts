@@ -73,10 +73,20 @@ describe('#1600 C0d — user properties resolved at dispatch', () => {
 
   it('is absent when the node has none', () => {
     expect(firstDispatch(node(), { file: 'x' }).cmd.resolvedUserProperties).toBeUndefined();
+    // An empty list (the API can save one) records nothing either.
+    expect(
+      firstDispatch(node({ userProperties: [] }), { file: 'x' }).cmd.resolvedUserProperties,
+    ).toBeUndefined();
   });
 });
 
 describe('resolveUserProperties', () => {
+  it('records a value that cannot be written as text as an error, never throwing', () => {
+    // `JSON.stringify` throws on a bigint: that throw must not escape to `prepFailure`.
+    const [prop] = resolveUserProperties([{ name: 'n', value: '' }], () => ({ n: 10n }));
+    expect(prop).toMatchObject({ name: 'n', error: expect.any(String) });
+  });
+
   it('cuts a long value or error at the authored bound, and says so', () => {
     const long = 'x'.repeat(USER_PROPERTY_VALUE_MAX_CHARS + 5);
     expect(resolveUserProperties([{ name: 'v', value: '' }], () => long)).toEqual([

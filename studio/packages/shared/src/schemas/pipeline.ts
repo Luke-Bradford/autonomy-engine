@@ -725,8 +725,8 @@ export const NodeSchema = z.object({
    * literal or a `${}` template resolved at dispatch and recorded on
    * `node.dispatched`, so the monitor shows them as activity-runs columns.
    * Only `execution` activities carry them today: `validateDoc` refuses them on
-   * a `control` activity, which never reaches the executor and so would never
-   * record them. ABSENT, not `[]`, when there are none (the editor deletes the
+   * a `control` activity and on a pipeline call, neither of which reaches the
+   * executor, so they would never be recorded. ABSENT, not `[]`, when there are none (the editor deletes the
    * key), so a doc without them is byte-identical to a pre-C0d doc.
    *
    * Read-tolerant here; the bounds are on `StrictNodeSchema`.

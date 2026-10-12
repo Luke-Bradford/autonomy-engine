@@ -829,6 +829,38 @@ describe('#1600 C0d ActivityRunsTable — user properties as columns', () => {
     expect(extra(screen.getAllByRole('row')[1]!)).toEqual([SECURE_REDACTED, 'abc…']);
   });
 
+  it('shows a withheld error as the marker, and marks a cut error', () => {
+    show([
+      props([
+        { name: 'Secret', error: SECURE_REDACTED },
+        { name: 'Cut', error: 'bad', truncated: true },
+      ]),
+    ]);
+    expect(extra(screen.getAllByRole('row')[1]!)).toEqual([SECURE_REDACTED, 'Not resolved: bad…']);
+  });
+
+  it('finds a row by what its user-property cells say', async () => {
+    vi.useFakeTimers();
+    try {
+      show([
+        props([{ name: 'Owner', value: 'finance' }]),
+        { ...BASE, key: 'w#0', activityId: 'w', nodeId: 'w', attemptId: 'w#0' },
+      ]);
+      fireEvent.change(screen.getByRole('searchbox', { name: 'Search activity runs' }), {
+        target: { value: 'finance' },
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(300));
+      expect(
+        screen
+          .getAllByRole('row')
+          .slice(1)
+          .map((r) => r.dataset['activityId']),
+      ).toEqual(['a']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('adds no column when no row has a user property', () => {
     show([BASE]);
     expect(screen.getAllByRole('columnheader')).toHaveLength(ACTIVITY_RUN_COLUMNS.length);

@@ -1589,13 +1589,21 @@ export function createEngine(doc: EngineDoc): Engine {
       resolvedDatasetIds: resolveDatasetIds(es, node, item),
       resolvedDatasetParams: resolveDatasetParams(es, node, item),
       // Never throws: a failed property records its error (user-properties.ts).
-      resolvedUserProperties:
-        node.userProperties === undefined
-          ? undefined
-          : resolveUserProperties(node.userProperties, (template) =>
-              substitute(template, buildCtx(es), 0, item),
-            ),
+      // An empty list is treated as none, so it records nothing.
+      resolvedUserProperties: resolveNodeUserProperties(es, node, item),
     };
+  }
+
+  /** #1600 C0d — a node's user properties resolved in its scope, one context for all. */
+  function resolveNodeUserProperties(
+    state: RunState,
+    node: Node,
+    item: { value: unknown } | undefined,
+  ): ResolvedUserProperty[] | undefined {
+    const props = node.userProperties;
+    if (props === undefined || props.length === 0) return undefined;
+    const ctx = buildCtx(state);
+    return resolveUserProperties(props, (template) => substitute(template, ctx, 0, item));
   }
 
   /**
