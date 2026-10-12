@@ -3,7 +3,7 @@ import { useStore } from 'zustand';
 import {
   DEFAULT_RETRY_INTERVAL_SECONDS,
   MAX_RETRY_INTERVAL_SECONDS,
-  getActivity,
+  timeoutApplies,
   type NodePolicy,
 } from '@autonomy-studio/shared';
 import { FieldCell, FieldGrid } from '../../lib/form/FieldGrid';
@@ -33,9 +33,12 @@ import { readableIssue } from './containerRules';
  * unchanged in both of `NodePanel`'s branches, the call panel included: a secure
  * flag on a call is refused, and that refusal is explained here like any other.
  *
- * #1477 OR29 — two `FieldGrid`s, the numbers and then the flags, so the compact
- * dock packs each pair onto one row; one grid of four would leave the fourth
- * alone on a row once the tab is wide enough for three.
+ * #1477 OR29 — the retry numbers and then the flags are two `FieldGrid`s, so
+ * the compact dock packs each pair onto one row; one grid of four would leave
+ * the fourth alone on a row once the tab is wide enough for three. #1600 C0a —
+ * the timeout is a grid of its own above them, first as in ADF's General tab,
+ * for the same reason: in the pair's grid it would push the interval onto a
+ * row alone.
  */
 export function PolicyEditor({
   store,
@@ -52,9 +55,7 @@ export function PolicyEditor({
   const globals = useStore(store, (s) => s.globals);
   const node = nodes.find((n) => n.id === nodeId);
   const policy = node?.policy;
-  // Mirrors `validateTimeoutPolicy`'s rule: only an adapter-run attempt can time out.
-  const timesOut =
-    node !== undefined && node.call === undefined && getActivity(node.type)?.kind === 'execution';
+  const timesOut = node !== undefined && timeoutApplies(node);
 
   // Filtered BEFORE `readableIssue`: the filter reads the validators' quoted ids,
   // which the rewrite replaces with names. Memoised because it re-runs the whole
@@ -81,8 +82,8 @@ export function PolicyEditor({
 
   return (
     <Section heading="Run policy" help={FORM_SECTION_HINTS.node.runPolicy}>
-      <FieldGrid className="field-stack">
-        {timesOut && (
+      {timesOut && (
+        <FieldGrid className="field-stack">
           <FieldCell span="short">
             <DraftNumberField
               label="Timeout (seconds)"
@@ -93,7 +94,9 @@ export function PolicyEditor({
               onCommit={(timeoutSeconds) => set({ timeoutSeconds })}
             />
           </FieldCell>
-        )}
+        </FieldGrid>
+      )}
+      <FieldGrid className="field-stack">
         <FieldCell span="short">
           <DraftNumberField
             label="Retries"

@@ -6,7 +6,7 @@
 
 **Reference:** Azure Data Factory (Microsoft Learn), with Fabric Data Factory where it is simpler. Each section cites the Learn page it follows. Studio differs from ADF only where this doc says so.
 
-**Measured baseline:** origin/main `f016cd28`. The palette has 20 catalog activities plus 3 containers. File work alone is six activities (read, write, copy, move, delete, list), and copying rows is a seventh (Copy Data). There is no Script, no Get metadata, no Validation and no row upsert. Node `description`, user properties and activity state do not exist. `policy.timeoutSeconds` is stored but never enforced. The HTTP response body is uncapped, and a 4xx or 5xx response still *succeeds*.
+**Measured baseline:** origin/main `f016cd28`. The palette has 20 catalog activities plus 3 containers. File work alone is six activities (read, write, copy, move, delete, list), and copying rows is a seventh (Copy Data). There is no Script, no Get metadata, no Validation and no row upsert. Node `description`, user properties and activity state do not exist. `policy.timeoutSeconds` is stored but never enforced (enforced since C0a). The HTTP response body is uncapped, and a 4xx or 5xx response still *succeeds*.
 
 ---
 
@@ -60,7 +60,7 @@ Sources: [pipelines and activities](https://learn.microsoft.com/azure/data-facto
 | Name | text | type + ordinal | Max 55 characters, unique in the pipeline (ADF rule) |
 | Description | text, 2 lines | — | **New** on `Node`. Shown on hover on the canvas and in the monitor |
 | Activity state | Active / Inactive | Active | **New**. An inactive node is greyed and skipped by validation. It records an *Inactive* run and **Mark as** Succeeded / Failed / Skipped (default Succeeded) drives its outgoing edges |
-| Timeout | duration (`D.HH:MM:SS` or seconds) | 12 h (workspace setting) | **Enforce it**: today it is stored but unenforced (F3). Expiry fails the attempt with `timeout`, which can be retried |
+| Timeout | duration (`D.HH:MM:SS` or seconds) | 12 h (workspace setting) | **Enforce it** (done in C0a; it was stored but unenforced, F3). Expiry fails the attempt with `timeout`, which can be retried |
 | Retry | number | 0 | As today; retries only transient failures |
 | Retry interval | seconds | 30 | As today |
 | Secure input / Secure output | two checkboxes on one line | off | As today, and also covering every new record in §5 |

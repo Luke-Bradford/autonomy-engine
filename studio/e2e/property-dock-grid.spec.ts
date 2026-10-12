@@ -161,13 +161,15 @@ test('a narrow dock keeps the label over its control; comfortable density puts i
   await expectQuiet(page, problems);
 });
 
-test('the General tab packs its two numbers onto one row, and its two flags onto the next', async ({
+test('the General tab packs its two retry numbers onto one row, below the timeout, and its two flags onto the next', async ({
   page,
 }) => {
   const problems = collectPageProblems(page);
   await openLlm(page, 'or29 grid general');
   await properties(page).getByRole('tab', { name: 'General' }).click();
   const general = properties(page).getByRole('tabpanel', { name: 'General' });
+  // #1600 C0a — the timeout is a row of its own above the pair.
+  const timeout = await geometryOf(general.getByRole('textbox', { name: 'Timeout (seconds)' }));
   const retries = await geometryOf(general.getByRole('textbox', { name: 'Retries' }));
   const interval = await geometryOf(
     general.getByRole('textbox', { name: 'Retry interval (seconds)' }),
@@ -181,6 +183,8 @@ test('the General tab packs its two numbers onto one row, and its two flags onto
   expect(Math.abs(secureOut.control.top - secureIn.control.top)).toBeLessThanOrEqual(1);
   expect(secureIn.cell.right).toBeLessThan(secureOut.cell.left);
   expect(secureIn.control.top).toBeGreaterThan(retries.control.bottom);
+  expect(retries.control.top).toBeGreaterThan(timeout.control.bottom);
+  expect(Math.abs(timeout.control.left - retries.control.left)).toBeLessThanOrEqual(1);
   expect(Math.round(retries.control.width)).toBe(120);
   await expectQuiet(page, problems);
 });

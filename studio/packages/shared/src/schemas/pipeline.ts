@@ -285,7 +285,8 @@ export function callDetaches(call: CallConfig): boolean {
  * keyed off F0's failure `kind`) + F2c (driver durable scheduling via S1's
  * `scheduled_wakeups` outbox); `timeoutSeconds` → F3. This mirrors F9a, which
  * shipped `ActivityDefinition.kind` as honest metadata with a ZERO production
- * delta rather than guessing its consumer's shape.
+ * delta rather than guessing its consumer's shape. (All three consumers have
+ * since shipped — F2b/F2c, and F3 with #1600 C0a — so no knob here is inert.)
  *
  * `secureInput`/`secureOutput` — which spec #1 D4 lists in this object — were
  * held back by F2a and shipped with **F4**, together with the emit-time
@@ -422,8 +423,9 @@ export const DEFAULT_RETRY_INTERVAL_SECONDS = 30;
  *
  * WHY this is a write-path rule and not a `.max()` on `NodePolicySchema`: a
  * range on the read path can only ever be widened, so a ceiling there would be a
- * guess F3 could never take back. Here it costs F3 nothing — a write-path bound
- * can tighten or relax freely, because no stored row becomes unreadable.
+ * guess that could never be taken back. F3 (#1600 C0a) shipped with no bound
+ * beyond this one; a write-path bound can tighten or relax freely, because no
+ * stored row becomes unreadable.
  */
 const TIMEOUT_SECONDS_SANITY_CEILING = 31_536_000;
 

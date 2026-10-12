@@ -1123,21 +1123,31 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         ...priceFields,
       };
     };
-    // #1600 C0a — once the deadline has aborted this attempt, the attempt ends
-    // as the timeout whatever failure the adapter then reports: adapters surface
-    // an abort as their own `cancelled` (http, agent), a classified fs error, a
-    // throw, or no terminal at all. A `succeeded` that still lands is kept — the
-    // work completed. Cancel and timeout cannot both claim an attempt: an
+    // #1600 C0a — once the deadline has aborted this attempt, it ends as the
+    // timeout however the adapter then reports the abort: as its own `cancelled`
+    // (every adapter maps an abort to it), a `transient`, a throw, or no terminal
+    // at all. An outcome the adapter still REACHED is kept: a `succeeded` (the
+    // work completed) and a `permanent` failure (a real verdict, which a retry
+    // would only repeat). Cancel and timeout cannot both claim an attempt: an
     // `AbortController` aborts once, so the first one owns `signal.reason`.
-    const timedOut = (): boolean => controller.signal.reason === ACTIVITY_TIMEOUT_REASON;
+    const timeoutTerminal =
+      timeoutSeconds === undefined
+        ? undefined
+        : activityTimeoutFailure(runId, nodeId, attemptId, timeoutSeconds);
     const cancelDeadline =
       timeoutSeconds === undefined
         ? undefined
         : (deps.armDeadline ?? armDeadline)(timeoutSeconds * 1000, () =>
             controller.abort(ACTIVITY_TIMEOUT_REASON),
           );
-    const timeoutFailure = (): EngineEvent =>
-      activityTimeoutFailure(runId, nodeId, attemptId, timeoutSeconds ?? 0);
+    /** Emit the timeout terminal if the deadline aborted this attempt; true if it did. */
+    const endedByTimeout = (): boolean => {
+      if (timeoutTerminal === undefined || controller.signal.reason !== ACTIVITY_TIMEOUT_REASON) {
+        return false;
+      }
+      emit(timeoutTerminal);
+      return true;
+    };
     try {
       for await (const ev of adapter.runActivity(ctx, secret, secretFields, sinkSecret)) {
         if (ev.type === 'output') {
@@ -1277,10 +1287,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           // reached, and L6 summed a run cost that silently omitted the exchange —
           // the same silent-loss shape #708 closed at the price-table door.
           if (ev.spendFact !== undefined) emit(meteredEvent(ev.spendFact));
-          if (timedOut()) {
-            emit(timeoutFailure());
-            return;
-          }
+          if (ev.kind !== 'permanent' && endedByTimeout()) return;
           emit(
             nodeFailed(runId, nodeId, attemptId, {
               error: ev.error,
@@ -1300,10 +1307,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           return;
         }
       }
-      if (timedOut()) {
-        emit(timeoutFailure());
-        return;
-      }
+      if (endedByTimeout()) return;
       // Stream ended with no terminal — an adapter contract violation.
       emit(
         nodeFailed(runId, nodeId, attemptId, {
@@ -1322,10 +1326,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         emit(runCancelledFailure(runId, nodeId, attemptId));
         return;
       }
-      if (timedOut()) {
-        emit(timeoutFailure());
-        return;
-      }
+      if (endedByTimeout()) return;
       const message = err instanceof Error ? err.message : String(err);
       // An unexpected throw is an adapter BUG of unknown cause, not a classified
       // failure — adapters signal a real cancel/transient by yielding a terminal

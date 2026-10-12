@@ -802,7 +802,7 @@ describe('NodePolicySchema (#1 F2a)', () => {
     expect(() => NodePolicySchema.parse({ timeoutSeconds: t })).toThrow();
   });
 
-  it('accepts a large timeoutSeconds (no invented ceiling — F3 owns any real bound)', () => {
+  it('accepts a large timeoutSeconds (no read-path ceiling — the bound is the write path's)', () => {
     expect(NodePolicySchema.parse({ timeoutSeconds: 604800 })).toEqual({ timeoutSeconds: 604800 });
   });
 });

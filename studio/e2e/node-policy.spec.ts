@@ -115,7 +115,7 @@ test.describe('#1312 — node run policy editor', () => {
     await expectQuiet(page, problems);
   });
 
-  test('#1600 C0a — at 1440x900 the timeout is a short control on the retries row', async ({
+  test('#1600 C0a — at 1440x900 the timeout is a short control on its own row, above the retries', async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -131,11 +131,14 @@ test.describe('#1312 — node run policy editor', () => {
     };
     const timeout = await box('Timeout (seconds)');
     const retries = await box('Retries');
-    // One row, one control height, one width: the timeout is a number like the others.
-    expect(timeout.y).toBe(retries.y);
+    const interval = await box('Retry interval (seconds)');
+    // A number like the others: one control height, one width, one left edge.
     expect(timeout.height).toBe(retries.height);
     expect(timeout.width).toBe(retries.width);
-    expect(timeout.x).toBeLessThan(retries.x);
+    expect(timeout.x).toBe(retries.x);
+    // Its own row, so the retry pair still shares one.
+    expect(timeout.y + timeout.height).toBeLessThan(retries.y);
+    expect(interval.y).toBe(retries.y);
     await expectQuiet(page, problems);
   });
 

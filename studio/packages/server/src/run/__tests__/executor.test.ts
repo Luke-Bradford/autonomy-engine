@@ -6,6 +6,7 @@ import sodium from 'libsodium-wrappers';
 import { z } from 'zod';
 import {
   BUILTIN_PRICE_TABLE_VERSION,
+  buildDedupeKey,
   CATALOG_VERSION,
   SECURE_REDACTED,
   type ActivityCatalog,
@@ -34,6 +35,12 @@ import { until } from '../../__tests__/poll-until.js';
 import { DatasetIoError } from '../../connectors/dataset-io-error.js';
 import { createExecutor, PREFLIGHT_STORE_CONCURRENCY } from '../executor.js';
 import { createRunCancels } from '../cancel.js';
+import { ACTIVITY_TIMEOUT_REASON } from '../timeout.js';
+import { createRunDrives } from '../drives.js';
+import { createAlarmClock } from '../../scheduler/alarms.js';
+import { createRetryAlarmHandler } from '../../scheduler/retry-alarm.js';
+import { silentLog } from '../../scheduler/__tests__/testLog.js';
+import { getWakeupByKey } from '../../repo/scheduled-wakeups.js';
 import type { ChildRuns } from '../child.js';
 import { createConnectorRegistry, type ConnectorRegistry } from '../../connectors/registry.js';
 import { connections } from '../../db/schema.js';
@@ -5192,12 +5199,24 @@ describe('createExecutor — #1600 C0a: the activity timeout', () => {
     expect(failureOf(db, run.id)).toMatchObject(timedOut);
   });
 
-  it('an adapter failure of any other kind after the timeout is the timeout too', async () => {
+  it('a transient failure after the timeout is the timeout too', async () => {
     const { db, run } = await runTimedOut(async function* (ctx) {
       await aborted(ctx.signal);
-      yield { type: 'failed', kind: 'permanent', error: 'stream closed' };
+      yield { type: 'failed', kind: 'transient', error: 'socket hang up' };
     });
     expect(failureOf(db, run.id)).toMatchObject(timedOut);
+  });
+
+  it('a PERMANENT failure the adapter still reached is kept: a retry would only repeat it', async () => {
+    const { db, run } = await runTimedOut(
+      async function* (ctx) {
+        await aborted(ctx.signal);
+        yield { type: 'failed', kind: 'permanent', error: 'http 400' };
+      },
+      { retry: 1 },
+    );
+    expect(failureOf(db, run.id)).toMatchObject({ kind: 'permanent', error: 'http 400' });
+    expect(failureOf(db, run.id)?.code).not.toBe(FAILURE_CODES.TIMEOUT);
   });
 
   it('an adapter that THROWS on the abort ends `timeout`, not permanent ADAPTER_THREW', async () => {
@@ -5240,6 +5259,60 @@ describe('createExecutor — #1600 C0a: the activity timeout', () => {
     expect(alarms.armed).toHaveLength(1);
   });
 
+  it('each retry gets a FRESH budget: the retried attempt arms its own deadline, and times out again', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const run = seedRun(db, seedVersion(db, [timedNode('n1', connId, 90, 1)]));
+    const deadlines = manualDeadlines();
+    const adapters = fakeHttpAdapter(async function* (ctx): AsyncIterable<ActivityEvent> {
+      await aborted(ctx.signal);
+      yield { type: 'failed', kind: 'cancelled', error: 'aborted' };
+    });
+    let t = 1_700_000_000_000;
+    const resolveDoc = resolveDocFor(db);
+    // The production wiring in miniature (as `retry-alarm.test.ts`): the driver's
+    // alarms ARE the clock, and the clock's retry handler drives that driver.
+    const d = {
+      db,
+      resolveDoc,
+      executor: createExecutor({
+        db,
+        masterKey: KEY,
+        resolveDoc,
+        adapters,
+        armDeadline: deadlines.armDeadline,
+      }),
+      alarms: {
+        arm: (input: Parameters<RetryAlarms['arm']>[0]) => clock.arm(input),
+        find: (input: Parameters<RetryAlarms['find']>[0]) =>
+          getWakeupByKey(db, input.kind, buildDedupeKey(input)),
+      },
+      drives: createRunDrives(),
+      now: () => t,
+    };
+    const clock = createAlarmClock({
+      db,
+      handlers: [createRetryAlarmHandler(d)],
+      now: () => t,
+      log: silentLog(),
+    });
+
+    const first = startRun(d, run);
+    await until(() => deadlines.armed.length === 1, 'the first attempt armed its deadline');
+    deadlines.expire();
+    await first;
+    t += 30_000;
+    clock.tick();
+    await until(() => deadlines.armed.length === 2, 'the retried attempt armed its own deadline');
+    deadlines.expire();
+    await until(() => getRun(db, run.id)?.status === 'failure', 'the run failed');
+
+    expect(deadlines.armed.map((a) => a.ms)).toEqual([90_000, 90_000]);
+    const failures = loadEngineEvents(db, run.id).filter((e) => e.type === 'node.failed');
+    expect(failures).toHaveLength(2);
+    for (const f of failures) expect(f).toMatchObject(timedOut);
+  });
+
   it('an attempt that finishes in time cancels its deadline and is never aborted by it', async () => {
     const db = freshDb().db;
     const connId = await seedConnection(db, 'http', {}, null);
@@ -5254,9 +5327,9 @@ describe('createExecutor — #1600 C0a: the activity timeout', () => {
     expect(state.status).toBe('success');
     expect(deadlines.armed).toHaveLength(1);
     expect(deadlines.armed[0]!.cancelled).toBe(true);
-    // `runAdapter`'s own `finally` abort carries no reason.
-    expect(signal?.reason).not.toBe(undefined);
-    expect(String(signal?.reason)).not.toContain('activityTimedOut');
+    // Aborted by `runAdapter`'s own `finally`, never by the deadline.
+    expect(signal?.aborted).toBe(true);
+    expect(signal?.reason).not.toBe(ACTIVITY_TIMEOUT_REASON);
   });
 
   it('a cancel that lands first owns the outcome: the attempt fails `cancelled`, and a later expiry changes nothing', async () => {
