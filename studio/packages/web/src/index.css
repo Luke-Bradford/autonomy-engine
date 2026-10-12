@@ -4005,6 +4005,23 @@ button.danger {
   font: var(--type-caption);
 }
 
+/* #1600 C0e — a described box's label takes the pointer so its tooltip shows;
+   the box itself stays inert. Only then, so an undescribed box is unchanged. */
+.flow-container-label[aria-description] {
+  pointer-events: auto;
+}
+
+/* #1600 C0e — a switched-off container, greyed as an inactive activity is
+   (`.flow-node--inactive`): no fill, a faded name. The `inactive · …` words are
+   left out of the fade so they keep their contrast. */
+.flow-container--inactive {
+  background: none;
+}
+
+.flow-container--inactive .flow-container-name {
+  opacity: 0.6;
+}
+
 /*
  * #748 — the container's delete button: the second of the box's two opt-ins,
  * alongside the edge handles above.

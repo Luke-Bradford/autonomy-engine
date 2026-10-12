@@ -273,6 +273,9 @@ export interface RunContainerData extends Record<string, unknown> {
    */
   status: string | null;
   tone: StatusTone | null;
+  /** #1600 C0e — the container's Description: the label's tooltip and accessible
+   * description, as on the author canvas. */
+  description?: string;
   /**
    * A loop's or stage's own progress; `null` until it has started, and always
    * `null` for a foreach, whose `round` is the 0-based index of the item in
@@ -494,7 +497,15 @@ export function runFlowNodes(
        when `status` is null, so an unprojected box reads `stage` while its
        accessible name reads `…, not projected`. Worth knowing before reading the
        sentence above as stronger than it is. */
-    const label = status === null ? null : containerStatusLabel(status, state?.status);
+    // #1600 C0e — a switched-off container says so, in the grey it is drawn in,
+    // exactly as an inactive activity does above.
+    const inactive = status !== null && cs?.inactive === true;
+    const label =
+      status === null
+        ? null
+        : inactive
+          ? inactiveStatusLabel(status)
+          : containerStatusLabel(status, state?.status);
     const items = c.kind === 'foreach' ? foreachProgress(cs) : null;
     return {
       id: c.id,
@@ -522,7 +533,11 @@ export function runFlowNodes(
       data: {
         name,
         status: label,
-        tone: status === null ? null : containerStatusTone(status, state?.status),
+        tone:
+          status === null
+            ? null
+            : containerStatusTone(inactive ? INACTIVE_TONE_STATUS : status, state?.status),
+        ...(c.description !== undefined && { description: c.description }),
         round: c.kind === 'foreach' ? null : (cs?.round ?? null),
         items,
         portIds: portIdsOf(portsOf(c.id, undefined)),

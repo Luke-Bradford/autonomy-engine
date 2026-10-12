@@ -51,6 +51,7 @@ const GROUP: ActivityRunGroup = {
   reason: null,
   skipReason: null,
   reused: false,
+  inactive: false,
   startedAt: 1_000,
   finishedAt: 3_000,
   durationMs: 2_000,

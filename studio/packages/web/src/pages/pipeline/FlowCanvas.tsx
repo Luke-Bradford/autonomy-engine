@@ -41,10 +41,13 @@ import {
   CONTAINER_KIND_LABELS,
   containerMembership,
   implicitRouting,
+  inactiveMarkAs,
+  isInactive,
   type ContainerKind,
   type Dataset,
   type Position as DomainPosition,
 } from '@autonomy-studio/shared';
+import { inactiveStatusLabel } from '../runs/nodeStatus';
 import type { StoreApi } from 'zustand';
 import { activityLabel, activityLabels } from './activityLabel';
 import {
@@ -318,6 +321,12 @@ interface ContainerData extends Record<string, unknown> {
   label: string;
   /** Whether this container is the property panel's current subject (U23). */
   selected: boolean;
+  /** #1600 C0e — the General tab's Description: the label's tooltip and
+   * accessible description, as an activity card's name has. */
+  description?: string;
+  /** #1600 C0e — `inactive · <outcome>` while the container is switched off,
+   * else `null`; the card's inactive badge in the same words. */
+  inactive: string | null;
   /** Confirm, then remove this container — see `confirmDeleteContainer` (#748). */
   onDelete: (id: string, kind: ContainerKind) => void;
   /** Make this container the property panel's subject — U23's config form. */
@@ -409,15 +418,20 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
   return (
     <div
       ref={boxRef}
-      className={`flow-container${d.selected ? ' flow-container--selected' : ''}${issues.length > 0 ? ' flow-container--invalid' : ''}`}
+      className={`flow-container${d.selected ? ' flow-container--selected' : ''}${issues.length > 0 ? ' flow-container--invalid' : ''}${d.inactive !== null ? ' flow-container--inactive' : ''}`}
       data-ports-expanded={expanded ? 'true' : 'false'}
       data-ports-named={named ? 'true' : 'false'}
       data-run-status={run?.status}
       {...handlers}
     >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
-      <span className="flow-container-label">
-        {d.label}
+      <span
+        className="flow-container-label"
+        title={d.description === undefined ? undefined : `${d.label}\n\n${d.description}`}
+        aria-description={d.description}
+      >
+        <span className="flow-container-name">{d.label}</span>
+        {d.inactive !== null && <span className="flow-container-inactive"> · {d.inactive}</span>}
         {/* #1395 OR4 — the run monitor's box says the same (`RunContainerNode`). */}
         {run !== undefined && ` · ${run.status}`}
         {run?.facts != null && ` · ${run.facts}`}
@@ -1317,6 +1331,8 @@ export function FlowCanvas({
           // Re-derived from the store, never carried forward — the same rule
           // and the same reason as the activity nodes' `selected` above.
           selected: selected.some((s) => s.kind === 'container' && s.id === c.id),
+          ...(c.description !== undefined && { description: c.description }),
+          inactive: isInactive(c) ? inactiveStatusLabel(inactiveMarkAs(c)) : null,
           onDelete: (id: string, kind: ContainerKind) => void confirmDeleteContainer(id, kind),
           onConfigure: selectContainer,
           onFanChange: onContainerFanChange,

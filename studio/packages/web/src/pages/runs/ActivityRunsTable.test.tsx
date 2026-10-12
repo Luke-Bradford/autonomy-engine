@@ -369,6 +369,7 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
     reason: 'child_failed:w@1',
     skipReason: null,
     reused: false,
+    inactive: false,
     startedAt: BASE.startedAt,
     finishedAt: BASE.finishedAt,
     durationMs: 1234,
@@ -444,6 +445,37 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
     for (const row of screen.getAllByRole('row').slice(1)) {
       expect(within(row).getAllByRole('cell')).toHaveLength(width);
     }
+  });
+
+  it('#1600 C0e — an inactive container is a group line saying inactive · <outcome>, over reused', () => {
+    const inactive: ActivityRunGroup = {
+      ...GROUP,
+      status: 'failure',
+      reason: 'inactive',
+      reused: true,
+      inactive: true,
+      startedAt: null,
+      finishedAt: null,
+      durationMs: null,
+      itemCount: null,
+      iterations: [],
+    };
+    render(
+      <MemoryRouter>
+        <ActivityRunsTable
+          rows={[]}
+          groups={[inactive]}
+          error={null}
+          runStatus="failure"
+          nameOf={() => null}
+          typeOf={() => null}
+          containerNameOf={(id) => ({ fe: 'ForEach 1' })[id] ?? null}
+        />
+      </MemoryRouter>,
+    );
+    const line = screen.getByRole('row', { name: /ForEach 1/ });
+    expect(line).toHaveTextContent('inactive · failed');
+    expect(line).not.toHaveTextContent('reused');
   });
 
   it('says why a skipped container was skipped, after its status', () => {

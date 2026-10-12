@@ -18,6 +18,7 @@ const group = (extra: Partial<ActivityRunGroup> = {}): ActivityRunGroup => ({
   reason: null,
   skipReason: null,
   reused: false,
+  inactive: false,
   startedAt: null,
   finishedAt: null,
   durationMs: null,
