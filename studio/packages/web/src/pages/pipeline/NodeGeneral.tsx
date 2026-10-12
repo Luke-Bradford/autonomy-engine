@@ -1,6 +1,7 @@
 import { useStore } from 'zustand';
 import {
   DESCRIPTION_MAX_CHARS,
+  INACTIVE_STATE,
   InactiveMarkAsSchema,
   NodeSchema,
   fieldLabelOf,
@@ -18,6 +19,8 @@ import { PolicyEditor } from './PolicyEditor';
 /** #1600 C0c — the two fields' label, `?` text and option names, from the schema. */
 const STATE_LABEL = fieldLabelOf(NodeSchema.shape.state)!;
 const MARK_AS_LABEL = fieldLabelOf(NodeSchema.shape.onInactiveMarkAs)!;
+/** The select's value for "active" — a form value only, never stored (absent `state` is active). */
+const ACTIVE = 'active';
 
 /**
  * #1600 OR41 C0b (catalogue spec §3) — an activity's General tab: what the
@@ -78,13 +81,13 @@ export function NodeGeneral({
                 <select
                   id={id}
                   aria-describedby={describedBy}
-                  value={inactive ? 'inactive' : 'active'}
+                  value={inactive ? INACTIVE_STATE : ACTIVE}
                   onChange={(e) =>
-                    store.getState().setNodeInactive(nodeId, e.target.value === 'inactive')
+                    store.getState().setNodeInactive(nodeId, e.target.value === INACTIVE_STATE)
                   }
                 >
-                  <option value="active">Active</option>
-                  <option value="inactive">Inactive</option>
+                  <option value={ACTIVE}>Active</option>
+                  <option value={INACTIVE_STATE}>Inactive</option>
                 </select>
               )}
             </LabelledControl>

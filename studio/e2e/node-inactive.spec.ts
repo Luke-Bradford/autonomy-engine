@@ -58,11 +58,11 @@ test('Activity state and Mark as on the General tab: the card greys, the doc sto
   expect(Math.abs(s!.y - m!.y)).toBeLessThan(2);
   expect(s!.width).toBeLessThan(200);
   expect(m!.width).toBeLessThan(200);
-  // The card is faded, never only by colour: the badge carries the words.
-  const opacity = await card
-    .locator('.flow-node-body')
-    .evaluate((el) => getComputedStyle(el).opacity);
-  expect(opacity).toBe('0.6');
+  // The card's face fades; the badge, which carries the words, keeps its contrast.
+  const opacityOf = (sel: string) =>
+    card.locator(sel).evaluate((el) => Number(getComputedStyle(el).opacity));
+  expect(await opacityOf('.flow-node-title')).toBeLessThan(1);
+  expect(await opacityOf('.flow-node-badge--inactive')).toBe(1);
 
   await page.getByRole('button', { name: 'Save version' }).click();
   await expect(page.locator('.notice')).toHaveText('Saved v2.');

@@ -77,4 +77,17 @@ describe('validation skips an inactive node (#1600 C0c)', () => {
       validatePipelineDoc(doc([src, reader], [{ id: 'e', from: 'src', to: 'r', on: 'success' }])),
     ).toEqual([]);
   });
+
+  it('an inactive call node is no call edge: a self-call through it is not a cycle', () => {
+    const self: Node = {
+      id: 'c',
+      type: 'call_pipeline',
+      config: {},
+      position: pos,
+      call: { pipelineVersionId: 'pv_self' },
+    };
+    const refused = validatePipelineDoc(doc([self]), { selfId: 'pv_self' });
+    expect(refused.some((e) => e.includes('pv_self'))).toBe(true);
+    expect(validatePipelineDoc(doc([off(self)]), { selfId: 'pv_self' })).toEqual([]);
+  });
 });

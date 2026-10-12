@@ -3465,13 +3465,14 @@ button.danger {
 
 /* #1600 OR41 C0c — a switched-off activity, greyed as ADF draws it: a dashed
    border and a faded face. The `inactive · …` badge carries the words, so the
-   fade is never the only signal. */
+   fade is never the only signal, and is left out of it so it keeps its contrast. */
 .flow-node--inactive {
   border-style: dashed;
 }
 
 .flow-node--inactive .flow-node-icon,
-.flow-node--inactive .flow-node-body {
+.flow-node--inactive .flow-node-title,
+.flow-node--inactive .flow-node-summary {
   opacity: 0.6;
 }
 

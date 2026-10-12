@@ -72,6 +72,10 @@ export interface ProjectedActivityRuns {
   groups: ActivityRunGroup[];
 }
 
+/** #1600 C0c — the error an inactive activity marked Failed shows: why it failed. */
+export const INACTIVE_FAILED_MESSAGE =
+  'The activity is inactive and marked as Failed, so it did not run.';
+
 /** How many runs' projections one server remembers (`routes/runs.ts`). */
 export const ACTIVITY_RUNS_MEMO_LIMIT = 200;
 
@@ -227,6 +231,16 @@ function fillDetail(row: ProjectedActivityRun, e: EngineEvent, payload: unknown)
       return;
     case 'node.inactive':
       row.inactive = true;
+      // #1600 C0c — no `node.failed` ever carries an error for it, so a run it
+      // failed would otherwise name the activity and say nothing about why.
+      if (e.markAs === 'failure') {
+        row.error = {
+          message: INACTIVE_FAILED_MESSAGE,
+          kind: null,
+          code: null,
+          connectionId: null,
+        };
+      }
       return;
     case 'node.failed':
       row.error = {

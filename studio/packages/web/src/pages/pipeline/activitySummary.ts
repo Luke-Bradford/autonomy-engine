@@ -26,6 +26,7 @@ import {
   type Node,
 } from '@autonomy-studio/shared';
 import { formatElapsed } from '../runs/format';
+import { inactiveStatusLabel } from '../runs/nodeStatus';
 
 /** #1600 C0c — Mark as's option names (Succeeded · Failed · Skipped), from the schema. */
 const MARK_AS_TITLES = fieldLabelOf(NodeSchema.shape.onInactiveMarkAs)!.options!;
@@ -149,7 +150,8 @@ export function activityBadges(node: Node): ActivityBadge[] {
     const outcome = MARK_AS_TITLES[markAs] ?? markAs;
     badges.push({
       key: 'inactive',
-      text: `inactive · ${outcome.toLowerCase()}`,
+      // The monitor's word for the same fact, so the card and the run agree.
+      text: inactiveStatusLabel(markAs),
       label: `Inactive: never runs, and records ${outcome}`,
     });
   }

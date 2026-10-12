@@ -13,7 +13,11 @@ import { createPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun } from '../../repo/runs.js';
 import type { Db } from '../../repo/types.js';
 import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
-import { projectActivityRuns, projectActivityRunsFromLog } from '../activity-runs.js';
+import {
+  INACTIVE_FAILED_MESSAGE,
+  projectActivityRuns,
+  projectActivityRunsFromLog,
+} from '../activity-runs.js';
 import {
   buildEngine,
   driveRun,
@@ -236,6 +240,20 @@ describe('#1484 activity runs — one row per attempt', () => {
       ['inner', 'success', 1, { containerId: 'fe', index: 0, count: 2, item: '10' }],
       ['inner', 'success', 1, { containerId: 'fe', index: 1, count: 2, item: 'b.csv' }],
     ]);
+  });
+
+  it('#1600 C0c — an inactive activity marked Failed fails the run, and its row says why', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a', { state: 'inactive', onInactiveMarkAs: 'failure' })]);
+    const runId = await drive(db, pvId, stub());
+    const [a] = project(db, pvId, runId);
+    expect(a).toMatchObject({ status: 'failure', inactive: true });
+    expect(a!.error).toEqual({
+      message: INACTIVE_FAILED_MESSAGE,
+      kind: null,
+      code: null,
+      connectionId: null,
+    });
   });
 
   it('#1600 C0c — an inactive body node ending each ForEach item gets one inactive row per item', async () => {

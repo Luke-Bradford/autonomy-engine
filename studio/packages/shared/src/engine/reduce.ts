@@ -3877,7 +3877,9 @@ export function createEngine(doc: EngineDoc): Engine {
         diagnostics,
       };
     }
-    if (!LIVE_NODE.has(ns.status) || event.attemptId !== ns.currentAttemptId) {
+    // Only `ready`: an inactive node is held there and never dispatched, so any
+    // other status (a duplicate after it settled, a stale round) is a no-op.
+    if (ns.status !== 'ready' || event.attemptId !== ns.currentAttemptId) {
       return { state, commands: [], diagnostics };
     }
     return settle(
