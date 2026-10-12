@@ -224,6 +224,14 @@ export interface ReseedFrontier {
    * of a rerun) there is no attempt, so its folded `sourceChildRunId` carries on.
    */
   childLinks: { callNodeId: string; sourceChildRunId: string }[];
+  /**
+   * #1600 C0c / #1669 — the frontier nodes that are inactive in the doc, in
+   * frontier order. Read off the DOC, not the source state: R2 pins R1's version
+   * and an inactive node reaches `success` only through its Mark as placeholder,
+   * so the doc is exact, and it also covers a source that was itself a rerun
+   * folded before this field existed.
+   */
+  copiedInactive: string[];
 }
 
 const LIVE_NODE = new Set<NodeRunState['status']>(['ready', 'dispatched']);
@@ -3601,6 +3609,23 @@ export function createEngine(doc: EngineDoc): Engine {
       };
     }
 
+    // #1600 C0c / #1669 — a copied node the source run recorded through Mark as
+    // stays `inactive` here, so the rerun reads as the source did. Guarded like
+    // `childLinks`: an id this fold did not copy, or one the pinned doc has
+    // active, is a malformed manifest and must never mark an executed node.
+    for (const nodeId of new Set(event.copiedInactive ?? [])) {
+      const why = !applied.has(nodeId)
+        ? 'which is not a copied frontier node'
+        : !isInactive(docNodeFor(nodeId))
+          ? 'which is not inactive in the pinned version'
+          : null;
+      if (why !== null) {
+        diagnostics.push(`impossible run.reseeded: inactive mark for '${nodeId}', ${why}`);
+        continue;
+      }
+      nodes[nodeId] = { ...nodes[nodeId]!, inactive: true };
+    }
+
     const containers: Record<string, ContainerRunState> = { ...state.containers };
     for (const [containerId, copied] of Object.entries(event.copiedContainers)) {
       if (containers[containerId] === undefined) {
@@ -5234,7 +5259,8 @@ export function createEngine(doc: EngineDoc): Engine {
           : ns.sourceChildRunId;
       if (sourceChildRunId !== undefined) childLinks.push({ callNodeId: id, sourceChildRunId });
     }
-    return { frontier, copiedOutputs, copiedContainers, childLinks };
+    const copiedInactive = frontier.filter((id) => isInactive(nodeById.get(id)));
+    return { frontier, copiedOutputs, copiedContainers, childLinks, copiedInactive };
   }
 
   return {

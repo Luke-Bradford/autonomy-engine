@@ -80,6 +80,7 @@ export interface DriveOptions {
     copiedContainers: Record<string, ContainerRunState>;
     childLinks?: { callNodeId: string; sourceChildRunId: string }[];
     copiedVariableWrites?: VariableWrite[];
+    copiedInactive?: string[];
   };
 }
 
@@ -163,6 +164,9 @@ export function driveRun(eng: Engine, opts: DriveOptions): DriveResult {
       ...(opts.reseed.childLinks !== undefined ? { childLinks: opts.reseed.childLinks } : {}),
       ...(opts.reseed.copiedVariableWrites !== undefined
         ? { copiedVariableWrites: opts.reseed.copiedVariableWrites }
+        : {}),
+      ...(opts.reseed.copiedInactive !== undefined
+        ? { copiedInactive: opts.reseed.copiedInactive }
         : {}),
     });
   } else {

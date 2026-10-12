@@ -135,6 +135,29 @@ describe('RS2 — reseedFrontier: linear + basic prefix', () => {
   });
 });
 
+describe('#1669 — reseedFrontier: copiedInactive', () => {
+  it('lists the frontier nodes the doc has inactive, and only those', () => {
+    const off: Node = { ...node('b'), state: 'inactive' };
+    const offFailed: Node = { ...node('d'), state: 'inactive', onInactiveMarkAs: 'failure' };
+    const eng = engine(
+      [node('a'), off, node('c'), offFailed],
+      [edge('a', 'b', 'success'), edge('b', 'c', 'success'), edge('d', 'c', 'completion')],
+    );
+    const r = eng.reseedFrontier(
+      state({ nodes: { a: 'success', b: 'success', c: 'failure', d: 'failure' } }),
+    );
+    expect(r.frontier).toEqual(['a', 'b']);
+    // `d` is inactive too, but marked Failed: it is not copied, so not listed.
+    expect(r.copiedInactive).toEqual(['b']);
+  });
+
+  it('is empty when no copied node is inactive', () => {
+    const eng = engine([node('a'), node('b')], [edge('a', 'b', 'success')]);
+    const r = eng.reseedFrontier(state({ nodes: { a: 'success', b: 'failure' } }));
+    expect(r.copiedInactive).toEqual([]);
+  });
+});
+
 describe('RS2 — reseedFrontier: satisfied-edge rule (the branch-join correctness property)', () => {
   it('a skipped SIBLING predecessor (dead failure edge) does NOT block a downstream join', () => {
     // a --success--> b, a --failure--> c; b,c --success--> d; d --success--> e.
