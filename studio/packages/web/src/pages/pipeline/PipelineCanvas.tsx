@@ -1111,20 +1111,25 @@ export function PipelineCanvas({
   // string, because the raw form is what `issuesBySubject` attributes on (the
   // rewrite replaces the ids it reads). `nameIssues` names no element, so it is
   // never attributed and joins the full list only.
-  const located = useMemo(
-    () =>
+  // #1669 — the warnings (a read that saves but fails when it runs) come out of
+  // the same validation pass and are kept apart: they never refuse Save or Debug.
+  const { located, warnings } = useMemo(() => {
+    const advisories: string[] = [];
+    const rewrite = (raw: string) => ({
+      raw,
+      text: readableIssue(raw, nodes, edges, containers),
+    });
+    return {
       // #1312 — `policyIssues` mirrors a THIRD gate, the write schema's
       // `StrictNodeSchema.policy`, and names nodes, so it is rewritten too.
-      [
-        ...validateCanvas(nodes, edges, containers, params, variables, globals),
+      located: [
+        ...validateCanvas(nodes, edges, containers, params, variables, globals, advisories),
         ...policyIssues(nodes),
         ...descriptionIssues(nodes),
-      ].map((raw) => ({
-        raw,
-        text: readableIssue(raw, nodes, edges, containers),
-      })),
-    [nodes, edges, containers, params, variables, globals],
-  );
+      ].map(rewrite),
+      warnings: advisories.map((raw) => rewrite(raw).text),
+    };
+  }, [nodes, edges, containers, params, variables, globals]);
   const clientIssues = useMemo(
     () => [
       ...located.map((issue) => issue.text),
@@ -2434,6 +2439,17 @@ export function PipelineCanvas({
                         >
                           {issues.length}
                         </span>
+                        {warnings.length > 0 && (
+                          <>
+                            {' '}
+                            <span
+                              className="count-badge count-badge--warning"
+                              aria-label={`${String(warnings.length)} warning(s)`}
+                            >
+                              {warnings.length}
+                            </span>
+                          </>
+                        )}
                       </button>
                       {/* #1477 OR29 — U21's Paste, moved here from a full-width
                       bar in the nothing-selected panel; then Expand, the dock's
@@ -2559,7 +2575,9 @@ export function PipelineCanvas({
                         aria-label="Problems"
                         hidden={!problemsOpen}
                       >
-                        {issues.length === 0 && <p className="page-hint">No problems.</p>}
+                        {issues.length === 0 && warnings.length === 0 && (
+                          <p className="page-hint">No problems.</p>
+                        )}
                         {issues.length > 0 && (
                           <div className="badge-list">
                             {/* #444: this used to say "you can still save … a run will refuse an
@@ -2576,6 +2594,18 @@ export function PipelineCanvas({
                                 // a name emit the identical duplicate-name string twice, and a bare
                                 // `key={msg}` makes that a React duplicate-key warning — which the
                                 // e2e console guard treats as a failure.
+                                <li key={`${String(i)}-${msg}`}>{msg}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {/* #1669 — these save; they say what fails at run. */}
+                        {warnings.length > 0 && (
+                          <div className="badge-list badge-list--warning">
+                            <strong>{warnings.length} warning(s)</strong> — these save, but fail
+                            or skip at run.
+                            <ul>
+                              {warnings.map((msg, i) => (
                                 <li key={`${String(i)}-${msg}`}>{msg}</li>
                               ))}
                             </ul>
