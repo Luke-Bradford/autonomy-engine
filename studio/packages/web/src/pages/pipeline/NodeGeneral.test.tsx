@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import type { Node } from '@autonomy-studio/shared';
+import { NodeSchema, fieldLabelOf, type Node } from '@autonomy-studio/shared';
 import { createCanvasStore } from './canvasStore';
 import { NodeGeneral } from './NodeGeneral';
 
@@ -55,10 +55,14 @@ describe('NodeGeneral — Activity state and Mark as (#1600 C0c)', () => {
     expect(f.markAs()).toHaveValue('failure');
   });
 
-  it('describes each select by its ? help', () => {
+  it("describes each select by its own ? help, from the schema's description", () => {
     const f = mount({ state: 'inactive' });
-    for (const select of [f.state(), f.markAs()]) {
-      expect(select).toHaveAccessibleDescription(/\S/);
+    for (const [select, field] of [
+      [f.state(), NodeSchema.shape.state],
+      [f.markAs(), NodeSchema.shape.onInactiveMarkAs],
+    ] as const) {
+      const note = fieldLabelOf(field)!.description!;
+      expect(select).toHaveAccessibleDescription(expect.stringContaining(note.slice(0, 40)));
     }
   });
 });

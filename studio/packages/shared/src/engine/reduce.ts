@@ -227,8 +227,8 @@ export interface ReseedFrontier {
   /**
    * #1600 C0c / #1669 — the frontier nodes that are inactive in the doc, in
    * frontier order. Read off the DOC, not the source state: R2 pins R1's version
-   * and an inactive node reaches `success` only through its Mark as placeholder,
-   * so the doc is exact, and it also covers a source that was itself a rerun
+   * and an inactive node reaches `success` (the only status the frontier copies)
+   * only through a Mark as Succeeded placeholder, so the doc is exact, and it also covers a source that was itself a rerun
    * folded before this field existed.
    */
   copiedInactive: string[];

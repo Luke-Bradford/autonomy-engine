@@ -287,6 +287,18 @@ describe('#1484 M2 ActivityRunsTable — filter and sort', () => {
     expect(cellsOf(screen.getAllByRole('row')[2]!).Status).toBe(inactiveStatusLabel('success'));
   });
 
+  it('#1669 — a search for the word an inactive pill shows finds that row', () => {
+    show(
+      [
+        { ...BASE, key: 'i#0', nodeId: 'i', activityId: 'i', attemptId: 'i#0', inactive: true },
+        { ...BASE, key: 'w#0', nodeId: 'w', activityId: 'w', attemptId: 'w#0', status: 'failure' },
+      ],
+      null,
+      '/?arQ=succeeded',
+    );
+    expect(bodyKeys().map((k) => k.split(':')[0])).toEqual(['i']);
+  });
+
   it('reads its filters from the URL', () => {
     show(ROWS, null, '/?arType=Copy');
     expect(bodyKeys()).toEqual(['a:1', 'a:2']);

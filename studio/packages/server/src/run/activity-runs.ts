@@ -577,6 +577,8 @@ export function projectActivityRunsFromLog(
   for (const { event: e, ts, payload } of log) {
     if (e.type === 'run.reseeded') {
       frontier = e.frontier;
+      // Trusted as logged, like `frontier`: this path has no doc to apply the
+      // reducer's "inactive in the pinned version" guard against (#1669).
       copiedInactive = new Set(e.copiedInactive);
     }
     const ref = attemptOf(e);

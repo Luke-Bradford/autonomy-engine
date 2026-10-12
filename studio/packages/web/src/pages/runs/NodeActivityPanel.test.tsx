@@ -160,6 +160,21 @@ describe('NodeActivityPanel — why there is no duration', () => {
     expect(panel.textContent).not.toMatch(/has not started/);
   });
 
+  it('#1669 — a copied INACTIVE node says it did not run in the source run either', () => {
+    const panel = renderPanel(
+      row({
+        nodeId: 'a',
+        status: 'success',
+        attempts: 0,
+        copiedFromRunId: 'run_0',
+        inactive: true,
+      }),
+    );
+    expect(panel.querySelector('.node-status')!.textContent).toBe('inactive · succeeded');
+    expect(panel.textContent).toMatch(/where the activity was inactive/);
+    expect(panel.textContent).not.toMatch(/outputs were computed there/);
+  });
+
   it('RS4 — a copied call node links the child run behind its result', () => {
     const panel = renderPanel(
       row({

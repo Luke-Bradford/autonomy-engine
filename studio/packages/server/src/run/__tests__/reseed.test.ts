@@ -330,7 +330,7 @@ describe('RS4 producer — a copied call node links its child; a re-run one gets
 });
 
 describe('#1669 — a copied inactive node stays inactive in the rerun', () => {
-  it('logs copiedInactive and folds the copy as inactive', async () => {
+  it('logs copiedInactive for the copied inactive node, and the rerun succeeds', async () => {
     const { db } = freshDb();
     // a (inactive, Mark as Succeeded) → b, b fails in R1.
     const pvId = seedVersion(
