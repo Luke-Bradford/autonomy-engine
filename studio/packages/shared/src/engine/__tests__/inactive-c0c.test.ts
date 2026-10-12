@@ -6,7 +6,7 @@
  * which folds `inactivateNode` exactly as the server driver's `pump` does.
  */
 import { describe, expect, it } from 'vitest';
-import type { Container, Edge, EngineEvent, Node } from '../types.js';
+import type { Container, Edge, EngineCommand, EngineEvent, Node } from '../types.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
 import { driveRun, simpleResolve } from './helpers/run-driver.js';
 
@@ -212,5 +212,146 @@ describe('crash recovery never runs an inactive node (#1600 C0c)', () => {
       outcome: 'failure',
       reason: 'invalid_event',
     });
+  });
+});
+
+describe('#1669 coverage — cancel, loop rounds and parallel resume around an inactive node', () => {
+  const START: EngineEvent = {
+    type: 'run.started',
+    runId: 'r1',
+    pipelineVersionId: 'pv1',
+    params: {},
+  };
+  const cancel: EngineEvent = {
+    type: 'run.cancelRequested',
+    runId: 'r1',
+    source: { kind: 'operator' },
+  };
+  const inactivated = (nodeId: string, attemptId: string): EngineEvent => ({
+    type: 'node.inactive',
+    runId: 'r1',
+    nodeId,
+    attemptId,
+    markAs: 'success',
+  });
+  const cmdTypes = (cs: EngineCommand[]) => cs.map((c) => c.type);
+
+  it('cancel while the inactive node is ready: it stays in flight until its placeholder lands, which then settles the cancel', () => {
+    const e = eng([off('x'), node('y')], [edge('x', 'y')]);
+    const s0 = e.reduce(e.seedState(), START).state;
+    expect(s0.nodes.x!.status).toBe('ready');
+    const c = e.reduce(s0, cancel);
+    // `ready` counts as in flight, so the cancel neither finishes the run nor
+    // touches the node: the owed `node.inactive` is not something to abort.
+    expect(c.commands).toEqual([]);
+    expect(c.state.nodes.x).toMatchObject({ status: 'ready', currentAttemptId: 'x#0' });
+    expect(c.state.nodes.x!.inactive).toBeUndefined();
+    // The late placeholder folds normally (it ran nothing), but cancel mode starts
+    // nothing after it: y stays pending, so the cancel DID prevent work.
+    const late = e.reduce(c.state, inactivated('x', 'x#0'));
+    expect(late.state.nodes.x).toMatchObject({ status: 'success', inactive: true });
+    expect(late.state.nodes.y!.status).toBe('pending');
+    expect(cmdTypes(late.commands)).toEqual(['finishRun']);
+    expect(late.commands[0]).toEqual({
+      type: 'finishRun',
+      outcome: 'cancelled',
+      reason: 'cancelled:operator',
+    });
+  });
+
+  it('cancel while a LONE inactive node is ready: nothing was prevented, so the run finishes with its own verdict', () => {
+    const e = eng([off('x', 'failure')]);
+    const c = e.reduce(e.reduce(e.seedState(), START).state, cancel);
+    expect(c.commands).toEqual([]);
+    const late = e.reduce(c.state, inactivated('x', 'x#0'));
+    expect(late.state.nodes.x).toMatchObject({ status: 'success', inactive: true });
+    // CURRENT behaviour, pinned: the cancel prevented nothing (every top-level
+    // node is terminal), so the verdict is the run's own, not `cancelled`.
+    expect(late.commands).toEqual([{ type: 'finishRun', outcome: 'success' }]);
+  });
+
+  it('boot resume of a CANCELLED run folds the ready inactive node to failure like any ready node; a late placeholder is then a no-op', () => {
+    const e = eng([off('x')]);
+    const folded = e.projectRunState([START, cancel]);
+    expect(folded.nodes.x!.status).toBe('ready');
+    const r = e.resume(folded);
+    expect(r.state.nodes.x!.status).toBe('failure');
+    expect(r.state.cancelRequested).toEqual({ source: { kind: 'operator' }, stoppedWork: true });
+    expect(r.commands).toEqual([
+      { type: 'finishRun', outcome: 'cancelled', reason: 'cancelled:operator' },
+    ]);
+    // Neither a dispatch nor a re-emitted inactivation for a cancelled run.
+    expect(cmdTypes(r.commands)).not.toContain('dispatchNode');
+    expect(cmdTypes(r.commands)).not.toContain('inactivateNode');
+    const late = e.reduce(r.state, inactivated('x', 'x#0'));
+    expect(late.state).toBe(r.state);
+    expect(late.commands).toEqual([]);
+  });
+
+  it('a back-edge loop resets the inactive flag and re-inactivates the node on round 2', () => {
+    const e = eng(
+      [off('gen'), node('check')],
+      [
+        edge('gen', 'check'),
+        {
+          id: 'check->gen:failure',
+          from: 'check',
+          to: 'gen',
+          on: 'failure',
+          back: true,
+          maxBounces: 3,
+        },
+      ],
+    );
+    let s = e.reduce(e.seedState(), START).state;
+    let r = e.reduce(s, inactivated('gen', 'gen#0'));
+    expect(r.state.nodes.gen).toMatchObject({ status: 'success', inactive: true });
+    expect(r.commands.map((c) => c.type)).toEqual(['dispatchNode']);
+    s = e.reduce(r.state, {
+      type: 'node.dispatched',
+      runId: 'r1',
+      nodeId: 'check',
+      attemptId: 'check#0',
+      idempotent: false,
+    }).state;
+    // Round 1's check fails: the back-edge resets gen (flag removed, not merely
+    // cleared) and the walk immediately re-holds it for a fresh placeholder.
+    r = e.reduce(s, {
+      type: 'node.failed',
+      runId: 'r1',
+      nodeId: 'check',
+      attemptId: 'check#0',
+      error: 'boom',
+      kind: 'permanent',
+    });
+    expect(Object.values(r.state.bounces)).toEqual([1]);
+    expect(r.state.nodes.gen).toMatchObject({ status: 'ready', currentAttemptId: 'gen#1' });
+    expect('inactive' in r.state.nodes.gen!).toBe(false);
+    expect(r.state.nodes.check!.status).toBe('pending');
+    expect(r.commands).toEqual([
+      { type: 'inactivateNode', nodeId: 'gen', attemptId: 'gen#1', markAs: 'success' },
+    ]);
+    // Round 2's placeholder brings the flag back and the loop proceeds.
+    r = e.reduce(r.state, inactivated('gen', 'gen#1'));
+    expect(r.state.nodes.gen).toMatchObject({ status: 'success', inactive: true });
+    expect(cmdTypes(r.commands)).toEqual(['dispatchNode']);
+  });
+
+  it('boot resume inside a PARALLEL foreach re-emits inactivateNode under each INSTANCE key, never dispatchNode', () => {
+    const e = eng(
+      [off('w', 'failure')],
+      [],
+      [{ id: 'fe', kind: 'foreach', children: ['w'], items: '${params.list}', batchCount: 2 }],
+    );
+    const s = e.projectRunState([{ ...START, params: { list: ['p', 'q'] } }]);
+    expect(Object.keys(s.nodes).sort()).toEqual(['w@0', 'w@1']);
+    expect(s.nodes['w@0']).toMatchObject({ status: 'ready', currentAttemptId: 'w@0#0' });
+    const r = e.resume(s);
+    expect(r.commands).toEqual([
+      { type: 'inactivateNode', nodeId: 'w@0', attemptId: 'w@0#0', markAs: 'failure' },
+      { type: 'inactivateNode', nodeId: 'w@1', attemptId: 'w@1#0', markAs: 'failure' },
+    ]);
+    expect(cmdTypes(r.commands)).not.toContain('dispatchNode');
+    expect(r.commands.some((c) => 'nodeId' in c && c.nodeId === 'w')).toBe(false);
   });
 });

@@ -141,6 +141,7 @@ describe('driveRun — the shared run-driver mechanic', () => {
         copiedOutputs: {},
         copiedContainers: {},
         childLinks: [],
+        copiedInactive: [],
       }),
     };
     const neverTerminates = (nodeId: string, attemptId: string, runId: string): EngineEvent => ({
