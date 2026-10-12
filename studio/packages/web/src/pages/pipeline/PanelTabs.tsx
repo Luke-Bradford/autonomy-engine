@@ -1,5 +1,6 @@
-import { useId, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Tab, TabList } from '@fluentui/react-components';
+import { useElementSize } from './useElementSize';
 
 /**
  * #1477 OR29 — a tab label's marks and what they mean. `mark` follows the label
@@ -165,10 +166,10 @@ export function PanelTabs<K extends string>({
       {header === undefined ? (
         strip
       ) : (
-        <div className="panel-tabs-sticky">
+        <PinnedRegion>
           {header}
           {strip}
-        </div>
+        </PinnedRegion>
       )}
       {meanings}
       {tabs.map((t) => (
@@ -184,5 +185,34 @@ export function PanelTabs<K extends string>({
         </div>
       ))}
     </>
+  );
+}
+
+/**
+ * #1594 OR40 S6u — the header and tab strip, pinned while the panel scrolls,
+ * with their height MEASURED and published on the panel that scrolls under them
+ * as `--panel-tabs-sticky-h`, for its `scroll-padding-top`: a field reached by
+ * Tab lands below them. The height depends on the dock's width (the header
+ * wraps), the density, the node's acts and an Apply error in the header, so no
+ * fixed value is right: a 7rem one left a field 10px under them in the
+ * comfortable right-hand dock. 0 (jsdom, a hidden dock) writes nothing, which
+ * leaves the padding at `auto`. Its own component so the measurement mounts and
+ * unmounts with the region, never outliving it on the panel.
+ */
+function PinnedRegion({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const height = useElementSize(ref, 'height');
+  useEffect(() => {
+    const scroller = ref.current?.parentElement;
+    if (!scroller || height === 0) return;
+    scroller.style.setProperty('--panel-tabs-sticky-h', `${height}px`);
+    return () => {
+      scroller.style.removeProperty('--panel-tabs-sticky-h');
+    };
+  }, [height]);
+  return (
+    <div className="panel-tabs-sticky" ref={ref}>
+      {children}
+    </div>
   );
 }

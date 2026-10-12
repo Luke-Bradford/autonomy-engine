@@ -230,7 +230,9 @@ body {
   position: absolute;
   width: 1px;
   height: 1px;
-  margin: -1px;
+  /* Back by its own 1px, so the box adds no overflow at its scroller's edge
+     (the editor's folding reads that overflow: `.toolbar`). */
+  margin: calc(-1 * var(--border-width));
   padding: 0;
   overflow: hidden;
   clip-path: inset(50%);
@@ -594,7 +596,7 @@ body {
 .row-actions {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-2);
 }
 
 /* The gap spaces the cell; the global `td button + button` margin would double it. */
@@ -1295,7 +1297,7 @@ button[aria-disabled='true'] {
 }
 
 td button + button {
-  margin-left: 0.4rem;
+  margin-left: var(--space-2);
 }
 
 /* `.labelled-control` (#1227) is the wrapper `LabelledControl` puts where a
@@ -1745,7 +1747,7 @@ button.primary {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--bg);
-  font-weight: 600;
+  font-weight: var(--weight-strong);
 }
 
 button.danger {
@@ -1912,10 +1914,13 @@ button.danger {
    the bottom of a long tab. Opaque and above the fields that scroll under it.
    It reaches across the panel's padding (negative margins, matching padding),
    so it sits where it will stick (no jump) and no field shows in the gutters.
-   `scroll-padding-top` keeps a field reached by Tab from landing beneath it. */
+   It sticks at the same edge: a sticky box is held inside its scroller's
+   padding, so `top: 0` pinned it one panel padding lower, over the first
+   field at rest in comfortable (#1594 OR40 S6u). `scroll-padding-top` keeps a
+   field reached by Tab from landing beneath it. */
 .panel-tabs-sticky {
   position: sticky;
-  top: 0;
+  top: calc(-1 * var(--property-panel-pad));
   margin: calc(-1 * var(--property-panel-pad)) calc(-1 * var(--property-panel-pad)) 0;
   padding: var(--property-panel-pad) var(--property-panel-pad) 0;
   z-index: 2;
@@ -1980,10 +1985,10 @@ button.danger {
 }
 
 .property-panel:has(> .panel-tabs-sticky) {
-  /* The pinned region's height with the header wrapped onto two rows, as it is
-     in the 320px-minimum right-hand dock. Erring high only scrolls a focused
-     field a little further; erring low would hide it under the header. */
-  scroll-padding-top: 7rem;
+  /* #1594 OR40 S6u — the pinned region's MEASURED height (`PanelTabs` writes
+     it), and room for a focused field's ring. Unset before the first
+     measurement, so the padding is `auto` until then. */
+  scroll-padding-top: calc(var(--panel-tabs-sticky-h) + var(--space-1));
 }
 
 .property-panel__header {

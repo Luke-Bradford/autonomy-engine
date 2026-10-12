@@ -4,7 +4,7 @@ import { useEffect, useState, type RefObject } from 'react';
  * #1475 — an element's rendered width or height in px, kept current by a
  * `ResizeObserver`; 0 until measured, and always 0 under jsdom, which has no
  * layout and no observer. The dock's and the Problems column's dividers take
- * their caps from it.
+ * their caps from it, and `PanelTabs` its pinned region's scroll padding.
  *
  * A PASSIVE effect, not a layout effect, and that is load-bearing: the
  * dividers measure elements AROUND them (a parent), and React attaches a host

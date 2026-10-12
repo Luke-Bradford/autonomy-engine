@@ -408,7 +408,7 @@ Compact means 13px field text, 12px labels, 28px single-line
 controls, and 4/8px spacing. Those numbers are the design tokens in `theme/tokens.css` (#1594
 OR40 S1), which hold both densities' values: `--control-h`, `--row-h`, `--type-body-size`,
 `--type-caption-size` and `--space-1..6`, plus the `--type-*` font shorthands. Read the tokens
-rather than repeating the numbers; `theme/tokens.test.ts` ratchets the literal count down.
+rather than repeating the numbers; `theme/tokens.test.ts` refuses any literal outside them.
 Weights are 400 and 600 only: `tokens.css` sets `b` and `strong` to `--weight-strong`, since the
 browser's `bolder` draws them at 700 (#1594 OR40 S6g).
 
@@ -646,7 +646,7 @@ The boxes on the authoring canvas and on the run page's Graph tab.
 
 `e2e/run-details-design.spec.ts` measures the banner, the activity runs, the spend line and the
 grid's pieces at 1440x900, compact light and comfortable dark; `run-list.spec.ts` measures a child
-run's indent. The small print is held by the literal ratchet only.
+run's indent. The small print is held by the literal rule only.
 
 ## Monitor › AI activity (#1594 OR40 S6r)
 
