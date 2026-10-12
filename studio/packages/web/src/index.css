@@ -6269,32 +6269,6 @@ button.danger {
 
 /* --- #917 Monitor › AI activity ------------------------------------------- */
 
-/* The at-a-glance row. A definition list rather than divs, because each tile IS
-   a term and its value, and that is what a screen reader should hear. */
-.monitor-tiles {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1rem;
-  margin: 1rem 0;
-}
-
-.monitor-tiles > div {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.5rem 0.9rem;
-  min-width: 8rem;
-}
-
-.monitor-tiles dt {
-  color: var(--muted);
-  font-size: 0.8rem;
-}
-
-.monitor-tiles dd {
-  margin: 0.15rem 0 0;
-  font-size: 1.15rem;
-}
-
 .quota-table,
 .ai-model-table {
   margin-top: var(--space-2);
@@ -6305,29 +6279,17 @@ button.danger {
    and stays visible text rather than a `title`. */
 .quota-reset-relative {
   color: var(--muted);
-  font-size: 0.8rem;
+  font-size: var(--type-caption-size);
 }
 
 .quota-overage {
   color: var(--warning);
 }
 
-/* An UNREADABLE quota is a NOTICE, never styled as a value — there is no number
-   here to make prominent, and making the absence look like a reading is the
-   fail-open shape this panel refuses. */
-.quota-unreadable strong {
-  letter-spacing: 0.02em;
-}
-
 .monitor-panel {
   margin-top: var(--space-6);
   border-top: 1px solid var(--border);
   padding-top: var(--space-2);
-}
-
-.agent-cli-summary {
-  color: var(--muted);
-  margin-top: 0.75rem;
 }
 
 /* #988 — the reported-activity section. Set apart from studio's own figures by
@@ -6346,10 +6308,15 @@ button.danger {
 
 .ai-window-picker {
   display: inline-flex;
-  align-items: baseline;
-  gap: 0.25em;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* #1594 OR40 S6r — the window picker's label: the caption type, muted, beside
+   the select it names. */
+.ai-window-picker > label {
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: var(--type-caption-size);
 }
 
 /* U12a (#1007) — the attempt timeline. Bars are absolutely positioned inside a
@@ -6513,7 +6480,9 @@ button.danger {
 
 /* #1484 — Live's one-line status beside the toggle: quiet, and never wrapping
    the title row. Empty (and so zero-width) while Live is off, but never
-   removed: a live region must already exist when its text first changes. */
+   removed: a live region must already exist when its text first changes.
+   #1594 OR40 S6r — AI activity's "Activity as of" line is the same quiet
+   status, beside its window picker. */
 .runs-live-status {
   color: var(--muted);
   font-size: var(--type-caption-size);
@@ -6524,19 +6493,19 @@ button.danger {
    there is no charting library. Every colour here is a palette custom property,
    so the chart themes with everything else rather than carrying its own. */
 .token-flow {
-  margin: 1rem 0 0;
+  margin: var(--space-4) 0 0;
 }
 
 .token-flow-caption {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  gap: 0.5rem;
+  gap: var(--space-2);
   /* Text wears TEXT colours, never a series colour — the swatches carry
      identity, the words stay readable. */
   color: var(--muted);
-  font-size: 0.8rem;
-  margin-bottom: 0.35rem;
+  font-size: var(--type-caption-size);
+  margin-bottom: var(--space-1);
 }
 
 .token-flow-scale {
@@ -6548,7 +6517,7 @@ button.danger {
   align-items: flex-end;
   /* The 2px gap IS the separator between adjacent bars — a border drawn around
      each mark would read as chrome and thicken the whole plot. */
-  gap: 2px;
+  gap: var(--mark-gap);
   height: 96px;
   margin: 0;
   padding: 0;
@@ -6569,8 +6538,8 @@ button.danger {
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  /* Same 2px surface gap between the two stacked segments as between bars. */
-  gap: 2px;
+  /* Same surface gap between the two stacked segments as between bars. */
+  gap: var(--mark-gap);
   width: 100%;
   height: 100%;
 }
@@ -6580,7 +6549,7 @@ button.danger {
   width: 100%;
   /* Rounded data-end only on the top of the stack; the bottom is anchored to
      the baseline and a rounded foot would float the bar off its own axis. */
-  border-radius: 2px 2px 0 0;
+  border-radius: var(--radius-mark) var(--radius-mark) 0 0;
 }
 
 .token-flow-seg--in {
@@ -6630,7 +6599,7 @@ button.danger {
   display: block;
   width: 100%;
   height: 12px;
-  border-radius: 2px;
+  border-radius: var(--radius-mark);
   background-color: var(--muted);
   background-image: repeating-linear-gradient(
     45deg,
@@ -6645,32 +6614,32 @@ button.danger {
   display: flex;
   justify-content: space-between;
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: var(--type-caption-size);
   font-variant-numeric: tabular-nums;
-  margin-top: 0.25rem;
+  margin-top: var(--space-1);
 }
 
 .token-flow-legend {
   display: flex;
-  gap: 1rem;
-  margin: 0.5rem 0 0;
+  gap: var(--space-4);
+  margin: var(--space-2) 0 0;
   padding: 0;
   list-style: none;
   color: var(--muted);
-  font-size: 0.8rem;
+  font-size: var(--type-caption-size);
 }
 
 .token-flow-legend li {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: var(--space-1);
 }
 
 .token-flow-swatch {
   display: inline-block;
   width: 10px;
   height: 10px;
-  border-radius: 2px;
+  border-radius: var(--radius-mark);
 }
 
 /* #1035 — the legend's key to BOTH hatched marks: the half-scale sliver

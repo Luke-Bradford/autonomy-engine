@@ -228,7 +228,7 @@ describe('AiActivityPage', () => {
     render(<AiActivityPage />);
 
     const panel = await screen.findByRole('region', { name: 'Account quota' });
-    await waitFor(() => expect(panel).toHaveTextContent('Claude quota UNREADABLE.'));
+    await waitFor(() => expect(panel).toHaveTextContent('Claude quota unreadable.'));
     expect(panel.textContent ?? '').not.toContain('%');
   });
 
@@ -256,7 +256,7 @@ describe('AiActivityPage', () => {
       expect(
         await screen.findByText('No AI or agent activity in this window.'),
       ).toBeInTheDocument();
-      expect(screen.getByText('No agent CLI subprocesses in this window.')).toBeInTheDocument();
+      expect(screen.getByText('None in this window')).toBeInTheDocument();
     });
 
     it('replaces the subprocess line with a real summary once one ran', async () => {
@@ -268,10 +268,8 @@ describe('AiActivityPage', () => {
 
       render(<AiActivityPage />);
 
-      expect(
-        await screen.findByText(/2 agent CLI subprocesses — 1 completed, 1 did not\./),
-      ).toBeInTheDocument();
-      expect(screen.queryByText('No agent CLI subprocesses in this window.')).toBeNull();
+      expect(await screen.findByText(/^2 — 1 completed, 1 did not, last at/)).toBeInTheDocument();
+      expect(screen.queryByText('None in this window')).toBeNull();
     });
   });
 
@@ -295,7 +293,7 @@ describe('AiActivityPage', () => {
       // dangerous thing this surface can say.
       expect(panel.textContent ?? '').not.toContain('5-hour');
       // The reading is still a READING: no UNREADABLE banner over a good figure.
-      expect(panel.textContent ?? '').not.toContain('UNREADABLE');
+      expect(panel.textContent ?? '').not.toMatch(/unreadable/i);
       expect(panel).toHaveTextContent('7%');
     });
 
@@ -345,7 +343,7 @@ describe('AiActivityPage', () => {
       // Absent is SILENT. Naming a provider the operator has not installed and
       // calling it unreadable is a fault they cannot act on.
       expect(panel.textContent ?? '').not.toContain('Codex');
-      expect(panel.textContent ?? '').not.toContain('UNREADABLE');
+      expect(panel.textContent ?? '').not.toMatch(/unreadable/i);
     });
 
     it('renders a codex reading with its scrape age, beside claude', async () => {
@@ -384,7 +382,7 @@ describe('AiActivityPage', () => {
       render(<AiActivityPage />);
 
       const panel = await screen.findByRole('region', { name: 'Account quota' });
-      await waitFor(() => expect(panel).toHaveTextContent('Codex quota UNREADABLE.'));
+      await waitFor(() => expect(panel).toHaveTextContent('Codex quota unreadable.'));
       // It says what to DO about it, rather than emitting the enum token.
       expect(panel).toHaveTextContent('has not run recently enough');
       expect(panel.textContent ?? '').not.toContain('no_reading');
@@ -415,10 +413,10 @@ describe('AiActivityPage', () => {
       render(<AiActivityPage />);
 
       const panel = await screen.findByRole('region', { name: 'Account quota' });
-      // The UNREADABLE statement STAYS. The number is an addition to it, never
+      // The unreadable statement stays. The number is an addition to it, never
       // a replacement for it — an old figure presented as live is the fail-open
       // failure this surface exists to prevent.
-      await waitFor(() => expect(panel).toHaveTextContent('Claude quota UNREADABLE.'));
+      await waitFor(() => expect(panel).toHaveTextContent('Claude quota unreadable.'));
       expect(panel).toHaveTextContent('Last known reading');
       expect(panel).toHaveTextContent('58%');
       // 750s → the shared elapsed formatter's two most significant units.
@@ -466,7 +464,7 @@ describe('AiActivityPage', () => {
 
       render(<AiActivityPage />);
       const panel = await screen.findByRole('region', { name: 'Account quota' });
-      await waitFor(() => expect(panel).toHaveTextContent('Claude quota UNREADABLE.'));
+      await waitFor(() => expect(panel).toHaveTextContent('Claude quota unreadable.'));
       expect(panel.textContent ?? '').not.toContain('Last known reading');
       expect(panel.textContent ?? '').not.toContain('%');
     });
@@ -767,9 +765,9 @@ describe('AiActivityPage', () => {
    * confident `0` for either.
    */
   describe('the token figures beside the chart (#1025)', () => {
-    /** The `<dd>` of the tile labelled `Tokens` — the `dt`, not the table header. */
-    function tokensTile(container: HTMLElement): string {
-      const dt = [...container.querySelectorAll('.monitor-tiles dt')].find(
+    /** The `<dd>` of the fact labelled `Tokens` — the `dt`, not the table header. */
+    function tokensFact(container: HTMLElement): string {
+      const dt = [...container.querySelectorAll('.ai-activity-facts dt')].find(
         (el) => el.textContent === 'Tokens',
       );
       return dt?.nextElementSibling?.textContent ?? '';
@@ -786,8 +784,8 @@ describe('AiActivityPage', () => {
         }),
       );
       const { container } = render(<AiActivityPage />);
-      await waitFor(() => expect(tokensTile(container)).not.toBe(''));
-      expect(tokensTile(container)).toBe('not reported');
+      await waitFor(() => expect(tokensFact(container)).not.toBe(''));
+      expect(tokensFact(container)).toBe('not reported');
     });
 
     it('an IDLE window still reads 0 in · 0 out — nothing billed is a measured zero', async () => {
@@ -796,8 +794,8 @@ describe('AiActivityPage', () => {
          answer is genuinely nothing. */
       activityMock.mockResolvedValue(snapshot({ totals: cost({ responseCount: 0 }) }));
       const { container } = render(<AiActivityPage />);
-      await waitFor(() => expect(tokensTile(container)).not.toBe(''));
-      expect(tokensTile(container)).toBe('0 in · 0 out');
+      await waitFor(() => expect(tokensFact(container)).not.toBe(''));
+      expect(tokensFact(container)).toBe('0 in · 0 out');
     });
 
     it('a model row whose provider omitted usage says so, per side', async () => {
@@ -993,7 +991,12 @@ describe('AiActivityPage', () => {
 
       render(<AiActivityPage />);
 
-      await waitFor(() => expect(screen.getByText(/in THIS workspace's runs/)).toBeInTheDocument());
+      // #1594 OR40 S6r — the page's description, through the title's `?`.
+      await waitFor(() =>
+        expect(screen.getByRole('region', { name: 'AI activity' })).toHaveAccessibleDescription(
+          /in this workspace's runs/,
+        ),
+      );
     });
     /**
      * A group is MANY invocations, so "some reported" is a state a single row

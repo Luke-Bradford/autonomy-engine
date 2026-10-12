@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { Fragment, useCallback, useState } from 'react';
 import {
   type AiActivitySnapshot,
   type ExternalAgentActivity,
@@ -25,6 +25,7 @@ import { When } from '../../lib/When';
 import { PageHeader } from '../../lib/PageHeader';
 import { Section } from '../../lib/Section';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
+import { pageHelpId } from '../../lib/pageHelpId';
 
 /**
  * #917 — Monitor → AI activity: what the connected AIs are doing, and how much
@@ -53,7 +54,7 @@ import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 const ACTIVITY_POLL_MS = 5_000;
 
 /**
- * What each non-terminal status is CALLED, and the order the tiles read in.
+ * What each non-terminal status is CALLED, and the order the facts read in.
  *
  * The wording carries the distinction the whole panel turns on: only `running`
  * is work actually happening. `pending` has a row but no drive yet, `queued` has
@@ -153,14 +154,15 @@ function ProviderQuota({ entry, now }: { entry: ProviderQuotaReading; now: numbe
     <div className="quota-provider">
       <h3>{label}</h3>
 
-      {/* An UNREADABLE quota says so, in words, and keeps saying so even when a
-          last-known number is shown beneath it. It must never render as a
-          CURRENT percentage: "0%" would mean "wide open", the opposite of
-          "unknown". */}
+      {/* An unreadable quota says so, in words, and keeps saying so even when a
+          last-known number is shown beneath it. In sentence case (#1594 OR40
+          S6r): the word carries the meaning, and capitals only shouted it. It
+          must never render as a CURRENT percentage: "0%" would mean "wide
+          open", the opposite of "unknown". */}
       {reading.kind === 'unreadable' && (
         <>
           <p role="status" className="notice quota-unreadable">
-            <strong>{label} quota UNREADABLE.</strong>{' '}
+            <strong>{label} quota unreadable.</strong>{' '}
             {quotaUnavailableText(provider, reading.reason)}
           </p>
           {/* #987 — the provider 429s most of the time, so without this the panel
@@ -245,7 +247,7 @@ function QuotaPanel() {
           freshness claim about the number, and it is the one attached to it. */}
       {lastUpdatedAt !== null && (
         <p className="page-hint quota-as-of">
-          Last checked <When ms={lastUpdatedAt} />.
+          Last checked <When ms={lastUpdatedAt} />
         </p>
       )}
     </Section>
@@ -349,8 +351,11 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
 
   return (
     <>
-      <dl className="monitor-tiles">
-        {/* EVERY non-terminal status gets a tile, driven off the response's own
+      {/* #1594 OR40 S6r — the window's figures as `.run-meta` facts, not KPI
+          tiles: a term and its value per row, which is what a screen reader
+          hears too. `ai-activity-facts` is a hook for the tests, not a style. */}
+      <dl className="run-meta ai-activity-facts">
+        {/* EVERY non-terminal status gets a fact, driven off the response's own
             keys rather than a hand-picked three. The server already seeds all of
             them from `LIVE_RUN_STATUSES` so a newly-added status cannot be
             dropped on the way out; listing three by hand here re-opened exactly
@@ -359,38 +364,46 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
             refuse. `LIVE_RUN_LABEL` is an exhaustive Record, so a new member of
             `LiveRunCounts` is a TYPECHECK failure here, not an invisible run. */}
         {LIVE_RUN_ORDER.map((status) => (
-          <div key={status}>
+          <Fragment key={status}>
             <dt>{LIVE_RUN_LABEL[status]}</dt>
             <dd>{runs[status]}</dd>
-          </div>
+          </Fragment>
         ))}
-        <div>
-          <dt>Billed exchanges</dt>
-          <dd>{totals.responseCount}</dd>
-        </div>
-        <div>
-          <dt>Tokens</dt>
-          {/* #1025 — `tokenSummary`, not a raw pair, because the SQL aggregate can
-              now say whether anyone COUNTED each side. It could not before, so this
-              printed `0 in / 0 out` for a window whose only AI use was agent-CLI
-              work — `cliSpendFact` carries no token fields at all, and
-              `coalesce(sum(…), 0)` delivered that absence as a confident zero.
-              Same helper as the run and node panels, so one vocabulary answers
-              "was this measured" everywhere. */}
-          <dd>{tokenSummary(totals)}</dd>
-        </div>
-        <div>
-          <dt>Spend</dt>
-          {/* `costFigure`, not a hand-rolled amount, because the five-way reading
-              it encodes is the money model's own vocabulary and getting it
-              slightly different here would be a SECOND answer to the same
-              question. Concretely: when exchanges happened but NONE could be
-              priced, the sum is 0 and the honest headline is "Cost unknown" —
-              writing `$0.00` with an "at least" beside it presents a total that
-              was never measured, which `costKindOf` documents as worse than
-              saying nothing at all. */}
-          <dd>{costFigure(costHeadline(totals))}</dd>
-        </div>
+        <dt>Billed exchanges</dt>
+        <dd>{totals.responseCount}</dd>
+        <dt>Tokens</dt>
+        {/* #1025 — `tokenSummary`, not a raw pair, because the SQL aggregate can
+            now say whether anyone COUNTED each side. It could not before, so this
+            printed `0 in / 0 out` for a window whose only AI use was agent-CLI
+            work — `cliSpendFact` carries no token fields at all, and
+            `coalesce(sum(…), 0)` delivered that absence as a confident zero.
+            Same helper as the run and node panels, so one vocabulary answers
+            "was this measured" everywhere. */}
+        <dd>{tokenSummary(totals)}</dd>
+        <dt>Spend</dt>
+        {/* `costFigure`, not a hand-rolled amount, because the five-way reading
+            it encodes is the money model's own vocabulary and getting it
+            slightly different here would be a SECOND answer to the same
+            question. Concretely: when exchanges happened but NONE could be
+            priced, the sum is 0 and the honest headline is "Cost unknown" —
+            writing `$0.00` with an "at least" beside it presents a total that
+            was never measured, which `costKindOf` documents as worse than
+            saying nothing at all. */}
+        <dd>{costFigure(costHeadline(totals))}</dd>
+        {/* Agent-CLI use is a fact of its own rather than part of Tokens because
+            it is not token-metered — folding it in would print zeros for real
+            work. A value, not a sentence (#1594 OR40 S6r): the term names it. */}
+        <dt>Agent CLI subprocesses</dt>
+        <dd>
+          {agentCli.invocations === 0 ? (
+            'None in this window'
+          ) : (
+            <>
+              {agentCli.invocations} — {agentCli.completed} completed, {agentCli.notCompleted} did
+              not, last at <When ms={agentCli.lastAt} />
+            </>
+          )}
+        </dd>
       </dl>
 
       {nothing && (
@@ -438,7 +451,7 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
                   <td>{m.provider}</td>
                   <td>{m.model}</td>
                   <td className="num">{m.cost.responseCount}</td>
-                  {/* Per model, the same honesty as the tile above: a row whose
+                  {/* Per model, the same honesty as the fact above: a row whose
                       provider never sent `usage` reads as not reported rather than
                       as a measured zero. The header lost its "in / out" because
                       the cell now states each side by name. */}
@@ -454,20 +467,6 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
         </>
       )}
 
-      {/* Agent-CLI use is counted apart from the token table because it is not
-          token-metered — folding it in would print zeros for real work. */}
-      <p className="agent-cli-summary">
-        {agentCli.invocations === 0 ? (
-          'No agent CLI subprocesses in this window.'
-        ) : (
-          <>
-            {agentCli.invocations} agent CLI subprocess
-            {agentCli.invocations === 1 ? '' : 'es'} — {agentCli.completed} completed,{' '}
-            {agentCli.notCompleted} did not. Last at <When ms={agentCli.lastAt} />.
-          </>
-        )}
-      </p>
-
       <ReportedActivityPanel external={external} />
     </>
   );
@@ -481,8 +480,29 @@ export function AiActivityPage() {
   });
 
   return (
-    <section aria-labelledby="ai-activity-heading">
-      <PageHeader title="AI activity" headingId="ai-activity-heading">
+    <section
+      aria-labelledby="ai-activity-heading"
+      aria-describedby={pageHelpId('ai-activity-heading')}
+    >
+      {/* #988 — the scope is STATED. This page read "AI activity" and meant
+          "AI activity studio itself dispatched", which is a narrower claim than
+          its own title, and an operator watching the autonomy loop fire read the
+          resulting zeros as "nothing is happening anywhere". Naming the actor is
+          the fix; the reported section at the bottom says what everything else
+          is. #1594 OR40 S6r — said through the title's `?`, not a paragraph. */}
+      <PageHeader
+        title="AI activity"
+        headingId="ai-activity-heading"
+        help={FORM_SECTION_HINTS.monitor.page}
+      >
+        {/* #1594 OR40 S6r — the freshness of the figures below, in the toolbar
+            ahead of the window it is for, as Runs states its own ahead of Live
+            (S6f): the picker stays the row's last control (S3). */}
+        {lastUpdatedAt !== null && (
+          <span className="runs-live-status">
+            Activity as of <When ms={lastUpdatedAt} />
+          </span>
+        )}
         <LabelledControl label="Window" className="ai-window-picker">
           {(id) => (
             <select
@@ -512,17 +532,6 @@ export function AiActivityPage() {
         </LabelledControl>
       </PageHeader>
 
-      {/* #988 — the scope is now STATED. This page read "AI activity" and meant
-          "AI activity studio itself dispatched", which is a narrower claim than
-          its own title, and an operator watching the autonomy loop fire read the
-          resulting zeros as "nothing is happening anywhere". Naming the actor is
-          the fix; the section at the bottom is where everything else reports. */}
-      <p className="page-hint">
-        What your connected AIs and agent CLIs have been doing in THIS workspace's runs — including
-        runs still in flight. Agents studio did not launch report in separately, below. Refreshes
-        itself every few seconds.
-      </p>
-
       {error !== null && (
         <p role="alert" className="error">
           Could not load AI activity: {error}
@@ -532,12 +541,6 @@ export function AiActivityPage() {
       {loading && data === null && error === null && <p className="notice">Loading activity…</p>}
 
       {data !== null && <ActivityPanel snapshot={data} />}
-
-      {lastUpdatedAt !== null && (
-        <p className="page-hint">
-          Activity as of <When ms={lastUpdatedAt} />.
-        </p>
-      )}
 
       <QuotaPanel />
     </section>

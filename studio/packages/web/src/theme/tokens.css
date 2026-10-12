@@ -68,6 +68,12 @@
   --radius-surface: 6px;
   /* Status badges and filter pills. */
   --radius-pill: 999px;
+  /* S6r — a chart's marks (the token-flow bars, their legend swatches): a bar
+     can be 2px wide, so the control radius would round it to a pill. */
+  --radius-mark: 2px;
+  /* S6r — the surface gap that separates adjacent chart marks, in place of a
+     border around each. Not spacing: it is part of the mark. */
+  --mark-gap: 2px;
 
   /* Heights, not spacing. */
   --control-h: 28px;
