@@ -1319,6 +1319,15 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * node bound no parameters. The reducer never reads it.
      */
     params: DispatchInputSchema.optional(),
+    /**
+     * #1600 OR41 C0d — the activity's user properties as this dispatch resolved
+     * them, which the activity-runs grid shows as columns. Recorded whatever
+     * the `llm_call` capture level, because the author chose each one to be
+     * shown. On a secure node every value and error is the marker (names
+     * stay). Absent when the node has none, so such a dispatch is
+     * byte-identical to a pre-C0d one. The reducer never reads it.
+     */
+    userProperties: z.array(ResolvedUserPropertySchema).optional(),
   }),
   z.object({
     type: z.literal('node.succeeded'),

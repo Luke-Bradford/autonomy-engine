@@ -196,6 +196,7 @@ function emptyRow(
     childRunId: null,
     error: null,
     skipReason: null,
+    userProperties: null,
   };
 }
 
@@ -209,11 +210,15 @@ function settleRow(row: ProjectedActivityRun, status: NodeRunStatus, ts: number,
     timed && row.startedAt !== null && ts >= row.startedAt ? ts - row.startedAt : null;
 }
 
-/** What an event says about its attempt's row: the branch an If or Switch took,
+/** What an event says about its attempt's row: the user properties a dispatch
+ * resolved, the branch an If or Switch took,
  * the child a call started, the counts a success logged, the error a failure
  * gave. The caller decides whether the row may still take it (rule 1). */
 function fillDetail(row: ProjectedActivityRun, e: EngineEvent, payload: unknown): void {
   switch (e.type) {
+    case 'node.dispatched':
+      row.userProperties = e.userProperties ?? null;
+      return;
     case 'condition.evaluated':
     case 'switch.evaluated':
       row.branch = e.branch;

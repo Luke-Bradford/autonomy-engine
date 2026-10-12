@@ -1799,6 +1799,12 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       ...(datasetAddresses !== undefined ? { datasetAddresses } : {}),
       ...(input !== undefined ? { input } : {}),
       ...(params !== undefined ? { params } : {}),
+      // #1600 C0d — resolved by the reducer; scrubbed like `input` as defence in
+      // depth (save already refuses a secret ref in one), and redacted on a
+      // secure node at append time (`redactSecureEvent`).
+      ...(command.resolvedUserProperties !== undefined
+        ? { userProperties: scrub(command.resolvedUserProperties) }
+        : {}),
     };
 
     const ctx: ActivityContext = {

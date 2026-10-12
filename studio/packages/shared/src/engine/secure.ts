@@ -157,10 +157,22 @@ export function redactSecureEvent(node: Node | undefined, event: EngineEvent): E
       // `secureInput` alone would still leave it readable on a `secureOutput`
       // node through the other half. `chars` stays, as it does there. The
       // resolved parameters (`params`) are input too, and go the same way.
-      return event.input === undefined && event.params === undefined
+      // #1600 C0d — user properties likewise: a `${}` in one can echo the input.
+      return event.input === undefined &&
+        event.params === undefined &&
+        event.userProperties === undefined
         ? event
         : {
             ...event,
+            ...(event.userProperties !== undefined
+              ? {
+                  userProperties: event.userProperties.map(({ name, error }) =>
+                    error !== undefined
+                      ? { name, error: SECURE_REDACTED }
+                      : { name, value: SECURE_REDACTED },
+                  ),
+                }
+              : {}),
             ...(event.input !== undefined
               ? { input: { text: SECURE_REDACTED, chars: event.input.chars } }
               : {}),
