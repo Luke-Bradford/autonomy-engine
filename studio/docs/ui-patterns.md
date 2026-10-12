@@ -332,8 +332,8 @@ message.
 - What still names the KEY: a top-level field's expression picker buttons ("Insert reference into
   url"). The key is what a `${}` reference and a server message cite. A row cell's buttons follow
   the cell's name ("Insert reference into column mapping row 1 expression").
-- **An activity's tabs are declared in its catalog entry** (#1477 OR29): *General* (run policy)
-  first, then the entry's `tabs`, from one fixed vocabulary (`ACTIVITY_TAB_KEYS`: Settings, Source,
+- **An activity's tabs are declared in its catalog entry** (#1477 OR29): *General* (*Basics*, the
+  description, then *Run policy*; #1600 C0b) first, then the entry's `tabs`, from one fixed vocabulary (`ACTIVITY_TAB_KEYS`: Settings, Source,
   Sink, Mapping, Request, Auth, Model, Prompt, Tools, Output, Location, Content), so a tab is named
   the same on every activity that has one.
   - Each tab lists its config keys, required first, and the binding slots it draws (a connection

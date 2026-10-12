@@ -16,12 +16,21 @@ export function ActivityCardBody({
   title,
   summary,
   badges,
+  description,
 }: {
   type: string;
   title: string;
   summary: string | null;
   badges: readonly ActivityBadge[];
+  /**
+   * #1600 OR41 C0b — the author's description of the step. Not drawn on the
+   * card (its height is fixed, OR2): it follows the name in the name's tooltip,
+   * and is the name's accessible description for a reader that never hovers.
+   */
+  description?: string | null;
 }) {
+  // Whitespace alone describes nothing; it must not draw a blank paragraph.
+  const about = description?.trim() ? description : undefined;
   return (
     <>
       {/* The glyph is DECORATIVE and says so: the name beside it is the
@@ -35,7 +44,11 @@ export function ActivityCardBody({
           summary row is drawn even when empty, so filling in a field never
           resizes the box (OR2). */}
       <span className="flow-node-body">
-        <strong className="flow-node-title" title={title}>
+        <strong
+          className="flow-node-title"
+          title={about === undefined ? title : `${title}\n\n${about}`}
+          aria-description={about}
+        >
           {title}
         </strong>
         <span className="flow-node-meta">

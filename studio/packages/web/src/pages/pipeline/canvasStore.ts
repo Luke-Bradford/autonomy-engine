@@ -683,7 +683,11 @@ function uncopiedReads(
       ...target.containers.map((c) => c.id),
     ]),
   ].filter((id) => !copied.has(id));
-  const read = new Set(carried.flatMap((v) => referencedNodeIds(v, outside)));
+  // #1600 C0b — a description is prose: a `${nodes.x}` in one is never
+  // evaluated, so it reads nothing and must not refuse the paste.
+  const read = new Set(
+    carried.flatMap((v) => referencedNodeIds({ ...v, description: undefined }, outside)),
+  );
   return outside.filter((id) => read.has(id));
 }
 
@@ -1428,6 +1432,12 @@ export interface CanvasState {
    * fact from saying nothing (`NodePolicySchema.retry`).
    */
   setNodePolicy(id: string, policy: NodePolicy | undefined): void;
+  /**
+   * #1600 OR41 C0b — an activity's description. `''` REMOVES the key rather
+   * than storing an empty string, so clearing it leaves the node as it was. A
+   * typing burst on one node is one undo step, as the pipeline's description is.
+   */
+  setNodeDescription(id: string, text: string): void;
   /**
    * U16 — the pipeline's typed contract. Each takes a WHOLE replacement row
    * rather than a field patch, for the same reason `createContainer` takes a
@@ -2319,6 +2329,23 @@ export function createCanvasStore(): StoreApi<CanvasState> {
             return next;
           }),
         }));
+      },
+
+      setNodeDescription(id, text) {
+        const node = get().nodes.find((n) => n.id === id);
+        if (node === undefined || (node.description ?? '') === text) return;
+        edit(
+          (s) => ({
+            nodes: s.nodes.map((n) => {
+              if (n.id !== id) return n;
+              const next = { ...n };
+              if (text === '') delete next.description;
+              else next.description = text;
+              return next;
+            }),
+          }),
+          `node:${id}:description`,
+        );
       },
 
       setNodeParamOverrides(id, end, params, coalesceKey) {

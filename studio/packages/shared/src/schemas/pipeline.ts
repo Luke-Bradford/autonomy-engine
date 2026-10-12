@@ -459,6 +459,21 @@ const StrictNodePolicySchema = NodePolicySchema.strict().superRefine((policy, ct
 });
 
 /**
+ * #1 F8a (spec D1) — the bounds on a version's `description` and `annotations`.
+ * Exported so the canvas (`propertyIssues`) and the write schema below refuse
+ * the same thing with the same words.
+ *
+ * #1477 — a connection carries the same two fields (ADF's linked-service form)
+ * under the same bounds, so `DESCRIPTION_MAX_CHARS` is the one limit and the
+ * pipeline name stays as its alias for the code that already reads it.
+ *
+ * #1600 OR41 C0b — an activity's description shares it too, which is why this
+ * sits ABOVE `NodeSchema`: `StrictNodeSchema` reads it when the module loads.
+ */
+export const DESCRIPTION_MAX_CHARS = 4000;
+export const PIPELINE_DESCRIPTION_MAX_CHARS = DESCRIPTION_MAX_CHARS;
+
+/**
  * An activity instance on the canvas. `type` names an entry in the Activity
  * Catalog (validated against the catalog elsewhere — this schema only checks
  * shape, not that `type` is a currently-known catalog entry, since an
@@ -615,6 +630,18 @@ export const NodeSchema = z.object({
    * be opened to be repaired. A later narrowing belongs on `StrictNodeSchema`.
    */
   policy: NodePolicySchema.optional(),
+  /**
+   * #1600 OR41 C0b (catalogue spec §3) — what this activity is for, in the
+   * author's words: shown on hover on the canvas and in the monitor's drawer.
+   * Free text, never evaluated: a `${}` in it is just text. ABSENT, not `''`,
+   * when there is none (the editor deletes the key on clear), so a doc without
+   * one is byte-identical to a pre-C0b doc.
+   *
+   * Read-tolerant here; the length bound is on `StrictNodeSchema`, the policy
+   * field's asymmetry. Counted by the content hash — it is authored content, so
+   * editing it is drift a commit should carry.
+   */
+  description: z.string().optional(),
 });
 export type Node = z.infer<typeof NodeSchema>;
 
@@ -650,6 +677,13 @@ export type Node = z.infer<typeof NodeSchema>;
  */
 export const StrictNodeSchema = NodeSchema.extend({
   policy: StrictNodePolicySchema.optional(),
+  // #1600 C0b — the pipeline description's bound, in its words.
+  description: z
+    .string()
+    .max(DESCRIPTION_MAX_CHARS, {
+      message: `the description can be at most ${DESCRIPTION_MAX_CHARS} characters`,
+    })
+    .optional(),
 }).superRefine((node, ctx) => {
   const parsed = NodeOutputsFieldSchema.safeParse(node.config['outputs']);
   if (parsed.success) return; // valid, or absent (= no contract, legal)
@@ -983,17 +1017,6 @@ export type NewPipeline = z.input<typeof NewPipelineSchema>;
  * "latest" — there is deliberately no update path for this schema/table; a
  * new version is always a new row (see the repository layer).
  */
-/**
- * #1 F8a (spec D1) — the bounds on a version's `description` and `annotations`.
- * Exported so the canvas (`propertyIssues`) and the write schema below refuse
- * the same thing with the same words.
- *
- * #1477 — a connection carries the same two fields (ADF's linked-service form)
- * under the same bounds, so `DESCRIPTION_MAX_CHARS` is the one limit and the
- * pipeline name stays as its alias for the code that already reads it.
- */
-export const DESCRIPTION_MAX_CHARS = 4000;
-export const PIPELINE_DESCRIPTION_MAX_CHARS = DESCRIPTION_MAX_CHARS;
 export const ANNOTATION_MAX_CHARS = 100;
 export const MAX_ANNOTATIONS = 50;
 

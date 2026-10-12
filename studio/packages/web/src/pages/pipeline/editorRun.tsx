@@ -71,7 +71,7 @@ function EditorRunStream({
   const status: RunStatus = runLifecycleView(lifecycle, projection)?.status ?? 'pending';
   const live = streamStillLive(stream.phase, status);
   const names = useMemo(() => activityLabels(doc.nodes), [doc]);
-  const types = useMemo(() => new Map(doc.nodes.map((n) => [n.id, n.type])), [doc]);
+  const byId = useMemo(() => new Map(doc.nodes.map((n) => [n.id, n])), [doc]);
 
   const view = useMemo((): EditorRunView => {
     const activity = new Map(nodes.map((n) => [n.nodeId, n]));
@@ -82,9 +82,10 @@ function EditorRunStream({
       status,
       live,
       nameOf: (id) => names.get(id) ?? null,
-      typeOf: (id) => types.get(id) ?? null,
+      typeOf: (id) => byId.get(id)?.type ?? null,
+      descriptionOf: (id) => byId.get(id)?.description ?? null,
     };
-  }, [run.runId, doc, nodes, projection, status, live, names, types]);
+  }, [run.runId, doc, nodes, projection, status, live, names, byId]);
 
   useEffect(() => {
     onView(view);
@@ -117,6 +118,7 @@ export function EditorRunDrawer({ nodeId, type }: { nodeId: string | null; type:
       <NodeActivityPanel
         node={node}
         name={run.nameOf(nodeId)}
+        description={run.descriptionOf(nodeId)}
         runStatus={run.status}
         live={run.live}
         onClose={() => setClosed(true)}

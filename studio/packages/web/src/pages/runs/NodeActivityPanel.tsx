@@ -116,6 +116,7 @@ const PANEL_ID = 'node-activity-panel';
 export function NodeActivityPanel({
   node,
   name,
+  description,
   runStatus,
   live,
   onClose,
@@ -126,6 +127,11 @@ export function NodeActivityPanel({
 }: {
   node: NodeActivity;
   name: string | null;
+  /**
+   * #1600 OR41 C0b — the bound version's description of the node, read off the
+   * same doc `name` is. Absent or `null` draws nothing.
+   */
+  description?: string | null;
   /** The run's status, for the one node word that depends on it (CX4). */
   runStatus: RunStatus;
   /** #890 — whether the page would hear this node settle, so its Duration may count up. */
@@ -179,6 +185,8 @@ export function NodeActivityPanel({
           </button>
         </div>
       </div>
+      {/* The author's line breaks are kept (`white-space: pre-wrap`). */}
+      {description?.trim() ? <p className="page-hint node-description">{description}</p> : null}
 
       <p>
         {/* U25 — one status vocabulary for the whole Monitor: the same word

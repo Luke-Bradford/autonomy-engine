@@ -149,6 +149,8 @@ interface ActivityData extends Record<string, unknown> {
   summary: string | null;
   /** #1394 OR3 — retry / timeout / secure, from the node's policy. */
   badges: readonly ActivityBadge[];
+  /** #1600 OR41 C0b — the author's description, shown on hover. */
+  description: string | null;
 }
 
 /**
@@ -264,7 +266,13 @@ const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProp
       {...handlers}
     >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
-      <ActivityCardBody type={d.type} title={d.title} summary={d.summary} badges={d.badges} />
+      <ActivityCardBody
+        type={d.type}
+        title={d.title}
+        summary={d.summary}
+        badges={d.badges}
+        description={d.description}
+      />
       <IssueBadge issues={issues} />
       {run !== undefined && <RunChip entry={run} />}
       {/* THE CONNECTION LINE IS GONE, deliberately. Every box used to carry
@@ -984,6 +992,7 @@ export function FlowCanvas({
             ports: portsOf(n.id),
             summary: activitySummary(n, datasetName),
             badges: activityBadges(n),
+            description: n.description ?? null,
           } satisfies ActivityData,
           // #737 — RE-DERIVED from the store every time, NOT carried forward in
           // the spread above. The store is the single authority on what is

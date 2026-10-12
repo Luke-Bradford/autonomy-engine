@@ -153,6 +153,7 @@ import { ContractSection, OutputRow, ParamRow, VariableRow } from './ContractEdi
 import { OUTPUT_COLUMNS, PARAM_COLUMNS, VARIABLE_COLUMNS } from './contractColumns';
 import {
   isOwnPolicyIssue,
+  descriptionIssues,
   policyIssues,
   saveDisabledReason,
   toVersionBody,
@@ -160,7 +161,7 @@ import {
 } from './canvasDoc';
 import { SubjectIssues } from './SubjectIssues';
 import { SubjectIssuesContext, useSubjectIssues } from './issueContext';
-import { PolicyEditor } from './PolicyEditor';
+import { NodeGeneral } from './NodeGeneral';
 import { PanelTabs } from './PanelTabs';
 import { refusalLead, tabStatusMark, tabStatuses } from './tabStatus';
 import { branchConditionsOf, conditionLabel, declaredConditionsOf } from './ports';
@@ -1116,6 +1117,7 @@ export function PipelineCanvas({
       [
         ...validateCanvas(nodes, edges, containers, params, variables, globals),
         ...policyIssues(nodes),
+        ...descriptionIssues(nodes),
       ].map((raw) => ({
         raw,
         text: readableIssue(raw, nodes, edges, containers),
@@ -4241,7 +4243,7 @@ export function NodePanel({
               content: (
                 // #1312 — policy: retry applies to a call, and a secure flag is
                 // refused on one, which is explained only if the section is here.
-                <PolicyEditor store={store} nodeId={nodeId} />
+                <NodeGeneral store={store} nodeId={nodeId} />
               ),
             },
             {
@@ -4280,7 +4282,7 @@ export function NodePanel({
             key: 'general',
             label: 'General',
             status: tabStatusMark(statuses.get('general')),
-            content: <PolicyEditor store={store} nodeId={nodeId} />,
+            content: <NodeGeneral store={store} nodeId={nodeId} />,
           },
           ...typeTabs.map((t) => ({
             key: t.key,

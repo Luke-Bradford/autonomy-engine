@@ -55,6 +55,7 @@ export const FORM_SECTION_HINTS = {
     parameters: "The values this trigger passes to the pipeline's parameters for each run.",
   },
   node: {
+    basics: 'What this activity is for, shown on hover on the canvas and in the monitor.',
     runPolicy:
       'How long one attempt may run, how a transient failure is retried, and what is kept out of the run log.',
   },

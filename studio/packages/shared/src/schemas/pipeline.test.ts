@@ -3,6 +3,7 @@ import { CATALOG_VERSION } from './version.js';
 import {
   CallConfigSchema,
   ContainerSchema,
+  DESCRIPTION_MAX_CHARS,
   EdgeOnSchema,
   EdgeSchema,
   NewPipelineSchema,
@@ -17,6 +18,7 @@ import {
   PipelineSchema,
   PipelineVersionSchema,
   PositionSchema,
+  StrictNodeSchema,
 } from './pipeline.js';
 
 describe('ParamTypeSchema', () => {
@@ -949,5 +951,42 @@ describe('NewPipelineVersionSchema', () => {
     expect(parsed.catalogVersion).toBe(CATALOG_VERSION);
     expect(parsed).not.toHaveProperty('id');
     expect(parsed).not.toHaveProperty('version');
+  });
+});
+
+describe("#1600 OR41 C0b — an activity's description", () => {
+  const node = { id: 'a', type: 'noop', config: {}, position: { x: 0, y: 0 } };
+
+  it('round-trips through the read schema, and stays absent when absent', () => {
+    expect(NodeSchema.parse({ ...node, description: 'Loads the orders' }).description).toBe(
+      'Loads the orders',
+    );
+    expect(NodeSchema.parse(node)).not.toHaveProperty('description');
+  });
+
+  it('is bounded on WRITE at the pipeline limit, in the same words, and tolerated on read', () => {
+    const long = { ...node, description: 'x'.repeat(DESCRIPTION_MAX_CHARS + 1) };
+    expect(
+      StrictNodeSchema.safeParse({ ...node, description: 'x'.repeat(DESCRIPTION_MAX_CHARS) })
+        .success,
+    ).toBe(true);
+    const refused = StrictNodeSchema.safeParse(long);
+    expect(refused.success).toBe(false);
+    expect(refused.error?.issues[0]?.path).toEqual(['description']);
+    expect(refused.error?.issues[0]?.message).toBe(
+      `the description can be at most ${DESCRIPTION_MAX_CHARS} characters`,
+    );
+    expect(NodeSchema.safeParse(long).success).toBe(true);
+  });
+
+  it('survives the version write schema', () => {
+    const body = NewPipelineVersionSchema.parse({
+      pipelineId: 'p',
+      nodes: [{ ...node, description: 'Loads the orders' }],
+      edges: [],
+      params: [],
+      outputs: [],
+    });
+    expect(body.nodes[0]?.description).toBe('Loads the orders');
   });
 });

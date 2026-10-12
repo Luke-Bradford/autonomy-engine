@@ -107,6 +107,7 @@ const RunActivityNode = memo(function RunActivityNode({ id, data }: NodeProps) {
           title={d.title}
           summary={d.card.summary}
           badges={d.card.badges}
+          description={d.card.description}
         />
       </span>
       {/* #903 — no run behind this view means no status line at all, rather

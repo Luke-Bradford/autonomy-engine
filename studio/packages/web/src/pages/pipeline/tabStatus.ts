@@ -5,12 +5,12 @@ import type { PanelTabStatus } from './PanelTabs';
 
 /** #1477 OR29 — what `issueTarget` found an issue to be about. */
 export type IssueTarget =
-  { readonly field: string } | { readonly slot: ActivityBindingSlot } | { readonly policy: true };
+  { readonly field: string } | { readonly slot: ActivityBindingSlot } | { readonly general: true };
 
 /**
  * #1477 OR29 — what a RAW issue already attributed to `nodeId` is about, read
  * from the part after the node's leading location. `undefined` when it names
- * no one field, binding or the run policy: it stays in the panel's issue list
+ * no one field, binding or General-tab field: it stays in the panel's issue list
  * under the tabs (which every tab shows), so leaving it off a label loses nothing.
  *
  * Like `issueSubject`, this reads the MESSAGE FORMAT and must be handed the raw
@@ -35,7 +35,8 @@ export function issueTarget(raw: string, nodeId: string): IssueTarget | undefine
   }
   const rest = afterLocation(raw, nodeId);
   if (rest === undefined) return undefined;
-  if (/^policy\b/.test(rest)) return { policy: true };
+  // The General tab: the run policy, and (#1600 C0b) the description above it.
+  if (/^(policy|description)\b/.test(rest)) return { general: true };
   const paired = /^(connectionIds|datasetIds|datasetParams)\.(source|sink)\b/.exec(rest);
   if (paired) {
     const side = paired[2] === 'source' ? 'source' : 'sink';
@@ -116,7 +117,7 @@ export function tabStatuses(input: TabStatusInput): Map<NodeTab, TabStatus> {
   for (const raw of input.issues) {
     const target = issueTarget(raw, nodeId);
     if (target === undefined) count(undefined);
-    else if ('policy' in target) count('general');
+    else if ('general' in target) count('general');
     else if ('field' in target) {
       flagged.add(target.field);
       count(tabOfField.get(target.field));
