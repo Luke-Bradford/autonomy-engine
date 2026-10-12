@@ -296,8 +296,8 @@ export function PendingCallbacks({
                      Referer header. */
                   <div role="status" className="secret-reveal">
                     <p>
-                      POST to this path to resume the run. Anyone holding it can complete this wait,
-                      so treat it as a secret — it is not an identifier.
+                      <code>POST</code> to this path to resume the run. Anyone holding it can
+                      complete this wait, so treat it as a secret — it is not an identifier.
                     </p>
                     <p>
                       <code>POST {wait.callbackPath}</code>

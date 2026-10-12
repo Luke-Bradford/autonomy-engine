@@ -311,10 +311,24 @@ export function rectOf(page: Page, selector: string): Promise<ScreenRect> {
  * state, and the Monitor's job is to say so. A spec about a parked run cannot
  * use the settling helper — it would simply time out.
  */
-export async function seedManualTrigger(
+export function seedManualTrigger(
   page: Page,
   pipelineVersionId: string,
   name = 'e2e manual',
+): Promise<string> {
+  return seedTrigger(page, pipelineVersionId, name);
+}
+
+/**
+ * Creates a trigger through the API, bound to `pipelineVersionId`: an enabled
+ * manual one unless `overrides` says otherwise (a mode, `enabled: false`, a
+ * webhook's `secretRef`). Returns its id.
+ */
+export async function seedTrigger(
+  page: Page,
+  pipelineVersionId: string,
+  name: string,
+  overrides: Record<string, unknown> = {},
 ): Promise<string> {
   const trigger = await page.request.post('/api/triggers', {
     data: {
@@ -327,6 +341,7 @@ export async function seedManualTrigger(
       runWindows: null,
       concurrency: { policy: 'skip_if_running' },
       enabled: true,
+      ...overrides,
     },
   });
   expect(trigger.status(), `creating trigger: ${await trigger.text()}`).toBe(201);
