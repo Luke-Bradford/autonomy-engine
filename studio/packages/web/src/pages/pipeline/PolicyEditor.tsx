@@ -3,6 +3,7 @@ import { useStore } from 'zustand';
 import {
   DEFAULT_RETRY_INTERVAL_SECONDS,
   MAX_RETRY_INTERVAL_SECONDS,
+  getActivity,
   type NodePolicy,
 } from '@autonomy-studio/shared';
 import { FieldCell, FieldGrid } from '../../lib/form/FieldGrid';
@@ -22,12 +23,11 @@ import { readableIssue } from './containerRules';
  * Writes straight to the store (no Apply): policy is not part of the config
  * draft `Apply config` commits, and each control here is a single value.
  *
- * `timeoutSeconds` is deliberately NOT offered: nothing reads it until F3 (#1
- * spec's ticket table, under #432) ships, and a control for a setting the engine
- * ignores would be a promise the run does not keep. A stored one — from an
- * import or the API — is kept on every edit, said plainly to be unenforced, and
- * can be removed, because the write schema's typo ceiling can block a save on it
- * and a save-blocking value must be repairable where it is shown.
+ * #1600 C0a — `timeoutSeconds` is offered on an EXECUTION activity only, the
+ * one place the executor enforces it. Anywhere else (a call, a webhook, an
+ * engine-evaluated activity) the save refuses a stored one; its refusal is
+ * listed below with a Remove button, because a save-blocking value must be
+ * repairable where it is shown.
  *
  * Self-contained over the store (nodes/edges/containers/params), so it mounts
  * unchanged in both of `NodePanel`'s branches, the call panel included: a secure
@@ -50,7 +50,11 @@ export function PolicyEditor({
   const params = useStore(store, (s) => s.params);
   const variables = useStore(store, (s) => s.variables);
   const globals = useStore(store, (s) => s.globals);
-  const policy = nodes.find((n) => n.id === nodeId)?.policy;
+  const node = nodes.find((n) => n.id === nodeId);
+  const policy = node?.policy;
+  // Mirrors `validateTimeoutPolicy`'s rule: only an adapter-run attempt can time out.
+  const timesOut =
+    node !== undefined && node.call === undefined && getActivity(node.type)?.kind === 'execution';
 
   // Filtered BEFORE `readableIssue`: the filter reads the validators' quoted ids,
   // which the rewrite replaces with names. Memoised because it re-runs the whole
@@ -78,13 +82,25 @@ export function PolicyEditor({
   return (
     <Section heading="Run policy" help={FORM_SECTION_HINTS.node.runPolicy}>
       <FieldGrid className="field-stack">
+        {timesOut && (
+          <FieldCell span="short">
+            <DraftNumberField
+              label="Timeout (seconds)"
+              stored={policy?.timeoutSeconds}
+              parse={parseWholeNumber}
+              placeholder="none"
+              about="Longest one attempt may run. On expiry the attempt is stopped and fails as a timeout, which Retries can retry. Blank sets no timeout."
+              onCommit={(timeoutSeconds) => set({ timeoutSeconds })}
+            />
+          </FieldCell>
+        )}
         <FieldCell span="short">
           <DraftNumberField
             label="Retries"
             stored={policy?.retry}
             parse={parseWholeNumber}
             placeholder="no retry"
-            about="Times a transient failure is retried after the first attempt. 0 never retries; blank leaves it unset."
+            about="Times a transient failure, including a timeout, is retried after the first attempt. 0 never retries; blank leaves it unset."
             onCommit={(retry) => set({ retry })}
           />
         </FieldCell>
@@ -134,10 +150,8 @@ export function PolicyEditor({
         Either flag also withholds this node&rsquo;s failure text and warnings, which could repeat a
         secret.
       </p>
-      {policy?.timeoutSeconds !== undefined && (
-        <p className="contract-advisory">
-          This node stores a timeout of {policy.timeoutSeconds}s, which is not enforced yet —
-          nothing reads it.{' '}
+      {!timesOut && policy?.timeoutSeconds !== undefined && (
+        <p>
           <button type="button" onClick={() => set({ timeoutSeconds: undefined })}>
             Remove the timeout
           </button>

@@ -642,10 +642,10 @@ export const FAILURE_CODES = {
   /** Bad/expired credentials (connector `auth`) — permanent until reconfigured. */
   AUTH: 'auth',
   /**
-   * RESERVED for #1 D4/F3: the POLICY timeout the driver terminalizes as
-   * `node.failed{kind:'transient', code:'timeout'}`. Declared here so F3 cannot
-   * mint a rival spelling. NOT an adapter's own internal timeout — that arrives
-   * as a plain connector `transient`.
+   * #1 D4/F3 (#1600 C0a): the POLICY timeout — `policy.timeoutSeconds` expired
+   * and the executor ended the attempt as `node.failed{kind:'transient',
+   * code:'timeout'}` (`server/src/run/timeout.ts`). NOT an adapter's own
+   * internal timeout — that arrives as a plain connector `transient`.
    */
   TIMEOUT: 'timeout',
   /** The adapter's stream ended with no terminal event (contract violation). */

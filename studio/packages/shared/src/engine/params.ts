@@ -2846,6 +2846,8 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     // #1 F4 — where a secure flag cannot be honoured, refuse it rather than accept
     // a promise the run would break.
     validateSecurePolicy(node, errors);
+    // #1600 C0a — likewise a timeout on a node nothing would time out.
+    validateTimeoutPolicy(node, errors);
     // #4 A1 — an `if`'s boolean condition must be WHOLE-VALUE (save-time half).
     if (node.type === IF_ACTIVITY_TYPE) validateIfCondition(node, errors);
     // #4 A2 — a `switch`'s `on` + `cases` shape (save-time half).
@@ -4825,6 +4827,36 @@ function outputsByIdOf(
   // `results`; loop/stage carry an `absent` (dynamic) contract (name-unchecked).
   for (const c of containers) m.set(c.id, containerOutputContract(c));
   return m;
+}
+
+/**
+ * #1600 OR41 C0a (#1 F3) — `policy.timeoutSeconds` is enforced by the executor
+ * on the attempt's adapter, so it holds only on an `execution` activity. Refused
+ * at save everywhere else, on F4's reasoning: an accepted timeout the run would
+ * never apply is a promise broken in silence.
+ *  - a CALL node: the child is a run of its own; time out its activities instead.
+ *  - a `webhook`: it waits for its callback, and that wait has its own Timeout.
+ *  - a `wait`: its duration is the setting.
+ *  - any other `control` activity: the reducer evaluates it in the same step,
+ *    so there is nothing to time out.
+ * An unknown type says nothing here; the config check names it.
+ */
+function validateTimeoutPolicy(node: Node, errors: string[]): void {
+  if (node.policy?.timeoutSeconds === undefined) return;
+  const refuse = (where: string, why: string) =>
+    errors.push(`node '${node.id}': policy.timeoutSeconds is not supported on ${where} — ${why}`);
+  if (node.call !== undefined) {
+    refuse('a pipeline call', "the child is a run of its own; set timeouts on the child pipeline's activities");
+    return;
+  }
+  if (getActivity(node.type)?.kind !== 'control') return;
+  if (node.type === WEBHOOK_ACTIVITY_TYPE) {
+    refuse(`'${node.type}'`, 'it waits for its callback; set its own Timeout instead');
+  } else if (node.type === WAIT_ACTIVITY_TYPE) {
+    refuse(`'${node.type}'`, 'its duration is its own setting');
+  } else {
+    refuse(`'${node.type}'`, 'the engine evaluates it instantly, so there is nothing to time out');
+  }
 }
 
 /**

@@ -323,11 +323,19 @@ export const NodePolicySchema = z.object({
    * (`StrictNodePolicySchema`), where a bound can move freely in either
    * direction without making a stored row unreadable.
    *
-   * SEAM FOR F3 (a named question, not a discovery): connection-level
-   * `config.timeoutMs` already bounds a single HTTP/LLM exchange
-   * (`connectors/http.ts`, `connectors/llm-shared.ts`). Which one wins, and
-   * whether this bounds the attempt or the whole node, is `timeoutScope` — the
-   * field F9a explicitly declined to declare ahead of its consumer.
+   * ENFORCED since #1600 C0a (#1 F3), by the executor
+   * (`server/src/run/timeout.ts`). It bounds ONE ATTEMPT, from the moment its
+   * adapter starts, and each retry gets a fresh budget (ADF's per-attempt
+   * timeout). Expiry aborts the attempt's signal and ends it
+   * `node.failed{kind:'transient', code:'timeout'}`, so retry applies.
+   * Enforcement is cooperative: an adapter that cannot stop mid-call (a
+   * synchronous SQLite statement, one long Postgres batch) overruns it.
+   * Execution activities only — `validateDoc` refuses it elsewhere.
+   *
+   * A connection-level `config.timeoutMs` still bounds a single HTTP/LLM
+   * exchange (`connectors/http.ts`, `connectors/llm-shared.ts`). Both apply and
+   * the smaller wins; the exchange's own timeout surfaces as a plain connector
+   * `transient` with no `timeout` code.
    */
   timeoutSeconds: z.number().int().positive().optional(),
   /**
