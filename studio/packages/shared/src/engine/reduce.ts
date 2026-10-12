@@ -11,6 +11,7 @@ import type {
   ContainerRunState,
   PipelineVersion,
   ReduceResult,
+  ResolvedUserProperty,
   RunState,
   SubstitutionContext,
   TerminalNodeStatus,
@@ -24,6 +25,7 @@ import {
   VARIABLE_MAX_BYTES,
   terminalStatusOf,
 } from './types.js';
+import { resolveUserProperties } from './user-properties.js';
 import {
   APPEND_VARIABLE_ACTIVITY_TYPE,
   FAIL_ACTIVITY_TYPE,
@@ -478,6 +480,8 @@ type PreparedDispatch = {
   /** #1144 — per-end dataset-parameter bindings, `${}`-resolved. */
   resolvedDatasetParams:
     { source?: Record<string, unknown>; sink?: Record<string, unknown> } | undefined;
+  /** #1600 C0d — the node's user properties, each `${}`-resolved (or its error). */
+  resolvedUserProperties: ResolvedUserProperty[] | undefined;
 };
 
 /**
@@ -1584,6 +1588,13 @@ export function createEngine(doc: EngineDoc): Engine {
       resolvedConnectionIds: resolveConnectionIds(es, node, item),
       resolvedDatasetIds: resolveDatasetIds(es, node, item),
       resolvedDatasetParams: resolveDatasetParams(es, node, item),
+      // Never throws: a failed property records its error (user-properties.ts).
+      resolvedUserProperties:
+        node.userProperties === undefined
+          ? undefined
+          : resolveUserProperties(node.userProperties, (template) =>
+              substitute(template, buildCtx(es), 0, item),
+            ),
     };
   }
 
@@ -1610,6 +1621,7 @@ export function createEngine(doc: EngineDoc): Engine {
       resolvedConnectionIds: prepared.resolvedConnectionIds,
       resolvedDatasetIds: prepared.resolvedDatasetIds,
       resolvedDatasetParams: prepared.resolvedDatasetParams,
+      resolvedUserProperties: prepared.resolvedUserProperties,
     };
   }
 

@@ -1109,6 +1109,21 @@ export const DispatchInputSchema = z.object({
 export type DispatchInput = z.infer<typeof DispatchInputSchema>;
 
 /**
+ * #1600 OR41 C0d — one user property as a dispatch resolved it: `value` when
+ * its `${}` evaluated, `error` (and no value) when it did not. Never both, and
+ * never a manufactured value: a property that could not be resolved says so.
+ * `truncated` is present only when the stored text was cut at
+ * `USER_PROPERTY_VALUE_MAX_CHARS`. On a secure node both texts are the marker.
+ */
+export const ResolvedUserPropertySchema = z.object({
+  name: z.string(),
+  value: z.string().optional(),
+  error: z.string().optional(),
+  truncated: z.literal(true).optional(),
+});
+export type ResolvedUserProperty = z.infer<typeof ResolvedUserPropertySchema>;
+
+/**
  * The durable facts the driver/reconciler append to `run_events`; folding them
  * through `reduce` is the ONLY way state changes. Every attempt-bearing event
  * carries its `attemptId` for stale-rejection. `run.resumed` /
@@ -2256,6 +2271,13 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     nodeId: z.string(),
     attemptId: z.string(),
     preparedInput: z.record(z.string(), z.unknown()),
+    /**
+     * #1600 OR41 C0d — the node's user properties as this dispatch resolved them
+     * (each a value or its error), for the executor to record on
+     * `node.dispatched`. Absent when the node has none. Ephemeral, like every
+     * command field.
+     */
+    resolvedUserProperties: z.array(ResolvedUserPropertySchema).optional(),
     /**
      * #2 L13a — the node's `connectionId` after the reducer resolved its `${}`
      * expression against the run env (a literal id passes through unchanged;
