@@ -256,7 +256,7 @@ describe('AiActivityPage', () => {
       expect(
         await screen.findByText('No AI or agent activity in this window.'),
       ).toBeInTheDocument();
-      expect(screen.getByText('No agent CLI subprocesses in this window.')).toBeInTheDocument();
+      expect(screen.getByText('None in this window')).toBeInTheDocument();
     });
 
     it('replaces the subprocess line with a real summary once one ran', async () => {
@@ -268,10 +268,8 @@ describe('AiActivityPage', () => {
 
       render(<AiActivityPage />);
 
-      expect(
-        await screen.findByText(/2 agent CLI subprocesses — 1 completed, 1 did not\./),
-      ).toBeInTheDocument();
-      expect(screen.queryByText('No agent CLI subprocesses in this window.')).toBeNull();
+      expect(await screen.findByText(/^2 — 1 completed, 1 did not, last at/)).toBeInTheDocument();
+      expect(screen.queryByText('None in this window')).toBeNull();
     });
   });
 
@@ -768,7 +766,7 @@ describe('AiActivityPage', () => {
    */
   describe('the token figures beside the chart (#1025)', () => {
     /** The `<dd>` of the fact labelled `Tokens` — the `dt`, not the table header. */
-    function tokensTile(container: HTMLElement): string {
+    function tokensFact(container: HTMLElement): string {
       const dt = [...container.querySelectorAll('.ai-activity-facts dt')].find(
         (el) => el.textContent === 'Tokens',
       );
@@ -786,8 +784,8 @@ describe('AiActivityPage', () => {
         }),
       );
       const { container } = render(<AiActivityPage />);
-      await waitFor(() => expect(tokensTile(container)).not.toBe(''));
-      expect(tokensTile(container)).toBe('not reported');
+      await waitFor(() => expect(tokensFact(container)).not.toBe(''));
+      expect(tokensFact(container)).toBe('not reported');
     });
 
     it('an IDLE window still reads 0 in · 0 out — nothing billed is a measured zero', async () => {
@@ -796,8 +794,8 @@ describe('AiActivityPage', () => {
          answer is genuinely nothing. */
       activityMock.mockResolvedValue(snapshot({ totals: cost({ responseCount: 0 }) }));
       const { container } = render(<AiActivityPage />);
-      await waitFor(() => expect(tokensTile(container)).not.toBe(''));
-      expect(tokensTile(container)).toBe('0 in · 0 out');
+      await waitFor(() => expect(tokensFact(container)).not.toBe(''));
+      expect(tokensFact(container)).toBe('0 in · 0 out');
     });
 
     it('a model row whose provider omitted usage says so, per side', async () => {

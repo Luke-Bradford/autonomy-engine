@@ -160,7 +160,7 @@ for (const { density, theme } of RUNS) {
     await expect(region.getByRole('heading', { level: 1, name: 'AI activity' })).toBeVisible();
     // Everything the page can draw is on it before it is measured.
     await expect(page.locator('.token-flow')).toBeVisible();
-    await expect(page.getByText(/2 agent CLI subprocesses/)).toBeVisible();
+    await expect(page.getByText(/^2 — 1 completed, 1 did not, last at/)).toBeVisible();
     await expect(
       page.getByText('Showing the busiest reporters only', { exact: false }),
     ).toBeVisible();
@@ -185,7 +185,7 @@ for (const { density, theme } of RUNS) {
       'Billed exchanges',
       'Tokens',
       'Spend',
-      'Agent CLI',
+      'Agent CLI subprocesses',
     ]);
     expect(closed.toolbarText).toMatch(/Activity as of/);
     expectInlineRow('AI activity title', closed.title);

@@ -52,7 +52,7 @@ export function seriesSnapshot() {
     agentCli: { invocations: 0, completed: 0, notCompleted: 0, lastAt: null },
     /* #988 — REQUIRED on the snapshot, so a stub without it is rejected by the
        client's schema and the page renders an error instead of a chart. Present
-       and empty here on purpose: this spec is about the METERED series, and
+       and empty here on purpose: the chart is about the METERED series, and
        reported external activity plots no bar (it is billed to no connection). */
     external: {
       invocations: 0,
@@ -102,9 +102,9 @@ export function seriesSnapshot() {
          * Its counted side is deliberately the FULL 1000 that sets the scale, so
          * this bucket's stack asks for the whole plot height PLUS the sliver and
          * the row gap. That is the only arrangement under which the sliver is
-         * squeezed at all, and therefore the only one under which the geometry
-         * assertions below can fail. At 400 they passed no matter what the CSS
-         * said — checked by mutation, which is how this number got here.
+         * squeezed at all, and therefore the only one under which the chart
+         * spec's geometry assertions can fail. At 400 they passed no matter what
+         * the CSS said — checked by mutation, which is how this number got here.
          */
         {
           bucketStart: 1_785_997_200_000,

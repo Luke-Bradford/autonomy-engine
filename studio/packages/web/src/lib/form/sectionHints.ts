@@ -104,7 +104,7 @@ export const FORM_SECTION_HINTS = {
   },
   monitor: {
     // #1594 OR40 S6r — the AI activity page's title `?`.
-    page: "What your connected AIs and agent CLIs did in this workspace's runs, live ones included, refreshed every few seconds.",
+    page: "What your AIs and agent CLIs did in this workspace's runs, live ones included; other agents report in below.",
     quota: "Each connected AI provider's subscription windows, read only when you ask.",
     reported:
       "Runs that agents studio did not launch reported to it, kept apart from studio's own figures.",

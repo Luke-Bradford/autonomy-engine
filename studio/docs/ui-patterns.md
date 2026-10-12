@@ -490,8 +490,8 @@ Every page's title row is `PageHeader` (`lib/PageHeader.tsx`, #1594 OR40 S3). Ne
   sentence saying what the page holds, in place of a paragraph under the title. Its note opens under
   the header row, at the row's width. It needs a plain-text title and a `headingId`; the page's
   `<section aria-labelledby>` takes `aria-describedby={pageHelpId(headingId)}`, so the note is the
-  page's description. The five Manage lists, Pipelines, Runs and AI activity use it. A page whose sections each have
-  a `?` (Home, Settings, Git) needs none. A warning an operator must see stays visible where it applies (the
+  page's description. The five Manage lists, Pipelines, Runs and AI activity use it. A page whose
+  sections each have a `?` (Home, Settings, Git) needs none. A warning an operator must see stays visible where it applies (the
   global parameter Value field's cleartext hint), never behind a `?`.
 - **The toolbar** is the header's children, wrapped in `Toolbar`. Controls are 8px apart, every one
   `--control-h` tall, and centred on one line. A Fluent (toggle) button and a `.page-back` link are
@@ -651,9 +651,11 @@ run's indent. The small print is held by the literal ratchet only.
 ## Monitor › AI activity (#1594 OR40 S6r)
 
 - **Header:** the title's `?` says what the page covers. The window picker's label and the figures'
-  "Activity as of" line sit in the toolbar, in muted caption type, the label 8px from its select.
-- **Figures:** a `.run-meta` facts list (term, value), never KPI tiles. Agent CLI work is one of
-  the facts, because it is not token-metered and would otherwise print zeros under Tokens.
+  "Activity as of" line (the Runs page's `.runs-live-status`) sit in the toolbar, in muted caption
+  type, the label 8px from its select.
+- **Figures:** a `.run-meta` facts list (term, value), never KPI tiles. Agent CLI subprocesses are
+  one of the facts, because they are not token-metered and would otherwise print zeros under
+  Tokens. A value is a figure or a short phrase, not a sentence.
 - **Quota:** an unreadable provider reads "Claude quota unreadable." in sentence case, in a notice and
   never as a number. The reset's relative half is caption type.
 - **Token-flow chart:** caption type for its caption, axis and legend, 16px above it. Its marks
@@ -662,8 +664,9 @@ run's indent. The small print is held by the literal ratchet only.
   pill).
 
 `e2e/ai-activity-design.spec.ts` measures the page at 1440x900, compact light and comfortable dark,
-with every state it can draw stubbed in. It also checks for ALL-CAPS text, using
-`e2e/support/allCaps.ts` with an acronym allowlist.
+with data in every section (stubbed). It also checks every visible text node for ALL CAPS
+(`allCapsText` in `e2e/support/allCaps.ts`, beside S4's `capitals`, both on `lib/words.ts`'s
+acronyms).
 
 ## The shell: rail, version, update banner and command bar (#1594 OR40 S6p)
 

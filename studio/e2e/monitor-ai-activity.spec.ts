@@ -181,7 +181,7 @@ test.describe('#917 Monitor › AI activity', () => {
     await fluentRootReady(page);
 
     const idleNotice = page.getByText('No AI or agent activity in this window.');
-    const noSubprocesses = page.getByText('No agent CLI subprocesses in this window.');
+    const noSubprocesses = page.getByText('None in this window', { exact: true });
 
     /* `toHaveCount(0)` rather than `not.toBeVisible()` for the absent side: a
        locator that matches nothing satisfies `not.toBeVisible()` for the wrong
@@ -216,7 +216,7 @@ test.describe('#917 Monitor › AI activity', () => {
       await expect(noSubprocesses).toHaveCount(0);
       // Not merely "the empty line is gone" — the populated summary is what the
       // server's non-zero count must render as.
-      await expect(page.getByText(/agent CLI subprocess/)).toBeVisible();
+      await expect(page.getByText(/^\d+ — \d+ completed, \d+ did not, last at/)).toBeVisible();
     }
 
     // Unconditional: the run-count tile is on the page whatever the window holds.

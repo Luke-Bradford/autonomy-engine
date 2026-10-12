@@ -6269,9 +6269,6 @@ button.danger {
 
 /* --- #917 Monitor › AI activity ------------------------------------------- */
 
-/* #1594 OR40 S6r — the window's figures are `.run-meta` facts, not KPI tiles:
-   a term and its value per row, which is also what a screen reader hears. */
-
 .quota-table,
 .ai-model-table {
   margin-top: var(--space-2);
@@ -6315,10 +6312,9 @@ button.danger {
   gap: var(--space-2);
 }
 
-/* #1594 OR40 S6r — a toolbar label and the figures' freshness: the caption
-   type, muted, beside the control they describe. */
-.ai-window-picker > label,
-.ai-activity-as-of {
+/* #1594 OR40 S6r — the window picker's label: the caption type, muted, beside
+   the select it names. */
+.ai-window-picker > label {
   color: var(--muted);
   font-size: var(--type-caption-size);
 }
@@ -6485,6 +6481,8 @@ button.danger {
 /* #1484 — Live's one-line status beside the toggle: quiet, and never wrapping
    the title row. Empty (and so zero-width) while Live is off, but never
    removed: a live region must already exist when its text first changes. */
+/* #1594 OR40 S6r — AI activity's "Activity as of" line is the same quiet
+   status beside its window picker. */
 .runs-live-status {
   color: var(--muted);
   font-size: var(--type-caption-size);

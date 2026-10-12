@@ -54,7 +54,7 @@ import { pageHelpId } from '../../lib/pageHelpId';
 const ACTIVITY_POLL_MS = 5_000;
 
 /**
- * What each non-terminal status is CALLED, and the order the tiles read in.
+ * What each non-terminal status is CALLED, and the order the facts read in.
  *
  * The wording carries the distinction the whole panel turns on: only `running`
  * is work actually happening. `pending` has a row but no drive yet, `queued` has
@@ -247,7 +247,7 @@ function QuotaPanel() {
           freshness claim about the number, and it is the one attached to it. */}
       {lastUpdatedAt !== null && (
         <p className="page-hint quota-as-of">
-          Last checked <When ms={lastUpdatedAt} />.
+          Last checked <When ms={lastUpdatedAt} />
         </p>
       )}
     </Section>
@@ -351,6 +351,9 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
 
   return (
     <>
+      {/* #1594 OR40 S6r — the window's figures as `.run-meta` facts, not KPI
+          tiles: a term and its value per row, which is what a screen reader
+          hears too. `ai-activity-facts` is a hook for the tests, not a style. */}
       <dl className="run-meta ai-activity-facts">
         {/* EVERY non-terminal status gets a fact, driven off the response's own
             keys rather than a hand-picked three. The server already seeds all of
@@ -389,16 +392,15 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
         <dd>{costFigure(costHeadline(totals))}</dd>
         {/* Agent-CLI use is a fact of its own rather than part of Tokens because
             it is not token-metered — folding it in would print zeros for real
-            work. */}
-        <dt>Agent CLI</dt>
+            work. A value, not a sentence (#1594 OR40 S6r): the term names it. */}
+        <dt>Agent CLI subprocesses</dt>
         <dd>
           {agentCli.invocations === 0 ? (
-            'No agent CLI subprocesses in this window.'
+            'None in this window'
           ) : (
             <>
-              {agentCli.invocations} agent CLI subprocess
-              {agentCli.invocations === 1 ? '' : 'es'} — {agentCli.completed} completed,{' '}
-              {agentCli.notCompleted} did not. Last at <When ms={agentCli.lastAt} />.
+              {agentCli.invocations} — {agentCli.completed} completed, {agentCli.notCompleted} did
+              not, last at <When ms={agentCli.lastAt} />
             </>
           )}
         </dd>
@@ -523,7 +525,7 @@ export function AiActivityPage() {
         {/* #1594 OR40 S6r — the freshness of the figures below, in the toolbar
             beside the window it is for, as Runs states its own (S6f). */}
         {lastUpdatedAt !== null && (
-          <span className="ai-activity-as-of">
+          <span className="runs-live-status">
             Activity as of <When ms={lastUpdatedAt} />
           </span>
         )}

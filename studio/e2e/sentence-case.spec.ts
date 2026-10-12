@@ -6,6 +6,7 @@ import {
 } from '../packages/web/src/testing/sentenceCase';
 import { openCanvas } from './support/canvas';
 import { addActivity, canvasNodes, toolbox } from './support/canvasGraph';
+import { capitals } from './support/allCaps';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 
@@ -26,47 +27,6 @@ async function setDensity(page: Page, density: Density) {
   await fluentRootReady(page);
   await page.getByRole('combobox', { name: 'Density', exact: true }).selectOption(density);
   await expect(page.locator('html')).toHaveAttribute('data-density', density);
-}
-
-/** Everything on the page that is drawn in capitals, by style or by its own text. */
-function capitals(page: Page, acronyms: readonly string[]) {
-  return page.evaluate((acronyms) => {
-    const kept = new Set(acronyms);
-    // A time column names the viewer's zone ("Started GMT+1", "BST"): a value,
-    // not a label, so the browser's own short zone name is kept.
-    const zone = new Intl.DateTimeFormat('en', { timeZoneName: 'short' })
-      .formatToParts(new Date())
-      .find((p) => p.type === 'timeZoneName')?.value;
-    for (const w of (zone ?? '').split(/[^\p{L}]+/u)) kept.add(w);
-    const found: string[] = [];
-    // `getClientRects`, not `offsetParent`: a fixed-position element has no offset parent.
-    const visible = (el: Element) => el.getClientRects().length > 0;
-    for (const el of document.querySelectorAll('body *')) {
-      const t = getComputedStyle(el).textTransform;
-      if ((t === 'uppercase' || t === 'capitalize') && visible(el) && el.textContent?.trim()) {
-        found.push(`${el.tagName.toLowerCase()}.${el.className}: text-transform ${t}`);
-      }
-    }
-    const named = 'h1, h2, h3, h4, h5, button, [role="tab"], th, legend, label';
-    for (const el of document.querySelectorAll(named)) {
-      if (!visible(el)) continue;
-      for (const word of (el.textContent ?? '').split(/[^\p{L}]+/u)) {
-        // The glossary's one banned variant: the term is "Parameters".
-        if (/^params?$/i.test(word)) {
-          found.push(`${el.tagName.toLowerCase()} "${el.textContent?.trim()}": ${word}`);
-        }
-        if (
-          word.length > 1 &&
-          word === word.toUpperCase() &&
-          /\p{Lu}/u.test(word) &&
-          !kept.has(word)
-        ) {
-          found.push(`${el.tagName.toLowerCase()} "${el.textContent?.trim()}": ${word}`);
-        }
-      }
-    }
-    return found;
-  }, acronyms);
 }
 
 /** The visible names of the palette's activities and of every tab on the page. */
