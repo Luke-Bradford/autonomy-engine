@@ -15,7 +15,12 @@ import type {
   VariableDef,
   VariableType,
 } from '../schemas/pipeline.js';
-import { callDetaches, isAddressableOutputName, isInactive } from '../schemas/pipeline.js';
+import {
+  callDetaches,
+  inactiveMarkAs,
+  isAddressableOutputName,
+  isInactive,
+} from '../schemas/pipeline.js';
 import type { OutputContract } from './outputs.js';
 import { containerOutputContract, outputContract } from './outputs.js';
 import { hasSecureOutput } from './secure.js';
@@ -1479,13 +1484,13 @@ export function resolveTriggerBindings(
 export function validateRefs(
   doc: ValidatedDoc,
   reads?: VariableReads,
-  globalsIn: Pick<ValidateDocOptions, 'globals' | 'globalReads'> = {},
+  globalsIn: Pick<ValidateDocOptions, 'globals' | 'globalReads' | 'advisories'> = {},
 ): string[] {
   const errors: string[] = [];
   const declared = new Map<string, Param>();
   for (const p of doc.params) declared.set(p.name, p);
   const variables = variableMapOf(doc.variables);
-  const g = globalScopeOf(globalsIn);
+  const g = globalScopeOf(globalsIn, doc.nodes);
 
   const graph = computeGraph(doc);
 
@@ -1870,7 +1875,7 @@ export function availableRefs(
   const secureOutputIds = secureOutputIdsOf(doc.nodes, containers);
   const declared = new Map(doc.params.map((p) => [p.name, p]));
   const variables = variableMapOf(doc.variables);
-  const globals = globalScopeOf(options);
+  const globals = globalScopeOf(options, doc.nodes);
 
   if (site.kind === 'container') {
     const c = containers.find((x) => x.id === site.containerId);
@@ -2601,6 +2606,15 @@ export interface ValidateDocOptions {
    */
   globalReads?: Set<string>;
   /**
+   * #1669 — collect NON-BLOCKING warnings here: a read that saves but fails
+   * when it runs (an inactive activity's output outside `default()`), and an
+   * inactive `if`/`switch` whose branch edges all skip. Never part of the
+   * returned errors, so no gate is changed by it; only the editor passes a
+   * sink. Complete only when the validators report nothing, for the reason
+   * {@link variableReadsOf} gives.
+   */
+  advisories?: string[];
+  /**
    * #1480 — the activity catalog the save gate checks `type` and literal
    * `config` against: the one the executor dispatches with. The shared catalog
    * when absent; a test that runs an injected catalog saves against it too.
@@ -2615,8 +2629,15 @@ export interface ValidateDocOptions {
   activityChecks?: boolean;
 }
 
-/** #844 GL3 — the globals a scan may read, and where it collects the reads. */
-type GlobalScope = Pick<ScanScope, 'globals' | 'globalReads'>;
+/**
+ * #844 GL3 — the globals a scan may read, and where it collects the reads.
+ * #1669 — also the doc-wide warning sink and the inactive ids it checks, which
+ * ride here because this is the one part every scan scope spreads.
+ */
+type GlobalScope = Pick<
+  ScanScope,
+  'globals' | 'globalReads' | 'advisories' | 'inactiveSucceededIds'
+>;
 
 /**
  * No globals: a trigger binding and a tool expression, whose closed root sets
@@ -2624,11 +2645,28 @@ type GlobalScope = Pick<ScanScope, 'globals' | 'globalReads'>;
  */
 const NO_GLOBALS: GlobalScope = { globals: new Map() };
 
-function globalScopeOf(options: Pick<ValidateDocOptions, 'globals' | 'globalReads'>): GlobalScope {
+function globalScopeOf(
+  options: Pick<ValidateDocOptions, 'globals' | 'globalReads' | 'advisories'>,
+  nodes: readonly Node[],
+): GlobalScope {
   return {
     globals: options.globals ?? new Map(),
     ...(options.globalReads !== undefined ? { globalReads: options.globalReads } : {}),
+    ...(options.advisories !== undefined
+      ? { advisories: options.advisories, inactiveSucceededIds: inactiveSucceededIds(nodes) }
+      : {}),
   };
+}
+
+/**
+ * #1669 — the inactive nodes marked Succeeded. Only those can fail a reader:
+ * marked Failed or Skipped, a node's success edges do not fire, so a reader
+ * that depends on it is skipped and never reads.
+ */
+function inactiveSucceededIds(nodes: readonly Node[]): ReadonlySet<string> {
+  return new Set(
+    nodes.filter((n) => isInactive(n) && inactiveMarkAs(n) === 'success').map((n) => n.id),
+  );
 }
 
 /**
@@ -2741,7 +2779,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
   const nodeIdSet = new Set(nodeIdList);
   const containers = doc.containers ?? [];
   const variables = variableMapOf(doc.variables);
-  const g = globalScopeOf(options);
+  const g = globalScopeOf(options, doc.nodes);
   const declared = new Map<string, Param>();
   for (const p of doc.params) {
     declared.set(p.name, p);
@@ -2853,6 +2891,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     // The structural checks (ids, edges, containers, cycles) and the parse-level
     // `StrictNodeSchema` rules still hold, and so does the output contract above:
     // a downstream ref validates against it whether or not the node is active.
+    // (#1669's warning for an inactive `if`/`switch` is in the branch-edge loop.)
     if (isInactive(node)) continue;
     // #1 F4 — where a secure flag cannot be honoured, refuse it rather than accept
     // a promise the run would break.
@@ -3257,6 +3296,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
   // rule here (canvas badge + the #444 write gate); PARSE stays permissive
   // (`EdgeSchema`) so a pre-gate git import round-trips one unchanged. A2 (switch)
   // extends `declaredBranchesOf` with the node's configured case labels + default.
+  const inactiveBranchWarned = new Set<string>();
   for (const e of doc.edges) {
     if (e.on !== 'branch') continue;
     // A dangling source is already reported by its true name (#786). Falling
@@ -3270,6 +3310,21 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     if (!fromExists(e)) continue;
     const src = nodeById.get(e.from);
     const branches = src === undefined ? undefined : declaredBranchesOf(src);
+    // #1669 — an inactive `if`/`switch` records no branch, so every branch edge
+    // off it skips (C0c silences the run's dead-branch diagnostic for it). Said
+    // once per node, as a warning: it is what Mark as decides, not a fault.
+    if (
+      g.advisories !== undefined &&
+      src !== undefined &&
+      branches !== undefined &&
+      isInactive(src) &&
+      !inactiveBranchWarned.has(src.id)
+    ) {
+      inactiveBranchWarned.add(src.id);
+      g.advisories.push(
+        `node '${src.id}': inactive, so it records no branch and none of its branch edges fires`,
+      );
+    }
     if (branches === undefined) {
       errors.push(
         `edge '${e.id}': source '${e.from}' is not a branching activity — only an ` +
@@ -4549,6 +4604,10 @@ interface ScanScope {
   globals: ReadonlyMap<string, GlobalParamType>;
   /** #844 GL3 — a side output: every declared global this scope's scan reads. */
   globalReads?: Set<string>;
+  /** #1669 — a side output: the non-blocking warnings (`ValidateDocOptions.advisories`). */
+  advisories?: string[];
+  /** #1669 — the inactive nodes marked Succeeded; set only with `advisories`. */
+  inactiveSucceededIds?: ReadonlySet<string>;
   /** Node ids whose SUCCESS (outputs) is guaranteed on every path here. */
   guaranteed: Set<string>;
   /**
@@ -5348,7 +5407,18 @@ function checkRefRoot(
       );
       return;
     }
-    if (scope.guaranteed.has(id)) return; // dominates + succeeded → available
+    if (scope.guaranteed.has(id)) {
+      // dominates + succeeded → available. #1669 — but an inactive node records
+      // no outputs, so this read fails at run: a warning, since `default()` fixes it.
+      if (!softOk && scope.inactiveSucceededIds?.has(id)) {
+        const msg =
+          `${where}: \${nodes.${id}.output.${name}} — node '${id}' is inactive, so it ` +
+          "has no outputs and this read fails when it runs; make it default()'s first argument";
+        // Once per field and ref: the same read twice in a field is one thing to fix.
+        if (scope.advisories?.includes(msg) === false) scope.advisories.push(msg);
+      }
+      return;
+    }
     // KNOWN RESTRICTION (safe false-reject, not fixed here): `softOk` is only
     // threaded to `default()`'s OWN first-arg ref — a non-dominating node
     // output wrapped in another fn call inside that first arg (e.g.

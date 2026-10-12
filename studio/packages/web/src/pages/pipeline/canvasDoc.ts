@@ -91,13 +91,18 @@ export function validateCanvas(
   params: Param[],
   variables: VariableDef[],
   globals: readonly GlobalRead[],
+  advisories?: string[],
 ): string[] {
   // #844 V2 — `variables` is REQUIRED here: without it every `${vars.x}` read
   // would badge as undeclared though the server accepts it, and the expression
   // picker (which probes candidates through this) would drop every variable.
   // #844 GL3 — `globals` (the workspace's) is required for the same reason: the
   // server's gate is handed the owner's globals, and any badge blocks Save.
-  return validatePipelineDoc({ params, nodes, edges, containers, variables }, globalTypes(globals));
+  // #1669 — `advisories`, when passed, collects the warnings that never block.
+  return validatePipelineDoc(
+    { params, nodes, edges, containers, variables },
+    { ...globalTypes(globals), ...(advisories !== undefined ? { advisories } : {}) },
+  );
 }
 
 /**

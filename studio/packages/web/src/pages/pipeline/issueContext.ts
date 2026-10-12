@@ -24,3 +24,8 @@ export function useSubjectIssues(kind: IssueSubject['kind'], id: string): readon
 export function issueCountLabel(count: number): string {
   return `${String(count)} validation issue${count === 1 ? '' : 's'}`;
 }
+
+/** #1669 — the count of the warnings that do not block a save: "1 warning", "2 warnings". */
+export function warningCountLabel(count: number): string {
+  return `${String(count)} warning${count === 1 ? '' : 's'}`;
+}

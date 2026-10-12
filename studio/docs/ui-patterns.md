@@ -577,7 +577,10 @@ Problems column.
   comfortable. The panel's acts are `--control-h` with 8px between them, and the node's type code is
   caption.
 - **Problems:** the list is `8px 12px` in body type at `--radius-surface`, its items 4px under the
-  heading and indented 16px. The count beside the Problems toggle is a caption pill.
+  heading and indented 16px. The count beside the Problems toggle is a caption pill. Warnings (#1669:
+  a doc that saves but fails or skips at run) are a second list under the errors, edged in
+  `--warning`, with their own `--warning` pill beside the error count. They never refuse Save or
+  Debug, and are not attributed to a card.
 - **The `ƒx` toggle** under a field is a `--control-h` button in caption type.
 
 `e2e/dock-design.spec.ts` measures them at 1440x900, compact light and comfortable dark.

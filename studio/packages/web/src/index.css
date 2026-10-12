@@ -2635,6 +2635,12 @@ button.danger {
   color: var(--bg);
 }
 
+/* #1669 — a warning: it saves, so it is not the error red. */
+.count-badge--warning {
+  background: var(--warning);
+  color: var(--bg);
+}
+
 /* #1393 — Save's dirty mark. Always laid out, shown by `visibility`, so the
    button keeps one width whether or not there is unsaved work. */
 .dirty-dot {
@@ -4519,6 +4525,15 @@ button.danger {
   border-left: 3px solid var(--error);
   border-radius: var(--radius-surface);
   font-size: var(--type-body-size);
+}
+
+/* #1669 — the warnings' list, under the errors' when both show. */
+.badge-list--warning {
+  border-left-color: var(--warning);
+}
+
+.badge-list + .badge-list {
+  margin-top: var(--space-2);
 }
 
 .badge-list ul {
