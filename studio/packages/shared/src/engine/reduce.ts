@@ -3152,7 +3152,21 @@ export function createEngine(doc: EngineDoc): Engine {
           // loop's alarm), so cancel mode leaves a READY container `pending`.
           // `skipped` below still propagates.
           if (r === 'ready' && state.cancelRequested !== null) continue;
-          if (r === 'ready') {
+          if (r === 'ready' && isInactive(cc)) {
+            // #1600 OR41 C0e — an INACTIVE container never enters: no `items` or
+            // `exitWhen` is read, no alarm armed, no child dispatched. It goes
+            // straight to its Mark as, with no outputs (ADF: an inactive activity
+            // has none). Pure, like enter and skip: the outcome is a function of
+            // the pinned doc, so replay re-derives it and no event is needed. Its
+            // children stay `pending`, exactly as a skipped container's do.
+            const markAs = inactiveMarkAs(cc);
+            state = withContainer(state, id, {
+              status: markAs,
+              inactive: true,
+              ...(markAs === 'failure' && { reason: 'inactive' }),
+            });
+            changed = true;
+          } else if (r === 'ready') {
             if (cc.kind === 'foreach') {
               // Foreach entry resolves `items` and may finish (bad items →
               // invalid_event) or exit immediately (zero items → success), so it
