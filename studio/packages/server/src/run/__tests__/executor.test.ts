@@ -4922,6 +4922,47 @@ describe('createExecutor — node.dispatched.input, the input a node ran with (#
     expect(input).not.toHaveProperty('truncated');
   });
 
+  it('#1600 C0d records the user properties as the reducer resolved them, and withholds them on a secure node', async () => {
+    const userPropertiesOf = (db: Db, runId: string) => {
+      const ev = loadEngineEvents(db, runId).find((e) => e.type === 'node.dispatched');
+      if (ev?.type !== 'node.dispatched') throw new Error('no node.dispatched');
+      return ev.userProperties;
+    };
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const authored = {
+      ...httpNode('n1', connId, { url: 'https://x/y', outputs: [] }),
+      userProperties: [
+        { name: 'Who', value: 'user ${params.who}' },
+        { name: 'Kind', value: 'nightly' },
+      ],
+    };
+    const who = [{ name: 'who', type: 'string' as const, required: true }];
+    const runOf = (pvId: string) =>
+      createRun(db, {
+        ownerId: 'local',
+        pipelineVersionId: pvId,
+        triggerId: null,
+        parentRunId: null,
+        params: { who: 'alice' },
+      });
+    const plain = runOf(seedVersion(db, [authored], who));
+    await startRun(deps(db, { adapters: succeeds() }), plain);
+    expect(userPropertiesOf(db, plain.id)).toEqual([
+      { name: 'Who', value: 'user alice' },
+      { name: 'Kind', value: 'nightly' },
+    ]);
+
+    const secure = runOf(
+      seedVersion(db, [{ ...authored, policy: { secureInput: true, secureOutput: true } }], who),
+    );
+    await startRun(deps(db, { adapters: succeeds() }), secure);
+    expect(userPropertiesOf(db, secure.id)).toEqual([
+      { name: 'Who', value: SECURE_REDACTED },
+      { name: 'Kind', value: SECURE_REDACTED },
+    ]);
+  });
+
   it('records NO parameters for a node that bound none — absent, not an empty record', async () => {
     const db = freshDb().db;
     const connId = await seedConnection(db, 'http', {}, null);

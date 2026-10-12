@@ -11,6 +11,7 @@ import type {
   ContainerRunState,
   PipelineVersion,
   ReduceResult,
+  ResolvedUserProperty,
   RunState,
   SubstitutionContext,
   TerminalNodeStatus,
@@ -24,6 +25,7 @@ import {
   VARIABLE_MAX_BYTES,
   terminalStatusOf,
 } from './types.js';
+import { resolveUserProperties } from './user-properties.js';
 import {
   APPEND_VARIABLE_ACTIVITY_TYPE,
   FAIL_ACTIVITY_TYPE,
@@ -478,6 +480,8 @@ type PreparedDispatch = {
   /** #1144 — per-end dataset-parameter bindings, `${}`-resolved. */
   resolvedDatasetParams:
     { source?: Record<string, unknown>; sink?: Record<string, unknown> } | undefined;
+  /** #1600 C0d — the node's user properties, each `${}`-resolved (or its error). */
+  resolvedUserProperties: ResolvedUserProperty[] | undefined;
 };
 
 /**
@@ -1584,7 +1588,22 @@ export function createEngine(doc: EngineDoc): Engine {
       resolvedConnectionIds: resolveConnectionIds(es, node, item),
       resolvedDatasetIds: resolveDatasetIds(es, node, item),
       resolvedDatasetParams: resolveDatasetParams(es, node, item),
+      // Never throws: a failed property records its error (user-properties.ts).
+      // An empty list is treated as none, so it records nothing.
+      resolvedUserProperties: resolveNodeUserProperties(es, node, item),
     };
+  }
+
+  /** #1600 C0d — a node's user properties resolved in its scope, one context for all. */
+  function resolveNodeUserProperties(
+    state: RunState,
+    node: Node,
+    item: { value: unknown } | undefined,
+  ): ResolvedUserProperty[] | undefined {
+    const props = node.userProperties;
+    if (props === undefined || props.length === 0) return undefined;
+    const ctx = buildCtx(state);
+    return resolveUserProperties(props, (template) => substitute(template, ctx, 0, item));
   }
 
   /**
@@ -1610,6 +1629,7 @@ export function createEngine(doc: EngineDoc): Engine {
       resolvedConnectionIds: prepared.resolvedConnectionIds,
       resolvedDatasetIds: prepared.resolvedDatasetIds,
       resolvedDatasetParams: prepared.resolvedDatasetParams,
+      resolvedUserProperties: prepared.resolvedUserProperties,
     };
   }
 

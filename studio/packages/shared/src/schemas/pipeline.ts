@@ -474,6 +474,41 @@ export const DESCRIPTION_MAX_CHARS = 4000;
 export const PIPELINE_DESCRIPTION_MAX_CHARS = DESCRIPTION_MAX_CHARS;
 
 /**
+ * #1600 OR41 C0d (catalogue spec §3; ADF "user properties") — an activity's
+ * user properties: name/value pairs the monitor shows as activity-runs
+ * columns. ADF allows five per activity. The value is a literal or a `${}`
+ * template, resolved when the activity is dispatched. The value bound is
+ * also where a resolved value is cut (`node.dispatched.userProperties`), so a
+ * literal that saves is never shown truncated.
+ */
+export const MAX_USER_PROPERTIES = 5;
+export const USER_PROPERTY_NAME_MAX_CHARS = 100;
+export const USER_PROPERTY_VALUE_MAX_CHARS = 2000;
+
+export const UserPropertySchema = z.object({ name: z.string(), value: z.string() });
+export type UserProperty = z.infer<typeof UserPropertySchema>;
+
+/** The write-path bounds; `NodeSchema` keeps the read-tolerant `UserPropertySchema`. */
+const StrictUserPropertiesSchema = z
+  .array(
+    z.object({
+      name: z
+        .string()
+        .refine((n) => n.trim() !== '', { message: 'a user property needs a name' })
+        .refine((n) => n.length <= USER_PROPERTY_NAME_MAX_CHARS, {
+          message: `a user property name can be at most ${USER_PROPERTY_NAME_MAX_CHARS} characters`,
+        }),
+      value: z.string().max(USER_PROPERTY_VALUE_MAX_CHARS, {
+        message: `a user property value can be at most ${USER_PROPERTY_VALUE_MAX_CHARS} characters`,
+      }),
+    }),
+  )
+  .max(MAX_USER_PROPERTIES, {
+    message: `an activity can have at most ${MAX_USER_PROPERTIES} user properties`,
+  })
+  .superRefine(refuseDuplicateNames('user property', 'within the activity'));
+
+/**
  * An activity instance on the canvas. `type` names an entry in the Activity
  * Catalog (validated against the catalog elsewhere — this schema only checks
  * shape, not that `type` is a currently-known catalog entry, since an
@@ -685,6 +720,19 @@ export const NodeSchema = z.object({
       skipped: 'Skipped',
     }),
   }),
+  /**
+   * #1600 OR41 C0d — up to `MAX_USER_PROPERTIES` name/value pairs, each value a
+   * literal or a `${}` template resolved at dispatch and recorded on
+   * `node.dispatched`, so the monitor shows them as activity-runs columns.
+   * Only `execution` activities carry them today: `validateDoc` refuses them on
+   * a `control` activity and on a pipeline call, neither of which reaches the
+   * executor, so they would never be recorded. ABSENT, not `[]`, when there
+   * are none (the editor deletes the key), so a doc without them is
+   * byte-identical to a pre-C0d doc.
+   *
+   * Read-tolerant here; the bounds are on `StrictNodeSchema`.
+   */
+  userProperties: z.array(UserPropertySchema).optional(),
 });
 export type Node = z.infer<typeof NodeSchema>;
 
@@ -737,6 +785,7 @@ export const StrictNodeSchema = NodeSchema.extend({
       message: `the description can be at most ${DESCRIPTION_MAX_CHARS} characters`,
     })
     .optional(),
+  userProperties: StrictUserPropertiesSchema.optional(),
 }).superRefine((node, ctx) => {
   const parsed = NodeOutputsFieldSchema.safeParse(node.config['outputs']);
   if (parsed.success) return; // valid, or absent (= no contract, legal)

@@ -10,6 +10,7 @@ import { PipelineVersionWriteSchema } from '../../api/pipelines';
 import {
   canSave,
   descriptionIssues,
+  userPropertiesIssues,
   nodePolicyIssues,
   policyIssues,
   saveDisabledReason,
@@ -364,6 +365,30 @@ describe('descriptionIssues (#1600 OR41 C0b)', () => {
     expect(descriptionIssues([at('a', 'x'.repeat(4000)), node('b')])).toEqual([]);
     expect(descriptionIssues([at('a', 'x'.repeat(4001))])).toEqual([
       "node 'a': description: the description can be at most 4000 characters",
+    ]);
+  });
+});
+
+describe('userPropertiesIssues (#1600 OR41 C0d)', () => {
+  it("names the node and the row the write schema would refuse, in the schema's words", () => {
+    const at = (id: string, userProperties: Node['userProperties']): Node => ({
+      ...node(id),
+      userProperties,
+    });
+    const five = Array.from({ length: 5 }, (_, i) => ({ name: `p${i}`, value: '' }));
+    expect(userPropertiesIssues([at('a', five), node('b')])).toEqual([]);
+    expect(userPropertiesIssues([at('a', [...five, { name: 'p5', value: '' }])])).toEqual([
+      "node 'a': userProperties: an activity can have at most 5 user properties",
+    ]);
+    expect(
+      userPropertiesIssues([
+        at('a', [
+          { name: 'x', value: '' },
+          { name: 'x', value: '' },
+        ]),
+      ]),
+    ).toEqual([
+      "node 'a': userProperties[1].name: duplicate user property name 'x' (user property names must be unique within the activity)",
     ]);
   });
 });

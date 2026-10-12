@@ -161,6 +161,33 @@ describe('#1484 activity runs — one row per attempt', () => {
     ).toBe(false);
   });
 
+  it('#1600 C0d — each attempt row carries the user properties its dispatch resolved', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [
+      node('a', {
+        policy: { retry: 1, retryIntervalSeconds: 30 },
+        userProperties: [
+          { name: 'Run', value: '${run.runId}' },
+          { name: 'Bad', value: "${int('abc')}" },
+        ],
+      }),
+      node('b'),
+    ]);
+    // Every attempt fails transiently, so the retry is a second dispatch.
+    const flaky = stub({ a: { outcome: 'failure', error: 'flaky', kind: 'transient' } });
+    const runId = await drive(db, pvId, flaky);
+    appendEngineEvent(db, { type: 'node.retryDue', runId, nodeId: 'a', previousAttemptId: 'a#0' });
+    await driveRun(deps(db, flaky), runId);
+    const rows = project(db, pvId, runId);
+    const aRows = rows.filter((r) => r.activityId === 'a');
+    expect(aRows.length).toBe(2);
+    for (const r of aRows) {
+      expect(r.userProperties?.[0]).toEqual({ name: 'Run', value: runId });
+      expect(r.userProperties?.[1]).toMatchObject({ name: 'Bad', error: expect.any(String) });
+    }
+    expect(rows.find((r) => r.activityId === 'b')?.userProperties).toBeNull();
+  });
+
   it('records the branch an If took, and the branch it did not take as a skip', async () => {
     const { db } = freshDb();
     const pvId = seedVersion(
@@ -1113,6 +1140,17 @@ describe('#1557 activity runs from the log alone — the version no longer resol
     bytesWritten: r.bytesWritten,
     childRunId: r.childRunId,
     error: r.error,
+  });
+
+  it('#1600 C0d — carries the user properties each dispatch recorded', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [
+      node('a', { userProperties: [{ name: 'Run', value: '${run.runId}' }] }),
+    ]);
+    const runId = await drive(db, pvId, stub());
+    expect(fromLog(db, runId).rows.map((r) => r.userProperties)).toEqual([
+      [{ name: 'Run', value: runId }],
+    ]);
   });
 
   it("gives every attempt the full account's times, status, branch, counts and error", async () => {

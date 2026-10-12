@@ -904,3 +904,12 @@ export function authorsCallBlob(node: Pick<Node, 'type' | 'call'>): boolean {
 export function timeoutApplies(node: Pick<Node, 'type' | 'call'>): boolean {
   return node.call === undefined && getActivity(node.type)?.kind === 'execution';
 }
+
+/**
+ * #1600 OR41 C0d — whether a node's user properties are recorded: they are
+ * resolved and written on `node.dispatched`, so on exactly the nodes the
+ * executor dispatches — the same set a timeout applies to.
+ */
+export function userPropertiesApply(node: Pick<Node, 'type' | 'call'>): boolean {
+  return timeoutApplies(node);
+}

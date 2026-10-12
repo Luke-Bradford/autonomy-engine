@@ -5821,6 +5821,11 @@ button.danger {
   color: var(--colorNeutralForeground3);
 }
 
+/* #1600 C0d — a user property that could not be resolved reads as an error. */
+.activity-runs__prop-error {
+  color: var(--error);
+}
+
 /* #1566 — the Pipeline cell: the name (which opens the run) takes the room
    and ellipsises; the editor icon and the row's ⋯ menu always stay visible. A
    wrapper, not a flex TD, so the cell keeps its table height and alignment. */

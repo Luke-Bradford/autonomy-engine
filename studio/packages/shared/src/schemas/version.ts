@@ -501,6 +501,13 @@
 // strips `state` (plain `z.object`) and DISPATCHES the node for real — a
 // deactivated `file_delete` would delete. That is bump 32's silently-wrong
 // case, so an older build must refuse the doc rather than run it.
+// NO BUMP for #1600 OR41 C0d: `NodeSchema.userProperties`, an activity's
+// user properties. A pre-C0d build strips them and dispatches the node exactly
+// as authored: they never reach the adapter, and a property that fails to
+// resolve records its error rather than failing the run, so nothing the run
+// does depends on them. Only the activity runs grid's columns are lost — the
+// inert shape C0b rode in on. (`node.dispatched.userProperties` is additive
+// and optional, so an older build reading a newer log ignores it.)
 export const CATALOG_VERSION = 34;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did

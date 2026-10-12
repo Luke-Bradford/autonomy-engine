@@ -171,9 +171,10 @@ test.describe('U7 — per-activity node config form', () => {
     await expect(request.getByRole('group', { name: 'Container' })).toHaveCount(0);
 
     // One read of every computed value, on General: Basics (#1600 C0b), then Run
-    // policy (#1594 OR40 S3 `Section`), each drawn without a box or a rule, and
-    // each body keeps the panel's own gap. Basics OPENS the tab, so it takes no
-    // space above its heading; Run policy follows 8px further down (16px apart).
+    // policy (#1594 OR40 S3 `Section`), then User properties (#1600 C0d), each
+    // drawn without a box or a rule, and each body keeps the panel's own gap.
+    // Basics OPENS the tab, so it takes no space above its heading; each later
+    // section follows 8px further down (16px apart).
     await tabs.getByRole('tab', { name: 'General' }).click();
     const layout = await properties(page).evaluate((panel) => {
       const sections = [
@@ -203,6 +204,14 @@ test.describe('U7 — per-activity node config form', () => {
       },
       {
         title: 'Run policy',
+        border: '0px',
+        ruled: '0px',
+        marginTop: '8px',
+        gap: layout.panelGap,
+      },
+      // #1600 C0d — User properties close the tab, spaced as Run policy is.
+      {
+        title: 'User properties',
         border: '0px',
         ruled: '0px',
         marginTop: '8px',

@@ -10,6 +10,8 @@
  * A hint never restates a note already in its section, which a screen reader
  * would otherwise read twice.
  */
+import { MAX_USER_PROPERTIES } from '@autonomy-studio/shared';
+
 export const FORM_SECTION_HINTS = {
   // #1594 OR40 S6d — each Manage list's `page` is its title's `?`.
   connection: {
@@ -58,6 +60,7 @@ export const FORM_SECTION_HINTS = {
     basics: 'What this activity is for, and whether it runs.',
     runPolicy:
       'How long one attempt may run, how a transient failure is retried, and what is kept out of the run log.',
+    userProperties: `Up to ${MAX_USER_PROPERTIES} name and value pairs, each value text or dynamic content, shown as columns in the activity runs grid.`,
   },
   settings: {
     appearance: 'How this browser shows the app; its theme, density and time zone.',

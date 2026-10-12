@@ -7,13 +7,16 @@ import {
   fieldLabelOf,
   inactiveMarkAs,
   isInactive,
+  userPropertiesApply,
 } from '@autonomy-studio/shared';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { Section } from '../../lib/Section';
 import { AutoGrowTextarea } from '../../lib/form/AutoGrowTextarea';
 import { FieldCell, FieldGrid } from '../../lib/form/FieldGrid';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
+import type { FieldPicker } from './ConfigFieldControl';
 import type { createCanvasStore } from './canvasStore';
+import { NodeUserProperties } from './NodeUserProperties';
 import { PolicyEditor } from './PolicyEditor';
 
 /** #1600 C0c — the two fields' label, `?` text and option names, from the schema. */
@@ -36,13 +39,21 @@ const ACTIVE = 'active';
  * straight through too. Mark as stays visible but disabled while the activity
  * is active: the stored value is kept (ADF keeps it), and a kept value the form
  * hid would be config nobody could see.
+ *
+ * #1600 C0d — User properties, last, on an activity that records them
+ * (`userPropertiesApply`): the save refuses them anywhere else. A node of
+ * another kind that already holds some (an imported doc) still shows them, so
+ * the refusal names config the author can see and remove.
  */
 export function NodeGeneral({
   store,
   nodeId,
+  picker,
 }: {
   store: ReturnType<typeof createCanvasStore>;
   nodeId: string;
+  /** The ƒx picker for user-property values. */
+  picker?: FieldPicker;
 }) {
   const description = useStore(
     store,
@@ -55,6 +66,10 @@ export function NodeGeneral({
   const markAs = useStore(store, (s) => {
     const n = s.nodes.find((x) => x.id === nodeId);
     return n === undefined ? 'success' : inactiveMarkAs(n);
+  });
+  const showUserProperties = useStore(store, (s) => {
+    const n = s.nodes.find((x) => x.id === nodeId);
+    return n !== undefined && (userPropertiesApply(n) || n.userProperties !== undefined);
   });
   return (
     <>
@@ -121,6 +136,7 @@ export function NodeGeneral({
         </FieldGrid>
       </Section>
       <PolicyEditor store={store} nodeId={nodeId} />
+      {showUserProperties && <NodeUserProperties store={store} nodeId={nodeId} picker={picker} />}
     </>
   );
 }

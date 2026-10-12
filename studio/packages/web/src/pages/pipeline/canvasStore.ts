@@ -17,6 +17,7 @@ import {
   type Edge,
   type Node,
   type NodePolicy,
+  type UserProperty,
   type Output,
   type Param,
   type VariableDef,
@@ -1443,6 +1444,14 @@ export interface CanvasState {
    */
   setNodeDescription(id: string, text: string): void;
   /**
+   * #1600 OR41 C0d — replace an activity's user properties. Whole-value, like
+   * `setNodeParamOverrides`: the caller builds the next list. An empty list
+   * REMOVES the key, so clearing the last row leaves the node as it was. Adding
+   * or removing a row is its own undo step; `coalesceKey` names the cell being
+   * typed into, so a typing burst in one cell is one step.
+   */
+  setNodeUserProperties(id: string, rows: readonly UserProperty[], coalesceKey?: string): void;
+  /**
    * #1600 OR41 C0c — switch an activity off (`true`) or back on. Active REMOVES
    * `state` (never stores `'active'`) and keeps `onInactiveMarkAs`, as ADF does.
    * Each toggle is its own undo step.
@@ -2385,6 +2394,24 @@ export function createCanvasStore(): StoreApi<CanvasState> {
             }),
           }),
           `node:${id}:description`,
+        );
+      },
+
+      setNodeUserProperties(id, rows, coalesceKey) {
+        const node = get().nodes.find((n) => n.id === id);
+        if (node === undefined) return;
+        if (JSON.stringify(node.userProperties ?? []) === JSON.stringify(rows)) return;
+        edit(
+          (s) => ({
+            nodes: s.nodes.map((n) => {
+              if (n.id !== id) return n;
+              const next = { ...n };
+              if (rows.length > 0) next.userProperties = rows.map((r) => ({ ...r }));
+              else delete next.userProperties;
+              return next;
+            }),
+          }),
+          coalesceKey === undefined ? undefined : `node:${id}:userProperties:${coalesceKey}`,
         );
       },
 

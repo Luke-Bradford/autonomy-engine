@@ -100,6 +100,10 @@ export function makeStubExecutor(opts: StubExecutorOptions = {}): RecordingExecu
           nodeId: command.nodeId,
           attemptId: command.attemptId,
           idempotent: plan.idempotent ?? true,
+          // #1600 C0d — recorded as the real executor records them.
+          ...(command.resolvedUserProperties !== undefined
+            ? { userProperties: command.resolvedUserProperties }
+            : {}),
         };
         if (plan.hang === true) return;
         // AFTER `node.dispatched` is yielded (and so folded + durable), never

@@ -3,6 +3,7 @@ import {
   ContainerRunStatusSchema,
   FailureKindSchema,
   NodeRunStatusSchema,
+  ResolvedUserPropertySchema,
   SkipReasonSchema,
 } from '../engine/types.js';
 import { ContainerKindSchema } from './pipeline.js';
@@ -105,6 +106,10 @@ export const ActivityRunSchema = z.object({
    * status. A skip the reset that ends a ForEach item or loop round cleared
    * reads its reason from the reducer's `resetSkips` (#1546). */
   skipReason: SkipReasonSchema.nullable(),
+  /** #1600 OR41 C0d — the user properties this attempt's dispatch resolved
+   * (`node.dispatched.userProperties`), which the grid shows as columns; `null`
+   * for an attempt with none or that was never dispatched. */
+  userProperties: z.array(ResolvedUserPropertySchema).nullable(),
 });
 export type ActivityRun = z.infer<typeof ActivityRunSchema>;
 

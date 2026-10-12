@@ -2865,6 +2865,39 @@ describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
     expect(otherPipeline().getState().pasteClipboard('pl_2').ok).toBe(true);
   });
 
+  it('#1600 C0d — a ${} in a USER PROPERTY is a read, so the paste is refused', () => {
+    const s = loaded();
+    s.getState().setSelection([{ kind: 'node', id: 'n_c' }]);
+    s.getState().updateNodeConfig('n_c', { prompt: 'plain' });
+    s.getState().setNodeUserProperties('n_c', [
+      { name: 'Body', value: '${nodes.n_a.output.body}' },
+    ]);
+    s.getState().copySelection('pl_1');
+    expect(otherPipeline().getState().pasteClipboard('pl_2').ok).toBe(false);
+  });
+
+  it('#1600 C0d — a pasted user property reading a copied node is pointed at its copy', () => {
+    const s = loaded();
+    s.getState().setSelection([
+      { kind: 'node', id: 'n_a' },
+      { kind: 'node', id: 'n_c' },
+    ]);
+    s.getState().updateNodeConfig('n_c', { prompt: 'plain' });
+    s.getState().setNodeUserProperties('n_c', [
+      { name: 'Body', value: '${nodes.n_a.output.body}' },
+    ]);
+    s.getState().copySelection('pl_1');
+    const target = otherPipeline();
+    expect(target.getState().pasteClipboard('pl_2').ok).toBe(true);
+    const pasted = target.getState().nodes;
+    const reader = pasted.find((n) => n.userProperties !== undefined)!;
+    const read = /^\$\{nodes\.(.+)\.output\.body\}$/.exec(reader.userProperties![0]!.value)?.[1];
+    // The read now names a node pasted alongside it, not the source's `n_a`.
+    expect(read).toBeDefined();
+    expect(read).not.toBe('n_a');
+    expect(pasted.some((n) => n.id === read && n.id !== reader.id)).toBe(true);
+  });
+
   it('refuses a read ANYWHERE in the node — a call param, not only config', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(
@@ -4779,6 +4812,51 @@ describe('setNodeDescription (#1600 OR41 C0b)', () => {
     const store = setup('Loads');
     store.getState().setNodeDescription('missing', 'x');
     store.getState().setNodeDescription('n', 'Loads');
+    expect(store.getState().dirty).toBe(false);
+  });
+});
+
+describe('setNodeUserProperties (#1600 OR41 C0d)', () => {
+  const setup = () => {
+    const store = createCanvasStore();
+    store.setState({
+      nodes: [
+        {
+          id: 'n',
+          type: 'http_request',
+          config: { url: 'https://example.test/x' },
+          position: { x: 0, y: 0 },
+        } as Node,
+      ],
+    });
+    return store;
+  };
+  const node = (store: ReturnType<typeof createCanvasStore>) => store.getState().nodes[0]!;
+
+  it('adding a row is one undo step, and a typing burst in one cell is one more', () => {
+    const store = setup();
+    store.getState().setNodeUserProperties('n', [{ name: '', value: '' }]);
+    store.getState().setNodeUserProperties('n', [{ name: 'S', value: '' }], '0:name');
+    store.getState().setNodeUserProperties('n', [{ name: 'Src', value: '' }], '0:name');
+    expect(node(store).userProperties).toEqual([{ name: 'Src', value: '' }]);
+    expect(store.getState().dirty).toBe(true);
+    store.getState().undo();
+    expect(node(store).userProperties).toEqual([{ name: '', value: '' }]);
+    store.getState().undo();
+    expect('userProperties' in node(store)).toBe(false);
+  });
+
+  it('removing the last row removes the key, so the doc is what it was before', () => {
+    const store = setup();
+    store.getState().setNodeUserProperties('n', [{ name: 'a', value: 'b' }]);
+    store.getState().setNodeUserProperties('n', []);
+    expect('userProperties' in node(store)).toBe(false);
+  });
+
+  it('is a no-op for an unknown node, and for an unchanged list', () => {
+    const store = setup();
+    store.getState().setNodeUserProperties('missing', [{ name: 'a', value: 'b' }]);
+    store.getState().setNodeUserProperties('n', []);
     expect(store.getState().dirty).toBe(false);
   });
 });

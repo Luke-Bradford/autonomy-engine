@@ -4,6 +4,9 @@ import {
   CallConfigSchema,
   ContainerSchema,
   DESCRIPTION_MAX_CHARS,
+  MAX_USER_PROPERTIES,
+  USER_PROPERTY_NAME_MAX_CHARS,
+  USER_PROPERTY_VALUE_MAX_CHARS,
   EdgeOnSchema,
   EdgeSchema,
   NewPipelineSchema,
@@ -988,5 +991,75 @@ describe("#1600 OR41 C0b — an activity's description", () => {
       outputs: [],
     });
     expect(body.nodes[0]?.description).toBe('Loads the orders');
+  });
+});
+
+describe("#1600 OR41 C0d — an activity's user properties", () => {
+  const node = { id: 'a', type: 'noop', config: {}, position: { x: 0, y: 0 } };
+  const props = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ name: `p${i}`, value: `v${i}` }));
+
+  it('round-trips through the read schema and the version write schema, and stays absent when absent', () => {
+    const userProperties = [{ name: 'Source', value: '${params.file}' }];
+    expect(NodeSchema.parse({ ...node, userProperties }).userProperties).toEqual(userProperties);
+    expect(NodeSchema.parse(node)).not.toHaveProperty('userProperties');
+    const body = NewPipelineVersionSchema.parse({
+      pipelineId: 'p',
+      nodes: [{ ...node, userProperties }],
+      edges: [],
+      params: [],
+      outputs: [],
+    });
+    expect(body.nodes[0]?.userProperties).toEqual(userProperties);
+  });
+
+  it(`allows at most ${MAX_USER_PROPERTIES} on WRITE, as ADF does, and tolerates more on read`, () => {
+    const ok = StrictNodeSchema.safeParse({ ...node, userProperties: props(MAX_USER_PROPERTIES) });
+    expect(ok.success).toBe(true);
+    const many = { ...node, userProperties: props(MAX_USER_PROPERTIES + 1) };
+    const refused = StrictNodeSchema.safeParse(many);
+    expect(refused.success).toBe(false);
+    expect(refused.error?.issues[0]?.path).toEqual(['userProperties']);
+    expect(refused.error?.issues[0]?.message).toBe(
+      `an activity can have at most ${MAX_USER_PROPERTIES} user properties`,
+    );
+    expect(NodeSchema.safeParse(many).success).toBe(true);
+  });
+
+  it('refuses an empty name, a duplicate name and over-long text on WRITE, naming the row', () => {
+    const issue = (userProperties: { name: string; value: string }[]) => {
+      const r = StrictNodeSchema.safeParse({ ...node, userProperties });
+      return r.success
+        ? undefined
+        : { path: r.error.issues[0]?.path, message: r.error.issues[0]?.message };
+    };
+    expect(issue([{ name: 'ok', value: '' }])).toBeUndefined();
+    expect(
+      issue([
+        { name: 'ok', value: 'x' },
+        { name: '  ', value: 'y' },
+      ]),
+    ).toEqual({
+      path: ['userProperties', 1, 'name'],
+      message: 'a user property needs a name',
+    });
+    expect(
+      issue([
+        { name: 'a', value: 'x' },
+        { name: 'a', value: 'y' },
+      ]),
+    ).toEqual({
+      path: ['userProperties', 1, 'name'],
+      message:
+        "duplicate user property name 'a' (user property names must be unique within the activity)",
+    });
+    expect(issue([{ name: 'n'.repeat(USER_PROPERTY_NAME_MAX_CHARS + 1), value: '' }])).toEqual({
+      path: ['userProperties', 0, 'name'],
+      message: `a user property name can be at most ${USER_PROPERTY_NAME_MAX_CHARS} characters`,
+    });
+    expect(issue([{ name: 'a', value: 'v'.repeat(USER_PROPERTY_VALUE_MAX_CHARS + 1) }])).toEqual({
+      path: ['userProperties', 0, 'value'],
+      message: `a user property value can be at most ${USER_PROPERTY_VALUE_MAX_CHARS} characters`,
+    });
   });
 });

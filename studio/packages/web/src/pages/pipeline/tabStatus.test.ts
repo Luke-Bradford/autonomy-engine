@@ -51,6 +51,13 @@ describe('issueTarget (#1477)', () => {
     expect(issueTarget("node 'n': description: the description can be at most 4000", 'n')).toEqual({
       general: true,
     });
+    // #1600 C0d — and the user properties below it, by row or as a whole.
+    expect(
+      issueTarget("node 'n': userProperties[0].name: a user property needs a name", 'n'),
+    ).toEqual({ general: true });
+    expect(
+      issueTarget('nodes.n.userProperties[1].value: ${params.x} is not a declared param', 'n'),
+    ).toEqual({ general: true });
     expect(issueTarget('nodes.n.connectionIds.sink: unknown function', 'n')).toEqual({
       slot: 'sinkConnection',
     });

@@ -66,3 +66,48 @@ describe('NodeGeneral — Activity state and Mark as (#1600 C0c)', () => {
     }
   });
 });
+
+describe('NodeGeneral — User properties (#1600 C0d)', () => {
+  const mountAs = (type: string, extra: Partial<Node> = {}) => {
+    const store = createCanvasStore();
+    store.setState({
+      nodes: [{ id: 'a', type, config: {}, position: { x: 0, y: 0 }, ...extra }],
+      edges: [],
+      containers: [],
+    });
+    render(<NodeGeneral store={store} nodeId="a" />);
+    return () => store.getState().nodes[0]!;
+  };
+  const add = () => screen.getByRole('button', { name: 'Add user property' });
+
+  it('adds rows that write name and value straight to the doc, up to five', () => {
+    const stored = mountAs('http_request');
+    fireEvent.click(add());
+    fireEvent.change(screen.getByLabelText('User property 1 name'), {
+      target: { value: 'File' },
+    });
+    fireEvent.change(screen.getByLabelText('User property 1 value'), {
+      target: { value: '${params.file}' },
+    });
+    expect(stored().userProperties).toEqual([{ name: 'File', value: '${params.file}' }]);
+    for (let i = 0; i < 4; i += 1) fireEvent.click(add());
+    expect(stored().userProperties).toHaveLength(5);
+    expect(add()).toBeDisabled();
+  });
+
+  it('removing the last row removes the key', () => {
+    const stored = mountAs('http_request', { userProperties: [{ name: 'a', value: 'b' }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove user property 1' }));
+    expect('userProperties' in stored()).toBe(false);
+  });
+
+  it('is not offered on an activity the engine evaluates, which would never record them', () => {
+    mountAs('if');
+    expect(screen.queryByRole('button', { name: 'Add user property' })).toBeNull();
+  });
+
+  it('still shows ones such an activity already holds, so the refusal can be acted on', () => {
+    mountAs('if', { userProperties: [{ name: 'a', value: 'b' }] });
+    expect(screen.getByLabelText('User property 1 name')).toHaveValue('a');
+  });
+});
