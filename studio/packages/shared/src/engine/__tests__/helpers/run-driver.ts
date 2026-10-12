@@ -226,6 +226,18 @@ export function driveRun(eng: Engine, opts: DriveOptions): DriveResult {
       });
       continue;
     }
+    // #1600 C0c — the driver's OWN `inactivateNode` command: append the switched-off
+    // node's placeholder `node.inactive` (`server/src/run/driver.ts` branch).
+    if (c.type === 'inactivateNode') {
+      apply({
+        type: 'node.inactive',
+        runId,
+        nodeId: c.nodeId,
+        attemptId: c.attemptId,
+        markAs: c.markAs,
+      });
+      continue;
+    }
     // #4 A8 — the driver's OWN `succeedControl` command (a `control` `filter`
     // succeeds): append `node.succeeded` with the `outputs` the reducer resolved
     // (the filtered `{ result }`). Mirrors the real driver's `pump`

@@ -1372,6 +1372,19 @@ export async function pump(
             outputs: command.outputs,
           },
         ];
+      } else if (command.type === 'inactivateNode') {
+        // #1600 OR41 C0c — the driver's OWN `inactivateNode` command (the node is
+        // switched off): append its placeholder `node.inactive`, whose fold makes
+        // `markAs` the node's terminal status. No executor: nothing runs.
+        source = [
+          {
+            type: 'node.inactive',
+            runId: state.runId,
+            nodeId: command.nodeId,
+            attemptId: command.attemptId,
+            markAs: command.markAs,
+          },
+        ];
       } else {
         // #5 S3 (#619) — the driver's OWN `parkRun` command (the run parked on a
         // durable timer/callback): append `run.waiting{reason}`, whose fold flips the

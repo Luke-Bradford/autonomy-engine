@@ -340,6 +340,18 @@ describe('variableGuardErrors — scopes', () => {
     expect(guard([append('a')], [], [{ ...par, batchCount: 1 }])).toEqual([]);
   });
 
+  it('#1600 C0c — an INACTIVE writer never writes, so it is no writer', () => {
+    const par: Container = {
+      id: 'fe',
+      kind: 'foreach',
+      children: ['a'],
+      items: '${createArray(1, 2)}',
+      batchCount: 2,
+    };
+    expect(guard([append('a')], [], [par])).toHaveLength(1);
+    expect(guard([{ ...append('a'), state: 'inactive' }], [], [par])).toEqual([]);
+  });
+
   it('refuses a parallel body reader beside an unordered outer writer', () => {
     const par: Container = {
       id: 'fe',

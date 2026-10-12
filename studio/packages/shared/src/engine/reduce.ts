@@ -41,7 +41,7 @@ import {
 } from '../catalog/types.js';
 import { outputContract, storeOutputs, validateOutputs } from './outputs.js';
 import { hasSecureOutput, redactSecureEvent, secureEventNodeId } from './secure.js';
-import { callDetaches, type VariableDef } from '../schemas/pipeline.js';
+import { callDetaches, inactiveMarkAs, isInactive, type VariableDef } from '../schemas/pipeline.js';
 import {
   backEdgeResetBody,
   coerceVariableValue,
@@ -1697,6 +1697,9 @@ export function createEngine(doc: EngineDoc): Engine {
     const dead = incoming.filter((e) => {
       if (e.on !== 'branch') return false;
       const oc = endpointOutcome(e.from, state, scope);
+      // #1600 C0c — an INACTIVE `if`/`switch` records no branch by design: its
+      // `onInactiveMarkAs` decides, so a dead branch edge there is not a defect.
+      if (state.nodes[ikey(e.from, scope)]?.inactive === true) return false;
       return (
         (oc === 'success' || oc === 'failure') && state.branches[ikey(e.from, scope)] === undefined
       );
@@ -1709,6 +1712,11 @@ export function createEngine(doc: EngineDoc): Engine {
         `the edge could never be satisfied and the subgraph was skipped silently — check the ` +
         `branch source`,
     );
+  }
+
+  /** #1600 C0c — the one place an inactive node's command is built (dispatch and resume). */
+  function inactivateCommand(node: Node, sid: string, attemptId: string): EngineCommand {
+    return { type: 'inactivateNode', nodeId: sid, attemptId, markAs: inactiveMarkAs(node) };
   }
 
   /**
@@ -1751,6 +1759,21 @@ export function createEngine(doc: EngineDoc): Engine {
     if (state.cancelRequested !== null) return { state, changed: false };
 
     const attemptId = `${sid}#${ns.attempts}`;
+    if (isInactive(node)) {
+      // #1600 OR41 C0c — an INACTIVE node never runs, whatever its type: checked
+      // FIRST, so no adapter, control evaluation or child is ever started for it.
+      // Hold it `ready` and ask the driver for its placeholder `node.inactive`,
+      // whose `markAs` becomes its terminal status (`onInactive`).
+      commands.push(inactivateCommand(node, sid, attemptId));
+      return {
+        state: withNode(state, sid, {
+          status: 'ready',
+          attempts: ns.attempts + 1,
+          currentAttemptId: attemptId,
+        }),
+        changed: true,
+      };
+    }
     const controlEvent = controlBranchEvent(node.type);
     if (controlEvent !== undefined) {
       // #4 A1/A2 — a `control` `if`/`switch` is ENGINE-evaluated: no connector, no
@@ -2994,6 +3017,7 @@ export function createEngine(doc: EngineDoc): Engine {
         retries: 0,
       };
       delete reset.skipReason;
+      delete reset.inactive; // #1600 C0c — the same rule as the skip's reason
       nodes[id] = reset;
       if (Object.prototype.hasOwnProperty.call(outputs, id)) {
         if (outputs === state.outputs) outputs = { ...outputs };
@@ -3830,6 +3854,40 @@ export function createEngine(doc: EngineDoc): Engine {
     return ns.retries < budget;
   }
 
+  /**
+   * #1600 OR41 C0c — fold an INACTIVE node's placeholder run: its terminal
+   * status is the recorded `markAs`, with `inactive` set so every reader can tell
+   * "switched off" from "ran". No outputs (it produced none, so a downstream read
+   * of one fails at its dispatch, ADF's documented limitation), no retry (nothing
+   * ran to retry), no skip reason (a downstream skip then reads `upstream`).
+   * Same attempt guard as `onSucceeded`: a stale re-emit is a no-op.
+   */
+  function onInactive(
+    state: RunState,
+    event: Extract<EngineEvent, { type: 'node.inactive' }>,
+    diagnostics: string[],
+  ): ReduceResult {
+    const ns = state.nodes[event.nodeId];
+    if (ns === undefined) return { state, commands: [], diagnostics };
+    if (ns.status === 'pending') {
+      diagnostics.push(`impossible node.inactive for never-reached node '${event.nodeId}'`);
+      return {
+        state,
+        commands: [{ type: 'finishRun', outcome: 'failure', reason: 'invalid_event' }],
+        diagnostics,
+      };
+    }
+    // Only `ready`: an inactive node is held there and never dispatched, so any
+    // other status (a duplicate after it settled, a stale round) is a no-op.
+    if (ns.status !== 'ready' || event.attemptId !== ns.currentAttemptId) {
+      return { state, commands: [], diagnostics };
+    }
+    return settle(
+      withNode(state, event.nodeId, { status: event.markAs, inactive: true }),
+      diagnostics,
+    );
+  }
+
   function onFailed(
     state: RunState,
     event: Extract<EngineEvent, { type: 'node.failed' }>,
@@ -4541,6 +4599,14 @@ export function createEngine(doc: EngineDoc): Engine {
       const ns = state.nodes[id];
       if (ns === undefined || ns.currentAttemptId === undefined) continue;
       const node = docNodeFor(id)!;
+      if (ns.status === 'ready' && isInactive(node)) {
+        // #1600 C0c crash recovery — an inactive node folds `ready` while its
+        // `node.inactive` is owed. Checked BEFORE every type fork below, the last
+        // of which is `dispatchNode`: re-deriving that would RUN a switched-off
+        // activity. Idempotent for the same reason as the forks below.
+        commands.push(inactivateCommand(node, id, ns.currentAttemptId));
+        continue;
+      }
       if (ns.status === 'ready') {
         const controlEvent = controlBranchEvent(node.type);
         if (controlEvent !== undefined) {
@@ -4979,6 +5045,8 @@ export function createEngine(doc: EngineDoc): Engine {
         return onDispatched(state, event, diagnostics);
       case 'node.succeeded':
         return onSucceeded(state, event, diagnostics);
+      case 'node.inactive':
+        return onInactive(state, event, diagnostics);
       case 'condition.evaluated':
       case 'switch.evaluated':
         return onControlBranchEvaluated(state, event, diagnostics);

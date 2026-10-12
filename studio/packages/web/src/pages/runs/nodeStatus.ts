@@ -1,4 +1,9 @@
-import { TERMINAL_CONTAINER, TERMINAL_NODE } from '@autonomy-studio/shared';
+import {
+  NodeSchema,
+  TERMINAL_CONTAINER,
+  TERMINAL_NODE,
+  fieldLabelOf,
+} from '@autonomy-studio/shared';
 import type { ContainerRunStatus, NodeRunStatus, RunStatus } from '@autonomy-studio/shared';
 
 /**
@@ -216,6 +221,21 @@ function containerStoppedByCancel(
 ): boolean {
   return runStatus === 'cancelled' && !TERMINAL_CONTAINER.has(status);
 }
+
+/**
+ * #1600 OR41 C0c — the word for a node a `node.inactive` placeholder settled: it
+ * never ran, so its status is the outcome it was MARKED with, and saying only
+ * "success" would claim it ran. ADF's "Inactive", plus the outcome, because the
+ * outcome is what routed its edges. Drawn in the skipped (grey) tone and pill
+ * whatever the outcome — see `INACTIVE_TONE_STATUS`.
+ */
+export function inactiveStatusLabel(status: NodeRunStatus): string {
+  const title = fieldLabelOf(NodeSchema.shape.onInactiveMarkAs)?.options?.[status] ?? status;
+  return `inactive · ${title.toLowerCase()}`;
+}
+
+/** #1600 C0c — the status whose tone and pill an inactive node borrows: grey, as ADF draws it. */
+export const INACTIVE_TONE_STATUS: NodeRunStatus = 'skipped';
 
 export function nodeStatusLabel(status: NodeRunStatus, runStatus?: RunStatus | null): string {
   if (nodeStoppedByCancel(status, runStatus)) {

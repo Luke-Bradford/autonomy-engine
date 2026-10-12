@@ -44,6 +44,8 @@ import { isSecureMarker } from './secureMarker';
 import {
   containerStatusLabel,
   containerStatusPillClass,
+  INACTIVE_TONE_STATUS,
+  inactiveStatusLabel,
   nodeStatusLabel,
   nodeStatusPillClass,
 } from './nodeStatus';
@@ -607,6 +609,10 @@ export function ActivityRunsTable({
                     <td>
                       {row.reused ? (
                         <span className={nodeStatusPillClass('success', runStatus)}>reused</span>
+                      ) : row.inactive ? (
+                        <span className={nodeStatusPillClass(INACTIVE_TONE_STATUS, runStatus)}>
+                          {inactiveStatusLabel(row.status)}
+                        </span>
                       ) : (
                         <span className={nodeStatusPillClass(row.status, runStatus)}>
                           {nodeStatusLabel(row.status, runStatus)}

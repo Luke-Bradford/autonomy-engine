@@ -83,6 +83,9 @@ export const ActivityRunSchema = z.object({
   status: NodeRunStatusSchema,
   /** Carried over from the run this one reran, not executed here. */
   reused: z.boolean(),
+  /** #1600 OR41 C0c — the activity is switched off: it never ran, and `status`
+   * is its *Mark as* outcome, recorded by a `node.inactive` placeholder. */
+  inactive: z.boolean(),
   /** Epoch ms of the first logged event of the attempt. */
   startedAt: z.number().int().nullable(),
   /** Epoch ms of the event that settled it; `null` while it is unsettled. */

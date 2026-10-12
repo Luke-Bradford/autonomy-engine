@@ -27,6 +27,8 @@ import {
 import {
   containerStatusLabel,
   containerStatusTone,
+  INACTIVE_TONE_STATUS,
+  inactiveStatusLabel,
   nodeStatusLabel,
   nodeStatusTone,
   type StatusTone,
@@ -399,11 +401,21 @@ export function runFlowNodes(
     /* U25 — the node says the same word the table's pill does. The TONE still
        comes off the raw engine status, except where a cancel stopped the node
        (#1329, see `nodeStatusTone`); only what an operator reads is worded. */
-    const label = status === null ? null : nodeStatusLabel(status, state?.status);
+    // #1600 C0c — a switched-off node says so, in the grey it is drawn in.
+    const inactive = status !== null && state?.nodes[n.id]?.inactive === true;
+    const label =
+      status === null
+        ? null
+        : inactive
+          ? inactiveStatusLabel(status)
+          : nodeStatusLabel(status, state?.status);
     const data = {
       title: name,
       status: label,
-      tone: status === null ? null : nodeStatusTone(status, state?.status),
+      tone:
+        status === null
+          ? null
+          : nodeStatusTone(inactive ? INACTIVE_TONE_STATUS : status, state?.status),
       showStatus,
       selected: n.id === options.selectedId,
       portIds: portIdsOf(portsOf(n.id, n)),

@@ -4782,3 +4782,52 @@ describe('setNodeDescription (#1600 OR41 C0b)', () => {
     expect(store.getState().dirty).toBe(false);
   });
 });
+
+describe('setNodeInactive / setNodeMarkAs (#1600 OR41 C0c)', () => {
+  const setup = (extra: Partial<Node> = {}) => {
+    const store = createCanvasStore();
+    store.setState({
+      nodes: [
+        { id: 'n', type: 'http_request', config: {}, position: { x: 0, y: 0 }, ...extra } as Node,
+      ],
+    });
+    return store;
+  };
+  const node = (store: ReturnType<typeof createCanvasStore>) => store.getState().nodes[0]!;
+
+  it("switches off with state 'inactive', and back on REMOVES the key (never stores 'active')", () => {
+    const store = setup();
+    store.getState().setNodeInactive('n', true);
+    expect(node(store).state).toBe('inactive');
+    expect(store.getState().dirty).toBe(true);
+    store.getState().setNodeInactive('n', false);
+    expect('state' in node(store)).toBe(false);
+  });
+
+  it('each toggle is its own undo step', () => {
+    const store = setup();
+    store.getState().setNodeInactive('n', true);
+    store.getState().setNodeMarkAs('n', 'failure');
+    store.getState().undo();
+    expect(node(store)).toMatchObject({ state: 'inactive' });
+    expect('onInactiveMarkAs' in node(store)).toBe(false);
+    store.getState().undo();
+    expect('state' in node(store)).toBe(false);
+  });
+
+  it('Succeeded (the default) removes Mark as; re-activating KEEPS it, as ADF does', () => {
+    const store = setup({ state: 'inactive', onInactiveMarkAs: 'skipped' });
+    store.getState().setNodeInactive('n', false);
+    expect(node(store).onInactiveMarkAs).toBe('skipped');
+    store.getState().setNodeMarkAs('n', 'success');
+    expect('onInactiveMarkAs' in node(store)).toBe(false);
+  });
+
+  it('is a no-op for an unknown node, and for an unchanged value', () => {
+    const store = setup({ state: 'inactive' });
+    store.getState().setNodeInactive('missing', true);
+    store.getState().setNodeInactive('n', true);
+    store.getState().setNodeMarkAs('n', 'success');
+    expect(store.getState().dirty).toBe(false);
+  });
+});

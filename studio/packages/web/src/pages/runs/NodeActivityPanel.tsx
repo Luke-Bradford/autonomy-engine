@@ -2,7 +2,13 @@ import { useId, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { describeDatasetAddress, SECURE_REDACTED, TERMINAL_NODE } from '@autonomy-studio/shared';
 import type { DatasetAddress, DispatchInput, RunStatus } from '@autonomy-studio/shared';
-import { nodeStatusLabel, nodeStatusPillClass, nodeStoppedByCancel } from './nodeStatus';
+import {
+  INACTIVE_TONE_STATUS,
+  inactiveStatusLabel,
+  nodeStatusLabel,
+  nodeStatusPillClass,
+  nodeStoppedByCancel,
+} from './nodeStatus';
 import { runDetailPath, runLinkLabel } from './runPath';
 import { formatOutputValue, jsonText, liveSpanStart, prettyStoredJson } from './format';
 import { NodeDuration } from './NodeDuration';
@@ -191,9 +197,15 @@ export function NodeActivityPanel({
       <p>
         {/* U25 — one status vocabulary for the whole Monitor: the same word
             the table and the graph show, sourced from `nodeStatus.ts`. */}
-        <span className={nodeStatusPillClass(node.status, runStatus)}>
-          {nodeStatusLabel(node.status, runStatus)}
-        </span>{' '}
+        {node.inactive ? (
+          <span className={nodeStatusPillClass(INACTIVE_TONE_STATUS, runStatus)}>
+            {inactiveStatusLabel(node.status)}
+          </span>
+        ) : (
+          <span className={nodeStatusPillClass(node.status, runStatus)}>
+            {nodeStatusLabel(node.status, runStatus)}
+          </span>
+        )}{' '}
         {run === undefined ? (
           <>
             {node.attempts} attempt{node.attempts === 1 ? '' : 's'}

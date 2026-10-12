@@ -49,6 +49,7 @@ function row(over: Partial<NodeActivity> & { nodeId: string }): NodeActivity {
     outputValues: undefined,
     copiedFromRunId: undefined,
     copiedChildRunId: undefined,
+    inactive: undefined,
     variableWrite: undefined,
     instanceId: undefined,
     startedAtMs: undefined,

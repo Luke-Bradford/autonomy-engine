@@ -72,6 +72,10 @@ export interface ProjectedActivityRuns {
   groups: ActivityRunGroup[];
 }
 
+/** #1600 C0c — the error an inactive activity marked Failed shows: why it failed. */
+export const INACTIVE_FAILED_MESSAGE =
+  'The activity is inactive and marked as Failed, so it did not run.';
+
 /** How many runs' projections one server remembers (`routes/runs.ts`). */
 export const ACTIVITY_RUNS_MEMO_LIMIT = 200;
 
@@ -84,6 +88,7 @@ function attemptOf(e: EngineEvent): { nodeId: string; attemptId: string } | null
     case 'node.dispatched':
     case 'node.succeeded':
     case 'node.failed':
+    case 'node.inactive':
     case 'condition.evaluated':
     case 'switch.evaluated':
     case 'variable.set':
@@ -116,6 +121,9 @@ function resultOf(
       return { attemptId: e.attemptId, status: 'success' };
     case 'node.failed':
       return { attemptId: e.attemptId, status: 'failure' };
+    case 'node.inactive':
+      // #1600 C0c — a switched-off node settles on its recorded *Mark as*.
+      return { attemptId: e.attemptId, status: e.markAs };
     case 'call.returned':
       return e.childOutcome === 'success'
         ? { attemptId: e.attemptId, status: 'success' }
@@ -175,6 +183,7 @@ function emptyRow(
     attempt: null,
     status,
     reused: false,
+    inactive: false,
     startedAt: null,
     finishedAt: null,
     durationMs: null,
@@ -219,6 +228,19 @@ function fillDetail(row: ProjectedActivityRun, e: EngineEvent, payload: unknown)
       row.rowsWritten = loggedCount(e.outputs.rowsWritten);
       row.bytesRead = loggedCount(e.outputs.bytesRead);
       row.bytesWritten = loggedCount(e.outputs.bytesWritten);
+      return;
+    case 'node.inactive':
+      row.inactive = true;
+      // #1600 C0c — no `node.failed` ever carries an error for it, so a run it
+      // failed would otherwise name the activity and say nothing about why.
+      if (e.markAs === 'failure') {
+        row.error = {
+          message: INACTIVE_FAILED_MESSAGE,
+          kind: null,
+          code: null,
+          connectionId: null,
+        };
+      }
       return;
     case 'node.failed':
       row.error = {
@@ -445,6 +467,9 @@ export function projectActivityRuns(
     if (state.nodes !== before.nodes) {
       for (const [nodeId, entry] of Object.entries(state.nodes)) {
         if (entry.status !== 'skipped' || before.nodes[nodeId]?.status === 'skipped') continue;
+        // #1600 C0c — an inactive node marked Skipped already has its row: the
+        // `node.inactive` placeholder's, settled above.
+        if (entry.inactive === true) continue;
         // Rule 4: an attempt in flight that the engine abandoned is that row.
         const live = before.nodes[nodeId]?.currentAttemptId ?? entry.currentAttemptId;
         const abandoned = live === undefined ? undefined : byAttempt.get(live);

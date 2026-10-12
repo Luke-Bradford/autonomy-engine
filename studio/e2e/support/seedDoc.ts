@@ -66,6 +66,9 @@ export interface SeedNode {
   policy?: Record<string, unknown>;
   /** #1600 C0b — the activity's description. Passed through as authored. */
   description?: string;
+  /** #1600 C0c — switched off, and the outcome it records. Passed through as authored. */
+  state?: 'inactive';
+  onInactiveMarkAs?: 'success' | 'failure' | 'skipped';
   /**
    * The datasets those two ends address — a first-class node FIELD and
    * deliberately not config (data-movement spec §3), so like `connectionId` it

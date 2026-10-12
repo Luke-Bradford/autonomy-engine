@@ -196,6 +196,24 @@ describe('activitySummary', () => {
 });
 
 describe('activityBadges', () => {
+  it('#1600 C0c — an inactive activity leads with its mark: inactive, and the outcome it records', () => {
+    expect(activityBadges(node('http_request', { state: 'inactive' }))).toEqual([
+      {
+        key: 'inactive',
+        text: 'inactive · succeeded',
+        label: 'Inactive: never runs, and records Succeeded',
+      },
+    ]);
+    const failed = node('http_request', {
+      state: 'inactive',
+      onInactiveMarkAs: 'failure',
+      policy: { retry: 2 },
+    });
+    expect(activityBadges(failed).map((b) => b.text)).toEqual(['inactive · failed', '↻ 2']);
+    // A kept Mark as on an ACTIVE activity draws nothing.
+    expect(activityBadges(node('http_request', { onInactiveMarkAs: 'failure' }))).toEqual([]);
+  });
+
   it('lists retry, timeout and secure from the policy', () => {
     const n = node('http_request', {
       policy: { retry: 2, timeoutSeconds: 300, secureOutput: true },

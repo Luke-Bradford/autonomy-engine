@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ContainerRunStatusSchema, NodeRunStatusSchema } from '@autonomy-studio/shared';
 import {
+  inactiveStatusLabel,
   containerStatusPillClass,
   containerStatusLabel,
   containerStatusTone,
@@ -186,5 +187,13 @@ describe('containerStatusLabel', () => {
   it('words no two container statuses the same', () => {
     const labels = ContainerRunStatusSchema.options.map((s) => containerStatusLabel(s));
     expect(new Set(labels).size).toBe(labels.length);
+  });
+});
+
+describe('inactiveStatusLabel (#1600 OR41 C0c)', () => {
+  it('says inactive and the outcome it was marked with, never the bare status', () => {
+    expect(inactiveStatusLabel('success')).toBe('inactive · succeeded');
+    expect(inactiveStatusLabel('failure')).toBe('inactive · failed');
+    expect(inactiveStatusLabel('skipped')).toBe('inactive · skipped');
   });
 });

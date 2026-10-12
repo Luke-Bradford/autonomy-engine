@@ -260,6 +260,19 @@ describe('unreadyConnectionsForVersion (#3 G8b enable-time gate)', () => {
     ]);
   });
 
+  it('#1600 C0c — skips an INACTIVE node: its unfinished connection does not block the gate', () => {
+    const { db } = freshDb();
+    const connId = needsSecretConnection(db);
+    const off: Node = { ...llmNode('n1', connId), state: 'inactive' };
+    const versionId = versionWithNodes(db, 'local', [off, llmNode('n2', 'conn_does_not_exist')]);
+    // Only the ACTIVE node's connection is reported.
+    expect(unreadyConnectionsForVersion(db, 'local', versionId)).toEqual([
+      { connectionId: 'conn_does_not_exist', reason: 'missing' },
+    ]);
+    const onlyOff = versionWithNodes(db, 'local', [off]);
+    expect(unreadyConnectionsForVersion(db, 'local', onlyOff)).toEqual([]);
+  });
+
   it('folds a CROSS-OWNER connection to missing (never confirms another owner’s connection)', () => {
     const { db } = freshDb();
     // A perfectly READY connection owned by someone else — must NOT read as ready

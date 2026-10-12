@@ -15,6 +15,7 @@ export function activityRun(over: Partial<ActivityRun> = {}): ActivityRun {
     attempt: null,
     status: 'success',
     reused: false,
+    inactive: false,
     startedAt: null,
     finishedAt: null,
     durationMs: null,

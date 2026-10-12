@@ -1,4 +1,8 @@
 import {
+  NodeSchema,
+  fieldLabelOf,
+  inactiveMarkAs,
+  isInactive,
   AGENT_TASK_ACTIVITY_TYPE,
   APPEND_VARIABLE_ACTIVITY_TYPE,
   callDetaches,
@@ -22,6 +26,10 @@ import {
   type Node,
 } from '@autonomy-studio/shared';
 import { formatElapsed } from '../runs/format';
+import { inactiveStatusLabel } from '../runs/nodeStatus';
+
+/** #1600 C0c — Mark as's option names (Succeeded · Failed · Skipped), from the schema. */
+const MARK_AS_TITLES = fieldLabelOf(NodeSchema.shape.onInactiveMarkAs)!.options!;
 
 /**
  * #1394 OR3 — the one line a card shows under its name, saying what THIS step
@@ -122,7 +130,7 @@ export function activitySummary(
 
 /** A small mark on a card for a policy that changes how the step runs. */
 export interface ActivityBadge {
-  key: 'retry' | 'timeout' | 'secure';
+  key: 'inactive' | 'retry' | 'timeout' | 'secure';
   /** What is drawn — short, since the card is narrow. */
   text: string;
   /** The whole sentence: the accessible name and the tooltip. */
@@ -134,9 +142,21 @@ export interface ActivityBadge {
  * timeout, and secure input/output. The words match the Policy tab's.
  */
 export function activityBadges(node: Node): ActivityBadge[] {
-  const p = node.policy;
-  if (p === undefined) return [];
   const badges: ActivityBadge[] = [];
+  // #1600 OR41 C0c — first, because it outranks every policy: a switched-off
+  // step never runs. The mark is ADF's: "inactive" plus the outcome it records.
+  if (isInactive(node)) {
+    const markAs = inactiveMarkAs(node);
+    const outcome = MARK_AS_TITLES[markAs] ?? markAs;
+    badges.push({
+      key: 'inactive',
+      // The monitor's word for the same fact, so the card and the run agree.
+      text: inactiveStatusLabel(markAs),
+      label: `Inactive: never runs, and records ${outcome}`,
+    });
+  }
+  const p = node.policy;
+  if (p === undefined) return badges;
   if (p.retry !== undefined && p.retry > 0) {
     badges.push({
       key: 'retry',

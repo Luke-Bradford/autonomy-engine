@@ -80,6 +80,7 @@ describe('#443 — terminalStatusOf', () => {
       },
       { type: 'node.dispatched', ...run, nodeId: 'n1', attemptId: 'n1#0', idempotent: true },
       { type: 'node.succeeded', ...run, nodeId: 'n1', attemptId: 'n1#0', outputs: {} },
+      { type: 'node.inactive', ...run, nodeId: 'n1', attemptId: 'n1#0', markAs: 'success' },
       EngineEventSchema.parse({
         type: 'node.failed',
         ...run,

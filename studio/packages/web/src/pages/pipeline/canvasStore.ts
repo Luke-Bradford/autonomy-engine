@@ -1,7 +1,11 @@
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import {
   ContainerSchema,
+  INACTIVE_STATE,
   formatZodIssues,
+  inactiveMarkAs,
+  isInactive,
+  type InactiveMarkAs,
   getActivity,
   authorsCallBlob,
   lowerPipelineNodes,
@@ -1439,6 +1443,14 @@ export interface CanvasState {
    */
   setNodeDescription(id: string, text: string): void;
   /**
+   * #1600 OR41 C0c — switch an activity off (`true`) or back on. Active REMOVES
+   * `state` (never stores `'active'`) and keeps `onInactiveMarkAs`, as ADF does.
+   * Each toggle is its own undo step.
+   */
+  setNodeInactive(id: string, inactive: boolean): void;
+  /** #1600 C0c — an inactive activity's recorded outcome; `success` (the default) removes the key. */
+  setNodeMarkAs(id: string, markAs: InactiveMarkAs): void;
+  /**
    * U16 — the pipeline's typed contract. Each takes a WHOLE replacement row
    * rather than a field patch, for the same reason `createContainer` takes a
    * whole `Container`: `default` is an absent-or-present key (not a nullable
@@ -2326,6 +2338,34 @@ export function createCanvasStore(): StoreApi<CanvasState> {
             const next = { ...n };
             if (Object.keys(kept).length > 0) next.policy = kept;
             else delete next.policy;
+            return next;
+          }),
+        }));
+      },
+
+      setNodeInactive(id, inactive) {
+        const node = get().nodes.find((n) => n.id === id);
+        if (node === undefined || isInactive(node) === inactive) return;
+        edit((s) => ({
+          nodes: s.nodes.map((n) => {
+            if (n.id !== id) return n;
+            const next = { ...n };
+            if (inactive) next.state = INACTIVE_STATE;
+            else delete next.state;
+            return next;
+          }),
+        }));
+      },
+
+      setNodeMarkAs(id, markAs) {
+        const node = get().nodes.find((n) => n.id === id);
+        if (node === undefined || inactiveMarkAs(node) === markAs) return;
+        edit((s) => ({
+          nodes: s.nodes.map((n) => {
+            if (n.id !== id) return n;
+            const next = { ...n };
+            if (markAs === 'success') delete next.onInactiveMarkAs;
+            else next.onInactiveMarkAs = markAs;
             return next;
           }),
         }));
