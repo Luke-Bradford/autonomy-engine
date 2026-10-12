@@ -320,13 +320,13 @@ export function seedManualTrigger(
 }
 
 /**
- * Creates a trigger through the API, bound to `pipelineVersionId`: an enabled
- * manual one unless `overrides` says otherwise (a mode, `enabled: false`, a
- * webhook's `secretRef`). Returns its id.
+ * Creates a trigger through the API, bound to `pipelineVersionId` (`null` for an
+ * unbound one): an enabled manual one unless `overrides` says otherwise (a mode,
+ * `enabled: false`, a webhook's `secretRef`). Returns its id.
  */
 export async function seedTrigger(
   page: Page,
-  pipelineVersionId: string,
+  pipelineVersionId: string | null,
   name: string,
   overrides: Record<string, unknown> = {},
 ): Promise<string> {

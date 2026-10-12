@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
+import { seedTrigger } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 import { triggerForm } from './support/panels';
 import { chooseRowAction } from './support/rowMenu';
@@ -103,21 +104,11 @@ test.describe('U14b recurrence builder', () => {
   }) => {
     // Seeded through the API, so this is a row the new form did not create —
     // exactly the case the old `formForEdit` could not save.
-    const seeded = await page.request.post('/api/triggers', {
-      data: {
-        name: 'Seeded weekly',
-        pipelineVersionId: null,
-        params: {},
-        mode: 'schedule',
-        schedule: null,
-        recurrence: { frequency: 'week', interval: 1, schedule: { weekDays: [1], hours: [9] } },
-        webhook: null,
-        concurrency: { policy: 'skip_if_running' },
-        runWindows: null,
-        enabled: false,
-      },
+    await seedTrigger(page, null, 'Seeded weekly', {
+      mode: 'schedule',
+      recurrence: { frequency: 'week', interval: 1, schedule: { weekDays: [1], hours: [9] } },
+      enabled: false,
     });
-    expect(seeded.status()).toBe(201);
 
     const problems = await openTriggers(page);
     const row = page.getByRole('row', { name: /Seeded weekly/ });
@@ -151,21 +142,11 @@ test.describe('U14b recurrence builder', () => {
     // stored row. The recurrence builder has no "nothing selected" state — its
     // blank form is a valid DAILY recurrence — so opening such a row on the
     // builder would silently author `0 0 * * *` on the next save.
-    const seeded = await page.request.post('/api/triggers', {
-      data: {
-        name: 'Inert schedule',
-        pipelineVersionId: null,
-        params: {},
-        mode: 'schedule',
-        schedule: null,
-        recurrence: null,
-        webhook: null,
-        concurrency: { policy: 'skip_if_running' },
-        runWindows: null,
-        enabled: false,
-      },
+    await seedTrigger(page, null, 'Inert schedule', {
+      mode: 'schedule',
+      recurrence: null,
+      enabled: false,
     });
-    expect(seeded.status()).toBe(201);
 
     const problems = await openTriggers(page);
     await chooseRowAction(page.getByRole('row', { name: /Inert schedule/ }), 'Edit');

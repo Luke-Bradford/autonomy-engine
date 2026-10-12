@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
+import { seedTrigger } from './support/seedDoc';
 import { fluentRootReady, resolvedPaletteColor } from './support/theme';
 import { arrowToItem, deleteRowAndExpectFocus, rowMenuButton } from './support/rowMenu';
 import { answerConfirm } from './support/confirmDialog';
@@ -104,20 +105,7 @@ test.describe('#1397 row ⋯ menus, by keyboard', () => {
     page,
   }) => {
     const problems = collectPageProblems(page);
-    const res = await page.request.post('/api/triggers', {
-      data: {
-        name: TRIGGER,
-        pipelineVersionId: null,
-        params: {},
-        mode: 'schedule',
-        schedule: null,
-        webhook: null,
-        runWindows: null,
-        concurrency: { policy: 'skip_if_running' },
-        enabled: false,
-      },
-    });
-    expect(res.status(), await res.text()).toBe(201);
+    await seedTrigger(page, null, TRIGGER, { mode: 'schedule', enabled: false });
     await page.goto('/#/manage/triggers');
     await page.getByRole('heading', { name: 'Triggers' }).waitFor();
     await fluentRootReady(page);

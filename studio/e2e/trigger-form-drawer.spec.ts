@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
+import { seedTrigger } from './support/seedDoc';
 import { triggerForm } from './support/panels';
 import { fluentRootReady } from './support/theme';
 import { rowMenuButton } from './support/rowMenu';
@@ -20,28 +21,11 @@ async function gotoTriggers(page: Page): Promise<void> {
 const drawer = (page: Page) => page.getByRole('dialog', { name: /trigger$/ });
 const prompt = (page: Page) => page.getByRole('alertdialog', { name: 'Unsaved changes' });
 
-async function seedTrigger(page: Page, name: string): Promise<void> {
-  const res = await page.request.post('/api/triggers', {
-    data: {
-      name,
-      pipelineVersionId: null,
-      params: {},
-      mode: 'schedule',
-      schedule: null,
-      webhook: null,
-      runWindows: null,
-      concurrency: { policy: 'skip_if_running' },
-      enabled: false,
-    },
-  });
-  expect(res.status(), await res.text()).toBe(201);
-}
-
 test.describe('#1396 the trigger form drawer', () => {
   test('opens beside the list, in sections, with display names', async ({ page }) => {
     const problems = collectPageProblems(page);
     const seeded = `e2e-1396-trg-${Date.now()}`;
-    await seedTrigger(page, seeded);
+    await seedTrigger(page, null, seeded, { mode: 'schedule', enabled: false });
     await gotoTriggers(page);
     await page.getByRole('button', { name: 'New trigger' }).click();
     await expect(drawer(page)).toBeVisible();

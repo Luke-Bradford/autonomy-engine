@@ -4,11 +4,10 @@ import { expect, type Page } from '@playwright/test';
  * Seed a Connection or a Dataset over the REST API, for a spec that needs one
  * to exist rather than to author one.
  *
- * ONE authority, because there were already five. `copy-node-authoring`,
- * `datasets-page`, `node-cost-and-tools` and `run-cost-summary` each grew their
+ * ONE authority, because there had already been several. Specs each grew their
  * own "POST it, assert 201, return the id" — most of them hard-wired to the one
  * `kind` that spec happened to need, so the next spec could not reuse them and
- * wrote a sixth. That is the shape #1021/#1106/#1088 complain about, and the
+ * wrote another (#1181 folded nine). That is the shape #1021/#1106/#1088 complain about, and the
  * fix is a general helper rather than another specific one: both of these take
  * the body verbatim, so no kind is privileged and no spec has to widen them.
  *

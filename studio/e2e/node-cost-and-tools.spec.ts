@@ -3,6 +3,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 import { openActivity } from './support/panels';
+import { seedConnection } from './support/seedResources';
 
 /**
  * #866 — the run monitor's drill-in says what a node SPENT.
@@ -32,11 +33,11 @@ import { openActivity } from './support/panels';
 test('#866 — a node drill-in states its spend, and never invents a figure', async ({ page }) => {
   const problems = collectPageProblems(page);
 
-  const created = await page.request.post('/api/connections', {
-    data: { name: 'e2e echo cli', kind: 'agent_cli', config: { command: '/bin/echo' } },
+  const connectionId = await seedConnection(page, {
+    name: 'e2e echo cli',
+    kind: 'agent_cli',
+    config: { command: '/bin/echo' },
   });
-  expect(created.status(), `creating connection: ${await created.text()}`).toBe(201);
-  const { id: connectionId } = (await created.json()) as { id: string };
 
   /* Hoisted rather than inlined: an inline literal in the `seedVersion(...)`
      call trips excess-property checking against `SeedDoc`. */

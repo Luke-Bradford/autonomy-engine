@@ -5,6 +5,7 @@ import { DENSITIES, DESIGN_RUNS, expectAppearance, preferAppearance } from './su
 import { expectOnRampWithEachHelp } from './support/typeRamp';
 import { fireAndSettle, seedVersion, type SeedDoc } from './support/seedDoc';
 import { openRunView } from './support/panels';
+import { seedConnection } from './support/seedResources';
 
 /**
  * #1594 OR40 S6g — the run page on the design system, at 1440x900 in compact
@@ -58,15 +59,11 @@ for (const { density, theme } of DESIGN_RUNS) {
     });
     expect(global.status(), await global.text()).toBe(201);
     const { id: globalId } = (await global.json()) as { id: string };
-    const created = await page.request.post('/api/connections', {
-      data: {
-        name: `S6g echo cli ${density}`,
-        kind: 'agent_cli',
-        config: { command: '/bin/echo' },
-      },
+    const connectionId = await seedConnection(page, {
+      name: `S6g echo cli ${density}`,
+      kind: 'agent_cli',
+      config: { command: '/bin/echo' },
     });
-    expect(created.status(), `creating connection: ${await created.text()}`).toBe(201);
-    const { id: connectionId } = (await created.json()) as { id: string };
     const doc: SeedDoc = {
       nodes: [
         {

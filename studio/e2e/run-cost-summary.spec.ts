@@ -3,6 +3,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion, type SeedDoc } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 import { openRunView } from './support/panels';
+import { seedConnection } from './support/seedResources';
 
 /**
  * U27 slice 1 (#930) — the run monitor says what the RUN cost.
@@ -29,11 +30,11 @@ test('#930 — the run monitor totals a run’s spend, and never invents a figur
 }) => {
   const problems = collectPageProblems(page);
 
-  const created = await page.request.post('/api/connections', {
-    data: { name: 'e2e echo cli run-cost', kind: 'agent_cli', config: { command: '/bin/echo' } },
+  const connectionId = await seedConnection(page, {
+    name: 'e2e echo cli run-cost',
+    kind: 'agent_cli',
+    config: { command: '/bin/echo' },
   });
-  expect(created.status(), `creating connection: ${await created.text()}`).toBe(201);
-  const { id: connectionId } = (await created.json()) as { id: string };
 
   /* Hoisted rather than inlined: an inline literal in the `seedVersion(...)`
      call trips excess-property checking against `SeedDoc`. */
@@ -124,15 +125,11 @@ test('#931 — the run list states what each run cost, and never invents a figur
 }) => {
   const problems = collectPageProblems(page);
 
-  const created = await page.request.post('/api/connections', {
-    data: {
-      name: 'e2e echo cli run-list-cost',
-      kind: 'agent_cli',
-      config: { command: '/bin/echo' },
-    },
+  const connectionId = await seedConnection(page, {
+    name: 'e2e echo cli run-list-cost',
+    kind: 'agent_cli',
+    config: { command: '/bin/echo' },
   });
-  expect(created.status(), `creating connection: ${await created.text()}`).toBe(201);
-  const { id: connectionId } = (await created.json()) as { id: string };
 
   const doc: SeedDoc = {
     nodes: [
@@ -217,11 +214,11 @@ test('#932 — the run total says which child runs it leaves out, and links them
 }) => {
   const problems = collectPageProblems(page);
 
-  const created = await page.request.post('/api/connections', {
-    data: { name: 'e2e echo cli child-spend', kind: 'agent_cli', config: { command: '/bin/echo' } },
+  const connectionId = await seedConnection(page, {
+    name: 'e2e echo cli child-spend',
+    kind: 'agent_cli',
+    config: { command: '/bin/echo' },
   });
-  expect(created.status(), `creating connection: ${await created.text()}`).toBe(201);
-  const { id: connectionId } = (await created.json()) as { id: string };
 
   /* The CHILD: one node that really spends, under its own run id. */
   const childDoc: SeedDoc = {
@@ -335,15 +332,11 @@ test('#931 — the run list states what a whole pipeline has cost, across every 
 }) => {
   const problems = collectPageProblems(page);
 
-  const created = await page.request.post('/api/connections', {
-    data: {
-      name: 'e2e echo cli pipeline-cost',
-      kind: 'agent_cli',
-      config: { command: '/bin/echo' },
-    },
+  const connectionId = await seedConnection(page, {
+    name: 'e2e echo cli pipeline-cost',
+    kind: 'agent_cli',
+    config: { command: '/bin/echo' },
   });
-  expect(created.status(), `creating connection: ${await created.text()}`).toBe(201);
-  const { id: connectionId } = (await created.json()) as { id: string };
 
   const doc: SeedDoc = {
     nodes: [
