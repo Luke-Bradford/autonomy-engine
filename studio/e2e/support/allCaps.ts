@@ -28,8 +28,9 @@ export const ACRONYMS: readonly string[] = [
  * Every visible ALL-CAPS word under `root` that is not an acronym, named by its
  * element: `strong "UNREADABLE"`. Read as DRAWN: a parent's
  * `text-transform: uppercase` capitalises its text, so a lowercase source string
- * styled into capitals fails too. Status badges and code are exempt. ONE
- * evaluate.
+ * styled into capitals fails too. Status badges and code are exempt, and so is
+ * a `<time>`: its zone's abbreviation (GMT, PDT) depends on where it is read.
+ * ONE evaluate.
  */
 export function allCapsText(page: Page, root = '.content'): Promise<string[]> {
   return page.evaluate(
@@ -42,7 +43,7 @@ export function allCapsText(page: Page, root = '.content'): Promise<string[]> {
         const el = node.parentElement;
         if (!el || el.getClientRects().length === 0) continue;
         if (el.closest('.visually-hidden, [hidden], details:not([open]) > :not(summary)')) continue;
-        if (el.closest('code, pre, .badge, .run-status, .node-status')) continue;
+        if (el.closest('code, pre, time, .badge, .run-status, .node-status')) continue;
         const raw = node.textContent ?? '';
         const drawn = getComputedStyle(el).textTransform === 'uppercase' ? raw.toUpperCase() : raw;
         for (const [word] of drawn.matchAll(/\b[A-Z][A-Z0-9]+\b/g)) {
