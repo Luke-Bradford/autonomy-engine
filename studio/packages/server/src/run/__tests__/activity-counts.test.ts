@@ -161,6 +161,67 @@ describe('#1484 runs list — Activities', () => {
     });
   });
 
+  it("leaves out a skipped container's body: it never entered, and is not unfinished (#1677)", async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('a'), node('b')],
+      [edge('a', 'c')],
+      [{ id: 'c', kind: 'stage', children: ['b'] }],
+    );
+    // `a` fails, so `c` is skipped and never enters; `b` stays pending forever.
+    const runId = await drive(db, pvId, { a: { outcome: 'failure', error: 'boom' } });
+
+    expect(summaryOf(db, runId).activities).toEqual({
+      succeeded: 0,
+      failed: 1,
+      skipped: 1,
+      reused: 0,
+      unfinished: 0,
+    });
+  });
+
+  it('leaves out the body of a ForEach over no items: it exits without entering (#1677)', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('b')],
+      [],
+      [{ id: 'fe', kind: 'foreach', children: ['b'], items: '${skip(createArray(1), 1)}' }],
+    );
+    const runId = await drive(db, pvId);
+
+    expect(summaryOf(db, runId).activities).toEqual({
+      succeeded: 1,
+      failed: 0,
+      skipped: 0,
+      reused: 0,
+      unfinished: 0,
+    });
+  });
+
+  it("still counts a failed container's never-reached children as unfinished (#1677)", async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('x'), node('y')],
+      [edge('x', 'y')],
+      [{ id: 'c', kind: 'stage', children: ['x', 'y'] }],
+    );
+    // The container entered and failed; `y` sat behind the failure, so it is
+    // skipped, not left pending. Only a container that never entered drops
+    // its body from the count.
+    const runId = await drive(db, pvId, { x: { outcome: 'failure', error: 'boom' } });
+
+    expect(summaryOf(db, runId).activities).toEqual({
+      succeeded: 0,
+      failed: 2,
+      skipped: 1,
+      reused: 0,
+      unfinished: 0,
+    });
+  });
+
   it('is null — never a zeroed count — for a run with no log, or no run.started', () => {
     const { db } = freshDb();
     const pvId = seedVersion(db, [node('a')]);

@@ -4,7 +4,7 @@ import type {
   RunActivityCounts,
   RunState,
 } from '@autonomy-studio/shared';
-import { isInactive } from '@autonomy-studio/shared';
+import { isInactive, TERMINAL_CONTAINER } from '@autonomy-studio/shared';
 import type { Db } from '../repo/types.js';
 import {
   buildEngine,
@@ -33,6 +33,7 @@ import { loadEngineEvents, RunLogUnparseableError } from './events.js';
  *   activity-runs read model, not this column.
  * - A PARALLEL ForEach's body nodes are absent from state (`seedState` skips
  *   them), so they are not counted; the ForEach itself is.
+ * - The body of a container that never entered is left out (`neverRunBody`).
  * - What a rerun-from-failed carried over (`run.reseeded`) is `reused`, whatever
  *   its status here: the frontier folds to `success`, but a copied container's
  *   body stays `pending` (the fold copies the container as one terminal unit and
@@ -61,9 +62,7 @@ export function activityCountsFromState(
     else if (status === 'skipped') counts.skipped += 1;
     else counts.unfinished += 1;
   };
-  // #1600 C0e — an inactive container's body never runs and has no activity
-  // row, so it is not counted (it would otherwise read as unfinished forever).
-  const offBody = new Set(doc.containers.filter(isInactive).flatMap((c) => c.children));
+  const offBody = neverRunBody(doc, state, reused);
   for (const node of doc.nodes) {
     if (!offBody.has(node.id)) tally(node.id, state.nodes[node.id]?.status);
   }
@@ -71,6 +70,33 @@ export function activityCountsFromState(
     tally(container.id, state.containers[container.id]?.status);
   }
   return counts;
+}
+
+/**
+ * The body nodes that never run in this run, so are not counted: they stay
+ * `pending` with no activity row, and would otherwise read as unfinished forever.
+ * - Every child of an inactive container (#1600 C0e), from the doc, so a body
+ *   whose container has not been reached yet is not counted either.
+ * - A still-`pending` child of a container that has finished: one that was
+ *   skipped, or a ForEach over no items (#1677). A container only finishes once
+ *   every child it entered is terminal, so a pending child there never entered.
+ * What a rerun carried over into a finished container stays `reused`.
+ */
+function neverRunBody(
+  doc: Pick<PipelineVersion, 'containers'>,
+  state: RunState,
+  reused: ReadonlySet<string>,
+): Set<string> {
+  const off = new Set<string>();
+  for (const c of doc.containers) {
+    const status = state.containers[c.id]?.status;
+    const finished = status !== undefined && TERMINAL_CONTAINER.has(status);
+    for (const id of c.children) {
+      if (isInactive(c)) off.add(id);
+      else if (finished && !reused.has(id) && state.nodes[id]?.status === 'pending') off.add(id);
+    }
+  }
+  return off;
 }
 
 /**
