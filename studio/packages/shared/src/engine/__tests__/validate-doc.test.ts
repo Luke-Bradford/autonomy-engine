@@ -1681,8 +1681,9 @@ describe('CONTAINER_CONFIG_FIELDS', () => {
   });
 
   // Every field on `ContainerSchema` is either structural (owned by other
-  // canvas affordances), General (#1600 C0e: the General tab) or configurable HERE. A field added to the schema with
-  // no home in either list is one the panel would silently never surface.
+  // canvas affordances), General (#1600 C0e: the General tab) or configurable
+  // HERE. A field added to the schema with no home in any of those lists is one
+  // the panel would silently never surface.
   it('accounts for every field on ContainerSchema', () => {
     const STRUCTURAL = ['id', 'kind', 'children'];
     const onSchema = Object.keys(ContainerSchema.shape);
