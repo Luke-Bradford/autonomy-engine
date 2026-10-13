@@ -284,9 +284,12 @@ describe('unreadyConnectionsForVersion (#3 G8b enable-time gate)', () => {
     const { db } = freshDb();
     const connId = needsSecretConnection(db);
     const stage: Container = { id: 'c', kind: 'stage', children: ['n1'] };
-    const off = versionWithNodes(db, 'local', [llmNode('n1', connId)], [
-      { ...stage, state: 'inactive' },
-    ]);
+    const off = versionWithNodes(
+      db,
+      'local',
+      [llmNode('n1', connId)],
+      [{ ...stage, state: 'inactive' }],
+    );
     expect(unreadyConnectionsForVersion(db, 'local', off)).toEqual([]);
     const on = versionWithNodes(db, 'local', [llmNode('n1', connId)], [stage]);
     expect(unreadyConnectionsForVersion(db, 'local', on)).toHaveLength(1);

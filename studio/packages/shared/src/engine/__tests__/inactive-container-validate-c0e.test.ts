@@ -32,14 +32,26 @@ const unfinished: Node = {
 
 describe('validation skips an inactive container and its body (#1600 C0e)', () => {
   const cases: [string, Node[], Container][] = [
-    ['a foreach with no items', [{ ...unfinished, config: {} }], { id: 'c', kind: 'foreach', children: ['b'] }],
-    ['a foreach with no body', [], { id: 'c', kind: 'foreach', children: [], items: '${createArray(1)}' }],
     [
-      "a foreach whose items reads a missing param",
+      'a foreach with no items',
+      [{ ...unfinished, config: {} }],
+      { id: 'c', kind: 'foreach', children: ['b'] },
+    ],
+    [
+      'a foreach with no body',
+      [],
+      { id: 'c', kind: 'foreach', children: [], items: '${createArray(1)}' },
+    ],
+    [
+      'a foreach whose items reads a missing param',
       [{ ...unfinished, config: { task: 't' } }],
       { id: 'c', kind: 'foreach', children: ['b'], items: '${params.nope}' },
     ],
-    ['a loop with no exitWhen', [{ ...unfinished, config: { task: 't' } }], { id: 'c', kind: 'loop', children: ['b'] }],
+    [
+      'a loop with no exitWhen',
+      [{ ...unfinished, config: { task: 't' } }],
+      { id: 'c', kind: 'loop', children: ['b'] },
+    ],
     ['an empty loop', [], { id: 'c', kind: 'loop', children: [], exitWhen: '${true}' }],
     [
       'a loop whose exitWhen reads a missing param',
@@ -61,9 +73,10 @@ describe('validation skips an inactive container and its body (#1600 C0e)', () =
 
   it('shape rules still hold: a dead field and a child that is not a node', () => {
     const dead = validatePipelineDoc(
-      doc([{ ...unfinished, config: { task: 't' } }], [
-        off({ id: 'c', kind: 'stage', children: ['b'], items: '${createArray(1)}' }),
-      ]),
+      doc(
+        [{ ...unfinished, config: { task: 't' } }],
+        [off({ id: 'c', kind: 'stage', children: ['b'], items: '${createArray(1)}' })],
+      ),
     );
     expect(dead).toEqual(["container 'c': items is only meaningful on a foreach, not a stage"]);
     const ghost = validatePipelineDoc(
@@ -75,7 +88,10 @@ describe('validation skips an inactive container and its body (#1600 C0e)', () =
   it('an activity outside the inactive container is still validated', () => {
     const errs = validatePipelineDoc(
       doc(
-        [{ ...unfinished, config: { task: 't' } }, { ...unfinished, id: 'out' }],
+        [
+          { ...unfinished, config: { task: 't' } },
+          { ...unfinished, id: 'out' },
+        ],
         [off({ id: 'c', kind: 'stage', children: ['b'] })],
       ),
     );

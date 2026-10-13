@@ -3691,8 +3691,7 @@ export function createEngine(doc: EngineDoc): Engine {
         diagnostics.push(
           `impossible run.reseeded: inactive mark for container '${containerId}', which is not inactive in the pinned version`,
         );
-        const { inactive: _dropped, ...executed } = containers[containerId]!;
-        containers[containerId] = executed;
+        delete containers[containerId]!.inactive;
       }
       // Mirror the container's outputs into `state.outputs` — the SOLE source
       // `buildCtx` reads for `${nodes.<container>.output.*}`, exactly as

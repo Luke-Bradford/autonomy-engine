@@ -13,7 +13,6 @@ import {
   type GlobalRead,
   type PipelineVersion,
   summarizeIssueList,
-  isInactive,
   switchedOffNodeIds,
 } from '@autonomy-studio/shared';
 import { pipelineVersions } from '../db/schema.js';

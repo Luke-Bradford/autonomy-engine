@@ -541,7 +541,9 @@ export function ActivityRunsTable({
                       <td>
                         {/* #1600 C0e — inactive outranks reused, as on an activity's row. */}
                         {group.inactive ? (
-                          <span className={containerStatusPillClass(INACTIVE_TONE_STATUS, runStatus)}>
+                          <span
+                            className={containerStatusPillClass(INACTIVE_TONE_STATUS, runStatus)}
+                          >
                             {inactiveStatusLabel(group.status)}
                           </span>
                         ) : group.reused ? (

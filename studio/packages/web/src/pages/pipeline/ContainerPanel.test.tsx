@@ -507,7 +507,12 @@ describe('ContainerPanel — the expression flyout on exitWhen and items (#864)'
 
 describe('ContainerPanel — Copy and Duplicate container (U21 #935)', () => {
   function panel() {
-    const handlers = { onApply: vi.fn(), onGeneral: vi.fn(), onCopy: vi.fn(), onDuplicate: vi.fn() };
+    const handlers = {
+      onApply: vi.fn(),
+      onGeneral: vi.fn(),
+      onCopy: vi.fn(),
+      onDuplicate: vi.fn(),
+    };
     render(
       <ContainerPanel
         container={LOOP}

@@ -164,7 +164,12 @@ describe('an inactive container never enters and records its Mark as (#1600 C0e)
 
 describe('rerun-from-failed copies an inactive container as inactive (#1600 C0e)', () => {
   const copied = { status: 'success' as const, round: 0, outputs: {}, inactive: true as const };
-  const reseed = { sourceRunId: 'src', frontier: [], copiedOutputs: {}, copiedContainers: { c: copied } };
+  const reseed = {
+    sourceRunId: 'src',
+    frontier: [],
+    copiedOutputs: {},
+    copiedContainers: { c: copied },
+  };
 
   it('keeps the mark and projects no outputs when the pinned doc has it inactive', () => {
     const { state, order, diagnostics } = driveRun(fan(offForeach()), {

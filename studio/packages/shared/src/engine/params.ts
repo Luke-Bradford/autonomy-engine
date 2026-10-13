@@ -3139,11 +3139,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     // loop whose only child is a container id is empty to the reducer. Testing
     // raw `children.length` here would let exactly that doc — the one that makes
     // #487 and this fix inseparable — pass the validator and still fail the run.
-    if (
-      live &&
-      c.kind === 'loop' &&
-      c.children.filter((ch) => nodeIdSet.has(ch)).length === 0
-    ) {
+    if (live && c.kind === 'loop' && c.children.filter((ch) => nodeIdSet.has(ch)).length === 0) {
       errors.push(
         `container '${c.id}': makes no progress — a loop needs at least one child ` +
           '(an empty loop re-rounds forever: a round resets nothing, so exitWhen never changes)',
