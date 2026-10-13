@@ -321,7 +321,7 @@ function gatePipelineVersion(
     if (callee === null) return undefined; // gone/never-existed — not analyzable
     const calleeOwnerId = ownerIdOf(callee.pipelineId);
     if (calleeOwnerId !== callerOwnerId) return undefined; // cross-owner — never traverse/echo
-    return { nodes: callee.nodes };
+    return { nodes: callee.nodes, containers: callee.containers };
   };
   // Reads run BEFORE the transaction below; that is safe because a
   // pipeline_versions row is IMMUTABLE once written (no update path), so a

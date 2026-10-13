@@ -121,3 +121,51 @@ describe("a container's description is bounded on write (#1600 C0e)", () => {
     expect(over.error?.issues[0]?.path).toEqual(['containers', 0, 'description']);
   });
 });
+
+describe('the call graph and the #1669 advisory see an inactive container (#1600 C0e)', () => {
+  const caller = (target: string): Node => ({
+    id: 'b',
+    type: 'call_pipeline',
+    config: {},
+    call: { pipelineVersionId: target, params: {} },
+    position: pos,
+  });
+  const box: Container = { id: 'c', kind: 'stage', children: ['b'] };
+
+  it("a call inside an inactive container is no call edge: no self-cycle, and a callee's is not followed", () => {
+    expect(
+      validatePipelineDoc(doc([caller('pv_self')], [off(box)]), { selfId: 'pv_self' }),
+    ).toEqual([]);
+    // pv_self → pv_b, whose only call back to pv_self sits in an inactive box.
+    const outer: Node = { ...caller('pv_b'), id: 'o' };
+    const resolvePipeline = (id: string) =>
+      id === 'pv_b' ? { nodes: [caller('pv_self')], containers: [off(box)] } : undefined;
+    expect(validatePipelineDoc(doc([outer], []), { selfId: 'pv_self', resolvePipeline })).toEqual(
+      [],
+    );
+    // Active, the same docs are refused — the test can fail.
+    expect(
+      validatePipelineDoc(doc([caller('pv_self')], [box]), { selfId: 'pv_self' }).join(' '),
+    ).toContain('cycle');
+  });
+
+  it("a read of an inactive ForEach's results, marked Succeeded, warns and still saves", () => {
+    const fe: Container = { id: 'c', kind: 'foreach', children: ['b'], items: '${createArray(1)}' };
+    const body: Node = { id: 'b', type: 'agent_task', config: { task: 't' }, position: pos };
+    const reader: Node = {
+      id: 'r',
+      type: 'agent_task',
+      config: { task: '${nodes.c.output.results}' },
+      position: pos,
+    };
+    const edges: Edge[] = [{ id: 'e', from: 'c', to: 'r', on: 'success' }];
+    const warn = (c: Container) => {
+      const advisories: string[] = [];
+      expect(validatePipelineDoc(doc([body, reader], [c], edges), { advisories })).toEqual([]);
+      return advisories;
+    };
+    expect(warn(off(fe)).join(' ')).toContain("node 'c' is inactive");
+    expect(warn(fe)).toEqual([]);
+    expect(warn({ ...off(fe), onInactiveMarkAs: 'skipped' })).toEqual([]);
+  });
+});

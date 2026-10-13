@@ -1491,7 +1491,7 @@ export function validateRefs(
   const declared = new Map<string, Param>();
   for (const p of doc.params) declared.set(p.name, p);
   const variables = variableMapOf(doc.variables);
-  const g = globalScopeOf(globalsIn, doc.nodes);
+  const g = globalScopeOf(globalsIn, doc.nodes, doc.containers ?? []);
 
   const graph = computeGraph(doc);
 
@@ -1894,7 +1894,7 @@ export function availableRefs(
   const secureOutputIds = secureOutputIdsOf(doc.nodes, containers);
   const declared = new Map(doc.params.map((p) => [p.name, p]));
   const variables = variableMapOf(doc.variables);
-  const globals = globalScopeOf(options, doc.nodes);
+  const globals = globalScopeOf(options, doc.nodes, doc.containers ?? []);
 
   if (site.kind === 'container') {
     const c = containers.find((x) => x.id === site.containerId);
@@ -2594,9 +2594,11 @@ function variableMapOf(variables: readonly VariableDef[]): ReadonlyMap<string, V
 }
 
 /** A pipeline-version resolver: the `nodes` of another version, for the call graph. */
-export type PipelineResolver = (
-  pipelineVersionId: string,
-) => Pick<PipelineVersion, 'nodes'> | undefined;
+export type PipelineResolver = (pipelineVersionId: string) => CallGraphDoc | undefined;
+
+/** What the call-graph walk reads of a version: its nodes, and its containers so
+ * a call inside an inactive one is left out (#1600 C0e). */
+type CallGraphDoc = Pick<PipelineVersion, 'nodes'> & { containers?: readonly Container[] };
 
 export interface ValidateDocOptions {
   /** This version's own id — catches a direct self-call + seeds the call graph. */
@@ -2667,12 +2669,16 @@ const NO_GLOBALS: GlobalScope = { globals: new Map() };
 function globalScopeOf(
   options: Pick<ValidateDocOptions, 'globals' | 'globalReads' | 'advisories'>,
   nodes: readonly Node[],
+  containers: readonly Container[],
 ): GlobalScope {
   return {
     globals: options.globals ?? new Map(),
     ...(options.globalReads !== undefined ? { globalReads: options.globalReads } : {}),
     ...(options.advisories !== undefined
-      ? { advisories: options.advisories, inactiveSucceededIds: inactiveSucceededIds(nodes) }
+      ? {
+          advisories: options.advisories,
+          inactiveSucceededIds: inactiveSucceededIds(nodes, containers),
+        }
       : {}),
   };
 }
@@ -2680,11 +2686,17 @@ function globalScopeOf(
 /**
  * #1669 — the inactive nodes marked Succeeded. Only those can fail a reader:
  * marked Failed or Skipped, a node's success edges do not fire, so a reader
- * that depends on it is skipped and never reads.
+ * that depends on it is skipped and never reads. #1600 C0e — and the inactive
+ * containers marked Succeeded, which record no outputs either.
  */
-function inactiveSucceededIds(nodes: readonly Node[]): ReadonlySet<string> {
+function inactiveSucceededIds(
+  nodes: readonly Node[],
+  containers: readonly Container[],
+): ReadonlySet<string> {
   return new Set(
-    nodes.filter((n) => isInactive(n) && inactiveMarkAs(n) === 'success').map((n) => n.id),
+    [...nodes, ...containers]
+      .filter((n) => isInactive(n) && inactiveMarkAs(n) === 'success')
+      .map((n) => n.id),
   );
 }
 
@@ -2806,7 +2818,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
   const nodeIdSet = new Set(nodeIdList);
   const containers = doc.containers ?? [];
   const variables = variableMapOf(doc.variables);
-  const g = globalScopeOf(options, doc.nodes);
+  const g = globalScopeOf(options, doc.nodes, doc.containers ?? []);
   const declared = new Map<string, Param>();
   for (const p of doc.params) {
     declared.set(p.name, p);
@@ -4548,11 +4560,13 @@ function forwardReach(
  * silently exempting it from the cycle + depth checks. `literal` mode also means
  * the target is the UNESCAPED text, which is the id the run would actually call.
  */
-function literalCallTargets(nodes: Pick<Node, 'call' | 'state'>[]): string[] {
+function literalCallTargets(doc: CallGraphDoc): string[] {
   const out: string[] = [];
-  for (const n of nodes) {
-    // #1600 C0c — an inactive call node starts no child, so it is no call edge.
-    if (n.call === undefined || isInactive(n)) continue;
+  // #1600 C0c/C0e — an inactive call node, or one inside an inactive container,
+  // starts no child, so it is no call edge.
+  const switchedOff = switchedOffNodeIds(doc.nodes, doc.containers ?? []);
+  for (const n of doc.nodes) {
+    if (n.call === undefined || switchedOff.has(n.id)) continue;
     const mode = interpolationMode(n.call.pipelineVersionId);
     if (mode.mode === 'literal') out.push(restoreEscapes(mode.scanned));
   }
@@ -4580,16 +4594,13 @@ export const MAX_CALL_DEPTH = 3;
  * `resolvePipeline` to fetch each callee's `nodes` (a dynamic `${}` target is
  * skipped — it cannot be resolved at save time).
  */
-function validateCallGraph(
-  doc: Pick<PipelineVersion, 'nodes'>,
-  options: ValidateDocOptions,
-): string[] {
+function validateCallGraph(doc: CallGraphDoc, options: ValidateDocOptions): string[] {
   const errors: string[] = [];
   const maxDepth = options.maxCallDepth ?? MAX_CALL_DEPTH;
   const { selfId, resolvePipeline } = options;
 
   if (selfId !== undefined) {
-    for (const t of literalCallTargets(doc.nodes)) {
+    for (const t of literalCallTargets(doc)) {
       if (t === selfId)
         errors.push(`call_pipeline cycle: a node calls its own version '${selfId}'`);
     }
@@ -4599,12 +4610,12 @@ function validateCallGraph(
   // `depth` counts call HOPS from this version (root = 0). `maxDepth` hops are
   // allowed; entering a version deeper than that is an error.
   const path: string[] = [selfId];
-  const dfs = (pvId: string, nodes: Pick<Node, 'call' | 'state'>[], depth: number): void => {
+  const dfs = (pvId: string, callee: CallGraphDoc, depth: number): void => {
     if (depth > maxDepth) {
       errors.push(`call_pipeline depth exceeds ${maxDepth} at version '${pvId}'`);
       return;
     }
-    for (const t of literalCallTargets(nodes)) {
+    for (const t of literalCallTargets(callee)) {
       if (path.includes(t)) {
         errors.push(`call_pipeline cycle: version '${t}' is reachable from itself`);
         continue;
@@ -4612,11 +4623,11 @@ function validateCallGraph(
       const childDoc = resolvePipeline(t);
       if (childDoc === undefined) continue; // unresolvable callee — not analyzable
       path.push(t);
-      dfs(t, childDoc.nodes, depth + 1);
+      dfs(t, childDoc, depth + 1);
       path.pop();
     }
   };
-  dfs(selfId, doc.nodes, 0);
+  dfs(selfId, doc, 0);
   return errors;
 }
 
