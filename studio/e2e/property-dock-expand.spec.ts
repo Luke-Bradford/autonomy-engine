@@ -164,6 +164,12 @@ test.describe('#1477 OR29 — Expand properties', () => {
     // Fit to the narrower canvas beside the right-hand dock, which puts `l` at
     // its left edge. The first fit was beside the bottom dock, which centres the
     // nodes under where the drawer opens (#1676).
+    await expect
+      .poll(async () => {
+        const { dock, wrap } = await boxes(page);
+        return dock.left >= wrap.right;
+      })
+      .toBe(true);
     await fitAndSettle(page);
     await setTheme(page, 'dark');
 

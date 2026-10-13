@@ -181,6 +181,25 @@ describe('#1484 runs list — Activities', () => {
     });
   });
 
+  it('leaves out the body of a ForEach over no items: it exits without entering (#1677)', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('b')],
+      [],
+      [{ id: 'fe', kind: 'foreach', children: ['b'], items: '${skip(createArray(1), 1)}' }],
+    );
+    const runId = await drive(db, pvId);
+
+    expect(summaryOf(db, runId).activities).toEqual({
+      succeeded: 1,
+      failed: 0,
+      skipped: 0,
+      reused: 0,
+      unfinished: 0,
+    });
+  });
+
   it("still counts a failed container's never-reached children as unfinished (#1677)", async () => {
     const { db } = freshDb();
     const pvId = seedVersion(
