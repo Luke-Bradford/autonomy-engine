@@ -512,7 +512,12 @@
 // (and `description`), a container switched off. C0c's reason, for a box: a
 // pre-C0e build strips `state` and ENTERS the container for real, running its
 // whole body, so an older build must refuse the doc rather than run it.
-export const CATALOG_VERSION = 35;
+// BUMP 35→36 for #1600 OR41 C1a: the `copy_files` activity type (Copy · Files
+// as-is) and the `fs` connection's `writable` permission. The new-activity-type
+// reason the file_* bumps give: a pre-C1a build lacks the entry and fails the
+// node `UNKNOWN_ACTIVITY` at its first run, so the doc must say it needs this
+// build. `writable` is optional and fail-closed, and nothing older reads it.
+export const CATALOG_VERSION = 36;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the
