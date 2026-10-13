@@ -1102,13 +1102,13 @@ describe('NodeActivityPanel — the activity type (#1449)', () => {
 
   it('names the kind of activity, and the type id the docs and errors use', () => {
     const panel = renderPanel(row({ nodeId: 'n_1', status: 'success' }), 'success', 'http_request');
-    expect(typeLine(panel)?.textContent).toBe('HTTP request http_request');
+    expect(typeLine(panel)?.textContent).toBe('Type HTTP request http_request');
     expect(typeLine(panel)?.querySelector('code')?.textContent).toBe('http_request');
   });
 
   it('shows a type the catalog does not know as the raw id alone, not invented', () => {
     const panel = renderPanel(row({ nodeId: 'n_1', status: 'success' }), 'success', 'mystery');
-    expect(typeLine(panel)?.textContent).toBe('mystery');
+    expect(typeLine(panel)?.textContent).toBe('Type mystery');
   });
 
   it('draws nothing when the bound version does not resolve the node', () => {

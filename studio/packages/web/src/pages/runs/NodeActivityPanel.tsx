@@ -208,7 +208,7 @@ export function NodeActivityPanel({
           shown as the raw id alone, as `activityLabel` does. */}
       {type ? (
         <p className="page-hint node-type">
-          {typeTitle === undefined ? null : <>{typeTitle} </>}
+          Type {typeTitle === undefined ? null : <>{typeTitle} </>}
           <code>{type}</code>
         </p>
       ) : null}

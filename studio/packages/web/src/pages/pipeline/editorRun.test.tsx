@@ -207,7 +207,7 @@ describe('EditorRunDrawer', () => {
   it('#1449 — names the activity type of the node', () => {
     mountDrawer(run, 'n_a');
     const panel = screen.getByRole('region', { name: 'Node HTTP request 1' });
-    expect(panel.querySelector('.node-type')?.textContent).toBe('HTTP request http_request');
+    expect(panel.querySelector('.node-type')?.textContent).toBe('Type HTTP request http_request');
   });
 
   it('shows nothing for a node the run has no row for, or with no run', () => {

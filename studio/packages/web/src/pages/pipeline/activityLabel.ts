@@ -10,8 +10,9 @@ import { getActivity, type Node } from '@autonomy-studio/shared';
  * the two map lookups that feed a canvas (`FlowCanvas`, `runFlow`). Those
  * fallbacks are unreachable by construction — each map is built from the very
  * array being mapped over — so they are there to keep the type total, not to run.
- * No surface NAMES an activity with this any more; the one surface that shows it
- * shows it as what it is, a type (the activity runs' Type column, #1484).
+ * No surface NAMES an activity with this any more; the surfaces that show it show
+ * it as what it is, a type (the activity runs' Type column, #1484, and the node
+ * panel's Type line, #1449).
  *
  * One function rather than the expression, because the canvas had grown three
  * hand-rolled copies of it — the node's own label (`FlowCanvas`), a connection

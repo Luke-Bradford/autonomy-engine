@@ -42,7 +42,7 @@ export interface ToolboxGroup {
  * and its words sit in different fields (the title says Copy, the description
  * says rows). An empty query matches everything.
  */
-export function matchesQuery(query: string, fields: readonly string[]): boolean {
+function matchesQuery(query: string, fields: readonly string[]): boolean {
   const lowered = fields.map((f) => f.toLowerCase());
   return query
     .toLowerCase()
@@ -72,7 +72,6 @@ export function matchesQuery(query: string, fields: readonly string[]): boolean 
  * nowhere in this file any more.
  */
 export function toolboxGroups(query: string): ToolboxGroup[] {
-  const needle = query.trim().toLowerCase();
   const groups: ToolboxGroup[] = [];
 
   for (const category of ACTIVITY_CATEGORIES) {
@@ -82,7 +81,7 @@ export function toolboxGroups(query: string): ToolboxGroup[] {
       // the docs, an export envelope and an error message all name, so an author
       // who knows `file_read` should not have to guess it is called "Read file".
       // And the description (#1449): an author searches for what they want done.
-      .filter((e) => matchesQuery(needle, [e.title, e.type, e.description]))
+      .filter((e) => matchesQuery(query, [e.title, e.type, e.description]))
       .sort((a, b) => a.title.localeCompare(b.title));
 
     if (entries.length > 0) {
