@@ -168,4 +168,25 @@ describe('the call graph and the #1669 advisory see an inactive container (#1600
     expect(warn(fe)).toEqual([]);
     expect(warn({ ...off(fe), onInactiveMarkAs: 'skipped' })).toEqual([]);
   });
+  it('a child of an inactive container needs no advisory: outside the box its output is unreadable, active or not', () => {
+    const child: Node = {
+      id: 'b',
+      type: 'agent_task',
+      config: { task: 't', outputs: [{ name: 'v', type: 'string' }] },
+      position: pos,
+    };
+    const reader: Node = {
+      id: 'r',
+      type: 'agent_task',
+      config: { task: '${nodes.b.output.v}' },
+      position: pos,
+    };
+    const stage: Container = { id: 'c', kind: 'stage', children: ['b'] };
+    const edges: Edge[] = [{ id: 'e', from: 'c', to: 'r', on: 'success' }];
+    const refusal = 'nodes.r.config.task: ${nodes.b.output.v} does not name an upstream node';
+    // Refused at save either way, so no read of it ever reaches a run; and a
+    // reader inside the box is itself switched off.
+    for (const c of [stage, off(stage)])
+      expect(validatePipelineDoc(doc([child, reader], [c], edges)).join(' ')).toContain(refusal);
+  });
 });
