@@ -189,7 +189,7 @@ test('the General tab packs its two retry numbers onto one row, below the timeou
   await expectQuiet(page, problems);
 });
 
-test('a ForEach container shows Items · Concurrency · Settings tabs, and packs Concurrency', async ({
+test('a ForEach container shows General · Items · Concurrency · Settings tabs, and packs Concurrency', async ({
   page,
 }) => {
   const problems = collectPageProblems(page);
@@ -200,9 +200,11 @@ test('a ForEach container shows Items · Concurrency · Settings tabs, and packs
   await page.getByRole('button', { name: 'Configure ForEach 1' }).click();
   const panel = properties(page);
   // By accessible name: Fluent draws a tab's label twice (once hidden, for its width).
-  await expect(panel.getByRole('tab')).toHaveCount(3);
-  for (const [i, name] of ['Items', 'Concurrency', 'Settings'].entries())
+  // #1600 C0e: General leads and is the tab first shown, as on an activity.
+  await expect(panel.getByRole('tab')).toHaveCount(4);
+  for (const [i, name] of ['General', 'Items', 'Concurrency', 'Settings'].entries())
     await expect(panel.getByRole('tab').nth(i)).toHaveAccessibleName(name);
+  await panel.getByRole('tab', { name: 'Items' }).click();
   await expect(panel.getByRole('textbox', { name: /^Items/ })).toHaveValue('${createArray(1, 2)}');
 
   await panel.getByRole('tab', { name: 'Concurrency' }).click();

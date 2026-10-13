@@ -106,7 +106,10 @@ test('an inactive ForEach never runs its body: the run routes on its Mark as, an
   const run = (await (await page.request.get(`/api/runs/${encodeURIComponent(runId)}`)).json()) as {
     status: string;
   };
-  expect(run.status).toBe('success');
+  // ADF's do-if-else: the skipped `onS` leaf is judged by its failed parent, so
+  // the run fails, as a real container failure in this graph does (the unit
+  // suite pins that parity). `onF` still ran: the mark routed the edges.
+  expect(run.status).toBe('failure');
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
