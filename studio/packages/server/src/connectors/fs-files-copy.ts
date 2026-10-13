@@ -107,7 +107,9 @@ async function lstatOrNull(path: string) {
   try {
     return await lstat(path);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    // ENOTDIR: a parent is a file, so nothing can be at this path either.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return null;
     throw err;
   }
 }

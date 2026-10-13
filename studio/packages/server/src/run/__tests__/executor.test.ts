@@ -5422,3 +5422,66 @@ describe('createExecutor — #1600 C0a: the activity timeout', () => {
     expect(failureOf(db, run.id)).toMatchObject({ code: FAILURE_CODES.TIMEOUT, kind: 'transient' });
   });
 });
+
+describe('createExecutor — #1600 OR41 C1a: Copy · Files as-is', () => {
+  const dirs: string[] = [];
+  afterAll(async () => {
+    for (const d of dirs) await rm(d, { recursive: true, force: true });
+  });
+  async function tempDir(prefix: string): Promise<string> {
+    const d = await realpath(await mkdtemp(join(tmpdir(), prefix)));
+    dirs.push(d);
+    return d;
+  }
+
+  const failureOf = (db: Db, runId: string) =>
+    loadEngineEvents(db, runId).find((e) => e.type === 'node.failed');
+
+  function filesNode(source: string, sink: string, extra: Partial<Node> = {}): Node {
+    return {
+      id: 'n1',
+      type: 'copy_files',
+      config: { sourcePath: 'in.txt', pathType: 'file' },
+      connectionIds: { source, sink },
+      position: { x: 0, y: 0 },
+      ...extra,
+    };
+  }
+
+  it('binds two fs connections and no dataset, and copies through the real fs adapter', async () => {
+    const src = await tempDir('exec-copy-files-src-');
+    const dst = await tempDir('exec-copy-files-dst-');
+    await writeFile(join(src, 'in.txt'), 'bytes as-is');
+    const db = freshDb().db;
+    const sourceId = await seedConnection(db, 'fs', { roots: [src] }, null);
+    const sinkId = await seedConnection(db, 'fs', { roots: [dst], writable: true }, null);
+    // A stray `datasetIds` stays inert: the entry declares no `datasetKinds`.
+    const pvId = seedVersion(db, [
+      filesNode(sourceId, sinkId, { datasetIds: { source: 'ds_not_there' } }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db), run);
+
+    expect(state.status).toBe('success');
+    expect(await readFile(join(dst, 'in.txt'), 'utf8')).toBe('bytes as-is');
+  });
+
+  it('refuses a sink connection that is not a file connection, before dispatch', async () => {
+    const src = await tempDir('exec-copy-files-src-');
+    await writeFile(join(src, 'in.txt'), 'x');
+    const db = freshDb().db;
+    const sourceId = await seedConnection(db, 'fs', { roots: [src] }, null);
+    const sinkId = await seedConnection(db, 'sqlite', { roots: [src], path: 'x.db' }, null);
+    const pvId = seedVersion(db, [filesNode(sourceId, sinkId)]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db), run);
+
+    expect(state.status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({
+      code: FAILURE_CODES.CONNECTION_KIND_INVALID,
+      side: 'sink',
+    });
+  });
+});
