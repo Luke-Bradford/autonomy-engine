@@ -3747,6 +3747,8 @@ describe('RunDetailPage — the activity run detail drawer (#1484 M2)', () => {
     const drawer = screen.getByRole('region', { name: 'Node HTTP request 1' });
     expect(drawer.closest('.run-drawer')).not.toBeNull();
     expect(drawer).toHaveTextContent('attempt 1 · Item 2 of 2 · b.csv');
+    // #1449 — the kind of activity, off the bound doc like the name.
+    expect(drawer.querySelector('.node-type')?.textContent).toBe('HTTP request http_request');
     expect(drawer).toHaveTextContent('b.csv');
     expect(
       within(drawer).getByRole('heading', { name: 'Outputs' }).closest('section'),

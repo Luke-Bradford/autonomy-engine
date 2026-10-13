@@ -26,7 +26,13 @@ export async function answerConfirm(
   const text = dialog.textContent ?? '';
   const target = answer === 'cancel' ? buttons[0]! : buttons[buttons.length - 1]!;
   await user.click(target);
-  await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+  // Gone from the DOM, not just from the accessibility tree (#1681). `queryByRole`
+  // skips an element hidden from that tree, so a dialog still MOUNTED with
+  // `aria-hidden` passed this wait, and the next question opened beside it. The
+  // one sighting of that flake dumped exactly such a dialog.
+  await waitFor(() =>
+    expect(screen.queryByRole('alertdialog', { hidden: true })).not.toBeInTheDocument(),
+  );
   return text;
 }
 

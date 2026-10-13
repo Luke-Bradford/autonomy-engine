@@ -118,6 +118,7 @@ export function EditorRunDrawer({ nodeId, type }: { nodeId: string | null; type:
       <NodeActivityPanel
         node={node}
         name={run.nameOf(nodeId)}
+        type={type}
         description={run.descriptionOf(nodeId)}
         runStatus={run.status}
         live={run.live}

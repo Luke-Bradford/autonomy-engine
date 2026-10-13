@@ -334,6 +334,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
     [doc],
   );
   const descriptionOf = (nodeId: string) => nodeDescriptions?.get(nodeId) ?? null;
+  // #1449 — the drawer's raw activity type, off the same bound doc.
+  const nodeTypeIds = useMemo(
+    () => (doc === null ? null : new Map(doc.nodes.map((n) => [n.id, n.type]))),
+    [doc],
+  );
   const nodeTypes = useMemo(
     () => (doc === null ? null : new Map(doc.nodes.map((n) => [n.id, activityLabel(n)]))),
     [doc],
@@ -977,6 +982,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
           <NodeActivityPanel
             node={drawerNode}
             name={nameOf(drawerRow.activityId)}
+            type={nodeTypeIds?.get(drawerRow.activityId) ?? null}
             description={descriptionOf(drawerRow.activityId)}
             runStatus={status}
             live={countingLive}

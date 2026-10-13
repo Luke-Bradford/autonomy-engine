@@ -66,11 +66,16 @@ function row(over: Partial<NodeActivity> & { nodeId: string }): NodeActivity {
  * the one `RunDetailPage.test.tsx` already uses, so there is no second opinion
  * here about what "a router that exists and goes nowhere" means.
  */
-function renderPanel(node: NodeActivity, runStatus: RunStatus = 'running'): HTMLElement {
+function renderPanel(
+  node: NodeActivity,
+  runStatus: RunStatus = 'running',
+  type?: string | null,
+): HTMLElement {
   renderWithRouter(
     <NodeActivityPanel
       node={node}
       name={null}
+      type={type}
       runStatus={runStatus}
       live={false}
       onClose={vi.fn()}
@@ -1089,5 +1094,25 @@ describe('NodeActivityPanel — the drawer tabs (#1484 OR35 M2)', () => {
       .map((l) => JSON.parse(l) as { value: number });
     expect(parsed).toHaveLength(205);
     expect(parsed[0]!.value).toBe(0);
+  });
+});
+
+describe('NodeActivityPanel — the activity type (#1449)', () => {
+  const typeLine = (panel: HTMLElement) => panel.querySelector('.node-type');
+
+  it('names the kind of activity, and the type id the docs and errors use', () => {
+    const panel = renderPanel(row({ nodeId: 'n_1', status: 'success' }), 'success', 'http_request');
+    expect(typeLine(panel)?.textContent).toBe('HTTP request http_request');
+    expect(typeLine(panel)?.querySelector('code')?.textContent).toBe('http_request');
+  });
+
+  it('shows a type the catalog does not know as the raw id alone, not invented', () => {
+    const panel = renderPanel(row({ nodeId: 'n_1', status: 'success' }), 'success', 'mystery');
+    expect(typeLine(panel)?.textContent).toBe('mystery');
+  });
+
+  it('draws nothing when the bound version does not resolve the node', () => {
+    const panel = renderPanel(row({ nodeId: 'n_1', status: 'success' }), 'success', null);
+    expect(typeLine(panel)).toBeNull();
   });
 });

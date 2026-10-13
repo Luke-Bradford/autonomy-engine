@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { ACTIVITY_CATEGORIES, ACTIVITY_CATEGORY_LABELS, catalog } from '@autonomy-studio/shared';
-import { toolboxGroups } from './activityGroups';
+import {
+  ACTIVITY_CATEGORIES,
+  ACTIVITY_CATEGORY_LABELS,
+  catalog,
+  COPY_ACTIVITY_TYPE,
+} from '@autonomy-studio/shared';
+import { containerToolboxEntries, toolboxGroups } from './activityGroups';
 
 /** Flatten groups back to a type list, in render order. */
 function typesOf(groups: ReturnType<typeof toolboxGroups>): string[] {
@@ -46,9 +51,11 @@ describe('toolboxGroups', () => {
   it('matches on title, case-insensitively', () => {
     const groups = toolboxGroups('hTtP');
     expect(typesOf(groups)).toContain('http_request');
-    expect(groups.every((g) => g.entries.every((e) => /http/i.test(`${e.title} ${e.type}`)))).toBe(
-      true,
-    );
+    expect(
+      groups.every((g) =>
+        g.entries.every((e) => /http/i.test(`${e.title} ${e.type} ${e.description}`)),
+      ),
+    ).toBe(true);
   });
 
   it('matches on the activity TYPE too, which is what an author who knows the docs types', () => {
@@ -82,5 +89,30 @@ describe('toolboxGroups', () => {
     // envelope and an error message name, the title is what the toolbox shows.
     expect(typesOf(toolboxGroups('execute_pipeline'))).toEqual(['execute_pipeline']);
     expect(typesOf(toolboxGroups('Execute pipeline'))).toEqual(['execute_pipeline']);
+  });
+
+  // #1449 — an author searches for what they want DONE, which is what the
+  // description says; the title only names the result.
+  it('matches on the description, every word somewhere in the entry', () => {
+    // "mapping" is in no title or type — only Copy data's description.
+    expect(typesOf(toolboxGroups('mapping'))).toEqual([COPY_ACTIVITY_TYPE]);
+    // Words are matched separately, across title and description, so the order
+    // an author types them in does not matter.
+    expect(typesOf(toolboxGroups('copy rows'))).toEqual([COPY_ACTIVITY_TYPE]);
+    expect(typesOf(toolboxGroups('  ROWS   copy '))).toEqual([COPY_ACTIVITY_TYPE]);
+    // Every word must match: "copy file" keeps Copy file, "rows" then drops it.
+    expect(typesOf(toolboxGroups('copy file'))).toContain('file_copy');
+    expect(typesOf(toolboxGroups('copy file rows'))).toEqual([]);
+  });
+});
+
+describe('containerToolboxEntries (#1449)', () => {
+  it('matches a container on its description too', () => {
+    expect(containerToolboxEntries('each item').map((e) => e.kind)).toEqual(['foreach']);
+    expect(containerToolboxEntries('condition').map((e) => e.kind)).toEqual(['loop']);
+  });
+
+  it('keeps all three for a search naming the group', () => {
+    expect(containerToolboxEntries('contain')).toHaveLength(3);
   });
 });

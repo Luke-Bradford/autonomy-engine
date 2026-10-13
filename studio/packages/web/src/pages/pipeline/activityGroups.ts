@@ -36,6 +36,22 @@ export interface ToolboxGroup {
 }
 
 /**
+ * #1449 — whether a palette entry answers a search: EVERY word of `query` is
+ * found in one of `fields`, ignoring case. Words rather than the whole query,
+ * because a search that reaches into a description is a phrase like "copy rows",
+ * and its words sit in different fields (the title says Copy, the description
+ * says rows). An empty query matches everything.
+ */
+export function matchesQuery(query: string, fields: readonly string[]): boolean {
+  const lowered = fields.map((f) => f.toLowerCase());
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((word) => word !== '')
+    .every((word) => lowered.some((field) => field.includes(word)));
+}
+
+/**
  * The toolbox's rendered content for a search query — pure, so the grouping and
  * filtering rules are testable without a DOM.
  *
@@ -65,12 +81,8 @@ export function toolboxGroups(query: string): ToolboxGroup[] {
       // Title AND type: the title is what the toolbox shows, but the type is what
       // the docs, an export envelope and an error message all name, so an author
       // who knows `file_read` should not have to guess it is called "Read file".
-      .filter(
-        (e) =>
-          needle === '' ||
-          e.title.toLowerCase().includes(needle) ||
-          e.type.toLowerCase().includes(needle),
-      )
+      // And the description (#1449): an author searches for what they want done.
+      .filter((e) => matchesQuery(needle, [e.title, e.type, e.description]))
       .sort((a, b) => a.title.localeCompare(b.title));
 
     if (entries.length > 0) {
@@ -124,13 +136,11 @@ export const CONTAINER_PALETTE: readonly ContainerPaletteEntry[] = [
 ];
 
 /**
- * The Containers entries a search query keeps — by title or by kind, like
+ * The Containers entries a search query keeps — by title, kind or description, like
  * `toolboxGroups`, and all of them for a search naming the group itself.
  */
 export function containerToolboxEntries(query: string): ContainerPaletteEntry[] {
   const needle = query.trim().toLowerCase();
   if (CONTAINER_GROUP_LABEL.toLowerCase().includes(needle)) return [...CONTAINER_PALETTE];
-  return CONTAINER_PALETTE.filter(
-    (e) => e.title.toLowerCase().includes(needle) || e.kind.includes(needle),
-  );
+  return CONTAINER_PALETTE.filter((e) => matchesQuery(needle, [e.title, e.kind, e.description]));
 }
