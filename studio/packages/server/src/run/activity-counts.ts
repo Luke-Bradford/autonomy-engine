@@ -61,9 +61,16 @@ export function activityCountsFromState(
     else if (status === 'skipped') counts.skipped += 1;
     else counts.unfinished += 1;
   };
-  // #1600 C0e — an inactive container's body never runs and has no activity
-  // row, so it is not counted (it would otherwise read as unfinished forever).
-  const offBody = new Set(doc.containers.filter(isInactive).flatMap((c) => c.children));
+  // A container that never enters leaves its body `pending` with no activity
+  // row, so the body is not counted (it would otherwise read as unfinished
+  // forever): an inactive one (#1600 C0e), or a skipped one (#1677). A container
+  // that entered keeps its body counted, whatever it ended as — a failure inside
+  // it skips what sat behind it, so nothing there is left pending for no reason.
+  const offBody = new Set(
+    doc.containers
+      .filter((c) => isInactive(c) || state.containers[c.id]?.status === 'skipped')
+      .flatMap((c) => c.children),
+  );
   for (const node of doc.nodes) {
     if (!offBody.has(node.id)) tally(node.id, state.nodes[node.id]?.status);
   }
