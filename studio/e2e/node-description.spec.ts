@@ -89,6 +89,8 @@ test("the monitor shows the run version's description: the graph card's hover an
   await activityRowById(page, 'w').getByRole('button', { name: 'Wait 1', exact: true }).click();
   const drawer = page.locator('#run-detail-drawer').getByRole('region', { name: 'Node Wait 1' });
   await expect(drawer.getByText(TEXT, { exact: true })).toBeVisible();
+  // #1449 — the drawer names the kind of activity and its type id.
+  await expect(drawer.locator('.node-type')).toHaveText('Type Wait wait');
 
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}?rdTab=graph`);
   await fluentRootReady(page);

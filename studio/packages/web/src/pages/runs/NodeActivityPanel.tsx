@@ -1,6 +1,11 @@
 import { useId, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
-import { describeDatasetAddress, SECURE_REDACTED, TERMINAL_NODE } from '@autonomy-studio/shared';
+import {
+  describeDatasetAddress,
+  getActivity,
+  SECURE_REDACTED,
+  TERMINAL_NODE,
+} from '@autonomy-studio/shared';
 import type { DatasetAddress, DispatchInput, RunStatus } from '@autonomy-studio/shared';
 import {
   INACTIVE_TONE_STATUS,
@@ -122,6 +127,7 @@ const PANEL_ID = 'node-activity-panel';
 export function NodeActivityPanel({
   node,
   name,
+  type,
   description,
   runStatus,
   live,
@@ -133,6 +139,11 @@ export function NodeActivityPanel({
 }: {
   node: NodeActivity;
   name: string | null;
+  /**
+   * #1449 — the node's activity type in the bound version, read off the same
+   * doc `name` is. Absent or `null` draws nothing.
+   */
+  type?: string | null;
   /**
    * #1600 OR41 C0b — the bound version's description of the node, read off the
    * same doc `name` is. Absent or `null` draws nothing.
@@ -170,6 +181,7 @@ export function NodeActivityPanel({
   const chosen = onTab === undefined ? ownTab : (tab ?? null);
   const stem = fileStem ?? drawerFileStem([name ?? node.nodeId]);
   const lines = run?.lines;
+  const typeTitle = type ? getActivity(type)?.title : undefined;
   return (
     <section
       id={PANEL_ID}
@@ -191,6 +203,15 @@ export function NodeActivityPanel({
           </button>
         </div>
       </div>
+      {/* #1449 — what KIND of activity this is, and the type id the docs, an
+          export and an error message name. A type the catalog does not know is
+          shown as the raw id alone, as `activityLabel` does. */}
+      {type ? (
+        <p className="page-hint node-type">
+          Type {typeTitle === undefined ? null : <>{typeTitle} </>}
+          <code>{type}</code>
+        </p>
+      ) : null}
       {/* The author's line breaks are kept (`white-space: pre-wrap`). */}
       {description?.trim() ? <p className="page-hint node-description">{description}</p> : null}
 

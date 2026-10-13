@@ -26,11 +26,12 @@ export interface ConnectionKindGroup {
 
 /**
  * The gallery's groups for a search, in `CONNECTION_KIND_GROUPS` order, empty
- * groups dropped. The same matching rules as the activity toolbox
- * (`toolboxGroups`): trimmed, case-insensitive, on what is SHOWN (the label)
+ * groups dropped. Trimmed, case-insensitive, on what is SHOWN (the label)
  * and what is STORED (the kind id), plus the group's label so "database"
  * lists the databases. Not on the descriptions: prose words ("file", "API")
- * would match kinds that are not that.
+ * would match kinds that are not that. The activity toolbox does read its
+ * descriptions (#1449), because an activity is looked for by what it DOES,
+ * and a connection kind by what it is.
  */
 export function connectionKindGroups(
   query: string,
