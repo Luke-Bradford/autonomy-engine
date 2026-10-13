@@ -427,7 +427,7 @@ export const DEFAULT_RETRY_INTERVAL_SECONDS = 30;
  * beyond this one; a write-path bound can tighten or relax freely, because no
  * stored row becomes unreadable.
  */
-const TIMEOUT_SECONDS_SANITY_CEILING = 31_536_000;
+export const TIMEOUT_SECONDS_SANITY_CEILING = 31_536_000;
 
 const StrictNodePolicySchema = NodePolicySchema.strict().superRefine((policy, ctx) => {
   if (

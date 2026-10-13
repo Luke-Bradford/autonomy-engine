@@ -52,6 +52,19 @@ export function parseWholeNumber(raw: string): WholeNumberParse {
 }
 
 /**
+ * #1600 OR41 C0f — a timeout in whole seconds: blank is unset, otherwise above 0.
+ * The dock's Timeout and Settings' default share it, so both refuse a 0 at the
+ * field rather than one of them leaving it to the save.
+ */
+export function parseTimeoutSeconds(raw: string): WholeNumberParse {
+  const parsed = parseWholeNumber(raw);
+  if (parsed.ok && parsed.value !== undefined && parsed.value <= 0) {
+    return { ok: false, reason: 'Enter a whole number of seconds above 0, or leave it blank' };
+  }
+  return parsed;
+}
+
+/**
  * Read a `datetime-local` value (naive, no zone) as an absolute UTC instant.
  *
  * The anchoring zone is the viewer's DISPLAY zone (#1524), the one every

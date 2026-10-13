@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { AppSettings, MasterKeySource } from '@autonomy-studio/shared';
 import { SettingsPage } from './SettingsPage';
 import { getSettings } from '../api/settings';
+import { getWorkspaceSettings, putWorkspaceSettings } from '../api/workspaceSettings';
 import { uiStore } from '../stores/uiStore';
 
 vi.mock('../api/settings', async (importActual) => ({
@@ -11,7 +12,21 @@ vi.mock('../api/settings', async (importActual) => ({
   getSettings: vi.fn(),
 }));
 
+vi.mock('../api/workspaceSettings', () => ({
+  getWorkspaceSettings: vi.fn(),
+  putWorkspaceSettings: vi.fn(),
+}));
+
 const getSettingsMock = vi.mocked(getSettings);
+const getWorkspaceSettingsMock = vi.mocked(getWorkspaceSettings);
+const putWorkspaceSettingsMock = vi.mocked(putWorkspaceSettings);
+
+beforeEach(() => {
+  getWorkspaceSettingsMock.mockResolvedValue({
+    settings: { defaultActivityTimeoutSeconds: 43_200 },
+    stored: false,
+  });
+});
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -153,11 +168,65 @@ describe('SettingsPage — design system', () => {
     expect(container.querySelector('.page-hint')).toBeNull();
     for (const [name, about] of [
       ['Appearance', /theme, density and time zone/i],
+      ['Run defaults', /new activity/i],
       ['Secret encryption', /master key/i],
     ] as const) {
       const region = screen.getByRole('region', { name });
       expect(region).toHaveClass('section');
       expect(region).toHaveAccessibleDescription(about);
     }
+  });
+});
+
+/** #1600 OR41 C0f — the workspace's default Timeout for a new activity. */
+describe('SettingsPage — run defaults', () => {
+  it('shows the stored default, and saves a new one when the field is left', async () => {
+    getSettingsMock.mockResolvedValue(settings('env', null));
+    putWorkspaceSettingsMock.mockResolvedValue({
+      settings: { defaultActivityTimeoutSeconds: 600 },
+      stored: true,
+    });
+    render(<SettingsPage />);
+    const field = await screen.findByRole('textbox', { name: /Activity timeout \(seconds\)/ });
+    expect(field).toHaveValue('43200');
+
+    await userEvent.clear(field);
+    await userEvent.type(field, '600');
+    await userEvent.tab();
+    expect(putWorkspaceSettingsMock).toHaveBeenCalledWith({ defaultActivityTimeoutSeconds: 600 });
+    expect(field).toHaveValue('600');
+  });
+
+  it('saves a blank as the default turned off, and refuses 0 without saving', async () => {
+    getSettingsMock.mockResolvedValue(settings('env', null));
+    putWorkspaceSettingsMock.mockResolvedValue({
+      settings: { defaultActivityTimeoutSeconds: null },
+      stored: true,
+    });
+    render(<SettingsPage />);
+    const field = await screen.findByRole('textbox', { name: /Activity timeout \(seconds\)/ });
+
+    await userEvent.clear(field);
+    await userEvent.type(field, '0');
+    await userEvent.tab();
+    expect(putWorkspaceSettingsMock).not.toHaveBeenCalled();
+    expect(await screen.findByText(/above 0/)).toBeInTheDocument();
+
+    await userEvent.clear(field);
+    await userEvent.tab();
+    expect(putWorkspaceSettingsMock).toHaveBeenCalledWith({ defaultActivityTimeoutSeconds: null });
+  });
+
+  it('says so when the save is refused', async () => {
+    getSettingsMock.mockResolvedValue(settings('env', null));
+    putWorkspaceSettingsMock.mockRejectedValue(new Error('refused by the server'));
+    render(<SettingsPage />);
+    const field = await screen.findByRole('textbox', { name: /Activity timeout \(seconds\)/ });
+    await userEvent.clear(field);
+    await userEvent.type(field, '90');
+    await userEvent.tab();
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('refused by the server');
+    expect(screen.getByRole('region', { name: 'Run defaults' })).toContainElement(alert);
   });
 });

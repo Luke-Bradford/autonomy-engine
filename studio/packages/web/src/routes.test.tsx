@@ -154,6 +154,13 @@ vi.mock('./api/globalParams', async (importActual) => ({
   ...(await importActual<typeof import('./api/globalParams')>()),
   listGlobalParams: vi.fn().mockResolvedValue([]),
 }));
+vi.mock('./api/workspaceSettings', () => ({
+  getWorkspaceSettings: vi.fn().mockResolvedValue({
+    settings: { defaultActivityTimeoutSeconds: 43_200 },
+    stored: false,
+  }),
+  putWorkspaceSettings: vi.fn(),
+}));
 vi.mock('./api/pipelines', async (importActual) => ({
   ...(await importActual<typeof import('./api/pipelines')>()),
   listPipelines: vi.fn().mockResolvedValue([]),

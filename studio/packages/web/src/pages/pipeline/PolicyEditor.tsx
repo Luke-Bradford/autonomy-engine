@@ -9,7 +9,7 @@ import {
 import { FieldCell, FieldGrid } from '../../lib/form/FieldGrid';
 import { Section } from '../../lib/Section';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
-import { parseWholeNumber } from '../triggers/formFields';
+import { parseTimeoutSeconds, parseWholeNumber } from '../triggers/formFields';
 import { DraftNumberField } from './DraftNumberField';
 import { enclosingContainers, nodePolicyIssues, policyIssues, validateCanvas } from './canvasDoc';
 import type { createCanvasStore } from './canvasStore';
@@ -88,9 +88,9 @@ export function PolicyEditor({
             <DraftNumberField
               label="Timeout (seconds)"
               stored={policy?.timeoutSeconds}
-              parse={parseWholeNumber}
+              parse={parseTimeoutSeconds}
               placeholder="none"
-              about="Longest one attempt may run. On expiry the attempt is stopped and fails as a timeout, which Retries can retry. Blank sets no timeout."
+              about="Longest one attempt may run. On expiry the attempt is stopped and fails as a timeout, which Retries can retry. A new activity starts with the workspace default from Settings. Blank sets no timeout."
               onCommit={(timeoutSeconds) => set({ timeoutSeconds })}
             />
           </FieldCell>

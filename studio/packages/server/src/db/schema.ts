@@ -525,6 +525,19 @@ export const globalParams = sqliteTable(
 );
 
 /**
+ * #1600 OR41 C0f — a workspace's own settings, one row per owner (migration
+ * 0047). No row = never saved, read as `DEFAULT_WORKSPACE_SETTINGS`; a NULL
+ * timeout on a row = the author turned the default off. See
+ * `repo/workspace-settings.ts`.
+ */
+export const workspaceSettings = sqliteTable('workspace_settings', {
+  ownerId: text('owner_id').primaryKey(),
+  defaultActivityTimeoutSeconds: integer('default_activity_timeout_seconds'),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});
+
+/**
  * Durable webhook-delivery ledger (`WebhookDelivery`) — the source of truth for
  * replay protection + caller idempotency. `(trigger_id, idempotency_key)` is
  * UNIQUE: the launcher admits a given delivery at most once, even across a

@@ -1,7 +1,18 @@
-import { useEffect, useState } from 'react';
-import type { AppSettings, MasterKeySource } from '@autonomy-studio/shared';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  DEFAULT_ACTIVITY_TIMEOUT_SECONDS,
+  type AppSettings,
+  type MasterKeySource,
+  type WorkspaceSettings,
+  type WorkspaceSettingsResponse,
+} from '@autonomy-studio/shared';
 import { useStore } from 'zustand';
 import { getSettings } from '../api/settings';
+import { getWorkspaceSettings, putWorkspaceSettings } from '../api/workspaceSettings';
+import { DraftNumberField } from './pipeline/DraftNumberField';
+import { parseTimeoutSeconds } from './triggers/formFields';
+import { useGuardedLoad, type GuardedHandlers } from '../hooks/useGuardedLoad';
+import { FieldCell, FieldGrid } from '../lib/form/FieldGrid';
 import { displayTimeZoneName, displayTimeZoneOptions, formatTimestamp } from '../lib/displayTime';
 import { LabelledControl } from '../lib/LabelledControl';
 import { DENSITIES, uiStore, type Density, type UiStore } from '../stores/uiStore';
@@ -24,6 +35,65 @@ const MASTER_KEY_SOURCE_LABEL: Record<MasterKeySource, string> = {
 
 /** The runtime's zone list does not change while the page is open. */
 const ZONE_OPTIONS = displayTimeZoneOptions();
+
+/**
+ * #1600 OR41 C0f — the workspace's run defaults: the Timeout a new activity is
+ * created with. Saved when the field is left, like the dock's policy fields. The
+ * load and every save share one `useGuardedLoad`, so a slow older answer cannot
+ * overwrite a newer one.
+ */
+function RunDefaults() {
+  const [settings, setSettings] = useState<WorkspaceSettings | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const guarded = useGuardedLoad();
+  const handlers = useMemo<GuardedHandlers<WorkspaceSettingsResponse>>(
+    () => ({
+      onData: (answer) => {
+        setSettings(answer.settings);
+        setError(null);
+      },
+      onError: (cause) => setError(cause instanceof Error ? cause.message : String(cause)),
+    }),
+    [],
+  );
+
+  useEffect(() => {
+    void guarded(getWorkspaceSettings, handlers);
+  }, [guarded, handlers]);
+
+  return (
+    <>
+      {error !== null && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+      {settings === null && error === null && <p>Loading…</p>}
+      {settings !== null && (
+        <FieldGrid className="field-stack">
+          <FieldCell span="short">
+            <DraftNumberField
+              label="Activity timeout (seconds)"
+              stored={settings.defaultActivityTimeoutSeconds ?? undefined}
+              parse={parseTimeoutSeconds}
+              placeholder="none"
+              about={
+                `The Timeout a new activity starts with. The default is ` +
+                `${DEFAULT_ACTIVITY_TIMEOUT_SECONDS} (12 hours). Blank creates activities with no timeout.`
+              }
+              onCommit={(seconds) =>
+                void guarded(
+                  () => putWorkspaceSettings({ defaultActivityTimeoutSeconds: seconds ?? null }),
+                  handlers,
+                )
+              }
+            />
+          </FieldCell>
+        </FieldGrid>
+      )}
+    </>
+  );
+}
 
 /**
  * #1484 OR35 principle 4 — the zone every timestamp in the app is shown in, per
@@ -180,6 +250,15 @@ export function SettingsPage() {
           <DensityPicker />
           <DisplayTimeZonePicker />
         </div>
+      </Section>
+
+      <Section
+        level={2}
+        landmark
+        heading="Run defaults"
+        help={FORM_SECTION_HINTS.settings.runDefaults}
+      >
+        <RunDefaults />
       </Section>
 
       <Section

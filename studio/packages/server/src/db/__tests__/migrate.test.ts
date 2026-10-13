@@ -11,6 +11,7 @@ const EXPECTED_TABLES = [
   'runs',
   'run_events',
   'secrets',
+  'workspace_settings',
 ];
 
 const EXPECTED_INDEXES = [
