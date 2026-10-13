@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { canvasNodes } from './support/canvasGraph';
+import { canvasNodes, fitAndSettle } from './support/canvasGraph';
 import { nodeById, openSeededCanvas, rectOf } from './support/seedDoc';
 import { setTheme } from './support/theme';
 import { properties } from './support/panels';
@@ -161,12 +161,22 @@ test.describe('#1477 OR29 — Expand properties', () => {
     await openSeededCanvas(page, `e2e 1477 expand right ${String(Date.now())}`, seed);
     await nodeById(page, 'h').click();
     await page.getByRole('button', { name: 'Dock to right' }).click();
+    // Fit to the narrower canvas beside the right-hand dock, which puts `l` at
+    // its left edge. The first fit was beside the bottom dock, which centres the
+    // nodes under where the drawer opens (#1676).
+    await fitAndSettle(page);
     await setTheme(page, 'dark');
 
     await page.getByRole('button', { name: 'Expand properties' }).click();
     // Wider than the right-hand dock's own cap: the expanded rules win there.
     await expectExpanded(page);
     // Selecting another activity in the strip of canvas shows it in the drawer.
+    // The point clicked is in the strip, not under the drawer.
+    const [target, drawer] = await Promise.all([
+      rectOf(page, '.react-flow__node[data-id="l"]'),
+      rectOf(page, '.property-dock'),
+    ]);
+    expect(target.left + 8).toBeLessThan(drawer.left);
     await nodeById(page, 'l').click({ position: { x: 8, y: 8 } });
     await expect(tabs(page).getByRole('tab', { name: 'Model' })).toBeVisible();
     await expectExpanded(page);
