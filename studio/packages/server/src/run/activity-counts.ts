@@ -4,6 +4,7 @@ import type {
   RunActivityCounts,
   RunState,
 } from '@autonomy-studio/shared';
+import { isInactive } from '@autonomy-studio/shared';
 import type { Db } from '../repo/types.js';
 import {
   buildEngine,
@@ -60,7 +61,12 @@ export function activityCountsFromState(
     else if (status === 'skipped') counts.skipped += 1;
     else counts.unfinished += 1;
   };
-  for (const node of doc.nodes) tally(node.id, state.nodes[node.id]?.status);
+  // #1600 C0e — an inactive container's body never runs and has no activity
+  // row, so it is not counted (it would otherwise read as unfinished forever).
+  const offBody = new Set(doc.containers.filter(isInactive).flatMap((c) => c.children));
+  for (const node of doc.nodes) {
+    if (!offBody.has(node.id)) tally(node.id, state.nodes[node.id]?.status);
+  }
   for (const container of doc.containers) {
     tally(container.id, state.containers[container.id]?.status);
   }
