@@ -90,7 +90,13 @@ Containers (ForEach, Until, Stage) get Name, Description, State and their own se
 - No `CATALOG_VERSION` bump (the ledger in `schemas/version.ts`).
 - **Not built yet:** user properties on control activities, pipeline calls and containers, and on attempts that fail before dispatch (each needs a record other than `node.dispatched`), tracked in #1673; Copy's own tab and *Auto-generate*, which belong with the Copy slices.
 
-Still open in C0: the 12 h workspace default, the `D.HH:MM:SS` input, a container's Description and State (the container panel's draft-and-Apply form), the canvas's multi-select *Deactivate*, and user properties on activities that do not reach the executor.
+**Built (C0e, 2026-10-13):** a container's Description and State. `Container.description`, `Container.state` and `Container.onInactiveMarkAs` mean what they mean on a node, are absent when default, and are edited on a new **General** tab that leads the container panel. They are written through like an activity's, not via the config tabs' draft-and-Apply. The description is bounded at save by `StrictContainerSchema`.
+- **Run:** an inactive container never enters. No `items` or `exitWhen` is read, no alarm is armed and nothing inside it runs. The walk records its Mark as with `inactive: true` and no outputs, and its children stay `pending`, as a skipped container's do. This is pure in the reducer (no event), because the outcome is a function of the pinned doc. Marked Failed, its reason is `inactive`, and an unhandled one fails the run. A rerun-from-failed that copies it keeps the mark only if the pinned version has it inactive.
+- **Validation:** the run-only rules (a loop's `exitWhen` and body, a ForEach's `items` and body, and their `${}` scans) are left out, so it can stand in for an unfinished loop. Its shape rules still apply. Every site that leaves an inactive node out (per-node rules, refs, the variable guard, the debug-callee refusal, trigger connection readiness) also leaves out each child of an inactive container, through `switchedOffNodeIds`.
+- **Editor and monitor:** the canvas box is greyed and its label says `inactive · <outcome>`, with the description as its tooltip. The run graph, the activity-runs group row (`inactive`) and the failure banner say the same.
+- `CATALOG_VERSION` 34→35, because a pre-C0e build would strip `state` and run the body.
+
+Still open in C0: the 12 h workspace default, the `D.HH:MM:SS` input, the canvas's multi-select *Deactivate*, and user properties on activities that do not reach the executor.
 
 ---
 
