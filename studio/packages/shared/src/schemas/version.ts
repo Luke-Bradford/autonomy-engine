@@ -508,7 +508,11 @@
 // does depends on them. Only the activity runs grid's columns are lost — the
 // inert shape C0b rode in on. (`node.dispatched.userProperties` is additive
 // and optional, so an older build reading a newer log ignores it.)
-export const CATALOG_VERSION = 34;
+// BUMP 34→35 for #1600 OR41 C0e: `ContainerSchema.state` + `onInactiveMarkAs`
+// (and `description`), a container switched off. C0c's reason, for a box: a
+// pre-C0e build strips `state` and ENTERS the container for real, running its
+// whole body, so an older build must refuse the doc rather than run it.
+export const CATALOG_VERSION = 35;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

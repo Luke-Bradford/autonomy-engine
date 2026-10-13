@@ -4,7 +4,7 @@
 // rerun-from-failed reseed.
 import { APPEND_VARIABLE_ACTIVITY_TYPE, SET_VARIABLE_ACTIVITY_TYPE } from '../catalog/types.js';
 import { docNodeIdOf } from './instance-key.js';
-import { isInactive } from '../schemas/pipeline.js';
+import { switchedOffNodeIds } from '../schemas/pipeline.js';
 import {
   backEdgeResetBody,
   containerJoin,
@@ -50,8 +50,10 @@ import type { Container, Edge, EngineEvent, VariableWrite } from './types.js';
 export function variableGuardErrors(doc: ValidatedDoc, reads: VariableReads): string[] {
   // No writer, nothing to guard — and this runs on every save and every canvas
   // validation, so an ordinary doc pays for none of the analysis below.
-  // #1600 C0c — an inactive writer never writes, so it is no writer.
-  const writers = doc.nodes.filter((n) => isVariableWriter(n.type) && !isInactive(n));
+  // #1600 C0c — an inactive writer never writes, so it is no writer; nor does
+  // one inside an inactive container (C0e).
+  const off = switchedOffNodeIds(doc.nodes, doc.containers ?? []);
+  const writers = doc.nodes.filter((n) => isVariableWriter(n.type) && !off.has(n.id));
   if (writers.length === 0) return [];
   const containers = doc.containers ?? [];
   const containerById = new Map(containers.map((c) => [c.id, c]));

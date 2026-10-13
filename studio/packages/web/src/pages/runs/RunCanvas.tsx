@@ -159,7 +159,11 @@ const RunContainerNode = memo(function RunContainerNode({ data }: NodeProps) {
       className={`flow-container run-container${toneClass('run-container', d.tone)}${d.selected ? ' run-container--selected' : ''}`}
     >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
-      <span className="flow-container-label">
+      <span
+        className="flow-container-label"
+        title={d.description === undefined ? undefined : `${d.name}\n\n${d.description}`}
+        aria-description={d.description}
+      >
         {d.name}
         {d.status !== null && ` · ${d.status}`}
         {d.round !== null && d.round > 0 && ` · round ${d.round}`}

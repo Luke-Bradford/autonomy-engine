@@ -229,13 +229,13 @@ function containerStoppedByCancel(
  * outcome is what routed its edges. Drawn in the skipped (grey) tone and pill
  * whatever the outcome — see `INACTIVE_TONE_STATUS`.
  */
-export function inactiveStatusLabel(status: NodeRunStatus): string {
+export function inactiveStatusLabel(status: NodeRunStatus | ContainerRunStatus): string {
   const title = fieldLabelOf(NodeSchema.shape.onInactiveMarkAs)?.options?.[status] ?? status;
   return `inactive · ${title.toLowerCase()}`;
 }
 
 /** #1600 C0c — the status whose tone and pill an inactive node borrows: grey, as ADF draws it. */
-export const INACTIVE_TONE_STATUS: NodeRunStatus = 'skipped';
+export const INACTIVE_TONE_STATUS = 'skipped' satisfies NodeRunStatus & ContainerRunStatus;
 
 export function nodeStatusLabel(status: NodeRunStatus, runStatus?: RunStatus | null): string {
   if (nodeStoppedByCancel(status, runStatus)) {

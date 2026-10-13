@@ -24,10 +24,13 @@ import { properties } from './support/panels';
 const AT = { x: 40, y: 40 };
 const AT2 = { x: 40, y: 200 };
 
-/** Open the config panel for one container, by the ⚙ on its box. */
+/** Open the config panel for one container, by the ⚙ on its box, on its first
+ * config tab (#1600 C0e: the panel itself opens on General). */
 async function configure(page: Page, label: string): Promise<void> {
   await page.getByRole('button', { name: `Configure ${label}` }).click();
   await expect(page.getByRole('heading', { name: label })).toBeVisible();
+  const firstTab = label.startsWith('Until') ? 'Condition' : 'Items';
+  await properties(page).getByRole('tab', { name: firstTab }).click();
 }
 
 /** The container docs the server holds for `pipelineId`, latest version first. */

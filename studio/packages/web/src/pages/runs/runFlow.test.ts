@@ -921,3 +921,39 @@ describe('runNodeOverlay', () => {
     });
   });
 });
+
+describe('#1600 C0e — an inactive container on the run graph', () => {
+  it('says inactive · <outcome> in the grey it is drawn in, and carries its description', () => {
+    const doc: RunDoc = {
+      nodes: [{ id: 'a', type: 'http_request', position: { x: 0, y: 0 }, config: {} }],
+      edges: [],
+      containers: [
+        {
+          id: 'stg',
+          kind: 'stage',
+          children: ['a'],
+          state: 'inactive',
+          onInactiveMarkAs: 'failure',
+          description: 'Loads the files',
+        },
+      ],
+    };
+    const started = {
+      id: 'x',
+      runId: 'run_1',
+      ts: 1,
+      seq: 0,
+      type: 'run.started',
+      payload: { type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} },
+    };
+    const projectedRun = projectRun(doc, [started]);
+    if (!projectedRun.ok) throw new Error('fixture: run.started must project');
+    expect(projectedRun.state.containers.stg).toMatchObject({ status: 'failure', inactive: true });
+    const box = runFlowNodes(doc, projectedRun.state).find((n) => n.id === 'stg')!;
+    expect(box.data).toMatchObject({
+      status: 'inactive · failed',
+      tone: containerStatusTone('skipped', projectedRun.state.status),
+      description: 'Loads the files',
+    });
+  });
+});

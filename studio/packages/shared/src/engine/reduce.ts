@@ -20,6 +20,7 @@ import type {
 import {
   FAILURE_CODES,
   SubstituteError,
+  INACTIVE_CONTAINER_REASON,
   TERMINAL_CONTAINER,
   TERMINAL_NODE,
   VARIABLE_MAX_BYTES,
@@ -3152,7 +3153,21 @@ export function createEngine(doc: EngineDoc): Engine {
           // loop's alarm), so cancel mode leaves a READY container `pending`.
           // `skipped` below still propagates.
           if (r === 'ready' && state.cancelRequested !== null) continue;
-          if (r === 'ready') {
+          if (r === 'ready' && isInactive(cc)) {
+            // #1600 OR41 C0e — an INACTIVE container never enters: no `items` or
+            // `exitWhen` is read, no alarm armed, no child dispatched. It goes
+            // straight to its Mark as, with no outputs (ADF: an inactive activity
+            // has none). Pure, like enter and skip: the outcome is a function of
+            // the pinned doc, so replay re-derives it and no event is needed. Its
+            // children stay `pending`, exactly as a skipped container's do.
+            const markAs = inactiveMarkAs(cc);
+            state = withContainer(state, id, {
+              status: markAs,
+              inactive: true,
+              ...(markAs === 'failure' && { reason: INACTIVE_CONTAINER_REASON }),
+            });
+            changed = true;
+          } else if (r === 'ready') {
             if (cc.kind === 'foreach') {
               // Foreach entry resolves `items` and may finish (bad items →
               // invalid_event) or exit immediately (zero items → success), so it
@@ -3667,6 +3682,17 @@ export function createEngine(doc: EngineDoc): Engine {
       // Fresh object, not the aliased event payload — matches the node branch's
       // immutable style (the fold never stores a reference into event data).
       containers[containerId] = { ...copied };
+      // #1600 C0e — a copied inactive container stays inactive, guarded like
+      // `copiedInactive` above: the pinned doc must have it switched off, or the
+      // mark is a malformed manifest and is dropped rather than trusted. It has
+      // no outputs to mirror, exactly as a live inactive container projects none.
+      if (copied.inactive === true) {
+        if (isInactive(containerById.get(containerId) ?? {})) continue;
+        diagnostics.push(
+          `impossible run.reseeded: inactive mark for container '${containerId}', which is not inactive in the pinned version`,
+        );
+        delete containers[containerId]!.inactive;
+      }
       // Mirror the container's outputs into `state.outputs` — the SOLE source
       // `buildCtx` reads for `${nodes.<container>.output.*}`, exactly as
       // `exitContainer` does on a live completion. Without this a downstream

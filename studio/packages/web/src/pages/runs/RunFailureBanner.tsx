@@ -1,6 +1,7 @@
 import { Link } from 'react-router';
 import { failureClass } from './format';
-import { failedNodeId, type RunFailure } from './runFailure';
+import { INACTIVE_CONTAINER_REASON } from '@autonomy-studio/shared';
+import { failedNodeId, INACTIVE_CONTAINER_FAILED_MESSAGE, type RunFailure } from './runFailure';
 
 /**
  * #1484 OR35 M2 — directly under a FAILED run's header: what failed, its error,
@@ -47,7 +48,11 @@ export function RunFailureBanner({
   const id = failedNodeId(failure);
   const name = nameOf(id) ?? id;
   const row = failure.kind === 'activity' ? failure.row : null;
-  const message = row?.error?.message ?? null;
+  // #1600 C0e — an inactive container marked Failed has no row; say why it failed.
+  const message =
+    failure.kind === 'container' && failure.reason === INACTIVE_CONTAINER_REASON
+      ? INACTIVE_CONTAINER_FAILED_MESSAGE
+      : (row?.error?.message ?? null);
   const [firstLine, ...rest] = message?.split('\n') ?? [];
   const cls =
     row?.error == null

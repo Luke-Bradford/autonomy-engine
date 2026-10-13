@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CATALOG_VERSION,
+  type Container,
   type Edge,
   type EngineEvent,
   type NewPipelineVersion,
@@ -37,7 +38,12 @@ function branchEdge(from: string, to: string, branch: string): Edge {
   return { id: `${from}->${to}:${branch}`, from, to, on: 'branch', branch };
 }
 
-function seedVersion(db: Db, nodes: Node[], edges: Edge[] = []): string {
+function seedVersion(
+  db: Db,
+  nodes: Node[],
+  edges: Edge[] = [],
+  containers: Container[] = [],
+): string {
   const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
   const input: NewPipelineVersion = {
     pipelineId: pipeline.id,
@@ -45,6 +51,7 @@ function seedVersion(db: Db, nodes: Node[], edges: Edge[] = []): string {
     outputs: [],
     nodes,
     edges,
+    containers,
     catalogVersion: CATALOG_VERSION,
   };
   return createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG }).id;
@@ -131,6 +138,26 @@ describe('#1484 runs list — Activities', () => {
       skipped: 0,
       reused: 0,
       unfinished: 2,
+    });
+  });
+
+  it("leaves out an inactive container's body: it never runs, and is not unfinished (#1600 C0e)", async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('b'), node('after')],
+      [edge('c', 'after')],
+      [{ id: 'c', kind: 'stage', children: ['b'], state: 'inactive' }],
+    );
+    const runId = await drive(db, pvId);
+
+    // The container (inactive · succeeded) and `after`; `b` has no row to count.
+    expect(summaryOf(db, runId).activities).toEqual({
+      succeeded: 2,
+      failed: 0,
+      skipped: 0,
+      reused: 0,
+      unfinished: 0,
     });
   });
 

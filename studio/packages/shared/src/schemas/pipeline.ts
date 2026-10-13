@@ -982,8 +982,71 @@ export const ContainerSchema = z.object({
     description: 'All waits for every incoming edge; Any starts on the first. Defaults to All.',
     options: optionTitles(containerJoinSchema, { all: 'All', any: 'Any' }),
   }),
+  /**
+   * #1600 OR41 C0e — the container's General fields, the same three an activity
+   * has (`Node.description`, `Node.state`, `Node.onInactiveMarkAs`) with the same
+   * meaning. They are not config: `CONTAINER_GENERAL_FIELD_NAMES` lists them, and
+   * the panel's General tab edits them outside the derived config form.
+   *
+   * `description` is free text, never evaluated, and absent rather than `''`.
+   * Read-tolerant here; bounded by `StrictContainerSchema`.
+   */
+  description: z.string().optional(),
+  /**
+   * An inactive container never enters: no `items` or `exitWhen` is evaluated,
+   * no alarm is armed and nothing inside it runs. The walk records it as
+   * `onInactiveMarkAs` with `inactive: true`, and that outcome drives its
+   * outgoing edges. It and everything inside it are left out of validation.
+   * ABSENT means active, so an active container is byte-identical to a pre-C0e one.
+   */
+  state: presented(z.literal(INACTIVE_STATE).optional(), {
+    title: 'Activity state',
+    description:
+      'An inactive container never runs, and nothing inside it does. The run records it as inactive with the outcome in Mark as, and validation skips it and its contents.',
+  }),
+  /** What an inactive container records (absent ⇒ `success`). Inert while active. */
+  onInactiveMarkAs: presented(InactiveMarkAsSchema.optional(), {
+    title: 'Mark as',
+    description:
+      'The outcome an inactive container records. It decides which outgoing edges run. Defaults to Succeeded.',
+    options: optionTitles(InactiveMarkAsSchema, {
+      success: 'Succeeded',
+      failure: 'Failed',
+      skipped: 'Skipped',
+    }),
+  }),
 });
 export type Container = z.infer<typeof ContainerSchema>;
+
+/**
+ * `ContainerSchema` + the bounds a container must pass to be SAVED (#1600 C0e),
+ * the twin of `StrictNodeSchema`: the read schema stays tolerant.
+ */
+export const StrictContainerSchema = ContainerSchema.extend({
+  description: z
+    .string()
+    .max(DESCRIPTION_MAX_CHARS, {
+      message: `the description can be at most ${DESCRIPTION_MAX_CHARS} characters`,
+    })
+    .optional(),
+});
+
+/**
+ * #1600 C0e — the ids that never run because they are switched off: every
+ * inactive node, and every child of an inactive container (containers do not
+ * nest, so its direct children are its whole body). The one reading every
+ * "leave it out of validation" site uses, so a body inside an inactive container
+ * is skipped exactly as an inactive activity is.
+ */
+export function switchedOffNodeIds(
+  nodes: readonly Pick<Node, 'id' | 'state'>[],
+  containers: readonly Pick<Container, 'children' | 'state'>[],
+): Set<string> {
+  const off = new Set<string>();
+  for (const n of nodes) if (isInactive(n)) off.add(n.id);
+  for (const c of containers) if (isInactive(c)) for (const ch of c.children) off.add(ch);
+  return off;
+}
 
 /**
  * Characters a short LABEL (an annotation, a folder) may not contain: control
@@ -1276,6 +1339,8 @@ export const NewPipelineVersionSchema = PipelineVersionSchema.omit({
   // The WRITE path is strict (#1 F13a) — `PipelineVersionSchema` above stays
   // read-tolerant. See `StrictNodeSchema` for why the asymmetry is deliberate.
   nodes: z.array(StrictNodeSchema),
+  // #1600 C0e — the container description's bound; `.default([])` as on read.
+  containers: z.array(StrictContainerSchema).default([]),
   // Duplicate pipeline-level param/output NAMES are refused on write (#458) —
   // the twin of the node-level `config.outputs` rule (F13a). Same asymmetry: the
   // read schema above stays tolerant so an already-stored duplicate-carrying row

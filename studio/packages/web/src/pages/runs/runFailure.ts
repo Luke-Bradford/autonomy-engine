@@ -32,6 +32,11 @@ export type RunFailure =
   | { kind: 'run'; reason: string | null };
 
 const NODE_FAILED = 'node_failed:';
+
+/** #1600 C0e — what the banner says for an inactive container marked Failed,
+ * the twin of the server's `INACTIVE_FAILED_MESSAGE` for an activity. */
+export const INACTIVE_CONTAINER_FAILED_MESSAGE =
+  'The container is inactive and marked as Failed, so it did not run.';
 const CHILD_FAILED = 'child_failed:';
 
 /**

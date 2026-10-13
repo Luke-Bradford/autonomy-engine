@@ -685,6 +685,36 @@ describe('#1484 activity runs — containers are groups', () => {
     expect(second!.startedAt).toBeGreaterThanOrEqual(first!.finishedAt!);
   });
 
+  it('#1600 C0e — an INACTIVE container is a group marked inactive, never started, with no rows of its own', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('inner'), node('after')],
+      [{ id: 'fe->after:failure', from: 'fe', to: 'after', on: 'failure' }],
+      [foreach({ state: 'inactive', onInactiveMarkAs: 'failure' })],
+      [1, 2],
+    );
+    // Were `inner` dispatched, the stub would fail it, and the run would show it.
+    const runId = await drive(db, pvId, stub({ inner: { outcome: 'failure', error: 'ran' } }));
+
+    const { rows, groups } = projectAll(db, pvId, runId);
+    expect(rows.map((r) => [r.activityId, r.status])).toEqual([['after', 'success']]);
+    expect(groups).toEqual([
+      expect.objectContaining({
+        containerId: 'fe',
+        status: 'failure',
+        reason: 'inactive',
+        inactive: true,
+        reused: false,
+        startedAt: null,
+        finishedAt: null,
+        durationMs: null,
+        itemCount: null,
+        iterations: [],
+      }),
+    ]);
+  });
+
   it('places a group where it started among the rows, and leaves a row outside any container ungrouped', async () => {
     const { db } = freshDb();
     const pvId = seedVersion(

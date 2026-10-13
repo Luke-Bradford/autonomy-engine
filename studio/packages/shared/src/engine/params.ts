@@ -20,6 +20,7 @@ import {
   inactiveMarkAs,
   isAddressableOutputName,
   isInactive,
+  switchedOffNodeIds,
 } from '../schemas/pipeline.js';
 import type { OutputContract } from './outputs.js';
 import { containerOutputContract, outputContract } from './outputs.js';
@@ -1490,7 +1491,7 @@ export function validateRefs(
   const declared = new Map<string, Param>();
   for (const p of doc.params) declared.set(p.name, p);
   const variables = variableMapOf(doc.variables);
-  const g = globalScopeOf(globalsIn, doc.nodes);
+  const g = globalScopeOf(globalsIn, doc.nodes, doc.containers ?? []);
 
   const graph = computeGraph(doc);
 
@@ -1514,11 +1515,13 @@ export function validateRefs(
     if (c.kind === 'foreach') for (const ch of c.children) foreachChildIds.add(ch);
   }
 
+  // #1600 C0e — and so is everything inside an inactive container.
+  const switchedOff = switchedOffNodeIds(doc.nodes, doc.containers ?? []);
   for (const node of doc.nodes) {
     // #1600 C0c — an inactive node never runs, so nothing in its config is ever
     // resolved: its refs are neither checked nor counted as reads (ADF leaves an
     // inactive activity out of validation, so it can hold an unfinished config).
-    if (isInactive(node)) continue;
+    if (switchedOff.has(node.id)) continue;
     const guaranteed = graph.guaranteed.get(node.id) ?? new Set<string>();
     const settled = graph.settled.get(node.id) ?? new Set<string>();
     const reachable = graph.reachable.get(node.id) ?? new Set<string>();
@@ -1891,7 +1894,7 @@ export function availableRefs(
   const secureOutputIds = secureOutputIdsOf(doc.nodes, containers);
   const declared = new Map(doc.params.map((p) => [p.name, p]));
   const variables = variableMapOf(doc.variables);
-  const globals = globalScopeOf(options, doc.nodes);
+  const globals = globalScopeOf(options, doc.nodes, doc.containers ?? []);
 
   if (site.kind === 'container') {
     const c = containers.find((x) => x.id === site.containerId);
@@ -2591,9 +2594,11 @@ function variableMapOf(variables: readonly VariableDef[]): ReadonlyMap<string, V
 }
 
 /** A pipeline-version resolver: the `nodes` of another version, for the call graph. */
-export type PipelineResolver = (
-  pipelineVersionId: string,
-) => Pick<PipelineVersion, 'nodes'> | undefined;
+export type PipelineResolver = (pipelineVersionId: string) => CallGraphDoc | undefined;
+
+/** What the call-graph walk reads of a version: its nodes, and its containers so
+ * a call inside an inactive one is left out (#1600 C0e). */
+type CallGraphDoc = Pick<PipelineVersion, 'nodes'> & { containers?: readonly Container[] };
 
 export interface ValidateDocOptions {
   /** This version's own id — catches a direct self-call + seeds the call graph. */
@@ -2664,12 +2669,16 @@ const NO_GLOBALS: GlobalScope = { globals: new Map() };
 function globalScopeOf(
   options: Pick<ValidateDocOptions, 'globals' | 'globalReads' | 'advisories'>,
   nodes: readonly Node[],
+  containers: readonly Container[],
 ): GlobalScope {
   return {
     globals: options.globals ?? new Map(),
     ...(options.globalReads !== undefined ? { globalReads: options.globalReads } : {}),
     ...(options.advisories !== undefined
-      ? { advisories: options.advisories, inactiveSucceededIds: inactiveSucceededIds(nodes) }
+      ? {
+          advisories: options.advisories,
+          inactiveSucceededIds: inactiveSucceededIds(nodes, containers),
+        }
       : {}),
   };
 }
@@ -2677,11 +2686,17 @@ function globalScopeOf(
 /**
  * #1669 — the inactive nodes marked Succeeded. Only those can fail a reader:
  * marked Failed or Skipped, a node's success edges do not fire, so a reader
- * that depends on it is skipped and never reads.
+ * that depends on it is skipped and never reads. #1600 C0e — and the inactive
+ * containers marked Succeeded, which record no outputs either.
  */
-function inactiveSucceededIds(nodes: readonly Node[]): ReadonlySet<string> {
+function inactiveSucceededIds(
+  nodes: readonly Node[],
+  containers: readonly Container[],
+): ReadonlySet<string> {
   return new Set(
-    nodes.filter((n) => isInactive(n) && inactiveMarkAs(n) === 'success').map((n) => n.id),
+    [...nodes, ...containers]
+      .filter((n) => isInactive(n) && inactiveMarkAs(n) === 'success')
+      .map((n) => n.id),
   );
 }
 
@@ -2745,6 +2760,14 @@ export const CONTAINER_CONFIG_FIELD_NAMES = [
 export type ContainerConfigField = (typeof CONTAINER_CONFIG_FIELD_NAMES)[number];
 
 /**
+ * #1600 OR41 C0e — a container's General fields, the ones every activity has
+ * too (catalogue spec §3). Not config: the panel's General tab edits them
+ * write-through, outside the derived config form, so they are not in
+ * `CONTAINER_CONFIG_FIELD_NAMES` and no kind refuses them.
+ */
+export const CONTAINER_GENERAL_FIELD_NAMES = ['description', 'state', 'onInactiveMarkAs'] as const;
+
+/**
  * Which config fields are meaningful on a container of each kind.
  *
  * `ContainerSchema` is a FLAT object with no kind cross-checks — a `stage` with
@@ -2795,7 +2818,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
   const nodeIdSet = new Set(nodeIdList);
   const containers = doc.containers ?? [];
   const variables = variableMapOf(doc.variables);
-  const g = globalScopeOf(options, doc.nodes);
+  const g = globalScopeOf(options, doc.nodes, doc.containers ?? []);
   const declared = new Map<string, Param>();
   for (const p of doc.params) {
     declared.set(p.name, p);
@@ -2895,6 +2918,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
   // `${nodes.<id>.output.*}` ref against a corrupt contract has the same one
   // root cause, so per-ref errors would just bury it.
   const nodeById = new Map<string, Node>(doc.nodes.map((n) => [n.id, n]));
+  const switchedOff = switchedOffNodeIds(doc.nodes, containers);
   for (const node of doc.nodes) {
     const beforeNode = errors.length;
     const contract = outputsById.get(node.id);
@@ -2908,7 +2932,8 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     // `StrictNodeSchema` rules still hold, and so does the output contract above:
     // a downstream ref validates against it whether or not the node is active.
     // (#1669's warning for an inactive `if`/`switch` is in the branch-edge loop.)
-    if (isInactive(node)) continue;
+    // #1600 C0e — a child of an inactive container never runs either.
+    if (switchedOff.has(node.id)) continue;
     // #1 F4 — where a secure flag cannot be honoured, refuse it rather than accept
     // a promise the run would break.
     validateSecurePolicy(node, errors);
@@ -3100,7 +3125,14 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
         );
       }
     }
-    if (c.kind === 'loop' && c.exitWhen === undefined) {
+    // #1600 OR41 C0e — an INACTIVE container never enters, so the rules that only
+    // a run needs (a loop's exitWhen and body, a foreach's items and body, and
+    // the `${}` scans of exitWhen/items) are left out, as for an inactive
+    // activity: it can stand in for an unfinished one. Shape rules still hold —
+    // children exist and are disjoint, a dead field is refused, and the parallel
+    // `@`-id and back-edge rules apply — as an inactive node keeps its parse rules.
+    const live = !isInactive(c);
+    if (live && c.kind === 'loop' && c.exitWhen === undefined) {
       errors.push(
         `container '${c.id}': a loop needs an exitWhen ` +
           '(maxRounds is only the round cap, not the exit condition)',
@@ -3119,7 +3151,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     // loop whose only child is a container id is empty to the reducer. Testing
     // raw `children.length` here would let exactly that doc — the one that makes
     // #487 and this fix inseparable — pass the validator and still fail the run.
-    if (c.kind === 'loop' && c.children.filter((ch) => nodeIdSet.has(ch)).length === 0) {
+    if (live && c.kind === 'loop' && c.children.filter((ch) => nodeIdSet.has(ch)).length === 0) {
       errors.push(
         `container '${c.id}': makes no progress — a loop needs at least one child ` +
           '(an empty loop re-rounds forever: a round resets nothing, so exitWhen never changes)',
@@ -3194,7 +3226,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     // terminates (it is not the loop's infinite-re-round hazard) but is useless,
     // so it is refused for parity with the loop child-count rule.
     if (c.kind === 'foreach') {
-      if (c.items === undefined) {
+      if (live && c.items === undefined) {
         errors.push(
           `container '${c.id}': a foreach needs an items expression ` +
             '(the ${} array the body iterates)',
@@ -3206,10 +3238,10 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
       // `maxRounds` was refused HERE until #859; it is now the generic
       // `kind !== 'loop'` rule above, which covers a stage too and emits the
       // identical message for a foreach.
-      if (c.children.filter((ch) => nodeIdSet.has(ch)).length === 0) {
+      if (live && c.children.filter((ch) => nodeIdSet.has(ch)).length === 0) {
         errors.push(`container '${c.id}': a foreach needs at least one child (its per-item body)`);
       }
-      if (c.items !== undefined)
+      if (live && c.items !== undefined)
         validateForeachItems(
           c,
           declared,
@@ -3253,7 +3285,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
         }
       }
     }
-    if (c.exitWhen !== undefined) {
+    if (live && c.exitWhen !== undefined) {
       validateExitWhen(
         c,
         declared,
@@ -4528,11 +4560,13 @@ function forwardReach(
  * silently exempting it from the cycle + depth checks. `literal` mode also means
  * the target is the UNESCAPED text, which is the id the run would actually call.
  */
-function literalCallTargets(nodes: Pick<Node, 'call' | 'state'>[]): string[] {
+function literalCallTargets(doc: CallGraphDoc): string[] {
   const out: string[] = [];
-  for (const n of nodes) {
-    // #1600 C0c — an inactive call node starts no child, so it is no call edge.
-    if (n.call === undefined || isInactive(n)) continue;
+  // #1600 C0c/C0e — an inactive call node, or one inside an inactive container,
+  // starts no child, so it is no call edge.
+  const switchedOff = switchedOffNodeIds(doc.nodes, doc.containers ?? []);
+  for (const n of doc.nodes) {
+    if (n.call === undefined || switchedOff.has(n.id)) continue;
     const mode = interpolationMode(n.call.pipelineVersionId);
     if (mode.mode === 'literal') out.push(restoreEscapes(mode.scanned));
   }
@@ -4560,16 +4594,13 @@ export const MAX_CALL_DEPTH = 3;
  * `resolvePipeline` to fetch each callee's `nodes` (a dynamic `${}` target is
  * skipped — it cannot be resolved at save time).
  */
-function validateCallGraph(
-  doc: Pick<PipelineVersion, 'nodes'>,
-  options: ValidateDocOptions,
-): string[] {
+function validateCallGraph(doc: CallGraphDoc, options: ValidateDocOptions): string[] {
   const errors: string[] = [];
   const maxDepth = options.maxCallDepth ?? MAX_CALL_DEPTH;
   const { selfId, resolvePipeline } = options;
 
   if (selfId !== undefined) {
-    for (const t of literalCallTargets(doc.nodes)) {
+    for (const t of literalCallTargets(doc)) {
       if (t === selfId)
         errors.push(`call_pipeline cycle: a node calls its own version '${selfId}'`);
     }
@@ -4579,12 +4610,12 @@ function validateCallGraph(
   // `depth` counts call HOPS from this version (root = 0). `maxDepth` hops are
   // allowed; entering a version deeper than that is an error.
   const path: string[] = [selfId];
-  const dfs = (pvId: string, nodes: Pick<Node, 'call' | 'state'>[], depth: number): void => {
+  const dfs = (pvId: string, callee: CallGraphDoc, depth: number): void => {
     if (depth > maxDepth) {
       errors.push(`call_pipeline depth exceeds ${maxDepth} at version '${pvId}'`);
       return;
     }
-    for (const t of literalCallTargets(nodes)) {
+    for (const t of literalCallTargets(callee)) {
       if (path.includes(t)) {
         errors.push(`call_pipeline cycle: version '${t}' is reachable from itself`);
         continue;
@@ -4592,11 +4623,11 @@ function validateCallGraph(
       const childDoc = resolvePipeline(t);
       if (childDoc === undefined) continue; // unresolvable callee — not analyzable
       path.push(t);
-      dfs(t, childDoc.nodes, depth + 1);
+      dfs(t, childDoc, depth + 1);
       path.pop();
     }
   };
-  dfs(selfId, doc.nodes, 0);
+  dfs(selfId, doc, 0);
   return errors;
 }
 

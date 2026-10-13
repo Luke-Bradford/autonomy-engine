@@ -13,7 +13,7 @@ import {
   type GlobalRead,
   type PipelineVersion,
   summarizeIssueList,
-  isInactive,
+  switchedOffNodeIds,
 } from '@autonomy-studio/shared';
 import { pipelineVersions } from '../db/schema.js';
 import { listOwnerGlobalTypes } from './global-params.js';
@@ -292,9 +292,11 @@ function gatePipelineVersion(
   // existing missing-version path.
   // OWNER-SCOPED like `resolvePipeline` below: another owner's version is never
   // classified, so the refusal can never confirm that someone else's id exists.
+  // #1600 C0e — nor does one inside an inactive container.
+  const switchedOff = switchedOffNodeIds(lowered.nodes, lowered.containers);
   const debugCallees = lowered.nodes
     // #1600 C0c — an inactive call node starts no child (`literalCallTargets`).
-    .filter((n) => !isInactive(n))
+    .filter((n) => !switchedOff.has(n.id))
     .map((n) => n.call?.pipelineVersionId)
     .filter((id): id is string => id !== undefined && !id.includes('${'))
     .filter((id) => {
@@ -319,7 +321,7 @@ function gatePipelineVersion(
     if (callee === null) return undefined; // gone/never-existed — not analyzable
     const calleeOwnerId = ownerIdOf(callee.pipelineId);
     if (calleeOwnerId !== callerOwnerId) return undefined; // cross-owner — never traverse/echo
-    return { nodes: callee.nodes };
+    return { nodes: callee.nodes, containers: callee.containers };
   };
   // Reads run BEFORE the transaction below; that is safe because a
   // pipeline_versions row is IMMUTABLE once written (no update path), so a

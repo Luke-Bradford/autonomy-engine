@@ -403,14 +403,24 @@ export const TERMINAL_CONTAINER: ReadonlySet<ContainerRunStatus> = new Set<Conta
   TerminalContainerStatusSchema.options satisfies readonly ContainerRunStatus[],
 );
 
+/** #1600 C0e — the `reason` an inactive container marked Failed records. */
+export const INACTIVE_CONTAINER_REASON = 'inactive';
+
 export const ContainerRunStateSchema = z.object({
   status: ContainerRunStatusSchema,
   round: z.number().int().nonnegative(),
   outputs: z.record(z.string(), z.unknown()),
   /** Why a container terminated (`capped`, `child_failed`, `exitWhen_error`,
-   * `no_progress`, `no_exit_condition`, `timeout`) — observability only; unset
+   * `no_progress`, `no_exit_condition`, `timeout`, and `inactive` for an
+   * inactive container marked Failed, #1600 C0e) — observability only; unset
    * while active/pending or on a clean exit. */
   reason: z.string().optional(),
+  /**
+   * #1600 OR41 C0e — the container is switched off: it never entered, and its
+   * status is its Mark as. Set only then; absent otherwise. The node's twin is
+   * `NodeRunState.inactive`.
+   */
+  inactive: z.literal(true).optional(),
   /**
    * #4 A17 — LOOP only: the epoch-ms instant this loop's wall-clock `timeout`
    * fires, stamped by the `container.timeoutScheduled` fold once the driver armed
