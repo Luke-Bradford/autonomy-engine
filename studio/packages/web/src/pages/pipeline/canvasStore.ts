@@ -177,6 +177,38 @@ export function containerExclusive(next: Selection[]): Selection[] {
  * a cast; the rest-spread (rather than an explicit field list) carries
  * `back`/`maxBounces` and any future `edgeBase` field through untouched.
  */
+/** #1600 C0e — a General tab edit, the same three fields on a node or a container. */
+export interface GeneralPatch {
+  description?: string;
+  inactive?: boolean;
+  markAs?: InactiveMarkAs;
+}
+
+/**
+ * Apply a General tab edit to a node or a container, writing each default as an
+ * ABSENT key, so a doc at its defaults is byte-identical to one that never had
+ * them: `description: ''`, `inactive: false` and `markAs: 'success'` delete.
+ */
+function withGeneral<T extends Pick<Node, 'description' | 'state' | 'onInactiveMarkAs'>>(
+  obj: T,
+  patch: GeneralPatch,
+): T {
+  const next = { ...obj };
+  if (patch.description !== undefined) {
+    if (patch.description === '') delete next.description;
+    else next.description = patch.description;
+  }
+  if (patch.inactive !== undefined) {
+    if (patch.inactive) next.state = INACTIVE_STATE;
+    else delete next.state;
+  }
+  if (patch.markAs !== undefined) {
+    if (patch.markAs === 'success') delete next.onInactiveMarkAs;
+    else next.onInactiveMarkAs = patch.markAs;
+  }
+  return next;
+}
+
 function retypeEdge(e: Edge, condition: EdgeCondition): Edge {
   let base: Omit<Edge, 'on' | 'branch'>;
   if (e.on === 'branch') {
@@ -1466,10 +1498,7 @@ export interface CanvasState {
    * removes `state`, `markAs: 'success'` removes `onInactiveMarkAs`. A typing
    * burst in the description is one undo step; every other change is its own.
    */
-  setContainerGeneral(
-    id: string,
-    patch: { description?: string; inactive?: boolean; markAs?: InactiveMarkAs },
-  ): void;
+  setContainerGeneral(id: string, patch: GeneralPatch): void;
   /**
    * U16 — the pipeline's typed contract. Each takes a WHOLE replacement row
    * rather than a field patch, for the same reason `createContainer` takes a
@@ -2367,13 +2396,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         const node = get().nodes.find((n) => n.id === id);
         if (node === undefined || isInactive(node) === inactive) return;
         edit((s) => ({
-          nodes: s.nodes.map((n) => {
-            if (n.id !== id) return n;
-            const next = { ...n };
-            if (inactive) next.state = INACTIVE_STATE;
-            else delete next.state;
-            return next;
-          }),
+          nodes: s.nodes.map((n) => (n.id === id ? withGeneral(n, { inactive }) : n)),
         }));
       },
 
@@ -2381,32 +2404,14 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         const node = get().nodes.find((n) => n.id === id);
         if (node === undefined || inactiveMarkAs(node) === markAs) return;
         edit((s) => ({
-          nodes: s.nodes.map((n) => {
-            if (n.id !== id) return n;
-            const next = { ...n };
-            if (markAs === 'success') delete next.onInactiveMarkAs;
-            else next.onInactiveMarkAs = markAs;
-            return next;
-          }),
+          nodes: s.nodes.map((n) => (n.id === id ? withGeneral(n, { markAs }) : n)),
         }));
       },
 
       setContainerGeneral(id, patch) {
         const c = get().containers.find((x) => x.id === id);
         if (c === undefined) return;
-        const next: Container = { ...c };
-        if (patch.description !== undefined) {
-          if (patch.description === '') delete next.description;
-          else next.description = patch.description;
-        }
-        if (patch.inactive !== undefined) {
-          if (patch.inactive) next.state = INACTIVE_STATE;
-          else delete next.state;
-        }
-        if (patch.markAs !== undefined) {
-          if (patch.markAs === 'success') delete next.onInactiveMarkAs;
-          else next.onInactiveMarkAs = patch.markAs;
-        }
+        const next = withGeneral(c, patch);
         if (
           next.description === c.description &&
           next.state === c.state &&
@@ -2424,13 +2429,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         if (node === undefined || (node.description ?? '') === text) return;
         edit(
           (s) => ({
-            nodes: s.nodes.map((n) => {
-              if (n.id !== id) return n;
-              const next = { ...n };
-              if (text === '') delete next.description;
-              else next.description = text;
-              return next;
-            }),
+            nodes: s.nodes.map((n) => (n.id === id ? withGeneral(n, { description: text }) : n)),
           }),
           `node:${id}:description`,
         );

@@ -9,7 +9,6 @@ import {
   isInactive,
   isParallelForeach,
   type Container,
-  type InactiveMarkAs,
   type ContainerConfigField,
   type Edge,
   type Node,
@@ -33,7 +32,7 @@ import {
   type FieldInput,
 } from './configForm';
 import { validateCanvas } from './canvasDoc';
-import { containersWithUpdated } from './canvasStore';
+import { containersWithUpdated, type GeneralPatch } from './canvasStore';
 import { CONTAINER_EDIT_TONE, containerEditQuestion, containerLabels } from './containerRules';
 import { useConfirm } from '../../lib/confirm/useConfirm';
 import { useSubjectIssues } from './issueContext';
@@ -138,7 +137,7 @@ export function ContainerPanel({
   onApply: (next: Container) => void;
   /** #1600 C0e — write the General tab's fields through (`setContainerGeneral`),
    * outside the config form's draft-and-Apply. */
-  onGeneral: (patch: { description?: string; inactive?: boolean; markAs?: InactiveMarkAs }) => void;
+  onGeneral: (patch: GeneralPatch) => void;
   /** #935 — put this container and its body on the canvas clipboard. */
   onCopy: () => void;
   /** U21 (#935) — copy this container and its body; the store owns every rule. */
