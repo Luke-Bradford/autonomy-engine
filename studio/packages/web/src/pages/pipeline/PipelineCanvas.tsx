@@ -93,6 +93,7 @@ import { downloadPipelineExport } from '../../api/pipelineExport';
 import { listConnections } from '../../api/connections';
 import { listDatasets } from '../../api/datasets';
 import { listGlobalParams, toGlobalReads } from '../../api/globalParams';
+import { getWorkspaceSettings } from '../../api/workspaceSettings';
 import { useGuardedLoad } from '../../hooks/useGuardedLoad';
 import { useRefreshOnFocus } from '../../hooks/useRefreshOnFocus';
 import {
@@ -870,6 +871,25 @@ export function PipelineCanvas({
     [guardedLoad, store],
   );
   /**
+   * #1600 OR41 C0f — the workspace's default Timeout for a new activity, read
+   * apart from the load above because it is not load-bearing: if it fails, an
+   * activity is created with no timeout, as before C0f, and the canvas still
+   * opens. Re-read on focus, since it is changed on the Settings page.
+   */
+  const guardedSettingsLoad = useGuardedLoad();
+  const refreshWorkspaceSettings = useCallback(
+    () =>
+      guardedSettingsLoad(getWorkspaceSettings, {
+        onData: ({ settings }) =>
+          store.getState().setNewActivityTimeoutSeconds(settings.defaultActivityTimeoutSeconds),
+        onError: () => {},
+      }),
+    [guardedSettingsLoad, store],
+  );
+  useEffect(() => {
+    void refreshWorkspaceSettings();
+  }, [refreshWorkspaceSettings]);
+  /**
    * #979 — the publish state, read SEPARATELY from the load above and never
    * folded into its `Promise.all`.
    *
@@ -932,6 +952,7 @@ export function PipelineCanvas({
   const guardedFocusLoad = useGuardedLoad();
   const refreshOnFocus = useCallback(() => {
     void refreshGlobals();
+    void refreshWorkspaceSettings();
     const ticket = takeTicket(publishSeq.current);
     void guardedFocusLoad(
       (signal) =>
@@ -949,7 +970,7 @@ export function PipelineCanvas({
         onError: () => {},
       },
     );
-  }, [refreshGlobals, guardedFocusLoad, pipelineId]);
+  }, [refreshGlobals, refreshWorkspaceSettings, guardedFocusLoad, pipelineId]);
   useRefreshOnFocus(refreshOnFocus);
 
   const nodes = useStore(store, (s) => s.nodes);

@@ -50,6 +50,7 @@ import { connectionsRoutes } from './routes/connections.js';
 import { datasetsRoutes } from './routes/datasets.js';
 import { secretsRoutes } from './routes/secrets.js';
 import { globalParamsRoutes } from './routes/global-params.js';
+import { workspaceSettingsRoutes } from './routes/workspace-settings.js';
 import { pipelinesRoutes } from './routes/pipelines.js';
 import { drainDebugVersions } from './repo/debug-versions.js';
 import { triggersRoutes } from './routes/triggers.js';
@@ -1079,6 +1080,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   await fastify.register(datasetsRoutes);
   await fastify.register(secretsRoutes);
   await fastify.register(globalParamsRoutes);
+  await fastify.register(workspaceSettingsRoutes);
   await fastify.register(pipelinesRoutes);
   await fastify.register(triggersRoutes);
   await fastify.register(webhooksRoutes);

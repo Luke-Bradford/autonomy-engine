@@ -4956,3 +4956,37 @@ describe('setContainerGeneral (#1600 OR41 C0e)', () => {
     expect(store.getState().dirty).toBe(false);
   });
 });
+
+/** #1600 OR41 C0f — a new execution activity starts with the workspace's default Timeout. */
+describe('addNode — the workspace default timeout (#1600 C0f)', () => {
+  it('writes the default into a new execution activity, and nothing before it loads', () => {
+    const s = createCanvasStore();
+    s.getState().addNode('http_request');
+    expect(s.getState().nodes[0]!.policy).toBeUndefined();
+
+    s.getState().setNewActivityTimeoutSeconds(43_200);
+    s.getState().addNode('http_request');
+    expect(s.getState().nodes[1]!.policy).toEqual({ timeoutSeconds: 43_200 });
+    // Workspace state, not the doc: setting it neither dirties nor adds an undo step.
+    expect(s.getState().past).toHaveLength(2);
+  });
+
+  it('leaves a control activity and a pipeline call without one, and a null default off', () => {
+    const s = createCanvasStore();
+    s.getState().setNewActivityTimeoutSeconds(600);
+    s.getState().addNode('if');
+    s.getState().addNode('execute_pipeline');
+    expect(s.getState().nodes.map((n) => n.policy)).toEqual([undefined, undefined]);
+
+    s.getState().setNewActivityTimeoutSeconds(null);
+    s.getState().addNode('http_request');
+    expect(s.getState().nodes[2]!.policy).toBeUndefined();
+  });
+
+  it('does not touch an existing activity when the default changes', () => {
+    const s = createCanvasStore();
+    s.getState().addNode('http_request');
+    s.getState().setNewActivityTimeoutSeconds(600);
+    expect(s.getState().nodes[0]!.policy).toBeUndefined();
+  });
+});

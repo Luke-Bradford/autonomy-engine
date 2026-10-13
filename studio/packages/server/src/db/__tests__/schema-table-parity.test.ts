@@ -12,12 +12,14 @@ import {
   TriggerSchema,
   WorkspaceEventRowSchema,
   WorkspaceGitSchema,
+  WorkspaceSettingsSchema,
 } from '@autonomy-studio/shared';
 import type { z } from 'zod';
 import {
   connections,
   datasets,
   globalParams,
+  workspaceSettings,
   pipelines,
   pipelineVersions,
   runDiagnostics,
@@ -99,6 +101,9 @@ const CASES: { name: string; table: Parameters<typeof getTableColumns>[0]; schem
     // than the infra exemption. `payload` is one JSON column (a union), matching
     // the single `payload` field; every other field maps 1:1.
     { name: 'workspace_events', table: workspaceEvents, schema: WorkspaceEventRowSchema },
+    // #1600 OR41 C0f — the settings document round-trips through
+    // `WorkspaceSettingsSchema` on every read and crosses the API boundary.
+    { name: 'workspace_settings', table: workspaceSettings, schema: WorkspaceSettingsSchema },
   ];
 
 describe('drizzle table ⇔ Zod schema parity (#473)', () => {

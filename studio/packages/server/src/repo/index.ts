@@ -4,6 +4,7 @@ export * from './pagination.js';
 export * from './connections.js';
 export * from './datasets.js';
 export * from './global-params.js';
+export * from './workspace-settings.js';
 export * from './pipelines.js';
 export * from './pipeline-versions.js';
 export * from './pipeline-version-states.js';

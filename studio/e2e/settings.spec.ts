@@ -167,7 +167,10 @@ for (const density of DENSITIES) {
         (el) => el.querySelector('.section__title')?.textContent,
       ),
     }));
-    expect(shape).toEqual({ prose: 0, sections: ['Appearance', 'Secret encryption'] });
+    expect(shape).toEqual({
+      prose: 0,
+      sections: ['Appearance', 'Run defaults', 'Secret encryption'],
+    });
 
     /* Measured: the facts list sits 8px under its heading row, as `Section`
        documents (`.run-meta`'s own margin would make it 24px), and both
@@ -180,10 +183,15 @@ for (const density of DENSITIES) {
         selects: [...document.querySelectorAll('.content select')].map((el) =>
           Math.round(el.getBoundingClientRect().height),
         ),
+        // #1600 C0f — Run defaults' one field is the same control.
+        inputs: [...document.querySelectorAll('.content input[type="text"]')].map((el) =>
+          Math.round(el.getBoundingClientRect().height),
+        ),
       };
     });
     expect(fit.factsGap).toBe(8);
     expect(fit.selects).toEqual([CONTROL_H[density], CONTROL_H[density]]);
+    expect(fit.inputs).toEqual([CONTROL_H[density]]);
 
     await expectQuiet(page, problems);
   });

@@ -116,6 +116,13 @@ describe('PolicyEditor (#1312)', () => {
     expect(policy()).toEqual({ retry: 1 });
   });
 
+  it('#1600 C0f — a timeout of 0 is refused at the field, and nothing is written', () => {
+    const { field, policy, section } = mount([node('a', 'http_request', { policy: { retry: 1 } })]);
+    enter(field('Timeout (seconds)'), '0');
+    expect(policy()).toEqual({ retry: 1 });
+    expect(within(section).getByText(/above 0/)).toBeTruthy();
+  });
+
   it('#1600 C0a — a stored timeout above the write ceiling shows in the field, named, until fixed', () => {
     const { field, section } = mount([
       node('a', 'http_request', { policy: { timeoutSeconds: 40_000_000 } }),

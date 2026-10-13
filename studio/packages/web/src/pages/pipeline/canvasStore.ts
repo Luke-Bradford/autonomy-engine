@@ -7,6 +7,7 @@ import {
   isInactive,
   type InactiveMarkAs,
   getActivity,
+  timeoutApplies,
   authorsCallBlob,
   lowerPipelineNodes,
   referencedNodeIds,
@@ -1029,6 +1030,14 @@ export interface CanvasState {
    */
   globals: GlobalRead[];
   /**
+   * #1600 OR41 C0f — the Timeout `addNode` writes into a new execution
+   * activity's policy: the workspace's default (Settings), read alongside the
+   * doc. `null` until it loads, when it fails to, and when the workspace turned
+   * the default off; each of those creates the activity with no timeout, which is
+   * what it did before C0f. Workspace state like `globals`, never doc state.
+   */
+  newActivityTimeoutSeconds: number | null;
+  /**
    * U21 — what is selected, as a SET. Empty is "nothing selected".
    *
    * An array rather than a `Set<string>` keyed `kind:id`: `Selection` is the
@@ -1072,6 +1081,8 @@ export interface CanvasState {
   loadVersion(v: PipelineVersion | null): void;
   /** #844 GL3 — replace the workspace's globals (see `globals`). */
   setGlobals(globals: GlobalRead[]): void;
+  /** #1600 OR41 C0f — see `newActivityTimeoutSeconds`. */
+  setNewActivityTimeoutSeconds(seconds: number | null): void;
   /**
    * Point `loaded` at a new version WITHOUT touching the working graph or the
    * dirty flag — used after a save when the operator kept editing during the
@@ -1623,6 +1634,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       description: '',
       annotations: [],
       globals: [],
+      newActivityTimeoutSeconds: null,
       selected: [],
       dirty: false,
       addCount: 0,
@@ -1632,6 +1644,10 @@ export function createCanvasStore(): StoreApi<CanvasState> {
 
       setGlobals(globals) {
         set({ globals });
+      },
+
+      setNewActivityTimeoutSeconds(newActivityTimeoutSeconds) {
+        set({ newActivityTimeoutSeconds });
       },
 
       loadVersion(v) {
@@ -1756,6 +1772,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         // and `lowerPipelineNodes` skips it by TYPE in the meantime (#425 in
         // `catalog/lower.ts`) so no `outputs: []` gets baked into the window.
         const n = get().addCount;
+        const timeoutSeconds = get().newActivityTimeoutSeconds;
         const created: Node = {
           id: newLocalId('n'),
           type,
@@ -1766,6 +1783,15 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           // claims. Otherwise, stagger so repeated adds don't stack exactly.
           position: position ? { ...position } : staggerPosition(n),
         };
+        // #1600 OR41 C0f — a new execution activity starts with the workspace's
+        // default Timeout, written into its policy as ADF writes `0.12:00:00`
+        // into a new activity. In the doc, so the JSON shows it and the author
+        // can change or clear it; never applied at run time, so a node saved
+        // without one keeps running without one (catalogue §8). A duplicate or a
+        // paste copies its source's policy instead.
+        if (timeoutSeconds !== null && timeoutApplies(created)) {
+          created.policy = { timeoutSeconds };
+        }
         // #526 — seed the declared output contract through the SAME composition the
         // server and the load path use, rather than reaching into the catalog entry
         // here. Hand-seeding worked, but it was a third place that had to agree
