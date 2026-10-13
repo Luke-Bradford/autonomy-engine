@@ -708,6 +708,13 @@ describe('ContainerPanel — the General tab (#1600 C0e)', () => {
     );
     expect(screen.getByRole('combobox', { name: 'Activity state' })).toHaveValue('active');
     expect(screen.getByRole('combobox', { name: 'Mark as' })).toBeDisabled();
+    // The `?` wording is the container's, not an activity's.
+    expect(screen.getByRole('combobox', { name: 'Activity state' })).toHaveAccessibleDescription(
+      /^An inactive container never runs, and nothing inside it does/,
+    );
+    expect(screen.getByRole('combobox', { name: 'Mark as' })).toHaveAccessibleDescription(
+      /^The outcome an inactive container records/,
+    );
   });
 
   it('writes each field through, outside Apply', () => {

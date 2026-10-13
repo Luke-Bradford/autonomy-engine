@@ -58,6 +58,8 @@ export const FORM_SECTION_HINTS = {
   },
   node: {
     basics: 'What this activity is for, and whether it runs.',
+    // #1600 C0e — the container panel's General tab.
+    containerBasics: 'What this container is for, and whether it and its contents run.',
     runPolicy:
       'How long one attempt may run, how a transient failure is retried, and what is kept out of the run log.',
     userProperties: `Up to ${MAX_USER_PROPERTIES} name and value pairs, each value text or dynamic content, shown as columns in the activity runs grid.`,

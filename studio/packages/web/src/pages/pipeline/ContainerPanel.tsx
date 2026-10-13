@@ -421,6 +421,7 @@ export function ContainerPanel({
     label: 'General',
     content: (
       <GeneralBasics
+        owner="container"
         descriptionLabel="Container description"
         description={container.description ?? ''}
         onDescription={(description) => onGeneral({ description })}

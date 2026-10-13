@@ -999,9 +999,22 @@ export const ContainerSchema = z.object({
    * outgoing edges. It and everything inside it are left out of validation.
    * ABSENT means active, so an active container is byte-identical to a pre-C0e one.
    */
-  state: z.literal(INACTIVE_STATE).optional(),
+  state: presented(z.literal(INACTIVE_STATE).optional(), {
+    title: 'Activity state',
+    description:
+      'An inactive container never runs, and nothing inside it does. The run records it as inactive with the outcome in Mark as, and validation skips it and its contents.',
+  }),
   /** What an inactive container records (absent ⇒ `success`). Inert while active. */
-  onInactiveMarkAs: InactiveMarkAsSchema.optional(),
+  onInactiveMarkAs: presented(InactiveMarkAsSchema.optional(), {
+    title: 'Mark as',
+    description:
+      'The outcome an inactive container records. It decides which outgoing edges run. Defaults to Succeeded.',
+    options: optionTitles(InactiveMarkAsSchema, {
+      success: 'Succeeded',
+      failure: 'Failed',
+      skipped: 'Skipped',
+    }),
+  }),
 });
 export type Container = z.infer<typeof ContainerSchema>;
 
