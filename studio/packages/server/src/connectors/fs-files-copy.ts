@@ -189,12 +189,18 @@ async function planDir(
 }
 
 /** Create `names` under the canonical `base` one at a time, each a real directory. */
-async function materialize(base: string, names: readonly string[]): Promise<string> {
+async function materialize(
+  base: string,
+  names: readonly string[],
+  changed?: Set<string>,
+): Promise<string> {
   let cur = base;
   for (const name of names) {
     const next = join(cur, name);
     try {
       await mkdir(next);
+      // A new entry in `cur`: flushed before any source is removed.
+      changed?.add(cur);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     }
@@ -545,12 +551,19 @@ export async function* runFilesCopy(
     started = true;
     const tmpSuffix = makeTmpSuffix(ctx);
     const stamps = new Map<string, ReadStamp>();
-    const sinkBase = await materialize(sinkDir.base, sinkDir.missing);
+    // Folders whose entries changed since the last flush: synced before After
+    // copy removes a source, so a power loss cannot lose the copy and the source.
+    const changed = new Set<string>();
+    const flush = async () => {
+      for (const dir of changed) await syncDir(dir);
+      changed.clear();
+    };
+    const sinkBase = await materialize(sinkDir.base, sinkDir.missing, changed);
     const moveBase =
-      moveDir === undefined ? undefined : await materialize(moveDir.base, moveDir.missing);
+      moveDir === undefined ? undefined : await materialize(moveDir.base, moveDir.missing, changed);
     for (const t of targets) {
       if (signal.aborted) throw new Error('file copy aborted');
-      const parent = await materialize(sinkBase, t.dirs);
+      const parent = await materialize(sinkBase, t.dirs, changed);
       const finalPath = join(parent, t.name);
       const noClobber = cfg.ifExists !== 'overwrite';
       if (cfg.ifExists === 'skip' && (await lstatOrNull(finalPath)) !== null) {
@@ -566,7 +579,10 @@ export async function* runFilesCopy(
       }
       // After copy, only for files that were written: a skipped file stays put.
       // The copy's folder entry is durable before any source is removed.
-      if (cfg.afterCopy !== 'keep') await syncDir(parent);
+      if (cfg.afterCopy !== 'keep') {
+        changed.add(parent);
+        await flush();
+      }
       for (const s of t.sources) {
         if (cfg.afterCopy !== 'keep') await unchangedSince(s, stamps.get(s.abs));
         if (cfg.afterCopy === 'delete') {
@@ -574,7 +590,7 @@ export async function* runFilesCopy(
           c.filesDeleted += 1;
         } else if (cfg.afterCopy === 'move' && moveBase !== undefined) {
           const segments = s.rel.split(sep);
-          const dir = await materialize(moveBase, segments.slice(0, -1));
+          const dir = await materialize(moveBase, segments.slice(0, -1), changed);
           const dest = join(dir, segments[segments.length - 1]!);
           try {
             // `link` then `unlink`: never replaces an existing file, as `rename` would.
@@ -595,7 +611,8 @@ export async function* runFilesCopy(
             throw err;
           }
           // And the moved entry is durable before the original goes.
-          await syncDir(dir);
+          changed.add(dir);
+          await flush();
           await unlink(s.abs);
           c.filesMoved += 1;
         }
