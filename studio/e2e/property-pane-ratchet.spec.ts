@@ -70,11 +70,6 @@ interface TabRead {
   offSize: string[];
 }
 
-/** #1694 OR42 F10 — the size classes (`--field-s`, `--field-m`), and the slack either side. */
-const SIZE_S = 120;
-const SIZE_M = 240;
-const SIZE_SLACK = 4;
-
 /** One read of the open tab: what is measured, from the rendered page. */
 function readTab(page: Page): Promise<TabRead> {
   return properties(page).evaluate((panel) => {
@@ -119,6 +114,11 @@ function readTab(page: Page): Promise<TabRead> {
     // value column (an L): its right edge on the row's. A table's cells are
     // sized by their columns. A Fluent combobox is measured by its box, not
     // its inner input. A choice must also show its longest option whole.
+    // The size classes (`--field-s`, `--field-m`), and the slack either side.
+    // Here, not module scope: this function runs in the page.
+    const SIZE_S = 120;
+    const SIZE_M = 240;
+    const SIZE_SLACK = 4;
     const ctx = document.createElement('canvas').getContext('2d')!;
     const offSize: string[] = [];
     const controls = panel.querySelectorAll<HTMLElement>(

@@ -37,7 +37,15 @@ test('a unit is a suffix inside an S box; the label is the title alone and the n
 }) => {
   const problems = collectPageProblems(page);
   await openSeededCanvas(page, 'or42 unit suffixes', {
-    nodes: [{ id: 'w', type: 'wait', position: { x: 0, y: 0 }, config: { seconds: '${30}' } }],
+    nodes: [
+      { id: 'w', type: 'wait', position: { x: 0, y: 0 }, config: { seconds: '${30}' } },
+      {
+        id: 'c',
+        type: 'copy',
+        position: { x: 320, y: 0 },
+        config: { mapping: [{ source: 'id', sink: 'id', type: 'integer' }] },
+      },
+    ],
   });
   await nodeById(page, 'w').click();
   const seconds = properties(page).getByRole('textbox', {
@@ -52,6 +60,8 @@ test('a unit is a suffix inside an S box; the label is the title alone and the n
     labelLines: 1,
   });
 
+  // A copy times out; a wait does not.
+  await nodeById(page, 'c').click();
   await properties(page).getByRole('tab', { name: 'General' }).click();
   for (const name of ['Timeout (seconds)', 'Retry interval (seconds)']) {
     const field = properties(page).getByRole('textbox', { name, exact: true });
@@ -118,6 +128,12 @@ test('a copy mapping reads whole: name columns at least 160px, nine rows unclipp
       (s as HTMLSelectElement).labels?.[0]?.textContent?.includes('on error'),
     ) as HTMLSelectElement[];
     return {
+      // The floor itself, which bites in a narrower dock than this one: at
+      // 1440 the table has the room either way.
+      floors: Array.from(
+        t.querySelectorAll('thead th[data-width="name"]'),
+        (th) => getComputedStyle(th).minWidth,
+      ),
       source: Math.round(header('Source').getBoundingClientRect().width),
       sink: Math.round(header('Sink').getBoundingClientRect().width),
       nameCells: names.length,
@@ -128,6 +144,7 @@ test('a copy mapping reads whole: name columns at least 160px, nine rows unclipp
       onError: onError.map((s) => s.options[s.selectedIndex]!.text),
     };
   });
+  expect(m.floors).toEqual(['160px', '160px']);
   expect(m.source).toBeGreaterThanOrEqual(160);
   expect(m.sink).toBeGreaterThanOrEqual(160);
   expect(m.nameCells).toBe(COLUMNS.length * 2);
