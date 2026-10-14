@@ -7,16 +7,15 @@ import { expect, type Locator, type Page } from '@playwright/test';
  *
  * Three readings, one `evaluate`, all failures returned at once:
  *
- * - **Hit-testing.** `elementFromPoint` at the four corners (inset 2px, or past
- *   a rounded corner's curve) and the
- *   centre must land inside the overlay. A surface that paints over it, such as
+ * - **Hit-testing.** `elementFromPoint` at the four corners and the centre
+ *   must land inside the overlay. A corner is probed 2px in, or further on a
+ *   rounded corner, which does not hit-test outside its curve. A surface that paints over it, such as
  *   the dock's sticky tab strip over the node `⋯` menu, takes the point.
  * - **Viewport.** The rect lies inside `innerWidth` × `innerHeight`.
  * - **Clipping.** No ancestor whose `overflow` is not `visible` has a box that
  *   fails to contain the rect. Hit-testing alone misses this case when the
  *   clipped part is off-screen.
- *
- * Returns the overlay's rect, so a caller can report where it was.
+
  */
 export async function expectOverlayUnobstructed(overlay: Locator, what = 'overlay'): Promise<void> {
   await expect(overlay).toBeVisible();
@@ -33,7 +32,14 @@ export async function expectOverlayUnobstructed(overlay: Locator, what = 'overla
           }`;
     const at = `${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)}`;
     if (r.width === 0 || r.height === 0) out.push(`empty rect at ${at}`);
-    if (r.left < 0 || r.top < 0 || r.right > innerWidth || r.bottom > innerHeight) {
+    // Half a pixel's grace, as for clipping below: a list sized to the room
+    // below its control ends ON the viewport's edge, at a fractional offset.
+    if (
+      r.left < -0.5 ||
+      r.top < -0.5 ||
+      r.right > innerWidth + 0.5 ||
+      r.bottom > innerHeight + 0.5
+    ) {
       out.push(`outside the ${innerWidth}x${innerHeight} viewport at ${at}`);
     }
     // A rounded corner does not hit-test outside its curve, so a probe 2px in
@@ -79,17 +85,41 @@ export async function expectOverlayUnobstructed(overlay: Locator, what = 'overla
  * Dropdown). The last one, because a submenu opens over its parent.
  */
 export function openOverlay(page: Page): Locator {
-  return page.locator('.fui-MenuPopover:visible, [role="listbox"]:visible').last();
+  return page.locator(OVERLAYS).last();
+}
+
+const OVERLAYS = '.fui-MenuPopover:visible, [role="listbox"]:visible';
+
+/**
+ * Run `open` with no overlay showing, and return the one it opened. Checked
+ * first, so a list that stays on the page cannot stand in for the new one.
+ */
+export async function openFrom(
+  page: Page,
+  open: () => Promise<unknown>,
+  what = 'overlay',
+): Promise<Locator> {
+  await expect(page.locator(OVERLAYS), `${what}: one was already open`).toHaveCount(0);
+  await open();
+  await expect(page.locator(OVERLAYS), `${what}: opened nothing`).not.toHaveCount(0);
+  return openOverlay(page);
 }
 
 /**
  * Every control in `scope` that opens a menu or a list, found by role rather
  * than listed by hand, so a new one is covered the day it ships. A native
  * `<select>` is left out: its list is drawn by the browser, above the page.
+ * In a table, only the first row's: every row's `⋯` is the same menu, and a
+ * list page in the shared e2e database can hold hundreds of rows.
  */
 export function popupTriggers(scope: Locator): Locator {
   return scope.locator(
-    ':is([aria-haspopup="menu"], [aria-haspopup="true"], [role="combobox"]):not(select):visible:not(:disabled):not([aria-disabled="true"])',
+    [
+      ':is([aria-haspopup="menu"], [aria-haspopup="true"], [aria-haspopup="listbox"], [role="combobox"])',
+      ':not(select):not(:disabled):not([aria-disabled="true"])',
+      ':not(:is(tbody > tr, [role="rowgroup"] > [role="row"]):not(:first-child) *)',
+      ':visible',
+    ].join(''),
   );
 }
 
@@ -102,6 +132,8 @@ export async function expectEveryPopupUnobstructed(
   page: Page,
   scope: Locator,
   what: string,
+  /** Run after each one closes: puts back a layout Escape may have changed. */
+  between: () => Promise<unknown> = async () => {},
 ): Promise<number> {
   const triggers = popupTriggers(scope);
   const count = await triggers.count();
@@ -109,11 +141,11 @@ export async function expectEveryPopupUnobstructed(
     const trigger = triggers.nth(i);
     const name = (await trigger.getAttribute('aria-label')) ?? (await trigger.innerText()).trim();
     await trigger.scrollIntoViewIfNeeded();
-    await trigger.click();
-    const overlay = openOverlay(page);
+    const overlay = await openFrom(page, () => trigger.click(), `${what}: ${name}`);
     await expectOverlayUnobstructed(overlay, `${what}: ${name}`);
     await page.keyboard.press('Escape');
-    await expect(page.locator('.fui-MenuPopover:visible, [role="listbox"]:visible')).toHaveCount(0);
+    await expect(page.locator(OVERLAYS)).toHaveCount(0);
+    await between();
   }
   return count;
 }

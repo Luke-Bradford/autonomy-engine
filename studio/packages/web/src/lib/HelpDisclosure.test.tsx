@@ -152,14 +152,14 @@ describe('placeNote (#1695 OR43 — the open note, in the top layer)', () => {
     expect(place(rect(600, 840, 16, 16), { width: 352, height: 60 }).top).toBe(`${840 - 4 - 60}px`);
   });
 
-  it('stays below when there is no more room above either', () => {
+  it('is held inside the viewport when neither side has the room', () => {
     expect(
       place(
         rect(600, 40, 16, 16),
         { width: 352, height: 120 },
         { viewport: { width: 1440, height: 150 } },
       ).top,
-    ).toBe('60px');
+    ).toBe(`${150 - 8 - 120}px`);
   });
 
   it('is held inside the viewport sideways', () => {

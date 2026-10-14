@@ -5732,7 +5732,7 @@ button.danger {
   left: 0;
   right: auto;
   /* The row's width, which `placeNote` measures: in the top layer a percentage
-     would be of the viewport. */
+     would be of the viewport. A label head's note sets its own (`100cqi`). */
   width: var(--help-anchor-width, 100%);
   max-width: 36rem;
 }

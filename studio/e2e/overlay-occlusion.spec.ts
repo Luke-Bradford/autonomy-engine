@@ -2,13 +2,14 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { editorMenuTrigger, openCanvas } from './support/canvas';
 import { addActivity, canvasNodes, toolbox } from './support/canvasGraph';
-import { properties } from './support/panels';
-import { tree } from './support/authorPane';
+import { nodeMenuAction, properties } from './support/panels';
+import { openRowMenu } from './support/authorPane';
 import {
   expectEveryHelpNoteUnobstructed,
   expectEveryPopupUnobstructed,
   expectEveryTooltipUnobstructed,
   expectOverlayUnobstructed,
+  openFrom,
   openOverlay,
 } from './support/occlusion';
 import { answerConfirm } from './support/confirmDialog';
@@ -58,6 +59,13 @@ for (const viewport of VIEWPORTS) {
       const name = `or43 overlays ${viewport.width} ${dock}`;
       await openCanvas(page, name);
 
+      // The canvas's own right-click menu, on the empty pane.
+      const pane = await openFrom(page, () =>
+        page.locator('.react-flow__pane').click({ button: 'right' }),
+      );
+      await expectOverlayUnobstructed(pane, 'canvas context menu');
+      await page.keyboard.press('Escape');
+
       // Every activity the toolbox offers, containers included.
       const activities = await toolbox(page).getByRole('list').getByRole('button').allInnerTexts();
       const containers = await toolbox(page)
@@ -92,15 +100,9 @@ for (const viewport of VIEWPORTS) {
           await canvasNodes(page).first().click();
           const more = panel.getByRole('button', { name: 'More node actions', exact: true });
           await expect(more).toBeVisible();
-          if (i === 0) {
-            // The node's own right-click menu (Move into ▸, Wrap in ▸).
-            await canvasNodes(page).first().click({ button: 'right' });
-            await expectOverlayUnobstructed(openOverlay(page), 'node context menu');
-            await page.keyboard.press('Escape');
-          }
           await setDock(page, dock);
-          await more.click();
-          await expectOverlayUnobstructed(openOverlay(page), `${title}: More node actions`);
+          const menu = await openFrom(page, () => more.click());
+          await expectOverlayUnobstructed(menu, `${title}: More node actions`);
           await page.keyboard.press('Escape');
           await setDock(page, dock);
         }
@@ -108,13 +110,13 @@ for (const viewport of VIEWPORTS) {
         const tabs = panel.getByRole('tablist').first().getByRole('tab');
         for (let t = 0; t < (await tabs.count()); t += 1) {
           await tabs.nth(t).click();
-          popups += await expectEveryPopupUnobstructed(page, panel, title);
-          await setDock(page, dock);
+          popups += await expectEveryPopupUnobstructed(page, panel, title, () =>
+            setDock(page, dock),
+          );
           notes += await expectEveryHelpNoteUnobstructed(panel, title);
         }
         if (!container) {
-          await panel.getByRole('button', { name: 'More node actions', exact: true }).click();
-          await page.getByRole('menuitem', { name: 'Delete node', exact: true }).click();
+          await nodeMenuAction(page, 'Delete node');
           await expect(canvasNodes(page)).toHaveCount(0);
         }
       }
@@ -122,20 +124,35 @@ for (const viewport of VIEWPORTS) {
       expect(popups).toBeGreaterThan(0);
       expect(notes).toBeGreaterThan(0);
 
+      // An activity's right-click menu, and its Move into ▸ submenu, which a
+      // container on the canvas enables.
+      await setDock(page, 'docked');
+      await addActivity(page, activities[0]!.trim());
+      const activity = page.locator('.react-flow__node:not(.react-flow__node-container)');
+      const nodeMenu = await openFrom(page, () => activity.click({ button: 'right' }));
+      await expectOverlayUnobstructed(nodeMenu, 'node context menu');
+      await page.getByRole('menuitem', { name: /^Move into/ }).click();
+      await expect(page.locator('.fui-MenuPopover:visible')).toHaveCount(2);
+      await expectOverlayUnobstructed(openOverlay(page), 'node context menu: Move into');
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Escape');
+      await setDock(page, dock);
+
       // The editor's header: the page ⋯, Trigger ▾ and any other menu there.
       await expect(editorMenuTrigger(page)).toBeVisible();
       // The smallest box holding both the page ⋯ and Trigger ▾.
       const header = editorMenuTrigger(page).locator(
         'xpath=ancestor::*[.//button[normalize-space()="Trigger"]][1]',
       );
-      expect(await expectEveryPopupUnobstructed(page, header, 'editor header')).toBeGreaterThan(1);
-      await setDock(page, dock);
+      expect(
+        await expectEveryPopupUnobstructed(page, header, 'editor header', () =>
+          setDock(page, dock),
+        ),
+      ).toBeGreaterThan(1);
 
       // The pipeline tree's More actions, revealed on hover.
-      const row = tree(page).getByRole('listitem').filter({ hasText: name }).first();
-      await row.hover();
-      await row.getByRole('button', { name: `More actions for ${name}` }).click();
-      await expectOverlayUnobstructed(openOverlay(page), 'pipeline tree: More actions');
+      const treeMenu = await openFrom(page, () => openRowMenu(page, name));
+      await expectOverlayUnobstructed(treeMenu, 'pipeline tree: More actions');
       await page.keyboard.press('Escape');
 
       await expectQuiet(page, problems);
@@ -143,7 +160,7 @@ for (const viewport of VIEWPORTS) {
   }
 }
 
-/** The hubs' menus and lists: every popup trigger, and each table's first row `⋯`. */
+/** The hubs' menus, lists and `?` notes: every one each page offers. */
 const PAGES = [
   '/#/manage/connections',
   '/#/manage/datasets',
@@ -162,19 +179,33 @@ for (const viewport of VIEWPORTS) {
     // Rows to open menus on.
     expect((await page.request.post('/api/demo/seed')).ok()).toBe(true);
     let checked = 0;
+    let notes = 0;
     for (const path of PAGES) {
       await page.goto(path);
       await page.getByRole('heading', { level: 1 }).waitFor();
       checked += await expectEveryPopupUnobstructed(page, page.locator('.content'), path);
+      notes += await expectEveryHelpNoteUnobstructed(page.locator('.content'), path);
     }
     expect(checked).toBeGreaterThan(PAGES.length);
+    expect(notes).toBeGreaterThan(0);
 
-    // The tooltips: the hub rail's (drawn over the page beside it) and the
-    // command bar's, every one that carries a Fluent tooltip.
+    // The Fluent tooltips: the hub rail's links, theme switch and version
+    // (drawn over the page beside it), the command bar's buttons, and the
+    // Author pane's New pipeline.
     const tipped = page
-      .locator('.hub-rail a, .command-bar button[aria-label]')
+      .locator(
+        '.hub-rail a, .hub-rail [role="switch"], .version-badge, .command-bar button[aria-label], #factory-new-pipeline',
+      )
       .filter({ visible: true });
-    expect(await expectEveryTooltipUnobstructed(page, tipped, 'shell')).toBeGreaterThan(3);
+    expect(await expectEveryTooltipUnobstructed(page, tipped, 'shell')).toBeGreaterThan(5);
+
+    // A drawer: New connection's kind gallery.
+    await page.goto('/#/manage/connections');
+    await page.getByRole('button', { name: 'New connection' }).click();
+    const drawer = page.getByRole('dialog', { name: 'New connection' });
+    await expectOverlayUnobstructed(drawer, 'New connection drawer');
+    await page.keyboard.press('Escape');
+    await expect(drawer).toBeHidden();
 
     // A dialog: the confirmation a new pipeline's Delete raises, answered
     // Cancel. New, because one with run history refuses without asking.
