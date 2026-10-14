@@ -844,7 +844,10 @@ describe('runNodeFacts', () => {
       runNodeFacts('copy_files', measured(0, 2_000, { filesWritten: 3, filesSkipped: 0 })),
     ).toBe('2s · 3 files');
     expect(
-      runNodeFacts('copy_files', measured(undefined, undefined, { filesWritten: 1, filesSkipped: 2 })),
+      runNodeFacts(
+        'copy_files',
+        measured(undefined, undefined, { filesWritten: 1, filesSkipped: 2 }),
+      ),
     ).toBe('1 file · 2 skipped');
     // Another node's `filesWritten` is a value it was handed.
     expect(runNodeFacts('webhook', measured(0, 5, { filesWritten: 3 }))).toBe('0.005s');

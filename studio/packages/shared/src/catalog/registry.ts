@@ -800,8 +800,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
         key: 'source',
         bindings: ['sourceConnection'],
         fields: [
-          'pathType',
           'sourcePath',
+          'pathType',
           'wildcard',
           'recursive',
           'fileListPath',

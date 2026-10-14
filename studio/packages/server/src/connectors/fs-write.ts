@@ -55,6 +55,17 @@ export function makeTmpSuffix(ctx: ActivityContext): string {
 }
 
 /**
+ * The codes `link` gives on a file system without hard links (FAT, exFAT, some
+ * SMB and NFS mounts): a clear permanent refusal, not a raw errno.
+ */
+export const LINK_UNSUPPORTED: ReadonlySet<string> = new Set([
+  'EPERM',
+  'ENOTSUP',
+  'EOPNOTSUPP',
+  'ENOSYS',
+]);
+
+/**
  * Crash-safe atomic replace, shared by `file_write` (writes a string) and
  * `file_copy` (streams a source file): create a FRESH sibling temp, hand it to
  * `writeInto`, `fsync` it, close it, then atomically `rename` it over
@@ -79,19 +90,8 @@ export function atomicReplace(
   tmpSuffix: string,
   signal: AbortSignal,
   writeInto: (fh: Awaited<ReturnType<typeof open>>) => Promise<void>,
-  opts: { noClobber: true },
+  opts: { noClobber?: boolean; mode?: number },
 ): Promise<ActivityEvent | undefined | typeof TARGET_EXISTS>;
-/**
- * The codes `link` gives on a file system without hard links (FAT, exFAT, some
- * SMB and NFS mounts): a clear permanent refusal, not a raw errno.
- */
-export const LINK_UNSUPPORTED: ReadonlySet<string> = new Set([
-  'EPERM',
-  'ENOTSUP',
-  'EOPNOTSUPP',
-  'ENOSYS',
-]);
-
 export async function atomicReplace(
   finalPath: string,
   tmpSuffix: string,

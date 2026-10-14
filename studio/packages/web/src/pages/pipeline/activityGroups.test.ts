@@ -113,9 +113,10 @@ describe('toolboxGroups', () => {
     // an author types them in does not matter.
     expect(typesOf(toolboxGroups('copy rows'))).toEqual([COPY_ACTIVITY_TYPE]);
     expect(typesOf(toolboxGroups('  ROWS   copy '))).toEqual([COPY_ACTIVITY_TYPE]);
-    // Every word must match: "copy file" keeps Copy file, "rows" then drops it.
+    // Every word must match: "copy file" keeps Copy file, "rows" then drops it
+    // (Copy data stays: #1600 C1a, its description names both rows and files).
     expect(typesOf(toolboxGroups('copy file'))).toContain('file_copy');
-    expect(typesOf(toolboxGroups('copy file rows'))).toEqual([]);
+    expect(typesOf(toolboxGroups('copy file rows'))).toEqual([COPY_ACTIVITY_TYPE]);
   });
 });
 
