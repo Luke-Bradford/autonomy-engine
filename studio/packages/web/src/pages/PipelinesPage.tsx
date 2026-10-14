@@ -4,12 +4,7 @@ import { useNavigate } from 'react-router';
 import { ToggleButton } from '@fluentui/react-components';
 import { MAX_BUNDLE_ITEMS } from '@autonomy-studio/shared';
 import { useStore } from 'zustand';
-import type {
-  Pipeline,
-  PipelineSummary,
-  PipelineVersionState,
-  WorkspaceGitSync,
-} from '@autonomy-studio/shared';
+import type { Pipeline, PipelineSummary, PipelineVersionState } from '@autonomy-studio/shared';
 import { useBusyAction } from '../hooks/useBusyAction';
 import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus';
@@ -25,7 +20,8 @@ import {
   listPipelineVersionStates,
   restorePipeline,
 } from '../api/pipelines';
-import { getWorkspaceGit, readWorkspaceGitSync } from '../api/workspaceGit';
+import { getWorkspaceGit } from '../api/workspaceGit';
+import { useWorkspaceGitSync } from '../hooks/useWorkspaceGitSync';
 import { RowStateBadge } from './pipeline/EditorStateBadge';
 import {
   LIVE_STATE_KEYS,
@@ -196,7 +192,6 @@ export function PipelinesPage({
     ReadonlyMap<string, PipelineVersionState> | undefined
   >(undefined);
   const [gitConnected, setGitConnected] = useState<boolean | undefined>(undefined);
-  const [gitSync, setGitSync] = useState<WorkspaceGitSync | null | undefined>(undefined);
   // #1569 OR37 — the grid's row facts, read with the row states and refreshed
   // with them. A failed read shows em-dashes (absent), never zeros.
   const [summaries, setSummaries] = useState<
@@ -209,28 +204,23 @@ export function PipelinesPage({
     states: false,
     summaries: false,
     git: false,
-    sync: false,
   });
   const markRead = useCallback(
-    (source: 'states' | 'summaries' | 'git' | 'sync', failed: boolean) =>
+    (source: 'states' | 'summaries' | 'git', failed: boolean) =>
       setReadFailed((prev) => (prev[source] === failed ? prev : { ...prev, [source]: failed })),
     [],
   );
   const guardedStatesLoad = useGuardedLoad();
   const guardedSummariesLoad = useGuardedLoad();
   const guardedGitLoad = useGuardedLoad();
-  const guardedSyncLoad = useGuardedLoad();
-  // Through the sync guard, so a sync still in flight from before the repo
-  // went away is superseded rather than landing afterwards.
-  const clearGitSync = useCallback(() => {
-    void guardedSyncLoad(() => Promise.resolve(undefined), {
-      onData: (sync) => {
-        setGitSync(sync);
-        markRead('sync', false);
-      },
-      onError: () => setGitSync(undefined),
-    });
-  }, [guardedSyncLoad, markRead]);
+  // #1511 — the shared hook; its `clear()` supersedes a sync still in flight
+  // from before the repo went away, so it never lands afterwards.
+  const {
+    sync: gitSync,
+    failed: syncFailed,
+    refresh: refreshGitSync,
+    clear: clearGitSync,
+  } = useWorkspaceGitSync();
   const refreshRowStates = useCallback(() => {
     void guardedStatesLoad((signal) => listPipelineVersionStates(signal), {
       onData: (items) => {
@@ -263,16 +253,7 @@ export function PipelinesPage({
           clearGitSync();
           return;
         }
-        void guardedSyncLoad((signal) => readWorkspaceGitSync(signal), {
-          onData: (sync) => {
-            setGitSync(sync);
-            markRead('sync', false);
-          },
-          onError: () => {
-            setGitSync(undefined);
-            markRead('sync', true);
-          },
-        });
+        refreshGitSync();
       },
       onError: () => {
         setGitConnected(undefined);
@@ -284,7 +265,7 @@ export function PipelinesPage({
     guardedStatesLoad,
     guardedSummariesLoad,
     guardedGitLoad,
-    guardedSyncLoad,
+    refreshGitSync,
     clearGitSync,
     markRead,
   ]);
@@ -663,7 +644,7 @@ export function PipelinesPage({
                 git: readOf(gitConnected, readFailed.git),
                 gitConnected,
                 // `null` is the server's own fetch failing: no drift reading.
-                sync: gitSync === null ? 'failed' : readOf(gitSync, readFailed.sync),
+                sync: gitSync === null ? 'failed' : readOf(gitSync, syncFailed),
               }),
       });
   const folderOptions = useMemo(() => folderOptionsOf(base), [base]);

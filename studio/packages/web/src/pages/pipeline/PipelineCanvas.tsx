@@ -62,7 +62,6 @@ import {
   type PipelineVersion,
   type WorkspaceGitStatus,
   type WorkspaceGitPullRequestReading,
-  type WorkspaceGitSync,
   type ActivityBindingSlot,
   COPY_ACTIVITY_TYPE,
   COPY_FILES_ACTIVITY_TYPE,
@@ -236,7 +235,8 @@ import { UnsavedChangesPrompt } from '../../lib/form/UnsavedChangesPrompt';
 import { AboutHelp } from '../../lib/HelpDisclosure';
 import { RowMoreMenu } from '../../lib/RowMoreMenu';
 import { claimTicket, readPublishState, takeTicket, type ReadSequence } from './publishState';
-import { readWorkspaceGitPullRequest, readWorkspaceGitSync } from '../../api/workspaceGit';
+import { readWorkspaceGitPullRequest } from '../../api/workspaceGit';
+import { useWorkspaceGitSync } from '../../hooks/useWorkspaceGitSync';
 import { EditorStateBadge } from './EditorStateBadge';
 import { canvasVersion, editingState, gitState, liveState, partText } from './editorState';
 import { LabelledControl } from '../../lib/LabelledControl';
@@ -1014,6 +1014,19 @@ export function PipelineCanvas({
   const head = useMemo(() => latestVersion(versions), [versions]);
   const headVersion = head?.version ?? null;
 
+  // The `fetch failed` re-read the sync hook runs on a `null` answer.
+  const rereadPublishState = useCallback(() => {
+    const ticket = takeTicket(publishSeq.current);
+    readPublishState(pipelineId).then(
+      (st) => {
+        if (!claimTicket(publishSeq.current, ticket)) return;
+        setActive(st.active);
+        setGit(st.git);
+      },
+      () => {},
+    );
+  }, [pipelineId]);
+
   /**
    * #1476 OR28 slice 6 — the repo compared with this workspace, for the git
    * part of the badge: is this pipeline uncommitted, has main moved. Read when
@@ -1029,30 +1042,20 @@ export function PipelineCanvas({
    * recorded on the repo's status; the status is re-read then, through the
    * publish-state ticket, so `fetch failed` replaces the comparison at once
    * instead of on the next focus.
+   *
+   * #1511 — through the shared hook, which single-flights these three triggers
+   * (#1689) and drops an in-flight read when the repo goes away. Not connected
+   * includes not yet known, which is only ever the empty state at mount.
    */
-  const [gitSync, setGitSync] = useState<WorkspaceGitSync | null | undefined>(undefined);
-  const guardedSyncLoad = useGuardedLoad();
-  const refreshGitSync = useCallback(() => {
-    void guardedSyncLoad((signal) => readWorkspaceGitSync(signal), {
-      onData: (s) => {
-        setGitSync(s);
-        if (s !== null) return;
-        const ticket = takeTicket(publishSeq.current);
-        readPublishState(pipelineId).then(
-          (st) => {
-            if (!claimTicket(publishSeq.current, ticket)) return;
-            setActive(st.active);
-            setGit(st.git);
-          },
-          () => {},
-        );
-      },
-      onError: () => setGitSync(undefined),
-    });
-  }, [guardedSyncLoad, pipelineId]);
+  const {
+    sync: gitSync,
+    refresh: refreshGitSync,
+    clear: clearGitSync,
+  } = useWorkspaceGitSync(rereadPublishState);
   useEffect(() => {
     if (gitConnected === true) refreshGitSync();
-  }, [gitConnected, headVersion, refreshGitSync]);
+    else clearGitSync();
+  }, [gitConnected, headVersion, refreshGitSync, clearGitSync]);
   useRefreshOnFocus(refreshGitSync, gitConnected === true);
 
   /**
