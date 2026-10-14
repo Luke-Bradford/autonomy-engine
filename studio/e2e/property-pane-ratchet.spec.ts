@@ -88,7 +88,7 @@ function readTab(page: Page): Promise<TabRead> {
     }
 
     const headHelp = [...panel.querySelectorAll('.section__head')]
-      .filter((head) => head.querySelector('summary') !== null)
+      .filter((head) => visible(head) && head.querySelector('summary') !== null)
       .map((head) => (head.querySelector('.section__title')?.textContent ?? '').trim());
 
     const quiet =
