@@ -69,17 +69,26 @@ export const LINK_UNSUPPORTED: ReadonlySet<string> = new Set([
 
 /** The longest file name, in bytes, that the common file systems accept. */
 const NAME_MAX_BYTES = 255;
+/** How much of a too-long name its hashed temp keeps: `.<prefix>.<40 hex>.tmp` stays at most 146 bytes. */
+const TMP_PREFIX_BYTES = 100;
 
 /**
  * The temp beside `finalPath`: `<name>.tmp.<suffix>`, or, when that name would
- * be too long for the file system (#1685), a hidden name derived from it, which
- * is as unique as the long name it replaces.
+ * be too long for the file system (#1685), a hidden name holding the start of
+ * the target's name and a hash of the whole long name, which keeps it unique.
  */
 export function tmpPathFor(finalPath: string, tmpSuffix: string): string {
   const name = `${basename(finalPath)}.tmp.${tmpSuffix}`;
   if (Buffer.byteLength(name) <= NAME_MAX_BYTES) return `${finalPath}.tmp.${tmpSuffix}`;
   const digest = createHash('sha256').update(name).digest('hex').slice(0, 40);
-  return join(dirname(finalPath), `.${digest}.tmp`);
+  // A readable prefix of the name, so a temp a crash leaves behind can still be
+  // tied to its target; cut on a character, never inside one.
+  let prefix = '';
+  for (const ch of basename(finalPath)) {
+    if (Buffer.byteLength(prefix + ch) > TMP_PREFIX_BYTES) break;
+    prefix += ch;
+  }
+  return join(dirname(finalPath), `.${prefix}.${digest}.tmp`);
 }
 
 /**

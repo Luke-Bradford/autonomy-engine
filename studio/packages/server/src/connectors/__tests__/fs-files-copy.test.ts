@@ -15,10 +15,11 @@ import {
   utimes,
   writeFile,
 } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { COPY_FILES_ACTIVITY_TYPE } from '@autonomy-studio/shared';
 import { fsAdapter } from '../fs.js';
 import { runFilesCopy, unchangedSince } from '../fs-files-copy.js';
+import { tmpPathFor } from '../fs-write.js';
 import { wildcardMatcher } from '../fs-select.js';
 import { cleanupTempRoots, tempRoot } from './temp-roots.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
@@ -604,6 +605,17 @@ describe('Copy · Files as-is — hardening (#1685)', () => {
     const events = await run({ sourcePath: 'in' });
     expect(outputs(events)).toMatchObject({ filesWritten: 1 });
     expect(await tree(dst)).toEqual([name]);
+  });
+
+  it('keeps a readable start of a too-long name in its temp, cut on a character', () => {
+    const ascii = basename(tmpPathFor(join(dst, 'x'.repeat(300)), 'run_1.n1.n1_0'));
+    expect(ascii).toMatch(/^\.x{100}\.[0-9a-f]{40}\.tmp$/);
+    const wide = basename(tmpPathFor(join(dst, 'é'.repeat(200)), 'run_1.n1.n1_0'));
+    // Two bytes each: 50 fit in the 100-byte prefix, and none is split.
+    expect(wide).toMatch(/^\.é{50}\.[0-9a-f]{40}\.tmp$/);
+    expect(Buffer.byteLength(wide)).toBeLessThanOrEqual(255);
+    // A name that fits keeps the plain form.
+    expect(tmpPathFor(join(dst, 'a.txt'), 's')).toBe(join(dst, 'a.txt.tmp.s'));
   });
 
   it('reports a refusal made after an abort as cancelled', async () => {
