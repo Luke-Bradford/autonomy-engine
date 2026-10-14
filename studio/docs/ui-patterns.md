@@ -64,7 +64,8 @@ required marks and display names; its layout is its own, below.
 ## Activity connection pickers
 
 - **One `ConnectionPicker` for every connection slot** (an activity's Connection, or a Copy's
-  Source and Sink connection): the select, then **Test**, **Edit** and **New** beside it on one row.
+  Source and Sink connection): the select, then **Test**, **Edit** and **New** beside it on one row,
+  as icon buttons whose `title` is their accessible name (#1694 OR42), so the select keeps its width.
 - **Every connection is listed, grouped by kind.** One this slot cannot use is listed disabled,
   with its reason (`connectionSlotReason`), so the picker says what exists. The bound connection
   is never disabled, whatever its kind.
@@ -148,7 +149,9 @@ required marks and display names; its layout is its own, below.
   own note under the picker says why.
 - **Every section says what it holds** (#1413), in one line behind the `?` beside its heading
   (#1477 OR29 in the dock; every surface since #1594 OR40 S3): the UI standard keeps prose off the
-  page. `Section`'s `help` is required, so a section without one does not compile. Plain copy lives
+  page. `Section`'s `help` is required, so a section without one does not compile. **The properties
+  pane is the exception (#1694 OR42):** its section headings carry no `?`, and pass `help={null}`
+  on purpose; `e2e/property-pane-ratchet.spec.ts` holds that for every catalog type. Plain copy lives
   in `FORM_SECTION_HINTS` (`web/src/lib/form/sectionHints.ts`), held to the same house rule by
   `sectionHints.test.ts`; a hint with markup (a `${…}` reference in `<code>`) is written inline. The note is the section's `aria-describedby`; the `?` is beside the
   heading, never inside it, so the section's name stays the heading alone. A hint never restates a
@@ -504,6 +507,10 @@ Every page's title row is `PageHeader` (`lib/PageHeader.tsx`, #1594 OR40 S3). Ne
   side). A label never wraps; a search box is the one control that gives way. The toolbar is not a
   `role="toolbar"`, because it does not implement arrow-key movement; each control keeps its own tab
   stop.
+- **A form's add actions** (*Add parameter*, *Add column mapping row*, *Auto-map columns*) sit in
+  `<Toolbar align="start">`, ABOVE the rows they add to (ADF's *＋ New*), packed left and sized to
+  their text; a pane's own acts at its foot (*Apply call*, *Copy container*) use the same row. Never
+  a bare button stretched across the form by its flex column (#1694 OR42).
 - **The content frame** is `.content`'s 16px padding on every page, so every title starts at the
   same left edge (the editor keeps the same sides and drops the top and bottom). There is no
   reading-width cap: grids use the width, and a form caps its controls, not the page.
@@ -763,8 +770,8 @@ replaced `FormSection` (a drawer's `fieldset` and `legend`), `DockSection` (the 
 
 - **The heading** is in the section type (14/600 compact, 16/600 comfortable), sentence case. It
   is an `h3` under a drawer or panel title (`h2`) and an `h2` under a page title (`level={2}`).
-- **The heading row** holds the heading, its `?` and, optionally, `actions`: a `Toolbar` at the
-  row's right end (the Monitor's Refresh quota).
+- **The heading row** holds the heading, its `?` (none with `help={null}`, the properties pane) and,
+  optionally, `actions`: a `Toolbar` at the row's right end (the Monitor's Refresh quota).
 - **Spacing:** the content starts 8px under the heading row, and its fields are 8px apart. Every
   container that holds sections stacks at 8px (`.form-drawer-body`, `.property-panel`,
   `.panel-tab`), and a section that follows anything takes 8px more, so sections are 16px apart.
