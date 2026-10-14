@@ -1014,6 +1014,19 @@ export function PipelineCanvas({
   const head = useMemo(() => latestVersion(versions), [versions]);
   const headVersion = head?.version ?? null;
 
+  // The `fetch failed` re-read the sync hook runs on a `null` answer.
+  const rereadPublishState = useCallback(() => {
+    const ticket = takeTicket(publishSeq.current);
+    readPublishState(pipelineId).then(
+      (st) => {
+        if (!claimTicket(publishSeq.current, ticket)) return;
+        setActive(st.active);
+        setGit(st.git);
+      },
+      () => {},
+    );
+  }, [pipelineId]);
+
   /**
    * #1476 OR28 slice 6 — the repo compared with this workspace, for the git
    * part of the badge: is this pipeline uncommitted, has main moved. Read when
@@ -1029,20 +1042,11 @@ export function PipelineCanvas({
    * recorded on the repo's status; the status is re-read then, through the
    * publish-state ticket, so `fetch failed` replaces the comparison at once
    * instead of on the next focus.
+   *
+   * #1511 — through the shared hook, which single-flights these three triggers
+   * (#1689) and drops an in-flight read when the repo goes away. Not connected
+   * includes not yet known, which is only ever the empty state at mount.
    */
-  const rereadPublishState = useCallback(() => {
-    const ticket = takeTicket(publishSeq.current);
-    readPublishState(pipelineId).then(
-      (st) => {
-        if (!claimTicket(publishSeq.current, ticket)) return;
-        setActive(st.active);
-        setGit(st.git);
-      },
-      () => {},
-    );
-  }, [pipelineId]);
-  // #1511 — through the shared hook, which single-flights the three triggers
-  // below (#1689) and drops an in-flight read when the repo goes away.
   const {
     sync: gitSync,
     refresh: refreshGitSync,

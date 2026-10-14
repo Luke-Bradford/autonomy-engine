@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { StrictMode, useEffect } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import type { WorkspaceGitSync } from '@autonomy-studio/shared';
 import * as workspaceGitApi from '../api/workspaceGit';
-import { useWorkspaceGitSync } from './useWorkspaceGitSync';
+import { STALE_AFTER_MS, useWorkspaceGitSync } from './useWorkspaceGitSync';
 
 vi.mock('../api/workspaceGit', () => ({ readWorkspaceGitSync: vi.fn() }));
 const syncMock = vi.mocked(workspaceGitApi.readWorkspaceGitSync);
@@ -39,6 +40,9 @@ async function answer(
 
 beforeEach(() => {
   syncMock.mockReset();
+});
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('useWorkspaceGitSync', () => {
@@ -152,5 +156,97 @@ describe('useWorkspaceGitSync', () => {
     });
     expect(onUnavailable).not.toHaveBeenCalled();
     expect(syncMock).toHaveBeenCalledTimes(1);
+  });
+  it('clear() alone cancels the queued re-read: the dropped answer starts nothing', async () => {
+    const [stale] = queueReads(1);
+    const { result } = renderHook(() => useWorkspaceGitSync());
+    act(() => {
+      result.current.refresh();
+      result.current.refresh(); // queues a trailing read
+    });
+    act(() => result.current.clear());
+    await answer(stale!, reading(1));
+    expect(syncMock).toHaveBeenCalledTimes(1);
+    expect(result.current.sync).toBeUndefined();
+  });
+
+  it('a read that never answers is given up on once stale, so refreshes are not stuck behind it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const [hung, fresh] = queueReads(2);
+    const { result } = renderHook(() => useWorkspaceGitSync());
+    act(() => result.current.refresh());
+    act(() => result.current.refresh());
+    expect(syncMock).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(Date.now() + STALE_AFTER_MS);
+    act(() => result.current.refresh());
+    expect(syncMock).toHaveBeenCalledTimes(2);
+
+    await answer(fresh!, reading(2));
+    expect(result.current.sync).toEqual(reading(2));
+    // The abandoned read lands late: dropped, and it starts nothing.
+    await answer(hung!, reading(1));
+    expect(result.current.sync).toEqual(reading(2));
+    expect(syncMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('the trailing read follows a FAILED in-flight read too', async () => {
+    const [bad, again] = queueReads(2);
+    const { result } = renderHook(() => useWorkspaceGitSync());
+    act(() => {
+      result.current.refresh();
+      result.current.refresh();
+    });
+    await act(async () => {
+      bad!.reject(new Error('boom'));
+      await bad!.promise.catch(() => {});
+    });
+    expect(syncMock).toHaveBeenCalledTimes(2);
+    await answer(again!, reading(2));
+    expect(result.current.failed).toBe(false);
+    expect(result.current.sync).toEqual(reading(2));
+  });
+
+  it('a throwing onUnavailable does not lose the queued re-read', async () => {
+    const [first, second] = queueReads(2);
+    const onUnavailable = vi.fn(() => {
+      throw new Error('caller bug');
+    });
+    const { result } = renderHook(() => useWorkspaceGitSync(onUnavailable));
+    act(() => {
+      result.current.refresh();
+      result.current.refresh();
+    });
+    const swallow = (e: PromiseRejectionEvent | Error) => e;
+    process.on('unhandledRejection', swallow);
+    try {
+      await answer(first!, null);
+      await new Promise((r) => setTimeout(r, 0));
+    } finally {
+      process.off('unhandledRejection', swallow);
+    }
+    expect(syncMock).toHaveBeenCalledTimes(2);
+    await answer(second!, reading(2));
+    expect(result.current.sync).toEqual(reading(2));
+  });
+
+  it('under StrictMode a refresh from the first mount does not block the remount', async () => {
+    const [first, second] = queueReads(2);
+    // As the callers do: refresh from an effect, which StrictMode runs twice.
+    const { result } = renderHook(
+      () => {
+        const r = useWorkspaceGitSync();
+        const { refresh } = r;
+        useEffect(() => refresh(), [refresh]);
+        return r;
+      },
+      { wrapper: StrictMode },
+    );
+    expect(syncMock).toHaveBeenCalledTimes(2);
+    // The first mount's read lands: its component is gone, so it writes nothing.
+    await answer(first!, reading(1));
+    expect(result.current.sync).toBeUndefined();
+    await answer(second!, reading(2));
+    expect(result.current.sync).toEqual(reading(2));
   });
 });
