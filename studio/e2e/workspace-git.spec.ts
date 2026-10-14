@@ -124,6 +124,16 @@ test.afterAll(async ({ request }) => {
   }
 });
 
+/**
+ * #1689 — a reading that waits on `POST /api/workspace/git/sync` after a
+ * reload, a focus or a navigation. In CI each sync costs 3–6 s against the
+ * suite's accumulated workspace (~300 pipelines), and the editor starts up to
+ * three overlapping ones of which only the newest is applied, so the default
+ * 5 s timeout fails while the product is still right. A tolerance until #1689
+ * single-flights the sync; not the fix.
+ */
+const SYNC_SETTLES = { timeout: 20_000 };
+
 test('a workspace connects to a repo, commits itself, imports it back, and disconnects', async ({
   page,
 }) => {
@@ -452,7 +462,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await expect(prLink).toHaveAttribute('href', 'https://github.com/acme/widgets/pull/7');
   await expect(prLink).toHaveAttribute('target', '_blank');
   await expect(prLink).toHaveAttribute('rel', 'noopener noreferrer');
-  await expect(gitPart).toHaveText(/ · uncommitted · PR #7\./);
+  await expect(gitPart).toHaveText(/ · uncommitted · PR #7\./, SYNC_SETTLES);
   await expect(gitPart).toHaveAttribute('title', /Pull request #7 is open from \S+ \(checked /);
   await page.setViewportSize({ width: 1280, height: 720 });
   await expect(page.locator('.editor-state-badge__part[data-part="git"]')).toHaveCount(0);
@@ -505,7 +515,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await page.unroute(gitStatusUrl);
   // And the next focus reads the real state again.
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect(gitPart).toHaveText(/ · uncommitted\./);
+  await expect(gitPart).toHaveText(/ · uncommitted\./, SYNC_SETTLES);
   await expect(gitPart).toHaveAttribute('data-tone', 'warning');
 
   /**
@@ -535,7 +545,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
     'v1 is the active (published) version, and is the latest saved version.',
   );
   await expect(rowPart(publishName, 'live')).toHaveAttribute('data-tone', 'success');
-  await expect(rowPart(publishName, 'git')).toHaveText(/^uncommitted\./);
+  await expect(rowPart(publishName, 'git')).toHaveText(/^uncommitted\./, SYNC_SETTLES);
   await expect(rowPart(publishName, 'git')).toHaveAttribute(
     'title',
     'This pipeline is not on studio/local/work yet.',
