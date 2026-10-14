@@ -559,7 +559,7 @@ describe('ConfigFieldControl — units as suffixes, blank empty cells (#1694)', 
     expect(getByRole('textbox').closest('.input-unit')).toBeNull();
   });
 
-  it("a cell's empty choice is blank; a top-level field's still reads — none —", () => {
+  it("an optional cell's empty choice is blank; a required cell's and a top-level field's read — none —", () => {
     const field: ConfigField = {
       name: 'onError',
       kind: 'enum',
@@ -571,6 +571,19 @@ describe('ConfigFieldControl — units as suffixes, blank empty cells (#1694)', 
     );
     expect(cell.getByRole('combobox').querySelector('option[value=""]')?.textContent).toBe('');
     cell.unmount();
+    // A REQUIRED cell keeps it: there, empty is a gap to fill.
+    const required = render(
+      <ConfigFieldControl
+        field={{ ...field, optional: false }}
+        name="mapping row 1 type"
+        value=""
+        onChange={noop}
+      />,
+    );
+    expect(required.getByRole('combobox').querySelector('option[value=""]')?.textContent).toBe(
+      '— none —',
+    );
+    required.unmount();
     const top = render(<ConfigFieldControl field={field} value="" onChange={noop} />);
     expect(top.getByRole('combobox').querySelector('option[value=""]')?.textContent).toBe(
       '— none —',

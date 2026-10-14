@@ -380,9 +380,11 @@ export function ConfigFieldControl({
               {...checked}
               onChange={(e) => onChange(e.target.value)}
             >
-              {/* #1694 OR42 item 9 — blank in a table's cell, where the same
-                  placeholder in every row was noise; the column says what it is. */}
-              <option value="">{cell ? '' : '— none —'}</option>
+              {/* #1694 OR42 item 9 — blank in an optional table cell, where
+                  the same placeholder in every row was noise and empty means
+                  the default (On error's "Fail the row"). A required cell keeps
+                  it: there, empty is a gap to fill. */}
+              <option value="">{cell && !required ? '' : '— none —'}</option>
               {(field.enumOptions ?? []).map((option) => (
                 <option key={option} value={option}>
                   {field.label?.options?.[option] ?? option}

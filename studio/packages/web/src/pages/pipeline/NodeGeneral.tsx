@@ -1,3 +1,4 @@
+import type { FieldSize } from './configForm';
 import { useStore } from 'zustand';
 import {
   DESCRIPTION_MAX_CHARS,
@@ -143,7 +144,7 @@ export function GeneralBasics({
               {(id, describedBy) => (
                 <select
                   id={id}
-                  data-size="s"
+                  data-size={'s' satisfies FieldSize}
                   aria-describedby={describedBy}
                   value={markAs}
                   onChange={(e) => onMarkAs(InactiveMarkAsSchema.parse(e.target.value))}

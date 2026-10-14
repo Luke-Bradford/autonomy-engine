@@ -14,8 +14,8 @@ import { nodeMenuAction, pickConnection, properties } from './support/panels';
  * - no button is wider than its own content (an add act sits in a toolbar sized
  *   to its text, never stretched across the form);
  * - no section heading carries a `?`;
- * - every control outside a table is one of three size classes, S, M or the
- *   row's value column, and a choice shows its longest option whole (F10);
+ * - every control outside a table holds its size class, S, M or the row's
+ *   value column, and a choice shows its longest option whole (F10);
  * - the pane's prose lines, and
  * - its `?`s, per type, never rise above the counts seeded below.
  *
@@ -110,15 +110,18 @@ function readTab(page: Page): Promise<TabRead> {
     const text = (el: Element) => (el.textContent ?? '').trim().slice(0, 60);
     const help = [...panel.querySelectorAll('summary[aria-label^="About "]')].filter(visible);
 
-    // F10 — every control outside a table is an S, an M, or its row's whole
-    // value column (an L): its right edge on the row's. A table's cells are
-    // sized by their columns. A Fluent combobox is measured by its box, not
-    // its inner input. A choice must also show its longest option whole.
-    // The size classes (`--field-s`, `--field-m`), and the slack either side.
-    // Here, not module scope: this function runs in the page.
-    const SIZE_S = 120;
-    const SIZE_M = 240;
-    const SIZE_SLACK = 4;
+    // F10 — every control outside a table holds its OWN size class: what
+    // `data-size` says (`fieldSize`), and otherwise a select or a binding is an
+    // M, a number an S, anything else an L, its right edge on its row's. An S
+    // or an M may only be narrower where its row is (`max-width: 100%`), never
+    // stretched. A table's cells are sized by their columns. A Fluent combobox
+    // is measured by its box, not its inner input. A choice must also show its
+    // longest option whole, beside its native arrow.
+    // The classes (`--field-s`, `--field-m`) and the slack either side. Here,
+    // not module scope: this function runs in the page.
+    const WIDTH = { s: 120, m: 240 } as Record<string, number>;
+    const SLACK = 4;
+    const ARROW = 20;
     const ctx = document.createElement('canvas').getContext('2d')!;
     const offSize: string[] = [];
     const controls = panel.querySelectorAll<HTMLElement>(
@@ -128,16 +131,27 @@ function readTab(page: Page): Promise<TabRead> {
       if (!visible(control) || control.closest('.row-table, [role="tablist"]') !== null) continue;
       if (control.matches('.connection-picker__combobox input')) continue;
       const box = control.getBoundingClientRect();
-      const row = control.closest('.labelled-control') ?? control.parentElement!;
-      const fills = Math.abs(box.right - row.getBoundingClientRect().right) <= SIZE_SLACK;
-      const near = (size: number) => Math.abs(box.width - size) <= SIZE_SLACK;
+      const row = (
+        control.closest('.labelled-control') ?? control.parentElement!
+      ).getBoundingClientRect();
+      const fills = Math.abs(box.right - row.right) <= SLACK;
+      const expected =
+        control.dataset.size ??
+        (control.matches('select, .connection-picker__combobox')
+          ? 'm'
+          : control.matches('.number-input')
+            ? 's'
+            : 'l');
+      const width = WIDTH[expected];
+      const held =
+        width === undefined
+          ? fills
+          : Math.abs(box.width - width) <= SLACK || (fills && box.width < width);
       const name =
         (control as HTMLInputElement).labels?.[0]?.textContent?.trim() ??
         control.getAttribute('aria-label') ??
         control.tagName;
-      if (!near(SIZE_S) && !near(SIZE_M) && !fills) {
-        offSize.push(`${name} ${Math.round(box.width)}px`);
-      }
+      if (!held) offSize.push(`${name} ${Math.round(box.width)}px, not ${expected.toUpperCase()}`);
       if (control instanceof HTMLSelectElement) {
         const style = getComputedStyle(control);
         ctx.font = style.font;
@@ -146,7 +160,10 @@ function readTab(page: Page): Promise<TabRead> {
           ...Array.from(control.options, (o) => ctx.measureText(o.text).width),
         );
         const room =
-          control.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+          control.clientWidth -
+          parseFloat(style.paddingLeft) -
+          parseFloat(style.paddingRight) -
+          ARROW;
         if (longest > room)
           offSize.push(
             `${name} cuts its longest option: ${Math.round(longest)}px in ${Math.round(room)}px`,
@@ -190,7 +207,7 @@ async function readPane(page: Page, tablist: string, name: string, misses: strin
       .toBe(true);
     for (const wide of read.wideButtons) misses.push(`${name} › ${label} › wide button: ${wide}`);
     for (const head of read.headHelp) misses.push(`${name} › ${label} › ? on heading: ${head}`);
-    for (const off of read.offSize) misses.push(`${name} › ${label} › not S, M or L: ${off}`);
+    for (const off of read.offSize) misses.push(`${name} › ${label} › off size: ${off}`);
     prose.push(...read.tabProse.map((line) => `${label}: ${line}`));
     help += read.tabHelp;
     if (i === 0) {

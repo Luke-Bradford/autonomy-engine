@@ -2,6 +2,7 @@ import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { UnitLabel, WithUnit } from '../../lib/form/UnitInput';
+import { titleWithUnit } from '../../lib/form/unit';
 import { FieldError } from '../../lib/form/FieldError';
 import { joinIds } from '../../lib/form/fieldValidation';
 
@@ -92,7 +93,7 @@ export function DraftNumberField<V extends number | undefined>({
     <>
       <LabelledControl
         label={<UnitLabel title={label} unit={unit} />}
-        about={{ name: unit === undefined ? label : `${label} (${unit})`, note: about }}
+        about={{ name: titleWithUnit(label, unit), note: about }}
       >
         {(id, describedBy) => (
           <WithUnit unit={unit}>

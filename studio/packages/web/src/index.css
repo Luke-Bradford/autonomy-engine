@@ -3057,7 +3057,7 @@ button.danger {
 :root[data-density]
   :is(.property-dock .property-panel:not(.node-detail-panel), .form-drawer-body, .field-form)
   :is(input.number-input, .labelled-control > input[type='number']) {
-  width: 120px;
+  width: var(--field-s);
   max-width: 100%;
   align-self: flex-start;
   justify-self: start;
@@ -3097,14 +3097,6 @@ button.danger {
   justify-self: start;
 }
 
-:root[data-density]
-  .property-dock
-  .property-panel:not(.node-detail-panel)
-  :is(select, input)[data-size='l'] {
-  width: 100%;
-  max-width: none;
-}
-
 /* #1694 OR42 item 5 — a unit drawn inside its box's right edge (`30` `s`,
    `WithUnit`), so the label carries the title alone and never wraps. The
    wrapper takes the box's own width, never the column's, or the suffix would
@@ -3119,7 +3111,7 @@ button.danger {
 }
 
 .input-unit > input {
-  padding-right: calc(var(--space-2) + var(--space-4));
+  padding-right: calc(var(--space-2) * 2 + var(--unit-ch, 1) * 1ch);
 }
 
 .input-unit__suffix {
@@ -5352,9 +5344,9 @@ button.danger {
   min-width: 5rem;
 }
 
-/* #1694 OR42 item 9 — a one-line name (a mapping's source and sink columns, a
-   parameter's name) reads whole: measured, the old 5rem cut `order_id` to
-   `order_i`. */
+/* #1694 OR42 item 9 — a one-line cell (a mapping's source and sink columns, a
+   key) reads whole: measured, the old 5rem cut `order_id` to `order_i`. In a
+   narrow dock the table scrolls sideways rather than crush it. */
 .row-table th[data-width='name'] {
   min-width: var(--row-table-name-min);
 }

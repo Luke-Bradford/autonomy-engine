@@ -7,3 +7,11 @@
 export function unitSuffix(unit: string): string {
   return unit === 'seconds' ? 's' : unit;
 }
+
+/**
+ * A field's title with its unit, "Timeout (seconds)": its name, its `?`'s and
+ * its validation messages' — the one spelling of that idea.
+ */
+export function titleWithUnit(title: string, unit: string | undefined): string {
+  return unit === undefined ? title : `${title} (${unit})`;
+}

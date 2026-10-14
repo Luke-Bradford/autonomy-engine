@@ -827,8 +827,8 @@ row heights), not the layout.
     960px window up, so its body is 418px and label-left. Under 960px it stacks below the list at the
     content column's width, which a 700px window takes under 400px. The editor's trigger and
     connection columns are narrower (361px at 1440), so their forms keep the label over the control.
-- **Controls are sized by type at every width**, on every form. A select is as wide as its longest
-  option, capped at 320px. A number (`.number-input`, or an `<input type="number">` row) is 120px. Only
+- **Controls are sized by type at every width**, on every form. Outside the property pane (below), a
+  select is as wide as its longest option, capped at 320px. A number (`.number-input`, or an `<input type="number">` row) is 120px. Only
   free text grows. The run drawer (`.node-detail-panel`) shares the dock and is not a form, so none of
   this applies to it.
 - **In the property pane, three size classes (#1694 OR42 F10).** Every control outside a table takes
@@ -840,11 +840,13 @@ row heights), not the layout.
   | M | `--field-m`, 240px | a name (a one-line literal), a connection or dataset binding, a longer choice; any unmarked select |
   | L | the value column | free text, paths, expressions, JSON |
 
-  `fieldSize` (`configForm.ts`) sets `data-size` on a config field, and S is exactly where `fieldSpan`
-  packs a field short. A choice must still show its longest option whole. Drawers and Settings keep
+  `fieldSize` (`configForm.ts`) sets `data-size` on a config field, and a choice is S exactly where
+  `fieldSpan` packs it short. A choice must still show its longest option whole. Drawers and Settings keep
   a select's natural width (above). A row table's cells are sized by its columns instead: a one-line
-  name column (`data-width="name"`, a mapping's source and sink) has a `--row-table-name-min` floor of
-  160px. `e2e/property-pane-ratchet.spec.ts` holds the classes for every catalog type and tab.
+  text column (`data-width="name"`, a mapping's source and sink, a key) has a `--row-table-name-min`
+  floor of 160px, and in a narrow dock the table scrolls sideways rather than crush it. An optional
+  choice cell's empty option is blank, because empty means its default; a required one keeps
+  "— none —". `e2e/property-pane-ratchet.spec.ts` holds the classes for every catalog type and tab.
 - **A unit is a suffix inside its box, not label text (#1694 OR42 item 5).** `30` `s`, through
   `WithUnit`/`UnitLabel` (`lib/form/UnitInput.tsx`), so a label is the title alone and never wraps. The
   unit stays in the field's accessible name, out of sight ("Timeout (seconds)"), so its name, its

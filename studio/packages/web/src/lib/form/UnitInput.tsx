@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { unitSuffix } from './unit';
 
 /**
@@ -29,11 +29,14 @@ export function UnitLabel({ title, unit }: { title: ReactNode; unit: string | un
  */
 export function WithUnit({ unit, children }: { unit: string | undefined; children: ReactNode }) {
   if (unit === undefined) return <>{children}</>;
+  const suffix = unitSuffix(unit);
+  // The box keeps clear of the suffix by its length, so a long value never
+  // runs under "bytes" (`--unit-ch`, `index.css`).
   return (
-    <span className="input-unit">
+    <span className="input-unit" style={{ '--unit-ch': suffix.length } as CSSProperties}>
       {children}
       <span className="input-unit__suffix" aria-hidden="true">
-        {unitSuffix(unit)}
+        {suffix}
       </span>
     </span>
   );
