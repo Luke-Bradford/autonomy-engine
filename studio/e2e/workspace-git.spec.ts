@@ -141,7 +141,8 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   // bare repo, over a workspace every earlier spec has filled. On CI it ran 31s
   // against the 30s default once #1476 slice 6 added a commit, a push and a
   // check (measured from the trace: the last assertion began at 29.6s).
-  test.setTimeout(90_000);
+  // 150 s, not 90: up to six readings wait on a CI git sync (`SYNC_SETTLES`, #1689).
+  test.setTimeout(150_000);
   const problems = collectPageProblems(page);
 
   /**
@@ -339,7 +340,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   const gitPart = page.getByRole('group', { name: 'Pipeline state' }).locator('[data-part="git"]');
   // #1476 slice 6 — and it came in from main, so it is not on the working
   // branch: uncommitted, in amber, with the reason in the detail.
-  await expect(gitPart).toHaveText(/^\S+ → main · from [0-9a-f]{7} · uncommitted\./);
+  await expect(gitPart).toHaveText(/^\S+ → main · from [0-9a-f]{7} · uncommitted\./, SYNC_SETTLES);
   await expect(gitPart).toHaveAttribute('data-tone', 'warning');
   await expect(gitPart).toHaveAttribute('title', /was imported from commit [0-9a-f]{7}/);
   await expect(gitPart).toHaveAttribute(
@@ -668,7 +669,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await page.getByRole('button', { name: 'Commit' }).click();
   await expect(page.getByRole('status')).toContainText('Committed');
   await openExistingCanvas(page, publishName);
-  await expect(gitPart).toHaveText(/ · in sync\./);
+  await expect(gitPart).toHaveText(/ · in sync\./, SYNC_SETTLES);
   await expect(gitPart).toHaveAttribute('data-tone', 'neutral');
   await expect(gitPart).toHaveAttribute(
     'title',
@@ -680,7 +681,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await incoming.getByRole('button', { name: 'Check for incoming' }).click();
   await expect(incoming).toContainText(`${pipelineName}-later`);
   await openExistingCanvas(page, publishName);
-  await expect(gitPart).toHaveText(/ · behind main — pull first\./);
+  await expect(gitPart).toHaveText(/ · behind main — pull first\./, SYNC_SETTLES);
   await expect(gitPart).toHaveAttribute('data-tone', 'warning');
   await expect(gitPart).toHaveAttribute(
     'title',
