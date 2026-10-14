@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import {
   appendFile,
@@ -8,6 +9,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  rm,
   stat,
   symlink,
   utimes,
@@ -16,7 +18,7 @@ import {
 import { join } from 'node:path';
 import { COPY_FILES_ACTIVITY_TYPE } from '@autonomy-studio/shared';
 import { fsAdapter } from '../fs.js';
-import { unchangedSince } from '../fs-files-copy.js';
+import { runFilesCopy, unchangedSince } from '../fs-files-copy.js';
 import { wildcardMatcher } from '../fs-select.js';
 import { cleanupTempRoots, tempRoot } from './temp-roots.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
@@ -249,6 +251,8 @@ describe('Copy · Files as-is — sink', () => {
     await put('in/sub/a.txt', 'lower');
     const events = await run({ sourcePath: 'in', copyBehavior: 'flatten' });
     expect(failure(events).error).toContain('would both be written');
+    // #1685 — and says why, since a case-sensitive sink could hold both.
+    expect(failure(events).error).toContain('differ only in case');
     expect(await tree(dst)).toEqual([]);
   });
 
@@ -391,16 +395,18 @@ describe('Copy · Files as-is — permissions and failures', () => {
     expect(failure(events)).toMatchObject({ kind: 'permanent' });
   });
 
-  it('reports what it had copied before a failure part-way', async () => {
-    await put('in/a.txt', 'a');
-    await put('in/sub/b.txt', 'b');
-    // `sub` in the sink is a FILE, so the second target has no folder to go in.
-    await writeFile(join(dst, 'sub'), 'not a folder');
-    const events = await run({ sourcePath: 'in' });
-    expect(failure(events)).toMatchObject({ kind: 'permanent' });
-    expect(events).toContainEqual({ type: 'output', name: 'filesWritten', value: 1 });
-    expect(await tree(dst)).toEqual(['a.txt', 'sub']);
-  });
+  it.skipIf(process.getuid?.() === 0)(
+    'reports what it had copied before a failure part-way',
+    async () => {
+      await put('in/a.txt', 'a');
+      // The SECOND file cannot be read, which nothing at plan time looks at.
+      await chmod(await put('in/b.txt', 'b'), 0o000);
+      const events = await run({ sourcePath: 'in' });
+      expect(failure(events)).toMatchObject({ kind: 'permanent' });
+      expect(events).toContainEqual({ type: 'output', name: 'filesWritten', value: 1 });
+      expect(await tree(dst)).toEqual(['a.txt']);
+    },
+  );
 
   it('is cancelled by an abort', async () => {
     await put('in/a.txt', 'a');
@@ -463,9 +469,9 @@ describe('Copy · Files as-is — review fixes (#1600 C1a)', () => {
 
   it('leaves a source that changed after it was read', async () => {
     const path = await put('in/a.txt', 'aaa');
-    const st = await lstat(path);
+    const st = await lstat(path, { bigint: true });
     const s = { abs: path, rel: 'a.txt', dev: st.dev, ino: st.ino, mode: 0o644 };
-    const stamp = { dev: st.dev, ino: st.ino, size: st.size, mtimeMs: st.mtimeMs, read: 3 };
+    const stamp = { dev: st.dev, ino: st.ino, size: st.size, mtimeNs: st.mtimeNs, read: 3 };
     await expect(unchangedSince(s, stamp)).resolves.toBeUndefined();
     // Fewer bytes copied than the file held.
     await expect(unchangedSince(s, { ...stamp, read: 2 })).rejects.toThrow('left in place');
@@ -488,5 +494,161 @@ describe('Copy · Files as-is — review fixes (#1600 C1a)', () => {
     expect(wildcardMatcher('**')('')).toBe(true);
     expect(wildcardMatcher('a.c')('abc')).toBe(false);
     expect(wildcardMatcher('*b*')('aaa')).toBe(false);
+  });
+});
+
+describe('Copy · Files as-is — hardening (#1685)', () => {
+  it('refuses at plan time a file standing where a sink folder must be made', async () => {
+    await put('in/a.txt', 'a');
+    await put('in/sub/b.txt', 'b');
+    await writeFile(join(dst, 'sub'), 'not a folder');
+    const events = await run({ sourcePath: 'in' });
+    expect(failure(events)).toMatchObject({ kind: 'permanent' });
+    expect(failure(events).error).toContain('is not a folder');
+    // Nothing was written: not even `a.txt`, which comes first.
+    expect(events.filter((e) => e.type === 'output')).toEqual([]);
+    expect(await tree(dst)).toEqual(['sub']);
+  });
+
+  it('refuses at plan time a target that is a folder, in every If file exists mode', async () => {
+    await put('in/a.txt', 'a');
+    await put('in/b.txt', 'b');
+    await mkdir(join(dst, 'b.txt'));
+    for (const ifExists of ['overwrite', 'skip', 'fail'] as const) {
+      const events = await run({ sourcePath: 'in', ifExists });
+      expect(failure(events).error).toContain('is a folder');
+      expect(await tree(dst)).toEqual([]);
+    }
+  });
+
+  it('refuses at plan time a file standing where a Move to folder must be made', async () => {
+    await put('in/sub/a.txt', 'a');
+    await put('done/sub', 'not a folder');
+    const events = await run(
+      { sourcePath: 'in', afterCopy: 'move', moveTo: 'done' },
+      { sourceWritable: true },
+    );
+    expect(failure(events)).toMatchObject({ kind: 'permanent' });
+    expect(await tree(dst)).toEqual([]);
+    expect(await tree(src)).toEqual(['done/sub', 'in/sub/a.txt']);
+  });
+
+  describe('Skip converges on a retry: an existing identical copy counts as copied', () => {
+    beforeEach(async () => {
+      await put('in/a.txt', 'new a');
+      await put('in/b.txt', 'same b');
+      // What an earlier attempt that failed before removing the source left.
+      await put('b.txt', 'same b', dst);
+    });
+
+    it('Delete source removes a source whose copy is already there', async () => {
+      const events = await run(
+        { sourcePath: 'in', ifExists: 'skip', afterCopy: 'delete' },
+        { sourceWritable: true },
+      );
+      expect(outputs(events)).toMatchObject({ filesWritten: 1, filesSkipped: 1, filesDeleted: 2 });
+      expect(await tree(src)).toEqual([]);
+      expect(await readFile(join(dst, 'b.txt'), 'utf8')).toBe('same b');
+    });
+
+    it('Move source to moves it', async () => {
+      const events = await run(
+        { sourcePath: 'in', ifExists: 'skip', afterCopy: 'move', moveTo: 'done' },
+        { sourceWritable: true },
+      );
+      expect(outputs(events)).toMatchObject({ filesWritten: 1, filesSkipped: 1, filesMoved: 2 });
+      expect(await tree(src)).toEqual(['done/a.txt', 'done/b.txt']);
+    });
+
+    it('keeps a source whose existing target is not a regular readable copy of it', async () => {
+      const keeps = async () => {
+        const events = await run(
+          { sourcePath: 'in', ifExists: 'skip', afterCopy: 'delete' },
+          { sourceWritable: true },
+        );
+        expect(outputs(events)).toMatchObject({ filesSkipped: 1, filesDeleted: 1 });
+        expect(await tree(src)).toEqual(['in/b.txt']);
+        // Back to the start for the next case: `a.txt` copied afresh.
+        await rm(join(dst, 'a.txt'));
+        await put('in/a.txt', 'new a');
+      };
+      // Longer, sharing the source's bytes as a prefix.
+      await writeFile(join(dst, 'b.txt'), 'same b and more');
+      await keeps();
+      // A symlink to an identical file: never followed.
+      await rm(join(dst, 'b.txt'));
+      await writeFile(join(dst, 'twin'), 'same b');
+      await symlink(join(dst, 'twin'), join(dst, 'b.txt'));
+      await keeps();
+      // A FIFO: must neither block nor fail the copy.
+      await rm(join(dst, 'b.txt'));
+      execFileSync('mkfifo', [join(dst, 'b.txt')]);
+      await keeps();
+    });
+
+    it('keeps a source whose existing target has the same size but other bytes', async () => {
+      await writeFile(join(dst, 'b.txt'), 'diff b');
+      const events = await run(
+        { sourcePath: 'in', ifExists: 'skip', afterCopy: 'delete' },
+        { sourceWritable: true },
+      );
+      expect(outputs(events)).toMatchObject({ filesSkipped: 1, filesDeleted: 1 });
+      expect(await tree(src)).toEqual(['in/b.txt']);
+      expect(await readFile(join(dst, 'b.txt'), 'utf8')).toBe('diff b');
+    });
+  });
+
+  it('copies a file whose name leaves no room for a temp suffix', async () => {
+    const name = `${'x'.repeat(250)}.txt`;
+    await put(`in/${name}`, 'long');
+    const events = await run({ sourcePath: 'in' });
+    expect(outputs(events)).toMatchObject({ filesWritten: 1 });
+    expect(await tree(dst)).toEqual([name]);
+  });
+
+  it('reports a refusal made after an abort as cancelled', async () => {
+    // Straight to the copy: the adapter answers an abort it sees before the
+    // dispatch itself, so only an abort landing mid-plan reaches this path.
+    const ac = new AbortController();
+    ac.abort();
+    const events: ActivityEvent[] = [];
+    const ctx: ActivityContext = {
+      runId: 'run_1',
+      nodeId: 'n1',
+      attemptId: 'n1#0',
+      activityType: COPY_FILES_ACTIVITY_TYPE,
+      input: { sourcePath: 'missing' },
+      connectionConfig: {},
+      sink: { kind: 'fs', connectionConfig: { roots: [dst], writable: true } },
+      signal: ac.signal,
+    };
+    for await (const ev of runFilesCopy(ctx, { roots: [src] })) events.push(ev);
+    expect(failure(events)).toMatchObject({ kind: 'cancelled' });
+  });
+
+  it('refuses a sink file and a Move to folder planned at one path', async () => {
+    // The two connections share a root, so the copy of `x` and the Move to
+    // folder are one path; neither exists yet, so only the plan can see it.
+    await put('in/x', 'x');
+    const events = await run(
+      { sourcePath: 'in', sinkFolder: 'out', afterCopy: 'move', moveTo: 'out/x' },
+      { sourceWritable: true, sinkRoot: src },
+    );
+    expect(failure(events).error).toContain('two things');
+    expect(await tree(src)).toEqual(['in/x']);
+    expect(existsSync(join(src, 'out'))).toBe(false);
+  });
+
+  it('finishes a move a failed attempt had linked but not removed', async () => {
+    await put('in/a.txt', 'a');
+    await mkdir(join(src, 'done'));
+    await link(join(src, 'in/a.txt'), join(src, 'done/a.txt'));
+    const events = await run(
+      { sourcePath: 'in', afterCopy: 'move', moveTo: 'done' },
+      { sourceWritable: true },
+    );
+    expect(outputs(events)).toMatchObject({ filesWritten: 1, filesMoved: 1 });
+    expect(await tree(src)).toEqual(['done/a.txt']);
+    expect(await tree(dst)).toEqual(['a.txt']);
   });
 });

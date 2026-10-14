@@ -5,6 +5,8 @@ import { classifyFsError } from './fs-connection.js';
 import type { ActivityContext, ActivityEvent } from './types.js';
 import { FS_STREAM_CHUNK_BYTES } from '../limits.js';
 import { constants as fsConstants } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { basename, dirname, join } from 'node:path';
 
 /**
  * The write half of the `fs` connector, shared by the `file_*` activities
@@ -65,6 +67,21 @@ export const LINK_UNSUPPORTED: ReadonlySet<string> = new Set([
   'ENOSYS',
 ]);
 
+/** The longest file name, in bytes, that the common file systems accept. */
+const NAME_MAX_BYTES = 255;
+
+/**
+ * The temp beside `finalPath`: `<name>.tmp.<suffix>`, or, when that name would
+ * be too long for the file system (#1685), a hidden name derived from it, which
+ * is as unique as the long name it replaces.
+ */
+export function tmpPathFor(finalPath: string, tmpSuffix: string): string {
+  const name = `${basename(finalPath)}.tmp.${tmpSuffix}`;
+  if (Buffer.byteLength(name) <= NAME_MAX_BYTES) return `${finalPath}.tmp.${tmpSuffix}`;
+  const digest = createHash('sha256').update(name).digest('hex').slice(0, 40);
+  return join(dirname(finalPath), `.${digest}.tmp`);
+}
+
 /**
  * Crash-safe atomic replace, shared by `file_write` (writes a string) and
  * `file_copy` (streams a source file): create a FRESH sibling temp, hand it to
@@ -99,7 +116,7 @@ export async function atomicReplace(
   writeInto: (fh: Awaited<ReturnType<typeof open>>) => Promise<void>,
   opts: { noClobber?: boolean; mode?: number } = {},
 ): Promise<ActivityEvent | undefined | typeof TARGET_EXISTS> {
-  const tmpPath = `${finalPath}.tmp.${tmpSuffix}`;
+  const tmpPath = tmpPathFor(finalPath, tmpSuffix);
   let fh: Awaited<ReturnType<typeof open>> | undefined;
   let renamed = false;
   try {
