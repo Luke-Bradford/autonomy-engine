@@ -132,12 +132,14 @@ async function readPane(page: Page, tablist: string, name: string, misses: strin
     // Read until two reads agree: a panel that loads something on mount (the
     // call panel's pipeline list) is measured settled, not mid-load.
     let read = await readTab(page);
-    for (let tries = 0; tries < 5; tries += 1) {
-      await page.waitForTimeout(150);
-      const again = await readTab(page);
-      if (JSON.stringify(again) === JSON.stringify(read)) break;
-      read = again;
-    }
+    await expect
+      .poll(async () => {
+        const again = await readTab(page);
+        const settled = JSON.stringify(again) === JSON.stringify(read);
+        read = again;
+        return settled;
+      })
+      .toBe(true);
     for (const wide of read.wideButtons) misses.push(`${name} › ${label} › wide button: ${wide}`);
     for (const head of read.headHelp) misses.push(`${name} › ${label} › ? on heading: ${head}`);
     prose.push(...read.tabProse.map((line) => `${label}: ${line}`));
