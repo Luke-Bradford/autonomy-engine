@@ -96,28 +96,28 @@ export function DraftNumberField<V extends number | undefined>({
       >
         {(id, describedBy) => (
           <WithUnit unit={unit}>
-          <input
-            id={id}
-            type="text"
-            className="number-input"
-            inputMode="numeric"
-            spellCheck={false}
-            placeholder={placeholder}
-            value={draft}
-            aria-invalid={error !== null}
-            aria-describedby={joinIds(error !== null ? errorId : undefined, describedBy)}
-            onChange={(e) => {
-              const raw = e.target.value;
-              setDraft(raw);
-              // #1393 — a standing error clears the moment the text is fine
-              // again, not on the next blur: an operator who has already fixed
-              // the value should not go on reading that it is wrong. Only ever
-              // CLEARS here; a new error is still raised by blur alone, so
-              // typing through an intermediate value does not shout.
-              if (error !== null && (raw === text || parse(raw).ok)) setError(null);
-            }}
-            onBlur={(e) => commit(e.target.value)}
-          />
+            <input
+              id={id}
+              type="text"
+              className="number-input"
+              inputMode="numeric"
+              spellCheck={false}
+              placeholder={placeholder}
+              value={draft}
+              aria-invalid={error !== null}
+              aria-describedby={joinIds(error !== null ? errorId : undefined, describedBy)}
+              onChange={(e) => {
+                const raw = e.target.value;
+                setDraft(raw);
+                // #1393 — a standing error clears the moment the text is fine
+                // again, not on the next blur: an operator who has already fixed
+                // the value should not go on reading that it is wrong. Only ever
+                // CLEARS here; a new error is still raised by blur alone, so
+                // typing through an intermediate value does not shout.
+                if (error !== null && (raw === text || parse(raw).ok)) setError(null);
+              }}
+              onBlur={(e) => commit(e.target.value)}
+            />
           </WithUnit>
         )}
       </LabelledControl>

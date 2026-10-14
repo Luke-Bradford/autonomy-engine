@@ -107,7 +107,9 @@ describe('fieldSize', () => {
 
   it('sizes a one-line literal (a name) M, a one-line field with a unit S, other one-liners L', () => {
     expect(fieldSize({ kind: 'text', singleLine: true, literal: true })).toBe('m');
-    expect(fieldSize({ kind: 'text', singleLine: true, label: { unit: 'seconds' } })).toBe('s');
+    expect(
+      fieldSize({ kind: 'text', singleLine: true, label: { title: 'Wait time', unit: 'seconds' } }),
+    ).toBe('s');
     expect(fieldSize({ kind: 'text', singleLine: true })).toBe('l');
     // A literal that may span lines is free text, not a name.
     expect(fieldSize({ kind: 'text', literal: true })).toBe('l');

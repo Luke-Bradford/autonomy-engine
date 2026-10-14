@@ -455,24 +455,24 @@ export function ConfigFieldControl({
         <>
           {oneLine ? (
             <WithUnit unit={unit}>
-            <input
-              id={id}
-              type="text"
-              className="config-field-line"
-              data-size={size}
-              ref={inputRef as RefObject<HTMLInputElement | null>}
-              value={text}
-              onSelect={onSelect}
-              spellCheck={false}
-              // A connection form's `user`/`host`/`url` is not the operator's
-              // own login, and a textarea never offered autofill for it.
-              autoComplete="off"
-              placeholder={field.defaultText}
-              aria-required={required || undefined}
-              aria-describedby={describedBy}
-              {...checked}
-              onChange={(e) => onChange(e.target.value)}
-            />
+              <input
+                id={id}
+                type="text"
+                className="config-field-line"
+                data-size={size}
+                ref={inputRef as RefObject<HTMLInputElement | null>}
+                value={text}
+                onSelect={onSelect}
+                spellCheck={false}
+                // A connection form's `user`/`host`/`url` is not the operator's
+                // own login, and a textarea never offered autofill for it.
+                autoComplete="off"
+                placeholder={field.defaultText}
+                aria-required={required || undefined}
+                aria-describedby={describedBy}
+                {...checked}
+                onChange={(e) => onChange(e.target.value)}
+              />
             </WithUnit>
           ) : field.kind === 'json' ? (
             <JsonEditor
