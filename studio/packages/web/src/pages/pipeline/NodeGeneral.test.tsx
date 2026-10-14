@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { NodeSchema, fieldLabelOf, type Node } from '@autonomy-studio/shared';
 import { createCanvasStore } from './canvasStore';
 import { NodeGeneral } from './NodeGeneral';
 
 /**
- * #1669 — the General tab's Activity state and Mark as (#1600 C0c), over a real
- * store: every assertion is about what the form wrote to the doc, or how it
- * presents the doc it was given.
+ * #1669 — the General tab's Mark as (#1600 C0c), over a real store: every
+ * assertion is about what the form wrote to the doc, or how it presents the doc
+ * it was given. #1694 OR42 — Activity state is no longer a field here: the
+ * canvas switches an activity off, and Mark as shows only while it is.
  */
 function mount(extra: Partial<Node> = {}) {
   const store = createCanvasStore();
@@ -15,18 +16,17 @@ function mount(extra: Partial<Node> = {}) {
   store.setState({ nodes: [{ ...target, ...extra }], edges: [], containers: [] });
   render(<NodeGeneral store={store} nodeId="a" />);
   return {
+    store,
     stored: () => store.getState().nodes[0]!,
-    state: () => screen.getByRole('combobox', { name: 'Activity state' }),
     markAs: () => screen.getByRole('combobox', { name: 'Mark as' }),
   };
 }
 
-describe('NodeGeneral — Activity state and Mark as (#1600 C0c)', () => {
-  it('keeps Mark as visible but disabled while the activity is active', () => {
-    const f = mount();
-    expect(f.state()).toHaveValue('active');
-    expect(f.markAs()).toBeDisabled();
-    expect(f.markAs()).toHaveValue('success');
+describe('NodeGeneral — Mark as (#1600 C0c, #1694 OR42)', () => {
+  it('has no Activity state field, and no Mark as while the activity is active', () => {
+    mount({ onInactiveMarkAs: 'failure' });
+    expect(screen.queryByRole('combobox', { name: 'Activity state' })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: 'Mark as' })).toBeNull();
   });
 
   it("names Mark as's options in ADF's words, storing the engine's", () => {
@@ -39,31 +39,25 @@ describe('NodeGeneral — Activity state and Mark as (#1600 C0c)', () => {
     ]);
   });
 
-  it('writes the state and the mark through, and keeps the mark when re-activated', () => {
+  it('appears when the activity is switched off, writes through, and keeps the mark when re-activated', () => {
     const f = mount();
-    fireEvent.change(f.state(), { target: { value: 'inactive' } });
-    expect(f.stored().state).toBe('inactive');
-    expect(f.markAs()).toBeEnabled();
-
+    act(() => void f.store.getState().setNodesInactive(['a'], true));
     fireEvent.change(f.markAs(), { target: { value: 'failure' } });
     expect(f.stored().onInactiveMarkAs).toBe('failure');
 
-    fireEvent.change(f.state(), { target: { value: 'active' } });
+    act(() => void f.store.getState().setNodesInactive(['a'], false));
+    expect(screen.queryByRole('combobox', { name: 'Mark as' })).toBeNull();
     // Absent, never 'active', so an active doc is byte-identical to a pre-C0c one.
     expect('state' in f.stored()).toBe(false);
-    expect(f.markAs()).toBeDisabled();
+    expect(f.stored().onInactiveMarkAs).toBe('failure');
+    act(() => void f.store.getState().setNodesInactive(['a'], true));
     expect(f.markAs()).toHaveValue('failure');
   });
 
-  it("describes each select by its own ? help, from the schema's description", () => {
+  it("describes Mark as by its own ? help, from the schema's description", () => {
     const f = mount({ state: 'inactive' });
-    for (const [select, field] of [
-      [f.state(), NodeSchema.shape.state],
-      [f.markAs(), NodeSchema.shape.onInactiveMarkAs],
-    ] as const) {
-      const note = fieldLabelOf(field)!.description!;
-      expect(select).toHaveAccessibleDescription(expect.stringContaining(note.slice(0, 40)));
-    }
+    const note = fieldLabelOf(NodeSchema.shape.onInactiveMarkAs)!.description!;
+    expect(f.markAs()).toHaveAccessibleDescription(expect.stringContaining(note.slice(0, 40)));
   });
 });
 

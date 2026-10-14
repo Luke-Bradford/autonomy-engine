@@ -1,7 +1,6 @@
 import { useStore } from 'zustand';
 import {
   DESCRIPTION_MAX_CHARS,
-  INACTIVE_STATE,
   InactiveMarkAsSchema,
   ContainerSchema,
   NodeSchema,
@@ -21,22 +20,18 @@ import type { createCanvasStore } from './canvasStore';
 import { NodeUserProperties } from './NodeUserProperties';
 import { PolicyEditor } from './PolicyEditor';
 
-/** #1600 C0c — the two fields' label, `?` text and option names, from the schema;
+/** #1600 C0c — Mark as's label, `?` text and option names, from the schema;
  * C0e — a container's own wording, from `ContainerSchema`. */
 const LABELS = {
   node: {
-    state: fieldLabelOf(NodeSchema.shape.state)!,
     markAs: fieldLabelOf(NodeSchema.shape.onInactiveMarkAs)!,
     basics: FORM_SECTION_HINTS.node.basics,
   },
   container: {
-    state: fieldLabelOf(ContainerSchema.shape.state)!,
     markAs: fieldLabelOf(ContainerSchema.shape.onInactiveMarkAs)!,
     basics: FORM_SECTION_HINTS.node.containerBasics,
   },
 };
-/** The select's value for "active" — a form value only, never stored (absent `state` is active). */
-const ACTIVE = 'active';
 
 /**
  * #1600 OR41 C0b (catalogue spec §3) — an activity's General tab: what the
@@ -48,10 +43,11 @@ const ACTIVE = 'active';
  * through to the store (no Apply), as the pipeline's description does: a typing
  * burst is one undo step (`setNodeDescription`).
  *
- * #1600 C0c — Activity state and Mark as (ADF's General tab). Both write
- * straight through too. Mark as stays visible but disabled while the activity
- * is active: the stored value is kept (ADF keeps it), and a kept value the form
- * hid would be config nobody could see.
+ * #1600 C0c — Mark as writes straight through too. #1694 OR42 — the activity
+ * is switched off and on from the canvas (right-click Deactivate, the dock's
+ * `⋯`), not here, so Mark as shows only while it is inactive, the one time it
+ * does anything. Re-activating keeps the stored mark (ADF keeps it); the code
+ * view shows it, and the next Deactivate resumes it.
  *
  * #1600 C0d — User properties, last, on an activity that records them
  * (`userPropertiesApply`): the save refuses them anywhere else. A node of
@@ -91,7 +87,6 @@ export function NodeGeneral({
         description={description}
         onDescription={(text) => store.getState().setNodeDescription(nodeId, text)}
         inactive={inactive}
-        onInactive={(off) => store.getState().setNodeInactive(nodeId, off)}
         markAs={markAs}
         onMarkAs={(v) => store.getState().setNodeMarkAs(nodeId, v)}
       />
@@ -102,10 +97,10 @@ export function NodeGeneral({
 }
 
 /**
- * #1600 OR41 C0e — the General tab's Basics: Description, Activity state and
- * Mark as. Presentational, so an activity (`NodeGeneral`) and a container
- * (`ContainerPanel`) show the same three controls; each owner writes through
- * to its own store action.
+ * #1600 OR41 C0e — the General tab's Basics: Description, and Mark as while
+ * inactive (#1694 OR42). Presentational, so an activity (`NodeGeneral`) and a
+ * container (`ContainerPanel`) show the same controls; each owner writes
+ * through to its own store action.
  */
 export function GeneralBasics({
   owner = 'node',
@@ -113,7 +108,6 @@ export function GeneralBasics({
   description,
   onDescription,
   inactive,
-  onInactive,
   markAs,
   onMarkAs,
 }: {
@@ -124,11 +118,10 @@ export function GeneralBasics({
   description: string;
   onDescription: (text: string) => void;
   inactive: boolean;
-  onInactive: (inactive: boolean) => void;
   markAs: InactiveMarkAs;
   onMarkAs: (markAs: InactiveMarkAs) => void;
 }) {
-  const { state: stateLabel, markAs: markAsLabel, basics } = LABELS[owner];
+  const { markAs: markAsLabel, basics } = LABELS[owner];
   return (
     <Section heading="Basics" help={basics}>
       <LabelledControl label="Description">
@@ -143,48 +136,31 @@ export function GeneralBasics({
           />
         )}
       </LabelledControl>
-      <FieldGrid className="field-stack">
-        <FieldCell span="short">
-          <LabelledControl
-            label={stateLabel.title}
-            about={{ name: stateLabel.title, note: stateLabel.description }}
-          >
-            {(id, describedBy) => (
-              <select
-                id={id}
-                aria-describedby={describedBy}
-                value={inactive ? INACTIVE_STATE : ACTIVE}
-                onChange={(e) => onInactive(e.target.value === INACTIVE_STATE)}
-              >
-                <option value={ACTIVE}>Active</option>
-                <option value={INACTIVE_STATE}>Inactive</option>
-              </select>
-            )}
-          </LabelledControl>
-        </FieldCell>
-        <FieldCell span="short">
-          <LabelledControl
-            label={markAsLabel.title}
-            about={{ name: markAsLabel.title, note: markAsLabel.description }}
-          >
-            {(id, describedBy) => (
-              <select
-                id={id}
-                aria-describedby={describedBy}
-                disabled={!inactive}
-                value={markAs}
-                onChange={(e) => onMarkAs(InactiveMarkAsSchema.parse(e.target.value))}
-              >
-                {InactiveMarkAsSchema.options.map((v) => (
-                  <option key={v} value={v}>
-                    {markAsLabel.options?.[v] ?? v}
-                  </option>
-                ))}
-              </select>
-            )}
-          </LabelledControl>
-        </FieldCell>
-      </FieldGrid>
+      {inactive && (
+        <FieldGrid className="field-stack">
+          <FieldCell span="short">
+            <LabelledControl
+              label={markAsLabel.title}
+              about={{ name: markAsLabel.title, note: markAsLabel.description }}
+            >
+              {(id, describedBy) => (
+                <select
+                  id={id}
+                  aria-describedby={describedBy}
+                  value={markAs}
+                  onChange={(e) => onMarkAs(InactiveMarkAsSchema.parse(e.target.value))}
+                >
+                  {InactiveMarkAsSchema.options.map((v) => (
+                    <option key={v} value={v}>
+                      {markAsLabel.options?.[v] ?? v}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </LabelledControl>
+          </FieldCell>
+        </FieldGrid>
+      )}
     </Section>
   );
 }

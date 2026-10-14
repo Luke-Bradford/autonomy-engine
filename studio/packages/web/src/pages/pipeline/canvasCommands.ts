@@ -1,10 +1,13 @@
-import { singleSelection, type createCanvasStore } from './canvasStore';
+import { selectedNodeIds, singleSelection, type createCanvasStore } from './canvasStore';
 import { containerLabels } from './containerRules';
 import { pasteAndSay } from './paste';
 import type { ClipboardCommand } from './undoRedo';
 
-/** What the canvas can be told to do from a keystroke or its context menu. */
-export type CanvasCommand = ClipboardCommand | 'delete';
+/**
+ * What the canvas can be told to do from a keystroke or its context menu.
+ * `deactivate`/`activate` (#1694 OR42) are the menu's alone: ADF has no key.
+ */
+export type CanvasCommand = ClipboardCommand | 'delete' | 'deactivate' | 'activate';
 
 /**
  * Whether the command was TAKEN — the caller `preventDefault`s a keystroke only
@@ -35,6 +38,17 @@ export function runCanvasCommand(
     if (state.selected.length === 0) return NOT_TAKEN;
     state.deleteSelection();
     return { taken: true, notice: null };
+  }
+  if (cmd === 'deactivate' || cmd === 'activate') {
+    // #1694 OR42 (#1680) — every selected activity, as one undo step. The count
+    // is of the ones that CHANGED, so a mixed selection says what it did.
+    const n = state.setNodesInactive(selectedNodeIds(state), cmd === 'deactivate');
+    if (n === 0) return NOT_TAKEN;
+    const what = `${n} ${n === 1 ? 'activity' : 'activities'}`;
+    return {
+      taken: true,
+      notice: cmd === 'deactivate' ? `Deactivated ${what}.` : `Activated ${what}.`,
+    };
   }
   if (cmd === 'copy' || cmd === 'cut') {
     const box = singleSelection(state.selected);

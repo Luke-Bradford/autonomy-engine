@@ -495,6 +495,8 @@ test.describe('copy/paste on the canvas (U21)', () => {
       'Paste⌘V',
       // #1597 — greyed here: this canvas has no container to move into.
       /^Move into/,
+      // #1694 OR42 — the activity's switch, in its own group before Delete.
+      'Deactivate',
       'Delete⌫',
     ]);
     // A key pressed inside the menu is the menu's, not the canvas's: ⌫ here

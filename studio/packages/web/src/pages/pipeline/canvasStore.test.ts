@@ -4928,7 +4928,7 @@ describe('setNodeUserProperties (#1600 OR41 C0d)', () => {
   });
 });
 
-describe('setNodeInactive / setNodeMarkAs (#1600 OR41 C0c)', () => {
+describe('setNodesInactive / setNodeMarkAs (#1600 OR41 C0c, #1694 OR42)', () => {
   const setup = (extra: Partial<Node> = {}) => {
     const store = createCanvasStore();
     store.setState({
@@ -4942,16 +4942,16 @@ describe('setNodeInactive / setNodeMarkAs (#1600 OR41 C0c)', () => {
 
   it("switches off with state 'inactive', and back on REMOVES the key (never stores 'active')", () => {
     const store = setup();
-    store.getState().setNodeInactive('n', true);
+    store.getState().setNodesInactive(['n'], true);
     expect(node(store).state).toBe('inactive');
     expect(store.getState().dirty).toBe(true);
-    store.getState().setNodeInactive('n', false);
+    store.getState().setNodesInactive(['n'], false);
     expect('state' in node(store)).toBe(false);
   });
 
   it('each toggle is its own undo step', () => {
     const store = setup();
-    store.getState().setNodeInactive('n', true);
+    store.getState().setNodesInactive(['n'], true);
     store.getState().setNodeMarkAs('n', 'failure');
     store.getState().undo();
     expect(node(store)).toMatchObject({ state: 'inactive' });
@@ -4962,7 +4962,7 @@ describe('setNodeInactive / setNodeMarkAs (#1600 OR41 C0c)', () => {
 
   it('Succeeded (the default) removes Mark as; re-activating KEEPS it, as ADF does', () => {
     const store = setup({ state: 'inactive', onInactiveMarkAs: 'skipped' });
-    store.getState().setNodeInactive('n', false);
+    store.getState().setNodesInactive(['n'], false);
     expect(node(store).onInactiveMarkAs).toBe('skipped');
     store.getState().setNodeMarkAs('n', 'success');
     expect('onInactiveMarkAs' in node(store)).toBe(false);
@@ -4970,10 +4970,25 @@ describe('setNodeInactive / setNodeMarkAs (#1600 OR41 C0c)', () => {
 
   it('is a no-op for an unknown node, and for an unchanged value', () => {
     const store = setup({ state: 'inactive' });
-    store.getState().setNodeInactive('missing', true);
-    store.getState().setNodeInactive('n', true);
+    expect(store.getState().setNodesInactive(['missing', 'n'], true)).toBe(0);
     store.getState().setNodeMarkAs('n', 'success');
     expect(store.getState().dirty).toBe(false);
+    expect(store.getState().past).toHaveLength(0);
+  });
+
+  it('switches several off as ONE undo step, counting only the ones that changed (#1680)', () => {
+    const store = createCanvasStore();
+    const at = (id: string, extra: Partial<Node> = {}) =>
+      ({ id, type: 'wait', config: {}, position: { x: 0, y: 0 }, ...extra }) as Node;
+    store.setState({ nodes: [at('a'), at('b', { state: 'inactive' }), at('c'), at('d')] });
+    expect(store.getState().setNodesInactive(['a', 'b', 'c', 'gone'], true)).toBe(2);
+    const states = () => store.getState().nodes.map((n) => n.state ?? 'active');
+    expect(states()).toEqual(['inactive', 'inactive', 'inactive', 'active']);
+    store.getState().undo();
+    expect(states()).toEqual(['active', 'inactive', 'active', 'active']);
+    store.getState().redo();
+    expect(store.getState().setNodesInactive(['a', 'b'], false)).toBe(2);
+    expect(states()).toEqual(['active', 'active', 'inactive', 'active']);
   });
 });
 

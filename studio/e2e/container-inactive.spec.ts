@@ -6,9 +6,9 @@ import { fluentRootReady } from './support/theme';
 
 /**
  * #1600 OR41 C0e (catalogue spec §3: "Containers get Name, Description,
- * State") — a ForEach switched off on its General tab: greyed on the canvas,
- * never entered, and recorded with its Mark as outcome, which alone routes its
- * edges. Its body is left out of validation, so an unfinished one saves.
+ * State") — a ForEach switched off (#1694 OR42: by its panel's Deactivate
+ * container): greyed on the canvas, never entered, and recorded with its Mark as
+ * outcome, which alone routes its edges. Its body is left out of validation, so an unfinished one saves.
  */
 
 const wait = (id: string, x: number, y = 0) => ({
@@ -24,7 +24,7 @@ const FOREACH = {
   items: '${createArray(1, 2)}',
 };
 
-test("a container's General tab: Description, Activity state and Mark as, written through and saved", async ({
+test("#1694 OR42 — a container's Deactivate button, then Description and Mark as on General, written through and saved", async ({
   page,
 }) => {
   const problems = collectPageProblems(page);
@@ -42,13 +42,13 @@ test("a container's General tab: Description, Activity state and Mark as, writte
     'true',
   );
   const basics = properties(page).getByRole('group', { name: 'Basics' });
-  const state = basics.getByLabel('Activity state', { exact: true });
   const markAs = basics.getByLabel('Mark as', { exact: true });
-  await expect(state).toHaveValue('active');
-  await expect(markAs).toBeDisabled();
+  await expect(basics.getByLabel('Activity state', { exact: true })).toHaveCount(0);
+  await expect(markAs).toHaveCount(0);
 
-  await state.selectOption('inactive');
+  await properties(page).getByRole('button', { name: 'Deactivate container' }).click();
   await expect(box).toHaveClass(/flow-container--inactive/);
+  await expect(properties(page).getByRole('button', { name: 'Activate container' })).toBeVisible();
   const words = box.locator('.flow-container-inactive');
   await expect(words).toHaveText(' · inactive · succeeded');
   await markAs.selectOption('failure');
@@ -59,12 +59,9 @@ test("a container's General tab: Description, Activity state and Mark as, writte
     'Each export file',
   );
 
-  // UI STANDARD rule 5/7 — the two selects packed side by side at 1440x900,
-  // each sized to its options; the box's name fades, its inactive words do not.
-  const [s, m] = await Promise.all([state.boundingBox(), markAs.boundingBox()]);
-  expect(Math.abs(s!.y - m!.y)).toBeLessThan(2);
-  expect(s!.width).toBeLessThan(200);
-  expect(m!.width).toBeLessThan(200);
+  // UI STANDARD rule 5 — a short select, sized to its options; the box's name
+  // fades, its inactive words do not.
+  expect((await markAs.boundingBox())!.width).toBeLessThan(200);
   const opacityOf = (sel: string) =>
     box.locator(sel).evaluate((el) => Number(getComputedStyle(el).opacity));
   expect(await opacityOf('.flow-container-name')).toBeLessThan(1);

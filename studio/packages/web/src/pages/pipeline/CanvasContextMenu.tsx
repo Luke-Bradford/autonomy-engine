@@ -64,6 +64,10 @@ const SELECTION_ITEMS: readonly { cmd: CanvasCommand; label: string; keys: strin
  * the canvas's containers; ArrowRight opens it from the keyboard) and Remove
  * from, the keyboard route to what dragging into a box does (WCAG 2.5.7). It
  * replaced the Container section every activity's properties used to carry.
+ *
+ * #1694 OR42 — Deactivate (ADF's right-click act), or Activate when every
+ * selected activity is already off, in its own group before Delete. It is where
+ * an activity is switched off: the General tab no longer carries the state.
  */
 export function CanvasContextMenu({
   request,
@@ -72,6 +76,7 @@ export function CanvasContextMenu({
   disabledReason,
   moves,
   onMove,
+  allInactive = false,
 }: {
   request: CanvasMenuRequest | null;
   onClose: () => void;
@@ -79,6 +84,8 @@ export function CanvasContextMenu({
   disabledReason: string | null;
   moves: CanvasMenuMoves | null;
   onMove: (target: string | null) => void;
+  /** #1694 OR42 — every selected activity is already switched off, so the act offered is Activate. */
+  allInactive?: boolean;
 }) {
   const x = request?.x ?? 0;
   const y = request?.y ?? 0;
@@ -159,6 +166,14 @@ export function CanvasContextMenu({
           )}
           {request.target === 'selection' && (
             <>
+              <MenuDivider />
+              <MenuItem
+                disabled={disabled}
+                subText={subText}
+                onClick={() => onCommand(allInactive ? 'activate' : 'deactivate')}
+              >
+                {allInactive ? 'Activate' : 'Deactivate'}
+              </MenuItem>
               <MenuDivider />
               <MenuItem
                 className="row-menu__danger"

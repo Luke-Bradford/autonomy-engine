@@ -1507,11 +1507,29 @@ describe('FlowCanvas context menu (#1477 OR29)', () => {
         'Duplicate⌘D',
         'Paste⌘V',
         'Move into',
+        'Deactivate',
         'Delete⌫',
       ]),
     );
     fireEvent.click(within(document.body).getByRole('menuitem', { name: /Delete/ }));
     expect(calls).toEqual(['delete']);
+  });
+
+  it('offers Deactivate while any selected activity is active, Activate once all are off (#1694 OR42)', async () => {
+    const calls: string[] = [];
+    const { store, node } = withGraph({ onCommand: (cmd) => calls.push(cmd) });
+    store.getState().setNodesInactive(['a'], true);
+    store.getState().setSelection([
+      { kind: 'node', id: 'a' },
+      { kind: 'node', id: 'b' },
+    ]);
+    fireEvent.contextMenu(node('a'), { clientX: 20, clientY: 20 });
+    fireEvent.click(await within(document.body).findByRole('menuitem', { name: 'Deactivate' }));
+    expect(calls).toEqual(['deactivate']);
+    store.getState().setNodesInactive(['b'], true);
+    fireEvent.contextMenu(node('b'), { clientX: 320, clientY: 20 });
+    fireEvent.click(await within(document.body).findByRole('menuitem', { name: 'Activate' }));
+    expect(calls).toEqual(['deactivate', 'activate']);
   });
 
   it('keeps a multi-selection that the right-clicked activity is part of', async () => {
@@ -1539,7 +1557,7 @@ describe('FlowCanvas context menu (#1477 OR29)', () => {
       reason: 'Saving — wait for it to finish.',
     });
     fireEvent.contextMenu(node('a'), { clientX: 20, clientY: 20 });
-    await waitFor(() => expect(within(document.body).getAllByRole('menuitem')).toHaveLength(6));
+    await waitFor(() => expect(within(document.body).getAllByRole('menuitem')).toHaveLength(7));
     for (const item of within(document.body).getAllByRole('menuitem')) {
       expect(item.getAttribute('aria-disabled'), item.textContent ?? '').toBe('true');
       expect(item.textContent).toContain('Saving — wait for it to finish.');
@@ -1554,7 +1572,7 @@ describe('FlowCanvas context menu (#1477 OR29)', () => {
     const { node } = withGraph({ onCommand: () => {} });
     node('a').focus();
     fireEvent.contextMenu(node('a'), { clientX: 20, clientY: 20 });
-    await waitFor(() => expect(within(document.body).getAllByRole('menuitem')).toHaveLength(6));
+    await waitFor(() => expect(within(document.body).getAllByRole('menuitem')).toHaveLength(7));
     fireEvent.keyDown(within(document.body).getAllByRole('menuitem')[0]!, { key: 'Escape' });
     await waitFor(() => expect(within(document.body).queryAllByRole('menuitem')).toEqual([]));
     await waitFor(() => expect(document.activeElement).toBe(node('a')));

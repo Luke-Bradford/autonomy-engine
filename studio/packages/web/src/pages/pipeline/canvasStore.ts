@@ -98,6 +98,30 @@ export function sameSelectionSet(a: Selection[], b: Selection[]): boolean {
   return a.every((x) => b.some((y) => sameSelection(x, y)));
 }
 
+/** The selection's activities that are still on the canvas, in selection order. */
+export function selectedNodeIds(state: {
+  selected: readonly { kind: string; id: string }[];
+  nodes: readonly { id: string }[];
+}): string[] {
+  return state.selected
+    .filter((sel) => sel.kind === 'node' && state.nodes.some((n) => n.id === sel.id))
+    .map((sel) => sel.id);
+}
+
+/**
+ * #1694 OR42 — whether every selected activity is already switched off, so the
+ * act a selection is offered is Activate rather than Deactivate. False with no
+ * activity selected. The canvas menu and the multi-selection panel both ask.
+ */
+export function selectionAllInactive(state: {
+  selected: readonly { kind: string; id: string }[];
+  nodes: readonly Node[];
+}): boolean {
+  const ids = new Set(selectedNodeIds(state));
+  const held = state.nodes.filter((n) => ids.has(n.id));
+  return held.length > 0 && held.every(isInactive);
+}
+
 /**
  * The ONE selected element, or `null` when zero or many are.
  *
@@ -1506,11 +1530,13 @@ export interface CanvasState {
    */
   setNodeUserProperties(id: string, rows: readonly UserProperty[], coalesceKey?: string): void;
   /**
-   * #1600 OR41 C0c — switch an activity off (`true`) or back on. Active REMOVES
+   * #1600 OR41 C0c — switch activities off (`true`) or back on. Active REMOVES
    * `state` (never stores `'active'`) and keeps `onInactiveMarkAs`, as ADF does.
-   * Each toggle is its own undo step.
+   * #1694 OR42 — over several at once (the canvas's Deactivate on a selection,
+   * #1680), as ONE undo step. Returns how many changed: an id already in that
+   * state, or unknown, is skipped, and when none changes there is no step at all.
    */
-  setNodeInactive(id: string, inactive: boolean): void;
+  setNodesInactive(ids: readonly string[], inactive: boolean): number;
   /** #1600 C0c — an inactive activity's recorded outcome; `success` (the default) removes the key. */
   setNodeMarkAs(id: string, markAs: InactiveMarkAs): void;
   /**
@@ -2453,12 +2479,18 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         }));
       },
 
-      setNodeInactive(id, inactive) {
-        const node = get().nodes.find((n) => n.id === id);
-        if (node === undefined || isInactive(node) === inactive) return;
+      setNodesInactive(ids, inactive) {
+        const wanted = new Set(ids);
+        const changing = new Set(
+          get()
+            .nodes.filter((n) => wanted.has(n.id) && isInactive(n) !== inactive)
+            .map((n) => n.id),
+        );
+        if (changing.size === 0) return 0;
         edit((s) => ({
-          nodes: s.nodes.map((n) => (n.id === id ? withGeneral(n, { inactive }) : n)),
+          nodes: s.nodes.map((n) => (changing.has(n.id) ? withGeneral(n, { inactive }) : n)),
         }));
+        return changing.size;
       },
 
       setNodeMarkAs(id, markAs) {

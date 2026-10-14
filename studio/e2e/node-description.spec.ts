@@ -37,7 +37,7 @@ test('a description typed on the General tab survives a save and reload, and is 
   await properties(page).getByRole('tab', { name: 'General' }).click();
   const section = properties(page).getByRole('group', { name: 'Basics' });
   await expect(section).toHaveAccessibleDescription(
-    'What this activity is for, and whether it runs.',
+    'What this activity is for, and what it records while inactive.',
   );
   const field = section.getByLabel('Activity description');
   await expect(field).toHaveAttribute('maxlength', '4000');
