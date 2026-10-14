@@ -43,7 +43,7 @@ const LIMITS: Record<string, { prose: number; help: number }> = {
   'Read file': { prose: 0, help: 7 },
   'Write file': { prose: 0, help: 8 },
   'Agent task': { prose: 1, help: 9 },
-  'LLM call': { prose: 3, help: 23 },
+  'LLM call': { prose: 1, help: 25 },
   'Append variable': { prose: 1, help: 7 },
   'Execute pipeline': { prose: 1, help: 5 },
   Fail: { prose: 0, help: 6 },
@@ -53,7 +53,7 @@ const LIMITS: Record<string, { prose: number; help: number }> = {
   Switch: { prose: 0, help: 7 },
   Wait: { prose: 0, help: 6 },
   'Webhook (external wait)': { prose: 0, help: 6 },
-  ForEach: { prose: 3, help: 3 },
+  ForEach: { prose: 2, help: 4 },
   Until: { prose: 1, help: 4 },
   Stage: { prose: 1, help: 1 },
 };
