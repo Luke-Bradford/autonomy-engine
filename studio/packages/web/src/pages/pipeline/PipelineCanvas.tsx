@@ -146,7 +146,7 @@ import {
   type ConfigDraft,
   type ConfigField,
 } from './configForm';
-import { nodeTypeTabs } from './activityTabs';
+import { applicableFieldNames, nodeTypeTabs } from './activityTabs';
 import { containerLabels, issuesBySubject, readableIssue, sameAttribution } from './containerRules';
 import { nameIssues, propertyIssues } from './paramRules';
 import { PipelineGeneral } from './PipelineGeneral';
@@ -4159,7 +4159,13 @@ export function NodePanel({
             picker={picker}
             choicesFor={choicesFor}
             emptyHint="This activity has no settings."
-            fieldNames={t.fields.map((f) => f.name)}
+            fieldNames={applicableFieldNames(
+              entry,
+              t.fields.map((f) => f.name),
+              fields ?? [],
+              editor.inputs,
+              editable,
+            )}
             toolbar={false}
             fieldModeExtra={
               /* #1170 M8 slice 2 — Auto-map (§6.3) and §13's explicit *unmapped*

@@ -84,9 +84,14 @@ describe('node panel labels (#1396)', () => {
       // One row in every row list, and an override row for every setting of the
       // bound connection: both carry labels of their own, which sit beside the
       // activity's titles.
-      const config = Object.fromEntries(
-        fields.filter((f) => f.kind === 'objectList').map((f) => [f.name, [{}]]),
-      );
+      // A field the entry draws only under a condition (#1686) holds a value, so
+      // it is on the panel whatever its controls say.
+      const config = Object.fromEntries([
+        ...fields.filter((f) => f.kind === 'objectList').map((f) => [f.name, [{}]]),
+        ...fields
+          .filter((f) => entry.appliesWhen?.[f.name] !== undefined)
+          .map((f) => [f.name, f.kind === 'boolean' ? true : 'x']),
+      ]);
       const overrides =
         kind === undefined
           ? {}

@@ -97,3 +97,49 @@ describe('copy_files config', () => {
     );
   });
 });
+
+describe('copy_files appliesWhen (#1686)', () => {
+  // The dock's view rule must agree with the schema's cross-field checks: over
+  // every combination of the three controls, a field the schema refuses is one
+  // the dock leaves out, and one it needs is one the dock draws. Include
+  // subfolders is left out of the comparison: it has a default, so the schema
+  // cannot tell it set from left (the superRefine's own note).
+  const entry = getActivity(COPY_FILES_ACTIVITY_TYPE);
+  const rules = entry?.appliesWhen ?? {};
+  const held: Record<string, string> = {
+    wildcard: '*.csv',
+    fileListPath: 'list.txt',
+    moveTo: 'done',
+    sinkFileName: 'all.csv',
+  };
+  const combos = (['file', 'folder', 'list'] as const).flatMap((pathType) =>
+    (['keep', 'delete', 'move'] as const).flatMap((afterCopy) =>
+      (['preserve', 'flatten', 'merge'] as const).map((copyBehavior) => ({
+        pathType,
+        afterCopy,
+        copyBehavior,
+      })),
+    ),
+  );
+  const applies = (name: string, controls: Record<string, string>) =>
+    (rules[name] ?? []).some((c) => (c.in as readonly string[]).includes(controls[c.field]!));
+  const refusedOn = (name: string, config: Record<string, unknown>) =>
+    issues(config).some((i) => i.startsWith(`${name}:`));
+
+  it('covers every conditional field', () => {
+    expect(Object.keys(rules).sort()).toEqual([...Object.keys(held), 'recursive'].sort());
+  });
+
+  it.each(Object.keys(held))('%s is drawn exactly where the schema accepts it', (name) => {
+    for (const controls of combos) {
+      const config = { sourcePath: 'in', ...controls, [name]: held[name] };
+      expect(refusedOn(name, config), `${name} set, ${JSON.stringify(controls)}`).toBe(
+        !applies(name, controls),
+      );
+      const without = { sourcePath: 'in', ...controls };
+      if (refusedOn(name, without)) {
+        expect(applies(name, controls), `${name} needed, ${JSON.stringify(controls)}`).toBe(true);
+      }
+    }
+  });
+});

@@ -817,6 +817,18 @@ const ENTRIES: ActivityCatalogEntry[] = [
         fields: ['sinkFolder', 'sinkFileName', 'copyBehavior', 'ifExists'],
       },
     ],
+    // #1686 — the same rules `copyFilesConfigSchema`'s superRefine enforces,
+    // read by the dock to leave out what cannot apply.
+    appliesWhen: {
+      wildcard: [{ field: 'pathType', in: ['folder'] }],
+      recursive: [{ field: 'pathType', in: ['folder'] }],
+      fileListPath: [{ field: 'pathType', in: ['list'] }],
+      moveTo: [{ field: 'afterCopy', in: ['move'] }],
+      sinkFileName: [
+        { field: 'pathType', in: ['file'] },
+        { field: 'copyBehavior', in: ['merge'] },
+      ],
+    },
     idempotent: false,
     connectionKinds: ['fs'],
     sinkConnectionKinds: ['fs'],

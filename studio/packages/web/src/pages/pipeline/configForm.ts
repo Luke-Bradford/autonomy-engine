@@ -467,10 +467,14 @@ export interface ConfigField {
  * written longhand at every seed, fallback and render site: `objectList` made
  * that ternary wrong in six places at once, and a single one of them missed
  * would hand a row control the string `''` and render nothing.
+ *
+ * A box whose key is unset shows what the run will do: ticked when the schema
+ * defaults it ON (#1686 review — `copy_files`' Include subfolders showed
+ * unticked while the copy recursed, and unticking it could never write `false`).
  */
 export function emptyControlValue(field: ConfigField): FieldInput {
   if (isRowKind(field.kind)) return [];
-  return field.kind === 'boolean' ? false : '';
+  return field.kind === 'boolean' ? field.defaultText === 'true' : '';
 }
 
 /**
@@ -1128,7 +1132,10 @@ export function parseFieldInput(field: ConfigField, raw: FieldInput): FieldParse
     // this comment justified the rule by claiming `catalog/lower.ts` distinguishes
     // absent from `false` on `emitMessages`. It does not: it tests `=== true`.
     // The rule is right, that reason was not.)
-    if (!raw && field.optional) return { ok: true, omit: true };
+    //
+    // "Not set" is the box at its DEFAULT, so for a box defaulted ON it is the
+    // ticked box that omits, and unticking writes `false`.
+    if (field.optional && raw === emptyControlValue(field)) return { ok: true, omit: true };
     return { ok: true, omit: false, value: raw };
   }
 

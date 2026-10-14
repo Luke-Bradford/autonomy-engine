@@ -100,6 +100,15 @@ export interface ActivityTab {
 }
 
 /**
+ * #1686 — one condition under which a config field applies: the CONTROLLING
+ * field's value is one of `in`. See `ActivityCatalogEntry.appliesWhen`.
+ */
+export interface ActivityFieldCondition {
+  readonly field: string;
+  readonly in: readonly [string, ...string[]];
+}
+
+/**
  * #1477 — which binding slots an entry has. One reading of the entry for the
  * catalog test, the web's tab resolver and the panel that draws them.
  */
@@ -516,6 +525,21 @@ export interface ActivityCatalogEntry {
    * is authored by its own panel and declares none. See `ActivityTab`.
    */
   tabs?: readonly [ActivityTab, ...ActivityTab[]];
+  /**
+   * #1686 — when a field applies, for the dock to leave out one that cannot
+   * (catalogue spec §4.1: Files as-is "shows" the options that apply). A field
+   * listed here applies when ANY of its conditions holds; an unlisted field
+   * always applies.
+   *
+   * A VIEW rule, never a validation rule: the schema's own cross-field checks
+   * still refuse a field set where it cannot apply, and the dock still draws a
+   * field that holds a value (UI STANDARD rule 3), so nothing in the JSON becomes
+   * unreachable from the form. Display-only like `tabs`, so declaring it never
+   * bumps `CATALOG_VERSION`; `activity-tabs.test.ts` pins it to the schema.
+   */
+  appliesWhen?: Readonly<
+    Record<string, readonly [ActivityFieldCondition, ...ActivityFieldCondition[]]>
+  >;
   /** Canonical outputs (UI/metadata). See the class doc — not the runtime SSOT. */
   outputs: Output[];
   /**

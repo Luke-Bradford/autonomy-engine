@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { catalog, isStructuralCallActivity } from '../registry.js';
+import { enumValuesOf } from '../../schemas/field-presentation.js';
 import { ACTIVITY_TAB_KEYS, applicableBindingSlots } from '../types.js';
 
 /**
@@ -62,6 +63,22 @@ describe('activity tabs (#1477)', () => {
       for (const tab of entry.tabs ?? []) {
         const optional = tab.fields.map((name) => shape[name]?.isOptional() ?? false);
         expect(optional).toEqual([...optional].sort((a, b) => Number(a) - Number(b)));
+      }
+    },
+  );
+
+  it.each(FORM_ACTIVITIES.map((e) => [e.type, e] as const))(
+    '%s conditions a field only on another enum field, and only on its values (#1686)',
+    (_type, entry) => {
+      const shape = shapeOf(entry.configSchema);
+      for (const [name, conditions] of Object.entries(entry.appliesWhen ?? {})) {
+        expect(Object.keys(shape), `${name} is not a config key`).toContain(name);
+        for (const c of conditions) {
+          expect(c.field, `${name} conditions on itself`).not.toBe(name);
+          const values = enumValuesOf(shape[c.field]);
+          expect(values, `${name}: ${c.field} is not an enum field`).toBeDefined();
+          for (const v of c.in) expect(values, `${name}: ${c.field} has no ${v}`).toContain(v);
+        }
       }
     },
   );

@@ -84,11 +84,40 @@ test.describe('#1600 C1a — Copy · Files as-is', () => {
         0,
       );
 
+      // #1686 — the dock draws only the fields that apply to the current
+      // choices, and follows them as they change.
+      const field = (role: 'textbox' | 'checkbox', name: string) =>
+        properties(page).getByRole(role, { name, exact: true });
+      const pathType = properties(page).getByRole('combobox', { name: 'Path type' });
+      const afterCopy = properties(page).getByRole('combobox', { name: 'After copy' });
+      await expect(field('textbox', 'Wildcard')).toBeVisible();
+      await expect(field('checkbox', 'Include subfolders')).toBeVisible();
+      await expect(field('textbox', 'File list path')).toHaveCount(0);
+      await expect(field('textbox', 'Move to')).toHaveCount(0);
+      await pathType.selectOption({ label: 'File list' });
+      await expect(field('textbox', 'File list path')).toBeVisible();
+      await expect(field('textbox', 'Wildcard')).toHaveCount(0);
+      await expect(field('checkbox', 'Include subfolders')).toHaveCount(0);
+      await afterCopy.selectOption({ label: 'Move source to' });
+      await expect(field('textbox', 'Move to')).toBeVisible();
+      await afterCopy.selectOption({ label: 'Keep source' });
+      await expect(field('textbox', 'Move to')).toHaveCount(0);
+      await pathType.selectOption({ label: 'Folder' });
+      await expect(field('textbox', 'Wildcard')).toBeVisible();
+      // Unset, the copy recurses, so the box shows ticked; unticking it is
+      // saved as `false` below rather than dropped back to the default.
+      await expect(field('checkbox', 'Include subfolders')).toBeChecked();
+      await field('checkbox', 'Include subfolders').uncheck();
+
       await pickConnection(page, 'Source connection', { id: src });
       await tab(page, 'Sink').click();
       await expect(
         properties(page).getByRole('combobox', { name: 'If file exists' }),
       ).toBeVisible();
+      // A folder copy keeps each file's own name, so File name is left out.
+      await expect(
+        properties(page).getByRole('textbox', { name: 'File name', exact: true }),
+      ).toHaveCount(0);
       await pickConnection(page, 'Sink connection', { id: sink });
       await fillSelectedNodeConfig(page, { 'Source path': 'in', 'Sink folder': 'out' });
 
@@ -99,10 +128,11 @@ test.describe('#1600 C1a — Copy · Files as-is', () => {
       const versions = await (
         await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
       ).json();
-      const latest = (versions as { version: number; nodes: { type: string }[] }[]).sort(
-        (a, b) => b.version - a.version,
-      )[0]!;
+      const latest = (
+        versions as { version: number; nodes: { type: string; config: object }[] }[]
+      ).sort((a, b) => b.version - a.version)[0]!;
       expect(latest.nodes.map((n) => n.type)).toEqual(['copy_files']);
+      expect(latest.nodes[0]!.config).toMatchObject({ recursive: false });
 
       await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
       await expect(canvasNodes(page)).toHaveCount(1);
