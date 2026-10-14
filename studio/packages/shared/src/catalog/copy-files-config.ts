@@ -118,9 +118,23 @@ export const copyFilesConfigSchema = z
   })
   .superRefine((cfg, ctx) => {
     // Every rule here refuses a config that would do something other than what
-    // it says, or nothing at all, rather than quietly ignoring a field.
+    // it says, or nothing at all, rather than quietly ignoring a field. (Fields
+    // with a default, like Include subfolders, cannot tell "set" from "left".)
+    // A `${}` value is decided at dispatch, so a rule reading one skips it.
     const issue = (field: string, message: string) =>
       ctx.addIssue({ code: 'custom', path: [field], message });
+    const literal = (v: unknown): v is string => typeof v === 'string' && !v.includes('${');
+    if (literal(cfg.wildcard) && /[/\\]/.test(cfg.wildcard)) {
+      issue('wildcard', 'a wildcard matches file names only, so it cannot hold a folder separator');
+    }
+    if (cfg.pathType !== 'folder' && cfg.wildcard !== '*') {
+      issue('wildcard', 'a wildcard is only read when the path type is Folder');
+    }
+    if (literal(cfg.modifiedStart) && literal(cfg.modifiedEnd)) {
+      if (Date.parse(cfg.modifiedStart) >= Date.parse(cfg.modifiedEnd)) {
+        issue('modifiedEnd', 'Modified before must be later than Modified from');
+      }
+    }
     if (cfg.pathType === 'list' && cfg.fileListPath === undefined) {
       issue('fileListPath', 'a file list needs a file list path');
     }

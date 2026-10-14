@@ -124,7 +124,7 @@ export const fsConnectionConfigSchema = z.object({
   writable: presented(z.boolean().optional(), {
     title: 'Allow writes',
     description:
-      'Lets Copy write files here, and delete or move them after a copy. Unticked, Copy only reads.',
+      'Lets Copy (files as-is) write files here, and delete or move them after a copy. Unticked, it only reads. The older file activities (Write, Copy, Move and Delete file) do not check it yet.',
   }),
 });
 

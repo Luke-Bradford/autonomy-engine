@@ -1,9 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
-import { link, mkdir, readFile, readdir, symlink, utimes, writeFile } from 'node:fs/promises';
+import {
+  appendFile,
+  chmod,
+  link,
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 import { COPY_FILES_ACTIVITY_TYPE } from '@autonomy-studio/shared';
 import { fsAdapter } from '../fs.js';
+import { unchangedSince } from '../fs-files-copy.js';
+import { wildcardMatcher } from '../fs-select.js';
 import { cleanupTempRoots, tempRoot } from './temp-roots.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
 
@@ -91,10 +105,6 @@ describe('Copy · Files as-is — selection', () => {
     await put('in/sub/c.csv', 'ccc');
     const events = await run({ sourcePath: 'in', wildcard: '*.csv', sinkFolder: 'out' });
     expect(outputs(events)).toEqual({
-      rowsRead: 0,
-      rowsWritten: 0,
-      rowsFailed: 0,
-      truncated: false,
       filesRead: 2,
       filesWritten: 2,
       filesSkipped: 0,
@@ -403,5 +413,80 @@ describe('Copy · Files as-is — permissions and failures', () => {
   it('refuses an invalid config', async () => {
     const events = await run({ sourcePath: 'in', pathType: 'list' });
     expect(failure(events).error).toContain('file list path');
+  });
+
+  it('keeps each source’s permission bits; a merge keeps only the bits all share', async () => {
+    await chmod(await put('in/secret.txt', 's'), 0o600);
+    await chmod(await put('in/open.txt', 'o'), 0o644);
+    outputs(await run({ sourcePath: 'in', sinkFolder: 'out' }));
+    expect((await stat(join(dst, 'out/secret.txt'))).mode & 0o777).toBe(0o600);
+    expect((await stat(join(dst, 'out/open.txt'))).mode & 0o777).toBe(0o644);
+    outputs(
+      await run({ sourcePath: 'in', sinkFolder: 'm', copyBehavior: 'merge', sinkFileName: 'all' }),
+    );
+    expect((await stat(join(dst, 'm/all'))).mode & 0o777).toBe(0o600);
+  });
+});
+
+describe('Copy · Files as-is — review fixes (#1600 C1a)', () => {
+  it('copies a name that starts with two dots; it is a name, not a way out', async () => {
+    await put('in/..backup.txt', 'b');
+    await put('in/..d/x.txt', 'x');
+    outputs(await run({ sourcePath: 'in' }));
+    expect(await tree(dst)).toEqual(['..backup.txt', '..d/x.txt']);
+  });
+
+  it('copies a file a list names twice only once, and merges a list in its own order', async () => {
+    await put('in/b.txt', 'B');
+    await put('in/a.txt', 'A');
+    await put('list.txt', 'b.txt\n./b.txt\na.txt\n');
+    const events = await run(
+      {
+        pathType: 'list',
+        sourcePath: 'in',
+        fileListPath: 'list.txt',
+        copyBehavior: 'merge',
+        sinkFileName: 'all.txt',
+        afterCopy: 'delete',
+      },
+      { sourceWritable: true },
+    );
+    expect(outputs(events)).toMatchObject({ filesRead: 2, filesDeleted: 2 });
+    expect(await readFile(join(dst, 'all.txt'), 'utf8')).toBe('BA');
+  });
+
+  it('creates no sink folder when nothing is selected', async () => {
+    await put('in/a.txt', 'a');
+    outputs(await run({ sourcePath: 'in', wildcard: '*.csv', sinkFolder: 'out/deep' }));
+    expect(existsSync(join(dst, 'out'))).toBe(false);
+  });
+
+  it('leaves a source that changed after it was read', async () => {
+    const path = await put('in/a.txt', 'aaa');
+    const st = await lstat(path);
+    const s = { abs: path, rel: 'a.txt', dev: st.dev, ino: st.ino, mode: 0o644 };
+    const stamp = { dev: st.dev, ino: st.ino, size: st.size, mtimeMs: st.mtimeMs, read: 3 };
+    await expect(unchangedSince(s, stamp)).resolves.toBeUndefined();
+    // Fewer bytes copied than the file held.
+    await expect(unchangedSince(s, { ...stamp, read: 2 })).rejects.toThrow('left in place');
+    // Written to after the read.
+    await appendFile(path, 'more');
+    await expect(unchangedSince(s, stamp)).rejects.toThrow('changed while it was copied');
+    // Never read at all.
+    await expect(unchangedSince(s, undefined)).rejects.toThrow('left in place');
+  });
+
+  it('matches a wildcard in linear time, where a regex would backtrack for seconds', () => {
+    const m = wildcardMatcher('*a*a*a*a*a*a*a*a*a*a*b');
+    const t0 = performance.now();
+    expect(m('a'.repeat(200))).toBe(false);
+    expect(performance.now() - t0).toBeLessThan(200);
+    expect(wildcardMatcher('*.csv')('x.csv')).toBe(true);
+    expect(wildcardMatcher('*.csv')('x.csvx')).toBe(false);
+    expect(wildcardMatcher('a?c*')('abc')).toBe(true);
+    expect(wildcardMatcher('a?c')('ac')).toBe(false);
+    expect(wildcardMatcher('**')('')).toBe(true);
+    expect(wildcardMatcher('a.c')('abc')).toBe(false);
+    expect(wildcardMatcher('*b*')('aaa')).toBe(false);
   });
 });

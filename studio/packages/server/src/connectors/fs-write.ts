@@ -81,12 +81,23 @@ export function atomicReplace(
   writeInto: (fh: Awaited<ReturnType<typeof open>>) => Promise<void>,
   opts: { noClobber: true },
 ): Promise<ActivityEvent | undefined | typeof TARGET_EXISTS>;
+/**
+ * The codes `link` gives on a file system without hard links (FAT, exFAT, some
+ * SMB and NFS mounts): a clear permanent refusal, not a raw errno.
+ */
+export const LINK_UNSUPPORTED: ReadonlySet<string> = new Set([
+  'EPERM',
+  'ENOTSUP',
+  'EOPNOTSUPP',
+  'ENOSYS',
+]);
+
 export async function atomicReplace(
   finalPath: string,
   tmpSuffix: string,
   signal: AbortSignal,
   writeInto: (fh: Awaited<ReturnType<typeof open>>) => Promise<void>,
-  opts: { noClobber?: boolean } = {},
+  opts: { noClobber?: boolean; mode?: number } = {},
 ): Promise<ActivityEvent | undefined | typeof TARGET_EXISTS> {
   const tmpPath = `${finalPath}.tmp.${tmpSuffix}`;
   let fh: Awaited<ReturnType<typeof open>> | undefined;
@@ -95,7 +106,7 @@ export async function atomicReplace(
     fh = await open(
       tmpPath,
       fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | O_NOFOLLOW,
-      0o644,
+      opts.mode ?? 0o644,
     );
     await writeInto(fh);
     // `fsync` the temp BEFORE the rename so the bytes are durable on disk first —
@@ -122,7 +133,14 @@ export async function atomicReplace(
       try {
         await link(tmpPath, finalPath);
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'EEXIST') return TARGET_EXISTS;
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === 'EEXIST') return TARGET_EXISTS;
+        if (code !== undefined && LINK_UNSUPPORTED.has(code)) {
+          return failed(
+            'permanent',
+            `the file system at '${finalPath}' does not support hard links, which writing without replacing needs; set If file exists to Overwrite`,
+          );
+        }
         throw err;
       }
       return undefined;

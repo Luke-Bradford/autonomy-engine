@@ -24,15 +24,35 @@ export const DEFAULT_MAX_LIST_ENTRIES = 10_000;
  * Case-sensitive, and matched against the name only, never the folder.
  */
 export function wildcardMatcher(pattern: string): (name: string) => boolean {
-  const source = [...pattern]
-    .map((ch) => {
-      if (ch === '*') return '.*';
-      if (ch === '?') return '.';
-      return ch.replace(/[\\^$.|+()[\]{}]/g, '\\$&');
-    })
-    .join('');
-  const re = new RegExp(`^${source}$`, 's');
-  return (name) => re.test(name);
+  // Iterative, not a RegExp: `*a*a*a*b` compiled to `.*a.*a.*a.*b` backtracks
+  // exponentially, and a wildcard can come from a `${}` fed by a trigger. This
+  // greedy match with one backtrack point is O(name × pattern) at worst.
+  const p = [...pattern];
+  return (name) => {
+    const n = [...name];
+    let pi = 0;
+    let ni = 0;
+    let star = -1;
+    let mark = 0;
+    while (ni < n.length) {
+      if (pi < p.length && (p[pi] === '?' || (p[pi] !== '*' && p[pi] === n[ni]))) {
+        pi += 1;
+        ni += 1;
+      } else if (pi < p.length && p[pi] === '*') {
+        star = pi;
+        mark = ni;
+        pi += 1;
+      } else if (star !== -1) {
+        pi = star + 1;
+        mark += 1;
+        ni = mark;
+      } else {
+        return false;
+      }
+    }
+    while (pi < p.length && p[pi] === '*') pi += 1;
+    return pi === p.length;
+  };
 }
 
 /**

@@ -2,6 +2,7 @@ import type { Node as FlowNode, Edge as FlowEdge } from '@xyflow/react';
 import {
   CONTAINER_KIND_LABELS,
   COPY_ACTIVITY_TYPE,
+  COPY_FILES_ACTIVITY_TYPE,
   containerMembership,
   type Node,
   type PipelineVersion,
@@ -174,6 +175,14 @@ export function runNodeFacts(type: string, activity: RunNodeMeasure | undefined)
     parts.push(`${formatCount(written)} ${written === 1 ? 'row' : 'rows'}`);
     const failed = out?.['rowsFailed'];
     if (isCount(failed) && failed > 0) parts.push(`${formatCount(failed)} failed`);
+  }
+  // #1600 C1a — Copy in Files as-is mode counts files, not rows.
+  const files = type === COPY_FILES_ACTIVITY_TYPE ? activity.outputValues : undefined;
+  const copied = files?.['filesWritten'];
+  if (isCount(copied)) {
+    parts.push(`${formatCount(copied)} ${copied === 1 ? 'file' : 'files'}`);
+    const skipped = files?.['filesSkipped'];
+    if (isCount(skipped) && skipped > 0) parts.push(`${formatCount(skipped)} skipped`);
   }
   return parts.length === 0 ? null : parts.join(' · ');
 }

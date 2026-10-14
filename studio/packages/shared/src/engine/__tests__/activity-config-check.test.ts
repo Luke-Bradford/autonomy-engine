@@ -17,6 +17,26 @@ const goodCopy = {
   mapping: [{ source: 'a', sink: 'a', type: 'string' }],
 };
 
+// #1600 C1a — a `${}` in a copy_files date or enum field is decided at
+// dispatch, so a save does not refuse it on its literal shape.
+describe('copy_files expression fields', () => {
+  it('saves a modified window and an After copy written as expressions', () => {
+    expect(
+      activityNodeErrors(
+        node('copy_files', {
+          sourcePath: 'in',
+          modifiedStart: '${pipeline.parameters.from}',
+          modifiedEnd: '${pipeline.parameters.to}',
+          afterCopy: '${pipeline.parameters.after}',
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      activityNodeErrors(node('copy_files', { sourcePath: 'in', modifiedStart: 'soon' })),
+    ).not.toEqual([]);
+  });
+});
+
 describe('activityNodeErrors (#1480)', () => {
   it('refuses an unknown activity type and names the closest catalog types', () => {
     const errors = activityNodeErrors(node('sql_execute', {}));

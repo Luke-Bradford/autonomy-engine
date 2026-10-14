@@ -692,7 +692,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     type: COPY_ACTIVITY_TYPE,
     title: 'Copy data',
     description:
-      'Copy rows from a source dataset into a sink dataset, mapping columns between them.',
+      'Copy rows from a source dataset into a sink dataset, mapping columns between them, or copy files as they are.',
     kind: 'execution',
     category: 'general',
     tabs: [
@@ -781,9 +781,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
      * crash mid-copy may have written, deleted or moved some files, so boot
      * recovery freezes the node rather than re-running it.
      *
-     * Outputs: the five `copy` outputs too (as zeros, `bytesRead` real), so a
-     * reference written against Copy keeps resolving when the toggle flips, plus
-     * the file counters §4.1 lists. All required: the adapter yields every one
+     * Outputs: the file and byte counters §4.1 lists, never the row outputs (a
+     * `rowsWritten` of 0 would count as "wrote nothing" in the run's rows
+     * total, `rowsWrittenFromLog`). All required: the adapter yields every one
      * on success and on a mid-copy failure.
      */
     type: COPY_FILES_ACTIVITY_TYPE,
@@ -800,11 +800,11 @@ const ENTRIES: ActivityCatalogEntry[] = [
         key: 'source',
         bindings: ['sourceConnection'],
         fields: [
-          'sourcePath',
           'pathType',
+          'sourcePath',
           'wildcard',
-          'fileListPath',
           'recursive',
+          'fileListPath',
           'modifiedStart',
           'modifiedEnd',
           'afterCopy',
@@ -821,16 +821,12 @@ const ENTRIES: ActivityCatalogEntry[] = [
     connectionKinds: ['fs'],
     sinkConnectionKinds: ['fs'],
     outputs: [
-      out('rowsRead', 'number'),
-      out('rowsWritten', 'number'),
-      out('rowsFailed', 'number'),
-      out('bytesRead', 'number'),
-      out('truncated', 'boolean'),
       out('filesRead', 'number'),
       out('filesWritten', 'number'),
       out('filesSkipped', 'number'),
       out('filesDeleted', 'number'),
       out('filesMoved', 'number'),
+      out('bytesRead', 'number'),
       out('bytesWritten', 'number'),
     ],
     configSchema: copyFilesConfigSchema,
