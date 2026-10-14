@@ -19,7 +19,6 @@ import {
   type CallTarget,
 } from './callRules';
 import { createCanvasStore } from './canvasStore';
-import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 
 /**
  * #425 — the call-node editor.
@@ -235,17 +234,16 @@ function mount() {
 }
 
 describe('CallPanel (component)', () => {
-  // #1413 — Call target and its Parameters each say what they hold, as the
-  // section's accessible description, like every Section.
-  it('names the Call target and Parameters sections and describes each with its hint', async () => {
+  // #1694 OR42 — in the properties pane a section heading carries no `?` and
+  // no description: the sections are named, nothing more.
+  it('names the Call target and Parameters sections, with no `?` on either heading', async () => {
     mount();
     await waitFor(() => expect(screen.getByLabelText(/Pipeline/)).toBeTruthy());
-    expect(screen.getByRole('group', { name: 'Call target' })).toHaveAccessibleDescription(
-      FORM_SECTION_HINTS.call.target,
-    );
-    expect(screen.getByRole('group', { name: 'Parameters' })).toHaveAccessibleDescription(
-      FORM_SECTION_HINTS.call.parameters,
-    );
+    for (const name of ['Call target', 'Parameters']) {
+      expect(screen.getByRole('group', { name })).not.toHaveAttribute('aria-describedby');
+      expect(screen.queryByRole('group', { name: `About ${name}` })).toBeNull();
+      expect(screen.queryByLabelText(`About ${name}`)).toBeNull();
+    }
   });
 
   it('marks a required param with the `*` after its name and `aria-required` (#1594 S3c)', async () => {

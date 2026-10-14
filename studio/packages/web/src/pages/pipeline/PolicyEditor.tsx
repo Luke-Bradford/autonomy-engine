@@ -8,7 +8,8 @@ import {
 } from '@autonomy-studio/shared';
 import { FieldCell, FieldGrid } from '../../lib/form/FieldGrid';
 import { Section } from '../../lib/Section';
-import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
+import { CheckboxField } from '../../lib/form/CheckboxField';
+import { Toolbar } from '../../lib/PageHeader';
 import { parseTimeoutSeconds, parseWholeNumber } from '../triggers/formFields';
 import { DraftNumberField } from './DraftNumberField';
 import { enclosingContainers, nodePolicyIssues, policyIssues, validateCanvas } from './canvasDoc';
@@ -40,6 +41,10 @@ import { readableIssue } from './containerRules';
  * for the same reason: in the pair's grid it would push the interval onto a
  * row alone.
  */
+/** Both secure flags' shared effect, in each one's note (#1694 OR42: was a paragraph under them). */
+const WITHHOLDS =
+  'Either flag also withholds the failure text and warnings, which could repeat a secret.';
+
 export function PolicyEditor({
   store,
   nodeId,
@@ -81,7 +86,7 @@ export function PolicyEditor({
   }
 
   return (
-    <Section heading="Run policy" help={FORM_SECTION_HINTS.node.runPolicy}>
+    <Section heading="Run policy" help={null}>
       {timesOut && (
         <FieldGrid className="field-stack">
           <FieldCell span="short">
@@ -124,41 +129,28 @@ export function PolicyEditor({
       </FieldGrid>
       <FieldGrid className="field-stack">
         <FieldCell span="short">
-          <label className="contract-check">
-            <input
-              type="checkbox"
-              checked={policy?.secureInput === true}
-              onChange={(e) => set({ secureInput: e.target.checked || undefined })}
-            />
-            Secure input
-          </label>
-          <p className="page-hint">Keep this node&rsquo;s resolved input out of the run log.</p>
+          <CheckboxField
+            label="Secure input"
+            checked={policy?.secureInput === true}
+            onChange={(on) => set({ secureInput: on || undefined })}
+            about={`Keeps this activity’s resolved input out of the run log. ${WITHHOLDS}`}
+          />
         </FieldCell>
         <FieldCell span="short">
-          <label className="contract-check">
-            <input
-              type="checkbox"
-              checked={policy?.secureOutput === true}
-              onChange={(e) => set({ secureOutput: e.target.checked || undefined })}
-            />
-            Secure output
-          </label>
-          <p className="page-hint">
-            Redact this node&rsquo;s outputs before they reach the run log. Nothing downstream can
-            reference them.
-          </p>
+          <CheckboxField
+            label="Secure output"
+            checked={policy?.secureOutput === true}
+            onChange={(on) => set({ secureOutput: on || undefined })}
+            about={`Redacts this activity’s outputs before they reach the run log, so nothing downstream can reference them. ${WITHHOLDS}`}
+          />
         </FieldCell>
       </FieldGrid>
-      <p className="page-hint">
-        Either flag also withholds this node&rsquo;s failure text and warnings, which could repeat a
-        secret.
-      </p>
       {!timesOut && policy?.timeoutSeconds !== undefined && (
-        <p>
+        <Toolbar align="start">
           <button type="button" onClick={() => set({ timeoutSeconds: undefined })}>
             Remove the timeout
           </button>
-        </p>
+        </Toolbar>
       )}
       {/* Plain visible text, not a live region: recomputed state that changes as
           the author edits, and the dock header's status line already announces the

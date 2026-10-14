@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { Toolbar } from '../PageHeader';
 
 /** One column of a `RowTable`: its header and how wide its cells want to be. */
 export interface RowTableColumn {
@@ -87,8 +88,10 @@ export function RowNotes({ span, children }: { span: number; children: ReactNode
 }
 
 /**
- * #1477 — a list of authored rows with its frame: "None declared." when empty,
- * otherwise the `RowTable`, then the Add button. Shared by the pipeline contract
+ * #1477 — a list of authored rows with its frame: the Add button, then "None
+ * declared." when empty, otherwise the `RowTable`. #1694 OR42 — the Add button
+ * sits ABOVE the rows in a start-packed `Toolbar`, sized to its text (ADF's
+ * *＋ New*), not stretched under them by the section's flex column. Shared by the pipeline contract
  * sections (`ContractSection`) and the annotation lists (`AnnotationRows`), so
  * the empty state and the Add control are one thing, whatever section chrome
  * (a `Section`) holds them. `addDisabled` is for a list with a
@@ -113,6 +116,11 @@ export function RowList({
 }) {
   return (
     <>
+      <Toolbar align="start">
+        <button type="button" onClick={onAdd} disabled={addDisabled}>
+          {addLabel}
+        </button>
+      </Toolbar>
       {count === 0 ? (
         <p className="page-hint">None declared.</p>
       ) : (
@@ -120,9 +128,6 @@ export function RowList({
           {children}
         </RowTable>
       )}
-      <button type="button" onClick={onAdd} disabled={addDisabled}>
-        {addLabel}
-      </button>
     </>
   );
 }

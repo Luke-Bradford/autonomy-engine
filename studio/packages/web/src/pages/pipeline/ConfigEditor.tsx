@@ -25,6 +25,7 @@ export function ConfigEditor<K extends string>({
   picker,
   emptyHint = 'This kind has no settings.',
   fieldModeExtra,
+  fieldActions,
   errorFor,
   fieldNames,
   toolbar = true,
@@ -46,6 +47,8 @@ export function ConfigEditor<K extends string>({
   emptyHint?: string;
   /** Rendered only with the controls, before the carried advisory. */
   fieldModeExtra?: ReactNode;
+  /** #1694 OR42 — a field's extra acts, in its row list's toolbar (`ConfigFieldControl`'s `actions`). */
+  fieldActions?: (fieldName: string) => ReactNode;
   /**
    * #1396 — a resource form's inline validation: each control is keyed
    * `config.<name>` and the JSON textarea `config`, and shows its error. The
@@ -126,6 +129,7 @@ export function ConfigEditor<K extends string>({
                   onChange={(next) => editor.setInput(field.name, next)}
                   {...(choices === undefined ? {} : { choices })}
                   {...(picker === undefined ? {} : { picker })}
+                  actions={fieldActions?.(field.name)}
                   {...(errorFor === undefined
                     ? {}
                     : {

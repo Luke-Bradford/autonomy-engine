@@ -14,6 +14,11 @@ import { Toolbar } from './PageHeader';
  * section. It sits behind the `?` (labels, not prose), BESIDE the heading, never
  * inside it, so the section's name stays the heading alone.
  *
+ * #1694 OR42 — except in the properties pane, where a section heading carries
+ * no `?` (the operator: toggle and edit, not read). Such a section passes
+ * `help={null}` on purpose: still required, so a new section elsewhere cannot
+ * forget its line by leaving the prop out.
+ *
  * A section is a `group`: inside a form or a panel, which is already a named
  * part of the page, another landmark is noise. `landmark` makes it a `region`,
  * for a section that is itself a top-level part of a page (the Monitor's
@@ -37,7 +42,8 @@ export function Section({
   children,
 }: {
   heading: string;
-  help: ReactNode;
+  /** `null`: no `?` and no description (the properties pane, #1694). */
+  help: ReactNode | null;
   /** The heading's level: 3 under a drawer or panel title (h2), 2 under a page title (h1). */
   level?: 2 | 3;
   landmark?: boolean;
@@ -79,9 +85,11 @@ export function Section({
           heading
         )}
       </Heading>
-      <AboutHelp name={heading} noteId={helpId}>
-        {help}
-      </AboutHelp>
+      {help !== null && (
+        <AboutHelp name={heading} noteId={helpId}>
+          {help}
+        </AboutHelp>
+      )}
       {actions !== undefined && <Toolbar>{actions}</Toolbar>}
     </div>
   );
@@ -90,9 +98,10 @@ export function Section({
       {children}
     </div>
   );
+  const describedBy = help === null ? undefined : helpId;
   const sectionClass = className === undefined ? 'section' : `section ${className}`;
   return landmark ? (
-    <section className={sectionClass} aria-labelledby={headingId} aria-describedby={helpId}>
+    <section className={sectionClass} aria-labelledby={headingId} aria-describedby={describedBy}>
       {head}
       {body}
     </section>
@@ -101,7 +110,7 @@ export function Section({
       className={sectionClass}
       role="group"
       aria-labelledby={headingId}
-      aria-describedby={helpId}
+      aria-describedby={describedBy}
     >
       {head}
       {body}

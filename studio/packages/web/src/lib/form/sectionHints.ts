@@ -10,7 +10,6 @@
  * A hint never restates a note already in its section, which a screen reader
  * would otherwise read twice.
  */
-import { MAX_USER_PROPERTIES } from '@autonomy-studio/shared';
 
 export const FORM_SECTION_HINTS = {
   // #1594 OR40 S6d — each Manage list's `page` is its title's `?`.
@@ -56,14 +55,6 @@ export const FORM_SECTION_HINTS = {
     concurrency: 'What happens when a run is due while an earlier run is still going.',
     parameters: "The values this trigger passes to the pipeline's parameters for each run.",
   },
-  node: {
-    basics: 'What this activity is for, and what it records while inactive.',
-    // #1600 C0e — the container panel's General tab.
-    containerBasics: 'What this container is for, and what it records while inactive.',
-    runPolicy:
-      'How long one attempt may run, how a transient failure is retried, and what is kept out of the run log.',
-    userProperties: `Up to ${MAX_USER_PROPERTIES} name and value pairs, each value text or dynamic content, shown as columns in the activity runs grid.`,
-  },
   settings: {
     appearance: 'How this browser shows the app; its theme, density and time zone.',
     secretEncryption:
@@ -104,11 +95,6 @@ export const FORM_SECTION_HINTS = {
       'Which saved version the copy starts from; any but Latest is recorded on the copy as an annotation.',
     annotations:
       'Tags that describe this pipeline, such as an environment, a team or a data domain.',
-  },
-  call: {
-    target:
-      'Which pipeline version this activity runs as a child run, and whether it waits for it to finish.',
-    parameters: "The values this activity passes to the child pipeline's parameters.",
   },
   monitor: {
     // #1594 OR40 S6r — the AI activity page's title `?`.

@@ -925,6 +925,15 @@ body {
   flex-shrink: 0;
 }
 
+/* #1694 OR42 — a form's add actions: packed left and sized to their controls.
+   `align-self` keeps a flex-column parent (a section body, a field) from
+   stretching the row, and so its buttons, across the form. */
+.toolbar.toolbar--start {
+  margin-left: 0;
+  align-self: flex-start;
+  flex-wrap: wrap;
+}
+
 /* On the toolbar's own controls only, never on everything inside it:
    `white-space` inherits, and a toolbar item can hold a popover (the rerun's
    `?` note, the Run now and Debug panels) whose labels and text must wrap. So
@@ -2276,6 +2285,12 @@ button.danger {
   flex-direction: column;
   gap: var(--space-2);
   margin-top: var(--space-3);
+}
+
+/* #1694 OR42 — a section whose every line is conditional (the Mapping tab's
+   warnings, now that Auto-map sits in the list's toolbar) takes no room empty. */
+.contract-section:empty {
+  display: none;
 }
 
 /* A WARNING about something the save will nonetheless accept — deliberately not
@@ -5201,6 +5216,14 @@ button.danger {
    Add button, spaced the way a `<label>` names a control. */
 .object-list {
   gap: var(--space-2);
+}
+
+/* #1694 OR42 — the key to override and its Add on one row, sized to content. */
+.param-override-add {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  align-self: flex-start;
 }
 
 /* #1304 — Remove sits under its input, and the flag under that. */

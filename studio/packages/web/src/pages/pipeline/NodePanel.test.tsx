@@ -15,7 +15,6 @@ import { createCanvasStore } from './canvasStore';
 import { deriveConfigFields } from './configForm';
 import { subjectKey } from './containerRules';
 import { SubjectIssuesContext } from './issueContext';
-import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 
 // `CallPanel` lists pipelines on mount. This suite is about which PANEL NodePanel
 // routes to, not about the call editor's own behaviour (`CallPanel.test.tsx` owns
@@ -1852,9 +1851,14 @@ describe('NodePanel — run policy (#1312)', () => {
     const { store } = mountOver(httpNode({ url: 'https://example.test' }));
     fireEvent.click(screen.getByRole('tab', { name: 'General' }));
     const section = screen.getByRole('group', { name: 'Run policy' });
-    // #1413 — the section says what it holds, as the group's description.
-    expect(section).toHaveAccessibleDescription(FORM_SECTION_HINTS.node.runPolicy);
-    fireEvent.click(within(section).getByLabelText('Secure output'));
+    // #1694 OR42 — no `?` on the heading; each flag's effect is its `?` note,
+    // which stays the box's description.
+    expect(section).not.toHaveAttribute('aria-describedby');
+    expect(within(section).queryByLabelText('About Run policy')).toBeNull();
+    const flag = within(section).getByRole('checkbox', { name: 'Secure output' });
+    expect(flag).toHaveAccessibleDescription(/Redacts this activity.s outputs/);
+    expect(within(section).queryByText(/Either flag also withholds/, { selector: 'p' })).toBeNull();
+    fireEvent.click(flag);
     expect(store.getState().nodes[0]?.policy).toEqual({ secureOutput: true });
     // Straight to the store: the config form's Apply is not involved.
     expect(store.getState().nodes[0]?.config).toEqual({ url: 'https://example.test' });

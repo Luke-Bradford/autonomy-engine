@@ -14,22 +14,19 @@ import { LabelledControl } from '../../lib/LabelledControl';
 import { Section } from '../../lib/Section';
 import { AutoGrowTextarea } from '../../lib/form/AutoGrowTextarea';
 import { FieldCell, FieldGrid } from '../../lib/form/FieldGrid';
-import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import type { FieldPicker } from './ConfigFieldControl';
 import type { createCanvasStore } from './canvasStore';
 import { NodeUserProperties } from './NodeUserProperties';
 import { PolicyEditor } from './PolicyEditor';
 
-/** #1600 C0c — Mark as's label, `?` text and option names, from the schema;
+/** #1600 C0c — Mark as's label and option names, from the schema;
  * C0e — a container's own wording, from `ContainerSchema`. */
 const LABELS = {
   node: {
     markAs: fieldLabelOf(NodeSchema.shape.onInactiveMarkAs)!,
-    basics: FORM_SECTION_HINTS.node.basics,
   },
   container: {
     markAs: fieldLabelOf(ContainerSchema.shape.onInactiveMarkAs)!,
-    basics: FORM_SECTION_HINTS.node.containerBasics,
   },
 };
 
@@ -121,9 +118,9 @@ export function GeneralBasics({
   markAs: InactiveMarkAs;
   onMarkAs: (markAs: InactiveMarkAs) => void;
 }) {
-  const { markAs: markAsLabel, basics } = LABELS[owner];
+  const { markAs: markAsLabel } = LABELS[owner];
   return (
-    <Section heading="Basics" help={basics}>
+    <Section heading="Basics" help={null}>
       <LabelledControl label="Description">
         {(id) => (
           <AutoGrowTextarea

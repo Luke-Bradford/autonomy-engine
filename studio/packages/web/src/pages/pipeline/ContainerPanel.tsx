@@ -34,6 +34,7 @@ import {
 import { validateCanvas } from './canvasDoc';
 import { containersWithUpdated, type GeneralPatch } from './canvasStore';
 import { CONTAINER_EDIT_TONE, containerEditQuestion, containerLabels } from './containerRules';
+import { Toolbar } from '../../lib/PageHeader';
 import { useConfirm } from '../../lib/confirm/useConfirm';
 import { useSubjectIssues } from './issueContext';
 import { SubjectIssues } from './SubjectIssues';
@@ -506,9 +507,11 @@ export function ContainerPanel({
                 {error}
               </p>
             )}
-            <button type="button" onClick={() => void apply()}>
-              Apply container settings
-            </button>
+            <Toolbar align="start">
+              <button type="button" onClick={() => void apply()}>
+                Apply container settings
+              </button>
+            </Toolbar>
           </div>
         </>
       )}
@@ -516,18 +519,20 @@ export function ContainerPanel({
           STORED, not the unapplied drafts above — the same rule as `Duplicate
           node` — and a container this form cannot render is still one a verbatim
           copy can carry. Copy is ⌘C's mouse path, for a paste elsewhere. */}
-      <button type="button" onClick={onCopy}>
-        Copy container
-      </button>
-      <button type="button" onClick={onDuplicate}>
-        Duplicate container
-      </button>
-      {/* #1694 OR42 — switched off and on here, beside the container's other
+      <Toolbar align="start">
+        <button type="button" onClick={onCopy}>
+          Copy container
+        </button>
+        <button type="button" onClick={onDuplicate}>
+          Duplicate container
+        </button>
+        {/* #1694 OR42 — switched off and on here, beside the container's other
           acts, not by a select on the General tab (ADF's Deactivate). Writes
           through, as the General tab does, outside the form's Apply. */}
-      <button type="button" onClick={() => onGeneral({ inactive: !isInactive(container) })}>
-        {isInactive(container) ? 'Activate container' : 'Deactivate container'}
-      </button>
+        <button type="button" onClick={() => onGeneral({ inactive: !isInactive(container) })}>
+          {isInactive(container) ? 'Activate container' : 'Deactivate container'}
+        </button>
+      </Toolbar>
       {/* #1393 — AFTER the fields, not above them: an issue arriving must not push
           the control being edited out from under the pointer. The Problems column
           beside the panel lists it too. */}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Combobox, Option, OptionGroup } from '@fluentui/react-components';
+import { AddRegular, BeakerRegular, EditRegular } from '@fluentui/react-icons';
 import type { ConnectionProbeResult, ConnectionPublic } from '@autonomy-studio/shared';
 import { messageOf } from '../../api/client';
 import { testSavedConnection } from '../../api/connections';
@@ -237,33 +238,39 @@ export function ConnectionPicker({
             </Combobox>
             <button
               type="button"
+              className="icon-button"
               aria-label={`Test selected ${noun}`}
+              title={`Test selected ${noun}`}
               disabled={value === undefined || probing}
               onClick={() => {
                 if (value !== undefined) void onTest(value, bound?.updatedAt);
               }}
             >
-              Test
+              <BeakerRegular aria-hidden="true" />
             </button>
             {onEdit !== undefined && (
               <button
                 type="button"
+                className="icon-button"
                 aria-label={`Edit selected ${noun}`}
+                title={`Edit selected ${noun}`}
                 disabled={bound === undefined}
                 onClick={(e) => {
                   if (bound !== undefined) onEdit(bound.id, e.currentTarget);
                 }}
               >
-                Edit
+                <EditRegular aria-hidden="true" />
               </button>
             )}
             {onNew !== undefined && (
               <button
                 type="button"
+                className="icon-button"
                 aria-label={`New ${noun}`}
+                title={`New ${noun}`}
                 onClick={(e) => onNew(e.currentTarget)}
               >
-                New
+                <AddRegular aria-hidden="true" />
               </button>
             )}
           </div>
