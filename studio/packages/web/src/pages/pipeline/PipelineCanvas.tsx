@@ -25,10 +25,13 @@ import {
   ArrowMaximizeRegular,
   ArrowMinimizeRegular,
   ArrowRedoRegular,
+  ArrowResetRegular,
   ArrowUndoRegular,
+  BracesRegular,
   ChevronDownRegular,
   ChevronRightRegular,
   ChevronUpRegular,
+  FormRegular,
   MoreHorizontalRegular,
   PanelBottomRegular,
   PanelRightRegular,
@@ -385,11 +388,14 @@ export function PipelineCanvas({
   const toolboxId = useId();
   const canvasGridRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
-  /* #1393 — the Problems column beside the properties. Open by default, and
-     present while open whether or not anything is wrong, so an issue arriving
-     never narrows the properties it sits beside. */
-  const problemsOpen = useStore(uiStore, (s) => s.problemsOpen);
-  const setProblemsOpen = useStore(uiStore, (s) => s.setProblemsOpen);
+  /* #1694 OR42 — the Problems column beside the properties claims width only
+     while it lists something AND the operator asked to see it: the header's
+     Problems button or Validate opens it. It never opens by itself, so an issue
+     arriving mid-edit narrows nothing (#1393 OR2), and it closes when the last
+     problem goes, so an empty column never takes the form's width. Per session,
+     not a stored preference: a stored "open" would show the column on the first
+     issue of the next session, which is the shift #1393 forbids. */
+  const [problemsOpen, setProblemsOpen] = useState(false);
   const problemsWidth = useStore(uiStore, (s) => s.problemsWidth);
   const dockBodyRef = useRef<HTMLDivElement>(null);
   const problemsId = useId();
@@ -1226,6 +1232,12 @@ export function PipelineCanvas({
   if (bySubject !== attribution && !sameAttribution(bySubject, attribution)) {
     setBySubject(attribution);
   }
+  // #1694 OR42 — the count the Problems button and column go by: warnings too,
+  // so a warnings-only doc is listable. Closed in render, as above, the moment
+  // the last one goes (`problemsOpen`).
+  const hasProblems = issues.length + warnings.length > 0;
+  if (problemsOpen && !hasProblems) setProblemsOpen(false);
+  const problemsShown = problemsOpen && hasProblems;
 
   /**
    * #1141 — why a save is refused, computed ONCE and read by BOTH buttons that
@@ -1332,7 +1344,7 @@ export function PipelineCanvas({
 
   /**
    * #1476 OR28 — Validate: run the server's save gate over the working graph as
-   * a dry run, open Problems, and say how many there are. The editor's badges
+   * a dry run, open Problems if it lists anything, and say how many there are. The editor's badges
    * already mirror most of that gate; the server adds what needs its database.
    *
    * A draft that cannot even be SENT (the client's write-schema badges — a
@@ -1345,8 +1357,12 @@ export function PipelineCanvas({
     const checked = docOf(s);
     const clientRaw = new Set(located.map((issue) => issue.raw));
     const clientCount = clientIssues.length;
+    // #1694 OR42 — Validate opens Problems on its answer, and only when the
+    // column would list something (warnings included, as the toggle counts
+    // them): an open flag with nothing to list would show the column on the
+    // next issue to arrive, mid-edit.
+    const listed = clientCount + warnings.length;
     setDockOpen(true);
-    setProblemsOpen(true);
     setValidating(true);
     try {
       const result = await validatePipelineDraft(pipelineId, draftBody(s));
@@ -1358,6 +1374,7 @@ export function PipelineCanvas({
       }
       const found = serverOnlyIssues(result, clientRaw);
       setServerCheck({ doc: checked, raw: found.raw });
+      if (listed + found.raw.length > 0) setProblemsOpen(true);
       showCanvasMsg(validationAnnouncement(clientCount + found.raw.length, found.truncated));
     } catch (err) {
       setServerCheck(null);
@@ -1369,6 +1386,7 @@ export function PipelineCanvas({
           ? validationAnnouncement(clientCount)
           : `Validation could not run: ${messageOf(err)}`,
       );
+      if (listed > 0) setProblemsOpen(true);
     } finally {
       setValidating(false);
     }
@@ -2451,13 +2469,17 @@ export function PipelineCanvas({
                       {/* #1393 — the count is on the header, so a folded dock still
                     says why Save is refused. Opening Problems from a folded
                     dock opens the dock too: a toggle whose effect is hidden
-                    would read as broken. */}
+                    would read as broken. #1694 OR42 — with nothing to list it
+                    does nothing, and says so, rather than open an empty column. */}
                       <button
                         type="button"
                         className="subtle"
-                        aria-expanded={dockOpen && problemsOpen}
+                        aria-expanded={dockOpen && problemsShown}
                         aria-controls={problemsId}
+                        aria-disabled={hasProblems ? undefined : true}
+                        title={hasProblems ? undefined : 'No problems'}
                         onClick={() => {
+                          if (!hasProblems) return;
                           if (!dockOpen) {
                             setDockOpen(true);
                             setProblemsOpen(true);
@@ -2594,21 +2616,21 @@ export function PipelineCanvas({
                       />
                       {/* Stacked under the properties in a right-hand dock, at a
                       fixed height, so there is no width to resize there. */}
-                      {problemsOpen && dockPosition === 'bottom' && (
+                      {problemsShown && dockPosition === 'bottom' && (
                         <ProblemsSplitter bodyRef={dockBodyRef} problemsId={problemsId} />
                       )}
                       {/* #1393 — the validation list, moved here from above the
                       canvas, where it grew by one line per issue on every
-                      keystroke. Plain text: the header above announces. */}
+                      keystroke. Plain text: the header above announces.
+                      #1694 OR42 — `hidden` (so it takes no width) unless it is
+                      open and lists something; MOUNTED either way, so the
+                      header's `aria-controls` always names an element. */}
                       <section
                         id={problemsId}
                         className="problems-panel"
                         aria-label="Problems"
-                        hidden={!problemsOpen}
+                        hidden={!problemsShown}
                       >
-                        {issues.length === 0 && warnings.length === 0 && (
-                          <p className="page-hint">No problems.</p>
-                        )}
                         {issues.length > 0 && (
                           <div className="badge-list">
                             {/* #444: this used to say "you can still save … a run will refuse an
@@ -3858,7 +3880,7 @@ export function NodePanel({
     editor.setInput(mappingField.name, rendered.value);
     showAutoMapNotice(
       `Mapped ${result.rows.length} column${result.rows.length === 1 ? '' : 's'}.` +
-        `${describeSkips(result)} Apply config to save.`,
+        `${describeSkips(result)} Apply to save.`,
     );
   }
 
@@ -4278,8 +4300,17 @@ export function NodePanel({
    * #1477 OR29 — the panel's one header row, pinned with the tab strip: what the
    * node is, and the acts on the whole node. The description is behind a `?`
    * (labels, not prose); the type id stays visible, as the one place it shows.
+   *
+   * #1694 OR42 — the draft's acts (JSON toggle, Revert, Apply) are compact and
+   * show only on a tab that holds the draft: General writes straight to the
+   * store (`NodeGeneral`), so there they would commit nothing. Apply stays an
+   * explicit act on the config tabs — it runs the `configSchema` pre-check and
+   * lands as one undo step; applying every keystroke would put half-typed
+   * configs in the store and the undo stack, and JSON needs a commit anyway.
+   * Another tab's unapplied edit shows as that tab's pending mark.
    */
-  function header(editActs: boolean) {
+  function header(configDraft: boolean) {
+    const editActs = configDraft && currentTab !== 'general';
     return (
       <>
         <div className="property-panel__header">
@@ -4293,21 +4324,41 @@ export function NodePanel({
           <span className="property-panel__actions">
             {editActs && (
               <>
-                {editor.canToggle && currentTab !== 'general' && (
-                  <button type="button" onClick={editor.toggleMode}>
-                    {editor.jsonMode ? 'Edit as fields' : 'Edit as JSON'}
+                {editor.canToggle && (
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label={editor.jsonMode ? 'Edit as fields' : 'Edit as JSON'}
+                    title={editor.jsonMode ? 'Edit as fields' : 'Edit as JSON'}
+                    onClick={editor.toggleMode}
+                  >
+                    {editor.jsonMode ? (
+                      <FormRegular aria-hidden="true" />
+                    ) : (
+                      <BracesRegular aria-hidden="true" />
+                    )}
                   </button>
                 )}
                 <button
                   type="button"
+                  className="icon-button"
+                  aria-label="Revert"
                   onClick={revert}
                   disabled={!dirty}
-                  title="Discard the setting edits not yet applied, on every tab"
+                  title="Revert: discard the setting edits not yet applied, on every tab"
                 >
-                  Revert
+                  <ArrowResetRegular aria-hidden="true" />
                 </button>
-                <button type="button" className="primary" onClick={apply}>
-                  Apply config
+                {/* The name keeps "config": what it applies, and what the
+                    notices and tests call it; the face is the short verb. */}
+                <button
+                  type="button"
+                  className="primary"
+                  aria-label="Apply config"
+                  title="Apply config"
+                  onClick={apply}
+                >
+                  Apply
                 </button>
               </>
             )}
@@ -4344,7 +4395,7 @@ export function NodePanel({
             />
           </span>
         </div>
-        {/* Under the header, so Apply's refusal shows whichever tab is open. */}
+        {/* Under the header, so Apply's refusal shows on every tab Apply is on. */}
         {editActs && error && (
           <p className="error property-panel__error" role="alert">
             {errorLead}

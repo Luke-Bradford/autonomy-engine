@@ -1498,11 +1498,11 @@ describe('NodePanel (Auto-map and the unmapped advisory, #1170)', () => {
     const panel = mount({ mapping: [ROW], mode: 'append' });
 
     autoMap();
-    expect(screen.getByText(/Apply config to save/)).toBeTruthy();
+    expect(screen.getByText(/Apply to save/)).toBeTruthy();
 
     panel.apply();
 
-    expect(screen.queryByText(/Apply config to save/)).toBeNull();
+    expect(screen.queryByText(/Apply to save/)).toBeNull();
   });
 });
 
@@ -1874,8 +1874,16 @@ describe('NodePanel — the dock tabs (#852)', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'General' }));
     expect(screen.getByRole('group', { name: 'Run policy' })).toBeTruthy();
     expect(screen.queryByRole('textbox', { name: 'Request URL' })).toBeNull();
-    // Apply is in the header, so it stays reachable from General (it was tab-bound before).
+    // #1694 OR42 — General writes straight to the store, so the draft's acts
+    // (Apply, Revert, the JSON toggle) are not offered there; they are on every
+    // tab that holds the draft.
+    expect(screen.queryByRole('button', { name: 'Apply config' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Revert' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Edit as JSON' })).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: 'Auth' }));
     expect(screen.getByRole('button', { name: 'Apply config' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Revert' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Edit as JSON' })).toBeTruthy();
   });
 
   it('keeps a half-typed field in the tab it left', () => {
@@ -2149,7 +2157,7 @@ describe('NodePanel — catalog tabs (#1477)', () => {
     it('does not count a change of tab as an edit', () => {
       mountOver(httpNode({ url: 'https://example.test/a' }));
       openTab('Auth');
-      openTab('General');
+      openTab('Request');
       expect(revertButton().disabled).toBe(true);
     });
   });
@@ -2282,6 +2290,17 @@ describe('NodePanel — tab-label status (#1477)', () => {
     panel.apply();
     expect(panel.storedConfig()).toMatchObject({ url: 'https://new' });
     expect(described('Request')).toBeNull();
+  });
+
+  it('keeps an unapplied edit, and its tab mark, while General is open (#1694 OR42)', () => {
+    const panel = mountOver(httpNode({ url: 'https://old' }));
+    fireEvent.change(screen.getByLabelText('Request URL'), { target: { value: 'https://new' } });
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }));
+    expect(screen.queryByRole('button', { name: 'Apply config' })).toBeNull();
+    expect(described('Request')).toBe('Unapplied changes');
+    fireEvent.click(screen.getByRole('tab', { name: 'Request' }));
+    panel.apply();
+    expect(panel.storedConfig()).toMatchObject({ url: 'https://new' });
   });
 
   it("marks a paired activity's tab complete once both its bindings are on the node", () => {

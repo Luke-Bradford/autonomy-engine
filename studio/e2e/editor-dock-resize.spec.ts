@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { openSeededCanvas, rectOf, type SeedDoc } from './support/seedDoc';
-import { properties } from './support/panels';
+import { openSeededCanvas, rectOf, withAWarning, type SeedDoc } from './support/seedDoc';
+import { openProblems, properties } from './support/panels';
 
 /**
  * #1475 OR27 slice 2 — the property dock is the operator's to size.
@@ -140,15 +140,16 @@ test('#1475 a dock sized on a tall window still leaves the canvas its floor on a
   await expectQuiet(page, problems);
 });
 
-test('#1475 a folded dock and a closed Problems column stay that way after a reload', async ({
+test('#1475 a folded dock stays that way after a reload, and Problems opens per session (#1694)', async ({
   page,
 }) => {
   const problems = collectPageProblems(page);
   await page.setViewportSize({ width: 1440, height: 900 });
-  await openSeededCanvas(page, `e2e 1475 dock fold ${Date.now()}`, seed);
+  await openSeededCanvas(page, `e2e 1475 dock fold ${Date.now()}`, withAWarning(seed));
 
-  await page.getByRole('button', { name: /^Problems/ }).click();
-  await expect(page.getByRole('region', { name: 'Problems', exact: true })).toBeHidden();
+  // #1694 OR42 — open is not a stored preference: a stored "open" would show
+  // the column on the first issue of the next session, the shift #1393 forbids.
+  await openProblems(page);
   await page.reload();
   await expect(properties(page)).toBeVisible();
   await expect(page.getByRole('region', { name: 'Problems', exact: true })).toBeHidden();
@@ -163,7 +164,7 @@ test('#1475 a folded dock and a closed Problems column stay that way after a rel
   // Folded, the canvas has the dock's height (and the divider's).
   await expect.poll(async () => (await heights(page)).flow).toBeGreaterThan(open.flow + 150);
 
-  // Unfolded again, Problems is still the operator's choice: closed.
+  // Unfolded again, Problems is still closed: it opens only when asked.
   await page.getByRole('button', { name: 'Show properties' }).click();
   await expect(properties(page)).toBeVisible();
   await expect(divider(page)).toBeVisible();

@@ -15,7 +15,7 @@ import {
   selectEdge,
   validationIssues,
 } from './support/canvasGraph';
-import { pickConnection, properties } from './support/panels';
+import { openProblems, pickConnection, properties } from './support/panels';
 import { seedConnection } from './support/seedResources';
 import { offRampText } from './support/typeRamp';
 import { nodeById, openSeededCanvas, seedVersion } from './support/seedDoc';
@@ -99,6 +99,8 @@ for (const { density, theme } of DESIGN_RUNS) {
     await addActivity(page, 'HTTP request');
     await expect.poll(() => validationIssues(page)).not.toEqual([]);
     await deselect(page);
+    // Opened, since it never opens by itself (#1694 OR42).
+    await openProblems(page);
 
     // The dock's shell, its header and the Problems column.
     const shell = await styles(

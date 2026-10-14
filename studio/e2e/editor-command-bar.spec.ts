@@ -3,6 +3,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { triggerMenuItem } from './support/canvas';
 import { dragNodeBy } from './support/canvasGraph';
 import { openSeededCanvas, seedTrigger, seedVersion, type SeedDoc } from './support/seedDoc';
+import { problemsToggle } from './support/panels';
 
 /**
  * #1476 OR28 slice 2 — the editor's command bar: Validate, and Trigger ▾ →
@@ -22,7 +23,9 @@ function problemsList(page: Page) {
   return page.getByRole('region', { name: 'Problems', exact: true });
 }
 
-test('Validate runs the save check, opens Problems and says what it found', async ({ page }) => {
+test('Validate runs the save check and says what it found, and an empty Problems stays shut', async ({
+  page,
+}) => {
   const problems = collectPageProblems(page);
   await openSeededCanvas(page, `e2e 1476 validate ${String(Date.now())}`, DOC);
 
@@ -36,8 +39,12 @@ test('Validate runs the save check, opens Problems and says what it found', asyn
   await page.getByRole('button', { name: 'Validate', exact: true }).click();
   expect((await checked).status()).toBe(200);
   await expect(notice(page)).toContainText('Validation: no problems found.');
-  await expect(problemsList(page)).toBeVisible();
-  await expect(problemsList(page)).toContainText('No problems.');
+  // #1694 OR42 — the dock opens, but an empty Problems column does not: it
+  // would take the form's width to say nothing. Its toggle says why.
+  await expect(page.getByRole('button', { name: 'Hide properties' })).toBeVisible();
+  await expect(problemsList(page)).toBeHidden();
+  await expect(problemsToggle(page)).toHaveAttribute('aria-disabled', 'true');
+  await expect(problemsToggle(page)).toHaveAttribute('aria-expanded', 'false');
 
   await expectQuiet(page, problems);
 });
@@ -65,13 +72,15 @@ test('what only the server can see is listed in Problems, refuses Save, and goes
   await page.getByRole('button', { name: 'Validate', exact: true }).click();
   await expect(notice(page)).toContainText('Validation: 1 problem — see Problems.');
   await expect(problemsList(page)).toContainText(issue);
-  await expect(page.getByRole('button', { name: /^Problems/ })).toContainText('1');
+  await expect(problemsToggle(page)).toContainText('1');
   await expect(save).toBeDisabled();
 
   // The finding was about THAT draft: any edit retires it.
   await dragNodeBy(page, 0, 0, 60);
-  await expect(problemsList(page)).not.toContainText(issue);
-  await expect(problemsList(page)).toContainText('No problems.');
+  // Nothing left to list, so the column closes (#1694 OR42).
+  await expect(problemsList(page)).toBeHidden();
+  await expect(problemsToggle(page).locator('.count-badge').first()).toHaveText('0');
+  await expect(page.locator('.problems-panel')).not.toContainText(issue);
   await expect(save).toBeEnabled();
 
   await expectQuiet(page, problems);

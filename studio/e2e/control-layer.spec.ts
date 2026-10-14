@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { nodeById, openSeededCanvas } from './support/seedDoc';
+import { nodeById, openSeededCanvas, withAWarning } from './support/seedDoc';
 import { properties } from './support/panels';
 import { resolvedPaletteColor } from './support/theme';
 import { BODY_SIZE, CONTROL_H, ICON_SIZE } from './support/appearance';
@@ -348,9 +348,14 @@ for (const density of ['compact', 'comfortable'] as const) {
       const problems = collectPageProblems(page);
       await openSettings(page, density);
       const h = CONTROL_H[density];
-      await openSeededCanvas(page, `or40 s2b ${density}`, {
-        nodes: [{ id: 'w', type: 'wait', position: { x: 0, y: 0 }, config: { seconds: '${1}' } }],
-      });
+      // A warning, so the Problems toggle has something to open (#1694 OR42).
+      await openSeededCanvas(
+        page,
+        `or40 s2b ${density}`,
+        withAWarning({
+          nodes: [{ id: 'w', type: 'wait', position: { x: 0, y: 0 }, config: { seconds: '${1}' } }],
+        }),
+      );
       await nodeById(page, 'w').click();
       const tablist = properties(page).getByRole('tablist').first();
       await expect(tablist).toBeVisible();
@@ -405,10 +410,7 @@ for (const density of ['compact', 'comfortable'] as const) {
             size: cs.fontSize,
           };
         });
-      // Problems may open with the dock (a stored preference): start it closed.
-      if ((await problemsToggle.getAttribute('aria-expanded')) === 'true') {
-        await problemsToggle.click();
-      }
+      // Closed on load: Problems opens only on request (#1694 OR42).
       await expect(problemsToggle).toHaveAttribute('aria-expanded', 'false');
       await page.mouse.move(0, 0);
       const rest = await subtle();
@@ -445,7 +447,8 @@ for (const density of ['compact', 'comfortable'] as const) {
       });
       expect(strip.map((i) => i.name)).toEqual([
         'Properties',
-        'Problems 0',
+        // The seeded warning (#1694 OR42) is what lets Problems open.
+        'Problems 01 warning',
         'Paste',
         'Expand properties',
         'Dock to right',
