@@ -9,13 +9,13 @@ import { expect, type Locator, type Page } from '@playwright/test';
  *
  * - **Hit-testing.** `elementFromPoint` at the four corners and the centre
  *   must land inside the overlay. A corner is probed 2px in, or further on a
- *   rounded corner, which does not hit-test outside its curve. A surface that paints over it, such as
- *   the dock's sticky tab strip over the node `⋯` menu, takes the point.
+ *   rounded corner, which does not hit-test outside its curve. A surface that
+ *   paints over it, such as the dock's sticky tab strip over the node `⋯`
+ *   menu, takes the point.
  * - **Viewport.** The rect lies inside `innerWidth` × `innerHeight`.
  * - **Clipping.** No ancestor whose `overflow` is not `visible` has a box that
  *   fails to contain the rect. Hit-testing alone misses this case when the
  *   clipped part is off-screen.
-
  */
 export async function expectOverlayUnobstructed(overlay: Locator, what = 'overlay'): Promise<void> {
   await expect(overlay).toBeVisible();
