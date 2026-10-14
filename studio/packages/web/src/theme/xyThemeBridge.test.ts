@@ -59,14 +59,18 @@ describe('xyThemeBridge.css', () => {
   });
 
   it('stays layout-neutral so it cannot regress the shipped MVP shell', () => {
-    expect(css).toMatch(/\.app-fluent-root:not\(\[data-portal-node\]\)\s*\{\s*display:\s*contents;\s*\}/);
+    expect(css).toMatch(
+      /\.app-fluent-root:not\(\[data-portal-node\]\)\s*\{\s*display:\s*contents;\s*\}/,
+    );
   });
 
   // #1695 OR43 — Fluent copies the class onto every portal mount node. A mount
   // node with `display: contents` has no box, so its z-index never applies and
   // every overlay paints under the app's positioned surfaces.
   it('leaves the portal mount nodes a box of their own', () => {
-    const contents = [...css.matchAll(/([^{}]+)\{[^}]*display:\s*contents/g)].map((m) => m[1]!.trim());
+    const contents = [...css.matchAll(/([^{}]+)\{[^}]*display:\s*contents/g)].map((m) =>
+      m[1]!.trim(),
+    );
     expect(contents).toEqual(['.app-fluent-root:not([data-portal-node])']);
   });
 

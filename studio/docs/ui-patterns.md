@@ -933,6 +933,20 @@ The workspace is seeded first, so lists are scanned with rows in them.
 - A canvas port is `role="img"`, named by its routing key: it is drawn and named but not
   keyboard-operable, and an `aria-label` on an element with no role is prohibited.
 
+## Overlay occlusion gate (#1695 OR43)
+
+Every overlay renders on top. Fluent menus, lists, tooltips and dialogs portal to one mount node at
+the end of `<body>` (`z-index: 1000000`). The theme bridge's `display: contents` applies to the
+app's provider only, never to that mount node, because a mount node without a box loses its
+`z-index`. A `?` help note opens in the browser's top layer (`popover="manual"`), placed by
+`placeNote`. `e2e/support/occlusion.ts` holds the helpers: `expectOverlayUnobstructed` hit-tests
+an open overlay at its corners and centre, and checks the viewport and every clipping ancestor.
+The `expectEvery…` sweeps find the triggers by role (`aria-haspopup`, `combobox`, `?`).
+`e2e/overlay-occlusion.spec.ts` runs them over every toolbox activity's tabs, the node and canvas
+menus, the editor header, the pipeline tree, the hub pages, the shell's tooltips and a confirmation
+dialog. It runs at 1440×900 and 1920×1000, docked and expanded. A new overlay needs no entry; a new
+kind of trigger goes into those helpers. Never fix an occluded overlay by raising its `z-index`.
+
 ## Case and terms (#1594 OR40 S4)
 
 **Sentence case everywhere.** A name, label, tab, button or heading capitalises its first word

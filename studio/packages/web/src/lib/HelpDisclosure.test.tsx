@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { HelpDisclosure, placeNote } from './HelpDisclosure';
+import { HelpDisclosure } from './HelpDisclosure';
+import { placeNote } from './placeNote';
 
 function help() {
   const view = render(
@@ -94,7 +95,17 @@ describe('HelpDisclosure (#1484 M2 — the ? help)', () => {
 
 /** A box at `left, top`, `width` by `height`, as `getBoundingClientRect` gives it. */
 function rect(left: number, top: number, width: number, height: number): DOMRect {
-  return { left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) };
+  return {
+    left,
+    top,
+    width,
+    height,
+    right: left + width,
+    bottom: top + height,
+    x: left,
+    y: top,
+    toJSON: () => ({}),
+  };
 }
 
 describe('placeNote (#1695 OR43 — the open note, in the top layer)', () => {
@@ -128,7 +139,7 @@ describe('placeNote (#1695 OR43 — the open note, in the top layer)', () => {
     return out;
   }
 
-  it('opens under the ?, its right edge on the ?\'s', () => {
+  it("opens under the ?, its right edge on the ?'s", () => {
     expect(place(rect(600, 100, 16, 16), { width: 352, height: 60 })).toEqual({
       left: `${616 - 352}px`,
       top: '120px',
@@ -143,7 +154,11 @@ describe('placeNote (#1695 OR43 — the open note, in the top layer)', () => {
 
   it('stays below when there is no more room above either', () => {
     expect(
-      place(rect(600, 40, 16, 16), { width: 352, height: 120 }, { viewport: { width: 1440, height: 150 } }).top,
+      place(
+        rect(600, 40, 16, 16),
+        { width: 352, height: 120 },
+        { viewport: { width: 1440, height: 150 } },
+      ).top,
     ).toBe('60px');
   });
 
@@ -152,7 +167,7 @@ describe('placeNote (#1695 OR43 — the open note, in the top layer)', () => {
     expect(place(rect(84, 100, 16, 16), { width: 352, height: 60 }).left).toBe('8px');
   });
 
-  it('inline: under its row, at the row\'s left and width', () => {
+  it("inline: under its row, at the row's left and width", () => {
     expect(
       place(rect(900, 100, 16, 16), { width: 400, height: 60 }, { inline: rect(500, 90, 400, 28) }),
     ).toEqual({ left: '500px', top: '122px', width: '400px' });

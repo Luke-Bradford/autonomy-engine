@@ -122,7 +122,10 @@ export async function expectEveryPopupUnobstructed(
  * #1695 OR43 — open every `?` help note in `scope` and assert each is
  * unobstructed. The note is the disclosure's `role="note"` span.
  */
-export async function expectEveryHelpNoteUnobstructed(scope: Locator, what: string): Promise<number> {
+export async function expectEveryHelpNoteUnobstructed(
+  scope: Locator,
+  what: string,
+): Promise<number> {
   const summaries = scope.locator('details.help-disclosure > summary:visible');
   const count = await summaries.count();
   for (let i = 0; i < count; i += 1) {

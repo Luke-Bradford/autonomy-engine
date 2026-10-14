@@ -79,8 +79,13 @@ for (const viewport of VIEWPORTS) {
         await addActivity(page, title);
         const panel = properties(page);
         if (container) {
-          await page.getByRole('button', { name: new RegExp(`^Configure ${title} \\d+$`) }).last().click();
-          await expect(panel.getByRole('heading', { name: new RegExp(`^${title} \\d+$`) })).toBeVisible();
+          await page
+            .getByRole('button', { name: new RegExp(`^Configure ${title} \\d+$`) })
+            .last()
+            .click();
+          await expect(
+            panel.getByRole('heading', { name: new RegExp(`^${title} \\d+$`) }),
+          ).toBeVisible();
           await setDock(page, dock);
         } else {
           await expect(canvasNodes(page)).toHaveCount(1);
@@ -166,7 +171,9 @@ for (const viewport of VIEWPORTS) {
 
     // The tooltips: the hub rail's (drawn over the page beside it) and the
     // command bar's, every one that carries a Fluent tooltip.
-    const tipped = page.locator('.hub-rail a, .command-bar button[aria-label]').filter({ visible: true });
+    const tipped = page
+      .locator('.hub-rail a, .command-bar button[aria-label]')
+      .filter({ visible: true });
     expect(await expectEveryTooltipUnobstructed(page, tipped, 'shell')).toBeGreaterThan(3);
 
     // A dialog: the confirmation a new pipeline's Delete raises, answered
