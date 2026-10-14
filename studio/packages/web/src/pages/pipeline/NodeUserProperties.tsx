@@ -47,6 +47,7 @@ export function NodeUserProperties({
         onAdd={() => write([...rows, { name: '', value: '' }])}
         addDisabled={rows.length >= MAX_USER_PROPERTIES}
         addTitle={`Up to ${MAX_USER_PROPERTIES}, shown as columns in the activity runs grid`}
+        addDisabledNote={`Limit of ${MAX_USER_PROPERTIES} reached`}
       >
         {rows.map((row, i) => {
           // The row is written through on every keystroke, so the stored doc

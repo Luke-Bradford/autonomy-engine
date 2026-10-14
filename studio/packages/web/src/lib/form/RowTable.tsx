@@ -105,6 +105,7 @@ export function RowList({
   onAdd,
   addDisabled = false,
   addTitle,
+  addDisabledNote,
   children,
 }: {
   columns: readonly RowTableColumn[];
@@ -115,6 +116,11 @@ export function RowList({
   addDisabled?: boolean;
   /** The Add button's hover: what the list allows, where a section `?` would have said it. */
   addTitle?: string;
+  /**
+   * Shown beside a DISABLED Add, saying why: a disabled button gets no hover in
+   * every browser (Firefox), so its `title` cannot be the only place it is said.
+   */
+  addDisabledNote?: string;
   children: ReactNode;
 }) {
   return (
@@ -123,6 +129,11 @@ export function RowList({
         <button type="button" onClick={onAdd} disabled={addDisabled} title={addTitle}>
           {addLabel}
         </button>
+        {addDisabled && addDisabledNote !== undefined && (
+          <span className="page-hint" role="status">
+            {addDisabledNote}
+          </span>
+        )}
       </Toolbar>
       {count === 0 ? (
         <p className="page-hint">None declared.</p>
