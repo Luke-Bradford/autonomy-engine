@@ -64,6 +64,9 @@ import {
   type WorkspaceGitPullRequestReading,
   type WorkspaceGitSync,
   type ActivityBindingSlot,
+  COPY_ACTIVITY_TYPE,
+  COPY_FILES_ACTIVITY_TYPE,
+  COPY_TYPES,
 } from '@autonomy-studio/shared';
 import {
   clipboardCommandFor,
@@ -2819,7 +2822,9 @@ function PropertyPanel({
   if (!node) return pipelinePanel;
   return (
     <NodePanel
-      key={node.id}
+      // #1600 C1a — and the type: Copy's toggle changes it, and the panel's
+      // draft belongs to the old mode's settings, so it starts over.
+      key={`${node.id}:${node.type}`}
       store={store}
       connections={connections}
       datasets={datasets}
@@ -3841,6 +3846,11 @@ export function NodePanel({
    * resolved list read by the tab strip, the tab bodies and the landing choice.
    */
   const typeTabs = useMemo(() => nodeTypeTabs(entry, fields ?? []), [entry, fields]);
+  // #1600 OR41 C1a — the one Copy palette item stands for two types; which one
+  // this node is, for the Source tab's *Copy* toggle.
+  const copyMode = (COPY_TYPES as readonly string[]).includes(nodeType)
+    ? (nodeType as (typeof COPY_TYPES)[number])
+    : undefined;
   const landing = typeTabs[0].key;
   const offered = (key: NodeTab | undefined): key is NodeTab =>
     key !== undefined && (key === 'general' || typeTabs.some((t) => t.key === key));
@@ -4085,6 +4095,26 @@ export function NodePanel({
     const holdsMapping = mappingField !== null && t.fields.some((f) => f === mappingField);
     return (
       <>
+        {t.key === 'source' && copyMode !== undefined && (
+          <LabelledControl
+            label="Copy"
+            about="Rows reads the data, maps its columns and converts their types. Files as-is copies files byte for byte, without reading them. Switching starts the other mode's settings fresh; Undo brings these back."
+          >
+            {(id, describedBy) => (
+              <select
+                id={id}
+                aria-describedby={describedBy}
+                value={copyMode}
+                onChange={(e) =>
+                  store.getState().setCopyMode(nodeId, e.target.value as typeof copyMode)
+                }
+              >
+                <option value={COPY_ACTIVITY_TYPE}>Rows</option>
+                <option value={COPY_FILES_ACTIVITY_TYPE}>Files as-is</option>
+              </select>
+            )}
+          </LabelledControl>
+        )}
         {t.bindings.map((slot) => bindingControls(slot))}
         {t.bindings.length > 0 && (
           <>
