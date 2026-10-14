@@ -1,4 +1,3 @@
-import type { FieldSize } from './configForm';
 import { useStore } from 'zustand';
 import {
   DESCRIPTION_MAX_CHARS,
@@ -16,6 +15,7 @@ import { Section } from '../../lib/Section';
 import { AutoGrowTextarea } from '../../lib/form/AutoGrowTextarea';
 import { FieldCell, FieldGrid } from '../../lib/form/FieldGrid';
 import type { FieldPicker } from './ConfigFieldControl';
+import type { FieldSize } from './configForm';
 import type { createCanvasStore } from './canvasStore';
 import { NodeUserProperties } from './NodeUserProperties';
 import { PolicyEditor } from './PolicyEditor';
