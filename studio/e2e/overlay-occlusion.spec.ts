@@ -58,19 +58,45 @@ for (const viewport of VIEWPORTS) {
 
       // Every activity the toolbox offers, containers included.
       const activities = await toolbox(page).getByRole('list').getByRole('button').allInnerTexts();
+      const containers = await toolbox(page)
+        .getByRole('list', { name: 'Containers', exact: true })
+        .getByRole('button')
+        .allInnerTexts();
       expect(activities.length).toBeGreaterThan(15);
+      expect(containers.length).toBeGreaterThan(1);
 
       let popups = 0;
       let notes = 0;
+      // Activities one at a time: each is swept, then deleted from its own
+      // menu, so none hides another. Containers have no `⋯` and are opened
+      // with their Configure button; they stay, and are drawn as boxes.
       for (const [i, title] of activities.map((t) => t.trim()).entries()) {
+        const container = containers.some((c) => c.trim() === title);
+        // The expanded dock covers the canvas, so select with it docked.
+        await setDock(page, 'docked');
         await addActivity(page, title);
-        await expect(canvasNodes(page)).toHaveCount(i + 1);
-        await setDock(page, dock);
         const panel = properties(page);
-        await panel.getByRole('button', { name: 'More node actions', exact: true }).click();
-        await expectOverlayUnobstructed(openOverlay(page), `${title}: More node actions`);
-        await page.keyboard.press('Escape');
-        await setDock(page, dock);
+        if (container) {
+          await page.getByRole('button', { name: new RegExp(`^Configure ${title} \\d+$`) }).last().click();
+          await expect(panel.getByRole('heading', { name: new RegExp(`^${title} \\d+$`) })).toBeVisible();
+          await setDock(page, dock);
+        } else {
+          await expect(canvasNodes(page)).toHaveCount(1);
+          await canvasNodes(page).first().click();
+          const more = panel.getByRole('button', { name: 'More node actions', exact: true });
+          await expect(more).toBeVisible();
+          if (i === 0) {
+            // The node's own right-click menu (Move into ▸, Wrap in ▸).
+            await canvasNodes(page).first().click({ button: 'right' });
+            await expectOverlayUnobstructed(openOverlay(page), 'node context menu');
+            await page.keyboard.press('Escape');
+          }
+          await setDock(page, dock);
+          await more.click();
+          await expectOverlayUnobstructed(openOverlay(page), `${title}: More node actions`);
+          await page.keyboard.press('Escape');
+          await setDock(page, dock);
+        }
 
         const tabs = panel.getByRole('tablist').first().getByRole('tab');
         for (let t = 0; t < (await tabs.count()); t += 1) {
@@ -79,16 +105,15 @@ for (const viewport of VIEWPORTS) {
           await setDock(page, dock);
           notes += await expectEveryHelpNoteUnobstructed(panel, title);
         }
+        if (!container) {
+          await panel.getByRole('button', { name: 'More node actions', exact: true }).click();
+          await page.getByRole('menuitem', { name: 'Delete node', exact: true }).click();
+          await expect(canvasNodes(page)).toHaveCount(0);
+        }
       }
       // The sweep reached the dock's lists and notes, not just the menus.
       expect(popups).toBeGreaterThan(0);
       expect(notes).toBeGreaterThan(0);
-
-      // The node's own right-click menu.
-      await canvasNodes(page).last().click({ button: 'right' });
-      await expectOverlayUnobstructed(openOverlay(page), 'node context menu');
-      await page.keyboard.press('Escape');
-      await setDock(page, dock);
 
       // The editor's header: the page ⋯, Trigger ▾ and any other menu there.
       await expect(editorMenuTrigger(page)).toBeVisible();
@@ -106,7 +131,7 @@ for (const viewport of VIEWPORTS) {
       await expectOverlayUnobstructed(openOverlay(page), 'pipeline tree: More actions');
       await page.keyboard.press('Escape');
 
-      expectQuiet(problems);
+      await expectQuiet(page, problems);
     });
   }
 }
@@ -149,6 +174,6 @@ for (const viewport of VIEWPORTS) {
     await page.getByRole('menuitem', { name: /^Delete/ }).click();
     await expectOverlayUnobstructed(page.getByRole('alertdialog'), 'Delete confirmation');
     await answerConfirm(page, 'cancel');
-    expectQuiet(problems);
+    await expectQuiet(page, problems);
   });
 }
