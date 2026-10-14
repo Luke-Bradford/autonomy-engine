@@ -157,6 +157,7 @@ describe('useWorkspaceGitSync', () => {
     expect(onUnavailable).not.toHaveBeenCalled();
     expect(syncMock).toHaveBeenCalledTimes(1);
   });
+
   it('clear() alone cancels the queued re-read: the dropped answer starts nothing', async () => {
     const [stale] = queueReads(1);
     const { result } = renderHook(() => useWorkspaceGitSync());
