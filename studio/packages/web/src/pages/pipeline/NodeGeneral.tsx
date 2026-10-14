@@ -15,6 +15,7 @@ import { Section } from '../../lib/Section';
 import { AutoGrowTextarea } from '../../lib/form/AutoGrowTextarea';
 import { FieldCell, FieldGrid } from '../../lib/form/FieldGrid';
 import type { FieldPicker } from './ConfigFieldControl';
+import type { FieldSize } from './configForm';
 import type { createCanvasStore } from './canvasStore';
 import { NodeUserProperties } from './NodeUserProperties';
 import { PolicyEditor } from './PolicyEditor';
@@ -143,6 +144,7 @@ export function GeneralBasics({
               {(id, describedBy) => (
                 <select
                   id={id}
+                  data-size={'s' satisfies FieldSize}
                   aria-describedby={describedBy}
                   value={markAs}
                   onChange={(e) => onMarkAs(InactiveMarkAsSchema.parse(e.target.value))}

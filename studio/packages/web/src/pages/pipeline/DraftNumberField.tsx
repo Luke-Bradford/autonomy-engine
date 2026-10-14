@@ -1,6 +1,8 @@
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { LabelledControl } from '../../lib/LabelledControl';
+import { UnitLabel, WithUnit } from '../../lib/form/UnitInput';
+import { titleWithUnit } from '../../lib/form/unit';
 import { FieldError } from '../../lib/form/FieldError';
 import { joinIds } from '../../lib/form/fieldValidation';
 
@@ -31,7 +33,9 @@ export function DraftNumberField<V extends number | undefined>({
   onCommit,
   about,
   placeholder,
+  unit,
 }: {
+  /** The title alone; `unit` is drawn as the box's suffix (#1694 OR42 item 5). */
   label: string;
   stored: number | undefined;
   parse: (raw: string) => DraftNumberParse<V>;
@@ -39,6 +43,8 @@ export function DraftNumberField<V extends number | undefined>({
   /** What the field means, behind a `?` beside its label (#1594 OR40 S3c-2). */
   about: ReactNode;
   placeholder?: string;
+  /** "seconds": out of the label's sight, in its name and the `?`'s ("Timeout (seconds)"). */
+  unit?: string;
 }) {
   const text = stored === undefined ? '' : String(stored);
   const [draft, setDraft] = useState(text);
@@ -85,30 +91,35 @@ export function DraftNumberField<V extends number | undefined>({
 
   return (
     <>
-      <LabelledControl label={label} about={{ name: label, note: about }}>
+      <LabelledControl
+        label={<UnitLabel title={label} unit={unit} />}
+        about={{ name: titleWithUnit(label, unit), note: about }}
+      >
         {(id, describedBy) => (
-          <input
-            id={id}
-            type="text"
-            className="number-input"
-            inputMode="numeric"
-            spellCheck={false}
-            placeholder={placeholder}
-            value={draft}
-            aria-invalid={error !== null}
-            aria-describedby={joinIds(error !== null ? errorId : undefined, describedBy)}
-            onChange={(e) => {
-              const raw = e.target.value;
-              setDraft(raw);
-              // #1393 — a standing error clears the moment the text is fine
-              // again, not on the next blur: an operator who has already fixed
-              // the value should not go on reading that it is wrong. Only ever
-              // CLEARS here; a new error is still raised by blur alone, so
-              // typing through an intermediate value does not shout.
-              if (error !== null && (raw === text || parse(raw).ok)) setError(null);
-            }}
-            onBlur={(e) => commit(e.target.value)}
-          />
+          <WithUnit unit={unit}>
+            <input
+              id={id}
+              type="text"
+              className="number-input"
+              inputMode="numeric"
+              spellCheck={false}
+              placeholder={placeholder}
+              value={draft}
+              aria-invalid={error !== null}
+              aria-describedby={joinIds(error !== null ? errorId : undefined, describedBy)}
+              onChange={(e) => {
+                const raw = e.target.value;
+                setDraft(raw);
+                // #1393 — a standing error clears the moment the text is fine
+                // again, not on the next blur: an operator who has already fixed
+                // the value should not go on reading that it is wrong. Only ever
+                // CLEARS here; a new error is still raised by blur alone, so
+                // typing through an intermediate value does not shout.
+                if (error !== null && (raw === text || parse(raw).ok)) setError(null);
+              }}
+              onBlur={(e) => commit(e.target.value)}
+            />
+          </WithUnit>
         )}
       </LabelledControl>
       {/* #1393 — a RESERVED slot, always mounted and a line tall, so an error

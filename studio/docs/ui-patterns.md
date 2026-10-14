@@ -827,10 +827,33 @@ row heights), not the layout.
     960px window up, so its body is 418px and label-left. Under 960px it stacks below the list at the
     content column's width, which a 700px window takes under 400px. The editor's trigger and
     connection columns are narrower (361px at 1440), so their forms keep the label over the control.
-- **Controls are sized by type at every width**, on every form. A select is as wide as its longest
-  option, capped at 320px. A number (`.number-input`, or an `<input type="number">` row) is 120px. Only
+- **Controls are sized by type at every width**, on every form. Outside the property pane (below), a
+  select is as wide as its longest option, capped at 320px. A number (`.number-input`, or an `<input type="number">` row) is 120px. Only
   free text grows. The run drawer (`.node-detail-panel`) shares the dock and is not a form, so none of
   this applies to it.
+- **In the property pane, three size classes (#1694 OR42 F10).** Every control outside a table takes
+  one of them, by what the field holds, never by what it sits in:
+
+  | Class | Width | Holds |
+  | --- | --- | --- |
+  | S | `--field-s`, 120px | a number, a field with a unit, a choice `fieldSpan` packs as short |
+  | M | `--field-m`, 240px | a name (a one-line literal), a connection or dataset binding, a longer choice; any unmarked select |
+  | L | the value column | free text, paths, expressions, JSON |
+
+  `fieldSize` (`configForm.ts`) sets `data-size` on a config field, and a choice is S exactly where
+  `fieldSpan` packs it short: up to 12 characters, what 120px shows beside a select's arrow. A
+  schema choice shows its longest option whole; a binding lists the operator's own names, which an M
+  clips. Drawers and Settings keep a select's natural width (above). A row table's cells are sized
+  by its columns instead: a one-line text column (`data-width="name"`, a mapping's source and sink,
+  a key) has a `--row-table-name-min` floor of 160px, and in a narrow dock the table scrolls
+  sideways rather than crush it. An optional choice cell's empty option is blank, because empty
+  means its default; a required one keeps "— none —". `e2e/property-pane-ratchet.spec.ts` holds the
+  classes for every catalog type and tab.
+- **A unit is a suffix inside its box, not label text (#1694 OR42 item 5).** `30` `s`, through
+  `WithUnit`/`UnitLabel` (`lib/form/UnitInput.tsx`), so a label is the title alone and never wraps. The
+  unit stays in the field's accessible name, out of sight ("Timeout (seconds)"), so its name, its
+  `?` and its validation messages are unchanged. This applies to a top-level number or one-line
+  field, which is an S on every surface, Settings included. A table's column header keeps "(ms)".
 
 **A drawer has no two-column grid.** #1396 first asked for one on wide screens. At 460px two columns
 would make controls about 100px wide beside their labels, too narrow for a URL, a JSON box or a time

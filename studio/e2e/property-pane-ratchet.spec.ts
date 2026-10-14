@@ -14,6 +14,8 @@ import { nodeMenuAction, pickConnection, properties } from './support/panels';
  * - no button is wider than its own content (an add act sits in a toolbar sized
  *   to its text, never stretched across the form);
  * - no section heading carries a `?`;
+ * - every control outside a table holds its size class, S, M or the row's
+ *   value column, and a choice shows its longest option whole (F10);
  * - the pane's prose lines, and
  * - its `?`s, per type, never rise above the counts seeded below.
  *
@@ -65,6 +67,7 @@ interface TabRead {
   panelProse: string[];
   tabHelp: number;
   panelHelp: number;
+  offSize: string[];
 }
 
 /** One read of the open tab: what is measured, from the rendered page. */
@@ -106,7 +109,72 @@ function readTab(page: Page): Promise<TabRead> {
     );
     const text = (el: Element) => (el.textContent ?? '').trim().slice(0, 60);
     const help = [...panel.querySelectorAll('summary[aria-label^="About "]')].filter(visible);
+
+    // F10 — every control outside a table holds its OWN size class: what
+    // `data-size` says (`fieldSize`), and otherwise a select or a binding is an
+    // M, a number an S, anything else an L, its right edge on its row's. An S
+    // or an M may only be narrower where its row is (`max-width: 100%`), never
+    // stretched. A table's cells are sized by their columns. A Fluent combobox
+    // is measured by its box, not its inner input. A choice must also show its
+    // longest option whole, beside its native arrow, where its options are
+    // the schema's.
+    // The classes (`--field-s`, `--field-m`) and the slack either side. Here,
+    // not module scope: this function runs in the page.
+    const WIDTH = { s: 120, m: 240 } as Record<string, number>;
+    const SLACK = 4;
+    const ARROW = 20;
+    const ctx = document.createElement('canvas').getContext('2d')!;
+    const offSize: string[] = [];
+    const controls = panel.querySelectorAll<HTMLElement>(
+      'select, textarea, input:not([type="checkbox"], [type="radio"], [type="hidden"]), .connection-picker__combobox',
+    );
+    for (const control of controls) {
+      if (!visible(control) || control.closest('.row-table, [role="tablist"]') !== null) continue;
+      if (control.matches('.connection-picker__combobox input')) continue;
+      const box = control.getBoundingClientRect();
+      const row = (
+        control.closest('.labelled-control') ?? control.parentElement!
+      ).getBoundingClientRect();
+      const fills = Math.abs(box.right - row.right) <= SLACK;
+      const expected =
+        control.dataset.size ??
+        (control.matches('select, .connection-picker__combobox')
+          ? 'm'
+          : control.matches('.number-input')
+            ? 's'
+            : 'l');
+      const width = WIDTH[expected];
+      const held =
+        width === undefined
+          ? fills
+          : Math.abs(box.width - width) <= SLACK || (fills && box.width < width);
+      const name =
+        (control as HTMLInputElement).labels?.[0]?.textContent?.trim() ??
+        control.getAttribute('aria-label') ??
+        control.tagName;
+      if (!held) offSize.push(`${name} ${Math.round(box.width)}px, not ${expected.toUpperCase()}`);
+      // A SCHEMA choice (marked by `fieldSize`) is a closed set, so it can be
+      // held whole; a binding lists the operator's own names, which an M clips.
+      if (control instanceof HTMLSelectElement && control.dataset.size !== undefined) {
+        const style = getComputedStyle(control);
+        ctx.font = style.font;
+        const longest = Math.max(
+          0,
+          ...Array.from(control.options, (o) => ctx.measureText(o.text).width),
+        );
+        const room =
+          control.clientWidth -
+          parseFloat(style.paddingLeft) -
+          parseFloat(style.paddingRight) -
+          ARROW;
+        if (longest > room)
+          offSize.push(
+            `${name} cuts its longest option: ${Math.round(longest)}px in ${Math.round(room)}px`,
+          );
+      }
+    }
     return {
+      offSize,
       wideButtons,
       headHelp,
       tabProse: prose.filter(inTab).map(text),
@@ -142,6 +210,7 @@ async function readPane(page: Page, tablist: string, name: string, misses: strin
       .toBe(true);
     for (const wide of read.wideButtons) misses.push(`${name} › ${label} › wide button: ${wide}`);
     for (const head of read.headHelp) misses.push(`${name} › ${label} › ? on heading: ${head}`);
+    for (const off of read.offSize) misses.push(`${name} › ${label} › off size: ${off}`);
     prose.push(...read.tabProse.map((line) => `${label}: ${line}`));
     help += read.tabHelp;
     if (i === 0) {
@@ -152,7 +221,7 @@ async function readPane(page: Page, tablist: string, name: string, misses: strin
   return { prose, help };
 }
 
-test('every catalog activity and container: no wide button, no `?` on a heading, prose and `?`s held', async ({
+test('every catalog activity and container: no wide button, no `?` on a heading, every field S, M or L, prose and `?`s held', async ({
   page,
 }) => {
   test.setTimeout(240_000);

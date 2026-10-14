@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import { describeJsonProblem, notValidJson } from '../../lib/json/jsonText';
 import { keyToWords, midSentence } from '../../lib/words';
+import { titleWithUnit } from '../../lib/form/unit';
 import {
   enumValuesOf,
   SecretRefSchema,
@@ -70,7 +71,7 @@ export type ConfigFieldKind =
  * control (a number, a checkbox, a choice between short names) packs beside
  * others; free text, JSON, row lists and a choice with a long name take the
  * grid's whole width, rather than be clipped to a packed cell's ~130px control
- * column. 16 characters is about that column at the dock's 13px.
+ * column (`SHORT_CHOICE_CHARS`).
  */
 export function fieldSpan(
   field: Pick<ConfigField, 'kind' | 'enumOptions' | 'label'>,
@@ -81,7 +82,39 @@ export function fieldSpan(
   return shown.every((text) => text.length <= SHORT_CHOICE_CHARS) ? 'short' : 'long';
 }
 
-const SHORT_CHOICE_CHARS = 16;
+/**
+ * #1694 OR42 F10 — what an S box (`--field-s`, 120px) shows whole beside a
+ * native select's arrow at the dock's 13px. Measured: 82px of room, and
+ * "Metadata only" (13) needs 86px. It was 16, sized to a packed cell's ~130px
+ * control column, when a choice took its own width.
+ */
+const SHORT_CHOICE_CHARS = 12;
+
+/**
+ * #1694 OR42 F10 — a control's SIZE CLASS in the property pane, set by what
+ * the field holds, never by the width of whatever it sits in (`index.css`,
+ * `--field-s`/`--field-m`):
+ *
+ *  - `s` (~120px) — a quantity or a short choice: a number, a field with a
+ *    unit (Wait's seconds, which also takes an expression), and an enum that
+ *    `fieldSpan` packs as short. A choice is S exactly where it packs, so a
+ *    packed choice is never a 240px box clamped into a 130px column.
+ *  - `m` (~240px) — a name: a longer choice, and a one-line LITERAL, which
+ *    is an identifier (a variable name), never an expression.
+ *  - `l` — everything else (free text, paths, expressions, JSON): the grid's
+ *    whole value column.
+ */
+export type FieldSize = 's' | 'm' | 'l';
+
+export function fieldSize(
+  field: Pick<ConfigField, 'kind' | 'enumOptions' | 'label' | 'literal' | 'singleLine'>,
+): FieldSize {
+  if (field.kind === 'number') return 's';
+  if (field.kind === 'enum') return fieldSpan(field) === 'short' ? 's' : 'm';
+  if (field.kind !== 'text' || field.singleLine !== true) return 'l';
+  if (field.label?.unit !== undefined) return 's';
+  return field.literal === true ? 'm' : 'l';
+}
 
 /** One bound of a number field; an exclusive one only ever on a decimal. */
 export interface NumberBound {
@@ -1389,8 +1422,7 @@ export function configKeyLabel(
 
 /** A top-level field's human title, with its unit: "Timeout (ms)". The key when it has none. */
 export function configFieldTitle(field: ConfigField): string {
-  const base = field.label?.title ?? field.name;
-  return field.label?.unit === undefined ? base : `${base} (${field.label.unit})`;
+  return titleWithUnit(field.label?.title ?? field.name, field.label?.unit);
 }
 
 /**
@@ -1400,8 +1432,7 @@ export function configFieldTitle(field: ConfigField): string {
  * its key (`configFieldTitle`): errors and expressions cite it.
  */
 export function rowTitle(field: ConfigField): string {
-  const base = field.label?.title ?? keyToWords(field.name);
-  return field.label?.unit === undefined ? base : `${base} (${field.label.unit})`;
+  return titleWithUnit(field.label?.title ?? keyToWords(field.name), field.label?.unit);
 }
 
 /**

@@ -3057,10 +3057,77 @@ button.danger {
 :root[data-density]
   :is(.property-dock .property-panel:not(.node-detail-panel), .form-drawer-body, .field-form)
   :is(input.number-input, .labelled-control > input[type='number']) {
-  width: 120px;
+  width: var(--field-s);
   max-width: 100%;
   align-self: flex-start;
   justify-self: start;
+}
+
+/* #1694 OR42 F10 — THREE SIZE CLASSES in the property pane, by what a field
+   holds and never by the width of what it sits in, so a section's boxes end
+   on one of a few edges rather than wherever each happened to land: S
+   (`--field-s`, a number, a duration, a short choice), M (`--field-m`, a name,
+   a connection, a longer choice) and L (the value column: free text, paths,
+   expressions). `fieldSize` (`configForm.ts`) sets `data-size` on a config
+   field; an unmarked choice in the pane is an M. Not a table's cells, which
+   its columns size (`.row-table`), and not a drawer or Settings, whose choices
+   keep their own width (above). */
+:root[data-density]
+  .property-dock
+  .property-panel:not(.node-detail-panel)
+  .labelled-control
+  > select:not([data-size], .row-table *),
+:root[data-density]
+  .property-dock
+  .property-panel:not(.node-detail-panel)
+  :is(select, input)[data-size='m'] {
+  width: var(--field-m);
+  max-width: 100%;
+  align-self: flex-start;
+  justify-self: start;
+}
+
+:root[data-density]
+  .property-dock
+  .property-panel:not(.node-detail-panel)
+  :is(select, input)[data-size='s'] {
+  width: var(--field-s);
+  max-width: 100%;
+  align-self: flex-start;
+  justify-self: start;
+}
+
+/* #1694 OR42 item 5 — a unit drawn inside its box's right edge (`30` `s`,
+   `WithUnit`), so the label carries the title alone and never wraps. The
+   wrapper takes the box's own width, never the column's, or the suffix would
+   sit at the column's edge. */
+.input-unit {
+  position: relative;
+  display: inline-flex;
+  width: max-content;
+  max-width: 100%;
+  align-self: flex-start;
+  justify-self: start;
+}
+
+/* A field with a unit is a quantity, so an S on every surface (Settings'
+   page is not one of the forms above), clear of the suffix: its 8px inset, an
+   8px gap, and its own length (`--unit-ch`, set by `WithUnit` as "5ch" for
+   "bytes"). */
+.input-unit > input {
+  width: var(--field-s);
+  max-width: 100%;
+  padding-right: calc(var(--space-4) + var(--unit-ch));
+}
+
+.input-unit__suffix {
+  position: absolute;
+  top: 50%;
+  right: var(--space-2);
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: var(--type-caption-size);
+  pointer-events: none;
 }
 
 /* #1477 OR29 slice 5b — a connection binding: the select sized by its options
@@ -3087,6 +3154,14 @@ button.danger {
   padding: 0;
   border: none;
   background: transparent;
+}
+/* #1694 OR42 F10 — in the property pane a binding is an M, like every name. */
+:root[data-density]
+  .property-dock
+  .property-panel:not(.node-detail-panel)
+  .connection-picker
+  .connection-picker__combobox {
+  width: var(--field-m);
 }
 .connection-picker .connection-picker__combobox::after {
   display: none;
@@ -5273,6 +5348,13 @@ button.danger {
 
 .row-table th[data-width='long'] {
   min-width: 5rem;
+}
+
+/* #1694 OR42 item 9 — a one-line cell (a mapping's source and sink columns, a
+   key) reads whole: measured, the old 5rem cut `order_id` to `order_i`. In a
+   narrow dock the table scrolls sideways rather than crush it. */
+.row-table th[data-width='name'] {
+  min-width: var(--row-table-name-min);
 }
 
 /* A tick box and the actions take only what they need. */

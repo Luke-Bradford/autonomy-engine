@@ -91,7 +91,8 @@ export function PolicyEditor({
         <FieldGrid className="field-stack">
           <FieldCell span="short">
             <DraftNumberField
-              label="Timeout (seconds)"
+              label="Timeout"
+              unit="seconds"
               stored={policy?.timeoutSeconds}
               parse={parseTimeoutSeconds}
               placeholder="none"
@@ -114,7 +115,8 @@ export function PolicyEditor({
         </FieldCell>
         <FieldCell span="short">
           <DraftNumberField
-            label="Retry interval (seconds)"
+            label="Retry interval"
+            unit="seconds"
             stored={policy?.retryIntervalSeconds}
             parse={parseWholeNumber}
             placeholder={String(DEFAULT_RETRY_INTERVAL_SECONDS)}

@@ -4,6 +4,7 @@ import { Toolbar } from '../../lib/PageHeader';
 import { CheckboxField } from '../../lib/form/CheckboxField';
 import {
   configFieldTitle,
+  fieldSize,
   describeNumberRule,
   emptyControlValue,
   isRowKind,
@@ -26,6 +27,7 @@ import { useCaretInsert } from './useCaretInsert';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { JsonEditor } from '../../lib/form/JsonEditor';
 import { RequiredMark } from '../../lib/form/RequiredMark';
+import { UnitLabel, WithUnit } from '../../lib/form/UnitInput';
 import { midSentence } from '../../lib/words';
 import {
   RemoveRowButton,
@@ -312,6 +314,13 @@ export function ConfigFieldControl({
   // arrives holding a line break never mounts an input even once.
   if (!sawLineBreak && /[\r\n]/.test(text)) setSawLineBreak(true);
   const oneLine = field.kind === 'text' && field.singleLine === true && !sawLineBreak;
+  // #1694 OR42 F10 — a top-level control's size class; a cell is sized by its
+  // table's column instead. Item 5 — a unit is drawn inside a one-line box as
+  // a suffix (`30` `s`) and leaves the label, which keeps it out of sight.
+  const size = cell ? undefined : fieldSize(field);
+  const unit = !cell && (field.kind === 'number' || oneLine) ? field.label?.unit : undefined;
+  const shownLabel =
+    unit === undefined ? label : <UnitLabel title={field.label?.title ?? field.name} unit={unit} />;
 
   if (isRowKind(field.kind)) {
     return (
@@ -364,13 +373,18 @@ export function ConfigFieldControl({
           <>
             <select
               id={id}
+              data-size={size}
               value={typeof value === 'string' ? value : ''}
               aria-required={required || undefined}
               aria-describedby={describedBy}
               {...checked}
               onChange={(e) => onChange(e.target.value)}
             >
-              <option value="">— none —</option>
+              {/* #1694 OR42 item 9 — blank in an optional table cell, where
+                  the same placeholder in every row was noise and empty means
+                  the default (On error's "Fail the row"). A required cell keeps
+                  it: there, empty is a gap to fill. */}
+              <option value="">{cell && !required ? '' : '— none —'}</option>
               {(field.enumOptions ?? []).map((option) => (
                 <option key={option} value={option}>
                   {field.label?.options?.[option] ?? option}
@@ -396,26 +410,29 @@ export function ConfigFieldControl({
         help={help}
         label={
           <>
-            {seen(numberField ? label : `${label} — number`)}
+            {seen(numberField ? shownLabel : `${label} — number`)}
             {required && !cell && <RequiredMark />}
           </>
         }
       >
         {(id) => (
           <>
-            <input
-              id={id}
-              type="text"
-              className="number-input"
-              inputMode={numberKeypad(field.numberRule)}
-              value={typeof value === 'string' ? value : ''}
-              spellCheck={false}
-              placeholder={field.defaultText}
-              aria-required={required || undefined}
-              aria-describedby={describedBy}
-              {...checked}
-              onChange={(e) => onChange(e.target.value)}
-            />
+            <WithUnit unit={unit}>
+              <input
+                id={id}
+                type="text"
+                className="number-input"
+                data-size={size}
+                inputMode={numberKeypad(field.numberRule)}
+                value={typeof value === 'string' ? value : ''}
+                spellCheck={false}
+                placeholder={field.defaultText}
+                aria-required={required || undefined}
+                aria-describedby={describedBy}
+                {...checked}
+                onChange={(e) => onChange(e.target.value)}
+              />
+            </WithUnit>
             {errorSlot}
           </>
         )}
@@ -431,7 +448,7 @@ export function ConfigFieldControl({
       help={help}
       label={
         <>
-          {seen(format === null ? label : `${label} — ${format}`)}
+          {seen(format === null ? shownLabel : `${label} — ${format}`)}
           {required && !cell && <RequiredMark />}
         </>
       }
@@ -439,23 +456,26 @@ export function ConfigFieldControl({
       {(id) => (
         <>
           {oneLine ? (
-            <input
-              id={id}
-              type="text"
-              className="config-field-line"
-              ref={inputRef as RefObject<HTMLInputElement | null>}
-              value={text}
-              onSelect={onSelect}
-              spellCheck={false}
-              // A connection form's `user`/`host`/`url` is not the operator's
-              // own login, and a textarea never offered autofill for it.
-              autoComplete="off"
-              placeholder={field.defaultText}
-              aria-required={required || undefined}
-              aria-describedby={describedBy}
-              {...checked}
-              onChange={(e) => onChange(e.target.value)}
-            />
+            <WithUnit unit={unit}>
+              <input
+                id={id}
+                type="text"
+                className="config-field-line"
+                data-size={size}
+                ref={inputRef as RefObject<HTMLInputElement | null>}
+                value={text}
+                onSelect={onSelect}
+                spellCheck={false}
+                // A connection form's `user`/`host`/`url` is not the operator's
+                // own login, and a textarea never offered autofill for it.
+                autoComplete="off"
+                placeholder={field.defaultText}
+                aria-required={required || undefined}
+                aria-describedby={describedBy}
+                {...checked}
+                onChange={(e) => onChange(e.target.value)}
+              />
+            </WithUnit>
           ) : field.kind === 'json' ? (
             <JsonEditor
               id={id}
@@ -617,7 +637,14 @@ function cellColumn(cell: ConfigField): RowTableColumn {
         {!cell.optional && <RequiredMark />}
       </>
     ),
-    width: cell.kind === 'boolean' ? 'check' : cell.kind === 'enum' ? 'short' : 'long',
+    width:
+      cell.kind === 'boolean'
+        ? 'check'
+        : cell.kind === 'enum'
+          ? 'short'
+          : cell.kind === 'text' && cell.singleLine === true
+            ? 'name'
+            : 'long',
   };
 }
 

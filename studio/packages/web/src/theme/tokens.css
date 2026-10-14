@@ -86,6 +86,13 @@
      `index.css`). One width in both densities, so every form's controls start
      at one x. */
   --form-label-column: 150px;
+  /* #1694 OR42 F10 — the property pane's control size classes, one width in
+     both densities: S a number, a duration or a short choice; M a name, a
+     connection or a longer choice (L is the value column itself). */
+  --field-s: 120px;
+  --field-m: 240px;
+  /* #1694 OR42 item 9 — a row table's one-line name column, read whole. */
+  --row-table-name-min: 160px;
   /* S6l — the space above and below a label-left row's caption line, so its
      text sits on the centre of a `--control-h` control beside it. */
   --form-label-inset: calc((var(--control-h) - var(--type-caption-line)) / 2);

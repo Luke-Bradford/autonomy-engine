@@ -116,7 +116,12 @@ test('a wide dock puts labels left and packs short fields into a row, in order',
   await expectQuiet(page, problems);
 });
 
-test('every select is as wide as its longest option, not the row', async ({ page }) => {
+// #1694 OR42 F10 — in the pane a select is an S or an M by what it offers,
+// never the row, and never narrower than its longest option. (A drawer's keeps
+// its own width; `field-grid.spec.ts`.)
+test('every select is an S or an M, not the row, and shows its longest option whole', async ({
+  page,
+}) => {
   const problems = collectPageProblems(page);
   await openLlm(page, 'or29 grid selects');
   const selects = await selectWidths(page);
@@ -125,7 +130,8 @@ test('every select is as wide as its longest option, not the row', async ({ page
   // two by the Container membership select until #1597 removed it.)
   expect(selects.map((s) => s.name)).toContainEqual(expect.stringMatching(/^Reasoning effort/));
   for (const select of selects) {
-    expect(select.width, `${select.name}`).toBeLessThanOrEqual(Math.min(select.longest + 40, 320));
+    expect([120, 240], `${select.name}`).toContain(Math.round(select.width));
+    expect(select.longest, `${select.name}`).toBeLessThan(select.width - 24);
   }
   await expectQuiet(page, problems);
 });

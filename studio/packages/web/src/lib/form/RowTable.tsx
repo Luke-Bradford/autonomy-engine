@@ -5,8 +5,12 @@ import { Toolbar } from '../PageHeader';
 export interface RowTableColumn {
   key: string;
   header: ReactNode;
-  /** `check` is a tick box, `short` a type or number, `long` free text. Default `long`. */
-  width?: 'check' | 'short' | 'long';
+  /**
+   * `check` is a tick box, `short` a type or number, `name` a one-line name
+   * (a column, a parameter: wide enough to read whole, #1694 OR42 item 9),
+   * `long` free text. Default `long`.
+   */
+  width?: 'check' | 'short' | 'name' | 'long';
 }
 
 /**
