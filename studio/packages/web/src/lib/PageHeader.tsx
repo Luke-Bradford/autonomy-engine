@@ -71,9 +71,19 @@ export function PageHeader({
  * Deliberately not `role="toolbar"`: that role promises one tab stop with
  * arrow-key movement between the controls, which this row does not implement.
  * Each control keeps its own tab stop, as any group of buttons does.
+ *
+ * #1694 OR42 — `align="start"` packs it LEFT instead, sized to its controls:
+ * a form's add actions sit above the table they add to (ADF's *＋ New*), never
+ * stretched across the form by its flex column.
  */
-export function Toolbar({ children }: { children: ReactNode }) {
-  return <div className="toolbar">{children}</div>;
+export function Toolbar({
+  children,
+  align = 'end',
+}: {
+  children: ReactNode;
+  align?: 'start' | 'end';
+}) {
+  return <div className={align === 'start' ? 'toolbar toolbar--start' : 'toolbar'}>{children}</div>;
 }
 
 /** A 1px rule between two groups of toolbar controls. Decorative. */

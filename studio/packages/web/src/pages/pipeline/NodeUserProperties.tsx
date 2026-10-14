@@ -2,7 +2,6 @@ import { useStore } from 'zustand';
 import { MAX_USER_PROPERTIES, type UserProperty } from '@autonomy-studio/shared';
 import { Section } from '../../lib/Section';
 import { RemoveRowButton, RowActions, RowList, type RowTableColumn } from '../../lib/form/RowTable';
-import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import type { FieldPicker, PickerTarget } from './ConfigFieldControl';
 import type { createCanvasStore } from './canvasStore';
 import { PickableInput } from './PickableInput';
@@ -39,7 +38,7 @@ export function NodeUserProperties({
       `${i}:${cell}`,
     );
   return (
-    <Section heading="User properties" help={FORM_SECTION_HINTS.node.userProperties}>
+    <Section heading="User properties" help={null}>
       <RowList
         columns={COLUMNS}
         label="User properties"
@@ -47,6 +46,8 @@ export function NodeUserProperties({
         addLabel="Add user property"
         onAdd={() => write([...rows, { name: '', value: '' }])}
         addDisabled={rows.length >= MAX_USER_PROPERTIES}
+        addTitle={`Up to ${MAX_USER_PROPERTIES}, shown as columns in the activity runs grid`}
+        addDisabledNote={`Limit of ${MAX_USER_PROPERTIES} reached`}
       >
         {rows.map((row, i) => {
           // The row is written through on every keystroke, so the stored doc

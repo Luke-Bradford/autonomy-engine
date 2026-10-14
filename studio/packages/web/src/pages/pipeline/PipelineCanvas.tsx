@@ -4210,6 +4210,28 @@ export function NodePanel({
               editable,
             )}
             toolbar={false}
+            fieldActions={(name) =>
+              /* #1694 OR42 — Auto-map in the mapping list's own toolbar, beside
+                 its Add, above the rows (ADF's *Import schemas*), and what its
+                 warnings rest on behind its `?` rather than in a paragraph. */
+              holdsMapping && name === mappingField?.name ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={runAutoMap}
+                    disabled={autoMapBlocked !== null}
+                    aria-describedby={`${nodeId}-automap-about`}
+                  >
+                    Auto-map columns
+                  </button>
+                  <AboutHelp name="Auto-map columns" noteId={`${nodeId}-automap-about`}>
+                    Maps each sink column to the source column of the same name. It and the warnings
+                    below read each dataset&rsquo;s declared columns, which can be out of date; the
+                    copy is checked against the store itself when it runs.
+                  </AboutHelp>
+                </>
+              ) : undefined
+            }
             fieldModeExtra={
               /* #1170 M8 slice 2 — Auto-map (§6.3) and §13's explicit *unmapped*
                  state, on the tab that holds the mapping. After the derived
@@ -4217,10 +4239,10 @@ export function NodePanel({
                  renderer. A field-mode extra because it describes the FORM
                  draft, which the author is not editing in JSON mode. */
               holdsMapping && (
+                /* A declared column list is an authoring aid and can be stale, so
+                   every line here is a warning and none of them is a refusal. The
+                   gate reads the store's ACTUAL columns at dispatch. */
                 <div className="contract-section">
-                  <button type="button" onClick={runAutoMap} disabled={autoMapBlocked !== null}>
-                    Auto-map columns
-                  </button>
                   {autoMapBlocked !== null && <p className="page-hint">{autoMapBlocked}</p>}
                   {autoMapNotice !== null && (
                     <p className="contract-advisory" role="status">
@@ -4276,15 +4298,6 @@ export function NodePanel({
                     <p className="contract-advisory">
                       {sourceAdvisory.ambiguous.join(', ')} match more than one source column
                       case-insensitively — name the column exactly.
-                    </p>
-                  )}
-                  {/* A declared column list is an authoring aid and can be stale, so
-                  every line above is a warning and none of them is a refusal. The
-                  gate reads the store's ACTUAL columns at dispatch. */}
-                  {(sinkAdvisory !== null || sourceAdvisory !== null) && (
-                    <p className="page-hint">
-                      Read from each dataset&rsquo;s declared columns, which can be out of date —
-                      the copy is checked against the store itself when it runs.
                     </p>
                   )}
                 </div>

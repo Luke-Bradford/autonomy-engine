@@ -98,7 +98,9 @@ test.describe('#1477 OR29 — dock density', () => {
     // label.
     const table = await panel.getByRole('table', { name: 'Parameters' }).boundingBox();
     const first = await firstRow.boundingBox();
-    expect(table!.y - header.bottom).toBeLessThanOrEqual(80);
+    // #1694 OR42 — plus one toolbar row (28px + the 8px gap): the list's Add
+    // sits ABOVE its rows now, as ADF's *＋ New* does.
+    expect(table!.y - header.bottom).toBeLessThanOrEqual(80 + 36);
     // The header row is under one compact row (32px) tall.
     expect(first!.y - table!.y).toBeLessThanOrEqual(32);
 

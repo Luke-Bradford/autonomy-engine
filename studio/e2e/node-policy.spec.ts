@@ -50,17 +50,19 @@ test.describe('#1312 — node run policy editor', () => {
     await openGeneralTab(page);
 
     const section = policySection(page);
-    // #1413 — the section says what it holds, as the group's description.
-    await expect(section).toHaveAccessibleDescription(
-      'How long one attempt may run, how a transient failure is retried, and what is kept out of the run log.',
-    );
+    // #1694 OR42 — no `?` on the heading in the properties pane; each secure
+    // flag's effect is its own `?` note, still the box's description.
+    await expect(section.getByLabel('About Run policy', { exact: true })).toHaveCount(0);
+    await expect(
+      section.getByRole('checkbox', { name: 'Secure output' }),
+    ).toHaveAccessibleDescription(/Redacts the outputs before the run log/);
     await section.getByLabel('Timeout (seconds)', { exact: true }).fill('300');
     await section.getByLabel('Timeout (seconds)', { exact: true }).blur();
     await section.getByLabel('Retries', { exact: true }).fill('2');
     await section.getByLabel('Retries', { exact: true }).blur();
     await section.getByLabel('Retry interval (seconds)', { exact: true }).fill('60');
     await section.getByLabel('Retry interval (seconds)', { exact: true }).blur();
-    await section.getByLabel('Secure output').check();
+    await section.getByRole('checkbox', { name: 'Secure output' }).check();
 
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
@@ -83,8 +85,12 @@ test.describe('#1312 — node run policy editor', () => {
     await expect(
       policySection(page).getByLabel('Retry interval (seconds)', { exact: true }),
     ).toHaveValue('60');
-    await expect(policySection(page).getByLabel('Secure output')).toBeChecked();
-    await expect(policySection(page).getByLabel('Secure input')).not.toBeChecked();
+    await expect(
+      policySection(page).getByRole('checkbox', { name: 'Secure output' }),
+    ).toBeChecked();
+    await expect(
+      policySection(page).getByRole('checkbox', { name: 'Secure input' }),
+    ).not.toBeChecked();
 
     await expectQuiet(page, problems);
   });

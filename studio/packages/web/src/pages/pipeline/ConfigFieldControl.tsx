@@ -1,5 +1,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type { Node, RefSuggestion } from '@autonomy-studio/shared';
+import { Toolbar } from '../../lib/PageHeader';
+import { CheckboxField } from '../../lib/form/CheckboxField';
 import {
   configFieldTitle,
   describeNumberRule,
@@ -207,6 +209,7 @@ export function ConfigFieldControl({
   name,
   target,
   validation,
+  actions,
 }: {
   field: ConfigField;
   value: FieldInput;
@@ -230,6 +233,11 @@ export function ConfigFieldControl({
    * exactly as before.
    */
   validation?: { key: string; error: string | undefined };
+  /**
+   * #1694 OR42 — the owning panel's own acts on a row list (Copy's *Auto-map
+   * columns*), in the list's toolbar beside its Add button. Ignored elsewhere.
+   */
+  actions?: ReactNode;
 }) {
   const shown = name ?? field.name;
   // A cell's `name` already says where it sits; only a top-level field is titled.
@@ -268,8 +276,8 @@ export function ConfigFieldControl({
     );
   // #1477 OR29 — a labelled field's explanation is behind a `?` beside its label
   // (labels, not prose), as a row list's already was. The note keeps `hintId`, so
-  // the control's description is unchanged. A checkbox keeps its line: its label
-  // wraps the box, so there is no label row to put a `?` in.
+  // the control's description is unchanged. #1694 OR42 — a checkbox's too, beside
+  // its label (`CheckboxField`), which wraps the box.
   const help =
     hintBody === null ? undefined : (
       <AboutHelp name={label} noteId={hintId}>
@@ -318,6 +326,7 @@ export function ConfigFieldControl({
           onChange={onChange}
           picker={picker}
           help={hintBody === null ? undefined : { id: hintId, body: hintBody }}
+          actions={actions}
         />
         {errorSlot}
       </>
@@ -326,20 +335,16 @@ export function ConfigFieldControl({
 
   if (field.kind === 'boolean') {
     return (
-      // The hint is a SIBLING of the label: inside it, it would join the
-      // checkbox's name.
-      <>
-        <label className="contract-check">
-          <input
-            type="checkbox"
-            checked={value === true}
-            aria-describedby={describedBy}
-            onChange={(e) => onChange(e.target.checked)}
-          />
-          {seen(label)}
-        </label>
-        {hint}
-      </>
+      // #1694 OR42 — its hint behind a `?` beside the box, like every other
+      // field's, keeping `hintId` so the box's description is unchanged.
+      <CheckboxField
+        label={seen(label)}
+        name={label}
+        checked={value === true}
+        onChange={onChange}
+        {...(hintBody === null ? {} : { about: hintBody, noteId: hintId })}
+        {...(describedBy === undefined ? {} : { describedBy })}
+      />
     );
   }
 
@@ -676,6 +681,7 @@ export function ObjectListControl({
   onChange,
   picker,
   help,
+  actions,
 }: {
   field: ConfigField;
   label: string;
@@ -694,6 +700,8 @@ export function ObjectListControl({
    * `<details>`' note is still the group's description.
    */
   help?: { id: string; body: ReactNode };
+  /** #1694 OR42 — more acts for the toolbar, after Add. */
+  actions?: ReactNode;
 }) {
   const cells = field.elementFields ?? [];
   const columns = cells.map(cellColumn);
@@ -762,6 +770,13 @@ export function ObjectListControl({
           </AboutHelp>
         )}
       </div>
+      {/* #1694 OR42 — the list's acts ABOVE its rows, sized to their text. */}
+      <Toolbar align="start">
+        <button type="button" onClick={() => onChange([...rows, {}])}>
+          {`Add ${midSentence(rowTitle(field))} row`}
+        </button>
+        {actions}
+      </Toolbar>
       {rows.length === 0 ? <p className="page-hint">No rows.</p> : null}
       {field.recordValue === 'secret' ? (
         <p className="page-hint">
@@ -830,9 +845,6 @@ export function ObjectListControl({
           ))}
         </RowTable>
       ) : null}
-      <button type="button" onClick={() => onChange([...rows, {}])}>
-        {`Add ${midSentence(rowTitle(field))} row`}
-      </button>
     </div>
   );
 }

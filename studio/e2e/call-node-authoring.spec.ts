@@ -64,17 +64,12 @@ test.describe('#425 — call-node authoring', () => {
 
     await canvasNodes(page).first().click();
     await expect(properties(page).getByRole('heading', { name: 'Call target' })).toBeVisible();
-    // #1413 — each section says what it holds, as the region's description.
-    await expect(
-      properties(page).getByRole('group', { name: 'Call target', exact: true }),
-    ).toHaveAccessibleDescription(
-      'Which pipeline version this activity runs as a child run, and whether it waits for it to finish.',
-    );
-    await expect(
-      properties(page).getByRole('group', { name: 'Parameters', exact: true }),
-    ).toHaveAccessibleDescription(
-      "The values this activity passes to the child pipeline's parameters.",
-    );
+    // #1694 OR42 — the properties pane's section headings carry no `?`.
+    for (const name of ['Call target', 'Parameters']) {
+      await expect(properties(page).getByRole('group', { name, exact: true })).not.toHaveAttribute(
+        'aria-describedby',
+      );
+    }
 
     // The child's params are UNKNOWN until a version is chosen — they are a
     // property of the target, not of the node — and the panel says so rather

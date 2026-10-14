@@ -136,7 +136,7 @@ Three toggles at the top of **Source** decide the shape. Everything below them f
 
 | Source is | Fields |
 |---|---|
-| Any | **Connection** `[▾ grouped by type] [Test] [Edit] [＋ New]` (gallery and test-before-create, per #1477), **or** *Use saved dataset* `[▾]` with its parameters ⓕ |
+| Any | **Connection** `[▾ grouped by type]` then *Test*, *Edit*, *＋ New* as icon buttons with tooltips (#1694 OR42; gallery and test-before-create, per #1477), **or** *Use saved dataset* `[▾]` with its parameters ⓕ |
 | Database (SQLite, Postgres, later OR15) | **Use** Table · Query. Table `[▾ from the connection] [Preview]` ⓕ. Query (SQL editor ⓕ, `:name` parameters table, which also covers a stored procedure call). Query timeout (default 2 h) |
 | Files (fs, later S3/Blob/SFTP OR13) | **Path type** File · Folder + wildcard · File list. Path ⓕ. Wildcard `*.csv` ⓕ. *Include subfolders* (default on). *Modified between* start ⓕ / end ⓕ (UTC; start inclusive, end exclusive). In Rows mode only: **Format** `[Delimited ▾]` plus its options inline (delimiter, header, encoding, quote, escape, null value, skip lines, sheet for Excel), which are the dataset's options without creating a dataset |
 | Inline | **Content** ⓕ, either rows as a JSON array or text. This replaces Write File, e.g. writing an expression's value to a file |
