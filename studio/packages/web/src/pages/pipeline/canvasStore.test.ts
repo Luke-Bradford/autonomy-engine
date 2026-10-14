@@ -290,6 +290,20 @@ describe('canvasStore', () => {
     expect(s.getState().nodes).toBe(settled);
   });
 
+  it('setCopyMode drops a half-picked dataset end, and keeps a half-picked connection end', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(null);
+    s.getState().addNode('copy');
+    const id = s.getState().nodes[0]!.id;
+    s.getState().setNodeBindingEnd(id, 'datasets', 'source', 'd_src');
+    s.getState().setNodeBindingEnd(id, 'connections', 'source', 'c_src');
+    expect(s.getState().pendingBindings[id]?.datasets).toBeDefined();
+    s.getState().setCopyMode(id, 'copy_files');
+    expect(s.getState().pendingBindings[id]).toEqual({
+      connections: { source: 'c_src', sink: undefined },
+    });
+  });
+
   it('updateNodeCall sets, clears and undoes a call blob — and refuses a non-call node', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(null);

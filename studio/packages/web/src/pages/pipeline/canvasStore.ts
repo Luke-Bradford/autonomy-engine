@@ -2401,6 +2401,18 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         delete next.datasetParams;
         const switched = lowerPipelineNodes([next])[0]!;
         edit((s) => ({ nodes: s.nodes.map((n) => (n.id === id ? switched : n)) }));
+        // A half-picked dataset end goes with the bindings (selection state, so
+        // outside `edit()`); a half-picked connection end stays with the pair.
+        set((s) => {
+          const held = s.pendingBindings[id];
+          if (held?.datasets === undefined) return {};
+          const forNode = { ...held };
+          delete forNode.datasets;
+          const rest = { ...s.pendingBindings };
+          if (forNode.connections === undefined) delete rest[id];
+          else rest[id] = forNode;
+          return { pendingBindings: rest };
+        });
       },
 
       setNodeConnection(id, connectionId) {
