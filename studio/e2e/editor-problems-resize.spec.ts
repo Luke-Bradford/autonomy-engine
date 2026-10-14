@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { openSeededCanvas, rectOf, type SeedDoc } from './support/seedDoc';
-import { properties } from './support/panels';
+import { openSeededCanvas, rectOf, withAWarning, type SeedDoc } from './support/seedDoc';
+import { openProblems, problemsToggle, properties } from './support/panels';
 
 /**
  * #1475 OR27 slice 4 — the Problems column beside the properties is the
@@ -12,7 +12,8 @@ import { properties } from './support/panels';
  * real reload.
  */
 
-const seed: SeedDoc = {
+// #1694 OR42 — with a warning, because the column opens only while it lists something.
+const seed: SeedDoc = withAWarning({
   nodes: [
     {
       id: 'a',
@@ -21,7 +22,7 @@ const seed: SeedDoc = {
       config: { url: 'https://a.example.test' },
     },
   ],
-};
+});
 
 /** Not the nav pane's, the dock's or the toolbox's separator, which are on this page too. */
 function divider(page: Page) {
@@ -52,6 +53,7 @@ test('#1475 dragging the Problems divider left widens it, the properties give up
   const problems = collectPageProblems(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await openSeededCanvas(page, `e2e 1475 problems drag ${Date.now()}`, seed);
+  await openProblems(page);
   const before = await widths(page);
   expect(before.problems).toBe(320);
   await expect(divider(page)).toHaveAttribute('aria-valuenow', '320');
@@ -72,6 +74,8 @@ test('#1475 dragging the Problems divider left widens it, the properties give up
 
   await page.reload();
   await expect(page.locator('.react-flow')).toBeVisible();
+  // Open per session (#1694 OR42); the WIDTH is the stored preference.
+  await openProblems(page);
   await expect.poll(async () => (await widths(page)).problems).toBe(380);
   await expect(divider(page)).toHaveAttribute('aria-valuenow', '380');
   await expectQuiet(page, problems);
@@ -83,6 +87,7 @@ test('#1475 the Problems divider steps from the keyboard, stops at half the dock
   const problems = collectPageProblems(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await openSeededCanvas(page, `e2e 1475 problems keys ${Date.now()}`, seed);
+  await openProblems(page);
 
   await divider(page).focus();
   await page.keyboard.press('ArrowLeft');
@@ -106,6 +111,8 @@ test('#1475 the Problems divider steps from the keyboard, stops at half the dock
 
   await page.reload();
   await expect(page.locator('.react-flow')).toBeVisible();
+  // Open per session (#1694 OR42); the WIDTH is the stored preference.
+  await openProblems(page);
   await expect(divider(page)).toHaveAttribute('aria-valuenow', String(wide));
 
   // On a smaller window the width chosen on the larger one is cut to THIS
@@ -126,12 +133,12 @@ test('#1475 the Problems divider steps from the keyboard, stops at half the dock
   // Folding Problems takes its divider with it, and the properties get the
   // whole body; unfolding puts both back as they were.
   const open = await widths(page);
-  await page.getByRole('button', { name: /^Problems/ }).click();
+  await problemsToggle(page).click();
   await expect(problemsList(page)).toBeHidden();
   await expect(divider(page)).toHaveCount(0);
   const folded = Math.round((await rectOf(page, '.property-dock__body > .property-panel')).width);
   expect(folded).toBe(Math.round(open.body));
-  await page.getByRole('button', { name: /^Problems/ }).click();
+  await problemsToggle(page).click();
   await expect(divider(page)).toHaveAttribute('aria-valuenow', String(wide));
   expect((await widths(page)).panel).toBe(open.panel);
   // So does folding the dock.

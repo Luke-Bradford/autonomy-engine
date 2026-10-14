@@ -160,3 +160,19 @@ export async function openRunView(
   await tab.click();
   await expect(tab).toHaveAttribute('aria-selected', 'true');
 }
+
+/** The dock header's Problems toggle (its name carries the counts). */
+export function problemsToggle(page: Page): Locator {
+  return page.getByRole('button', { name: /^Problems/ });
+}
+
+/**
+ * #1694 OR42 — open the Problems column. It never opens by itself, and only
+ * opens while it lists something, so this asserts the toggle is live first.
+ */
+export async function openProblems(page: Page): Promise<void> {
+  const toggle = problemsToggle(page);
+  await expect(toggle).not.toHaveAttribute('aria-disabled', 'true');
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+}

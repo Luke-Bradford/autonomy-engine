@@ -532,3 +532,30 @@ export const IF_FOREACH_THEN_FAIL: SeedDoc = {
     },
   ],
 };
+
+/**
+ * #1694 OR42 — `seed` plus one saved Problems WARNING: an inactive If whose
+ * branch edge can never fire (#1669). The Problems column opens only while it
+ * lists something, so a spec that measures it, or checks it across a reload,
+ * needs a doc that saves and still lists one.
+ */
+export function withAWarning(seed: SeedDoc): SeedDoc {
+  return {
+    ...seed,
+    nodes: [
+      ...seed.nodes,
+      {
+        id: 'warn_if',
+        type: 'if',
+        config: { condition: '${true}' },
+        position: { x: 0, y: 400 },
+        state: 'inactive',
+      },
+      { id: 'warn_wait', type: 'wait', config: { seconds: '${0}' }, position: { x: 300, y: 400 } },
+    ],
+    edges: [
+      ...(seed.edges ?? []),
+      { id: 'warn_e', from: 'warn_if', to: 'warn_wait', on: 'branch', branch: 'true' },
+    ],
+  };
+}

@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { addActivity } from './support/canvasGraph';
 import { openSeededCanvas } from './support/seedDoc';
-import { properties } from './support/panels';
+import { problemsToggle, properties } from './support/panels';
 
 /**
  * #1393 (OR2) — "When I make an edit, the page shifts around."
@@ -110,8 +110,16 @@ test.describe('#1393 the editor does not shift when you edit', () => {
     // 5. A node the validator refuses. The issue list used to grow above the
     // canvas by one line per issue; it is the Problems column now.
     await addActivity(page, 'Execute pipeline');
-    const problemsList = page.getByRole('region', { name: 'Problems', exact: true });
+    // #1694 OR42 — listed, but the column does NOT open by itself: opening it
+    // would narrow the form under the pointer. The header counts it instead.
+    const problemsList = page.getByRole('region', {
+      name: 'Problems',
+      exact: true,
+      includeHidden: true,
+    });
     await expect(problemsList.locator('.badge-list li')).toContainText(['needs a call config']);
+    await expect(problemsList).toBeHidden();
+    await expect(problemsToggle(page).locator('.count-badge').first()).toHaveText('1');
     await expect(boxes.save(page)).toBeDisabled();
     // Announced from the dock header, which stays shown when the list folds.
     await expect(page.locator('.property-dock__header [role="status"]')).toHaveText(
@@ -126,7 +134,7 @@ test.describe('#1393 the editor does not shift when you edit', () => {
     // Undone, so the doc can save again.
     await page.getByTestId('rf__node-a').click();
     await page.keyboard.press('Meta+z');
-    await expect(problemsList.getByText('No problems.')).toBeVisible();
+    await expect(problemsToggle(page)).toHaveAttribute('aria-disabled', 'true');
     await expectUnmoved(page, baseline, 'undo');
 
     // 6. Saved. The message lands in the strip, and the dirty marks clear.

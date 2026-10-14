@@ -68,6 +68,9 @@ test('a wide dock puts labels left and packs short fields into a row, in order',
   page,
 }) => {
   const problems = collectPageProblems(page);
+  // 1280, not 1440: with Problems shut by default (#1694 OR42) the 1440 tab is
+  // wide enough for three, so the two-to-a-row case is the narrower window.
+  await page.setViewportSize({ width: 1280, height: 900 });
   await openLlm(page, 'or29 grid wide');
   const tab = modelTab(page);
   const tokens = await geometryOf(tab.getByRole('textbox', { name: 'Max output tokens' }));
@@ -75,7 +78,7 @@ test('a wide dock puts labels left and packs short fields into a row, in order',
   const topP = await geometryOf(tab.getByRole('textbox', { name: 'Top P' }));
   const model = await geometryOf(tab.getByRole('textbox', { name: 'Model for this step' }));
 
-  // At 1440 the bottom dock shares its width with Problems: two to a row.
+  // At 1280 the bottom dock's tab (Problems shut, #1694 OR42): two to a row.
   expect(tokens.tabWidth).toBeGreaterThanOrEqual(580);
   expect(tokens.tabWidth).toBeLessThan(900);
   // Two numbers on a row in schema order, the third starting the next.

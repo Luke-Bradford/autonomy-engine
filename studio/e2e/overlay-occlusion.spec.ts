@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { editorMenuTrigger, openCanvas } from './support/canvas';
 import { addActivity, canvasNodes, toolbox } from './support/canvasGraph';
-import { nodeMenuAction, properties } from './support/panels';
+import { nodeMenuAction, openProblems, problemsToggle, properties } from './support/panels';
 import { openRowMenu } from './support/authorPane';
 import {
   expectEveryHelpNoteUnobstructed,
@@ -86,6 +86,12 @@ for (const viewport of VIEWPORTS) {
         // The expanded dock covers the canvas, so select with it docked.
         await setDock(page, 'docked');
         await addActivity(page, title);
+        // #1694 OR42 — Problems opens only on request. Open it whenever this
+        // activity gives it something to list, so every overlay is still
+        // checked against it (the expanded-dock case this gate was built on).
+        if ((await problemsToggle(page).getAttribute('aria-disabled')) !== 'true') {
+          await openProblems(page);
+        }
         const panel = properties(page);
         if (container) {
           await page

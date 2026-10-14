@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { activityRowById, properties } from './support/panels';
+import { activityRowById, openProblems, problemsToggle, properties } from './support/panels';
 import {
   fireAndSettle,
   nodeById,
@@ -238,6 +238,8 @@ test('#1669 — Problems warns about a read of an inactive output and an inactiv
     ],
   });
 
+  // Listed only once opened: Problems never opens by itself (#1694 OR42).
+  await openProblems(page);
   const panel = page.getByRole('region', { name: 'Problems', exact: true });
   const warnings = panel.locator('.badge-list--warning');
   await expect(warnings.locator('strong')).toHaveText('2 warnings');
@@ -252,7 +254,7 @@ test('#1669 — Problems warns about a read of an inactive output and an inactiv
   );
   // Warnings never join the errors: no error list, and the toggle's error count stays 0.
   await expect(panel.locator('.badge-list:not(.badge-list--warning)')).toHaveCount(0);
-  const toggle = page.getByRole('button', { name: /^Problems/ });
+  const toggle = problemsToggle(page);
   await expect(toggle.locator('.count-badge').first()).toHaveText('0');
   await expect(toggle.locator('.count-badge--warning')).toHaveText('2 warnings');
   await expect(toggle).toHaveAccessibleName('Problems 0 2 warnings');

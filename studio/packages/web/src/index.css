@@ -2487,8 +2487,8 @@ button.danger {
 }
 
 /* A right-hand dock is too narrow for Problems BESIDE the properties, so it is
-   stacked under them — at a FIXED height whether or not anything is wrong
-   (#1393: an issue arriving re-flows nothing). `--problems-width` belongs to
+   stacked under them, at a FIXED height while it is shown (#1694 OR42: only on
+   request, and only while it lists something). `--problems-width` belongs to
    the bottom dock and is ignored here. */
 .canvas-main--dock-right .property-dock__body {
   flex-direction: column;
@@ -2602,9 +2602,9 @@ button.danger {
 }
 
 /* #1393 — the validation list, as a FIXED-width column beside the properties.
-   Fixed, and present while open whether or not anything is wrong, so an issue
-   arriving never re-flows the form beside it. It scrolls inside the dock's
-   height like the panel does. */
+   #1694 OR42 — shown only on request and while it lists something, so an
+   empty column takes no width and an issue arriving re-flows nothing. It
+   scrolls inside the dock's height like the panel does. */
 .problems-panel:not([hidden]) {
   /* #1475 — the operator's width, written on `.property-dock__body` from
      `uiStore`; the fallback repeats `PROBLEMS_DEFAULT_WIDTH`. The cap repeats

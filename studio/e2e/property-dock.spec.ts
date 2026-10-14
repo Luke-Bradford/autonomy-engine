@@ -123,8 +123,9 @@ test.describe('#852 — the bottom property dock', () => {
 
     await properties(page).getByRole('tab', { name: 'General' }).click();
     await expect(properties(page).getByRole('group', { name: 'Run policy' })).toBeVisible();
-    // #1477 — Apply is in the pinned header, so it is reachable from any tab.
-    await expect(properties(page).getByRole('button', { name: 'Apply config' })).toBeVisible();
+    // #1694 OR42 — General writes straight to the node, so the config draft's
+    // Apply is not offered there (it is on every type tab).
+    await expect(properties(page).getByRole('button', { name: 'Apply config' })).toHaveCount(0);
 
     // Another activity: the panel remounts (it is keyed per node) and must land
     // on the tab the operator was using, not snap back to its first type tab.

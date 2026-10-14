@@ -3,6 +3,7 @@ import { answerConfirm } from './support/confirmDialog';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, openSeededCanvas, seedVersion, type SeedDoc } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
+import { openProblems } from './support/panels';
 import { chooseRowAction } from './support/rowMenu';
 
 /**
@@ -131,6 +132,8 @@ test('#844 GL3 — the canvas re-reads the globals when the window regains focus
   /* Deleted in another tab; the canvas learns of it when it regains focus. */
   expect((await page.request.delete(`/api/global-params/${g.id}`)).ok()).toBe(true);
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  // Listed in Problems, which opens on request (#1694 OR42).
+  await openProblems(page);
   await expect(refusal).toBeVisible();
   await expect(save).toBeDisabled();
 

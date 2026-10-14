@@ -464,7 +464,12 @@ One look per control type (#1594 OR40 S2a), from the tokens, in both densities. 
   properties` / `Show properties`, chevron pointing where the dock goes). Properties and Problems
   are deliberately **not** a tablist: Problems shows *with* the properties (a resizable column
   beside them, or stacked under them docked right), and tab semantics would say one panel at a
-  time.
+  time. Problems opens only on request (the toggle, or Validate when it finds something) and only
+  while it lists something; it closes when the last problem goes, and with nothing to list the
+  toggle is `aria-disabled` with the title "No problems" (#1694 OR42).
+- **The panel header's draft acts** (#1694 OR42) are the JSON toggle and Revert as icon buttons, and
+  Apply as a short primary `Apply` named "Apply config". They show only on a tab that holds the
+  config draft, never on General, which writes straight to the node.
 - **Checkboxes and radios** sit beside their words: box, 8px, label. A `<label>` wrapping the input
   is all it takes. Keep `contract-check` on the dock's checkbox labels: the form layout lists it
   among the labels that sit under the label column (`formLayout.test.ts`).
@@ -808,8 +813,9 @@ row heights), not the layout.
   the hint.
 - **The threshold is measured on the form's context, not the window.** The context is the dock tab,
   a drawer's body (`.form-drawer-body`) or a `.field-form`.
-  - **Dock:** it shares its width with the Problems column. At 1440 wide the bottom dock is 935px, but
-    its tab is 589px. The tab is 429px at 1280 wide, 1069px at 1920, and 302–463px when docked right.
+  - **Dock:** it shares its width with the Problems column while that is open (#1694 OR42: only on
+    request, and only while it lists something). At 1440 wide the bottom dock is 935px, but with
+    Problems open its tab is 589px. The tab is 429px at 1280 wide, 1069px at 1920, and 302–463px when docked right.
   - **Drawer:** beside its list the drawer is 340–460px (`--drawer-width`), which is 460px from about a
     960px window up, so its body is 418px and label-left. Under 960px it stacks below the list at the
     content column's width, which a 700px window takes under 400px. The editor's trigger and

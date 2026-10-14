@@ -19,7 +19,6 @@ import {
   RUNS_LIVE_STORAGE_KEY,
   RUNS_PAGE_SIZE_STORAGE_KEY,
   MINIMAP_STORAGE_KEY,
-  PROBLEMS_OPEN_STORAGE_KEY,
   DOCK_NODE_TAB_STORAGE_KEY,
   DOCK_PIPELINE_TAB_STORAGE_KEY,
   PROBLEMS_DEFAULT_WIDTH,
@@ -399,10 +398,9 @@ describe('uiStore display time zone (#1484)', () => {
 });
 
 describe('uiStore property dock (#1475 OR27)', () => {
-  it('starts open, with Problems open, at the default share', () => {
+  it('starts open, at the default share', () => {
     const state = createUiStore(fakeStorage()).getState();
     expect(state.dockOpen).toBe(true);
-    expect(state.problemsOpen).toBe(true);
     expect(state.dockHeight).toBeNull();
   });
 
@@ -411,11 +409,9 @@ describe('uiStore property dock (#1475 OR27)', () => {
     const first = createUiStore(storage).getState();
     first.setDockHeight(333.6);
     first.setDockOpen(false);
-    first.setProblemsOpen(false);
     const second = createUiStore(storage).getState();
     expect(second.dockHeight).toBe(334);
     expect(second.dockOpen).toBe(false);
-    expect(second.problemsOpen).toBe(false);
   });
 
   it('keeps one preference when another key is garbage', () => {
@@ -423,12 +419,12 @@ describe('uiStore property dock (#1475 OR27)', () => {
       fakeStorage({
         [DOCK_HEIGHT_STORAGE_KEY]: '360',
         [DOCK_OPEN_STORAGE_KEY]: 'maybe',
-        [PROBLEMS_OPEN_STORAGE_KEY]: 'false',
+        [DOCK_POSITION_STORAGE_KEY]: 'right',
       }),
     ).getState();
     expect(state.dockHeight).toBe(360);
     expect(state.dockOpen).toBe(true);
-    expect(state.problemsOpen).toBe(false);
+    expect(state.dockPosition).toBe('right');
   });
 
   it.each(['', 'abc', '-50', '1e9', '12.5', 'NaN', '99999999999999999999'])(

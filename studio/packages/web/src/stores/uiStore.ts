@@ -72,9 +72,6 @@ export interface UiState {
    */
   runDrawerWidth: number | null;
   setRunDrawerWidth: (width: number | null) => void;
-  /** The Problems column inside the dock (#1393). */
-  problemsOpen: boolean;
-  setProblemsOpen: (open: boolean) => void;
   /**
    * #1475 OR27 — the Problems column's width in px, within
    * [`PROBLEMS_MIN_WIDTH`, `PROBLEMS_MAX_WIDTH`]. Like the dock's height, the
@@ -348,7 +345,6 @@ export const DOCK_OPEN_STORAGE_KEY = 'autonomy-studio.dock-open';
 export const DOCK_POSITION_STORAGE_KEY = 'autonomy-studio.dock-position';
 export const DOCK_WIDTH_STORAGE_KEY = 'autonomy-studio.dock-width';
 export const RUN_DRAWER_WIDTH_STORAGE_KEY = 'autonomy-studio.run-drawer-width';
-export const PROBLEMS_OPEN_STORAGE_KEY = 'autonomy-studio.problems-open';
 export const TOOLBOX_WIDTH_STORAGE_KEY = 'autonomy-studio.toolbox-width';
 export const TOOLBOX_COLLAPSED_STORAGE_KEY = 'autonomy-studio.toolbox-collapsed';
 export const PROBLEMS_WIDTH_STORAGE_KEY = 'autonomy-studio.problems-width';
@@ -626,7 +622,6 @@ type StoredAsIs =
   | 'minimapHidden'
   | 'dockOpen'
   | 'dockPosition'
-  | 'problemsOpen'
   | 'toolboxCollapsed'
   | 'dockNodeTab'
   | 'dockPipelineTab'
@@ -710,12 +705,6 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       DOCK_POSITION_STORAGE_KEY,
       parseOneOf(DOCK_POSITIONS),
       'bottom',
-    );
-    const [problemsOpen, setProblemsOpen] = pref(
-      'problemsOpen',
-      PROBLEMS_OPEN_STORAGE_KEY,
-      parseBoolean,
-      true,
     );
     const [toolboxCollapsed, setToolboxCollapsed] = pref(
       'toolboxCollapsed',
@@ -901,8 +890,6 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
         );
         set({ runDrawerWidth });
       },
-      problemsOpen,
-      setProblemsOpen,
       problemsWidth: readStored(
         storage,
         PROBLEMS_WIDTH_STORAGE_KEY,

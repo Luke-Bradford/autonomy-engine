@@ -1,8 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
 import { editorMenuItem } from './support/canvas';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { openSeededCanvas, rectOf, type SeedDoc } from './support/seedDoc';
-import { properties } from './support/panels';
+import { openSeededCanvas, rectOf, withAWarning, type SeedDoc } from './support/seedDoc';
+import { openProblems, properties } from './support/panels';
 
 /**
  * #1475 OR27 — the property dock can sit BESIDE the canvas instead of under
@@ -41,7 +41,8 @@ test('#1475 the dock moves beside the canvas, keeps its tree, and stays there af
 }) => {
   const problems = collectPageProblems(page);
   await page.setViewportSize({ width: 1440, height: 900 });
-  await openSeededCanvas(page, `e2e 1475 dock right ${Date.now()}`, seed);
+  // A warning, so Problems has something to list and can open (#1694 OR42).
+  await openSeededCanvas(page, `e2e 1475 dock right ${Date.now()}`, withAWarning(seed));
   const bottom = await boxes(page);
   expect(bottom.dock.top).toBeGreaterThan(bottom.wrap.bottom - 1);
 
@@ -68,6 +69,7 @@ test('#1475 the dock moves beside the canvas, keeps its tree, and stays there af
       .evaluate((el) => el === (window as unknown as { dockPanel: Element }).dockPanel),
   ).toBe(true);
   // Problems is stacked under the properties, not beside them.
+  await openProblems(page);
   const panel = await rectOf(page, '.property-panel');
   const list = await rectOf(page, '.problems-panel');
   expect(list.top).toBeGreaterThanOrEqual(panel.bottom);
