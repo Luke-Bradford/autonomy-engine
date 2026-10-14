@@ -5,14 +5,19 @@ import { unitSuffix } from './unit';
  * #1694 OR42 item 5 — a field's label with its unit moved out of sight: the
  * title is drawn, " (seconds)" is not, so the accessible name is unchanged
  * ("Timeout (seconds)") and every spec and screen reader still reaches it.
- * The leading space sits INSIDE the hidden span, or jsdom names the field
- * "Timeout(seconds)" while a browser normalises it.
+ * The space is a text node of its own, OUTSIDE the hidden span: measured,
+ * jsdom drops a span's leading space and names the field "Timeout(seconds)".
  */
 export function UnitLabel({ title, unit }: { title: ReactNode; unit: string | undefined }) {
   return (
     <>
       {title}
-      {unit !== undefined && <span className="visually-hidden">{` (${unit})`}</span>}
+      {unit !== undefined && (
+        <>
+          {' '}
+          <span className="visually-hidden">{`(${unit})`}</span>
+        </>
+      )}
     </>
   );
 }

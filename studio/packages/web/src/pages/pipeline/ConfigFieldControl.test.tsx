@@ -523,3 +523,58 @@ describe('ConfigFieldControl — a row list is a compact table (#1477 OR29)', ()
     expect(fireEvent.mouseDown(worded)).toBe(true);
   });
 });
+
+// #1694 OR42 item 5 — a unit leaves the label for a suffix inside the box, and
+// stays in the field's name; item 9 — a cell's empty choice is blank.
+describe('ConfigFieldControl — units as suffixes, blank empty cells (#1694)', () => {
+  /** The label as DRAWN: its text without what `.visually-hidden` keeps out of sight. */
+  function drawnLabel(control: HTMLElement): string {
+    const label = (control as HTMLInputElement).labels![0]!.cloneNode(true) as HTMLElement;
+    label.querySelectorAll('.visually-hidden').forEach((hidden) => hidden.remove());
+    return (label.textContent ?? '').trim();
+  }
+
+  it.each([
+    ['number', { kind: 'number' as const }],
+    ['one-line text', { kind: 'text' as const, singleLine: true as const }],
+  ])('a %s field draws its unit as a suffix and keeps it in its name', (_, shape) => {
+    const field: ConfigField = {
+      name: 'seconds',
+      optional: true,
+      label: { title: 'Wait time', unit: 'seconds' },
+      ...shape,
+    };
+    const { getByRole } = render(<ConfigFieldControl field={field} value="" onChange={noop} />);
+    const input = getByRole('textbox', { name: 'Wait time (seconds)' });
+    expect(drawnLabel(input)).toBe('Wait time');
+    const suffix = input.parentElement!.querySelector('.input-unit__suffix');
+    expect(suffix?.textContent).toBe('s');
+    expect(suffix?.getAttribute('aria-hidden')).toBe('true');
+    expect(input.getAttribute('data-size')).toBe('s');
+  });
+
+  it('a field without a unit has no suffix box', () => {
+    const field: ConfigField = { name: 'n', kind: 'number', optional: true };
+    const { getByRole } = render(<ConfigFieldControl field={field} value="" onChange={noop} />);
+    expect(getByRole('textbox').closest('.input-unit')).toBeNull();
+  });
+
+  it("a cell's empty choice is blank; a top-level field's still reads — none —", () => {
+    const field: ConfigField = {
+      name: 'onError',
+      kind: 'enum',
+      optional: true,
+      enumOptions: ['fail', 'null'],
+    };
+    const cell = render(
+      <ConfigFieldControl field={field} name="mapping row 1 on error" value="" onChange={noop} />,
+    );
+    expect(cell.getByRole('combobox').querySelector('option[value=""]')?.textContent).toBe('');
+    cell.unmount();
+    const top = render(<ConfigFieldControl field={field} value="" onChange={noop} />);
+    expect(top.getByRole('combobox').querySelector('option[value=""]')?.textContent).toBe(
+      '— none —',
+    );
+    expect(top.getByRole('combobox').getAttribute('data-size')).toBe('s');
+  });
+});

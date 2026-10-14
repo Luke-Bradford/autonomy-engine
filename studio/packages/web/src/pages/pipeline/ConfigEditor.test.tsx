@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render } from '@testing-library/react';
 import { ConfigEditor } from './ConfigEditor';
-import { fieldSpan, type ConfigField } from './configForm';
+import { fieldSize, fieldSpan, type ConfigField } from './configForm';
 import type { ConfigEditorState } from './useConfigEditor';
 
 const noop = (): void => undefined;
@@ -85,5 +85,31 @@ describe('fieldSpan', () => {
         label: { title: 'Mode', options: { a: 'A very long option title' } },
       }),
     ).toBe('long');
+  });
+});
+
+// #1694 OR42 F10 — the pane's three size classes, by what a field holds.
+describe('fieldSize', () => {
+  it('sizes a number S and free text, JSON and row lists L', () => {
+    expect(
+      (['number', 'text', 'json', 'stringList', 'objectList', 'keyValue'] as const).map((kind) =>
+        fieldSize({ kind }),
+      ),
+    ).toEqual(['s', 'l', 'l', 'l', 'l', 'l']);
+  });
+
+  it('sizes a choice S exactly where fieldSpan packs it, and M otherwise', () => {
+    const short = { kind: 'enum' as const, enumOptions: ['low', 'high'] };
+    const long = { kind: 'enum' as const, enumOptions: ['json_schema_strict_mode'] };
+    expect([fieldSize(short), fieldSpan(short)]).toEqual(['s', 'short']);
+    expect([fieldSize(long), fieldSpan(long)]).toEqual(['m', 'long']);
+  });
+
+  it('sizes a one-line literal (a name) M, a one-line field with a unit S, other one-liners L', () => {
+    expect(fieldSize({ kind: 'text', singleLine: true, literal: true })).toBe('m');
+    expect(fieldSize({ kind: 'text', singleLine: true, label: { unit: 'seconds' } })).toBe('s');
+    expect(fieldSize({ kind: 'text', singleLine: true })).toBe('l');
+    // A literal that may span lines is free text, not a name.
+    expect(fieldSize({ kind: 'text', literal: true })).toBe('l');
   });
 });
