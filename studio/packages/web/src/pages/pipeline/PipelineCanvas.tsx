@@ -4098,7 +4098,10 @@ export function NodePanel({
         {t.key === 'source' && copyMode !== undefined && (
           <LabelledControl
             label="Copy"
-            about="Rows reads the data, maps its columns and converts their types. Files as-is copies files byte for byte, without reading them. Switching starts the other mode's settings fresh; Undo brings these back."
+            about={{
+              name: 'Copy',
+              note: "Rows reads the data, maps its columns and converts their types. Files as-is copies files byte for byte, without reading them. Switching starts the other mode's settings fresh; Undo brings these back.",
+            }}
           >
             {(id, describedBy) => (
               <select

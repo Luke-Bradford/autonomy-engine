@@ -135,7 +135,10 @@ export const copyFilesConfigSchema = z
     }
     if (cfg.copyBehavior === 'merge') {
       if (cfg.pathType === 'file') {
-        issue('copyBehavior', 'merging needs a folder or a file list; one file has nothing to merge');
+        issue(
+          'copyBehavior',
+          'merging needs a folder or a file list; one file has nothing to merge',
+        );
       }
       if (cfg.sinkFileName === undefined) {
         issue('sinkFileName', 'merging into one file needs its file name');
