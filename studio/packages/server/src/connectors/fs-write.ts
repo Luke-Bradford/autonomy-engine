@@ -5,6 +5,8 @@ import { classifyFsError } from './fs-connection.js';
 import type { ActivityContext, ActivityEvent } from './types.js';
 import { FS_STREAM_CHUNK_BYTES } from '../limits.js';
 import { constants as fsConstants } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { basename, dirname, join } from 'node:path';
 
 /**
  * The write half of the `fs` connector, shared by the `file_*` activities
@@ -65,6 +67,30 @@ export const LINK_UNSUPPORTED: ReadonlySet<string> = new Set([
   'ENOSYS',
 ]);
 
+/** The longest file name, in bytes, that the common file systems accept. */
+const NAME_MAX_BYTES = 255;
+/** How much of a too-long name its hashed temp keeps: `.<prefix>.<40 hex>.tmp` stays at most 146 bytes. */
+const TMP_PREFIX_BYTES = 100;
+
+/**
+ * The temp beside `finalPath`: `<name>.tmp.<suffix>`, or, when that name would
+ * be too long for the file system (#1685), a hidden name holding the start of
+ * the target's name and a hash of the whole long name, which keeps it unique.
+ */
+export function tmpPathFor(finalPath: string, tmpSuffix: string): string {
+  const name = `${basename(finalPath)}.tmp.${tmpSuffix}`;
+  if (Buffer.byteLength(name) <= NAME_MAX_BYTES) return `${finalPath}.tmp.${tmpSuffix}`;
+  const digest = createHash('sha256').update(name).digest('hex').slice(0, 40);
+  // A readable prefix of the name, so a temp a crash leaves behind can still be
+  // tied to its target; cut on a character, never inside one.
+  let prefix = '';
+  for (const ch of basename(finalPath)) {
+    if (Buffer.byteLength(prefix + ch) > TMP_PREFIX_BYTES) break;
+    prefix += ch;
+  }
+  return join(dirname(finalPath), `.${prefix}.${digest}.tmp`);
+}
+
 /**
  * Crash-safe atomic replace, shared by `file_write` (writes a string) and
  * `file_copy` (streams a source file): create a FRESH sibling temp, hand it to
@@ -99,7 +125,7 @@ export async function atomicReplace(
   writeInto: (fh: Awaited<ReturnType<typeof open>>) => Promise<void>,
   opts: { noClobber?: boolean; mode?: number } = {},
 ): Promise<ActivityEvent | undefined | typeof TARGET_EXISTS> {
-  const tmpPath = `${finalPath}.tmp.${tmpSuffix}`;
+  const tmpPath = tmpPathFor(finalPath, tmpSuffix);
   let fh: Awaited<ReturnType<typeof open>> | undefined;
   let renamed = false;
   try {

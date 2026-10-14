@@ -1,5 +1,14 @@
-import { constants as fsConstants } from 'node:fs';
-import { link, lstat, mkdir, open, opendir, realpath, unlink } from 'node:fs/promises';
+import { constants as fsConstants, type BigIntStats } from 'node:fs';
+import {
+  link,
+  lstat,
+  mkdir,
+  open,
+  opendir,
+  realpath,
+  unlink,
+  type FileHandle,
+} from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { z } from 'zod';
 import {
@@ -26,6 +35,7 @@ import {
   streamInto,
 } from './fs-write.js';
 import type { ActivityContext, ActivityEvent } from './types.js';
+import { FS_STREAM_CHUNK_BYTES } from '../limits.js';
 
 /**
  * #1600 OR41 C1a — Copy · Files as-is (activity catalogue §4.1): copy files
@@ -34,15 +44,21 @@ import type { ActivityContext, ActivityEvent } from './types.js';
  *
  * PLAN FIRST, WRITE SECOND. Every file is selected and every target worked out
  * before the first byte is written, so each refusal below is made with nothing
- * written, deleted or moved (a file standing where a folder must be created is
- * found only when that folder is made, and fails the copy there):
- *  - two sources would land on one target (Flatten, or a name that differs
- *    only in case on a case-insensitive disk);
+ * written, deleted or moved:
+ *  - two sources would land on one target (Flatten, or names that differ only
+ *    in case: refused on every sink, because a case-insensitive disk would make
+ *    them one file and nothing here can tell which kind of disk a sink is);
+ *  - a file or symlink stands where a sink or *Move to* folder must be made,
+ *    or a target is itself a folder (#1685);
  *  - a target IS a source, by device and inode, so a hardlink or a case-only
  *    difference cannot hide it. Overwriting a source, or deleting one after
  *    "copying" it onto itself, destroys the only copy;
  *  - *If file exists* is Fail and a target exists;
- *  - a *Move to* target already exists (a move never replaces a file).
+ *  - a *Move to* target already exists (a move never replaces a file),
+ *    unless it is the source itself, linked there by an attempt that failed
+ *    before removing the original: that move is finished, not refused.
+ * A folder made or replaced by someone else after the plan is still caught as
+ * each folder is created, and fails the copy there.
  *
  * CONFINEMENT. Every path resolves inside its own connection's roots through
  * `resolveWithinRoots`, symlinks are never followed (a walk skips them, a
@@ -56,6 +72,14 @@ import type { ActivityContext, ActivityEvent } from './types.js';
  * when it was read, and every byte of it must have been copied; otherwise the
  * copy fails and the file stays, so a write that lands mid-copy is never lost.
  * Each copy keeps its source's permission bits (a merge, the bits all share).
+ *
+ * A RETRY CONVERGES UNDER SKIP. With *If file exists* = Skip, a target that
+ * already holds exactly its source's bytes is reported skipped, and After copy
+ * still removes the source: an attempt that failed between writing a copy and
+ * removing its source is finished by the next one. A target with other bytes,
+ * or that is not a regular file, is skipped and its source kept, and so is a
+ * Merge target (it has no one source to compare). Under Fail, a retry refuses
+ * on the files the failed attempt wrote; that is what Fail asks for.
  *
  * PERMISSION. The sink connection must allow writes, and so must the source
  * when After copy deletes or moves (the fs `writable` flag, fail-closed).
@@ -72,17 +96,17 @@ type FsConfig = z.infer<typeof fsConnectionConfigSchema>;
 export interface SourceFile {
   readonly abs: string;
   readonly rel: string;
-  readonly dev: number;
-  readonly ino: number;
+  readonly dev: bigint;
+  readonly ino: bigint;
   readonly mode: number;
 }
 
 /** What a source looked like when it was read, to check before removing it. */
 export interface ReadStamp {
-  readonly dev: number;
-  readonly ino: number;
-  readonly size: number;
-  readonly mtimeMs: number;
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly size: bigint;
+  readonly mtimeNs: bigint;
   readonly read: number;
 }
 
@@ -121,9 +145,13 @@ async function confined(roots: readonly string[], requested: string): Promise<st
   return r.ok ? r.path : refuse(r.error);
 }
 
+/**
+ * `bigint`, so a device or inode number above 2^53 (some network file systems)
+ * is compared exactly: two files must never share an identity by rounding.
+ */
 async function lstatOrNull(path: string) {
   try {
-    return await lstat(path);
+    return await lstat(path, { bigint: true });
   } catch (err) {
     // ENOTDIR: a parent is a file, so nothing can be at this path either.
     const code = (err as NodeJS.ErrnoException).code;
@@ -188,6 +216,81 @@ async function planDir(
   return { base, missing, path: join(base, ...missing) };
 }
 
+/**
+ * A plan-time check that each of `names`, walked down from `base`, is a real
+ * folder where it exists, so a file or symlink standing where the copy must
+ * make a folder is refused before anything is written. Memoised across the
+ * plan; `materialize` re-checks at write time.
+ */
+function folderCheck(): (base: string, names: readonly string[]) => Promise<void> {
+  const known = new Map<string, 'folder' | 'missing'>();
+  return async (base, names) => {
+    let cur = base;
+    for (const name of names) {
+      cur = join(cur, name);
+      let kind = known.get(cur);
+      if (kind === undefined) {
+        const st = await lstatOrNull(cur);
+        if (st?.isSymbolicLink() === true) {
+          refuse(`'${cur}' is a symlink; the fs connector does not follow symlinks`);
+        }
+        if (st !== null && !st.isDirectory()) {
+          refuse(`'${cur}' is not a folder, and the copy needs one there`);
+        }
+        kind = st === null ? 'missing' : 'folder';
+        known.set(cur, kind);
+      }
+      if (kind === 'missing') return;
+    }
+  };
+}
+
+/** `link` then `unlink` is a move that never replaces an existing file, as `rename` would. */
+async function linkTo(s: SourceFile, dest: string): Promise<void> {
+  try {
+    await link(s.abs, dest);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EEXIST') refuse(`cannot move '${s.rel}': '${dest}' already exists`);
+    if (code === 'EXDEV') {
+      refuse(`cannot move '${s.rel}' to '${dest}' across file systems; use Delete source instead`);
+    }
+    if (code !== undefined && LINK_UNSUPPORTED.has(code)) {
+      refuse(
+        `cannot move '${s.rel}': the file system does not support hard links, which a move needs; use Delete source instead`,
+      );
+    }
+    throw err;
+  }
+}
+
+/**
+ * Every path the plan will create, case-folded as the target clash check is:
+ * a file and a folder, or two files, cannot both be made at one path. Catches
+ * a sink and a Move to that overlap (the two connections may share a root),
+ * where each path alone looks free (#1685).
+ */
+function plannedPaths() {
+  const made = new Map<string, 'file' | 'folder'>();
+  const add = (path: string, kind: 'file' | 'folder') => {
+    const key = path.toLowerCase();
+    const was = made.get(key);
+    if (was === undefined) made.set(key, kind);
+    else if (was === 'file' || kind === 'file') {
+      refuse(`the copy would make two things at '${path}': a file and a folder, or two files`);
+    }
+  };
+  return {
+    folders(base: string, names: readonly string[]) {
+      let cur = base;
+      for (const name of names) add((cur = join(cur, name)), 'folder');
+    },
+    file(path: string) {
+      add(path, 'file');
+    },
+  };
+}
+
 /** Create `names` under the canonical `base` one at a time, each a real directory. */
 async function materialize(
   base: string,
@@ -234,13 +337,9 @@ async function selectSources(
   const rootStat = await lstatOrNull(root);
   if (rootStat === null) refuse(`source path '${cfg.sourcePath}' does not exist`);
   const files: SourceFile[] = [];
-  const take = (
-    abs: string,
-    rel: string,
-    st: { dev: number; ino: number; mode: number; mtimeMs: number },
-  ) => {
-    if (contains(st.mtimeMs)) {
-      files.push({ abs, rel, dev: st.dev, ino: st.ino, mode: st.mode & 0o777 });
+  const take = (abs: string, rel: string, st: BigIntStats) => {
+    if (contains(Number(st.mtimeNs) / 1e6)) {
+      files.push({ abs, rel, dev: st.dev, ino: st.ino, mode: Number(st.mode) & 0o777 });
     }
   };
 
@@ -275,7 +374,7 @@ async function selectSources(
             if (cfg.recursive) pending.push(rel);
           } else if (d.isFile() && matches(d.name)) {
             const abs = join(root, rel);
-            take(abs, rel, await lstat(abs));
+            take(abs, rel, await lstat(abs, { bigint: true }));
           }
         }
       } finally {
@@ -366,24 +465,13 @@ async function writeTarget(
   let read = 0;
   const writeInto = async (dst: Awaited<ReturnType<typeof open>>) => {
     for (const s of target.sources) {
-      const src = await open(s.abs, fsConstants.O_RDONLY | O_NOFOLLOW);
+      const src = await openSource(s);
       try {
-        const st = await src.stat();
-        if (!st.isFile()) refuse(`source '${s.abs}' is no longer a regular file`);
-        if (st.dev !== s.dev || st.ino !== s.ino) {
-          refuse(`source '${s.abs}' was replaced after the copy was planned`);
-        }
-        const bytes = await streamInto(src, dst, signal);
+        const bytes = await streamInto(src.fh, dst, signal);
         read += bytes;
-        stamps.set(s.abs, {
-          dev: st.dev,
-          ino: st.ino,
-          size: st.size,
-          mtimeMs: st.mtimeMs,
-          read: bytes,
-        });
+        stamps.set(s.abs, stampOf(src.st, bytes));
       } finally {
-        await closeQuietly(src);
+        await closeQuietly(src.fh);
       }
     }
   };
@@ -403,6 +491,103 @@ async function writeTarget(
   return 'written';
 }
 
+/** Open a planned source, refusing one that is no longer the file the plan saw. */
+async function openSource(s: SourceFile): Promise<{ fh: FileHandle; st: BigIntStats }> {
+  const fh = await open(s.abs, fsConstants.O_RDONLY | O_NOFOLLOW);
+  try {
+    const st = await fh.stat({ bigint: true });
+    if (!st.isFile()) refuse(`source '${s.abs}' is no longer a regular file`);
+    if (st.dev !== s.dev || st.ino !== s.ino) {
+      refuse(`source '${s.abs}' was replaced after the copy was planned`);
+    }
+    return { fh, st };
+  } catch (err) {
+    await closeQuietly(fh);
+    throw err;
+  }
+}
+
+function stampOf(st: BigIntStats, read: number): ReadStamp {
+  return { dev: st.dev, ino: st.ino, size: st.size, mtimeNs: st.mtimeNs, read };
+}
+
+/**
+ * True when the regular file at `targetPath` holds exactly the bytes of the
+ * source `s`. Stamps the source from this read, as a copy would, so After copy
+ * can check it is still the file that was compared. Size first; a same-size
+ * pair is read in chunks, never whole.
+ */
+async function alreadyCopied(
+  s: SourceFile,
+  targetPath: string,
+  signal: AbortSignal,
+  stamps: Map<string, ReadStamp>,
+): Promise<boolean> {
+  let dst: FileHandle;
+  try {
+    // O_NONBLOCK: a FIFO standing at the target must not block the open.
+    dst = await open(targetPath, fsConstants.O_RDONLY | O_NOFOLLOW | fsConstants.O_NONBLOCK);
+  } catch (err) {
+    // A symlink (ELOOP), an unreadable or vanished target: not a copy of this
+    // source, so it is skipped and the source kept, as before #1685.
+    if (NOT_COMPARABLE.has((err as NodeJS.ErrnoException).code ?? '')) return false;
+    throw err;
+  }
+  let src: Awaited<ReturnType<typeof openSource>> | undefined;
+  try {
+    const dstSt = await dst.stat({ bigint: true });
+    if (!dstSt.isFile()) return false;
+    src = await openSource(s);
+    if (dstSt.size !== src.st.size) return false;
+    const a = Buffer.allocUnsafe(FS_STREAM_CHUNK_BYTES);
+    const b = Buffer.allocUnsafe(FS_STREAM_CHUNK_BYTES);
+    let read = 0;
+    for (;;) {
+      if (signal.aborted) throw new Error('file copy aborted');
+      const { bytesRead } = await src.fh.read(a, 0, a.length, read);
+      if (bytesRead === 0) break;
+      const got = await readFully(dst, b, bytesRead, read);
+      if (got !== bytesRead || a.compare(b, 0, got, 0, bytesRead) !== 0) return false;
+      read += bytesRead;
+    }
+    // The target may have grown past the source while it was read.
+    if ((await readFully(dst, b, 1, read)) !== 0) return false;
+    // Nothing proves an earlier attempt's fsync reached this file: flush it
+    // before its source can be removed.
+    await dst.sync();
+    stamps.set(s.abs, stampOf(src.st, read));
+    return true;
+  } finally {
+    await closeQuietly(dst);
+    await closeQuietly(src?.fh);
+  }
+}
+
+const NOT_COMPARABLE: ReadonlySet<string> = new Set([
+  'ELOOP',
+  'EACCES',
+  'EPERM',
+  'ENOENT',
+  'EISDIR',
+  'ENXIO',
+]);
+
+/** Read up to `length` bytes at `position`, looping on a short read. */
+async function readFully(
+  fh: FileHandle,
+  buf: Buffer,
+  length: number,
+  position: number,
+): Promise<number> {
+  let got = 0;
+  while (got < length) {
+    const { bytesRead } = await fh.read(buf, got, length - got, position + got);
+    if (bytesRead === 0) break;
+    got += bytesRead;
+  }
+  return got;
+}
+
 /**
  * Refuse to delete or move a source that changed after it was read: another
  * inode now at the path, a different size or modified time, or fewer bytes
@@ -418,8 +603,8 @@ export async function unchangedSince(s: SourceFile, stamp: ReadStamp | undefined
     now.dev !== stamp.dev ||
     now.ino !== stamp.ino ||
     now.size !== stamp.size ||
-    now.mtimeMs !== stamp.mtimeMs ||
-    stamp.read !== stamp.size
+    now.mtimeNs !== stamp.mtimeNs ||
+    BigInt(stamp.read) !== stamp.size
   ) {
     refuse(`source '${s.rel}' changed while it was copied, so it was left in place`);
   }
@@ -502,7 +687,10 @@ export async function* runFilesCopy(
     const sinkDir = await planDir(sink.roots, cfg.sinkFolder);
     const targets = planTargets(cfg, sinkDir.path, files);
     const sourceIds = new Set(files.map((f) => `${f.dev}:${f.ino}`));
-    const seen = new Map<string, string>();
+    const folders = folderCheck();
+    const paths = plannedPaths();
+    paths.folders(sinkDir.base, sinkDir.missing);
+    const seen = new Map<string, { from: string; path: string }>();
     for (const t of targets) {
       const finalPath = join(sinkDir.path, ...t.dirs, t.name);
       // Case-folded, so two names that one case-insensitive disk would make one
@@ -510,11 +698,23 @@ export async function* runFilesCopy(
       const key = finalPath.toLowerCase();
       const from = t.sources.map((s) => s.rel).join(', ');
       const clash = seen.get(key);
-      if (clash !== undefined)
-        refuse(`'${clash}' and '${from}' would both be written to '${finalPath}'`);
-      seen.set(key, from);
+      if (clash !== undefined) {
+        refuse(
+          `'${clash.from}' and '${from}' would both be written to '${finalPath}'` +
+            (clash.path === finalPath
+              ? ''
+              : '; the names differ only in case, which a case-insensitive disk stores as one file, so the copy refuses rather than let one overwrite the other'),
+        );
+      }
+      seen.set(key, { from, path: finalPath });
+      paths.folders(sinkDir.path, t.dirs);
+      paths.file(finalPath);
+      await folders(sinkDir.path, t.dirs);
       const existing = await lstatOrNull(finalPath);
       if (existing !== null) {
+        if (existing.isDirectory()) {
+          refuse(`'${finalPath}' is a folder, so a file cannot be written there`);
+        }
         if (sourceIds.has(`${existing.dev}:${existing.ino}`)) {
           refuse(
             `'${finalPath}' is one of the files being copied; a copy cannot write over its own source`,
@@ -525,15 +725,25 @@ export async function* runFilesCopy(
       }
     }
     let moveDir: PlannedDir | undefined;
+    // Sources a failed attempt had already linked into Move to, but not removed.
+    const linked = new Set<string>();
     if (cfg.afterCopy === 'move') {
       moveDir = await planDir(source.roots, cfg.moveTo);
+      paths.folders(moveDir.base, moveDir.missing);
       for (const f of files) {
         const dest = join(moveDir.path, f.rel);
-        if ((await lstatOrNull(dest)) !== null)
-          refuse(`cannot move '${f.rel}': '${dest}' already exists`);
+        const dirs = f.rel.split(sep).slice(0, -1);
+        paths.folders(moveDir.path, dirs);
+        paths.file(dest);
+        await folders(moveDir.path, dirs);
+        const there = await lstatOrNull(dest);
+        if (there !== null) {
+          if (there.isFile() && there.dev === f.dev && there.ino === f.ino) linked.add(f.abs);
+          else refuse(`cannot move '${f.rel}': '${dest}' already exists`);
+        }
       }
       // `link` cannot cross file systems: refuse before anything is written.
-      const moveDev = (await lstat(moveDir.base)).dev;
+      const moveDev = (await lstat(moveDir.base, { bigint: true })).dev;
       const away = files.find((f) => f.dev !== moveDev);
       if (away !== undefined) {
         refuse(
@@ -566,18 +776,28 @@ export async function* runFilesCopy(
       const parent = await materialize(sinkBase, t.dirs, changed);
       const finalPath = join(parent, t.name);
       const noClobber = cfg.ifExists !== 'overwrite';
+      // A skipped target that already holds its one source's bytes counts as
+      // copied, so a retry removes the source an earlier attempt left behind.
+      const skip = async () => {
+        c.filesSkipped += t.sources.length;
+        return (
+          cfg.afterCopy !== 'keep' &&
+          t.sources.length === 1 &&
+          (await alreadyCopied(t.sources[0]!, finalPath, signal, stamps))
+        );
+      };
       if (cfg.ifExists === 'skip' && (await lstatOrNull(finalPath)) !== null) {
-        c.filesSkipped += t.sources.length;
-        continue;
+        if (!(await skip())) continue;
+      } else {
+        const outcome = await writeTarget(t, finalPath, tmpSuffix, noClobber, signal, c, stamps);
+        if (outcome === 'exists') {
+          if (cfg.ifExists === 'fail')
+            refuse(`'${finalPath}' appeared during the copy and If file exists is Fail`);
+          if (!(await skip())) continue;
+        }
       }
-      const outcome = await writeTarget(t, finalPath, tmpSuffix, noClobber, signal, c, stamps);
-      if (outcome === 'exists') {
-        if (cfg.ifExists === 'fail')
-          refuse(`'${finalPath}' appeared during the copy and If file exists is Fail`);
-        c.filesSkipped += t.sources.length;
-        continue;
-      }
-      // After copy, only for files that were written: a skipped file stays put.
+      // After copy, only for a source whose bytes are at the target: a skipped
+      // file with other bytes stays put.
       // The copy's folder entry is durable before any source is removed.
       if (cfg.afterCopy !== 'keep') {
         changed.add(parent);
@@ -592,23 +812,15 @@ export async function* runFilesCopy(
           const segments = s.rel.split(sep);
           const dir = await materialize(moveBase, segments.slice(0, -1), changed);
           const dest = join(dir, segments[segments.length - 1]!);
-          try {
-            // `link` then `unlink`: never replaces an existing file, as `rename` would.
-            await link(s.abs, dest);
-          } catch (err) {
-            const code = (err as NodeJS.ErrnoException).code;
-            if (code === 'EEXIST') refuse(`cannot move '${s.rel}': '${dest}' already exists`);
-            if (code === 'EXDEV') {
-              refuse(
-                `cannot move '${s.rel}' to '${dest}' across file systems; use Delete source instead`,
-              );
+          if (linked.has(s.abs)) {
+            // Already linked there: only the original name is left to remove,
+            // once the link is still this very file.
+            const there = await lstatOrNull(dest);
+            if (there === null || there.dev !== s.dev || there.ino !== s.ino) {
+              refuse(`cannot move '${s.rel}': '${dest}' changed after the copy was planned`);
             }
-            if (code !== undefined && LINK_UNSUPPORTED.has(code)) {
-              refuse(
-                `cannot move '${s.rel}': the file system does not support hard links, which a move needs; use Delete source instead`,
-              );
-            }
-            throw err;
+          } else {
+            await linkTo(s, dest);
           }
           // And the moved entry is durable before the original goes.
           changed.add(dir);
@@ -624,7 +836,9 @@ export async function* runFilesCopy(
       for (const [name, value] of Object.entries(outputsOf(c)))
         yield { type: 'output', name, value };
     }
-    if (err instanceof Refusal) yield failed('permanent', err.message);
+    // Whatever unwound the copy once it was aborted, the outcome is the abort.
+    if (signal.aborted) yield failFromError(err, signal);
+    else if (err instanceof Refusal) yield failed('permanent', err.message);
     else if (err instanceof EventFailure) yield err.event;
     else yield failFromError(err, signal);
   }
