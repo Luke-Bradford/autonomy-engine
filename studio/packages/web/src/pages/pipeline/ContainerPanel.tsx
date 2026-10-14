@@ -425,7 +425,6 @@ export function ContainerPanel({
         description={container.description ?? ''}
         onDescription={(description) => onGeneral({ description })}
         inactive={isInactive(container)}
-        onInactive={(inactive) => onGeneral({ inactive })}
         markAs={inactiveMarkAs(container)}
         onMarkAs={(markAs) => onGeneral({ markAs })}
       />
@@ -522,6 +521,12 @@ export function ContainerPanel({
       </button>
       <button type="button" onClick={onDuplicate}>
         Duplicate container
+      </button>
+      {/* #1694 OR42 — switched off and on here, beside the container's other
+          acts, not by a select on the General tab (ADF's Deactivate). Writes
+          through, as the General tab does, outside the form's Apply. */}
+      <button type="button" onClick={() => onGeneral({ inactive: !isInactive(container) })}>
+        {isInactive(container) ? 'Activate container' : 'Deactivate container'}
       </button>
       {/* #1393 — AFTER the fields, not above them: an issue arriving must not push
           the control being edited out from under the pointer. The Problems column

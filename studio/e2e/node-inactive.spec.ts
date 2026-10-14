@@ -12,8 +12,9 @@ import { fluentRootReady } from './support/theme';
 
 /**
  * #1600 OR41 C0c (catalogue spec §3; ADF "deactivate an activity") — an
- * activity switched off on the General tab: greyed on the canvas, never run, and
- * recorded with its Mark as outcome, which alone routes its edges.
+ * activity switched off (#1694 OR42: from the canvas, not the General tab):
+ * greyed on the canvas, never run, and recorded with its Mark as outcome, which
+ * alone routes its edges.
  */
 
 const fail = (extra: Record<string, unknown> = {}) => ({
@@ -30,40 +31,61 @@ const wait = (id: string, x: number) => ({
   position: { x, y: 0 },
 });
 
-test('Activity state and Mark as on the General tab: the card greys, the doc stores only what differs', async ({
+test('#1694 OR42 — Deactivate from the right-click menu and the dock ⋯: the card greys, Mark as shows only while inactive, the doc stores only what differs', async ({
   page,
 }) => {
   const problems = collectPageProblems(page);
   await page.setViewportSize({ width: 1440, height: 900 });
-  const id = await openSeededCanvas(page, 'inactive authoring', { nodes: [fail()] });
+  const id = await openSeededCanvas(page, 'inactive authoring', {
+    nodes: [fail(), wait('w', 300)],
+  });
   const card = nodeById(page, 'f');
-  await expect(card.locator('.flow-node')).not.toHaveClass(/flow-node--inactive/);
+  const other = nodeById(page, 'w');
+  const greyed = /flow-node--inactive/;
+  await expect(card.locator('.flow-node')).not.toHaveClass(greyed);
 
+  // No state field on General, and no Mark as while the activity is active.
   await card.click();
   await properties(page).getByRole('tab', { name: 'General' }).click();
   const basics = properties(page).getByRole('group', { name: 'Basics' });
-  const state = basics.getByLabel('Activity state', { exact: true });
   const markAs = basics.getByLabel('Mark as', { exact: true });
-  await expect(state).toHaveValue('active');
-  // Kept, but not in force, while the activity is active.
-  await expect(markAs).toBeDisabled();
+  await expect(basics.getByLabel('Activity state', { exact: true })).toHaveCount(0);
+  await expect(markAs).toHaveCount(0);
 
-  await state.selectOption('inactive');
-  await expect(card.locator('.flow-node')).toHaveClass(/flow-node--inactive/);
+  // #1680 — two selected, one right-click Deactivate, one undo step for both.
+  await other.click({ modifiers: ['Meta'] });
+  await card.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Deactivate' }).click();
+  await expect(page.locator('.notice')).toHaveText('Deactivated 2 activities.');
+  await expect(card.locator('.flow-node')).toHaveClass(greyed);
+  await expect(other.locator('.flow-node')).toHaveClass(greyed);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(card.locator('.flow-node')).not.toHaveClass(greyed);
+  await expect(other.locator('.flow-node')).not.toHaveClass(greyed);
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await expect(other.locator('.flow-node')).toHaveClass(greyed);
+  // With every selected activity off, the menu offers Activate instead.
+  await card.click({ button: 'right' });
+  await expect(page.getByRole('menuitem', { name: 'Deactivate' })).toHaveCount(0);
+  await page.getByRole('menuitem', { name: 'Activate' }).click();
+  await expect(other.locator('.flow-node')).not.toHaveClass(greyed);
+
+  // The dock's ⋯ switches the one node, and Mark as appears with it. A click
+  // inside a multi-selection keeps it, so the canvas is cleared first.
+  await page.locator('.react-flow__pane').click({ position: { x: 5, y: 5 } });
+  await card.click();
+  await properties(page).getByRole('tab', { name: 'General' }).click();
+  const more = properties(page).getByRole('button', { name: 'More node actions' });
+  await more.click();
+  await page.getByRole('menuitem', { name: 'Deactivate node' }).click();
+  await expect(card.locator('.flow-node')).toHaveClass(greyed);
   const badge = card.locator('.flow-node-badge--inactive');
   await expect(badge).toHaveText('inactive · succeeded');
-  await expect(markAs).toBeEnabled();
   await markAs.selectOption('failure');
   await expect(badge).toHaveText('inactive · failed');
   await expect(badge).toHaveAttribute('aria-label', 'Inactive: never runs, and records Failed');
-
-  // UI STANDARD rule 5/7 — two short selects packed side by side, each sized to
-  // its options rather than stretched, measured at 1440x900.
-  const [s, m] = await Promise.all([state.boundingBox(), markAs.boundingBox()]);
-  expect(s && m).toBeTruthy();
-  expect(Math.abs(s!.y - m!.y)).toBeLessThan(2);
-  expect(s!.width).toBeLessThan(200);
-  expect(m!.width).toBeLessThan(200);
+  // UI STANDARD rule 5 — a short select, sized to its options.
+  expect((await markAs.boundingBox())!.width).toBeLessThan(200);
   // The card's face fades; the badge, which carries the words, keeps its contrast.
   const opacityOf = (sel: string) =>
     card.locator(sel).evaluate((el) => Number(getComputedStyle(el).opacity));
@@ -75,25 +97,26 @@ test('Activity state and Mark as on the General tab: the card greys, the doc sto
   const versions = async () => {
     const res = await page.request.get(`/api/pipelines/${encodeURIComponent(id)}/versions`);
     const items = (await res.json()) as { version: number; nodes: Record<string, unknown>[] }[];
-    return items.reduce((a, b) => (a.version > b.version ? a : b)).nodes[0]!;
+    return items.reduce((a, b) => (a.version > b.version ? a : b)).nodes;
   };
-  expect(await versions()).toMatchObject({ state: 'inactive', onInactiveMarkAs: 'failure' });
+  const [f2, w2] = await versions();
+  expect(f2).toMatchObject({ state: 'inactive', onInactiveMarkAs: 'failure' });
+  expect('state' in w2!).toBe(false);
 
-  // Back on: `state` is REMOVED (never `'active'`), and Mark as is kept, as ADF does.
-  // A save reloads the version, which clears the selection, so re-open the node.
+  // Back on: `state` is REMOVED (never `'active'`), Mark as hides, and its value
+  // is kept, as ADF does. A save reloads the version, which clears the selection.
   await card.click();
   await properties(page).getByRole('tab', { name: 'General' }).click();
-  await expect(state).toHaveValue('inactive');
   await expect(markAs).toHaveValue('failure');
-  await state.selectOption('active');
-  await expect(card.locator('.flow-node')).not.toHaveClass(/flow-node--inactive/);
-  await expect(markAs).toBeDisabled();
-  await expect(markAs).toHaveValue('failure');
+  await more.click();
+  await page.getByRole('menuitem', { name: 'Activate node' }).click();
+  await expect(card.locator('.flow-node')).not.toHaveClass(greyed);
+  await expect(markAs).toHaveCount(0);
   await page.getByRole('button', { name: 'Save version' }).click();
   await expect(page.locator('.notice')).toHaveText('Saved v3.');
-  const v3 = await versions();
-  expect('state' in v3).toBe(false);
-  expect(v3.onInactiveMarkAs).toBe('failure');
+  const [f3] = await versions();
+  expect('state' in f3!).toBe(false);
+  expect(f3!.onInactiveMarkAs).toBe('failure');
 
   await expectQuiet(page, problems);
 });

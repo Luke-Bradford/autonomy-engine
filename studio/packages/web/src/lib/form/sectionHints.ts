@@ -57,9 +57,9 @@ export const FORM_SECTION_HINTS = {
     parameters: "The values this trigger passes to the pipeline's parameters for each run.",
   },
   node: {
-    basics: 'What this activity is for, and whether it runs.',
+    basics: 'What this activity is for, and what it records while inactive.',
     // #1600 C0e — the container panel's General tab.
-    containerBasics: 'What this container is for, and whether it and its contents run.',
+    containerBasics: 'What this container is for, and what it records while inactive.',
     runPolicy:
       'How long one attempt may run, how a transient failure is retried, and what is kept out of the run log.',
     userProperties: `Up to ${MAX_USER_PROPERTIES} name and value pairs, each value text or dynamic content, shown as columns in the activity runs grid.`,

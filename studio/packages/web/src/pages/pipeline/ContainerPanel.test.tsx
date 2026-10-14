@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { answerConfirm } from '../../testing/confirmDialog';
 import {
@@ -700,21 +700,31 @@ describe('ContainerPanel — the General tab (#1600 C0e)', () => {
     return onGeneral;
   }
 
-  it('opens on General, with Description, Activity state and Mark as', () => {
+  it('opens on General, with Description; Mark as only while inactive (#1694 OR42)', () => {
     mountGeneral({ ...LOOP, description: 'Retries the export' });
     expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('textbox', { name: 'Container description' })).toHaveValue(
       'Retries the export',
     );
-    expect(screen.getByRole('combobox', { name: 'Activity state' })).toHaveValue('active');
-    expect(screen.getByRole('combobox', { name: 'Mark as' })).toBeDisabled();
-    // The `?` wording is the container's, not an activity's.
-    expect(screen.getByRole('combobox', { name: 'Activity state' })).toHaveAccessibleDescription(
-      /^An inactive container never runs, and nothing inside it does/,
-    );
+    expect(screen.queryByRole('combobox', { name: 'Activity state' })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: 'Mark as' })).toBeNull();
+  });
+
+  it("shows Mark as on an inactive container, in the container's `?` wording", () => {
+    mountGeneral({ ...LOOP, state: 'inactive' });
     expect(screen.getByRole('combobox', { name: 'Mark as' })).toHaveAccessibleDescription(
       /^The outcome an inactive container records/,
     );
+  });
+
+  it('Deactivate container / Activate container switch it, outside Apply', () => {
+    const onGeneral = mountGeneral(LOOP);
+    fireEvent.click(screen.getByRole('button', { name: 'Deactivate container' }));
+    cleanup();
+    const back = mountGeneral({ ...LOOP, state: 'inactive' });
+    fireEvent.click(screen.getByRole('button', { name: 'Activate container' }));
+    expect(onGeneral.mock.calls).toEqual([[{ inactive: true }]]);
+    expect(back.mock.calls).toEqual([[{ inactive: false }]]);
   });
 
   it('writes each field through, outside Apply', () => {
@@ -723,16 +733,9 @@ describe('ContainerPanel — the General tab (#1600 C0e)', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Mark as' }), {
       target: { value: 'failure' },
     });
-    fireEvent.change(screen.getByRole('combobox', { name: 'Activity state' }), {
-      target: { value: 'active' },
-    });
     fireEvent.change(screen.getByRole('textbox', { name: 'Container description' }), {
       target: { value: 'x' },
     });
-    expect(onGeneral.mock.calls).toEqual([
-      [{ markAs: 'failure' }],
-      [{ inactive: false }],
-      [{ description: 'x' }],
-    ]);
+    expect(onGeneral.mock.calls).toEqual([[{ markAs: 'failure' }], [{ description: 'x' }]]);
   });
 });

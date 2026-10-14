@@ -34,6 +34,30 @@ function seeded() {
 }
 
 describe('runCanvasCommand (#1477)', () => {
+  it('deactivates and activates every selected activity as one undo step, counting the changes (#1694 OR42)', () => {
+    const store = seeded();
+    expect(runCanvasCommand(store, 'pl_1', 'deactivate')).toEqual({ taken: false });
+    store.getState().setNodesInactive(['b'], true);
+    store.getState().setSelection([
+      { kind: 'node', id: 'a' },
+      { kind: 'node', id: 'b' },
+      { kind: 'edge', id: 'e_ab' },
+    ]);
+    expect(runCanvasCommand(store, 'pl_1', 'deactivate')).toEqual({
+      taken: true,
+      notice: 'Deactivated 1 activity.',
+    });
+    const states = () => store.getState().nodes.map((n) => n.state ?? 'active');
+    expect(states()).toEqual(['inactive', 'inactive', 'active']);
+    expect(runCanvasCommand(store, 'pl_1', 'activate')).toEqual({
+      taken: true,
+      notice: 'Activated 2 activities.',
+    });
+    expect(states()).toEqual(['active', 'active', 'active']);
+    store.getState().undo();
+    expect(states()).toEqual(['inactive', 'inactive', 'active']);
+  });
+
   it('leaves copy, cut, duplicate and delete UNTAKEN with nothing selected, so the browser keeps ⌘C', () => {
     const store = seeded();
     for (const cmd of ['copy', 'cut', 'duplicate', 'delete'] as const) {

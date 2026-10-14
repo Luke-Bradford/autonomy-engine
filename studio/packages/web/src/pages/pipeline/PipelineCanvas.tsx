@@ -49,6 +49,7 @@ import {
   splitUnwritten,
   formatZodIssues,
   switchedOffNodeIds,
+  isInactive,
   getActivity,
   authorsCallBlob,
   type ActivePipelineVersion,
@@ -109,6 +110,7 @@ import type { ConnectionColumnRequest } from './connectionColumnRequest';
 import { ActivityToolbox } from './ActivityToolbox';
 import {
   createCanvasStore,
+  selectionAllInactive,
   singleSelection,
   type Selection,
   type CanvasState,
@@ -2905,6 +2907,7 @@ export function MultiSelectionPanel({
   onNotice: (message: string) => void;
 }) {
   const activities = selection.filter((s) => s.kind === 'node').length;
+  const allInactive = useStore(store, selectionAllInactive);
   const connections = selection.filter((s) => s.kind === 'edge').length;
   const parts = [
     `${activities} ${activities === 1 ? 'activity' : 'activities'}`,
@@ -2954,6 +2957,19 @@ export function MultiSelectionPanel({
         }}
       >
         Duplicate selection
+      </button>
+      {/* #1694 OR42 (#1680) — every selected activity off, as one undo step;
+          Activate once they all are, as the canvas's right-click says. */}
+      <button
+        type="button"
+        disabled={activities === 0}
+        onClick={() => {
+          const cmd = allInactive ? 'activate' : 'deactivate';
+          const result = runCanvasCommand(store, pipelineId, cmd);
+          if (result.taken && result.notice !== null) onNotice(result.notice);
+        }}
+      >
+        {allInactive ? 'Activate selection' : 'Deactivate selection'}
       </button>
       <button type="button" onClick={() => store.getState().deleteSelection()}>
         Delete selection
@@ -3521,6 +3537,8 @@ export function NodePanel({
    * type, for a node the doc no longer holds.
    */
   const nodeName = nodeNames.get(nodeId) ?? entry?.title ?? nodeType;
+  // #1694 OR42 — which way the `⋯` menu's switch goes.
+  const nodeInactive = docNodes.some((n) => n.id === nodeId && isInactive(n));
 
   // U7 — the per-activity form, derived from the activity's own `configSchema`
   // (see `configForm.ts` for why the schema, not hand-written metadata, is the
@@ -4304,6 +4322,19 @@ export function NodePanel({
                 {
                   label: 'Duplicate node',
                   onSelect: () => store.getState().duplicateNode(nodeId),
+                },
+                /* #1694 OR42 — the node's own switch, as the canvas's right-click
+                   Deactivate is the selection's: the General tab no longer
+                   carries the state. Ungated, like Duplicate and Delete. */
+                {
+                  label: nodeInactive ? 'Activate node' : 'Deactivate node',
+                  onSelect: () => {
+                    // Read at the click, not at render: an undo while the menu
+                    // was open must not turn Activate into a second Deactivate.
+                    const st = store.getState();
+                    const now = st.nodes.find((n) => n.id === nodeId);
+                    if (now !== undefined) st.setNodesInactive([nodeId], !isInactive(now));
+                  },
                 },
               ]}
               destructive={{
