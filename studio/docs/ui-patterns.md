@@ -841,12 +841,14 @@ row heights), not the layout.
   | L | the value column | free text, paths, expressions, JSON |
 
   `fieldSize` (`configForm.ts`) sets `data-size` on a config field, and a choice is S exactly where
-  `fieldSpan` packs it short. A choice must still show its longest option whole. Drawers and Settings keep
-  a select's natural width (above). A row table's cells are sized by its columns instead: a one-line
-  text column (`data-width="name"`, a mapping's source and sink, a key) has a `--row-table-name-min`
-  floor of 160px, and in a narrow dock the table scrolls sideways rather than crush it. An optional
-  choice cell's empty option is blank, because empty means its default; a required one keeps
-  "— none —". `e2e/property-pane-ratchet.spec.ts` holds the classes for every catalog type and tab.
+  `fieldSpan` packs it short: up to 12 characters, what 120px shows beside a select's arrow. A
+  schema choice shows its longest option whole; a binding lists the operator's own names, which an M
+  clips. Drawers and Settings keep a select's natural width (above). A row table's cells are sized
+  by its columns instead: a one-line text column (`data-width="name"`, a mapping's source and sink,
+  a key) has a `--row-table-name-min` floor of 160px, and in a narrow dock the table scrolls
+  sideways rather than crush it. An optional choice cell's empty option is blank, because empty
+  means its default; a required one keeps "— none —". `e2e/property-pane-ratchet.spec.ts` holds the
+  classes for every catalog type and tab.
 - **A unit is a suffix inside its box, not label text (#1694 OR42 item 5).** `30` `s`, through
   `WithUnit`/`UnitLabel` (`lib/form/UnitInput.tsx`), so a label is the title alone and never wraps. The
   unit stays in the field's accessible name, out of sight ("Timeout (seconds)"), so its name, its

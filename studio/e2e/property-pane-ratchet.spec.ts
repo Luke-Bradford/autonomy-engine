@@ -116,7 +116,8 @@ function readTab(page: Page): Promise<TabRead> {
     // or an M may only be narrower where its row is (`max-width: 100%`), never
     // stretched. A table's cells are sized by their columns. A Fluent combobox
     // is measured by its box, not its inner input. A choice must also show its
-    // longest option whole, beside its native arrow.
+    // longest option whole, beside its native arrow, where its options are
+    // the schema's.
     // The classes (`--field-s`, `--field-m`) and the slack either side. Here,
     // not module scope: this function runs in the page.
     const WIDTH = { s: 120, m: 240 } as Record<string, number>;
@@ -152,7 +153,9 @@ function readTab(page: Page): Promise<TabRead> {
         control.getAttribute('aria-label') ??
         control.tagName;
       if (!held) offSize.push(`${name} ${Math.round(box.width)}px, not ${expected.toUpperCase()}`);
-      if (control instanceof HTMLSelectElement) {
+      // A SCHEMA choice (marked by `fieldSize`) is a closed set, so it can be
+      // held whole; a binding lists the operator's own names, which an M clips.
+      if (control instanceof HTMLSelectElement && control.dataset.size !== undefined) {
         const style = getComputedStyle(control);
         ctx.font = style.font;
         const longest = Math.max(

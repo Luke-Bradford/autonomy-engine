@@ -71,7 +71,7 @@ export type ConfigFieldKind =
  * control (a number, a checkbox, a choice between short names) packs beside
  * others; free text, JSON, row lists and a choice with a long name take the
  * grid's whole width, rather than be clipped to a packed cell's ~130px control
- * column. 16 characters is about that column at the dock's 13px.
+ * column (`SHORT_CHOICE_CHARS`).
  */
 export function fieldSpan(
   field: Pick<ConfigField, 'kind' | 'enumOptions' | 'label'>,
@@ -82,7 +82,13 @@ export function fieldSpan(
   return shown.every((text) => text.length <= SHORT_CHOICE_CHARS) ? 'short' : 'long';
 }
 
-const SHORT_CHOICE_CHARS = 16;
+/**
+ * #1694 OR42 F10 — what an S box (`--field-s`, 120px) shows whole beside a
+ * native select's arrow at the dock's 13px. Measured: 82px of room, and
+ * "Metadata only" (13) needs 86px. It was 16, sized to a packed cell's ~130px
+ * control column, when a choice took its own width.
+ */
+const SHORT_CHOICE_CHARS = 12;
 
 /**
  * #1694 OR42 F10 — a control's SIZE CLASS in the property pane, set by what
