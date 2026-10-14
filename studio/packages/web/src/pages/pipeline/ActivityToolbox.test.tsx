@@ -35,8 +35,10 @@ function offeredNames(): string[] {
 }
 
 // #425 retired the structural-call exclusion, so every catalogued activity is
-// authorable — the name is kept because it still says what the list MEANS.
-const authorable = [...catalog.values()];
+// authorable — the name is kept because it still says what the list MEANS. An
+// `inPalette: false` type (#1600 C1a: `copy_files`) is reached from another
+// item's toggle, not the toolbox.
+const authorable = [...catalog.values()].filter((e) => e.inPalette !== false);
 
 describe('ActivityToolbox', () => {
   it('offers every generically-authorable activity, grouped under its category heading', () => {
@@ -68,7 +70,7 @@ describe('ActivityToolbox', () => {
     // `node.call` blob the generic config form could not, so the palette offers
     // the whole catalog and nothing is left unreachable from the canvas.
     const store = renderToolbox();
-    expect(offeredNames()).toHaveLength(catalog.size + CONTAINER_PALETTE.length);
+    expect(offeredNames()).toHaveLength(authorable.length + CONTAINER_PALETTE.length);
     fireEvent.click(screen.getByRole('button', { name: 'Execute pipeline' }));
     expect(store.getState().nodes[0]!.type).toBe('execute_pipeline');
   });

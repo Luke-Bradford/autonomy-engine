@@ -13,9 +13,22 @@ function typesOf(groups: ReturnType<typeof toolboxGroups>): string[] {
 }
 
 describe('toolboxGroups', () => {
+  // #1600 OR41 C1a — `copy_files` is Copy in Files as-is mode, reached by the
+  // dock's toggle: the toolbox offers ONE Copy, under any search.
+  it('never offers an inPalette:false type, even searched by its type id', () => {
+    expect(typesOf(toolboxGroups(''))).not.toContain('copy_files');
+    expect(typesOf(toolboxGroups('copy_files'))).toEqual([]);
+    expect(typesOf(toolboxGroups('copy'))).toContain('copy');
+  });
+
   it('offers EVERY catalogued activity, the structural-call one included (#425)', () => {
     const types = typesOf(toolboxGroups(''));
-    expect(types.sort()).toEqual([...catalog.values()].map((e) => e.type).sort());
+    expect(types.sort()).toEqual(
+      [...catalog.values()]
+        .filter((e) => e.inPalette !== false)
+        .map((e) => e.type)
+        .sort(),
+    );
     // `execute_pipeline` stores its settings in `node.call`, which the generic
     // config form cannot author — but `CallPanel` can, so the palette no longer
     // hides the one activity that composes pipelines out of pipelines.

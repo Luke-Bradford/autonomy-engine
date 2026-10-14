@@ -787,7 +787,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
      * on success and on a mid-copy failure.
      */
     type: COPY_FILES_ACTIVITY_TYPE,
-    title: 'Copy',
+    // `copy`'s title: one activity to an author, so a card does not rename
+    // itself when the toggle flips.
+    title: 'Copy data',
     description:
       'Copy files as they are, without parsing them, from one file connection to another.',
     kind: 'execution',

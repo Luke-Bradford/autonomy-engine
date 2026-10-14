@@ -237,6 +237,59 @@ describe('canvasStore', () => {
     expect(s.getState().dirty).toBe(true);
   });
 
+  // #1600 OR41 C1a — Copy's *Copy mode* toggle: Rows (`copy`) ⇄ Files as-is
+  // (`copy_files`). The modes share no settings, so the config starts fresh and
+  // the dataset bindings (rows only) go; the connection pair stays; one undo.
+  it('setCopyMode switches a copy node between rows and files as-is, in one undo step', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        nodes: [
+          {
+            id: 'n_c',
+            type: 'copy',
+            config: { mode: 'overwrite' },
+            connectionIds: { source: 'c_src', sink: 'c_sink' },
+            datasetIds: { source: 'd_src', sink: 'd_sink' },
+            position: { x: 10, y: 20 },
+          },
+          { id: 'n_b', type: 'llm_call', config: { prompt: 'p' }, position: { x: 100, y: 20 } },
+        ],
+        edges: [],
+      }),
+    );
+    const before = s.getState().nodes[0]!;
+
+    s.getState().setCopyMode('n_c', 'copy_files');
+    const switched = s.getState().nodes[0]!;
+    expect(switched.type).toBe('copy_files');
+    expect(switched.config['mode']).toBeUndefined();
+    expect(switched.connectionIds).toEqual({ source: 'c_src', sink: 'c_sink' });
+    expect('datasetIds' in switched).toBe(false);
+    expect(s.getState().dirty).toBe(true);
+
+    s.getState().undo();
+    expect(s.getState().nodes[0]).toEqual(before);
+    s.getState().redo();
+    expect(s.getState().nodes[0]!.type).toBe('copy_files');
+
+    // Back to rows, and the same-type no-op writes nothing.
+    s.getState().setCopyMode('n_c', 'copy');
+    expect(s.getState().nodes[0]!.type).toBe('copy');
+    const settled = s.getState().nodes;
+    s.getState().setCopyMode('n_c', 'copy');
+    expect(s.getState().nodes).toBe(settled);
+
+    // Never a type change the toggle cannot make: not a non-copy node, not a
+    // target outside the pair, not a missing node.
+    s.getState().setCopyMode('n_b', 'copy_files');
+    expect(s.getState().nodes[1]!.type).toBe('llm_call');
+    s.getState().setCopyMode('n_c', 'llm_call' as 'copy');
+    expect(s.getState().nodes[0]!.type).toBe('copy');
+    s.getState().setCopyMode('n_missing', 'copy_files');
+    expect(s.getState().nodes).toBe(settled);
+  });
+
   it('updateNodeCall sets, clears and undoes a call blob — and refuses a non-call node', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(null);
