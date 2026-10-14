@@ -3110,9 +3110,13 @@ button.danger {
   justify-self: start;
 }
 
-/* Clear of the suffix: its 8px inset, an 8px gap, and its own length
-   (`--unit-ch`, set by `WithUnit` as "5ch" for "bytes"). */
+/* A field with a unit is a quantity, so an S on every surface (Settings'
+   page is not one of the forms above), clear of the suffix: its 8px inset, an
+   8px gap, and its own length (`--unit-ch`, set by `WithUnit` as "5ch" for
+   "bytes"). */
 .input-unit > input {
+  width: var(--field-s);
+  max-width: 100%;
   padding-right: calc(var(--space-4) + var(--unit-ch));
 }
 

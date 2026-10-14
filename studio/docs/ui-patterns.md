@@ -852,8 +852,8 @@ row heights), not the layout.
 - **A unit is a suffix inside its box, not label text (#1694 OR42 item 5).** `30` `s`, through
   `WithUnit`/`UnitLabel` (`lib/form/UnitInput.tsx`), so a label is the title alone and never wraps. The
   unit stays in the field's accessible name, out of sight ("Timeout (seconds)"), so its name, its
-  `?` and its validation messages are unchanged. This applies to a top-level number or one-line field.
-  A table's column header keeps "(ms)".
+  `?` and its validation messages are unchanged. This applies to a top-level number or one-line
+  field, which is an S on every surface, Settings included. A table's column header keeps "(ms)".
 
 **A drawer has no two-column grid.** #1396 first asked for one on wide screens. At 460px two columns
 would make controls about 100px wide beside their labels, too narrow for a URL, a JSON box or a time
