@@ -397,7 +397,6 @@ async function writeTarget(
   return 'written';
 }
 
-/** Carries an already-built `failed` event (from `atomicReplace`) out of the copy loop. */
 /**
  * Refuse to delete or move a source that changed after it was read: another
  * inode now at the path, a different size or modified time, or fewer bytes
@@ -420,6 +419,22 @@ export async function unchangedSince(s: SourceFile, stamp: ReadStamp | undefined
   }
 }
 
+/**
+ * Flush a folder's entries to disk. `atomicReplace` fsyncs the file but not the
+ * rename's directory entry; that is fine while the source still exists, and not
+ * once After copy is about to remove it, when a power loss could otherwise
+ * lose both. So the folder holding the new copy is synced first.
+ */
+async function syncDir(path: string): Promise<void> {
+  const dir = await open(path, fsConstants.O_RDONLY);
+  try {
+    await dir.sync();
+  } finally {
+    await closeQuietly(dir);
+  }
+}
+
+/** Carries an already-built `failed` event (from `atomicReplace`) out of the copy loop. */
 class EventFailure extends Error {
   constructor(readonly event: ActivityEvent) {
     super('write failed');
@@ -550,6 +565,8 @@ export async function* runFilesCopy(
         continue;
       }
       // After copy, only for files that were written: a skipped file stays put.
+      // The copy's folder entry is durable before any source is removed.
+      if (cfg.afterCopy !== 'keep') await syncDir(parent);
       for (const s of t.sources) {
         if (cfg.afterCopy !== 'keep') await unchangedSince(s, stamps.get(s.abs));
         if (cfg.afterCopy === 'delete') {
@@ -577,6 +594,8 @@ export async function* runFilesCopy(
             }
             throw err;
           }
+          // And the moved entry is durable before the original goes.
+          await syncDir(dir);
           await unlink(s.abs);
           c.filesMoved += 1;
         }
