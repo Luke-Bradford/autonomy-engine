@@ -248,5 +248,14 @@ test.describe('U2 hub rail', () => {
       [FLUENT_PORTAL_ROOT, CANVAS_TOKEN],
     );
     expect(portalToken).not.toBe('');
+
+    // #1695 OR43 — and with a BOX of its own. The class Fluent copies onto the
+    // mount node is the one the bridge made `display: contents`, which voided
+    // the mount node's z-index and painted every overlay under the dock.
+    const box = await page.evaluate((sel) => {
+      const s = getComputedStyle(document.querySelector(sel)!);
+      return { display: s.display, zIndex: s.zIndex };
+    }, FLUENT_PORTAL_ROOT);
+    expect(box).toEqual({ display: 'block', zIndex: '1000000' });
   });
 });

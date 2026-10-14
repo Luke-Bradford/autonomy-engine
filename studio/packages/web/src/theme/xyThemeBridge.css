@@ -21,15 +21,23 @@
  * would silently fall back to RF's white light default — the exact bug this
  * bridge exists to kill.
  */
-.app-fluent-root {
-  /*
-   * Layout-neutral: the interposed provider element must not introduce a box or
-   * paint its own background over the MVP shell (non-breaking requirement). It
-   * still carries the token vars, and CSS custom properties inherit through a
-   * `display: contents` element.
-   */
+/*
+ * Layout-neutral: the interposed provider element must not introduce a box or
+ * paint its own background over the MVP shell (non-breaking requirement). It
+ * still carries the token vars, and CSS custom properties inherit through a
+ * `display: contents` element.
+ *
+ * The APP's provider only (#1695 OR43). Fluent copies the provider's class onto
+ * every portal mount node it appends to `<body>` (`data-portal-node`), and a
+ * `display: contents` mount node has no box, so its `z-index: 1000000` never
+ * applied: every menu, list, tooltip and dialog painted under any app surface
+ * with a positive `z-index` (the dock, its sticky tab strip, the drawers).
+ */
+.app-fluent-root:not([data-portal-node]) {
   display: contents;
+}
 
+.app-fluent-root {
   /* Canvas surface + background pattern. RF reads ONE override slot for the
      pattern colour (`--xy-background-pattern-color`), shared by the dots/lines/
      cross variants — the per-variant `-*-color` forms exist only as RF's own

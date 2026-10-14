@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HelpDisclosure } from './HelpDisclosure';
+import { placeNote } from './placeNote';
 
 function help() {
   const view = render(
@@ -89,5 +90,86 @@ describe('HelpDisclosure (#1484 M2 — the ? help)', () => {
     const details = screen.getByText('What the section holds.').closest('details');
     expect(details).toHaveClass('help-disclosure', 'help-disclosure--inline');
     expect(screen.getByRole('note')).toHaveAttribute('id', 'n_inline');
+  });
+});
+
+/** A box at `left, top`, `width` by `height`, as `getBoundingClientRect` gives it. */
+function rect(left: number, top: number, width: number, height: number): DOMRect {
+  return {
+    left,
+    top,
+    width,
+    height,
+    right: left + width,
+    bottom: top + height,
+    x: left,
+    y: top,
+    toJSON: () => ({}),
+  };
+}
+
+describe('placeNote (#1695 OR43 — the open note, in the top layer)', () => {
+  function place(
+    q: DOMRect,
+    note: { width: number; height: number },
+    opts: { inline?: DOMRect; viewport?: { width: number; height: number } } = {},
+  ) {
+    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(opts.viewport?.width ?? 1440);
+    vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(opts.viewport?.height ?? 900);
+    const row = document.createElement('div');
+    const details = document.createElement('details');
+    const span = document.createElement('span');
+    row.append(details);
+    details.append(span);
+    document.body.append(row);
+    vi.spyOn(details, 'getBoundingClientRect').mockReturnValue(q);
+    vi.spyOn(span, 'getBoundingClientRect').mockReturnValue(rect(0, 0, note.width, note.height));
+    if (opts.inline) {
+      vi.spyOn(row, 'getBoundingClientRect').mockReturnValue(opts.inline);
+      // jsdom has no layout, so no offsetParent: the row stands in for it.
+      Object.defineProperty(details, 'offsetParent', { value: row });
+    }
+    placeNote(details, span, opts.inline !== undefined);
+    const out = {
+      left: span.style.left,
+      top: span.style.top,
+      width: span.style.getPropertyValue('--help-anchor-width'),
+    };
+    row.remove();
+    return out;
+  }
+
+  it("opens under the ?, its right edge on the ?'s", () => {
+    expect(place(rect(600, 100, 16, 16), { width: 352, height: 60 })).toEqual({
+      left: `${616 - 352}px`,
+      top: '120px',
+      width: '',
+    });
+  });
+
+  it('opens above the ? when the room below is too short', () => {
+    // 860 + 4 + 60 > 900 - 8: flipped, its bottom 4px over the ?.
+    expect(place(rect(600, 840, 16, 16), { width: 352, height: 60 }).top).toBe(`${840 - 4 - 60}px`);
+  });
+
+  it('is held inside the viewport when neither side has the room', () => {
+    expect(
+      place(
+        rect(600, 40, 16, 16),
+        { width: 352, height: 120 },
+        { viewport: { width: 1440, height: 150 } },
+      ).top,
+    ).toBe(`${150 - 8 - 120}px`);
+  });
+
+  it('is held inside the viewport sideways', () => {
+    // Its right edge on the ?'s would put its left at -252.
+    expect(place(rect(84, 100, 16, 16), { width: 352, height: 60 }).left).toBe('8px');
+  });
+
+  it("inline: under its row, at the row's left and width", () => {
+    expect(
+      place(rect(900, 100, 16, 16), { width: 400, height: 60 }, { inline: rect(500, 90, 400, 28) }),
+    ).toEqual({ left: '500px', top: '122px', width: '400px' });
   });
 });
