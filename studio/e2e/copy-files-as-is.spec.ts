@@ -114,7 +114,7 @@ test.describe('#1600 C1a — Copy · Files as-is', () => {
       await expect(properties(page).getByRole('textbox', { name: 'Source path' })).toHaveValue(
         'in',
       );
-      await expectQuiet(problems);
+      await expectQuiet(page, problems);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
