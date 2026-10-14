@@ -27,7 +27,31 @@ import { nodeMenuAction, pickConnection, properties } from './support/panels';
 test.use({ viewport: { width: 1440, height: 900 } });
 
 /** Toolbox name → the most prose lines and `?`s its pane may show. Lower only. */
-const LIMITS: Record<string, { prose: number; help: number }> = {};
+const LIMITS: Record<string, { prose: number; help: number }> = {
+  'Copy data': { prose: 1, help: 10 },
+  'Copy file': { prose: 0, help: 8 },
+  'Delete file': { prose: 0, help: 7 },
+  'HTTP request': { prose: 1, help: 11 },
+  'List directory': { prose: 0, help: 7 },
+  'Lookup rows': { prose: 0, help: 6 },
+  'Move file': { prose: 0, help: 8 },
+  'Read file': { prose: 0, help: 7 },
+  'Write file': { prose: 0, help: 8 },
+  'Agent task': { prose: 1, help: 9 },
+  'LLM call': { prose: 3, help: 23 },
+  'Append variable': { prose: 1, help: 7 },
+  'Execute pipeline': { prose: 1, help: 5 },
+  Fail: { prose: 0, help: 6 },
+  Filter: { prose: 0, help: 7 },
+  'If condition': { prose: 0, help: 6 },
+  'Set variable': { prose: 1, help: 7 },
+  Switch: { prose: 0, help: 7 },
+  Wait: { prose: 0, help: 6 },
+  'Webhook (external wait)': { prose: 0, help: 6 },
+  ForEach: { prose: 3, help: 3 },
+  Until: { prose: 1, help: 4 },
+  Stage: { prose: 1, help: 1 },
+};
 
 interface TabRead {
   wideButtons: string[];
@@ -45,7 +69,8 @@ function readTab(page: Page): Promise<TabRead> {
       const box = el.getBoundingClientRect();
       return box.width > 0 && box.height > 0;
     };
-    const tabpanel = panel.querySelector('[role="tabpanel"]');
+    // The OPEN tab's panel: the others stay mounted, hidden.
+    const tabpanel = [...panel.querySelectorAll('[role="tabpanel"]')].find(visible) ?? null;
     const inTab = (el: Element) => tabpanel !== null && tabpanel.contains(el);
 
     const wideButtons: string[] = [];
@@ -216,7 +241,7 @@ test('Copy’s Mapping: Add row and Auto-map share one toolbar above the rows, A
         id: 'c',
         type: 'copy',
         position: { x: 0, y: 0 },
-        config: { mapping: [{ source: 'id', sink: 'id' }] },
+        config: { mapping: [{ source: 'id', sink: 'id', type: 'integer' }] },
       },
     ],
   });
