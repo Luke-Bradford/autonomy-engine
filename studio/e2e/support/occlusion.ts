@@ -1,4 +1,4 @@
-import { expect, type Locator } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 
 /**
  * #1695 OR43 — an open overlay (menu, popover, listbox, tooltip, dialog) is
@@ -66,4 +66,90 @@ export async function expectOverlayUnobstructed(overlay: Locator, what = 'overla
     return out;
   });
   expect(problems, `${what} is obstructed`).toEqual([]);
+}
+
+/**
+ * The overlay a trigger just opened: a Fluent menu, or any listbox (Combobox,
+ * Dropdown). The last one, because a submenu opens over its parent.
+ */
+export function openOverlay(page: Page): Locator {
+  return page.locator('.fui-MenuPopover:visible, [role="listbox"]:visible').last();
+}
+
+/**
+ * Every control in `scope` that opens a menu or a list, found by role rather
+ * than listed by hand, so a new one is covered the day it ships. A native
+ * `<select>` is left out: its list is drawn by the browser, above the page.
+ */
+export function popupTriggers(scope: Locator): Locator {
+  return scope.locator(
+    ':is([aria-haspopup="menu"], [aria-haspopup="true"], [role="combobox"]):not(select):visible:not(:disabled):not([aria-disabled="true"])',
+  );
+}
+
+/**
+ * #1695 OR43 — open every menu and list `scope` offers, one at a time, and
+ * assert each is unobstructed. Each is closed with Escape before the next.
+ * Returns how many were checked, so a caller can assert the sweep saw some.
+ */
+export async function expectEveryPopupUnobstructed(
+  page: Page,
+  scope: Locator,
+  what: string,
+): Promise<number> {
+  const triggers = popupTriggers(scope);
+  const count = await triggers.count();
+  for (let i = 0; i < count; i += 1) {
+    const trigger = triggers.nth(i);
+    const name = (await trigger.getAttribute('aria-label')) ?? (await trigger.innerText()).trim();
+    await trigger.scrollIntoViewIfNeeded();
+    await trigger.click();
+    const overlay = openOverlay(page);
+    await expectOverlayUnobstructed(overlay, `${what}: ${name}`);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.fui-MenuPopover:visible, [role="listbox"]:visible')).toHaveCount(0);
+  }
+  return count;
+}
+
+/**
+ * #1695 OR43 — open every `?` help note in `scope` and assert each is
+ * unobstructed. The note is the disclosure's `role="note"` span.
+ */
+export async function expectEveryHelpNoteUnobstructed(scope: Locator, what: string): Promise<number> {
+  const summaries = scope.locator('details.help-disclosure > summary:visible');
+  const count = await summaries.count();
+  for (let i = 0; i < count; i += 1) {
+    const summary = summaries.nth(i);
+    const name = (await summary.getAttribute('aria-label')) ?? '?';
+    await summary.scrollIntoViewIfNeeded();
+    await summary.click();
+    const note = summary.locator('xpath=..').locator(':scope > [role="note"]');
+    await expectOverlayUnobstructed(note, `${what}: ${name}`);
+    await summary.click();
+    await expect(note).toBeHidden();
+  }
+  return count;
+}
+
+/**
+ * #1695 OR43 — hover each of `triggers` and assert the tooltip it raises is
+ * unobstructed. A trigger that raises none fails: a tooltip that never shows
+ * cannot be checked, and the list is meant to hold only tooltip triggers.
+ */
+export async function expectEveryTooltipUnobstructed(
+  page: Page,
+  triggers: Locator,
+  what: string,
+): Promise<number> {
+  const count = await triggers.count();
+  for (let i = 0; i < count; i += 1) {
+    const trigger = triggers.nth(i);
+    await trigger.hover();
+    const tip = page.getByRole('tooltip').filter({ visible: true }).last();
+    await expectOverlayUnobstructed(tip, `${what}: tooltip ${i + 1}`);
+    await page.mouse.move(0, 0);
+    await expect(page.getByRole('tooltip').filter({ visible: true })).toHaveCount(0);
+  }
+  return count;
 }
