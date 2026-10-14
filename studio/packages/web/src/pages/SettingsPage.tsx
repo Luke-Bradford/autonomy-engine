@@ -73,7 +73,8 @@ function RunDefaults() {
         <FieldGrid className="field-stack">
           <FieldCell span="short">
             <DraftNumberField
-              label="Activity timeout (seconds)"
+              label="Activity timeout"
+              unit="seconds"
               stored={settings.defaultActivityTimeoutSeconds ?? undefined}
               parse={parseTimeoutSeconds}
               placeholder="none"

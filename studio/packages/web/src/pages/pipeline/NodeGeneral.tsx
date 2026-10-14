@@ -143,6 +143,7 @@ export function GeneralBasics({
               {(id, describedBy) => (
                 <select
                   id={id}
+                  data-size="s"
                   aria-describedby={describedBy}
                   value={markAs}
                   onChange={(e) => onMarkAs(InactiveMarkAsSchema.parse(e.target.value))}

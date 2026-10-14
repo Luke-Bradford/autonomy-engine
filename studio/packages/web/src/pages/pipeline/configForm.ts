@@ -83,6 +83,30 @@ export function fieldSpan(
 
 const SHORT_CHOICE_CHARS = 16;
 
+/**
+ * #1694 OR42 F10 — a control's SIZE CLASS in the property pane, set by what
+ * the field holds, never by the width of whatever it sits in (`index.css`,
+ * `--field-s`/`--field-m`):
+ *
+ *  - `s` (~120px) — a quantity or a short choice: a number, a field with a
+ *    unit (Wait's seconds, which also takes an expression), and an enum that
+ *    `fieldSpan` packs as short. One rule for both, so a packed choice is
+ *    never a 240px box clamped into a 130px column.
+ *  - `m` (~240px) — a name: a longer choice, and a one-line LITERAL, which
+ *    is an identifier (a variable name), never an expression.
+ *  - `l` — everything else (free text, paths, expressions, JSON): the grid's
+ *    whole value column.
+ */
+export function fieldSize(
+  field: Pick<ConfigField, 'kind' | 'enumOptions' | 'label' | 'literal' | 'singleLine'>,
+): 's' | 'm' | 'l' {
+  if (field.kind === 'number') return 's';
+  if (field.kind === 'enum') return fieldSpan(field) === 'short' ? 's' : 'm';
+  if (field.kind !== 'text' || field.singleLine !== true) return 'l';
+  if (field.label?.unit !== undefined) return 's';
+  return field.literal === true ? 'm' : 'l';
+}
+
 /** One bound of a number field; an exclusive one only ever on a decimal. */
 export interface NumberBound {
   readonly value: number;
