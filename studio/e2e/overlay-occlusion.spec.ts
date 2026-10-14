@@ -61,7 +61,8 @@ for (const viewport of VIEWPORTS) {
 
       // The canvas's own right-click menu, on the empty pane.
       const pane = await openFrom(page, () =>
-        page.locator('.react-flow__pane').click({ button: 'right' }),
+        // In a corner: an empty canvas centres its starter card.
+        page.locator('.react-flow__pane').click({ button: 'right', position: { x: 24, y: 24 } }),
       );
       await expectOverlayUnobstructed(pane, 'canvas context menu');
       await page.keyboard.press('Escape');
