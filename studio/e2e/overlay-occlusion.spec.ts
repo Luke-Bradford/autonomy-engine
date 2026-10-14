@@ -12,6 +12,8 @@ import {
   openOverlay,
 } from './support/occlusion';
 import { answerConfirm } from './support/confirmDialog';
+import { createPipelineFromList } from './support/pipelinesPage';
+import { chooseRowAction } from './support/rowMenu';
 
 /**
  * #1695 OR43 — every overlay renders on top.
@@ -167,11 +169,13 @@ for (const viewport of VIEWPORTS) {
     const tipped = page.locator('.hub-rail a, .command-bar button[aria-label]').filter({ visible: true });
     expect(await expectEveryTooltipUnobstructed(page, tipped, 'shell')).toBeGreaterThan(3);
 
-    // A dialog: the confirmation a row's Delete raises, answered Cancel.
+    // A dialog: the confirmation a new pipeline's Delete raises, answered
+    // Cancel. New, because one with run history refuses without asking.
     await page.goto('/#/author/pipelines');
-    const row = page.getByRole('row').filter({ has: page.getByRole('button', { name: /^Actions for / }) }).first();
-    await row.getByRole('button', { name: /^Actions for / }).click();
-    await page.getByRole('menuitem', { name: /^Delete/ }).click();
+    const name = `or43 dialog ${viewport.width} ${Date.now()}`;
+    await createPipelineFromList(page, name);
+    await page.goto('/#/author/pipelines');
+    await chooseRowAction(page.getByRole('row').filter({ hasText: name }), 'Delete');
     await expectOverlayUnobstructed(page.getByRole('alertdialog'), 'Delete confirmation');
     await answerConfirm(page, 'cancel');
     await expectQuiet(page, problems);
