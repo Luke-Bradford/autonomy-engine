@@ -33,7 +33,7 @@ export function WithUnit({ unit, children }: { unit: string | undefined; childre
   // The box keeps clear of the suffix by its length, so a long value never
   // runs under "bytes" (`--unit-ch`, `index.css`).
   return (
-    <span className="input-unit" style={{ '--unit-ch': suffix.length } as CSSProperties}>
+    <span className="input-unit" style={{ '--unit-ch': `${suffix.length}ch` } as CSSProperties}>
       {children}
       <span className="input-unit__suffix" aria-hidden="true">
         {suffix}
