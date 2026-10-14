@@ -25,9 +25,11 @@ import {
   SWITCH_ACTIVITY_TYPE,
   WAIT_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
+  COPY_FILES_ACTIVITY_TYPE,
 } from './types.js';
 import { agentTaskConfigSchema } from './agent-config.js';
 import { copyDispatchInputSchema, copyInputSchema } from './copy-config.js';
+import { copyFilesConfigSchema } from './copy-files-config.js';
 import { llmCallConfigSchema } from './llm-config.js';
 import {
   fileCopyConfigSchema,
@@ -690,7 +692,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     type: COPY_ACTIVITY_TYPE,
     title: 'Copy data',
     description:
-      'Copy rows from a source dataset into a sink dataset, mapping columns between them.',
+      'Copy rows from a source dataset into a sink dataset, mapping columns between them, or copy files as they are.',
     kind: 'execution',
     category: 'general',
     tabs: [
@@ -762,6 +764,73 @@ const ENTRIES: ActivityCatalogEntry[] = [
     ],
     configSchema: copyInputSchema,
     dispatchConfigSchema: copyDispatchInputSchema,
+  },
+  {
+    /*
+     * #1600 OR41 C1a — Copy · Files as-is (activity catalogue §4.1): bytes from
+     * one `fs` connection to another, by file, folder + wildcard or file list,
+     * with copy behaviour, if-exists and after-copy options. The SAME Copy to
+     * an author: the palette offers only `copy` (`inPalette: false` here), and
+     * the dock's *Copy* toggle switches a node between the two types. Why a
+     * type and not a mode field: `copy-files-config.ts`.
+     *
+     * PAIRED on connections (`sinkConnectionKinds`), so the executor resolves
+     * `connectionIds.{source,sink}` and dispatches on the SOURCE kind, exactly
+     * as `copy` does. NOT dataset-bound: no `datasetKinds`, so a stray
+     * `datasetIds` stays inert. `idempotent: false` on `copy`'s argument: a
+     * crash mid-copy may have written, deleted or moved some files, so boot
+     * recovery freezes the node rather than re-running it.
+     *
+     * Outputs: the file and byte counters §4.1 lists, never the row outputs (a
+     * `rowsWritten` of 0 would count as "wrote nothing" in the run's rows
+     * total, `rowsWrittenFromLog`). All required: the adapter yields every one
+     * on success and on a mid-copy failure.
+     */
+    type: COPY_FILES_ACTIVITY_TYPE,
+    // `copy`'s title: one activity to an author, so a card does not rename
+    // itself when the toggle flips.
+    title: 'Copy data',
+    description:
+      'Copy files as they are, without parsing them, from one file connection to another.',
+    kind: 'execution',
+    category: 'general',
+    inPalette: false,
+    tabs: [
+      {
+        key: 'source',
+        bindings: ['sourceConnection'],
+        fields: [
+          'sourcePath',
+          'pathType',
+          'wildcard',
+          'recursive',
+          'fileListPath',
+          'modifiedStart',
+          'modifiedEnd',
+          'afterCopy',
+          'moveTo',
+        ],
+      },
+      {
+        key: 'sink',
+        bindings: ['sinkConnection'],
+        fields: ['sinkFolder', 'sinkFileName', 'copyBehavior', 'ifExists'],
+      },
+    ],
+    idempotent: false,
+    connectionKinds: ['fs'],
+    sinkConnectionKinds: ['fs'],
+    outputs: [
+      out('filesRead', 'number'),
+      out('filesWritten', 'number'),
+      out('filesSkipped', 'number'),
+      out('filesDeleted', 'number'),
+      out('filesMoved', 'number'),
+      out('bytesRead', 'number'),
+      out('bytesWritten', 'number'),
+    ],
+    configSchema: copyFilesConfigSchema,
+    dispatchConfigSchema: copyFilesConfigSchema,
   },
   {
     /**

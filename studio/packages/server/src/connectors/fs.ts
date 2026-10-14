@@ -3,6 +3,7 @@ import { open, opendir, realpath, rename, stat, unlink } from 'node:fs/promises'
 import { z } from 'zod';
 import {
   COPY_ACTIVITY_TYPE,
+  COPY_FILES_ACTIVITY_TYPE,
   LOOKUP_ACTIVITY_TYPE,
   FILE_COPY_ACTIVITY_TYPE,
   FILE_DELETE_ACTIVITY_TYPE,
@@ -22,6 +23,14 @@ import {
   type DatasetKind,
 } from '@autonomy-studio/shared';
 import { DatasetIoError } from './dataset-io-error.js';
+import {
+  atomicReplace,
+  closeQuietly,
+  failFromError,
+  makeTmpSuffix,
+  streamInto,
+} from './fs-write.js';
+import { DEFAULT_MAX_LIST_ENTRIES, DEFAULT_MAX_READ_BYTES } from './fs-select.js';
 import { runLookupActivity } from './lookup.js';
 import type { SourceIo } from './source-io.js';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter, ResolvedDataset } from './types.js';
@@ -34,12 +43,13 @@ import { O_NOFOLLOW, resolveWithinRoots } from './confine.js';
 // #1165 M7 slice 2 — the connection schema and the errno classifier moved OUT
 // to `fs-connection.ts` so the `delimited` store reader can re-validate and
 // classify WITHOUT importing this adapter, which slice 3 makes import IT.
-import { classifyFsError, fsConnectionConfigSchema, notAnFsKind } from './fs-connection.js';
+import { fsConnectionConfigSchema, notAnFsKind } from './fs-connection.js';
 // #1167 M7 slice 3 — `fs` becomes a STORE. The copy arm below pairs this
 // adapter's `delimited` reader with sqlite's writer, so the import direction is
 // `fs.ts` -> `delimited-io.ts` + `sqlite.ts` -> `copy.ts`. NOT a cycle: `copy.ts`
 // imports neither store, which is the property its own docblock protects.
 import { runCopyActivity } from './copy.js';
+import { runFilesCopy } from './fs-files-copy.js';
 import { refuseForeignSink, writeRowsToSink } from './copy-sink.js';
 import {
   describeExcelDatasetColumns,
@@ -57,7 +67,6 @@ import {
 // absolute-root refinement that `node:path` cannot express in a browser-safe
 // package, so this arm's sink gate is the SAME check `sqlite.ts`'s own arm makes
 // rather than a weaker one that leans on the writer re-parsing.
-import { FS_STREAM_CHUNK_BYTES } from '../limits.js';
 
 /**
  * The `fs` connector adapter (#4 A11 + A12) — the FIRST non-http/LLM connector,
@@ -119,37 +128,11 @@ import { FS_STREAM_CHUNK_BYTES } from '../limits.js';
  * NOT retry unless we positively recognise the condition as transient.
  */
 
-/** Default read size cap (bytes) — bounds a huge file from OOM-ing a worker. */
-const DEFAULT_MAX_READ_BYTES = 10 * 1024 * 1024; // 10 MiB
-
-/**
- * Default `file_list` entry cap — bounds a pathological directory (millions of
- * entries) from producing an unbounded `entries` output / OOM-ing a worker. The
- * adapter iterates lazily via `opendir` and STOPS at the cap (a `permanent`
- * failure), so it never materialises more than this many dirents.
- */
-const DEFAULT_MAX_LIST_ENTRIES = 10_000;
-
 // The per-activity input shapes are the SHARED `file*ConfigSchema` (#578): the
 // SAME schema the catalog `configSchema` and `dispatchConfigSchema` declare
 // (`shared/catalog/fs-activity-config.ts`), imported here so the palette, the
 // save gate (#1480) and this live-request guard can never drift. `input` here
 // is the node's prepared (substituted) value.
-
-/**
- * Map a thrown fs error to a terminal `failed` event.
- *
- * The classification itself is `classifyFsError` (`fs-connection.ts`), shared
- * with the `delimited` store reader so the two cannot disagree about whether a
- * given errno is retryable. This wrapper adds only the ACTIVITY-shaped part: an
- * abort reports a fixed sentence rather than whatever errno the unwinding
- * syscall happened to raise.
- */
-function failFromError(err: unknown, signal: AbortSignal): ActivityEvent {
-  const kind = classifyFsError(err, signal);
-  if (kind === 'cancelled') return failed('cancelled', 'file activity aborted');
-  return failed(kind, err instanceof Error ? err.message : String(err));
-}
 
 /**
  * What an abort BEFORE any dispatch is called, per activity.
@@ -164,22 +147,12 @@ function failFromError(err: unknown, signal: AbortSignal): ActivityEvent {
  */
 const ABORT_REASONS: Readonly<Record<string, string>> = {
   [COPY_ACTIVITY_TYPE]: 'dataset copy aborted',
+  [COPY_FILES_ACTIVITY_TYPE]: 'file copy aborted',
   [LOOKUP_ACTIVITY_TYPE]: 'dataset lookup aborted',
 };
 
 function abortedReason(activityType: string): string {
   return ABORT_REASONS[activityType] ?? 'file activity aborted';
-}
-
-/** Close a file handle, swallowing a close error so it never masks the result. */
-async function closeQuietly(fh: Awaited<ReturnType<typeof open>> | undefined): Promise<void> {
-  try {
-    await fh?.close();
-  } catch {
-    // A close failure after the read/write already produced its terminal event
-    // is not itself a classifiable activity outcome — never let it escape (and
-    // turn a `succeeded` into an unclassified throw).
-  }
 }
 
 /** The confined canonical path, or the terminal `failed` event to yield instead. */
@@ -219,17 +192,6 @@ async function resolveSourceDest(
   return { ok: true, source: s.path, dest: d.path };
 }
 
-/**
- * A per-dispatch temp-file suffix (filename-safe), unique per (run,node,attempt)
- * so two DIFFERENT runs dispatching the same node/attempt id concurrently against
- * the same fs root cannot collide on a temp name (which `O_EXCL` would otherwise
- * turn into a spurious failure). `runId` is globally unique per run, so
- * `runId.nodeId.attemptId` is unique per write. Shared by `file_write`+`file_copy`.
- */
-function makeTmpSuffix(ctx: ActivityContext): string {
-  return `${ctx.runId}.${ctx.nodeId}.${ctx.attemptId}`.replace(/[^\w.-]/g, '_');
-}
-
 async function doRead(
   cfg: z.infer<typeof fsConnectionConfigSchema>,
   requested: string,
@@ -256,71 +218,6 @@ async function doRead(
     return failFromError(err, signal);
   } finally {
     await closeQuietly(fh);
-  }
-}
-
-/**
- * Crash-safe atomic replace, shared by `file_write` (writes a string) and
- * `file_copy` (streams a source file): create a FRESH sibling temp, hand it to
- * `writeInto`, `fsync` it, close it, then atomically `rename` it over
- * `finalPath`. A crash/cancel before the rename leaves the target fully OLD,
- * never torn; the temp is unlinked on every non-renamed exit. The temp lives in
- * the SAME canonical, already-contained parent dir, so the rename is a
- * same-filesystem atomic op (no EXDEV) and never crosses the root boundary.
- * `tmpSuffix` is unique per dispatch attempt; `O_EXCL` refuses to reuse a stale
- * temp, and `O_NOFOLLOW` keeps the temp create symlink-safe.
- *
- * Returns `undefined` on success (the caller builds the `succeeded` event with
- * its own outputs), or a terminal `failed` event mapping the error.
- */
-async function atomicReplace(
-  finalPath: string,
-  tmpSuffix: string,
-  signal: AbortSignal,
-  writeInto: (fh: Awaited<ReturnType<typeof open>>) => Promise<void>,
-): Promise<ActivityEvent | undefined> {
-  const tmpPath = `${finalPath}.tmp.${tmpSuffix}`;
-  let fh: Awaited<ReturnType<typeof open>> | undefined;
-  let renamed = false;
-  try {
-    fh = await open(
-      tmpPath,
-      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | O_NOFOLLOW,
-      0o644,
-    );
-    await writeInto(fh);
-    // `fsync` the temp BEFORE the rename so the bytes are durable on disk first —
-    // otherwise a power-loss crash right after the rename could expose the new
-    // dir entry pointing at unflushed (zero-length) data on a filesystem without
-    // ordered metadata journaling. This is also where a deferred-allocation
-    // ENOSPC surfaces. (Residual, accepted: the parent directory is NOT fsync'd,
-    // so the rename itself is not guaranteed durable across a crash — worst case
-    // the target keeps its OLD content, never a torn/partial file.)
-    await fh.sync();
-    // Close BEFORE the rename — and let a close error PROPAGATE (unlike the
-    // read/cleanup path's quiet close): a delayed-write failure surfacing only at
-    // `close()` (a known POSIX/NFS mode) means the temp is INCOMPLETE, so the
-    // write must fail and NOT rename a corrupt file over the target. The
-    // `finally` still runs (temp unlinked), and `fh` stays set so `closeQuietly`
-    // there is a safe best-effort second close.
-    await fh.close();
-    fh = undefined;
-    await rename(tmpPath, finalPath);
-    renamed = true;
-    return undefined;
-  } catch (err) {
-    return failFromError(err, signal);
-  } finally {
-    await closeQuietly(fh);
-    // Best-effort cleanup: if we created the temp but never renamed it away
-    // (error/cancel), remove it so a failed write leaves no orphan behind.
-    if (!renamed) {
-      try {
-        await unlink(tmpPath);
-      } catch {
-        // Nothing to clean up (temp never created) or already gone — ignore.
-      }
-    }
   }
 }
 
@@ -376,21 +273,8 @@ async function doCopy(
     src = source;
     const st = await source.stat();
     if (!st.isFile()) return failed('permanent', `source '${sourcePath}' is not a regular file`);
-    const buffer = Buffer.allocUnsafe(FS_STREAM_CHUNK_BYTES);
     const failure = await atomicReplace(destPath, tmpSuffix, signal, async (dst) => {
-      for (;;) {
-        if (signal.aborted) throw new Error('file copy aborted');
-        const { bytesRead } = await source.read(buffer, 0, buffer.length, null);
-        if (bytesRead === 0) break;
-        // A single `write` may be short (a full/slow FS), so loop until the whole
-        // chunk lands — never silently drop the tail or over-count `bytesWritten`.
-        let off = 0;
-        while (off < bytesRead) {
-          const { bytesWritten: w } = await dst.write(buffer, off, bytesRead - off);
-          off += w;
-        }
-        bytesWritten += bytesRead;
-      }
+      bytesWritten = await streamInto(source, dst, signal);
     });
     if (failure) return failure;
     return { type: 'succeeded', outputs: { bytesWritten, source: sourcePath, dest: destPath } };
@@ -630,6 +514,13 @@ export const fsAdapter: ConnectorAdapter = {
     }
     if (ctx.signal.aborted) {
       yield failed('cancelled', abortedReason(ctx.activityType));
+      return;
+    }
+
+    // #1600 OR41 C1a — Copy · Files as-is. Its own arm: it reads no dataset
+    // and shares nothing with the rows copy below but the connection.
+    if (ctx.activityType === COPY_FILES_ACTIVITY_TYPE) {
+      yield* runFilesCopy(ctx, cfg.data);
       return;
     }
 

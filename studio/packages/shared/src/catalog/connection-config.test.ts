@@ -306,6 +306,16 @@ describe('#1119 M4 — config keys no per-dispatch override may set', () => {
     expect(isNonOverridableConnectionConfigKey('postgres', 'writable')).toBe(true);
   });
 
+  it('closes the fs write permission too, and leaves it absent = read-only (#1600 C1a)', () => {
+    // Copy · Files as-is refuses a sink (or a delete/move source) without it, so
+    // an override that could set it would grant itself writes.
+    expect(isNonOverridableConnectionConfigKey('fs', 'writable')).toBe(true);
+    expect(fsConnectionConfigSchema.parse({ roots: ['/data'] }).writable).toBeUndefined();
+    expect(fsConnectionConfigSchema.parse({ roots: ['/data'], writable: true }).writable).toBe(
+      true,
+    );
+  });
+
   it('leaves ordinary settings overridable', () => {
     expect(isNonOverridableConnectionConfigKey('anthropic_api', 'model')).toBe(false);
     expect(isNonOverridableConnectionConfigKey('http', 'baseUrl')).toBe(false);

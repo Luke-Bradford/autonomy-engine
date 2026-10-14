@@ -14,3 +14,4 @@ export * from './dataset-config.js';
 // #996 M5 slice 1 — the `copy` activity's mapping declaration (§6.1). Landing
 // ahead of its consumer: slice 3's `copyConfigSchema` embeds it.
 export * from './copy-config.js';
+export * from './copy-files-config.js';

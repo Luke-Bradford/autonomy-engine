@@ -4,6 +4,7 @@ import {
   APPEND_VARIABLE_ACTIVITY_TYPE,
   catalog,
   COPY_ACTIVITY_TYPE,
+  COPY_FILES_ACTIVITY_TYPE,
   EXECUTE_PIPELINE_ACTIVITY_TYPE,
   FAIL_ACTIVITY_TYPE,
   FILE_COPY_ACTIVITY_TYPE,
@@ -110,6 +111,12 @@ const CASES: Record<string, [Node, string]> = {
     'delete tmp/x',
   ],
   [FILE_LIST_ACTIVITY_TYPE]: [node(FILE_LIST_ACTIVITY_TYPE, { config: { path: 'in' } }), 'in'],
+  [COPY_FILES_ACTIVITY_TYPE]: [
+    node(COPY_FILES_ACTIVITY_TYPE, {
+      config: { sourcePath: 'inbox', sinkFolder: 'archive', afterCopy: 'move', moveTo: 'done' },
+    }),
+    'inbox → archive · move source',
+  ],
   [COPY_ACTIVITY_TYPE]: [
     node(COPY_ACTIVITY_TYPE, {
       config: { mode: 'overwrite' },

@@ -124,6 +124,16 @@ test.afterAll(async ({ request }) => {
   }
 });
 
+/**
+ * #1689 — a reading that waits on `POST /api/workspace/git/sync` after a
+ * reload, a focus or a navigation. In CI each sync costs 3–6 s against the
+ * suite's accumulated workspace (~300 pipelines), and the editor starts up to
+ * three overlapping ones of which only the newest is applied, so the default
+ * 5 s timeout fails while the product is still right. A tolerance until #1689
+ * single-flights the sync; not the fix.
+ */
+const SYNC_SETTLES = { timeout: 20_000 };
+
 test('a workspace connects to a repo, commits itself, imports it back, and disconnects', async ({
   page,
 }) => {
@@ -131,7 +141,8 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   // bare repo, over a workspace every earlier spec has filled. On CI it ran 31s
   // against the 30s default once #1476 slice 6 added a commit, a push and a
   // check (measured from the trace: the last assertion began at 29.6s).
-  test.setTimeout(90_000);
+  // 150 s, not 90: up to six readings wait on a CI git sync (`SYNC_SETTLES`, #1689).
+  test.setTimeout(150_000);
   const problems = collectPageProblems(page);
 
   /**
@@ -329,7 +340,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   const gitPart = page.getByRole('group', { name: 'Pipeline state' }).locator('[data-part="git"]');
   // #1476 slice 6 — and it came in from main, so it is not on the working
   // branch: uncommitted, in amber, with the reason in the detail.
-  await expect(gitPart).toHaveText(/^\S+ → main · from [0-9a-f]{7} · uncommitted\./);
+  await expect(gitPart).toHaveText(/^\S+ → main · from [0-9a-f]{7} · uncommitted\./, SYNC_SETTLES);
   await expect(gitPart).toHaveAttribute('data-tone', 'warning');
   await expect(gitPart).toHaveAttribute('title', /was imported from commit [0-9a-f]{7}/);
   await expect(gitPart).toHaveAttribute(
@@ -452,7 +463,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await expect(prLink).toHaveAttribute('href', 'https://github.com/acme/widgets/pull/7');
   await expect(prLink).toHaveAttribute('target', '_blank');
   await expect(prLink).toHaveAttribute('rel', 'noopener noreferrer');
-  await expect(gitPart).toHaveText(/ · uncommitted · PR #7\./);
+  await expect(gitPart).toHaveText(/ · uncommitted · PR #7\./, SYNC_SETTLES);
   await expect(gitPart).toHaveAttribute('title', /Pull request #7 is open from \S+ \(checked /);
   await page.setViewportSize({ width: 1280, height: 720 });
   await expect(page.locator('.editor-state-badge__part[data-part="git"]')).toHaveCount(0);
@@ -505,7 +516,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await page.unroute(gitStatusUrl);
   // And the next focus reads the real state again.
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect(gitPart).toHaveText(/ · uncommitted\./);
+  await expect(gitPart).toHaveText(/ · uncommitted\./, SYNC_SETTLES);
   await expect(gitPart).toHaveAttribute('data-tone', 'warning');
 
   /**
@@ -535,7 +546,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
     'v1 is the active (published) version, and is the latest saved version.',
   );
   await expect(rowPart(publishName, 'live')).toHaveAttribute('data-tone', 'success');
-  await expect(rowPart(publishName, 'git')).toHaveText(/^uncommitted\./);
+  await expect(rowPart(publishName, 'git')).toHaveText(/^uncommitted\./, SYNC_SETTLES);
   await expect(rowPart(publishName, 'git')).toHaveAttribute(
     'title',
     'This pipeline is not on studio/local/work yet.',
@@ -658,7 +669,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await page.getByRole('button', { name: 'Commit' }).click();
   await expect(page.getByRole('status')).toContainText('Committed');
   await openExistingCanvas(page, publishName);
-  await expect(gitPart).toHaveText(/ · in sync\./);
+  await expect(gitPart).toHaveText(/ · in sync\./, SYNC_SETTLES);
   await expect(gitPart).toHaveAttribute('data-tone', 'neutral');
   await expect(gitPart).toHaveAttribute(
     'title',
@@ -670,7 +681,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await incoming.getByRole('button', { name: 'Check for incoming' }).click();
   await expect(incoming).toContainText(`${pipelineName}-later`);
   await openExistingCanvas(page, publishName);
-  await expect(gitPart).toHaveText(/ · behind main — pull first\./);
+  await expect(gitPart).toHaveText(/ · behind main — pull first\./, SYNC_SETTLES);
   await expect(gitPart).toHaveAttribute('data-tone', 'warning');
   await expect(gitPart).toHaveAttribute(
     'title',

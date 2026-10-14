@@ -7,6 +7,7 @@ import {
   APPEND_VARIABLE_ACTIVITY_TYPE,
   callDetaches,
   COPY_ACTIVITY_TYPE,
+  COPY_FILES_ACTIVITY_TYPE,
   EXECUTE_PIPELINE_ACTIVITY_TYPE,
   FAIL_ACTIVITY_TYPE,
   FILE_COPY_ACTIVITY_TYPE,
@@ -120,6 +121,15 @@ export function activitySummary(
       // `append` is the default and says nothing; `overwrite` deletes, and a
       // destructive step should say so on its face.
       return line !== null && c.mode === 'overwrite' ? `${line} · overwrite` : line;
+    }
+    case COPY_FILES_ACTIVITY_TYPE: {
+      // An empty sink folder is the connection's first allowed folder.
+      const to = joined([text(c.sinkFolder), text(c.sinkFileName)], '/') ?? 'sink root';
+      const line = arrow(text(c.sourcePath), to);
+      // Keep is the default and says nothing; delete and move change the source.
+      const after =
+        c.afterCopy === 'delete' ? 'delete source' : c.afterCopy === 'move' ? 'move source' : null;
+      return line !== null && after !== null ? `${line} · ${after}` : line;
     }
     case LOOKUP_ACTIVITY_TYPE:
       return prefixed('from ', dataset(node.datasetIds?.source, datasetName));

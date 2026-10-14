@@ -114,6 +114,18 @@ export const fsConnectionConfigSchema = z.object({
     title: 'Most entries listed',
     description: 'The cap on one directory listing. Defaults to 10000.',
   }),
+  /**
+   * #1600 OR41 C1a — whether Copy (files as-is) may write into this store, and
+   * delete or move its files after a copy. Absent = it may not: a permission
+   * is withheld until someone grants it, sqlite's rule. The older file_*
+   * activities do not read it (they keep the behaviour their saved versions
+   * ran with, catalogue §8); every write path the catalogue adds does.
+   */
+  writable: presented(z.boolean().optional(), {
+    title: 'Allow writes',
+    description:
+      'Lets Copy (files as-is) write files here, and delete or move them after a copy. Unticked, it only reads. The older file activities (Write, Copy, Move and Delete file) do not check it yet.',
+  }),
 });
 
 /**
@@ -663,7 +675,8 @@ export const CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS: Record<ConnectionKind, read
   ollama: [],
   agent_cli: [],
   http: [],
-  fs: ['roots'],
+  // #1600 C1a — `writable` on sqlite's argument: a permission, not a setting.
+  fs: ['roots', 'writable'],
   // `writable` joins the two path keys even though NOTHING consumes it yet (the
   // M4 reader opens read-only unconditionally). It is a PERMISSION, not a
   // setting: once M5's copy sink reads it, an overridable `writable` would let a

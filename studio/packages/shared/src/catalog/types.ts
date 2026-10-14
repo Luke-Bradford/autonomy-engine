@@ -358,6 +358,18 @@ export const FILE_LIST_ACTIVITY_TYPE = 'file_list';
 export const COPY_ACTIVITY_TYPE = 'copy';
 
 /**
+ * #1600 OR41 C1a — Copy in **Files as-is** mode (activity catalogue §4.1): the
+ * second type under the ONE Copy palette item. The dock's *Copy* toggle
+ * switches a node between `copy` (rows) and this; the palette offers only
+ * `copy` (`inPalette: false` on this entry). See `copy-files-config.ts` for
+ * why it is a type rather than a mode field.
+ */
+export const COPY_FILES_ACTIVITY_TYPE = 'copy_files';
+
+/** The two types the one Copy palette item stands for, rows first (the toggle's order). */
+export const COPY_TYPES = [COPY_ACTIVITY_TYPE, COPY_FILES_ACTIVITY_TYPE] as const;
+
+/**
  * #996 M12 slice 2 (#1221) — the `lookup` activity `type`, the SOURCE-ONLY half
  * of the data-movement set (spec §5's `lookup` ruling).
  *
@@ -414,6 +426,13 @@ export interface ActivityCatalogEntry {
   kind: ActivityKind;
   /** Authoring-palette group (U5). See `ACTIVITY_CATEGORIES`. */
   category: ActivityCategory;
+  /**
+   * #1600 OR41 C1a — `false` keeps the type out of the toolbox. It is still a
+   * full catalog type that saves, validates and runs; it is reached from
+   * another item instead (`copy_files` through Copy's *Copy* toggle). Absent
+   * means it is offered.
+   */
+  inPalette?: false;
   /**
    * Whether re-running this activity is SAFE after a crash (no double side
    * effect). Persisted verbatim into `node.dispatched.idempotent`; the boot

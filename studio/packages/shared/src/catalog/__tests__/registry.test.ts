@@ -21,6 +21,8 @@ describe('activity catalog', () => {
       'agent_task',
       'append_variable',
       'copy',
+      // #1600 OR41 C1a — Copy · Files as-is, behind Copy's toggle.
+      'copy_files',
       'execute_pipeline',
       'fail',
       'file_copy',
@@ -105,7 +107,9 @@ describe('activity catalog', () => {
     const paired = [...catalog.values()]
       .filter((entry) => entry.sinkConnectionKinds !== undefined)
       .map((entry) => entry.type);
-    expect(paired).toEqual(['copy']);
+    // #1600 OR41 C1a — `copy_files` joins: Copy · Files as-is binds an `fs`
+    // source and an `fs` sink, CATALOG_VERSION 35 -> 36.
+    expect(paired).toEqual(['copy', 'copy_files']);
   });
 
   it('a declared sink allowlist must be non-empty, and pair with a non-empty source one', () => {

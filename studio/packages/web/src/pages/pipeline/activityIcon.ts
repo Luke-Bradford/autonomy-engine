@@ -75,6 +75,10 @@ const BY_TYPE: Readonly<Record<string, Glyph>> = {
      catch. A database with an outbound arrow says what a copy does — reads one
      store, writes another — where a pair of pages says only "duplicate". */
   copy: DatabaseArrowRight20Regular,
+  /* #1600 OR41 C1a — Copy in Files as-is mode: the SAME activity to an author
+     (one palette item, a toggle in the dock), so the same glyph, as
+     `call_pipeline` shares `execute_pipeline`'s. */
+  copy_files: DatabaseArrowRight20Regular,
   /* #1221 M12 — `lookup` reads a store and writes nowhere, so it is the INBOUND
      twin of `copy`'s outbound arrow: the glyph says which way data moves, which
      is the whole distinction between these two activities. It follows the map's

@@ -1,0 +1,99 @@
+import { describe, expect, it } from 'vitest';
+import { copyFilesConfigSchema } from '../copy-files-config.js';
+import { getActivity } from '../registry.js';
+import { COPY_FILES_ACTIVITY_TYPE } from '../types.js';
+
+/** #1600 OR41 C1a — the Copy · Files as-is config and its catalog entry. */
+const issues = (input: unknown) =>
+  (copyFilesConfigSchema.safeParse(input).error?.issues ?? []).map(
+    (i) => `${i.path.join('.')}: ${i.message}`,
+  );
+
+describe('copy_files config', () => {
+  it('needs only a source path; everything else has a default', () => {
+    expect(copyFilesConfigSchema.parse({ sourcePath: 'in' })).toEqual({
+      sourcePath: 'in',
+      pathType: 'folder',
+      wildcard: '*',
+      recursive: true,
+      afterCopy: 'keep',
+      copyBehavior: 'preserve',
+      ifExists: 'overwrite',
+    });
+    expect(issues({})).toEqual([expect.stringMatching(/^sourcePath: /)]);
+  });
+
+  it.each([
+    [{ pathType: 'list' }, 'fileListPath: a file list needs a file list path'],
+    [{ fileListPath: 'l.txt' }, 'fileListPath: a file list path is only read when'],
+    [{ afterCopy: 'move' }, 'moveTo: moving the source needs a folder'],
+    [{ moveTo: 'done' }, 'moveTo: a move-to folder is only used when'],
+    [{ copyBehavior: 'merge' }, 'sinkFileName: merging into one file needs its file name'],
+    [
+      { copyBehavior: 'merge', pathType: 'file', sinkFileName: 'a' },
+      'copyBehavior: merging needs a folder or a file list',
+    ],
+    [{ sinkFileName: 'a.txt' }, 'sinkFileName: a file name is only used for one file or a merge'],
+    [{ modifiedStart: 'yesterday' }, 'modifiedStart: '],
+  ])('refuses %j', (extra, message) => {
+    expect(issues({ sourcePath: 'in', ...extra }).join('\n')).toContain(message);
+  });
+
+  it('refuses a wildcard it would never read, or one holding a folder separator', () => {
+    expect(issues({ sourcePath: 'in', wildcard: 'sub/*.csv' })).toEqual([
+      'wildcard: a wildcard matches file names only, so it cannot hold a folder separator',
+    ]);
+    expect(issues({ sourcePath: 'a.txt', pathType: 'file', wildcard: '*.csv' })).toEqual([
+      'wildcard: a wildcard is only read when the path type is Folder',
+    ]);
+    // The default is not "set", so a file copy with it is fine.
+    expect(issues({ sourcePath: 'a.txt', pathType: 'file' })).toEqual([]);
+  });
+
+  it('refuses a literal modified window that selects nothing, at save rather than at run', () => {
+    expect(
+      issues({
+        sourcePath: 'in',
+        modifiedStart: '2026-03-02T00:00:00Z',
+        modifiedEnd: '2026-03-01T00:00:00Z',
+      }),
+    ).toEqual(['modifiedEnd: Modified before must be later than Modified from']);
+    expect(
+      issues({
+        sourcePath: 'in',
+        modifiedStart: '2026-03-01T00:00:00Z',
+        modifiedEnd: '2026-03-01T00:00:00Z',
+      }),
+    ).toHaveLength(1);
+  });
+
+  it('accepts a file name for one file, and for a merge', () => {
+    expect(issues({ sourcePath: 'a', pathType: 'file', sinkFileName: 'b' })).toEqual([]);
+    expect(issues({ sourcePath: 'in', copyBehavior: 'merge', sinkFileName: 'all' })).toEqual([]);
+  });
+
+  it('is a paired fs-to-fs entry with no datasets, kept out of the palette', () => {
+    const entry = getActivity(COPY_FILES_ACTIVITY_TYPE)!;
+    expect(entry).toMatchObject({
+      title: 'Copy data',
+      inPalette: false,
+      connectionKinds: ['fs'],
+      sinkConnectionKinds: ['fs'],
+      idempotent: false,
+    });
+    expect(entry.datasetKinds).toBeUndefined();
+    // Files and bytes, never rows: a `rowsWritten` of 0 would count as "wrote
+    // nothing" in the run's rows total.
+    expect(entry.outputs.map((o) => o.name).sort()).toEqual(
+      [
+        'bytesRead',
+        'bytesWritten',
+        'filesDeleted',
+        'filesMoved',
+        'filesRead',
+        'filesSkipped',
+        'filesWritten',
+      ].sort(),
+    );
+  });
+});
