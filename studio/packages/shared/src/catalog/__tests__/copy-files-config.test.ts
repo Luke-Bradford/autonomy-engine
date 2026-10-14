@@ -47,7 +47,7 @@ describe('copy_files config', () => {
   it('is a paired fs-to-fs entry with no datasets, kept out of the palette', () => {
     const entry = getActivity(COPY_FILES_ACTIVITY_TYPE)!;
     expect(entry).toMatchObject({
-      title: 'Copy',
+      title: 'Copy data',
       inPalette: false,
       connectionKinds: ['fs'],
       sinkConnectionKinds: ['fs'],
