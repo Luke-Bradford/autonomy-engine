@@ -122,7 +122,7 @@ test.describe('U5 activities toolbox', () => {
     const problems = collectPageProblems(page);
     await openCanvas(page, 'e2e or22 describe');
     const does =
-      'Copy rows from a source dataset into a sink dataset, mapping columns between them.';
+      'Copy rows from a source dataset into a sink dataset, mapping columns between them, or copy files as they are.';
 
     const item = toolbox(page).getByRole('button', { name: 'Copy data', exact: true });
     await expect(item).toHaveAttribute('title', does);

@@ -1,8 +1,8 @@
 /**
  * File SELECTION for the `fs` connector: the caps, the wildcard and the
- * modified-time window. Shared by `file_list`/`file_read` (`fs.ts`) and
- * Copy · Files as-is (`fs-files-copy.ts`, #1600 OR41 C1a); Get metadata (C8)
- * and Delete (C9) select files the same way.
+ * modified-time window. `fs.ts` reads the two caps; the wildcard and the
+ * window are Copy · Files as-is's (`fs-files-copy.ts`, #1600 OR41 C1a), kept
+ * here for Get metadata (C8) and Delete (C9), which select files the same way.
  */
 
 /** Default read size cap (bytes) — bounds a huge file from OOM-ing a worker. */
