@@ -5731,8 +5731,22 @@ button.danger {
 .help-disclosure--inline > span {
   left: 0;
   right: auto;
-  width: 100%;
+  /* The row's width, which `placeNote` measures: in the top layer a percentage
+     would be of the viewport. */
+  width: var(--help-anchor-width, 100%);
   max-width: 36rem;
+}
+
+/* #1695 OR43 — open, the note is in the top layer (`popover="manual"`), so no
+   scroller clips it and nothing paints over it. `placeNote` sets its `top` and
+   `left`; this clears the UA popover's centring and its colours. */
+.help-disclosure > span:popover-open {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  color: inherit;
+  max-height: calc(100vh - 2 * var(--space-2));
+  overflow: auto;
 }
 
 /* #1484 OR35 M2 — a failed run's banner: one line under the header. */

@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type FocusEvent,
@@ -24,6 +25,15 @@ import {
  *
  * The note is `tabIndex={-1}`: a click on it then moves focus inside the help,
  * rather than to nothing.
+ *
+ * #1695 OR43 — open, the note is shown in the browser's TOP LAYER
+ * (`popover="manual"`), so no scrolling panel clips it and nothing in the app
+ * paints over it: a dock's note used to be cut off by the dock's own scroller
+ * and covered by the Problems panel beside it. The top layer takes it out of
+ * the page's layout, so `placeNote` puts it where it used to sit, and flips it
+ * above its anchor when there is no room below. It stays in the DOM where it
+ * is, so the details' containment checks, `aria-describedby` and the inherited
+ * design tokens are unchanged.
  */
 export function HelpDisclosure({
   label,
@@ -40,7 +50,25 @@ export function HelpDisclosure({
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDetailsElement>(null);
+  const noteRef = useRef<HTMLSpanElement>(null);
   const [open, setOpen] = useState(false);
+  useLayoutEffect(() => {
+    const details = ref.current;
+    const note = noteRef.current;
+    if (!TOP_LAYER || !open || details === null || note === null) return;
+    note.showPopover();
+    const place = () => placeNote(details, note, inline);
+    place();
+    const win = details.ownerDocument.defaultView;
+    // Capture: a scroll of ANY panel moves the anchor.
+    win?.addEventListener('scroll', place, true);
+    win?.addEventListener('resize', place);
+    return () => {
+      win?.removeEventListener('scroll', place, true);
+      win?.removeEventListener('resize', place);
+      if (note.matches(':popover-open')) note.hidePopover();
+    };
+  }, [open, inline]);
   useEffect(() => {
     const details = ref.current;
     if (!open || details === null) return;
@@ -78,11 +106,48 @@ export function HelpDisclosure({
       <summary aria-label={label} title={label}>
         ?
       </summary>
-      <span id={noteId} role="note" tabIndex={-1}>
+      <span id={noteId} ref={noteRef} role="note" tabIndex={-1} popover={TOP_LAYER ? 'manual' : undefined}>
         {children}
       </span>
     </details>
   );
+}
+
+/**
+ * Where the Popover API is missing (jsdom), no `popover` is set: the attribute
+ * alone hides the note, and nothing could show it. The note then sits where
+ * the stylesheet anchors it, as it did before #1695.
+ */
+const TOP_LAYER =
+  typeof HTMLElement !== 'undefined' && typeof HTMLElement.prototype.showPopover === 'function';
+
+/** The gap between a note and its anchor, and the least room kept to the viewport's edge. */
+const NOTE_GAP = 4;
+const NOTE_EDGE = 8;
+
+/**
+ * #1695 OR43 — place an open note (in the top layer, so `position: fixed`)
+ * where the stylesheet anchored it before: under the `?`, its right edge on the
+ * `?`'s, or `inline`, under the enclosing positioned row at the row's width.
+ * Above the anchor instead when the room below is too short and the room above
+ * is not, and held inside the viewport sideways.
+ */
+export function placeNote(details: HTMLElement, note: HTMLElement, inline: boolean): void {
+  const win = details.ownerDocument.defaultView;
+  if (win === null) return;
+  const q = details.getBoundingClientRect();
+  // `inline` was anchored to its containing block: the nearest positioned row.
+  const anchor = inline && details.offsetParent instanceof HTMLElement ? details.offsetParent : details;
+  const a = anchor.getBoundingClientRect();
+  if (inline) note.style.setProperty('--help-anchor-width', `${a.width}px`);
+  const n = note.getBoundingClientRect();
+  const wanted = inline ? a.left : q.right - n.width;
+  const left = Math.max(NOTE_EDGE, Math.min(wanted, win.innerWidth - NOTE_EDGE - n.width));
+  const below = a.bottom + NOTE_GAP;
+  const above = a.top - NOTE_GAP - n.height;
+  const top = below + n.height > win.innerHeight - NOTE_EDGE && above >= NOTE_EDGE ? above : below;
+  note.style.left = `${left}px`;
+  note.style.top = `${top}px`;
 }
 
 /**

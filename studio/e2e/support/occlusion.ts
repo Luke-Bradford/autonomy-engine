@@ -54,7 +54,13 @@ export async function expectOverlayUnobstructed(overlay: Locator, what = 'overla
         out.push(`${name} (${Math.round(x)},${Math.round(y)}) hits ${describe(hit)}`);
       }
     }
-    for (let a = el.parentElement; a !== null && a !== document.documentElement; a = a.parentElement) {
+    // Nothing outside the top layer clips what is in it (a popover, a modal).
+    const inTopLayer = (n: Element) => n.matches(':popover-open, :modal');
+    for (
+      let a = inTopLayer(el) ? null : el.parentElement;
+      a !== null && a !== document.documentElement;
+      a = inTopLayer(a) ? null : a.parentElement
+    ) {
       const s = getComputedStyle(a);
       if (s.overflowX === 'visible' && s.overflowY === 'visible') continue;
       const c = a.getBoundingClientRect();
