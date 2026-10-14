@@ -80,7 +80,7 @@ for (const viewport of VIEWPORTS) {
       // Activities one at a time: each is swept, then deleted from its own
       // menu, so none hides another. Containers have no `⋯` and are opened
       // with their Configure button; they stay, and are drawn as boxes.
-      for (const [i, title] of activities.map((t) => t.trim()).entries()) {
+      for (const title of activities.map((t) => t.trim())) {
         const container = containers.some((c) => c.trim() === title);
         // The expanded dock covers the canvas, so select with it docked.
         await setDock(page, 'docked');
