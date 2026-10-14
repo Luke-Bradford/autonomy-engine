@@ -36,9 +36,8 @@ test('a description typed on the General tab survives a save and reload, and is 
   await nodeById(page, 'w').click();
   await properties(page).getByRole('tab', { name: 'General' }).click();
   const section = properties(page).getByRole('group', { name: 'Basics' });
-  await expect(section).toHaveAccessibleDescription(
-    'What this activity is for, and what it records while inactive.',
-  );
+  // #1694 OR42 — the properties pane's section headings carry no `?`.
+  await expect(section).not.toHaveAttribute('aria-describedby');
   const field = section.getByLabel('Activity description');
   await expect(field).toHaveAttribute('maxlength', '4000');
   await field.fill(TEXT);

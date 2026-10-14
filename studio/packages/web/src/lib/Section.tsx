@@ -43,7 +43,7 @@ export function Section({
 }: {
   heading: string;
   /** `null`: no `?` and no description (the properties pane, #1694). */
-  help: ReactNode | null;
+  help: ReactNode;
   /** The heading's level: 3 under a drawer or panel title (h2), 2 under a page title (h1). */
   level?: 2 | 3;
   landmark?: boolean;
@@ -54,6 +54,7 @@ export function Section({
   className?: string;
   children: ReactNode;
 }) {
+  const bare = help === null || help === undefined;
   const headingId = useId();
   const helpId = useId();
   const bodyId = useId();
@@ -85,7 +86,7 @@ export function Section({
           heading
         )}
       </Heading>
-      {help !== null && (
+      {!bare && (
         <AboutHelp name={heading} noteId={helpId}>
           {help}
         </AboutHelp>
@@ -98,7 +99,7 @@ export function Section({
       {children}
     </div>
   );
-  const describedBy = help === null ? undefined : helpId;
+  const describedBy = bare ? undefined : helpId;
   const sectionClass = className === undefined ? 'section' : `section ${className}`;
   return landmark ? (
     <section className={sectionClass} aria-labelledby={headingId} aria-describedby={describedBy}>

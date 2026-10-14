@@ -4216,7 +4216,12 @@ export function NodePanel({
                  warnings rest on behind its `?` rather than in a paragraph. */
               holdsMapping && name === mappingField?.name ? (
                 <>
-                  <button type="button" onClick={runAutoMap} disabled={autoMapBlocked !== null}>
+                  <button
+                    type="button"
+                    onClick={runAutoMap}
+                    disabled={autoMapBlocked !== null}
+                    aria-describedby={`${nodeId}-automap-about`}
+                  >
                     Auto-map columns
                   </button>
                   <AboutHelp name="Auto-map columns" noteId={`${nodeId}-automap-about`}>
@@ -4234,6 +4239,9 @@ export function NodePanel({
                  renderer. A field-mode extra because it describes the FORM
                  draft, which the author is not editing in JSON mode. */
               holdsMapping && (
+                /* A declared column list is an authoring aid and can be stale, so
+                   every line here is a warning and none of them is a refusal. The
+                   gate reads the store's ACTUAL columns at dispatch. */
                 <div className="contract-section">
                   {autoMapBlocked !== null && <p className="page-hint">{autoMapBlocked}</p>}
                   {autoMapNotice !== null && (
@@ -4292,9 +4300,6 @@ export function NodePanel({
                       case-insensitively — name the column exactly.
                     </p>
                   )}
-                  {/* A declared column list is an authoring aid and can be stale, so
-                  every line above is a warning and none of them is a refusal. The
-                  gate reads the store's ACTUAL columns at dispatch. */}
                 </div>
               )
             }

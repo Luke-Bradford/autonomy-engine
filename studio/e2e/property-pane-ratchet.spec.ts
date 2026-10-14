@@ -26,7 +26,12 @@ import { nodeMenuAction, pickConnection, properties } from './support/panels';
  */
 test.use({ viewport: { width: 1440, height: 900 } });
 
-/** Toolbox name → the most prose lines and `?`s its pane may show. Lower only. */
+/**
+ * Toolbox name → the most prose lines and `?`s its pane may show. Lower only.
+ * What is left is OR42's open slices (#1694): the config fields' visible hints
+ * and the call and container panels' notes (item 4's rest), and the `?`s each
+ * field still carries (the per-field `?` audit).
+ */
 const LIMITS: Record<string, { prose: number; help: number }> = {
   'Copy data': { prose: 1, help: 10 },
   'Copy file': { prose: 0, help: 8 },
@@ -124,7 +129,15 @@ async function readPane(page: Page, tablist: string, name: string, misses: strin
     await tab.click();
     await expect(tab).toHaveAttribute('aria-selected', 'true');
     const label = (await tab.textContent())?.trim() ?? String(i);
-    const read = await readTab(page);
+    // Read until two reads agree: a panel that loads something on mount (the
+    // call panel's pipeline list) is measured settled, not mid-load.
+    let read = await readTab(page);
+    for (let tries = 0; tries < 5; tries += 1) {
+      await page.waitForTimeout(150);
+      const again = await readTab(page);
+      if (JSON.stringify(again) === JSON.stringify(read)) break;
+      read = again;
+    }
     for (const wide of read.wideButtons) misses.push(`${name} › ${label} › wide button: ${wide}`);
     for (const head of read.headHelp) misses.push(`${name} › ${label} › ? on heading: ${head}`);
     prose.push(...read.tabProse.map((line) => `${label}: ${line}`));

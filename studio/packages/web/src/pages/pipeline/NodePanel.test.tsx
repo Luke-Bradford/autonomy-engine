@@ -1856,7 +1856,7 @@ describe('NodePanel — run policy (#1312)', () => {
     expect(section).not.toHaveAttribute('aria-describedby');
     expect(within(section).queryByLabelText('About Run policy')).toBeNull();
     const flag = within(section).getByRole('checkbox', { name: 'Secure output' });
-    expect(flag).toHaveAccessibleDescription(/Redacts this activity.s outputs/);
+    expect(flag).toHaveAccessibleDescription(/Redacts the outputs before the run log/);
     expect(within(section).queryByText(/Either flag also withholds/, { selector: 'p' })).toBeNull();
     fireEvent.click(flag);
     expect(store.getState().nodes[0]?.policy).toEqual({ secureOutput: true });

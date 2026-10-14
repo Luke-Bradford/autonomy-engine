@@ -16,6 +16,10 @@ import { enclosingContainers, nodePolicyIssues, policyIssues, validateCanvas } f
 import type { createCanvasStore } from './canvasStore';
 import { readableIssue } from './containerRules';
 
+/** Both secure flags' shared effect, in each one's note (#1694 OR42: was a paragraph under them). */
+const WITHHOLDS =
+  'Either flag also withholds failure text and warnings, which could repeat a secret.';
+
 /**
  * #1312 — a node's run `policy` in the canvas: retries, the interval between
  * them, and F4's secure input/output flags. Until this, `policy` could be set
@@ -41,10 +45,6 @@ import { readableIssue } from './containerRules';
  * for the same reason: in the pair's grid it would push the interval onto a
  * row alone.
  */
-/** Both secure flags' shared effect, in each one's note (#1694 OR42: was a paragraph under them). */
-const WITHHOLDS =
-  'Either flag also withholds the failure text and warnings, which could repeat a secret.';
-
 export function PolicyEditor({
   store,
   nodeId,
@@ -131,17 +131,19 @@ export function PolicyEditor({
         <FieldCell span="short">
           <CheckboxField
             label="Secure input"
+            name="Secure input"
             checked={policy?.secureInput === true}
             onChange={(on) => set({ secureInput: on || undefined })}
-            about={`Keeps this activity’s resolved input out of the run log. ${WITHHOLDS}`}
+            about={`Keeps the resolved input out of the run log. ${WITHHOLDS}`}
           />
         </FieldCell>
         <FieldCell span="short">
           <CheckboxField
             label="Secure output"
+            name="Secure output"
             checked={policy?.secureOutput === true}
             onChange={(on) => set({ secureOutput: on || undefined })}
-            about={`Redacts this activity’s outputs before they reach the run log, so nothing downstream can reference them. ${WITHHOLDS}`}
+            about={`Redacts the outputs before the run log; nothing downstream can reference them. ${WITHHOLDS}`}
           />
         </FieldCell>
       </FieldGrid>

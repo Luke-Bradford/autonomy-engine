@@ -55,7 +55,7 @@ test.describe('#1312 — node run policy editor', () => {
     await expect(section.getByLabel('About Run policy', { exact: true })).toHaveCount(0);
     await expect(
       section.getByRole('checkbox', { name: 'Secure output' }),
-    ).toHaveAccessibleDescription(/Redacts this activity.s outputs before they reach the run log/);
+    ).toHaveAccessibleDescription(/Redacts the outputs before the run log/);
     await section.getByLabel('Timeout (seconds)', { exact: true }).fill('300');
     await section.getByLabel('Timeout (seconds)', { exact: true }).blur();
     await section.getByLabel('Retries', { exact: true }).fill('2');

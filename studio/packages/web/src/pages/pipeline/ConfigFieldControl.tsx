@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type { Node, RefSuggestion } from '@autonomy-studio/shared';
 import { Toolbar } from '../../lib/PageHeader';
+import { CheckboxField } from '../../lib/form/CheckboxField';
 import {
   configFieldTitle,
   describeNumberRule,
@@ -275,8 +276,8 @@ export function ConfigFieldControl({
     );
   // #1477 OR29 — a labelled field's explanation is behind a `?` beside its label
   // (labels, not prose), as a row list's already was. The note keeps `hintId`, so
-  // the control's description is unchanged. A checkbox keeps its line: its label
-  // wraps the box, so there is no label row to put a `?` in.
+  // the control's description is unchanged. #1694 OR42 — a checkbox's too, beside
+  // its label (`CheckboxField`), which wraps the box.
   const help =
     hintBody === null ? undefined : (
       <AboutHelp name={label} noteId={hintId}>
@@ -334,20 +335,16 @@ export function ConfigFieldControl({
 
   if (field.kind === 'boolean') {
     return (
-      // The hint is a SIBLING of the label: inside it, it would join the
-      // checkbox's name.
-      <>
-        <label className="contract-check">
-          <input
-            type="checkbox"
-            checked={value === true}
-            aria-describedby={describedBy}
-            onChange={(e) => onChange(e.target.checked)}
-          />
-          {seen(label)}
-        </label>
-        {hint}
-      </>
+      // #1694 OR42 — its hint behind a `?` beside the box, like every other
+      // field's, keeping `hintId` so the box's description is unchanged.
+      <CheckboxField
+        label={seen(label)}
+        name={label}
+        checked={value === true}
+        onChange={onChange}
+        {...(hintBody === null ? {} : { about: hintBody, noteId: hintId })}
+        {...(describedBy === undefined ? {} : { describedBy })}
+      />
     );
   }
 

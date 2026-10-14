@@ -104,6 +104,7 @@ export function RowList({
   addLabel,
   onAdd,
   addDisabled = false,
+  addTitle,
   children,
 }: {
   columns: readonly RowTableColumn[];
@@ -112,12 +113,14 @@ export function RowList({
   addLabel: string;
   onAdd: () => void;
   addDisabled?: boolean;
+  /** The Add button's hover: what the list allows, where a section `?` would have said it. */
+  addTitle?: string;
   children: ReactNode;
 }) {
   return (
     <>
       <Toolbar align="start">
-        <button type="button" onClick={onAdd} disabled={addDisabled}>
+        <button type="button" onClick={onAdd} disabled={addDisabled} title={addTitle}>
           {addLabel}
         </button>
       </Toolbar>
