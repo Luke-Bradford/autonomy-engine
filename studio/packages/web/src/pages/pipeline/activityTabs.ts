@@ -5,7 +5,12 @@ import {
   type ActivityCatalogEntry,
   type ActivityTabKey,
 } from '@autonomy-studio/shared';
-import type { ConfigField } from './configForm';
+import {
+  emptyControlValue,
+  sameControlValue,
+  type ConfigField,
+  type FieldInput,
+} from './configForm';
 
 /** #1477 OR29 — one of a node's type tabs, resolved against what the node can show. */
 export interface NodeTypeTab {
@@ -77,4 +82,52 @@ export function nodeTypeTabs(
   return head === undefined
     ? [{ key: 'settings', label: ACTIVITY_TAB_TITLES.settings, fields: [], bindings: [] }]
     : [head, ...rest];
+}
+
+/**
+ * #1686 — which of a tab's fields the dock draws, by the entry's `appliesWhen`.
+ *
+ * A field applies when any of its conditions holds on the CONTROL's value: the
+ * draft's, or the schema default while the control is empty. A `${}` there is
+ * decided at dispatch, so the field is drawn, as it is when the control has no
+ * value at all (the shared suite pins every control to an enum field, so that
+ * is a malformed rule rather than a state). A field that does not apply is
+ * still drawn while it holds a value, stored or typed, so the author can see and
+ * clear what the schema will refuse: nothing in the JSON is unreachable from the
+ * form (UI STANDARD rule 3). `fields` is every field of the node, because a
+ * control can sit on another tab.
+ */
+export function applicableFieldNames(
+  entry: Pick<ActivityCatalogEntry, 'appliesWhen'> | undefined,
+  names: readonly string[],
+  fields: readonly ConfigField[],
+  inputs: Readonly<Record<string, FieldInput>>,
+  stored: Readonly<Record<string, unknown>>,
+): string[] {
+  const rules = entry?.appliesWhen;
+  if (rules === undefined) return [...names];
+  const byName = new Map(fields.map((f) => [f.name, f]));
+  const valueOf = (name: string): string | undefined => {
+    const input = inputs[name];
+    if (typeof input === 'string' && input !== '') return input;
+    return byName.get(name)?.defaultText;
+  };
+  const holds = (name: string): boolean => {
+    if (stored[name] !== undefined) return true;
+    const field = byName.get(name);
+    const input = inputs[name];
+    return (
+      field !== undefined &&
+      input !== undefined &&
+      !sameControlValue(input, emptyControlValue(field))
+    );
+  };
+  return names.filter((name) => {
+    const conditions = rules[name];
+    if (conditions === undefined || holds(name)) return true;
+    return conditions.some((c) => {
+      const value = valueOf(c.field);
+      return value === undefined || value.includes('${') || c.in.includes(value);
+    });
+  });
 }

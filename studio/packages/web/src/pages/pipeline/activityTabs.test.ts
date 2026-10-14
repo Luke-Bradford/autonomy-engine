@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { getActivity, type ActivityCatalogEntry } from '@autonomy-studio/shared';
-import { nodeTypeTabs } from './activityTabs';
-import { deriveConfigFields } from './configForm';
+import { applicableFieldNames, nodeTypeTabs } from './activityTabs';
+import { deriveConfigFields, seedFieldInputs } from './configForm';
 
 const fieldsOf = (entry: ActivityCatalogEntry) => deriveConfigFields(entry.configSchema) ?? [];
 
@@ -85,5 +85,63 @@ describe('nodeTypeTabs (#1477)', () => {
         bindings: [],
       },
     ]);
+  });
+});
+
+describe('applicableFieldNames (#1686)', () => {
+  const copyFiles = getActivity('copy_files');
+  if (copyFiles === undefined) throw new Error('copy_files is catalogued');
+  const fields = fieldsOf(copyFiles);
+  const all = fields.map((f) => f.name);
+  const hidden = (config: Record<string, unknown>, inputs = seedFieldInputs(fields, config)) =>
+    all.filter((n) => !applicableFieldNames(copyFiles, all, fields, inputs, config).includes(n));
+
+  it('reads each control at its schema default while it is empty', () => {
+    // Folder, Keep, Preserve: no file list, no move-to, no file name.
+    expect(hidden({})).toEqual(['fileListPath', 'moveTo', 'sinkFileName']);
+  });
+
+  it('follows the draft as the controls change', () => {
+    expect(hidden({ pathType: 'file' })).toEqual([
+      'wildcard',
+      'fileListPath',
+      'recursive',
+      'moveTo',
+    ]);
+    expect(hidden({ pathType: 'list', afterCopy: 'move' })).toEqual([
+      'wildcard',
+      'recursive',
+      'sinkFileName',
+    ]);
+    // Either condition of File name: one file, or a merge.
+    expect(hidden({ copyBehavior: 'merge' })).toEqual(['fileListPath', 'moveTo']);
+    const typed = { ...seedFieldInputs(fields, {}), pathType: 'list' };
+    expect(hidden({}, typed)).toEqual(['wildcard', 'recursive', 'moveTo', 'sinkFileName']);
+  });
+
+  it('draws a field whose control is an expression', () => {
+    // No enum control takes one today, but a typed field that does (UI STANDARD
+    // rule 4) must not hide what it may yet select.
+    const typed = { ...seedFieldInputs(fields, {}), pathType: '${pipeline().parameters.kind}' };
+    expect(hidden({}, typed)).toEqual(['moveTo']);
+  });
+
+  it('still draws a field that holds a value where it cannot apply', () => {
+    // Stored: the schema refuses it, and the author must be able to clear it.
+    expect(hidden({ pathType: 'file', wildcard: '*.csv' })).toEqual([
+      'fileListPath',
+      'recursive',
+      'moveTo',
+    ]);
+    // Typed, then its control moved away: it stays until it is cleared.
+    const typed = { ...seedFieldInputs(fields, {}), afterCopy: 'keep', moveTo: 'done' };
+    expect(hidden({}, typed)).toEqual(['fileListPath', 'sinkFileName']);
+  });
+
+  it('draws every field of an entry with no rules', () => {
+    const http = getActivity('http_request');
+    if (http === undefined) throw new Error('http_request is catalogued');
+    const names = fieldsOf(http).map((f) => f.name);
+    expect(applicableFieldNames(http, names, fieldsOf(http), {}, {})).toEqual(names);
   });
 });

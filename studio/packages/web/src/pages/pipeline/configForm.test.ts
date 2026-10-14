@@ -300,6 +300,33 @@ describe('parseFieldInput', () => {
     expect(parseFieldInput(reqBool, false)).toEqual({ ok: true, omit: false, value: false });
   });
 
+  it('reads a box defaulted ON as checked, and writes false only when it is unticked', () => {
+    // #1686 review — `copy_files`' Include subfolders: unset, the copy recurses,
+    // so the box must show ticked, and unticking it must write `false` rather
+    // than omit the key back to the default.
+    const onByDefault: ConfigField = {
+      name: 'recursive',
+      kind: 'boolean',
+      optional: true,
+      defaultText: 'true',
+    };
+    expect(seedFieldInputs([onByDefault], {})).toEqual({ recursive: true });
+    expect(parseFieldInput(onByDefault, true)).toEqual({ ok: true, omit: true });
+    expect(parseFieldInput(onByDefault, false)).toEqual({ ok: true, omit: false, value: false });
+    expect(assembleConfig({}, [onByDefault], { recursive: false })).toMatchObject({
+      ok: true,
+      config: { recursive: false },
+    });
+    expect(assembleConfig({ recursive: true }, [onByDefault], { recursive: true })).toMatchObject({
+      ok: true,
+      config: { recursive: true },
+    });
+    expect(assembleConfig({ recursive: false }, [onByDefault], { recursive: true })).toMatchObject({
+      ok: true,
+      config: {},
+    });
+  });
+
   it('REFUSES an input it cannot parse instead of coercing it', () => {
     expect(parseFieldInput(num, 'abc').ok).toBe(false);
     expect(parseFieldInput(num, '1e').ok).toBe(false);
