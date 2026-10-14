@@ -181,12 +181,16 @@ test('every catalog activity and container: no wide button, no `?` on a heading,
     await expect(nodeById(page, id)).toHaveCount(0);
   }
   for (const name of containers) {
-    // A fresh canvas each: a container is removed by more than one act.
-    await openSeededCanvas(page, `or42 pane ratchet ${name}`, { nodes: [] });
+    // On the same canvas, so nothing navigates away from unsaved work: added,
+    // measured, then taken back off by Undo.
     await toolbox(page).getByRole('button', { name, exact: true }).click();
-    await page.getByRole('button', { name: /^Configure / }).click();
+    const configure = page.getByRole('button', { name: /^Configure / });
+    await expect(configure).toHaveCount(1);
+    await configure.click();
     const { prose, help } = await readPane(page, 'Container properties', name, misses);
     measured[name] = { prose: prose.length, help, lines: prose };
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect(configure).toHaveCount(0);
   }
 
   for (const [name, got] of Object.entries(measured)) {
