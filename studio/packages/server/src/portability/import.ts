@@ -82,10 +82,15 @@ function toDbNode(node: NodeExport): Node {
   if (datasetIds === undefined || datasetIds.source === null || datasetIds.sink === null) {
     return withConn;
   }
+  // #1600 C1q — an ABSENT source is an inline one, and is omitted, never
+  // carried as `source: undefined`.
   const { source, sink } = datasetIds;
   return {
     ...withConn,
-    datasetIds: { source, ...(sink === undefined ? {} : { sink }) },
+    datasetIds: {
+      ...(source === undefined ? {} : { source }),
+      ...(sink === undefined ? {} : { sink }),
+    },
     ...(datasetParams === undefined ? {} : { datasetParams }),
   };
 }

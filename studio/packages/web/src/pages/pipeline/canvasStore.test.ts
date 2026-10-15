@@ -4031,6 +4031,37 @@ describe('setNodeBindingEnd — paired bindings reach the doc WHOLE (#1139)', ()
     expect(store.getState().pendingBindings['l']).toBeUndefined();
   });
 
+  it('#1600 C1q — re-picking the SINK beside an inline source keeps { sink } and the inline source', () => {
+    const inlineDatasets = {
+      source: { kind: 'query' as const, config: { sql: 'SELECT * FROM orders' } },
+    };
+    const store = createCanvasStore();
+    store.setState({
+      nodes: [
+        {
+          id: 'c',
+          type: 'copy',
+          config: {},
+          connectionIds: { source: 'conn_a', sink: 'conn_b' },
+          datasetIds: { sink: 'ds_old' },
+          inlineDatasets,
+          position: { x: 0, y: 0 },
+        },
+      ],
+    });
+    store.getState().setNodeBindingEnd('c', 'datasets', 'sink', 'ds_new');
+    const n = store.getState().nodes[0]!;
+    expect(n.datasetIds).toEqual({ sink: 'ds_new' });
+    expect('source' in (n.datasetIds as object)).toBe(false);
+    expect(n.inlineDatasets).toEqual(inlineDatasets);
+
+    // Picking a saved SOURCE dataset is choosing it over the inline one.
+    store.getState().setNodeBindingEnd('c', 'datasets', 'source', 'ds_src');
+    const after = store.getState().nodes[0]!;
+    expect(after.datasetIds).toEqual({ source: 'ds_src', sink: 'ds_new' });
+    expect(after.inlineDatasets).toBeUndefined();
+  });
+
   it('DROPS a sink a source-only node inherited, rather than carrying it forward', () => {
     // Reachable through an imported or API-seeded doc: the edit spreads the
     // node's existing pair, so editing only the source would otherwise re-commit

@@ -97,6 +97,14 @@ export const InlineDatasetKindSchema = z.enum(INLINE_DATASET_KINDS);
 export type InlineDatasetKind = z.infer<typeof InlineDatasetKindSchema>;
 
 /**
+ * #1600 OR41 C1q — the `ResolvedDataset.id` an inline source dispatches under.
+ * Never a stored row's id (those are generated), so the executor's same-dataset
+ * self-copy check cannot match it; the PHYSICAL address check still refuses an
+ * inline Table that is the sink's own table.
+ */
+export const INLINE_SOURCE_DATASET_ID = 'inline:source';
+
+/**
  * #1396 — what a form or a list CALLS each kind, as `CONNECTION_KIND_LABELS`
  * does for connections. The enum value stays the identifier everywhere it is
  * stored or sent; this is display only, and a `Record` so a new kind cannot

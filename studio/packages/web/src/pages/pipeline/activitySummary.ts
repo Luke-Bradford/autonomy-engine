@@ -117,7 +117,8 @@ export function activitySummary(
     case COPY_ACTIVITY_TYPE: {
       const ids = node.datasetIds;
       if (ids === undefined) return null;
-      const line = arrow(dataset(ids.source, datasetName), dataset(ids.sink, datasetName));
+      const from = inlineSourceLabel(node) ?? dataset(ids.source, datasetName);
+      const line = arrow(from, dataset(ids.sink, datasetName));
       // `append` is the default and says nothing; `overwrite` deletes, and a
       // destructive step should say so on its face.
       return line !== null && c.mode === 'overwrite' ? `${line} · overwrite` : line;
@@ -132,10 +133,21 @@ export function activitySummary(
       return line !== null && after !== null ? `${line} · ${after}` : line;
     }
     case LOOKUP_ACTIVITY_TYPE:
-      return prefixed('from ', dataset(node.datasetIds?.source, datasetName));
+      return prefixed(
+        'from ',
+        inlineSourceLabel(node) ?? dataset(node.datasetIds?.source, datasetName),
+      );
     default:
       return null;
   }
+}
+
+/** #1600 C1q — an inline source on the card: its table, or "query". */
+function inlineSourceLabel(node: Node): string | undefined {
+  const inline = node.inlineDatasets?.source;
+  if (inline === undefined) return undefined;
+  if (inline.kind === 'query') return 'query';
+  return text(inline.config['table']) ?? 'table';
 }
 
 /** A small mark on a card for a policy that changes how the step runs. */

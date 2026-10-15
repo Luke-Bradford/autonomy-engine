@@ -452,11 +452,12 @@ function maskNode(node: NodeExport, masks: NodeRefMasks): NodeExport {
     };
   }
   if (masked.datasetIds !== undefined) {
-    const sink = masked.datasetIds.sink;
+    const { source, sink } = masked.datasetIds;
     masked = {
       ...masked,
       datasetIds: {
-        source: maskEnd(masked.datasetIds.source, masks.datasetSource),
+        // #1600 C1q — an absent source (inline) stays absent.
+        ...(source === undefined ? {} : { source: maskEnd(source, masks.datasetSource) }),
         ...(sink === undefined ? {} : { sink: maskEnd(sink, masks.datasetSink) }),
       },
     };
@@ -592,9 +593,10 @@ function exportNode(
     // on a git round-trip and be reported as an `unresolvedDatasetRef` that never
     // existed. `envelope.ts` states the null-vs-absent contract this honours.
     const ds = maps.datasetResourceId;
-    const sink = datasetIds.sink;
+    const { source, sink } = datasetIds;
     exported.datasetIds = {
-      source: toRid(datasetIds.source, ds, 'datasetSource'),
+      // #1600 C1q — an absent source (inline) is omitted, the sink's rule.
+      ...(source === undefined ? {} : { source: toRid(source, ds, 'datasetSource') }),
       ...(sink === undefined ? {} : { sink: toRid(sink, ds, 'datasetSink') }),
     };
   }

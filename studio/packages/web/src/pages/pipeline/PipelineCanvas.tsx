@@ -61,6 +61,7 @@ import {
   type ConnectionPublic,
   type Dataset,
   type Edge,
+  type InlineDataset,
   type Node,
   type Pipeline,
   type PipelineVersion,
@@ -3418,6 +3419,14 @@ function overrideResourceFor<T extends { id: string }>(
   return row === undefined ? null : view(row);
 }
 
+/** #1600 C1q — an inline source's table or SQL, for the dock's read-only line. */
+function inlineSourceText(inline: InlineDataset): string {
+  const { table, schema, sql } = inline.config;
+  if (inline.kind === 'query') return typeof sql === 'string' ? sql : '';
+  const name = typeof table === 'string' ? table : '';
+  return typeof schema === 'string' ? `${schema}.${name}` : name;
+}
+
 /**
  * #1304 — one dataset end's overrides. Rendered only for an end the DOC binds.
  * A half-picked pending end is not in `datasetIds`, and `validateDoc` refuses
@@ -4095,6 +4104,15 @@ export function NodePanel({
               ).map((d) => ({ id: d.id, label: datasetOptionLabel(d) }))}
               onPick={(id) => store.getState().setNodeBindingEnd(nodeId, 'datasets', 'source', id)}
             />
+            {/* #1600 C1q — an inline source shown read-only until the Use Table ·
+                Query block (C1q-b) edits it, so a node's source is never
+                invisible here. Picking a source dataset above replaces it. */}
+            {thisNode?.inlineDatasets !== undefined && (
+              <p className="contract-advisory" role="status" data-testid="inline-source">
+                Inline {thisNode.inlineDatasets.source.kind}{' '}
+                <code>{inlineSourceText(thisNode.inlineDatasets.source)}</code>
+              </p>
+            )}
 
             <DatasetOverrides
               store={store}

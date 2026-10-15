@@ -7,6 +7,9 @@ import {
   captureDispatchInput,
   captureDispatchParams,
   collectSecretSinkMarkers,
+  containsSecretMarker,
+  DATASET_CONNECTION_KINDS,
+  INLINE_SOURCE_DATASET_ID,
   computeCostEstimate,
   firstParamOverrideViolation,
   connectionConfigSchema,
@@ -16,6 +19,7 @@ import {
   sameDatasetAddress,
   resolveDocNode,
   FAILURE_CODES,
+  formatZodIssues,
   findLlmMessagesRowIndex,
   LLM_CALL_ACTIVITY_TYPE,
   llmCallConfigSchema,
@@ -30,6 +34,7 @@ import {
   type DatasetKind,
   type EngineEvent,
   type FailureKind,
+  type InlineDataset,
   type Node,
   type WarningCode,
   isNonOverridableConnectionConfigKey,
@@ -106,6 +111,18 @@ import type { ChildRuns } from './child.js';
  * subprocesses that each fail and re-record it. Only the optimisation is lost;
  * correctness (failure → window → later admissions skip) is unchanged.
  */
+
+/**
+ * #1600 OR41 C1q — the bind values an inline source applied, for
+ * `node.dispatched.params`. `undefined` for a Table, which has none.
+ */
+function inlineParametersOf(inline: InlineDataset): Record<string, unknown> | undefined {
+  const { parameters } = inline.config;
+  return typeof parameters === 'object' && parameters !== null && !Array.isArray(parameters)
+    ? (parameters as Record<string, unknown>)
+    : undefined;
+}
+
 export interface ExecutorDeps {
   db: Db;
   /** The secret-encryption master key (for just-in-time secret decrypt). */
@@ -891,6 +908,79 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   }
 
   /**
+   * #1600 OR41 C1q — a node's INLINE source (`inlineDatasets.source`) as the
+   * same `ResolvedDataset` a saved one becomes, so every reader runs unchanged.
+   *
+   * `resolveDataset`'s ladder, minus what an inline address does not have. There
+   * is no row, so no NOT_FOUND and no owner check; and no stored connection to
+   * agree with, so the agreement check becomes a KIND check: the store the node
+   * binds for its source must be one this kind can live in
+   * (`DATASET_CONNECTION_KINDS`), or a Table would reach an `fs` reader. No
+   * allowlist either: every key is the author's own, and the literal ones (`sql`,
+   * `table`, `schema`) were never evaluated (`resolveInlineDatasets`).
+   *
+   * A node that also names a source dataset is refused rather than letting one
+   * win. `validateDoc` refuses it at save; this covers a doc that bypassed it.
+   */
+  function resolveInlineDataset(
+    inline: InlineDataset,
+    alsoDatasetId: string | undefined,
+    kinds: readonly DatasetKind[],
+    activityType: string,
+    connectionKind: ConnectionKind,
+  ): { error: string; code: string } | { dataset: ResolvedDataset } {
+    if (alsoDatasetId !== undefined) {
+      return {
+        error: `the node names source dataset '${alsoDatasetId}' AND an inline source — keep one`,
+        code: FAILURE_CODES.DATASET_KIND_INVALID,
+      };
+    }
+    if (!kinds.includes(inline.kind)) {
+      return {
+        error: `an inline ${inline.kind} source is not valid for activity '${activityType}' (expected: ${kinds.join(', ')})`,
+        code: FAILURE_CODES.DATASET_KIND_INVALID,
+      };
+    }
+    if (!DATASET_CONNECTION_KINDS[inline.kind].includes(connectionKind)) {
+      return {
+        error:
+          `an inline ${inline.kind} source needs a ${DATASET_CONNECTION_KINDS[inline.kind].join(' or ')} ` +
+          `connection, but the node bound a '${connectionKind}' connection for its source`,
+        code: FAILURE_CODES.DATASET_CONNECTION_MISMATCH,
+      };
+    }
+    // A `${}` parameter can resolve run-supplied json this module never saw at
+    // save, so the marker refusal runs on the RESOLVED value, as it does for a
+    // saved dataset's overrides.
+    if (containsSecretMarker(inline.config)) {
+      return {
+        error:
+          'an inline source resolved to a value containing a secret marker — ' +
+          'parameters are non-secret; use a declared secret sink',
+        code: FAILURE_CODES.DATASET_PARAM_SECRET_MARKER,
+      };
+    }
+    // `.strict()`, `validateDoc`'s rule, so a doc that bypassed the save gate
+    // cannot run a config other than the one it carries.
+    const parsed = datasetConfigSchema(inline.kind).strict().safeParse(inline.config);
+    if (!parsed.success) {
+      return {
+        error: `the inline ${inline.kind} source is not valid once its parameters are applied: ${formatZodIssues(parsed.error.issues)}`,
+        code: FAILURE_CODES.DATASET_PARAM_INVALID,
+      };
+    }
+    return {
+      dataset: {
+        id: INLINE_SOURCE_DATASET_ID,
+        name: `inline ${inline.kind}`,
+        kind: inline.kind,
+        config: inline.config,
+        columns: [],
+      },
+    };
+  }
+
+  /**
    * M6 slice B (#1149, spec §2.1) — ask a store WHERE one resolved dataset
    * physically is.
    *
@@ -1551,14 +1641,28 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       const connectionPaired = entry.sinkConnectionKinds !== undefined;
       const sinkDatasetKinds = datasetKinds.sink;
       const datasetPaired = sinkDatasetKinds !== undefined;
-      const resolvedSourceDs = resolveDataset(
-        command.resolvedDatasetIds?.source,
-        datasetKinds.source,
-        node.type,
-        ownerId,
-        connectionPaired ? command.resolvedConnectionIds?.source : command.resolvedConnectionId,
-        command.resolvedDatasetParams?.source,
-      );
+      // #1600 C1q — an inline source stands in for the source dataset. The
+      // source end's adapter is `adapter`, so its kind is the bound store's.
+      const inlineSource = command.resolvedInlineDatasets?.source;
+      const resolvedSourceDs =
+        inlineSource !== undefined
+          ? resolveInlineDataset(
+              inlineSource,
+              command.resolvedDatasetIds?.source,
+              datasetKinds.source,
+              node.type,
+              adapter.kind,
+            )
+          : resolveDataset(
+              command.resolvedDatasetIds?.source,
+              datasetKinds.source,
+              node.type,
+              ownerId,
+              connectionPaired
+                ? command.resolvedConnectionIds?.source
+                : command.resolvedConnectionId,
+              command.resolvedDatasetParams?.source,
+            );
       if ('error' in resolvedSourceDs) {
         // Labelled ONLY when the dataset binding is genuinely a pair — M1's rule
         // for the connection ladder, followed here rather than diverged from: an
@@ -1773,7 +1877,15 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           scrub({
             connectionParams: appliedConnectionParams,
             datasetParams: {
-              source: datasets !== undefined ? command.resolvedDatasetParams?.source : undefined,
+              // #1600 C1q — an inline source's applied values are its own
+              // `parameters`; `validateDoc` refuses `datasetParams.source` beside
+              // one, so the two can never both apply.
+              source:
+                datasets === undefined
+                  ? undefined
+                  : command.resolvedInlineDatasets !== undefined
+                    ? inlineParametersOf(command.resolvedInlineDatasets.source)
+                    : command.resolvedDatasetParams?.source,
               sink: datasets?.sink !== undefined ? command.resolvedDatasetParams?.sink : undefined,
             },
           }),

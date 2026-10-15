@@ -99,6 +99,7 @@ function lowerFileTransfer(afterCopy: 'keep' | 'delete') {
       node.connectionIds !== undefined ||
       node.datasetIds !== undefined ||
       node.datasetParams !== undefined ||
+      node.inlineDatasets !== undefined ||
       node.call !== undefined
     ) {
       return undefined;
