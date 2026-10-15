@@ -442,7 +442,9 @@ describe('writeAccessWarnings (#1600 OR41 C1b)', () => {
     ]);
     expect(
       writeAccessWarnings([copy('a', { source: 'ro', sink: 'ro' }, 'delete')], connections),
-    ).toEqual(["node 'a': the sink connection 'Conn ro' does not allow writes"]);
+    ).toEqual([
+      "node 'a': the sink connection 'Conn ro' does not allow writes, which a files copy needs",
+    ]);
   });
 
   it('skips writable, unknown, dynamic and non-file connections, other types and inactive nodes', () => {
