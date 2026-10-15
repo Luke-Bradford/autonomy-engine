@@ -25,6 +25,7 @@ import {
   type Param,
   type VariableDef,
   type GlobalRead,
+  type InlineDataset,
   type PipelineVersion,
   type Position,
 } from '@autonomy-studio/shared';
@@ -1507,6 +1508,28 @@ export interface CanvasState {
     coalesceKey?: string,
   ): void;
   /**
+   * #1600 OR41 C1q-b — set (or, with `undefined`, remove) the node's inline
+   * database source, the dock's *Use* Table · Query.
+   *
+   * An inline source IS the source end, so setting one drops the saved source
+   * dataset and its `datasetParams.source` (`validateDoc` refuses both naming the
+   * source). The sink end is kept where the activity has one, and a sink only
+   * PENDING (a copy whose sink was picked before any source) is committed beside
+   * it, because the inline source completes the pair. The pending pick is left in
+   * place: the committed pair wins over it everywhere it is read, and undo, which
+   * does not restore selection state, would otherwise lose it.
+   *
+   * Removing the inline source (*Use* Saved dataset) leaves a copy's sink
+   * committed as `{ sink }`, which `validateDoc` reports on the Source tab until a
+   * saved source is picked, rather than moving it back to pending and dropping
+   * its overrides.
+   *
+   * Whole-value like the other node setters: the caller builds the config.
+   * `coalesceKey` names the field being typed into, so a keystroke burst is ONE
+   * undo step, as `setNodeParamOverrides` does.
+   */
+  setNodeInlineSource(id: string, inline: InlineDataset | undefined, coalesceKey?: string): void;
+  /**
    * #1312 — replace a node's run `policy` (retry, retry interval, secure flags).
    *
    * Whole-value, like the other node setters: the caller merges. Undefined keys
@@ -2582,6 +2605,45 @@ export function createCanvasStore(): StoreApi<CanvasState> {
             }),
           }),
           coalesceKey === undefined ? undefined : `params:${id}:${end}:${coalesceKey}`,
+        );
+      },
+
+      setNodeInlineSource(id, inline, coalesceKey) {
+        const state = get();
+        const node = state.nodes.find((n) => n.id === id);
+        if (node === undefined) return;
+        if (inline === undefined && node.inlineDatasets === undefined) return;
+        // Only an activity that reads a dataset source has a source to replace.
+        const kinds = getActivity(node.type)?.datasetKinds;
+        if (inline !== undefined && kinds === undefined) return;
+        // A sink only where the activity has one: as setNodeBindingEnd does, a
+        // stray sink no picker renders is dropped rather than carried forward.
+        const sink =
+          kinds?.sink === undefined
+            ? undefined
+            : (node.datasetIds?.sink ?? state.pendingBindings[id]?.datasets?.sink);
+        edit(
+          (s) => ({
+            nodes: s.nodes.map((n) => {
+              if (n.id !== id) return n;
+              const next = { ...n };
+              if (inline === undefined) {
+                delete next.inlineDatasets;
+                return next;
+              }
+              next.inlineDatasets = { source: inline };
+              // The sink key is omitted, never `undefined` (see setNodeBindingEnd).
+              if (sink !== undefined) next.datasetIds = { sink };
+              else delete next.datasetIds;
+              // An end's overrides go with it (#1144): the source's always, the
+              // sink's when no sink is kept.
+              if (sink !== undefined && next.datasetParams?.sink !== undefined) {
+                next.datasetParams = { sink: next.datasetParams.sink };
+              } else delete next.datasetParams;
+              return next;
+            }),
+          }),
+          coalesceKey === undefined ? undefined : `inline:${id}:${coalesceKey}`,
         );
       },
 

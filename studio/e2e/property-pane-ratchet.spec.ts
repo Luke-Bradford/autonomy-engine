@@ -316,14 +316,18 @@ test('every catalog activity and container: no wide button, no `?` on a heading,
  * this walk's own measured count; lower only. A key with a ` (…)` suffix is a second state
  * of that toolbox entry (the files-as-is copy, structured output, inactive).
  */
+const INLINE_SQL = 'SELECT id FROM orders WHERE region = :region AND load <> :load';
+
 const SEEDED_HELP_LIMITS: Record<string, number> = {
   'Copy data': 9,
   'Copy data (files as-is)': 19,
   'Copy data (files from a folder)': 16,
+  'Copy data (inline query)': 12,
   'Delete file': 7,
   'HTTP request': 9,
   'List directory': 7,
   'Lookup rows': 6,
+  'Lookup rows (inline table)': 9,
   'Read file': 7,
   'Write file': 7,
   'Agent task': 8,
@@ -354,6 +358,8 @@ const SHOWS: Record<string, string[]> = {
   'Copy data': ['orders_2026.csv', '${run.runId}', 'customer_name', 'E2E-1'],
   'Copy data (files as-is)': ['files.txt', '/tmp/e2e/done', 'merged.txt', 'E2E-1'],
   'Copy data (files from a folder)': ['*.csv', '/tmp/e2e/in'],
+  'Copy data (inline query)': [INLINE_SQL, 'region', 'EU', '${run.runId}'],
+  'Lookup rows (inline table)': ['main', 'orders'],
   'Delete file': ['/tmp/e2e/old.txt', '2048', 'E2E-1'],
   'List directory': ['/tmp/e2e', '2048', 'E2E-1'],
   'Read file': ['/tmp/e2e/in.txt', '2048', 'E2E-1'],
@@ -472,6 +478,32 @@ function seeds(ids: SeedIds): Record<string, Seed> {
           recursive: true,
           sinkFolder: '/tmp/e2e/out',
         },
+      },
+    },
+    // #1600 C1q-b — a database source read inline: Use, the statement and its
+    // bind values on Copy, and the schema and table on Lookup.
+    'Copy data (inline query)': {
+      node: {
+        ...exec,
+        type: 'copy',
+        connectionIds: { source: ids.sql, sink: ids.sql },
+        datasetIds: { sink: ids.sink },
+        inlineDatasets: {
+          source: {
+            kind: 'query',
+            config: { sql: INLINE_SQL, parameters: { region: 'EU', load: '${run.runId}' } },
+          },
+        },
+        config: { mode: 'append', mapping: [{ source: 'id', sink: 'id', type: 'integer' }] },
+      },
+    },
+    'Lookup rows (inline table)': {
+      node: {
+        ...exec,
+        type: 'lookup',
+        connectionId: ids.sql,
+        inlineDatasets: { source: { kind: 'table', config: { schema: 'main', table: 'orders' } } },
+        config: {},
       },
     },
     'Delete file': fsNode('file_delete', { path: '/tmp/e2e/old.txt' }),

@@ -27,8 +27,13 @@ export function ExpressionEditor({
   fieldName: string;
   value: string;
   onChange: (next: string) => void;
-  picker: FieldPicker;
-  target: PickerTarget;
+  /**
+   * #1600 C1q-b — omitted for a LITERAL field (an inline query's SQL), which
+   * takes no `${}`: the editor is then a plain full-size text box, with no
+   * reference or function flyout to insert one.
+   */
+  picker?: FieldPicker;
+  target?: PickerTarget;
   /** The field holds one line: a line break never enters it, and Enter is OK. */
   singleLine: boolean;
 }) {
@@ -109,8 +114,8 @@ function EditorDialog({
   fieldName: string;
   draft: string;
   setDraft: (next: string) => void;
-  picker: FieldPicker;
-  target: PickerTarget;
+  picker: FieldPicker | undefined;
+  target: PickerTarget | undefined;
   singleLine: boolean;
   /** Close; the draft to write, or `null` to discard it. */
   onDone: (next: string | null) => void;
@@ -198,10 +203,12 @@ function EditorDialog({
         onSelect={onSelect}
         onChange={(e) => edit(e.target.value)}
       />
-      <ExpressionPicker
-        fieldName={fieldName}
-        {...fieldPickerProps({ insert, functionOptions }, picker, target, draft, edit)}
-      />
+      {picker !== undefined && target !== undefined && (
+        <ExpressionPicker
+          fieldName={fieldName}
+          {...fieldPickerProps({ insert, functionOptions }, picker, target, draft, edit)}
+        />
+      )}
       <div className="expression-editor-actions">
         {/* The confirm dialog's order: Cancel, then the primary act, at the right. */}
         <button type="button" onClick={() => onDone(null)}>

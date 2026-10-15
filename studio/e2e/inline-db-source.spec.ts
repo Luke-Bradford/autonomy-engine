@@ -1,20 +1,28 @@
-import { expect, test } from '@playwright/test';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { nodeById, openSeededCanvas } from './support/seedDoc';
+import { fireAndSettle, nodeById, openSeededCanvas } from './support/seedDoc';
 import { problemsToggle, properties } from './support/panels';
 import { seedConnection, seedDataset } from './support/seedResources';
 
 /**
- * #1600 OR41 C1q-a — a Copy whose SOURCE is an inline Query (`Node.inlineDatasets`)
- * beside a saved SINK dataset (`datasetIds: { sink }`), seeded through the API.
+ * #1600 OR41 C1q — a Copy or Lookup whose SOURCE is an inline Table or Query
+ * (`Node.inlineDatasets`), read straight from the bound database connection.
  *
- * What this pins, before C1q-b brings the editable Source block: the server's save
- * gate and the client's write-schema parse both accept the sink-only shape; the
- * canvas's own validation raises no problem for it; and the node's source is
- * visible in the form (UI standard rule 3) on its card and on the Source tab.
+ * C1q-a seeded it through the API and showed it read-only; C1q-b makes the Source
+ * tab's *Use* Saved dataset · Table · Query block edit it. The second test is
+ * the ticket's acceptance, the watermark journey, with the Copy's query AUTHORED
+ * in the dock and then run for real against a SQLite file.
  */
+
+const sourceTab = (page: Page) =>
+  properties(page).getByRole('tab', { name: 'Source', exact: true });
+
 test.describe('#1600 C1q — an inline database source', () => {
-  test('a copy reading an inline query shows it on its card and its Source tab, with no problem raised', async ({
+  test('a seeded inline query opens as Use Query, its statement and bind value editable, with no problem raised', async ({
     page,
   }) => {
     const problems = collectPageProblems(page);
@@ -53,13 +61,164 @@ test.describe('#1600 C1q — an inline database source', () => {
     await expect(card).toContainText('e2e 1600 c1q stage');
 
     await card.click();
-    await properties(page).getByRole('tab', { name: 'Source', exact: true }).click();
-    const line = properties(page).getByTestId('inline-source');
-    await expect(line).toContainText('Inline query');
-    await expect(line.locator('code')).toHaveText(sql);
+    await sourceTab(page).click();
+    const pane = properties(page);
+    await expect(pane.getByRole('combobox', { name: 'Use' })).toHaveValue('query');
+    await expect(pane.getByRole('textbox', { name: 'SQL statement' })).toHaveValue(sql);
+    await expect(pane.getByRole('textbox', { name: 'Bind value 1 name' })).toHaveValue('wm');
+    await expect(pane.getByRole('textbox', { name: 'Bind value 1 value' })).toHaveValue(
+      '${params.wm}',
+    );
+    // An inline source stands in for the saved picker.
+    await expect(pane.getByRole('combobox', { name: 'Source dataset' })).toHaveCount(0);
+    // The statement is literal: no ⓕ beside it, and its ⤢ editor has no reference list.
+    await expect(
+      pane.getByRole('button', { name: 'Insert reference into SQL statement' }),
+    ).toHaveCount(0);
+    await expect(pane.getByRole('button', { name: 'Insert reference into :wm' })).toHaveCount(1);
+    await pane.getByRole('button', { name: 'Open SQL statement in the editor' }).click();
+    const editor = page.getByRole('dialog');
+    await expect(editor.getByRole('textbox')).toHaveValue(sql);
+    await expect(editor.getByRole('button', { name: /^Insert reference/ })).toHaveCount(0);
+    await editor.getByRole('button', { name: 'Cancel' }).click();
+    await expect(editor).toHaveCount(0);
 
     // The canvas validates with the same `validateDoc` the server ran: nothing to report.
     await expect(problemsToggle(page)).not.toHaveText(/[1-9]/);
     await expectQuiet(page, problems);
+  });
+
+  test('the watermark journey: a Lookup reads the watermark, the Copy query authored in the dock binds it, and only newer rows land', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    // `realpathSync`: macOS `/var` is a symlink, and roots compare REAL paths.
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1600-c1qb-')));
+    try {
+      const dbPath = join(root, 'warehouse.db');
+      const db = new DatabaseSync(dbPath);
+      db.exec(`
+        CREATE TABLE etl_control (name TEXT, last_wm INTEGER);
+        INSERT INTO etl_control VALUES ('orders', 100);
+        CREATE TABLE orders (id INTEGER, modified_at INTEGER);
+        INSERT INTO orders VALUES (1, 50), (2, 150), (3, 200);
+        CREATE TABLE stage (id INTEGER);
+      `);
+      db.close();
+      const conn = await seedConnection(page, {
+        name: 'e2e 1600 c1qb warehouse',
+        kind: 'sqlite',
+        config: { roots: [root], path: dbPath, writable: true },
+      });
+      const sink = await seedDataset(page, {
+        name: 'e2e 1600 c1qb stage',
+        kind: 'table',
+        connectionId: conn,
+        config: { table: 'stage' },
+        columns: [{ name: 'id', type: 'integer', nullable: true }],
+      });
+      const pipelineId = await openSeededCanvas(page, 'e2e 1600 c1qb watermark', {
+        nodes: [
+          {
+            id: 'lookup1',
+            type: 'lookup',
+            config: {},
+            connectionId: conn,
+            inlineDatasets: {
+              source: {
+                kind: 'query',
+                config: {
+                  sql: 'SELECT last_wm FROM etl_control WHERE name = :n',
+                  parameters: { n: 'orders' },
+                },
+              },
+            },
+            position: { x: 0, y: 0 },
+          },
+          {
+            id: 'copy1',
+            type: 'copy',
+            config: { mapping: [{ source: 'id', sink: 'id', type: 'integer' }], mode: 'append' },
+            connectionIds: { source: conn, sink: conn },
+            datasetIds: { sink },
+            // The whole table to start with; the author narrows it below.
+            inlineDatasets: { source: { kind: 'table', config: { table: 'orders' } } },
+            position: { x: 320, y: 0 },
+          },
+        ],
+        edges: [{ from: 'lookup1', to: 'copy1', on: 'success' }],
+      });
+
+      await nodeById(page, 'copy1').click();
+      await sourceTab(page).click();
+      const pane = properties(page);
+      const use = pane.getByRole('combobox', { name: 'Use' });
+      await expect(use).toHaveValue('table');
+      await expect(pane.getByRole('textbox', { name: 'Table' })).toHaveValue('orders');
+
+      await use.selectOption('query');
+      await pane
+        .getByRole('textbox', { name: 'SQL statement' })
+        .fill('SELECT id FROM orders WHERE modified_at > :wm');
+      await pane.getByRole('button', { name: 'Add bind value' }).click();
+      const name = pane.getByRole('textbox', { name: 'Bind value 1 name' });
+      await expect(name).toHaveValue('p1');
+      // A leading colon is refused at the row, not stored as a key that never binds.
+      await name.fill(':wm');
+      await expect(pane.getByText('Leave out the leading :.')).toBeVisible();
+      await name.fill('wm');
+      await expect(pane.getByText('Leave out the leading :.')).toHaveCount(0);
+      await pane
+        .getByRole('textbox', { name: 'Bind value 1 value' })
+        .fill('${nodes.lookup1.output.rows[0].last_wm}');
+      await expect(problemsToggle(page)).not.toHaveText(/[1-9]/);
+
+      await page.getByRole('button', { name: 'Save version' }).click();
+      await expect(page.locator('.notice')).toHaveText('Saved v2.');
+      const versions = (await (
+        await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+      ).json()) as { id: string; version: number; nodes: Record<string, unknown>[] }[];
+      const latest = versions.sort((a, b) => b.version - a.version)[0]!;
+      const copy = latest.nodes.find((n) => n['id'] === 'copy1')!;
+      expect(copy['inlineDatasets']).toEqual({
+        source: {
+          kind: 'query',
+          config: {
+            sql: 'SELECT id FROM orders WHERE modified_at > :wm',
+            parameters: { wm: '${nodes.lookup1.output.rows[0].last_wm}' },
+          },
+        },
+      });
+      expect(copy['datasetIds']).toEqual({ sink });
+
+      const staged = () => {
+        const back = new DatabaseSync(dbPath, { readOnly: true });
+        try {
+          return back.prepare('SELECT id FROM stage ORDER BY id').all();
+        } finally {
+          back.close();
+        }
+      };
+      const runOk = async (label: string) => {
+        const runId = await fireAndSettle(page, latest.id, label);
+        const run = await (await page.request.get(`/api/runs/${encodeURIComponent(runId)}`)).json();
+        expect(run.status, `run: ${JSON.stringify(run)}`).toBe('success');
+      };
+
+      // Only the rows modified after the watermark (100) land.
+      await runOk('e2e 1600 c1qb first');
+      expect(staged()).toEqual([{ id: 2 }, { id: 3 }]);
+
+      // A raised watermark copies none.
+      const control = new DatabaseSync(dbPath);
+      control.exec("UPDATE etl_control SET last_wm = 300 WHERE name = 'orders'");
+      control.close();
+      await runOk('e2e 1600 c1qb second');
+      expect(staged()).toEqual([{ id: 2 }, { id: 3 }]);
+
+      await expectQuiet(page, problems);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

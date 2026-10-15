@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getActivity } from '@autonomy-studio/shared';
+import { getActivity, validateDoc, type Node } from '@autonomy-studio/shared';
 import { nodeTypeTabs } from './activityTabs';
 import { deriveConfigFields } from './configForm';
 import {
@@ -89,6 +89,51 @@ describe('issueTarget (#1477)', () => {
 
   it('keeps a dotted node id whole', () => {
     expect(issueTarget('nodes.a.b.config.url: bad', 'a.b')).toEqual({ field: 'url' });
+  });
+
+  it('#1600 C1q-b — puts every inline-source issue validateDoc raises on the Source dataset slot', () => {
+    // The validator's own messages, not copies of them: a reworded message that
+    // stops reaching the Source tab fails here.
+    const copy = (id: string, extra: Partial<Node>): Node => ({
+      id,
+      type: 'copy',
+      config: { mapping: [{ source: 'id', sink: 'id', type: 'integer' }], mode: 'append' },
+      connectionIds: { source: 'c1', sink: 'c2' },
+      position: { x: 0, y: 0 },
+      ...extra,
+    });
+    const nodes: Node[] = [
+      // not valid (an empty table name), and named beside a saved source
+      copy('a', {
+        datasetIds: { source: 'd1', sink: 'd2' },
+        inlineDatasets: { source: { kind: 'table', config: { table: '' } } },
+      }),
+      // `${` in the SQL
+      copy('b', {
+        datasetIds: { sink: 'd2' },
+        inlineDatasets: {
+          source: {
+            kind: 'query',
+            config: { sql: 'SELECT ${params.x}' },
+          },
+        },
+      }),
+      // a sink alone
+      copy('c', { datasetIds: { sink: 'd2' } }),
+    ];
+    const issues = validateDoc({ params: [], nodes, edges: [], containers: [], variables: [] });
+    for (const id of ['a', 'b', 'c']) {
+      const own = issues.filter((m) => issueTarget(m, id) !== undefined);
+      expect(own.length, `issues for ${id}: ${issues.join(' | ')}`).toBeGreaterThan(0);
+      for (const m of own) expect(issueTarget(m, id), m).toEqual({ slot: 'sourceDataset' });
+    }
+    expect(issues.filter((m) => /^node\.a: /.test(m))).toHaveLength(2);
+    // A parameter value's expression issue is reported on its config path.
+    expect(
+      issueTarget("nodes.b.inlineDatasets.source.config.parameters.p: unknown param 'nope'", 'b'),
+    ).toEqual({
+      slot: 'sourceDataset',
+    });
   });
 });
 
