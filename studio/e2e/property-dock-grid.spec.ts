@@ -246,26 +246,44 @@ test('the run policy keeps one row rhythm, and its errors share one line below i
   const general = properties(page).getByRole('tabpanel', { name: 'General' });
   const rows = () =>
     general.evaluate((tab) => {
-      const top = (name: string) => {
+      const row = (name: string) => {
         const el = Array.from(tab.querySelectorAll('input')).find(
           (i) => i.labels?.[0]?.textContent?.startsWith(name) ?? false,
         );
-        return el!.closest('.labelled-control, .help-row')!.getBoundingClientRect().top;
+        // The union of the label and its control: a narrow dock's row may
+        // generate no box of its own.
+        const [a, b] = [el!.labels![0]!.getBoundingClientRect(), el!.getBoundingClientRect()];
+        const top = Math.min(a.top, b.top);
+        return { top, height: Math.max(a.bottom, b.bottom) - top };
       };
       const css = getComputedStyle(tab);
       const space = (v: string) => parseFloat(css.getPropertyValue(v));
+      const gap = space('--space-2');
+      // Distinct rows top to bottom: a wide dock packs Retries and Retry
+      // interval onto one, a narrow one stacks them.
+      const tops: { top: number; height: number }[] = [];
+      for (const r of ['Timeout', 'Retries', 'Retry interval', 'Secure input'].map(row)) {
+        const same = tops.find((t) => Math.abs(t.top - r.top) <= 1);
+        if (same === undefined) tops.push(r);
+        else same.height = Math.max(same.height, r.height);
+      }
+      tops.sort((x, y) => x.top - y.top);
+      const pairs = tops.slice(1).map((r, i) => [tops[i]!, r] as const);
       return {
-        pitch: [top('Timeout'), top('Retries'), top('Secure input')]
-          .map((t, i, a) => (i === 0 ? 0 : t - a[i - 1]!))
-          .slice(1),
-        rhythm: space('--control-h') + space('--space-2'),
+        rows: tops.length,
+        pitch: pairs.map(([up, down]) => down.top - up.top),
+        // What a row adds beyond its own box and the gap: nothing, now.
+        extra: pairs.map(([up, down]) => down.top - up.top - up.height - gap),
+        rhythm: space('--control-h') + gap,
         slots: tab.querySelectorAll('.field-error-slot').length,
       };
     });
 
   const wide = await rows();
   expect(wide.rhythm).toBe(36);
+  expect(wide.rows).toBe(3);
   for (const p of wide.pitch) expect(Math.abs(p - wide.rhythm)).toBeLessThanOrEqual(1);
+  for (const e of wide.extra) expect(Math.abs(e)).toBeLessThanOrEqual(1);
   expect(wide.slots).toBe(1);
 
   // An error lands in the shared line, below every field, named.
@@ -289,7 +307,10 @@ test('the run policy keeps one row rhythm, and its errors share one line below i
   await expect
     .poll(() => general.evaluate((el) => el.getBoundingClientRect().width))
     .toBeLessThan(580);
+  // A narrow dock stacks a number's label over it, so its rows are taller by
+  // design; still nothing is reserved between them.
   const narrow = await rows();
-  for (const p of narrow.pitch) expect(Math.abs(p - narrow.rhythm)).toBeLessThanOrEqual(1);
+  expect(narrow.rows).toBe(4);
+  for (const e of narrow.extra) expect(Math.abs(e)).toBeLessThanOrEqual(1);
   await expectQuiet(page, problems);
 });

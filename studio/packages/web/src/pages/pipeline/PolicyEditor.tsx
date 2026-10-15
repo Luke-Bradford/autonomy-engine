@@ -80,7 +80,7 @@ export function PolicyEditor({
   );
 
   // #1694 OR42 item 5 — the numbers' errors share one reserved line under the
-  // grid, so the rows keep the dock's rhythm.
+  // fields, so the rows keep the dock's rhythm.
   const errors = useFieldErrorLine();
 
   function set(patch: Partial<NodePolicy>) {
@@ -92,11 +92,12 @@ export function PolicyEditor({
 
   return (
     <Section heading="Run policy" help={null}>
-      {/* One grid (#1694 OR42 item 5): the timeout is a row of its own as a
-          long cell, while its input stays an S. */}
-      <FieldGrid className="field-stack">
-        {timesOut && (
-          <FieldCell span="long">
+      {/* Three grids, not one: a wide dock packs three short cells to a row,
+          which would put a flag beside the numbers. The section spaces them by the
+          grid's own row gap, so the rhythm is the same either way. */}
+      {timesOut && (
+        <FieldGrid className="field-stack">
+          <FieldCell span="short">
             <DraftNumberField
               label="Timeout"
               unit="seconds"
@@ -108,7 +109,9 @@ export function PolicyEditor({
               errorLine={errors.node}
             />
           </FieldCell>
-        )}
+        </FieldGrid>
+      )}
+      <FieldGrid className="field-stack">
         <FieldCell span="short">
           <DraftNumberField
             label="Retries"
@@ -136,6 +139,8 @@ export function PolicyEditor({
             errorLine={errors.node}
           />
         </FieldCell>
+      </FieldGrid>
+      <FieldGrid className="field-stack">
         <FieldCell span="short">
           <CheckboxField
             label="Secure input"
