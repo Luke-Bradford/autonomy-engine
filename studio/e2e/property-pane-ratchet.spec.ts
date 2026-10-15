@@ -322,7 +322,7 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   'Copy data': 9,
   'Copy data (files as-is)': 19,
   'Copy data (files from a folder)': 16,
-  'Copy data (inline query)': 11,
+  'Copy data (inline query)': 12,
   'Delete file': 7,
   'HTTP request': 9,
   'List directory': 7,
