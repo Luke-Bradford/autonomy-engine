@@ -162,6 +162,22 @@ describe('placeNote (#1695 OR43 — the open note, in the top layer)', () => {
     ).toBe(`${150 - 8 - 120}px`);
   });
 
+  it('is held inside the viewport when its anchor is below it (#1707)', () => {
+    // A list that finished loading pushed the ? 1200px down. "Above" the ? is
+    // still off-screen, so flipping alone put the note at y=2139 of 1000.
+    expect(
+      place(
+        rect(600, 2200, 16, 16),
+        { width: 352, height: 58 },
+        { viewport: { width: 1920, height: 1000 } },
+      ).top,
+    ).toBe(`${1000 - 8 - 58}px`);
+  });
+
+  it('is held inside the viewport when its anchor is above it', () => {
+    expect(place(rect(600, -500, 16, 16), { width: 352, height: 58 }).top).toBe('8px');
+  });
+
   it('is held inside the viewport sideways', () => {
     // Its right edge on the ?'s would put its left at -252.
     expect(place(rect(84, 100, 16, 16), { width: 352, height: 60 }).left).toBe('8px');

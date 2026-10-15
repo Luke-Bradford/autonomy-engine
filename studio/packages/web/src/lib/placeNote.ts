@@ -29,9 +29,12 @@ export function placeNote(details: HTMLElement, note: HTMLElement, inline: boole
   const flip = below + n.height > win.innerHeight - NOTE_EDGE && above >= NOTE_EDGE;
   // Neither side has the room: held inside the viewport, over the anchor if it
   // must be. Its `max-height` (`index.css`) is the viewport less both edges.
-  const top = flip
-    ? above
-    : Math.max(NOTE_EDGE, Math.min(below, win.innerHeight - NOTE_EDGE - n.height));
+  // Flipped too (#1707): an anchor BELOW the viewport has "room above" that is
+  // itself off-screen, so the flip alone would hide the note.
+  const top = Math.max(
+    NOTE_EDGE,
+    Math.min(flip ? above : below, win.innerHeight - NOTE_EDGE - n.height),
+  );
   note.style.left = `${left}px`;
   note.style.top = `${top}px`;
 }
