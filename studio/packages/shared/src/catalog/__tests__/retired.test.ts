@@ -62,7 +62,8 @@ describe('#1600 C1b — lowerRetiredTypes', () => {
       },
     });
     expect(lowered).not.toHaveProperty('connectionId');
-    const { outputs: _o, ...config } = lowered!.config;
+    const config = { ...lowered!.config };
+    delete config['outputs'];
     expect(copyFilesConfigSchema.safeParse(config).success).toBe(true);
   });
 
@@ -75,7 +76,11 @@ describe('#1600 C1b — lowerRetiredTypes', () => {
 
   it('keeps an inactive node inactive, and an unbound one unbound', () => {
     const [lowered] = lowerRetiredTypes([
-      fileNode('file_copy', { source: 'a', dest: 'b' }, { connectionId: undefined, state: 'inactive' }),
+      fileNode(
+        'file_copy',
+        { source: 'a', dest: 'b' },
+        { connectionId: undefined, state: 'inactive' },
+      ),
     ]);
     expect(lowered!.type).toBe('copy_files');
     expect(lowered!.state).toBe('inactive');
@@ -83,13 +88,21 @@ describe('#1600 C1b — lowerRetiredTypes', () => {
   });
 
   it.each([
-    ['connection parameters, which a paired node refuses', { connectionParams: { maxBytes: 1 } }, {}],
+    [
+      'connection parameters, which a paired node refuses',
+      { connectionParams: { maxBytes: 1 } },
+      {},
+    ],
     ['a whole-expression destination', {}, { dest: '${pipeline.parameters.dest}' }],
     ['a half-filled config', {}, { source: '' }],
     ['a destination ending in a folder separator', {}, { dest: 'out/' }],
     ['no destination', {}, { dest: undefined }],
   ])('leaves a node with %s as it is', (_why, extra, config) => {
-    const node = fileNode('file_copy', { source: 'a', dest: 'b', ...config }, extra as Partial<Node>);
+    const node = fileNode(
+      'file_copy',
+      { source: 'a', dest: 'b', ...config },
+      extra as Partial<Node>,
+    );
     expect(lowerRetiredTypes([node])[0]).toBe(node);
   });
 

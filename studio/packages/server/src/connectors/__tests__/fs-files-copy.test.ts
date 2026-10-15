@@ -677,8 +677,16 @@ describe('Copy · Files as-is — hardening (#1685)', () => {
 describe('#1600 C1b — source and dest outputs', () => {
   it('one file names the file read and the file written', async () => {
     await put('in/a.csv', 'aa');
-    const events = await run({ pathType: 'file', sourcePath: 'in/a.csv', sinkFolder: 'out', sinkFileName: 'b/x.csv' });
-    expect(outputs(events)).toMatchObject({ source: join(src, 'in/a.csv'), dest: join(dst, 'out/b/x.csv') });
+    const events = await run({
+      pathType: 'file',
+      sourcePath: 'in/a.csv',
+      sinkFolder: 'out',
+      sinkFileName: 'b/x.csv',
+    });
+    expect(outputs(events)).toMatchObject({
+      source: join(src, 'in/a.csv'),
+      dest: join(dst, 'out/b/x.csv'),
+    });
   });
 
   it('a merge names the merged file', async () => {
@@ -691,7 +699,11 @@ describe('#1600 C1b — source and dest outputs', () => {
   it('names them when the window selects nothing, so the declared outputs are met', async () => {
     const path = await put('in/a.csv', 'a');
     await utimes(path, new Date('2020-01-01T00:00:00Z'), new Date('2020-01-01T00:00:00Z'));
-    const events = await run({ pathType: 'file', sourcePath: 'in/a.csv', modifiedStart: '2026-01-01T00:00:00Z' });
+    const events = await run({
+      pathType: 'file',
+      sourcePath: 'in/a.csv',
+      modifiedStart: '2026-01-01T00:00:00Z',
+    });
     expect(outputs(events)).toMatchObject({ filesRead: 0, source: path, dest: join(dst, 'a.csv') });
   });
 });
@@ -729,7 +741,8 @@ describe('#1600 C1b — a lowered file_copy / file_move runs as the retired type
       { id: 'n1', type, config, connectionId: 'c', position: { x: 0, y: 0 } } as Node,
     ])[0]!;
     expect(node.type).toBe(COPY_FILES_ACTIVITY_TYPE);
-    const { outputs: _declared, ...input } = node.config;
+    const input = { ...node.config };
+    delete input['outputs'];
     return input;
   };
 
@@ -746,7 +759,12 @@ describe('#1600 C1b — a lowered file_copy / file_move runs as the retired type
     const before = await readFile(join(src, 'out/x.csv'), 'utf8');
     await rm(join(src, 'out/x.csv'));
     const now = outputs(
-      await dispatch(COPY_FILES_ACTIVITY_TYPE, lowered(FILE_COPY_ACTIVITY_TYPE, { source: 'in/a.csv', dest }), true, true),
+      await dispatch(
+        COPY_FILES_ACTIVITY_TYPE,
+        lowered(FILE_COPY_ACTIVITY_TYPE, { source: 'in/a.csv', dest }),
+        true,
+        true,
+      ),
     );
     expect(await readFile(join(src, 'out/x.csv'), 'utf8')).toBe(before);
     expect({ bytesWritten: now.bytesWritten, source: now.source, dest: now.dest }).toEqual(old);
@@ -762,7 +780,12 @@ describe('#1600 C1b — a lowered file_copy / file_move runs as the retired type
     await rm(join(src, 'out/x.csv'));
     await put('in/a.csv', 'payload');
     const now = outputs(
-      await dispatch(COPY_FILES_ACTIVITY_TYPE, lowered(FILE_MOVE_ACTIVITY_TYPE, config), true, true),
+      await dispatch(
+        COPY_FILES_ACTIVITY_TYPE,
+        lowered(FILE_MOVE_ACTIVITY_TYPE, config),
+        true,
+        true,
+      ),
     );
     expect(await tree(src)).toEqual(['out/x.csv']);
     expect(await readFile(join(src, 'out/x.csv'), 'utf8')).toBe('payload');
@@ -771,7 +794,12 @@ describe('#1600 C1b — a lowered file_copy / file_move runs as the retired type
 
   it('the stored retired type still runs on a connection that never allowed writes', async () => {
     await put('in/a.csv', 'payload');
-    const events = await dispatch(FILE_COPY_ACTIVITY_TYPE, { source: 'in/a.csv', dest: 'b.csv' }, false, false);
+    const events = await dispatch(
+      FILE_COPY_ACTIVITY_TYPE,
+      { source: 'in/a.csv', dest: 'b.csv' },
+      false,
+      false,
+    );
     expect(last(events).type).toBe('succeeded');
   });
 });

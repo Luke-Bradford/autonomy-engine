@@ -106,9 +106,16 @@ describe('canvasStore', () => {
     expect(n).toMatchObject({
       type: 'copy_files',
       connectionIds: { source: 'conn_fs', sink: 'conn_fs' },
-      config: { pathType: 'file', sourcePath: 'in/a.csv', sinkFolder: 'out', sinkFileName: 'a.csv' },
+      config: {
+        pathType: 'file',
+        sourcePath: 'in/a.csv',
+        sinkFolder: 'out',
+        sinkFileName: 'a.csv',
+      },
     });
-    expect(n!.config['outputs']).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'dest' })]));
+    expect(n!.config['outputs']).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'dest' })]),
+    );
     expect(s.getState().dirty).toBe(false);
     expect(s.getState().loaded?.nodes[0]?.type).toBe('file_copy');
   });
