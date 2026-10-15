@@ -1,5 +1,5 @@
 import type { Node } from '../schemas/pipeline.js';
-import { protectEscapes, restoreEscapes, scanTemplateRefs } from '../engine/expr.js';
+import { protectEscapes, scanTemplateRefs } from '../engine/expr.js';
 import { copyFilesConfigSchema } from './copy-files-config.js';
 import { getActivity } from './registry.js';
 import {
@@ -54,6 +54,10 @@ export interface RetiredLowering {
   lower: (node: Node) => Node | undefined;
 }
 
+/** `protectEscapes`' sentinel for a `$${` escape, put back AS WRITTEN (not as the `${` it evaluates to). */
+const ESCAPE = protectEscapes('$${');
+const unprotect = (s: string) => s.split(ESCAPE).join('$${');
+
 /**
  * Split a destination path into its folder and its file name at the last `/`
  * outside every `${…}`, so `${dir}/out.csv` splits and `out/${name}` does too.
@@ -78,8 +82,8 @@ export function splitDestination(
   if (cut === -1) {
     return matches.length === 0 ? { folder: undefined, name: dest } : undefined;
   }
-  const folder = restoreEscapes(s.slice(0, cut));
-  return { folder: folder === '' ? '/' : folder, name: restoreEscapes(s.slice(cut + 1)) };
+  const folder = unprotect(s.slice(0, cut));
+  return { folder: folder === '' ? '/' : folder, name: unprotect(s.slice(cut + 1)) };
 }
 
 /** `file_copy` and `file_move` → Copy · Files as-is, one file, After copy Keep or Delete source. */

@@ -161,6 +161,7 @@ import { OUTPUT_COLUMNS, PARAM_COLUMNS, VARIABLE_COLUMNS } from './contractColum
 import {
   isOwnPolicyIssue,
   descriptionIssues,
+  writeAccessWarnings,
   userPropertiesIssues,
   policyIssues,
   saveDisabledReason,
@@ -1164,9 +1165,11 @@ export function PipelineCanvas({
         ...descriptionIssues(nodes),
         ...userPropertiesIssues(nodes),
       ].map(rewrite),
-      warnings: advisories.map((raw) => readableIssue(raw, nodes, edges, containers)),
+      warnings: [...advisories, ...writeAccessWarnings(nodes, connections)].map((raw) =>
+        readableIssue(raw, nodes, edges, containers),
+      ),
     };
-  }, [nodes, edges, containers, params, variables, globals]);
+  }, [nodes, edges, containers, params, variables, globals, connections]);
   const clientIssues = useMemo(
     () => [
       ...located.map((issue) => issue.text),
