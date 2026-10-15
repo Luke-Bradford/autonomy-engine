@@ -292,4 +292,19 @@ describe('isModalDialogOpen (#1397)', () => {
   ])('is false for %s', (_, attrs) => {
     withSurface(attrs, () => expect(isModalDialogOpen()).toBe(false));
   });
+
+  // #1694 — the ⤢ editor is a native <dialog>, whose role is only implicit:
+  // matched by tag, and only while it is open.
+  it('a native modal <dialog> counts only while open', () => {
+    const dialog = document.createElement('dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    document.body.appendChild(dialog);
+    try {
+      expect(isModalDialogOpen()).toBe(false);
+      dialog.setAttribute('open', '');
+      expect(isModalDialogOpen()).toBe(true);
+    } finally {
+      dialog.remove();
+    }
+  });
 });

@@ -5466,6 +5466,64 @@ textarea[data-grow='edit'],
   font-family: var(--font-mono);
 }
 
+/* #1694 OR42 F10 — ⤢: a field in a full-size editor. A native modal
+   `<dialog>` in the top layer, portalled to the app's Fluent root
+   (`ExpressionEditor`), so it is themed here and not by the UA sheet, which
+   would paint it `Canvas` white in dark mode. */
+.expression-editor {
+  width: min(960px, calc(100vw - var(--space-6) * 2));
+  max-height: calc(100vh - var(--space-6) * 2);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  overflow-y: auto;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-surface);
+}
+
+/* `display: flex` above would show a CLOSED dialog; it is mounted only while
+   open, and this keeps the UA's rule if that ever changes. */
+.expression-editor:not([open]) {
+  display: none;
+}
+
+.expression-editor::backdrop {
+  /* Fluent's own dialog scrim; `::backdrop` inherits it from the dialog. */
+  background: var(--colorBackgroundOverlay);
+}
+
+.expression-editor h2 {
+  margin: 0;
+  font: var(--type-section);
+  overflow-wrap: anywhere;
+}
+
+.expression-editor-text {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font-family: var(--font-mono);
+}
+
+.expression-editor .expression-picker {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.expression-editor .expression-picker-list {
+  flex-basis: 100%;
+}
+
+.expression-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
 /* An open list is wider than its cell; the table grows into its scroll. */
 .row-table .expression-picker-list {
   flex-basis: 100%;

@@ -1,5 +1,11 @@
-import { useEffect, useRef } from 'react';
-import type { ExampleChoices, FunctionOption, FunctionsOptions } from './ExpressionPicker';
+import { useEffect, useRef, type ComponentProps } from 'react';
+import type { FieldPicker, PickerTarget } from './ConfigFieldControl';
+import type {
+  ExampleChoices,
+  ExpressionPicker,
+  FunctionOption,
+  FunctionsOptions,
+} from './ExpressionPicker';
 import {
   applyInsert,
   applyWrap,
@@ -50,7 +56,7 @@ export function useCaretInsert<E extends HTMLInputElement | HTMLTextAreaElement>
     return [el.selectionStart ?? text.length, el.selectionEnd ?? text.length];
   };
 
-  return {
+  const api = {
     ref,
     onSelect: () => {
       touched.current = true;
@@ -105,4 +111,44 @@ export function useCaretInsert<E extends HTMLInputElement | HTMLTextAreaElement>
       };
     },
   };
+  return api;
 }
+
+/**
+ * The flyout's props for `text` in one caret-tracked control (#1286):
+ * references land at its caret and functions are judged at its selection, both
+ * through the field's `picker` at `target`. ONE wiring for every text control
+ * that carries the flyout — the config form's field, `PickableInput`'s row and
+ * the ⤢ editor's box — so the three cannot drift apart.
+ *
+ * Takes the caret's two functions, not the hook's whole result: the result
+ * holds the control's ref, which nothing may be handed during render.
+ */
+export function fieldPickerProps(
+  { insert, functionOptions }: Pick<CaretInsert, 'insert' | 'functionOptions'>,
+  picker: FieldPicker,
+  target: PickerTarget,
+  text: string,
+  onChange: (next: string) => void,
+): Pick<
+  ComponentProps<typeof ExpressionPicker>,
+  'describe' | 'resolve' | 'onSelect' | 'functions'
+> {
+  return {
+    describe: picker.describe,
+    resolve: () => picker.resolve(target),
+    onSelect: (inserted, mode) => onChange(insert(text, inserted, mode)),
+    functions: {
+      value: text,
+      resolve: () =>
+        functionOptions(
+          text,
+          (span) => picker.wraps(target, text, span),
+          () => picker.examples(target),
+          onChange,
+        ),
+    },
+  };
+}
+
+type CaretInsert = ReturnType<typeof useCaretInsert>;
