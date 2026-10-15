@@ -19,7 +19,7 @@ import {
   type Seed,
 } from './callRules';
 import type { createCanvasStore } from './canvasStore';
-import type { FieldPicker } from './ConfigFieldControl';
+import { EDIT_ROWS, type FieldPicker } from './ConfigFieldControl';
 import { PickableInput } from './PickableInput';
 import { Toolbar } from '../../lib/PageHeader';
 import { CheckboxField } from '../../lib/form/CheckboxField';
@@ -457,7 +457,9 @@ function CallEditor({
                 label="Parameters (JSON object)"
                 value={draft.paramsJson}
                 onValueChange={(paramsJson) => setDraft((d) => ({ ...d, paramsJson }))}
-                rows={4}
+                // #1694 OR42 F10 — expand on edit, as every config field does.
+                restRows={1}
+                maxRows={EDIT_ROWS}
                 placeholder="{}"
                 aria-describedby={describedBy}
               />

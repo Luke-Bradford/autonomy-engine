@@ -126,7 +126,7 @@ export type PickerTarget = {
  * #1694 OR42 F10 — the lines a top-level text box grows to while it is edited;
  * a table cell's box grows to the same (`.row-table td textarea`, index.css).
  */
-const EDIT_ROWS = 8;
+export const EDIT_ROWS = 8;
 
 /** A top-level config field's position: the one shape the flyout knew before #1178. */
 const topLevelTarget = (name: string): PickerTarget => ({
@@ -505,7 +505,9 @@ export function ConfigFieldControl({
               ref={inputRef as RefObject<HTMLTextAreaElement | null>}
               value={text}
               onSelect={onSelect}
-              rows={cell ? 2 : 4}
+              // A cell keeps its two lines; a top-level box expands on edit
+              // like a text one (#1694 OR42 F10).
+              {...(cell ? { rows: 2 } : { restRows: 1, maxRows: EDIT_ROWS })}
               placeholder={field.defaultText}
               aria-required={required || undefined}
               aria-describedby={describedBy}

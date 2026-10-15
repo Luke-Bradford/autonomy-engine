@@ -38,6 +38,7 @@ export function ConfigEditor<K extends string>({
    */
   kindLabel: string;
   className: string;
+  /** The most lines the JSON view grows to, sized to its config below that. */
   rows: number;
   advisory: string | null;
   choicesFor?: (fieldName: string) => FieldChoices | undefined;
@@ -104,7 +105,9 @@ export function ConfigEditor<K extends string>({
                 label="Config (JSON)"
                 value={editor.jsonText}
                 onValueChange={editor.setJsonText}
-                rows={rows}
+                // #1694 OR42 F10 — as tall as its text, never more than `rows`:
+                // the whole config is the view, so it is not collapsed at rest.
+                maxRows={rows}
                 {...(errorFor === undefined
                   ? {}
                   : fieldAttrs({ key: 'config', error: jsonError, errorId: jsonErrorId }))}

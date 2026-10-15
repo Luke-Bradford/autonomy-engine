@@ -3148,7 +3148,8 @@ button.danger {
 
 /* A text box that expands on edit (AutoGrowTextarea `restRows`) sets its own
    height; a drag handle would be overwritten at the next keystroke. */
-textarea[data-grow='edit'] {
+textarea[data-grow='edit'],
+.json-editor > .json-editor-input[data-fit] {
   resize: none;
 }
 

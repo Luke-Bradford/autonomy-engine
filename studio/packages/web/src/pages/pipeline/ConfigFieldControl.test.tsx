@@ -181,6 +181,27 @@ describe('ConfigFieldControl — the expression flyout is withheld on a JSON fie
   });
 });
 
+// #1694 OR42 F10 — a top-level JSON box expands on edit; a JSON cell does not.
+describe('ConfigFieldControl — a JSON box expands on edit', () => {
+  it('top-level, rests at a line and grows while edited', () => {
+    const json: ConfigField = { name: 'quota', kind: 'json', optional: true };
+    const { getByRole } = render(<ConfigFieldControl field={json} value="" onChange={noop} />);
+    const box = getByRole('textbox', { name: /quota/ });
+    expect(box).toHaveAttribute('data-grow', 'edit');
+    expect(box).toHaveAttribute('rows', '1');
+  });
+
+  it('in a row, keeps its two lines', () => {
+    const json: ConfigField = { name: 'quota', kind: 'json', optional: true };
+    const { getByRole } = render(
+      <ConfigFieldControl field={json} value="" onChange={noop} name="Rules row 1 quota" />,
+    );
+    const box = getByRole('textbox');
+    expect(box).not.toHaveAttribute('data-grow');
+    expect(box).toHaveAttribute('rows', '2');
+  });
+});
+
 describe('ConfigFieldControl — human labels and required fields (#1396)', () => {
   it('a titled field reads as its title and unit, and keeps its key in the hint', () => {
     const field: ConfigField = {

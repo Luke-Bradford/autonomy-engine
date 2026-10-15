@@ -41,6 +41,8 @@ describe('AutoGrowTextarea', () => {
     // them puts back jsdom's own (inherited from Element).
     delete (proto as { scrollHeight?: number }).scrollHeight;
     delete (proto as { clientWidth?: number }).clientWidth;
+    delete (proto as { offsetHeight?: number }).offsetHeight;
+    delete (proto as { clientHeight?: number }).clientHeight;
   });
 
   function mount(initial?: string) {
@@ -168,6 +170,82 @@ describe('AutoGrowTextarea', () => {
     );
     // content-box: the height is the lines alone, padding and border outside it.
     expect((screen.getByLabelText('two') as HTMLTextAreaElement).style.height).toBe('40px');
+  });
+
+  describe('an unwrapped line wider than the box', () => {
+    /*
+     * A classic 15px horizontal scrollbar, drawn whenever a line is longer than
+     * 40 characters and the box does not hide its overflow across. The box's
+     * outer height is its inline height (border-box); its client height is that
+     * less the 2px border and the scrollbar.
+     */
+    const BAR = 15;
+    function stubScrollbar() {
+      Object.defineProperty(proto, 'offsetHeight', {
+        configurable: true,
+        get(this: HTMLTextAreaElement) {
+          return parseFloat(this.style.height) || 0;
+        },
+      });
+      Object.defineProperty(proto, 'clientHeight', {
+        configurable: true,
+        get(this: HTMLTextAreaElement) {
+          const wide = this.value.split('\n').some((l) => l.length > 40);
+          const bar = wide && this.style.overflowX !== 'hidden' ? BAR : 0;
+          return (parseFloat(this.style.height) || 0) - 2 - bar;
+        },
+      });
+    }
+    const LONG = 'x'.repeat(60);
+
+    it('adds the scrollbar to its height, so the last line stays in view', () => {
+      const box = mount();
+      stubScrollbar();
+      fireEvent.change(box, { target: { value: `a\n${LONG}` } });
+      // 2 lines × 20 + 8 padding + 2 border, and the bar under them.
+      expect(box.style.height).toBe(`${String(50 + BAR)}px`);
+      fireEvent.change(box, { target: { value: 'a\nb' } });
+      expect(box.style.height).toBe('50px');
+    });
+
+    it('collapsed, hides it and shows the line from its start; edited, the stylesheet has it back', () => {
+      vi.useFakeTimers();
+      try {
+        stubLayout();
+        stubScrollbar();
+        const style = document.createElement('style');
+        style.dataset.grow = '';
+        style.textContent =
+          '.grow-under-test { line-height: 20px; padding: 4px 0; border: 1px solid; box-sizing: border-box; }';
+        document.head.appendChild(style);
+        render(
+          <AutoGrowTextarea
+            aria-label="json"
+            className="grow-under-test"
+            restRows={1}
+            maxRows={8}
+            value={`${LONG}\nb`}
+            readOnly
+          />,
+        );
+        const box = screen.getByLabelText('json') as HTMLTextAreaElement;
+        expect(box.style.overflowX).toBe('hidden');
+        expect(box.style.height).toBe('30px');
+        fireEvent.focus(box);
+        expect(box.style.overflowX).toBe('');
+        expect(box.style.height).toBe(`${String(50 + BAR)}px`);
+        box.scrollLeft = 50;
+        fireEvent.blur(box);
+        act(() => {
+          vi.runAllTimers();
+        });
+        expect(box.style.overflowX).toBe('hidden');
+        expect(box.style.height).toBe('30px');
+        expect(box.scrollLeft).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe('expand on edit (restRows)', () => {
