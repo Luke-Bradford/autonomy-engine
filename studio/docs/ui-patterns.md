@@ -169,7 +169,8 @@ required marks and display names; its layout is its own, below.
 - **A `?` only where the value is not obvious (#1694 OR42 item 4).** A config field shows a `?`
   only when the catalog writes it a `description` in `presented()`, and the catalog writes one
   only for what an engineer would not know from the label: a default, a constraint between fields,
-  a confinement, or what a whole `${}` must give. Top P, Seed, Content and Error message get none. A `?` holding only the key, or only a number rule that the error line states on a bad
+  a confinement, or what a whole `${}` must give. Top P, Seed, Content and Error message get none.
+  A `?` holding only the key, or only a number rule that the error line states on a bad
   value, is noise. The note still leads with the rule and ends with the key; with no `?`, a
   titled label carries the key as its hover `title`. The ratchet's `HELP_LIMITS` are the measured
   counts and may only fall.
