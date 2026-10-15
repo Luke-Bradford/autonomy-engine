@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  type ConnectionPublic,
   type Edge,
   type EdgeOn,
   type Node,
@@ -16,6 +17,7 @@ import {
   saveDisabledReason,
   toVersionBody,
   validateCanvas,
+  writeAccessWarnings,
 } from './canvasDoc';
 
 function node(id: string, config: Record<string, unknown> = {}): Node {
@@ -390,5 +392,64 @@ describe('userPropertiesIssues (#1600 OR41 C0d)', () => {
     ).toEqual([
       "node 'a': userProperties[1].name: duplicate user property name 'x' (user property names must be unique within the activity)",
     ]);
+  });
+});
+
+describe('writeAccessWarnings (#1600 OR41 C1b)', () => {
+  const conn = (id: string, writable?: boolean, kind = 'fs'): ConnectionPublic =>
+    ({
+      id,
+      name: `Conn ${id}`,
+      kind,
+      config: { roots: ['/d'], ...(writable === undefined ? {} : { writable }) },
+    }) as unknown as ConnectionPublic;
+  const copy = (
+    id: string,
+    connectionIds: { source: string; sink: string },
+    afterCopy = 'keep',
+    extra: Partial<Node> = {},
+  ): Node => ({
+    ...node(id, { pathType: 'file', sourcePath: 'a', afterCopy }),
+    type: 'copy_files',
+    connectionIds,
+    ...extra,
+  });
+  const connections = [conn('ro'), conn('rw', true), conn('no', false), conn('db', undefined, 'sqlite')];
+
+  it('names a copy whose sink does not allow writes, absent or false', () => {
+    expect(
+      writeAccessWarnings(
+        [copy('a', { source: 'rw', sink: 'ro' }), copy('b', { source: 'rw', sink: 'no' })],
+        connections,
+      ),
+    ).toEqual([
+      "node 'a': the sink connection 'Conn ro' does not allow writes",
+      "node 'b': the sink connection 'Conn no' does not allow writes",
+    ]);
+  });
+
+  it('names the source only when After copy removes it, and once when it is the sink too', () => {
+    expect(writeAccessWarnings([copy('a', { source: 'ro', sink: 'rw' })], connections)).toEqual([]);
+    expect(writeAccessWarnings([copy('a', { source: 'ro', sink: 'rw' }, 'move')], connections)).toEqual([
+      "node 'a': After copy removes the source, and the source connection 'Conn ro' does not allow writes",
+    ]);
+    expect(writeAccessWarnings([copy('a', { source: 'ro', sink: 'ro' }, 'delete')], connections)).toEqual([
+      "node 'a': the sink connection 'Conn ro' does not allow writes",
+    ]);
+  });
+
+  it('skips writable, unknown, dynamic and non-file connections, other types and inactive nodes', () => {
+    expect(
+      writeAccessWarnings(
+        [
+          copy('a', { source: 'rw', sink: 'rw' }, 'delete'),
+          copy('b', { source: 'x', sink: '${pipeline.parameters.c}' }),
+          copy('c', { source: 'db', sink: 'db' }),
+          copy('d', { source: 'ro', sink: 'ro' }, 'keep', { state: 'inactive' }),
+          { ...copy('e', { source: 'ro', sink: 'ro' }), type: 'copy' },
+        ],
+        connections,
+      ),
+    ).toEqual([]);
   });
 });
