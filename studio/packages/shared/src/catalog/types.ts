@@ -438,8 +438,9 @@ export interface ActivityCatalogEntry {
   /**
    * #1600 OR41 C1a — `false` keeps the type out of the toolbox. It is still a
    * full catalog type that saves, validates and runs; it is reached from
-   * another item instead (`copy_files` through Copy's *Copy* toggle). Absent
-   * means it is offered.
+   * another item instead (`copy_files` through Copy's *Copy* toggle), or it is
+   * retired and a stored node opens as its replacement (`file_copy` and
+   * `file_move`, #1600 C1b, `retired.ts`). Absent means it is offered.
    */
   inPalette?: false;
   /**
