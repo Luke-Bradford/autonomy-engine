@@ -234,7 +234,10 @@ message.
   A fix shows at once: the error goes the moment the value is fine, and a new problem in the same
   field waits for the next blur. A field that leaves the form takes its error with it.
 - **The error sits in a reserved slot under the field** (`FieldError`, `.field-error-slot`), so it
-  does not push the fields below down. `fieldAttrs` gives the control:
+  does not push the fields below down. In the property dock, a group of number fields shares
+  **one** reserved line after the group instead (`useFieldErrorLine`, `DraftNumberField`'s
+  `errorLine`). Each message is named there ("Retries: must be a whole number"), and the rows keep
+  the 36px rhythm (#1694 OR42 item 5). `fieldAttrs` gives the control:
   - its key (`data-field`);
   - an invalid mark (`data-invalid`, plus `aria-invalid`, except on a row list's `group`, where ARIA
     does not allow it);
