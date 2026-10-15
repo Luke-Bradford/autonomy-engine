@@ -24,7 +24,6 @@ import {
   SWITCH_ACTIVITY_TYPE,
   WAIT_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
-  type InlineDataset,
   type Node,
 } from '@autonomy-studio/shared';
 import { formatElapsed } from '../runs/format';
@@ -143,22 +142,17 @@ export function activitySummary(
   }
 }
 
-/** #1600 C1q — an inline source on the card: its `schema.table`, or "query". */
+/**
+ * #1600 C1q — an inline source on the card: the `schema.table` of a table, or
+ * "query" (a statement is too long for a card; the Source tab shows it).
+ */
 function inlineSourceLabel(node: Node): string | undefined {
   const inline = node.inlineDatasets?.source;
   if (inline === undefined) return undefined;
-  return inline.kind === 'query' ? 'query' : inlineSourceText(inline) || undefined;
-}
-
-/**
- * #1600 C1q — an inline source's address as text: the SQL of a query, or the
- * `schema.table` of a table. The card and the dock's Source line both read it.
- */
-export function inlineSourceText(inline: InlineDataset): string {
-  const { table, schema, sql } = inline.config;
-  if (inline.kind === 'query') return typeof sql === 'string' ? sql : '';
+  if (inline.kind === 'query') return 'query';
+  const { table, schema } = inline.config;
   const name = typeof table === 'string' ? table : '';
-  return typeof schema === 'string' ? `${schema}.${name}` : name;
+  return (typeof schema === 'string' ? `${schema}.${name}` : name) || undefined;
 }
 
 /** A small mark on a card for a policy that changes how the step runs. */

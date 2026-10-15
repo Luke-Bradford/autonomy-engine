@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import {
   DATASET_CONNECTION_KINDS,
   INLINE_DATASET_KINDS,
@@ -10,7 +10,9 @@ import {
   type InlineDatasetKind,
   type Node,
 } from '@autonomy-studio/shared';
+import { AboutHelp } from '../../lib/HelpDisclosure';
 import { LabelledControl } from '../../lib/LabelledControl';
+import { RequiredMark } from '../../lib/form/RequiredMark';
 import { AutoGrowTextarea } from '../../lib/form/AutoGrowTextarea';
 import {
   RemoveRowButton,
@@ -30,6 +32,13 @@ import {
 import type { createCanvasStore } from './canvasStore';
 import { ExpressionEditor } from './ExpressionEditor';
 import { PickableInput } from './PickableInput';
+import {
+  bindNameProblem,
+  bindValueText,
+  coerceBindValue,
+  freshBindName,
+  renameKey,
+} from './inlineSource';
 
 type Use = 'saved' | InlineDatasetKind;
 
@@ -45,10 +54,11 @@ const PARAM_COLUMNS: readonly RowTableColumn[] = [
 ];
 
 /** What a newly chosen Table or Query starts as: the fields to fill, nothing carried. */
-const BLANK: Record<InlineDatasetKind, InlineDataset> = {
-  table: { kind: 'table', config: { table: '' } },
-  query: { kind: 'query', config: { sql: '' } },
-};
+function blank(kind: InlineDatasetKind): InlineDataset {
+  return kind === 'table'
+    ? { kind: 'table', config: { table: '' } }
+    : { kind: 'query', config: { sql: '' } };
+}
 
 /**
  * Each kind's fields, read from the dataset schema both a saved and an inline
@@ -152,7 +162,7 @@ export function InlineSourceEditor({
             onChange={(e) => {
               const next = e.target.value as Use;
               if (next === use) return;
-              write(next === 'saved' ? undefined : BLANK[next]);
+              write(next === 'saved' ? undefined : blank(next));
             }}
           >
             {choices.map((c) => (
@@ -201,7 +211,16 @@ function TableFields({
       {(['schema', 'table'] as const).map((key) => {
         const f = field('table', key);
         return (
-          <LabelledControl key={key} label={configFieldTitle(f)} about={about(f, LITERAL_NAME)}>
+          <LabelledControl
+            key={key}
+            label={
+              <>
+                {configFieldTitle(f)}
+                {!f.optional && <RequiredMark />}
+              </>
+            }
+            about={about(f, LITERAL_NAME)}
+          >
             {(id, describedBy) => (
               <input
                 id={id}
@@ -237,7 +256,11 @@ function QueryFields({
   const names = Object.keys(parameters);
   const sqlField = field('query', 'sql');
   const sqlTitle = configFieldTitle(sqlField);
-  const bindTitle = configFieldTitle(field('query', 'parameters'));
+  const bindField = field('query', 'parameters');
+  const bindTitle = configFieldTitle(bindField);
+  const bindAbout = about(bindField);
+  const bindLabelId = useId();
+  const bindNoteId = useId();
   const sql = text(inline.config['sql']);
   const setSql = (next: string) =>
     write({ kind: 'query', config: { ...inline.config, sql: next } }, 'sql');
@@ -248,17 +271,18 @@ function QueryFields({
     else delete config['parameters'];
     return { kind: 'query', config };
   };
-  const rename = (from: string, to: string, i: number) => {
-    // Rebuilt in order, so the row does not jump to the end of the table.
-    const next: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(parameters)) next[k === from ? to : k] = v;
-    write(withParameters(next), `param:${i}:name`);
-  };
+  const rename = (from: string, to: string, i: number) =>
+    write(withParameters(renameKey(parameters, from, to)), `param:${i}:name`);
 
   return (
     <>
       <LabelledControl
-        label={sqlTitle}
+        label={
+          <>
+            {sqlTitle}
+            <RequiredMark />
+          </>
+        }
         about={about(sqlField, 'Literal: ${} is not evaluated here.')}
       >
         {(id, describedBy) => (
@@ -274,25 +298,37 @@ function QueryFields({
               onChange={(e) => setSql(e.target.value)}
             />
             {/* No picker: the statement is literal, so its editor offers no `${}`.
-                In the toggle row a config field's ⤢ sits in. */}
+                The wrapper is the toggle row a config field's ⤢ sits in. OK is
+                its own undo step, not merged into the typing before it. */}
             <div className="expression-picker">
               <ExpressionEditor
                 fieldName={sqlTitle}
                 value={sql}
-                onChange={setSql}
+                onChange={(next) =>
+                  write({ kind: 'query', config: { ...inline.config, sql: next } })
+                }
                 singleLine={false}
               />
             </div>
           </>
         )}
       </LabelledControl>
+      {/* The list's title and `?`, as a config field's row list draws them. */}
+      <div className="object-list-label help-row">
+        <span id={bindLabelId}>{bindTitle}</span>
+        {bindAbout !== undefined && (
+          <AboutHelp name={bindAbout.name} noteId={bindNoteId}>
+            {bindAbout.note}
+          </AboutHelp>
+        )}
+      </div>
       <RowList
         columns={PARAM_COLUMNS}
         label={bindTitle}
         count={names.length}
         addLabel="Add bind value"
         addTitle="A :name in the statement, and the value bound to it"
-        onAdd={() => write(withParameters({ ...parameters, [freshName(names)]: '' }))}
+        onAdd={() => write(withParameters({ ...parameters, [freshBindName(names)]: '' }))}
       >
         {names.map((name, i) => (
           <ParameterRow
@@ -317,23 +353,9 @@ function QueryFields({
   );
 }
 
-/** `p1`, `p2`, … — the first not already taken; the author renames it to the statement's `:name`. */
-function freshName(taken: readonly string[]): string {
-  for (let i = 1; ; i += 1) if (!taken.includes(`p${i}`)) return `p${i}`;
-}
-
-/** Why a typed bind-value name cannot be stored, or `null` when it can. */
-function bindNameProblem(draft: string, others: readonly string[]): string | null {
-  if (draft === '') return 'Name it as it is written after : in the statement.';
-  // Keys are stored WITHOUT the colon, so `:wm` would silently never bind.
-  if (draft.startsWith(':')) return 'Leave out the leading :.';
-  if (others.includes(draft)) return `:${draft} is already bound.`;
-  return null;
-}
-
 /**
  * One `:name` and its value. The name box shows a local DRAFT: a name that
- * cannot be a key of the stored record (blank, a leading `:`, a duplicate) is
+ * cannot be a key of the stored record (`bindNameProblem`) is
  * held here with its reason until it can be, and the stored row keeps its last
  * good name.
  */
@@ -353,7 +375,7 @@ function ParameterRow({
   others: readonly string[];
   picker: FieldPicker | undefined;
   onRename: (to: string) => void;
-  onValue: (value: string) => void;
+  onValue: (value: string | number) => void;
   onRemove: () => void;
 }) {
   const [draft, setDraft] = useState(name);
@@ -362,14 +384,26 @@ function ParameterRow({
     setSynced(name);
     setDraft(name);
   }
-  const problem = draft === name ? null : bindNameProblem(draft, others);
+  // A stored name is judged too: an imported `:wm` says why it never binds.
+  const problem = bindNameProblem(draft, others);
+  // The value box shows a DRAFT as the override rows do (`OverrideRow`): a
+  // stored number is `150` for the text `150.`, and rendering it back would
+  // snap the box while the author is still typing. It follows the store only
+  // when the store moves on its own (undo, a flyout insert).
+  const [valueDraft, setValueDraft] = useState(() => bindValueText(value));
+  const [syncedValue, setSyncedValue] = useState(value);
+  if (syncedValue !== value) {
+    setSyncedValue(value);
+    if (coerceBindValue(value, valueDraft) !== value) setValueDraft(bindValueText(value));
+  }
   const label = `Bind value ${index + 1}`;
   const target: PickerTarget = {
     place: (n, v) => {
       const source = n.inlineDatasets?.source;
       if (source === undefined) return n;
       const current = source.config['parameters'];
-      const params = current !== null && typeof current === 'object' ? current : {};
+      const params =
+        current !== null && typeof current === 'object' && !Array.isArray(current) ? current : {};
       return {
         ...n,
         inlineDatasets: {
@@ -397,8 +431,11 @@ function ParameterRow({
         </td>
         <td>
           <PickableInput
-            value={text(value)}
-            onChange={onValue}
+            value={valueDraft}
+            onChange={(t) => {
+              setValueDraft(t);
+              onValue(coerceBindValue(value, t));
+            }}
             picker={picker}
             pickerName={`:${name}`}
             target={target}

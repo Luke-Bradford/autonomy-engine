@@ -4145,7 +4145,8 @@ describe('setNodeBindingEnd — paired bindings reach the doc WHOLE (#1139)', ()
           connectionId: 'conn_a',
           // A stale sink a source-only activity has no picker for is dropped too.
           datasetIds: { source: 'ds_src', sink: 'ds_stale' },
-          datasetParams: { source: { table: 'x' } },
+          // …and the stale sink's overrides with it.
+          datasetParams: { source: { table: 'x' }, sink: { table: 'y' } },
           position: { x: 0, y: 0 },
         },
         {
@@ -4170,7 +4171,12 @@ describe('setNodeBindingEnd — paired bindings reach the doc WHOLE (#1139)', ()
     expect(store.getState().nodes[1]!.datasetIds).toBeUndefined();
     store.getState().setNodeInlineSource('c', table);
     expect(store.getState().nodes[1]!.datasetIds).toEqual({ sink: 'ds_sink' });
-    expect(store.getState().pendingBindings['c']).toBeUndefined();
+    // Undo does not restore selection state, so the pending pick is kept: undone,
+    // the sink is still picked, and re-choosing the inline source commits it again.
+    store.getState().undo();
+    expect(store.getState().nodes[1]!.datasetIds).toBeUndefined();
+    store.getState().setNodeInlineSource('c', table);
+    expect(store.getState().nodes[1]!.datasetIds).toEqual({ sink: 'ds_sink' });
 
     // Never for a missing node, or one whose activity binds no dataset source.
     const settled = store.getState().nodes;

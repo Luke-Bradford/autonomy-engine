@@ -1513,9 +1513,16 @@ export interface CanvasState {
    *
    * An inline source IS the source end, so setting one drops the saved source
    * dataset and its `datasetParams.source` (`validateDoc` refuses both naming the
-   * source). The sink end is kept, and a sink only PENDING (a copy whose sink was
-   * picked before any source) is committed beside it, because the inline source
-   * completes the pair. Removing it leaves the sink as it was.
+   * source). The sink end is kept where the activity has one, and a sink only
+   * PENDING (a copy whose sink was picked before any source) is committed beside
+   * it, because the inline source completes the pair. The pending pick is left in
+   * place: the committed pair wins over it everywhere it is read, and undo, which
+   * does not restore selection state, would otherwise lose it.
+   *
+   * Removing the inline source (*Use* Saved dataset) leaves a copy's sink
+   * committed as `{ sink }`, which `validateDoc` reports on the Source tab until a
+   * saved source is picked, rather than moving it back to pending and dropping
+   * its overrides.
    *
    * Whole-value like the other node setters: the caller builds the config.
    * `coalesceKey` names the field being typed into, so a keystroke burst is ONE
@@ -2628,7 +2635,9 @@ export function createCanvasStore(): StoreApi<CanvasState> {
               // The sink key is omitted, never `undefined` (see setNodeBindingEnd).
               if (sink !== undefined) next.datasetIds = { sink };
               else delete next.datasetIds;
-              if (next.datasetParams?.sink !== undefined) {
+              // An end's overrides go with it (#1144): the source's always, the
+              // sink's when no sink is kept.
+              if (sink !== undefined && next.datasetParams?.sink !== undefined) {
                 next.datasetParams = { sink: next.datasetParams.sink };
               } else delete next.datasetParams;
               return next;
@@ -2636,18 +2645,6 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           }),
           coalesceKey === undefined ? undefined : `inline:${id}:${coalesceKey}`,
         );
-        // A pending dataset end is now complete or moot. Selection state, not
-        // document state, so outside `edit()` (setNodeBindingEnd's rule).
-        if (inline !== undefined && state.pendingBindings[id]?.datasets !== undefined) {
-          set((s) => {
-            const forNode = { ...s.pendingBindings[id] };
-            delete forNode.datasets;
-            const rest = { ...s.pendingBindings };
-            if (forNode.connections === undefined) delete rest[id];
-            else rest[id] = forNode;
-            return { pendingBindings: rest };
-          });
-        }
       },
 
       setNodeBindingEnd(id, kind, side, value) {

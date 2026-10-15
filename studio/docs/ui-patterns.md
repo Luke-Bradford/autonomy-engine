@@ -1094,5 +1094,6 @@ strays: "node" in version history's counts, and "param" in validation and server
 | Run | One execution of a pipeline version | |
 | Activity run | One activity's execution inside a run, one row per attempt | |
 | Dataset | A named shape of data at a connection (table, query, file) | |
+| Bind values | A query's `:name` values, keyed without the colon ("Add bind value"), on a saved query dataset and an inline one alike | Parameters, params (a pipeline's inputs) |
 | Connection | Where and how studio reaches a system, with its secrets | |
 | Trigger | What starts runs: manual, schedule, tumbling window, webhook, event | |

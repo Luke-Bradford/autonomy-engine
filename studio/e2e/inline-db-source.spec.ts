@@ -69,8 +69,19 @@ test.describe('#1600 C1q — an inline database source', () => {
     await expect(pane.getByRole('textbox', { name: 'Bind value 1 value' })).toHaveValue(
       '${params.wm}',
     );
-    // An inline source stands in for the saved picker; nothing offers ⓕ on the statement.
+    // An inline source stands in for the saved picker.
     await expect(pane.getByRole('combobox', { name: 'Source dataset' })).toHaveCount(0);
+    // The statement is literal: no ⓕ beside it, and its ⤢ editor has no reference list.
+    await expect(
+      pane.getByRole('button', { name: 'Insert reference into SQL statement' }),
+    ).toHaveCount(0);
+    await expect(pane.getByRole('button', { name: 'Insert reference into :wm' })).toHaveCount(1);
+    await pane.getByRole('button', { name: 'Open SQL statement in the editor' }).click();
+    const editor = page.getByRole('dialog');
+    await expect(editor.getByRole('textbox')).toHaveValue(sql);
+    await expect(editor.getByRole('button', { name: /^Insert reference/ })).toHaveCount(0);
+    await editor.getByRole('button', { name: 'Cancel' }).click();
+    await expect(editor).toHaveCount(0);
 
     // The canvas validates with the same `validateDoc` the server ran: nothing to report.
     await expect(problemsToggle(page)).not.toHaveText(/[1-9]/);
