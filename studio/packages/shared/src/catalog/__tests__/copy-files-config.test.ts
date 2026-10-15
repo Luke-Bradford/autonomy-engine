@@ -83,16 +83,19 @@ describe('copy_files config', () => {
     });
     expect(entry.datasetKinds).toBeUndefined();
     // Files and bytes, never rows: a `rowsWritten` of 0 would count as "wrote
-    // nothing" in the run's rows total.
+    // nothing" in the run's rows total. Plus `source` and `dest`, the retired
+    // Copy file / Move file outputs (#1600 C1b).
     expect(entry.outputs.map((o) => o.name).sort()).toEqual(
       [
         'bytesRead',
         'bytesWritten',
+        'dest',
         'filesDeleted',
         'filesMoved',
         'filesRead',
         'filesSkipped',
         'filesWritten',
+        'source',
       ].sort(),
     );
   });
