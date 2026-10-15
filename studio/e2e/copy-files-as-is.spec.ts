@@ -274,7 +274,8 @@ test.describe('#1600 C1a — Copy · Files as-is', () => {
 
       // The Allow writes warning is listed; it does not refuse Save.
       const toggle = problemsToggle(page);
-      await expect(toggle.locator('.count-badge').first()).toHaveText('1');
+      await expect(toggle.locator('.count-badge').first()).toHaveText('0');
+      await expect(toggle.locator('.count-badge--warning')).toHaveText('1 warning');
       await toggle.click();
       await expect(page.locator('.problems-panel')).toContainText(
         "the sink connection 'e2e 1600 legacy store' does not allow writes, which a files copy needs",
