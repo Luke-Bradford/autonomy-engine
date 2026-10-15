@@ -1,4 +1,5 @@
 import {
+  DEFAULT_HTTP_TIMEOUT_MS,
   formatZodIssues,
   HTTP_SECRET_HEADERS_FIELD,
   httpConnectionConfigSchema,
@@ -41,9 +42,6 @@ import { redactSecrets } from './redact.js';
  * a worker-pool slot (which, with the shared pool, would otherwise stall every
  * run). Default 30s, overridable per connection via `config.timeoutMs`.
  */
-
-/** Default per-request timeout (ms) — bounds a hung endpoint. */
-const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
 
 /**
  * The `secretFields` key prefix for the `secretHeaders` sink (item 7 / S4),

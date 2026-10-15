@@ -22,16 +22,18 @@ test.use({ viewport: { width: 1440, height: 900 } });
  * count is the form's section `?`s (#1413 keeps one per section outside the
  * properties pane: Basics, Connection, Authentication, Advanced, Annotations),
  * the Secret picker's, and the kind's fields whose note is not its label.
+ * #1712 raised agent_cli and postgres once, on purpose: the CLI timeout and the
+ * two postgres timeouts now state the default the server applies.
  */
 const CONNECTION_HELP_LIMITS: Record<string, number> = {
   anthropic_api: 8,
   openai_api: 7,
   ollama: 7,
-  agent_cli: 13,
+  agent_cli: 14,
   http: 7,
   fs: 10,
   sqlite: 8,
-  postgres: 8,
+  postgres: 10,
 };
 
 /**

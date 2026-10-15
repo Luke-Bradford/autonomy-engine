@@ -40,6 +40,56 @@ import { AGENT_TASK_ACTIVITY_TYPE, LLM_CALL_ACTIVITY_TYPE } from './types.js';
 /** Default per-request timeout (ms) for an LLM call — bounds a hung provider. */
 export const DEFAULT_LLM_TIMEOUT_MS = 120_000;
 
+/*
+ * #1712 — the defaults the server applies when a connection leaves a field
+ * absent. They live here so each field's note is built from the same number the
+ * adapter uses; the server imports them rather than spelling its own.
+ */
+
+/** Default per-request timeout (ms) for an HTTP call — bounds a hung endpoint. */
+export const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
+
+/** Default read size cap (bytes) — bounds a huge file from OOM-ing a worker. */
+export const DEFAULT_MAX_READ_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Default `file_list` entry cap — bounds a pathological directory (millions of
+ * entries) from producing an unbounded `entries` output / OOM-ing a worker.
+ */
+export const DEFAULT_MAX_LIST_ENTRIES = 10_000;
+
+/** libpq's default port, applied when `config.port` is absent. */
+export const DEFAULT_POSTGRES_PORT = 5432;
+/** Applied when `config.connectTimeoutMs` is absent. `pg`'s own default is 0 =
+ * wait forever, which would hang a dispatch on a black-holed host. */
+export const DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS = 10_000;
+/** Applied when `config.statementTimeoutMs` is absent, to BOTH statement timers
+ * (see the server's `clientOptionsFor`). `pg`'s own defaults are `false` for
+ * each — no cap at all on either side. */
+export const DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS = 30_000;
+
+/**
+ * Default wall-clock bound (30 min) so a hung agent never permanently holds a
+ * worker-pool slot. Agent runs are long, hence generous.
+ */
+export const DEFAULT_AGENT_TIMEOUT_MS = 30 * 60_000;
+
+/** Default combined stdout+stderr byte cap for a supervised process. */
+export const DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
+
+const MIB = 1024 * 1024;
+
+/** "Defaults to N." with N in a readable unit when it has one: 30000 ms reads
+ * "(30 seconds)", 10485760 bytes "(10 MiB)". */
+function defaultNote(value: number, unit?: 'ms' | 'bytes'): string {
+  const plural = (n: number, word: string) => `${String(n)} ${word}${n === 1 ? '' : 's'}`;
+  let readable: string | undefined;
+  if (unit === 'ms' && value % 60_000 === 0) readable = plural(value / 60_000, 'minute');
+  else if (unit === 'ms' && value % 1000 === 0) readable = plural(value / 1000, 'second');
+  else if (unit === 'bytes' && value % MIB === 0) readable = `${String(value / MIB)} MiB`;
+  return `Defaults to ${String(value)}${readable === undefined ? '' : ` (${readable})`}.`;
+}
+
 /** The non-secret Connection config common to every LLM adapter. */
 export const llmConnectionConfigSchema = z.object({
   /** Provider base URL override (self-hosted / gateway / local). */
@@ -54,7 +104,7 @@ export const llmConnectionConfigSchema = z.object({
   timeoutMs: presented(z.number().int().positive().optional(), {
     title: 'Timeout',
     unit: 'ms',
-    description: 'Defaults to 120000 (2 minutes).',
+    description: defaultNote(DEFAULT_LLM_TIMEOUT_MS, 'ms'),
   }),
 });
 
@@ -79,7 +129,7 @@ export const httpConnectionConfigSchema = z.object({
   timeoutMs: presented(z.number().int().positive().optional(), {
     title: 'Timeout',
     unit: 'ms',
-    description: 'Defaults to 30000 (30 seconds).',
+    description: defaultNote(DEFAULT_HTTP_TIMEOUT_MS, 'ms'),
   }),
 });
 
@@ -103,12 +153,12 @@ export const fsConnectionConfigSchema = z.object({
   maxBytes: presented(z.number().int().positive().optional(), {
     title: 'Largest file read',
     unit: 'bytes',
-    description: 'Defaults to 10485760 (10 MiB).',
+    description: defaultNote(DEFAULT_MAX_READ_BYTES, 'bytes'),
   }),
   /** Per-`file_list` entry cap. Defaults to 10000. */
   maxEntries: presented(z.number().int().positive().optional(), {
     title: 'Most entries listed',
-    description: 'The cap on one directory listing. Defaults to 10000.',
+    description: `The cap on one directory listing. ${defaultNote(DEFAULT_MAX_LIST_ENTRIES)}`,
   }),
   /**
    * #1600 OR41 C1a — whether Copy (files as-is) may write into this store, and
@@ -231,7 +281,7 @@ export const postgresConnectionConfigSchema = z.object({
   }),
   port: presented(z.number().int().min(1).max(65535).optional(), {
     title: 'Port',
-    description: 'Defaults to 5432.',
+    description: defaultNote(DEFAULT_POSTGRES_PORT),
   }),
   database: presented(singleLine(z.string()).min(1, 'a postgres connection needs a database'), {
     title: 'Database',
@@ -253,12 +303,14 @@ export const postgresConnectionConfigSchema = z.object({
   connectTimeoutMs: presented(z.number().int().positive().optional(), {
     title: 'Connect timeout',
     unit: 'ms',
+    description: defaultNote(DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS, 'ms'),
   }),
   /** Server-side `statement_timeout`, in ms — the cap on one statement, and a
    * different timer from the connect budget above. */
   statementTimeoutMs: presented(z.number().int().positive().optional(), {
     title: 'Statement timeout',
     unit: 'ms',
+    description: defaultNote(DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS, 'ms'),
   }),
   /**
    * #1196 M10 slice 3a — whether this store may be used as a copy SINK.
@@ -343,12 +395,13 @@ export const agentConnectionConfigSchema = z.object({
   timeoutMs: presented(z.number().int().positive().optional(), {
     title: 'Timeout',
     unit: 'ms',
+    description: defaultNote(DEFAULT_AGENT_TIMEOUT_MS, 'ms'),
   }),
   /** Combined stdout+stderr byte cap before output is truncated. */
   maxOutputBytes: presented(z.number().int().positive().optional(), {
     title: 'Output limit',
     unit: 'bytes',
-    description: 'Stdout and stderr combined.',
+    description: `Stdout and stderr combined. ${defaultNote(DEFAULT_MAX_OUTPUT_BYTES, 'bytes')}`,
   }),
   /**
    * #2 L14c — the subscription/quota reset-window hint. A subscription CLI's

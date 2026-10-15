@@ -3,6 +3,7 @@ import {
   agentConnectionConfigSchema,
   AGENT_CLI_CONNECTION_KIND,
   AGENT_TASK_ACTIVITY_TYPE,
+  DEFAULT_AGENT_TIMEOUT_MS,
   LLM_CALL_ACTIVITY_TYPE,
   agentTaskConfigSchema,
   agentStructuredInstruction,
@@ -82,12 +83,6 @@ import { MASTER_KEY_ENV_VARS } from '../secrets/secrets.js';
  * survive a server restart (documented in the process-supervisor contract).
  */
 
-/**
- * Default wall-clock bound (30 min) so a hung agent never permanently holds a
- * worker-pool slot. Agent runs are long, hence generous; overridable per
- * connection via `config.timeoutMs`.
- */
-const DEFAULT_AGENT_TIMEOUT_MS = 30 * 60_000;
 
 // #1087 — the shape moved to `shared/catalog/connection-config.ts` (with its
 // `isCompilableRegex` boundary guard) so the Manage › Connections form derives

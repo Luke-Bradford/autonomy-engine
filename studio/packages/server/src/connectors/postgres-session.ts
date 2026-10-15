@@ -1,5 +1,8 @@
 import pg from 'pg';
 import {
+  DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS,
+  DEFAULT_POSTGRES_PORT,
+  DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS,
   formatZodIssues,
   postgresConnectionConfigSchema,
   type DatasetKind,
@@ -97,16 +100,15 @@ export type PostgresClientFactory = (options: PostgresClientOptions) => Postgres
 export const defaultClientFactory: PostgresClientFactory = (options) =>
   new pg.Client(options) as unknown as PostgresClient;
 
-/** libpq's default port, applied when `config.port` is absent. Spelled here
- * rather than left to `pg`, which would read `PGPORT` — see `clientOptionsFor`. */
-export const DEFAULT_POSTGRES_PORT = 5432;
-/** Applied when `config.connectTimeoutMs` is absent. `pg`'s own default is 0 =
- * wait forever, which would hang a dispatch on a black-holed host. */
-export const DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS = 10_000;
-/** Applied when `config.statementTimeoutMs` is absent, to BOTH statement timers
- * (see `clientOptionsFor`). `pg`'s own defaults are `false` for each — no cap at
- * all on either side. */
-export const DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS = 30_000;
+/** The port and the two timeouts applied when a config leaves them absent
+ * (#1712: shared, so the connection form's notes are built from them). The port
+ * is spelled rather than left to `pg`, which would read `PGPORT` — see
+ * `clientOptionsFor`. */
+export {
+  DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS,
+  DEFAULT_POSTGRES_PORT,
+  DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS,
+};
 /**
  * `sslmode` → `pg`'s `ssl` option, BY HAND and never by passthrough.
  *

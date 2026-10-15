@@ -49,6 +49,7 @@
 
 import { execa } from 'execa';
 import { AsyncEventQueue } from '../util/async-event-queue.js';
+import { DEFAULT_MAX_OUTPUT_BYTES } from '@autonomy-studio/shared';
 
 export interface SpawnSupervisedOptions {
   command: string;
@@ -101,7 +102,7 @@ export interface SupervisedProcess {
   result: Promise<SupervisedResult>;
 }
 
-export const DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
+export { DEFAULT_MAX_OUTPUT_BYTES };
 
 /** Grace period between SIGTERM and the SIGKILL escalation. */
 const KILL_GRACE_MS = 500;

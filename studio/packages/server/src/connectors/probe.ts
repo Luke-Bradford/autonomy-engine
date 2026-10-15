@@ -48,9 +48,9 @@ import { redactSecrets } from './redact.js';
  * store timed out, so the reading is never mistaken for the store's own verdict.
  *
  * Kept here rather than in `limits.ts`: `limits.ts` holds bounds several
- * subsystems share (`SQLITE_BUSY_TIMEOUT_MS`), and precedent for probe-shaped
- * timeouts is local (`DEFAULT_HTTP_TIMEOUT_MS` lives with the http adapter).
- * This one has exactly one consumer, three lines below it.
+ * subsystems share (`SQLITE_BUSY_TIMEOUT_MS`). This one has exactly one
+ * consumer, three lines below it, and no connection form states it, so it does
+ * not join the shared defaults the notes are built from (#1712).
  */
 export const PROBE_BACKSTOP_MS = 130_000;
 

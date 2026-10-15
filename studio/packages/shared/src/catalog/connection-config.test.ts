@@ -11,6 +11,15 @@ import {
   CONNECTION_CONFIG_SCHEMAS,
   CONNECTION_KINDS,
   CONNECTION_SECRET_USE,
+  DEFAULT_AGENT_TIMEOUT_MS,
+  DEFAULT_HTTP_TIMEOUT_MS,
+  DEFAULT_LLM_TIMEOUT_MS,
+  DEFAULT_MAX_LIST_ENTRIES,
+  DEFAULT_MAX_OUTPUT_BYTES,
+  DEFAULT_MAX_READ_BYTES,
+  DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS,
+  DEFAULT_POSTGRES_PORT,
+  DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS,
   agentConnectionConfigSchema,
   connectionConfigAdvisory,
   connectionConfigSchema,
@@ -349,5 +358,34 @@ describe('connection form labels (#1396)', () => {
 
   it.each(CONNECTION_KINDS)('%s has a display name', (kind) => {
     expect(CONNECTION_KIND_LABELS[kind]).toMatch(/\S/);
+  });
+});
+
+/**
+ * #1712 — a field the server fills when it is absent says so, and its note is
+ * built from the constant the server applies, so the two cannot drift.
+ */
+describe('server-applied defaults in the connection notes', () => {
+  it.each([
+    ['anthropic_api', 'timeoutMs', `Defaults to ${String(DEFAULT_LLM_TIMEOUT_MS)} (2 minutes).`],
+    ['http', 'timeoutMs', `Defaults to ${String(DEFAULT_HTTP_TIMEOUT_MS)} (30 seconds).`],
+    ['fs', 'maxBytes', `Defaults to ${String(DEFAULT_MAX_READ_BYTES)} (10 MiB).`],
+    ['fs', 'maxEntries', `Defaults to ${String(DEFAULT_MAX_LIST_ENTRIES)}.`],
+    ['postgres', 'port', `Defaults to ${String(DEFAULT_POSTGRES_PORT)}.`],
+    [
+      'postgres',
+      'connectTimeoutMs',
+      `Defaults to ${String(DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS)} (10 seconds).`,
+    ],
+    [
+      'postgres',
+      'statementTimeoutMs',
+      `Defaults to ${String(DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS)} (30 seconds).`,
+    ],
+    ['agent_cli', 'timeoutMs', `Defaults to ${String(DEFAULT_AGENT_TIMEOUT_MS)} (30 minutes).`],
+    ['agent_cli', 'maxOutputBytes', `Defaults to ${String(DEFAULT_MAX_OUTPUT_BYTES)} (10 MiB).`],
+  ] as const)('%s %s', (kind, key, note) => {
+    const field = connectionConfigSchema(kind).shape[key];
+    expect(fieldLabelThrough(field)?.description).toContain(note);
   });
 });
