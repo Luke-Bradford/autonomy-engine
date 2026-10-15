@@ -159,7 +159,7 @@ describe('MultiSelectionPanel (U21)', () => {
       />,
     );
     expect(screen.getByRole('heading', { name: '3 selected' })).toBeTruthy();
-    expect(screen.getByText(/2 activities, 1 connection\./)).toBeTruthy();
+    expect(screen.getByText('2 activities, 1 connection')).toBeTruthy();
   });
 
   it('says nothing about connections when none are selected', () => {
@@ -175,7 +175,7 @@ describe('MultiSelectionPanel (U21)', () => {
         ]}
       />,
     );
-    expect(screen.getByText(/^2 activities\./)).toBeTruthy();
+    expect(screen.getByText('2 activities')).toBeTruthy();
     expect(screen.queryByText(/connection/)).toBeNull();
   });
 
@@ -195,7 +195,7 @@ describe('MultiSelectionPanel (U21)', () => {
         ]}
       />,
     );
-    expect(screen.getByText(/^1 activity, 1 connection\./)).toBeTruthy();
+    expect(screen.getByText('1 activity, 1 connection')).toBeTruthy();
   });
 
   it('deletes everything selected, in one undo entry', () => {

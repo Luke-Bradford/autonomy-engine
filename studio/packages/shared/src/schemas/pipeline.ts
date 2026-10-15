@@ -961,7 +961,8 @@ export const ContainerSchema = z.object({
    */
   batchCount: presented(z.number().int().min(1).max(50).optional(), {
     title: 'Batch count',
-    description: 'How many items run at once, from 1 to 50. Absent or 1 runs them one at a time.',
+    description:
+      'How many items run at once, from 1 to 50. Absent or 1 runs them one at a time, in order. Either way, each item runs its own activities in sequence.',
   }),
   /**
    * #844 V5 (spec V-D6) — foreach-only OPT-IN to nondeterministic variable

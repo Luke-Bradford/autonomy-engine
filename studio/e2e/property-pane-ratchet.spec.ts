@@ -16,12 +16,12 @@ import { nodeMenuAction, pickConnection, properties } from './support/panels';
  * - no section heading carries a `?`;
  * - every control outside a table holds its size class, S, M or the row's
  *   value column, and a choice shows its longest option whole (F10);
- * - the pane's prose lines, and
+ * - the pane shows no prose at all, and
  * - its `?`s, per type, never rise above the counts seeded below.
  *
- * The two counts are a RATCHET: seeded from what slice 3 left, they may only
- * fall. A type the map does not know fails until it is seeded, so a new
- * activity's pane is looked at once, deliberately. Prose is a visible `p`,
+ * The `?` count is a RATCHET: seeded from what slice 3 left, it may only fall.
+ * A type the map does not know fails until it is seeded, so a new activity's
+ * pane is looked at once, deliberately. Prose is a visible `p`,
  * `.page-hint` or `.field-hint` of four words or more, outside a status, an
  * error, an advisory or a `?` note: an empty state ("No rows.") is not prose,
  * and a warning about the current value is not there to be read in advance.
@@ -29,35 +29,35 @@ import { nodeMenuAction, pickConnection, properties } from './support/panels';
 test.use({ viewport: { width: 1440, height: 900 } });
 
 /**
- * Toolbox name → the most prose lines and `?`s its pane may show. Lower only.
- * What is left is OR42's open slices (#1694): the config fields' visible hints
- * and the call and container panels' notes (item 4's rest), and the `?`s each
- * field still carries (the per-field `?` audit).
+ * Toolbox name → the most `?`s its pane may show. Lower only. What is left is
+ * OR42's per-field `?` audit (#1694). Prose has no budget: none, in any pane
+ * (item 4). Where slice 8 turned a paragraph into a `?` (a container's palette
+ * sentence, the call's Wait note), the count rose by that one, once.
  */
-const LIMITS: Record<string, { prose: number; help: number }> = {
-  'Copy data': { prose: 1, help: 10 },
-  'Copy file': { prose: 0, help: 8 },
-  'Delete file': { prose: 0, help: 7 },
-  'HTTP request': { prose: 1, help: 11 },
-  'List directory': { prose: 0, help: 7 },
-  'Lookup rows': { prose: 0, help: 6 },
-  'Move file': { prose: 0, help: 8 },
-  'Read file': { prose: 0, help: 7 },
-  'Write file': { prose: 0, help: 8 },
-  'Agent task': { prose: 1, help: 9 },
-  'LLM call': { prose: 1, help: 25 },
-  'Append variable': { prose: 1, help: 7 },
-  'Execute pipeline': { prose: 1, help: 5 },
-  Fail: { prose: 0, help: 6 },
-  Filter: { prose: 0, help: 7 },
-  'If condition': { prose: 0, help: 6 },
-  'Set variable': { prose: 1, help: 7 },
-  Switch: { prose: 0, help: 7 },
-  Wait: { prose: 0, help: 6 },
-  'Webhook (external wait)': { prose: 0, help: 6 },
-  ForEach: { prose: 2, help: 4 },
-  Until: { prose: 1, help: 4 },
-  Stage: { prose: 1, help: 1 },
+const HELP_LIMITS: Record<string, number> = {
+  'Copy data': 10,
+  'Copy file': 8,
+  'Delete file': 7,
+  'HTTP request': 11,
+  'List directory': 7,
+  'Lookup rows': 6,
+  'Move file': 8,
+  'Read file': 7,
+  'Write file': 8,
+  'Agent task': 9,
+  'LLM call': 25,
+  'Append variable': 7,
+  'Execute pipeline': 6,
+  Fail: 6,
+  Filter: 7,
+  'If condition': 6,
+  'Set variable': 7,
+  Switch: 7,
+  Wait: 6,
+  'Webhook (external wait)': 6,
+  ForEach: 5,
+  Until: 5,
+  Stage: 2,
 };
 
 interface TabRead {
@@ -221,7 +221,7 @@ async function readPane(page: Page, tablist: string, name: string, misses: strin
   return { prose, help };
 }
 
-test('every catalog activity and container: no wide button, no `?` on a heading, every field S, M or L, prose and `?`s held', async ({
+test('every catalog activity and container: no wide button, no `?` on a heading, every field S, M or L, no prose, `?`s held', async ({
   page,
 }) => {
   test.setTimeout(240_000);
@@ -265,15 +265,13 @@ test('every catalog activity and container: no wide button, no `?` on a heading,
   }
 
   for (const [name, got] of Object.entries(measured)) {
-    const limit = LIMITS[name];
+    if (got.prose > 0) misses.push(`${name}: prose: ${got.lines.join(' | ')}`);
+    const limit = HELP_LIMITS[name];
     if (limit === undefined) {
-      misses.push(`${name}: not seeded — prose ${got.prose}, ? ${got.help}`);
+      misses.push(`${name}: not seeded — ? ${got.help}`);
       continue;
     }
-    if (got.prose > limit.prose) {
-      misses.push(`${name}: prose ${got.prose} > ${limit.prose}: ${got.lines.join(' | ')}`);
-    }
-    if (got.help > limit.help) misses.push(`${name}: ? ${got.help} > ${limit.help}`);
+    if (got.help > limit) misses.push(`${name}: ? ${got.help} > ${limit}`);
   }
   expect(misses).toEqual([]);
   await expectQuiet(page, problems);

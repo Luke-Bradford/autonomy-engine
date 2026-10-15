@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
+import { AboutHelp } from '../../lib/HelpDisclosure';
 import type { FieldPicker, PickerTarget } from './ConfigFieldControl';
 import { ExpressionPicker } from './ExpressionPicker';
 import { useCaretInsert } from './useCaretInsert';
@@ -22,6 +23,7 @@ export function PickableInput({
   pickerName,
   target,
   after,
+  about,
   required = false,
   children,
 }: {
@@ -34,6 +36,12 @@ export function PickableInput({
   target: PickerTarget;
   /** Content after the input, still inside the label (a hint that names it). */
   after?: ReactNode;
+  /**
+   * #1694 OR42 — what the field means, behind a `?` beside it (labels, not
+   * prose). A sibling of the label, as the flyout is, and the input's
+   * description.
+   */
+  about?: { name: string; note: ReactNode };
   /** The value must be given: `aria-required`, beside the label's `RequiredMark`. */
   required?: boolean;
   children: ReactNode;
@@ -44,6 +52,7 @@ export function PickableInput({
     insert: insertAtCaret,
     functionOptions,
   } = useCaretInsert<HTMLInputElement>();
+  const aboutId = useId();
   return (
     <div className="config-field">
       <label>
@@ -55,9 +64,15 @@ export function PickableInput({
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
           aria-required={required || undefined}
+          aria-describedby={about === undefined ? undefined : aboutId}
         />
         {after}
       </label>
+      {about !== undefined && (
+        <AboutHelp name={about.name} noteId={aboutId}>
+          {about.note}
+        </AboutHelp>
+      )}
       {picker && (
         <ExpressionPicker
           fieldName={pickerName}

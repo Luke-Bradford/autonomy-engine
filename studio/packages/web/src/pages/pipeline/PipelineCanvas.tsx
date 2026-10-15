@@ -119,6 +119,7 @@ import { useExpressionPicker } from './useExpressionPicker';
 import { ConfigEditor } from './ConfigEditor';
 import { useConfigEditor } from './useConfigEditor';
 import { autoMappableField, describeSkips } from './copyMappingAids';
+import { PanelHeader } from './PanelHeader';
 import { CallPanel } from './CallPanel';
 import type { FieldChoices, FieldPicker } from './ConfigFieldControl';
 import { variableWriteChoices } from './variableChoices';
@@ -2938,9 +2939,7 @@ export function MultiSelectionPanel({
   return (
     <section className="property-panel" aria-label="Properties">
       <h2>{selection.length} selected</h2>
-      <p className="page-hint">
-        {parts.join(', ')}. Editing is one at a time — click a single activity to configure it.
-      </p>
+      <p className="page-hint">{parts.join(', ')}</p>
       {/* U21 — the bulk acts, in the order an operator reaches for them. Copy,
           Cut and Duplicate act on the ACTIVITIES only (an edge travels with the
           pair it joins, and an edge alone has nothing to copy into), which is
@@ -3831,12 +3830,19 @@ export function NodePanel({
     sinkAdvisory?.notWritten ?? [],
   );
 
+  // #1694 OR42 item 4 — why Auto-map is off, as a short state beside it, not a
+  // sentence. It names the side that is missing, and is the button's
+  // description too.
   const autoMapBlocked =
-    sourceDataset === undefined || sinkDataset === undefined
-      ? 'Bind a source and a sink dataset to map their columns.'
-      : draftMapping === null
-        ? 'Finish the mapping row being edited before mapping the rest.'
-        : null;
+    sourceDataset === undefined && sinkDataset === undefined
+      ? 'No datasets bound'
+      : sourceDataset === undefined
+        ? 'No source dataset'
+        : sinkDataset === undefined
+          ? 'No sink dataset'
+          : draftMapping === null
+            ? 'Mapping row unfinished'
+            : null;
 
   function runAutoMap() {
     if (!mappingField || !sourceDataset || !sinkDataset || draftMapping === null) return;
@@ -4170,7 +4176,7 @@ export function NodePanel({
             advisory={null}
             picker={picker}
             choicesFor={choicesFor}
-            emptyHint="This activity has no settings."
+            emptyHint="No settings"
             fieldNames={applicableFieldNames(
               entry,
               t.fields.map((f) => f.name),
@@ -4189,7 +4195,11 @@ export function NodePanel({
                     type="button"
                     onClick={runAutoMap}
                     disabled={autoMapBlocked !== null}
-                    aria-describedby={`${nodeId}-automap-about`}
+                    aria-describedby={
+                      autoMapBlocked === null
+                        ? `${nodeId}-automap-about`
+                        : `${nodeId}-automap-blocked ${nodeId}-automap-about`
+                    }
                   >
                     Auto-map columns
                   </button>
@@ -4212,7 +4222,11 @@ export function NodePanel({
                    every line here is a warning and none of them is a refusal. The
                    gate reads the store's ACTUAL columns at dispatch. */
                 <div className="contract-section">
-                  {autoMapBlocked !== null && <p className="page-hint">{autoMapBlocked}</p>}
+                  {autoMapBlocked !== null && (
+                    <p id={`${nodeId}-automap-blocked`} className="page-hint">
+                      {autoMapBlocked}
+                    </p>
+                  )}
                   {autoMapNotice !== null && (
                     <p className="contract-advisory" role="status">
                       {autoMapNotice}
@@ -4295,88 +4309,87 @@ export function NodePanel({
     const editActs = configDraft && currentTab !== 'general';
     return (
       <>
-        <div className="property-panel__header">
-          <h2>{nodeName}</h2>
-          <code className="property-panel__type">{nodeType}</code>
-          {entry !== undefined && (
-            <AboutHelp name={entry.title} noteId={`${nodeId}-about`}>
-              {entry.description}
-            </AboutHelp>
-          )}
-          <span className="property-panel__actions">
-            {editActs && (
-              <>
-                {editor.canToggle && (
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-label={editor.jsonMode ? 'Edit as fields' : 'Edit as JSON'}
-                    title={editor.jsonMode ? 'Edit as fields' : 'Edit as JSON'}
-                    onClick={editor.toggleMode}
-                  >
-                    {editor.jsonMode ? (
-                      <FormRegular aria-hidden="true" />
-                    ) : (
-                      <BracesRegular aria-hidden="true" />
-                    )}
-                  </button>
-                )}
+        <PanelHeader
+          name={nodeName}
+          type={nodeType}
+          about={
+            entry === undefined
+              ? undefined
+              : { title: entry.title, noteId: `${nodeId}-about`, body: entry.description }
+          }
+        >
+          {editActs && (
+            <>
+              {editor.canToggle && (
                 <button
                   type="button"
                   className="icon-button"
-                  aria-label="Revert"
-                  onClick={revert}
-                  disabled={!dirty}
-                  title="Revert: discard the setting edits not yet applied, on every tab"
+                  aria-label={editor.jsonMode ? 'Edit as fields' : 'Edit as JSON'}
+                  title={editor.jsonMode ? 'Edit as fields' : 'Edit as JSON'}
+                  onClick={editor.toggleMode}
                 >
-                  <ArrowResetRegular aria-hidden="true" />
+                  {editor.jsonMode ? (
+                    <FormRegular aria-hidden="true" />
+                  ) : (
+                    <BracesRegular aria-hidden="true" />
+                  )}
                 </button>
-                {/* The name keeps "config": what it applies, and what the
+              )}
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Revert"
+                onClick={revert}
+                disabled={!dirty}
+                title="Revert: discard the setting edits not yet applied, on every tab"
+              >
+                <ArrowResetRegular aria-hidden="true" />
+              </button>
+              {/* The name keeps "config": what it applies, and what the
                     notices and tests call it; the face is the short verb. */}
-                <button
-                  type="button"
-                  className="primary"
-                  aria-label="Apply config"
-                  title="Apply config"
-                  onClick={apply}
-                >
-                  Apply
-                </button>
-              </>
-            )}
-            {/* U21 — Duplicate acts on the node as SAVED into the store, not on
+              <button
+                type="button"
+                className="primary"
+                aria-label="Apply config"
+                title="Apply config"
+                onClick={apply}
+              >
+                Apply
+              </button>
+            </>
+          )}
+          {/* U21 — Duplicate acts on the node as SAVED into the store, not on
                   the unapplied draft: the copy carries the config Apply last
                   wrote. Ungated, like Delete — what #907 gated is the SAVE of an
                   archived pipeline, which the server refuses. */}
-            <RowMoreMenu
-              name={nodeName}
-              label="More node actions"
-              actions={[
-                {
-                  label: 'Duplicate node',
-                  onSelect: () => store.getState().duplicateNode(nodeId),
-                },
-                /* #1694 OR42 — the node's own switch, as the canvas's right-click
+          <RowMoreMenu
+            name={nodeName}
+            label="More node actions"
+            actions={[
+              {
+                label: 'Duplicate node',
+                onSelect: () => store.getState().duplicateNode(nodeId),
+              },
+              /* #1694 OR42 — the node's own switch, as the canvas's right-click
                    Deactivate is the selection's: the General tab no longer
                    carries the state. Ungated, like Duplicate and Delete. */
-                {
-                  label: nodeInactive ? 'Activate node' : 'Deactivate node',
-                  onSelect: () => {
-                    // Read at the click, not at render: an undo while the menu
-                    // was open must not turn Activate into a second Deactivate.
-                    const st = store.getState();
-                    const now = st.nodes.find((n) => n.id === nodeId);
-                    if (now !== undefined) st.setNodesInactive([nodeId], !isInactive(now));
-                  },
+              {
+                label: nodeInactive ? 'Activate node' : 'Deactivate node',
+                onSelect: () => {
+                  // Read at the click, not at render: an undo while the menu
+                  // was open must not turn Activate into a second Deactivate.
+                  const st = store.getState();
+                  const now = st.nodes.find((n) => n.id === nodeId);
+                  if (now !== undefined) st.setNodesInactive([nodeId], !isInactive(now));
                 },
-              ]}
-              destructive={{
-                label: 'Delete node',
-                onSelect: () => store.getState().deleteNode(nodeId),
-              }}
-            />
-          </span>
-        </div>
+              },
+            ]}
+            destructive={{
+              label: 'Delete node',
+              onSelect: () => store.getState().deleteNode(nodeId),
+            }}
+          />
+        </PanelHeader>
         {/* Under the header, so Apply's refusal shows on every tab Apply is on. */}
         {editActs && error && (
           <p className="error property-panel__error" role="alert">
