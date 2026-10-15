@@ -335,6 +335,42 @@ describe('importEnvelope: pipeline', () => {
     ).toEqual(['stripped_source']);
   });
 
+  it('#1600 C1q — a SINK-only pair beside an inline source survives the round-trip, not reported', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Inline' });
+    const inlineDatasets = {
+      source: {
+        kind: 'query' as const,
+        config: { sql: 'SELECT * FROM t WHERE a > :wm', parameters: { wm: '${params.target}' } },
+      },
+    };
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [{ name: 'target', type: 'string', required: true }],
+      outputs: [],
+      nodes: [
+        {
+          id: 'inline_source',
+          type: 'llm_call',
+          config: { prompt: 'p' },
+          datasetIds: { sink: '${params.target}' },
+          inlineDatasets,
+          position: { x: 0, y: 0 },
+        },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const result = importEnvelope(db, 'owner-b', exportPipeline(db, pipeline.id, 'owner-a'));
+    if (result.kind !== 'pipeline') throw new Error('unreachable');
+    const node = result.versions[0]!.nodes[0]!;
+    expect(node.datasetIds).toEqual({ sink: '${params.target}' });
+    expect('source' in node.datasetIds!).toBe(false);
+    expect(node.inlineDatasets).toEqual(inlineDatasets);
+    expect(result.attention.filter((a) => a.type === 'unresolvedDatasetRef')).toEqual([]);
+  });
+
   // An export carries EVERY immutable version, and a node id is stable across
   // them — so a binding that was never re-authored appears identically in each.
   // Reported once per version, the operator reads the same repair instruction

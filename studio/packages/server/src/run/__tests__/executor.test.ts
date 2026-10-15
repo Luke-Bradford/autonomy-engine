@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import Database from 'better-sqlite3';
 import { join } from 'node:path';
 import sodium from 'libsodium-wrappers';
 import { z } from 'zod';
@@ -24,6 +25,7 @@ import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-v
 import { createRun, getRun } from '../../repo/runs.js';
 import { createConnection } from '../../repo/connections.js';
 import { createDataset } from '../../repo/datasets.js';
+import { rowsOf } from '../../connectors/__tests__/sqlite-fixtures.js';
 import { createSecret } from '../../repo/secrets.js';
 import { encrypt } from '../../secrets/secrets.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
@@ -102,7 +104,8 @@ function httpNode(
 function seedVersion(
   db: Db,
   nodes: Node[],
-  params: { name: string; type: 'string'; required: boolean }[] = [],
+  params: NewPipelineVersion['params'] = [],
+  edges: NewPipelineVersion['edges'] = [],
 ): string {
   const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
   const input: NewPipelineVersion = {
@@ -110,7 +113,7 @@ function seedVersion(
     params,
     outputs: [],
     nodes,
-    edges: [],
+    edges,
     catalogVersion: CATALOG_VERSION,
   };
   return createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG }).id;
@@ -5483,5 +5486,212 @@ describe('createExecutor — #1600 OR41 C1a: Copy · Files as-is', () => {
       code: FAILURE_CODES.CONNECTION_KIND_INVALID,
       side: 'sink',
     });
+  });
+});
+
+describe('createExecutor — #1600 OR41 C1q: an inline Table · Query source', () => {
+  const dirs: string[] = [];
+  afterAll(async () => {
+    for (const d of dirs) await rm(d, { recursive: true, force: true });
+  });
+  async function tempDir(prefix: string): Promise<string> {
+    const d = await realpath(await mkdtemp(join(tmpdir(), prefix)));
+    dirs.push(d);
+    return d;
+  }
+  const failureOf = (db: Db, runId: string) =>
+    loadEngineEvents(db, runId).find((e) => e.type === 'node.failed');
+
+  /** A source store holding `orders` and an `etl_control` watermark row, and an empty sink store. */
+  async function seedStores() {
+    const root = await tempDir('exec-inline-');
+    const src = new Database(join(root, 'src.db'));
+    src.exec(
+      'CREATE TABLE orders (id INTEGER PRIMARY KEY, modified_at INTEGER);' +
+        'INSERT INTO orders VALUES (1, 50), (2, 150), (3, 200);' +
+        'CREATE TABLE etl_control (name TEXT PRIMARY KEY, last_wm INTEGER);' +
+        "INSERT INTO etl_control VALUES ('orders', 100);",
+    );
+    src.close();
+    const dst = new Database(join(root, 'dst.db'));
+    dst.exec('CREATE TABLE stage (id INTEGER, modified_at INTEGER)');
+    dst.close();
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'sqlite', { roots: [root], path: 'src.db' }, null);
+    const sinkConn = await seedConnection(
+      db,
+      'sqlite',
+      { roots: [root], path: 'dst.db', writable: true },
+      null,
+    );
+    const sinkDs = createDataset(db, {
+      ownerId: 'local',
+      name: 'stage',
+      connectionId: sinkConn,
+      kind: 'table',
+      config: { table: 'stage' },
+      columns: [
+        { name: 'id', type: 'integer', nullable: true },
+        { name: 'modified_at', type: 'integer', nullable: true },
+      ],
+      parameters: [],
+    }).id;
+    return { root, db, sourceConn, sinkConn, sinkDs };
+  }
+
+  const mapping = [
+    { source: 'id', sink: 'id', type: 'integer' },
+    { source: 'modified_at', sink: 'modified_at', type: 'integer' },
+  ];
+
+  function inlineCopy(
+    sourceConn: string,
+    sinkConn: string,
+    sinkDs: string,
+    inline: NonNullable<Node['inlineDatasets']>['source'],
+    extra: Partial<Node> = {},
+  ): Node {
+    return {
+      id: 'copy1',
+      type: 'copy',
+      config: { mapping, mode: 'append' },
+      connectionIds: { source: sourceConn, sink: sinkConn },
+      datasetIds: { sink: sinkDs },
+      inlineDatasets: { source: inline },
+      position: { x: 1, y: 0 },
+      ...extra,
+    };
+  }
+
+  it('THE WATERMARK JOURNEY: Lookup reads the watermark, Copy binds it as :wm, and only newer rows land', async () => {
+    const { root, db, sourceConn, sinkConn, sinkDs } = await seedStores();
+    const lookup: Node = {
+      id: 'lookup1',
+      type: 'lookup',
+      config: {},
+      connectionId: sourceConn,
+      inlineDatasets: {
+        source: {
+          kind: 'query',
+          config: {
+            sql: 'SELECT last_wm FROM etl_control WHERE name = :n',
+            parameters: { n: 'orders' },
+          },
+        },
+      },
+      position: { x: 0, y: 0 },
+    };
+    const copy = inlineCopy(sourceConn, sinkConn, sinkDs, {
+      kind: 'query',
+      config: {
+        sql: 'SELECT id, modified_at FROM orders WHERE modified_at > :wm ORDER BY id',
+        parameters: { wm: '${nodes.lookup1.output.rows[0].last_wm}' },
+      },
+    });
+    const pvId = seedVersion(
+      db,
+      [lookup, copy],
+      [],
+      [{ id: 'e1', from: 'lookup1', to: 'copy1', on: 'success' }],
+    );
+
+    const first = seedRun(db, pvId);
+    expect((await startRun(deps(db), first)).status).toBe('success');
+    expect(rowsOf(join(root, 'dst.db'), 'SELECT * FROM stage ORDER BY id')).toEqual([
+      { id: 2, modified_at: 150 },
+      { id: 3, modified_at: 200 },
+    ]);
+    // The bind value the run applied is on the dispatch record, as a saved
+    // dataset's overrides are.
+    const dispatchedCopy = loadEngineEvents(db, first.id).find(
+      (e) => e.type === 'node.dispatched' && e.nodeId === 'copy1',
+    );
+    expect(
+      dispatchedCopy?.type === 'node.dispatched' && JSON.parse(dispatchedCopy.params!.text),
+    ).toEqual({
+      datasetParams: { source: { wm: 100 } },
+    });
+
+    // Raise the watermark: a second run copies nothing new.
+    const src = new Database(join(root, 'src.db'));
+    src.exec("UPDATE etl_control SET last_wm = 200 WHERE name = 'orders'");
+    src.close();
+    const second = seedRun(db, pvId);
+    expect((await startRun(deps(db), second)).status).toBe('success');
+    expect(rowsOf(join(root, 'dst.db'), 'SELECT count(*) AS n FROM stage')).toEqual([{ n: 2 }]);
+  });
+
+  it('copies a whole inline TABLE', async () => {
+    const { root, db, sourceConn, sinkConn, sinkDs } = await seedStores();
+    const pvId = seedVersion(db, [
+      inlineCopy(sourceConn, sinkConn, sinkDs, { kind: 'table', config: { table: 'orders' } }),
+    ]);
+    const run = seedRun(db, pvId);
+    expect((await startRun(deps(db), run)).status).toBe('success');
+    expect(rowsOf(join(root, 'dst.db'), 'SELECT count(*) AS n FROM stage')).toEqual([{ n: 3 }]);
+  });
+
+  it('refuses an inline table in a store it cannot live in (an fs connection), before dispatch', async () => {
+    const { db, sinkConn, sinkDs, root } = await seedStores();
+    const fsConn = await seedConnection(db, 'fs', { roots: [root] }, null);
+    const pvId = seedVersion(db, [
+      inlineCopy(fsConn, sinkConn, sinkDs, { kind: 'table', config: { table: 'orders' } }),
+    ]);
+    const run = seedRun(db, pvId);
+    expect((await startRun(deps(db), run)).status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({
+      code: FAILURE_CODES.DATASET_CONNECTION_MISMATCH,
+      side: 'source',
+    });
+    expect(loadEngineEvents(db, run.id).some((e) => e.type === 'node.dispatched')).toBe(false);
+  });
+
+  it('refuses a doc that bypassed the save gate with a source dataset AND an inline source', async () => {
+    const { db, sourceConn, sinkConn, sinkDs } = await seedStores();
+    const pvId = seedLegacyVersion(db, [
+      inlineCopy(
+        sourceConn,
+        sinkConn,
+        sinkDs,
+        { kind: 'table', config: { table: 'orders' } },
+        { datasetIds: { source: sinkDs, sink: sinkDs } },
+      ),
+    ]);
+    const run = seedRun(db, pvId);
+    expect((await startRun(deps(db), run)).status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({ code: FAILURE_CODES.DATASET_KIND_INVALID });
+  });
+
+  it('refuses a bind value that resolves to something SQL cannot bind', async () => {
+    const { db, sourceConn, sinkConn, sinkDs } = await seedStores();
+    const pvId = seedVersion(
+      db,
+      [
+        inlineCopy(sourceConn, sinkConn, sinkDs, {
+          kind: 'query',
+          config: { sql: 'SELECT * FROM orders WHERE id = :x', parameters: { x: '${params.p}' } },
+        }),
+      ],
+      [{ name: 'p', type: 'json', required: true }],
+    );
+    const run = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: null,
+      params: { p: { not: 'bindable' } },
+    });
+    expect((await startRun(deps(db), run)).status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({ code: FAILURE_CODES.DATASET_PARAM_INVALID });
+  });
+
+  it('refuses an inline table that is the sink table itself (the physical self-copy check)', async () => {
+    const { db, sinkConn, sinkDs } = await seedStores();
+    const pvId = seedVersion(db, [
+      inlineCopy(sinkConn, sinkConn, sinkDs, { kind: 'table', config: { table: 'stage' } }),
+    ]);
+    const run = seedRun(db, pvId);
+    expect((await startRun(deps(db), run)).status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({ code: FAILURE_CODES.DATASET_SELF_COPY });
   });
 });
