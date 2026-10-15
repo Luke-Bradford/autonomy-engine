@@ -531,6 +531,9 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   // the editor can still fire one after this registers, and leaving the page
   // aborts it, so a request wait could settle on that and read no response
   // (#1699). An aborted request never produces a response, so this cannot.
+  // An editor sync that answers can still satisfy it, so this only paces the
+  // test: the proof that the list's own read landed is the git part's
+  // `uncommitted.` below, which waits SYNC_SETTLES for it.
   const listSync = page.waitForResponse(
     (r) => r.request().method() === 'POST' && r.url().endsWith('/api/workspace/git/sync') && r.ok(),
   );

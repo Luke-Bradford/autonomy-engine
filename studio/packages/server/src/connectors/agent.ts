@@ -157,7 +157,7 @@ const MAX_CLI_DIAGNOSTIC_CHARS = 1000;
  *
  * Why it exists (#799 review): on `llm_call` the matched text is a single
  * completion, but on `agent_task` it is the whole transcript, up to the
- * connection's `maxOutputBytes` (10 MB by default), and the match is a
+ * connection's `maxOutputBytes` (`DEFAULT_MAX_OUTPUT_BYTES` by default), and the match is a
  * SYNCHRONOUS `RegExp.test` on the server's only thread. Scanning megabytes per
  * failed node is an event-loop stall the `llm_call` shape never had.
  *
@@ -437,7 +437,7 @@ type CliTerminal = CliClassification['terminal'];
  *
  * TWO bounds apply, and neither is the SURFACE question:
  *  - SIZE: the pattern is tested against a `MAX_CLI_MATCH_CHARS` excerpt, not the
- *    whole (up to `maxOutputBytes`, 10 MB) transcript, because the `test` is
+ *    whole (up to `maxOutputBytes`) transcript, because the `test` is
  *    synchronous and scanning megabytes on the server's only thread is an
  *    event-loop stall. Note the limit of what this buys: `headTailExcerpt` returns
  *    the text UNMODIFIED below the cap, so for a transcript under 64k — plenty of

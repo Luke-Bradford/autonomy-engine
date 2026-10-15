@@ -442,7 +442,7 @@ export async function describePostgresDatasetColumns(read: PostgresDatasetRead):
  * here is exactly the one that was measured.
  *
  * THE TIMEOUT NOW BOUNDS A FETCH, NOT THE COPY. `statementTimeoutMs` (default
- * 30s) arms both pg timers per statement, and each `FETCH` is a statement — so
+ * `DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS`) arms both pg timers per statement, and each `FETCH` is a statement — so
  * it caps how long ONE batch may take, and a copy of any total duration is fine
  * so long as no single batch stalls. A slow first batch on an unindexed scan is
  * the shape that trips it, and it surfaces as SQLSTATE `57014`, which this

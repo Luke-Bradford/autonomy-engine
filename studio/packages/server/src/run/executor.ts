@@ -350,9 +350,9 @@ function withTranscript(
  * saturated limiter makes a node WAIT for a slot before `node.dispatched`, with
  * no event emitted anywhere — so the trade is unbounded sessions for bounded
  * but invisible pre-dispatch delay. One slot can be held for
- * `DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS` (10s) plus up to two
- * `DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS` (30s) enrichment queries
- * (`connectors/postgres-session.ts`), so a wide fan-out of copy nodes against
+ * `DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS` plus up to two
+ * `DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS` enrichment queries (both in
+ * `@autonomy-studio/shared`), so a wide fan-out of copy nodes against
  * one unreachable server queues at roughly ceil(N/4) x that, where today it is
  * one such window in parallel. A run cancelled while queued still proceeds to
  * dispatch when its slot arrives — unchanged from today, but the window widens.

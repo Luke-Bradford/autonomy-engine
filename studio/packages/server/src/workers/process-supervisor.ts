@@ -71,7 +71,7 @@ export interface SpawnSupervisedOptions {
    * before the supervisor stops accumulating and marks `truncated: true`.
    * Streaming continues to be drained (so the child never blocks on a full
    * pipe) but no further `line` events are emitted and no more memory is
-   * retained. Default 10 MiB.
+   * retained. Default `DEFAULT_MAX_OUTPUT_BYTES`.
    */
   maxOutputBytes?: number;
   /** Cancellation — aborting tree-kills the process. */

@@ -69,13 +69,16 @@ export const DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS = 10_000;
 export const DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS = 30_000;
 
 /**
- * Default wall-clock bound (30 min) so a hung agent never permanently holds a
+ * Default wall-clock bound so a hung agent never permanently holds a
  * worker-pool slot. Agent runs are long, hence generous.
  */
 export const DEFAULT_AGENT_TIMEOUT_MS = 30 * 60_000;
 
 /** Default combined stdout+stderr byte cap for a supervised process. */
 export const DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
+
+/** The `anthropic-version` header sent when a connection sets none. */
+export const DEFAULT_ANTHROPIC_VERSION = '2023-06-01';
 
 const MIB = 1024 * 1024;
 
@@ -100,7 +103,7 @@ export const llmConnectionConfigSchema = z.object({
   model: presented(singleLine(z.string()).optional(), {
     title: 'Default model',
   }),
-  /** Per-request timeout in ms (whole exchange). Defaults to 120s. */
+  /** Per-request timeout in ms (whole exchange). Defaults to `DEFAULT_LLM_TIMEOUT_MS`. */
   timeoutMs: presented(z.number().int().positive().optional(), {
     title: 'Timeout',
     unit: 'ms',
@@ -110,10 +113,10 @@ export const llmConnectionConfigSchema = z.object({
 
 /** `anthropic_api`: the LLM shape plus the API version header. */
 export const anthropicConnectionConfigSchema = llmConnectionConfigSchema.extend({
-  /** The `anthropic-version` header value. Defaults to `2023-06-01`. */
+  /** The `anthropic-version` header value. Defaults to `DEFAULT_ANTHROPIC_VERSION`. */
   anthropicVersion: presented(singleLine(z.string()).optional(), {
     title: 'API version',
-    description: 'The anthropic-version header. Defaults to 2023-06-01.',
+    description: `The anthropic-version header. Defaults to ${DEFAULT_ANTHROPIC_VERSION}.`,
   }),
 });
 
@@ -125,7 +128,7 @@ export const httpConnectionConfigSchema = z.object({
   headers: presented(z.record(z.string(), z.string()).optional(), {
     title: 'Default headers',
   }),
-  /** Per-request timeout in ms (whole exchange). Defaults to 30s. */
+  /** Per-request timeout in ms (whole exchange). Defaults to `DEFAULT_HTTP_TIMEOUT_MS`. */
   timeoutMs: presented(z.number().int().positive().optional(), {
     title: 'Timeout',
     unit: 'ms',
@@ -149,13 +152,13 @@ export const fsConnectionConfigSchema = z.object({
       description: 'Absolute paths. Every file step is confined to these folders.',
     },
   ),
-  /** Per-read size cap in bytes. Defaults to 10 MiB. */
+  /** Per-read size cap in bytes. Defaults to `DEFAULT_MAX_READ_BYTES`. */
   maxBytes: presented(z.number().int().positive().optional(), {
     title: 'Largest file read',
     unit: 'bytes',
     description: defaultNote(DEFAULT_MAX_READ_BYTES, 'bytes'),
   }),
-  /** Per-`file_list` entry cap. Defaults to 10000. */
+  /** Per-`file_list` entry cap. Defaults to `DEFAULT_MAX_LIST_ENTRIES`. */
   maxEntries: presented(z.number().int().positive().optional(), {
     title: 'Most entries listed',
     description: `The cap on one directory listing. ${defaultNote(DEFAULT_MAX_LIST_ENTRIES)}`,

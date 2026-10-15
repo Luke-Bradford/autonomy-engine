@@ -12,6 +12,7 @@ import {
   CONNECTION_KINDS,
   CONNECTION_SECRET_USE,
   DEFAULT_AGENT_TIMEOUT_MS,
+  DEFAULT_ANTHROPIC_VERSION,
   DEFAULT_HTTP_TIMEOUT_MS,
   DEFAULT_LLM_TIMEOUT_MS,
   DEFAULT_MAX_LIST_ENTRIES,
@@ -368,6 +369,7 @@ describe('connection form labels (#1396)', () => {
 describe('server-applied defaults in the connection notes', () => {
   it.each([
     ['anthropic_api', 'timeoutMs', `Defaults to ${String(DEFAULT_LLM_TIMEOUT_MS)} (2 minutes).`],
+    ['anthropic_api', 'anthropicVersion', `Defaults to ${DEFAULT_ANTHROPIC_VERSION}.`],
     ['http', 'timeoutMs', `Defaults to ${String(DEFAULT_HTTP_TIMEOUT_MS)} (30 seconds).`],
     ['fs', 'maxBytes', `Defaults to ${String(DEFAULT_MAX_READ_BYTES)} (10 MiB).`],
     ['fs', 'maxEntries', `Defaults to ${String(DEFAULT_MAX_LIST_ENTRIES)}.`],

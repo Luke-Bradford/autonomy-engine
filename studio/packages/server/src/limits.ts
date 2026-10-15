@@ -27,8 +27,7 @@
  * It lives HERE rather than beside its consumer, and the departure is worth
  * naming because `RETENTION_BATCH` (`repo/retention.ts`) sits next to its
  * consumer (`DEFAULT_MAX_LIST_ENTRIES` sits in shared, where the fs form's note
- * is built from it, #1712): §5
- * and §9 name `limits.ts` explicitly as where the data-movement bounds go, and
+ * is built from it, #1712): §5 and §9 name `limits.ts` explicitly as where the data-movement bounds go, and
  * the ones still to come (`LOOKUP_ROW_CAP`, `LOOKUP_BYTE_CAP` at M12) are read
  * by more than one consumer, so the set belongs in one place.
  *

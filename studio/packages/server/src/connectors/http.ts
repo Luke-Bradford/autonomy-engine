@@ -40,7 +40,7 @@ import { redactSecrets } from './redact.js';
  * EVERY request is bounded by a timeout spanning the WHOLE exchange (connect +
  * headers + body read), so a hung/slowloris endpoint can never permanently hold
  * a worker-pool slot (which, with the shared pool, would otherwise stall every
- * run). Default 30s, overridable per connection via `config.timeoutMs`.
+ * run). `DEFAULT_HTTP_TIMEOUT_MS`, overridable per connection via `config.timeoutMs`.
  */
 
 /**
