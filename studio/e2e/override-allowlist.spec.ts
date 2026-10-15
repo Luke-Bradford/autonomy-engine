@@ -6,7 +6,7 @@ import { fluentRootReady } from './support/theme';
 /**
  * #1305 — a connection's or dataset's own `parameters` allowlist (which config
  * keys a node may override per run) is edited on its page. #1304 gave the canvas
- * the node half; `param-overrides.spec.ts` covers that the canvas offers exactly
+ * the node half; `param-overrides.spec.ts` covers that the canvas lists exactly
  * the allowlisted keys, so this spec stops at the page → server round trip.
  *
  * What it pins against the LIVE server, not a mock:

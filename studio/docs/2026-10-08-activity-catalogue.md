@@ -122,11 +122,11 @@ Sources: [copy activity](https://learn.microsoft.com/azure/data-factory/copy-act
 
 **Tabs:** General · Source · Sink · Mapping (rows only) · Settings · User properties.
 
-Three toggles at the top of **Source** decide the shape. Everything below them follows from these three:
+Three toggles decide the shape: *Copy mode* first on **General** (#1694 OR42 item 8), the other two at the top of **Source**. Everything below them follows from these three:
 
 | Toggle | Options | Default | Effect |
 |---|---|---|---|
-| **Copy** | **Rows** (read, map and convert) · **Files as-is** (bytes, no parsing) | Rows | Files as-is hides Mapping and the format options, and shows the copy-behaviour options. The ADF equivalent is a Binary dataset. Built (C1a) as two catalog types, `copy` and `copy_files`, under one palette item; the dock labels the toggle *Copy mode*, because a bare *Copy* label would be a substring of *After copy* and *Copy behaviour* on the same panel |
+| **Copy** | **Rows** (read, map and convert) · **Files as-is** (bytes, no parsing) | Rows | Files as-is hides Mapping and the format options, and shows the copy-behaviour options. The ADF equivalent is a Binary dataset. Built (C1a) as two catalog types, `copy` and `copy_files`, under one palette item; the dock labels the toggle *Copy mode* and shows it first on General, as an activity-level choice (#1694 OR42 item 8), because a bare *Copy* label would be a substring of *After copy* and *Copy behaviour* on the same panel |
 | **Load** | **Full** · **Incremental** | Full | Incremental adds a watermark (below) |
 | **After copy** | **Keep source** · **Delete source** · **Move source to…** (folder ⓕ) | Keep | Delete or Move = the old Move File. Files only, applied per file after it is written (non-atomic, as in ADF). Under *If file exists* = Skip, a target that already holds exactly its source's bytes is reported skipped and its source is still removed, so a retry finishes a source an earlier attempt copied but did not remove (not for Merge, which has no one source to compare); a Move an earlier attempt linked but did not finish is finished in every mode (#1685) |
 

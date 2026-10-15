@@ -112,44 +112,41 @@ export function noOverridableSettingsNote(kind: string, noun: OverrideResource['
 }
 
 /**
- * The keys the Add control may offer: declared by the owner, present in the
- * kind's schema, not a security-boundary key, and not already overridden.
+ * The keys a node may override on this resource: declared by the owner, present
+ * in the kind's schema, and not a security-boundary key, in the owner's order.
  *
- * Filtering by the SCHEMA as well as the allowlist is what keeps Add from
+ * Filtering by the SCHEMA as well as the allowlist is what keeps the editor from
  * offering a key the executor's merged-config re-validation refuses. An
  * allowlist is a plain list of names and can hold a key the kind does not have.
  */
-export function addableKeys(
-  r: OverrideResource,
-  current: Readonly<Record<string, unknown>>,
-): string[] {
+export function declaredOverrideKeys(r: OverrideResource): string[] {
   const usable = new Set(usableKeys(r));
-  return r.allowlist.filter((k) => usable.has(k) && !Object.hasOwn(current, k));
+  return r.allowlist.filter((k) => usable.has(k));
 }
 
 /**
- * Why there is nothing to add, when that needs saying. The three causes need
- * different fixes, so the note names the actual one:
- *  - the KIND has no overridable settings at all (`table`, `sqlite`), which no
- *    allowlist edit can change;
- *  - the owner declared nothing;
- *  - the owner declared only keys this kind cannot take.
- * `null` when Add has something to offer, or when every usable declared key is
- * already overridden (the rows are the explanation).
+ * #1694 OR42 item 8 — the override table's rows: every declared key (blank
+ * until overridden), then every stored key that is not one, so a stray
+ * override is shown, flagged, rather than hidden. With no resource to read
+ * (`null`), only the stored keys.
  */
-export function overrideNote(
-  r: OverrideResource,
+export function overrideRowKeys(
+  r: OverrideResource | null,
   current: Readonly<Record<string, unknown>>,
-): string | null {
-  if (addableKeys(r, current).length > 0) return null;
-  const usable = usableKeys(r);
-  if (usable.length === 0) {
-    return noOverridableSettingsNote(r.kind, r.noun);
-  }
-  if (r.allowlist.length === 0) {
-    return `${r.name} declares no overridable settings, so there is nothing to override here.`;
-  }
-  if (r.allowlist.some((k) => usable.includes(k))) return null;
+): string[] {
+  const declared = r === null ? [] : declaredOverrideKeys(r);
+  return [...declared, ...Object.keys(current).filter((k) => !declared.includes(k))];
+}
+
+/**
+ * The note an override table needs, or `null`. Only the misconfiguration is
+ * said: the owner declared keys, and none is one this kind lets a node
+ * override, so the declaration has no effect. A resource that declares nothing
+ * (or a kind with nothing overridable) gets no table and no note, as ADF shows
+ * no Dataset properties for an unparameterised dataset.
+ */
+export function overrideNote(r: OverrideResource): string | null {
+  if (r.allowlist.length === 0 || declaredOverrideKeys(r).length > 0) return null;
   return `${r.name}'s declared parameters name no setting a node can override on ${kindPlural(r.kind, r.noun)}.`;
 }
 
@@ -205,7 +202,7 @@ export function coerceOverride(field: ConfigField | undefined, text: string): un
 function violationMessage(r: OverrideResource, v: ParamOverrideViolation): string {
   switch (v.reason) {
     case 'non_overridable':
-      return `\`${v.key}\` can never be overridden on ${kindPlural(r.kind, r.noun)}. Remove this row.`;
+      return `\`${v.key}\` can never be overridden on ${kindPlural(r.kind, r.noun)}. Remove this override.`;
     case 'undeclared':
       return `${r.name} does not declare \`${v.key}\` as overridable, so a run will refuse it.`;
     case 'secret_marker':
@@ -259,7 +256,7 @@ export function overrideRowProblem(
   // Reached only by a text/enum key: `typeProblem` has already refused `''` for
   // every other kind, with the more specific message.
   if (value === '') {
-    return `An empty value replaces the ${r.noun}'s \`${key}\` with nothing. Remove the row to keep the ${r.noun}'s own setting.`;
+    return `An empty value replaces the ${r.noun}'s \`${key}\` with nothing. Remove the override to keep the ${r.noun}'s own setting.`;
   }
   return null;
 }

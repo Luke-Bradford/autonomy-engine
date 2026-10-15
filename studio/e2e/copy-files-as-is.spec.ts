@@ -19,7 +19,7 @@ import { seedConnection } from './support/seedResources';
 /**
  * #1600 OR41 C1a — Copy · Files as-is (activity catalogue §4.1).
  *
- * ONE Copy in the palette; the *Copy mode* select at the top of its Source tab
+ * ONE Copy in the palette; the *Copy mode* select leading its General tab (#1694 OR42 item 8)
  * switches the node between Rows (`copy`) and Files as-is (`copy_files`). What
  * only a browser can show: the toggle is reachable at 1440x900 without
  * scrolling, Files as-is drops the Mapping tab and draws its own fields, and
@@ -62,22 +62,26 @@ test.describe('#1600 C1a — Copy · Files as-is', () => {
       await addActivity(page, 'Copy data');
       await expect(canvasNodes(page)).toHaveCount(1);
       await canvasNodes(page).first().click();
+      // #1694 OR42 item 8 — an activity-level choice: on General, not on Source.
       await tab(page, 'Source').click();
       const mode = properties(page).getByRole('combobox', { name: 'Copy mode', exact: true });
+      await expect(mode).toHaveCount(0);
+      await tab(page, 'General').click();
       await expect(mode).toHaveValue('copy');
       await expect(tab(page, 'Mapping')).toBeVisible();
 
       // Measured at 1440x900: the toggle is drawn inside the viewport, and it is
-      // the FIRST control on the Source tab, above the connection picker.
+      // the FIRST control on General, above the description.
       const box = await mode.boundingBox();
       expect(box, 'Copy mode select has a box').not.toBeNull();
       expect(box!.y + box!.height).toBeLessThanOrEqual(900);
-      const picker = properties(page).getByRole('combobox', { name: 'Source connection' });
-      expect(box!.y).toBeLessThan((await picker.boundingBox())!.y);
+      const description = properties(page).getByRole('textbox', { name: 'Activity description' });
+      expect(box!.y).toBeLessThan((await description.boundingBox())!.y);
 
       await mode.selectOption({ label: 'Files as-is' });
       await expect(mode).toHaveValue('copy_files');
       await expect(tab(page, 'Mapping')).toHaveCount(0);
+      await tab(page, 'Source').click();
       await expect(properties(page).getByRole('combobox', { name: 'Path type' })).toBeVisible();
       await expect(properties(page).getByRole('combobox', { name: 'After copy' })).toBeVisible();
       await expect(properties(page).getByRole('combobox', { name: 'Source dataset' })).toHaveCount(
@@ -137,10 +141,11 @@ test.describe('#1600 C1a — Copy · Files as-is', () => {
       await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
       await expect(canvasNodes(page)).toHaveCount(1);
       await canvasNodes(page).first().click();
-      await tab(page, 'Source').click();
+      await tab(page, 'General').click();
       await expect(
         properties(page).getByRole('combobox', { name: 'Copy mode', exact: true }),
       ).toHaveValue('copy_files');
+      await tab(page, 'Source').click();
       await expect(properties(page).getByRole('textbox', { name: 'Source path' })).toHaveValue(
         'in',
       );

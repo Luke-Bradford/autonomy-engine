@@ -1,5 +1,9 @@
+import type { ReactNode } from 'react';
 import { useStore } from 'zustand';
 import {
+  COPY_ACTIVITY_TYPE,
+  COPY_FILES_ACTIVITY_TYPE,
+  COPY_TYPES,
   DESCRIPTION_MAX_CHARS,
   InactiveMarkAsSchema,
   ContainerSchema,
@@ -47,6 +51,10 @@ const LABELS = {
  * does anything. Re-activating keeps the stored mark (ADF keeps it); the code
  * view shows it, and the next Deactivate resumes it.
  *
+ * #1694 OR42 item 8 — a Copy node's *Copy mode* (Rows or Files as-is) leads
+ * Basics. It shapes the whole activity (which tabs it has), so it is chosen
+ * here rather than on the Source tab.
+ *
  * #1600 C0d — User properties, last, on an activity that records them
  * (`userPropertiesApply`): the save refuses them anywhere else. A node of
  * another kind that already holds some (an imported doc) still shows them, so
@@ -78,9 +86,24 @@ export function NodeGeneral({
     const n = s.nodes.find((x) => x.id === nodeId);
     return n !== undefined && (userPropertiesApply(n) || n.userProperties !== undefined);
   });
+  // #1600 OR41 C1a — the one Copy palette item stands for two types.
+  const copyMode = useStore(store, (s) => {
+    const type = s.nodes.find((x) => x.id === nodeId)?.type;
+    return (COPY_TYPES as readonly (string | undefined)[]).includes(type)
+      ? (type as (typeof COPY_TYPES)[number])
+      : undefined;
+  });
   return (
     <>
       <GeneralBasics
+        lead={
+          copyMode === undefined ? undefined : (
+            <CopyModeField
+              value={copyMode}
+              onChange={(next) => store.getState().setCopyMode(nodeId, next)}
+            />
+          )
+        }
         descriptionLabel="Activity description"
         description={description}
         onDescription={(text) => store.getState().setNodeDescription(nodeId, text)}
@@ -102,6 +125,7 @@ export function NodeGeneral({
  */
 export function GeneralBasics({
   owner = 'node',
+  lead,
   descriptionLabel,
   description,
   onDescription,
@@ -111,6 +135,8 @@ export function GeneralBasics({
 }: {
   /** Whose General tab this is: picks the `?` wording (#1600 C0e). */
   owner?: keyof typeof LABELS;
+  /** An activity-level choice shown before the description (Copy's mode). */
+  lead?: ReactNode;
   /** The description field's accessible name (`Activity description`). */
   descriptionLabel: string;
   description: string;
@@ -122,6 +148,7 @@ export function GeneralBasics({
   const { markAs: markAsLabel } = LABELS[owner];
   return (
     <Section heading="Basics" help={null}>
+      {lead}
       <LabelledControl label="Description">
         {(id) => (
           <AutoGrowTextarea
@@ -161,5 +188,45 @@ export function GeneralBasics({
         </FieldGrid>
       )}
     </Section>
+  );
+}
+
+/**
+ * #1600 OR41 C1a — Copy's *Copy mode*: Rows (`copy`) or Files as-is
+ * (`copy_files`). Switching swaps the node's type and starts the other mode's
+ * settings fresh (`setCopyMode`); Undo brings them back.
+ */
+function CopyModeField({
+  value,
+  onChange,
+}: {
+  value: (typeof COPY_TYPES)[number];
+  onChange: (next: (typeof COPY_TYPES)[number]) => void;
+}) {
+  return (
+    <FieldGrid className="field-stack">
+      <FieldCell span="short">
+        <LabelledControl
+          label="Copy mode"
+          about={{
+            name: 'Copy mode',
+            note: "Rows reads the data, maps its columns and converts their types. Files as-is copies files byte for byte, without reading them. Switching starts the other mode's settings fresh; Undo brings these back.",
+          }}
+        >
+          {(id, describedBy) => (
+            <select
+              id={id}
+              data-size={'s' satisfies FieldSize}
+              aria-describedby={describedBy}
+              value={value}
+              onChange={(e) => onChange(e.target.value as (typeof COPY_TYPES)[number])}
+            >
+              <option value={COPY_ACTIVITY_TYPE}>Rows</option>
+              <option value={COPY_FILES_ACTIVITY_TYPE}>Files as-is</option>
+            </select>
+          )}
+        </LabelledControl>
+      </FieldCell>
+    </FieldGrid>
   );
 }

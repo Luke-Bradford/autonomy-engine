@@ -1732,32 +1732,63 @@ describe('parameter override editor (#1304)', () => {
       ...extra,
     }) as Node;
   const docNode = (store: ReturnType<typeof createCanvasStore>) => store.getState().nodes[0]!;
-  const addOverride = (group: string, key: string) => {
-    const fieldset = screen.getByRole('group', { name: group });
-    fireEvent.change(within(fieldset).getByRole('combobox', { name: /Add .* override/ }), {
-      target: { value: key },
-    });
-    fireEvent.click(within(fieldset).getByRole('button', { name: 'Add override' }));
-  };
-
-  it('adds a connection override from the allowlist, starting at the stored value', () => {
+  it('#1694 — lists every declared setting as a row, blank until overridden, the resource’s value as placeholder', () => {
     const { store } = mountOver(lookup(), [fsConn(['maxBytes'])], [csv(['path'])]);
-    addOverride('Connection overrides', 'maxBytes');
-    expect(docNode(store).connectionParams).toEqual({ maxBytes: 1000 });
+    const group = screen.getByRole('group', { name: 'Connection overrides' });
+    // A table named by its legend, with no Add control: every declared key is already a row.
+    expect(within(group).getByRole('table', { name: 'Connection overrides' })).toBeTruthy();
+    expect(within(group).queryByRole('button', { name: /Add/ })).toBeNull();
+    const input = within(group).getByRole('textbox', { name: 'Largest file read (bytes)' });
+    expect((input as HTMLInputElement).value).toBe('');
+    expect((input as HTMLInputElement).placeholder).toBe('1000');
+    // Nothing is overridden until something is typed, and an empty row has no ✕.
+    expect('connectionParams' in docNode(store)).toBe(false);
+    expect(within(group).queryByRole('button', { name: /Remove override/ })).toBeNull();
     // A number field's text is COERCED as it is written, so dispatch's re-validation sees a number.
-    fireEvent.change(screen.getByRole('textbox', { name: 'Largest file read (bytes)' }), {
-      target: { value: '2048' },
-    });
+    fireEvent.change(input, { target: { value: '2048' } });
     expect(docNode(store).connectionParams).toEqual({ maxBytes: 2048 });
   });
 
   it('writes a dataset end’s override, and keeps a whole ${} verbatim', () => {
     const { store } = mountOver(lookup(), [fsConn([])], [csv(['path'])]);
-    addOverride('Source dataset overrides', 'path');
-    fireEvent.change(screen.getByRole('textbox', { name: 'File path' }), {
-      target: { value: '${params.file}' },
-    });
+    const input = screen.getByRole('textbox', { name: 'File path' });
+    expect((input as HTMLInputElement).placeholder).toBe('in.csv');
+    fireEvent.change(input, { target: { value: '${params.file}' } });
     expect(docNode(store).datasetParams).toEqual({ source: { path: '${params.file}' } });
+  });
+
+  it('#1694 — clearing a row removes its override, in the same undo step as its typing', () => {
+    const { store } = mountOver(lookup(), [fsConn(['maxBytes'])]);
+    const input = screen.getByRole('textbox', { name: 'Largest file read (bytes)' });
+    const before = store.getState().past.length;
+    fireEvent.change(input, { target: { value: '5' } });
+    expect(docNode(store).connectionParams).toEqual({ maxBytes: 5 });
+    fireEvent.change(input, { target: { value: '' } });
+    expect('connectionParams' in docNode(store)).toBe(false);
+    // The row stays, blank, ready to be typed into again.
+    expect((input as HTMLInputElement).value).toBe('');
+    // One burst (type, clear) is one step, so one undo goes back to before it.
+    expect(store.getState().past.length).toBe(before + 1);
+    act(() => store.getState().undo());
+    expect(store.getState().past.length).toBe(before);
+    expect('connectionParams' in docNode(store)).toBe(false);
+  });
+
+  it('#1694 — a stray row stays while its box is cleared; only its ✕ removes it, as an undo step of its own', () => {
+    const { store } = mountOver(lookup({ connectionParams: { roots: 'x' } }), [
+      fsConn(['maxBytes']),
+    ]);
+    const input = screen.getByRole('textbox', { name: 'Allowed folders' });
+    fireEvent.change(input, { target: { value: '' } });
+    // Kept as '' (flagged), so the row does not vanish mid-edit.
+    expect(docNode(store).connectionParams).toEqual({ roots: '' });
+    expect(screen.getByRole('textbox', { name: 'Allowed folders' })).toBe(input);
+    // A stored '' replaces the connection's value: no inherited placeholder.
+    expect((input as HTMLInputElement).placeholder).toBe('');
+    const before = store.getState().past.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Remove override Allowed folders' }));
+    expect('connectionParams' in docNode(store)).toBe(false);
+    expect(store.getState().past.length).toBe(before + 1);
   });
 
   it('removing the last row clears the field outright', () => {
@@ -1804,11 +1835,10 @@ describe('parameter override editor (#1304)', () => {
     expect(screen.getByText(/Files does not declare `maxEntries`/)).toBeTruthy();
   });
 
-  it('says why nothing can be added when the allowlist is empty', () => {
+  it('#1694 — shows no overrides at all for a resource that declares none', () => {
     mountOver(lookup(), [fsConn([])], [csv([])]);
-    const group = screen.getByRole('group', { name: 'Connection overrides' });
-    expect(within(group).getByText(/Files declares no overridable settings/)).toBeTruthy();
-    expect(within(group).queryByRole('button', { name: 'Add override' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Connection overrides' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Source dataset overrides' })).toBeNull();
   });
 
   it('a bound resource this workspace does not list gets no false flags and no Add', () => {
@@ -2001,7 +2031,8 @@ describe('NodePanel — what each tab holds (#1396, #1477)', () => {
     name: 'Service',
     kind: 'http',
     config: {},
-    parameters: [],
+    // #1694 — a declared key, so the overrides table renders.
+    parameters: ['baseUrl'],
     secretStatus: 'not_required',
     ownerId: null,
     resourceId: 'r_c_http',
@@ -2028,6 +2059,19 @@ describe('NodePanel — what each tab holds (#1396, #1477)', () => {
         expect(panel.contains(button)).toBe(false);
       }
     }
+  });
+
+  it('#1694 — Copy mode leads General, not Source: it is an activity-level choice', () => {
+    mountOver(node('n_copy', 'copy', {}));
+    const source = within(screen.getByRole('tabpanel', { name: 'Source' }));
+    expect(source.queryByRole('combobox', { name: 'Copy mode' })).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }));
+    const general = within(screen.getByRole('tabpanel', { name: 'General' }));
+    const mode = general.getByRole('combobox', { name: 'Copy mode' });
+    expect((mode as HTMLSelectElement).value).toBe('copy');
+    expect(follows(mode, general.getByRole('textbox', { name: 'Activity description' }))).toBe(
+      true,
+    );
   });
 
   it('splits a paired activity’s pickers over Source and Sink, opening on Source', () => {

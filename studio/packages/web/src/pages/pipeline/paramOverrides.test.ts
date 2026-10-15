@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { ConnectionPublic, Dataset } from '@autonomy-studio/shared';
 import {
-  addableKeys,
   coerceOverride,
   connectionOverrideResource,
   datasetOverrideResource,
+  declaredOverrideKeys,
   overrideNote,
+  overrideRowKeys,
   overrideRowProblem,
 } from './paramOverrides';
 
@@ -32,31 +33,39 @@ const dataset = (kind: string, config: Record<string, unknown>, parameters: stri
   }) as unknown as Dataset;
 
 describe('paramOverrides (#1304)', () => {
-  it('offers only declared keys the kind has and allows, minus ones already set', () => {
-    const r = connectionOverrideResource(fsConnection(['maxBytes', 'roots', 'nope']));
-    expect(addableKeys(r, {})).toEqual(expect.arrayContaining(['maxBytes']));
-    expect(addableKeys(r, {})).not.toContain('nope');
-    expect(addableKeys(r, { maxBytes: 5 })).not.toContain('maxBytes');
+  it('lists only declared keys the kind has and allows, in the owner’s order', () => {
+    const r = connectionOverrideResource(fsConnection(['nope', 'maxBytes', 'roots']));
+    expect(declaredOverrideKeys(r)).toEqual(['maxBytes']);
   });
 
-  it('never offers a non-overridable key, even when the allowlist names it', () => {
+  it('never lists a non-overridable key, even when the allowlist names it', () => {
     const r = datasetOverrideResource(dataset('table', { table: 't' }, ['table', 'schema']));
-    expect(addableKeys(r, {})).toEqual([]);
-    // …and says the KIND has none, not that the allowlist is empty.
-    expect(overrideNote(r, {})).toBe(
-      'Database table datasets have no settings a node can override.',
-    );
+    expect(declaredOverrideKeys(r)).toEqual([]);
   });
 
-  it('tells an empty allowlist apart from a kind with nothing overridable', () => {
-    const r = connectionOverrideResource(fsConnection([]));
-    expect(overrideNote(r, {})).toMatch(/Files declares no overridable settings/);
-    const some = connectionOverrideResource(fsConnection(['maxBytes']));
-    expect(overrideNote(some, {})).toBeNull();
-    // Every usable key already set: nothing to add, and nothing to explain.
-    expect(overrideNote(some, { maxBytes: 5 })).toBeNull();
-    const junk = connectionOverrideResource(fsConnection(['nope']));
-    expect(overrideNote(junk, {})).toMatch(/name no setting/);
+  it('#1694 — rows: every declared key, set or not, then each stray stored key', () => {
+    const r = connectionOverrideResource(fsConnection(['maxBytes']));
+    expect(overrideRowKeys(r, {})).toEqual(['maxBytes']);
+    expect(overrideRowKeys(r, { maxBytes: 5 })).toEqual(['maxBytes']);
+    // A key the resource does not declare is still a row, so it can be seen and removed.
+    expect(overrideRowKeys(r, { roots: ['/x'], maxBytes: 5 })).toEqual(['maxBytes', 'roots']);
+    // No resource to read: the stored keys alone.
+    expect(overrideRowKeys(null, { a: 1 })).toEqual(['a']);
+    expect(overrideRowKeys(null, {})).toEqual([]);
+  });
+
+  it('#1694 — notes only a declaration that has no effect', () => {
+    // Nothing declared: no table, no note.
+    expect(overrideNote(connectionOverrideResource(fsConnection([])))).toBeNull();
+    expect(overrideNote(datasetOverrideResource(dataset('table', { table: 't' }, [])))).toBeNull();
+    // Declared, but nothing a node may override on the kind: the declaration is dead.
+    expect(
+      overrideNote(datasetOverrideResource(dataset('table', { table: 't' }, ['table']))),
+    ).toMatch(/name no setting/);
+    expect(overrideNote(connectionOverrideResource(fsConnection(['maxBytes'])))).toBeNull();
+    expect(overrideNote(connectionOverrideResource(fsConnection(['nope'])))).toMatch(
+      /name no setting/,
+    );
   });
 
   it('coerces a literal to the field type, and keeps a whole ${} verbatim', () => {
@@ -71,7 +80,7 @@ describe('paramOverrides (#1304)', () => {
 
   it('coerces a json-kind key (a query dataset’s bind parameters)', () => {
     const r = datasetOverrideResource(dataset('query', { sql: 'select 1' }, ['parameters']));
-    expect(addableKeys(r, {})).toEqual(['parameters']);
+    expect(declaredOverrideKeys(r)).toEqual(['parameters']);
     const field = r.fields.find((f) => f.name === 'parameters');
     expect(coerceOverride(field, '{"a":1}')).toEqual({ a: 1 });
   });
@@ -88,7 +97,7 @@ describe('paramOverrides (#1304)', () => {
     expect(overrideRowProblem(r, 'maxBytes', { $secret: 'k' })).toMatch(/secret/);
     const t = datasetOverrideResource(dataset('table', { table: 't' }, ['table']));
     expect(overrideRowProblem(t, 'table', 'x')).toBe(
-      '`table` can never be overridden on Database table datasets. Remove this row.',
+      '`table` can never be overridden on Database table datasets. Remove this override.',
     );
     const u = connectionOverrideResource(fsConnection(['ghost']));
     expect(overrideRowProblem(u, 'ghost', 'x')).toBe(
