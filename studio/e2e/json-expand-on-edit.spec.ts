@@ -29,8 +29,7 @@ function measure(box: Locator) {
     const px = (v: string) => parseFloat(v) || 0;
     const borders = px(cs.borderTopWidth) + px(cs.borderBottomWidth);
     return {
-      lines:
-        (el.clientHeight - px(cs.paddingTop) - px(cs.paddingBottom)) / px(cs.lineHeight),
+      lines: (el.clientHeight - px(cs.paddingTop) - px(cs.paddingBottom)) / px(cs.lineHeight),
       textLines: el.value.split('\n').length,
       bar: el.offsetHeight - el.clientHeight - borders,
       clipped: el.scrollHeight > el.clientHeight,
