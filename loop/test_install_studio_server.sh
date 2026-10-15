@@ -105,6 +105,26 @@ case "$*" in
       [ "$n" -le "$CURL_FAIL_TIMES" ] && exit 7
       exit 0
     fi ;;
+  # The two reads `service_idle` makes. CURL_BUSY_STATUS names the one run
+  # status that has a row; CURL_NEXT_FIRE_IN puts a trigger fire that many
+  # seconds from now (negative = overdue); CURL_API_RC fails the read outright
+  # and CURL_API_GARBAGE answers 200 with something that is not JSON.
+  *"/api/runs?status="*)
+    [ -n "${CURL_API_RC:-}" ] && exit "$CURL_API_RC"
+    [ -n "${CURL_API_GARBAGE:-}" ] && { echo '<html>'; exit 0; }
+    case "$*" in
+      *"status=${CURL_BUSY_STATUS:-none}"*) echo '{"items":[{"id":"run_x"}],"nextCursor":null}' ;;
+      *) echo '{"items":[],"nextCursor":null}' ;;
+    esac
+    exit 0 ;;
+  *"/api/triggers/next-fires"*)
+    [ -n "${CURL_API_RC:-}" ] && exit "$CURL_API_RC"
+    if [ -n "${CURL_NEXT_FIRE_IN:-}" ]; then
+      echo "[{\"triggerId\":\"t1\",\"at\":$(( ($(date +%s) + CURL_NEXT_FIRE_IN) * 1000 )),\"source\":\"schedule\"}]"
+    else
+      echo '[]'
+    fi
+    exit 0 ;;
 esac
 exit "${CURL_RC:-0}"
 EOS
@@ -904,6 +924,85 @@ check "dry-run printed the unit" "1" \
 # --dry-run returns BEFORE taking the lock.
 check "dry-run still created no state dir" "0" \
   "$([ -d "$sb/state" ] && echo 1 || echo 0)"
+
+# --- `--update --if-idle`: the unattended refresh (operator, 2026-10-15) -----
+# Every case starts STALE (GIT_ORIGIN_SHA differs from the stamp), so the only
+# thing deciding whether a rebuild happens is `service_idle`. "Rebuilt" is read
+# from the artifact the stub records -- a `pnpm build` call -- never from the
+# installer's own log line.
+refresh() { # $1=sandbox, then VAR=value pairs for the stubs; output in $1/refresh.out
+  rf_sb="$1"; shift
+  : >"$rf_sb/pnpm.calls"; : >"$rf_sb/curl.calls"
+  ( load_sut "$rf_sb"
+    for kv in "$@"; do export "${kv?}"; done
+    GIT_ORIGIN_SHA="newsha1" LOADED_LABELS="$LOADED" main --update --if-idle \
+      --port 8788 --state-dir "$rf_sb/state" --repo-src "$rf_sb/src" \
+      --node /usr/bin/node ) >"$rf_sb/refresh.out" 2>&1
+  echo "$?" >"$rf_sb/refresh.rc"
+}
+rebuilt() { has ' build$' "$1/pnpm.calls"; }
+
+echo "== --if-idle is refused outside --update =="
+sb="$(new_sandbox)"
+( load_sut "$sb"; main --if-idle --port 8788 --state-dir "$sb/state" \
+    --repo-src "$sb/src" --node /usr/bin/node ) >"$sb/ifidle.out" 2>&1
+check "a plain install with --if-idle fails" "1" "$([ "$?" -ne 0 ] && echo 1 || echo 0)"
+check "and says why" "1" "$(has 'only applies to --update' "$sb/ifidle.out")"
+check "and builds nothing" "0" "$(wc -l <"$sb/pnpm.calls" | tr -d ' ')"
+
+echo "== --if-idle refreshes a stale, idle service =="
+sb="$(installed_sandbox)"; refresh "$sb"
+check "it exits 0" "0" "$(cat "$sb/refresh.rc")"
+check "and rebuilds" "1" "$(rebuilt "$sb")"
+check "and re-stamps the new sha" "newsha1" "$(cat "$sb/state/built.sha")"
+
+echo "== --if-idle never bounces the service under a live run =="
+for st in pending queued running; do
+  sb="$(installed_sandbox)"; refresh "$sb" "CURL_BUSY_STATUS=$st"
+  check "a $st run: exits 0 (a skip is not a failure)" "0" "$(cat "$sb/refresh.rc")"
+  check "a $st run: builds nothing" "0" "$(rebuilt "$sb")"
+  check "a $st run: keeps the old stamp" "0riginsha" "$(cat "$sb/state/built.sha")"
+  check "a $st run: says why" "1" "$(has "a $st run is in flight" "$sb/refresh.out")"
+done
+
+echo "== a WAITING run does not block the refresh =="
+# A durable park survives a restart by design and can last days; counting it as
+# busy would starve the refresh. The stub answers a row for status=waiting, so
+# adding `waiting` to the busy set turns this red.
+sb="$(installed_sandbox)"; refresh "$sb" "CURL_BUSY_STATUS=waiting"
+check "a waiting run still refreshes" "1" "$(rebuilt "$sb")"
+
+echo "== --if-idle defers to an imminent trigger fire =="
+sb="$(installed_sandbox)"; refresh "$sb" "CURL_NEXT_FIRE_IN=300"
+check "a fire in 5 min: builds nothing" "0" "$(rebuilt "$sb")"
+check "a fire in 5 min: says why" "1" "$(has 'a trigger fires in' "$sb/refresh.out")"
+sb="$(installed_sandbox)"; refresh "$sb" "CURL_NEXT_FIRE_IN=-30"
+check "an overdue fire: builds nothing" "0" "$(rebuilt "$sb")"
+sb="$(installed_sandbox)"; refresh "$sb" "CURL_NEXT_FIRE_IN=3600"
+check "a fire an hour away: refreshes" "1" "$(rebuilt "$sb")"
+
+echo "== an unreadable answer is UNKNOWN, never idle =="
+sb="$(installed_sandbox)"; refresh "$sb" "CURL_API_RC=22"
+check "a failed API read: builds nothing" "0" "$(rebuilt "$sb")"
+check "a failed API read: exits 0" "0" "$(cat "$sb/refresh.rc")"
+check "a failed API read: says why" "1" "$(has 'could not read' "$sb/refresh.out")"
+sb="$(installed_sandbox)"; refresh "$sb" "CURL_API_GARBAGE=1"
+check "a non-JSON answer: builds nothing" "0" "$(rebuilt "$sb")"
+check "a non-JSON answer: says why" "1" "$(has 'unreadable answer' "$sb/refresh.out")"
+
+echo "== a dead service is idle: the rebuild is the repair =="
+# CURL_RC fails /health and every API read alike. If the API reads ran, they
+# would fail and the case would read UNKNOWN; refreshing proves the dead-server
+# branch answered first.
+sb="$(installed_sandbox)"; refresh "$sb" "CURL_RC=7"
+check "a dead service is rebuilt" "1" "$(rebuilt "$sb")"
+
+echo "== a CURRENT service costs no API reads =="
+sb="$(installed_sandbox)"
+: >"$sb/curl.calls"
+( load_sut "$sb"; LOADED_LABELS="$LOADED" main --update --if-idle --port 8788 \
+    --state-dir "$sb/state" --repo-src "$sb/src" --node /usr/bin/node ) >"$sb/cur2.out" 2>&1
+check "already current: no run or trigger reads" "0" "$(has '/api/' "$sb/curl.calls")"
 
 echo
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; else echo "$fails FAILURE(S)"; fi
