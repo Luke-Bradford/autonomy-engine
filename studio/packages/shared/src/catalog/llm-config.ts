@@ -703,7 +703,6 @@ export const llmCallConfigSchema = z
     /** System instruction; folds together with any `role:'system'` messages. */
     system: presented(z.string().optional(), {
       title: 'System prompt',
-      description: 'Instructions that frame every turn.',
     }),
     /** v2 role-tagged conversation. Mutually exclusive with `prompt`. */
     messages: presented(llmMessagesSchema.optional(), {
@@ -713,11 +712,9 @@ export const llmCallConfigSchema = z
     /** Overrides the connection's default model for this node. */
     model: presented(singleLine(z.string()).optional(), {
       title: 'Model for this step',
-      description: "Overrides the connection's default model.",
     }),
     maxTokens: presented(z.number().int().positive().optional(), {
       title: 'Max output tokens',
-      description: 'The most tokens the model may write in its answer.',
     }),
     // Only the UNIVERSAL lower bound (0) is enforced here; the upper bound is
     // provider-specific (Anthropic 0–1, OpenAI/Ollama 0–2) so the adapters own
@@ -730,13 +727,12 @@ export const llmCallConfigSchema = z
     // connection or the adapter default. See `connectors/anthropic-models.ts`.
     temperature: presented(z.number().min(0).optional(), {
       title: 'Temperature',
-      description: 'Higher is more varied. The allowed range depends on the provider.',
+      description: 'The allowed range depends on the provider.',
     }),
     // L1 sampling — mapped per-provider by the adapters (names differ).
     // `topP` is nucleus sampling: a probability, universally [0, 1].
     topP: presented(z.number().min(0).max(1).optional(), {
       title: 'Top P',
-      description: 'Nucleus sampling, from 0 to 1.',
     }),
     // Elements are `.min(1)`: an empty stop STRING is invalid at every provider,
     // so catch it at save-time. The ARRAY is intentionally left able to be empty
@@ -745,11 +741,9 @@ export const llmCallConfigSchema = z
     // every stop entry.
     stop: presented(z.array(z.string().min(1)).optional(), {
       title: 'Stop sequences',
-      description: 'The model stops writing when it produces one of these.',
     }),
     seed: presented(z.number().int().optional(), {
       title: 'Seed',
-      description: 'Asks the provider for repeatable sampling, where it supports that.',
     }),
     // L3 reasoning knob — the portable effort level; each adapter lowers it to
     // that provider's reasoning surface (Anthropic adaptive-thinking+effort,
@@ -757,7 +751,6 @@ export const llmCallConfigSchema = z
     // offered (see `reasoningEffortSchema`); an unknown level fails at save-time.
     reasoningEffort: presented(reasoningEffortSchema.optional(), {
       title: 'Reasoning effort',
-      description: 'How much the model thinks before answering.',
       options: optionTitles(reasoningEffortSchema, {
         low: 'Low',
         medium: 'Medium',
@@ -773,12 +766,10 @@ export const llmCallConfigSchema = z
     // save.
     outputMode: presented(outputModeSchema.optional(), {
       title: 'Output mode',
-      description: 'Text returns free text; Structured returns the fields of Output schema.',
       options: optionTitles(outputModeSchema, { text: 'Text', structured: 'Structured' }),
     }),
     outputSchema: presented(llmOutputSchemaSchema.optional(), {
       title: 'Output schema',
-      description: 'The named, typed fields a structured answer must have.',
     }),
     // L10a tool surface — the local pure-tool contract. `tools` declares the
     // callable tools (deferred-eval `${tool.args.*}` expressions — see the
@@ -788,11 +779,9 @@ export const llmCallConfigSchema = z
     // at save.
     tools: presented(llmToolsArraySchema.optional(), {
       title: 'Tool definitions',
-      description: 'Tools the model may call while answering.',
     }),
     toolChoice: presented(llmToolChoiceSchema.optional(), {
       title: 'Tool choice',
-      description: 'Whether the model may, must or must not call a tool.',
       options: optionTitles(llmToolChoiceSchema, {
         auto: 'Model decides',
         required: 'Must call a tool',

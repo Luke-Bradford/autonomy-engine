@@ -262,7 +262,6 @@ const ENTRIES: ActivityCatalogEntry[] = [
     configSchema: z.object({
       on: presented(z.string().min(1), {
         title: 'Switch on',
-        description: 'The ${} value matched against the cases.',
       }),
       cases: presented(z.array(z.string()), {
         title: 'Cases',
@@ -295,7 +294,6 @@ const ENTRIES: ActivityCatalogEntry[] = [
     configSchema: z.object({
       message: presented(z.string().min(1), {
         title: 'Error message',
-        description: 'This step fails with this message. May use ${}.',
       }),
     }),
   },
@@ -323,7 +321,6 @@ const ENTRIES: ActivityCatalogEntry[] = [
     configSchema: z.object({
       variable: presented(literalText(singleLine(z.string())).min(1), {
         title: 'Variable name',
-        description: "The name of a variable declared on the pipeline's Variables tab.",
       }),
       value: presented(singleLine(z.string()), { title: 'Value' }),
     }),

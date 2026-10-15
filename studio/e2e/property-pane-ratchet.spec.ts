@@ -29,30 +29,33 @@ import { nodeMenuAction, pickConnection, properties } from './support/panels';
 test.use({ viewport: { width: 1440, height: 900 } });
 
 /**
- * Toolbox name → the most `?`s its pane may show. Lower only. What is left is
- * OR42's per-field `?` audit (#1694). Prose has no budget: none, in any pane
- * (item 4). Where slice 8 turned a paragraph into a `?` (a container's palette
- * sentence, the call's Wait note), the count rose by that one, once.
+ * Toolbox name → the most `?`s its pane may show. Lower only. Prose has no
+ * budget: none, in any pane (item 4). Where slice 8 turned a paragraph into a
+ * `?` (a container's palette sentence, the call's Wait note), the count rose by
+ * that one, once. Since the per-field audit (#1694 OR42 item 4), a config field
+ * has a `?` only where the catalog wrote it a note, so each count is the pane's
+ * `About` `?`, its General policy fields and the fields whose value is not
+ * obvious from the label, measured.
  */
 const HELP_LIMITS: Record<string, number> = {
-  'Copy data': 10,
+  'Copy data': 9,
   'Copy file': 8,
   'Delete file': 7,
-  'HTTP request': 11,
+  'HTTP request': 9,
   'List directory': 7,
   'Lookup rows': 6,
   'Move file': 8,
   'Read file': 7,
-  'Write file': 8,
-  'Agent task': 9,
-  'LLM call': 25,
-  'Append variable': 7,
+  'Write file': 7,
+  'Agent task': 8,
+  'LLM call': 15,
+  'Append variable': 6,
   'Execute pipeline': 6,
-  Fail: 6,
+  Fail: 5,
   Filter: 7,
   'If condition': 6,
-  'Set variable': 7,
-  Switch: 7,
+  'Set variable': 5,
+  Switch: 6,
   Wait: 6,
   'Webhook (external wait)': 6,
   ForEach: 5,

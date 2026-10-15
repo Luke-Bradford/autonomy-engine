@@ -29,7 +29,6 @@ export const fileWriteConfigSchema = z.object({
   path: filePath('File path', IN_ROOTS),
   content: presented(z.string(), {
     title: 'Content',
-    description: 'The text written to the file.',
   }),
 });
 

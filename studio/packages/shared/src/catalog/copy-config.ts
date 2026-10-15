@@ -307,7 +307,6 @@ export const copyInputSchema = copyInputShape(
   // given, and only this authored variant is ever rendered by a form.
   presented(CopyMappingSchema, {
     title: 'Column mapping',
-    description: 'Which source column, or expression, fills each sink column, and as what type.',
   }),
 );
 

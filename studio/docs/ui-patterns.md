@@ -102,13 +102,15 @@ required marks and display names; its layout is its own, below.
 - **Human labels come from the schema**, not from a list in the web package. Tag a field with
   `presented(schema, { title, description?, unit? })` from `shared/schemas/field-presentation.ts`,
   and `ConfigFieldControl` renders:
-  - the title, with the unit in brackets ("Timeout (ms)");
-  - the description, with the stored key in code type, as a hint under the control (linked with
-    `aria-describedby`).
+  - the title, with the unit as a suffix inside the box;
+  - the description, with the stored key in code type, behind a `?` beside the label (linked with
+    `aria-describedby`). Write a description only where the value is not obvious (below).
 
-  Keep the key visible: server errors, advisories and `${}` expressions all cite it.
+  Keep the key reachable: server errors, advisories and `${}` expressions all cite it. It ends the
+  `?` note, or, for a titled field with no `?`, is the label's hover `title`.
 - `unit` names what the stored value is in. It never converts the value.
-- **A number field says what it admits.** Its hint leads with the rule the schema states, read by
+- **A number field says what it admits.** Its `?` note leads with the rule the schema states (with
+  no `?`, the rule is still its description, out of sight), read by
   `configForm.ts` (`numberRule`, `describeNumberRule`): "Whole number from 1 to 65535.",
   "Number greater than 0.". So the label is the title alone, with no " — number". A row cell has no
   hint, and keeps the suffix.
@@ -164,6 +166,14 @@ required marks and display names; its layout is its own, below.
   description where it explains one. Warnings, errors and advisories about the current value are
   not prose. `e2e/property-pane-ratchet.spec.ts` fails on any prose line in any catalog type's
   default pane.
+- **A `?` only where the value is not obvious (#1694 OR42 item 4).** A config field shows a `?`
+  only when the catalog writes it a `description` in `presented()`, and the catalog writes one
+  only for what an engineer would not know from the label: a default, a constraint between fields,
+  a confinement, or what a whole `${}` must give. Top P, Seed, Content and Error message get none.
+  A `?` holding only the key, or only a number rule that the error line states on a bad
+  value, is noise. The note still leads with the rule and ends with the key; with no `?`, a
+  titled label carries the key as its hover `title`. The ratchet's `HELP_LIMITS` are the measured
+  counts and may only fall.
 - A field's title must not contain another field's label on the same form ("Name", "Kind",
   "Store"): label lookups by substring, in tests and in assistive tech, would then find two
   controls. A section may share its field's word ("Value"): the section is a group, not a control,

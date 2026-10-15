@@ -108,7 +108,6 @@ export const copyFilesConfigSchema = z
     }),
     ifExists: presented(ifExistsSchema.default('overwrite'), {
       title: 'If file exists',
-      description: 'What happens when a file is already at the destination.',
       options: optionTitles(ifExistsSchema, {
         overwrite: 'Overwrite',
         skip: 'Skip',
