@@ -160,7 +160,6 @@ export function PolicyEditor({
           />
         </FieldCell>
       </FieldGrid>
-      {errors.line}
       {!timesOut && policy?.timeoutSeconds !== undefined && (
         <Toolbar align="start">
           <button type="button" onClick={() => set({ timeoutSeconds: undefined })}>
@@ -168,6 +167,8 @@ export function PolicyEditor({
           </button>
         </Toolbar>
       )}
+      {/* After the conditional button, so an empty line never sits above it. */}
+      {errors.line}
       {/* Plain visible text, not a live region: recomputed state that changes as
           the author edits, and the dock header's status line already announces the
           save being blocked (#1249's one-announcer concern). */}

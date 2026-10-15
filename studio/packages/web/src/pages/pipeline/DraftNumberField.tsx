@@ -142,8 +142,8 @@ export function DraftNumberField<V extends number | undefined>({
         error !== null &&
         errorLine !== null &&
         createPortal(
-          // Named, since it no longer sits under its field; lower case after
-          // the colon, as a form's summary reads (`FieldError`).
+          // Named, since it no longer sits under its field: "name: message",
+          // as a drawer form's summary reads (`FormErrors`).
           <p id={errorId} className="error" role="alert">
             {`${label}: ${error}`}
           </p>,

@@ -237,7 +237,7 @@ message.
   does not push the fields below down. In the property dock, a group of number fields shares
   **one** reserved line after the group instead (`useFieldErrorLine`, `DraftNumberField`'s
   `errorLine`). Each message is named there ("Retries: must be a whole number"), and the rows keep
-  the 36px rhythm (#1694 OR42 item 5). `fieldAttrs` gives the control:
+  the dock's rhythm, a control and the grid gap (#1694 OR42 item 5). `fieldAttrs` gives the control:
   - its key (`data-field`);
   - an invalid mark (`data-invalid`, plus `aria-invalid`, except on a row list's `group`, where ARIA
     does not allow it);
