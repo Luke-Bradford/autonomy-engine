@@ -1,4 +1,4 @@
-import { describe, expect, it, afterEach, vi } from 'vitest';
+import { describe, expect, it, afterEach, beforeEach, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
 import { AutoGrowTextarea } from './AutoGrowTextarea';
@@ -168,5 +168,152 @@ describe('AutoGrowTextarea', () => {
     );
     // content-box: the height is the lines alone, padding and border outside it.
     expect((screen.getByLabelText('two') as HTMLTextAreaElement).style.height).toBe('40px');
+  });
+
+  describe('expand on edit (restRows)', () => {
+    function Editing({ initial, restRows = 1 }: { initial: string; restRows?: number }) {
+      const [value, setValue] = useState(initial);
+      return (
+        <AutoGrowTextarea
+          aria-label="expression"
+          className="grow-under-test"
+          restRows={restRows}
+          maxRows={8}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+        />
+      );
+    }
+
+    function mountEditing(initial: string, restRows?: number) {
+      stubLayout();
+      const style = document.createElement('style');
+      style.dataset.grow = '';
+      style.textContent =
+        '.grow-under-test { line-height: 20px; padding: 4px 0; border: 1px solid; box-sizing: border-box; }';
+      document.head.appendChild(style);
+      render(<Editing initial={initial} restRows={restRows} />);
+      return screen.getByLabelText('expression') as HTMLTextAreaElement;
+    }
+
+    const lines = (n: number) => Array.from({ length: n }, (_, i) => `l${String(i)}`).join('\n');
+    const press = (type: string, init: { button?: number; ctrlKey?: boolean } = {}) => {
+      const e = new Event(type, { bubbles: true });
+      Object.assign(e, { button: init.button ?? 0, ctrlKey: init.ctrlKey ?? false });
+      fireEvent(document.body, e);
+    };
+    const settle = () =>
+      act(() => {
+        vi.runAllTimers();
+      });
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('rests at one line, its rest out of sight, and grows to eight while focused', () => {
+      const box = mountEditing(lines(12));
+      expect(box.style.height).toBe('30px');
+      expect(box.style.overflowY).toBe('hidden');
+      expect(box.dataset.grow).toBe('edit');
+      fireEvent.focus(box);
+      // 8 lines × 20 + 8 padding + 2 border, and it scrolls past them.
+      expect(box.style.height).toBe('170px');
+      expect(box.style.overflowY).toBe('auto');
+    });
+
+    it('collapses a task after a blur with no press in progress, back on its first line', () => {
+      const box = mountEditing(lines(12));
+      fireEvent.focus(box);
+      box.scrollTop = 100;
+      fireEvent.blur(box);
+      // A tap's click follows its focus change in the same task.
+      expect(box.style.height).toBe('170px');
+      settle();
+      expect(box.style.height).toBe('30px');
+      expect(box.scrollTop).toBe(0);
+    });
+
+    it('a blur during a press collapses only after the press ends and its click is dispatched', () => {
+      const box = mountEditing(lines(3));
+      fireEvent.focus(box);
+      expect(box.style.height).toBe('70px');
+      press('pointerdown');
+      fireEvent.blur(box);
+      settle();
+      // Still tall: the control under the pointer has not moved.
+      expect(box.style.height).toBe('70px');
+      press('pointerup');
+      expect(box.style.height).toBe('70px');
+      settle();
+      expect(box.style.height).toBe('30px');
+    });
+
+    it('a cancelled press, or one that opens a context menu, still collapses', () => {
+      for (const end of ['pointercancel', 'contextmenu']) {
+        const box = mountEditing(lines(3));
+        fireEvent.focus(box);
+        press('pointerdown');
+        fireEvent.blur(box);
+        press(end);
+        settle();
+        expect(box.style.height, end).toBe('30px');
+        cleanup();
+      }
+    });
+
+    it('a secondary or ctrl press is not held for: its pointerup may never come', () => {
+      for (const init of [{ button: 2 }, { ctrlKey: true }]) {
+        const box = mountEditing(lines(3));
+        fireEvent.focus(box);
+        press('pointerdown', init);
+        fireEvent.blur(box);
+        settle();
+        expect(box.style.height, JSON.stringify(init)).toBe('30px');
+        cleanup();
+      }
+    });
+
+    it('focus returning before the deferred collapse keeps it open', () => {
+      const box = mountEditing(lines(3));
+      fireEvent.focus(box);
+      press('pointerdown');
+      fireEvent.blur(box);
+      press('pointerup');
+      fireEvent.focus(box);
+      settle();
+      expect(box.style.height).toBe('70px');
+    });
+
+    it('unmounting with a collapse pending leaves no timer behind', () => {
+      const box = mountEditing(lines(3));
+      fireEvent.focus(box);
+      fireEvent.blur(box);
+      cleanup();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('a rest cap above the edit cap is clamped to it', () => {
+      const box = mountEditing(lines(12), 20);
+      expect(box.style.height).toBe('170px');
+    });
+
+    it('passes the caller its element through `ref`', () => {
+      stubLayout();
+      const ref = { current: null as HTMLTextAreaElement | null };
+      render(<AutoGrowTextarea aria-label="reffed" ref={ref} value="" readOnly />);
+      expect(ref.current).toBe(screen.getByLabelText('reffed'));
+    });
+  });
+
+  it('without restRows a blur leaves its height alone', () => {
+    const box = mount('a\nb\nc');
+    fireEvent.focus(box);
+    fireEvent.blur(box);
+    expect(box.style.height).toBe('70px');
+    expect(box.hasAttribute('data-grow')).toBe(false);
   });
 });

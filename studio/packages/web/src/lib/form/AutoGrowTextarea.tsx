@@ -1,4 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, type TextareaHTMLAttributes } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type Ref,
+  type TextareaHTMLAttributes,
+} from 'react';
 
 /**
  * #1569 OR37 — a textarea one line tall that grows with what is typed, up to
@@ -19,13 +27,83 @@ import { useEffect, useLayoutEffect, useRef, useState, type TextareaHTMLAttribut
  * CONTROLLED only: it measures when `value` changes, so a `defaultValue` use
  * would never grow. Measuring collapses the box for an instant, which can clamp
  * a scrolled ancestor near its end — so every ancestor's scroll is put back.
+ *
+ * #1694 OR42 F10 — EXPAND ON EDIT, given `restRows`: at rest the box caps at
+ * `restRows` lines (one, for a config field), and while it has focus at
+ * `maxRows`, so nothing in a pane is permanently tall yet a long value is all
+ * in view while it is being edited. Collapsed, it shows its first line.
+ *
+ * The collapse waits for a pointer that is still down. A press on a control
+ * below blurs the box on pointerdown; shrinking then would move that control
+ * up from under the pointer before pointerup, and the click would land on
+ * whatever slid there instead. So a blur during a press collapses just after
+ * the press ends, once its click has been dispatched. Any other blur collapses
+ * a task later, not at once: a tap sends its pointer events BEFORE the
+ * mousedown that moves focus, and its click follows in the same task. Only a
+ * primary press counts, because a context-menu press may never send its
+ * pointerup; `contextmenu` ends a press too, so the box never stays open.
  */
 export function AutoGrowTextarea({
   maxRows = 4,
+  restRows,
+  ref: outerRef,
+  onFocus,
+  onBlur,
   ...props
-}: Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'rows' | 'style'> & { maxRows?: number }) {
+}: Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'rows' | 'style'> & {
+  maxRows?: number;
+  restRows?: number;
+  ref?: Ref<HTMLTextAreaElement>;
+}) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  const setRef = useCallback(
+    (el: HTMLTextAreaElement | null) => {
+      ref.current = el;
+      if (typeof outerRef === 'function') outerRef(el);
+      else if (outerRef) outerRef.current = el;
+    },
+    [outerRef],
+  );
   const [width, setWidth] = useState(0);
+  const [focused, setFocused] = useState(false);
+  const expandsOnEdit = restRows !== undefined;
+  const rows = expandsOnEdit && !focused ? Math.min(restRows, maxRows) : maxRows;
+  const collapsed = rows < maxRows;
+  // Whether a press is in progress, and whether a blur is waiting for its end.
+  const pressed = useRef(false);
+  const collapseOnRelease = useRef(false);
+  const collapseTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const collapseSoon = useCallback(() => {
+    clearTimeout(collapseTimer.current);
+    collapseTimer.current = setTimeout(() => setFocused(false), 0);
+  }, []);
+  useEffect(() => {
+    if (!expandsOnEdit || !focused) return;
+    // Capture, so the press is seen before the blur it causes.
+    const down = (e: PointerEvent) => {
+      pressed.current = e.button === 0 && !e.ctrlKey;
+    };
+    const up = () => {
+      pressed.current = false;
+      if (!collapseOnRelease.current) return;
+      collapseOnRelease.current = false;
+      // After the click this press dispatches, which follows pointerup.
+      collapseSoon();
+    };
+    document.addEventListener('pointerdown', down, true);
+    document.addEventListener('pointerup', up, true);
+    document.addEventListener('pointercancel', up, true);
+    document.addEventListener('contextmenu', up, true);
+    return () => {
+      document.removeEventListener('pointerdown', down, true);
+      document.removeEventListener('pointerup', up, true);
+      document.removeEventListener('pointercancel', up, true);
+      document.removeEventListener('contextmenu', up, true);
+      pressed.current = false;
+      collapseOnRelease.current = false;
+    };
+  }, [expandsOnEdit, focused, collapseSoon]);
+  useEffect(() => () => clearTimeout(collapseTimer.current), []);
   useEffect(() => {
     const el = ref.current;
     if (el === null || typeof ResizeObserver === 'undefined') return;
@@ -52,10 +130,31 @@ export function AutoGrowTextarea({
       cs.boxSizing === 'border-box' ? px(cs.borderTopWidth) + px(cs.borderBottomWidth) : 0;
     // `scrollHeight` counts padding but never the border.
     const content = el.scrollHeight + border - (cs.boxSizing === 'border-box' ? 0 : padding);
-    const cap = line * maxRows + border + (cs.boxSizing === 'border-box' ? padding : 0);
+    const cap = line * rows + border + (cs.boxSizing === 'border-box' ? padding : 0);
     el.style.height = `${String(Math.min(content, cap))}px`;
-    el.style.overflowY = content > cap ? 'auto' : 'hidden';
+    // Collapsed, the rest of the value is out of sight without a scrollbar.
+    el.style.overflowY = content > cap && !collapsed ? 'auto' : 'hidden';
     for (const [p, top] of scrolled) p.scrollTop = top;
-  }, [props.value, maxRows, width]);
-  return <textarea {...props} ref={ref} rows={1} />;
+    // Collapsed, it shows its FIRST line, not the one the caret left it on.
+    if (collapsed) el.scrollTop = 0;
+  }, [props.value, rows, collapsed, maxRows, width]);
+  return (
+    <textarea
+      {...props}
+      ref={setRef}
+      rows={1}
+      data-grow={expandsOnEdit ? 'edit' : undefined}
+      onFocus={(e) => {
+        clearTimeout(collapseTimer.current);
+        collapseOnRelease.current = false;
+        setFocused(true);
+        onFocus?.(e);
+      }}
+      onBlur={(e) => {
+        if (pressed.current) collapseOnRelease.current = true;
+        else collapseSoon();
+        onBlur?.(e);
+      }}
+    />
+  );
 }

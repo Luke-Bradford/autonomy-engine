@@ -856,6 +856,13 @@ row heights), not the layout.
   sideways rather than crush it. An optional choice cell's empty option is blank, because empty
   means its default; a required one keeps "— none —". `e2e/property-pane-ratchet.spec.ts` holds the
   classes for every catalog type and tab.
+- **Expand on edit (#1694 OR42 F10).** Nothing is permanently tall or permanently full-bleed. A
+  config field's text box (`ConfigFieldControl`, through `AutoGrowTextarea`'s `restRows`) is one
+  line at rest, showing its first line, and grows to its text, up to eight lines, while it has
+  focus. A blur during a pointer press collapses it only after the press ends, so a click on the
+  control below lands where the author aimed. An S or M one-line box holding a `${}` widens to the
+  value column while it has focus. `e2e/property-pane-expand-on-edit.spec.ts` pins both. Not yet:
+  the JSON editor (four lines), and ⤢ to a full expression editor.
 - **A unit is a suffix inside its box, not label text (#1694 OR42 item 5).** `30` `s`, through
   `WithUnit`/`UnitLabel` (`lib/form/UnitInput.tsx`), so a label is the title alone and never wraps. The
   unit stays in the field's accessible name, out of sight ("Timeout (seconds)"), so its name, its

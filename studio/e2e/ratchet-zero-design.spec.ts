@@ -90,6 +90,9 @@ for (const { density, theme } of DESIGN_RUNS) {
     // height: in the bottom dock, and in the narrowest right-hand dock, where
     // the header wraps and the region is taller (comfortable: 122px, past the
     // fixed 7rem this replaced).
+    // Short enough that the tab overflows: since #1694 OR42 F10 its text boxes
+    // rest at one line, and in compact at full height the whole tab fits.
+    await page.setViewportSize({ width: 1600, height: 700 });
     await openSeededCanvas(page, `S6u dock ${density} ${Date.now()}`, {
       nodes: [{ id: 'l', type: 'llm_call', position: { x: 0, y: 0 }, config: { prompt: 'Hi' } }],
     });

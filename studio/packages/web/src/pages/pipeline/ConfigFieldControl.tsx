@@ -27,6 +27,7 @@ import { useCaretInsert } from './useCaretInsert';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { JsonEditor } from '../../lib/form/JsonEditor';
 import { RequiredMark } from '../../lib/form/RequiredMark';
+import { AutoGrowTextarea } from '../../lib/form/AutoGrowTextarea';
 import { UnitLabel, WithUnit } from '../../lib/form/UnitInput';
 import { midSentence } from '../../lib/words';
 import {
@@ -120,6 +121,12 @@ export type PickerTarget = {
    */
   field?: string;
 };
+
+/**
+ * #1694 OR42 F10 — the lines a top-level text box grows to while it is edited;
+ * a table cell's box grows to the same (`.row-table td textarea`, index.css).
+ */
+const EDIT_ROWS = 8;
 
 /** A top-level config field's position: the one shape the flyout knew before #1178. */
 const topLevelTarget = (name: string): PickerTarget => ({
@@ -462,6 +469,9 @@ export function ConfigFieldControl({
                 type="text"
                 className="config-field-line"
                 data-size={size}
+                // #1694 OR42 F10 — an S or M box holding a `${}` widens to the
+                // value column while it has focus (index.css).
+                data-expr={text.includes('${') ? '' : undefined}
                 ref={inputRef as RefObject<HTMLInputElement | null>}
                 value={text}
                 onSelect={onSelect}
@@ -490,7 +500,7 @@ export function ConfigFieldControl({
               {...checked}
               onValueChange={onChange}
             />
-          ) : (
+          ) : cell ? (
             <textarea
               id={id}
               ref={inputRef as RefObject<HTMLTextAreaElement | null>}
@@ -498,7 +508,24 @@ export function ConfigFieldControl({
               onSelect={onSelect}
               // A cell opens one line tall, and grows with its text
               // (`field-sizing`, index.css) so a multi-line value still shows.
-              rows={cell ? 1 : field.kind === 'stringList' ? 4 : 2}
+              rows={1}
+              spellCheck={false}
+              placeholder={field.defaultText}
+              aria-required={required || undefined}
+              aria-describedby={describedBy}
+              {...checked}
+              onChange={(e) => onChange(e.target.value)}
+            />
+          ) : (
+            // #1694 OR42 F10 — expand on edit: one line at rest, up to eight
+            // while it has focus, so no field is permanently tall.
+            <AutoGrowTextarea
+              id={id}
+              ref={inputRef as RefObject<HTMLTextAreaElement | null>}
+              value={text}
+              onSelect={onSelect}
+              restRows={1}
+              maxRows={EDIT_ROWS}
               spellCheck={false}
               placeholder={field.defaultText}
               aria-required={required || undefined}

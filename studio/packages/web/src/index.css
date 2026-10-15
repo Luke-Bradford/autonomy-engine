@@ -3130,6 +3130,28 @@ button.danger {
   pointer-events: none;
 }
 
+/* #1694 OR42 F10 — EXPAND ON EDIT. An S or M one-line box holding a `${}`
+   (`data-expr`, ConfigFieldControl) widens to the value column while it has
+   focus, so an expression is not edited through a 120px slot, and goes back
+   to its class when it loses it: in the pane, and for a box with a unit on
+   every surface, which is an S on every surface (above). Width only, and a
+   one-line text field always has a row to itself (`fieldSpan`), so nothing
+   beside or below it moves. */
+:root[data-density]
+  .property-dock
+  .property-panel:not(.node-detail-panel)
+  input[data-size][data-expr]:focus,
+.input-unit:has(> input[data-expr]:focus),
+.input-unit > input[data-expr]:focus {
+  width: 100%;
+}
+
+/* A text box that expands on edit (AutoGrowTextarea `restRows`) sets its own
+   height; a drag handle would be overwritten at the next keystroke. */
+textarea[data-grow='edit'] {
+  resize: none;
+}
+
 /* #1477 OR29 slice 5b — a connection binding: the select sized by its options
    as above, Test, Edit and ＋ New beside it on one row. */
 .connection-picker {
@@ -5407,7 +5429,8 @@ button.danger {
   white-space: nowrap;
 }
 
-/* One line tall, growing with its text (where the engine supports it). */
+/* One line tall, growing with its text (where the engine supports it), to the
+   eight lines a top-level box grows to while edited (`EDIT_ROWS`). */
 .row-table td textarea {
   field-sizing: content;
   min-height: 0;
