@@ -3146,7 +3146,8 @@ button.danger {
   width: 100%;
 }
 
-/* A text box that expands on edit (AutoGrowTextarea `restRows`) sets its own
+/* A text box that expands on edit (AutoGrowTextarea `restRows`), and a JSON
+   box sized to its text (JsonEditor `maxRows`, `data-fit`), set their own
    height; a drag handle would be overwritten at the next keystroke. */
 textarea[data-grow='edit'],
 .json-editor > .json-editor-input[data-fit] {

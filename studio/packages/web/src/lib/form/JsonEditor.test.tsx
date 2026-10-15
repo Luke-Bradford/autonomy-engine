@@ -143,7 +143,6 @@ describe('JsonEditor (#1396)', () => {
           id="j"
           label="Params"
           value="{}"
-          rows={4}
           restRows={1}
           maxRows={8}
           onValueChange={() => undefined}
@@ -152,7 +151,6 @@ describe('JsonEditor (#1396)', () => {
       const box = screen.getByRole('textbox');
       expect(box).toHaveAttribute('data-grow', 'edit');
       expect(box).toHaveAttribute('data-fit', '');
-      expect(box).toHaveAttribute('rows', '1');
       expect(box).toHaveAttribute('wrap', 'off');
       expect(box).toHaveClass('json-editor-input');
     });

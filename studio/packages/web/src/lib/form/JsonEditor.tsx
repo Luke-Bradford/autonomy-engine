@@ -5,8 +5,27 @@ import { AutoGrowTextarea } from './AutoGrowTextarea';
 
 type TextareaProps = Omit<
   TextareaHTMLAttributes<HTMLTextAreaElement>,
-  'value' | 'defaultValue' | 'onChange' | 'children' | 'className' | 'wrap' | 'dir' | 'style'
+  | 'value'
+  | 'defaultValue'
+  | 'onChange'
+  | 'children'
+  | 'className'
+  | 'wrap'
+  | 'dir'
+  | 'style'
+  | 'rows'
 >;
+
+/** A fixed number of `rows`, or sized to its text: one or the other, never a mix. */
+type Sizing =
+  | { rows?: number; maxRows?: undefined; restRows?: undefined }
+  | {
+      rows?: undefined;
+      /** Sized to its text, up to this many lines (`AutoGrowTextarea`). */
+      maxRows: number;
+      /** The lines it rests at while it does not have focus. */
+      restRows?: number;
+    };
 
 /**
  * #1396 — the one control for typing JSON: Config (JSON), a JSON-kind setting,
@@ -45,17 +64,14 @@ export function JsonEditor({
   restRows,
   rows,
   ...textarea
-}: TextareaProps & {
-  value: string;
-  onValueChange: (next: string) => void;
-  /** The field's label, for the Format button's description. */
-  label: string;
-  ref?: Ref<HTMLTextAreaElement>;
-  /** Sized to its text, up to this many lines (`AutoGrowTextarea`). */
-  maxRows?: number;
-  /** With `maxRows`, the lines it rests at while it does not have focus. */
-  restRows?: number;
-}) {
+}: TextareaProps &
+  Sizing & {
+    value: string;
+    onValueChange: (next: string) => void;
+    /** The field's label, for the Format button's description. */
+    label: string;
+    ref?: Ref<HTMLTextAreaElement>;
+  }) {
   const own = useRef<HTMLTextAreaElement | null>(null);
   const problemId = useId();
   // A problem is about the text it was found in. Once the value changes in any

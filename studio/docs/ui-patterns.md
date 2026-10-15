@@ -408,6 +408,9 @@ pipeline parameter's default. Their refusals still say where the mistake is (bel
   attach as on any field. Tab leaves the box, and undo is the browser's.
 - **It has a code face:** monospace, unwrapped (long lines scroll), left-to-right, with spelling and
   autocorrect off.
+- **Size.** In the properties pane a JSON box expands on edit like a text box (see *Expand on
+  edit*), and Edit as JSON's box is as tall as its config up to its cap. Elsewhere it is a fixed
+  number of rows.
 - **Format JSON** lays the text out as `JSON.stringify(value, null, 2)` would.
   - It moves only whitespace (`formatJsonText`), so a value is never changed: an integer past 2^53,
     `1E+2`, an escape and a duplicate key all stay as typed.
@@ -885,7 +888,8 @@ row heights), not the layout.
   value column while it has focus. A top-level JSON box (`JsonEditor`'s `restRows`: a JSON config
   field, Execute pipeline's JSON parameters) expands on edit the same way, a scrollbar under a long
   unwrapped line added to its height, and Edit as JSON's box is as tall as its config up to its cap.
-  `e2e/property-pane-expand-on-edit.spec.ts` pins all three. Not yet: ⤢ to a full expression editor.
+  `e2e/property-pane-expand-on-edit.spec.ts` pins the text boxes and `e2e/json-expand-on-edit.spec.ts`
+  the JSON ones. Not yet: ⤢ to a full expression editor.
 - **A unit is a suffix inside its box, not label text (#1694 OR42 item 5).** `30` `s`, through
   `WithUnit`/`UnitLabel` (`lib/form/UnitInput.tsx`), so a label is the title alone and never wraps. The
   unit stays in the field's accessible name, out of sight ("Timeout (seconds)"), so its name, its

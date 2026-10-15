@@ -4172,7 +4172,7 @@ export function NodePanel({
             editor={editor}
             kindLabel={entry?.title ?? nodeType}
             className="contract-section"
-            rows={10}
+            maxRows={10}
             advisory={null}
             picker={picker}
             choicesFor={choicesFor}

@@ -42,6 +42,11 @@ import {
  * mousedown that moves focus, and its click follows in the same task. Only a
  * primary press counts, because a context-menu press may never send its
  * pointerup; `contextmenu` ends a press too, so the box never stays open.
+ *
+ * An UNWRAPPED box (`wrap="off"`, JSON) can draw a horizontal scrollbar under a
+ * long line, inside the height set here; its thickness is added so the last
+ * line is not hidden behind it. Collapsed, overflow across is hidden as well,
+ * so a one-line box never carries a scrollbar under its one line.
  */
 export function AutoGrowTextarea({
   maxRows = 4,
@@ -142,12 +147,15 @@ export function AutoGrowTextarea({
     // that height, hiding the last line: `scrollHeight` never counts it. Read
     // after the overflow is set, since a vertical scrollbar narrows the box.
     // Zero where scrollbars overlay, and below zero where there is no layout.
-    const bar =
-      el.offsetHeight - el.clientHeight - px(cs.borderTopWidth) - px(cs.borderBottomWidth);
-    if (bar > 0) el.style.height = `${String(height + bar)}px`;
+    // Rounded: the two heights are whole pixels and a border at a fractional
+    // zoom is not, which would otherwise read as a sliver of a bar.
+    const bar = Math.round(
+      el.offsetHeight - el.clientHeight - px(cs.borderTopWidth) - px(cs.borderBottomWidth),
+    );
+    if (bar >= 1) el.style.height = `${String(height + bar)}px`;
     for (const [p, top] of scrolled) p.scrollTop = top;
-    // Collapsed, it shows its FIRST line, not the one the caret left it on,
-    // from its start.
+    // Collapsed, it shows its FIRST line from its first character, not
+    // wherever the caret left it scrolled.
     if (collapsed) {
       el.scrollTop = 0;
       el.scrollLeft = 0;

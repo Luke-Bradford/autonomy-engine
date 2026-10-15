@@ -17,6 +17,16 @@ export function properties(page: Page): Locator {
   return page.getByRole('region', { name: 'Properties', exact: true });
 }
 
+/** Open the tab of the selected node's pane that holds `field`, trying each in turn. */
+export async function showPaneField(page: Page, field: Locator): Promise<void> {
+  const tabs = properties(page)
+    .getByRole('tablist', { name: 'Activity properties' })
+    .getByRole('tab');
+  const count = await tabs.count();
+  for (let i = 0; i < count && !(await field.isVisible()); i++) await tabs.nth(i).click();
+  await expect(field).toBeVisible();
+}
+
 /** Matches text that starts with `prefix`; a substring would also match "store A2". */
 function startsWith(prefix: string): RegExp {
   return new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);

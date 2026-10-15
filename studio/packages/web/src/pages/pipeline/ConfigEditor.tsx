@@ -19,7 +19,7 @@ export function ConfigEditor<K extends string>({
   editor,
   kindLabel,
   className,
-  rows,
+  maxRows,
   advisory,
   choicesFor,
   picker,
@@ -38,8 +38,8 @@ export function ConfigEditor<K extends string>({
    */
   kindLabel: string;
   className: string;
-  /** The most lines the JSON view grows to, sized to its config below that. */
-  rows: number;
+  /** The most lines the JSON view shows; below that it is as tall as its config. */
+  maxRows: number;
   advisory: string | null;
   choicesFor?: (fieldName: string) => FieldChoices | undefined;
   /** The canvas's expression picker (U8a) — a resource form has no graph to pick from. */
@@ -105,9 +105,9 @@ export function ConfigEditor<K extends string>({
                 label="Config (JSON)"
                 value={editor.jsonText}
                 onValueChange={editor.setJsonText}
-                // #1694 OR42 F10 — as tall as its text, never more than `rows`:
+                // #1694 OR42 F10 — as tall as its text, never more than `maxRows`:
                 // the whole config is the view, so it is not collapsed at rest.
-                maxRows={rows}
+                maxRows={maxRows}
                 {...(errorFor === undefined
                   ? {}
                   : fieldAttrs({ key: 'config', error: jsonError, errorId: jsonErrorId }))}

@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
-import { properties } from './support/panels';
+import { properties, showPaneField } from './support/panels';
 
 /**
  * #1694 OR42 F10 — expand on edit, for the JSON editor. A top-level JSON box in
@@ -39,16 +39,6 @@ function measure(box: Locator) {
   });
 }
 
-/** Open the tab of the selected node's pane that holds `field`. */
-async function showField(page: Page, field: Locator) {
-  const tabs = properties(page)
-    .getByRole('tablist', { name: 'Activity properties' })
-    .getByRole('tab');
-  const count = await tabs.count();
-  for (let i = 0; i < count && !(await field.isVisible()); i++) await tabs.nth(i).click();
-  await expect(field).toBeVisible();
-}
-
 /** An Execute pipeline node whose target is an expression, so its parameters are JSON. */
 async function openCall(page: Page, params: Record<string, unknown>) {
   await openSeededCanvas(page, `e2e 1694 json expand ${String(Date.now())}`, {
@@ -68,7 +58,7 @@ async function openCall(page: Page, params: Record<string, unknown>) {
     name: 'Parameters (JSON object)',
     exact: true,
   });
-  await showField(page, box);
+  await showPaneField(page, box);
   return box;
 }
 
@@ -126,12 +116,26 @@ test('a long unwrapped line: the scrollbar under it is added, so the last line s
   expect(m.lines).toBeCloseTo(4, 1);
   expect(m.clipped).toBe(false);
 
+  // Past the cap, both scrollbars: still eight whole lines in view above the one across.
+  await box.fill(
+    JSON.stringify(
+      Object.fromEntries([
+        ['note', 'x'.repeat(300)],
+        ...Array.from({ length: 10 }, (_, i) => [`p${String(i)}`, i]),
+      ]),
+      null,
+      2,
+    ),
+  );
+  m = await measure(box);
+  expect(m.textLines).toBe(13);
+  expect(m.bar).toBeGreaterThan(0);
+  expect(m.lines).toBeCloseTo(8, 1);
+
   await expectQuiet(page, problems);
 });
 
-test('Format on a resting box lays it out in view: the mistake is selected where it can be seen', async ({
-  page,
-}) => {
+test('Format opens a resting box on its mistake, and leaves an open box open', async ({ page }) => {
   const problems = collectPageProblems(page);
   const box = await openCall(page, { query: 'ships' });
   await box.fill('{\n  "a": 1,\n  "b" 2\n}');
@@ -144,9 +148,22 @@ test('Format on a resting box lays it out in view: the mistake is selected where
   );
   // Focused and open, all four lines showing, so the selected mistake is in view.
   await expect(box).toBeFocused();
-  const m = await measure(box);
+  let m = await measure(box);
   expect(m.lines).toBeCloseTo(4, 1);
   expect(m.clipped).toBe(false);
+
+  // An open box already laid out: Format changes nothing, and the box it was
+  // pressed under stays open and focused rather than collapsing after the click.
+  const laidOut = '{\n  "a": 1,\n  "b": 2\n}';
+  await box.fill(laidOut);
+  await expect.poll(async () => (await measure(box)).lines).toBeCloseTo(4, 1);
+  await properties(page).getByRole('button', { name: 'Format JSON' }).click();
+  // Past the collapse's one-task delay, had the click left it blurred.
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 50)));
+  await expect(box).toBeFocused();
+  await expect(box).toHaveValue(laidOut);
+  m = await measure(box);
+  expect(m.lines).toBeCloseTo(4, 1);
 
   await expectQuiet(page, problems);
 });

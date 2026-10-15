@@ -541,7 +541,7 @@ export function ConnectionForm({
           editor={editor}
           kindLabel={CONNECTION_KIND_LABELS[editor.kind]}
           className="connection-config"
-          rows={8}
+          maxRows={8}
           advisory={advisory}
           errorFor={validation.errorFor}
         />
