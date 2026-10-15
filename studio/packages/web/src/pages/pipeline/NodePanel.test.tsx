@@ -1774,6 +1774,23 @@ describe('parameter override editor (#1304)', () => {
     expect('connectionParams' in docNode(store)).toBe(false);
   });
 
+  it('#1694 — a stray row stays while its box is cleared; only its ✕ removes it, as an undo step of its own', () => {
+    const { store } = mountOver(lookup({ connectionParams: { roots: 'x' } }), [
+      fsConn(['maxBytes']),
+    ]);
+    const input = screen.getByRole('textbox', { name: 'Allowed folders' });
+    fireEvent.change(input, { target: { value: '' } });
+    // Kept as '' (flagged), so the row does not vanish mid-edit.
+    expect(docNode(store).connectionParams).toEqual({ roots: '' });
+    expect(screen.getByRole('textbox', { name: 'Allowed folders' })).toBe(input);
+    // A stored '' replaces the connection's value: no inherited placeholder.
+    expect((input as HTMLInputElement).placeholder).toBe('');
+    const before = store.getState().past.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Remove override Allowed folders' }));
+    expect('connectionParams' in docNode(store)).toBe(false);
+    expect(store.getState().past.length).toBe(before + 1);
+  });
+
   it('removing the last row clears the field outright', () => {
     const { store } = mountOver(lookup({ connectionParams: { maxBytes: 5 } }), [
       fsConn(['maxBytes']),
@@ -2042,6 +2059,19 @@ describe('NodePanel — what each tab holds (#1396, #1477)', () => {
         expect(panel.contains(button)).toBe(false);
       }
     }
+  });
+
+  it('#1694 — Copy mode leads General, not Source: it is an activity-level choice', () => {
+    mountOver(node('n_copy', 'copy', {}));
+    const source = within(screen.getByRole('tabpanel', { name: 'Source' }));
+    expect(source.queryByRole('combobox', { name: 'Copy mode' })).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }));
+    const general = within(screen.getByRole('tabpanel', { name: 'General' }));
+    const mode = general.getByRole('combobox', { name: 'Copy mode' });
+    expect((mode as HTMLSelectElement).value).toBe('copy');
+    expect(follows(mode, general.getByRole('textbox', { name: 'Activity description' }))).toBe(
+      true,
+    );
   });
 
   it('splits a paired activity’s pickers over Source and Sink, opening on Source', () => {

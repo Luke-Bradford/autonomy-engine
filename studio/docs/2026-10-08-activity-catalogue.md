@@ -122,7 +122,7 @@ Sources: [copy activity](https://learn.microsoft.com/azure/data-factory/copy-act
 
 **Tabs:** General · Source · Sink · Mapping (rows only) · Settings · User properties.
 
-Three toggles at the top of **Source** decide the shape. Everything below them follows from these three:
+Three toggles decide the shape: *Copy mode* first on **General** (#1694 OR42 item 8), the other two at the top of **Source**. Everything below them follows from these three:
 
 | Toggle | Options | Default | Effect |
 |---|---|---|---|

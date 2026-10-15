@@ -12,7 +12,7 @@ import { properties, pickConnection } from './support/panels';
  * could only be written through the REST API or a git commit. This spec walks the
  * authoring path end to end against LIVE rows:
  *
- *  - the Add list is fed by the real resources' `parameters` allowlists, so a
+ *  - the rows are the real resources' `parameters` allowlists, so a
  *    key the owner did not declare is not on offer;
  *  - a number setting's text reaches the persisted version as a NUMBER, which is
  *    what dispatch re-validates the merged config against;

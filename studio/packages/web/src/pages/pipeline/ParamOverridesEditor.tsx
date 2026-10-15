@@ -5,6 +5,7 @@ import { PickableInput } from './PickableInput';
 import { formatDefaultInput } from './paramRules';
 import {
   coerceOverride,
+  declaredOverrideKeys,
   overrideNote,
   overrideRowKeys,
   overrideRowProblem,
@@ -71,6 +72,7 @@ export function ParamOverridesEditor({
   const legendId = useId();
   const current = value ?? {};
   const keys = overrideRowKeys(resource, current);
+  const declaredKeys = resource === null ? [] : declaredOverrideKeys(resource);
   const note =
     resource === null
       ? `The bound ${noun} is not one this workspace lists, so its overridable settings cannot be checked here.`
@@ -79,11 +81,12 @@ export function ParamOverridesEditor({
   // properties for one.
   if (keys.length === 0 && note === null) return null;
 
-  const write = (key: string, next: unknown) => {
+  // `coalesce` folds a row's typing into one undo step; a ✕ is a step of its own.
+  const write = (key: string, next: unknown, coalesce: boolean) => {
     const rest = { ...current };
     if (next === undefined) delete rest[key];
     else rest[key] = next;
-    onChange(Object.keys(rest).length > 0 ? rest : undefined, key);
+    onChange(Object.keys(rest).length > 0 ? rest : undefined, coalesce ? key : undefined);
   };
 
   return (
@@ -98,6 +101,7 @@ export function ParamOverridesEditor({
                 key={key}
                 name={key}
                 stored={current[key]}
+                declared={declaredKeys.includes(key)}
                 inherited={
                   resource !== null && Object.hasOwn(resource.config, key)
                     ? resource.config[key]
@@ -111,7 +115,8 @@ export function ParamOverridesEditor({
                 }
                 picker={picker}
                 place={place}
-                onValue={(next) => write(key, next)}
+                onValue={(next) => write(key, next, true)}
+                onRemove={() => write(key, undefined, false)}
               />
             );
           })}
@@ -132,16 +137,25 @@ export function ParamOverridesEditor({
 function OverrideRow({
   name,
   stored,
+  declared,
   inherited,
   field,
   problem,
   picker,
   place,
   onValue,
+  onRemove,
 }: {
   name: string;
   /** `undefined` while the row holds no override. */
   stored: unknown;
+  /**
+   * The resource declares this key, so the row stays when its override goes and
+   * a blank box means "no override". A stray row exists only while its key is
+   * stored: clearing its box keeps the key (as `''`, flagged) rather than making
+   * the row vanish mid-edit, and only its ✕ removes it.
+   */
+  declared: boolean;
   /** The resource's own value for the key, shown as the placeholder. */
   inherited: unknown;
   field: ConfigField | undefined;
@@ -150,6 +164,7 @@ function OverrideRow({
   place: (node: Readonly<Node>, key: string, value: unknown) => Node;
   /** The row's next stored value; `undefined` removes the override. */
   onValue: (next: unknown) => void;
+  onRemove: () => void;
 }) {
   const [draft, setDraft] = useState(() => formatDefaultInput(stored));
   // Adjusted during render when `stored` changes (React's documented pattern for
@@ -178,16 +193,16 @@ function OverrideRow({
   return (
     <>
       <tr>
-        <th scope="row" className="param-override-name">
-          {label}
-        </th>
+        <th scope="row">{label}</th>
         <td>
           <PickableInput
             value={draft}
-            placeholder={formatDefaultInput(inherited)}
+            // A stored '' REPLACES the resource's value, so showing that value
+            // as the placeholder would say the opposite of what the run does.
+            placeholder={stored === '' ? undefined : formatDefaultInput(inherited)}
             onChange={(text) => {
               setDraft(text);
-              onValue(text === '' ? undefined : coerceOverride(field, text));
+              onValue(text === '' && declared ? undefined : coerceOverride(field, text));
             }}
             picker={picker}
             pickerName={name}
@@ -202,7 +217,7 @@ function OverrideRow({
               label={`Remove override ${label}`}
               onRemove={() => {
                 setDraft('');
-                onValue(undefined);
+                onRemove();
               }}
             />
           )}

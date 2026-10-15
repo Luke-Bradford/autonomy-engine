@@ -336,7 +336,7 @@ message.
   properties*), directly under the picker. Every setting the resource declares overridable is a
   row, blank until typed into, with the resource's own value as its placeholder. Clearing a box
   removes its override, so there is no Add control, and an empty-string override cannot be authored
-  there. A stored key the resource does not declare is a row too, flagged. A resource that declares
+  there. A stored key the resource does not declare is a row too, flagged, and only its ✕ removes it. A resource that declares
   nothing shows no table at all, as ADF shows no Dataset properties for an unparameterised dataset.
 - What still names the KEY: a top-level field's expression picker buttons ("Insert reference into
   url"). The key is what a `${}` reference and a server message cite. A row cell's buttons follow

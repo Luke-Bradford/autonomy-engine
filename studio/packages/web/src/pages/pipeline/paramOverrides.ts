@@ -202,7 +202,7 @@ export function coerceOverride(field: ConfigField | undefined, text: string): un
 function violationMessage(r: OverrideResource, v: ParamOverrideViolation): string {
   switch (v.reason) {
     case 'non_overridable':
-      return `\`${v.key}\` can never be overridden on ${kindPlural(r.kind, r.noun)}. Remove this row.`;
+      return `\`${v.key}\` can never be overridden on ${kindPlural(r.kind, r.noun)}. Remove this override.`;
     case 'undeclared':
       return `${r.name} does not declare \`${v.key}\` as overridable, so a run will refuse it.`;
     case 'secret_marker':

@@ -97,7 +97,7 @@ describe('paramOverrides (#1304)', () => {
     expect(overrideRowProblem(r, 'maxBytes', { $secret: 'k' })).toMatch(/secret/);
     const t = datasetOverrideResource(dataset('table', { table: 't' }, ['table']));
     expect(overrideRowProblem(t, 'table', 'x')).toBe(
-      '`table` can never be overridden on Database table datasets. Remove this row.',
+      '`table` can never be overridden on Database table datasets. Remove this override.',
     );
     const u = connectionOverrideResource(fsConnection(['ghost']));
     expect(overrideRowProblem(u, 'ghost', 'x')).toBe(
