@@ -278,7 +278,7 @@ test.describe('#1600 C1a — Copy · Files as-is', () => {
       await expect(toggle.locator('.count-badge').first()).toHaveText('1');
       await toggle.click();
       await expect(page.locator('.problems-panel')).toContainText(
-        "the sink connection 'e2e 1600 legacy store' does not allow writes",
+        "the sink connection 'e2e 1600 legacy store' does not allow writes, which a files copy needs",
       );
 
       // Any edit saves the node as its replacement.

@@ -20,18 +20,30 @@ describe('#1600 C1b — splitDestination', () => {
     ['/data/out/a.csv', { folder: '/data/out', name: 'a.csv' }],
     ['/a.csv', { folder: '/', name: 'a.csv' }],
     ['a.csv', { folder: undefined, name: 'a.csv' }],
-    ['${dir}/a.csv', { folder: '${dir}', name: 'a.csv' }],
-    ['out/${name}', { folder: 'out', name: '${name}' }],
-    ["out/${concat('x/', name)}", { folder: 'out', name: "${concat('x/', name)}" }],
+    ['${root}/out/a.csv', { folder: '${root}/out', name: 'a.csv' }],
+    ['/data/${day}/a.csv', { folder: '/data/${day}', name: 'a.csv' }],
+    ['out/a_${day}.csv', { folder: 'out', name: 'a_${day}.csv' }],
+    ['report_${day}.csv', { folder: undefined, name: 'report_${day}.csv' }],
+    ["out/a${concat('x/', name)}", { folder: 'out', name: "a${concat('x/', name)}" }],
     ['out/$${x}/a.csv', { folder: 'out/$${x}', name: 'a.csv' }],
+    ['$${x}.csv', { folder: undefined, name: '$${x}.csv' }],
   ])('%s', (dest, expected) => {
     expect(splitDestination(dest)).toEqual(expected);
   });
 
-  it('refuses a wholly-expression destination, which may resolve absolute', () => {
+  it('refuses a name that begins with an expression, which may resolve absolute or to a number', () => {
     expect(splitDestination('${pipeline.parameters.dest}')).toBeUndefined();
     expect(splitDestination('${a}${b}')).toBeUndefined();
-    expect(splitDestination('out/${unterminated')).toBeUndefined();
+    expect(splitDestination('out/${name}')).toBeUndefined();
+    expect(splitDestination('out/${name}.csv')).toBeUndefined();
+  });
+
+  it('refuses a folder that is one bare expression, which may resolve empty or to a number', () => {
+    expect(splitDestination('${dir}/a.csv')).toBeUndefined();
+  });
+
+  it('refuses an unterminated expression', () => {
+    expect(splitDestination('out/a${unterminated')).toBeUndefined();
   });
 });
 
@@ -62,6 +74,10 @@ describe('#1600 C1b — lowerRetiredTypes', () => {
       },
     });
     expect(lowered).not.toHaveProperty('connectionId');
+    // A copy, not the registry's own objects.
+    const declared = lowered!.config['outputs'] as object[];
+    expect(declared).not.toBe(getActivity('copy_files')!.outputs);
+    expect(declared[0]).not.toBe(getActivity('copy_files')!.outputs[0]);
     const config = { ...lowered!.config };
     delete config['outputs'];
     expect(copyFilesConfigSchema.safeParse(config).success).toBe(true);

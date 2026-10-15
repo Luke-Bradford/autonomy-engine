@@ -35,8 +35,7 @@ import {
  * returned unchanged, still a valid runnable node of its retired type:
  * - it carries something a paired node refuses (`connectionParams`,
  *   `connectionIds`, datasets, a call);
- * - its destination is wholly an expression, which could resolve to an absolute
- *   path that `sinkFileName` refuses;
+ * - its destination splits in a way only the run could judge (`splitDestination`);
  * - the lowered config does not pass `copy_files`' schema (a half-filled node).
  *
  * PURE and copy-on-write: an unchanged node is returned by reference.
@@ -60,10 +59,15 @@ const unprotect = (s: string) => s.split(ESCAPE).join('$${');
 
 /**
  * Split a destination path into its folder and its file name at the last `/`
- * outside every `${…}`, so `${dir}/out.csv` splits and `out/${name}` does too.
- * `undefined` when no such `/` exists and the path holds an expression: a
- * whole-expression destination may be absolute or relative, which only the
- * run knows.
+ * outside every `${…}`: `/data/${day}/out.csv` and `report_${day}.csv` split.
+ *
+ * `undefined` where only the run could say what the split means, so the node
+ * stays its retired type:
+ * - the file name BEGINS with an expression (`out/${name}`, `${dest}`): it may
+ *   resolve to an absolute path, or to a number (a whole `${}` keeps its type),
+ *   which *File name* refuses where the old string join wrote it;
+ * - the folder is ONE bare expression (`${dir}/a.csv`): it may resolve empty
+ *   or to a number, where the old join made `/a.csv` or `5/a.csv`.
  */
 export function splitDestination(
   dest: string,
@@ -79,9 +83,10 @@ export function splitDestination(
       break;
     }
   }
-  if (cut === -1) {
-    return matches.length === 0 ? { folder: undefined, name: dest } : undefined;
-  }
+  const startsWithRef = (from: number) => matches.some((m) => m.start === from);
+  if (startsWithRef(cut + 1)) return undefined;
+  if (cut === -1) return { folder: undefined, name: unprotect(s) };
+  if (matches.some((m) => m.start === 0 && m.end === cut - 1)) return undefined;
   const folder = unprotect(s.slice(0, cut));
   return { folder: folder === '' ? '/' : folder, name: unprotect(s.slice(cut + 1)) };
 }

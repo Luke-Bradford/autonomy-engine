@@ -428,8 +428,8 @@ describe('writeAccessWarnings (#1600 OR41 C1b)', () => {
         connections,
       ),
     ).toEqual([
-      "node 'a': the sink connection 'Conn ro' does not allow writes",
-      "node 'b': the sink connection 'Conn no' does not allow writes",
+      "node 'a': the sink connection 'Conn ro' does not allow writes, which a files copy needs",
+      "node 'b': the sink connection 'Conn no' does not allow writes, which a files copy needs",
     ]);
   });
 
@@ -438,7 +438,7 @@ describe('writeAccessWarnings (#1600 OR41 C1b)', () => {
     expect(
       writeAccessWarnings([copy('a', { source: 'ro', sink: 'rw' }, 'move')], connections),
     ).toEqual([
-      "node 'a': After copy removes the source, and the source connection 'Conn ro' does not allow writes",
+      "node 'a': After copy removes the source, which needs writes allowed on the source connection 'Conn ro'",
     ]);
     expect(
       writeAccessWarnings([copy('a', { source: 'ro', sink: 'ro' }, 'delete')], connections),

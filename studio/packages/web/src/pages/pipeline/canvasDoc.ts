@@ -179,11 +179,13 @@ export function writeAccessWarnings(
     return [
       ...(sink === undefined
         ? []
-        : [`node '${n.id}': the sink connection '${sink.name}' does not allow writes`]),
+        : [
+            `node '${n.id}': the sink connection '${sink.name}' does not allow writes, which a files copy needs`,
+          ]),
       ...(source === undefined || source === sink
         ? []
         : [
-            `node '${n.id}': After copy removes the source, and the source connection '${source.name}' does not allow writes`,
+            `node '${n.id}': After copy removes the source, which needs writes allowed on the source connection '${source.name}'`,
           ]),
     ];
   });

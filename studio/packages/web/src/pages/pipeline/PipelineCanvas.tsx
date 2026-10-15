@@ -1150,7 +1150,7 @@ export function PipelineCanvas({
   // #1669 — the warnings (a doc that saves but fails or skips at run) come out of
   // the same validation pass and are kept apart: they never refuse Save or Debug.
   // Unattributed, so a card and its panel show only the issues that block.
-  const { located, warnings } = useMemo(() => {
+  const { located, warnings: advisoryWarnings } = useMemo(() => {
     const advisories: string[] = [];
     const rewrite = (raw: string) => ({
       raw,
@@ -1165,11 +1165,20 @@ export function PipelineCanvas({
         ...descriptionIssues(nodes),
         ...userPropertiesIssues(nodes),
       ].map(rewrite),
-      warnings: [...advisories, ...writeAccessWarnings(nodes, connections)].map((raw) =>
+      warnings: advisories.map((raw) => readableIssue(raw, nodes, edges, containers)),
+    };
+  }, [nodes, edges, containers, params, variables, globals]);
+  // #1600 C1b — kept out of the memo above, so a connections refresh does not
+  // re-run the whole validation for a warning that reads only the connections.
+  const warnings = useMemo(
+    () => [
+      ...advisoryWarnings,
+      ...writeAccessWarnings(nodes, connections).map((raw) =>
         readableIssue(raw, nodes, edges, containers),
       ),
-    };
-  }, [nodes, edges, containers, params, variables, globals, connections]);
+    ],
+    [advisoryWarnings, nodes, edges, containers, connections],
+  );
   const clientIssues = useMemo(
     () => [
       ...located.map((issue) => issue.text),
