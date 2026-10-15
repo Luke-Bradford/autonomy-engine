@@ -2431,6 +2431,8 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         const next: Node = { ...current, type, config: {} };
         delete next.datasetIds;
         delete next.datasetParams;
+        // #1600 C1q — an inline source is a dataset binding too; Files as-is has none.
+        delete next.inlineDatasets;
         const switched = lowerPipelineNodes([next])[0]!;
         edit((s) => ({ nodes: s.nodes.map((n) => (n.id === id ? switched : n)) }));
         // A half-picked dataset end goes with the bindings (selection state, so
@@ -2658,8 +2660,11 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         // missing `source` read as half-bound and deleted the node's whole
         // `datasetIds`, sink included. Picking a saved SOURCE dataset is the
         // author choosing it over the inline one, which the write below drops.
+        // A saved source the author has picked (committed or pending) still wins:
+        // only with none does the inline source stand in, so the outcome does not
+        // depend on which end was picked first.
         const inlineSource =
-          kind === 'datasets' && side === 'sink' && node?.inlineDatasets !== undefined;
+          kind === 'datasets' && source === undefined && node?.inlineDatasets !== undefined;
         const bound: { source?: string; sink?: string } | undefined = inlineSource
           ? needsBothEnds && sink !== undefined
             ? { sink }

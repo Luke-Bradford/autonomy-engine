@@ -60,8 +60,7 @@ import {
   lowerOutputSchema,
 } from '../catalog/llm-config.js';
 import { copyMappingShapeIssues } from '../catalog/copy-config.js';
-import { datasetConfigSchema } from '../catalog/dataset-config.js';
-import { formatZodIssues } from '../schemas/zod-issues.js';
+import { inlineDatasetConfigIssues } from '../catalog/dataset-config.js';
 import { SecretRefSchema, isSecretRef } from '../schemas/secret-ref.js';
 import type { ContainerKind, Output } from '../schemas/pipeline.js';
 import type { EvalIn, FnSpec, SigType } from './functions.js';
@@ -3541,34 +3540,6 @@ function validateIfCondition(node: Node, errors: string[]): void {
 }
 
 /**
- * #996 §8 (M5 slice 4c, #1139) — a `copy`'s mapping COLUMN NAMES must be literal.
- *
- * IDENTIFIER-ONLY. It is not the whole of what this gate says about a copy —
- * `validateCopyMappingShape` below adds the three CROSS-ROW rules (#1176) — but
- * per-FIELD types remain the adapter's (`copyDispatchInputSchema`) and the
- * canvas schema's, because `Node.config` is opaque to this validator and §13
- * gives the authoring surface to M8's mapping panel. So every malformed shape
- * below is a SILENT SKIP — there is nothing THIS rule has to say about it.
- *
- * Why the rule cannot live at dispatch, which is where every other
- * `copy` check lives. §8's argument, and it is the whole reason this function
- * exists: substitution happens in the REDUCER, so by the time a mapping reaches
- * an adapter an interpolated column name is an ordinary string and the adapter
- * cannot tell it came from an expression. The distinction only exists at save
- * time, so the rule has to be enforced at save time or not at all.
- *
- * `source` and `sink` are the only identifier fields on a copy NODE. `mode` is a
- * closed enum re-parsed at dispatch, not an identifier; `expression` is a VALUE
- * and is explicitly ALLOWED to be `${}` — §8's first bullet is that values bind
- * as query parameters, which is what makes them safe by construction rather than
- * by escaping. Refusing `expression` here would break the one escape hatch the
- * section grants.
- *
- * The DATASET half of §8 is already enforced elsewhere and needs nothing here:
- * `catalog/dataset-config.ts`'s `SQL_IDENTIFIER_RE` makes a `${}` table or schema
- * name unparseable as a `table`/`query` dataset config in the first place.
- */
-/**
  * #1600 OR41 C1q — the save rules for `Node.inlineDatasets` (catalogue spec
  * §4.1, Source "Database" row). Whether the node's ACTIVITY accepts the kind,
  * and whether its bound connection can hold it, stay at DISPATCH, `datasetIds`'
@@ -3599,14 +3570,9 @@ function validateInlineDatasets(node: Node, errors: string[]): void {
       `node.${node.id}: a source dataset and an inline source both name the source — keep one`,
     );
   }
-  // `.strict()`: a stray key in an inline config is a typo, and stripping it
-  // would run something other than what was authored.
-  const parsed = datasetConfigSchema(inline.kind).strict().safeParse(inline.config);
-  if (!parsed.success) {
-    errors.push(
-      `node.${node.id}: the inline ${inline.kind} source is not valid: ` +
-        formatZodIssues(parsed.error.issues),
-    );
+  const issues = inlineDatasetConfigIssues(inline.kind, inline.config);
+  if (issues !== null) {
+    errors.push(`node.${node.id}: the inline ${inline.kind} source is not valid: ${issues}`);
   }
   const sql = inline.config['sql'];
   if (inline.kind === 'query' && typeof sql === 'string' && sql.includes('${')) {
@@ -3617,6 +3583,34 @@ function validateInlineDatasets(node: Node, errors: string[]): void {
   }
 }
 
+/**
+ * #996 §8 (M5 slice 4c, #1139) — a `copy`'s mapping COLUMN NAMES must be literal.
+ *
+ * IDENTIFIER-ONLY. It is not the whole of what this gate says about a copy —
+ * `validateCopyMappingShape` below adds the three CROSS-ROW rules (#1176) — but
+ * per-FIELD types remain the adapter's (`copyDispatchInputSchema`) and the
+ * canvas schema's, because `Node.config` is opaque to this validator and §13
+ * gives the authoring surface to M8's mapping panel. So every malformed shape
+ * below is a SILENT SKIP — there is nothing THIS rule has to say about it.
+ *
+ * Why the rule cannot live at dispatch, which is where every other
+ * `copy` check lives. §8's argument, and it is the whole reason this function
+ * exists: substitution happens in the REDUCER, so by the time a mapping reaches
+ * an adapter an interpolated column name is an ordinary string and the adapter
+ * cannot tell it came from an expression. The distinction only exists at save
+ * time, so the rule has to be enforced at save time or not at all.
+ *
+ * `source` and `sink` are the only identifier fields on a copy NODE. `mode` is a
+ * closed enum re-parsed at dispatch, not an identifier; `expression` is a VALUE
+ * and is explicitly ALLOWED to be `${}` — §8's first bullet is that values bind
+ * as query parameters, which is what makes them safe by construction rather than
+ * by escaping. Refusing `expression` here would break the one escape hatch the
+ * section grants.
+ *
+ * The DATASET half of §8 is already enforced elsewhere and needs nothing here:
+ * `catalog/dataset-config.ts`'s `SQL_IDENTIFIER_RE` makes a `${}` table or schema
+ * name unparseable as a `table`/`query` dataset config in the first place.
+ */
 function validateCopyMappingIdentifiers(node: Node, errors: string[]): void {
   const rows = node.config['mapping'];
   if (!Array.isArray(rows)) return;

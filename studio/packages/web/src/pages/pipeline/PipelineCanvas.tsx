@@ -61,7 +61,6 @@ import {
   type ConnectionPublic,
   type Dataset,
   type Edge,
-  type InlineDataset,
   type Node,
   type Pipeline,
   type PipelineVersion,
@@ -69,6 +68,7 @@ import {
   type WorkspaceGitPullRequestReading,
   type ActivityBindingSlot,
 } from '@autonomy-studio/shared';
+import { inlineSourceText } from './activitySummary';
 import {
   clipboardCommandFor,
   arrangeDisabledReason,
@@ -3419,14 +3419,6 @@ function overrideResourceFor<T extends { id: string }>(
   return row === undefined ? null : view(row);
 }
 
-/** #1600 C1q — an inline source's table or SQL, for the dock's read-only line. */
-function inlineSourceText(inline: InlineDataset): string {
-  const { table, schema, sql } = inline.config;
-  if (inline.kind === 'query') return typeof sql === 'string' ? sql : '';
-  const name = typeof table === 'string' ? table : '';
-  return typeof schema === 'string' ? `${schema}.${name}` : name;
-}
-
 /**
  * #1304 — one dataset end's overrides. Rendered only for an end the DOC binds.
  * A half-picked pending end is not in `datasetIds`, and `validateDoc` refuses
@@ -3952,7 +3944,10 @@ export function NodePanel({
   if (connectionId !== undefined) boundSlots.add('connection');
   if (thisNode?.connectionIds?.source !== undefined) boundSlots.add('sourceConnection');
   if (thisNode?.connectionIds?.sink !== undefined) boundSlots.add('sinkConnection');
-  if (thisNode?.datasetIds?.source !== undefined) boundSlots.add('sourceDataset');
+  // #1600 C1q — an inline source binds the source end as a saved one does.
+  if (thisNode?.datasetIds?.source !== undefined || thisNode?.inlineDatasets !== undefined) {
+    boundSlots.add('sourceDataset');
+  }
   if (thisNode?.datasetIds?.sink !== undefined) boundSlots.add('sinkDataset');
   const refusalPaths =
     applyRefusal !== null && applyRefusal.message === error ? applyRefusal.paths : [];
@@ -4108,7 +4103,7 @@ export function NodePanel({
                 Query block (C1q-b) edits it, so a node's source is never
                 invisible here. Picking a source dataset above replaces it. */}
             {thisNode?.inlineDatasets !== undefined && (
-              <p className="contract-advisory" role="status" data-testid="inline-source">
+              <p className="contract-advisory" data-testid="inline-source">
                 Inline {thisNode.inlineDatasets.source.kind}{' '}
                 <code>{inlineSourceText(thisNode.inlineDatasets.source)}</code>
               </p>

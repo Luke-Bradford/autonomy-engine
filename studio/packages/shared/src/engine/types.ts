@@ -887,6 +887,13 @@ export const FAILURE_CODES = {
    */
   DATASET_SELF_COPY: 'dataset_self_copy',
   /**
+   * #1600 OR41 C1q — a node names a saved source dataset AND an inline source
+   * (`inlineDatasets`), so which one it reads is undecidable. `validateDoc`
+   * refuses it at save; this is the dispatch-time refusal for a doc that
+   * bypassed that gate. Refused rather than letting one win.
+   */
+  DATASET_SOURCE_CONFLICT: 'dataset_source_conflict',
+  /**
    * M6 slice B (#1149) — the store this dataset lives in cannot say WHERE the
    * dispatch would land, so the run refuses to make it.
    *

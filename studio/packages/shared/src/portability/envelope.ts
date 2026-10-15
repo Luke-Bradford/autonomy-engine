@@ -86,10 +86,12 @@ export const NodeExportSchema = NodeSchema.omit({
    * No `SCHEMA_VERSION` bump and no upgrader (`envelope.ts` carries three). An
    * older export always carries both ends, so it parses here unchanged; this
    * widening only admits a shape older exports could not contain.
+   *
+   * #1600 OR41 C1q — `source` takes the same null-vs-absent split. NULL = export
+   * stripped a literal source (drops whole, as before); ABSENT = the node reads
+   * an inline source (`inlineDatasets`, which carries no id and travels in the
+   * node as is), so `{sink}` survives import beside it.
    */
-  // #1600 OR41 C1q — `source` takes the same null-vs-absent split as `sink`:
-  // NULL = export stripped a literal source, ABSENT = the node reads an inline
-  // source (`inlineDatasets`, which carries no id and travels in the node as is).
   datasetIds: z
     .object({
       source: z.string().min(1).nullable().optional(),

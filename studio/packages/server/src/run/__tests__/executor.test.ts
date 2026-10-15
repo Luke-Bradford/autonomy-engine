@@ -18,6 +18,7 @@ import {
   type NewPipelineVersion,
   type Node,
   type PipelineVersion,
+  catalog as sharedCatalog,
 } from '@autonomy-studio/shared';
 import { createPipeline } from '../../repo/pipelines.js';
 import { insertLegacyVersion } from '../../__tests__/legacy-version.js';
@@ -5659,7 +5660,7 @@ describe('createExecutor — #1600 OR41 C1q: an inline Table · Query source', (
     ]);
     const run = seedRun(db, pvId);
     expect((await startRun(deps(db), run)).status).toBe('failure');
-    expect(failureOf(db, run.id)).toMatchObject({ code: FAILURE_CODES.DATASET_KIND_INVALID });
+    expect(failureOf(db, run.id)).toMatchObject({ code: FAILURE_CODES.DATASET_SOURCE_CONFLICT });
   });
 
   it('refuses a bind value that resolves to something SQL cannot bind', async () => {
@@ -5683,6 +5684,51 @@ describe('createExecutor — #1600 OR41 C1q: an inline Table · Query source', (
     });
     expect((await startRun(deps(db), run)).status).toBe('failure');
     expect(failureOf(db, run.id)).toMatchObject({ code: FAILURE_CODES.DATASET_PARAM_INVALID });
+  });
+
+  it('refuses a bind value that RESOLVES to a secret marker, before dispatch', async () => {
+    const { db, sourceConn, sinkConn, sinkDs } = await seedStores();
+    const pvId = seedVersion(
+      db,
+      [
+        inlineCopy(sourceConn, sinkConn, sinkDs, {
+          kind: 'query',
+          config: { sql: 'SELECT * FROM orders WHERE id = :x', parameters: { x: '${params.p}' } },
+        }),
+      ],
+      [{ name: 'p', type: 'json', required: true }],
+    );
+    const run = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: null,
+      params: { p: { $secret: 'conn_1' } },
+    });
+    expect((await startRun(deps(db), run)).status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({
+      code: FAILURE_CODES.DATASET_PARAM_SECRET_MARKER,
+    });
+    expect(loadEngineEvents(db, run.id).some((e) => e.type === 'node.dispatched')).toBe(false);
+  });
+
+  it('refuses an inline kind the activity does not accept on its source', async () => {
+    const { db, sourceConn, sinkConn, sinkDs } = await seedStores();
+    const copyEntry = sharedCatalog.get('copy')!;
+    const catalog = new Map(sharedCatalog);
+    catalog.set('copy', {
+      ...copyEntry,
+      datasetKinds: { source: ['delimited'], sink: copyEntry.datasetKinds!.sink },
+    });
+    const pvId = seedVersion(db, [
+      inlineCopy(sourceConn, sinkConn, sinkDs, { kind: 'table', config: { table: 'orders' } }),
+    ]);
+    const run = seedRun(db, pvId);
+    expect((await startRun(deps(db, { catalog }), run)).status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({
+      code: FAILURE_CODES.DATASET_KIND_INVALID,
+      side: 'source',
+    });
   });
 
   it('refuses an inline table that is the sink table itself (the physical self-copy check)', async () => {

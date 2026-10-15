@@ -605,8 +605,10 @@ export const NodeSchema = z.object({
    * were honoured and still bind: NOT `.partial()` (which would also make
    * `source` droppable, and a sink-only address names no data to read) and NOT a
    * `config` key (which would reintroduce the unremapped-ref bug this field
-   * exists to kill). `source` therefore stays REQUIRED, and a sink-only object
-   * is still refused.
+   * exists to kill). `source` therefore stayed REQUIRED, and a sink-only object
+   * was refused. #1600 C1q made `source` optional too, for a Copy whose source
+   * is inline (`inlineDatasets`, below): the sink-only refusal moved to
+   * `validateDoc`, which still refuses it when there is no inline source.
    *
    * WHICH activities may bind source-only is the CATALOG's to say, not this
    * schema's: an entry whose `datasetKinds.sink` is undefined is dataset-unpaired

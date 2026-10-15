@@ -8,7 +8,8 @@ import {
   captureDispatchParams,
   collectSecretSinkMarkers,
   containsSecretMarker,
-  DATASET_CONNECTION_KINDS,
+  datasetConnectionKindAdvisory,
+  inlineDatasetConfigIssues,
   INLINE_SOURCE_DATASET_ID,
   computeCostEstimate,
   firstParamOverrideViolation,
@@ -19,7 +20,6 @@ import {
   sameDatasetAddress,
   resolveDocNode,
   FAILURE_CODES,
-  formatZodIssues,
   findLlmMessagesRowIndex,
   LLM_CALL_ACTIVITY_TYPE,
   llmCallConfigSchema,
@@ -111,17 +111,6 @@ import type { ChildRuns } from './child.js';
  * subprocesses that each fail and re-record it. Only the optimisation is lost;
  * correctness (failure → window → later admissions skip) is unchanged.
  */
-
-/**
- * #1600 OR41 C1q — the bind values an inline source applied, for
- * `node.dispatched.params`. `undefined` for a Table, which has none.
- */
-function inlineParametersOf(inline: InlineDataset): Record<string, unknown> | undefined {
-  const { parameters } = inline.config;
-  return typeof parameters === 'object' && parameters !== null && !Array.isArray(parameters)
-    ? (parameters as Record<string, unknown>)
-    : undefined;
-}
 
 export interface ExecutorDeps {
   db: Db;
@@ -932,7 +921,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     if (alsoDatasetId !== undefined) {
       return {
         error: `the node names source dataset '${alsoDatasetId}' AND an inline source — keep one`,
-        code: FAILURE_CODES.DATASET_KIND_INVALID,
+        code: FAILURE_CODES.DATASET_SOURCE_CONFLICT,
       };
     }
     if (!kinds.includes(inline.kind)) {
@@ -941,11 +930,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         code: FAILURE_CODES.DATASET_KIND_INVALID,
       };
     }
-    if (!DATASET_CONNECTION_KINDS[inline.kind].includes(connectionKind)) {
+    const storeMismatch = datasetConnectionKindAdvisory(inline.kind, connectionKind);
+    if (storeMismatch !== null) {
       return {
-        error:
-          `an inline ${inline.kind} source needs a ${DATASET_CONNECTION_KINDS[inline.kind].join(' or ')} ` +
-          `connection, but the node bound a '${connectionKind}' connection for its source`,
+        error: `the inline source's ${storeMismatch}`,
         code: FAILURE_CODES.DATASET_CONNECTION_MISMATCH,
       };
     }
@@ -960,12 +948,12 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         code: FAILURE_CODES.DATASET_PARAM_SECRET_MARKER,
       };
     }
-    // `.strict()`, `validateDoc`'s rule, so a doc that bypassed the save gate
-    // cannot run a config other than the one it carries.
-    const parsed = datasetConfigSchema(inline.kind).strict().safeParse(inline.config);
-    if (!parsed.success) {
+    // `validateDoc`'s rule again, after the values resolved, so a doc that
+    // bypassed the save gate cannot run a config other than the one it carries.
+    const issues = inlineDatasetConfigIssues(inline.kind, inline.config);
+    if (issues !== null) {
       return {
-        error: `the inline ${inline.kind} source is not valid once its parameters are applied: ${formatZodIssues(parsed.error.issues)}`,
+        error: `the inline ${inline.kind} source is not valid once its parameters are applied: ${issues}`,
         code: FAILURE_CODES.DATASET_PARAM_INVALID,
       };
     }
@@ -2194,4 +2182,15 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       yield* performDispatch(command, runId);
     },
   };
+}
+
+/**
+ * #1600 OR41 C1q — the bind values an inline source applied, for
+ * `node.dispatched.params`. `undefined` for a Table, which has none.
+ */
+function inlineParametersOf(inline: InlineDataset): Record<string, unknown> | undefined {
+  const { parameters } = inline.config;
+  return typeof parameters === 'object' && parameters !== null && !Array.isArray(parameters)
+    ? (parameters as Record<string, unknown>)
+    : undefined;
 }
