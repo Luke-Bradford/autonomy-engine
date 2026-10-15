@@ -173,7 +173,11 @@ required marks and display names; its layout is its own, below.
   A `?` holding only the key, or only a number rule that the error line states on a bad
   value, is noise. The note still leads with the rule and ends with the key; with no `?`, a
   titled label carries the key as its hover `title`. The ratchet's `HELP_LIMITS` are the measured
-  counts and may only fall.
+  counts and may only fall. The same rule holds on the connection and dataset forms, where the CSV
+  and Excel header flags, Default headers, Postgres Statement timeout, sqlite and Postgres Allow
+  writes, and the CLI's Command and Timeout get none;
+  `e2e/resource-form-help.spec.ts` holds each kind's new form to its measured count. Those forms
+  keep a `?` per section (#1413). Only the properties pane drops it.
 - A field's title must not contain another field's label on the same form ("Name", "Kind",
   "Store"): label lookups by substring, in tests and in assistive tech, would then find two
   controls. A section may share its field's word ("Value"): the section is a group, not a control,

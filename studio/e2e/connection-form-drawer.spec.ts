@@ -56,7 +56,7 @@ test.describe('#1396 the connection form drawer', () => {
     );
     const timeout = form(page).getByLabel('Timeout (ms)', { exact: true });
     await expect(timeout).toBeVisible();
-    await expect(timeout).toHaveAccessibleDescription(/How long one request may take\..*timeoutMs/);
+    await expect(timeout).toHaveAccessibleDescription(/Defaults to 120000.*timeoutMs/);
     await expect(form(page).getByLabel('Base URL', { exact: true })).toBeVisible();
 
     // #1413 — the picker says what the chosen kind is, and follows a change.
