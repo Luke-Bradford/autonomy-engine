@@ -821,8 +821,8 @@ row heights), not the layout.
   together in the control column. A checkbox stays a wrapping label (box, 8px, words) and sits in the
   control column, as do a sibling hint and a `FieldError`. A row table's cells (a bound end's
   overrides included) and a dock fieldset of choices are not rows: they are too narrow for a label
-  column, or their legend is their label. The trigger form's builders (recurrence, window, binding) are fieldsets of fields,
-  so their fields are rows.
+  column, or their legend is their label. The trigger form's builders (recurrence, window,
+  binding) are fieldsets of fields, so their fields are rows.
 - **Rows are 8px apart**, and required is the `*` after the label (`RequiredMark`), never a word in
   the hint.
 - **The threshold is measured on the form's context, not the window.** The context is the dock tab,
