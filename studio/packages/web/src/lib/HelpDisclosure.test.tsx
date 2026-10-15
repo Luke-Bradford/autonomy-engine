@@ -174,7 +174,7 @@ describe('placeNote (#1695 OR43 — the open note, in the top layer)', () => {
     ).toBe(`${1000 - 8 - 58}px`);
   });
 
-  it('is held inside the viewport when its anchor is above it', () => {
+  it('is held inside the viewport when its anchor is above it (unchanged; the mirror of #1707)', () => {
     expect(place(rect(600, -500, 16, 16), { width: 352, height: 58 }).top).toBe('8px');
   });
 
