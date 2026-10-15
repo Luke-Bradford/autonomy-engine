@@ -2,6 +2,8 @@ import { useState, type ReactNode } from 'react';
 import {
   DATASET_CONNECTION_KINDS,
   INLINE_DATASET_KINDS,
+  datasetConfigSchema,
+  datasetConnectionKindAdvisory,
   type ConnectionKind,
   type DatasetKind,
   type InlineDataset,
@@ -18,8 +20,15 @@ import {
   type RowTableColumn,
 } from '../../lib/form/RowTable';
 import { EDIT_ROWS, type FieldPicker, type PickerTarget } from './ConfigFieldControl';
-import type { FieldSize } from './configForm';
+import {
+  configFieldTitle,
+  deriveConfigFields,
+  fieldSize,
+  type ConfigField,
+  type FieldSize,
+} from './configForm';
 import type { createCanvasStore } from './canvasStore';
+import { ExpressionEditor } from './ExpressionEditor';
 import { PickableInput } from './PickableInput';
 
 type Use = 'saved' | InlineDatasetKind;
@@ -42,6 +51,32 @@ const BLANK: Record<InlineDatasetKind, InlineDataset> = {
 };
 
 /**
+ * Each kind's fields, read from the dataset schema both a saved and an inline
+ * source are checked against, so their titles, notes and sizes are the saved
+ * dataset form's and cannot drift from it.
+ */
+const FIELDS: Record<InlineDatasetKind, ReadonlyMap<string, ConfigField>> = {
+  table: fieldsOf('table'),
+  query: fieldsOf('query'),
+};
+
+function fieldsOf(kind: InlineDatasetKind): ReadonlyMap<string, ConfigField> {
+  return new Map((deriveConfigFields(datasetConfigSchema(kind)) ?? []).map((f) => [f.name, f]));
+}
+
+function field(kind: InlineDatasetKind, name: string): ConfigField {
+  const found = FIELDS[kind].get(name);
+  if (found === undefined) throw new Error(`the ${kind} dataset schema has no '${name}'`);
+  return found;
+}
+
+/** A field's `?`: its schema note, then (for a name) that it is never an expression. */
+function about(f: ConfigField, extra?: string) {
+  const note = [f.label?.description, extra].filter((s) => s !== undefined).join(' ');
+  return note === '' ? undefined : { name: configFieldTitle(f), note };
+}
+
+/**
  * #1600 OR41 C1q-b (catalogue spec §4.1, Source "Database" row) — a database
  * source's **Use** Saved dataset · Table · Query, for every activity whose
  * source end takes a `table` or `query` dataset (Copy, Lookup).
@@ -50,16 +85,17 @@ const BLANK: Record<InlineDatasetKind, InlineDataset> = {
  * `Node.inlineDatasets.source` through `setNodeInlineSource`, so the source is
  * read straight from the bound connection with no saved dataset. Each keystroke
  * writes through, coalesced per field into one undo step, as the override rows
- * do: there is no Apply to forget.
+ * do: there is no Apply to forget. The choice shown is read from the node, so
+ * undo moves it too.
  *
- * The SQL, table and schema are LITERAL (catalogue §8): only a parameter's value
- * takes ⓕ, so a value can never become SQL and a name never comes from an
- * expression. The save gate says so too (`validateInlineDatasets`); this form
- * simply offers no ⓕ where the gate would refuse one.
+ * The SQL, table and schema are LITERAL (catalogue §8): only a bind value takes
+ * ⓕ, so a value can never become SQL and a name never comes from an expression.
+ * The save gate says so too (`validateInlineDatasets`); this form simply offers
+ * no ⓕ where the gate would refuse one, and the SQL's ⤢ editor has no flyout.
  *
  * The choice shows when the bound source connection is a store an inline kind
  * can live in, or when an inline source is already stored (a stored value is
- * never hidden). Otherwise only the saved picker draws.
+ * never hidden; one under a connection that cannot hold it says so).
  */
 export function InlineSourceEditor({
   store,
@@ -80,15 +116,10 @@ export function InlineSourceEditor({
   saved: ReactNode;
 }) {
   const inline = node.inlineDatasets?.source;
-  const kinds = INLINE_DATASET_KINDS.filter(
-    (k) =>
-      sourceKinds.includes(k) &&
-      (connectionKind === undefined || DATASET_CONNECTION_KINDS[k].includes(connectionKind)),
-  );
-  const offered =
-    connectionKind !== undefined &&
-    kinds.some((k) => DATASET_CONNECTION_KINDS[k].includes(connectionKind));
-  if (inline === undefined && !offered) return <>{saved}</>;
+  const fits = (k: InlineDatasetKind) =>
+    connectionKind !== undefined && DATASET_CONNECTION_KINDS[k].includes(connectionKind);
+  const kinds = INLINE_DATASET_KINDS.filter((k) => sourceKinds.includes(k) && fits(k));
+  if (inline === undefined && kinds.length === 0) return <>{saved}</>;
 
   const use: Use = inline?.kind ?? 'saved';
   // A stored kind stays a choice even when the connection no longer suits it.
@@ -98,6 +129,10 @@ export function InlineSourceEditor({
   ];
   const write = (next: InlineDataset | undefined, coalesceKey?: string) =>
     store.getState().setNodeInlineSource(node.id, next, coalesceKey);
+  const mismatch =
+    inline === undefined || connectionKind === undefined
+      ? null
+      : datasetConnectionKindAdvisory(inline.kind, connectionKind);
 
   return (
     <>
@@ -105,12 +140,7 @@ export function InlineSourceEditor({
         label="Use"
         about={{
           name: 'Use',
-          note: (
-            <>
-              Saved dataset binds a dataset from Manage. Table and Query read the source connection
-              directly, with no saved dataset.
-            </>
-          ),
+          note: 'Saved dataset binds a dataset from Manage. Table and Query read the source connection directly, with no saved dataset.',
         }}
       >
         {(id, describedBy) => (
@@ -136,17 +166,21 @@ export function InlineSourceEditor({
       {inline === undefined && saved}
       {inline?.kind === 'table' && <TableFields inline={inline} write={write} />}
       {inline?.kind === 'query' && <QueryFields inline={inline} write={write} picker={picker} />}
+      {mismatch !== null && (
+        <p className="contract-advisory" role="status">
+          The inline source’s {mismatch}.
+        </p>
+      )}
     </>
   );
 }
 
 function text(value: unknown): string {
-  return typeof value === 'string'
-    ? value
-    : value === undefined || value === null
-      ? ''
-      : String(value);
+  if (typeof value === 'string') return value;
+  return value === undefined || value === null ? '' : String(value);
 }
+
+const LITERAL_NAME = 'A literal name, never an expression.';
 
 function TableFields({
   inline,
@@ -164,37 +198,24 @@ function TableFields({
   };
   return (
     <>
-      <LabelledControl
-        label="Schema"
-        about={{ name: 'Schema', note: 'Optional. A literal name, never an expression.' }}
-      >
-        {(id, describedBy) => (
-          <input
-            id={id}
-            aria-describedby={describedBy}
-            data-size={'s' satisfies FieldSize}
-            spellCheck={false}
-            value={text(inline.config['schema'])}
-            onChange={(e) => set('schema', e.target.value)}
-          />
-        )}
-      </LabelledControl>
-      <LabelledControl
-        label="Table"
-        about={{ name: 'Table', note: 'A literal name, never an expression.' }}
-      >
-        {(id, describedBy) => (
-          <input
-            id={id}
-            aria-describedby={describedBy}
-            aria-required
-            data-size={'m' satisfies FieldSize}
-            spellCheck={false}
-            value={text(inline.config['table'])}
-            onChange={(e) => set('table', e.target.value)}
-          />
-        )}
-      </LabelledControl>
+      {(['schema', 'table'] as const).map((key) => {
+        const f = field('table', key);
+        return (
+          <LabelledControl key={key} label={configFieldTitle(f)} about={about(f, LITERAL_NAME)}>
+            {(id, describedBy) => (
+              <input
+                id={id}
+                aria-describedby={describedBy}
+                aria-required={!f.optional || undefined}
+                data-size={fieldSize(f)}
+                spellCheck={false}
+                value={text(inline.config[key])}
+                onChange={(e) => set(key, e.target.value)}
+              />
+            )}
+          </LabelledControl>
+        );
+      })}
     </>
   );
 }
@@ -214,12 +235,18 @@ function QueryFields({
       ? (raw as Record<string, unknown>)
       : {};
   const names = Object.keys(parameters);
+  const sqlField = field('query', 'sql');
+  const sqlTitle = configFieldTitle(sqlField);
+  const bindTitle = configFieldTitle(field('query', 'parameters'));
+  const sql = text(inline.config['sql']);
+  const setSql = (next: string) =>
+    write({ kind: 'query', config: { ...inline.config, sql: next } }, 'sql');
 
-  const withParameters = (next: Record<string, unknown>) => {
+  const withParameters = (next: Record<string, unknown>): InlineDataset => {
     const config = { ...inline.config };
     if (Object.keys(next).length > 0) config['parameters'] = next;
     else delete config['parameters'];
-    return { kind: 'query' as const, config };
+    return { kind: 'query', config };
   };
   const rename = (from: string, to: string, i: number) => {
     // Rebuilt in order, so the row does not jump to the end of the table.
@@ -231,38 +258,40 @@ function QueryFields({
   return (
     <>
       <LabelledControl
-        label="Query"
-        about={{
-          name: 'Query',
-          note: (
-            <>
-              Literal SQL: <code>{'${}'}</code> is not evaluated here. Write <code>:name</code> for
-              a value and bind it under Parameters.
-            </>
-          ),
-        }}
+        label={sqlTitle}
+        about={about(sqlField, 'Literal: ${} is not evaluated here.')}
       >
         {(id, describedBy) => (
-          <AutoGrowTextarea
-            id={id}
-            aria-describedby={describedBy}
-            aria-required
-            restRows={1}
-            maxRows={EDIT_ROWS}
-            spellCheck={false}
-            value={text(inline.config['sql'])}
-            onChange={(e) =>
-              write({ kind: 'query', config: { ...inline.config, sql: e.target.value } }, 'sql')
-            }
-          />
+          <>
+            <AutoGrowTextarea
+              id={id}
+              aria-describedby={describedBy}
+              aria-required
+              restRows={1}
+              maxRows={EDIT_ROWS}
+              spellCheck={false}
+              value={sql}
+              onChange={(e) => setSql(e.target.value)}
+            />
+            {/* No picker: the statement is literal, so its editor offers no `${}`.
+                In the toggle row a config field's ⤢ sits in. */}
+            <div className="expression-picker">
+              <ExpressionEditor
+                fieldName={sqlTitle}
+                value={sql}
+                onChange={setSql}
+                singleLine={false}
+              />
+            </div>
+          </>
         )}
       </LabelledControl>
       <RowList
         columns={PARAM_COLUMNS}
-        label="Parameters"
+        label={bindTitle}
         count={names.length}
-        addLabel="Add parameter"
-        addTitle="A :name in the query, and the value bound to it"
+        addLabel="Add bind value"
+        addTitle="A :name in the statement, and the value bound to it"
         onAdd={() => write(withParameters({ ...parameters, [freshName(names)]: '' }))}
       >
         {names.map((name, i) => (
@@ -288,15 +317,25 @@ function QueryFields({
   );
 }
 
-/** `p1`, `p2`, … — the first not already taken; the author renames it to the SQL's `:name`. */
+/** `p1`, `p2`, … — the first not already taken; the author renames it to the statement's `:name`. */
 function freshName(taken: readonly string[]): string {
   for (let i = 1; ; i += 1) if (!taken.includes(`p${i}`)) return `p${i}`;
 }
 
+/** Why a typed bind-value name cannot be stored, or `null` when it can. */
+function bindNameProblem(draft: string, others: readonly string[]): string | null {
+  if (draft === '') return 'Name it as it is written after : in the statement.';
+  // Keys are stored WITHOUT the colon, so `:wm` would silently never bind.
+  if (draft.startsWith(':')) return 'Leave out the leading :.';
+  if (others.includes(draft)) return `:${draft} is already bound.`;
+  return null;
+}
+
 /**
- * One `:name` and its value. The name box shows a local DRAFT: a blank or
- * duplicate name cannot be a key of the stored record, so it is held here with
- * its reason until it is one, and the stored row keeps its last good name.
+ * One `:name` and its value. The name box shows a local DRAFT: a name that
+ * cannot be a key of the stored record (blank, a leading `:`, a duplicate) is
+ * held here with its reason until it can be, and the stored row keeps its last
+ * good name.
  */
 function ParameterRow({
   index,
@@ -323,13 +362,8 @@ function ParameterRow({
     setSynced(name);
     setDraft(name);
   }
-  const problem =
-    draft === ''
-      ? 'Name the parameter as it is written after : in the query.'
-      : draft !== name && others.includes(draft)
-        ? `:${draft} is already a parameter.`
-        : null;
-  const label = `Parameter ${index + 1}`;
+  const problem = draft === name ? null : bindNameProblem(draft, others);
+  const label = `Bind value ${index + 1}`;
   const target: PickerTarget = {
     place: (n, v) => {
       const source = n.inlineDatasets?.source;
@@ -357,7 +391,7 @@ function ParameterRow({
             onChange={(e) => {
               const to = e.target.value;
               setDraft(to);
-              if (to !== '' && !others.includes(to)) onRename(to);
+              if (bindNameProblem(to, others) === null) onRename(to);
             }}
           />
         </td>
@@ -373,7 +407,7 @@ function ParameterRow({
           </PickableInput>
         </td>
         <RowActions>
-          <RemoveRowButton label={`Remove parameter ${index + 1}`} onRemove={onRemove} />
+          <RemoveRowButton label={`Remove bind value ${index + 1}`} onRemove={onRemove} />
         </RowActions>
       </tr>
       {problem !== null && (

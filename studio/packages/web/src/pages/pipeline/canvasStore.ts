@@ -2607,8 +2607,14 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         if (node === undefined) return;
         if (inline === undefined && node.inlineDatasets === undefined) return;
         // Only an activity that reads a dataset source has a source to replace.
-        if (inline !== undefined && getActivity(node.type)?.datasetKinds === undefined) return;
-        const sink = node.datasetIds?.sink ?? state.pendingBindings[id]?.datasets?.sink;
+        const kinds = getActivity(node.type)?.datasetKinds;
+        if (inline !== undefined && kinds === undefined) return;
+        // A sink only where the activity has one: as setNodeBindingEnd does, a
+        // stray sink no picker renders is dropped rather than carried forward.
+        const sink =
+          kinds?.sink === undefined
+            ? undefined
+            : (node.datasetIds?.sink ?? state.pendingBindings[id]?.datasets?.sink);
         edit(
           (s) => ({
             nodes: s.nodes.map((n) => {

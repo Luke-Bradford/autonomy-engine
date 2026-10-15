@@ -4114,8 +4114,12 @@ describe('setNodeBindingEnd — paired bindings reach the doc WHOLE (#1139)', ()
     expect(store.getState().dirty).toBe(true);
 
     // A typing burst on one field coalesces into ONE undo step.
-    store.getState().setNodeInlineSource('c', { kind: 'query', config: { sql: 'SELECT 12' } }, 'sql');
-    store.getState().setNodeInlineSource('c', { kind: 'query', config: { sql: 'SELECT 123' } }, 'sql');
+    store
+      .getState()
+      .setNodeInlineSource('c', { kind: 'query', config: { sql: 'SELECT 12' } }, 'sql');
+    store
+      .getState()
+      .setNodeInlineSource('c', { kind: 'query', config: { sql: 'SELECT 123' } }, 'sql');
     expect(store.getState().nodes[0]!.inlineDatasets?.source.config).toEqual({ sql: 'SELECT 123' });
     store.getState().undo();
     expect(store.getState().nodes[0]!.inlineDatasets).toEqual({ source: query });
@@ -4139,7 +4143,8 @@ describe('setNodeBindingEnd — paired bindings reach the doc WHOLE (#1139)', ()
           type: 'lookup',
           config: {},
           connectionId: 'conn_a',
-          datasetIds: { source: 'ds_src' },
+          // A stale sink a source-only activity has no picker for is dropped too.
+          datasetIds: { source: 'ds_src', sink: 'ds_stale' },
           datasetParams: { source: { table: 'x' } },
           position: { x: 0, y: 0 },
         },
