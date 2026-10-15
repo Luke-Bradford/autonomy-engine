@@ -44,7 +44,13 @@ import {
 } from '../catalog/types.js';
 import { outputContract, storeOutputs, validateOutputs } from './outputs.js';
 import { hasSecureOutput, redactSecureEvent, secureEventNodeId } from './secure.js';
-import { callDetaches, inactiveMarkAs, isInactive, type VariableDef } from '../schemas/pipeline.js';
+import {
+  callDetaches,
+  inactiveMarkAs,
+  isInactive,
+  type InlineDatasets,
+  type VariableDef,
+} from '../schemas/pipeline.js';
 import {
   backEdgeResetBody,
   coerceVariableValue,
@@ -477,10 +483,12 @@ type PreparedDispatch = {
   /** M1 (#1104) — the paired source/sink binding, both ends `${}`-resolved. */
   resolvedConnectionIds: { source: string; sink: string } | undefined;
   /** M12 slice 1 (#1220) — `sink` optional: a source-only reader binds one address. */
-  resolvedDatasetIds: { source: string; sink?: string } | undefined;
+  resolvedDatasetIds: { source?: string; sink?: string } | undefined;
   /** #1144 — per-end dataset-parameter bindings, `${}`-resolved. */
   resolvedDatasetParams:
     { source?: Record<string, unknown>; sink?: Record<string, unknown> } | undefined;
+  /** #1600 C1q — the inline source, `${}` resolved in its parameter values only. */
+  resolvedInlineDatasets: InlineDatasets | undefined;
   /** #1600 C0d — the node's user properties, each `${}`-resolved (or its error). */
   resolvedUserProperties: ResolvedUserProperty[] | undefined;
 };
@@ -1497,12 +1505,14 @@ export function createEngine(doc: EngineDoc): Engine {
     state: RunState,
     node: Node,
     item: { value: unknown } | undefined,
-  ): { source: string; sink?: string } | undefined {
+  ): { source?: string; sink?: string } | undefined {
     if (node.datasetIds === undefined) return undefined;
     const ctx = buildCtx(state);
-    const sink = node.datasetIds.sink;
+    const { source, sink } = node.datasetIds;
     return {
-      source: String(substitute(node.datasetIds.source, ctx, 0, item)),
+      // #1600 C1q — `source` may be absent too, beside an inline source, and is
+      // omitted on the sink's argument below.
+      ...(source === undefined ? {} : { source: String(substitute(source, ctx, 0, item)) }),
       // M12 slice 1 (#1220) — the key is OMITTED, never stringified. An absent
       // sink through the `String(substitute(...))` above yields the SEVEN-
       // CHARACTER STRING "undefined", which is a well-formed dataset id as far
@@ -1565,6 +1575,31 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
+   * #1600 OR41 C1q — the node's inline source with `${}` resolved in its
+   * `config.parameters` VALUES and nowhere else. `sql`, `table` and `schema`
+   * pass through as authored: never evaluating them is what keeps a value from
+   * becoming SQL and an identifier from coming from an expression (§8).
+   * Type-preserving, in the same env as `resolveDatasetParams`. A non-record
+   * `parameters` passes through for the executor's re-parse to refuse.
+   */
+  function resolveInlineDatasets(
+    state: RunState,
+    node: Node,
+    item: { value: unknown } | undefined,
+  ): InlineDatasets | undefined {
+    const source = node.inlineDatasets?.source;
+    if (source === undefined) return undefined;
+    const { parameters } = source.config;
+    if (parameters === undefined) return { source };
+    return {
+      source: {
+        kind: source.kind,
+        config: { ...source.config, parameters: substitute(parameters, buildCtx(state), 0, item) },
+      },
+    };
+  }
+
+  /**
    * Bundle the two dispatch-prep resolutions so every `dispatchNode` emission
    * site threads a resolved `connectionId` alongside the substituted config with
    * NO drift — both run against the SAME `(state, node)` the site passes. Kept as
@@ -1589,6 +1624,7 @@ export function createEngine(doc: EngineDoc): Engine {
       resolvedConnectionIds: resolveConnectionIds(es, node, item),
       resolvedDatasetIds: resolveDatasetIds(es, node, item),
       resolvedDatasetParams: resolveDatasetParams(es, node, item),
+      resolvedInlineDatasets: resolveInlineDatasets(es, node, item),
       // Never throws: a failed property records its error (user-properties.ts).
       // An empty list is treated as none, so it records nothing.
       resolvedUserProperties: resolveNodeUserProperties(es, node, item),
@@ -1630,6 +1666,7 @@ export function createEngine(doc: EngineDoc): Engine {
       resolvedConnectionIds: prepared.resolvedConnectionIds,
       resolvedDatasetIds: prepared.resolvedDatasetIds,
       resolvedDatasetParams: prepared.resolvedDatasetParams,
+      resolvedInlineDatasets: prepared.resolvedInlineDatasets,
       resolvedUserProperties: prepared.resolvedUserProperties,
     };
   }

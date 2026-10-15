@@ -79,13 +79,25 @@ function toDbNode(node: NodeExport): Node {
   // its dataset binding on every export/import round-trip and be reported as
   // needing a repair it cannot express. A null SOURCE always drops whole, on
   // either shape — an address with no source names no data to read.
-  if (datasetIds === undefined || datasetIds.source === null || datasetIds.sink === null) {
+  if (
+    datasetIds === undefined ||
+    datasetIds.source === null ||
+    datasetIds.sink === null ||
+    // #1600 C1q — `source` is optional too now; an object with neither end is
+    // no binding at all, and dropping it beats a write-gate refusal of the import.
+    (datasetIds.source === undefined && datasetIds.sink === undefined)
+  ) {
     return withConn;
   }
+  // #1600 C1q — an ABSENT source is an inline one, and is omitted, never
+  // carried as `source: undefined`.
   const { source, sink } = datasetIds;
   return {
     ...withConn,
-    datasetIds: { source, ...(sink === undefined ? {} : { sink }) },
+    datasetIds: {
+      ...(source === undefined ? {} : { source }),
+      ...(sink === undefined ? {} : { sink }),
+    },
     ...(datasetParams === undefined ? {} : { datasetParams }),
   };
 }

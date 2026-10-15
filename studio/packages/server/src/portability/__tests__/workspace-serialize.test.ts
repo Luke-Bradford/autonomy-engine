@@ -270,6 +270,48 @@ describe('serializeWorkspace', () => {
     expect('sink' in pair!).toBe(false);
   });
 
+  it('#1600 C1q — a SINK-only pair beside an inline source serializes with NO source key', () => {
+    const { db } = freshDb();
+    const store = createConnection(db, {
+      ownerId: 'local',
+      name: 'Store',
+      kind: 'sqlite',
+      config: {},
+      secretRef: null,
+    });
+    const sink = createDataset(db, {
+      ownerId: 'local',
+      name: 'Sink',
+      connectionId: store.id,
+      kind: 'table',
+      config: {},
+      columns: [],
+    });
+    const inlineDatasets = {
+      source: { kind: 'table' as const, config: { table: 'orders' } },
+    };
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(db, {
+      ...baseVersion(pipeline.id),
+      nodes: [
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: { prompt: 'p' },
+          datasetIds: { sink: sink.id },
+          inlineDatasets,
+          position: { x: 0, y: 0 },
+        },
+      ],
+    });
+
+    const node = envelopeAt(serializeWorkspace(db, 'local'), 'pipelines/p.json').data.versions[0]
+      .nodes[0];
+    expect(node.datasetIds).toEqual({ sink: sink.resourceId });
+    expect('source' in node.datasetIds!).toBe(false);
+    expect(node.inlineDatasets).toEqual(inlineDatasets);
+  });
+
   it('M3 (#1117) — remaps BOTH ends of a datasetIds pair to resourceIds', () => {
     const { db } = freshDb();
     const store = createConnection(db, {

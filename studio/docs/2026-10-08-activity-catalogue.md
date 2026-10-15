@@ -142,6 +142,8 @@ Three toggles decide the shape: *Copy mode* first on **General** (#1694 OR42 ite
 | Inline | **Content** ⓕ, either rows as a JSON array or text. This replaces Write File, e.g. writing an expression's value to a file |
 | Any (rows) | **Additional columns** table: name · value, where value is `$$FILEPATH`, `$$COLUMN:<src>`, a literal or ⓕ (ADF `additionalColumns`) |
 
+**Built (C1q-a, #1600):** an inline Table or Query is `Node.inlineDatasets.source`, a node-level field beside `datasetIds` (whose `source` became optional so a Copy can bind a saved sink beside it). It dispatches as the same resolved dataset a saved one becomes, so every reader runs unchanged. The SQL text, table and schema stay literal by construction: the reducer resolves `${}` only in the parameter **values**, and save refuses a `${` in the SQL, so a value can never become SQL and a name never comes from an expression (§8). At dispatch the node's source connection must be a store the kind can live in (sqlite or postgres). A Lookup's first row is read as `${nodes.<lookup>.output.rows[0].<column>}` until C7 adds `firstRow`; studio has no `activity('Name')` function, so the ticket's ADF spelling does not apply.
+
 **Incremental** (Load = Incremental) uses a watermark column: Watermark column `[▾ source columns]`, one of:
 - **Watermark from** *Automatic*: studio stores the highest value the last *successful* run copied, per activity. This is the default.
 - **Watermark from** *Expression*: the old watermark ⓕ, for example from a Lookup on a control table.
@@ -331,6 +333,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 |---|---|---|
 | C0 | General tab for all activities: description, state + mark as, **enforced timeout**, user properties as monitor columns | F3 timeout |
 | C1 | **Copy: Files as-is**. Folder/wildcard/list/recursive/modified-between source; preserve/flatten/merge; if-exists; after-copy keep/delete/move. Lower file_copy and file_move. Split: **C1a** the `copy_files` type, its fs engine, the fs `writable` permission and the dock toggle; **C1b** the `file_copy`/`file_move` lowering with output aliases (§8), and both retired from the palette (moved forward from C13, since their lowering exists) | part of OR30 #1478 |
+| C1q | **Copy + Lookup: database source Use Table · Query, inline** (operator ask 2026-10-14; §4.1's Database row had no slice). Split: **C1q-a** the engine — `Node.inlineDatasets.source` {kind table/query, config}, `datasetIds.source` optional beside it, save rules, dispatch, portability (`CATALOG_VERSION` 38); **C1q-b** the dock's Source block (Use Saved dataset · Table · Query, SQL editor, `:name` parameters table with ⓕ values, Preview, Query timeout), the same block on Lookup, and the watermark-journey e2e | — |
 | C2 | Copy: inline source + file sink (rows → delimited). Lower file_write | OR14 writer dependency |
 | C3 | Copy: database sink. Truncate, upsert (keys), auto-create from mapping, pre-copy script, batch size | OR15 upsert/auto-create |
 | C4 | Copy: mapping redesign (x → y rows from imported schemas, map-by-name default, type conversion settings, ƒx whole mapping, additional columns) | depends on OR10 import |

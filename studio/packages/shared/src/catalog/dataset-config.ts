@@ -564,6 +564,21 @@ export function datasetConfigSchema(kind: DatasetKind): z.ZodObject {
   return DATASET_CONFIG_SCHEMAS[kind];
 }
 
+/**
+ * #1600 OR41 C1q — why an inline source's config is not valid for its kind, as
+ * one sentence, or `null`. `.strict()`: a stray key in an inline config is a
+ * typo, and stripping it would run something other than what was authored. The
+ * ONE definition of the rule: `validateDoc` applies it at save and the executor
+ * again at dispatch, after the parameter values resolved.
+ */
+export function inlineDatasetConfigIssues(
+  kind: DatasetKind,
+  config: Record<string, unknown>,
+): string | null {
+  const parsed = datasetConfigSchema(kind).strict().safeParse(config);
+  return parsed.success ? null : formatZodIssues(parsed.error.issues);
+}
+
 /** Every kind, in the enum's own order — the form's kind picker reads this. */
 export const DATASET_KINDS: readonly DatasetKind[] = DatasetKindSchema.options;
 
@@ -679,7 +694,8 @@ export function datasetConnectionKindAdvisory(
   const expected = DATASET_CONNECTION_KINDS[kind];
   if (expected.includes(connectionKind)) return null;
   // Kinds by their display names (#1436), which is what the form's Kind and
-  // Connection pickers show; nothing calls this on the server. Phrased so no
+  // Connection pickers show. The executor reuses it for an inline source's
+  // refusal (#1600 C1q), whose message an operator reads in the run. Phrased so no
   // kind name follows an indefinite article: "Excel workbook", "Anthropic API",
   // "Agent CLI" and "OpenAI API" are vowel-initial, so "a ${kind} dataset ... a
   // ${connectionKind} connection" would misread for a third of the matrix, and

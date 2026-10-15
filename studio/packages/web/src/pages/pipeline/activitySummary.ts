@@ -24,6 +24,7 @@ import {
   SWITCH_ACTIVITY_TYPE,
   WAIT_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
+  type InlineDataset,
   type Node,
 } from '@autonomy-studio/shared';
 import { formatElapsed } from '../runs/format';
@@ -117,7 +118,8 @@ export function activitySummary(
     case COPY_ACTIVITY_TYPE: {
       const ids = node.datasetIds;
       if (ids === undefined) return null;
-      const line = arrow(dataset(ids.source, datasetName), dataset(ids.sink, datasetName));
+      const from = inlineSourceLabel(node) ?? dataset(ids.source, datasetName);
+      const line = arrow(from, dataset(ids.sink, datasetName));
       // `append` is the default and says nothing; `overwrite` deletes, and a
       // destructive step should say so on its face.
       return line !== null && c.mode === 'overwrite' ? `${line} · overwrite` : line;
@@ -132,10 +134,31 @@ export function activitySummary(
       return line !== null && after !== null ? `${line} · ${after}` : line;
     }
     case LOOKUP_ACTIVITY_TYPE:
-      return prefixed('from ', dataset(node.datasetIds?.source, datasetName));
+      return prefixed(
+        'from ',
+        inlineSourceLabel(node) ?? dataset(node.datasetIds?.source, datasetName),
+      );
     default:
       return null;
   }
+}
+
+/** #1600 C1q — an inline source on the card: its `schema.table`, or "query". */
+function inlineSourceLabel(node: Node): string | undefined {
+  const inline = node.inlineDatasets?.source;
+  if (inline === undefined) return undefined;
+  return inline.kind === 'query' ? 'query' : inlineSourceText(inline) || undefined;
+}
+
+/**
+ * #1600 C1q — an inline source's address as text: the SQL of a query, or the
+ * `schema.table` of a table. The card and the dock's Source line both read it.
+ */
+export function inlineSourceText(inline: InlineDataset): string {
+  const { table, schema, sql } = inline.config;
+  if (inline.kind === 'query') return typeof sql === 'string' ? sql : '';
+  const name = typeof table === 'string' ? table : '';
+  return typeof schema === 'string' ? `${schema}.${name}` : name;
 }
 
 /** A small mark on a card for a policy that changes how the step runs. */

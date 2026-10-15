@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { InactiveMarkAsSchema, MAX_RETRY_INTERVAL_SECONDS } from '../schemas/pipeline.js';
+import {
+  InactiveMarkAsSchema,
+  InlineDatasetsSchema,
+  MAX_RETRY_INTERVAL_SECONDS,
+} from '../schemas/pipeline.js';
 import { TriggerContextSchema } from '../schemas/trigger-context.js';
 import { DatasetAddressSchema } from '../datamove/address.js';
 import type {
@@ -882,6 +886,13 @@ export const FAILURE_CODES = {
    * and the gate refuses to guess (`datamove/address.ts`).
    */
   DATASET_SELF_COPY: 'dataset_self_copy',
+  /**
+   * #1600 OR41 C1q — a node names a saved source dataset AND an inline source
+   * (`inlineDatasets`), so which one it reads is undecidable. `validateDoc`
+   * refuses it at save; this is the dispatch-time refusal for a doc that
+   * bypassed that gate. Refused rather than letting one win.
+   */
+  DATASET_SOURCE_CONFLICT: 'dataset_source_conflict',
   /**
    * M6 slice B (#1149) — the store this dataset lives in cannot say WHERE the
    * dispatch would land, so the run refuses to make it.
@@ -2355,7 +2366,9 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
      * never persisted, and this schema has no `.parse()` call site — it types the
      * command union rather than validating a stored artifact.
      */
-    resolvedDatasetIds: z.object({ source: z.string(), sink: z.string().optional() }).optional(),
+    resolvedDatasetIds: z
+      .object({ source: z.string().optional(), sink: z.string().optional() })
+      .optional(),
     /**
      * #1144 — the node's per-end `datasetParams` after the reducer resolved each
      * value's `${}` against the run env (type-PRESERVING, exactly as
@@ -2369,6 +2382,14 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
         sink: z.record(z.string(), z.unknown()).optional(),
       })
       .optional(),
+    /**
+     * #1600 OR41 C1q — the node's `inlineDatasets` with `${}` resolved in
+     * `config.parameters` VALUES only; `sql`, `table` and `schema` are the
+     * authored literals, never evaluated (`resolveInlineDatasets`). The executor
+     * builds the source `ResolvedDataset` from THIS. Ephemeral like the fields
+     * above.
+     */
+    resolvedInlineDatasets: InlineDatasetsSchema.optional(),
   }),
   z.object({
     // Spawn a `call_pipeline` child. `childRunId` is DETERMINISTIC from

@@ -2431,6 +2431,8 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         const next: Node = { ...current, type, config: {} };
         delete next.datasetIds;
         delete next.datasetParams;
+        // #1600 C1q — an inline source is a dataset binding too; Files as-is has none.
+        delete next.inlineDatasets;
         const switched = lowerPipelineNodes([next])[0]!;
         edit((s) => ({ nodes: s.nodes.map((n) => (n.id === id ? switched : n)) }));
         // A half-picked dataset end goes with the bindings (selection state, so
@@ -2653,8 +2655,21 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         // the catalog declares the kinds), but "only a complete binding reaches
         // the doc" should be true because this function makes it true, not
         // because a later layer ignores the difference.
-        const bound =
-          source === undefined
+        // #1600 C1q — an inline source (`inlineDatasets`) IS the source end, so
+        // picking the sink beside one commits `{ sink }` alone. Without this the
+        // missing `source` read as half-bound and deleted the node's whole
+        // `datasetIds`, sink included. Picking a saved SOURCE dataset is the
+        // author choosing it over the inline one, which the write below drops.
+        // A saved source the author has picked (committed or pending) still wins:
+        // only with none does the inline source stand in, so the outcome does not
+        // depend on which end was picked first.
+        const inlineSource =
+          kind === 'datasets' && source === undefined && node?.inlineDatasets !== undefined;
+        const bound: { source?: string; sink?: string } | undefined = inlineSource
+          ? needsBothEnds && sink !== undefined
+            ? { sink }
+            : undefined
+          : source === undefined
             ? undefined
             : !needsBothEnds
               ? { source }
@@ -2676,8 +2691,11 @@ export function createCanvasStore(): StoreApi<CanvasState> {
               // checked instead of casting past it.
               if (bound === undefined) delete next[field];
               else if (kind === 'datasets') next.datasetIds = bound;
-              else if (bound.sink !== undefined)
+              else if (bound.source !== undefined && bound.sink !== undefined)
                 next.connectionIds = { source: bound.source, sink: bound.sink };
+              if (kind === 'datasets' && next.datasetIds?.source !== undefined) {
+                delete next.inlineDatasets;
+              }
               // A connections pair with no sink is unreachable — `needsBothEnds`
               // is unconditionally true for that kind — and is left as a no-op
               // rather than a cast asserting what the branch above already
@@ -2690,7 +2708,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
               // nothing on screen to explain or clear it.
               if (kind === 'datasets' && next.datasetParams !== undefined) {
                 const params = { ...next.datasetParams };
-                if (next.datasetIds === undefined) delete params.source;
+                if (next.datasetIds?.source === undefined) delete params.source;
                 if (next.datasetIds?.sink === undefined) delete params.sink;
                 if (params.source === undefined && params.sink === undefined) {
                   delete next.datasetParams;

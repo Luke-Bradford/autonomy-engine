@@ -196,6 +196,19 @@ describe('activitySummary', () => {
     expect(activitySummary(n, (id) => NAMES.get(id))).toBe('a dataset → orders table');
   });
 
+  it('#1600 C1q — names an inline source: "query", or the table with its schema', () => {
+    const names = (id: string) => NAMES.get(id);
+    const query = node(COPY_ACTIVITY_TYPE, {
+      datasetIds: { sink: 'ds_sink' },
+      inlineDatasets: { source: { kind: 'query', config: { sql: 'SELECT 1' } } },
+    });
+    expect(activitySummary(query, names)).toBe('query → orders table');
+    const table = node(LOOKUP_ACTIVITY_TYPE, {
+      inlineDatasets: { source: { kind: 'table', config: { schema: 'app', table: 'orders' } } },
+    });
+    expect(activitySummary(table, names)).toBe('from app.orders');
+  });
+
   it('names a structural call node by whether it waits', () => {
     const n = node('call_pipeline', { call: { pipelineVersionId: 'v', params: {}, wait: true } });
     expect(activitySummary(n, () => undefined)).toBe('runs a pipeline and waits');

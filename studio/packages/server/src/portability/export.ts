@@ -146,8 +146,9 @@ function stripNodeDatasetIds(node: NodeExport): NodeExport {
   // `portableEnd` (or a `?? null`) would emit `sink: null`, which the importer
   // reads as "export stripped a literal" and drops the whole pair on — losing a
   // source-only node's binding silently. `envelope.ts` states the two meanings.
-  const sink = node.datasetIds.sink;
-  const source = portableEnd(node.datasetIds.source);
+  const { source: rawSource, sink } = node.datasetIds;
+  // #1600 C1q — an ABSENT source (beside an inline source) stays absent too.
+  const source = rawSource === undefined ? undefined : portableEnd(rawSource);
   const portableSink = sink === undefined ? undefined : portableEnd(sink);
   // #1144 — a nulled end means the importer drops the pair WHOLE (`import.ts`),
   // so its `datasetParams` could never bind again. They are dropped here too,
@@ -159,7 +160,7 @@ function stripNodeDatasetIds(node: NodeExport): NodeExport {
     ...rest,
     ...(datasetParams !== undefined && pairSurvives ? { datasetParams } : {}),
     datasetIds: {
-      source,
+      ...(source === undefined ? {} : { source }),
       ...(portableSink === undefined ? {} : { sink: portableSink }),
     },
   };

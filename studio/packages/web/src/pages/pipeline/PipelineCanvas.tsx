@@ -68,6 +68,7 @@ import {
   type WorkspaceGitPullRequestReading,
   type ActivityBindingSlot,
 } from '@autonomy-studio/shared';
+import { inlineSourceText } from './activitySummary';
 import {
   clipboardCommandFor,
   arrangeDisabledReason,
@@ -3943,7 +3944,10 @@ export function NodePanel({
   if (connectionId !== undefined) boundSlots.add('connection');
   if (thisNode?.connectionIds?.source !== undefined) boundSlots.add('sourceConnection');
   if (thisNode?.connectionIds?.sink !== undefined) boundSlots.add('sinkConnection');
-  if (thisNode?.datasetIds?.source !== undefined) boundSlots.add('sourceDataset');
+  // #1600 C1q — an inline source binds the source end as a saved one does.
+  if (thisNode?.datasetIds?.source !== undefined || thisNode?.inlineDatasets !== undefined) {
+    boundSlots.add('sourceDataset');
+  }
   if (thisNode?.datasetIds?.sink !== undefined) boundSlots.add('sinkDataset');
   const refusalPaths =
     applyRefusal !== null && applyRefusal.message === error ? applyRefusal.paths : [];
@@ -4095,6 +4099,15 @@ export function NodePanel({
               ).map((d) => ({ id: d.id, label: datasetOptionLabel(d) }))}
               onPick={(id) => store.getState().setNodeBindingEnd(nodeId, 'datasets', 'source', id)}
             />
+            {/* #1600 C1q — an inline source shown read-only until the Use Table ·
+                Query block (C1q-b) edits it, so a node's source is never
+                invisible here. Picking a source dataset above replaces it. */}
+            {thisNode?.inlineDatasets !== undefined && (
+              <p className="contract-advisory" data-testid="inline-source">
+                Inline {thisNode.inlineDatasets.source.kind}{' '}
+                <code>{inlineSourceText(thisNode.inlineDatasets.source)}</code>
+              </p>
+            )}
 
             <DatasetOverrides
               store={store}

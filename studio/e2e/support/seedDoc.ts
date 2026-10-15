@@ -77,7 +77,12 @@ export interface SeedNode {
    * is checked at DISPATCH: a seed can mint a version naming a dataset and only
    * learn at fire time whether it resolves.
    */
-  datasetIds?: { source: string; sink?: string };
+  datasetIds?: { source?: string; sink?: string };
+  /** #1600 C1q — an inline Table or Query source beside (or instead of) a saved
+   * source dataset. Passed through as authored. */
+  inlineDatasets?: {
+    source: { kind: 'table' | 'query'; config: Record<string, unknown> };
+  };
   /** Per-dispatch overrides of each dataset's declared `parameters` (#1304) —
    * values may be `${}` expressions, e.g. a foreach body's per-item path. */
   datasetParams?: { source?: Record<string, unknown>; sink?: Record<string, unknown> };

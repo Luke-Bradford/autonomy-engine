@@ -337,12 +337,24 @@ function remapNodeToDb(
     // survived would leave a broken sink ref unexamined whenever the source was
     // nulled, silently dropping it instead of refusing the apply. The connection
     // pair above resolves both ends unconditionally for the same reason.
-    const source = toDbRef(datasetIds.source, datasetById, 'source dataset');
+    // #1600 C1q — the SOURCE takes the same absent-before-`toDbRef` rule: an
+    // absent source is an inline one (`inlineDatasets`, in `rest`) and keeps
+    // the sink, where a null one still drops the pair whole.
+    const rawSource = datasetIds.source;
+    const source =
+      rawSource === undefined ? undefined : toDbRef(rawSource, datasetById, 'source dataset');
     const sink = rawSink === undefined ? undefined : toDbRef(rawSink, datasetById, 'sink dataset');
-    if (source !== undefined) {
+    const sourceOk = rawSource === undefined || source !== undefined;
+    const sinkOk = rawSink === undefined || sink !== undefined;
+    if (sourceOk && sinkOk && (source !== undefined || sink !== undefined)) {
       // Only now does absent-vs-null matter, and only for the SHAPE.
-      if (rawSink === undefined) dbNode = { ...dbNode, datasetIds: { source } };
-      else if (sink !== undefined) dbNode = { ...dbNode, datasetIds: { source, sink } };
+      dbNode = {
+        ...dbNode,
+        datasetIds: {
+          ...(source === undefined ? {} : { source }),
+          ...(sink === undefined ? {} : { sink }),
+        },
+      };
     }
   }
   if (datasetParams !== undefined && dbNode.datasetIds !== undefined) {

@@ -407,6 +407,27 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     expect(pair!.source).not.toBe(source.resourceId);
   });
 
+  it('#1600 C1q — a SINK-only pair beside an inline source applies, remapped, with the inline source intact', () => {
+    const src = freshDb().db;
+    const { sink, pipe, incoming } = datasetSnapshot(src);
+    const node = incoming.pipelines[0]!.data.versions[0]!.nodes[0]!;
+    delete node.datasetIds!.source;
+    const inlineDatasets = {
+      source: { kind: 'query' as const, config: { sql: 'SELECT 1 AS id' } },
+    };
+    node.inlineDatasets = inlineDatasets;
+
+    const tgt = freshDb().db;
+    expect(applyWorkspace(tgt, 'local', incoming, 'sha1', 'main').refused).toBe(false);
+
+    const tgtSink = getDatasetByResourceId(tgt, 'local', sink.resourceId)!;
+    const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
+    const tgtNode = getLatestPipelineVersion(tgt, tgtPipe.id)!.nodes[0]!;
+    expect(tgtNode.datasetIds).toEqual({ sink: tgtSink.id });
+    expect('source' in tgtNode.datasetIds!).toBe(false);
+    expect(tgtNode.inlineDatasets).toEqual(inlineDatasets);
+  });
+
   // M12 slice 1 (#1220), found by review — `toDbRef` is a VALIDATION as much as a
   // lookup: it THROWS on a dangling literal and merely returns `undefined` on a
   // nulled ref. So the two ends must both be put through it before either end's

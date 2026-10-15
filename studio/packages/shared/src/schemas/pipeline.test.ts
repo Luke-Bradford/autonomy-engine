@@ -179,8 +179,13 @@ describe('NodeSchema', () => {
     expect(NodeSchema.parse(value)).toEqual(value);
   });
 
-  it('still rejects a SINK-only pair, and an empty-string end on either side', () => {
-    expect(() => NodeSchema.parse({ ...node, datasetIds: { sink: 'ds_sink' } })).toThrow();
+  // #1600 C1q — a SINK-only pair now PARSES, because a Copy with an inline
+  // source binds a saved sink alone. The rule that a sink by itself names no
+  // data to read moved to `validateDoc` (`validate-doc.test.ts`, inlineDatasets).
+  it('accepts a SINK-only pair (beside an inline source), and still rejects an empty-string end', () => {
+    expect(NodeSchema.parse({ ...node, datasetIds: { sink: 'ds_sink' } }).datasetIds).toEqual({
+      sink: 'ds_sink',
+    });
     expect(() =>
       NodeSchema.parse({ ...node, datasetIds: { source: '', sink: 'ds_sink' } }),
     ).toThrow();
