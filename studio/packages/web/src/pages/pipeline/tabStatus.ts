@@ -38,6 +38,17 @@ export function issueTarget(raw: string, nodeId: string): IssueTarget | undefine
   // The General tab: the run policy, (#1600 C0b) the description above it,
   // and (#1600 C0d) the user properties below it.
   if (/^(policy|description|userProperties)\b/.test(rest)) return { general: true };
+  // #1600 C1q-b — the inline database source sits on the Source dataset slot,
+  // as the saved one does: its config path (`nodes.<id>.inlineDatasets.…`) and
+  // `validateInlineDatasets`' sentences, which name it in prose.
+  if (
+    /^inlineDatasets\b/.test(rest) ||
+    /^(the inline |an inline |a source dataset and an inline source|datasetIds names no source)/.test(
+      rest,
+    )
+  ) {
+    return { slot: 'sourceDataset' };
+  }
   const paired = /^(connectionIds|datasetIds|datasetParams)\.(source|sink)\b/.exec(rest);
   if (paired) {
     const side = paired[2] === 'source' ? 'source' : 'sink';
