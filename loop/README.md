@@ -27,6 +27,7 @@ It lives at the repo ROOT, not under `studio/`, for two reasons: it outlives the
 | `test_install_studio_server.sh` | Sources the real installer; asserts the plist it renders and the staleness/drift predicates. No launchd, no network |
 | `com.autonomy.studio-build-*.plist` | The launchd agents |
 | `com.autonomy.studio-server.plist.tmpl` | Template for the supervised studio server unit |
+| `com.autonomy.studio-server-refresh.plist` | Every 30 min: `install_studio_server.sh --update --if-idle`, which keeps the service on origin/main while it is idle |
 
 ## The supervised studio server (#765 Defect 2)
 
@@ -45,6 +46,7 @@ loop/install_studio_server.sh --dry-run    # print the plist it would install; t
 loop/install_studio_server.sh --status     # fetch, then report drift + unit state; changes nothing
 loop/install_studio_server.sh --update     # refresh to origin/main IF STALE (see below)
 loop/install_studio_server.sh --update --force   # rebuild even if the stamp says current
+loop/install_studio_server.sh --update --if-idle # unattended: only while no run is in flight or due
 loop/install_studio_server.sh --uninstall  # remove the unit; KEEPS the state dir (it holds a DB)
 ```
 
@@ -68,6 +70,17 @@ interlock keyed on "a fire is running" would have skipped nine consecutive slots
 stays a human act; **#792 phase 2** owns making that act a click.
 
 So the job here is to make the human act cheap and the drift visible.
+
+**Amended 2026-10-15 (operator): one unattended path.** *"Something to keep it fresh would be
+good, just when I want to check in from time to time to see how it is looking."*
+`com.autonomy.studio-server-refresh.plist` runs `--update --if-idle` every 30 minutes. `--if-idle`
+rebuilds and bounces only while the service has no `pending`/`queued`/`running` run and no trigger
+due within 15 minutes. An unreadable answer counts as **not** idle, so the tick skips and the next
+one retries. The interlock is keyed on the service's own work, not on loop fires. That is what
+dissolves the starvation measured above: loop fires run no pipelines on this service, and the
+demo's scheduled runs take minutes. `waiting` runs do not block it, because a durable park
+survives a restart by design and can last days. A hand-run `--update` is unchanged and still
+bounces immediately. Log: `~/.autonomy-studio/service/logs/refresh.log`.
 
 **`--update` is a no-op when there is nothing to do**, so it is safe to run any time instead of being
 a minutes-long rebuild-and-bounce every time. Four properties, each asserted by the suite:

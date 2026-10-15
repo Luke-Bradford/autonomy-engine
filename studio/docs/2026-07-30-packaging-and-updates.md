@@ -80,7 +80,7 @@ Remaining workspace-git work (G8 secret-readiness reconcile, G10 non-GitHub host
 | RBAC | Same seam; roles attach to the principal. |
 | Windows / Linux installers | The bundle layout and update protocol below are OS-agnostic; only the installer and service manager differ. |
 | Code signing / notarisation | Needed to distribute to strangers, not to install on a gated machine. Add when that changes. |
-| Scheduled auto-update | Explicitly rejected — see "Why on-demand". |
+| Scheduled auto-update | Explicitly rejected — see "Why on-demand". **Exception (operator, 2026-10-15):** the operator's own local demo service (`loop/`'s supervised 8788 unit) refreshes every 30 min via `install_studio_server.sh --update --if-idle`, interlocked on the service's own runs and imminent trigger fires. This doc's rule still governs studio installs generally. |
 | Single-binary distribution | Deferred by the Bun spike: `better-sqlite3` is a native addon and escaping it forks dev/prod. Bundling a Node runtime is therefore assumed throughout. |
 
 ## Why on-demand, not scheduled

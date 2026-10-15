@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  studio-server REFRESH LaunchAgent. Every 30 minutes it runs
+  `install_studio_server.sh --update --if-idle`, so the supervised studio
+  service on 8788 tracks origin/main without anyone running --update by hand.
+
+  OPERATOR (2026-10-15): "something to keep it fresh would be good, just when I
+  want to check in from time to time to see how it is looking".
+
+  Each tick is cheap when there is nothing to do: --update is a fetch and a
+  stamp comparison while the service is current. When it is stale, --if-idle
+  rebuilds and bounces ONLY while the service has no pending/queued/running run
+  and no trigger due within 15 minutes; otherwise it logs why and the next tick
+  retries. The installer's lock serialises a tick with a hand-run --update.
+  See install_studio_server.sh `service_idle` for the rules and why.
+
+  Install: cp loop/com.autonomy.studio-server-refresh.plist ~/Library/LaunchAgents/
+           launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.autonomy.studio-server-refresh.plist
+  Stop:    launchctl bootout gui/$(id -u)/com.autonomy.studio-server-refresh
+  Log:     ~/.autonomy-studio/service/logs/refresh.log
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.autonomy.studio-server-refresh</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/lukebradford/Dev/studio-loop/install_studio_server.sh</string>
+    <string>--update</string>
+    <string>--if-idle</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>1800</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/lukebradford/.autonomy-studio/service/logs/refresh.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/lukebradford/.autonomy-studio/service/logs/refresh.log</string>
+</dict>
+</plist>

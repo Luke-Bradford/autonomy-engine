@@ -46,6 +46,14 @@
 # over 07-26..07-30 would have fired at all. Applying an update stays a human
 # act, and #792 phase 2 owns making that act a click.
 #
+# AMENDED 2026-10-15 (operator): "something to keep it fresh would be good, just
+# when I want to check in from time to time to see how it is looking". So ONE
+# unattended path now exists: `--update --if-idle`, run every 30 minutes by
+# `com.autonomy.studio-server-refresh.plist`. Its interlock is keyed on the
+# SERVICE'S OWN runs and imminent trigger fires (`service_idle`), not on loop
+# fires, which is what dissolves the starvation measured above: loop fires run
+# no pipelines here, and the demo's scheduled runs take minutes.
+#
 # So the job here is to make the human act CHEAP and the drift VISIBLE:
 #
 #   * `--update` is a no-op when there is nothing to do, so it is safe to run
@@ -64,6 +72,7 @@
 #   install_studio_server.sh [--port N] [--state-dir P] [--repo-src P] [--node P]
 #   install_studio_server.sh --update      # refresh to origin/main IF STALE, rebuild, restart
 #   install_studio_server.sh --update --force   # rebuild even if the stamp says current
+#   install_studio_server.sh --update --if-idle # unattended: only while no run is in flight or due
 #   install_studio_server.sh --status      # fetch, then report drift + unit state; change nothing
 #   install_studio_server.sh --uninstall   # remove the unit (KEEPS the state dir)
 #   install_studio_server.sh --dry-run     # print the plist that would be installed; touch nothing
@@ -127,6 +136,7 @@ configure() {
   NODE_BIN=""
   DRY_RUN=0
   FORCE=0
+  IF_IDLE=0
   FETCHED=0
   MODE="install"
   while [ "$#" -gt 0 ]; do
@@ -149,12 +159,21 @@ configure() {
       # The escape hatch from the staleness check, for a human who wants the
       # rebuild anyway.
       --force)     FORCE=1; shift ;;
+      # The UNATTENDED form of `--update` (the refresh LaunchAgent runs it):
+      # rebuild and bounce only while the service is idle. See `service_idle`.
+      --if-idle)   IF_IDLE=1; shift ;;
       --status)    MODE="status"; shift ;;
       --uninstall) MODE="uninstall"; shift ;;
       -h|--help)   MODE="help"; shift ;;
       *)           die "unknown argument: $1"; return 1 ;;
     esac
   done
+
+  # Meaningless anywhere else, and silently ignoring it would let a typo'd
+  # unattended install bounce the service mid-run.
+  if [ "$IF_IDLE" -eq 1 ] && [ "$MODE" != "update" ]; then
+    die "--if-idle only applies to --update"; return 1
+  fi
 
   # Absolute, without `cd` (STATE_DIR need not exist yet). An EMPTY value is
   # left alone rather than turned into "$PWD/", so validate_install_target can
@@ -375,6 +394,66 @@ server_healthy() {
     [ "$sh_i" -lt 3 ] && sleep 2
   done
   return 1
+}
+
+# --- service_idle: may an UNATTENDED refresh bounce the service right now?
+#
+# Operator, 2026-10-15: keep the demo service fresh on its own, so a check-in
+# shows current main without anyone running `--update`. That reverses the
+# "applying an update stays a human act" rule in the header, and only for
+# `--update --if-idle`. The objection recorded there was an interlock keyed on
+# "a FIRE is running", which the driver log showed would starve (a 74.7h driver
+# run). This one is keyed on the SERVICE'S OWN WORK instead: a loop fire never
+# runs pipelines on this service, while the operator's scheduled demo runs do,
+# and those last minutes, not days.
+#
+# Returns 0 = idle, 1 = busy, 2 = UNKNOWN. Only 0 lets a refresh proceed, so an
+# unreadable answer skips this tick and the next one retries -- the fail-safe
+# direction, because an unnecessary skip costs half an hour of staleness while a
+# wrong "idle" kills a run mid-flight. Sets IDLE_REASON for the log.
+#
+# Busy = a run that is `pending`, `queued` or `running`, or a trigger due within
+# IDLE_HORIZON_S (which covers the minutes of build + bounce). `waiting` is
+# deliberately NOT busy: it is a durable park built to survive a restart, and
+# it can last days, so counting it would starve the refresh indefinitely.
+#
+# A server that does not answer is idle: nothing runs in it, and the rebuild is
+# the repair. `server_healthy` retries, so a blip is not mistaken for dead.
+IDLE_BUSY_STATUSES="pending queued running"
+IDLE_HORIZON_S="${IDLE_HORIZON_S:-900}"
+service_idle() {
+  IDLE_REASON=""
+  if ! server_healthy; then
+    IDLE_REASON="the service does not answer, so nothing is running in it"
+    return 0
+  fi
+  for si_status in $IDLE_BUSY_STATUSES; do
+    si_body="$(curl -fsS --max-time 5 "http://127.0.0.1:$PORT/api/runs?status=$si_status" 2>/dev/null)" || {
+      IDLE_REASON="could not read $si_status runs"; return 2; }
+    si_n="$(printf '%s' "$si_body" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["items"]))' 2>/dev/null)"
+    case "$si_n" in
+      '' | *[!0-9]*) IDLE_REASON="unreadable answer for $si_status runs"; return 2 ;;
+    esac
+    if [ "$si_n" -gt 0 ]; then
+      IDLE_REASON="a $si_status run is in flight"; return 1
+    fi
+  done
+  si_body="$(curl -fsS --max-time 5 "http://127.0.0.1:$PORT/api/triggers/next-fires" 2>/dev/null)" || {
+    IDLE_REASON="could not read upcoming trigger fires"; return 2; }
+  # Seconds until the soonest fire, `none` when nothing is scheduled. A fire
+  # already overdue is negative, which is <= the horizon, so it reads busy.
+  si_in="$(printf '%s' "$si_body" | python3 -c '
+import json, sys, time
+fires = [f["at"] for f in json.load(sys.stdin)]
+print(int(min(fires) / 1000 - time.time()) if fires else "none")' 2>/dev/null)"
+  case "$si_in" in
+    none) return 0 ;;
+    '' | *[!0-9-]*) IDLE_REASON="unreadable answer for upcoming trigger fires"; return 2 ;;
+  esac
+  if [ "$si_in" -le "$IDLE_HORIZON_S" ]; then
+    IDLE_REASON="a trigger fires in ${si_in}s (within ${IDLE_HORIZON_S}s)"; return 1
+  fi
+  return 0
 }
 
 # --- report_status: the drift surface (#773 asked for the running commit to be
@@ -700,11 +779,11 @@ main() {
 # path and no `return` can leak past it.
 main_locked() {
   # `--update` asks the one question a hand-run install does not: is there
-  # anything to do. Nothing here defers to a running fire -- there is no
-  # interlock in this file, deliberately (see the header: an interlocked
-  # scheduled updater is what the approved packaging design rejects, and what
-  # the driver log shows would starve). An update is a human act, so the human
-  # picks the moment.
+  # anything to do. Nothing here defers to a running loop FIRE -- that
+  # interlock is what the approved packaging design rejects, and what the
+  # driver log shows would starve. A hand-run update is a human act, so the
+  # human picks the moment; the unattended `--if-idle` form defers to the
+  # service's own runs instead (see `service_idle`).
   if [ "$MODE" = "update" ] && [ "$FORCE" -eq 0 ]; then
     # Only when there is a clone to fetch INTO. `git -C <missing dir> fetch`
     # exits 128, which would have made `--update` die on a wiped or absent tree
@@ -722,6 +801,17 @@ main_locked() {
       return 0
     fi
     say "stale: built $(built_sha) vs origin/main $(origin_sha)"
+  fi
+
+  # Unattended refresh only (`--if-idle`): never bounce the service under a run
+  # or into an imminent trigger. Outside the FORCE gate on purpose -- `--force`
+  # overrides the staleness check, not the safety of the moment.
+  if [ "$IF_IDLE" -eq 1 ]; then
+    service_idle
+    case "$?" in
+      0) : ;;
+      *) say "not refreshing now: $IDLE_REASON. The next tick retries."; return 0 ;;
+    esac
   fi
 
   resolve_node || return 1
