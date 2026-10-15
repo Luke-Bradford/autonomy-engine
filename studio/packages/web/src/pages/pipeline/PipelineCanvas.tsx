@@ -68,7 +68,7 @@ import {
   type WorkspaceGitPullRequestReading,
   type ActivityBindingSlot,
 } from '@autonomy-studio/shared';
-import { inlineSourceText } from './activitySummary';
+import { InlineSourceEditor } from './InlineSourceEditor';
 import {
   clipboardCommandFor,
   arrangeDisabledReason,
@@ -4079,9 +4079,10 @@ export function NodePanel({
             )}
           </Fragment>
         );
-      case 'sourceDataset':
-        return datasetKinds === undefined ? null : (
-          <Fragment key={slot}>
+      case 'sourceDataset': {
+        if (datasetKinds === undefined) return null;
+        const saved = (
+          <>
             {/* #1139 — the dataset ADDRESSES within those stores. Narrowed by the
                 connection bound to the SAME end as well as by kind: slice 4a
                 refuses a node/dataset connection disagreement at dispatch
@@ -4099,16 +4100,6 @@ export function NodePanel({
               ).map((d) => ({ id: d.id, label: datasetOptionLabel(d) }))}
               onPick={(id) => store.getState().setNodeBindingEnd(nodeId, 'datasets', 'source', id)}
             />
-            {/* #1600 C1q — an inline source shown read-only until the Use Table ·
-                Query block (C1q-b) edits it, so a node's source is never
-                invisible here. Picking a source dataset above replaces it. */}
-            {thisNode?.inlineDatasets !== undefined && (
-              <p className="contract-advisory" data-testid="inline-source">
-                Inline {thisNode.inlineDatasets.source.kind}{' '}
-                <code>{inlineSourceText(thisNode.inlineDatasets.source)}</code>
-              </p>
-            )}
-
             <DatasetOverrides
               store={store}
               node={thisNode}
@@ -4116,8 +4107,26 @@ export function NodePanel({
               datasets={datasets}
               picker={picker}
             />
+          </>
+        );
+        return (
+          <Fragment key={slot}>
+            {/* #1600 C1q-b — a database source's Use Saved dataset · Table · Query. */}
+            {thisNode === undefined ? (
+              saved
+            ) : (
+              <InlineSourceEditor
+                store={store}
+                node={thisNode}
+                sourceKinds={datasetKinds.source}
+                connectionKind={connections.find((c) => c.id === sourceConnectionId)?.kind}
+                picker={picker}
+                saved={saved}
+              />
+            )}
           </Fragment>
         );
+      }
       case 'sinkDataset':
         return datasetKinds?.sink === undefined ? null : (
           <Fragment key={slot}>
