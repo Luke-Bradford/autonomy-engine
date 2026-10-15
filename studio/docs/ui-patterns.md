@@ -336,8 +336,9 @@ message.
   properties*), directly under the picker. Every setting the resource declares overridable is a
   row, blank until typed into, with the resource's own value as its placeholder. Clearing a box
   removes its override, so there is no Add control, and an empty-string override cannot be authored
-  there. A stored key the resource does not declare is a row too, flagged, and only its ✕ removes it. A resource that declares
-  nothing shows no table at all, as ADF shows no Dataset properties for an unparameterised dataset.
+  there. A stored key the resource does not declare is a row too, flagged, and only its ✕ removes
+  it. A resource that declares nothing shows no table at all, as ADF shows no Dataset properties
+  for an unparameterised dataset.
 - What still names the KEY: a top-level field's expression picker buttons ("Insert reference into
   url"). The key is what a `${}` reference and a server message cite. A row cell's buttons follow
   the cell's name ("Insert reference into column mapping row 1 expression").
@@ -818,9 +819,9 @@ row heights), not the layout.
 - **One row markup.** Every field row is a `LabelledControl` (`lib/LabelledControl.tsx`), inputs
   included, so the layout has one shape to place. `SecretInput` is one too: its input and Show sit
   together in the control column. A checkbox stays a wrapping label (box, 8px, words) and sits in the
-  control column, as do a sibling hint and a `FieldError`. A row table's cells (a bound end's overrides
-  included) and a dock fieldset of choices are not rows: they are too narrow for a label column, or their legend
-  is their label. The trigger form's builders (recurrence, window, binding) are fieldsets of fields,
+  control column, as do a sibling hint and a `FieldError`. A row table's cells (a bound end's
+  overrides included) and a dock fieldset of choices are not rows: they are too narrow for a label
+  column, or their legend is their label. The trigger form's builders (recurrence, window, binding) are fieldsets of fields,
   so their fields are rows.
 - **Rows are 8px apart**, and required is the `*` after the label (`RequiredMark`), never a word in
   the hint.
