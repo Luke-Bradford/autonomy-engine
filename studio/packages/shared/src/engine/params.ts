@@ -60,6 +60,8 @@ import {
   lowerOutputSchema,
 } from '../catalog/llm-config.js';
 import { copyMappingShapeIssues } from '../catalog/copy-config.js';
+import { datasetConfigSchema } from '../catalog/dataset-config.js';
+import { formatZodIssues } from '../schemas/zod-issues.js';
 import { SecretRefSchema, isSecretRef } from '../schemas/secret-ref.js';
 import type { ContainerKind, Output } from '../schemas/pipeline.js';
 import type { EvalIn, FnSpec, SigType } from './functions.js';
@@ -1711,6 +1713,26 @@ export function validateRefs(
         scanSecretSinks(path, binding, [], errors);
       }
     }
+    // #1600 OR41 C1q — an inline source's parameter VALUES are resolved in the
+    // same env (`resolveInlineDatasets`), so they are scanned here. Only
+    // `parameters` is ever evaluated; `validateDoc` refuses a `${` in `sql`. The
+    // secret refusal covers the WHOLE config, since none of it is a secret sink.
+    if (node.inlineDatasets !== undefined) {
+      const path = `nodes.${node.id}.inlineDatasets.source.config`;
+      const { config } = node.inlineDatasets.source;
+      if (config['parameters'] !== undefined) {
+        scan(
+          `${path}.parameters`,
+          config['parameters'],
+          scope,
+          errors,
+          0,
+          undefined,
+          foreachChildIds.has(node.id),
+        );
+      }
+      scanSecretSinks(path, config, [], errors);
+    }
     // #952 — a call node's `call` refs. `call` sits BESIDE `config`, not inside
     // it (`schemas/pipeline.ts`), so neither the config scan above nor
     // `scanSecretSinks` below has ever reached it: a `${}` target id or param
@@ -3066,14 +3088,21 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
           `node.${node.id}: datasetParams need datasetIds to bind against ` +
             '(without a dataset the bindings are silently inert) — bind a dataset or remove them',
         );
+      } else if (node.datasetParams.source !== undefined && node.datasetIds.source === undefined) {
+        // #1600 C1q — `source` became optional beside an inline source, whose
+        // values go in its own `parameters`, so this end can dangle too.
+        errors.push(
+          `node.${node.id}: datasetParams.source needs a source dataset to bind against ` +
+            "(an inline source takes its values in its own parameters) — move them there or remove them",
+        );
       } else if (node.datasetParams.sink !== undefined && node.datasetIds.sink === undefined) {
-        // `source` is required on `datasetIds`, so only the sink end can dangle.
         errors.push(
           `node.${node.id}: datasetParams.sink needs a sink dataset to bind against ` +
             '(without one the bindings are silently inert) — bind a sink dataset or remove them',
         );
       }
     }
+    validateInlineDatasets(node, errors);
     // #796 item 2 — a `wait: false` call never receives its child's result, so
     // declared outputs could never be produced. Same idiom as above: refused,
     // not dropped. `outputsByIdOf` is the other half — it gives such a node an
@@ -3539,6 +3568,55 @@ function validateIfCondition(node: Node, errors: string[]): void {
  * `catalog/dataset-config.ts`'s `SQL_IDENTIFIER_RE` makes a `${}` table or schema
  * name unparseable as a `table`/`query` dataset config in the first place.
  */
+/**
+ * #1600 OR41 C1q — the save rules for `Node.inlineDatasets` (catalogue spec
+ * §4.1, Source "Database" row). Whether the node's ACTIVITY accepts the kind,
+ * and whether its bound connection can hold it, stay at DISPATCH, `datasetIds`'
+ * posture: the connection is a mutable row and may be a `${}` ref.
+ */
+function validateInlineDatasets(node: Node, errors: string[]): void {
+  const inline = node.inlineDatasets?.source;
+  if (inline === undefined) {
+    // `datasetIds.source` is optional only so an inline source can stand in
+    // for it; a sink-only address still names no data to read.
+    if (node.datasetIds !== undefined && node.datasetIds.source === undefined) {
+      errors.push(
+        `node.${node.id}: datasetIds names no source dataset and the node has no inline source ` +
+          '(a sink alone names no data to read) — bind a source dataset or an inline source',
+      );
+    }
+    return;
+  }
+  if (node.call !== undefined) {
+    errors.push(
+      `node.${node.id}: inlineDatasets have no effect on a call node ` +
+        "(its dispatch and refs are the child pipeline's) — remove them",
+    );
+    return;
+  }
+  if (node.datasetIds?.source !== undefined) {
+    errors.push(
+      `node.${node.id}: a source dataset and an inline source both name the source — keep one`,
+    );
+  }
+  // `.strict()`: a stray key in an inline config is a typo, and stripping it
+  // would run something other than what was authored.
+  const parsed = datasetConfigSchema(inline.kind).strict().safeParse(inline.config);
+  if (!parsed.success) {
+    errors.push(
+      `node.${node.id}: the inline ${inline.kind} source is not valid: ` +
+        formatZodIssues(parsed.error.issues),
+    );
+  }
+  const sql = inline.config['sql'];
+  if (inline.kind === 'query' && typeof sql === 'string' && sql.includes('${')) {
+    errors.push(
+      `node.${node.id}: an inline query's SQL stays literal, so '\${' in it is never evaluated ` +
+        '— write :name in the SQL and bind the value in its parameters',
+    );
+  }
+}
+
 function validateCopyMappingIdentifiers(node: Node, errors: string[]): void {
   const rows = node.config['mapping'];
   if (!Array.isArray(rows)) return;

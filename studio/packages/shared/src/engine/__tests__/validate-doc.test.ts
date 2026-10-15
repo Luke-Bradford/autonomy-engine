@@ -1741,3 +1741,113 @@ describe('#796 item 2 — a detached call (wait: false) returns nothing', () => 
     ).toEqual([]);
   });
 });
+
+// ===========================================================================
+// inlineDatasets — an inline Table or Query source's save rules (#1600 C1q)
+// ===========================================================================
+
+describe('validateDoc — inlineDatasets (#1600 OR41 C1q)', () => {
+  const query = (config: Record<string, unknown>): Partial<Node> => ({
+    inlineDatasets: { source: { kind: 'query', config } },
+  });
+
+  it('accepts an inline query whose parameter VALUES are ${} expressions, beside a sink dataset', () => {
+    const n = node(
+      'n',
+      {},
+      {
+        ...query({
+          sql: 'SELECT * FROM orders WHERE modified_at > :wm',
+          parameters: { wm: '${params.wm}' },
+        }),
+        datasetIds: { sink: 'ds_sink' },
+      },
+    );
+    const params: Param[] = [{ name: 'wm', type: 'string', required: true }];
+    const d = doc([n], [], [], params);
+    expect(validateDoc(d)).toEqual([]);
+    expect(validateRefs(d)).toEqual([]);
+  });
+
+  it('accepts an inline table, and refuses an identifier that is an expression', () => {
+    const ok = node(
+      't',
+      {},
+      { inlineDatasets: { source: { kind: 'table', config: { table: 'orders' } } } },
+    );
+    expect(validateDoc(doc([ok]))).toEqual([]);
+    const bad = node(
+      'b',
+      {},
+      {
+        inlineDatasets: { source: { kind: 'table', config: { table: '${params.t}' } } },
+      },
+    );
+    expect(validateDoc(doc([bad])).join(' ')).toMatch(
+      /node\.b: the inline table source is not valid/,
+    );
+  });
+
+  it("refuses '${' in the SQL text — the statement stays literal", () => {
+    const d = doc([node('n', {}, query({ sql: "SELECT * FROM t WHERE a = '${params.a}'" }))]);
+    expect(validateDoc(d).join(' ')).toMatch(/node\.n: an inline query's SQL stays literal/);
+  });
+
+  it('refuses an unknown config key rather than stripping it', () => {
+    const d = doc([node('n', {}, query({ sql: 'SELECT 1', paramters: { a: 1 } }))]);
+    expect(validateDoc(d).join(' ')).toMatch(/node\.n: the inline query source is not valid/);
+  });
+
+  it('refuses a source dataset AND an inline source — two sources', () => {
+    const d = doc([
+      node('n', {}, { ...query({ sql: 'SELECT 1' }), datasetIds: { source: 'ds_src' } }),
+    ]);
+    expect(validateDoc(d).join(' ')).toMatch(/node\.n: a source dataset and an inline source/);
+  });
+
+  it('refuses a sink-only datasetIds with no inline source — it names no data to read', () => {
+    const d = doc([node('n', {}, { datasetIds: { sink: 'ds_sink' } })]);
+    expect(validateDoc(d).join(' ')).toMatch(/node\.n: datasetIds names no source dataset/);
+  });
+
+  it('refuses datasetParams.source beside an inline source — its values go in its own parameters', () => {
+    const d = doc([
+      node(
+        'n',
+        {},
+        {
+          ...query({ sql: 'SELECT 1' }),
+          datasetIds: { sink: 'ds_sink' },
+          datasetParams: { source: { parameters: { a: 1 } } },
+        },
+      ),
+    ]);
+    expect(validateDoc(d).join(' ')).toMatch(
+      /node\.n: datasetParams\.source needs a source dataset/,
+    );
+  });
+
+  it('refuses an inline source on a call node', () => {
+    const c = { ...callNode('c', 'ver_1'), ...query({ sql: 'SELECT 1' }) };
+    expect(validateDoc(doc([c])).join(' ')).toMatch(
+      /node\.c: inlineDatasets have no effect on a call node/,
+    );
+  });
+
+  it('scans parameter refs (an unknown node is refused) and refuses an authored secret anywhere', () => {
+    const unknownRef = doc([
+      node(
+        'n',
+        {},
+        query({ sql: 'SELECT 1 WHERE :a', parameters: { a: '${nodes.ghost.output.x}' } }),
+      ),
+    ]);
+    expect(validateRefs(unknownRef).join(' ')).toMatch(
+      /inlineDatasets\.source\.config\.parameters/,
+    );
+    const secret = doc([
+      node('n', {}, query({ sql: 'SELECT 1', parameters: { a: { $secret: 'conn_1' } } })),
+    ]);
+    expect(validateRefs(secret).join(' ')).toMatch(/inlineDatasets\.source\.config/);
+  });
+});

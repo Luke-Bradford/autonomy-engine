@@ -1786,3 +1786,43 @@ describe('activity.warned is inert (#750)', () => {
     expect(eng.reduce(s, EngineEventSchema.parse(event)).state).toEqual(before);
   });
 });
+
+// ===========================================================================
+// #1600 OR41 C1q — an inline source resolves its parameter VALUES only
+// ===========================================================================
+
+describe('#1600 C1q — inlineDatasets resolution on dispatchNode', () => {
+  it('resolves parameter values TYPE-PRESERVINGLY and passes the SQL through verbatim', () => {
+    const sql = "SELECT * FROM t WHERE a > :wm AND note = '${params.wm}'";
+    const n: Node = {
+      ...node('a'),
+      inlineDatasets: {
+        source: {
+          kind: 'query',
+          config: { sql, parameters: { wm: '${params.wm}', tag: 'x-${params.t}' } },
+        },
+      },
+    };
+    const eng = engine([n]);
+    const r = eng.reduce(eng.seedState(), started({ wm: 41, t: 'q' }));
+    expect(dispatchCmd(r.commands, 'a').resolvedInlineDatasets).toEqual({
+      source: { kind: 'query', config: { sql, parameters: { wm: 41, tag: 'x-q' } } },
+    });
+  });
+
+  it('passes an inline table through untouched, and leaves the field undefined when absent', () => {
+    const table = { kind: 'table' as const, config: { table: 'orders' } };
+    const eng = engine([{ ...node('a'), inlineDatasets: { source: table } }]);
+    const r = eng.reduce(eng.seedState(), started());
+    expect(dispatchCmd(r.commands, 'a').resolvedInlineDatasets).toEqual({ source: table });
+    const bare = engine([node('a')]);
+    const r2 = bare.reduce(bare.seedState(), started());
+    expect(dispatchCmd(r2.commands, 'a').resolvedInlineDatasets).toBeUndefined();
+  });
+
+  it('omits an absent datasetIds.source rather than stringifying it', () => {
+    const eng = engine([{ ...node('a'), datasetIds: { sink: 'ds_b' } }]);
+    const r = eng.reduce(eng.seedState(), started());
+    expect(dispatchCmd(r.commands, 'a').resolvedDatasetIds).toEqual({ sink: 'ds_b' });
+  });
+});

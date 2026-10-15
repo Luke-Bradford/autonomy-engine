@@ -522,7 +522,12 @@
 // the editor saves as `copy_files` carrying them. A pre-C1b build's adapter
 // never yields them, so it would fail such a node "missing declared output";
 // the doc must say it needs this build.
-export const CATALOG_VERSION = 37;
+// BUMP 37→38 for #1600 OR41 C1q: `NodeSchema.inlineDatasets` (a Table or Query
+// source declared on the node) and `datasetIds.source` made optional beside it.
+// A pre-C1q build strips `inlineDatasets` and dispatches such a copy or lookup
+// with no source at all, which fails DATASET_MISSING at best; the doc must say
+// it needs this build.
+export const CATALOG_VERSION = 38;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the
