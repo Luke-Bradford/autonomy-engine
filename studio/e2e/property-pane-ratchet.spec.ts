@@ -83,6 +83,8 @@ interface TabRead {
   tabHelp: number;
   panelHelp: number;
   offSize: string[];
+  /** What the visible controls hold: a value, and a choice's option text too. */
+  values: string[];
 }
 
 /** One read of the open tab: what is measured, from the rendered page. */
@@ -140,11 +142,18 @@ function readTab(page: Page): Promise<TabRead> {
     const ARROW = 20;
     const ctx = document.createElement('canvas').getContext('2d')!;
     const offSize: string[] = [];
+    const values: string[] = [];
     const controls = panel.querySelectorAll<HTMLElement>(
       'select, textarea, input:not([type="checkbox"], [type="radio"], [type="hidden"]), .connection-picker__combobox',
     );
     for (const control of controls) {
-      if (!visible(control) || control.closest('.row-table, [role="tablist"]') !== null) continue;
+      if (!visible(control)) continue;
+      if (control instanceof HTMLSelectElement) {
+        values.push(control.value, control.selectedOptions[0]?.text ?? '');
+      } else if (control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement) {
+        values.push(control.value);
+      }
+      if (control.closest('.row-table, [role="tablist"]') !== null) continue;
       if (control.matches('.connection-picker__combobox input')) continue;
       const box = control.getBoundingClientRect();
       const row = (
@@ -190,6 +199,7 @@ function readTab(page: Page): Promise<TabRead> {
     }
     return {
       offSize,
+      values,
       wideButtons,
       headHelp,
       tabProse: prose.filter(inTab).map(text),
@@ -206,6 +216,7 @@ async function readPane(page: Page, tablist: string, name: string, misses: strin
   const count = await tabs.count();
   expect(count, `${name} has property tabs`).toBeGreaterThan(0);
   const prose: string[] = [];
+  const values = new Set<string>();
   let help = 0;
   for (let i = 0; i < count; i += 1) {
     const tab = tabs.nth(i);
@@ -227,13 +238,14 @@ async function readPane(page: Page, tablist: string, name: string, misses: strin
     for (const head of read.headHelp) misses.push(`${name} › ${label} › ? on heading: ${head}`);
     for (const off of read.offSize) misses.push(`${name} › ${label} › off size: ${off}`);
     prose.push(...read.tabProse.map((line) => `${label}: ${line}`));
+    for (const value of read.values) values.add(value);
     help += read.tabHelp;
     if (i === 0) {
       prose.push(...read.panelProse.map((line) => `panel: ${line}`));
       help += read.panelHelp;
     }
   }
-  return { prose, help };
+  return { prose, help, values };
 }
 
 type Measured = Record<string, { prose: number; help: number; lines: string[] }>;
@@ -244,7 +256,7 @@ function judge(measured: Measured, limits: Record<string, number>, misses: strin
     if (got.prose > 0) misses.push(`${name}: prose: ${got.lines.join(' | ')}`);
     const limit = limits[name];
     if (limit === undefined) {
-      misses.push(`${name}: not seeded — ? ${got.help}`);
+      misses.push(`${name}: no ? limit — ? ${got.help}`);
       continue;
     }
     if (got.help > limit) misses.push(`${name}: ? ${got.help} > ${limit}`);
@@ -302,13 +314,14 @@ test('every catalog activity and container: no wide button, no `?` on a heading,
 /**
  * The seeded walk's limits: the same `?` ratchet, read on a pane whose config
  * is FILLED — every override row, table row and choice-gated field showing, so
- * a field that only renders once its neighbour is set is measured too. Seeded
- * from the first walk; lower only. A key with a ` (…)` suffix is a second state
+ * a field that only renders once its neighbour is set is measured too. Each is
+ * this walk's own measured count; lower only. A key with a ` (…)` suffix is a second state
  * of that toolbox entry (the files-as-is copy, structured output, inactive).
  */
 const SEEDED_HELP_LIMITS: Record<string, number> = {
   'Copy data': 9,
   'Copy data (files as-is)': 19,
+  'Copy data (files from a folder)': 16,
   'Copy file': 8,
   'Delete file': 7,
   'HTTP request': 9,
@@ -334,6 +347,42 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   Until: 5,
   Stage: 2,
   'Stage (inactive)': 3,
+};
+
+/**
+ * Per seed, values its pane must hold in some control once it renders, so a
+ * seed whose fields never draw (a gate, a dropped key, the wrong state) fails
+ * rather than quietly shrinking what is measured.
+ */
+const SHOWS: Record<string, string[]> = {
+  'Copy data': ['orders_2026.csv', '${run.runId}', 'customer_name', 'E2E-1'],
+  'Copy data (files as-is)': ['files.txt', '/tmp/e2e/done', 'merged.txt', 'E2E-1'],
+  'Copy data (files from a folder)': ['*.csv', '/tmp/e2e/in'],
+  'Copy file': ['/tmp/e2e/b.txt', '2048', 'E2E-1'],
+  'Delete file': ['/tmp/e2e/old.txt', '2048', 'E2E-1'],
+  'List directory': ['/tmp/e2e', '2048', 'E2E-1'],
+  'Move file': ['/tmp/e2e/b/a.txt', '2048', 'E2E-1'],
+  'Read file': ['/tmp/e2e/in.txt', '2048', 'E2E-1'],
+  'Write file': ['/tmp/e2e/out.txt', '2048', 'E2E-1'],
+  'HTTP request': ['/v1/orders', 'X-Trace', '15000', 'E2E-1'],
+  'Lookup rows': ['orders_2026.csv', '4096', 'E2E-1'],
+  'Agent task': ['Summarise the repo', '/tmp/e2e', 'E2E-1'],
+  'LLM call': ['Price of SKU-1?', 'lookup_price', 'claude-haiku-4-5', 'E2E-1'],
+  'LLM call (structured)': ['Classify'],
+  'Append variable': ['rows', 'x'],
+  'Set variable': ['count', '5'],
+  'Execute pipeline': ['eu'],
+  Fail: ['Stopped: ${run.runId}'],
+  Filter: ['${greater(item, 1)}'],
+  'If condition': ['${equals(1, 1)}'],
+  Switch: ['gold\nsilver'],
+  Wait: ['${30}'],
+  'Wait (inactive)': ['failure'],
+  'Webhook (external wait)': ['${600}'],
+  ForEach: ["${createArray('a.csv', 'b.csv')}"],
+  Until: ['${equals(1, 1)}'],
+  Stage: ['any'],
+  'Stage (inactive)': ['skipped'],
 };
 
 type NodeSeed = Omit<SeedNode, 'id' | 'position'>;
@@ -406,8 +455,6 @@ function seeds(ids: SeedIds): Record<string, Seed> {
           pathType: 'list',
           sourcePath: '/tmp/e2e/in',
           fileListPath: 'files.txt',
-          wildcard: '*',
-          recursive: false,
           modifiedStart: '2026-10-01T00:00:00Z',
           modifiedEnd: '2026-10-13T00:00:00Z',
           afterCopy: 'move',
@@ -416,6 +463,20 @@ function seeds(ids: SeedIds): Record<string, Seed> {
           sinkFileName: 'merged.txt',
           copyBehavior: 'merge',
           ifExists: 'skip',
+        },
+      },
+    },
+    'Copy data (files from a folder)': {
+      node: {
+        ...exec,
+        type: 'copy_files',
+        connectionIds: { source: ids.fs, sink: ids.fs },
+        config: {
+          pathType: 'folder',
+          sourcePath: '/tmp/e2e/in',
+          wildcard: '*.csv',
+          recursive: true,
+          sinkFolder: '/tmp/e2e/out',
         },
       },
     },
@@ -583,7 +644,7 @@ function seeds(ids: SeedIds): Record<string, Seed> {
     Until: {
       container: {
         kind: 'loop',
-        exitWhen: "${equals(nodes.body.status, 'success')}",
+        exitWhen: '${equals(1, 1)}',
         maxRounds: 5,
         timeout: 600,
         join: 'any',
@@ -676,24 +737,28 @@ test('every catalog activity and container, its config FILLED: the same four hol
   expect(names.length).toBeGreaterThan(10);
 
   const measured: Measured = {};
-  for (const [key, seed] of Object.entries(all)) {
+  for (const [i, [key, seed]] of Object.entries(all).entries()) {
     const entry = names.includes(key) ? key : key.replace(/ \(.*\)$/, '');
+    if (!names.includes(entry)) {
+      misses.push(`${key}: seeds no toolbox entry`);
+      continue;
+    }
+    // Ids new to each canvas, so its readiness waits cannot be met by the last
+    // seed's nodes before the route has switched.
+    const id = `n${i}`;
     const doc: SeedDoc = {
       variables: [
         { name: 'count', type: 'number', default: 0 },
         { name: 'rows', type: 'array', default: [] },
       ],
       params: [{ name: 'history', type: 'json', required: false, default: [] }],
-      nodes:
-        'node' in seed
-          ? [{ ...seed.node, id: 'n', position: { x: 0, y: 0 } }]
-          : [{ ...seed.child, id: 'body', position: { x: 0, y: 0 } }],
-      containers: 'container' in seed ? [{ ...seed.container, id: 'box', children: ['body'] }] : [],
+      nodes: [{ ...('node' in seed ? seed.node : seed.child), id, position: { x: 0, y: 0 } }],
+      containers: 'container' in seed ? [{ ...seed.container, id: `box${i}`, children: [id] }] : [],
     };
     await openSeededCanvas(page, `or42 seeded ${key}`, doc);
     let tablist: string;
     if ('node' in seed) {
-      await nodeById(page, 'n').click();
+      await nodeById(page, id).click();
       tablist = 'Activity properties';
     } else {
       await page.getByRole('button', { name: /^Configure / }).click();
@@ -701,10 +766,17 @@ test('every catalog activity and container, its config FILLED: the same four hol
     }
     // The pane is the seed's toolbox entry, not some other type's.
     await expect(
-      properties(page).getByLabel(`About ${entry}`, { exact: true }).first(),
+      properties(page)
+        .locator('.property-panel__header')
+        .getByLabel(`About ${entry}`, { exact: true }),
     ).toBeAttached();
-    const { prose, help } = await readPane(page, tablist, key, misses);
+    const { prose, help, values } = await readPane(page, tablist, key, misses);
     measured[key] = { prose: prose.length, help, lines: prose };
+    const shows = SHOWS[key];
+    if (shows === undefined) misses.push(`${key}: no SHOWS entry`);
+    for (const value of shows ?? []) {
+      if (!values.has(value)) misses.push(`${key}: no control holds ${JSON.stringify(value)}`);
+    }
   }
   judge(measured, SEEDED_HELP_LIMITS, misses);
   expect(misses).toEqual([]);
