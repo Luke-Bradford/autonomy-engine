@@ -82,6 +82,9 @@ test('a Copy node opens on Source; each tab starts on screen and Sink fits whole
 
 test('the header and tab strip stay pinned while a long tab scrolls', async ({ page }) => {
   const problems = collectPageProblems(page);
+  // Short, so the Model tab overflows: since #1694 OR42 F10 its text boxes
+  // rest at one line, and at the file's size the whole tab fits.
+  await page.setViewportSize({ width: 1440, height: 640 });
   await openSeededCanvas(page, 'or29 sticky header', seed);
   await nodeById(page, 'l').click();
   await expect(tabs(page).getByRole('tab', { name: 'Model' })).toHaveAttribute(
