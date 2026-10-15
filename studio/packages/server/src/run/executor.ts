@@ -111,7 +111,6 @@ import type { ChildRuns } from './child.js';
  * subprocesses that each fail and re-record it. Only the optimisation is lost;
  * correctness (failure → window → later admissions skip) is unchanged.
  */
-
 export interface ExecutorDeps {
   db: Db;
   /** The secret-encryption master key (for just-in-time secret decrypt). */
