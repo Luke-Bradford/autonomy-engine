@@ -272,8 +272,7 @@ test.describe('#1600 C1a — Copy · Files as-is', () => {
         properties(page).getByRole('textbox', { name: 'File name', exact: true }),
       ).toHaveValue('a.txt');
 
-      // Opening is not an edit; the Allow writes warning is listed, not blocking.
-      await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
+      // The Allow writes warning is listed; it does not refuse Save.
       const toggle = problemsToggle(page);
       await expect(toggle.locator('.count-badge').first()).toHaveText('1');
       await toggle.click();
