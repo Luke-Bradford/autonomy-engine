@@ -16,7 +16,13 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { COPY_FILES_ACTIVITY_TYPE } from '@autonomy-studio/shared';
+import {
+  COPY_FILES_ACTIVITY_TYPE,
+  FILE_COPY_ACTIVITY_TYPE,
+  FILE_MOVE_ACTIVITY_TYPE,
+  lowerRetiredTypes,
+  type Node,
+} from '@autonomy-studio/shared';
 import { fsAdapter } from '../fs.js';
 import { runFilesCopy, unchangedSince } from '../fs-files-copy.js';
 import { tmpPathFor } from '../fs-write.js';
@@ -115,6 +121,9 @@ describe('Copy · Files as-is — selection', () => {
       filesMoved: 0,
       bytesRead: 5,
       bytesWritten: 5,
+      // #1600 C1b — a folder copy names the folders.
+      source: join(src, 'in'),
+      dest: join(dst, 'out'),
     });
     expect(await tree(dst)).toEqual(['out/a.csv', 'out/sub/c.csv']);
     expect(await readFile(join(dst, 'out/sub/c.csv'), 'utf8')).toBe('ccc');
@@ -662,5 +671,107 @@ describe('Copy · Files as-is — hardening (#1685)', () => {
     expect(outputs(events)).toMatchObject({ filesWritten: 1, filesMoved: 1 });
     expect(await tree(src)).toEqual(['done/a.txt']);
     expect(await tree(dst)).toEqual(['a.txt']);
+  });
+});
+
+describe('#1600 C1b — source and dest outputs', () => {
+  it('one file names the file read and the file written', async () => {
+    await put('in/a.csv', 'aa');
+    const events = await run({ pathType: 'file', sourcePath: 'in/a.csv', sinkFolder: 'out', sinkFileName: 'b/x.csv' });
+    expect(outputs(events)).toMatchObject({ source: join(src, 'in/a.csv'), dest: join(dst, 'out/b/x.csv') });
+  });
+
+  it('a merge names the merged file', async () => {
+    await put('in/a.csv', 'a');
+    await put('in/b.csv', 'b');
+    const events = await run({ sourcePath: 'in', copyBehavior: 'merge', sinkFileName: 'all.csv' });
+    expect(outputs(events)).toMatchObject({ source: join(src, 'in'), dest: join(dst, 'all.csv') });
+  });
+
+  it('names them when the window selects nothing, so the declared outputs are met', async () => {
+    const path = await put('in/a.csv', 'a');
+    await utimes(path, new Date('2020-01-01T00:00:00Z'), new Date('2020-01-01T00:00:00Z'));
+    const events = await run({ pathType: 'file', sourcePath: 'in/a.csv', modifiedStart: '2026-01-01T00:00:00Z' });
+    expect(outputs(events)).toMatchObject({ filesRead: 0, source: path, dest: join(dst, 'a.csv') });
+  });
+});
+
+/**
+ * #1600 C1b — a stored `file_copy`/`file_move` opens in the editor as its
+ * lowering and, once saved, runs as `copy_files`. Both run here on one
+ * connection that allows writes: the lowered node writes the same bytes to the
+ * same file and answers the retired outputs with the same values.
+ */
+describe('#1600 C1b — a lowered file_copy / file_move runs as the retired type did', () => {
+  async function dispatch(
+    activityType: string,
+    input: Record<string, unknown>,
+    writable: boolean,
+    paired: boolean,
+  ): Promise<ActivityEvent[]> {
+    const connectionConfig = { roots: [src], ...(writable && { writable: true }) };
+    const c: ActivityContext = {
+      runId: 'run_1',
+      nodeId: 'n1',
+      attemptId: 'n1#0',
+      activityType,
+      input,
+      connectionConfig,
+      ...(paired && { sink: { kind: 'fs' as const, connectionConfig } }),
+      signal: new AbortController().signal,
+    };
+    const out: ActivityEvent[] = [];
+    for await (const ev of fsAdapter.runActivity(c, null)) out.push(ev);
+    return out;
+  }
+  const lowered = (type: string, config: Record<string, unknown>) => {
+    const node = lowerRetiredTypes([
+      { id: 'n1', type, config, connectionId: 'c', position: { x: 0, y: 0 } } as Node,
+    ])[0]!;
+    expect(node.type).toBe(COPY_FILES_ACTIVITY_TYPE);
+    const { outputs: _declared, ...input } = node.config;
+    return input;
+  };
+
+  it.each([
+    ['a relative destination', 'out/x.csv'],
+    ['an absolute destination', '<root>/out/x.csv'],
+  ])('file_copy, %s', async (_why, destTemplate) => {
+    await put('in/a.csv', 'payload');
+    await mkdir(join(src, 'out'));
+    const dest = destTemplate.replace('<root>', src);
+    const old = outputs(
+      await dispatch(FILE_COPY_ACTIVITY_TYPE, { source: 'in/a.csv', dest }, false, false),
+    );
+    const before = await readFile(join(src, 'out/x.csv'), 'utf8');
+    await rm(join(src, 'out/x.csv'));
+    const now = outputs(
+      await dispatch(COPY_FILES_ACTIVITY_TYPE, lowered(FILE_COPY_ACTIVITY_TYPE, { source: 'in/a.csv', dest }), true, true),
+    );
+    expect(await readFile(join(src, 'out/x.csv'), 'utf8')).toBe(before);
+    expect({ bytesWritten: now.bytesWritten, source: now.source, dest: now.dest }).toEqual(old);
+    expect(await tree(src)).toEqual(['in/a.csv', 'out/x.csv']);
+  });
+
+  it('file_move', async () => {
+    await put('in/a.csv', 'payload');
+    await mkdir(join(src, 'out'));
+    const config = { source: 'in/a.csv', dest: 'out/x.csv' };
+    const old = outputs(await dispatch(FILE_MOVE_ACTIVITY_TYPE, config, false, false));
+    expect(await tree(src)).toEqual(['out/x.csv']);
+    await rm(join(src, 'out/x.csv'));
+    await put('in/a.csv', 'payload');
+    const now = outputs(
+      await dispatch(COPY_FILES_ACTIVITY_TYPE, lowered(FILE_MOVE_ACTIVITY_TYPE, config), true, true),
+    );
+    expect(await tree(src)).toEqual(['out/x.csv']);
+    expect(await readFile(join(src, 'out/x.csv'), 'utf8')).toBe('payload');
+    expect({ source: now.source, dest: now.dest }).toEqual(old);
+  });
+
+  it('the stored retired type still runs on a connection that never allowed writes', async () => {
+    await put('in/a.csv', 'payload');
+    const events = await dispatch(FILE_COPY_ACTIVITY_TYPE, { source: 'in/a.csv', dest: 'b.csv' }, false, false);
+    expect(last(events).type).toBe('succeeded');
   });
 });
