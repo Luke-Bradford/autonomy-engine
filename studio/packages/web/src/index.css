@@ -5294,11 +5294,13 @@ button.danger {
 }
 
 /* #1694 OR42 item 8 — an override table's row header is the setting's name,
-   read like the cell beside it rather than as a column heading. */
+   read like the cell beside it rather than as a column heading, and level with
+   its box: the value cell also holds the box's `${}` / `ƒx` toggles, so a
+   middle-aligned name would sit below the box. */
 .param-overrides .row-table tbody th {
   color: var(--text);
   font: var(--type-body);
-  vertical-align: middle;
+  line-height: var(--control-h);
 }
 
 /* #1477 OR29 — `RowTable`: authored rows (params, variables, outputs, a

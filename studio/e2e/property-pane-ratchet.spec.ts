@@ -313,9 +313,15 @@ test('a picker’s Test, Edit and New are icon buttons; overrides are a name/val
   // on one line (ADF's Dataset properties); nothing to Add.
   const group = properties(page).getByRole('group', { name: 'Connection overrides' });
   await expect(group.getByRole('button', { name: /^Add/ })).toHaveCount(0);
-  const name = (await group
+  // The name's TEXT, not its cell: a row header's box is the whole row's height.
+  const name = await group
     .getByRole('rowheader', { name: 'Largest file read (bytes)' })
-    .boundingBox())!;
+    .evaluate((th) => {
+      const range = document.createRange();
+      range.selectNodeContents(th);
+      const r = range.getBoundingClientRect();
+      return { x: r.x, y: r.y, width: r.width, height: r.height };
+    });
   const value = (await group
     .getByRole('textbox', { name: 'Largest file read (bytes)' })
     .boundingBox())!;
