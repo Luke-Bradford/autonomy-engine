@@ -3093,7 +3093,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
         // values go in its own `parameters`, so this end can dangle too.
         errors.push(
           `node.${node.id}: datasetParams.source needs a source dataset to bind against ` +
-            "(an inline source takes its values in its own parameters) — move them there or remove them",
+            '(an inline source takes its values in its own parameters) — move them there or remove them',
         );
       } else if (node.datasetParams.sink !== undefined && node.datasetIds.sink === undefined) {
         errors.push(
