@@ -566,6 +566,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
     description: 'Copy a file to another path on a file system connection.',
     kind: 'execution',
     category: 'general',
+    // #1600 C1b — retired from the palette: the one Copy covers it, and a
+    // stored node opens as Copy · Files as-is (`retired.ts`). It still runs.
+    inPalette: false,
     tabs: [{ key: 'location', bindings: ['connection'], fields: ['source', 'dest'] }],
     idempotent: false,
     connectionKinds: ['fs'],
@@ -585,6 +588,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
     description: 'Move or rename a file on a file system connection.',
     kind: 'execution',
     category: 'general',
+    // #1600 C1b — retired from the palette: the one Copy covers it, and a
+    // stored node opens as Copy · Files as-is (`retired.ts`). It still runs.
+    inPalette: false,
     tabs: [{ key: 'location', bindings: ['connection'], fields: ['source', 'dest'] }],
     idempotent: false,
     connectionKinds: ['fs'],
@@ -782,7 +788,12 @@ const ENTRIES: ActivityCatalogEntry[] = [
      * Outputs: the file and byte counters §4.1 lists, never the row outputs (a
      * `rowsWritten` of 0 would count as "wrote nothing" in the run's rows
      * total, `rowsWrittenFromLog`). All required: the adapter yields every one
-     * on success and on a mid-copy failure.
+     * on success, and the counters on a mid-copy failure too.
+     *
+     * #1600 C1b — plus `source` and `dest`, the canonical source path and the
+     * file written (one file or a merge) or the sink folder. They are the
+     * retired `file_copy`/`file_move` outputs, so a lowered node's
+     * `${nodes.x.output.dest}` still resolves (`retired.ts`).
      */
     type: COPY_FILES_ACTIVITY_TYPE,
     // `copy`'s title: one activity to an author, so a card does not rename
@@ -838,6 +849,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
       out('filesMoved', 'number'),
       out('bytesRead', 'number'),
       out('bytesWritten', 'number'),
+      out('source', 'string'),
+      out('dest', 'string'),
     ],
     configSchema: copyFilesConfigSchema,
     dispatchConfigSchema: copyFilesConfigSchema,

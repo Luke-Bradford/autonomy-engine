@@ -1,6 +1,9 @@
 import {
+  COPY_FILES_ACTIVITY_TYPE,
   StrictNodeSchema,
+  isInactive,
   validatePipelineDoc,
+  type ConnectionPublic,
   type Container,
   type Edge,
   type Node,
@@ -147,6 +150,44 @@ export function descriptionIssues(nodes: Node[]): string[] {
     return check.success
       ? []
       : check.error.issues.map((issue) => `node '${n.id}': description: ${issue.message}`);
+  });
+}
+
+/**
+ * #1600 OR41 C1b — a Copy · Files as-is whose sink connection, or whose source
+ * when After copy deletes or moves, does not allow writes. The run refuses it
+ * (`runFilesCopy`), so the author hears it here first. Above all for a stored
+ * Copy file or Move file, which opens as this type (`lowerRetiredTypes`) while
+ * its connection never needed the permission. A warning, not an issue: the
+ * connection is a separate, mutable row, and the run checks it at dispatch. A
+ * `${}` or unknown connection id is skipped, as only the run knows it.
+ */
+export function writeAccessWarnings(
+  nodes: Node[],
+  connections: readonly ConnectionPublic[],
+): string[] {
+  const byId = new Map(connections.map((c) => [c.id, c]));
+  const readOnly = (id: string | undefined) => {
+    const c = id === undefined ? undefined : byId.get(id);
+    return c?.kind === 'fs' && c.config['writable'] !== true ? c : undefined;
+  };
+  return nodes.flatMap((n) => {
+    if (n.type !== COPY_FILES_ACTIVITY_TYPE || isInactive(n)) return [];
+    const sink = readOnly(n.connectionIds?.sink);
+    const removes = n.config['afterCopy'] === 'delete' || n.config['afterCopy'] === 'move';
+    const source = removes ? readOnly(n.connectionIds?.source) : undefined;
+    return [
+      ...(sink === undefined
+        ? []
+        : [
+            `node '${n.id}': the sink connection '${sink.name}' does not allow writes, which a files copy needs`,
+          ]),
+      ...(source === undefined || source === sink
+        ? []
+        : [
+            `node '${n.id}': After copy removes the source, which needs writes allowed on the source connection '${source.name}'`,
+          ]),
+    ];
   });
 }
 

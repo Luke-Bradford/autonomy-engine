@@ -42,10 +42,18 @@ test.describe('U5 activities toolbox', () => {
     await expect(toolbox(page).getByRole('list', { name: 'General', exact: true })).toBeVisible();
 
     // #1449 — each word may match the title, type or description: "rows" is
-    // only in Copy data's description, so Copy file drops out.
+    // only in Copy data's description, so Read file and the other file
+    // activities drop out. #1600 C1b — Copy file and Move file are retired:
+    // "file" finds the one Copy and the file activities left, not them.
     await toolbox(page).getByRole('searchbox', { name: 'Filter activities' }).fill('copy rows');
     await expect(toolbox(page).getByRole('button', { name: 'Copy data' })).toBeVisible();
+    await expect(toolbox(page).getByRole('button', { name: 'Read file' })).toHaveCount(0);
+    await toolbox(page).getByRole('searchbox', { name: 'Filter activities' }).fill('file');
+    // The filter has applied once Read file is back.
+    await expect(toolbox(page).getByRole('button', { name: 'Read file' })).toBeVisible();
+    await expect(toolbox(page).getByRole('button', { name: 'Copy data' })).toBeVisible();
     await expect(toolbox(page).getByRole('button', { name: 'Copy file' })).toHaveCount(0);
+    await expect(toolbox(page).getByRole('button', { name: 'Move file' })).toHaveCount(0);
 
     await toolbox(page).getByRole('searchbox', { name: 'Filter activities' }).fill('zzzz');
     await expect(toolbox(page).getByRole('status')).toContainText('No activities match');

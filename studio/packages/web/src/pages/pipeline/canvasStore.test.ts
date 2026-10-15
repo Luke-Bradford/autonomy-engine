@@ -86,6 +86,40 @@ function retype(
 }
 
 describe('canvasStore', () => {
+  // #1600 OR41 C1b — a stored Copy file opens as Copy · Files as-is (catalogue
+  // §8), without dirtying the doc; `loaded` keeps the stored type.
+  it('opens a retired file_copy node as its replacement, not dirty', () => {
+    const s = createCanvasStore();
+    const v = version({
+      nodes: [
+        {
+          id: 'n_c',
+          type: 'file_copy',
+          config: { source: 'in/a.csv', dest: 'out/a.csv' },
+          connectionId: 'conn_fs',
+          position: { x: 1, y: 2 },
+        },
+      ],
+    });
+    s.getState().loadVersion(v);
+    const [n] = s.getState().nodes;
+    expect(n).toMatchObject({
+      type: 'copy_files',
+      connectionIds: { source: 'conn_fs', sink: 'conn_fs' },
+      config: {
+        pathType: 'file',
+        sourcePath: 'in/a.csv',
+        sinkFolder: 'out',
+        sinkFileName: 'a.csv',
+      },
+    });
+    expect(n!.config['outputs']).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'dest' })]),
+    );
+    expect(s.getState().dirty).toBe(false);
+    expect(s.getState().loaded?.nodes[0]?.type).toBe('file_copy');
+  });
+
   // #844 GL3 — the workspace's globals are not document state: setting them
   // neither dirties the doc nor pushes an undo entry, and opening another
   // version keeps them.

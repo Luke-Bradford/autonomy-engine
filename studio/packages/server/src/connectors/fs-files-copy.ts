@@ -134,10 +134,20 @@ const COUNTERS = [
 ] as const;
 type Counters = Record<(typeof COUNTERS)[number], number>;
 
-function outputsOf(c: Counters): Record<string, unknown> {
+/**
+ * #1600 C1b — where the copy read from and wrote to, canonical: the source
+ * file or folder, and the file written (one file or a merge) or the sink
+ * folder. The retired `file_copy`/`file_move` outputs of the same names.
+ */
+interface CopyPaths {
+  source: string;
+  dest: string;
+}
+
+function outputsOf(c: Counters, paths: CopyPaths | undefined): Record<string, unknown> {
   // No row outputs: a files copy moves no rows, and a `rowsWritten` of 0 would
   // read as "wrote nothing" in the runs list's rows total.
-  return { ...c };
+  return { ...c, ...paths };
 }
 
 async function confined(roots: readonly string[], requested: string): Promise<string> {
@@ -331,7 +341,7 @@ async function selectSources(
   source: FsConfig,
   contains: (mtimeMs: number) => boolean,
   signal: AbortSignal,
-): Promise<SourceFile[]> {
+): Promise<{ root: string; files: SourceFile[] }> {
   const cap = source.maxEntries ?? DEFAULT_MAX_LIST_ENTRIES;
   const root = await confined(source.roots, cfg.sourcePath);
   const rootStat = await lstatOrNull(root);
@@ -346,7 +356,7 @@ async function selectSources(
   if (cfg.pathType === 'file') {
     if (!rootStat!.isFile()) refuse(`source path '${cfg.sourcePath}' is not a file`);
     take(root, basename(root), rootStat!);
-    return files;
+    return { root, files };
   }
   if (!rootStat!.isDirectory()) refuse(`source path '${cfg.sourcePath}' is not a folder`);
 
@@ -422,10 +432,10 @@ async function selectSources(
       take(abs, relative(root, abs), st!);
     }
     // A list is copied, and merged, in the author's order.
-    return files;
+    return { root, files };
   }
   files.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
-  return files;
+  return { root, files };
 }
 
 interface Target {
@@ -681,11 +691,23 @@ export async function* runFilesCopy(
   const signal = ctx.signal;
   const c: Counters = Object.fromEntries(COUNTERS.map((k) => [k, 0])) as Counters;
   let started = false;
+  let where: CopyPaths | undefined;
   try {
     // ── Plan ────────────────────────────────────────────────────────────
-    const files = await selectSources(cfg, source, window.contains, signal);
+    const { root, files } = await selectSources(cfg, source, window.contains, signal);
     const sinkDir = await planDir(sink.roots, cfg.sinkFolder);
     const targets = planTargets(cfg, sinkDir.path, files);
+    // Named as `planTargets` names them, so `dest` is known when nothing is selected too.
+    where = {
+      source: root,
+      dest:
+        cfg.pathType === 'file' || cfg.copyBehavior === 'merge'
+          ? join(
+              sinkDir.path,
+              ...segmentsBelow(sinkDir.path, cfg.sinkFileName ?? basename(root), 'sink file'),
+            )
+          : sinkDir.path,
+    };
     const sourceIds = new Set(files.map((f) => `${f.dev}:${f.ino}`));
     const folders = folderCheck();
     const paths = plannedPaths();
@@ -753,7 +775,7 @@ export async function* runFilesCopy(
     }
     // Nothing selected: a success that creates no folders.
     if (targets.length === 0) {
-      yield { type: 'succeeded', outputs: outputsOf(c) };
+      yield { type: 'succeeded', outputs: outputsOf(c, where) };
       return;
     }
 
@@ -830,10 +852,10 @@ export async function* runFilesCopy(
         }
       }
     }
-    yield { type: 'succeeded', outputs: outputsOf(c) };
+    yield { type: 'succeeded', outputs: outputsOf(c, where) };
   } catch (err) {
     if (started) {
-      for (const [name, value] of Object.entries(outputsOf(c)))
+      for (const [name, value] of Object.entries(outputsOf(c, where)))
         yield { type: 'output', name, value };
     }
     // Whatever unwound the copy once it was aborted, the outcome is the abort.

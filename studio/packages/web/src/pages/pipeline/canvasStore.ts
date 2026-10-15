@@ -10,6 +10,7 @@ import {
   timeoutApplies,
   authorsCallBlob,
   lowerPipelineNodes,
+  lowerRetiredTypes,
   COPY_TYPES,
   referencedNodeIds,
   remapNodeRefs,
@@ -1718,7 +1719,12 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           // the working graph never mutates the loaded version in place. Still
           // load-bearing after the lowering — `lowerPipelineNodes` is
           // copy-on-write and hands back an unchanged node BY REFERENCE.
-          nodes: v ? lowerPipelineNodes(v.nodes).map((n) => ({ ...n })) : [],
+          //
+          // #1600 C1b — and a node of a RETIRED type (Copy file, Move file) opens
+          // as its replacement, so the next Save writes it (catalogue §8). Not
+          // `dirty` either, for the reason above; the stored version still runs
+          // as the type it holds.
+          nodes: v ? lowerPipelineNodes(lowerRetiredTypes(v.nodes)).map((n) => ({ ...n })) : [],
           // #1139 — a half-picked binding names a node in the doc being REPLACED,
           // so it cannot outlive it. Cleared here rather than left to be masked,
           // because "masked" and "gone" look identical right up until a new doc

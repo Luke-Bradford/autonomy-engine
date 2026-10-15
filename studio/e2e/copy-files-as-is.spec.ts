@@ -13,7 +13,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { addActivity, canvasNodes, fillSelectedNodeConfig } from './support/canvasGraph';
 import { fireAndSettle, openSeededCanvas, seedVersion } from './support/seedDoc';
-import { pickConnection, properties } from './support/panels';
+import { pickConnection, problemsToggle, properties } from './support/panels';
 import { seedConnection } from './support/seedResources';
 
 /**
@@ -202,6 +202,117 @@ test.describe('#1600 C1a — Copy · Files as-is', () => {
         expect(existsSync(join(inDir, rel)), `${rel} left the source`).toBe(false);
         expect(existsSync(join(root, 'done', rel)), `${rel} moved to done`).toBe(true);
       }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * #1600 C1b — catalogue §8. A stored Move file keeps running as it was, on a
+   * connection that never allowed writes. Opened in the editor it IS Copy ·
+   * Files as-is (After copy Delete source), the Problems list says the run will
+   * now need Allow writes, and Save writes it as `copy_files`, which runs once
+   * writes are allowed.
+   */
+  test('a stored Move file runs as before, opens as Copy · Files as-is, and saves as one', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const root = tempRoot('1600-lower');
+    try {
+      mkdirSync(join(root, 'in'));
+      mkdirSync(join(root, 'out'));
+      writeFileSync(join(root, 'in', 'a.txt'), 'alpha\n');
+      const store = await seedConnection(page, {
+        name: 'e2e 1600 legacy store',
+        kind: 'fs',
+        config: { roots: [root] },
+      });
+      const doc = {
+        nodes: [
+          {
+            id: 'n_move',
+            type: 'file_move',
+            position: { x: 0, y: 0 },
+            connectionId: store,
+            config: { source: 'in/a.txt', dest: 'out/a.txt' },
+          },
+        ],
+      };
+      const { pipelineId, pipelineVersionId } = await seedVersion(page, 'e2e 1600 legacy', doc);
+
+      // The stored version is untouched by the lowering: it runs as file_move.
+      const oldRun = await fireAndSettle(page, pipelineVersionId, 'e2e 1600 legacy run');
+      const old = await (await page.request.get(`/api/runs/${encodeURIComponent(oldRun)}`)).json();
+      expect(old.status, `run: ${JSON.stringify(old)}`).toBe('success');
+      expect(existsSync(join(root, 'in', 'a.txt'))).toBe(false);
+      expect(readFileSync(join(root, 'out', 'a.txt'), 'utf8')).toBe('alpha\n');
+      rmSync(join(root, 'out', 'a.txt'));
+      writeFileSync(join(root, 'in', 'a.txt'), 'alpha\n');
+
+      await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+      await expect(canvasNodes(page)).toHaveCount(1);
+      await canvasNodes(page).first().click();
+      await tab(page, 'General').click();
+      await expect(
+        properties(page).getByRole('combobox', { name: 'Copy mode', exact: true }),
+      ).toHaveValue('copy_files');
+      await tab(page, 'Source').click();
+      await expect(properties(page).getByRole('textbox', { name: 'Source path' })).toHaveValue(
+        'in/a.txt',
+      );
+      await expect(properties(page).getByRole('combobox', { name: 'After copy' })).toHaveValue(
+        'delete',
+      );
+      await tab(page, 'Sink').click();
+      await expect(properties(page).getByRole('textbox', { name: 'Sink folder' })).toHaveValue(
+        'out',
+      );
+      await expect(
+        properties(page).getByRole('textbox', { name: 'File name', exact: true }),
+      ).toHaveValue('a.txt');
+
+      // The Allow writes warning is listed; it does not refuse Save.
+      const toggle = problemsToggle(page);
+      await expect(toggle.locator('.count-badge').first()).toHaveText('0');
+      await expect(toggle.locator('.count-badge--warning')).toHaveText('1 warning');
+      await toggle.click();
+      await expect(page.locator('.problems-panel')).toContainText(
+        "the sink connection 'e2e 1600 legacy store' does not allow writes, which a files copy needs",
+      );
+
+      // Any edit saves the node as its replacement.
+      await tab(page, 'General').click();
+      await properties(page)
+        .getByRole('textbox', { name: 'Activity description' })
+        .fill('moved by the lowering');
+      await page.getByRole('button', { name: 'Save version' }).click();
+      await expect(page.locator('.notice')).toHaveText('Saved v2.');
+      const versions = (await (
+        await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+      ).json()) as {
+        id: string;
+        version: number;
+        nodes: { type: string; connectionIds?: object; config: object }[];
+      }[];
+      const latest = versions.sort((a, b) => b.version - a.version)[0]!;
+      expect(latest.nodes[0]).toMatchObject({
+        type: 'copy_files',
+        connectionIds: { source: store, sink: store },
+        config: { pathType: 'file', sourcePath: 'in/a.txt', afterCopy: 'delete' },
+      });
+
+      // Allowed writes, the saved copy moves the file as the old version did.
+      const allowed = await page.request.patch(`/api/connections/${encodeURIComponent(store)}`, {
+        data: { config: { roots: [root], writable: true } },
+      });
+      expect(allowed.status(), await allowed.text()).toBe(200);
+      const newRun = await fireAndSettle(page, latest.id, 'e2e 1600 lowered run');
+      const now = await (await page.request.get(`/api/runs/${encodeURIComponent(newRun)}`)).json();
+      expect(now.status, `run: ${JSON.stringify(now)}`).toBe('success');
+      expect(existsSync(join(root, 'in', 'a.txt'))).toBe(false);
+      expect(readFileSync(join(root, 'out', 'a.txt'), 'utf8')).toBe('alpha\n');
+      await expectQuiet(page, problems);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
