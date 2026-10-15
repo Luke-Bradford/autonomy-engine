@@ -45,18 +45,16 @@ export const llmConnectionConfigSchema = z.object({
   /** Provider base URL override (self-hosted / gateway / local). */
   baseUrl: presented(singleLine(z.string()).optional(), {
     title: 'Base URL',
-    description: "Override the provider's address, for a gateway or a self-hosted server.",
   }),
   /** Default model, used when the node's activity config sets none. */
   model: presented(singleLine(z.string()).optional(), {
     title: 'Default model',
-    description: 'Used when a step does not name its own model.',
   }),
   /** Per-request timeout in ms (whole exchange). Defaults to 120s. */
   timeoutMs: presented(z.number().int().positive().optional(), {
     title: 'Timeout',
     unit: 'ms',
-    description: 'How long one request may take. Defaults to 120000 (2 minutes).',
+    description: 'Defaults to 120000 (2 minutes).',
   }),
 });
 
@@ -73,17 +71,15 @@ export const anthropicConnectionConfigSchema = llmConnectionConfigSchema.extend(
 export const httpConnectionConfigSchema = z.object({
   baseUrl: presented(singleLine(z.string()).optional(), {
     title: 'Base URL',
-    description: 'Requests from a step resolve against this address.',
   }),
   headers: presented(z.record(z.string(), z.string()).optional(), {
     title: 'Default headers',
-    description: 'Sent with every request through this connection.',
   }),
   /** Per-request timeout in ms (whole exchange). Defaults to 30s. */
   timeoutMs: presented(z.number().int().positive().optional(), {
     title: 'Timeout',
     unit: 'ms',
-    description: 'How long one request may take. Defaults to 30000 (30 seconds).',
+    description: 'Defaults to 30000 (30 seconds).',
   }),
 });
 
@@ -173,7 +169,6 @@ export const sqliteConnectionConfigSchema = z.object({
   /** Whether this store may be used as a copy SINK (M5). Absent = read-only. */
   writable: presented(z.boolean().optional(), {
     title: 'Allow writes',
-    description: 'Lets a copy write into this store. Unticked, it is read-only.',
   }),
 });
 
@@ -264,7 +259,6 @@ export const postgresConnectionConfigSchema = z.object({
   statementTimeoutMs: presented(z.number().int().positive().optional(), {
     title: 'Statement timeout',
     unit: 'ms',
-    description: 'The longest one SQL statement may run.',
   }),
   /**
    * #1196 M10 slice 3a — whether this store may be used as a copy SINK.
@@ -283,7 +277,6 @@ export const postgresConnectionConfigSchema = z.object({
    */
   writable: presented(z.boolean().optional(), {
     title: 'Allow writes',
-    description: 'Lets a copy write into this store. Unticked, it is read-only.',
   }),
 });
 
@@ -312,7 +305,6 @@ export const agentConnectionConfigSchema = z.object({
   /** The executable to run (e.g. `claude`, `codex`). */
   command: presented(singleLine(z.string()).min(1), {
     title: 'Command',
-    description: 'The program to run, e.g. claude or codex.',
   }),
   /** Static leading args; the `task` is appended as the final argv element. */
   args: presented(z.array(z.string()).optional(), {
@@ -351,13 +343,12 @@ export const agentConnectionConfigSchema = z.object({
   timeoutMs: presented(z.number().int().positive().optional(), {
     title: 'Timeout',
     unit: 'ms',
-    description: 'The program is stopped once it runs this long.',
   }),
   /** Combined stdout+stderr byte cap before output is truncated. */
   maxOutputBytes: presented(z.number().int().positive().optional(), {
     title: 'Output limit',
     unit: 'bytes',
-    description: 'Output past this is cut off.',
+    description: 'Stdout and stderr combined.',
   }),
   /**
    * #2 L14c — the subscription/quota reset-window hint. A subscription CLI's

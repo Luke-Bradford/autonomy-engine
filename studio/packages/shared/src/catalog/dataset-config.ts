@@ -77,7 +77,6 @@ export const tableDatasetConfigSchema = z.object({
    * have ATTACHed database aliases, and `postgres` (M10) needs it for real. */
   schema: presented(sqlIdentifier('schema').optional(), {
     title: 'Schema',
-    description: 'The namespace the table is in. Leave blank for the default.',
   }),
   table: presented(sqlIdentifier('table'), {
     title: 'Table',
@@ -202,11 +201,11 @@ export const delimitedDatasetConfigSchema = z
     }),
     delimiter: presented(delimitedChar('delimiter').default(','), {
       title: 'Delimiter',
-      description: 'The character between fields. Defaults to a comma.',
+      description: 'Defaults to a comma.',
     }),
     quote: presented(delimitedChar('quote').default('"'), {
       title: 'Quote character',
-      description: 'Wraps a field that holds the delimiter. Defaults to ".',
+      description: 'Defaults to ".',
     }),
     /** Absent means RFC 4180: a doubled quote is the only escape. Declaring one
      * ADDS "the next character is literal" inside a quoted field. */
@@ -216,11 +215,10 @@ export const delimitedDatasetConfigSchema = z
     }),
     header: presented(z.boolean(), {
       title: 'First row is a header',
-      description: 'Read the first line as column headings, not data.',
     }),
     encoding: presented(DelimitedEncodingSchema.default('utf-8'), {
       title: 'Encoding',
-      description: 'The file’s text encoding. Defaults to UTF-8.',
+      description: 'Defaults to UTF-8.',
       options: optionTitles(DelimitedEncodingSchema, {
         'utf-8': 'UTF-8',
         'utf-16le': 'UTF-16 LE',
@@ -346,7 +344,6 @@ export const excelDatasetConfigSchema = z
     }),
     header: presented(z.boolean(), {
       title: 'Has a header row',
-      description: 'Read one row as column headings, not data.',
     }),
     /** 1-based; only meaningful with `header: true`. */
     headerRow: presented(z.int().min(1).default(1), {
@@ -357,7 +354,6 @@ export const excelDatasetConfigSchema = z
     /** §6.4 — the NULL sentinel, for TEXT cells that spell null out. */
     nullValue: presented(singleLine(z.string()).optional(), {
       title: 'Null marker',
-      description: 'Text in a cell that means NULL.',
     }),
     /** §6.2 — the ONLY way a TEXTUAL date is read. A date-typed CELL needs none. */
     dateFormat: presented(
