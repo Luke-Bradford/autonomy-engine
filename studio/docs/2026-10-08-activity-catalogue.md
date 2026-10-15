@@ -180,7 +180,7 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
 | Performance | Degree of parallelism (files and partitioned reads), Batch size | auto / 1000 |
 | Session log | **Logging** Off · Warnings (skipped rows and files) · Everything (every file and row batch). **Mode** Best effort · Reliable. **Write to** connection + folder ⓕ, or *Run log* (kept with the run, capped). | Warnings to the run log |
 
-**Outputs:** `rowsRead`, `rowsWritten`, `rowsSkipped`, `filesRead`, `filesWritten`, `filesSkipped`, `filesDeleted`, `filesMoved`, `bytesRead`, `bytesWritten`, `durationMs`, `throughput` (bytes/s), `watermark` {old, new}, `logPath`, `consistency` {verified, result}. Files as-is (C1a) yields the file and byte counters only, never the row outputs: a `rowsWritten` of 0 would read as "wrote nothing" in the run's rows total. A file list may be merged too, in the list's order.
+**Outputs:** `rowsRead`, `rowsWritten`, `rowsSkipped`, `filesRead`, `filesWritten`, `filesSkipped`, `filesDeleted`, `filesMoved`, `bytesRead`, `bytesWritten`, `durationMs`, `throughput` (bytes/s), `watermark` {old, new}, `logPath`, `consistency` {verified, result}. Files as-is (C1a) yields the file and byte counters only, never the row outputs: a `rowsWritten` of 0 would read as "wrote nothing" in the run's rows total. A file list may be merged too, in the list's order. Files as-is also yields `source` and `dest` (C1b), the canonical source file or folder and the file written (one file or a merge) or the sink folder. They are the retired Copy file / Move file outputs, so a lowered node's refs still resolve (§8).
 
 ### 4.2 Lookup
 Source: [Lookup](https://learn.microsoft.com/azure/data-factory/control-flow-lookup-activity).
@@ -330,7 +330,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | # | Slice | Absorbs |
 |---|---|---|
 | C0 | General tab for all activities: description, state + mark as, **enforced timeout**, user properties as monitor columns | F3 timeout |
-| C1 | **Copy: Files as-is**. Folder/wildcard/list/recursive/modified-between source; preserve/flatten/merge; if-exists; after-copy keep/delete/move. Lower file_copy and file_move. Split: **C1a** the `copy_files` type, its fs engine, the fs `writable` permission and the dock toggle; **C1b** the `file_copy`/`file_move` lowering with output aliases (§8) | part of OR30 #1478 |
+| C1 | **Copy: Files as-is**. Folder/wildcard/list/recursive/modified-between source; preserve/flatten/merge; if-exists; after-copy keep/delete/move. Lower file_copy and file_move. Split: **C1a** the `copy_files` type, its fs engine, the fs `writable` permission and the dock toggle; **C1b** the `file_copy`/`file_move` lowering with output aliases (§8), and both retired from the palette (moved forward from C13, since their lowering exists) | part of OR30 #1478 |
 | C2 | Copy: inline source + file sink (rows → delimited). Lower file_write | OR14 writer dependency |
 | C3 | Copy: database sink. Truncate, upsert (keys), auto-create from mapping, pre-copy script, batch size | OR15 upsert/auto-create |
 | C4 | Copy: mapping redesign (x → y rows from imported schemas, map-by-name default, type conversion settings, ƒx whole mapping, additional columns) | depends on OR10 import |
@@ -365,8 +365,18 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
   | `webhook` | Web · Wait for callback, no URL |
   | `append_variable` | Set variable · Append |
 
-  The saved document is not rewritten until the author saves it again. Old versions keep running and replay identically: the event log stores the type that was dispatched.
-- **Output aliases.** Old output names stay readable. For example `nodes.x.output.entries` (List Directory) resolves to `childItems`, and `output.content` from Read File works on the Lookup. Each lowering declares its aliases, and a unit test checks every retired output name.
+  The saved document is not rewritten until the author saves it again. Old versions keep running and replay identically, because a version is immutable and binds the type it holds.
+
+  **How C1b built it** (`packages/shared/src/catalog/retired.ts`), with two deliberate departures from the sentence above:
+  - **Presented, not dispatched.** The lowering runs on the editor's load only, so the next Save writes the replacement. A stored version keeps its type and dispatches through that type's own arm. Dispatching `file_copy`/`file_move` as `copy_files` would change four results, against the "Defaults keep today's behaviour" rule below:
+    1. `copy_files` needs Allow writes on the connection; the old types never read it.
+    2. It creates a missing destination folder, where Copy file fails.
+    3. One file is a regular file, where Move file also moves a folder.
+    4. A move becomes a copy then a delete: it succeeds across file systems where Move file fails, and it copies the bytes where Move file renamed.
+  - **Not on the server's write path.** `lowerPipelineNodes` also runs for workspace-git apply and portable import, which keep a file's version id and re-mint history. Lowering there would make a re-pulled branch file differ from its own stored row, and change what an imported OLD version does. The server keeps accepting the retired types until C13 decides otherwise.
+  - **Faithful or not at all.** A node is left as its retired type when it carries `connectionParams` (a paired node refuses them), when its destination is wholly an expression (it may resolve absolute, which *File name* refuses), or when the lowered config would not validate. C13's Convert has to explain those, since they never lower.
+  - **Allow writes.** A saved lowered node is a real `copy_files` and needs Allow writes on its connection. The Problems list warns while the connection lacks it, for every Files as-is copy, so the author hears it before the run refuses.
+- **Output aliases.** Old output names stay readable. For example `nodes.x.output.entries` (List Directory) resolves to `childItems`, and `output.content` from Read File works on the Lookup. Each lowering declares its aliases, and a unit test checks every retired output name. Copy file and Move file need no renaming: Files as-is yields `bytesWritten`, `source` and `dest` under the same names and types (C1b).
 - **Defaults keep today's behaviour** where the new default would change a running pipeline's result: Web *Fail on HTTP error*, Lookup *first row only*, Copy *after copy*. The *new-node* defaults are ADF's. The *lowered-node* defaults are today's behaviour.
 - **Palette:** retired types are not offered. A pipeline that still contains one shows it under its new name, with a one-click *Convert*. Convert is the lowering written back, and it shows a diff before saving.
 
