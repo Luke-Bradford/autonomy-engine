@@ -36,7 +36,7 @@ describe('ConfigEditor — one grid cell per field (#1477 OR29)', () => {
         editor={editor}
         kindLabel="LLM call"
         className="contract-section"
-        rows={4}
+        maxRows={4}
         advisory={null}
       />,
     );

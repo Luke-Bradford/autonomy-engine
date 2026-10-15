@@ -1,7 +1,7 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
-import { properties } from './support/panels';
+import { properties, showPaneField } from './support/panels';
 
 /**
  * #1694 OR42 F10 — expand on edit. A top-level text box in the properties pane
@@ -29,16 +29,6 @@ function lines(box: Locator) {
   });
 }
 
-/** Open the tab of the selected node's pane that holds `field`. */
-async function showField(page: Page, field: Locator) {
-  const tabs = properties(page)
-    .getByRole('tablist', { name: 'Activity properties' })
-    .getByRole('tab');
-  const count = await tabs.count();
-  for (let i = 0; i < count && !(await field.isVisible()); i++) await tabs.nth(i).click();
-  await expect(field).toBeVisible();
-}
-
 test('a text box rests at one line, grows to eight while edited, and a click below it lands', async ({
   page,
 }) => {
@@ -55,7 +45,7 @@ test('a text box rests at one line, grows to eight while edited, and a click bel
   });
   await nodeById(page, 'a').click();
   const task = properties(page).getByRole('textbox', { name: 'Task', exact: true });
-  await showField(page, task);
+  await showPaneField(page, task);
 
   // At rest: one line, its first, and no drag handle.
   expect(await lines(task)).toBeCloseTo(1, 1);
@@ -182,7 +172,7 @@ test('an S box holding a ${} widens to the value column while edited, and only t
     });
 
   await nodeById(page, 'w').click();
-  await showField(page, seconds);
+  await showPaneField(page, seconds);
   const rest = await widths();
   expect(rest.box).toBe(120);
   expect(rest.shortOfColumn).toBeGreaterThan(240);

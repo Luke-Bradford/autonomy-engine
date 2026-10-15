@@ -42,6 +42,11 @@ import {
  * mousedown that moves focus, and its click follows in the same task. Only a
  * primary press counts, because a context-menu press may never send its
  * pointerup; `contextmenu` ends a press too, so the box never stays open.
+ *
+ * An UNWRAPPED box (`wrap="off"`, JSON) can draw a horizontal scrollbar under a
+ * long line, inside the height set here; its thickness is added so the last
+ * line is not hidden behind it. Collapsed, overflow across is hidden as well,
+ * so a one-line box never carries a scrollbar under its one line.
  */
 export function AutoGrowTextarea({
   maxRows = 4,
@@ -131,12 +136,30 @@ export function AutoGrowTextarea({
     // `scrollHeight` counts padding but never the border.
     const content = el.scrollHeight + border - (cs.boxSizing === 'border-box' ? 0 : padding);
     const cap = line * rows + border + (cs.boxSizing === 'border-box' ? padding : 0);
-    el.style.height = `${String(Math.min(content, cap))}px`;
-    // Collapsed, the rest of the value is out of sight without a scrollbar.
+    const height = Math.min(content, cap);
+    el.style.height = `${String(height)}px`;
+    // Collapsed, the rest of the value is out of sight without a scrollbar,
+    // across as well as down: an unwrapped box (JSON) would draw a horizontal
+    // one under its single line. Otherwise across is the stylesheet's.
     el.style.overflowY = content > cap && !collapsed ? 'auto' : 'hidden';
+    el.style.overflowX = collapsed ? 'hidden' : '';
+    // An unwrapped line wider than the box draws a horizontal scrollbar INSIDE
+    // that height, hiding the last line: `scrollHeight` never counts it. Read
+    // after the overflow is set, since a vertical scrollbar narrows the box.
+    // Zero where scrollbars overlay, and below zero where there is no layout.
+    // Rounded: the two heights are whole pixels and a border at a fractional
+    // zoom is not, which would otherwise read as a sliver of a bar.
+    const bar = Math.round(
+      el.offsetHeight - el.clientHeight - px(cs.borderTopWidth) - px(cs.borderBottomWidth),
+    );
+    if (bar >= 1) el.style.height = `${String(height + bar)}px`;
     for (const [p, top] of scrolled) p.scrollTop = top;
-    // Collapsed, it shows its FIRST line, not the one the caret left it on.
-    if (collapsed) el.scrollTop = 0;
+    // Collapsed, it shows its FIRST line from its first character, not
+    // wherever the caret left it scrolled.
+    if (collapsed) {
+      el.scrollTop = 0;
+      el.scrollLeft = 0;
+    }
   }, [props.value, rows, collapsed, maxRows, width]);
   return (
     <textarea

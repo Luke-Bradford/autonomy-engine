@@ -1,11 +1,31 @@
 import { useCallback, useId, useRef, useState } from 'react';
-import type { Ref, TextareaHTMLAttributes } from 'react';
+import type { ChangeEvent, Ref, TextareaHTMLAttributes } from 'react';
 import { MAX_LAYOUT_DEPTH, formatJsonText, positionOf, scanJson } from '../json/jsonText';
+import { AutoGrowTextarea } from './AutoGrowTextarea';
 
 type TextareaProps = Omit<
   TextareaHTMLAttributes<HTMLTextAreaElement>,
-  'value' | 'defaultValue' | 'onChange' | 'children' | 'className' | 'wrap' | 'dir'
+  | 'value'
+  | 'defaultValue'
+  | 'onChange'
+  | 'children'
+  | 'className'
+  | 'wrap'
+  | 'dir'
+  | 'style'
+  | 'rows'
 >;
+
+/** A fixed number of `rows`, or sized to its text: one or the other, never a mix. */
+type Sizing =
+  | { rows?: number; maxRows?: undefined; restRows?: undefined }
+  | {
+      rows?: undefined;
+      /** Sized to its text, up to this many lines (`AutoGrowTextarea`). */
+      maxRows: number;
+      /** The lines it rests at while it does not have focus. */
+      restRows?: number;
+    };
 
 /**
  * #1396 — the one control for typing JSON: Config (JSON), a JSON-kind setting,
@@ -28,20 +48,30 @@ type TextareaProps = Omit<
  *
  * The button's name is the same everywhere, "Format JSON", so that no other
  * field's `getByLabel` can match it; `aria-description` says which field it is for.
+ *
+ * #1694 OR42 F10 — given `maxRows` it is sized to its text up to that many
+ * lines, and given `restRows` too it EXPANDS ON EDIT like any config field's
+ * text box (`AutoGrowTextarea`): one line at rest, up to `maxRows` while it has
+ * focus. `rows` is then unused. Format keeps focus in the box on every path, so
+ * a click on it never collapses the text it is laying out.
  */
 export function JsonEditor({
   value,
   onValueChange,
   label,
   ref,
+  maxRows,
+  restRows,
+  rows,
   ...textarea
-}: TextareaProps & {
-  value: string;
-  onValueChange: (next: string) => void;
-  /** The field's label, for the Format button's description. */
-  label: string;
-  ref?: Ref<HTMLTextAreaElement>;
-}) {
+}: TextareaProps &
+  Sizing & {
+    value: string;
+    onValueChange: (next: string) => void;
+    /** The field's label, for the Format button's description. */
+    label: string;
+    ref?: Ref<HTMLTextAreaElement>;
+  }) {
   const own = useRef<HTMLTextAreaElement | null>(null);
   const problemId = useId();
   // A problem is about the text it was found in. Once the value changes in any
@@ -61,7 +91,12 @@ export function JsonEditor({
   function format() {
     const el = own.current;
     setProblem(null);
-    if (el === null || el.readOnly || el.disabled || value.trim() === '') return;
+    if (el === null || el.readOnly || el.disabled) return;
+    // Focus first, on every path: a box that expands on edit would otherwise
+    // collapse once this click is done, and a problem shown beside a box that
+    // shrinks moves the form below it (#1393).
+    el.focus();
+    if (value.trim() === '') return;
     let source = value;
     let scan = scanJson(source);
     // The call and run-parameter forms trim before parsing, so a BOM or a
@@ -76,7 +111,6 @@ export function JsonEditor({
         text: value,
         message: `Not JSON at line ${line}, column ${column}: ${scan.reason}`,
       });
-      el.focus();
       // One character, and a whole one: an emoji is two UTF-16 units.
       const width = (value.codePointAt(scan.offset) ?? 0) > 0xffff ? 2 : 1;
       el.setSelectionRange(scan.offset, Math.min(value.length, scan.offset + width));
@@ -92,7 +126,6 @@ export function JsonEditor({
     }
     if (formatted === value) return;
     const top = el.scrollTop;
-    el.focus();
     el.select();
     // `execCommand` is deprecated but is the only way to replace a textarea's
     // text that the browser's undo stack records. Where it does nothing (jsdom),
@@ -111,26 +144,33 @@ export function JsonEditor({
       .filter((id) => id !== undefined && id !== '')
       .join(' ') || undefined;
 
+  const input = {
+    spellCheck: false,
+    autoCapitalize: 'off',
+    autoCorrect: 'off',
+    ...textarea,
+    'aria-describedby': describedBy,
+    ref: setRef,
+    className: 'json-editor-input',
+    dir: 'ltr',
+    wrap: 'off',
+    value,
+    onChange: (e: ChangeEvent<HTMLTextAreaElement>) => {
+      // Typing ends the problem too, even when the edit comes back to the
+      // very text it was found in.
+      setProblem(null);
+      onValueChange(e.target.value);
+    },
+  };
+
   return (
     <div className="json-editor">
-      <textarea
-        spellCheck={false}
-        autoCapitalize="off"
-        autoCorrect="off"
-        {...textarea}
-        aria-describedby={describedBy}
-        ref={setRef}
-        className="json-editor-input"
-        dir="ltr"
-        wrap="off"
-        value={value}
-        onChange={(e) => {
-          // Typing ends the problem too, even when the edit comes back to the
-          // very text it was found in.
-          setProblem(null);
-          onValueChange(e.target.value);
-        }}
-      />
+      {maxRows === undefined ? (
+        <textarea {...input} rows={rows} />
+      ) : (
+        // `data-fit`: the box sets its own height, so no drag handle (index.css).
+        <AutoGrowTextarea {...input} maxRows={maxRows} restRows={restRows} data-fit="" />
+      )}
       <div className="json-editor-tools">
         {/* aria-description is an ARIA 1.3 global attribute; aria-query 5.3
             does not list it on button. */}

@@ -134,4 +134,59 @@ describe('JsonEditor (#1396)', () => {
     );
     expect(screen.getByRole('button', { name: 'Format JSON' })).toBeDisabled();
   });
+
+  // #1694 OR42 F10 — expand on edit.
+  describe('sized to its text (maxRows)', () => {
+    it('given restRows, expands on edit and has no drag handle', () => {
+      render(
+        <JsonEditor
+          id="j"
+          label="Params"
+          value="{}"
+          restRows={1}
+          maxRows={8}
+          onValueChange={() => undefined}
+        />,
+      );
+      const box = screen.getByRole('textbox');
+      expect(box).toHaveAttribute('data-grow', 'edit');
+      expect(box).toHaveAttribute('data-fit', '');
+      expect(box).toHaveAttribute('wrap', 'off');
+      expect(box).toHaveClass('json-editor-input');
+    });
+
+    it('without maxRows, is the fixed box it was', () => {
+      render(
+        <JsonEditor id="j" label="Params" value="{}" rows={4} onValueChange={() => undefined} />,
+      );
+      const box = screen.getByRole('textbox');
+      expect(box).toHaveAttribute('rows', '4');
+      expect(box).not.toHaveAttribute('data-fit');
+      expect(box).not.toHaveAttribute('data-grow');
+    });
+
+    // Every path: a click on Format must never leave a box that expands on edit
+    // to collapse under the text it just laid out, or beside a problem it shows.
+    it.each([
+      ['already laid out', '{\n  "a": 1\n}'],
+      ['blank', '  '],
+      ['too deep', '['.repeat(300) + ']'.repeat(300)],
+      ['not JSON', '[1 2]'],
+    ])('Format leaves the box focused when the text is %s', (_, value) => {
+      render(
+        <JsonEditor
+          id="j"
+          label="Params"
+          value={value}
+          restRows={1}
+          maxRows={8}
+          onValueChange={() => undefined}
+        />,
+      );
+      const button = screen.getByRole('button', { name: 'Format JSON' });
+      button.focus();
+      fireEvent.click(button);
+      expect(screen.getByRole('textbox')).toHaveFocus();
+    });
+  });
 });

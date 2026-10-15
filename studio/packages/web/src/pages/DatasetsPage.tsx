@@ -963,7 +963,7 @@ function DatasetForm({
           editor={editor}
           kindLabel={DATASET_KIND_LABELS[editor.kind]}
           className="dataset-config"
-          rows={6}
+          maxRows={6}
           advisory={advisory}
           choicesFor={choicesFor}
           errorFor={validation.errorFor}
