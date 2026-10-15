@@ -32,6 +32,11 @@ import { nodeMenuAction, pickConnection, properties } from './support/panels';
  * `.page-hint` or `.field-hint` of four words or more, outside a status, an
  * error, an advisory or a `?` note: an empty state ("No rows.") is not prose,
  * and a warning about the current value is not there to be read in advance.
+ *
+ * The walk runs twice: once on each type fresh from the toolbox, and once on
+ * each type minted with its config FILLED (`seeds`), so what only renders once
+ * a value is set (override rows, table rows, Mark as while inactive) is held
+ * too. A toolbox entry with no filled seed fails the second walk.
  */
 test.use({ viewport: { width: 1440, height: 900 } });
 
@@ -301,12 +306,39 @@ test('every catalog activity and container: no wide button, no `?` on a heading,
  * from the first walk; lower only. A key with a ` (…)` suffix is a second state
  * of that toolbox entry (the files-as-is copy, structured output, inactive).
  */
-const SEEDED_HELP_LIMITS: Record<string, number> = {};
+const SEEDED_HELP_LIMITS: Record<string, number> = {
+  'Copy data': 9,
+  'Copy data (files as-is)': 19,
+  'Copy file': 8,
+  'Delete file': 7,
+  'HTTP request': 9,
+  'List directory': 7,
+  'Lookup rows': 6,
+  'Move file': 8,
+  'Read file': 7,
+  'Write file': 7,
+  'Agent task': 8,
+  'LLM call': 15,
+  'LLM call (structured)': 15,
+  'Append variable': 6,
+  'Execute pipeline': 6,
+  Fail: 5,
+  Filter: 7,
+  'If condition': 6,
+  'Set variable': 5,
+  Switch: 6,
+  Wait: 6,
+  'Wait (inactive)': 7,
+  'Webhook (external wait)': 6,
+  ForEach: 5,
+  Until: 5,
+  Stage: 2,
+  'Stage (inactive)': 3,
+};
 
 type NodeSeed = Omit<SeedNode, 'id' | 'position'>;
 type Seed =
-  | { node: NodeSeed }
-  | { container: Omit<SeedContainer, 'id' | 'children'>; child: NodeSeed };
+  { node: NodeSeed } | { container: Omit<SeedContainer, 'id' | 'children'>; child: NodeSeed };
 
 interface SeedIds {
   fs: string;
@@ -645,7 +677,7 @@ test('every catalog activity and container, its config FILLED: the same four hol
 
   const measured: Measured = {};
   for (const [key, seed] of Object.entries(all)) {
-    const entry = key.replace(/ \(.*\)$/, '');
+    const entry = names.includes(key) ? key : key.replace(/ \(.*\)$/, '');
     const doc: SeedDoc = {
       variables: [
         { name: 'count', type: 'number', default: 0 },
@@ -656,8 +688,7 @@ test('every catalog activity and container, its config FILLED: the same four hol
         'node' in seed
           ? [{ ...seed.node, id: 'n', position: { x: 0, y: 0 } }]
           : [{ ...seed.child, id: 'body', position: { x: 0, y: 0 } }],
-      containers:
-        'container' in seed ? [{ ...seed.container, id: 'box', children: ['body'] }] : [],
+      containers: 'container' in seed ? [{ ...seed.container, id: 'box', children: ['body'] }] : [],
     };
     await openSeededCanvas(page, `or42 seeded ${key}`, doc);
     let tablist: string;
