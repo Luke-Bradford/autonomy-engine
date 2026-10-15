@@ -145,11 +145,13 @@ export function isTextEntryTarget(target: EventTarget | null): boolean {
  * can fall to `<body>` while a modal is up (a mousedown on its backdrop), and
  * the page behind a modal is inert whatever has focus. `aria-modal`, so a
  * non-modal alert (the leave prompt, which has its own guard) does not count.
+ * A native `<dialog>` (the ⤢ editor) has its role only implicitly, so it is
+ * matched by tag, and only while `open`.
  */
 export function isModalDialogOpen(doc: Document = document): boolean {
   return (
     doc.querySelector(
-      '[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]',
+      '[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"], dialog[open][aria-modal="true"]',
     ) !== null
   );
 }

@@ -23,7 +23,8 @@ import {
   type FunctionOption,
 } from './ExpressionPicker';
 import type { WrapSpan } from './expressionInsert';
-import { useCaretInsert } from './useCaretInsert';
+import { fieldPickerProps, useCaretInsert } from './useCaretInsert';
+import { ExpressionEditor } from './ExpressionEditor';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { JsonEditor } from '../../lib/form/JsonEditor';
 import { RequiredMark } from '../../lib/form/RequiredMark';
@@ -318,7 +319,7 @@ export function ConfigFieldControl({
   const {
     ref: inputRef,
     onSelect,
-    insert: insertAtCaret,
+    insert,
     functionOptions,
   } = useCaretInsert<HTMLInputElement | HTMLTextAreaElement>();
   const text = typeof value === 'string' ? value : '';
@@ -638,19 +639,29 @@ export function ConfigFieldControl({
               // stacked under every expression box were 44px a field.
               compact
               keepFocus={cell}
-              describe={picker.describe}
-              resolve={() => picker.resolve(target ?? topLevelTarget(field.name))}
-              onSelect={(insert, mode) => onChange(insertAtCaret(text, insert, mode))}
-              functions={{
-                value: text,
-                resolve: () =>
-                  functionOptions(
-                    text,
-                    (span) => picker.wraps(target ?? topLevelTarget(field.name), text, span),
-                    () => picker.examples(target ?? topLevelTarget(field.name)),
-                    onChange,
-                  ),
-              }}
+              {...fieldPickerProps(
+                { insert, functionOptions },
+                picker,
+                target ?? topLevelTarget(field.name),
+                text,
+                onChange,
+              )}
+              // #1694 OR42 F10 — ⤢ opens the field in a full-size editor. A
+              // top-level field only: a cell's toggles show only while its box
+              // has focus, and a row has no room for a third.
+              after={
+                cell ? undefined : (
+                  <ExpressionEditor
+                    // Titled as the field's label reads ("Task"), not its key.
+                    fieldName={label}
+                    value={text}
+                    onChange={onChange}
+                    picker={picker}
+                    target={target ?? topLevelTarget(field.name)}
+                    singleLine={oneLine}
+                  />
+                )
+              }
             />
           )}
         </>

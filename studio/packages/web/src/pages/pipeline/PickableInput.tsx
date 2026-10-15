@@ -2,7 +2,7 @@ import { useId, type ReactNode } from 'react';
 import { AboutHelp } from '../../lib/HelpDisclosure';
 import type { FieldPicker, PickerTarget } from './ConfigFieldControl';
 import { ExpressionPicker } from './ExpressionPicker';
-import { useCaretInsert } from './useCaretInsert';
+import { fieldPickerProps, useCaretInsert } from './useCaretInsert';
 
 /**
  * One text input that can take the U8a flyout. A component rather than inline
@@ -46,19 +46,14 @@ export function PickableInput({
   required?: boolean;
   children: ReactNode;
 }) {
-  const {
-    ref: inputRef,
-    onSelect,
-    insert: insertAtCaret,
-    functionOptions,
-  } = useCaretInsert<HTMLInputElement>();
+  const { ref, onSelect, insert, functionOptions } = useCaretInsert<HTMLInputElement>();
   const aboutId = useId();
   return (
     <div className="config-field">
       <label>
         {children}
         <input
-          ref={inputRef}
+          ref={ref}
           value={value}
           onSelect={onSelect}
           onChange={(e) => onChange(e.target.value)}
@@ -76,19 +71,7 @@ export function PickableInput({
       {picker && (
         <ExpressionPicker
           fieldName={pickerName}
-          describe={picker.describe}
-          resolve={() => picker.resolve(target)}
-          onSelect={(insert, mode) => onChange(insertAtCaret(value, insert, mode))}
-          functions={{
-            value,
-            resolve: () =>
-              functionOptions(
-                value,
-                (span) => picker.wraps(target, value, span),
-                () => picker.examples(target),
-                onChange,
-              ),
-          }}
+          {...fieldPickerProps({ insert, functionOptions }, picker, target, value, onChange)}
         />
       )}
     </div>

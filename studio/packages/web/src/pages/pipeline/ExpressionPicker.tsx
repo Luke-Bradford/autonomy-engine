@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type MouseEvent } from 'react';
+import { useId, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import type { FunctionDoc, RefSuggestion } from '@autonomy-studio/shared';
 import type { InsertMode } from './expressionInsert';
 
@@ -89,6 +89,7 @@ export function ExpressionPicker({
   functions: functionsProp,
   compact = false,
   keepFocus = false,
+  after,
 }: {
   fieldName: string;
   /** How a suggestion is NAMED — web-side, because the node labels live here. */
@@ -125,6 +126,12 @@ export function ExpressionPicker({
    * and need none of that.
    */
   keepFocus?: boolean;
+  /**
+   * A control on the toggles' row, after them and BEFORE the lists: an open
+   * list takes the row's full width, so anything after it would wrap below
+   * the list (#1694 OR42, the ⤢ editor).
+   */
+  after?: ReactNode;
 }) {
   const [open, setOpen] = useState<Open | null>(null);
   const onToggleDown = keepFocus ? (e: MouseEvent) => e.preventDefault() : undefined;
@@ -207,6 +214,8 @@ export function ExpressionPicker({
           {compact ? 'ƒx' : 'Functions'}
         </button>
       )}
+
+      {after}
 
       {functions !== undefined && (
         <div

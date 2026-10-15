@@ -889,7 +889,24 @@ row heights), not the layout.
   field, Execute pipeline's JSON parameters) expands on edit the same way, a scrollbar under a long
   unwrapped line added to its height, and Edit as JSON's box is as tall as its config up to its cap.
   `e2e/property-pane-expand-on-edit.spec.ts` pins the text boxes and `e2e/json-expand-on-edit.spec.ts`
-  the JSON ones. Not yet: ⤢ to a full expression editor.
+  the JSON ones.
+- **⤢ opens a field in a full-size editor (#1694 OR42 F10).** Beside a top-level text field's `${}`
+  and `ƒx` sits ⤢ (`ExpressionEditor`): a modal holding a draft of the field's text, 16 lines tall
+  (4 for a one-line field), with the same reference and function flyout, inserting at the
+  editor's own caret. OK (or ⌘/Ctrl+Enter; Enter alone in a one-line field, which takes no line
+  break) writes the draft through the field's own change, exactly as typing would, and only if the
+  draft differs from the text it opened on. Cancel and Escape discard it without asking, as ADF's
+  dynamic-content pane does; an Escape the flyout takes closes only its list. Buttons follow the
+  confirm dialog: Cancel, then OK, at the right.
+  - **Where it is:** every field that carries the flyout at the top level, in an activity's or a
+    container's pane. **Not** on a table cell (its toggles show only while its box has focus), a
+    `literal` field, a `json` or `stringList` field (no flyout, #864), a field with no flyout (the
+    connection and dataset forms), or `PickableInput`'s rows (call arguments, parameter overrides).
+  - It is a native `<dialog>` portalled to the app's Fluent root, not a Fluent dialog, because it is
+    mounted by a field that can unmount while it is open. A top-layer modal cannot be occluded, so
+    the overlay occlusion gate does not open it. Inferred, not tested: the leave prompt renders under
+    the top layer, so a Back press while the editor is open is answerable only once it closes.
+  - `e2e/expression-editor.spec.ts` pins it.
 - **A unit is a suffix inside its box, not label text (#1694 OR42 item 5).** `30` `s`, through
   `WithUnit`/`UnitLabel` (`lib/form/UnitInput.tsx`), so a label is the title alone and never wraps. The
   unit stays in the field's accessible name, out of sight ("Timeout (seconds)"), so its name, its
