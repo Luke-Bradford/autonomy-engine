@@ -3275,7 +3275,7 @@ button.danger {
 @container field-form (min-width: 400px) {
   /* LABEL-LEFT: the label in a column of its own, the control, its hint and
      its error in the next. Only a field row of a form's own sections — not the
-     cells of a row table or a param-override row, which are too narrow, nor a
+     cells of a row table, which are too narrow, nor a
      dock fieldset of choices. The trigger form's builders are fieldsets of
      fields, so they are rows' parents too. `:root[data-density]` (always set)
      only raises the weight: (0,4,0), over the stacked drawer row
@@ -5293,24 +5293,12 @@ button.danger {
   gap: var(--space-2);
 }
 
-/* #1694 OR42 — the key to override and its Add on one row, sized to content. */
-.param-override-add {
-  display: flex;
-  align-items: flex-end;
-  gap: var(--space-2);
-  align-self: flex-start;
-}
-
-/* #1304 — Remove sits under its input, and the flag under that. */
-.param-override-row {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-1);
-}
-
-.param-override-row > .config-field {
-  align-self: stretch;
+/* #1694 OR42 item 8 — an override table's row header is the setting's name,
+   read like the cell beside it rather than as a column heading. */
+.param-overrides .row-table tbody th {
+  color: var(--text);
+  font: var(--type-body);
+  vertical-align: middle;
 }
 
 /* #1477 OR29 — `RowTable`: authored rows (params, variables, outputs, a

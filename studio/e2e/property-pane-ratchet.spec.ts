@@ -279,7 +279,7 @@ test('every catalog activity and container: no wide button, no `?` on a heading,
   await expectQuiet(page, problems);
 });
 
-test('a picker’s Test, Edit and New are icon buttons; an override and its Add share a row', async ({
+test('a picker’s Test, Edit and New are icon buttons; overrides are a name/value table, no Add', async ({
   page,
 }) => {
   const problems = collectPageProblems(page);
@@ -309,13 +309,18 @@ test('a picker’s Test, Edit and New are icon buttons; an override and its Add 
     expect((await button.boundingBox())!.width).toBeLessThanOrEqual(32);
   }
 
+  // #1694 OR42 item 8 — every declared setting is a row, its name and its box
+  // on one line (ADF's Dataset properties); nothing to Add.
   const group = properties(page).getByRole('group', { name: 'Connection overrides' });
-  const select = (await group
-    .getByRole('combobox', { name: 'Add connection override' })
+  await expect(group.getByRole('button', { name: /^Add/ })).toHaveCount(0);
+  const name = (await group
+    .getByRole('rowheader', { name: 'Largest file read (bytes)' })
     .boundingBox())!;
-  const add = (await group.getByRole('button', { name: 'Add override' }).boundingBox())!;
-  expect(Math.abs(add.y + add.height - (select.y + select.height))).toBeLessThanOrEqual(1);
-  expect(add.x).toBeGreaterThan(select.x + select.width);
+  const value = (await group
+    .getByRole('textbox', { name: 'Largest file read (bytes)' })
+    .boundingBox())!;
+  expect(Math.abs(name.y + name.height / 2 - (value.y + value.height / 2))).toBeLessThanOrEqual(2);
+  expect(value.x).toBeGreaterThanOrEqual(name.x + name.width);
   await expectQuiet(page, problems);
 });
 
