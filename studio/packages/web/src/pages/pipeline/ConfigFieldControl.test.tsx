@@ -231,6 +231,65 @@ describe('ConfigFieldControl — human labels and required fields (#1396)', () =
     expect(getByRole('textbox', { name: 'path' }).hasAttribute('aria-describedby')).toBe(false);
   });
 
+  // #1694 OR42 — a `?` only where the catalog wrote a note. A titled field
+  // without one has none, and its label carries the key on hover instead.
+  it.each([
+    ['text', 'textbox'],
+    ['enum', 'combobox'],
+    ['boolean', 'checkbox'],
+  ] as const)('a titled %s field with no note has no `?`, its key on the label', (kind, role) => {
+    const field: ConfigField = {
+      name: 'content',
+      kind,
+      optional: true,
+      ...(kind === 'enum' ? { enumOptions: ['a'] } : {}),
+      label: { title: 'Content' },
+    };
+    const { getByRole, getByText, container } = render(
+      <ConfigFieldControl field={field} value="" onChange={noop} />,
+    );
+    expect(container.querySelector('details.help-disclosure')).toBeNull();
+    expect(getByRole(role, { name: 'Content' }).hasAttribute('aria-describedby')).toBe(false);
+    expect(getByText('Content').closest('[title]')?.getAttribute('title')).toBe('content');
+  });
+
+  it('a titled row list with no note has no `?`, its key on the label', () => {
+    const field: ConfigField = {
+      name: 'headers',
+      kind: 'objectList',
+      optional: true,
+      label: { title: 'Request headers' },
+      elementFields: [{ name: 'name', kind: 'text', optional: true }],
+    };
+    const { getByRole, container } = render(
+      <ConfigFieldControl field={field} value={[]} onChange={noop} />,
+    );
+    expect(container.querySelector('details.help-disclosure')).toBeNull();
+    expect(getByRole('group', { name: 'Request headers' }).hasAttribute('aria-describedby')).toBe(
+      false,
+    );
+    expect(container.querySelector('.object-list-label [title]')?.getAttribute('title')).toBe(
+      'headers',
+    );
+  });
+
+  it('a titled field with a note keeps its key in the note, not on the label', () => {
+    const field: ConfigField = {
+      name: 'url',
+      kind: 'text',
+      optional: true,
+      singleLine: true,
+      label: { title: 'Request URL', description: 'Joined to the base URL.' },
+    };
+    const { getByRole, container } = render(
+      <ConfigFieldControl field={field} value="" onChange={noop} />,
+    );
+    expect(getByRole('textbox', { name: 'Request URL' })).toHaveAccessibleDescription(
+      'Joined to the base URL. url',
+    );
+    expect(container.querySelector('label [title]')).toBeNull();
+  });
+
   it('marks a required field, and only a required one', () => {
     const required: ConfigField = { name: 'host', kind: 'text', optional: false, singleLine: true };
     const optional: ConfigField = { name: 'port', kind: 'text', optional: true, singleLine: true };
@@ -300,16 +359,30 @@ describe('ConfigFieldControl — a number field says what it admits (#1396)', ()
   };
 
   it('leads the hint with the rule, and the label is the title alone', () => {
-    const { getByRole } = render(<ConfigFieldControl field={port} value="" onChange={noop} />);
+    const noted: ConfigField = {
+      ...port,
+      label: { title: 'Port', description: 'Where it listens.' },
+    };
+    const { getByRole } = render(<ConfigFieldControl field={noted} value="" onChange={noop} />);
     expect(getByRole('textbox', { name: 'Port' })).toHaveAccessibleDescription(
-      'Whole number from 1 to 65535. port',
+      'Whole number from 1 to 65535. Where it listens. port',
     );
   });
 
-  it('an untitled number field gets the rule too, without repeating its key', () => {
-    const untitled: ConfigField = { ...port, label: undefined };
-    const { getByRole } = render(<ConfigFieldControl field={untitled} value="" onChange={noop} />);
-    expect(getByRole('textbox', { name: 'port' })).toHaveAccessibleDescription(
+  // #1694 OR42 — a rule alone is not a note, so a field the catalog wrote no
+  // note for has no `?`; the rule is still its description, out of sight.
+  it.each([
+    ['a titled', port],
+    ['an untitled', { ...port, label: undefined }],
+  ] as const)('%s number field with no note has no `?`, its rule still described', (_, field) => {
+    const { getByRole, container } = render(
+      <ConfigFieldControl field={field} value="" onChange={noop} />,
+    );
+    expect(getByRole('textbox', { name: /^port$/i })).toHaveAccessibleDescription(
+      'Whole number from 1 to 65535.',
+    );
+    expect(container.querySelector('details.help-disclosure')).toBeNull();
+    expect(container.querySelector('.visually-hidden')?.textContent).toBe(
       'Whole number from 1 to 65535.',
     );
   });

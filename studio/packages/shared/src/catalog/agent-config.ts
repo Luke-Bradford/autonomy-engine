@@ -27,7 +27,6 @@ import { llmOutputSchemaSchema } from './llm-config.js';
 export const agentTaskConfigSchema = z.object({
   task: presented(z.string().min(1), {
     title: 'Task',
-    description: 'What the agent is asked to do. May use ${}.',
   }),
   cwd: presented(singleLine(z.string()).optional(), {
     title: 'Working directory',
@@ -37,7 +36,6 @@ export const agentTaskConfigSchema = z.object({
   // itself: the form matches that instance by identity, and `llm_call` shares it.
   outputSchema: presented(llmOutputSchemaSchema.optional(), {
     title: 'Output schema',
-    description: "The shape the agent's answer must take, as named typed fields.",
   }),
 });
 

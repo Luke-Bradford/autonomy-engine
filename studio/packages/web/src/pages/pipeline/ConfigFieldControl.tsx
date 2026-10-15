@@ -189,9 +189,10 @@ export type FieldChoices = {
  * The label carries the field NAME unless the schema gives it a human title
  * (`presented`, #1396). The name is what the author writes in a
  * `${nodes.x.config…}` reference and what the server's validation errors cite,
- * so a TITLED field still shows its key, in the hint under the control: the
- * title is for reading the form, the key is the thread connecting the form,
- * the doc and the error message.
+ * so a TITLED field still shows its key: at the end of its `?` note, or, for a
+ * field with no `?` (#1694 OR42, a `?` only where the catalog wrote a note), as
+ * the label's hover title. The title is for reading the form, the key is the
+ * thread connecting the form, the doc and the error message.
  *
  * #1396 — a REQUIRED field (one whose key may not be absent) carries a visual
  * asterisk, hidden from the accessible name, and `aria-required` on the
@@ -256,26 +257,35 @@ export function ConfigFieldControl({
   // its label said. The label stays, out of sight, as the control's NAME
   // ("Column mapping row 2 sink"), so every spec and screen reader still reaches it.
   const cell = name !== undefined;
-  const seen = (text: ReactNode) => (cell ? <span className="visually-hidden">{text}</span> : text);
   const required = !field.optional;
   const hintId = useId();
   // #1396 — a top-level number field leads its hint with what it admits
   // ("Whole number from 1 to 65535."), which is why its label needs no
-  // " — number". A cell has no hint slot, and keeps the suffix.
+  // " — number". A cell has no hint slot, and keeps the suffix. With no note
+  // (#1694 OR42) the rule is still its description, out of sight (`ruleOnly`).
   const numberField = name === undefined && field.kind === 'number';
   const rule = numberField ? describeNumberRule(field.numberRule ?? { integer: false }) : null;
+  // #1694 OR42 — a `?` only where the catalog wrote a note: a field whose
+  // label says it all ("Temperature", "Content") has none. A `?` holding just
+  // the key, or just a rule its error line states on a bad value, was noise.
+  // Where there is a note it still leads with the rule and ends with the key.
+  const description = titled?.description;
   const hintBody =
-    titled === undefined && rule === null ? null : (
+    description === undefined ? null : (
       <>
-        {rule !== null && (
-          <>
-            {rule}.{titled === undefined ? '' : ' '}
-          </>
-        )}
-        {titled?.description !== undefined && <>{titled.description} </>}
-        {/* An untitled field's label is already its key. */}
-        {titled !== undefined && <code>{field.name}</code>}
+        {rule !== null && <>{rule}. </>}
+        {description} <code>{field.name}</code>
       </>
+    );
+  // With no `?`, a titled label still carries its key, on hover.
+  const keyTitle = titled !== undefined && hintBody === null ? field.name : undefined;
+  const seen = (text: ReactNode) =>
+    cell ? (
+      <span className="visually-hidden">{text}</span>
+    ) : keyTitle === undefined ? (
+      text
+    ) : (
+      <span title={keyTitle}>{text}</span>
     );
   // #1477 OR29 — a labelled field's explanation is behind a `?` beside its label
   // (labels, not prose), as a row list's already was. The note keeps `hintId`, so
@@ -289,7 +299,10 @@ export function ConfigFieldControl({
     );
   const errorId = useId();
   const error = validation?.error;
-  const shownHintId = hintBody === null ? undefined : hintId;
+  // A number field with no `?` is still described by its rule, so a screen
+  // reader hears "Number from 0 to 1." where the eye sees a number box.
+  const ruleOnly = hintBody === null && rule !== null;
+  const shownHintId = hintBody === null && !ruleOnly ? undefined : hintId;
   // #1396 — with `validation`, the field's key, invalid mark and a description
   // that leads with the error; without it (the canvas), the hint alone.
   const checkedAs = (group: boolean): Partial<ReturnType<typeof fieldAttrs>> =>
@@ -434,6 +447,11 @@ export function ConfigFieldControl({
                 onChange={(e) => onChange(e.target.value)}
               />
             </WithUnit>
+            {ruleOnly && (
+              <span id={hintId} className="visually-hidden">
+                {rule}.
+              </span>
+            )}
             {errorSlot}
           </>
         )}
@@ -839,7 +857,12 @@ export function ObjectListControl({
     >
       {/* A `div`: the `?` is a `<details>`, which a span may not hold. */}
       <div className="object-list-label help-row">
-        <span id={labelId}>{label}</span>
+        <span
+          id={labelId}
+          title={help === undefined && label !== field.name ? field.name : undefined}
+        >
+          {label}
+        </span>
         {required && <RequiredMark />}
         {about !== null && (
           <AboutHelp name={label} noteId={aboutId}>
