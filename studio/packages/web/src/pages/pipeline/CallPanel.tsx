@@ -22,6 +22,7 @@ import type { createCanvasStore } from './canvasStore';
 import type { FieldPicker } from './ConfigFieldControl';
 import { PickableInput } from './PickableInput';
 import { Toolbar } from '../../lib/PageHeader';
+import { CheckboxField } from '../../lib/form/CheckboxField';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { JsonEditor } from '../../lib/form/JsonEditor';
 import { Section } from '../../lib/Section';
@@ -374,33 +375,31 @@ function CallEditor({
           picker={picker}
           pickerName="call target"
           target={targetPosition}
-          after={
-            <span className="page-hint">
-              A <code>{'${}'}</code> target is resolved when the node dispatches. Its references are
-              checked when you save, but the save-time self-call and depth guards only see literal
-              targets. Recursion through one is stopped only at run time, {MAX_CALL_DEPTH} nested
-              runs deep, where the next call is refused and that node fails.
-            </span>
-          }
+          about={{
+            name: 'Version id or expression',
+            note: (
+              <>
+                A <code>{'${}'}</code> target is resolved when the node dispatches. Its references
+                are checked when you save, but the save-time self-call and depth guards only see
+                literal targets. Recursion through one is stopped only at run time, {MAX_CALL_DEPTH}{' '}
+                nested runs deep, where the next call is refused and that node fails.
+              </>
+            ),
+          }}
         >
           Version id or expression
         </PickableInput>
       )}
 
-      <label className="contract-check">
-        <input
-          type="checkbox"
-          checked={draft.wait}
-          onChange={(e) => setDraft((d) => ({ ...d, wait: e.target.checked }))}
-        />
-        Wait for the child run to finish
-      </label>
-      {!draft.wait && (
-        <p className="page-hint">
-          This node succeeds as soon as the child run starts. The child runs on by itself, and its
-          outcome and outputs never come back here.
-        </p>
-      )}
+      {/* #1694 OR42 item 4 — what unticking means is behind the box's `?`, not a
+          paragraph that appears under it. */}
+      <CheckboxField
+        label="Wait for the child run to finish"
+        name="Wait for the child run to finish"
+        checked={draft.wait}
+        onChange={(wait) => setDraft((d) => ({ ...d, wait }))}
+        about="Unticked, this node succeeds as soon as the child run starts. The child runs on by itself, and its outcome and outputs never come back here."
+      />
 
       <Section heading="Parameters" help={null}>
         {draft.mode === 'pick' && !chosen ? (
@@ -408,10 +407,10 @@ function CallEditor({
           // target, so there is nothing honest to offer — and offering the JSON
           // fallback here would invite an operator to hand-write a record this
           // panel is about to be able to type for them.
-          <p className="page-hint">Choose a version to see the parameters it declares.</p>
+          <p className="page-hint">No version chosen</p>
         ) : draft.mode === 'pick' && chosen ? (
           rows.length === 0 ? (
-            <p className="page-hint">This pipeline version declares no parameters.</p>
+            <p className="page-hint">No parameters</p>
           ) : (
             <ul className="call-params">
               {rows.map((name) => {
@@ -436,9 +435,7 @@ function CallEditor({
                       {decl ? (
                         <span className="page-hint">{VALUE_TYPE_TITLES[decl.type]}</span>
                       ) : (
-                        <span className="page-hint">
-                          not declared by this version — will be sent anyway
-                        </span>
+                        <span className="page-hint">undeclared, sent anyway</span>
                       )}
                     </PickableInput>
                   </li>
@@ -447,23 +444,23 @@ function CallEditor({
             </ul>
           )
         ) : (
-          <LabelledControl label="Parameters (JSON object)">
-            {(id) => (
-              <>
-                <JsonEditor
-                  id={id}
-                  label="Parameters (JSON object)"
-                  value={draft.paramsJson}
-                  onValueChange={(paramsJson) => setDraft((d) => ({ ...d, paramsJson }))}
-                  rows={4}
-                  placeholder="{}"
-                  aria-describedby={`${id}-hint`}
-                />
-                <span id={`${id}-hint`} className="page-hint">
-                  The target is not a version this workspace can list, so its declared parameters
-                  are unknown — enter the arguments directly.
-                </span>
-              </>
+          <LabelledControl
+            label="Parameters (JSON object)"
+            about={{
+              name: 'Parameters (JSON object)',
+              note: 'The target is not a version this workspace can list, so its declared parameters are unknown. Enter the arguments directly.',
+            }}
+          >
+            {(id, describedBy) => (
+              <JsonEditor
+                id={id}
+                label="Parameters (JSON object)"
+                value={draft.paramsJson}
+                onValueChange={(paramsJson) => setDraft((d) => ({ ...d, paramsJson }))}
+                rows={4}
+                placeholder="{}"
+                aria-describedby={describedBy}
+              />
             )}
           </LabelledControl>
         )}

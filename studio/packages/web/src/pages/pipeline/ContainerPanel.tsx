@@ -35,6 +35,7 @@ import { validateCanvas } from './canvasDoc';
 import { containersWithUpdated, type GeneralPatch } from './canvasStore';
 import { CONTAINER_EDIT_TONE, containerEditQuestion, containerLabels } from './containerRules';
 import { Toolbar } from '../../lib/PageHeader';
+import { PanelHeader } from './PanelHeader';
 import { useConfirm } from '../../lib/confirm/useConfirm';
 import { useSubjectIssues } from './issueContext';
 import { SubjectIssues } from './SubjectIssues';
@@ -149,7 +150,7 @@ export function ContainerPanel({
   const label =
     containerLabels(containers).get(container.id) ?? CONTAINER_KIND_LABELS[container.kind];
   // #1413 — the palette's sentence for this kind. A kind the palette does not
-  // list gets no line rather than a bare type id.
+  // list gets no `?` rather than an empty one.
   const kindDescription = CONTAINER_PALETTE.find((e) => e.kind === container.kind)?.description;
   const stored = container as unknown as Record<string, unknown>;
 
@@ -461,14 +462,21 @@ export function ContainerPanel({
        top-level landmark (#1594 OR40 S5). */
     <section className="property-panel" aria-label="Properties">
       {confirmDialog}
-      <h2>{label}</h2>
-      {/* #1413 — the palette's hover sentence, kept once the box is placed, as
-          the node panel does for an activity. */}
-      {kindDescription && (
-        <p className="page-hint property-panel__about">
-          {kindDescription} <code>{container.kind}</code>
-        </p>
-      )}
+      {/* #1694 OR42 — the activity panel's header row: the name, the kind id,
+          and the palette's sentence behind a `?` (#1413), not a paragraph. */}
+      <PanelHeader
+        name={label}
+        type={container.kind}
+        about={
+          kindDescription === undefined
+            ? undefined
+            : {
+                title: CONTAINER_KIND_LABELS[container.kind],
+                noteId: `${container.id}-about`,
+                body: kindDescription,
+              }
+        }
+      />
       <p className="page-hint">
         {container.children.length} {container.children.length === 1 ? 'activity' : 'activities'}{' '}
         inside.
@@ -589,9 +597,7 @@ function ForeachModeHint({
   const n = parsed.data;
   return (
     <p className="page-hint">
-      {isParallelForeach({ ...container, batchCount: n })
-        ? `Parallel: up to ${n} items run at once. Each item still runs its activities in order.`
-        : 'Sequential: items run one at a time, in order. Set batchCount above 1 to run items in parallel.'}
+      {isParallelForeach({ ...container, batchCount: n }) ? `Parallel (${n})` : 'Sequential'}
     </p>
   );
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { answerConfirm } from '../../testing/confirmDialog';
 import {
@@ -70,14 +70,18 @@ describe('ContainerPanel says what the container does (#1413)', () => {
   // Every KIND, not every palette entry: a kind the palette forgot would get no
   // line at all, and this is what catches it.
   it.each(ContainerKindSchema.options)(
-    'a %s box repeats its palette description and names its kind',
+    'a %s box names its kind and keeps its palette description behind a `?`',
     (kind) => {
       const description = CONTAINER_PALETTE.find((e) => e.kind === kind)?.description;
       expect(description).toBeDefined();
       mount({ ...LOOP, kind } as Container);
-      const about = screen.getAllByRole('heading', { level: 2 })[0]!.nextElementSibling;
-      expect(about?.classList.contains('property-panel__about')).toBe(true);
-      expect(about?.textContent).toBe(`${description} ${kind}`);
+      // #1694 OR42 — the activity panel's header row: name, kind id, `?`.
+      const header = screen.getAllByRole('heading', { level: 2 })[0]!.parentElement!;
+      expect(header.classList.contains('property-panel__header')).toBe(true);
+      expect(header.querySelector('.property-panel__type')?.textContent).toBe(kind);
+      expect(within(header).getByText(description!)).toBeDefined();
+      // Not a paragraph under the heading.
+      expect(document.querySelector('.property-panel__about')).toBeNull();
       // One sentence, like an activity's (registry.test.ts holds those).
       expect(description).toMatch(/^[^.!?]+\.$/);
     },
@@ -557,28 +561,28 @@ describe('ContainerPanel — a foreach says whether it runs in parallel', () => 
 
   it('reads as sequential with no batchCount, and as parallel once one is typed', () => {
     mount(FOREACH);
-    expect(screen.getByText(/^Sequential: items run one at a time, in order\./)).toBeDefined();
+    expect(screen.getByText('Sequential')).toBeDefined();
     fireEvent.change(screen.getByLabelText(/^Batch count/), { target: { value: '4' } });
-    expect(screen.getByText(/^Parallel: up to 4 items run at once\./)).toBeDefined();
-    expect(screen.queryByText(/^Sequential:/)).toBeNull();
+    expect(screen.getByText('Parallel (4)')).toBeDefined();
+    expect(screen.queryByText('Sequential')).toBeNull();
     fireEvent.change(screen.getByLabelText(/^Batch count/), { target: { value: '1' } });
-    expect(screen.getByText(/^Sequential:/)).toBeDefined();
+    expect(screen.getByText('Sequential')).toBeDefined();
   });
 
   it('claims neither mode for a value that is not a batch count', () => {
     mount({ ...FOREACH, batchCount: 3 });
-    expect(screen.getByText(/^Parallel: up to 3 items/)).toBeDefined();
+    expect(screen.getByText('Parallel (3)')).toBeDefined();
     // A fraction the schema refuses, and number literals `Number()` reads but
     // Apply's own parser refuses — each would otherwise claim a mode.
     for (const value of ['2.5', '0x3', '+3', '99']) {
       fireEvent.change(screen.getByLabelText(/^Batch count/), { target: { value } });
-      expect(screen.queryByText(/^(Sequential|Parallel):/), value).toBeNull();
+      expect(screen.queryByText(/^(Sequential|Parallel \()/), value).toBeNull();
     }
   });
 
   it('is a foreach line only', () => {
     mount(LOOP);
-    expect(screen.queryByText(/^(Sequential|Parallel):/)).toBeNull();
+    expect(screen.queryByText(/^(Sequential|Parallel \()/)).toBeNull();
   });
 });
 

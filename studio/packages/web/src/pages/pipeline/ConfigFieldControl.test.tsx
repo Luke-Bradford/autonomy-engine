@@ -591,3 +591,50 @@ describe('ConfigFieldControl — units as suffixes, blank empty cells (#1694)', 
     expect(top.getByRole('combobox').getAttribute('data-size')).toBe('s');
   });
 });
+
+describe('ConfigFieldControl — what a list holds is behind its `?`, not a paragraph (#1694 OR42)', () => {
+  const secrets: ConfigField = {
+    name: 'auth',
+    kind: 'keyValue',
+    optional: true,
+    recordValue: 'secret',
+    elementFields: [
+      { name: 'key', kind: 'text', optional: false },
+      { name: 'secret', kind: 'text', optional: false },
+    ],
+  };
+  const described: ConfigField = {
+    ...secrets,
+    label: { title: 'Auth', description: 'Headers sent with the request.' },
+  };
+
+  const schema: ConfigField = {
+    name: 'outputSchema',
+    kind: 'outputSchema',
+    optional: true,
+    elementFields: [{ name: 'name', kind: 'text', optional: false }],
+  };
+
+  it.each([
+    ['an output schema', schema, /^Each row is one field of the structured output.*\{"enum"/],
+    ['a secret list with no note of its own', secrets, /^Each row names a secret/],
+    [
+      'a secret list after its own note',
+      described,
+      /^Headers sent with the request\..*Each row names a secret/,
+    ],
+  ])('%s', (_, field, reads) => {
+    const { container } = render(<ConfigFieldControl field={field} value={[]} onChange={noop} />);
+    // No paragraph explains the rows; the `?` beside the list's label does.
+    for (const p of container.querySelectorAll('p')) {
+      expect(p.textContent).not.toMatch(/Each row/);
+    }
+    const notes = container.querySelectorAll('.object-list-label details');
+    expect(notes).toHaveLength(1);
+    const note = notes[0]!.querySelector('[id]')!;
+    expect(note.textContent).toMatch(reads);
+    // The note is still the list's description, for a screen reader.
+    const group = container.querySelector('.object-list')!;
+    expect(group.getAttribute('aria-describedby')?.split(' ')).toContain(note.id);
+  });
+});

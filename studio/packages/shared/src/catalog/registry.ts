@@ -323,7 +323,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     configSchema: z.object({
       variable: presented(literalText(singleLine(z.string())).min(1), {
         title: 'Variable name',
-        description: 'The name of a variable declared on the pipeline.',
+        description: "The name of a variable declared on the pipeline's Variables tab.",
       }),
       value: presented(singleLine(z.string()), { title: 'Value' }),
     }),
@@ -345,7 +345,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
     configSchema: z.object({
       variable: presented(literalText(singleLine(z.string())).min(1), {
         title: 'Variable name',
-        description: 'The name of a variable declared on the pipeline.',
+        description:
+          "The name of an array variable declared on the pipeline's Variables tab. To replace a value instead, use Set variable.",
       }),
       value: presented(singleLine(z.string()), { title: 'Value' }),
     }),

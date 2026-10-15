@@ -277,12 +277,6 @@ export function ConfigFieldControl({
         {titled !== undefined && <code>{field.name}</code>}
       </>
     );
-  const hint =
-    hintBody === null ? null : (
-      <p id={hintId} className="field-hint">
-        {hintBody}
-      </p>
-    );
   // #1477 OR29 — a labelled field's explanation is behind a `?` beside its label
   // (labels, not prose), as a row list's already was. The note keeps `hintId`, so
   // the control's description is unchanged. #1694 OR42 — a checkbox's too, beside
@@ -295,7 +289,7 @@ export function ConfigFieldControl({
     );
   const errorId = useId();
   const error = validation?.error;
-  const shownHintId = hint === null ? undefined : hintId;
+  const shownHintId = hintBody === null ? undefined : hintId;
   // #1396 — with `validation`, the field's key, invalid mark and a description
   // that leads with the error; without it (the canvas), the hint alone.
   const checkedAs = (group: boolean): Partial<ReturnType<typeof fieldAttrs>> =>
@@ -805,12 +799,41 @@ export function ObjectListControl({
     baseline: 'probed',
   });
 
+  // #1694 OR42 item 4 — what a secret list or an output schema's rows hold is
+  // behind the list's `?`, after the field's own note, not a paragraph under
+  // its toolbar (labels, not prose). A list with no note of its own gets one.
+  const listNote =
+    field.recordValue === 'secret' ? (
+      <>Each row names a secret from the Secrets page. Never type the secret&apos;s value here.</>
+    ) : field.kind === 'outputSchema' ? (
+      <>
+        Each row is one field of the structured output. Constraints take the rest of the
+        field&apos;s JSON Schema, such as <code>{'{"enum": ["a", "b"]}'}</code>.
+      </>
+    ) : null;
+  const ownNoteId = useId();
+  const aboutId = help?.id ?? ownNoteId;
+  const about: ReactNode =
+    help === undefined ? (
+      listNote
+    ) : listNote === null ? (
+      help.body
+    ) : (
+      <>
+        {help.body} {listNote}
+      </>
+    );
+  const describedByAll =
+    help === undefined && listNote !== null
+      ? [describedBy, aboutId].filter(Boolean).join(' ')
+      : describedBy;
+
   return (
     <div
       className="config-field object-list"
       role="group"
       aria-label={label}
-      aria-describedby={describedBy}
+      aria-describedby={describedByAll}
       {...checked}
       ref={groupRef}
     >
@@ -818,9 +841,9 @@ export function ObjectListControl({
       <div className="object-list-label help-row">
         <span id={labelId}>{label}</span>
         {required && <RequiredMark />}
-        {help !== undefined && (
-          <AboutHelp name={label} noteId={help.id}>
-            {help.body}
+        {about !== null && (
+          <AboutHelp name={label} noteId={aboutId}>
+            {about}
           </AboutHelp>
         )}
       </div>
@@ -832,17 +855,6 @@ export function ObjectListControl({
         {actions}
       </Toolbar>
       {rows.length === 0 ? <p className="page-hint">No rows.</p> : null}
-      {field.recordValue === 'secret' ? (
-        <p className="page-hint">
-          Each row names a secret from the Secrets page. Never type the secret&apos;s value here.
-        </p>
-      ) : null}
-      {field.kind === 'outputSchema' ? (
-        <p className="page-hint">
-          Each row is one field of the structured output. Constraints take the rest of the
-          field&apos;s JSON Schema, such as <code>{'{"enum": ["a", "b"]}'}</code>.
-        </p>
-      ) : null}
       {rows.length > 0 ? (
         <RowTable columns={columns} labelledBy={labelId}>
           {rows.map((row, index) => (

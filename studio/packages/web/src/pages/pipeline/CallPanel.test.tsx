@@ -270,7 +270,7 @@ describe('CallPanel (component)', () => {
     await waitFor(() => expect(screen.getByLabelText(/query/)).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/query/), { target: { value: 'ships' } });
     fireEvent.change(screen.getByLabelText(/limit/), { target: { value: '25' } });
-    fireEvent.click(screen.getByLabelText(/Wait for the child run/));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Wait for the child run to finish' }));
 
     const before = store.getState().past.length;
     fireEvent.click(screen.getByRole('button', { name: 'Apply call' }));
@@ -319,7 +319,9 @@ describe('CallPanel (component)', () => {
 
     fireEvent.click(screen.getByLabelText('Expression'));
     // Translated, and TYPED — `limit` is a number on the far side, not '25'.
-    const json = (screen.getByLabelText(/Parameters \(JSON object\)/) as HTMLTextAreaElement).value;
+    const json = (
+      screen.getByRole('textbox', { name: /Parameters \(JSON object\)/ }) as HTMLTextAreaElement
+    ).value;
     expect(JSON.parse(json)).toEqual({ query: 'ships', limit: 25 });
 
     fireEvent.click(screen.getByLabelText('Pick a version'));

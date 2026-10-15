@@ -75,9 +75,7 @@ test.describe('#425 — call-node authoring', () => {
     // property of the target, not of the node — and the panel says so rather
     // than offering an empty form or a raw JSON box.
     await expect(arg(page, 'query')).toHaveCount(0);
-    await expect(
-      properties(page).getByText('Choose a version to see the parameters it declares.'),
-    ).toBeVisible();
+    await expect(properties(page).getByText('No version chosen', { exact: true })).toBeVisible();
 
     await properties(page)
       .getByRole('combobox', { name: 'Pipeline' })
@@ -91,15 +89,18 @@ test.describe('#425 — call-node authoring', () => {
     // #796 item 2 — a new call WAITS, because that is what the engine does with
     // an absent `wait`; the box used to read unchecked while the node waited.
     // Unticking it is the one choice that gets written.
-    const wait = properties(page).getByLabel('Wait for the child run');
+    // #1694 OR42 — what unticking means is the box's description (its `?`),
+    // never a paragraph that appears under it.
+    const wait = properties(page).getByRole('checkbox', {
+      name: 'Wait for the child run to finish',
+    });
     await expect(wait).toBeChecked();
-    await expect(
-      properties(page).getByText('succeeds as soon as the child run starts'),
-    ).toHaveCount(0);
+    await expect(wait).toHaveAccessibleDescription(/succeeds as soon as the child run starts/);
     await wait.uncheck();
+    await expect(wait).toHaveAccessibleDescription(/succeeds as soon as the child run starts/);
     await expect(
-      properties(page).getByText('succeeds as soon as the child run starts'),
-    ).toBeVisible();
+      properties(page).locator('p').filter({ hasText: 'succeeds as soon as the child run starts' }),
+    ).toHaveCount(0);
     await properties(page).getByRole('button', { name: 'Apply call' }).click();
 
     expect(await validationIssues(page), 'the authored call left the doc invalid').toEqual([]);
@@ -118,7 +119,9 @@ test.describe('#425 — call-node authoring', () => {
     await expect(properties(page).getByRole('combobox', { name: 'Pipeline' })).toContainText(CHILD);
     await expect(arg(page, 'query')).toHaveValue('ships');
     await expect(arg(page, 'limit')).toHaveValue('25');
-    await expect(properties(page).getByLabel('Wait for the child run')).not.toBeChecked();
+    await expect(
+      properties(page).getByRole('checkbox', { name: 'Wait for the child run to finish' }),
+    ).not.toBeChecked();
 
     // The contract that would otherwise be destroyed silently: a call node's
     // outputs come from the CHILD projection, so `config.outputs` must be ABSENT
@@ -163,16 +166,26 @@ test.describe('#425 — call-node authoring', () => {
            `MAX_CALL_DEPTH`), and reaching that bound is a refusal, not a cap —
            stated as "only at run time" because the nested runs up to the bound
            DO execute, side effects included, before the next one is refused. */
-    await expect(properties(page).getByText(/references are checked when you save/)).toBeVisible();
-    await expect(properties(page).getByText(/only see literal targets/)).toBeVisible();
-    await expect(properties(page).getByText(/nested runs\s+deep/)).toBeVisible();
-    await expect(properties(page).getByText(/the next call is refused/)).toBeVisible();
-    await expect(properties(page).getByText(/not checked when you save/)).toHaveCount(0);
+    // #1694 OR42 — behind the box's `?`, so read as its description.
+    const target = properties(page).getByRole('textbox', {
+      name: 'Version id or expression',
+      exact: true,
+    });
+    await expect(target).toHaveAccessibleDescription(/references are checked when you save/);
+    await expect(target).toHaveAccessibleDescription(/only see literal targets/);
+    await expect(target).toHaveAccessibleDescription(/nested runs\s+deep/);
+    await expect(target).toHaveAccessibleDescription(/the next call is refused/);
+    await expect(target).not.toHaveAccessibleDescription(/not checked when you save/);
+    await expect(
+      properties(page).locator('.page-hint').filter({ hasText: 'checked when you save' }),
+    ).toHaveCount(0);
 
-    await properties(page).getByLabel('Version id or expression').fill('${params.target}');
+    await target.fill('${params.target}');
     // The target is not a listable version, so its declared params are unknown —
     // the arguments are entered directly rather than guessed at.
-    await properties(page).getByLabel('Parameters (JSON object)').fill('{"query":"ships"}');
+    await properties(page)
+      .getByRole('textbox', { name: 'Parameters (JSON object)', exact: true })
+      .fill('{"query":"ships"}');
     await properties(page).getByRole('button', { name: 'Apply call' }).click();
 
     expect(await validationIssues(page)).toEqual([]);
@@ -184,12 +197,10 @@ test.describe('#425 — call-node authoring', () => {
     // chosen" and then lost on the next Apply.
     await page.goto(`/#/author/pipelines/${encodeURIComponent(parentId)}`);
     await canvasNodes(page).first().click();
-    await expect(properties(page).getByLabel('Version id or expression')).toHaveValue(
-      '${params.target}',
-    );
-    await expect(properties(page).getByLabel('Parameters (JSON object)')).toHaveValue(
-      '{\n  "query": "ships"\n}',
-    );
+    await expect(target).toHaveValue('${params.target}');
+    await expect(
+      properties(page).getByRole('textbox', { name: 'Parameters (JSON object)', exact: true }),
+    ).toHaveValue('{\n  "query": "ships"\n}');
 
     await expectQuiet(page, problems);
   });

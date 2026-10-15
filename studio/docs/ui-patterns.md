@@ -156,6 +156,14 @@ required marks and display names; its layout is its own, below.
   `sectionHints.test.ts`; a hint with markup (a `${…}` reference in `<code>`) is written inline. The note is the section's `aria-describedby`; the `?` is beside the
   heading, never inside it, so the section's name stays the heading alone. A hint never restates a
   note already inside its section, which a screen reader would read twice.
+- **The properties pane shows no prose at all (#1694 OR42 item 4).** What a field, a list or a
+  type means is its `?`, as the field's description: a list's note follows the field's own in one
+  `?`, the panel header (`PanelHeader`) keeps the type's palette sentence behind one, and a
+  checkbox's consequence is its `CheckboxField` note. A state line stays visible but terse, three
+  words at most ("No variables declared", "No sink dataset", "Parallel (4)"), and is the control's
+  description where it explains one. Warnings, errors and advisories about the current value are
+  not prose. `e2e/property-pane-ratchet.spec.ts` fails on any prose line in any catalog type's
+  default pane.
 - A field's title must not contain another field's label on the same form ("Name", "Kind",
   "Store"): label lookups by substring, in tests and in assistive tech, would then find two
   controls. A section may share its field's word ("Value"): the section is a group, not a control,

@@ -35,13 +35,10 @@ export function variableWriteChoices(
   return {
     values: eligible.map((v) => v.name),
     describe: (name) => `${name} (${types.get(name) ?? 'undeclared'})`,
-    // Two different repairs, so two different sentences: telling an author with
-    // three string variables to "declare one" would send them to a tab that
-    // already has what they think the chooser wants. Short (#1477 OR29): a
-    // second line pushed Set variable's Value off a 1280×720 screen.
-    emptyHint:
-      variables.length === 0
-        ? 'No variables are declared. Add one on the Variables tab.'
-        : 'No array variables. Add one on the Variables tab, or use Set variable.',
+    // Two different states, so two different lines: telling an author with
+    // three string variables "no variables" would send them to a tab that
+    // already has what they think the chooser wants. #1694 OR42 item 4 — a
+    // state, not a paragraph; where to declare one is the field's `?`.
+    emptyHint: variables.length === 0 ? 'No variables declared' : 'No array variables',
   };
 }

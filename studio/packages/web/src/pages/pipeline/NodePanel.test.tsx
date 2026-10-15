@@ -1382,7 +1382,11 @@ describe('NodePanel (Auto-map and the unmapped advisory, #1170)', () => {
     expect(screen.getByRole('button', { name: 'Auto-map columns' }).hasAttribute('disabled')).toBe(
       true,
     );
-    expect(screen.getByText(/Bind a source and a sink dataset/)).toBeTruthy();
+    // #1694 OR42 — a short state beside it, which is also the button's description.
+    const line = screen.getByText('No datasets bound');
+    expect(
+      screen.getByRole('button', { name: 'Auto-map columns' }).getAttribute('aria-describedby'),
+    ).toContain(line.id);
   });
 
   it('names a NOT NULL sink column nothing writes apart from one merely not copied', () => {

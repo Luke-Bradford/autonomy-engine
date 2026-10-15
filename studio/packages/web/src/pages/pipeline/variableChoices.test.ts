@@ -32,15 +32,13 @@ describe('variableWriteChoices (#844 V6)', () => {
   it('says WHY a list is empty: none declared, versus none of them an array', () => {
     expect(variableWriteChoices('set_variable', [])).toMatchObject({
       values: [],
-      emptyHint: expect.stringMatching(/^No variables are declared/),
+      emptyHint: 'No variables declared',
     });
-    expect(variableWriteChoices('append_variable', [])?.emptyHint).toMatch(
-      /^No variables are declared/,
-    );
+    expect(variableWriteChoices('append_variable', [])?.emptyHint).toBe('No variables declared');
     const noArrays = declared.filter((v) => v.type !== 'array');
     expect(variableWriteChoices('append_variable', noArrays)).toMatchObject({
       values: [],
-      emptyHint: expect.stringMatching(/^No array variables/),
+      emptyHint: 'No array variables',
     });
   });
 
