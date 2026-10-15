@@ -4086,6 +4086,97 @@ describe('setNodeBindingEnd — paired bindings reach the doc WHOLE (#1139)', ()
     expect(n.inlineDatasets).toBeUndefined();
   });
 
+  it('#1600 C1q-b — setNodeInlineSource replaces the saved source end, keeps the sink, and undoes as one step', () => {
+    const store = createCanvasStore();
+    store.getState().loadVersion(null);
+    store.setState({
+      nodes: [
+        {
+          id: 'c',
+          type: 'copy',
+          config: {},
+          connectionIds: { source: 'conn_a', sink: 'conn_b' },
+          datasetIds: { source: 'ds_src', sink: 'ds_sink' },
+          datasetParams: { source: { table: 'x' }, sink: { table: 'y' } },
+          position: { x: 0, y: 0 },
+        },
+      ],
+    });
+    const before = store.getState().nodes[0]!;
+
+    const query = { kind: 'query' as const, config: { sql: 'SELECT 1' } };
+    store.getState().setNodeInlineSource('c', query);
+    const n = store.getState().nodes[0]!;
+    expect(n.inlineDatasets).toEqual({ source: query });
+    expect(n.datasetIds).toEqual({ sink: 'ds_sink' });
+    expect('source' in (n.datasetIds as object)).toBe(false);
+    expect(n.datasetParams).toEqual({ sink: { table: 'y' } });
+    expect(store.getState().dirty).toBe(true);
+
+    // A typing burst on one field coalesces into ONE undo step.
+    store.getState().setNodeInlineSource('c', { kind: 'query', config: { sql: 'SELECT 12' } }, 'sql');
+    store.getState().setNodeInlineSource('c', { kind: 'query', config: { sql: 'SELECT 123' } }, 'sql');
+    expect(store.getState().nodes[0]!.inlineDatasets?.source.config).toEqual({ sql: 'SELECT 123' });
+    store.getState().undo();
+    expect(store.getState().nodes[0]!.inlineDatasets).toEqual({ source: query });
+    store.getState().undo();
+    expect(store.getState().nodes[0]).toEqual(before);
+
+    // `undefined` removes the inline source and leaves the sink alone.
+    store.getState().redo();
+    store.getState().setNodeInlineSource('c', undefined);
+    const cleared = store.getState().nodes[0]!;
+    expect('inlineDatasets' in cleared).toBe(false);
+    expect(cleared.datasetIds).toEqual({ sink: 'ds_sink' });
+  });
+
+  it('#1600 C1q-b — setNodeInlineSource on a source-only node drops datasetIds whole, and commits a half-picked sink', () => {
+    const store = createCanvasStore();
+    store.setState({
+      nodes: [
+        {
+          id: 'l',
+          type: 'lookup',
+          config: {},
+          connectionId: 'conn_a',
+          datasetIds: { source: 'ds_src' },
+          datasetParams: { source: { table: 'x' } },
+          position: { x: 0, y: 0 },
+        },
+        {
+          id: 'c',
+          type: 'copy',
+          config: {},
+          connectionIds: { source: 'conn_a', sink: 'conn_b' },
+          position: { x: 0, y: 0 },
+        },
+      ],
+    });
+    const table = { kind: 'table' as const, config: { table: 'orders' } };
+    store.getState().setNodeInlineSource('l', table);
+    const l = store.getState().nodes[0]!;
+    expect(l.inlineDatasets).toEqual({ source: table });
+    expect('datasetIds' in l).toBe(false);
+    expect('datasetParams' in l).toBe(false);
+
+    // A copy with only its sink picked holds it as PENDING; the inline source
+    // completes the end, so the sink reaches the doc and nothing stays pending.
+    store.getState().setNodeBindingEnd('c', 'datasets', 'sink', 'ds_sink');
+    expect(store.getState().nodes[1]!.datasetIds).toBeUndefined();
+    store.getState().setNodeInlineSource('c', table);
+    expect(store.getState().nodes[1]!.datasetIds).toEqual({ sink: 'ds_sink' });
+    expect(store.getState().pendingBindings['c']).toBeUndefined();
+
+    // Never for a missing node, or one whose activity binds no dataset source.
+    const settled = store.getState().nodes;
+    store.getState().setNodeInlineSource('missing', table);
+    store.getState().addNode('llm_call');
+    const llm = store.getState().nodes[2]!;
+    store.getState().setNodeInlineSource(llm.id, table);
+    expect(store.getState().nodes[2]).toBe(llm);
+    expect(store.getState().nodes.slice(0, 2)).toEqual(settled);
+  });
+
   it('DROPS a sink a source-only node inherited, rather than carrying it forward', () => {
     // Reachable through an imported or API-seeded doc: the edit spreads the
     // node's existing pair, so editing only the source would otherwise re-commit

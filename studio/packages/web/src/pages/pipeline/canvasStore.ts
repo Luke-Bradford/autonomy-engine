@@ -25,6 +25,7 @@ import {
   type Param,
   type VariableDef,
   type GlobalRead,
+  type InlineDataset,
   type PipelineVersion,
   type Position,
 } from '@autonomy-studio/shared';
@@ -1507,6 +1508,21 @@ export interface CanvasState {
     coalesceKey?: string,
   ): void;
   /**
+   * #1600 OR41 C1q-b — set (or, with `undefined`, remove) the node's inline
+   * database source, the dock's *Use* Table · Query.
+   *
+   * An inline source IS the source end, so setting one drops the saved source
+   * dataset and its `datasetParams.source` (`validateDoc` refuses both naming the
+   * source). The sink end is kept, and a sink only PENDING (a copy whose sink was
+   * picked before any source) is committed beside it, because the inline source
+   * completes the pair. Removing it leaves the sink as it was.
+   *
+   * Whole-value like the other node setters: the caller builds the config.
+   * `coalesceKey` names the field being typed into, so a keystroke burst is ONE
+   * undo step, as `setNodeParamOverrides` does.
+   */
+  setNodeInlineSource(id: string, inline: InlineDataset | undefined, coalesceKey?: string): void;
+  /**
    * #1312 — replace a node's run `policy` (retry, retry interval, secure flags).
    *
    * Whole-value, like the other node setters: the caller merges. Undefined keys
@@ -2583,6 +2599,49 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           }),
           coalesceKey === undefined ? undefined : `params:${id}:${end}:${coalesceKey}`,
         );
+      },
+
+      setNodeInlineSource(id, inline, coalesceKey) {
+        const state = get();
+        const node = state.nodes.find((n) => n.id === id);
+        if (node === undefined) return;
+        if (inline === undefined && node.inlineDatasets === undefined) return;
+        // Only an activity that reads a dataset source has a source to replace.
+        if (inline !== undefined && getActivity(node.type)?.datasetKinds === undefined) return;
+        const sink = node.datasetIds?.sink ?? state.pendingBindings[id]?.datasets?.sink;
+        edit(
+          (s) => ({
+            nodes: s.nodes.map((n) => {
+              if (n.id !== id) return n;
+              const next = { ...n };
+              if (inline === undefined) {
+                delete next.inlineDatasets;
+                return next;
+              }
+              next.inlineDatasets = { source: inline };
+              // The sink key is omitted, never `undefined` (see setNodeBindingEnd).
+              if (sink !== undefined) next.datasetIds = { sink };
+              else delete next.datasetIds;
+              if (next.datasetParams?.sink !== undefined) {
+                next.datasetParams = { sink: next.datasetParams.sink };
+              } else delete next.datasetParams;
+              return next;
+            }),
+          }),
+          coalesceKey === undefined ? undefined : `inline:${id}:${coalesceKey}`,
+        );
+        // A pending dataset end is now complete or moot. Selection state, not
+        // document state, so outside `edit()` (setNodeBindingEnd's rule).
+        if (inline !== undefined && state.pendingBindings[id]?.datasets !== undefined) {
+          set((s) => {
+            const forNode = { ...s.pendingBindings[id] };
+            delete forNode.datasets;
+            const rest = { ...s.pendingBindings };
+            if (forNode.connections === undefined) delete rest[id];
+            else rest[id] = forNode;
+            return { pendingBindings: rest };
+          });
+        }
       },
 
       setNodeBindingEnd(id, kind, side, value) {
