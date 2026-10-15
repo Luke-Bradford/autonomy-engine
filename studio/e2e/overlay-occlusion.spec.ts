@@ -190,6 +190,12 @@ for (const viewport of VIEWPORTS) {
     for (const path of PAGES) {
       await page.goto(path);
       await page.getByRole('heading', { level: 1 }).waitFor();
+      // #1707 — swept once the page has loaded, not while it shows "Loading
+      // triggers…": the list then lands above the Import `?`, moving it 2000px
+      // down under its open note, and its rows' menus were never counted.
+      await expect(page.locator('.content').getByText(/^Loading\b.*…$/)).toHaveCount(0, {
+        timeout: 15_000,
+      });
       checked += await expectEveryPopupUnobstructed(page, page.locator('.content'), path);
       notes += await expectEveryHelpNoteUnobstructed(page.locator('.content'), path);
     }
