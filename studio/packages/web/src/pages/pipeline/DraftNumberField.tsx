@@ -1,5 +1,6 @@
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { UnitLabel, WithUnit } from '../../lib/form/UnitInput';
 import { titleWithUnit } from '../../lib/form/unit';
@@ -34,6 +35,7 @@ export function DraftNumberField<V extends number | undefined>({
   about,
   placeholder,
   unit,
+  errorLine,
 }: {
   /** The title alone; `unit` is drawn as the box's suffix (#1694 OR42 item 5). */
   label: string;
@@ -45,6 +47,13 @@ export function DraftNumberField<V extends number | undefined>({
   placeholder?: string;
   /** "seconds": out of the label's sight, in its name and the `?`'s ("Timeout (seconds)"). */
   unit?: string;
+  /**
+   * #1694 OR42 item 5 — a SHARED reserved error line for a group of fields
+   * (`FieldErrorLine`). Given, the field reserves no line of its own and writes
+   * its error there, after its name; `null` while that line has not mounted.
+   * Left out, the field keeps its own slot under it (a field on its own).
+   */
+  errorLine?: HTMLElement | null;
 }) {
   const text = stored === undefined ? '' : String(stored);
   const [draft, setDraft] = useState(text);
@@ -122,12 +131,25 @@ export function DraftNumberField<V extends number | undefined>({
           </WithUnit>
         )}
       </LabelledControl>
-      {/* #1393 — a RESERVED slot, always mounted and a line tall, so an error
-          arriving does not push every field below it down. It used to REPLACE
-          the hint, which moved them by the difference in height. The alert is
-          only the populated line inside: an empty `role="alert"` would still
-          be found by every page-wide alert query. */}
-      <FieldError id={errorId} message={error} role="alert" />
+      {errorLine === undefined ? (
+        /* #1393 — a RESERVED slot, always mounted and a line tall, so an error
+           arriving does not push every field below it down. It used to REPLACE
+           the hint, which moved them by the difference in height. The alert is
+           only the populated line inside: an empty `role="alert"` would still
+           be found by every page-wide alert query. */
+        <FieldError id={errorId} message={error} role="alert" />
+      ) : (
+        error !== null &&
+        errorLine !== null &&
+        createPortal(
+          // Named, since it no longer sits under its field: "name: message",
+          // as a drawer form's summary reads (`FormErrors`).
+          <p id={errorId} className="error" role="alert">
+            {`${label}: ${error}`}
+          </p>,
+          errorLine,
+        )
+      )}
     </>
   );
 }

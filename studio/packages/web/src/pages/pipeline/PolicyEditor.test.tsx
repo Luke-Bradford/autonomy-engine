@@ -69,7 +69,14 @@ describe('PolicyEditor (#1312)', () => {
   it('a non-whole entry is reported and NOT written, and correcting it clears the error', () => {
     const { field, policy, section } = mount([node('a', 'http_request', { policy: { retry: 1 } })]);
     enter(field('Retries'), '1.5');
-    expect(within(section).getByRole('alert').textContent).toMatch(/not a whole number/);
+    expect(within(section).getByRole('alert').textContent).toMatch(
+      /^Retries: .*not a whole number/,
+    );
+    // #1694 OR42 item 5 — one reserved line for the section's numbers, after
+    // them, not one under each row.
+    const slots = section.querySelectorAll('.field-error-slot');
+    expect(slots).toHaveLength(1);
+    expect(slots[0]!.contains(within(section).getByRole('alert'))).toBe(true);
     expect(policy()).toEqual({ retry: 1 });
     // Retyping the stored value writes nothing but must still clear the error.
     enter(field('Retries'), '1');
