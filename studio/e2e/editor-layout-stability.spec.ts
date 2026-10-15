@@ -27,6 +27,11 @@ const boxes = {
   // #1477 OR29 — Retry interval now packs beside Retries; Secure input is
   // the first control on the row below.
   belowRetries: (page: Page) => properties(page).getByRole('checkbox', { name: 'Secure input' }),
+  // #1694 OR42 item 5 — the run policy's errors share ONE reserved line after
+  // its fields, so the box that proves that line holds still is the next
+  // section's heading, below it.
+  belowErrorLine: (page: Page) =>
+    properties(page).getByRole('heading', { name: 'User properties' }),
   save: (page: Page) => page.getByRole('button', { name: 'Save version' }),
 };
 

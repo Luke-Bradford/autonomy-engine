@@ -229,3 +229,67 @@ test('a ForEach container shows General · Items · Concurrency · Settings tabs
   await expect(panel.getByRole('textbox', { name: /^Items/ })).toBeHidden();
   await expectQuiet(page, problems);
 });
+
+/**
+ * #1694 OR42 item 5 — one row rhythm. The run policy's numbers used to reserve
+ * an error line each, so Timeout → Retries → Secure input stood ~65px apart
+ * where every other row is a control and a gap. Their errors now share one
+ * reserved line after the grid. Measured on the rows' own boxes (a narrow
+ * dock's cell generates no box), wide and narrow.
+ */
+test('the run policy keeps one row rhythm, and its errors share one line below it', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  await openLlm(page, 'or42 row rhythm');
+  await properties(page).getByRole('tab', { name: 'General' }).click();
+  const general = properties(page).getByRole('tabpanel', { name: 'General' });
+  const rows = () =>
+    general.evaluate((tab) => {
+      const top = (name: string) => {
+        const el = Array.from(tab.querySelectorAll('input')).find(
+          (i) => i.labels?.[0]?.textContent?.startsWith(name) ?? false,
+        );
+        return el!.closest('.labelled-control, .help-row')!.getBoundingClientRect().top;
+      };
+      const css = getComputedStyle(tab);
+      const space = (v: string) => parseFloat(css.getPropertyValue(v));
+      return {
+        pitch: [top('Timeout'), top('Retries'), top('Secure input')]
+          .map((t, i, a) => (i === 0 ? 0 : t - a[i - 1]!))
+          .slice(1),
+        rhythm: space('--control-h') + space('--space-2'),
+        slots: tab.querySelectorAll('.field-error-slot').length,
+      };
+    });
+
+  const wide = await rows();
+  expect(wide.rhythm).toBe(36);
+  for (const p of wide.pitch) expect(Math.abs(p - wide.rhythm)).toBeLessThanOrEqual(1);
+  expect(wide.slots).toBe(1);
+
+  // An error lands in the shared line, below every field, named.
+  const retries = general.getByRole('textbox', { name: 'Retries' });
+  await retries.fill('x');
+  await retries.blur();
+  const alert = general.getByRole('alert');
+  await expect(alert).toHaveText(/^Retries: /);
+  const [alertTop, secureBottom] = await Promise.all([
+    alert.evaluate((el) => el.getBoundingClientRect().top),
+    general
+      .getByRole('checkbox', { name: 'Secure input' })
+      .evaluate((el) => el.closest('.help-row')!.getBoundingClientRect().bottom),
+  ]);
+  expect(alertTop).toBeGreaterThanOrEqual(secureBottom);
+  await retries.fill('');
+  await retries.blur();
+  await expect(alert).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Dock to right' }).click();
+  await expect
+    .poll(() => general.evaluate((el) => el.getBoundingClientRect().width))
+    .toBeLessThan(580);
+  const narrow = await rows();
+  for (const p of narrow.pitch) expect(Math.abs(p - narrow.rhythm)).toBeLessThanOrEqual(1);
+  await expectQuiet(page, problems);
+});

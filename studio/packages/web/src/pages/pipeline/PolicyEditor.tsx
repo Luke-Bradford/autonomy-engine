@@ -7,6 +7,7 @@ import {
   type NodePolicy,
 } from '@autonomy-studio/shared';
 import { FieldCell, FieldGrid } from '../../lib/form/FieldGrid';
+import { useFieldErrorLine } from '../../lib/form/FieldErrorLine';
 import { Section } from '../../lib/Section';
 import { CheckboxField } from '../../lib/form/CheckboxField';
 import { Toolbar } from '../../lib/PageHeader';
@@ -78,6 +79,10 @@ export function PolicyEditor({
     [nodes, edges, containers, params, variables, globals, nodeId],
   );
 
+  // #1694 OR42 item 5 — the numbers' errors share one reserved line under the
+  // grid, so the rows keep the dock's rhythm.
+  const errors = useFieldErrorLine();
+
   function set(patch: Partial<NodePolicy>) {
     // Merged over the store's CURRENT policy, not this render's closure, so two
     // commits landing before a re-render cannot drop each other's key.
@@ -87,9 +92,11 @@ export function PolicyEditor({
 
   return (
     <Section heading="Run policy" help={null}>
-      {timesOut && (
-        <FieldGrid className="field-stack">
-          <FieldCell span="short">
+      {/* One grid (#1694 OR42 item 5): the timeout is a row of its own as a
+          long cell, while its input stays an S. */}
+      <FieldGrid className="field-stack">
+        {timesOut && (
+          <FieldCell span="long">
             <DraftNumberField
               label="Timeout"
               unit="seconds"
@@ -98,11 +105,10 @@ export function PolicyEditor({
               placeholder="none"
               about="Longest one attempt may run. On expiry the attempt is stopped and fails as a timeout, which Retries can retry. A new activity starts with the workspace default from Settings. Blank sets no timeout."
               onCommit={(timeoutSeconds) => set({ timeoutSeconds })}
+              errorLine={errors.node}
             />
           </FieldCell>
-        </FieldGrid>
-      )}
-      <FieldGrid className="field-stack">
+        )}
         <FieldCell span="short">
           <DraftNumberField
             label="Retries"
@@ -111,6 +117,7 @@ export function PolicyEditor({
             placeholder="no retry"
             about="Times a transient failure, including a timeout, is retried after the first attempt. 0 never retries; blank leaves it unset."
             onCommit={(retry) => set({ retry })}
+            errorLine={errors.node}
           />
         </FieldCell>
         <FieldCell span="short">
@@ -126,10 +133,9 @@ export function PolicyEditor({
               `sends one, is used instead (never less than ${DEFAULT_RETRY_INTERVAL_SECONDS}s).`
             }
             onCommit={(retryIntervalSeconds) => set({ retryIntervalSeconds })}
+            errorLine={errors.node}
           />
         </FieldCell>
-      </FieldGrid>
-      <FieldGrid className="field-stack">
         <FieldCell span="short">
           <CheckboxField
             label="Secure input"
@@ -149,6 +155,7 @@ export function PolicyEditor({
           />
         </FieldCell>
       </FieldGrid>
+      {errors.line}
       {!timesOut && policy?.timeoutSeconds !== undefined && (
         <Toolbar align="start">
           <button type="button" onClick={() => set({ timeoutSeconds: undefined })}>
