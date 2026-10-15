@@ -532,10 +532,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   // aborts it, so a request wait could settle on that and read no response
   // (#1699). An aborted request never produces a response, so this cannot.
   const listSync = page.waitForResponse(
-    (r) =>
-      r.request().method() === 'POST' &&
-      r.url().endsWith('/api/workspace/git/sync') &&
-      r.ok(),
+    (r) => r.request().method() === 'POST' && r.url().endsWith('/api/workspace/git/sync') && r.ok(),
   );
   await page.goto('/#/author/pipelines');
   await fluentRootReady(page);

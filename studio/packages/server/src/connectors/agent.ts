@@ -83,7 +83,6 @@ import { MASTER_KEY_ENV_VARS } from '../secrets/secrets.js';
  * survive a server restart (documented in the process-supervisor contract).
  */
 
-
 // #1087 — the shape moved to `shared/catalog/connection-config.ts` (with its
 // `isCompilableRegex` boundary guard) so the Manage › Connections form derives
 // its controls from the schema this adapter parses at dispatch. The quota
