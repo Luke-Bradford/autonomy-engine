@@ -1,7 +1,14 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { addActivity, canvasNodes, toolbox } from './support/canvasGraph';
-import { nodeById, openSeededCanvas } from './support/seedDoc';
+import {
+  nodeById,
+  openSeededCanvas,
+  seedVersion,
+  type SeedContainer,
+  type SeedDoc,
+  type SeedNode,
+} from './support/seedDoc';
 import { seedConnection, seedDataset } from './support/seedResources';
 import { nodeMenuAction, pickConnection, properties } from './support/panels';
 
@@ -224,6 +231,21 @@ async function readPane(page: Page, tablist: string, name: string, misses: strin
   return { prose, help };
 }
 
+type Measured = Record<string, { prose: number; help: number; lines: string[] }>;
+
+/** Prose fails outright; a `?` count over its limit, or with no limit, fails. */
+function judge(measured: Measured, limits: Record<string, number>, misses: string[]) {
+  for (const [name, got] of Object.entries(measured)) {
+    if (got.prose > 0) misses.push(`${name}: prose: ${got.lines.join(' | ')}`);
+    const limit = limits[name];
+    if (limit === undefined) {
+      misses.push(`${name}: not seeded — ? ${got.help}`);
+      continue;
+    }
+    if (got.help > limit) misses.push(`${name}: ? ${got.help} > ${limit}`);
+  }
+}
+
 test('every catalog activity and container: no wide button, no `?` on a heading, every field S, M or L, no prose, `?`s held', async ({
   page,
 }) => {
@@ -243,7 +265,7 @@ test('every catalog activity and container: no wide button, no `?` on a heading,
   expect(containers.length).toBeGreaterThan(2);
 
   const misses: string[] = [];
-  const measured: Record<string, { prose: number; help: number; lines: string[] }> = {};
+  const measured: Measured = {};
   for (const name of activities) {
     await toolbox(page).getByRole('button', { name, exact: true }).click();
     await expect(canvasNodes(page)).toHaveCount(1);
@@ -267,15 +289,393 @@ test('every catalog activity and container: no wide button, no `?` on a heading,
     await expect(configure).toHaveCount(0);
   }
 
-  for (const [name, got] of Object.entries(measured)) {
-    if (got.prose > 0) misses.push(`${name}: prose: ${got.lines.join(' | ')}`);
-    const limit = HELP_LIMITS[name];
-    if (limit === undefined) {
-      misses.push(`${name}: not seeded — ? ${got.help}`);
-      continue;
+  judge(measured, HELP_LIMITS, misses);
+  expect(misses).toEqual([]);
+  await expectQuiet(page, problems);
+});
+
+/**
+ * The seeded walk's limits: the same `?` ratchet, read on a pane whose config
+ * is FILLED — every override row, table row and choice-gated field showing, so
+ * a field that only renders once its neighbour is set is measured too. Seeded
+ * from the first walk; lower only. A key with a ` (…)` suffix is a second state
+ * of that toolbox entry (the files-as-is copy, structured output, inactive).
+ */
+const SEEDED_HELP_LIMITS: Record<string, number> = {};
+
+type NodeSeed = Omit<SeedNode, 'id' | 'position'>;
+type Seed =
+  | { node: NodeSeed }
+  | { container: Omit<SeedContainer, 'id' | 'children'>; child: NodeSeed };
+
+interface SeedIds {
+  fs: string;
+  http: string;
+  llm: string;
+  agent: string;
+  sql: string;
+  source: string;
+  sink: string;
+  child: string;
+}
+
+/** Every toolbox entry with its config filled, plus the second states above. */
+function seeds(ids: SeedIds): Record<string, Seed> {
+  const description = 'Seeded so every field renders.';
+  // Timeout and user properties are refused on control and call nodes, and the
+  // secure flags on the branch, variable and call nodes.
+  const exec = {
+    description,
+    policy: {
+      timeoutSeconds: 120,
+      retry: 2,
+      retryIntervalSeconds: 60,
+      secureInput: true,
+      secureOutput: true,
+    },
+    userProperties: [
+      { name: 'team', value: 'data' },
+      { name: 'ticket', value: 'E2E-1' },
+    ],
+  };
+  const control = {
+    description,
+    policy: { retry: 2, retryIntervalSeconds: 60, secureInput: true, secureOutput: true },
+  };
+  const retryOnly = { description, policy: { retry: 2, retryIntervalSeconds: 60 } };
+  const fsNode = (type: string, config: Record<string, unknown>): Seed => ({
+    node: { ...exec, type, config, connectionId: ids.fs, connectionParams: { maxBytes: 2048 } },
+  });
+  const body: NodeSeed = { type: 'wait', config: { seconds: '${0}' } };
+  return {
+    'Copy data': {
+      node: {
+        ...exec,
+        type: 'copy',
+        connectionIds: { source: ids.fs, sink: ids.sql },
+        datasetIds: { source: ids.source, sink: ids.sink },
+        datasetParams: { source: { path: 'orders_2026.csv' } },
+        config: {
+          mode: 'overwrite',
+          mapping: [
+            { source: 'id', sink: 'id', type: 'integer' },
+            { source: 'name', sink: 'customer_name', type: 'string', onError: 'null' },
+            { expression: '${run.runId}', sink: 'load_id', type: 'string' },
+          ],
+        },
+      },
+    },
+    'Copy data (files as-is)': {
+      node: {
+        ...exec,
+        type: 'copy_files',
+        connectionIds: { source: ids.fs, sink: ids.fs },
+        config: {
+          pathType: 'list',
+          sourcePath: '/tmp/e2e/in',
+          fileListPath: 'files.txt',
+          wildcard: '*',
+          recursive: false,
+          modifiedStart: '2026-10-01T00:00:00Z',
+          modifiedEnd: '2026-10-13T00:00:00Z',
+          afterCopy: 'move',
+          moveTo: '/tmp/e2e/done',
+          sinkFolder: '/tmp/e2e/out',
+          sinkFileName: 'merged.txt',
+          copyBehavior: 'merge',
+          ifExists: 'skip',
+        },
+      },
+    },
+    'Copy file': fsNode('file_copy', { source: '/tmp/e2e/a.txt', dest: '/tmp/e2e/b.txt' }),
+    'Delete file': fsNode('file_delete', { path: '/tmp/e2e/old.txt' }),
+    'List directory': fsNode('file_list', { path: '/tmp/e2e' }),
+    'Move file': fsNode('file_move', { source: '/tmp/e2e/a.txt', dest: '/tmp/e2e/b/a.txt' }),
+    'Read file': fsNode('file_read', { path: '/tmp/e2e/in.txt' }),
+    'Write file': fsNode('file_write', { path: '/tmp/e2e/out.txt', content: 'one\ntwo' }),
+    'HTTP request': {
+      node: {
+        ...exec,
+        type: 'http_request',
+        connectionId: ids.http,
+        connectionParams: { timeoutMs: 15000 },
+        config: {
+          url: '/v1/orders',
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Trace': 'e2e' },
+          body: '{"hello":"world"}',
+          secretHeaders: { Authorization: { $secret: 'api_token' } },
+        },
+      },
+    },
+    'Lookup rows': {
+      node: {
+        ...exec,
+        type: 'lookup',
+        connectionId: ids.fs,
+        connectionParams: { maxBytes: 4096 },
+        datasetIds: { source: ids.source },
+        datasetParams: { source: { path: 'orders_2026.csv' } },
+        config: {},
+      },
+    },
+    'Agent task': {
+      node: {
+        ...exec,
+        type: 'agent_task',
+        connectionId: ids.agent,
+        connectionParams: { cwd: '/tmp' },
+        config: {
+          task: 'Summarise the repo',
+          cwd: '/tmp/e2e',
+          outputSchema: {
+            type: 'object',
+            required: ['summary'],
+            properties: { summary: { type: 'string' }, score: { type: 'number' } },
+          },
+        },
+      },
+    },
+    'LLM call': {
+      node: {
+        ...exec,
+        type: 'llm_call',
+        connectionId: ids.llm,
+        connectionParams: { model: 'claude-haiku-4-5' },
+        config: {
+          model: 'claude-sonnet-4-5',
+          maxTokens: 1024,
+          temperature: 0.2,
+          topP: 0.9,
+          stop: ['END', 'STOP'],
+          seed: 42,
+          reasoningEffort: 'medium',
+          system: 'You are terse.',
+          messages: [
+            { role: 'system', content: 'Answer in English.' },
+            { role: 'user', content: 'Price of SKU-1?' },
+          ],
+          history: '${params.history}',
+          tools: [
+            {
+              name: 'lookup_price',
+              description: 'Look up a price',
+              parameters: {
+                type: 'object',
+                properties: { sku: { type: 'string' } },
+                required: ['sku'],
+              },
+              expression: '${tool.args.sku}',
+            },
+          ],
+          toolChoice: 'auto',
+          maxToolIterations: 3,
+          outputMode: 'text',
+          emitMessages: true,
+          capture: 'full',
+          captureReasoning: true,
+        },
+      },
+    },
+    'LLM call (structured)': {
+      node: {
+        ...exec,
+        type: 'llm_call',
+        connectionId: ids.llm,
+        config: {
+          prompt: 'Classify',
+          outputMode: 'structured',
+          outputSchema: {
+            type: 'object',
+            properties: { label: { type: 'string', enum: ['a', 'b'] } },
+          },
+        },
+      },
+    },
+    'Append variable': {
+      node: { ...retryOnly, type: 'append_variable', config: { variable: 'rows', value: 'x' } },
+    },
+    'Set variable': {
+      node: { ...retryOnly, type: 'set_variable', config: { variable: 'count', value: '5' } },
+    },
+    'Execute pipeline': {
+      node: {
+        ...retryOnly,
+        type: 'execute_pipeline',
+        config: {},
+        call: { pipelineVersionId: ids.child, params: { region: 'eu', limit: 5 }, wait: true },
+      },
+    },
+    Fail: { node: { ...control, type: 'fail', config: { message: 'Stopped: ${run.runId}' } } },
+    Filter: {
+      node: {
+        ...control,
+        type: 'filter',
+        config: { items: '${createArray(1, 2, 3)}', predicate: '${greater(item, 1)}' },
+      },
+    },
+    'If condition': {
+      node: { ...retryOnly, type: 'if', config: { condition: '${equals(1, 1)}' } },
+    },
+    Switch: {
+      node: {
+        ...retryOnly,
+        type: 'switch',
+        config: { on: "${toLower('Gold')}", cases: ['gold', 'silver'] },
+      },
+    },
+    Wait: { node: { ...control, type: 'wait', config: { seconds: '${30}' } } },
+    'Wait (inactive)': {
+      node: {
+        ...control,
+        type: 'wait',
+        config: { seconds: '${30}' },
+        state: 'inactive',
+        onInactiveMarkAs: 'failure',
+      },
+    },
+    'Webhook (external wait)': {
+      node: { ...control, type: 'webhook', config: { timeoutSeconds: '${600}' } },
+    },
+    ForEach: {
+      container: {
+        kind: 'foreach',
+        items: "${createArray('a.csv', 'b.csv')}",
+        batchCount: 4,
+        allowNondeterministicVars: true,
+        join: 'any',
+        description,
+      },
+      child: body,
+    },
+    Until: {
+      container: {
+        kind: 'loop',
+        exitWhen: "${equals(nodes.body.status, 'success')}",
+        maxRounds: 5,
+        timeout: 600,
+        join: 'any',
+        description,
+      },
+      child: body,
+    },
+    Stage: { container: { kind: 'stage', join: 'any', description }, child: body },
+    'Stage (inactive)': {
+      container: { kind: 'stage', description, state: 'inactive', onInactiveMarkAs: 'skipped' },
+      child: body,
+    },
+  };
+}
+
+test('every catalog activity and container, its config FILLED: the same four holds, `?`s held', async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  const problems = collectPageProblems(page);
+  const fs = await seedConnection(page, {
+    name: 'e2e or42 seeded files',
+    kind: 'fs',
+    config: { roots: ['/tmp'], maxBytes: 1048576, writable: true },
+    parameters: ['maxBytes'],
+  });
+  // Copy's sink is a table, on a database connection.
+  const sql = await seedConnection(page, {
+    name: 'e2e or42 seeded db',
+    kind: 'sqlite',
+    config: { roots: ['/tmp'], path: '/tmp/e2e-or42-panes.db', writable: true },
+  });
+  const columns = (names: string[]) =>
+    names.map((name, i) => ({ name, type: i === 0 ? 'integer' : 'string', nullable: i > 0 }));
+  const ids: SeedIds = {
+    fs,
+    http: await seedConnection(page, {
+      name: 'e2e or42 seeded http',
+      kind: 'http',
+      config: { baseUrl: 'https://example.test', timeoutMs: 10000 },
+      parameters: ['timeoutMs'],
+    }),
+    llm: await seedConnection(page, {
+      name: 'e2e or42 seeded llm',
+      kind: 'anthropic_api',
+      config: { model: 'claude-sonnet-4-5', timeoutMs: 60000 },
+      parameters: ['model'],
+    }),
+    agent: await seedConnection(page, {
+      name: 'e2e or42 seeded agent',
+      kind: 'agent_cli',
+      config: { command: '/bin/echo', args: ['hi'], cwd: '/tmp', timeoutMs: 60000 },
+      parameters: ['cwd'],
+    }),
+    source: await seedDataset(page, {
+      name: 'e2e or42 seeded orders',
+      kind: 'delimited',
+      connectionId: fs,
+      config: { path: 'orders.csv' },
+      columns: columns(['id', 'name']),
+      parameters: ['path'],
+    }),
+    sql,
+    sink: await seedDataset(page, {
+      name: 'e2e or42 seeded orders table',
+      kind: 'table',
+      connectionId: sql,
+      config: { table: 'orders' },
+      columns: columns(['id', 'customer_name', 'load_id', 'note']),
+    }),
+    child: (
+      await seedVersion(page, 'or42 seeded child', {
+        params: [
+          { name: 'region', type: 'string', required: true },
+          { name: 'limit', type: 'number', required: false, default: 10 },
+        ],
+        nodes: [{ id: 'c1', type: 'wait', config: { seconds: '${0}' }, position: { x: 0, y: 0 } }],
+      })
+    ).pipelineVersionId,
+  };
+  const all = seeds(ids);
+
+  // Every toolbox entry has a seed under its own name, so one added to the
+  // catalog fails here until it is given a filled config.
+  await openSeededCanvas(page, 'or42 seeded toolbox', { nodes: [] });
+  const names = await toolbox(page).locator('.activity-toolbox__item').allTextContents();
+  const misses: string[] = names
+    .filter((name) => all[name] === undefined)
+    .map((name) => `${name}: no seeded config`);
+  expect(names.length).toBeGreaterThan(10);
+
+  const measured: Measured = {};
+  for (const [key, seed] of Object.entries(all)) {
+    const entry = key.replace(/ \(.*\)$/, '');
+    const doc: SeedDoc = {
+      variables: [
+        { name: 'count', type: 'number', default: 0 },
+        { name: 'rows', type: 'array', default: [] },
+      ],
+      params: [{ name: 'history', type: 'json', required: false, default: [] }],
+      nodes:
+        'node' in seed
+          ? [{ ...seed.node, id: 'n', position: { x: 0, y: 0 } }]
+          : [{ ...seed.child, id: 'body', position: { x: 0, y: 0 } }],
+      containers:
+        'container' in seed ? [{ ...seed.container, id: 'box', children: ['body'] }] : [],
+    };
+    await openSeededCanvas(page, `or42 seeded ${key}`, doc);
+    let tablist: string;
+    if ('node' in seed) {
+      await nodeById(page, 'n').click();
+      tablist = 'Activity properties';
+    } else {
+      await page.getByRole('button', { name: /^Configure / }).click();
+      tablist = 'Container properties';
     }
-    if (got.help > limit) misses.push(`${name}: ? ${got.help} > ${limit}`);
+    // The pane is the seed's toolbox entry, not some other type's.
+    await expect(
+      properties(page).getByLabel(`About ${entry}`, { exact: true }).first(),
+    ).toBeAttached();
+    const { prose, help } = await readPane(page, tablist, key, misses);
+    measured[key] = { prose: prose.length, help, lines: prose };
   }
+  judge(measured, SEEDED_HELP_LIMITS, misses);
   expect(misses).toEqual([]);
   await expectQuiet(page, problems);
 });
