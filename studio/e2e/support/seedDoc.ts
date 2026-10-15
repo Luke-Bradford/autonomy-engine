@@ -66,6 +66,8 @@ export interface SeedNode {
   policy?: Record<string, unknown>;
   /** #1600 C0b — the activity's description. Passed through as authored. */
   description?: string;
+  /** #1600 — the activity's user properties (execution nodes only). Passed through as authored. */
+  userProperties?: { name: string; value: string }[];
   /** #1600 C0c — switched off, and the outcome it records. Passed through as authored. */
   state?: 'inactive';
   onInactiveMarkAs?: 'success' | 'failure' | 'skipped';
@@ -75,7 +77,7 @@ export interface SeedNode {
    * is checked at DISPATCH: a seed can mint a version naming a dataset and only
    * learn at fire time whether it resolves.
    */
-  datasetIds?: { source: string; sink: string };
+  datasetIds?: { source: string; sink?: string };
   /** Per-dispatch overrides of each dataset's declared `parameters` (#1304) —
    * values may be `${}` expressions, e.g. a foreach body's per-item path. */
   datasetParams?: { source?: Record<string, unknown>; sink?: Record<string, unknown> };
@@ -103,6 +105,7 @@ export interface SeedContainer {
   timeout?: number;
   items?: string;
   batchCount?: number;
+  allowNondeterministicVars?: boolean;
   join?: 'all' | 'any';
   /** #1600 C0e — the container's General fields. */
   description?: string;
