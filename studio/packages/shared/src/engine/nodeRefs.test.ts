@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { parseExpr, protectEscapes, scanTemplateRefs } from './expr.js';
 import { MAX_CONFIG_DEPTH } from './params.js';
-import { referencedNodeIds, remapNodeRefs, remapNodeRefsInString } from './nodeRefs.js';
+import {
+  referencedNodeIds,
+  remapNodeRefs,
+  remapNodeRefsInString,
+  renameNodeOutputRefs,
+} from './nodeRefs.js';
 
 // The ids a real paste carries. `newLocalId` is `${prefix}_${crypto.randomUUID()}`,
 // so EVERY canvas-minted id contains hyphens — a scanner that reads "identifier
@@ -239,5 +244,94 @@ describe('referencedNodeIds reads at ANY depth', () => {
     let deep: unknown = `\${nodes.${A}.output.y}`;
     for (let i = 0; i < MAX_CONFIG_DEPTH + 5; i += 1) deep = { d: deep };
     expect(referencedNodeIds(deep, [A])).toEqual([A]);
+  });
+});
+
+describe('#1600 C8b — renameNodeOutputRefs (one node, one output renamed)', () => {
+  const R = new Map([['entries', 'childItems']]);
+  const rename = (v: unknown) => renameNodeOutputRefs(v, 'list', R);
+
+  it('renames the output field, keeping its tail, index and the rest of the span', () => {
+    expect(rename('${nodes.list.output.entries}')).toBe('${nodes.list.output.childItems}');
+    expect(rename("${concat(nodes.list.output.entries[0].name, '/x')}")).toBe(
+      "${concat(nodes.list.output.childItems[0].name, '/x')}",
+    );
+    expect(rename('a ${nodes.list.output.entries.length} b ${nodes.list.output.entries}')).toBe(
+      'a ${nodes.list.output.childItems.length} b ${nodes.list.output.childItems}',
+    );
+  });
+
+  it('leaves another output, a status read, another node and literals alone', () => {
+    for (const s of [
+      '${nodes.list.output.path}',
+      '${nodes.list.status}',
+      '${nodes.list2.output.entries}',
+      "${concat('nodes.list.output.entries', 'x')}",
+      'prose nodes.list.output.entries',
+      '$${nodes.list.output.entries}',
+      '${nodes.list.output.entriesX}',
+    ]) {
+      expect(rename(s)).toBe(s);
+    }
+  });
+
+  it('refuses a read it cannot rename faithfully', () => {
+    for (const s of [
+      '${nodes.list.output}',
+      "${nodes.list.output['entries']}",
+      '${nodes.list[0]}',
+      '${nodes.list.output.entries',
+      `\${nodes.list.output.entries}\u0000`,
+      "${concat('x, nodes.list.output.entries)}",
+    ]) {
+      expect(rename(s), s).toBeUndefined();
+    }
+  });
+
+  it('walks every leaf, copy-on-write: unchanged subtrees keep their identity', () => {
+    const untouched = { a: '${nodes.other.output.x}', b: [1, true, null] };
+    const tree = { untouched, deep: [{ items: '${nodes.list.output.entries}' }] };
+    const out = rename(tree) as typeof tree;
+    expect(out.deep[0]).toEqual({ items: '${nodes.list.output.childItems}' });
+    expect(out.untouched).toBe(untouched);
+    expect(tree.deep[0]?.items).toBe('${nodes.list.output.entries}');
+    const same = { a: '${nodes.list.output.path}' };
+    expect(rename(same)).toBe(same);
+  });
+
+  it('one refused leaf refuses the whole tree', () => {
+    expect(rename({ ok: '${nodes.list.output.entries}', bad: '${nodes.list.output}' })).toBe(
+      undefined,
+    );
+  });
+
+  it('past MAX_CONFIG_DEPTH, refuses a subtree that names the node and passes one that does not', () => {
+    const nest = (leaf: string) => {
+      let v: unknown = leaf;
+      for (let d = 0; d <= MAX_CONFIG_DEPTH + 1; d += 1) v = { v };
+      return v;
+    };
+    expect(rename(nest('${nodes.list.output.entries}'))).toBeUndefined();
+    const plain = nest('${nodes.other.output.entries}');
+    expect(rename(plain)).toBe(plain);
+  });
+
+  it('AGREES WITH THE GRAMMAR: the parsed shape is identical except the renamed field', () => {
+    const bodies = [
+      'nodes.list.output.entries',
+      'nodes.list.output.entries[0].name',
+      'default(nodes.list.output.entries, nodes.b.output.entries)',
+      'nodes.b.output.rows[nodes.list.output.entries].name',
+    ];
+    const norm = (e: unknown): unknown => JSON.parse(JSON.stringify(e).split('childItems').join('entries'));
+    for (const body of bodies) {
+      const after = rename(`\${${body}}`) as string;
+      expect(after).toContain('childItems');
+      const scan = scanTemplateRefs(protectEscapes(after));
+      expect(scan.unterminatedAt).toBeNull();
+      expect(norm(parseExpr((scan.matches[0] as { body: string }).body))).toEqual(
+        norm(parseExpr(body)),
+      );
+    }
   });
 });

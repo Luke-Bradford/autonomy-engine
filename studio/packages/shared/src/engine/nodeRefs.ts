@@ -276,3 +276,139 @@ export function referencedNodeIds(value: unknown, ids: Iterable<string>): string
   }
   return [...seen];
 }
+
+/**
+ * #1600 C8b — rename the OUTPUT NAMES read from ONE node:
+ * `${nodes.<id>.output.<old>…}` → `${nodes.<id>.output.<new>…}`, for each
+ * `old → new` in `renames`, across every string leaf of `value`.
+ *
+ * A retired type whose replacement renames an output (List directory's
+ * `entries` is Get metadata's `childItems`) is lowered only if every read of it
+ * can be rewritten (`retired.ts`, "faithful or not at all"). So this is a
+ * rewriter AND a guard, and it answers `undefined` where it cannot be sure:
+ * - the node is read as anything but `.output.<field>` or `.status` (a bare
+ *   `.output`, an indexed `.output[…]`), so which output it means is unknown;
+ * - a string names `nodes.<id>` but cannot be scanned (an unterminated `${` or
+ *   quote, or the NUL mask char), so a read may hide in it;
+ * - a subtree past `MAX_CONFIG_DEPTH` names `nodes.<id>`. Counted from where the
+ *   caller starts, which may be above a config, so a deep config the save gate
+ *   accepts can be refused here. That is the safe side: the node stays as is.
+ *
+ * The same scanner pieces as `remapBody` (the namespace and id matching, the
+ * one quoting rule, the escape mask), so a read this sees is one the copy
+ * rewriter sees. Copy-on-write: an unchanged subtree is returned by reference.
+ */
+export function renameNodeOutputRefs<T>(
+  value: T,
+  id: string,
+  renames: ReadonlyMap<string, string>,
+): T | undefined {
+  const idMap = new Map([[id, id]]);
+  const token = `${NS}.${id}`;
+  const REFUSED = Symbol('refused');
+  const walk = (v: unknown, depth: number): unknown => {
+    if (typeof v === 'string') return renameOutputsInString(v, token, idMap, renames) ?? REFUSED;
+    if (v === null || typeof v !== 'object') return v;
+    if (depth > MAX_CONFIG_DEPTH) return JSON.stringify(v).includes(token) ? REFUSED : v;
+    if (Array.isArray(v)) {
+      let changed = false;
+      const out: unknown[] = [];
+      for (const child of v) {
+        const next = walk(child, depth + 1);
+        if (next === REFUSED) return REFUSED;
+        changed ||= next !== child;
+        out.push(next);
+      }
+      return changed ? out : v;
+    }
+    let changed = false;
+    const out: Record<string, unknown> = {};
+    for (const [k, child] of Object.entries(v as Record<string, unknown>)) {
+      const next = walk(child, depth + 1);
+      if (next === REFUSED) return REFUSED;
+      changed ||= next !== child;
+      out[k] = next;
+    }
+    return changed ? out : v;
+  };
+  const result = walk(value, 0);
+  return result === REFUSED ? undefined : (result as T);
+}
+
+/** `renameNodeOutputRefs` on one string: the renamed string, or `undefined` when unsure. */
+function renameOutputsInString(
+  s: string,
+  token: string,
+  idMap: ReadonlyMap<string, string>,
+  renames: ReadonlyMap<string, string>,
+): string | undefined {
+  // Cannot read the node at all: nothing to rename and nothing to doubt.
+  if (!s.includes(token)) return s;
+  if (s.includes(MASK_CHAR)) return undefined;
+  const scanned = s.split(ESCAPED_OPEN).join(MASK_OPEN);
+  const { matches, unterminatedAt } = scanTemplateRefs(scanned);
+  if (unterminatedAt !== null) return undefined;
+  let out = scanned;
+  for (let k = matches.length - 1; k >= 0; k -= 1) {
+    const m = matches[k] as { start: number; end: number; body: string };
+    const body = renameOutputsInBody(m.body, token, idMap, renames);
+    if (body === undefined) return undefined;
+    if (body === m.body) continue;
+    out = `${out.slice(0, m.start + 2)}${body}${out.slice(m.end)}`;
+  }
+  return out === scanned ? s : out.split(MASK_OPEN).join(ESCAPED_OPEN);
+}
+
+const OUTPUT_SEGMENT = '.output.';
+const STATUS_SEGMENT = '.status';
+
+/** One `${}` body of `renameOutputsInString`, walked as `remapBody` walks it. */
+function renameOutputsInBody(
+  body: string,
+  token: string,
+  idMap: ReadonlyMap<string, string>,
+  renames: ReadonlyMap<string, string>,
+): string | undefined {
+  let out = '';
+  let cut = 0;
+  const finish = () => (cut === 0 ? body : out + body.slice(cut));
+  let i = 0;
+  while (i < body.length) {
+    const ch = body[i] as string;
+    if (isQuote(ch)) {
+      const close = quotedSpanEnd(body, i);
+      // Unterminated: where the literal ends is unknowable, so a read after it
+      // cannot be ruled out.
+      if (close === -1) return body.includes(token, i) ? undefined : finish();
+      i = close + 1;
+      continue;
+    }
+    if (!atNamespace(body, i)) {
+      i += 1;
+      continue;
+    }
+    const idStart = i + NS.length + 1;
+    const matched = matchMappedId(body, idStart, idMap);
+    if (matched === null) {
+      i = idStart;
+      continue;
+    }
+    const p = idStart + matched.length;
+    if (body.startsWith(STATUS_SEGMENT, p) && endsPath(body[p + STATUS_SEGMENT.length])) {
+      i = p + STATUS_SEGMENT.length;
+      continue;
+    }
+    if (!body.startsWith(OUTPUT_SEGMENT, p)) return undefined;
+    const fieldStart = p + OUTPUT_SEGMENT.length;
+    let fieldEnd = fieldStart;
+    while (fieldEnd < body.length && !endsPath(body[fieldEnd])) fieldEnd += 1;
+    if (fieldEnd === fieldStart) return undefined;
+    const renamed = renames.get(body.slice(fieldStart, fieldEnd));
+    if (renamed !== undefined) {
+      out += body.slice(cut, fieldStart) + renamed;
+      cut = fieldEnd;
+    }
+    i = fieldEnd;
+  }
+  return finish();
+}
