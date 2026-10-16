@@ -109,6 +109,8 @@ export function applicableFieldNames(
   const byName = new Map(fields.map((f) => [f.name, f]));
   const valueOf = (name: string): string | undefined => {
     const input = inputs[name];
+    // A set with nothing ticked is known to hold none, not unknown.
+    if (byName.get(name)?.kind === 'enumSet') return typeof input === 'string' ? input : undefined;
     if (typeof input === 'string' && input !== '') return input;
     return byName.get(name)?.defaultText;
   };
@@ -127,7 +129,13 @@ export function applicableFieldNames(
     if (conditions === undefined || holds(name)) return true;
     return conditions.some((c) => {
       const value = valueOf(c.field);
-      return value === undefined || value.includes('${') || c.in.includes(value);
+      // #1600 OR41 C8a — a set of choices holds its ticks one per line, and
+      // applies when any is one of `in`; a single choice is the one-line case.
+      return (
+        value === undefined ||
+        value.includes('${') ||
+        value.split('\n').some((v) => c.in.includes(v))
+      );
     });
   });
 }

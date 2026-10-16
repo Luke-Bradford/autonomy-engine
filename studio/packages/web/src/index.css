@@ -1373,6 +1373,14 @@ td button + button {
   color: var(--muted);
 }
 
+/* #1600 OR41 C8a — a set of choices in a config form (Get metadata's field
+   list): the boxes pack in columns rather than stack eight deep. */
+.config-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+  gap: var(--space-1) var(--space-4);
+}
+
 /* The seven day checkboxes wrap as one row rather than stacking seven deep. */
 .trigger-form .recurrence-days {
   display: flex;

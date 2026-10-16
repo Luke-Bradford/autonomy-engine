@@ -374,6 +374,54 @@ export function ConfigFieldControl({
     );
   }
 
+  if (field.kind === 'enumSet') {
+    // #1600 OR41 C8a — a set of choices as a grid of tick boxes (Get
+    // metadata's field list). The control's text holds the ticks one per line.
+    const ticked = new Set(typeof value === 'string' ? value.split('\n') : []);
+    const toggle = (option: string, on: boolean) => {
+      const next = new Set(ticked);
+      if (on) next.add(option);
+      else next.delete(option);
+      onChange((field.enumOptions ?? []).filter((o) => next.has(o)).join('\n'));
+    };
+    return (
+      <LabelledControl
+        className="config-field"
+        help={help}
+        label={
+          <>
+            {seen(label)}
+            {required && !cell && <RequiredMark />}
+          </>
+        }
+      >
+        {(id) => (
+          <>
+            <div
+              id={id}
+              role="group"
+              aria-label={field.label?.title ?? field.name}
+              aria-describedby={describedBy}
+              className="config-choices"
+            >
+              {(field.enumOptions ?? []).map((option) => (
+                <label key={option} className="contract-check">
+                  <input
+                    type="checkbox"
+                    checked={ticked.has(option)}
+                    onChange={(e) => toggle(option, e.target.checked)}
+                  />
+                  {enumOptionLabel(field, option)}
+                </label>
+              ))}
+            </div>
+            {errorSlot}
+          </>
+        )}
+      </LabelledControl>
+    );
+  }
+
   if (field.kind === 'enum') {
     return (
       <LabelledControl
