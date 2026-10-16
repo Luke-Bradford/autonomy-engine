@@ -227,7 +227,8 @@ test.describe('#1600 C8a — Get metadata', () => {
       expect(await filtered(pipelineVersionId, 'e2e 1600 c8b old')).toEqual(['a.csv', 'b.csv']);
 
       await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
-      await expect(canvasNodes(page)).toHaveCount(3);
+      // Three activities and the ForEach box.
+      await expect(canvasNodes(page)).toHaveCount(4);
       await canvasNodes(page).filter({ hasText: 'Get metadata' }).click();
       await tab(page, 'Settings').click();
       await expect(box(page, 'Child items')).toBeChecked();
