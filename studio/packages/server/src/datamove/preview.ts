@@ -4,6 +4,7 @@ import {
   inlineQuerySqlIssue,
   type ConnectionKind,
   type DatasetPreviewResult,
+  type DatasetTablesResult,
   type InlineDataset,
 } from '@autonomy-studio/shared';
 import type { ConnectorRegistry } from '../connectors/registry.js';
@@ -50,13 +51,67 @@ export interface PreviewInlineSourceArgs {
  * The checks are the run's too: `resolveInlineSource` (store kind, secret marker,
  * config) and save's literal-SQL rule, so Preview never shows rows for a source
  * that cannot be saved or would be refused at dispatch.
- *
- * CONCURRENCY is probe's split (`connectors/probe.ts`): the slot is held until
- * the REAL read settles, and the caller is answered on its own timer.
  */
 export async function previewInlineSource(
   args: PreviewInlineSourceArgs,
 ): Promise<DatasetPreviewResult> {
+  return readThroughLookup(args, 'the preview', prefixOf);
+}
+
+/**
+ * The SQL that lists a store's tables and views, per store an inline Table can
+ * live in. A test holds it to `DATASET_CONNECTION_KINDS.table`, so a store added
+ * there fails until it says how its tables are listed.
+ *
+ * sqlite: the main database's `sqlite_master`, without sqlite's own
+ * `sqlite_`-prefixed tables. postgres: `information_schema.tables`, which lists
+ * only what the connection's role holds a privilege on, without the system
+ * schemas.
+ */
+export const TABLE_CATALOG_SQL: Partial<Record<ConnectionKind, string>> = {
+  sqlite:
+    "SELECT NULL AS schema, name FROM sqlite_master WHERE type IN ('table', 'view') " +
+    "AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY name",
+  postgres:
+    'SELECT table_schema AS schema, table_name AS name FROM information_schema.tables ' +
+    "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') ORDER BY 1, 2",
+};
+
+/**
+ * #1600 C1q-c — the tables and views a connection's store lists, for the Source
+ * tab's Table `[▾ from the connection]`. NEVER throws, as `previewInlineSource`.
+ *
+ * It is the same read, not a second one: the catalogue query goes through the
+ * store adapter's own Lookup arm as an inline Query, so it inherits the
+ * read-only reader, the row and byte caps, the pool and the backstop.
+ */
+export async function listConnectionTables(
+  args: Omit<PreviewInlineSourceArgs, 'inline'>,
+): Promise<DatasetTablesResult> {
+  const kind = args.connection.kind;
+  const sql = TABLE_CATALOG_SQL[kind];
+  if (sql === undefined) {
+    return { ok: false, error: `a '${kind}' connection has no tables to list` };
+  }
+  return readThroughLookup(
+    { ...args, inline: { kind: 'query', config: { sql } } },
+    'listing tables',
+    tablesOf,
+  );
+}
+
+/**
+ * Read an inline source through the store adapter's `lookup` arm and answer the
+ * caller with `toResult` of its outputs, or a refusal.
+ *
+ * CONCURRENCY is probe's split (`connectors/probe.ts`): the slot is held until
+ * the REAL read settles, and the caller is answered on its own timer.
+ */
+async function readThroughLookup<R extends { ok: true }>(
+  args: PreviewInlineSourceArgs,
+  what: string,
+  toResult: (outputs: Record<string, unknown>) => R,
+): Promise<R | Refusal> {
   const { registry, connection, secret, inline, signal, backstopMs = PREVIEW_BACKSTOP_MS } = args;
 
   const sqlIssue = inlineQuerySqlIssue(inline.kind, inline.config);
@@ -69,16 +124,15 @@ export async function previewInlineSource(
   }
 
   const controller = new AbortController();
-  const onCallerAbort = () => stop('the preview was cancelled');
+  const onCallerAbort = () => stop(`${what} was cancelled`);
   const timer = setTimeout(
-    () =>
-      stop(`the preview did not finish within ${Math.round(backstopMs / 1000)}s and was stopped`),
+    () => stop(`${what} did not finish within ${Math.round(backstopMs / 1000)}s and was stopped`),
     backstopMs,
   );
   timer.unref?.();
-  let settle!: (result: DatasetPreviewResult) => void;
+  let settle!: (result: R | Refusal) => void;
   let settled = false;
-  const answer = new Promise<DatasetPreviewResult>((resolve) => {
+  const answer = new Promise<R | Refusal>((resolve) => {
     // Once the caller has its answer nothing needs the timer or the listener,
     // however it was answered: the read, the backstop or the caller leaving.
     // The SLOT is a separate matter and stays held until the read ends.
@@ -102,7 +156,7 @@ export async function previewInlineSource(
     // would spend a session on rows nobody will see.
     if (settled) return;
     try {
-      settle(await readPrefix(args, adapter, resolved.dataset, controller.signal));
+      settle(await readOutputs(args, adapter, resolved.dataset, controller.signal, toResult));
     } catch (err) {
       // An adapter's stream threw rather than yielding `failed`. Its message is
       // the least trusted string here, so it is redacted like a failure's.
@@ -116,12 +170,15 @@ export async function previewInlineSource(
   return answer;
 }
 
-async function readPrefix(
+type Refusal = { ok: false; error: string };
+
+async function readOutputs<R>(
   args: PreviewInlineSourceArgs,
   adapter: ConnectorAdapter,
   dataset: ResolvedDataset,
   signal: AbortSignal,
-): Promise<DatasetPreviewResult> {
+  toResult: (outputs: Record<string, unknown>) => R,
+): Promise<R | Refusal> {
   const events = adapter.runActivity(
     {
       runId: PREVIEW_ID,
@@ -139,13 +196,13 @@ async function readPrefix(
     if (event.type === 'failed') {
       return { ok: false, error: redactSecrets(event.error, [args.secret]) };
     }
-    if (event.type === 'succeeded') return prefixOf(event.outputs);
+    if (event.type === 'succeeded') return toResult(event.outputs);
   }
   return { ok: false, error: 'the store ended the read without an answer' };
 }
 
 /** Lookup's `{ rows, truncated }` as the preview's first `PREVIEW_ROW_CAP` rows. */
-function prefixOf(outputs: Record<string, unknown>): DatasetPreviewResult {
+function prefixOf(outputs: Record<string, unknown>): DatasetPreviewResult & { ok: true } {
   const all = Array.isArray(outputs['rows']) ? (outputs['rows'] as Record<string, unknown>[]) : [];
   const rows = all.slice(0, PREVIEW_ROW_CAP);
   const capped = outputs['truncated'] === true;
@@ -161,4 +218,15 @@ function prefixOf(outputs: Record<string, unknown>): DatasetPreviewResult {
     return { ok: true, rows, truncated, note };
   }
   return { ok: true, rows, truncated };
+}
+
+/** Lookup's rows as `{ schema, name }`; a row without a string name is not offered. */
+function tablesOf(outputs: Record<string, unknown>): DatasetTablesResult & { ok: true } {
+  const rows = Array.isArray(outputs['rows']) ? (outputs['rows'] as Record<string, unknown>[]) : [];
+  const tables = rows.flatMap((row) => {
+    const { schema, name } = row;
+    if (typeof name !== 'string' || name === '') return [];
+    return [{ schema: typeof schema === 'string' ? schema : null, name }];
+  });
+  return { ok: true, tables, truncated: outputs['truncated'] === true };
 }

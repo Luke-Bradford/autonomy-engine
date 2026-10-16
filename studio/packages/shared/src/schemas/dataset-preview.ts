@@ -36,3 +36,28 @@ export const DatasetPreviewResultSchema = z.union([
   z.object({ ok: z.literal(false), error: z.string().min(1) }),
 ]);
 export type DatasetPreviewResult = z.infer<typeof DatasetPreviewResultSchema>;
+
+/**
+ * #1600 C1q-c — the body of `POST /api/datasets/tables`: the connection whose
+ * tables the Source tab's Table field offers. A POST beside `/preview` and
+ * `/sheets`, which share its gate.
+ */
+export const DatasetTablesRequestSchema = z.object({ connectionId: z.string().min(1) });
+export type DatasetTablesRequest = z.infer<typeof DatasetTablesRequestSchema>;
+
+/**
+ * The tables and views a connection's store lists, as Table `[▾ from the
+ * connection]` offers them. `schema` is `null` for a store with no schema to
+ * name (sqlite's main database). `truncated` means the list is a prefix: the
+ * read stopped at Lookup's row or byte cap. A refusal is a 200 with `ok: false`,
+ * as `DatasetPreviewResultSchema`.
+ */
+export const DatasetTablesResultSchema = z.union([
+  z.object({
+    ok: z.literal(true),
+    tables: z.array(z.object({ schema: z.string().nullable(), name: z.string() })),
+    truncated: z.boolean(),
+  }),
+  z.object({ ok: z.literal(false), error: z.string().min(1) }),
+]);
+export type DatasetTablesResult = z.infer<typeof DatasetTablesResultSchema>;
