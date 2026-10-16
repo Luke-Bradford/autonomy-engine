@@ -220,8 +220,16 @@ Source: [Lookup](https://learn.microsoft.com/azure/data-factory/control-flow-loo
 - **Stored contracts.** A node saved before C7a still declares the four old outputs in `config.outputs`, so its runs would drop `count` and `firstRow`. The editor re-seeds a node whose contract is exactly that former default when it loads it (`formerOutputs`, `refreshFormerOutputs`), and the next Save writes it. It runs on the editor's load only, for the reason C1b's lowering does (below). Any other contract is left alone.
 - **Two dock changes it needed.** The tab vocabulary puts Settings after Mapping (ADF's Copy order), so a Lookup opens on its Source. The dock's remembered tab starts unset rather than Settings, so an activity opens on its first tab until the author picks one.
 - **A stored config.** A stored `lookup` is now parsed at dispatch. A version that carries one of these keys with a value the schema refuses fails `permanent` where it used to ignore it. M12 offered no such key, so only a hand-written doc can hold one.
-- **Not built, C7b:** Read as *Whole file as text* and the `file_read` lowering; the workspace ceiling; the Monitor rows column; the title *Lookup*.
-  - The Monitor rows column needs the activity's type on the activity-runs row: the run-log projection has no doc to read it from.
+- **Not built in C7a:** the rest of C7, below.
+
+**Built (C7b):** *Read as* Rows · Whole file as text, and the title *Lookup*.
+- **Whole file as text is `file_read`.** Its shape (an `fs` connection and a `path`, giving `content` and `path`) is already that mode, so a new type would be a second dispatch arm doing the same read. `copy_files` needed a new type only because its config differs from `file_copy`'s. So the §8 row `file_read → Lookup · Whole file as text` needs no lowering: the type is unchanged, a stored version runs through the same arm, and `output.content` resolves as before. `file_read` is not a retired type and has no entry in `RETIRED_LOWERINGS`.
+- **One palette item, two types,** as C1a's Copy: `LOOKUP_TYPES` = `lookup`, `file_read`; both are titled *Lookup*, `file_read` is `inPalette: false`, and both draw Lookup's glyph. `ACTIVITY_MODE_GROUPS` lists Copy's and Lookup's groups, and one store action (`setActivityMode`) and one dock control serve both.
+- **Read as leads General, not Source** (where the table above puts it), for OR42 item 8's reason: it decides which tabs the activity has. The text mode's tab is *Source* (it was *Location*) and it has no Settings.
+- **Switching** starts the other mode's settings as a new node of that type has them, so text → rows writes First row only on (ADF's new-node default). The dataset binding goes; the connection and its overrides stay. One undo step.
+- **A refused connection names the mode.** A sqlite connection under Whole file as text reads *Lookup (whole file as text) can't use this kind yet*, since a Lookup in Rows mode takes it.
+- **The text mode reads as `file_read` always has:** up to the connection's `maxBytes` (10 MiB unless set), failing a larger file, with outputs `content` and `path`. §4.2's `bytes`, `truncated`, the 1 MiB Lookup byte cap and *When over the limit* for the text mode are C7c.
+- **Not built, C7c:** those, the workspace Max rows ceiling and the Monitor rows column. The Monitor rows column needs the activity's type on the activity-runs row: the run-log projection has no doc to read it from.
 
 ### 4.3 Get metadata
 Sources: [Get Metadata](https://learn.microsoft.com/azure/data-factory/control-flow-get-metadata-activity), [Validation](https://learn.microsoft.com/azure/data-factory/control-flow-validation-activity).
@@ -363,13 +371,13 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C4 | Copy: mapping redesign (x → y rows from imported schemas, map-by-name default, type conversion settings, ƒx whole mapping, additional columns) | depends on OR10 import |
 | C5 | Copy: incremental (watermark Automatic / Expression; files modified-since-last-success) | OR15 incremental |
 | C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs | — |
-| C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Whole file as text with the `file_read` lowering, the workspace Max rows ceiling, the Monitor rows column, the title *Lookup* | — |
+| C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Rows · Whole file as text (`file_read` as Lookup's second type), the title *Lookup* (built); **C7c** the workspace Max rows ceiling, the Monitor rows column, Lookup's byte cap and *When over the limit* for the text mode | — |
 | C8 | Get metadata + wait-until. Lower file_list | OR17 #1408 |
 | C9 | Delete: wildcard, folders, dates, log. Lower file_delete | OR17 #1408 |
 | C10 | Script activity | OR12 #1403, OR15 sql_script |
 | C11 | Web: fail-on-error, response cap, parse, retry-after, wait-for-callback. Lower http_request and webhook | — |
 | C12 | Set variable operations + pipeline return value. Lower append_variable | OR34 outputs |
-| C13 | Palette regroup (§2), retire the remaining old types from the palette (C1b retired Copy file and Move file), `CATALOG_VERSION` bump, the migration guarantees in §8 | — |
+| C13 | Palette regroup (§2), retire the remaining old types from the palette (C1b retired Copy file and Move file), `CATALOG_VERSION` bump, the migration guarantees in §8. `file_read` is NOT retired: since C7b it is Lookup's *Whole file as text* mode, so it is never refused, converted or listed as retired | — |
 
 **Order:** C0, then C1 (the operator's "copy and copy file" complaint), C7, C8, C9 (cheap consolidations), C11, C12, then C2–C6 as their dependencies (OR10, OR14) land, then C10 and C13. C13 can only land once every retired type has a lowering.
 
@@ -384,7 +392,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
   | `file_copy` | Copy · Files as-is · Keep |
   | `file_move` | Copy · Files as-is · Delete source |
   | `file_write` | Copy · Inline → file |
-  | `file_read` | Lookup · Whole file as text |
+  | `file_read` | Lookup · Whole file as text (C7b: the same type, offered as Lookup's mode; no lowering) |
   | `file_list` | Get metadata · Child items |
   | `file_delete` | Delete |
   | `lookup` | Lookup · not first-row-only, so today's `rows` shape is kept |

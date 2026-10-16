@@ -47,7 +47,9 @@ test.describe('#1600 C7b — Lookup · Read as', () => {
 
       // ONE Lookup in the toolbox; Read file is its other mode, not an entry.
       await expect(toolbox(page).getByRole('button', { name: 'Read file' })).toHaveCount(0);
-      await expect(toolbox(page).getByRole('button', { name: 'Lookup', exact: true })).toHaveCount(1);
+      await expect(toolbox(page).getByRole('button', { name: 'Lookup', exact: true })).toHaveCount(
+        1,
+      );
       await addActivity(page, 'Lookup');
       await expect(canvasNodes(page)).toHaveCount(1);
       await canvasNodes(page).first().click();
