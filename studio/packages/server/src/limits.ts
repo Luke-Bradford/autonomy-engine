@@ -311,3 +311,30 @@ export const RUNS_EXPORT_MAX_ROWS = 10_000;
  * file larger than this, because `POST /api/import` could never read it back.
  */
 export const REQUEST_BODY_LIMIT_BYTES = 1024 * 1024;
+
+/**
+ * #1600 C1q-c — how many rows a dataset Preview shows. A preview is a look at
+ * the shape and a sample, not a read of the data. It runs Lookup's bounded read
+ * (`LOOKUP_ROW_CAP` rows, `LOOKUP_BYTE_CAP` bytes) and keeps this prefix of it.
+ * Reading up to 1000 rows to show 100 is the price of not being a second reader,
+ * and it is bounded by the same caps a Lookup activity pays.
+ */
+export const PREVIEW_ROW_CAP = 100;
+
+/**
+ * How many previews may read a store at once, server-wide. Probe's shape
+ * (`PROBE_CONCURRENCY`): a slot is held until the real read settles, so a hung
+ * store cannot accumulate uncounted sessions, and a flood queues rather than
+ * being refused. A pool of its own, deliberately: a run of slow previews must
+ * not stall Test connection, so the two together may hold eight sessions.
+ */
+export const PREVIEW_CONCURRENCY = 4;
+
+/**
+ * When a preview's caller is answered regardless, queue time included. The read
+ * is then aborted, which a postgres cursor sees between fetches (each fetch is
+ * itself bounded by the connection's `statementTimeoutMs`). A sqlite statement
+ * runs synchronously and cannot be interrupted mid-step; its slot frees when it
+ * returns.
+ */
+export const PREVIEW_BACKSTOP_MS = 60_000;

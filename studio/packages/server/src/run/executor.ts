@@ -7,10 +7,6 @@ import {
   captureDispatchInput,
   captureDispatchParams,
   collectSecretSinkMarkers,
-  containsSecretMarker,
-  datasetConnectionKindAdvisory,
-  inlineDatasetConfigIssues,
-  INLINE_SOURCE_DATASET_ID,
   computeCostEstimate,
   firstParamOverrideViolation,
   connectionConfigSchema,
@@ -45,8 +41,10 @@ import { getRun } from '../repo/runs.js';
 import { connectionNotReadyReason, getConnection } from '../repo/connections.js';
 import { getDataset } from '../repo/datasets.js';
 import { getConnectionQuotaResetEpoch } from '../repo/connection-quota.js';
-import { getSecretByRef, getSecretByName } from '../repo/secrets.js';
+import { getSecretByName } from '../repo/secrets.js';
 import { decrypt } from '../secrets/secrets.js';
+import { readConnectionSecret } from '../secrets/connection-secret.js';
+import { resolveInlineSource } from '../datamove/inline-source.js';
 import { deepRedactRecord, deepRedactSecrets, redactSecrets } from '../connectors/redact.js';
 import type { Db } from '../repo/types.js';
 import type { ConnectorRegistry } from '../connectors/registry.js';
@@ -722,30 +720,26 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         };
       }
     }
-    let secret: string | null = null;
-    if (connection.secretRef !== null) {
-      const secretRow = getSecretByRef(deps.db, connection.secretRef);
-      if (secretRow === null) {
-        // Defence in depth, not a reachable state: `connections.secret_ref` is an
-        // FK onto `secrets.ref` with `onDelete: 'restrict'`, so a dangling ref is
-        // rejected at insert AND the referenced secret cannot be deleted out from
-        // under it. Kept (with its own code) so a future schema change that
-        // relaxes the FK surfaces loudly instead of NPE-ing.
-        return {
-          error: `secret '${connection.secretRef}' not found`,
-          code: FAILURE_CODES.SECRET_NOT_FOUND,
-        };
-      }
-      try {
-        secret = await decrypt(secretRow.ciphertext, deps.masterKey);
-      } catch {
-        // NEVER echo the underlying decrypt error (could leak ciphertext/key detail).
-        return {
-          error: `secret '${connection.secretRef}' could not be decrypted`,
-          code: FAILURE_CODES.SECRET_UNDECRYPTABLE,
-        };
-      }
+    const read = await readConnectionSecret(deps.db, deps.masterKey, connection.secretRef);
+    if (!read.ok) {
+      // NEVER echo the underlying decrypt error (could leak ciphertext/key
+      // detail) — `readConnectionSecret` carries only the reason. `missing` is
+      // defence in depth, not a reachable state: `connections.secret_ref` is an
+      // FK onto `secrets.ref` with `onDelete: 'restrict'`, so a dangling ref is
+      // rejected at insert AND the referenced secret cannot be deleted out from
+      // under it. Kept (with its own code) so a future schema change that
+      // relaxes the FK surfaces loudly instead of NPE-ing.
+      return read.reason === 'missing'
+        ? {
+            error: `secret '${connection.secretRef}' not found`,
+            code: FAILURE_CODES.SECRET_NOT_FOUND,
+          }
+        : {
+            error: `secret '${connection.secretRef}' could not be decrypted`,
+            code: FAILURE_CODES.SECRET_UNDECRYPTABLE,
+          };
     }
+    const secret = read.secret;
     return { adapter, secret, connectionConfig, connectionKind: connection.kind };
   }
 
@@ -909,6 +903,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
    *
    * A node that also names a source dataset is refused rather than letting one
    * win. `validateDoc` refuses it at save; this covers a doc that bypassed it.
+   * The rungs that hold for the source alone are `resolveInlineSource`'s, which
+   * the Preview route runs too (C1q-c).
    */
   function resolveInlineDataset(
     inline: InlineDataset,
@@ -929,42 +925,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         code: FAILURE_CODES.DATASET_KIND_INVALID,
       };
     }
-    const storeMismatch = datasetConnectionKindAdvisory(inline.kind, connectionKind);
-    if (storeMismatch !== null) {
-      return {
-        error: `the inline source's ${storeMismatch}`,
-        code: FAILURE_CODES.DATASET_CONNECTION_MISMATCH,
-      };
-    }
-    // A `${}` parameter can resolve run-supplied json this module never saw at
-    // save, so the marker refusal runs on the RESOLVED value, as it does for a
-    // saved dataset's overrides.
-    if (containsSecretMarker(inline.config)) {
-      return {
-        error:
-          'an inline source resolved to a value containing a secret marker — ' +
-          'parameters are non-secret; use a declared secret sink',
-        code: FAILURE_CODES.DATASET_PARAM_SECRET_MARKER,
-      };
-    }
-    // `validateDoc`'s rule again, after the values resolved, so a doc that
-    // bypassed the save gate cannot run a config other than the one it carries.
-    const issues = inlineDatasetConfigIssues(inline.kind, inline.config);
-    if (issues !== null) {
-      return {
-        error: `the inline ${inline.kind} source is not valid once its parameters are applied: ${issues}`,
-        code: FAILURE_CODES.DATASET_PARAM_INVALID,
-      };
-    }
-    return {
-      dataset: {
-        id: INLINE_SOURCE_DATASET_ID,
-        name: `inline ${inline.kind}`,
-        kind: inline.kind,
-        config: inline.config,
-        columns: [],
-      },
-    };
+    return resolveInlineSource(inline, connectionKind);
   }
 
   /**

@@ -1,11 +1,14 @@
 import { z } from 'zod';
 import {
+  DatasetPreviewResultSchema,
   DatasetReferencesResponseSchema,
   DatasetSchema,
   DatasetSheetsResultSchema,
   NewDatasetSchema,
   paginatedResponseSchema,
   type Dataset,
+  type DatasetPreviewRequest,
+  type DatasetPreviewResult,
   type DatasetReferencesResponse,
   type DatasetSheetsResult,
 } from '@autonomy-studio/shared';
@@ -130,5 +133,22 @@ export function listDatasetSheets(body: {
     method: 'POST',
     body,
     schema: DatasetSheetsResultSchema,
+  });
+}
+
+/**
+ * #1600 C1q-c — the first rows of a Copy or Lookup's inline Table or Query, for
+ * the Source tab's Preview. A refusal is a 200 `{ ok: false }` (it does not
+ * throw), as `listDatasetSheets`; `ApiError` is a transport or protocol fault.
+ */
+export function previewDatasetSource(
+  body: DatasetPreviewRequest,
+  signal?: AbortSignal,
+): Promise<DatasetPreviewResult> {
+  return apiFetch('/api/datasets/preview', {
+    method: 'POST',
+    body,
+    schema: DatasetPreviewResultSchema,
+    ...(signal === undefined ? {} : { signal }),
   });
 }

@@ -24,7 +24,8 @@ import {
 import { newId } from '../repo/ids.js';
 import { connectionDependents, regateTriggersForConnection } from '../run/connection-readiness.js';
 import { configKeysChangedByOverlay, probeConnection } from '../connectors/probe.js';
-import { SecretDecryptionError, decrypt, encrypt } from '../secrets/secrets.js';
+import { encrypt } from '../secrets/secrets.js';
+import { connectionSecretRefusal, readConnectionSecret } from '../secrets/connection-secret.js';
 import { NotFoundError } from '../errors.js';
 import { pageArgsFromQuery, requireOwned } from './util.js';
 import { exportConnection } from '../portability/index.js';
@@ -336,28 +337,20 @@ export const connectionsRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
-    if (usingStoredSecret && existing.secretRef !== null) {
-      const row = getSecretByRef(db, existing.secretRef);
+    if (usingStoredSecret) {
+      const read = await readConnectionSecret(db, masterKey, existing.secretRef);
       // A dangling `secretRef` should be impossible (there is an FK), and this
       // route is not the place to discover otherwise loudly: `null` is exactly
       // what "this connection has no usable secret" means, and every
       // secret-requiring adapter already answers that with its own sentence
       // (postgres: "this postgres connection has no secret …").
-      if (row) {
-        try {
-          secret = await decrypt(row.ciphertext, masterKey);
-        } catch (err) {
-          // NEVER echo a decrypt error — it can carry ciphertext/key detail.
-          // The executor takes the same posture at its own decrypt.
-          const result: ConnectionProbeResult = {
-            ok: false,
-            error:
-              err instanceof SecretDecryptionError
-                ? "this connection's secret could not be decrypted with the current master key"
-                : "this connection's secret could not be read",
-          };
-          return result;
-        }
+      if (read.ok) secret = read.secret;
+      else if (read.reason !== 'missing') {
+        const result: ConnectionProbeResult = {
+          ok: false,
+          error: connectionSecretRefusal(read.reason),
+        };
+        return result;
       }
     }
 

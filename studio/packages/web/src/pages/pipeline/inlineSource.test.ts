@@ -3,7 +3,10 @@ import {
   bindNameProblem,
   bindValueText,
   coerceBindValue,
+  dynamicBindNames,
   freshBindName,
+  previewBindValue,
+  previewInline,
   renameKey,
 } from './inlineSource';
 
@@ -34,5 +37,42 @@ describe('inline source bind values (#1600 C1q-b)', () => {
     expect(Object.keys(odd)).toEqual(['__proto__']);
     expect(Object.getOwnPropertyDescriptor(odd, '__proto__')?.value).toBe('v');
     expect(freshBindName(['p1', 'p3'])).toBe('p2');
+  });
+});
+
+describe('inline source preview (#1600 C1q-c)', () => {
+  const q = (parameters: Record<string, unknown>) => ({
+    kind: 'query' as const,
+    config: { sql: 'SELECT * FROM t WHERE a > :wm', parameters },
+  });
+
+  it('asks for a value only where the run would evaluate one', () => {
+    expect(
+      dynamicBindNames(
+        q({ wm: '${nodes.l.output.rows[0].wm}', lit: 'plain', esc: '$${not}', n: 3, nil: null }),
+      ),
+    ).toEqual(['wm']);
+  });
+
+  it('binds a number as a number and anything else as typed', () => {
+    expect(previewBindValue('5')).toBe(5);
+    expect(previewBindValue('-2.5')).toBe(-2.5);
+    expect(previewBindValue('007')).toBe('007');
+    expect(previewBindValue('2026-10-01')).toBe('2026-10-01');
+    expect(previewBindValue('')).toBe('');
+    // Never a number JSON cannot carry (it would bind NULL), never a trimmed one.
+    expect(previewBindValue('NaN')).toBe('NaN');
+    expect(previewBindValue('Infinity')).toBe('Infinity');
+    expect(previewBindValue(' 5')).toBe(' 5');
+  });
+
+  it('sends every value literal: the preview value for a ${}, the escape resolved for text', () => {
+    expect(previewInline(q({ wm: '${x}', esc: 'a$${b}', n: 3 }), { wm: '42' })).toEqual(
+      q({ wm: 42, esc: 'a${b}', n: 3 }),
+    );
+    // A dynamic value with nothing typed binds as empty text, never the expression.
+    expect(previewInline(q({ wm: '${x}' }), {}).config['parameters']).toEqual({ wm: '' });
+    const table = { kind: 'table' as const, config: { table: 't' } };
+    expect(previewInline(table, {})).toBe(table);
   });
 });

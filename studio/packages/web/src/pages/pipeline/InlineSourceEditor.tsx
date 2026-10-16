@@ -32,6 +32,7 @@ import {
 import type { createCanvasStore } from './canvasStore';
 import { ExpressionEditor } from './ExpressionEditor';
 import { PickableInput } from './PickableInput';
+import { SourcePreview } from './SourcePreview';
 import {
   bindNameProblem,
   bindValueText,
@@ -112,6 +113,7 @@ export function InlineSourceEditor({
   node,
   sourceKinds,
   connectionKind,
+  connectionId,
   picker,
   saved,
 }: {
@@ -121,6 +123,8 @@ export function InlineSourceEditor({
   sourceKinds: readonly DatasetKind[];
   /** The kind of the connection bound to the source end, when one is known. */
   connectionKind: ConnectionKind | undefined;
+  /** The saved source connection Preview reads; `undefined` when unset or a `${}`. */
+  connectionId: string | undefined;
   picker: FieldPicker | undefined;
   /** The Saved dataset picker and its overrides. */
   saved: ReactNode;
@@ -180,6 +184,13 @@ export function InlineSourceEditor({
         <p className="contract-advisory" role="status">
           The inline source’s {mismatch}.
         </p>
+      )}
+      {inline !== undefined && (
+        <SourcePreview
+          inline={inline}
+          connectionId={connectionId}
+          connectionParams={Object.keys(node.connectionParams ?? {}).length > 0}
+        />
       )}
     </>
   );
