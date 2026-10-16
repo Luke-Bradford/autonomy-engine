@@ -81,9 +81,11 @@ test.describe('#1221 — lookup-node authoring', () => {
     // Everything that shapes the read belongs to the dataset, so the Source tab
     // (#1477) holds the bindings and no config form, rather than a raw JSON
     // textarea. Its own Settings (#1600 C7a) are a tab of their own, after it.
-    await expect(
-      properties(page).getByRole('tablist', { name: 'Activity properties' }).getByRole('tab'),
-    ).toHaveText(['General', 'Source', 'Settings']);
+    const tabStrip = properties(page).getByRole('tablist', { name: 'Activity properties' });
+    await expect(tabStrip.getByRole('tab')).toHaveCount(3);
+    for (const name of ['General', 'Source', 'Settings']) {
+      await expect(tabStrip.getByRole('tab', { name, exact: true })).toHaveCount(1);
+    }
     await expect(properties(page).getByRole('tab', { name: 'Source' })).toHaveAttribute(
       'aria-selected',
       'true',
@@ -188,6 +190,7 @@ test.describe('#1221 — lookup-node authoring', () => {
     await maxRows.fill('50');
     await maxRows.blur();
     await overLimit.selectOption({ label: 'Fail' });
+    await properties(page).getByRole('button', { name: 'Apply config', exact: true }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');

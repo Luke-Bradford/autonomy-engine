@@ -194,6 +194,9 @@ for (const { density, theme } of DESIGN_RUNS) {
     await openSeededCanvas(lookup, `S6l overrides ${density} ${Date.now()}`, { nodes: [] });
     await addActivity(lookup, 'Lookup rows');
     await canvasNodes(lookup).first().click();
+    // The dock reopens the tab last chosen (#852), Settings above, and a
+    // Lookup has one since #1600 C7a.
+    await properties(lookup).getByRole('tab', { name: 'Source' }).click();
     await pickConnection(lookup, 'Connection', { id: connId });
     await expect(
       properties(lookup).getByRole('group', { name: 'Connection overrides' }),
