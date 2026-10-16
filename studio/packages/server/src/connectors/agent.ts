@@ -376,12 +376,13 @@ type CliShapeLabel = 'llm_call' | 'agent_task';
  * `maxOutputBytes`); nothing read it, so a clipped transcript flowed into
  * `${nodes.x.output.output}` indistinguishable from a whole one. That is the
  * silent-truncation class `limits.ts` states outright and `fs.ts`'s `file_read`
- * refuses — the only path that did it silently had already computed the marker.
+ * refuses (it truncates only when the node asks, and then marks and warns) — the
+ * only path that did it silently had already computed the marker.
  *
- * ADVISORY, not a failure, and the asymmetry with `file_read` is deliberate: a
- * partial FILE is useless, whereas an over-long agent transcript is a normal
- * outcome whose prefix is usually exactly what the operator wanted. So state the
- * clipping and let the run stand.
+ * ADVISORY, not a failure, and the asymmetry with `file_read`'s default is
+ * deliberate: a partial FILE is rarely usable, whereas an over-long agent
+ * transcript is a normal outcome whose prefix is usually exactly what the
+ * operator wanted. So state the clipping and let the run stand.
  *
  * PRECISION MATTERS IN THE SENTENCE. The budget is ONE allowance shared by both
  * streams (`SharedByteBudget`), so this says COLLECTION stopped at the cap — a

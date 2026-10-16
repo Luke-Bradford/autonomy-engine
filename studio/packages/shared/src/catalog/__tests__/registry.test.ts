@@ -257,7 +257,19 @@ describe('activity catalog', () => {
     // A read is side-effect-free (safe to resume); a write is not (fail-safe freeze).
     expect(read.idempotent).toBe(true);
     expect(write.idempotent).toBe(false);
-    expect(read.outputs.map((o) => o.name).sort()).toEqual(['content', 'path']);
+    expect(read.outputs.map((o) => o.name).sort()).toEqual([
+      'bytes',
+      'content',
+      'path',
+      'truncated',
+    ]);
+    // #1600 C7c — a node saved before C7c declares the two it had.
+    expect(read.formerOutputs).toEqual([
+      [
+        { name: 'content', type: 'string' },
+        { name: 'path', type: 'string' },
+      ],
+    ]);
     expect(write.outputs.map((o) => o.name).sort()).toEqual(['bytesWritten', 'path']);
     // configSchema (palette metadata): `path` required for both, `content` for write.
     expect(read.configSchema.safeParse({ path: 'notes.txt' }).success).toBe(true);
@@ -479,7 +491,8 @@ describe('activity mode groups (#1600 OR41 C7b)', () => {
     expect(LOOKUP_TYPES).toEqual(['lookup', 'file_read']);
     expect(getActivity('lookup')!.title).toBe('Lookup');
     expect(getActivity('file_read')!.connectionKinds).toEqual(['fs']);
-    expect(getActivity('file_read')!.tabs?.map((t) => t.key)).toEqual(['source']);
+    expect(getActivity('file_read')!.tabs?.map((t) => t.key)).toEqual(['source', 'settings']);
+    expect(getActivity('file_read')!.tabs?.[1]?.fields).toEqual(['overLimit']);
     expect(activityModeGroup('llm_call')).toBeUndefined();
   });
 });

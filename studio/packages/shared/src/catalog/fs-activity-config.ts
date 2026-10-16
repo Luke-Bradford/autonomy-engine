@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { presented, singleLine } from '../schemas/field-presentation.js';
+import { LOOKUP_OVER_LIMIT_OPTIONS, lookupOverLimitSchema } from './lookup-config.js';
 
 // #1396 — the human labels the node panel shows. Built per field (each call
 // returns a fresh instance), so no two activities share a tagged schema.
@@ -21,8 +22,24 @@ const IN_ROOTS = "Must sit inside one of the connection's allowed folders.";
  * validation-behaviour change, so `CATALOG_VERSION` is deliberately NOT bumped.
  */
 
-/** `file_read`: a single non-empty `path`. */
-export const fileReadConfigSchema = z.object({ path: filePath('File path', IN_ROOTS) });
+/**
+ * `file_read`: a single non-empty `path`.
+ *
+ * #1600 OR41 C7c — and Lookup's *When over the limit*, for a file over the
+ * connection's read limit (`maxBytes`). The default is Fail, which is what a
+ * stored `file_read` has always done (catalogue §8) and what ADF's Lookup does
+ * over its size limit. A whole file cut short is rarely usable, unlike a
+ * bounded set of rows, so rows mode's Truncate default is not copied here.
+ */
+export const fileReadConfigSchema = z.object({
+  path: filePath('File path', IN_ROOTS),
+  overLimit: presented(lookupOverLimitSchema.default('fail'), {
+    title: 'When over the limit',
+    description:
+      "A file larger than the connection's Largest file read. Fails unless set to Truncate and warn.",
+    options: LOOKUP_OVER_LIMIT_OPTIONS,
+  }),
+});
 
 /** `file_write`: a `path` plus the UTF-8 text `content` to write. */
 export const fileWriteConfigSchema = z.object({

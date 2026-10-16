@@ -537,6 +537,24 @@ describe('refreshFormerOutputs (#1600 OR41 C7a)', () => {
     expect(out).toMatchObject({ id: 'l', connectionId: 'c', config: { maxRows: 5 } });
   });
 
+  it('re-seeds a whole-file-text Lookup saved before C7c (#1600 C7c)', () => {
+    const node = {
+      id: 'r',
+      type: 'file_read',
+      config: {
+        path: 'a.txt',
+        outputs: [
+          { name: 'content', type: 'string' },
+          { name: 'path', type: 'string' },
+        ],
+      },
+      position: { x: 0, y: 0 },
+    } as Node;
+    const [out] = refreshFormerOutputs([node]);
+    expect(out!.config['outputs']).toEqual(getActivity('file_read')!.outputs);
+    expect(out!.config['path']).toBe('a.txt');
+  });
+
   it('leaves every other contract, and every other node, by reference', () => {
     const nodes = [
       lookup(FOUR.slice(0, 3)),

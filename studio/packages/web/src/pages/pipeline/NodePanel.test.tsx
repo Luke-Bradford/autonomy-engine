@@ -2087,7 +2087,7 @@ describe('NodePanel — what each tab holds (#1396, #1477)', () => {
     expect(mode.value).toBe('lookup');
     fireEvent.change(mode, { target: { value: 'file_read' } });
     expect(store.getState().nodes[0]!.type).toBe('file_read');
-    expect(tabNames()).toEqual(['General', 'Source']);
+    expect(tabNames()).toEqual(['General', 'Source', 'Settings']);
     // The file path and the connection sit on Source.
     fireEvent.click(screen.getByRole('tab', { name: 'Source' }));
     const source = within(screen.getByRole('tabpanel', { name: 'Source' }));

@@ -335,7 +335,8 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   // Read file became Lookup's Whole file as text, and gained that one.
   Lookup: 10,
   'Lookup (inline table)': 13,
-  'Lookup (whole file as text)': 8,
+  // +1 for C7c's When over the limit, whose `?` names the limit and the default.
+  'Lookup (whole file as text)': 9,
   'Write file': 7,
   'Agent task': 8,
   'LLM call': 15,

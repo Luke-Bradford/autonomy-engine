@@ -202,7 +202,7 @@ Source: [Lookup](https://learn.microsoft.com/azure/data-factory/control-flow-loo
 - **Settings:**
   - **First row only** (default **on**, as ADF).
   - **Max rows**: default 1000, workspace ceiling, so today's cap becomes configurable.
-  - **When over the limit**: Truncate and warn · Fail (default Truncate and warn, as today).
+  - **When over the limit**: Truncate and warn · Fail (default Truncate and warn, as today). *Whole file as text* has it too, defaulting to Fail (C7c below).
 - **Outputs:**
   - `firstRow` (first row only), or `rows` + `count`;
   - `content` + `path` (whole-file text);
@@ -211,7 +211,7 @@ Source: [Lookup](https://learn.microsoft.com/azure/data-factory/control-flow-loo
 
 **Built (C7a):** First row only, Max rows and When over the limit, on a Settings tab after Source.
 - **Defaults.** The schema's defaults are today's behaviour: off, 1000, Truncate and warn. A stored `lookup` (`config: {}`) is therefore already "Lookup · not first row only" (§8), with no lowering. A new Lookup is written `firstRowOnly: true` by the catalog entry's `newNodeConfig`, so ADF's default is in the JSON.
-- **Max rows** can only lower the 1000-row cap (`LOOKUP_ROW_CAP`, now in `shared`). The 1 MiB byte cap is not configurable. Raising the ceiling per workspace is C7b.
+- **Max rows** can only lower the 1000-row cap (`LOOKUP_ROW_CAP`, now in `shared`). The 1 MiB byte cap is not configurable. Raising the ceiling per workspace is C7d.
 - **When over the limit** applies to either bound, rows or bytes. Fail fails the activity `permanent` with the truncation reason.
 - **First row only** reads one row. A source with more rows is not a truncation. Its one row can still be over the byte cap, which is truncated (or fails).
 - **Outputs.** All six are always present, because every declared output is required: `rows`, `rowCount`, `count`, `firstRow`, `bytes`, `truncated`. That is a deliberate departure from "firstRow, or rows + count".
@@ -225,11 +225,23 @@ Source: [Lookup](https://learn.microsoft.com/azure/data-factory/control-flow-loo
 **Built (C7b):** *Read as* Rows · Whole file as text, and the title *Lookup*.
 - **Whole file as text is `file_read`.** Its shape (an `fs` connection and a `path`, giving `content` and `path`) is already that mode, so a new type would be a second dispatch arm doing the same read. `copy_files` needed a new type only because its config differs from `file_copy`'s. So the §8 row `file_read → Lookup · Whole file as text` needs no lowering: the type is unchanged, a stored version runs through the same arm, and `output.content` resolves as before. `file_read` is not a retired type and has no entry in `RETIRED_LOWERINGS`.
 - **One palette item, two types,** as C1a's Copy: `LOOKUP_TYPES` = `lookup`, `file_read`; both are titled *Lookup*, `file_read` is `inPalette: false`, and both draw Lookup's glyph. `ACTIVITY_MODE_GROUPS` lists Copy's and Lookup's groups, and one store action (`setActivityMode`) and one dock control serve both.
-- **Read as leads General, not Source** (where the table above puts it), for OR42 item 8's reason: it decides which tabs the activity has. The text mode's tab is *Source* (it was *Location*) and it has no Settings.
+- **Read as leads General, not Source** (where the table above puts it), for OR42 item 8's reason: it decides which tabs the activity has. The text mode's tab is *Source* (it was *Location*). C7c gave it a Settings tab.
 - **Switching** starts the other mode's settings as a new node of that type has them, so text → rows writes First row only on (ADF's new-node default). The dataset binding goes; the connection and its overrides stay. One undo step.
 - **A refused connection names the mode.** A sqlite connection under Whole file as text reads *Lookup (whole file as text) can't use this kind yet*, since a Lookup in Rows mode takes it.
-- **The text mode reads as `file_read` always has:** up to the connection's `maxBytes` (10 MiB unless set), failing a larger file, with outputs `content` and `path`. §4.2's `bytes`, `truncated`, the 1 MiB Lookup byte cap and *When over the limit* for the text mode are C7c.
-- **Not built, C7c:** those, the workspace Max rows ceiling and the Monitor rows column. The Monitor rows column needs the activity's type on the activity-runs row: the run-log projection has no doc to read it from.
+- **The text mode reads as `file_read` always has:** up to the connection's `maxBytes` (10 MiB unless set), failing a larger file, with outputs `content` and `path`. C7c added `bytes`, `truncated` and *When over the limit*.
+
+**Built (C7c):** *When over the limit* and `bytes`/`truncated` for *Whole file as text*.
+- **Settings tab** with one field, *When over the limit*: Truncate and warn · Fail. It uses the same choice and labels as rows mode (`LOOKUP_OVER_LIMIT_OPTIONS`).
+- **The limit is the connection's `maxBytes`, not the 1 MiB Lookup byte cap.** That is a deliberate departure from the C7 row as first written. A stored Read file reads up to 10 MiB today, so applying 1 MiB would fail or cut files it reads now, which §8 forbids. A hoster lowers the limit per connection.
+- **The default is Fail, not Truncate.**
+  - Fail is what every stored `file_read` has done (§8).
+  - It is also ADF's behaviour: *"The Lookup activity output supports up to 4 MB in size, activity will fail if the size exceeds the limit"* ([Lookup](https://learn.microsoft.com/azure/data-factory/control-flow-lookup-activity)).
+  - A file cut short (half a JSON document) is rarely usable, where a bounded set of rows is.
+  - No `newNodeConfig` is needed, because the schema default is the new-node default.
+  - Only an explicit `truncate` truncates. Anything else keeps the failing read.
+- **Truncate and warn** keeps the first `maxBytes` bytes, cut back to a whole UTF-8 character (a leading BOM is kept, as a whole read keeps it). It emits `activity.warned` `lookup_truncated` with the file's size, the limit and the connection field that sets it (*Largest file read*), never content, and outputs `truncated: true`. A file that shrank under the limit after its size was read is read whole, not marked truncated.
+- **Outputs** `content`, `path`, `bytes` (the UTF-8 size of `content`, what was kept, as rows mode counts it), `truncated`. All four are always present. A node saved before C7c declares `content` and `path` only: `formerOutputs` re-seeds it on the editor's load, as C7a's Lookup does. `CATALOG_VERSION` 41.
+- **Not built, C7d:** the workspace Max rows ceiling and the Monitor rows column. The Monitor rows column needs the activity's type on the activity-runs row: the run-log projection has no doc to read it from.
 
 ### 4.3 Get metadata
 Sources: [Get Metadata](https://learn.microsoft.com/azure/data-factory/control-flow-get-metadata-activity), [Validation](https://learn.microsoft.com/azure/data-factory/control-flow-validation-activity).
@@ -371,7 +383,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C4 | Copy: mapping redesign (x → y rows from imported schemas, map-by-name default, type conversion settings, ƒx whole mapping, additional columns) | depends on OR10 import |
 | C5 | Copy: incremental (watermark Automatic / Expression; files modified-since-last-success) | OR15 incremental |
 | C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs | — |
-| C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Rows · Whole file as text (`file_read` as Lookup's second type), the title *Lookup* (built); **C7c** the workspace Max rows ceiling, the Monitor rows column, Lookup's byte cap and *When over the limit* for the text mode | — |
+| C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Rows · Whole file as text (`file_read` as Lookup's second type), the title *Lookup* (built); **C7c** *When over the limit* and `bytes`/`truncated` for the text mode, limited by the connection's `maxBytes` rather than the 1 MiB byte cap (built); **C7d** the workspace Max rows ceiling, the Monitor rows column | — |
 | C8 | Get metadata + wait-until. Lower file_list | OR17 #1408 |
 | C9 | Delete: wildcard, folders, dates, log. Lower file_delete | OR17 #1408 |
 | C10 | Script activity | OR12 #1403, OR15 sql_script |

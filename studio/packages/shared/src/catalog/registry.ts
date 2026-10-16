@@ -519,19 +519,33 @@ const ENTRIES: ActivityCatalogEntry[] = [
     //
     // #1600 OR41 C7b — Lookup · *Whole file as text* (`LOOKUP_TYPES`): the
     // second type under the ONE Lookup palette item, as `copy_files` is under
-    // Copy, so it shares Lookup's title and is not offered on its own. Its read
-    // is unchanged: the connection's `maxBytes` (not Lookup's byte cap) and a
-    // file over it fails rather than truncating.
+    // Copy, so it shares Lookup's title and is not offered on its own.
+    //
+    // #1600 OR41 C7c — Settings: *When over the limit*. The limit is the
+    // connection's `maxBytes` (not rows mode's 1 MiB byte cap, which would fail
+    // reads stored nodes make today), and the default is Fail, as it always was.
+    // Truncate keeps the first `maxBytes` bytes and warns. `bytes` and
+    // `truncated` say what was kept, as in rows mode.
     type: FILE_READ_ACTIVITY_TYPE,
     title: 'Lookup',
     description: 'Read the contents of a file on a file system connection.',
     kind: 'execution',
     category: 'general',
     inPalette: false,
-    tabs: [{ key: 'source', bindings: ['connection'], fields: ['path'] }],
+    tabs: [
+      { key: 'source', bindings: ['connection'], fields: ['path'] },
+      { key: 'settings', fields: ['overLimit'] },
+    ],
     idempotent: true,
     connectionKinds: ['fs'],
-    outputs: [out('content', 'string'), out('path', 'string')],
+    outputs: [
+      out('content', 'string'),
+      out('path', 'string'),
+      out('bytes', 'number'),
+      out('truncated', 'boolean'),
+    ],
+    // The two A11 declared, which a node saved before C7c still holds.
+    formerOutputs: [[out('content', 'string'), out('path', 'string')]],
     configSchema: fileReadConfigSchema,
     dispatchConfigSchema: fileReadConfigSchema,
   },
