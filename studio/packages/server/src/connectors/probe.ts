@@ -50,7 +50,7 @@ import { runBounded } from '../util/bounded-attempt.js';
  *
  * Kept here rather than in `limits.ts`: `limits.ts` holds bounds several
  * subsystems share (`SQLITE_BUSY_TIMEOUT_MS`). This one has exactly one
- * consumer, three lines below it, and no connection form states it, so it does
+ * consumer, `probeConnection` below, and no connection form states it, so it does
  * not join the shared defaults the notes are built from (#1712).
  */
 export const PROBE_BACKSTOP_MS = 130_000;
@@ -59,18 +59,16 @@ export const PROBE_BACKSTOP_MS = 130_000;
  * How many probes may be in flight at once, process-wide.
  *
  * A probe opens a real socket to an operator-named host, and the backstop above
- * is a RACE, not a cancel — when it fires, the underlying attempt keeps running
- * and keeps holding its socket. Without a cap, N concurrent requests mean N live
- * sockets (and, for postgres, N server-side sessions) with nothing bounding
- * them, on a server that sets no `requestTimeout`.
+ * is a RACE, not a cancel: `testConnection` takes no abort signal, so when the
+ * backstop fires the underlying attempt keeps running and keeps holding its
+ * socket. Without a cap, N concurrent requests mean N live sockets (and, for
+ * postgres, N server-side sessions) with nothing bounding them, on a server that
+ * sets no `requestTimeout`.
  *
- * So this counts ATTEMPTS, not answered requests, and `probeConnection` holds a
- * slot until the underlying `testConnection` settles — past the backstop, if the
- * adapter hung. That distinction is the whole cap: releasing on the backstop
- * instead (the first shape here) bounded only how many probes could be WAITED
- * on at once, while orphaned sockets accumulated behind it without limit. The
- * price is that a saturated limiter makes later probes queue, which is why the
- * backstop budget starts at the request rather than at admission.
+ * So this counts ATTEMPTS, not answered requests: the slot is held until the
+ * underlying `testConnection` settles, past the backstop if the adapter hung
+ * (`runBounded`, `util/bounded-attempt.ts`, which records why releasing on the
+ * backstop did not bound anything).
  *
  * `pLimit` is the same primitive the executor bounds its RUNNING phase with
  * (`run/executor.ts`, `pLimit(deps.concurrency ?? 4)`), at the same default —

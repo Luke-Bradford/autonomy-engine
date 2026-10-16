@@ -115,4 +115,66 @@ describe('runBounded', () => {
     await attempt(pLimit(1), () => Promise.resolve('rows'), { signal: caller.signal });
     expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
   });
+
+  it('clears its timer once answered by the backstop or by the caller leaving', async () => {
+    vi.useFakeTimers();
+    const slow = hung();
+    const backstopped = attempt(pLimit(1), slow.work, { backstopMs: 50 });
+    await vi.advanceTimersByTimeAsync(50);
+    await backstopped;
+    expect(vi.getTimerCount()).toBe(0);
+
+    const caller = new AbortController();
+    const left = hung();
+    const cancelled = attempt(pLimit(1), left.work, { signal: caller.signal });
+    caller.abort();
+    await cancelled;
+    expect(vi.getTimerCount()).toBe(0);
+    slow.release();
+    left.release();
+  });
+
+  it('answers a caller that leaves while queued, and that attempt never starts', async () => {
+    const limit = pLimit(1);
+    const holder = hung();
+    const held = attempt(limit, holder.work);
+    const caller = new AbortController();
+    const queued = hung();
+    const answer = attempt(limit, queued.work, { signal: caller.signal });
+    await vi.waitFor(() => expect(holder.started).toHaveBeenCalled());
+    caller.abort();
+    expect(await answer).toEqual({ ok: false, stop: 'cancelled', admitted: false });
+    holder.release();
+    await held;
+    await vi.waitFor(() => expect(limit.activeCount + limit.pendingCount).toBe(0));
+    expect(queued.started).not.toHaveBeenCalled();
+  });
+
+  it('does not map a rejection that arrives after the caller was answered', async () => {
+    vi.useFakeTimers();
+    let reject!: (err: Error) => void;
+    const onThrow = vi.fn(() => 'thrown');
+    const limit = pLimit(1);
+    const answer = runBounded({
+      limit,
+      backstopMs: 50,
+      work: () => new Promise<string>((_resolve, fail) => (reject = fail)),
+      onStop: () => 'stopped',
+      onThrow,
+    });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await answer).toBe('stopped');
+    reject(new Error('aborted'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(limit.activeCount).toBe(0);
+    expect(onThrow).not.toHaveBeenCalled();
+  });
+
+  it('never holds the process open for a hung attempt', () => {
+    const unref = vi.fn();
+    vi.spyOn(globalThis, 'setTimeout').mockReturnValueOnce({ unref } as never);
+    void attempt(pLimit(1), hung().work);
+    expect(unref).toHaveBeenCalledOnce();
+    vi.restoreAllMocks();
+  });
 });
