@@ -394,7 +394,7 @@ function QueryFields({
           Commits on blur (`DraftNumberField`), so clearing to retype never
           stores a 0. */}
       <DraftNumberField
-        label={configFieldTitle(timeoutField)}
+        label={timeoutField.label?.title ?? timeoutField.name}
         unit={timeoutField.label?.unit}
         stored={typeof storedTimeout === 'number' ? storedTimeout : undefined}
         parse={parseTimeoutSeconds}

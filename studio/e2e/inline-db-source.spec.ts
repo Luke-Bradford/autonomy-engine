@@ -39,7 +39,7 @@ test.describe('#1600 C1q — an inline database source', () => {
       columns: [{ name: 'id', type: 'integer', nullable: true }],
     });
     const sql = 'SELECT id FROM orders WHERE modified_at > :wm';
-    await openSeededCanvas(page, 'e2e 1600 c1q inline', {
+    const pipelineId = await openSeededCanvas(page, 'e2e 1600 c1q inline', {
       params: [{ name: 'wm', type: 'string', required: true }],
       nodes: [
         {
@@ -103,13 +103,24 @@ test.describe('#1600 C1q — an inline database source', () => {
     await expect(
       pane.getByText('Enter a whole number of seconds above 0, or leave it blank'),
     ).toHaveCount(0);
-    // Committed to the node, not only drawn: it survives the tab remounting.
-    await properties(page).getByRole('tab', { name: 'General', exact: true }).click();
-    await sourceTab(page).click();
-    await expect(timeout).toHaveValue('90');
 
     // The canvas validates with the same `validateDoc` the server ran: nothing to report.
     await expect(problemsToggle(page)).not.toHaveText(/[1-9]/);
+
+    // Committed to the node, not only drawn: the saved version carries it, a number.
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+    const versions = (await (
+      await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+    ).json()) as { version: number; nodes: Record<string, unknown>[] }[];
+    const latest = versions.sort((a, b) => b.version - a.version)[0]!;
+    const copy = latest.nodes.find((n) => n['id'] === 'copy1')!;
+    expect(copy['inlineDatasets']).toEqual({
+      source: {
+        kind: 'query',
+        config: { sql, parameters: { wm: '${params.wm}' }, queryTimeoutSeconds: 90 },
+      },
+    });
     await expectQuiet(page, problems);
   });
 
