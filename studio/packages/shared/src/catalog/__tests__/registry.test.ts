@@ -433,3 +433,30 @@ describe('activity descriptions (#1413)', () => {
     expect(new Set(descriptions).size).toBe(entries.length);
   });
 });
+
+describe('new-node config and former outputs (#1600 OR41 C7a)', () => {
+  it.each([...catalog.values()].filter((e) => e.newNodeConfig !== undefined).map((e) => [e.type, e]))(
+    '%s writes a new node a config its own schema accepts',
+    (_type, entry) => {
+      expect(entry.configSchema.safeParse(entry.newNodeConfig).success).toBe(true);
+    },
+  );
+
+  it('a Lookup starts First row only, and only a Lookup has new-node config', () => {
+    const seeded = [...catalog.values()].filter((e) => e.newNodeConfig !== undefined);
+    expect(seeded.map((e) => [e.type, e.newNodeConfig])).toEqual([
+      ['lookup', { firstRowOnly: true }],
+    ]);
+  });
+
+  it('a former contract is never today’s, and names only outputs today’s keeps', () => {
+    for (const entry of catalog.values()) {
+      for (const former of entry.formerOutputs ?? []) {
+        expect(former).not.toEqual(entry.outputs);
+        // Today's contract only ADDS: every old name still resolves, as the
+        // same type (catalogue §8).
+        for (const o of former) expect(entry.outputs).toContainEqual(o);
+      }
+    }
+  });
+});

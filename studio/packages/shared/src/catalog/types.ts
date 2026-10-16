@@ -45,11 +45,14 @@ export type ActivityCategory = (typeof ACTIVITY_CATEGORIES)[number];
  * Display-only metadata, like `description`: nothing persists it on a version,
  * so declaring or regrouping tabs never bumps `CATALOG_VERSION`.
  */
+// #1600 OR41 C7a — `settings` sits after `mapping`, ADF's Copy order (Source ·
+// Sink · Mapping · Settings), so a Lookup opens on its Source. Before it, no
+// entry declared `settings` beside a tab it now follows.
 export const ACTIVITY_TAB_KEYS = [
-  'settings',
   'source',
   'sink',
   'mapping',
+  'settings',
   'request',
   'auth',
   'model',
