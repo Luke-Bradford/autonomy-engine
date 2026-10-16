@@ -6,6 +6,7 @@ import {
 } from '@autonomy-studio/shared';
 import type { ConnectorRegistry } from './registry.js';
 import { redactSecrets } from './redact.js';
+import { runBounded } from '../util/bounded-attempt.js';
 
 /**
  * #1191 — the route boundary for `ConnectorAdapter.testConnection`.
@@ -217,37 +218,13 @@ export async function probeConnection(args: ProbeConnectionArgs): Promise<Connec
     return { ok: false, error: `no adapter for connection kind '${kind}'` };
   }
 
-  // The CALLER's answer, settled independently of the slot. Racing the backstop
-  // INSIDE the limited function was the first shape here and it did not bound
-  // what the cap exists to bound: `pLimit` frees a slot when the function it
-  // wrapped settles, and that function settled on the RACE — so a hung adapter
-  // released its slot after `backstopMs` while its socket (and, for postgres,
-  // its server-side session) kept running, uncounted. A steady stream of probes
-  // at a black-holed host would then accumulate live sockets without limit,
-  // which is precisely the hazard `PROBE_CONCURRENCY` is documented to prevent.
-  //
-  // Splitting the two fixes it: the slot is held until the REAL attempt settles,
-  // so live attempts are never more than `PROBE_CONCURRENCY`; the caller is
-  // answered on its own timer regardless.
-  let settle!: (result: ConnectionProbeResult) => void;
-  let settled = false;
-  let admitted = false;
-  const answer = new Promise<ConnectionProbeResult>((resolve) => {
-    settle = (result) => {
-      if (settled) return;
-      settled = true;
-      resolve(result);
-    };
-  });
-
-  // Started BEFORE admission, so `backstopMs` is a TOTAL budget over queue-wait
-  // plus attempt. It has to be: holding slots through a hang means a saturated
-  // limiter can leave a probe queued indefinitely, and a timer that only starts
-  // on admission would never fire for it — an HTTP request hanging forever on a
-  // server that sets no `requestTimeout`. Every caller now gets a sentence
-  // within the budget whether or not its probe ever ran.
-  const timer = setTimeout(() => {
-    settle({
+  // The slot/answer split, the total budget over queue wait and the decline of
+  // an attempt answered while queued are `runBounded`'s (#1720).
+  return runBounded({
+    limit: probeLimit,
+    backstopMs,
+    work: async () => redactProbeResult(await adapter.testConnection(config, secret), secret),
+    onStop: (_stop, admitted) => ({
       ok: false,
       error: admitted
         ? `the connection test did not answer within ${Math.round(
@@ -258,40 +235,18 @@ export async function probeConnection(args: ProbeConnectionArgs): Promise<Connec
           `the server is already running its maximum of ${PROBE_CONCURRENCY} connection tests and this one did not start within ${Math.round(
             backstopMs / 1000,
           )}s — try again shortly`,
-    });
-  }, backstopMs);
-  // Never hold the process open. The case this timer exists for is an adapter
-  // that has HUNG, so without `unref` a graceful `app.close()` could sit waiting
-  // out the full backstop for a probe whose answer nobody is going to read.
-  timer.unref?.();
-
-  void probeLimit(async () => {
-    // Withdrew while queued: the caller already has its sentence, so opening a
-    // socket now would spend a real connection (and a credential) on an answer
-    // nobody will read. Declining here is what keeps the queue-wait bound from
-    // being merely cosmetic.
-    if (settled) return;
-    admitted = true;
-    try {
-      settle(redactProbeResult(await adapter.testConnection(config, secret), secret));
-    } catch (err) {
-      // The contract says this cannot happen (`sqlite`/`postgres` both pin
-      // "typed to RESOLVE, never reject"). If it does, it is an adapter bug, and
-      // the thrown message is the least trustworthy string in the system — it
-      // may quote a value we passed in — so it goes through redaction like any
-      // other.
-      settle(
-        redactProbeResult(
-          { ok: false, error: err instanceof Error ? err.message : String(err) },
-          secret,
-        ),
-      );
-    } finally {
-      clearTimeout(timer);
-    }
+    }),
+    // The contract says this cannot happen (`sqlite`/`postgres` both pin
+    // "typed to RESOLVE, never reject"). If it does, it is an adapter bug, and
+    // the thrown message is the least trustworthy string in the system — it
+    // may quote a value we passed in — so it goes through redaction like any
+    // other.
+    onThrow: (err) =>
+      redactProbeResult(
+        { ok: false, error: err instanceof Error ? err.message : String(err) },
+        secret,
+      ),
   });
-
-  return answer;
 }
 
 /**
