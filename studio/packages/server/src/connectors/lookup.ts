@@ -1,5 +1,4 @@
 import {
-  LOOKUP_ROW_CAP,
   WARNING_CODES,
   formatZodIssues,
   lookupConfigSchema,
@@ -7,7 +6,7 @@ import {
 } from '@autonomy-studio/shared';
 import { failed } from './activity-events.js';
 import { DatasetIoError } from './dataset-io-error.js';
-import { LOOKUP_BATCH_ROWS, LOOKUP_BYTE_CAP } from '../limits.js';
+import { LOOKUP_BATCH_ROWS, LOOKUP_BYTE_CAP, LOOKUP_ROW_CAP } from '../limits.js';
 import { MAX_VALUE_DEPTH, estimateRowLowerBound } from './lookup-bounds.js';
 import type { SourceIo } from './source-io.js';
 import type { ActivityContext, ActivityEvent } from './types.js';
@@ -276,6 +275,11 @@ function logSafeRow(
  * ADF's name for `rowCount`, which stays for the nodes that read it (catalogue
  * §8). `firstRow` is `null` when no row was materialised; `truncated` says
  * whether that is an empty source or a first row too large to keep.
+ *
+ * `firstRow` repeats `rows[0]` in the durable log, so a lookup's outputs hold at
+ * most twice `LOOKUP_BYTE_CAP` of row data. Still a constant bound, and cheaper
+ * than charging the copy against the cap, which would change which rows a
+ * stored lookup keeps.
  */
 function lookupOutputs(
   rows: readonly Record<string, unknown>[],
@@ -298,26 +302,30 @@ function truncationReason(
   rowCount: number,
   bytes: number,
   maxRows: number,
+  failing: boolean,
 ): string {
+  // Under Fail no rows are returned, so the consequence clause would be false.
   if (cause === 'rows') {
-    const limit = maxRows === LOOKUP_ROW_CAP ? 'cap' : 'Max rows limit';
     return (
       `the source has more rows than this lookup may materialise: stopped at the ` +
-      `${maxRows}-row ${limit}, so 'rows' is a prefix. Narrow the dataset's query ` +
-      `or filter to the rows the decision needs.`
+      `${maxRows}-row limit${failing ? '' : ", so 'rows' is a prefix"}. Narrow the ` +
+      `dataset's query or filter to the rows the decision needs.`
     );
   }
   if (cause === 'first-row') {
     return (
-      `the FIRST row alone exceeds the ${LOOKUP_BYTE_CAP}-byte cap, so NO rows were ` +
-      `materialised — 'rows' is empty for this reason and not because the source is. ` +
+      `the FIRST row alone exceeds the ${LOOKUP_BYTE_CAP}-byte cap` +
+      (failing
+        ? '. '
+        : `, so NO rows were materialised — 'rows' is empty for this reason and not ` +
+          `because the source is. `) +
       `Select fewer or narrower columns.`
     );
   }
   return (
     `the source is larger than a lookup may materialise: stopped at the ` +
-    `${LOOKUP_BYTE_CAP}-byte cap after ${rowCount} row(s) totalling ${bytes} bytes, so ` +
-    `'rows' is a prefix. Select fewer or narrower columns.`
+    `${LOOKUP_BYTE_CAP}-byte cap after ${rowCount} row(s) totalling ${bytes} bytes` +
+    `${failing ? '' : ", so 'rows' is a prefix"}. Select fewer or narrower columns.`
   );
 }
 
@@ -426,9 +434,9 @@ export async function* runLookupActivity(
     outer: for await (const batch of io.readBatches({
       dataset: source,
       signal: ctx.signal,
-      // One past the limit at most, so a small limit pulls no more than it can
-      // use and still sees whether the source has another row.
-      batchRows: Math.min(LOOKUP_BATCH_ROWS, rowLimit + 1),
+      // A small limit pulls no more than it can use: First row only stops at its
+      // one row, and Max rows needs one row past the limit to know it truncated.
+      batchRows: firstRowOnly ? 1 : Math.min(LOOKUP_BATCH_ROWS, maxRows + 1),
     })) {
       for (const raw of batch) {
         if (rows.length >= rowLimit) {
@@ -478,8 +486,9 @@ export async function* runLookupActivity(
   }
 
   if (cause !== null) {
-    const reason = truncationReason(cause, rows.length, bytes, maxRows);
-    if (overLimit === 'fail') {
+    const failing = overLimit === 'fail';
+    const reason = truncationReason(cause, rows.length, bytes, maxRows, failing);
+    if (failing) {
       yield failed('permanent', `lookup is over its limit — ${reason}`);
       return;
     }

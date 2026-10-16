@@ -527,6 +527,16 @@ describe('refreshFormerOutputs (#1600 OR41 C7a)', () => {
     expect((node!.config['outputs'] as unknown[])[0]).not.toBe(today[0]);
   });
 
+  it('keeps the rest of the node and its config', () => {
+    const node = {
+      ...lookup(FOUR.map((o) => ({ ...o }))),
+      connectionId: 'c',
+      config: { outputs: FOUR.map((o) => ({ ...o })), maxRows: 5 },
+    } as Node;
+    const [out] = refreshFormerOutputs([node]);
+    expect(out).toMatchObject({ id: 'l', connectionId: 'c', config: { maxRows: 5 } });
+  });
+
   it('leaves every other contract, and every other node, by reference', () => {
     const nodes = [
       lookup(FOUR.slice(0, 3)),

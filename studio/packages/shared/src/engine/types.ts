@@ -1075,6 +1075,9 @@ export const WARNING_CODES = {
    * source: `LOOKUP_ROW_CAP` or `LOOKUP_BYTE_CAP` bound before the source ran
    * out of rows.
    *
+   * #1600 C7a — or the node's Max rows. This is the default, Truncate and warn;
+   * When over the limit = Fail fails instead and emits no warning.
+   *
    * §5 settles the behaviour this pairs with — "truncate and mark, never fail. A
    * lookup is a read for a decision, and a bounded answer is usable where an
    * error is not" — and it settles that the marking is TWO-CHANNEL: `truncated:

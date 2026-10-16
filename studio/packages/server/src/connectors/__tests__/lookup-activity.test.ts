@@ -696,6 +696,34 @@ describe('#1600 OR41 C7a — the Settings tab: First row only, Max rows, When ov
     const end = terminal(events);
     expect(end).toMatchObject({ type: 'failed', kind: 'permanent' });
     expect(end.type === 'failed' ? end.error : '').toContain('2-row');
+    // It returns no rows, so it must not say it returned a prefix.
+    expect(end.type === 'failed' ? end.error : '').not.toContain('prefix');
+  });
+
+  it('Fail with First row only names an oversize first row, and claims no rows', async () => {
+    const events = await run(
+      lookupCtx({ input: { firstRowOnly: true, overLimit: 'fail' } }),
+      sourceIo([[{ v: 'z'.repeat(LOOKUP_BYTE_CAP + 1) }]]),
+    );
+    const end = terminal(events);
+    expect(end).toMatchObject({ type: 'failed', kind: 'permanent' });
+    const error = end.type === 'failed' ? end.error : '';
+    expect(error).toContain('FIRST row alone');
+    expect(error).not.toContain('materialised —');
+  });
+
+  it('asks the reader for no more rows than the limit can use', async () => {
+    const asked: (number | undefined)[] = [];
+    const io = sourceIo([], {
+      async *readBatches(args) {
+        asked.push(args.batchRows);
+        yield many(3);
+      },
+    });
+    await run(lookupCtx({ input: { firstRowOnly: true } }), io);
+    await run(lookupCtx({ input: { maxRows: 5 } }), io);
+    await run(lookupCtx(), io);
+    expect(asked).toEqual([1, 6, LOOKUP_BATCH_ROWS]);
   });
 
   it('Fail applies to the BYTE cap too, the other half of "the limit"', async () => {

@@ -37,17 +37,15 @@ export type LookupOverLimit = z.infer<typeof overLimitSchema>;
 export const lookupConfigSchema = z.object({
   firstRowOnly: presented(z.boolean().default(false), {
     title: 'First row only',
-    description:
-      'Return the first row as firstRow. Off returns every row, up to Max rows, as rows.',
+    description: 'Returns one row, as firstRow. Off returns every row, as rows.',
   }),
   maxRows: presented(z.number().int().min(1).max(LOOKUP_ROW_CAP).default(LOOKUP_ROW_CAP), {
     title: 'Max rows',
-    description: `The most rows to return, up to ${LOOKUP_ROW_CAP}. Not used with First row only.`,
+    description: `Up to ${LOOKUP_ROW_CAP}. Not used with First row only.`,
   }),
   overLimit: presented(overLimitSchema.default('truncate'), {
     title: 'When over the limit',
-    description:
-      'What happens when the source has more than Max rows, or more data than a lookup may hold. Truncate returns the rows that fit and warns.',
+    description: 'More than Max rows, or more data than a lookup may hold.',
     options: optionTitles(overLimitSchema, { truncate: 'Truncate and warn', fail: 'Fail' }),
   }),
 });

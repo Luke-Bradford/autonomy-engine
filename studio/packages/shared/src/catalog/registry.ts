@@ -936,7 +936,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
       out('bytes', 'number'),
       out('truncated', 'boolean'),
     ],
-    // The four M12 declared, which a node saved before C7a still holds.
+    // The four M12 declared, which a node saved before C7a still holds. Written
+    // out, not derived from `outputs`: it is a snapshot of an old default.
     formerOutputs: [
       [
         out('rows', 'json'),

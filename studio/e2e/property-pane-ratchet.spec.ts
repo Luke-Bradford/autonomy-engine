@@ -54,7 +54,8 @@ const HELP_LIMITS: Record<string, number> = {
   'Delete file': 7,
   'HTTP request': 9,
   'List directory': 7,
-  // +3 for C7a's Settings: First row only, Max rows and When over the limit.
+  // +3 for C7a's Settings, each `?` a fact its label lacks: First row only names
+  // the output it writes, Max rows its ceiling, When over the limit both bounds.
   'Lookup rows': 9,
   'Read file': 7,
   'Write file': 7,
@@ -328,7 +329,8 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   'Delete file': 7,
   'HTTP request': 9,
   'List directory': 7,
-  // +3 for C7a's Settings: First row only, Max rows and When over the limit.
+  // +3 for C7a's Settings, each `?` a fact its label lacks: First row only names
+  // the output it writes, Max rows its ceiling, When over the limit both bounds.
   'Lookup rows': 9,
   'Lookup rows (inline table)': 12,
   'Read file': 7,

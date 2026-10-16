@@ -41,13 +41,13 @@ export type ActivityCategory = (typeof ACTIVITY_CATEGORIES)[number];
  * The vocabulary is FIXED here, so a tab is spelled the same on every activity
  * that has one ("Source" on Copy and on Lookup) and a new tab is a deliberate
  * addition rather than a per-entry string. The order is the vocabulary's own.
+ * `settings` follows `mapping`, ADF's Copy order (Source · Sink · Mapping ·
+ * Settings), so a Lookup opens on its Source (#1600 C7a); an activity whose
+ * only or first tab is Settings is unaffected.
  *
  * Display-only metadata, like `description`: nothing persists it on a version,
  * so declaring or regrouping tabs never bumps `CATALOG_VERSION`.
  */
-// #1600 OR41 C7a — `settings` sits after `mapping`, ADF's Copy order (Source ·
-// Sink · Mapping · Settings), so a Lookup opens on its Source. Before it, no
-// entry declared `settings` beside a tab it now follows.
 export const ACTIVITY_TAB_KEYS = [
   'source',
   'sink',
@@ -389,7 +389,8 @@ export const COPY_TYPES = [COPY_ACTIVITY_TYPE, COPY_FILES_ACTIVITY_TYPE] as cons
  * node's declared outputs. It is the one activity whose rows become DURABLE:
  * §5's rule that "rows never enter `run_events`" is a statement about `copy`,
  * and `lookup` is the deliberate exception — which is why §5 gives it a
- * CONCRETE bound (`LOOKUP_ROW_CAP`, `LOOKUP_BYTE_CAP` in `server/limits.ts`)
+ * CONCRETE bound (`LOOKUP_ROW_CAP` in `catalog/lookup-config.ts`, `LOOKUP_BYTE_CAP` in
+ * `server/limits.ts`)
  * rather than a "bounded" one, and why the truncation has to be VISIBLE in both
  * the outputs and the run log.
  *
