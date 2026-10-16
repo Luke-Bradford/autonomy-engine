@@ -165,7 +165,7 @@ test.describe('#1221 — lookup-node authoring', () => {
   }) => {
     const problems = collectPageProblems(page);
     await page.setViewportSize({ width: 1440, height: 900 });
-    const pipelineId = await openSeededCanvas(page, 'e2e 1600 c7a lookup settings', {
+    const pipelineId = await openSeededCanvas(page, 'e2e 1600 c7a lookup row limit', {
       nodes: [],
     });
     await addActivity(page, 'Lookup rows');
