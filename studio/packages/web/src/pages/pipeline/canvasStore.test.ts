@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   EdgeSchema,
+  getActivity,
   PipelineVersionSchema,
   type Container,
   type Node,
@@ -5030,7 +5031,7 @@ describe('insertTemplate (#1413 OR22)', () => {
 
     const [list, files, load] = nodes.map((n) => n.id);
     const [box] = containers;
-    expect(nodes[1]!.config.items).toBe(`\${nodes.${list}.output.entries}`);
+    expect(nodes[1]!.config.items).toBe(`\${nodes.${list}.output.childItems}`);
     expect(nodes[2]!.datasetParams?.source?.path).toBe(
       `\${concat(nodes.${list}.output.path, '/', item.name)}`,
     );
@@ -5061,10 +5062,9 @@ describe('insertTemplate (#1413 OR22)', () => {
     const s = createCanvasStore();
     s.getState().insertTemplate(csv);
     const list = s.getState().nodes[0]!;
-    expect((list.config.outputs as { name: string }[]).map((o) => o.name)).toEqual([
-      'entries',
-      'path',
-    ]);
+    expect((list.config.outputs as { name: string }[]).map((o) => o.name)).toEqual(
+      getActivity('get_metadata')!.outputs.map((o) => o.name),
+    );
   });
 
   it('is ONE undo step, marks the draft dirty, selects nothing and takes no stagger slot', () => {

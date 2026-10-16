@@ -392,17 +392,17 @@ function pipelineDoc(key: PipelineKey, c: DocContext): Doc {
           copy('reset_staging', 0, 'q_empty', 'stg', same(STAGING_COLS), 'overwrite', 'warehouse'),
           {
             id: 'list',
-            type: 'file_list',
+            type: 'get_metadata',
             position: { x: 260, y: 0 },
             connectionId: conn.fs,
-            config: { path: p.landing },
+            config: { path: p.landing, fieldList: ['childItems'] },
           },
           {
             id: 'files',
             type: 'filter',
             position: { x: 520, y: 0 },
             config: {
-              items: '${nodes.list.output.entries}',
+              items: '${nodes.list.output.childItems}',
               predicate: "${and(equals(item.type, 'file'), endsWith(item.name, '.csv'))}",
             },
           },
