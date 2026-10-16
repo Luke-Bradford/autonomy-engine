@@ -65,7 +65,11 @@ import {
 
 const out = (name: string, type: Output['type']): Output => ({ name, type });
 /** An output that may be null (#594's present-null), e.g. a Get metadata field left unticked. */
-const optionalOut = (name: string, type: Output['type']): Output => ({ name, type, optional: true });
+const optionalOut = (name: string, type: Output['type']): Output => ({
+  name,
+  type,
+  optional: true,
+});
 
 /**
  * #1396 — the hint on a `${}` duration field (`wait.seconds`,
@@ -675,7 +679,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // lowered to its Child items in C8b; tables are C8c, Wait until C8d.
     type: GET_METADATA_ACTIVITY_TYPE,
     title: 'Get metadata',
-    description: 'Read facts about a file or folder: whether it exists, its size and dates, and what it holds.',
+    description:
+      'Read facts about a file or folder: whether it exists, its size and dates, and what it holds.',
     kind: 'execution',
     category: 'general',
     tabs: [

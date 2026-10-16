@@ -1946,7 +1946,10 @@ describe('a set of choices (#1600 OR41 C8a)', () => {
   });
 
   it('round-trips the ticks, written in the options’ order', () => {
-    expect(formatFieldValue(field, ['size', 'exists'])).toEqual({ ok: true, value: 'size\nexists' });
+    expect(formatFieldValue(field, ['size', 'exists'])).toEqual({
+      ok: true,
+      value: 'size\nexists',
+    });
     expect(parseFieldInput(field, 'childItems\nexists')).toEqual({
       ok: true,
       omit: false,

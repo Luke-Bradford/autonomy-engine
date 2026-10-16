@@ -7,7 +7,12 @@ import type { GetMetadataConfig, GetMetadataField } from '@autonomy-studio/share
 import { failed } from './activity-events.js';
 import { CONFINED_READ_FLAGS, missingWithinRoots, resolveWithinRoots } from './confine.js';
 import type { fsConnectionConfigSchema } from './fs-connection.js';
-import { DEFAULT_MAX_LIST_ENTRIES, direntType, modifiedWindow, wildcardMatcher } from './fs-select.js';
+import {
+  DEFAULT_MAX_LIST_ENTRIES,
+  direntType,
+  modifiedWindow,
+  wildcardMatcher,
+} from './fs-select.js';
 import { closeQuietly, failFromError } from './fs-write.js';
 import type { ActivityEvent } from './types.js';
 

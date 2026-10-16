@@ -157,7 +157,11 @@ describe('applicableFieldNames on a set of choices (#1600 OR41 C8a)', () => {
 
   it('draws the child item settings only while Child items is ticked', () => {
     expect(shown({ path: '.', fieldList: ['size', 'exists'] })).toEqual(['path', 'fieldList']);
-    expect(shown({ path: '.', fieldList: ['exists', 'childItems'] })).toEqual(['path', 'fieldList', ...CHILD]);
+    expect(shown({ path: '.', fieldList: ['exists', 'childItems'] })).toEqual([
+      'path',
+      'fieldList',
+      ...CHILD,
+    ]);
     // Nothing ticked is known to hold none, not unknown.
     expect(shown({ path: '.' })).toEqual(['path', 'fieldList']);
   });

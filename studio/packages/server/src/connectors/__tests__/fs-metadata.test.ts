@@ -59,7 +59,11 @@ async function failureOf(
 describe('get_metadata — a file', () => {
   it('reads every ticked field, and the outputs satisfy the catalog contract', async () => {
     await writeFile(join(root, 'a.csv'), 'id\n1\n', 'utf8');
-    await utimes(join(root, 'a.csv'), new Date('2026-10-01T00:00:00Z'), new Date('2026-10-02T03:04:05Z'));
+    await utimes(
+      join(root, 'a.csv'),
+      new Date('2026-10-01T00:00:00Z'),
+      new Date('2026-10-02T03:04:05Z'),
+    );
     const fieldList = GET_METADATA_FS_FIELDS.filter((f) => f !== 'childItems');
     const out = await outputsOf({ path: 'a.csv', fieldList });
     expect(out).toMatchObject({
@@ -133,9 +137,11 @@ describe('get_metadata — a folder', () => {
     await writeFile(join(root, 'b.txt'), 'b', 'utf8');
     await mkdir(join(root, 'c.csv'));
     const names = async (extra: Record<string, unknown>) =>
-      ((await outputsOf({ path: '.', fieldList: ['childItems'], ...extra })).childItems as Array<{
-        name: string;
-      }>).map((i) => i.name);
+      (
+        (await outputsOf({ path: '.', fieldList: ['childItems'], ...extra })).childItems as Array<{
+          name: string;
+        }>
+      ).map((i) => i.name);
     expect(await names({ childFilter: '*.csv' })).toEqual(['a.csv', 'c.csv']);
     expect(await names({ childFilter: '*.csv', childType: 'files' })).toEqual(['a.csv']);
     expect(await names({ childType: 'folders' })).toEqual(['c.csv']);
@@ -145,9 +151,21 @@ describe('get_metadata — a folder', () => {
     await writeFile(join(root, 'old.csv'), 'o', 'utf8');
     await writeFile(join(root, 'new.csv'), 'n', 'utf8');
     await mkdir(join(root, 'dir'));
-    await utimes(join(root, 'old.csv'), new Date('2026-01-01T00:00:00Z'), new Date('2026-01-01T00:00:00Z'));
-    await utimes(join(root, 'new.csv'), new Date('2026-10-01T00:00:00Z'), new Date('2026-10-01T00:00:00Z'));
-    await utimes(join(root, 'dir'), new Date('2026-10-01T00:00:00Z'), new Date('2026-10-01T00:00:00Z'));
+    await utimes(
+      join(root, 'old.csv'),
+      new Date('2026-01-01T00:00:00Z'),
+      new Date('2026-01-01T00:00:00Z'),
+    );
+    await utimes(
+      join(root, 'new.csv'),
+      new Date('2026-10-01T00:00:00Z'),
+      new Date('2026-10-01T00:00:00Z'),
+    );
+    await utimes(
+      join(root, 'dir'),
+      new Date('2026-10-01T00:00:00Z'),
+      new Date('2026-10-01T00:00:00Z'),
+    );
     const out = await outputsOf({
       path: '.',
       fieldList: ['childItems'],
@@ -162,7 +180,10 @@ describe('get_metadata — a folder', () => {
       { path: '.', fieldList: ['childItems'], childFilter: '*.csv' },
       { maxEntries: 2 },
     );
-    expect(ev).toMatchObject({ kind: 'permanent', error: 'folder has more than the 2-entry list limit' });
+    expect(ev).toMatchObject({
+      kind: 'permanent',
+      error: 'folder has more than the 2-entry list limit',
+    });
   });
 });
 

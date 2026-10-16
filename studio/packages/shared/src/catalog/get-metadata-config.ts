@@ -92,7 +92,8 @@ export const getMetadataConfigSchema = z
       if (cfg.modifiedStart !== undefined) {
         issue('modifiedStart', 'only read when Child items is ticked');
       }
-      if (cfg.modifiedEnd !== undefined) issue('modifiedEnd', 'only read when Child items is ticked');
+      if (cfg.modifiedEnd !== undefined)
+        issue('modifiedEnd', 'only read when Child items is ticked');
     }
     if (literal(cfg.childFilter) && /[/\\]/.test(cfg.childFilter)) {
       issue('childFilter', WILDCARD_SEPARATOR_MESSAGE);

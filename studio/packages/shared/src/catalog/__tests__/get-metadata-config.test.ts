@@ -16,9 +16,7 @@ const issuesOf = (cfg: Record<string, unknown>) => {
 describe('get_metadata config (#1600 OR41 C8a)', () => {
   it('needs a path and at least one field', () => {
     expect(ok({ path: '/d', fieldList: ['exists'] })).toBe(true);
-    expect(issuesOf({ path: '/d', fieldList: [] })).toEqual([
-      'fieldList: tick at least one field',
-    ]);
+    expect(issuesOf({ path: '/d', fieldList: [] })).toEqual(['fieldList: tick at least one field']);
     expect(ok({ path: '', fieldList: ['exists'] })).toBe(false);
   });
 
@@ -87,8 +85,7 @@ describe('get_metadata config (#1600 OR41 C8a)', () => {
   });
 
   it('reads the field list as a set of choices', () => {
-    const shape = (getMetadataConfigSchema as unknown as { shape: Record<string, unknown> })
-      .shape;
+    const shape = (getMetadataConfigSchema as unknown as { shape: Record<string, unknown> }).shape;
     expect(enumSetValuesOf(shape.fieldList)).toEqual([...GET_METADATA_FS_FIELDS]);
     expect(enumSetValuesOf(shape.childType)).toBeUndefined();
   });

@@ -198,8 +198,9 @@ export function enumSetValuesOf(schema: unknown): readonly string[] | undefined 
   let current: unknown = schema;
   for (let depth = 0; depth < 8; depth += 1) {
     if (typeof current !== 'object' || current === null || !('_zod' in current)) return undefined;
-    const def = (current as { _zod: { def: { type?: string; innerType?: unknown; element?: unknown } } })
-      ._zod.def;
+    const def = (
+      current as { _zod: { def: { type?: string; innerType?: unknown; element?: unknown } } }
+    )._zod.def;
     if (def.type === 'array') return enumValuesOf(def.element);
     current = def.innerType;
   }
