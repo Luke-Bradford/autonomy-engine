@@ -26,6 +26,7 @@ import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-v
 import { createRun, getRun } from '../../repo/runs.js';
 import { createConnection } from '../../repo/connections.js';
 import { createDataset } from '../../repo/datasets.js';
+import { putWorkspaceSettings } from '../../repo/workspace-settings.js';
 import { rowsOf } from '../../connectors/__tests__/sqlite-fixtures.js';
 import { createSecret } from '../../repo/secrets.js';
 import { encrypt } from '../../secrets/secrets.js';
@@ -5739,5 +5740,89 @@ describe('createExecutor — #1600 OR41 C1q: an inline Table · Query source', (
     const run = seedRun(db, pvId);
     expect((await startRun(deps(db), run)).status).toBe('failure');
     expect(failureOf(db, run.id)).toMatchObject({ code: FAILURE_CODES.DATASET_SELF_COPY });
+  });
+});
+
+describe('createExecutor — a Lookup’s workspace Lookup max rows (#1600 OR41 C7d)', () => {
+  const lookupCatalog: ActivityCatalog = new Map<string, ActivityCatalogEntry>([
+    [
+      'lookup',
+      {
+        type: 'lookup',
+        title: 'Lookup',
+        description: 'A test lookup.',
+        kind: 'execution',
+        category: 'general',
+        idempotent: true,
+        connectionKinds: ['http'],
+        outputs: [],
+        configSchema: z.object({}),
+      },
+    ],
+    [
+      'http_request',
+      {
+        type: 'http_request',
+        title: 'HTTP',
+        description: 'A test request.',
+        kind: 'execution',
+        category: 'general',
+        idempotent: false,
+        connectionKinds: ['http'],
+        outputs: [],
+        configSchema: z.object({}),
+      },
+    ],
+  ]);
+
+  async function ceilingSeen(
+    type: string,
+    ownerId: string | null,
+  ): Promise<{ present: boolean; value: unknown }> {
+    let seen: { present: boolean; value: unknown } = { present: false, value: undefined };
+    const adapters = fakeHttpAdapter(async function* (ctx) {
+      seen = { present: 'lookupMaxRows' in ctx, value: ctx.lookupMaxRows };
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+    const db = freshDb().db;
+    putWorkspaceSettings(db, 'local', { defaultActivityTimeoutSeconds: null, lookupMaxRows: 250 });
+    putWorkspaceSettings(db, 'other', { defaultActivityTimeoutSeconds: null, lookupMaxRows: 4000 });
+    // Owned like the run, so the connection resolves for a run with no owner too.
+    const connId = createConnection(db, {
+      ownerId,
+      name: 'C',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    }).id;
+    const pvId = seedLegacyVersion(db, [
+      { id: 'n1', type, config: {}, connectionId: connId, position: { x: 0, y: 0 } },
+    ]);
+    const run = createRun(db, {
+      ownerId,
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+    // Only what the adapter was handed is under test; the run's own outcome is
+    // the real catalog's business (its `lookup` declares outputs this stub skips).
+    await startRun(deps(db, { adapters, catalog: lookupCatalog }), run);
+    return seen;
+  }
+
+  it('hands a Lookup its own owner’s value, never another workspace’s', async () => {
+    expect(await ceilingSeen('lookup', 'local')).toEqual({ present: true, value: 250 });
+  });
+
+  it('hands a Lookup in a run with no owner the documented default', async () => {
+    expect(await ceilingSeen('lookup', null)).toEqual({ present: true, value: 1000 });
+  });
+
+  it('omits the field for every other activity', async () => {
+    expect(await ceilingSeen('http_request', 'local')).toEqual({
+      present: false,
+      value: undefined,
+    });
   });
 });

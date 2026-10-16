@@ -23,7 +23,7 @@ const putWorkspaceSettingsMock = vi.mocked(putWorkspaceSettings);
 
 beforeEach(() => {
   getWorkspaceSettingsMock.mockResolvedValue({
-    settings: { defaultActivityTimeoutSeconds: 43_200 },
+    settings: { defaultActivityTimeoutSeconds: 43_200, lookupMaxRows: 1000 },
     stored: false,
   });
 });
@@ -183,7 +183,7 @@ describe('SettingsPage — run defaults', () => {
   it('shows the stored default, and saves a new one when the field is left', async () => {
     getSettingsMock.mockResolvedValue(settings('env', null));
     putWorkspaceSettingsMock.mockResolvedValue({
-      settings: { defaultActivityTimeoutSeconds: 600 },
+      settings: { defaultActivityTimeoutSeconds: 600, lookupMaxRows: 1000 },
       stored: true,
     });
     render(<SettingsPage />);
@@ -193,14 +193,18 @@ describe('SettingsPage — run defaults', () => {
     await userEvent.clear(field);
     await userEvent.type(field, '600');
     await userEvent.tab();
-    expect(putWorkspaceSettingsMock).toHaveBeenCalledWith({ defaultActivityTimeoutSeconds: 600 });
+    // The whole document: the other setting goes back as it was.
+    expect(putWorkspaceSettingsMock).toHaveBeenCalledWith({
+      defaultActivityTimeoutSeconds: 600,
+      lookupMaxRows: 1000,
+    });
     expect(field).toHaveValue('600');
   });
 
   it('saves a blank as the default turned off, and refuses 0 without saving', async () => {
     getSettingsMock.mockResolvedValue(settings('env', null));
     putWorkspaceSettingsMock.mockResolvedValue({
-      settings: { defaultActivityTimeoutSeconds: null },
+      settings: { defaultActivityTimeoutSeconds: null, lookupMaxRows: 1000 },
       stored: true,
     });
     render(<SettingsPage />);
@@ -214,7 +218,10 @@ describe('SettingsPage — run defaults', () => {
 
     await userEvent.clear(field);
     await userEvent.tab();
-    expect(putWorkspaceSettingsMock).toHaveBeenCalledWith({ defaultActivityTimeoutSeconds: null });
+    expect(putWorkspaceSettingsMock).toHaveBeenCalledWith({
+      defaultActivityTimeoutSeconds: null,
+      lookupMaxRows: 1000,
+    });
   });
 
   it('says so when the save is refused', async () => {
@@ -228,5 +235,84 @@ describe('SettingsPage — run defaults', () => {
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('refused by the server');
     expect(screen.getByRole('region', { name: 'Run defaults' })).toContainElement(alert);
+  });
+});
+
+/** #1600 OR41 C7d — the workspace's Lookup max rows. */
+describe('SettingsPage — Lookup max rows', () => {
+  const rowsField = () => screen.findByRole('textbox', { name: 'Lookup max rows' });
+
+  it('shows the stored value, saves a new one in the whole document, and refuses out of range', async () => {
+    getSettingsMock.mockResolvedValue(settings('env', null));
+    putWorkspaceSettingsMock.mockResolvedValue({
+      settings: { defaultActivityTimeoutSeconds: 43_200, lookupMaxRows: 2500 },
+      stored: true,
+    });
+    render(<SettingsPage />);
+    const field = await rowsField();
+    expect(field).toHaveValue('1000');
+
+    for (const bad of ['0', '5001', '']) {
+      await userEvent.clear(field);
+      if (bad !== '') await userEvent.type(field, bad);
+      await userEvent.tab();
+      expect(putWorkspaceSettingsMock).not.toHaveBeenCalled();
+      expect(await screen.findByText(/from 1 to 5000/)).toBeInTheDocument();
+    }
+
+    await userEvent.clear(field);
+    await userEvent.type(field, '2500');
+    await userEvent.tab();
+    expect(putWorkspaceSettingsMock).toHaveBeenCalledWith({
+      defaultActivityTimeoutSeconds: 43_200,
+      lookupMaxRows: 2500,
+    });
+  });
+
+  it('a refused save does not ride along with the next one', async () => {
+    getSettingsMock.mockResolvedValue(settings('env', null));
+    putWorkspaceSettingsMock.mockRejectedValueOnce(new Error('refused by the server'));
+    putWorkspaceSettingsMock.mockResolvedValue({
+      settings: { defaultActivityTimeoutSeconds: 600, lookupMaxRows: 1000 },
+      stored: true,
+    });
+    render(<SettingsPage />);
+    const rows = await rowsField();
+    await userEvent.clear(rows);
+    await userEvent.type(rows, '300');
+    await userEvent.tab();
+    expect(await screen.findByText('refused by the server')).toBeInTheDocument();
+
+    const timeout = screen.getByRole('textbox', { name: /Activity timeout \(seconds\)/ });
+    await userEvent.clear(timeout);
+    await userEvent.type(timeout, '600');
+    await userEvent.tab();
+    expect(putWorkspaceSettingsMock).toHaveBeenLastCalledWith({
+      defaultActivityTimeoutSeconds: 600,
+      lookupMaxRows: 1000,
+    });
+  });
+
+  it('two quick saves keep each other: the second is built on the first, not on the page', async () => {
+    getSettingsMock.mockResolvedValue(settings('env', null));
+    // The first save never answers before the second is sent.
+    putWorkspaceSettingsMock.mockReturnValue(new Promise(() => {}));
+    render(<SettingsPage />);
+    const timeout = await screen.findByRole('textbox', { name: /Activity timeout \(seconds\)/ });
+    const rows = await rowsField();
+
+    await userEvent.clear(timeout);
+    await userEvent.type(timeout, '600');
+    await userEvent.clear(rows);
+    await userEvent.type(rows, '300');
+    await userEvent.tab();
+    expect(putWorkspaceSettingsMock).toHaveBeenNthCalledWith(1, {
+      defaultActivityTimeoutSeconds: 600,
+      lookupMaxRows: 1000,
+    });
+    expect(putWorkspaceSettingsMock).toHaveBeenNthCalledWith(2, {
+      defaultActivityTimeoutSeconds: 600,
+      lookupMaxRows: 300,
+    });
   });
 });

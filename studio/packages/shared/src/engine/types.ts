@@ -1076,7 +1076,8 @@ export const WARNING_CODES = {
    * source: `LOOKUP_ROW_CAP` or `LOOKUP_BYTE_CAP` bound before the source ran
    * out of rows.
    *
-   * #1600 C7a — or the node's Max rows. This is the default, Truncate and warn;
+   * #1600 C7a — or the node's Max rows (C7d: or the workspace's Lookup max
+   * rows, when lower). This is the default, Truncate and warn;
    * When over the limit = Fail fails instead and emits no warning.
    *
    * #1600 C7c — or Lookup · Whole file as text (`file_read`) kept the first

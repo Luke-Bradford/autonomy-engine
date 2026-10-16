@@ -78,6 +78,11 @@ async function expectDemo3RunPage(page: Page, runId: string): Promise<void> {
   ] as const) {
     await expect(row(id).getByRole('cell').nth(rowsWrittenAt)).toHaveText(rows);
   }
+  // #1600 C7d — the Lookup's `count` is its Rows read: the one row of
+  // `SELECT COUNT(*) AS n FROM rejects`.
+  const rowsReadAt = headers.findIndex((h) => h.startsWith('Rows read'));
+  expect(rowsReadAt).toBeGreaterThan(0);
+  await expect(row('count_rejects').getByRole('cell').nth(rowsReadAt)).toHaveText('1');
   await row('clean').locator('button.activity-runs__open').click();
   const drawer = page.locator('#run-detail-drawer');
   await drawer.getByRole('tab', { name: 'Output' }).click();

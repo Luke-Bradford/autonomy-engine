@@ -922,8 +922,11 @@ const ENTRIES: ActivityCatalogEntry[] = [
      * path, the sheet and the header row stay the DATASET's, re-validated by the
      * reader at dispatch (§8). M12 cut a `maxRows` knob because a per-node
      * override would make the durable-log bound configurable by the person it
-     * protects against. Max rows keeps that: it can only LOWER
-     * `LOOKUP_ROW_CAP`, and the byte cap is not configurable at all.
+     * protects against. That bound is the 1 MiB byte cap, which is still not
+     * configurable at all. Rows are (C7d): a node's Max rows asks for up to
+     * `LOOKUP_ROW_CEILING_MAX`, and the run is held to the workspace's Lookup
+     * max rows as well (`WorkspaceSettings.lookupMaxRows`, default
+     * `LOOKUP_ROW_CAP`), so more rows only ever means smaller rows.
      */
     type: LOOKUP_ACTIVITY_TYPE,
     title: 'Lookup',
@@ -968,6 +971,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
         out('truncated', 'boolean'),
       ],
     ],
+    // The Monitor's Rows read column (C7d). `rowCount` for a node saved before
+    // C7a, whose contract has no `count`; the two are the same number.
+    rowsReadOutputs: ['count', 'rowCount'],
     configSchema: lookupConfigSchema,
     dispatchConfigSchema: lookupConfigSchema,
   },

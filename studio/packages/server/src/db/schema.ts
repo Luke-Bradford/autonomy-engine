@@ -533,6 +533,8 @@ export const globalParams = sqliteTable(
 export const workspaceSettings = sqliteTable('workspace_settings', {
   ownerId: text('owner_id').primaryKey(),
   defaultActivityTimeoutSeconds: integer('default_activity_timeout_seconds'),
+  /** #1600 OR41 C7d (migration 0048) — the ceiling every Lookup run is held to. */
+  lookupMaxRows: integer('lookup_max_rows').notNull(),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 });

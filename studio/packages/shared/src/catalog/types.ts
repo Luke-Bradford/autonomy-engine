@@ -582,6 +582,13 @@ export interface ActivityCatalogEntry {
    */
   formerOutputs?: readonly (readonly Output[])[];
   /**
+   * #1600 OR41 C7d — the outputs, in order, whose first logged count fills the
+   * Monitor activity-runs table's Rows read column. Absent means `rowsRead`
+   * (Copy's name). Each is a declared `number` output (`registry.test.ts`).
+   * Display only, like `tabs`, so declaring it never bumps `CATALOG_VERSION`.
+   */
+  rowsReadOutputs?: readonly [string, ...string[]];
+  /**
    * #1600 OR41 C7a — config written into a NEW node when the canvas adds it:
    * ADF's new-node default where it differs from the schema's own default,
    * which stays today's behaviour for stored nodes (catalogue §8). In the doc,

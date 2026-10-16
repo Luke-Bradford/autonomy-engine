@@ -60,7 +60,7 @@ export const FORM_SECTION_HINTS = {
     secretEncryption:
       'Where the master key that encrypts every stored secret comes from, and the file holding it when there is one.',
     runDefaults:
-      'Values this workspace gives a new activity; changing one leaves existing activities alone.',
+      'Values this workspace gives a new activity, and the row limit every Lookup is held to.',
   },
   // #1594 OR40 S6c — the Git page. The branches are named by the facts list's
   // own terms (Collaboration branch, Working branch) so the two can be matched.

@@ -1394,3 +1394,63 @@ describe('#1557 activity runs from the log alone — the version no longer resol
     ]);
   });
 });
+
+describe('#1600 OR41 C7d — a Lookup’s count fills the Rows read column', () => {
+  /** Project with some doc nodes RETYPED: the stub save catalog has no `lookup`,
+   * and the column reads the doc node's type, never the executor's. */
+  function projectTyped(db: Db, pvId: string, runId: string, types: Record<string, string>) {
+    const doc = makeDocResolver(db)(pvId);
+    const typed = {
+      ...doc,
+      nodes: doc.nodes.map((n) => (types[n.id] === undefined ? n : { ...n, type: types[n.id]! })),
+    };
+    return projectActivityRuns(typed, buildEngine(doc), loadEngineLog(db, runId)).rows;
+  }
+
+  it('reads `count`, or `rowCount` on a contract saved before C7a, and only for a Lookup', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('lk'), node('old'), node('other')]);
+    const runId = await drive(
+      db,
+      pvId,
+      stub({
+        lk: { outputs: { rows: [], count: 7, rowCount: 7 } },
+        old: { outputs: { rows: [], rowCount: 3 } },
+        other: { outputs: { count: 9 } },
+      }),
+    );
+    const rows = projectTyped(db, pvId, runId, { lk: 'lookup', old: 'lookup' });
+    const byId = Object.fromEntries(rows.map((r) => [r.nodeId, r.rowsRead]));
+    // `count` means rows only for a type that says so; any other type's is not.
+    expect(byId).toEqual({ lk: 7, old: 3, other: null });
+  });
+
+  it('fills each instance of a parallel ForEach over a Lookup', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('w')],
+      [],
+      [{ id: 'fe', kind: 'foreach', children: ['w'], items: '${params.list}', batchCount: 2 }],
+      [1, 2],
+    );
+    // The stub plans by the dispatched (instance) id.
+    const runId = await drive(
+      db,
+      pvId,
+      stub({ 'w@0': { outputs: { count: 4 } }, 'w@1': { outputs: { count: 6 } } }),
+    );
+    const rows = projectTyped(db, pvId, runId, { w: 'lookup' });
+    expect(rows.map((r) => [r.nodeId, r.rowsRead]).sort()).toEqual([
+      ['w@0', 4],
+      ['w@1', 6],
+    ]);
+  });
+
+  it('stays blank from the log alone, which cannot say the activity is a Lookup', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('lk')]);
+    const runId = await drive(db, pvId, stub({ lk: { outputs: { count: 7 } } }));
+    expect(projectActivityRunsFromLog(loadEngineLog(db, runId)).rows[0]?.rowsRead).toBeNull();
+  });
+});

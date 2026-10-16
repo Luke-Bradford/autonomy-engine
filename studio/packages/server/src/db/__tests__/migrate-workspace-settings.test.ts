@@ -18,12 +18,15 @@ describe('0047 migration: workspace_settings', () => {
     expect([...byName.keys()].sort()).toEqual([
       'created_at',
       'default_activity_timeout_seconds',
+      'lookup_max_rows',
       'owner_id',
       'updated_at',
     ]);
     expect(byName.get('owner_id')!.pk).toBe(1);
     expect(byName.get('owner_id')!.notnull).toBe(1);
     expect(byName.get('default_activity_timeout_seconds')!.notnull).toBe(0);
+    // #1600 C7d (0048) — the Lookup ceiling always has a value.
+    expect(byName.get('lookup_max_rows')!.notnull).toBe(1);
   });
 
   it('refuses a second row for one owner, a NULL owner and a non-positive timeout', () => {
@@ -36,5 +39,17 @@ describe('0047 migration: workspace_settings', () => {
     expect(() => insert.run(null, 60)).toThrow(/NOT NULL/);
     expect(() => insert.run('other', 0)).toThrow(/CHECK/);
     insert.run('third', null);
+    expect(
+      sqlite
+        .prepare('SELECT lookup_max_rows FROM workspace_settings WHERE owner_id = ?')
+        .get('third'),
+    ).toEqual({ lookup_max_rows: 1000 });
+    expect(() =>
+      sqlite
+        .prepare(
+          'INSERT INTO workspace_settings (owner_id, lookup_max_rows, created_at, updated_at) VALUES (?, 0, 1, 1)',
+        )
+        .run('fourth'),
+    ).toThrow(/CHECK/);
   });
 });

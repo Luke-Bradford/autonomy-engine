@@ -1,4 +1,5 @@
 import {
+  catalog,
   parseInstanceKey,
   TERMINAL_CONTAINER,
   TERMINAL_NODE,
@@ -210,11 +211,40 @@ function settleRow(row: ProjectedActivityRun, status: NodeRunStatus, ts: number,
     timed && row.startedAt !== null && ts >= row.startedAt ? ts - row.startedAt : null;
 }
 
+/** #1600 OR41 C7d — the Rows read column's outputs when the type declares none,
+ * or is unknown (a log-basis row has no doc to name it): Copy's `rowsRead`. */
+const DEFAULT_ROWS_READ_OUTPUTS: readonly string[] = ['rowsRead'];
+
+/** The Rows read outputs of a doc node's type (`ActivityCatalogEntry.rowsReadOutputs`). */
+function rowsReadOutputsOf(type: string | undefined): readonly string[] {
+  return (
+    (type === undefined ? undefined : catalog.get(type)?.rowsReadOutputs) ??
+    DEFAULT_ROWS_READ_OUTPUTS
+  );
+}
+
+/** The first of `names` that logged a count, or `null`. */
+function firstLoggedCount(
+  outputs: Readonly<Record<string, unknown>>,
+  names: readonly string[],
+): number | null {
+  for (const name of names) {
+    const count = loggedCount(outputs[name]);
+    if (count !== null) return count;
+  }
+  return null;
+}
+
 /** What an event says about its attempt's row: the user properties a dispatch
  * resolved, the branch an If or Switch took,
  * the child a call started, the counts a success logged, the error a failure
  * gave. The caller decides whether the row may still take it (rule 1). */
-function fillDetail(row: ProjectedActivityRun, e: EngineEvent, payload: unknown): void {
+function fillDetail(
+  row: ProjectedActivityRun,
+  e: EngineEvent,
+  payload: unknown,
+  rowsReadOutputs: readonly string[] = DEFAULT_ROWS_READ_OUTPUTS,
+): void {
   switch (e.type) {
     case 'node.dispatched':
       row.userProperties = e.userProperties ?? null;
@@ -229,7 +259,7 @@ function fillDetail(row: ProjectedActivityRun, e: EngineEvent, payload: unknown)
       row.childRunId ??= e.childRunId;
       return;
     case 'node.succeeded':
-      row.rowsRead = loggedCount(e.outputs.rowsRead);
+      row.rowsRead = firstLoggedCount(e.outputs, rowsReadOutputs);
       row.rowsWritten = loggedCount(e.outputs.rowsWritten);
       row.bytesRead = loggedCount(e.outputs.bytesRead);
       row.bytesWritten = loggedCount(e.outputs.bytesWritten);
@@ -276,6 +306,7 @@ export function projectActivityRuns(
   log: readonly LoggedEngineEvent[],
 ): ProjectedActivityRuns {
   const docIds = new Set(doc.nodes.map((n) => n.id));
+  const typeOf = new Map(doc.nodes.map((n) => [n.id, n.type]));
   const containerOf = new Map<string, Container>();
   for (const c of doc.containers) for (const child of c.children) containerOf.set(child, c);
 
@@ -455,7 +486,8 @@ export function projectActivityRuns(
     };
     if (ref !== null) {
       const row = detail(ref.attemptId);
-      if (row !== undefined) fillDetail(row, e, payload);
+      if (row !== undefined)
+        fillDetail(row, e, payload, rowsReadOutputsOf(typeOf.get(row.activityId)));
     }
 
     const result = resultOf(e);

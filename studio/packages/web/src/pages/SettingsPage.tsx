@@ -1,6 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   DEFAULT_ACTIVITY_TIMEOUT_SECONDS,
+  LOOKUP_ROW_CAP,
+  LOOKUP_ROW_CEILING_MAX,
+  LookupMaxRowsPutSchema,
   type AppSettings,
   type MasterKeySource,
   type WorkspaceSettings,
@@ -9,8 +12,8 @@ import {
 import { useStore } from 'zustand';
 import { getSettings } from '../api/settings';
 import { getWorkspaceSettings, putWorkspaceSettings } from '../api/workspaceSettings';
-import { DraftNumberField } from './pipeline/DraftNumberField';
-import { parseTimeoutSeconds } from './triggers/formFields';
+import { DraftNumberField, type DraftNumberParse } from './pipeline/DraftNumberField';
+import { parseTimeoutSeconds, parseWholeNumber } from './triggers/formFields';
 import { useGuardedLoad, type GuardedHandlers } from '../hooks/useGuardedLoad';
 import { FieldCell, FieldGrid } from '../lib/form/FieldGrid';
 import { displayTimeZoneName, displayTimeZoneOptions, formatTimestamp } from '../lib/displayTime';
@@ -37,22 +40,52 @@ const MASTER_KEY_SOURCE_LABEL: Record<MasterKeySource, string> = {
 const ZONE_OPTIONS = displayTimeZoneOptions();
 
 /**
+ * #1600 OR41 C7d — Lookup max rows: a whole number from 1 to ADF's 5000, the
+ * PUT body's own rule. Blank is refused: the ceiling always has a value.
+ */
+function parseLookupMaxRows(raw: string): DraftNumberParse<number> {
+  const parsed = parseWholeNumber(raw);
+  if (!parsed.ok) return parsed;
+  if (parsed.value === undefined || !LookupMaxRowsPutSchema.safeParse(parsed.value).success) {
+    return { ok: false, reason: `Enter a whole number from 1 to ${LOOKUP_ROW_CEILING_MAX}` };
+  }
+  return { ok: true, value: parsed.value };
+}
+
+/**
  * #1600 OR41 C0f — the workspace's run defaults: the Timeout a new activity is
- * created with. Saved when the field is left, like the dock's policy fields. The
- * load and every save share one `useGuardedLoad`, so a slow older answer cannot
- * overwrite a newer one.
+ * created with, and (C7d) the Lookup max rows every Lookup run is held to. Saved
+ * when the field is left, like the dock's policy fields. The load and every save
+ * share one `useGuardedLoad`, so a slow older answer cannot overwrite a newer
+ * one.
+ *
+ * The PUT takes the whole document, so each save is built from `latest`, the
+ * last document sent or received, never from the render's `settings`: two
+ * quick saves in a row must not undo each other (#1581). A refused save resets
+ * it to the last confirmed one. Another tab's change made since this page
+ * loaded is overwritten by the next save here: the cost of a whole-document
+ * PUT, which is what keeps an omitted field from being written as its default.
  */
 function RunDefaults() {
   const [settings, setSettings] = useState<WorkspaceSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const latest = useRef<WorkspaceSettings | null>(null);
+  /** The last document the server confirmed, which a refused save falls back to. */
+  const confirmed = useRef<WorkspaceSettings | null>(null);
   const guarded = useGuardedLoad();
   const handlers = useMemo<GuardedHandlers<WorkspaceSettingsResponse>>(
     () => ({
       onData: (answer) => {
+        latest.current = answer.settings;
+        confirmed.current = answer.settings;
         setSettings(answer.settings);
         setError(null);
       },
-      onError: (cause) => setError(cause instanceof Error ? cause.message : String(cause)),
+      onError: (cause) => {
+        // A refused save must not ride along with the next one.
+        latest.current = confirmed.current;
+        setError(cause instanceof Error ? cause.message : String(cause));
+      },
     }),
     [],
   );
@@ -60,6 +93,13 @@ function RunDefaults() {
   useEffect(() => {
     void guarded(getWorkspaceSettings, handlers);
   }, [guarded, handlers]);
+
+  const save = (patch: Partial<WorkspaceSettings>) => {
+    if (latest.current === null) return;
+    const next = { ...latest.current, ...patch };
+    latest.current = next;
+    void guarded(() => putWorkspaceSettings(next), handlers);
+  };
 
   return (
     <>
@@ -82,12 +122,20 @@ function RunDefaults() {
                 `The Timeout a new activity starts with. The default is ` +
                 `${DEFAULT_ACTIVITY_TIMEOUT_SECONDS} (12 hours). Blank creates activities with no timeout.`
               }
-              onCommit={(seconds) =>
-                void guarded(
-                  () => putWorkspaceSettings({ defaultActivityTimeoutSeconds: seconds ?? null }),
-                  handlers,
-                )
+              onCommit={(seconds) => save({ defaultActivityTimeoutSeconds: seconds ?? null })}
+            />
+          </FieldCell>
+          <FieldCell span="short">
+            <DraftNumberField
+              label="Lookup max rows"
+              stored={settings.lookupMaxRows}
+              parse={parseLookupMaxRows}
+              about={
+                `The most rows a Lookup may return. Each Lookup's own Max rows (default ` +
+                `${LOOKUP_ROW_CAP}) can ask for up to this. The default is ${LOOKUP_ROW_CAP}, up to ` +
+                `${LOOKUP_ROW_CEILING_MAX}. Lowering it also holds existing Lookups to it.`
               }
+              onCommit={(rows) => save({ lookupMaxRows: rows })}
             />
           </FieldCell>
         </FieldGrid>

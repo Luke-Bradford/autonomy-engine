@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { LOOKUP_ACTIVITY_TYPE, LOOKUP_ROW_CAP, WARNING_CODES } from '@autonomy-studio/shared';
+import {
+  LOOKUP_ACTIVITY_TYPE,
+  LOOKUP_ROW_CAP,
+  LOOKUP_ROW_CEILING_MAX,
+  WARNING_CODES,
+} from '@autonomy-studio/shared';
 import { LOOKUP_BATCH_ROWS, LOOKUP_BYTE_CAP } from '../../limits.js';
 import { estimateRowLowerBound } from '../lookup-bounds.js';
 import { runLookupActivity } from '../lookup.js';
@@ -32,7 +37,12 @@ function sourceIo(
 }
 
 function lookupCtx(
-  over: { datasets?: unknown; signal?: AbortSignal; input?: Record<string, unknown> } = {},
+  over: {
+    datasets?: unknown;
+    signal?: AbortSignal;
+    input?: Record<string, unknown>;
+    lookupMaxRows?: number;
+  } = {},
 ): ActivityContext {
   return {
     runId: 'run-1',
@@ -48,6 +58,7 @@ function lookupCtx(
             source: { id: 'ds-1', name: 'src', kind: 'table', config: { table: 't' }, columns: [] },
           },
         }),
+    ...(over.lookupMaxRows !== undefined ? { lookupMaxRows: over.lookupMaxRows } : {}),
     signal: over.signal ?? new AbortController().signal,
   } as unknown as ActivityContext;
 }
@@ -752,7 +763,7 @@ describe('#1600 OR41 C7a — the Settings tab: First row only, Max rows, When ov
     });
     for (const input of [
       { maxRows: 0 },
-      { maxRows: LOOKUP_ROW_CAP + 1 },
+      { maxRows: LOOKUP_ROW_CEILING_MAX + 1 },
       { maxRows: 1.5 },
       { firstRowOnly: 'yes' },
       { overLimit: 'drop' },
@@ -770,5 +781,65 @@ describe('#1600 OR41 C7a — the Settings tab: First row only, Max rows, When ov
       sourceIo([many(2)]),
     );
     expect(outputsOf(events).count).toBe(1);
+  });
+});
+
+describe('#1600 OR41 C7d — the workspace’s Lookup max rows', () => {
+  const many = (n: number) => Array.from({ length: n }, (_, i) => ({ i }));
+  const reasonOf = (events: ActivityEvent[]) => {
+    const w = warnings(events)[0];
+    return w?.type === 'warned' ? w.reason : '';
+  };
+
+  it('holds a node’s Max rows to a LOWER workspace ceiling, and says the workspace set it', async () => {
+    const events = await run(
+      lookupCtx({ input: { maxRows: 500 }, lookupMaxRows: 200 }),
+      sourceIo([many(300)]),
+    );
+    const out = outputsOf(events);
+    expect(out.count).toBe(200);
+    expect(out.truncated).toBe(true);
+    expect(reasonOf(events)).toContain("workspace's Lookup max rows (200, in Settings)");
+  });
+
+  it('a raised ceiling lets a node ask for more than 1000 rows', async () => {
+    const events = await run(
+      lookupCtx({ input: { maxRows: 1500 }, lookupMaxRows: 3000 }),
+      sourceIo([many(1400)]),
+    );
+    expect(outputsOf(events)).toMatchObject({ count: 1400, truncated: false });
+  });
+
+  it('a raised ceiling leaves a node at its own Max rows, and names the node’s limit', async () => {
+    const events = await run(lookupCtx({ lookupMaxRows: 3000 }), sourceIo([many(1200)]));
+    expect(outputsOf(events)).toMatchObject({ count: LOOKUP_ROW_CAP, truncated: true });
+    expect(reasonOf(events)).toContain(`${LOOKUP_ROW_CAP}-row limit`);
+    expect(reasonOf(events)).not.toContain('workspace');
+  });
+
+  it('with no ceiling given, holds even a 5000-row ask to the 1000-row default', async () => {
+    const events = await run(lookupCtx({ input: { maxRows: 5000 } }), sourceIo([many(1100)]));
+    expect(outputsOf(events).count).toBe(LOOKUP_ROW_CAP);
+  });
+
+  it('fails permanent at the ceiling under Fail', async () => {
+    const end = terminal(
+      await run(
+        lookupCtx({ input: { maxRows: 500, overLimit: 'fail' }, lookupMaxRows: 100 }),
+        sourceIo([many(150)]),
+      ),
+    );
+    expect(end).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(end.type === 'failed' ? end.error : '').toContain(
+      "workspace's Lookup max rows (100, in Settings)",
+    );
+  });
+
+  it('First row only still reads one row under any ceiling', async () => {
+    const events = await run(
+      lookupCtx({ input: { firstRowOnly: true }, lookupMaxRows: 1 }),
+      sourceIo([many(3)]),
+    );
+    expect(outputsOf(events)).toMatchObject({ count: 1, truncated: false });
   });
 });

@@ -1,4 +1,5 @@
 import {
+  LOOKUP_ROW_CAP,
   WARNING_CODES,
   formatZodIssues,
   lookupConfigSchema,
@@ -296,19 +297,29 @@ function lookupOutputs(
   };
 }
 
+/** The row bound a lookup ran under, and whether the WORKSPACE set it (C7d). */
+interface RowBound {
+  readonly rows: number;
+  /** The workspace's Lookup max rows was lower than the node's own Max rows. */
+  readonly workspace: boolean;
+}
+
 /** The prose for a truncation, naming WHICH bound bound — never a row value. */
 function truncationReason(
   cause: TruncationCause,
   rowCount: number,
   bytes: number,
-  maxRows: number,
+  bound: RowBound,
   failing: boolean,
 ): string {
   // Under Fail no rows are returned, so the consequence clause would be false.
   if (cause === 'rows') {
+    const limit = bound.workspace
+      ? `workspace's Lookup max rows (${bound.rows}, in Settings)`
+      : `${bound.rows}-row limit`;
     return (
       `the source has more rows than this lookup may materialise: stopped at the ` +
-      `${maxRows}-row limit${failing ? '' : ", so 'rows' is a prefix"}. Narrow the ` +
+      `${limit}${failing ? '' : ", so 'rows' is a prefix"}. Narrow the ` +
       `dataset's query or filter to the rows the decision needs.`
     );
   }
@@ -405,7 +416,12 @@ export async function* runLookupActivity(
     );
     return;
   }
-  const { firstRowOnly, maxRows, overLimit } = settings.data;
+  const { firstRowOnly, maxRows: asked, overLimit } = settings.data;
+  // #1600 C7d — the node asks (up to ADF's 5000, by its schema), the workspace's
+  // Lookup max rows bounds: whichever is lower.
+  const ceiling = ctx.lookupMaxRows ?? LOOKUP_ROW_CAP;
+  const maxRows = Math.min(asked, ceiling);
+  const rowBound: RowBound = { rows: maxRows, workspace: ceiling < asked };
   const rowLimit = firstRowOnly ? 1 : maxRows;
 
   let coercion: CoercionOptions;
@@ -427,8 +443,8 @@ export async function* runLookupActivity(
     // `batchRows` (#1224): the pre-screen bounds what THIS activity copies, and
     // can bound nothing the reader already materialised — and a reader hands
     // over a whole batch. `COPY_BATCH_ROWS` is sized for a streaming copy, which
-    // wants long pulls; a lookup keeps at most `LOOKUP_ROW_CAP` rows and 1 MiB
-    // and so gains nothing from them while paying up to 1000 resident rows for
+    // wants long pulls; a lookup keeps at most its Max rows and 1 MiB
+    // and so gains nothing from them while paying up to a whole batch of resident rows for
     // them. A smaller batch also yields to the event loop more often, which §9
     // asks of a bounded read anyway.
     outer: for await (const batch of io.readBatches({
@@ -487,7 +503,7 @@ export async function* runLookupActivity(
 
   if (cause !== null) {
     const failing = overLimit === 'fail';
-    const reason = truncationReason(cause, rows.length, bytes, maxRows, failing);
+    const reason = truncationReason(cause, rows.length, bytes, rowBound, failing);
     if (failing) {
       yield failed('permanent', `lookup is over its limit — ${reason}`);
       return;

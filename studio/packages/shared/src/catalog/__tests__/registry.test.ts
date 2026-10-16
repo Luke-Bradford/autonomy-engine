@@ -473,6 +473,20 @@ describe('new-node config and former outputs (#1600 OR41 C7a)', () => {
       }
     }
   });
+
+  // #1600 OR41 C7d — the Monitor reads a count from these, so each must be one.
+  it('names only declared number outputs for the Rows read column', () => {
+    const declaring = [...catalog.values()].filter((e) => e.rowsReadOutputs !== undefined);
+    expect(declaring.map((e) => [e.type, e.rowsReadOutputs])).toEqual([
+      ['lookup', ['count', 'rowCount']],
+    ]);
+    for (const entry of declaring) {
+      const contracts = [entry.outputs, ...(entry.formerOutputs ?? [])];
+      for (const name of entry.rowsReadOutputs ?? []) {
+        expect(contracts.flat()).toContainEqual({ name, type: 'number' });
+      }
+    }
+  });
 });
 
 // #1600 OR41 C7b — a palette item that stands for several types (Copy, Lookup).
