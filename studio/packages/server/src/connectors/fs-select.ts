@@ -17,11 +17,6 @@ import type { Dirent } from 'node:fs';
 export { DEFAULT_MAX_LIST_ENTRIES, DEFAULT_MAX_READ_BYTES } from '@autonomy-studio/shared';
 
 /**
- * A file-NAME wildcard as ADF's `wildcardFileName` reads one: `*` is any run of
- * characters (none included), `?` is exactly one, everything else is literal.
- * Case-sensitive, and matched against the name only, never the folder.
- */
-/**
  * Classify a directory entry, or an `lstat` result, by its raw type (a symlink
  * is REPORTED, not followed). `file_list`'s entries and Get metadata's item and
  * child item types (#1600 OR41 C8a) share it, so the two say the same words.
@@ -35,6 +30,11 @@ export function direntType(
   return 'other';
 }
 
+/**
+ * A file-NAME wildcard as ADF's `wildcardFileName` reads one: `*` is any run of
+ * characters (none included), `?` is exactly one, everything else is literal.
+ * Case-sensitive, and matched against the name only, never the folder.
+ */
 export function wildcardMatcher(pattern: string): (name: string) => boolean {
   // Iterative, not a RegExp: `*a*a*a*b` compiled to `.*a.*a.*a.*b` backtracks
   // exponentially, and a wildcard can come from a `${}` fed by a trigger. This

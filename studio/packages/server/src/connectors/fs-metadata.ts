@@ -127,11 +127,6 @@ async function childItemsOf(
       if (visited > maxEntries) {
         return failed('permanent', `folder has more than the ${maxEntries}-entry list limit`);
       }
-      const type = direntType(dirent);
-      if (input.childType === 'files' && type !== 'file') continue;
-      if (input.childType === 'folders' && type !== 'directory') continue;
-      // ADF: with a modified window set, child items hold files only.
-      if (timed && type !== 'file') continue;
       if (!matches(dirent.name)) continue;
       let st: Stats;
       try {
@@ -140,7 +135,13 @@ async function childItemsOf(
         if (isMissing(err)) continue; // removed since it was listed
         throw err;
       }
-      if (timed && !window.contains(st.mtimeMs)) continue;
+      // Typed from the `lstat`, not the dirent: a file system that does not
+      // report a dirent's type would otherwise list everything as `other`.
+      const type = direntType(st);
+      if (input.childType === 'files' && type !== 'file') continue;
+      if (input.childType === 'folders' && type !== 'directory') continue;
+      // ADF: with a modified window set, child items hold files only.
+      if (timed && (type !== 'file' || !window.contains(st.mtimeMs))) continue;
       items.push({
         name: dirent.name,
         type,
@@ -197,22 +198,28 @@ export async function doGetMetadata(
   }
 
   const type = direntType(st);
+  // Child items read a folder only. Checked before anything slow (Content MD5).
+  if (ticked.has('childItems') && type !== 'directory') {
+    return failed('permanent', `Child items needs a folder, and '${input.path}' is a ${type}`);
+  }
   const fields = emptyFields();
-  if (ticked.has('exists')) fields.exists = true;
-  if (ticked.has('itemName')) fields.itemName = basename(path);
-  if (ticked.has('itemType')) fields.itemType = type;
-  if (ticked.has('size') && type === 'file') fields.size = st.size;
-  if (ticked.has('created')) fields.created = createdOf(st);
-  if (ticked.has('lastModified')) fields.lastModified = st.mtime.toISOString();
+  try {
+    if (ticked.has('exists')) fields.exists = true;
+    if (ticked.has('itemName')) fields.itemName = basename(path);
+    if (ticked.has('itemType')) fields.itemType = type;
+    if (ticked.has('size') && type === 'file') fields.size = st.size;
+    if (ticked.has('created')) fields.created = createdOf(st);
+    // `toISOString` throws on a time outside JavaScript's range; caught below.
+    if (ticked.has('lastModified')) fields.lastModified = st.mtime.toISOString();
+  } catch (err) {
+    return failFromError(err, signal);
+  }
   if (ticked.has('contentMD5') && type === 'file') {
     const md5 = await md5Of(path, signal);
     if (isEvent(md5)) return md5;
     fields.contentMD5 = md5;
   }
   if (ticked.has('childItems')) {
-    if (type !== 'directory') {
-      return failed('permanent', `Child items needs a folder, and '${input.path}' is a ${type}`);
-    }
     const items = await childItemsOf(cfg, path, input, signal);
     if (isEvent(items)) return items;
     fields.childItems = items;

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
-import { instant, WILDCARD_SEPARATOR_MESSAGE } from './copy-files-config.js';
+import { instant, modifiedWindowIssue, wildcardIssue } from './file-selection.js';
 
 /**
  * #1600 OR41 C8a — Get metadata's config (catalogue §4.3), the SINGLE SOURCE OF
@@ -50,7 +50,7 @@ export const getMetadataConfigSchema = z
     fieldList: presented(z.array(fieldSchema).min(1, 'tick at least one field'), {
       title: 'Field list',
       description:
-        'The facts to read. Each ticked field fills the output of the same name; the rest are null. Literal, not dynamic content. With Exists ticked, a missing file or folder gives exists false instead of failing.',
+        'Each ticked field fills the output of the same name; the rest are null. With Exists ticked, a missing path gives false instead of failing.',
       options: FIELD_TITLES,
     }),
     childFilter: presented(singleLine(z.string()).min(1).default('*'), {
@@ -68,19 +68,18 @@ export const getMetadataConfigSchema = z
     }),
     modifiedStart: instant(
       'Modified from',
-      'Only files last modified at or after this UTC time. Folders are left out when set, as in ADF.',
+      'Only files last modified at or after this UTC time. Folders are left out when set.',
     ),
     modifiedEnd: instant(
       'Modified before',
-      'Only files last modified before this UTC time. Folders are left out when set, as in ADF.',
+      'Only files last modified before this UTC time. Folders are left out when set.',
     ),
   })
   .superRefine((cfg, ctx) => {
     // As in `copyFilesConfigSchema`: refuse a setting that would be ignored,
-    // rather than quietly ignore it. A `${}` value is decided at dispatch.
+    // rather than quietly ignore it.
     const issue = (field: string, message: string) =>
       ctx.addIssue({ code: 'custom', path: [field], message });
-    const literal = (v: unknown): v is string => typeof v === 'string' && !v.includes('${');
     const seen = new Set<string>();
     for (const field of cfg.fieldList) {
       if (seen.has(field)) issue('fieldList', `${FIELD_TITLES[field]} is ticked twice`);
@@ -95,13 +94,9 @@ export const getMetadataConfigSchema = z
       if (cfg.modifiedEnd !== undefined)
         issue('modifiedEnd', 'only read when Child items is ticked');
     }
-    if (literal(cfg.childFilter) && /[/\\]/.test(cfg.childFilter)) {
-      issue('childFilter', WILDCARD_SEPARATOR_MESSAGE);
-    }
-    if (literal(cfg.modifiedStart) && literal(cfg.modifiedEnd)) {
-      if (Date.parse(cfg.modifiedStart) >= Date.parse(cfg.modifiedEnd)) {
-        issue('modifiedEnd', 'Modified before must be later than Modified from');
-      }
-    }
+    const separator = wildcardIssue(cfg.childFilter);
+    if (separator !== undefined) issue('childFilter', separator);
+    const window = modifiedWindowIssue(cfg.modifiedStart, cfg.modifiedEnd);
+    if (window !== undefined) issue('modifiedEnd', window);
   });
 export type GetMetadataConfig = z.infer<typeof getMetadataConfigSchema>;

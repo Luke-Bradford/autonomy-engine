@@ -377,6 +377,7 @@ export function ConfigFieldControl({
   if (field.kind === 'enumSet') {
     // #1600 OR41 C8a — a set of choices as a grid of tick boxes (Get
     // metadata's field list). The control's text holds the ticks one per line.
+    // A group named like a row list's: a `<label for>` cannot name a group.
     const ticked = new Set(typeof value === 'string' ? value.split('\n') : []);
     const toggle = (option: string, on: boolean) => {
       const next = new Set(ticked);
@@ -385,40 +386,33 @@ export function ConfigFieldControl({
       onChange((field.enumOptions ?? []).filter((o) => next.has(o)).join('\n'));
     };
     return (
-      <LabelledControl
-        className="config-field"
-        help={help}
-        label={
-          <>
+      <div
+        className="config-field config-choice-set"
+        role="group"
+        aria-label={label}
+        aria-describedby={describedBy}
+        {...checkedAs(true)}
+      >
+        <div className="object-list-label help-row">
+          <span>
             {seen(label)}
             {required && !cell && <RequiredMark />}
-          </>
-        }
-      >
-        {(id) => (
-          <>
-            <div
-              id={id}
-              role="group"
-              aria-label={field.label?.title ?? field.name}
-              aria-describedby={describedBy}
-              className="config-choices"
-            >
-              {(field.enumOptions ?? []).map((option) => (
-                <label key={option} className="contract-check">
-                  <input
-                    type="checkbox"
-                    checked={ticked.has(option)}
-                    onChange={(e) => toggle(option, e.target.checked)}
-                  />
-                  {enumOptionLabel(field, option)}
-                </label>
-              ))}
-            </div>
-            {errorSlot}
-          </>
-        )}
-      </LabelledControl>
+          </span>
+          {help}
+        </div>
+        <div className="config-choices">
+          {(field.enumOptions ?? []).map((option) => (
+            <CheckboxField
+              key={option}
+              label={enumOptionLabel(field, option)}
+              name={enumOptionLabel(field, option)}
+              checked={ticked.has(option)}
+              onChange={(on) => toggle(option, on)}
+            />
+          ))}
+        </div>
+        {errorSlot}
+      </div>
     );
   }
 

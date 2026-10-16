@@ -97,6 +97,16 @@ export async function missingWithinRoots(
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err;
     }
+    // A component `realpath` cannot resolve but `lstat` finds is a dangling
+    // link, whose target may be outside: walking past it would answer for that
+    // target. Refuse, as for any path that is not inside.
+    try {
+      await lstat(dir);
+      return null;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err;
+    }
     const parent = dirname(dir);
     if (parent === dir) return null;
     missing.unshift(basename(dir));

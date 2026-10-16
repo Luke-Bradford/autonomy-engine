@@ -245,3 +245,43 @@ describe('get_metadata — dispatch', () => {
     expect(ev.kind).toBe('cancelled');
   });
 });
+
+describe('get_metadata — edges the lenses asked for', () => {
+  it('never walks past a dangling link, whose target may be outside', async () => {
+    // `realpath` cannot resolve `root/dangling`, but it is there: walking past
+    // it to `root` would answer for `outside/gone/x`.
+    await symlink(join(outside, 'gone'), join(root, 'dangling'));
+    expect((await run({ path: 'dangling/x', fieldList: ['exists'] })).type).toBe('failed');
+  });
+
+  it('reads Modified before as exclusive', async () => {
+    await writeFile(join(root, 'edge.csv'), 'e', 'utf8');
+    await writeFile(join(root, 'early.csv'), 'e', 'utf8');
+    const at = new Date('2026-10-01T00:00:00Z');
+    await utimes(join(root, 'edge.csv'), at, at);
+    await utimes(
+      join(root, 'early.csv'),
+      new Date('2026-09-01T00:00:00Z'),
+      new Date('2026-09-01T00:00:00Z'),
+    );
+    const out = await outputsOf({
+      path: '.',
+      fieldList: ['childItems'],
+      modifiedEnd: '2026-10-01T00:00:00Z',
+    });
+    expect((out.childItems as Array<{ name: string }>).map((i) => i.name)).toEqual(['early.csv']);
+  });
+
+  it('lists exactly the limit without failing', async () => {
+    for (const n of ['a', 'b']) await writeFile(join(root, `${n}.txt`), n, 'utf8');
+    const ev = await run({ path: '.', fieldList: ['childItems'] }, { maxEntries: 2 });
+    expect(ev.type).toBe('succeeded');
+  });
+
+  it('says a folder exists and has no size or MD5', async () => {
+    await mkdir(join(root, 'd'));
+    expect(
+      await outputsOf({ path: 'd', fieldList: ['exists', 'itemName', 'size', 'contentMD5'] }),
+    ).toMatchObject({ exists: true, itemName: 'd', size: null, contentMD5: null });
+  });
+});
