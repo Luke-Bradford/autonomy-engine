@@ -818,3 +818,64 @@ describe('resolveDatasetAddress', () => {
     ).rejects.toBeInstanceOf(DatasetIoError);
   });
 });
+
+describe('a query timeout (#1600 OR41 C1q-c)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function queryRead(root: string, config: Record<string, unknown>, batchRows: number) {
+    return readSqliteDatasetBatches({
+      connectionConfig: { roots: [root], path: join(root, 'app.db') },
+      datasetKind: 'query',
+      datasetConfig: { sql: 'select * from t', ...config },
+      batchRows,
+    });
+  }
+
+  it('starts no pull once the limit has passed, and fails transient', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const root = tempRoot();
+    seedDb(root, 10);
+    const seen: number[] = [];
+    let thrown: unknown;
+    try {
+      for await (const batch of queryRead(root, { queryTimeoutSeconds: 5 }, 4)) {
+        seen.push(batch.length);
+        vi.setSystemTime(Date.now() + 5_000);
+      }
+    } catch (err) {
+      thrown = err;
+    }
+    expect(seen).toEqual([4]);
+    expect(thrown).toBeInstanceOf(DatasetIoError);
+    expect((thrown as DatasetIoError).kind).toBe('transient');
+    expect((thrown as DatasetIoError).message).toBe(
+      'the query ran past its query timeout of 5 seconds',
+    );
+  });
+
+  it('keeps a read whose last rows arrived after the limit', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const root = tempRoot();
+    seedDb(root, 3);
+    const seen: number[] = [];
+    for await (const batch of queryRead(root, { queryTimeoutSeconds: 5 }, 4)) {
+      seen.push(batch.length);
+      vi.setSystemTime(Date.now() + 60_000);
+    }
+    expect(seen).toEqual([3]);
+  });
+
+  it('puts no limit on a query saved without one', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const root = tempRoot();
+    seedDb(root, 10);
+    const seen: number[] = [];
+    for await (const batch of queryRead(root, {}, 4)) {
+      seen.push(batch.length);
+      vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1000);
+    }
+    expect(seen).toEqual([4, 4, 2]);
+  });
+});

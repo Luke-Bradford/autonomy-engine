@@ -28,6 +28,8 @@ import {
   excelDatasetConfigSchema,
   unimplementedDatasetConfigSchema,
   isNonOverridableDatasetConfigKey,
+  inlineDatasetConfigIssues,
+  NEW_QUERY_TIMEOUT_SECONDS,
 } from './dataset-config.js';
 
 describe('dataset config catalog', () => {
@@ -355,6 +357,32 @@ describe('query dataset config', () => {
       queryDatasetConfigSchema.safeParse({ sql: 'select 1', parameters: { a: { nested: 1 } } })
         .success,
     ).toBe(false);
+  });
+
+  // #1600 OR41 C1q-c — ADF's copy-source `queryTimeout`, in whole seconds.
+  it('takes a query timeout of whole seconds above 0, and none at all', () => {
+    const parse = (queryTimeoutSeconds: unknown) =>
+      queryDatasetConfigSchema.safeParse({ sql: 'select 1', queryTimeoutSeconds }).success;
+    expect(parse(undefined)).toBe(true);
+    expect(parse(1)).toBe(true);
+    expect(parse(NEW_QUERY_TIMEOUT_SECONDS)).toBe(true);
+    expect(parse(0)).toBe(false);
+    expect(parse(-5)).toBe(false);
+    expect(parse(1.5)).toBe(false);
+    expect(parse('7200')).toBe(false);
+  });
+
+  it("starts a new query at ADF's two hours", () => {
+    expect(NEW_QUERY_TIMEOUT_SECONDS).toBe(2 * 60 * 60);
+  });
+
+  it('lets an inline query carry its timeout, literal only', () => {
+    expect(
+      inlineDatasetConfigIssues('query', { sql: 'select 1', queryTimeoutSeconds: 30 }),
+    ).toBeNull();
+    expect(
+      inlineDatasetConfigIssues('query', { sql: 'select 1', queryTimeoutSeconds: '${x}' }),
+    ).not.toBeNull();
   });
 });
 

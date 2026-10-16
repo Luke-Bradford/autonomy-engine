@@ -204,8 +204,12 @@ export function clientOptionsFor(
  *
  * A read `partialWritePossible` is always false: a read writes nothing.
  */
+/** SQLSTATE `query_canceled`: a statement or query timeout fired. The reader
+ * also matches it to tell its own query-timeout cancel from the connection's. */
+export const QUERY_CANCELED = '57014';
+
 const TRANSIENT_POSTGRES_CODES: ReadonlySet<string> = new Set([
-  '57014', // query_canceled — our own statement/query timeout fired
+  QUERY_CANCELED, // our own statement/query timeout fired
   '57P01', // admin_shutdown
   '57P02', // crash_shutdown
   '57P03', // cannot_connect_now — the server is starting up

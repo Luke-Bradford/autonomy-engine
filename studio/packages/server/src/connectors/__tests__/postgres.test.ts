@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import Database from 'better-sqlite3';
 import pg from 'pg';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   clientOptionsFor,
   createPostgresAdapter,
@@ -1064,6 +1064,30 @@ describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
     });
   }
 
+  // #1600 OR41 C1q-c — MEASURED, not assumed: `SET LOCAL statement_timeout` is
+  // accepted inside `BEGIN READ ONLY`, and the server cancels the FETCH in
+  // flight at the query timeout (1 s here) rather than at the connection's 9 s.
+  it('cancels a FETCH at the query timeout, inside the read-only transaction', async () => {
+    const started = Date.now();
+    await expect(
+      (async () => {
+        for await (const _batch of readPostgresDatasetBatches({
+          connectionConfig: { ...live, statementTimeoutMs: 9_000 },
+          secret: password,
+          datasetKind: 'query',
+          datasetConfig: { sql: 'select pg_sleep(5) as slept', queryTimeoutSeconds: 1 },
+          createClient: realClientFactory,
+        })) {
+          void _batch;
+        }
+      })(),
+    ).rejects.toMatchObject({
+      kind: 'transient',
+      message: 'the query ran past its query timeout of 1 seconds',
+    });
+    expect(Date.now() - started).toBeLessThan(4_000);
+  });
+
   /**
    * A fixture table, dropped afterwards. Named per test run so two tests cannot
    * collide, and created through an ADMIN session so a failure here is never
@@ -1443,6 +1467,104 @@ describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
       const a = await address(live.host, { sql: 'select 1' }, 'query');
       expect(a.object).toBeNull();
       expect(a.storeIdentity).toMatch(/^\d+:\d+:primary$/);
+    });
+  });
+});
+
+describe('a query timeout on the postgres reader (#1600 OR41 C1q-c)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function drain(iterable: AsyncIterable<readonly Record<string, unknown>[]>) {
+    const out: Record<string, unknown>[][] = [];
+    for await (const batch of iterable) out.push([...batch]);
+    return out;
+  }
+
+  /** CONFIG's statement timeout is 9 s, so a 5 s query timeout starts inside
+   * the final stretch and a 60 s one does not. */
+  function queryRead(factory: PostgresClientFactory, queryTimeoutSeconds?: number) {
+    return readPostgresDatasetBatches({
+      ...READ_BASE,
+      datasetKind: 'query',
+      datasetConfig: {
+        sql: 'select a from t',
+        ...(queryTimeoutSeconds === undefined ? {} : { queryTimeoutSeconds }),
+      },
+      createClient: factory,
+      batchRows: 1,
+    });
+  }
+
+  it('starts no FETCH once the limit has passed, and still rolls back and closes', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { rec, factory } = readerFactory({ fetches: [[{ a: 1 }], [{ a: 2 }]] });
+    await expect(
+      (async () => {
+        for await (const batch of queryRead(factory, 60)) {
+          expect(batch).toHaveLength(1);
+          vi.setSystemTime(Date.now() + 60_000);
+        }
+      })(),
+    ).rejects.toMatchObject({
+      kind: 'transient',
+      message: 'the query ran past its query timeout of 60 seconds',
+    });
+    expect(rec.queries.filter((q) => q.startsWith('FETCH'))).toHaveLength(1);
+    expect(rec.queries).toContain('ROLLBACK');
+    expect(rec.ended).toBe(1);
+  });
+
+  it('leaves statement_timeout alone while more than the statement timeout is left', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { rec, factory } = readerFactory({ fetches: [[{ a: 1 }], []] });
+    await drain(queryRead(factory, 60));
+    expect(rec.queries.some((q) => q.includes('statement_timeout'))).toBe(false);
+  });
+
+  it('lowers statement_timeout to the time left in the final stretch', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { rec, factory } = readerFactory({ fetches: [[{ a: 1 }], []] });
+    const iterable = queryRead(factory, 5);
+    for await (const _batch of iterable) {
+      void _batch;
+      vi.setSystemTime(Date.now() + 1_500);
+    }
+    const tail = rec.queries.filter((q) => q.startsWith('FETCH') || q.includes('statement_timeout'));
+    expect(tail).toEqual([
+      'SET LOCAL statement_timeout = 5000',
+      'FETCH FORWARD 1 FROM "__studio_copy"',
+      'SET LOCAL statement_timeout = 3500',
+      'FETCH FORWARD 1 FROM "__studio_copy"',
+    ]);
+  });
+
+  it("reports the server's cancel of a lowered FETCH as the query timeout", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { rec, factory } = readerFactory({
+      failOn: {
+        match: 'FETCH',
+        error: pgError('57014', 'canceling statement due to statement timeout'),
+      },
+    });
+    await expect(drain(queryRead(factory, 5))).rejects.toMatchObject({
+      kind: 'transient',
+      message: 'the query ran past its query timeout of 5 seconds',
+    });
+    expect(rec.ended).toBe(1);
+  });
+
+  it("keeps the connection's own wording for a cancel the query timeout did not cause", async () => {
+    const { factory } = readerFactory({
+      failOn: {
+        match: 'FETCH',
+        error: pgError('57014', 'canceling statement due to statement timeout'),
+      },
+    });
+    await expect(drain(queryRead(factory, 60))).rejects.toMatchObject({
+      kind: 'transient',
+      message: 'the source could not be read: canceling statement due to statement timeout',
     });
   });
 });

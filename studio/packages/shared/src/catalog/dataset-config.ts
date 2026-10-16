@@ -71,6 +71,15 @@ const sqlIdentifier = (label: string) =>
 export const SqlParameterValueSchema = z.union([z.string(), z.number(), z.null()]);
 export type SqlParameterValue = z.infer<typeof SqlParameterValueSchema>;
 
+/**
+ * #1600 OR41 C1q-c — the query timeout a NEW query source starts with: ADF's
+ * copy-source `queryTimeout` default, 02:00:00. Written into the new source, not
+ * applied at dispatch: a query saved without one keeps running with none, so an
+ * upgrade never puts a limit on a pipeline that already runs (catalogue §8, the
+ * C0f activity-timeout decision's reasoning).
+ */
+export const NEW_QUERY_TIMEOUT_SECONDS = 2 * 60 * 60;
+
 /** `table` — a whole table in the store, addressed by identifier (§2.6). */
 export const tableDatasetConfigSchema = z.object({
   /** Optional namespace. SQLite has no schemas in the Postgres sense but does
@@ -114,6 +123,25 @@ export const queryDatasetConfigSchema = z.object({
   parameters: presented(z.record(z.string().min(1), SqlParameterValueSchema).optional(), {
     title: 'Bind values',
     description: 'A value for each :param in the statement, keyed without the colon.',
+  }),
+  /**
+   * #1600 OR41 C1q-c — ADF's copy-source `queryTimeout`, in whole seconds, the
+   * unit of the activity timeout beside it. Absent = no limit (see
+   * `NEW_QUERY_TIMEOUT_SECONDS` for why absent is not the default).
+   *
+   * WALL CLOCK from the statement's start to its last row, so it includes the
+   * time a copy spends writing between batches: the cursor is open for all of
+   * it. Checked before each batch is pulled, so a read whose last rows arrive
+   * past the limit still succeeds. What bounds the overrun differs by store, and
+   * the claim is exactly this: postgres lowers `statement_timeout` for the
+   * final stretch, so a fetch is cancelled at the limit; sqlite steps
+   * synchronously and cannot be interrupted, so a one-batch read (an aggregate)
+   * is never cut short, and only a read of many batches is bounded.
+   */
+  queryTimeoutSeconds: presented(z.number().int().positive().optional(), {
+    title: 'Query timeout',
+    unit: 'seconds',
+    description: `The whole read's limit, checked between batches. Blank means no limit; a new query starts at ${String(NEW_QUERY_TIMEOUT_SECONDS)} (2 hours).`,
   }),
 });
 
