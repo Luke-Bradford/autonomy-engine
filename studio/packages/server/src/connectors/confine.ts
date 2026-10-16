@@ -23,6 +23,98 @@ import { fsConnectionConfigSchema } from './fs-connection.js';
 export type ConnectorLabel = 'fs' | 'sqlite';
 
 /**
+ * The roots, canonicalised (symlinks and trailing separators resolved) so a
+ * containment comparison is canonical-vs-canonical. A root that does not
+ * resolve (missing/unreadable) is skipped, not fatal — a valid path under a
+ * GOOD root still works; only if NONE resolve is it an error, which the caller
+ * reports.
+ */
+async function canonicalRootsOf(roots: readonly string[]): Promise<string[]> {
+  const canonicalRoots: string[] = [];
+  for (const root of roots) {
+    if (!isAbsolute(root)) continue; // schema enforces this; defence in depth
+    try {
+      canonicalRoots.push(await realpath(root));
+    } catch {
+      // Skip an inaccessible root.
+    }
+  }
+  return canonicalRoots;
+}
+
+/**
+ * Whether a CANONICAL path is one of the canonical roots or under one. The ONE
+ * containment test: {@link resolveWithinRoots} and {@link missingWithinRoots}
+ * both ask it, so the two cannot disagree about what "inside" means.
+ */
+export function isWithinCanonicalRoots(
+  canonicalPath: string,
+  canonicalRoots: readonly string[],
+): boolean {
+  return canonicalRoots.some((root) => {
+    if (canonicalPath === root) return true;
+    // Compare against `root + sep` so a sibling whose name merely EXTENDS the
+    // root (`/a/bc` under root `/a/b`) is not falsely contained. Guard the
+    // filesystem-root case: `realpath('/')` is `'/'`, which already ends in
+    // `sep`, so appending another would make `'//'` and reject every path — an
+    // admin who sets `roots:['/']` means "anywhere", so use `root` as the prefix
+    // when it already ends in the separator.
+    const prefix = root.endsWith(sep) ? root : root + sep;
+    return canonicalPath.startsWith(prefix);
+  });
+}
+
+/**
+ * #1600 OR41 C8a — for a path that does not exist (resolving it threw `ENOENT`
+ * or `ENOTDIR`): where it WOULD be, if that is inside the roots, else `null`.
+ *
+ * Get metadata's *Exists* answers `false` for a missing path rather than fail,
+ * and that answer must not become an oracle for paths OUTSIDE the roots. A
+ * lexical comparison would be one: under a root holding `link -> /etc`,
+ * `root/link/nope/x` is lexically inside, so it would say "does not exist"
+ * while an existing `/etc/nope` gets "outside the allowed roots". So walk up to
+ * the nearest ancestor that `realpath` resolves, and judge THAT canonical
+ * ancestor with the same containment test. `resolve` has already collapsed
+ * every `..`, so the missing remainder below it cannot climb out.
+ *
+ * Any other error from `realpath` propagates, as in {@link resolveWithinRoots}.
+ */
+export async function missingWithinRoots(
+  roots: readonly string[],
+  requested: string,
+): Promise<string | null> {
+  const canonicalRoots = await canonicalRootsOf(roots);
+  if (canonicalRoots.length === 0) return null;
+  const target = resolve(isAbsolute(requested) ? requested : join(canonicalRoots[0]!, requested));
+  const missing: string[] = [];
+  let dir = target;
+  for (;;) {
+    try {
+      const ancestor = await realpath(dir);
+      if (!isWithinCanonicalRoots(ancestor, canonicalRoots)) return null;
+      return missing.length === 0 ? ancestor : join(ancestor, ...missing);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err;
+    }
+    // A component `realpath` cannot resolve but `lstat` finds is a dangling
+    // link, whose target may be outside: walking past it would answer for that
+    // target. Refuse, as for any path that is not inside.
+    try {
+      await lstat(dir);
+      return null;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    missing.unshift(basename(dir));
+    dir = parent;
+  }
+}
+
+/**
  * #1119 M4 — the path-confinement guard, EXTRACTED so more than one connector
  * can share it (data-movement spec §8, in as many words: "EXTRACT and share
  * `fs`'s guard — do not mirror it … a second copy of that logic is a defect by
@@ -64,15 +156,7 @@ export async function resolveWithinRoots(
   // containment comparison is canonical-vs-canonical. A root that does not
   // resolve (missing/unreadable) is skipped, not fatal — a valid path under a
   // GOOD root still works; only if NONE resolve is it an error.
-  const canonicalRoots: string[] = [];
-  for (const root of roots) {
-    if (!isAbsolute(root)) continue; // schema enforces this; defence in depth
-    try {
-      canonicalRoots.push(await realpath(root));
-    } catch {
-      // Skip an inaccessible root.
-    }
-  }
+  const canonicalRoots = await canonicalRootsOf(roots);
   if (canonicalRoots.length === 0) {
     return {
       ok: false,
@@ -90,18 +174,7 @@ export async function resolveWithinRoots(
   const realParent = await realpath(dirname(target));
   const finalPath = join(realParent, basename(target));
 
-  const contained = canonicalRoots.some((root) => {
-    if (finalPath === root) return true;
-    // Compare against `root + sep` so a sibling whose name merely EXTENDS the
-    // root (`/a/bc` under root `/a/b`) is not falsely contained. Guard the
-    // filesystem-root case: `realpath('/')` is `'/'`, which already ends in
-    // `sep`, so appending another would make `'//'` and reject every path — an
-    // admin who sets `roots:['/']` means "anywhere", so use `root` as the prefix
-    // when it already ends in the separator.
-    const prefix = root.endsWith(sep) ? root : root + sep;
-    return finalPath.startsWith(prefix);
-  });
-  if (!contained) {
+  if (!isWithinCanonicalRoots(finalPath, canonicalRoots)) {
     return { ok: false, error: `path '${requested}' resolves outside the allowed roots` };
   }
 

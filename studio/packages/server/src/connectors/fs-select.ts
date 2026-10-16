@@ -4,6 +4,7 @@
  * window are Copy · Files as-is's (`fs-files-copy.ts`, #1600 OR41 C1a), kept
  * here for Get metadata (C8) and Delete (C9), which select files the same way.
  */
+import type { Dirent } from 'node:fs';
 
 /**
  * The two caps' defaults (#1712: shared, so the connection form's notes are
@@ -14,6 +15,20 @@
  * nothing matching is bounded too.
  */
 export { DEFAULT_MAX_LIST_ENTRIES, DEFAULT_MAX_READ_BYTES } from '@autonomy-studio/shared';
+
+/**
+ * Classify a directory entry, or an `lstat` result, by its raw type (a symlink
+ * is REPORTED, not followed). `file_list`'s entries and Get metadata's item and
+ * child item types (#1600 OR41 C8a) share it, so the two say the same words.
+ */
+export function direntType(
+  d: Pick<Dirent, 'isFile' | 'isDirectory' | 'isSymbolicLink'>,
+): 'file' | 'directory' | 'symlink' | 'other' {
+  if (d.isFile()) return 'file';
+  if (d.isDirectory()) return 'directory';
+  if (d.isSymbolicLink()) return 'symlink';
+  return 'other';
+}
 
 /**
  * A file-NAME wildcard as ADF's `wildcardFileName` reads one: `*` is any run of

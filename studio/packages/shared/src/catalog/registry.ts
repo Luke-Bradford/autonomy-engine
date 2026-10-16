@@ -16,6 +16,7 @@ import {
   FILE_READ_ACTIVITY_TYPE,
   FILE_WRITE_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
+  GET_METADATA_ACTIVITY_TYPE,
   FILTER_RESULT_OUTPUT,
   IF_ACTIVITY_TYPE,
   HTTP_REQUEST_ACTIVITY_TYPE,
@@ -30,6 +31,7 @@ import {
 import { agentTaskConfigSchema } from './agent-config.js';
 import { copyDispatchInputSchema, copyInputSchema } from './copy-config.js';
 import { copyFilesConfigSchema } from './copy-files-config.js';
+import { getMetadataConfigSchema } from './get-metadata-config.js';
 import { lookupConfigSchema } from './lookup-config.js';
 import { llmCallConfigSchema } from './llm-config.js';
 import {
@@ -62,6 +64,12 @@ import {
  */
 
 const out = (name: string, type: Output['type']): Output => ({ name, type });
+/** An output that may be null (#594's present-null), e.g. a Get metadata field left unticked. */
+const optionalOut = (name: string, type: Output['type']): Output => ({
+  name,
+  type,
+  optional: true,
+});
 
 /**
  * #1396 — the hint on a `${}` duration field (`wait.seconds`,
@@ -659,6 +667,58 @@ const ENTRIES: ActivityCatalogEntry[] = [
     outputElements: { entries: [out('name', 'string'), out('type', 'string')] },
     configSchema: fileListConfigSchema,
     dispatchConfigSchema: fileListConfigSchema,
+  },
+  {
+    // #1600 OR41 C8a — Get metadata on a file system connection (catalogue
+    // §4.3). The fields ticked in `fieldList` fill the outputs of the same
+    // name; the rest are null, so every field output is OPTIONAL and the
+    // contract is fixed, not derived from the ticks (a derived one would go
+    // stale when they change). A reference to an unticked field therefore
+    // resolves to null where ADF fails it; the spec records the difference.
+    // Side-effect-free, so `idempotent:true`, like `file_list`. `file_list` is
+    // lowered to its Child items in C8b; tables are C8c, Wait until C8d.
+    type: GET_METADATA_ACTIVITY_TYPE,
+    title: 'Get metadata',
+    description:
+      'Read facts about a file or folder: whether it exists, its size and dates, and what it holds.',
+    kind: 'execution',
+    category: 'general',
+    tabs: [
+      { key: 'source', bindings: ['connection'], fields: ['path'] },
+      {
+        key: 'settings',
+        fields: ['fieldList', 'childFilter', 'childType', 'modifiedStart', 'modifiedEnd'],
+      },
+    ],
+    appliesWhen: {
+      childFilter: [{ field: 'fieldList', in: ['childItems'] }],
+      childType: [{ field: 'fieldList', in: ['childItems'] }],
+      modifiedStart: [{ field: 'fieldList', in: ['childItems'] }],
+      modifiedEnd: [{ field: 'fieldList', in: ['childItems'] }],
+    },
+    idempotent: true,
+    connectionKinds: ['fs'],
+    outputs: [
+      out('path', 'string'),
+      optionalOut('exists', 'boolean'),
+      optionalOut('itemName', 'string'),
+      optionalOut('itemType', 'string'),
+      optionalOut('size', 'number'),
+      optionalOut('created', 'string'),
+      optionalOut('lastModified', 'string'),
+      optionalOut('contentMD5', 'string'),
+      optionalOut('childItems', 'json'),
+    ],
+    outputElements: {
+      childItems: [
+        out('name', 'string'),
+        out('type', 'string'),
+        optionalOut('size', 'number'),
+        out('lastModified', 'string'),
+      ],
+    },
+    configSchema: getMetadataConfigSchema,
+    dispatchConfigSchema: getMetadataConfigSchema,
   },
   {
     /*

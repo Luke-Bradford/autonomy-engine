@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
+import { instant, modifiedWindowIssue, wildcardIssue } from './file-selection.js';
 
 /**
  * #1600 OR41 C1a — the config of Copy in **Files as-is** mode (activity
@@ -34,10 +35,6 @@ const IN_ROOTS = "Absolute, or relative to the connection's first allowed folder
 
 const path = (title: string, description: string) =>
   presented(singleLine(z.string()).min(1), { title, description });
-
-/** A UTC instant (`2026-10-13T00:00:00Z`). A `${}` is checked at dispatch instead. */
-const instant = (title: string, description: string) =>
-  presented(singleLine(z.iso.datetime({ offset: true })).optional(), { title, description });
 
 export const copyFilesConfigSchema = z
   .object({
@@ -122,18 +119,13 @@ export const copyFilesConfigSchema = z
     // A `${}` value is decided at dispatch, so a rule reading one skips it.
     const issue = (field: string, message: string) =>
       ctx.addIssue({ code: 'custom', path: [field], message });
-    const literal = (v: unknown): v is string => typeof v === 'string' && !v.includes('${');
-    if (literal(cfg.wildcard) && /[/\\]/.test(cfg.wildcard)) {
-      issue('wildcard', 'a wildcard matches file names only, so it cannot hold a folder separator');
-    }
+    const separator = wildcardIssue(cfg.wildcard);
+    if (separator !== undefined) issue('wildcard', separator);
     if (cfg.pathType !== 'folder' && cfg.wildcard !== '*') {
       issue('wildcard', 'a wildcard is only read when the path type is Folder');
     }
-    if (literal(cfg.modifiedStart) && literal(cfg.modifiedEnd)) {
-      if (Date.parse(cfg.modifiedStart) >= Date.parse(cfg.modifiedEnd)) {
-        issue('modifiedEnd', 'Modified before must be later than Modified from');
-      }
-    }
+    const window = modifiedWindowIssue(cfg.modifiedStart, cfg.modifiedEnd);
+    if (window !== undefined) issue('modifiedEnd', window);
     if (cfg.pathType === 'list' && cfg.fileListPath === undefined) {
       issue('fileListPath', 'a file list needs a file list path');
     }

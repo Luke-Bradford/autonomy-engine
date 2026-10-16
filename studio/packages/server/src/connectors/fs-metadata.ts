@@ -1,0 +1,228 @@
+import type { Stats } from 'node:fs';
+import { lstat, open, opendir } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { basename, join } from 'node:path';
+import type { z } from 'zod';
+import type { GetMetadataConfig, GetMetadataField } from '@autonomy-studio/shared';
+import { failed } from './activity-events.js';
+import { CONFINED_READ_FLAGS, missingWithinRoots, resolveWithinRoots } from './confine.js';
+import type { fsConnectionConfigSchema } from './fs-connection.js';
+import {
+  DEFAULT_MAX_LIST_ENTRIES,
+  direntType,
+  modifiedWindow,
+  wildcardMatcher,
+} from './fs-select.js';
+import { closeQuietly, failFromError } from './fs-write.js';
+import type { ActivityEvent } from './types.js';
+
+/**
+ * #1600 OR41 C8a — Get metadata on a file system connection (catalogue §4.3).
+ *
+ * Every field the node does not tick is output as `null`; the catalog declares
+ * them all optional, so the output contract does not depend on the ticks.
+ *
+ * Deliberate differences from ADF, recorded in the catalogue spec:
+ * - `itemType` and a child item's `type` are `file_list`'s words (`file`,
+ *   `directory`, `symlink`, `other`), not ADF's `File`/`Folder`, so C8b's
+ *   lowering of `file_list` keeps a `type == 'directory'` test working.
+ * - Content MD5 is a studio addition (ADF has none for a file system). It is
+ *   base64, the Content-MD5 form, and reads the whole file with no size cap,
+ *   checking for cancel between chunks.
+ * - Child items are sorted by name (code-unit order, not the host's locale),
+ *   where a directory read's order depends on the OS. Each carries its size and
+ *   last-modified time.
+ * - Child items on a file FAIL rather than come back null, so a lowered
+ *   `file_list` on a file still fails as it did. Size and Content MD5 on a
+ *   folder are null.
+ * - A symlink at the path is refused even with Exists ticked: the connector
+ *   never follows one, so it cannot say whether its target exists.
+ */
+
+type FsConfig = z.infer<typeof fsConnectionConfigSchema>;
+type FieldValues = Record<GetMetadataField, unknown>;
+
+const MD5_CHUNK_BYTES = 1 << 16;
+
+function emptyFields(): FieldValues {
+  return {
+    exists: null,
+    itemName: null,
+    itemType: null,
+    size: null,
+    created: null,
+    lastModified: null,
+    contentMD5: null,
+    childItems: null,
+  };
+}
+
+const isMissing = (err: unknown): boolean => {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+};
+
+/** What Exists ticked answers for a missing path. */
+function notThere(path: string): ActivityEvent {
+  return { type: 'succeeded', outputs: { path, ...emptyFields(), exists: false } };
+}
+
+/** `birthtime` where the file system records one; `0` means it does not. */
+function createdOf(st: Stats): string | null {
+  return st.birthtimeMs > 0 ? st.birthtime.toISOString() : null;
+}
+
+async function md5Of(path: string, signal: AbortSignal): Promise<string | ActivityEvent> {
+  let fh: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    fh = await open(path, CONFINED_READ_FLAGS);
+    const hash = createHash('md5');
+    const buffer = Buffer.allocUnsafe(MD5_CHUNK_BYTES);
+    for (;;) {
+      if (signal.aborted) return failed('cancelled', 'file activity aborted');
+      const { bytesRead } = await fh.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+    return hash.digest('base64');
+  } catch (err) {
+    return failFromError(err, signal);
+  } finally {
+    await closeQuietly(fh);
+  }
+}
+
+interface ChildItem {
+  name: string;
+  type: ReturnType<typeof direntType>;
+  size: number | null;
+  lastModified: string;
+}
+
+async function childItemsOf(
+  cfg: FsConfig,
+  folder: string,
+  input: GetMetadataConfig,
+  signal: AbortSignal,
+): Promise<ChildItem[] | ActivityEvent> {
+  const window = modifiedWindow(input.modifiedStart, input.modifiedEnd);
+  if (!window.ok) return failed('permanent', window.error);
+  const timed = input.modifiedStart !== undefined || input.modifiedEnd !== undefined;
+  const matches = wildcardMatcher(input.childFilter);
+  // Counted on every entry VISITED, as `file_list` counts, so a huge folder
+  // with no matches is still bounded.
+  const maxEntries = cfg.maxEntries ?? DEFAULT_MAX_LIST_ENTRIES;
+  const items: ChildItem[] = [];
+  let visited = 0;
+  let dir: Awaited<ReturnType<typeof opendir>> | undefined;
+  try {
+    // `opendir` has no `O_NOFOLLOW`; the target-symlink guard is the confine
+    // step's `lstat`, the same residual `file_list` states.
+    dir = await opendir(folder);
+    for (;;) {
+      if (signal.aborted) return failed('cancelled', 'file activity aborted');
+      const dirent = await dir.read();
+      if (dirent === null) break;
+      visited += 1;
+      if (visited > maxEntries) {
+        return failed('permanent', `folder has more than the ${maxEntries}-entry list limit`);
+      }
+      if (!matches(dirent.name)) continue;
+      let st: Stats;
+      try {
+        st = await lstat(join(folder, dirent.name));
+      } catch (err) {
+        if (isMissing(err)) continue; // removed since it was listed
+        throw err;
+      }
+      // Typed from the `lstat`, not the dirent: a file system that does not
+      // report a dirent's type would otherwise list everything as `other`.
+      const type = direntType(st);
+      if (input.childType === 'files' && type !== 'file') continue;
+      if (input.childType === 'folders' && type !== 'directory') continue;
+      // ADF: with a modified window set, child items hold files only.
+      if (timed && (type !== 'file' || !window.contains(st.mtimeMs))) continue;
+      items.push({
+        name: dirent.name,
+        type,
+        size: type === 'file' ? st.size : null,
+        lastModified: st.mtime.toISOString(),
+      });
+    }
+  } catch (err) {
+    return failFromError(err, signal);
+  } finally {
+    try {
+      await dir?.close();
+    } catch {
+      // Already closed by a finished iteration.
+    }
+  }
+  return items.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}
+
+const isEvent = (v: unknown): v is ActivityEvent =>
+  typeof v === 'object' && v !== null && 'type' in v && !Array.isArray(v);
+
+export async function doGetMetadata(
+  cfg: FsConfig,
+  input: GetMetadataConfig,
+  signal: AbortSignal,
+): Promise<ActivityEvent> {
+  const ticked = new Set<GetMetadataField>(input.fieldList);
+  const answersMissing = ticked.has('exists');
+
+  let resolved: Awaited<ReturnType<typeof resolveWithinRoots>>;
+  try {
+    resolved = await resolveWithinRoots(cfg.roots, input.path, 'fs');
+  } catch (err) {
+    if (answersMissing && isMissing(err)) {
+      try {
+        const where = await missingWithinRoots(cfg.roots, input.path);
+        if (where !== null) return notThere(where);
+      } catch {
+        // Report the original error below.
+      }
+    }
+    return failFromError(err, signal);
+  }
+  if (!resolved.ok) return failed('permanent', resolved.error);
+  const path = resolved.path;
+
+  let st: Stats;
+  try {
+    st = await lstat(path);
+  } catch (err) {
+    if (answersMissing && isMissing(err)) return notThere(path);
+    return failFromError(err, signal);
+  }
+
+  const type = direntType(st);
+  // Child items read a folder only. Checked before anything slow (Content MD5).
+  if (ticked.has('childItems') && type !== 'directory') {
+    return failed('permanent', `Child items needs a folder, and '${input.path}' is a ${type}`);
+  }
+  const fields = emptyFields();
+  try {
+    if (ticked.has('exists')) fields.exists = true;
+    if (ticked.has('itemName')) fields.itemName = basename(path);
+    if (ticked.has('itemType')) fields.itemType = type;
+    if (ticked.has('size') && type === 'file') fields.size = st.size;
+    if (ticked.has('created')) fields.created = createdOf(st);
+    // `toISOString` throws on a time outside JavaScript's range; caught below.
+    if (ticked.has('lastModified')) fields.lastModified = st.mtime.toISOString();
+  } catch (err) {
+    return failFromError(err, signal);
+  }
+  if (ticked.has('contentMD5') && type === 'file') {
+    const md5 = await md5Of(path, signal);
+    if (isEvent(md5)) return md5;
+    fields.contentMD5 = md5;
+  }
+  if (ticked.has('childItems')) {
+    const items = await childItemsOf(cfg, path, input, signal);
+    if (isEvent(items)) return items;
+    fields.childItems = items;
+  }
+  return { type: 'succeeded', outputs: { path, ...fields } };
+}

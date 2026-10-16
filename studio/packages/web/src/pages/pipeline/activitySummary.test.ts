@@ -14,6 +14,7 @@ import {
   FILE_READ_ACTIVITY_TYPE,
   FILE_WRITE_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
+  GET_METADATA_ACTIVITY_TYPE,
   IF_ACTIVITY_TYPE,
   LLM_CALL_ACTIVITY_TYPE,
   LOOKUP_ACTIVITY_TYPE,
@@ -111,6 +112,10 @@ const CASES: Record<string, [Node, string]> = {
     'delete tmp/x',
   ],
   [FILE_LIST_ACTIVITY_TYPE]: [node(FILE_LIST_ACTIVITY_TYPE, { config: { path: 'in' } }), 'in'],
+  [GET_METADATA_ACTIVITY_TYPE]: [
+    node(GET_METADATA_ACTIVITY_TYPE, { config: { path: 'in', fieldList: ['exists'] } }),
+    'in',
+  ],
   [COPY_FILES_ACTIVITY_TYPE]: [
     node(COPY_FILES_ACTIVITY_TYPE, {
       config: { sourcePath: 'inbox', sinkFolder: 'archive', afterCopy: 'move', moveTo: 'done' },

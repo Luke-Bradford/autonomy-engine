@@ -61,6 +61,7 @@ export type ConfigFieldKind =
   | 'boolean'
   | 'enum'
   | 'stringList'
+  | 'enumSet'
   | 'json'
   | 'objectList'
   | 'keyValue'
@@ -717,7 +718,7 @@ function deriveElementFields(element: unknown, waivedByIdentity = false): Config
     // acting on it, someone could teach `unwrap` to follow `getter` believing
     // recursion was already handled elsewhere.)
     const { kind, enumOptions, numberRule } = classify(inner, false);
-    if (isRowKind(kind) || kind === 'stringList') return null;
+    if (isRowKind(kind) || kind === 'stringList' || kind === 'enumSet') return null;
     cells.push({
       name,
       kind,
@@ -858,6 +859,10 @@ function classify(
     case 'array': {
       const element = unwrap((schema as { element?: unknown }).element).inner;
       if (defOf(element)?.type === 'string') return { kind: 'stringList' };
+      // #1600 OR41 C8a — a set of choices (Get metadata's field list): one
+      // checkbox per enum member.
+      const choices = enumValuesOf(element);
+      if (choices) return { kind: 'enumSet', enumOptions: choices };
       if (!nestable) {
         // Depth-1: the CALLER only needs to know this would be a row list, so
         // that it can degrade. Deriving its columns would be the recursion the
@@ -1045,6 +1050,17 @@ export function formatFieldValue(field: ConfigField, value: unknown): FieldRende
       return value.every((v) => v === v.trim() && v !== '' && !v.includes('\n'))
         ? { ok: true, value: value.join('\n') }
         : { ok: false, reason: 'holds an entry a one-per-line control would alter' };
+    case 'enumSet': {
+      // Ticked values, one per line in the control's own text, so the dock's
+      // generic draft machinery holds a set as it holds a list. A value the
+      // boxes cannot show (not a member, or ticked twice) routes to JSON.
+      const options = field.enumOptions ?? [];
+      return Array.isArray(value) &&
+        value.every((v) => typeof v === 'string' && options.includes(v)) &&
+        new Set(value).size === value.length
+        ? { ok: true, value: (value as string[]).join('\n') }
+        : { ok: false, reason: 'not a set of the permitted values' };
+    }
     case 'json': {
       const text = JSON.stringify(value, null, 2);
       // `undefined` back from stringify means the value has no JSON form at all.
@@ -1218,7 +1234,9 @@ export function parseFieldInput(field: ConfigField, raw: FieldInput): FieldParse
     // number", so no value could be written, and the schema reporting the key as
     // missing is the honest outcome rather than a trap.
     if (field.kind === 'text') return { ok: true, omit: false, value: raw };
-    if (field.kind === 'stringList') return { ok: true, omit: false, value: [] };
+    if (field.kind === 'stringList' || field.kind === 'enumSet') {
+      return { ok: true, omit: false, value: [] };
+    }
     return { ok: true, omit: true };
   }
 
@@ -1243,6 +1261,17 @@ export function parseFieldInput(field: ConfigField, raw: FieldInput): FieldParse
       return values.length === 0
         ? { ok: true, omit: true }
         : { ok: true, omit: false, value: values };
+    }
+    case 'enumSet': {
+      // Written in the options' order, whatever order the boxes were ticked in,
+      // so a diff of the config shows what changed and nothing else.
+      const ticked = new Set(raw.split(/\r?\n/).map((line) => line.trim()));
+      ticked.delete('');
+      const options = field.enumOptions ?? [];
+      const unknown = [...ticked].find((v) => !options.includes(v));
+      return unknown === undefined
+        ? { ok: true, omit: false, value: options.filter((o) => ticked.has(o)) }
+        : { ok: false, message: 'must be one of the permitted values' };
     }
     case 'json':
       try {

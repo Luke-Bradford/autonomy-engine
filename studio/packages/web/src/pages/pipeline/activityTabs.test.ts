@@ -145,3 +145,32 @@ describe('applicableFieldNames (#1686)', () => {
     expect(applicableFieldNames(http, names, fieldsOf(http), {}, {})).toEqual(names);
   });
 });
+
+describe('applicableFieldNames on a set of choices (#1600 OR41 C8a)', () => {
+  const meta = getActivity('get_metadata');
+  if (meta === undefined) throw new Error('get_metadata is catalogued');
+  const fields = fieldsOf(meta);
+  const all = fields.map((f) => f.name);
+  const shown = (config: Record<string, unknown>) =>
+    applicableFieldNames(meta, all, fields, seedFieldInputs(fields, config), config);
+  const CHILD = ['childFilter', 'childType', 'modifiedStart', 'modifiedEnd'];
+
+  it('draws the child item settings only while Child items is ticked', () => {
+    expect(shown({ path: '.', fieldList: ['size', 'exists'] })).toEqual(['path', 'fieldList']);
+    expect(shown({ path: '.', fieldList: ['exists', 'childItems'] })).toEqual([
+      'path',
+      'fieldList',
+      ...CHILD,
+    ]);
+    // Nothing ticked is known to hold none, not unknown.
+    expect(shown({ path: '.' })).toEqual(['path', 'fieldList']);
+  });
+
+  it('keeps a stored child setting in view so it can be removed', () => {
+    expect(shown({ path: '.', fieldList: ['size'], childFilter: '*.csv' })).toEqual([
+      'path',
+      'fieldList',
+      'childFilter',
+    ]);
+  });
+});

@@ -155,7 +155,7 @@ test.describe('#1221 — lookup-node authoring', () => {
     // The bump this entry owes, stamped on the row the server minted. A LITERAL
     // on purpose: it is the tripwire that makes a catalog widening show up here
     // and not only in the shared package's own tests.
-    expect(latest.catalogVersion).toBe(42); // #1600 C7d — Lookup Max rows up to 5000
+    expect(latest.catalogVersion).toBe(43); // #1600 C8a — Get metadata
 
     await expectQuiet(page, problems);
   });

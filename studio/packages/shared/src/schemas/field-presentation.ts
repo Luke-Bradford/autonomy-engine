@@ -190,6 +190,24 @@ export function enumValuesOf(schema: unknown): readonly string[] | undefined {
 }
 
 /**
+ * #1600 OR41 C8a — the values of a set-of-choices field (an array of a string
+ * enum, such as Get metadata's field list), seen through the same wrappers as
+ * {@link enumValuesOf}, or `undefined` when the field is not one.
+ */
+export function enumSetValuesOf(schema: unknown): readonly string[] | undefined {
+  let current: unknown = schema;
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (typeof current !== 'object' || current === null || !('_zod' in current)) return undefined;
+    const def = (
+      current as { _zod: { def: { type?: string; innerType?: unknown; element?: unknown } } }
+    )._zod.def;
+    if (def.type === 'array') return enumValuesOf(def.element);
+    current = def.innerType;
+  }
+  return undefined;
+}
+
+/**
  * #1396 — a top-level field's human label, from the field or the ONE wrapper
  * (`.optional()`, `.default()`) around it. The "every field is titled" gates on
  * each catalog share this read. The form itself (`configForm.ts`'s `unwrap`)
@@ -238,7 +256,12 @@ function unnamedIn(field: unknown, path: string, depth: number): string[] {
   // forever. `lazy`, `pipe`, `intersection` and `tuple` are not walked; no
   // catalog config uses one today, so a value hidden inside one is not checked.
   if (depth > 8) return [];
-  const values = enumValuesOf(field);
+  // #1600 OR41 C8a — a set of choices titled on the FIELD (where the form
+  // reads its checkbox labels) is checked there; one titled on the enum inside
+  // it is walked as before.
+  const values =
+    enumValuesOf(field) ??
+    (outermostLabel(field)?.options === undefined ? undefined : enumSetValuesOf(field));
   if (values !== undefined) {
     const names = outermostLabel(field)?.options ?? {};
     return values

@@ -104,7 +104,8 @@ export interface ActivityTab {
 
 /**
  * #1686 — one condition under which a config field applies: the CONTROLLING
- * field's value is one of `in`. See `ActivityCatalogEntry.appliesWhen`.
+ * field's value is one of `in` (#1600 OR41 C8a: or, for a set of choices such
+ * as Get metadata's field list, any ticked value is). See `ActivityCatalogEntry.appliesWhen`.
  */
 export interface ActivityFieldCondition {
   readonly field: string;
@@ -348,6 +349,13 @@ export const FILE_COPY_ACTIVITY_TYPE = 'file_copy';
 export const FILE_MOVE_ACTIVITY_TYPE = 'file_move';
 export const FILE_DELETE_ACTIVITY_TYPE = 'file_delete';
 export const FILE_LIST_ACTIVITY_TYPE = 'file_list';
+
+/**
+ * #1600 OR41 C8a — Get metadata (catalogue §4.3). A new runnable type, read by
+ * its catalog entry and the `fs` adapter's dispatch arm, so it lives once here.
+ * `file_list` is lowered to it in C8b (§8).
+ */
+export const GET_METADATA_ACTIVITY_TYPE = 'get_metadata';
 
 /**
  * #996 M5 — the `copy` activity's `Node.type` (#1134 slice 4b).

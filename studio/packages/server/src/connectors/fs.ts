@@ -1,4 +1,4 @@
-import { constants as fsConstants, type Dirent } from 'node:fs';
+import { constants as fsConstants } from 'node:fs';
 import { open, opendir, realpath, rename, stat, unlink } from 'node:fs/promises';
 import { z } from 'zod';
 import {
@@ -11,6 +11,8 @@ import {
   FILE_MOVE_ACTIVITY_TYPE,
   FILE_READ_ACTIVITY_TYPE,
   FILE_WRITE_ACTIVITY_TYPE,
+  GET_METADATA_ACTIVITY_TYPE,
+  getMetadataConfigSchema,
   WARNING_CODES,
   fileCopyConfigSchema,
   fileDeleteConfigSchema,
@@ -31,7 +33,7 @@ import {
   makeTmpSuffix,
   streamInto,
 } from './fs-write.js';
-import { DEFAULT_MAX_LIST_ENTRIES, DEFAULT_MAX_READ_BYTES } from './fs-select.js';
+import { DEFAULT_MAX_LIST_ENTRIES, DEFAULT_MAX_READ_BYTES, direntType } from './fs-select.js';
 import { runLookupActivity } from './lookup.js';
 import type { SourceIo } from './source-io.js';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter, ResolvedDataset } from './types.js';
@@ -51,6 +53,7 @@ import { fsConnectionConfigSchema, notAnFsKind } from './fs-connection.js';
 // imports neither store, which is the property its own docblock protects.
 import { runCopyActivity } from './copy.js';
 import { runFilesCopy } from './fs-files-copy.js';
+import { doGetMetadata } from './fs-metadata.js';
 import { refuseForeignSink, writeRowsToSink } from './copy-sink.js';
 import {
   describeExcelDatasetColumns,
@@ -278,14 +281,6 @@ async function doWrite(
     type: 'succeeded',
     outputs: { bytesWritten: Buffer.byteLength(input.content, 'utf8'), path: finalPath },
   };
-}
-
-/** Classify a directory entry by its raw type (a symlink is REPORTED, not followed). */
-function direntType(d: Dirent): 'file' | 'directory' | 'symlink' | 'other' {
-  if (d.isFile()) return 'file';
-  if (d.isDirectory()) return 'directory';
-  if (d.isSymbolicLink()) return 'symlink';
-  return 'other';
 }
 
 async function doCopy(
@@ -736,6 +731,19 @@ export const fsAdapter: ConnectorAdapter = {
         return;
       }
       yield await doList(cfg.data, input.data.path, ctx.signal);
+      return;
+    }
+
+    if (ctx.activityType === GET_METADATA_ACTIVITY_TYPE) {
+      const input = getMetadataConfigSchema.safeParse(ctx.input);
+      if (!input.success) {
+        yield failed(
+          'permanent',
+          `invalid get_metadata activity config: ${formatZodIssues(input.error.issues)}`,
+        );
+        return;
+      }
+      yield await doGetMetadata(cfg.data, input.data, ctx.signal);
       return;
     }
 

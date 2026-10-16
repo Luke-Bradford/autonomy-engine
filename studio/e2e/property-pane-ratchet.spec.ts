@@ -52,6 +52,9 @@ test.use({ viewport: { width: 1440, height: 900 } });
 const HELP_LIMITS: Record<string, number> = {
   'Copy data': 9,
   'Delete file': 7,
+  // #1600 OR41 C8a — List directory's 7 and the Field list's, which says the
+  // unticked outputs are null and what Exists does for a missing path.
+  'Get metadata': 8,
   'HTTP request': 9,
   'List directory': 7,
   // +3 for C7a's Settings, each `?` a fact its label lacks: First row only names
@@ -327,6 +330,9 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   // +1 for C1q-c's Query timeout, a new field whose `?` says blank means no limit.
   'Copy data (inline query)': 13,
   'Delete file': 7,
+  // #1600 OR41 C8a — the 8 above and Child items' four settings: Filter's
+  // wildcard syntax, Child entries' All, and the window's UTC and folders.
+  'Get metadata': 12,
   'HTTP request': 9,
   'List directory': 7,
   // +3 for C7a's Settings, each `?` a fact its label lacks: First row only names
@@ -370,6 +376,7 @@ const SHOWS: Record<string, string[]> = {
   'Lookup (inline table)': ['main', 'orders'],
   'Delete file': ['/tmp/e2e/old.txt', '2048', 'E2E-1'],
   'List directory': ['/tmp/e2e', '2048', 'E2E-1'],
+  'Get metadata': ['/tmp/e2e', '*.csv', '2026-10-01T00:00:00Z', '2048', 'E2E-1'],
   'Lookup (whole file as text)': ['/tmp/e2e/in.txt', '2048', 'E2E-1'],
   'Write file': ['/tmp/e2e/out.txt', '2048', 'E2E-1'],
   'HTTP request': ['/v1/orders', 'X-Trace', '15000', 'E2E-1'],
@@ -516,6 +523,14 @@ function seeds(ids: SeedIds): Record<string, Seed> {
     },
     'Delete file': fsNode('file_delete', { path: '/tmp/e2e/old.txt' }),
     'List directory': fsNode('file_list', { path: '/tmp/e2e' }),
+    // #1600 OR41 C8a — Child items ticked, so its settings draw too.
+    'Get metadata': fsNode('get_metadata', {
+      path: '/tmp/e2e',
+      fieldList: ['exists', 'childItems'],
+      childFilter: '*.csv',
+      childType: 'files',
+      modifiedStart: '2026-10-01T00:00:00Z',
+    }),
     'Lookup (whole file as text)': fsNode('file_read', { path: '/tmp/e2e/in.txt' }),
     'Write file': fsNode('file_write', { path: '/tmp/e2e/out.txt', content: 'one\ntwo' }),
     'HTTP request': {

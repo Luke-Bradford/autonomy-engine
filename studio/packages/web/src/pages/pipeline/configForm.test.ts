@@ -1933,3 +1933,36 @@ describe('fieldSpan — the default-labelled empty choice is sized too (#1732)',
     expect(fieldSpan({ ...field, defaultText: 'gone' })).toBe('short');
   });
 });
+
+describe('a set of choices (#1600 OR41 C8a)', () => {
+  const schema = z.object({
+    fieldList: z.array(z.enum(['exists', 'size', 'childItems'])).min(1),
+  });
+  const field = deriveConfigFields(schema)![0]!;
+
+  it('derives a checkbox set from an array of an enum', () => {
+    expect(field.kind).toBe('enumSet');
+    expect(field.enumOptions).toEqual(['exists', 'size', 'childItems']);
+  });
+
+  it('round-trips the ticks, written in the options’ order', () => {
+    expect(formatFieldValue(field, ['size', 'exists'])).toEqual({
+      ok: true,
+      value: 'size\nexists',
+    });
+    expect(parseFieldInput(field, 'childItems\nexists')).toEqual({
+      ok: true,
+      omit: false,
+      value: ['exists', 'childItems'],
+    });
+    // Nothing ticked is written as an empty list, which the schema then refuses.
+    expect(parseFieldInput(field, '')).toEqual({ ok: true, omit: false, value: [] });
+  });
+
+  it('sends a value the boxes cannot show to JSON', () => {
+    expect(formatFieldValue(field, ['size', 'size']).ok).toBe(false);
+    expect(formatFieldValue(field, ['rowCount']).ok).toBe(false);
+    expect(formatFieldValue(field, 'size').ok).toBe(false);
+    expect(parseFieldInput(field, 'rowCount').ok).toBe(false);
+  });
+});

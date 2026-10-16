@@ -266,6 +266,29 @@ Sources: [Get Metadata](https://learn.microsoft.com/azure/data-factory/control-f
 - **Wait until** toggle (= ADF Validation): *Wait until it exists* / *Is non-empty* / *Is at least N bytes*, *Check every* (default 10 s), *Give up after* (default 12 h). This is a durable park, the same mechanism as Wait, not a busy loop.
 - **Outputs:** one per ticked field, plus `childItems[{name, type, size, lastModified}]`.
 
+**Built (C8a, 2026-10-16):** Get metadata on a file system connection, as the new `get_metadata` type. It is in the palette as *Get metadata*, with Source (connection, *File or folder path* ⓕ) and Settings tabs.
+
+- **Field list:** ADF's names, stored as ADF's `fieldList` array and drawn as a grid of tick boxes (a new `enumSet` config-form kind for an array of an enum). They are Exists, Item name, Item type, Size, Created, Last modified, Content MD5 and Child items. The array is written in the options' order. It takes no dynamic content, because an enum member can never be a `${}`, and a new node ticks nothing, as in ADF.
+- **Child items settings:** *Filter* (wildcard ⓕ, default `*`), *Child entries* (All · Files only · Folders only) and *Modified from* / *Modified before*. The wildcard and window checks are Copy · Files as-is's, now in one module (`catalog/file-selection.ts`). They are shown only while Child items is ticked (`appliesWhen` now also reads a set of choices), and refused at save when set without it.
+- **Outputs:** `path` plus one optional output per field, each `null` when unticked.
+  - **Deliberate difference from ADF:** the contract is fixed, not derived from the ticks, because a derived one would go stale when they change. A reference to an unticked field therefore saves and resolves to `null`, where ADF fails it.
+- **Missing path:** with Exists ticked, a missing path (a missing parent included, `ENOENT` or `ENOTDIR`) gives `exists: false` and `null` elsewhere. Otherwise it fails as any read does.
+  - That answer is never given for a path outside the roots. `confine.ts`'s `missingWithinRoots` walks up to the nearest ancestor `realpath` resolves and judges that canonical ancestor with the one containment test (`isWithinCanonicalRoots`, now shared with `resolveWithinRoots`). A dangling link on the way up is refused as well, because its target may be outside. So a link out of a root cannot turn `exists: false` into an oracle for outside folders.
+  - A symlink at the path is refused even with Exists ticked, because the connector never follows one.
+- **Child items:** read from a folder only, and fail on a file, so C8b's lowering of `file_list` still fails where List directory did.
+  - The list limit (`maxEntries`) counts every entry visited, matched or not, as `file_list` does.
+  - Each item is `{name, type, size, lastModified}`, with `size` `null` unless a file. Its type comes from an `lstat`, not the directory entry, so a file system that does not type its entries still filters correctly. The list is sorted by name in code-unit order, because a directory read's order depends on the OS.
+  - A modified window leaves folders out, as ADF's does.
+- **Deliberate differences from ADF:**
+  - `itemType` and a child's `type` are `file_list`'s words (`file`, `directory`, `symlink`, `other`), not `File`/`Folder`, so C8b's lowering keeps a `type == 'directory'` test working.
+  - Content MD5 is a studio addition (ADF offers none for a file system). It is base64, the Content-MD5 form, and reads the whole file, checking for cancel between chunks.
+  - Size is `null` for a folder.
+  - Created is `null` where the file system records no birth time.
+  - Up to `maxEntries` child items, each with a size and a time, can make a large output (ADF caps an activity's output at 4 MB). OR36 #1567 owns capture caps.
+- `CATALOG_VERSION` 42→43 (a new runnable type).
+
+Still open in C8: **C8b** lowers `file_list` to Get metadata · Child items and retires List directory from the palette. Its `entries` → `childItems` alias is a real rename, unlike C1b's, so it needs the downstream references rewritten, and the starter templates move with it. **C8c** adds tables on SQLite and Postgres (exists, structure, column count, row count), Structure and Column count for delimited and Excel files through a saved dataset source, and per-connection-kind field options. **C8d** adds *Wait until* (the durable park). Include subfolders for child items goes in C8b.
+
 ### 4.4 Delete
 Source: [Delete](https://learn.microsoft.com/azure/data-factory/delete-activity).
 
@@ -369,7 +392,7 @@ The **capture level** (workspace setting, overridable per pipeline and per activ
 | Copy sink, rows | T delimited (OR14 writer) | ✓ append/overwrite; **T** truncate, upsert, auto-create, pre-copy | ✓ same | — | OR13 | OR15 |
 | Copy, files as-is | ✓ copy/move (single file); **T** folder, wildcard, list, delete-after | — | — | T (download to file) | OR13 | — |
 | Lookup | ✓ | ✓ | ✓ | (use Web) | OR13 | OR15 |
-| Get metadata | ✓ list only; **T** full field list + wait | **T** exists, structure, columns, rows | **T** same | — | OR13 | OR15 |
+| Get metadata | ✓ full field list (C8a); **T** wait | **T** exists, structure, columns, rows | **T** same | — | OR13 | OR15 |
 | Delete | ✓ one file; **T** wildcard, folders, dates, log | — (Script) | — (Script) | — | OR13 | — |
 | Script | — | **T** | **T** | — | — | OR15 |
 | Web | — | — | — | ✓; **T** fail-on-error, cap, callback | — | — |
@@ -393,7 +416,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C5 | Copy: incremental (watermark Automatic / Expression; files modified-since-last-success) | OR15 incremental |
 | C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs | — |
 | C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Rows · Whole file as text (`file_read` as Lookup's second type), the title *Lookup* (built); **C7c** *When over the limit* and `bytes`/`truncated` for the text mode, limited by the connection's `maxBytes` rather than the 1 MiB byte cap (built); **C7d** the workspace Lookup max rows (1000 by default, up to ADF's 5000) and the Monitor Rows read column (built) | — |
-| C8 | Get metadata + wait-until. Lower file_list | OR17 #1408 |
+| C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, Include subfolders, List directory retired from the palette; **C8c** tables (SQLite, Postgres) and a dataset source's structure and column count; **C8d** Wait until | OR17 #1408 |
 | C9 | Delete: wildcard, folders, dates, log. Lower file_delete | OR17 #1408 |
 | C10 | Script activity | OR12 #1403, OR15 sql_script |
 | C11 | Web: fail-on-error, response cap, parse, retry-after, wait-for-callback. Lower http_request and webhook | — |

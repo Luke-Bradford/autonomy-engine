@@ -35,6 +35,8 @@ describe('activity catalog', () => {
       'file_read',
       'file_write',
       'filter',
+      // #1600 OR41 C8a — Get metadata.
+      'get_metadata',
       'http_request',
       'if',
       'llm_call',
@@ -68,7 +70,9 @@ describe('activity catalog', () => {
     // so the reconciler resuming it after a crash re-reads and is safe. That is
     // `file_read`/`file_list`'s own reasoning, and the entry has no sink half
     // for a later slice to widen without confronting this flag.
-    expect(idempotent).toEqual(['file_read', 'file_list', 'lookup']);
+    // #1600 OR41 C8a — `get_metadata` is the FOURTH, on `file_list`'s reasoning:
+    // it stats and lists, and writes nowhere.
+    expect(idempotent).toEqual(['file_read', 'file_list', 'get_metadata', 'lookup']);
     // file_write/copy/move/delete MUST stay non-idempotent — each is a side effect.
     for (const type of ['file_write', 'file_copy', 'file_move', 'file_delete']) {
       expect(getActivity(type)!.idempotent).toBe(false);
