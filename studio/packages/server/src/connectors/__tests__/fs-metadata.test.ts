@@ -2,7 +2,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, symlink, utimes, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { GET_METADATA_FS_FIELDS, getActivity } from '@autonomy-studio/shared';
+import {
+  FILE_LIST_ACTIVITY_TYPE,
+  GET_METADATA_ACTIVITY_TYPE,
+  GET_METADATA_FS_FIELDS,
+  getActivity,
+  getMetadataConfigSchema,
+  lowerRetiredTypes,
+  type Node,
+} from '@autonomy-studio/shared';
 import { fsAdapter } from '../fs.js';
 import { cleanupTempRoots, tempRoot } from './temp-roots.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
@@ -283,5 +291,89 @@ describe('get_metadata — edges the lenses asked for', () => {
     expect(
       await outputsOf({ path: 'd', fieldList: ['exists', 'itemName', 'size', 'contentMD5'] }),
     ).toMatchObject({ exists: true, itemName: 'd', size: null, contentMD5: null });
+  });
+});
+
+// #1600 OR41 C8b — a stored List directory opens as Get metadata · Child items
+// (`retired.ts`). After its next Save it runs as that, so the two must agree on
+// what an author's pipeline reads: the same entries by name and type, the same
+// path, and a failure wherever List directory failed. The deliberate
+// differences (sorted, more fields per item) are in the catalogue's §4.3.
+describe('get_metadata — the lowered file_list answers as List directory did', () => {
+  async function dispatch(type: string, input: Record<string, unknown>, maxEntries?: number) {
+    const events: ActivityEvent[] = [];
+    const c: ActivityContext = {
+      runId: 'run_1',
+      nodeId: 'list',
+      attemptId: 'list#0',
+      activityType: type,
+      input,
+      connectionConfig: { roots: [root], ...(maxEntries === undefined ? {} : { maxEntries }) },
+      signal: new AbortController().signal,
+    };
+    for await (const ev of fsAdapter.runActivity(c, null)) events.push(ev);
+    expect(events).toHaveLength(1);
+    return events[0]!;
+  }
+  /** Both ways: the stored `file_list`, and the Get metadata it opens as. */
+  async function both(path: string, maxEntries?: number) {
+    const stored = {
+      id: 'list',
+      type: FILE_LIST_ACTIVITY_TYPE,
+      config: { path },
+      connectionId: 'c',
+      position: { x: 0, y: 0 },
+    } as Node;
+    const lowered = lowerRetiredTypes({ nodes: [stored], containers: [] }).nodes[0]!;
+    expect(lowered.type).toBe(GET_METADATA_ACTIVITY_TYPE);
+    // The dispatch input is the config the schema parses, `outputs` aside.
+    const { outputs: _contract, ...config } = lowered.config;
+    const input = getMetadataConfigSchema.parse(config);
+    return {
+      old: await dispatch(FILE_LIST_ACTIVITY_TYPE, { path }, maxEntries),
+      now: await dispatch(GET_METADATA_ACTIVITY_TYPE, input, maxEntries),
+    };
+  }
+  const named = (items: unknown) =>
+    (items as { name: string; type: string }[])
+      .map(({ name, type }) => ({ name, type }))
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+
+  it('the same entries by name and type, a dotfile and a link included, and the same path', async () => {
+    await mkdir(join(root, 'in', 'sub'), { recursive: true });
+    await writeFile(join(root, 'in', 'b.csv'), 'x', 'utf8');
+    await writeFile(join(root, 'in', '.hidden'), 'x', 'utf8');
+    await symlink(join(root, 'in', 'b.csv'), join(root, 'in', 'link'));
+    const { old, now } = await both('in');
+    if (old.type !== 'succeeded' || now.type !== 'succeeded') throw new Error('expected success');
+    expect(named(now.outputs['childItems'])).toEqual(named(old.outputs['entries']));
+    expect(named(old.outputs['entries'])).toEqual([
+      { name: '.hidden', type: 'file' },
+      { name: 'b.csv', type: 'file' },
+      { name: 'link', type: 'symlink' },
+      { name: 'sub', type: 'directory' },
+    ]);
+    expect(now.outputs['path']).toBe(old.outputs['path']);
+  });
+
+  it.each([
+    ['a file', async () => writeFile(join(root, 'a.csv'), 'x', 'utf8'), 'a.csv'],
+    ['a missing path', async () => undefined, 'nope'],
+  ])('fails permanently on %s, as List directory does', async (_why, setUp, path) => {
+    await setUp();
+    const { old, now } = await both(path);
+    expect([old.type, now.type]).toEqual(['failed', 'failed']);
+    expect(old.type === 'failed' && now.type === 'failed' && [old.kind, now.kind]).toEqual([
+      'permanent',
+      'permanent',
+    ]);
+  });
+
+  it('the same list limit: exactly the limit lists, one more fails', async () => {
+    for (const n of ['a', 'b', 'c']) await writeFile(join(root, n), 'x', 'utf8');
+    const at = await both('.', 3);
+    expect([at.old.type, at.now.type]).toEqual(['succeeded', 'succeeded']);
+    const over = await both('.', 2);
+    expect([over.old.type, over.now.type]).toEqual(['failed', 'failed']);
   });
 });
