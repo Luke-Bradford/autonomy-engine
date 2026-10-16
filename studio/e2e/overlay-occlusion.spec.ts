@@ -181,6 +181,11 @@ for (const viewport of VIEWPORTS) {
   test(`Monitor and Manage overlays are unobstructed — ${viewport.width}x${viewport.height}`, async ({
     page,
   }) => {
+    // Its own budget, as the editor's sweep has: it walks every page's overlays,
+    // so it grows with the catalog. Green on CI it took 21.5-28.8s against the
+    // default 30s, and it failed twice on the main branch after #1707's fix when
+    // that budget ran out at 32s on the last step, not for a missing row.
+    test.setTimeout(90_000);
     const problems = collectPageProblems(page);
     await page.setViewportSize(viewport);
     // Rows to open menus on.
