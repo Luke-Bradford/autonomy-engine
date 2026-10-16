@@ -479,7 +479,7 @@ describe('activity mode groups (#1600 OR41 C7b)', () => {
     expect(LOOKUP_TYPES).toEqual(['lookup', 'file_read']);
     expect(getActivity('lookup')!.title).toBe('Lookup');
     expect(getActivity('file_read')!.connectionKinds).toEqual(['fs']);
-    expect(getActivity('file_read')!.tabs.map((t) => t.key)).toEqual(['source']);
+    expect(getActivity('file_read')!.tabs?.map((t) => t.key)).toEqual(['source']);
     expect(activityModeGroup('llm_call')).toBeUndefined();
   });
 });

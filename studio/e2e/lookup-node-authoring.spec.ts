@@ -61,7 +61,7 @@ test.describe('#1221 — lookup-node authoring', () => {
     const pipelineId = await openSeededCanvas(page, 'e2e 1221 lookup', { nodes: [] });
 
     // The palette offers it — the catalog entry landing is half the ticket.
-    await addActivity(page, 'Lookup rows');
+    await addActivity(page, 'Lookup');
     await expect(canvasNodes(page)).toHaveCount(1);
     await canvasNodes(page).first().click();
 
@@ -168,7 +168,7 @@ test.describe('#1221 — lookup-node authoring', () => {
     const pipelineId = await openSeededCanvas(page, 'e2e 1600 c7a lookup row limit', {
       nodes: [],
     });
-    await addActivity(page, 'Lookup rows');
+    await addActivity(page, 'Lookup');
     await canvasNodes(page).first().click();
     await properties(page).getByRole('tab', { name: 'Settings' }).click();
 
