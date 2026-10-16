@@ -123,9 +123,11 @@ export function renameKey(
  * integer-like keys (`1`, `10`, which sqlite binds) first whatever the insertion
  * order, so a row renamed to one would jump while its box, kept by position,
  * showed another row's name. `prev` is the order shown; names still present
- * keep their slot. One gone and one new is a rename (or its undo), so the new
- * name takes the gone one's slot; otherwise new names go to the end, so an undone
- * Remove comes back last. Returns `prev` itself when nothing moved.
+ * keep their slot. One gone and one new is a rename (or its undo): the new name
+ * takes the gone one's slot. Otherwise a new name goes after the last row of
+ * the names the record lists before it: an undone Remove returns to its slot,
+ * and Add and Import, which append to the record, go last. Returns `prev`
+ * itself when nothing moved.
  */
 export function reconcileKeyOrder(
   prev: readonly string[],
@@ -139,7 +141,12 @@ export function reconcileKeyOrder(
   if (gone.length === 1 && added.length === 1) {
     return prev.map((k) => (k === gone[0] ? added[0]! : k));
   }
-  return [...prev.filter((k) => present.has(k)), ...added];
+  const shown = prev.filter((k) => present.has(k));
+  for (const k of added) {
+    const before = keys.slice(0, keys.indexOf(k)).map((b) => shown.indexOf(b));
+    shown.splice(Math.max(-1, ...before) + 1, 0, k);
+  }
+  return shown;
 }
 
 /** `p1`, `p2`, … — the first not already taken; the author renames it to the statement's `:name`. */

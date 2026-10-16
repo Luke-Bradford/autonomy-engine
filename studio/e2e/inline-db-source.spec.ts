@@ -430,15 +430,19 @@ test.describe('#1600 C1q — an inline database source', () => {
     await nodeById(page, 'copy1').click();
     await sourceTab(page).click();
     const pane = properties(page);
-    const box = (n: number, part: 'name' | 'value') =>
+    const row = (n: number, part: 'name' | 'value') =>
       pane.getByRole('textbox', { name: `Bind value ${n} ${part}` });
 
-    await box(2, 'name').fill('');
-    await box(2, 'name').pressSequentially('10');
-    await expect(box(2, 'name')).toHaveValue('10');
-    await expect(box(2, 'value')).toHaveValue('y');
-    await expect(box(1, 'name')).toHaveValue('p2');
-    await expect(box(1, 'value')).toHaveValue('x');
+    await row(2, 'name').fill('');
+    // The first keystroke makes the name integer-like: where the row used to jump.
+    await row(2, 'name').pressSequentially('1');
+    await expect(row(2, 'name')).toHaveValue('1');
+    await expect(row(1, 'name')).toHaveValue('p2');
+    await row(2, 'name').pressSequentially('0');
+    await expect(row(2, 'name')).toHaveValue('10');
+    await expect(row(2, 'value')).toHaveValue('y');
+    await expect(row(1, 'name')).toHaveValue('p2');
+    await expect(row(1, 'value')).toHaveValue('x');
     await expectQuiet(page, problems);
   });
 });

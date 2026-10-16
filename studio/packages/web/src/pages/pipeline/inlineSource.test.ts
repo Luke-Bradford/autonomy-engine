@@ -89,25 +89,24 @@ describe('inline source bind values (#1600 C1q-b)', () => {
   });
 
   // #1725: a record lists integer-like keys first, so the rows hold their own order.
-  it('keeps the rows in their own order when a name becomes integer-like', () => {
-    const shown = ['p2', 'a'];
+  it('keeps the rows in their own order when a name becomes integer-like, and undoes in place', () => {
     expect(Object.keys(renameKey({ p2: 1, a: 2 }, 'a', '1'))).toEqual(['1', 'p2']);
-    expect(reconcileKeyOrder(shown, ['1', 'p2'])).toEqual(['p2', '1']);
+    expect(reconcileKeyOrder(['p2', 'a'], ['1', 'p2'])).toEqual(['p2', '1']);
     expect(reconcileKeyOrder(['p2', '1'], ['10', 'p2'])).toEqual(['p2', '10']);
-    // A middle row keeps its slot, and so does the undo of its rename.
     expect(reconcileKeyOrder(['a', 'b', 'c'], ['1', 'a', 'c'])).toEqual(['a', '1', 'c']);
     expect(reconcileKeyOrder(['a', '1', 'c'], ['a', 'b', 'c'])).toEqual(['a', 'b', 'c']);
-    // Undo of that rename puts the name back in the same slot.
-    expect(reconcileKeyOrder(['p2', '10'], ['p2', 'a'])).toEqual(['p2', 'a']);
   });
 
-  it('drops a removed name, appends new ones, and returns the same array when nothing moved', () => {
+  it('drops a removed name, puts new ones where the record lists them, and keeps the array when nothing moved', () => {
     expect(reconcileKeyOrder(['b', 'a', 'c'], ['b', 'c'])).toEqual(['b', 'c']);
-    // An undone Remove comes back last, not in its old slot.
-    expect(reconcileKeyOrder(['b', 'c'], ['b', 'a', 'c'])).toEqual(['b', 'c', 'a']);
-    expect(reconcileKeyOrder(['b', 'a'], ['2', 'a', 'b', '1'])).toEqual(['b', 'a', '2', '1']);
+    // An undone Remove returns to its slot, the first row's included.
+    expect(reconcileKeyOrder(['a', 'c'], ['a', 'b', 'c'])).toEqual(['a', 'b', 'c']);
+    expect(reconcileKeyOrder(['b', 'c'], ['a', 'b', 'c'])).toEqual(['a', 'b', 'c']);
+    // Add and Import append to the record, so their rows go last.
+    expect(reconcileKeyOrder(['z', 'a'], ['a', 'z', 'x', 'y'])).toEqual(['z', 'a', 'x', 'y']);
+    expect(reconcileKeyOrder(['p2', '10'], ['10', 'p2', 'p1'])).toEqual(['p2', '10', 'p1']);
     expect(reconcileKeyOrder([], ['x', 'y'])).toEqual(['x', 'y']);
-    // Two gone and two new is not one rename: the new names go to the end.
+    // Two gone and two new is not one rename.
     expect(reconcileKeyOrder(['a', 'b', 'c'], ['c', 'x', 'y'])).toEqual(['c', 'x', 'y']);
     const same = ['z', '1'];
     expect(reconcileKeyOrder(same, ['1', 'z'])).toBe(same);
