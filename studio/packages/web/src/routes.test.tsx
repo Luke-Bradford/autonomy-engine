@@ -156,7 +156,7 @@ vi.mock('./api/globalParams', async (importActual) => ({
 }));
 vi.mock('./api/workspaceSettings', () => ({
   getWorkspaceSettings: vi.fn().mockResolvedValue({
-    settings: { defaultActivityTimeoutSeconds: 43_200 },
+    settings: { defaultActivityTimeoutSeconds: 43_200, lookupMaxRows: 1000 },
     stored: false,
   }),
   putWorkspaceSettings: vi.fn(),
