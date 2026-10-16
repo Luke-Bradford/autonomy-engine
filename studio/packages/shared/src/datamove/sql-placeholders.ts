@@ -241,7 +241,6 @@ function endOfLineComment(sql: string, start: number): number {
   return i;
 }
 
-
 /** The end of a NON-nesting block comment (sqlite). */
 function endOfFlatBlockComment(sql: string, start: number): number {
   const close = sql.indexOf('*/', start + 2);

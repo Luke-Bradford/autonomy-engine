@@ -34,7 +34,7 @@ describe('sqlBindNames', () => {
   });
 
   it('sqlite: skips [..], `..`, "..", \'..\', flat block comments and LF-ended line comments', () => {
-    const sql = "select 1 as [x:a], 1 as `x:b`, \":c\", ':d', /* /* :e */ :f -- :g\r :h\n, :i";
+    const sql = 'select 1 as [x:a], 1 as `x:b`, ":c", \':d\', /* /* :e */ :f -- :g\r :h\n, :i';
     expect(sqlBindNames(sql, 'sqlite')).toEqual(['f', 'i']);
   });
 
