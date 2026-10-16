@@ -396,6 +396,15 @@ test.describe('#1600 C1q — an inline database source', () => {
         },
       },
     });
+
+    // #1725: sqlite binds `:10`, and a record lists integer-like keys first.
+    // Renamed keystroke by keystroke, the row stays where it is and keeps its value.
+    await row(2, 'name').fill('');
+    await row(2, 'name').pressSequentially('10');
+    await expect(row(2, 'name')).toHaveValue('10');
+    await expect(row(2, 'value')).toHaveValue('${params.wm}');
+    await expect(row(1, 'name')).toHaveValue('a');
+    await expect(row(3, 'name')).toHaveValue('b');
     await expectQuiet(page, problems);
   });
 });

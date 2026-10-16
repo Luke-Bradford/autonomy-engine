@@ -9,6 +9,7 @@ import {
   freshBindName,
   previewBindValue,
   previewInline,
+  reconcileKeyOrder,
   renameKey,
   sqlDialectOf,
   statementBindNames,
@@ -85,6 +86,26 @@ describe('inline source bind values (#1600 C1q-b)', () => {
     expect(Object.keys(odd)).toEqual(['__proto__']);
     expect(Object.getOwnPropertyDescriptor(odd, '__proto__')?.value).toBe('v');
     expect(freshBindName(['p1', 'p3'])).toBe('p2');
+  });
+
+  // #1725: a record lists integer-like keys first, so the rows hold their own order.
+  it('keeps the rows in their own order when a name becomes integer-like', () => {
+    const shown = ['p2', 'a'];
+    expect(Object.keys(renameKey({ p2: 1, a: 2 }, 'a', '1'))).toEqual(['1', 'p2']);
+    expect(reconcileKeyOrder(shown, ['1', 'p2'])).toEqual(['p2', '1']);
+    expect(reconcileKeyOrder(['p2', '1'], ['10', 'p2'])).toEqual(['p2', '10']);
+    // Undo of that rename puts the name back in the same slot.
+    expect(reconcileKeyOrder(['p2', '10'], ['p2', 'a'])).toEqual(['p2', 'a']);
+  });
+
+  it('drops a removed name, appends new ones, and returns the same array when nothing moved', () => {
+    expect(reconcileKeyOrder(['b', 'a', 'c'], ['b', 'c'])).toEqual(['b', 'c']);
+    expect(reconcileKeyOrder(['b', 'a'], ['2', 'a', 'b', '1'])).toEqual(['b', 'a', '2', '1']);
+    expect(reconcileKeyOrder([], ['x', 'y'])).toEqual(['x', 'y']);
+    // Two gone and two new is not one rename: the new names go to the end.
+    expect(reconcileKeyOrder(['a', 'b', 'c'], ['c', 'x', 'y'])).toEqual(['c', 'x', 'y']);
+    const same = ['z', '1'];
+    expect(reconcileKeyOrder(same, ['1', 'z'])).toBe(same);
   });
 });
 
