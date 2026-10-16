@@ -15,3 +15,4 @@ export * from './delimited.js';
 export * from './mapping-agreement.js';
 export * from './pump.js';
 export * from './schema-drift.js';
+export * from './sql-placeholders.js';

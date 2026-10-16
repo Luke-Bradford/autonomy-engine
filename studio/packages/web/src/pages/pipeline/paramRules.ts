@@ -40,8 +40,11 @@ import { notValidJson } from '../../lib/json/jsonText';
 /** A secret's value is a credential LABEL, never the credential — `engine/params.ts`. */
 const SECRET_LABEL = /^[A-Za-z0-9._-]{1,64}$/;
 
-/** The numeric shapes run-time `coerce` accepts from a string — `engine/params.ts`. */
-const NUMERIC_TEXT = /^-?\d+(\.\d+)?$/;
+/**
+ * The numeric shapes run-time `coerce` accepts from a string — `engine/params.ts`.
+ * Also a bind value's Number literal (`inlineSource.ts`), so the two cannot drift.
+ */
+export const NUMERIC_TEXT = /^-?\d+(\.\d+)?$/;
 
 /**
  * Mint a fresh row with a name nothing else is using.

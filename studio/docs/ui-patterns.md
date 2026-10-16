@@ -1094,7 +1094,7 @@ strays: "node" in version history's counts, and "param" in validation and server
 | Run | One execution of a pipeline version | |
 | Activity run | One activity's execution inside a run, one row per attempt | |
 | Dataset | A named shape of data at a connection (table, query, file) | |
-| Bind values | A query's `:name` values, keyed without the colon ("Add bind value"), on a saved query dataset and an inline one alike | Parameters, params (a pipeline's inputs) |
+| Bind values | A query's `:name` values, keyed without the colon ("Add bind value"; an inline query's "Import from statement" adds one per unbound `:name`), on a saved query dataset and an inline one alike | Parameters, params (a pipeline's inputs) |
 | Preview data | Reading a source's first rows from the form ("Preview data"; a `${}` bind value asks for a *Preview value for :name*). *Preview vN* stays the version-history view | Sample, Test query |
 | Connection | Where and how studio reaches a system, with its secrets | |
 | Trigger | What starts runs: manual, schedule, tumbling window, webhook, event | |

@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest';
+import type { InlineDataset } from '@autonomy-studio/shared';
 import {
   bindNameProblem,
+  bindTypeOf,
+  bindValueFor,
   bindValueText,
-  coerceBindValue,
   dynamicBindNames,
   freshBindName,
   previewBindValue,
   previewInline,
   renameKey,
+  sqlDialectOf,
+  statementBindNames,
+  withImportedBindNames,
 } from './inlineSource';
 
 describe('inline source bind values (#1600 C1q-b)', () => {
@@ -19,16 +24,59 @@ describe('inline source bind values (#1600 C1q-b)', () => {
     expect(bindNameProblem('wm', ['n'])).toBeNull();
   });
 
-  it('keeps a stored number a number while the text reads as one, and stores other text as typed', () => {
-    expect(coerceBindValue(100, '150')).toBe(150);
-    expect(coerceBindValue(100, '1.5e2')).toBe(150);
-    expect(coerceBindValue(100, '')).toBe('');
-    expect(coerceBindValue(100, '${params.wm}')).toBe('${params.wm}');
-    expect(coerceBindValue('100', '150')).toBe('150');
-    expect(coerceBindValue(null, '7')).toBe('7');
+  it("stores what the row's type says, and holds a Number that is not one yet", () => {
+    expect(bindValueFor('text', '150')).toEqual({ value: '150' });
+    expect(bindValueFor('number', '150')).toEqual({ value: 150 });
+    expect(bindValueFor('number', ' -1.5 ')).toEqual({ value: -1.5 });
+    for (const t of ['', '150.', '0x10', '1e3', 'abc', 'Infinity', '1e999']) {
+      expect(bindValueFor('number', t)).toEqual({
+        problem: 'Not saved: enter a number, or a ${} value.',
+      });
+    }
+    // A stored number's own text reads back as itself, so it loads without a problem.
+    expect(bindValueFor('number', bindValueText(1e-7))).toEqual({ value: 1e-7 });
+    expect(bindValueFor('number', bindValueText(1e21))).toEqual({ value: 1e21 });
+    // Stored rounded, it would be a different value than the one typed.
+    expect(bindValueFor('number', '12345678901234567890')).toEqual({
+      problem: 'Not saved: too large to store exactly. Choose Text to keep every digit.',
+    });
+    expect(bindValueFor('number', '9007199254740991')).toEqual({ value: 9007199254740991 });
+    // A `${}` is stored as typed whatever the type: the run keeps what it resolves to.
+    expect(bindValueFor('number', '${params.wm}')).toEqual({ value: '${params.wm}' });
+    expect(bindValueFor('number', '$${literal}')).toEqual({
+      problem: 'Not saved: enter a number, or a ${} value.',
+    });
+    expect(bindValueFor('null', 'anything')).toEqual({ value: null });
+    expect(bindTypeOf(7)).toBe('number');
+    expect(bindTypeOf(null)).toBe('null');
+    expect(bindTypeOf('7')).toBe('text');
+    expect(bindTypeOf(undefined)).toBe('text');
     expect(bindValueText(null)).toBe('');
     expect(bindValueText(7)).toBe('7');
     expect(bindValueText({ a: 1 })).toBe('');
+  });
+
+  it('imports a blank text row for each statement name not yet stored, after the stored rows', () => {
+    const inline: InlineDataset = {
+      kind: 'query',
+      config: { sql: 'select * from t where a = :b and c = @a and d = :__proto__', parameters: {} },
+    };
+    const names = statementBindNames(inline, 'sqlite');
+    expect(names).toEqual(['b', 'a', '__proto__']);
+    // `@a` is a sqlite spelling only: on postgres `@` is an operator.
+    expect(statementBindNames(inline, 'postgres')).toEqual(['b', '__proto__']);
+    const next = withImportedBindNames({ z: 1, a: 2 }, names);
+    expect(Object.entries(next)).toEqual([
+      ['z', 1],
+      ['a', 2],
+      ['b', ''],
+      ['__proto__', ''],
+    ]);
+    expect(Object.getPrototypeOf(next)).toBe(Object.prototype);
+    expect(sqlDialectOf('sqlite')).toBe('sqlite');
+    expect(sqlDialectOf('postgres')).toBe('postgres');
+    expect(sqlDialectOf('fs')).toBeUndefined();
+    expect(sqlDialectOf(undefined)).toBeUndefined();
   });
 
   it('renames in place, keeps every value, and defines __proto__ as an own key', () => {
@@ -52,6 +100,12 @@ describe('inline source preview (#1600 C1q-c)', () => {
         q({ wm: '${nodes.l.output.rows[0].wm}', lit: 'plain', esc: '$${not}', n: 3, nil: null }),
       ),
     ).toEqual(['wm']);
+  });
+
+  it('with the dialect known, asks only for the names the statement uses', () => {
+    const both = q({ wm: '${params.a}', gone: '${params.b}' });
+    expect(dynamicBindNames(both)).toEqual(['wm', 'gone']);
+    expect(dynamicBindNames(both, 'sqlite')).toEqual(['wm']);
   });
 
   it('binds a number as a number and anything else as typed', () => {
