@@ -549,7 +549,10 @@
 // stops at 1000, so it imports such a doc and fails the node at its first run
 // (invalid lookup activity config): bump 39's fails-at-first-run shape, so the
 // doc must say it needs this build.
-export const CATALOG_VERSION = 42;
+// BUMP 42→43 for #1600 OR41 C8a: a new runnable type, `get_metadata` (Get
+// metadata on a file system connection). A pre-C8a build has no catalog entry
+// for it, so it refuses the doc's node as an unknown activity: C1a's reason.
+export const CATALOG_VERSION = 43;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

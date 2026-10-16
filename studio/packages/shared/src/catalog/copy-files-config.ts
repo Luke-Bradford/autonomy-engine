@@ -35,9 +35,16 @@ const IN_ROOTS = "Absolute, or relative to the connection's first allowed folder
 const path = (title: string, description: string) =>
   presented(singleLine(z.string()).min(1), { title, description });
 
-/** A UTC instant (`2026-10-13T00:00:00Z`). A `${}` is checked at dispatch instead. */
-const instant = (title: string, description: string) =>
+/**
+ * A UTC instant (`2026-10-13T00:00:00Z`). A `${}` is checked at dispatch instead.
+ * Get metadata's child item window uses it too (#1600 OR41 C8a).
+ */
+export const instant = (title: string, description: string) =>
   presented(singleLine(z.iso.datetime({ offset: true })).optional(), { title, description });
+
+/** The refusal of a folder separator in a file-name wildcard (Copy and Get metadata). */
+export const WILDCARD_SEPARATOR_MESSAGE =
+  'a wildcard matches file names only, so it cannot hold a folder separator';
 
 export const copyFilesConfigSchema = z
   .object({
@@ -124,7 +131,7 @@ export const copyFilesConfigSchema = z
       ctx.addIssue({ code: 'custom', path: [field], message });
     const literal = (v: unknown): v is string => typeof v === 'string' && !v.includes('${');
     if (literal(cfg.wildcard) && /[/\\]/.test(cfg.wildcard)) {
-      issue('wildcard', 'a wildcard matches file names only, so it cannot hold a folder separator');
+      issue('wildcard', WILDCARD_SEPARATOR_MESSAGE);
     }
     if (cfg.pathType !== 'folder' && cfg.wildcard !== '*') {
       issue('wildcard', 'a wildcard is only read when the path type is Folder');

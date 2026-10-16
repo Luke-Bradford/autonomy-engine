@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { catalog, isStructuralCallActivity } from '../registry.js';
-import { enumValuesOf } from '../../schemas/field-presentation.js';
+import { enumSetValuesOf, enumValuesOf } from '../../schemas/field-presentation.js';
 import { ACTIVITY_TAB_KEYS, applicableBindingSlots } from '../types.js';
 
 /**
@@ -75,7 +75,9 @@ describe('activity tabs (#1477)', () => {
         expect(Object.keys(shape), `${name} is not a config key`).toContain(name);
         for (const c of conditions) {
           expect(c.field, `${name} conditions on itself`).not.toBe(name);
-          const values = enumValuesOf(shape[c.field]);
+          // #1600 OR41 C8a — or a set of choices (Get metadata's field list),
+          // which a condition holds on when any ticked value is one of `in`.
+          const values = enumValuesOf(shape[c.field]) ?? enumSetValuesOf(shape[c.field]);
           expect(values, `${name}: ${c.field} is not an enum field`).toBeDefined();
           for (const v of c.in) expect(values, `${name}: ${c.field} has no ${v}`).toContain(v);
         }
