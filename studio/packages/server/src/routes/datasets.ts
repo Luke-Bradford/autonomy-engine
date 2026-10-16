@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import type { FastifyPluginAsync } from 'fastify';
-import { NewDatasetSchema, canonicalStringify } from '@autonomy-studio/shared';
+import {
+  DatasetPreviewRequestSchema,
+  NewDatasetSchema,
+  canonicalStringify,
+  type DatasetPreviewResult,
+} from '@autonomy-studio/shared';
 import {
   createDataset,
   deleteDataset,
@@ -12,6 +17,9 @@ import { NotFoundError } from '../errors.js';
 import { datasetReferences } from '../datamove/dataset-references.js';
 import { exportDataset } from '../portability/index.js';
 import { listSheetsForConnection } from '../connectors/xlsx-sheets.js';
+import { connectionNotReadyReason } from '../repo/connections.js';
+import { previewInlineSource } from '../datamove/preview.js';
+import { connectionSecretRefusal, readConnectionSecret } from '../secrets/connection-secret.js';
 import { pageArgsFromQuery, requireOwned, requireOwnedConnection } from './util.js';
 
 /**
@@ -74,7 +82,7 @@ const DatasetSheetsBodySchema = z.object({
 });
 
 export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
-  const { db } = fastify;
+  const { db, masterKey } = fastify;
 
   fastify.post('/api/datasets', async (request, reply) => {
     const body = DatasetWriteBodySchema.parse(request.body);
@@ -115,6 +123,66 @@ export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
     return listSheetsForConnection({
       connection: { kind: connection.kind, config: connection.config },
       path: body.path,
+    });
+  });
+
+  /**
+   * #1600 C1q-c — the first rows of a Copy or Lookup's inline Table or Query,
+   * for the Source tab's Preview. Touches no dataset row and writes nothing.
+   *
+   * A POST for `/sheets`' reason: the statement and its bind values are what the
+   * operator is mid-way through writing, which a query string would put in logs.
+   * A refusal is a 200 `{ ok: false, error }`; a 400 is a body that is not one.
+   *
+   * SECURITY. Ownership first, with `/sheets`' non-disclosing gate (a connection
+   * shared with no owner is refused here, though a run may use it). Then the
+   * executor's own readiness gate, so a disabled connection or one missing its
+   * secret is refused BEFORE any secret is decrypted. The stored secret is spent
+   * only on the connection's stored config: the body names a connection, never
+   * a config, so it cannot point the credential somewhere else. The read is the
+   * run's Lookup read (`previewInlineSource`): sqlite read-only, postgres inside
+   * `BEGIN READ ONLY`, bounded in rows, bytes, time and concurrency. A statement
+   * can still call a side-effecting function postgres allows under READ ONLY;
+   * that is the same reach saving and running the pipeline already gives the
+   * same owner over the same connection.
+   *
+   * Not applied: a node's `connectionParams` (the form says so beside Preview).
+   */
+  fastify.post('/api/datasets/preview', async (request, reply) => {
+    // The caller left before the answer: stop the read. Registered first, so a
+    // caller that leaves during the decrypt is seen too. `request.raw`'s `close`
+    // fires once the body is read, so it is the RESPONSE's close that says so.
+    const left = new AbortController();
+    reply.raw.on('close', () => {
+      if (!reply.raw.writableFinished) left.abort();
+    });
+    const body = DatasetPreviewRequestSchema.parse(request.body);
+    const connection = requireOwnedConnection(db, request.principal, body.connectionId);
+    const notReady = connectionNotReadyReason(connection);
+    if (notReady !== null) {
+      const refused: DatasetPreviewResult = {
+        ok: false,
+        error:
+          notReady === 'disabled'
+            ? 'this connection is disabled'
+            : 'this connection is missing its required secret',
+      };
+      return refused;
+    }
+    const read = await readConnectionSecret(db, masterKey, connection.secretRef);
+    if (!read.ok) {
+      const refused: DatasetPreviewResult = {
+        ok: false,
+        error: connectionSecretRefusal(read.reason),
+      };
+      return refused;
+    }
+    return previewInlineSource({
+      registry: fastify.connectors,
+      connection: { kind: connection.kind, config: connection.config },
+      secret: read.secret,
+      inline: body.source.inline,
+      signal: left.signal,
     });
   });
 

@@ -12,9 +12,13 @@ import { join } from 'node:path';
 import {
   CATALOG_VERSION,
   DatasetReferencesResponseSchema,
+  DatasetPreviewResultSchema,
   DatasetSheetsResultSchema,
 } from '@autonomy-studio/shared';
+import { eq } from 'drizzle-orm';
 import { buildXlsx } from '../../connectors/__tests__/xlsx-fixtures.js';
+import { seedDb } from '../../connectors/__tests__/sqlite-fixtures.js';
+import { connections } from '../../db/schema.js';
 import { cleanupTempRoots, tempRoot } from '../../connectors/__tests__/temp-roots.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 
@@ -345,6 +349,73 @@ describe('datasets routes', () => {
         method: 'POST',
         url: '/api/datasets/sheets',
         payload: { path: 'book.xlsx' },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+  });
+
+  describe('POST /preview (#1600 C1q-c)', () => {
+    const sqliteStore = (ownerId = 'local') => {
+      const root = tempRoot('preview-route-');
+      const path = seedDb(root, 2);
+      return createConnection(app.db, {
+        ownerId,
+        name: 'Orders db',
+        kind: 'sqlite',
+        config: { roots: [root], path },
+        secretRef: null,
+      });
+    };
+    const preview = (connectionId: string, sql = 'SELECT id, name FROM t ORDER BY id') =>
+      app.inject({
+        method: 'POST',
+        url: '/api/datasets/preview',
+        payload: {
+          connectionId,
+          source: { from: 'inline', inline: { kind: 'query', config: { sql } } },
+        },
+      });
+
+    it('answers the first rows of an inline query on the caller’s connection', async () => {
+      const res = await preview(sqliteStore().id);
+      expect(res.statusCode).toBe(200);
+      expect(DatasetPreviewResultSchema.parse(res.json())).toEqual({
+        ok: true,
+        rows: [
+          { id: 1, name: 'row-1' },
+          { id: 2, name: 'row-2' },
+        ],
+        truncated: false,
+      });
+    });
+
+    // The executor's readiness gate, before any secret is decrypted: a disabled
+    // connection is not one a person can read through either.
+    it('refuses a disabled connection', async () => {
+      const conn = sqliteStore();
+      app.db.update(connections).set({ enabled: false }).where(eq(connections.id, conn.id)).run();
+      const res = await preview(conn.id);
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: false, error: 'this connection is disabled' });
+    });
+
+    it('refuses a connection that is not the caller’s, without disclosing which', async () => {
+      const theirs = sqliteStore('someone_else');
+      const res = await preview(theirs.id);
+      expect(res.statusCode).toBe(400);
+      expect(res.body).not.toContain('row-1');
+      const missing = await preview('conn_does_not_exist');
+      expect(missing.statusCode).toBe(400);
+      expect(res.json().message.replace(theirs.id, 'X')).toBe(
+        missing.json().message.replace('conn_does_not_exist', 'X'),
+      );
+    });
+
+    it('rejects a body that is not a body', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/datasets/preview',
+        payload: { connectionId: store, source: { from: 'dataset', datasetId: 'x' } },
       });
       expect(res.statusCode).toBe(400);
     });

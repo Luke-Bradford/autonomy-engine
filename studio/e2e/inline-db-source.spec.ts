@@ -156,7 +156,17 @@ test.describe('#1600 C1q — an inline database source', () => {
       await expect(use).toHaveValue('table');
       await expect(pane.getByRole('textbox', { name: 'Table' })).toHaveValue('orders');
 
+      // C1q-c — Preview data reads the table through the run's own Lookup read.
+      const previewRows = pane.getByRole('table', { name: 'Preview rows' });
+      const firstColumn = () => previewRows.locator('tbody tr td:first-child').allTextContents();
+      await pane.getByRole('button', { name: 'Preview data' }).click();
+      await expect(pane.getByText('3 rows', { exact: true })).toBeVisible();
+      await expect(previewRows.locator('thead th')).toHaveText(['id', 'modified_at']);
+      expect(await firstColumn()).toEqual(['1', '2', '3']);
+
       await use.selectOption('query');
+      // A result belongs to the source it was read for: changing it clears the table.
+      await expect(previewRows).toHaveCount(0);
       await pane
         .getByRole('textbox', { name: 'SQL statement' })
         .fill('SELECT id FROM orders WHERE modified_at > :wm');
@@ -172,6 +182,16 @@ test.describe('#1600 C1q — an inline database source', () => {
         .getByRole('textbox', { name: 'Bind value 1 value' })
         .fill('${nodes.lookup1.output.rows[0].last_wm}');
       await expect(problemsToggle(page)).not.toHaveText(/[1-9]/);
+
+      // :wm is an expression only a run resolves, so Preview asks for its value
+      // and binds it as the run would (a number, against an INTEGER column).
+      await pane.getByRole('textbox', { name: 'Preview value for :wm' }).fill('100');
+      await pane.getByRole('button', { name: 'Preview data' }).click();
+      await expect(pane.getByText('2 rows', { exact: true })).toBeVisible();
+      expect(await firstColumn()).toEqual(['2', '3']);
+      // Held to its scroll box, so the rows never push the dock's other fields away.
+      const box = await pane.locator('.source-preview-rows').boundingBox();
+      expect(box!.height).toBeLessThanOrEqual(320);
 
       await page.getByRole('button', { name: 'Save version' }).click();
       await expect(page.locator('.notice')).toHaveText('Saved v2.');

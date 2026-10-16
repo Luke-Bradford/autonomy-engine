@@ -60,7 +60,7 @@ import {
   lowerOutputSchema,
 } from '../catalog/llm-config.js';
 import { copyMappingShapeIssues } from '../catalog/copy-config.js';
-import { inlineDatasetConfigIssues } from '../catalog/dataset-config.js';
+import { inlineDatasetConfigIssues, inlineQuerySqlIssue } from '../catalog/dataset-config.js';
 import { SecretRefSchema, isSecretRef } from '../schemas/secret-ref.js';
 import type { ContainerKind, Output } from '../schemas/pipeline.js';
 import type { EvalIn, FnSpec, SigType } from './functions.js';
@@ -3574,13 +3574,8 @@ function validateInlineDatasets(node: Node, errors: string[]): void {
   if (issues !== null) {
     errors.push(`node.${node.id}: the inline ${inline.kind} source is not valid: ${issues}`);
   }
-  const sql = inline.config['sql'];
-  if (inline.kind === 'query' && typeof sql === 'string' && sql.includes('${')) {
-    errors.push(
-      `node.${node.id}: an inline query's SQL stays literal, so '\${' in it is never evaluated ` +
-        '— write :name in the SQL and bind the value in its parameters',
-    );
-  }
+  const sqlIssue = inlineQuerySqlIssue(inline.kind, inline.config);
+  if (sqlIssue !== null) errors.push(`node.${node.id}: ${sqlIssue}`);
 }
 
 /**

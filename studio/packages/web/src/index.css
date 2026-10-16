@@ -2303,6 +2303,24 @@ button.danger {
   color: var(--warning);
 }
 
+/* #1600 C1q-c — the Source tab's Preview data: the button beside its reason,
+   and the rows held to a scrollable box so 100 of them do not push the rest
+   of the dock away. */
+.source-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.source-preview-rows {
+  max-height: 20rem;
+  overflow: auto;
+}
+
+.preview-null {
+  color: var(--muted);
+}
+
 /* #1191 — the "Test connection" verdict.
    NOT `.error` even when the probe failed: `.error` is reserved for something
    that blocked an action, and a refusal here is the adapter ANSWERING a

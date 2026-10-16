@@ -3696,6 +3696,7 @@ export function NodePanel({
   // `paired`: the pair is authoritative where it exists, and `validateDoc`
   // refuses the two fields together, so they can never disagree.
   const sourceConnectionId = boundConnections?.source ?? thisNode?.connectionId;
+  const sourceConnection = connections.find((c) => c.id === sourceConnectionId);
   // A pair the author has STARTED but not finished. It is not on the node, so it
   // is not saved — and saying so is the point: without this the first pick would
   // survive on screen, vanish on reload, and look like the canvas lost it.
@@ -4119,7 +4120,8 @@ export function NodePanel({
                 store={store}
                 node={thisNode}
                 sourceKinds={datasetKinds.source}
-                connectionKind={connections.find((c) => c.id === sourceConnectionId)?.kind}
+                connectionKind={sourceConnection?.kind}
+                connectionId={sourceConnection?.id}
                 picker={picker}
                 saved={saved}
               />

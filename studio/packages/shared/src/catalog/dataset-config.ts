@@ -579,6 +579,23 @@ export function inlineDatasetConfigIssues(
   return parsed.success ? null : formatZodIssues(parsed.error.issues);
 }
 
+/**
+ * #1600 C1q — why an inline query's SQL breaks §8's literal rule, or `null`. The
+ * statement is never evaluated, so a `${` in it would reach the store as text;
+ * save refuses it, and Preview applies the same rule so it never shows rows for
+ * a source that cannot be saved. The executor does not re-apply it: a stored doc
+ * that bypassed save still runs the literal text, never an evaluated one.
+ */
+export function inlineQuerySqlIssue(
+  kind: DatasetKind,
+  config: Record<string, unknown>,
+): string | null {
+  const sql = config['sql'];
+  return kind === 'query' && typeof sql === 'string' && sql.includes('${')
+    ? "an inline query's SQL stays literal, so '${' in it is never evaluated — write :name in the SQL and bind the value in its parameters"
+    : null;
+}
+
 /** Every kind, in the enum's own order — the form's kind picker reads this. */
 export const DATASET_KINDS: readonly DatasetKind[] = DatasetKindSchema.options;
 
