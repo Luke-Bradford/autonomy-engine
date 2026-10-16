@@ -141,7 +141,7 @@ export const queryDatasetConfigSchema = z.object({
   queryTimeoutSeconds: presented(z.number().int().positive().optional(), {
     title: 'Query timeout',
     unit: 'seconds',
-    description: `The whole read's limit, checked between batches. Blank means no limit; a new query starts at ${String(NEW_QUERY_TIMEOUT_SECONDS)} (2 hours).`,
+    description: `The whole read's limit, checked between batches. Blank means no limit; a new inline Query starts at ${String(NEW_QUERY_TIMEOUT_SECONDS)} (2 hours).`,
   }),
 });
 

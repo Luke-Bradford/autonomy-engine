@@ -44,7 +44,8 @@ const DATASET_HELP_LIMITS: Record<string, number> = {
   delimited: 12,
   excel: 10,
   table: 6,
-  query: 7,
+  // +1 for C1q-c's Query timeout, a new field whose `?` says blank means no limit.
+  query: 8,
 };
 
 /** The store kind each dataset kind is made on, for the form's Store picker. */
