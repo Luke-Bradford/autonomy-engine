@@ -114,7 +114,7 @@ export const queryDatasetConfigSchema = z.object({
    * `:name` is the PORTABLE spelling and each store's reader binds it in its
    * own (#1194): sqlite binds by name, postgres has no named parameters at all
    * and binds positionally, so its reader rewrites `:name` to `$n` at dispatch
-   * — see `connectors/postgres-named-parameters.ts` for why that needs a lexer.
+   * — see `datamove/sql-placeholders.ts` for why finding a `:name` needs a lexer.
    * MEASURED: better-sqlite3 also honours `@name` and `$name` from this same
    * record, and both are sqlite-ONLY — `$name` opens a dollar-quoted string on
    * postgres. Write `:name` if the dataset should survive being re-pointed at
