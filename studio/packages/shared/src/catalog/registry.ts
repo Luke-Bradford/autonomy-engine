@@ -938,7 +938,12 @@ const ENTRIES: ActivityCatalogEntry[] = [
     ],
     // The four M12 declared, which a node saved before C7a still holds.
     formerOutputs: [
-      [out('rows', 'json'), out('rowCount', 'number'), out('bytes', 'number'), out('truncated', 'boolean')],
+      [
+        out('rows', 'json'),
+        out('rowCount', 'number'),
+        out('bytes', 'number'),
+        out('truncated', 'boolean'),
+      ],
     ],
     configSchema: lookupConfigSchema,
     dispatchConfigSchema: lookupConfigSchema,

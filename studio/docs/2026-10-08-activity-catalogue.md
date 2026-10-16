@@ -209,6 +209,18 @@ Source: [Lookup](https://learn.microsoft.com/azure/data-factory/control-flow-loo
   - `truncated`, `bytes`.
 - **Monitor:** `count` maps to the rows column, which is not mapped today.
 
+**Built (C7a):** First row only, Max rows and When over the limit, on a Settings tab after Source.
+- **Defaults.** The schema's defaults are today's behaviour: off, 1000, Truncate and warn. A stored `lookup` (`config: {}`) is therefore already "Lookup · not first row only" (§8), with no lowering. A new Lookup is written `firstRowOnly: true` by the catalog entry's `newNodeConfig`, so ADF's default is in the JSON.
+- **Max rows** can only lower the 1000-row cap (`LOOKUP_ROW_CAP`, now in `shared`). The 1 MiB byte cap is not configurable. Raising the ceiling per workspace is C7b.
+- **When over the limit** applies to either bound, rows or bytes. Fail fails the activity `permanent` with the truncation reason.
+- **First row only** reads one row. A source with more rows is not a truncation. Its one row can still be over the byte cap, which is truncated (or fails).
+- **Outputs.** All six are always present, because every declared output is required: `rows`, `rowCount`, `count`, `firstRow`, `bytes`, `truncated`. That is a deliberate departure from "firstRow, or rows + count".
+  - `firstRow` is `null` when no row was kept. `truncated` tells an empty source from a first row too large to keep.
+  - `rowCount` stays as the old name for `count`.
+- **Stored contracts.** A node saved before C7a still declares the four old outputs in `config.outputs`, so its runs would drop `count` and `firstRow`. The editor re-seeds a node whose contract is exactly that former default when it loads it (`formerOutputs`, `refreshFormerOutputs`), and the next Save writes it. It runs on the editor's load only, for the reason C1b's lowering does (below). Any other contract is left alone.
+- **Not built, C7b:** Read as *Whole file as text* and the `file_read` lowering; the workspace ceiling; the Monitor rows column; the title *Lookup*.
+  - The Monitor rows column needs the activity's type on the activity-runs row: the run-log projection has no doc to read it from.
+
 ### 4.3 Get metadata
 Sources: [Get Metadata](https://learn.microsoft.com/azure/data-factory/control-flow-get-metadata-activity), [Validation](https://learn.microsoft.com/azure/data-factory/control-flow-validation-activity).
 
@@ -349,7 +361,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C4 | Copy: mapping redesign (x → y rows from imported schemas, map-by-name default, type conversion settings, ƒx whole mapping, additional columns) | depends on OR10 import |
 | C5 | Copy: incremental (watermark Automatic / Expression; files modified-since-last-success) | OR15 incremental |
 | C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs | — |
-| C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read | — |
+| C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Whole file as text with the `file_read` lowering, the workspace Max rows ceiling, the Monitor rows column, the title *Lookup* | — |
 | C8 | Get metadata + wait-until. Lower file_list | OR17 #1408 |
 | C9 | Delete: wildcard, folders, dates, log. Lower file_delete | OR17 #1408 |
 | C10 | Script activity | OR12 #1403, OR15 sql_script |

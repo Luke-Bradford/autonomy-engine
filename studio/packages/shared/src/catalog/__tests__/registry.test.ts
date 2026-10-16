@@ -435,12 +435,11 @@ describe('activity descriptions (#1413)', () => {
 });
 
 describe('new-node config and former outputs (#1600 OR41 C7a)', () => {
-  it.each([...catalog.values()].filter((e) => e.newNodeConfig !== undefined).map((e) => [e.type, e]))(
-    '%s writes a new node a config its own schema accepts',
-    (_type, entry) => {
-      expect(entry.configSchema.safeParse(entry.newNodeConfig).success).toBe(true);
-    },
-  );
+  it.each(
+    [...catalog.values()].filter((e) => e.newNodeConfig !== undefined).map((e) => [e.type, e]),
+  )('%s writes a new node a config its own schema accepts', (_type, entry) => {
+    expect(entry.configSchema.safeParse(entry.newNodeConfig).success).toBe(true);
+  });
 
   it('a Lookup starts First row only, and only a Lookup has new-node config', () => {
     const seeded = [...catalog.values()].filter((e) => e.newNodeConfig !== undefined);
