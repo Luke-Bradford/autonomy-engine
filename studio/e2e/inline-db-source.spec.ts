@@ -299,4 +299,102 @@ test.describe('#1600 C1q — an inline database source', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test('bind values from the statement: Import adds the unbound :names in one step, a stale one says so, and each row has a type', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const conn = await seedConnection(page, {
+      name: 'e2e 1600 c1q-c binds store',
+      kind: 'sqlite',
+      config: { path: 'e2e-1600-c1q-c.db', writable: true },
+    });
+    const sink = await seedDataset(page, {
+      name: 'e2e 1600 c1q-c binds stage',
+      kind: 'table',
+      connectionId: conn,
+      config: { table: 'stage' },
+      columns: [{ name: 'id', type: 'integer', nullable: true }],
+    });
+    // `@b` is sqlite's own spelling of the same bind name; the comment's `:q` is not one.
+    const sql = 'SELECT id FROM orders WHERE a = :a AND b = @b AND c > :c -- :q';
+    const pipelineId = await openSeededCanvas(page, 'e2e 1600 c1q-c binds', {
+      params: [{ name: 'wm', type: 'string', required: true }],
+      nodes: [
+        {
+          id: 'copy1',
+          type: 'copy',
+          config: { mapping: [{ source: 'id', sink: 'id', type: 'integer' }], mode: 'append' },
+          connectionIds: { source: conn, sink: conn },
+          datasetIds: { sink },
+          inlineDatasets: {
+            source: {
+              kind: 'query',
+              config: { sql, parameters: { a: 'x', z: '${params.wm}' }, queryTimeoutSeconds: 90 },
+            },
+          },
+          position: { x: 0, y: 0 },
+        },
+      ],
+    });
+
+    await nodeById(page, 'copy1').click();
+    await sourceTab(page).click();
+    const pane = properties(page);
+    const row = (n: number, part: 'name' | 'type' | 'value') =>
+      part === 'type'
+        ? pane.getByRole('combobox', { name: `Bind value ${n} type` })
+        : pane.getByRole('textbox', { name: `Bind value ${n} ${part}` });
+    const importButton = pane.getByRole('button', { name: 'Import from statement' });
+
+    await expect(pane.getByText('Not bound: :b, :c', { exact: true })).toBeVisible();
+    await expect(pane.getByText('Not in the statement, so it is not bound.')).toHaveCount(1);
+    // The stored `${}` row's type follows its expression.
+    await expect(row(2, 'type')).toHaveValue('expression');
+    await expect(row(2, 'type')).toBeDisabled();
+
+    await importButton.click();
+    await expect(row(3, 'name')).toHaveValue('b');
+    await expect(row(4, 'name')).toHaveValue('c');
+    await expect(row(4, 'type')).toHaveValue('text');
+    await expect(importButton).toBeDisabled();
+    await expect(pane.getByText(/^Not bound:/)).toHaveCount(0);
+    // One undo step takes both imported rows back out.
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect(row(3, 'name')).toHaveCount(0);
+    await importButton.click();
+    await expect(row(4, 'name')).toHaveValue('c');
+
+    // A Number holds text that is not a number yet, and stores one when it is.
+    await row(3, 'type').selectOption('number');
+    await row(3, 'value').fill('150.');
+    await expect(pane.getByText('Enter a number, or a ${} value.')).toBeVisible();
+    await row(3, 'value').fill('150');
+    await expect(pane.getByText('Enter a number, or a ${} value.')).toHaveCount(0);
+    // Null stores null, and there is no value to type.
+    await row(1, 'type').selectOption('null');
+    await expect(row(1, 'value')).toBeDisabled();
+    // Sized to its options, not stretched (UI standard rule 5).
+    expect((await row(1, 'type').boundingBox())!.width).toBeLessThanOrEqual(120);
+    await expect(problemsToggle(page)).not.toHaveText(/[1-9]/);
+
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+    const versions = (await (
+      await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+    ).json()) as { version: number; nodes: Record<string, unknown>[] }[];
+    const latest = versions.sort((a, b) => b.version - a.version)[0]!;
+    const copy = latest.nodes.find((n) => n['id'] === 'copy1')!;
+    expect(copy['inlineDatasets']).toEqual({
+      source: {
+        kind: 'query',
+        config: {
+          sql,
+          parameters: { a: null, z: '${params.wm}', b: 150, c: '' },
+          queryTimeoutSeconds: 90,
+        },
+      },
+    });
+    await expectQuiet(page, problems);
+  });
 });

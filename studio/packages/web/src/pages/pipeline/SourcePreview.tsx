@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { DatasetPreviewResult, InlineDataset } from '@autonomy-studio/shared';
+import type { DatasetPreviewResult, InlineDataset, SqlDialect } from '@autonomy-studio/shared';
 import { previewDatasetSource } from '../../api/datasets';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { formatOutputValue } from '../runs/format';
@@ -23,14 +23,17 @@ export function SourcePreview({
   inline,
   connectionId,
   connectionParams,
+  dialect,
 }: {
   inline: InlineDataset;
+  /** The source store's SQL dialect, when known: only the names its statement uses ask a value. */
+  dialect?: SqlDialect | undefined;
   /** `undefined` when the source connection is not a saved one (unset, or a `${}`). */
   connectionId: string | undefined;
   /** The node binds connection parameters, which Preview does not apply. */
   connectionParams: boolean;
 }) {
-  const dynamic = dynamicBindNames(inline);
+  const dynamic = dynamicBindNames(inline, dialect);
   const [values, setValues] = useState<Record<string, string>>({});
   const sent = previewInline(inline, values);
   const key = JSON.stringify([connectionId, sent]);

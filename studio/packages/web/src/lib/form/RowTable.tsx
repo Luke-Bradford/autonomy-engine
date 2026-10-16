@@ -110,6 +110,7 @@ export function RowList({
   addDisabled = false,
   addTitle,
   addDisabledNote,
+  actions,
   children,
 }: {
   columns: readonly RowTableColumn[];
@@ -125,6 +126,8 @@ export function RowList({
    * every browser (Firefox), so its `title` cannot be the only place it is said.
    */
   addDisabledNote?: string;
+  /** More of the list's own actions, after Add in the same toolbar (an inline query's *Import from statement*). */
+  actions?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -138,6 +141,7 @@ export function RowList({
             {addDisabledNote}
           </span>
         )}
+        {actions}
       </Toolbar>
       {count === 0 ? (
         <p className="page-hint">None declared.</p>

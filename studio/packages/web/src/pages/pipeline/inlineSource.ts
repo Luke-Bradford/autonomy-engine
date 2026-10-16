@@ -1,4 +1,12 @@
-import { interpolationMode, restoreEscapes, type InlineDataset } from '@autonomy-studio/shared';
+import {
+  interpolationMode,
+  restoreEscapes,
+  sqlBindNames,
+  type ConnectionKind,
+  type InlineDataset,
+  type SqlDialect,
+  type SqlParameterValue,
+} from '@autonomy-studio/shared';
 
 /**
  * #1600 OR41 C1q-b — the pure rules behind the inline source's bind values
@@ -17,18 +25,65 @@ export function bindNameProblem(name: string, others: readonly string[]): string
 }
 
 /**
- * The value a bind-value box's text stores. A bind value may be a string, a
- * number or null (`SqlParameterValueSchema`), and typing must not change which:
- * a stored number stays a number while the text still reads as one, so editing
- * `100` to `150` binds a number as it did. Any other text is stored as typed,
- * a `${}` included (resolved at dispatch, keeping the type it resolves to).
+ * #1600 OR41 C1q-c — a bind value's type, one per member of
+ * `SqlParameterValueSchema` (string | number | null), so every stored value has
+ * a choice that shows it and every choice stores something the schema holds.
  */
-export function coerceBindValue(stored: unknown, text: string): string | number {
-  if (typeof stored === 'number' && text.trim() !== '') {
-    const n = Number(text);
-    if (Number.isFinite(n)) return n;
+export type BindType = 'text' | 'number' | 'null';
+
+/** The type a stored value shows as. A `${}` is stored as text either way. */
+export function bindTypeOf(value: unknown): BindType {
+  if (typeof value === 'number') return 'number';
+  return value === null ? 'null' : 'text';
+}
+
+/**
+ * The value a row stores for its type and its box's text, or why it stores
+ * nothing yet. A `${}` is stored as typed whatever the type: a run resolves it
+ * keeping the type it resolves to. A number is a plain decimal, the literal a
+ * `number` pipeline parameter accepts, so `0x10` and `1e3` are not numbers here
+ * (nor is `150.` while it is being typed: the stored value waits for `150.5`).
+ */
+export function bindValueFor(
+  type: BindType,
+  text: string,
+): { value: SqlParameterValue } | { problem: string } {
+  if (type === 'null') return { value: null };
+  if (type === 'text' || isDynamicBindText(text)) return { value: text };
+  if (/^-?\d+(\.\d+)?$/.test(text.trim())) {
+    const n = Number(text.trim());
+    if (Number.isFinite(n)) return { value: n };
   }
-  return text;
+  return { problem: 'Enter a number, or a ${} value.' };
+}
+
+/** Whether a box's text is a `${}` the run evaluates (the row's type then follows it). */
+export function isDynamicBindText(text: string): boolean {
+  return interpolationMode(text).mode !== 'literal';
+}
+
+/** The dialect a source connection's SQL is scanned in, when it is a store a query lives in. */
+export function sqlDialectOf(kind: ConnectionKind | undefined): SqlDialect | undefined {
+  return kind === 'sqlite' || kind === 'postgres' ? kind : undefined;
+}
+
+/** The `:name`s an inline query's statement uses, as its store's lexer finds them. */
+export function statementBindNames(inline: InlineDataset, dialect: SqlDialect): string[] {
+  const sql = inline.config['sql'];
+  return typeof sql === 'string' ? sqlBindNames(sql, dialect) : [];
+}
+
+/**
+ * The record with a blank text row added for each of `names` it does not hold,
+ * after the rows it has. `Object.fromEntries`, as `renameKey`, so a
+ * `:__proto__` in the statement becomes an own key rather than the prototype.
+ */
+export function withImportedBindNames(
+  record: Readonly<Record<string, unknown>>,
+  names: readonly string[],
+): Record<string, unknown> {
+  const missing = names.filter((n) => !Object.prototype.hasOwnProperty.call(record, n));
+  return Object.fromEntries([...Object.entries(record), ...missing.map((n) => [n, ''] as const)]);
 }
 
 /** A bind value as its box's text: a stored `null` is an empty box. */
@@ -65,10 +120,17 @@ function isDynamic(value: unknown): value is string {
   return typeof value === 'string' && interpolationMode(value).mode !== 'literal';
 }
 
-/** The bind names whose value is a `${}`: Preview asks for a value in its place. */
-export function dynamicBindNames(inline: InlineDataset): string[] {
+/**
+ * The bind names whose value is a `${}`: Preview asks for a value in its place.
+ * With the store's dialect known, only the names the statement uses: a value
+ * the statement never names is never bound, so it needs no preview value.
+ */
+export function dynamicBindNames(inline: InlineDataset, dialect?: SqlDialect): string[] {
   const parameters = parametersOf(inline);
-  return Object.keys(parameters).filter((name) => isDynamic(parameters[name]));
+  const used = dialect === undefined ? undefined : statementBindNames(inline, dialect);
+  return Object.keys(parameters).filter(
+    (name) => isDynamic(parameters[name]) && (used === undefined || used.includes(name)),
+  );
 }
 
 /**
