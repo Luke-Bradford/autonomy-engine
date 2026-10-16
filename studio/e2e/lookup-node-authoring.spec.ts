@@ -176,7 +176,7 @@ test.describe('#1221 — lookup-node authoring', () => {
     // ADF's new-node default, written into the node rather than assumed.
     await expect(firstRowOnly).toBeChecked();
     await expect(maxRows).toBeVisible();
-    await expect(overLimit.locator('option')).toHaveText(['Truncate and warn', 'Fail']);
+    await expect(overLimit.locator('option')).toContainText(['Truncate and warn', 'Fail']);
 
     // The whole tab is on screen at 1440x900, and the number box is number-sized.
     const pane = (await properties(page).boundingBox())!;

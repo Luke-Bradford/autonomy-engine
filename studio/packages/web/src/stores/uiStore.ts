@@ -85,8 +85,12 @@ export interface UiState {
    * pipeline. One preference for every pipeline, so a reload or another
    * pipeline lands on the tab the operator was using, as selecting another
    * activity already did (#852).
+   *
+   * `null` until one is chosen: each activity then opens on its own first
+   * declared tab (#1600 C7a). A `'settings'` default made a Lookup, whose
+   * Settings follow its Source, open on Settings.
    */
-  dockNodeTab: NodeTab;
+  dockNodeTab: NodeTab | null;
   setDockNodeTab: (tab: NodeTab) => void;
   dockPipelineTab: PipelineTab;
   setDockPipelineTab: (tab: PipelineTab) => void;
@@ -716,7 +720,7 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       'dockNodeTab',
       DOCK_NODE_TAB_STORAGE_KEY,
       parseOneOf(NODE_TABS),
-      'settings',
+      null,
     );
     const [dockPipelineTab, setDockPipelineTab] = pref(
       'dockPipelineTab',
