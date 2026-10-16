@@ -1926,7 +1926,7 @@ describe('fieldSpan — the default-labelled empty choice is sized too (#1732)',
     const field = {
       kind: 'enum' as const,
       enumOptions: ['truncate', 'fail'],
-      label: { options: { truncate: 'Truncate', fail: 'Fail the row' } },
+      label: { title: 'On error', options: { truncate: 'Truncate', fail: 'Fail the row' } },
     };
     expect(fieldSpan(field)).toBe('short');
     expect(fieldSpan({ ...field, defaultText: 'fail' })).toBe('long');

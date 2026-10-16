@@ -686,14 +686,17 @@ describe('ConfigFieldControl — units as suffixes, blank empty cells (#1694)', 
   });
 });
 
-describe("ConfigFieldControl — an unset enum names its default (#1732)", () => {
+describe('ConfigFieldControl — an unset enum names its default (#1732)', () => {
   const field: ConfigField = {
     name: 'onOverLimit',
     kind: 'enum',
     optional: true,
     enumOptions: ['truncate', 'fail'],
     defaultText: 'fail',
-    label: { options: { truncate: 'Truncate and warn', fail: 'Fail' } },
+    label: {
+      title: 'When over the limit',
+      options: { truncate: 'Truncate and warn', fail: 'Fail' },
+    },
   };
   const empty = (root: HTMLElement) => root.querySelector('option[value=""]')?.textContent;
 
@@ -705,7 +708,7 @@ describe("ConfigFieldControl — an unset enum names its default (#1732)", () =>
   });
 
   it('keeps — none — when there is no default, or the default is not a choice', () => {
-    const { defaultText: _unused, ...plain } = field;
+    const plain: ConfigField = { ...field, defaultText: undefined };
     const none = render(<ConfigFieldControl field={plain} value="" onChange={noop} />);
     expect(empty(none.getByRole('combobox'))).toBe('— none —');
     none.unmount();
