@@ -660,6 +660,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
     description: 'List the files and folders in a directory on a file system connection.',
     kind: 'execution',
     category: 'general',
+    // #1600 C8b — retired from the palette: Get metadata · Child items covers
+    // it, and a stored node opens as that (`retired.ts`). It still runs.
+    inPalette: false,
     tabs: [{ key: 'location', bindings: ['connection'], fields: ['path'] }],
     idempotent: true,
     connectionKinds: ['fs'],

@@ -323,7 +323,8 @@ describe('#1600 C8b — renameNodeOutputRefs (one node, one output renamed)', ()
       'default(nodes.list.output.entries, nodes.b.output.entries)',
       'nodes.b.output.rows[nodes.list.output.entries].name',
     ];
-    const norm = (e: unknown): unknown => JSON.parse(JSON.stringify(e).split('childItems').join('entries'));
+    const norm = (e: unknown): unknown =>
+      JSON.parse(JSON.stringify(e).split('childItems').join('entries'));
     for (const body of bodies) {
       const after = rename(`\${${body}}`) as string;
       expect(after).toContain('childItems');

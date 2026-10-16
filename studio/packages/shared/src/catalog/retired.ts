@@ -1,12 +1,16 @@
-import type { Node } from '../schemas/pipeline.js';
+import type { Container, Node } from '../schemas/pipeline.js';
 import { protectEscapes, scanTemplateRefs } from '../engine/expr.js';
+import { renameNodeOutputRefs } from '../engine/nodeRefs.js';
 import { copyFilesConfigSchema } from './copy-files-config.js';
+import { getMetadataConfigSchema } from './get-metadata-config.js';
 import { catalogOutputs } from './lower.js';
 import { getActivity } from './registry.js';
 import {
   COPY_FILES_ACTIVITY_TYPE,
   FILE_COPY_ACTIVITY_TYPE,
+  FILE_LIST_ACTIVITY_TYPE,
   FILE_MOVE_ACTIVITY_TYPE,
+  GET_METADATA_ACTIVITY_TYPE,
 } from './types.js';
 
 /**
@@ -37,7 +41,9 @@ import {
  * - it carries something a paired node refuses (`connectionParams`,
  *   `connectionIds`, datasets, a call);
  * - its destination splits in a way only the run could judge (`splitDestination`);
- * - the lowered config does not pass `copy_files`' schema (a half-filled node).
+ * - the lowered config does not pass its replacement's schema (a half-filled node);
+ * - #1600 C8b — an output it renames (`entries` → `childItems`) is read
+ *   somewhere the rename cannot rewrite faithfully (`renameNodeOutputRefs`).
  *
  * PURE and copy-on-write: an unchanged node is returned by reference.
  */
@@ -47,7 +53,9 @@ export interface RetiredLowering {
   /**
    * §8's output aliases: each retired output name → the replacement's output
    * that answers it. A test checks every retired name is here and exists on
-   * the replacement with the same type.
+   * the replacement with the same type. Where a name changes, every
+   * `${nodes.<id>.output.<old>}` in the doc is rewritten to the new one as the
+   * node is lowered (`lowerRetiredTypes`).
    */
   outputs: Readonly<Record<string, string>>;
   /** The lowered node, or `undefined` when it cannot be lowered faithfully. */
@@ -92,19 +100,19 @@ export function splitDestination(
   return { folder: folder === '' ? '/' : folder, name: unprotect(s.slice(cut + 1)) };
 }
 
+/** Anything a single-connection replacement would refuse or a lowering would drop. */
+const carriesUnlowerable = (node: Node) =>
+  node.connectionParams !== undefined ||
+  node.connectionIds !== undefined ||
+  node.datasetIds !== undefined ||
+  node.datasetParams !== undefined ||
+  node.inlineDatasets !== undefined ||
+  node.call !== undefined;
+
 /** `file_copy` and `file_move` → Copy · Files as-is, one file, After copy Keep or Delete source. */
 function lowerFileTransfer(afterCopy: 'keep' | 'delete') {
   return (node: Node): Node | undefined => {
-    if (
-      node.connectionParams !== undefined ||
-      node.connectionIds !== undefined ||
-      node.datasetIds !== undefined ||
-      node.datasetParams !== undefined ||
-      node.inlineDatasets !== undefined ||
-      node.call !== undefined
-    ) {
-      return undefined;
-    }
+    if (carriesUnlowerable(node)) return undefined;
     const { source, dest } = node.config;
     if (typeof source !== 'string' || typeof dest !== 'string') return undefined;
     const split = splitDestination(dest);
@@ -137,6 +145,24 @@ function lowerFileTransfer(afterCopy: 'keep' | 'delete') {
   };
 }
 
+/**
+ * #1600 C8b — `file_list` → Get metadata · Child items, on the same connection
+ * and path. Get metadata's child item defaults (Filter `*`, which matches a
+ * dotfile, and All entries, no modified window) list what List directory
+ * listed. The `entries` → `childItems` rename is `lowerRetiredTypes`' job.
+ */
+function lowerFileList(node: Node): Node | undefined {
+  if (carriesUnlowerable(node)) return undefined;
+  const { path } = node.config;
+  if (typeof path !== 'string') return undefined;
+  const config: Record<string, unknown> = { path, fieldList: ['childItems'] };
+  if (!getMetadataConfigSchema.safeParse(config).success) return undefined;
+  const replacement = getActivity(GET_METADATA_ACTIVITY_TYPE);
+  if (replacement === undefined) return undefined;
+  config['outputs'] = catalogOutputs(replacement);
+  return { ...node, type: GET_METADATA_ACTIVITY_TYPE, config };
+}
+
 export const RETIRED_LOWERINGS: Readonly<Record<string, RetiredLowering>> = {
   [FILE_COPY_ACTIVITY_TYPE]: {
     to: COPY_FILES_ACTIVITY_TYPE,
@@ -148,14 +174,74 @@ export const RETIRED_LOWERINGS: Readonly<Record<string, RetiredLowering>> = {
     outputs: { source: 'source', dest: 'dest' },
     lower: lowerFileTransfer('delete'),
   },
+  [FILE_LIST_ACTIVITY_TYPE]: {
+    to: GET_METADATA_ACTIVITY_TYPE,
+    outputs: { entries: 'childItems', path: 'path' },
+    lower: lowerFileList,
+  },
 };
 
-/** Present every retired-type node that can be lowered faithfully as its replacement. */
-export function lowerRetiredTypes(nodes: Node[]): Node[] {
-  return nodes.map((node) => {
+/**
+ * Present every retired-type node that can be lowered faithfully as its
+ * replacement, across a whole doc: an output it renames is read from other
+ * nodes and from containers (a ForEach's `items`, a loop's `exitWhen`).
+ *
+ * Each node's rewrite is all or nothing. It runs over the doc as already
+ * lowered, so a later node sees an earlier one's renames, and if any read of the
+ * node cannot be rewritten, the node and every reader of it stay as they were.
+ * A `description` is prose and never evaluated, so it is not rewritten (the
+ * same exclusion as a pasted node's).
+ */
+export function lowerRetiredTypes<D extends { nodes: Node[]; containers: Container[] }>(doc: D): D {
+  let { nodes, containers } = doc;
+  // By index over the CURRENT doc, not `doc.nodes`: an earlier node's rename may
+  // already have rewritten this one, and lowering the original would undo it.
+  for (let i = 0; i < nodes.length; i += 1) {
+    const node = nodes[i] as Node;
     const lowering = Object.hasOwn(RETIRED_LOWERINGS, node.type)
       ? RETIRED_LOWERINGS[node.type]
       : undefined;
-    return lowering?.lower(node) ?? node;
-  });
+    const lowered = lowering?.lower(node);
+    if (lowering === undefined || lowered === undefined) continue;
+    let next = nodes.map((n, j) => (j === i ? lowered : n));
+    let nextContainers = containers;
+    const renames = new Map(Object.entries(lowering.outputs).filter(([from, to]) => from !== to));
+    if (renames.size > 0) {
+      const renamed = renameReads(next, containers, node.id, renames);
+      if (renamed === undefined) continue;
+      [next, nextContainers] = renamed;
+    }
+    nodes = next;
+    containers = nextContainers;
+  }
+  return nodes === doc.nodes && containers === doc.containers ? doc : { ...doc, nodes, containers };
+}
+
+/** `renameNodeOutputRefs` over every node and container, `description` aside; `undefined` if any refuses. */
+function renameReads(
+  nodes: Node[],
+  containers: Container[],
+  id: string,
+  renames: ReadonlyMap<string, string>,
+): [Node[], Container[]] | undefined {
+  const one = <T extends { description?: string | undefined }>(item: T): T | undefined => {
+    const { description, ...rest } = item;
+    const out = renameNodeOutputRefs(rest, id, renames);
+    if (out === undefined) return undefined;
+    if (out === rest) return item;
+    return (description === undefined ? out : { ...out, description }) as T;
+  };
+  const outNodes: Node[] = [];
+  for (const n of nodes) {
+    const r = one(n);
+    if (r === undefined) return undefined;
+    outNodes.push(r);
+  }
+  const outContainers: Container[] = [];
+  for (const c of containers) {
+    const r = one(c);
+    if (r === undefined) return undefined;
+    outContainers.push(r);
+  }
+  return [outNodes, outContainers];
 }
