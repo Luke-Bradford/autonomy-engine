@@ -58,12 +58,12 @@ export const getMetadataConfigSchema = z
       description: 'Child items whose name matches this wildcard (* and ?).',
     }),
     childType: presented(childTypeSchema.default('all'), {
-      title: 'Child item type',
-      description: 'All lists links and other entries too.',
+      title: 'Child entries',
+      description: 'Which entries Child items lists. All includes links and other entries too.',
       options: optionTitles(childTypeSchema, {
         all: 'All',
-        files: 'Files',
-        folders: 'Folders',
+        files: 'Files only',
+        folders: 'Folders only',
       }),
     }),
     modifiedStart: instant(

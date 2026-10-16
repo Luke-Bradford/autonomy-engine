@@ -90,7 +90,13 @@ describe('node panel labels (#1396)', () => {
         ...fields.filter((f) => f.kind === 'objectList').map((f) => [f.name, [{}]]),
         ...fields
           .filter((f) => entry.appliesWhen?.[f.name] !== undefined)
-          .map((f) => [f.name, f.kind === 'boolean' ? true : 'x']),
+          // #1600 OR41 C8a — an enum takes one of its own values (Get
+          // metadata's Child item type): 'x' is not one, and a value the panel
+          // cannot show sends the whole node to the JSON editor.
+          .map((f) => [
+            f.name,
+            f.kind === 'boolean' ? true : f.kind === 'enum' ? f.enumOptions![0] : 'x',
+          ]),
       ]);
       const overrides =
         kind === undefined

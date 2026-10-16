@@ -12,6 +12,7 @@ import {
   Delete20Regular,
   Document20Regular,
   DocumentEdit20Regular,
+  DocumentSearch20Regular,
   ErrorCircle20Regular,
   Filter20Regular,
   Folder20Regular,
@@ -67,6 +68,9 @@ const BY_TYPE: Readonly<Record<string, Glyph>> = {
   file_move: FolderArrowRight20Regular,
   file_delete: Delete20Regular,
   file_list: Folder20Regular,
+  /* #1600 OR41 C8a — Get metadata looks a file or folder over and changes
+     nothing: a document under a magnifier. */
+  get_metadata: DocumentSearch20Regular,
   /* #996 M5 — the data-movement `copy`, NOT `Copy20Regular`: `file_copy` already
      draws that, and one glyph across two unrelated activities is exactly the
      "quietly wearing somebody else's icon" failure this map's test exists to

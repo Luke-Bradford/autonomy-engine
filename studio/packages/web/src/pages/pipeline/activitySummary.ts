@@ -13,6 +13,7 @@ import {
   FILE_COPY_ACTIVITY_TYPE,
   FILE_DELETE_ACTIVITY_TYPE,
   FILE_LIST_ACTIVITY_TYPE,
+  GET_METADATA_ACTIVITY_TYPE,
   FILE_MOVE_ACTIVITY_TYPE,
   FILE_READ_ACTIVITY_TYPE,
   FILE_WRITE_ACTIVITY_TYPE,
@@ -106,6 +107,7 @@ export function activitySummary(
       return null;
     case FILE_READ_ACTIVITY_TYPE:
     case FILE_LIST_ACTIVITY_TYPE:
+    case GET_METADATA_ACTIVITY_TYPE:
       return text(c.path) ?? null;
     case FILE_WRITE_ACTIVITY_TYPE:
       return prefixed('→ ', text(c.path));
