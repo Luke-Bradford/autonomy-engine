@@ -13,6 +13,9 @@ describe('override allowlist rules (#1305)', () => {
     const pg = connectionAllowlistSubject('postgres').offered;
     expect(pg).toEqual(['connectTimeoutMs', 'statementTimeoutMs']);
     expect(datasetAllowlistSubject('delimited').offered).toContain('path');
+    // A query's statement is never offered (§8); its bind values and its query
+    // timeout (#1600 C1q-c, ADF's dynamic `queryTimeout`) are.
+    expect(datasetAllowlistSubject('query').offered).toEqual(['parameters', 'queryTimeoutSeconds']);
   });
 
   it('offers nothing for a kind with no overridable settings', () => {

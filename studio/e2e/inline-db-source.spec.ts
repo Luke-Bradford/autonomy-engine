@@ -39,7 +39,7 @@ test.describe('#1600 C1q — an inline database source', () => {
       columns: [{ name: 'id', type: 'integer', nullable: true }],
     });
     const sql = 'SELECT id FROM orders WHERE modified_at > :wm';
-    await openSeededCanvas(page, 'e2e 1600 c1q inline', {
+    const pipelineId = await openSeededCanvas(page, 'e2e 1600 c1q inline', {
       params: [{ name: 'wm', type: 'string', required: true }],
       nodes: [
         {
@@ -83,8 +83,44 @@ test.describe('#1600 C1q — an inline database source', () => {
     await editor.getByRole('button', { name: 'Cancel' }).click();
     await expect(editor).toHaveCount(0);
 
+    // C1q-c — Query timeout: a query stored without one has none (nothing is
+    // applied on upgrade), and the box is number-sized at 1440x900.
+    const timeout = pane.getByRole('textbox', { name: 'Query timeout (seconds)', exact: true });
+    await expect(timeout).toHaveValue('');
+    await expect(timeout).toHaveAttribute('placeholder', 'none');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const timeoutBox = (await timeout.boundingBox())!;
+    expect(timeoutBox.width).toBeLessThanOrEqual(140);
+    expect(timeoutBox.height).toBeLessThanOrEqual(28);
+    // A value the save would refuse is refused at the field, on blur, and kept on screen.
+    await timeout.fill('0');
+    await timeout.blur();
+    await expect(
+      pane.getByText('Enter a whole number of seconds above 0, or leave it blank'),
+    ).toBeVisible();
+    await timeout.fill('90');
+    await timeout.blur();
+    await expect(
+      pane.getByText('Enter a whole number of seconds above 0, or leave it blank'),
+    ).toHaveCount(0);
+
     // The canvas validates with the same `validateDoc` the server ran: nothing to report.
     await expect(problemsToggle(page)).not.toHaveText(/[1-9]/);
+
+    // Committed to the node, not only drawn: the saved version carries it, a number.
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+    const versions = (await (
+      await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+    ).json()) as { version: number; nodes: Record<string, unknown>[] }[];
+    const latest = versions.sort((a, b) => b.version - a.version)[0]!;
+    const copy = latest.nodes.find((n) => n['id'] === 'copy1')!;
+    expect(copy['inlineDatasets']).toEqual({
+      source: {
+        kind: 'query',
+        config: { sql, parameters: { wm: '${params.wm}' }, queryTimeoutSeconds: 90 },
+      },
+    });
     await expectQuiet(page, problems);
   });
 
@@ -184,6 +220,10 @@ test.describe('#1600 C1q — an inline database source', () => {
       await use.selectOption('query');
       // A result belongs to the source it was read for: changing it clears the table.
       await expect(previewRows).toHaveCount(0);
+      // C1q-c — a new Query starts at ADF's two-hour query timeout.
+      await expect(
+        pane.getByRole('textbox', { name: 'Query timeout (seconds)', exact: true }),
+      ).toHaveValue('7200');
       await pane
         .getByRole('textbox', { name: 'SQL statement' })
         .fill('SELECT id FROM orders WHERE modified_at > :wm');
@@ -222,6 +262,7 @@ test.describe('#1600 C1q — an inline database source', () => {
           kind: 'query',
           config: {
             sql: 'SELECT id FROM orders WHERE modified_at > :wm',
+            queryTimeoutSeconds: 7200,
             parameters: { wm: '${nodes.lookup1.output.rows[0].last_wm}' },
           },
         },

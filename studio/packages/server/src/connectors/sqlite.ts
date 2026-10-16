@@ -36,6 +36,7 @@ export {
   type SqliteValue,
 } from './sqlite-store.js';
 import { refuseForeignSink, writeRowsToSink } from './copy-sink.js';
+import { queryTimeoutSecondsOf, startQueryClock } from './query-timeout.js';
 export {
   writeSqliteDatasetRows,
   type SinkValue,
@@ -271,6 +272,10 @@ export async function* readSqliteDatasetBatches(
   let iterator: IterableIterator<unknown> | undefined;
   try {
     db.defaultSafeIntegers(true);
+    // #1600 C1q-c — from just before the statement first steps, so opening the
+    // store does not count. A step is synchronous and cannot be interrupted, so
+    // this bounds a read of many batches and never cuts a one-batch read short.
+    const clock = startQueryClock(queryTimeoutSecondsOf(read.datasetKind, read.datasetConfig));
     let cursor: IterableIterator<unknown>;
     try {
       const prepared = db.prepare(statement.sql);
@@ -290,6 +295,7 @@ export async function* readSqliteDatasetBatches(
       if (!first) await yieldToEventLoop();
       if (read.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset read aborted');
       first = false;
+      clock.remainingMs(); // throws once the query timeout has passed
 
       const batch: SqliteRow[] = [];
       let done = false;

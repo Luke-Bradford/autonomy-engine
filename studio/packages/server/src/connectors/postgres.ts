@@ -23,6 +23,7 @@ import {
 } from './postgres-named-parameters.js';
 import { refuseForeignSink, writeRowsToSink } from './copy-sink.js';
 import { yieldToEventLoop } from './scheduling.js';
+import { queryTimeoutSecondsOf, startQueryClock } from './query-timeout.js';
 // #1196 — the session leaf. `postgres.ts` is the READER + adapter; everything
 // about reaching a server lives one module down, where the sink writer can also
 // reach it without importing this file back (see `postgres-session.ts`).
@@ -36,7 +37,9 @@ import {
   resolveStoreIdentity,
   POSTGRES_DATASET_KINDS,
   qualifiedTable,
+  QUERY_CANCELED,
   readFailure,
+  statementTimeoutMsOf,
   type PostgresClient,
   type PostgresClientFactory,
   type PostgresQueryResult,
@@ -446,7 +449,9 @@ export async function describePostgresDatasetColumns(read: PostgresDatasetRead):
  * it caps how long ONE batch may take, and a copy of any total duration is fine
  * so long as no single batch stalls. A slow first batch on an unindexed scan is
  * the shape that trips it, and it surfaces as SQLSTATE `57014`, which this
- * module classifies `transient`.
+ * module classifies `transient`. A `query` source's `queryTimeoutSeconds`
+ * (#1600 C1q-c) is the one bound on the whole read: no FETCH starts past it, and
+ * in its final stretch the FETCH in flight is cancelled at it.
  */
 export async function* readPostgresDatasetBatches(
   read: PostgresDatasetRead,
@@ -455,6 +460,11 @@ export async function* readPostgresDatasetBatches(
   const batchRows = read.batchRows ?? COPY_BATCH_ROWS;
   if (read.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset read aborted');
 
+  // The bound one FETCH has without a query timeout. Read before the session
+  // opens, so nothing here can throw while a client is held; `openSession`
+  // refuses an invalid config, so the fallback is never what a read runs with.
+  const conn = postgresConnectionConfigSchema.safeParse(read.connectionConfig);
+  const statementTimeoutMs = statementTimeoutMsOf(conn.success ? conn.data : {});
   const client = await openSession(
     read.createClient,
     read.connectionConfig,
@@ -462,6 +472,9 @@ export async function* readPostgresDatasetBatches(
     'cannot reach the postgres server to read the source',
     readerTypes(),
   );
+  // #1600 C1q-c — started before BEGIN, so connecting does not count against
+  // the query timeout.
+  const clock = startQueryClock(queryTimeoutSecondsOf(read.datasetKind, read.datasetConfig));
   let inTransaction = false;
   try {
     try {
@@ -485,6 +498,21 @@ export async function* readPostgresDatasetBatches(
       if (read.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset read aborted');
       first = false;
 
+      // #1600 C1q-c — no FETCH starts past the query timeout, and in its final
+      // stretch (less left than one statement may take) the server is told the
+      // time left, so the FETCH in flight is cancelled at the limit rather than
+      // at the connection's statement timeout. `SET LOCAL` lasts until the
+      // transaction ends, which the `finally` below always does.
+      const left = clock.remainingMs();
+      const lowered = left !== null && left < statementTimeoutMs;
+      if (lowered) {
+        try {
+          await client.query(`SET LOCAL statement_timeout = ${String(Math.ceil(left))}`);
+        } catch (err) {
+          throw readFailure(err, 'the source could not be read', read.secret);
+        }
+      }
+
       let rows: Record<string, unknown>[];
       try {
         const fetched = await client.query(
@@ -492,6 +520,9 @@ export async function* readPostgresDatasetBatches(
         );
         rows = fetched.rows;
       } catch (err) {
+        if (lowered && (err as { code?: unknown } | null)?.code === QUERY_CANCELED) {
+          throw clock.expired();
+        }
         throw readFailure(err, 'the source could not be read', read.secret);
       }
       if (rows.length === 0) return;

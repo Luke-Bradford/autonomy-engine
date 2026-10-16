@@ -322,7 +322,8 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   'Copy data': 9,
   'Copy data (files as-is)': 19,
   'Copy data (files from a folder)': 16,
-  'Copy data (inline query)': 12,
+  // +1 for C1q-c's Query timeout, a new field whose `?` says blank means no limit.
+  'Copy data (inline query)': 13,
   'Delete file': 7,
   'HTTP request': 9,
   'List directory': 7,

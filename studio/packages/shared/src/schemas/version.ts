@@ -527,7 +527,14 @@
 // A pre-C1q build strips `inlineDatasets` and dispatches such a copy or lookup
 // with no source at all, which fails DATASET_MISSING at best; the doc must say
 // it needs this build.
-export const CATALOG_VERSION = 38;
+// BUMP 38→39 for #1600 OR41 C1q-c: the `query` dataset config's
+// `queryTimeoutSeconds`, which a new inline Query is written with. An inline
+// config is parsed `.strict()`, so a pre-C1q-c build imports such a doc (import
+// runs no `validateDoc`) and then fails the node at its first run on the
+// unknown key: C1a's fails-at-first-run shape, so the doc must say it needs
+// this build. (A saved dataset's key is stripped by an older build, which then
+// reads with no limit: the bound is lost, the rows are not.)
+export const CATALOG_VERSION = 39;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

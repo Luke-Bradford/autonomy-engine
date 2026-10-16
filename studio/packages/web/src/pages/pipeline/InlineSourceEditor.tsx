@@ -2,6 +2,7 @@ import { useId, useState, type ReactNode } from 'react';
 import {
   DATASET_CONNECTION_KINDS,
   INLINE_DATASET_KINDS,
+  NEW_QUERY_TIMEOUT_SECONDS,
   datasetConfigSchema,
   datasetConnectionKindAdvisory,
   type ConnectionKind,
@@ -34,6 +35,8 @@ import { ExpressionEditor } from './ExpressionEditor';
 import { PickableInput } from './PickableInput';
 import { ConnectionTables } from './ConnectionTables';
 import { SourcePreview } from './SourcePreview';
+import { DraftNumberField } from './DraftNumberField';
+import { parseTimeoutSeconds } from '../triggers/formFields';
 import {
   bindNameProblem,
   bindValueText,
@@ -55,11 +58,13 @@ const PARAM_COLUMNS: readonly RowTableColumn[] = [
   { key: 'value', header: 'Value', width: 'long' },
 ];
 
-/** What a newly chosen Table or Query starts as: the fields to fill, nothing carried. */
+/** What a newly chosen Table or Query starts as: the fields to fill, nothing
+ * carried. A new Query starts at ADF's two-hour query timeout (#1600 C1q-c),
+ * written in so it shows and can be cleared; one stored without it has none. */
 function blank(kind: InlineDatasetKind): InlineDataset {
   return kind === 'table'
     ? { kind: 'table', config: { table: '' } }
-    : { kind: 'query', config: { sql: '' } };
+    : { kind: 'query', config: { sql: '', queryTimeoutSeconds: NEW_QUERY_TIMEOUT_SECONDS } };
 }
 
 /**
@@ -301,6 +306,14 @@ function QueryFields({
   };
   const rename = (from: string, to: string, i: number) =>
     write(withParameters(renameKey(parameters, from, to)), `param:${i}:name`);
+  const timeoutField = field('query', 'queryTimeoutSeconds');
+  const storedTimeout = inline.config['queryTimeoutSeconds'];
+  const setTimeoutSeconds = (next: number | undefined) => {
+    const config = { ...inline.config };
+    if (next === undefined) delete config['queryTimeoutSeconds'];
+    else config['queryTimeoutSeconds'] = next;
+    write({ kind: 'query', config });
+  };
 
   return (
     <>
@@ -377,6 +390,21 @@ function QueryFields({
           />
         ))}
       </RowList>
+      {/* Literal, like the statement: a run resolves `${}` in bind values only. */}
+      <DraftNumberField
+        label={timeoutField.label?.title ?? timeoutField.name}
+        unit={timeoutField.label?.unit}
+        stored={typeof storedTimeout === 'number' ? storedTimeout : undefined}
+        parse={parseTimeoutSeconds}
+        placeholder="none"
+        about={
+          about(
+            timeoutField,
+            `Literal here. A new Query starts at ${String(NEW_QUERY_TIMEOUT_SECONDS)} (2 hours).`,
+          )?.note
+        }
+        onCommit={setTimeoutSeconds}
+      />
     </>
   );
 }
