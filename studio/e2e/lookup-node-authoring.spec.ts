@@ -179,6 +179,9 @@ test.describe('#1221 — lookup-node authoring', () => {
     await expect(firstRowOnly).toBeChecked();
     await expect(maxRows).toBeVisible();
     await expect(overLimit.locator('option')).toContainText(['Truncate and warn', 'Fail']);
+    // #1732 — the unset choice names the schema default rather than "— none —".
+    await expect(overLimit).toHaveValue('');
+    await expect(overLimit.locator('option').first()).toHaveText('Truncate and warn (default)');
 
     // The whole tab is on screen at 1440x900, and the number box is number-sized.
     const pane = (await properties(page).boundingBox())!;

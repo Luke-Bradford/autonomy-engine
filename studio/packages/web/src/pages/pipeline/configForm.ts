@@ -74,12 +74,33 @@ export type ConfigFieldKind =
  * column (`SHORT_CHOICE_CHARS`).
  */
 export function fieldSpan(
-  field: Pick<ConfigField, 'kind' | 'enumOptions' | 'label'>,
+  field: Pick<ConfigField, 'kind' | 'enumOptions' | 'label' | 'defaultText'>,
 ): 'short' | 'long' {
   if (field.kind === 'number' || field.kind === 'boolean') return 'short';
   if (field.kind !== 'enum') return 'long';
-  const shown = (field.enumOptions ?? []).map((o) => field.label?.options?.[o] ?? o);
+  const shown = (field.enumOptions ?? []).map((o) => enumOptionLabel(field, o));
+  const unset = enumDefaultLabel(field);
+  if (unset !== undefined) shown.push(unset);
   return shown.every((text) => text.length <= SHORT_CHOICE_CHARS) ? 'short' : 'long';
+}
+
+/**
+ * #1732 — what an enum's empty choice reads when the schema defaults the key:
+ * "Fail (default)". Selecting it still writes nothing, so the stored doc keeps
+ * the key absent and the JSON stays the source of truth. `undefined` when there
+ * is no default, or the default is not one of the choices.
+ */
+export function enumDefaultLabel(
+  field: Pick<ConfigField, 'enumOptions' | 'label' | 'defaultText'>,
+): string | undefined {
+  const value = field.defaultText;
+  if (value === undefined || !(field.enumOptions ?? []).includes(value)) return undefined;
+  return `${enumOptionLabel(field, value)} (default)`;
+}
+
+/** An enum choice as the dock shows it: its display name, else the value itself. */
+export function enumOptionLabel(field: Pick<ConfigField, 'label'>, value: string): string {
+  return field.label?.options?.[value] ?? value;
 }
 
 /**
@@ -107,7 +128,10 @@ const SHORT_CHOICE_CHARS = 12;
 export type FieldSize = 's' | 'm' | 'l';
 
 export function fieldSize(
-  field: Pick<ConfigField, 'kind' | 'enumOptions' | 'label' | 'literal' | 'singleLine'>,
+  field: Pick<
+    ConfigField,
+    'kind' | 'enumOptions' | 'label' | 'literal' | 'singleLine' | 'defaultText'
+  >,
 ): FieldSize {
   if (field.kind === 'number') return 's';
   if (field.kind === 'enum') return fieldSpan(field) === 'short' ? 's' : 'm';

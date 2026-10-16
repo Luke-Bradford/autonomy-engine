@@ -76,6 +76,8 @@ test.describe('#1600 C7b — Lookup · Read as', () => {
       });
       await expect(overLimit.locator('option')).toContainText(['Truncate and warn', 'Fail']);
       await expect(overLimit).toHaveValue('');
+      // #1732 — unset reads as its default, and still writes nothing.
+      await expect(overLimit.locator('option').first()).toHaveText('Fail (default)');
       const limitBox = await overLimit.boundingBox();
       expect(limitBox, 'When over the limit has a box').not.toBeNull();
       expect(limitBox!.y + limitBox!.height).toBeLessThanOrEqual(900);

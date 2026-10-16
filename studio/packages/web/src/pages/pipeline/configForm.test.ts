@@ -24,6 +24,7 @@ import {
   deriveConfigFields,
   deriveFieldsWithCarried,
   describeNumberRule,
+  fieldSpan,
   formatFieldValue,
   numberKeypad,
   parseConfigText,
@@ -1917,5 +1918,18 @@ describe('number fields carry the rule their schema states (#1396)', () => {
       'Number greater than 0, at most 1',
     );
     expect(describeNumberRule({ integer: false })).toBe('Number');
+  });
+});
+
+describe('fieldSpan — the default-labelled empty choice is sized too (#1732)', () => {
+  it('a short choice whose default label is long takes the whole width', () => {
+    const field = {
+      kind: 'enum' as const,
+      enumOptions: ['truncate', 'fail'],
+      label: { title: 'On error', options: { truncate: 'Truncate', fail: 'Fail the row' } },
+    };
+    expect(fieldSpan(field)).toBe('short');
+    expect(fieldSpan({ ...field, defaultText: 'fail' })).toBe('long');
+    expect(fieldSpan({ ...field, defaultText: 'gone' })).toBe('short');
   });
 });
