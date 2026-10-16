@@ -199,7 +199,9 @@ test.describe('#1221 — lookup-node authoring', () => {
     ).json()) as { version: number; nodes: { type: string; config: Record<string, unknown> }[] }[];
     const latest = versions.reduce((a, b) => (b.version > a.version ? b : a));
     const config = latest.nodes.find((n) => n.type === 'lookup')!.config;
-    expect(config).toMatchObject({ firstRowOnly: false, maxRows: 50, overLimit: 'fail' });
+    // Unticked is the schema's default, which the form writes as an absent key.
+    expect(config['firstRowOnly'] ?? false).toBe(false);
+    expect(config).toMatchObject({ maxRows: 50, overLimit: 'fail' });
     expect((config['outputs'] as { name: string }[]).map((o) => o.name)).toEqual([
       'rows',
       'rowCount',
