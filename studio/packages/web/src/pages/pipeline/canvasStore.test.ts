@@ -5263,3 +5263,63 @@ describe('addNode — the workspace default timeout (#1600 C0f)', () => {
     expect(s.getState().nodes[0]!.policy).toBeUndefined();
   });
 });
+
+/** #1600 OR41 C7a — a Lookup's new-node default, and a stored one's old contract. */
+describe('Lookup settings in the store (#1600 C7a)', () => {
+  const names = (n: Node) => (n.config['outputs'] as { name: string }[]).map((o) => o.name);
+  const SIX = ['rows', 'rowCount', 'count', 'firstRow', 'bytes', 'truncated'];
+  const FOUR = [
+    { name: 'rows', type: 'json' },
+    { name: 'rowCount', type: 'number' },
+    { name: 'bytes', type: 'number' },
+    { name: 'truncated', type: 'boolean' },
+  ];
+  const stored = (outputs: unknown) =>
+    version({
+      nodes: [
+        {
+          id: 'l',
+          type: 'lookup',
+          config: { outputs },
+          position: { x: 0, y: 0 },
+        } as Node,
+      ],
+    });
+
+  it('a new Lookup starts First row only, as ADF does, with the full contract', () => {
+    const s = createCanvasStore();
+    s.getState().addNode('lookup');
+    const node = s.getState().nodes[0]!;
+    expect(node.config['firstRowOnly']).toBe(true);
+    expect(names(node)).toEqual(SIX);
+    // A copy, never the catalog's object: editing the node must not edit it.
+    s.getState().addNode('lookup');
+    expect(s.getState().nodes[1]!.config).not.toBe(node.config);
+  });
+
+  it('another activity gets no Lookup settings', () => {
+    const s = createCanvasStore();
+    s.getState().addNode('http_request');
+    expect(Object.keys(s.getState().nodes[0]!.config)).toEqual(['outputs']);
+  });
+
+  it('a stored Lookup with the pre-C7a four outputs opens with all six, not dirty', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(stored(FOUR));
+    const node = s.getState().nodes[0]!;
+    expect(names(node)).toEqual(SIX);
+    // No setting is added: a stored lookup keeps returning every row.
+    expect(node.config['firstRowOnly']).toBeUndefined();
+    expect(s.getState().dirty).toBe(false);
+  });
+
+  it('a stored Lookup with any other contract is left exactly as it is', () => {
+    const custom = [...FOUR.slice(0, 3)];
+    const s = createCanvasStore();
+    s.getState().loadVersion(stored(custom));
+    expect(s.getState().nodes[0]!.config['outputs']).toEqual(custom);
+    const extraKey = FOUR.map((o, i) => (i === 0 ? { ...o, description: 'x' } : o));
+    s.getState().loadVersion(stored(extraKey));
+    expect(s.getState().nodes[0]!.config['outputs']).toEqual(extraKey);
+  });
+});

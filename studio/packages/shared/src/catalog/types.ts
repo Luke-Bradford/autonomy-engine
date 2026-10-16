@@ -544,6 +544,24 @@ export interface ActivityCatalogEntry {
   /** Canonical outputs (UI/metadata). See the class doc — not the runtime SSOT. */
   outputs: Output[];
   /**
+   * #1600 OR41 C7a — earlier catalog defaults of `outputs`. A node saves its
+   * contract into `config.outputs` and keeps it, so a node saved before outputs
+   * were added still declares the old set, and the new names are dropped from
+   * its run. The editor re-seeds a node whose `config.outputs` is EXACTLY one of
+   * these with today's `outputs` when it loads (`refreshFormerOutputs`), and the
+   * next Save writes it. A contract that matches none is left alone. Authoring
+   * only, like `tabs`.
+   */
+  formerOutputs?: readonly (readonly Output[])[];
+  /**
+   * #1600 OR41 C7a — config written into a NEW node when the canvas adds it:
+   * ADF's new-node default where it differs from the schema's own default,
+   * which stays today's behaviour for stored nodes (catalogue §8). In the doc,
+   * so the JSON shows it; never applied at run time. Must parse against
+   * `configSchema` (`registry.test.ts`).
+   */
+  newNodeConfig?: Readonly<Record<string, unknown>>;
+  /**
    * #1420 — the known fields of each ELEMENT of an array output, keyed by output
    * name: what the expression picker offers as `${item.<field>}` inside a foreach
    * over that output. UI metadata only. It never reaches typing, which keeps a
