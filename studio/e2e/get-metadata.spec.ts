@@ -69,6 +69,21 @@ test.describe('#1600 C8a — Get metadata', () => {
       expect(last!.y - first!.y, 'eight boxes do not stack eight deep').toBeLessThan(
         4 * first!.height + 4 * 8,
       );
+      // A grid, not a wrapped line: equal columns, so the boxes in a row are
+      // evenly spaced whatever their labels' lengths, and every later row
+      // lines up under the first.
+      const xs = await fieldList(page)
+        .getByRole('checkbox')
+        .evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().x)));
+      const ys = await fieldList(page)
+        .getByRole('checkbox')
+        .evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().y)));
+      const columns = xs.filter((_, i) => ys[i] === ys[0]);
+      expect(columns.length, 'more than one column').toBeGreaterThan(1);
+      const steps = columns.slice(1).map((x, i) => x - columns[i]!);
+      for (const step of steps)
+        expect(Math.abs(step - steps[0]!), `steps ${steps}`).toBeLessThan(2);
+      for (const x of xs) expect(columns).toContain(x);
 
       await box(page, 'Child items').check();
       await box(page, 'Exists').check();
