@@ -2,7 +2,6 @@ import pg from 'pg';
 import {
   COPY_ACTIVITY_TYPE,
   LOOKUP_ACTIVITY_TYPE,
-  DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS,
   datasetConfigSchema,
   formatZodIssues,
   postgresConnectionConfigSchema,
@@ -40,6 +39,7 @@ import {
   qualifiedTable,
   QUERY_CANCELED,
   readFailure,
+  statementTimeoutMsOf,
   type PostgresClient,
   type PostgresClientFactory,
   type PostgresQueryResult,
@@ -449,7 +449,9 @@ export async function describePostgresDatasetColumns(read: PostgresDatasetRead):
  * it caps how long ONE batch may take, and a copy of any total duration is fine
  * so long as no single batch stalls. A slow first batch on an unindexed scan is
  * the shape that trips it, and it surfaces as SQLSTATE `57014`, which this
- * module classifies `transient`.
+ * module classifies `transient`. A `query` source's `queryTimeoutSeconds`
+ * (#1600 C1q-c) is the one bound on the whole read: no FETCH starts past it, and
+ * in its final stretch the FETCH in flight is cancelled at it.
  */
 export async function* readPostgresDatasetBatches(
   read: PostgresDatasetRead,
@@ -458,6 +460,11 @@ export async function* readPostgresDatasetBatches(
   const batchRows = read.batchRows ?? COPY_BATCH_ROWS;
   if (read.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset read aborted');
 
+  // The bound one FETCH has without a query timeout. Read before the session
+  // opens, so nothing here can throw while a client is held; `openSession`
+  // refuses an invalid config, so the fallback is never what a read runs with.
+  const conn = postgresConnectionConfigSchema.safeParse(read.connectionConfig);
+  const statementTimeoutMs = statementTimeoutMsOf(conn.success ? conn.data : {});
   const client = await openSession(
     read.createClient,
     read.connectionConfig,
@@ -465,13 +472,9 @@ export async function* readPostgresDatasetBatches(
     'cannot reach the postgres server to read the source',
     readerTypes(),
   );
-  // #1600 C1q-c — started once the session is open, so connecting does not
-  // count against the query timeout. The statement timeout is the connection's
-  // (already validated by `openSession`), the bound one FETCH has without it.
+  // #1600 C1q-c — started before BEGIN, so connecting does not count against
+  // the query timeout.
   const clock = startQueryClock(queryTimeoutSecondsOf(read.datasetKind, read.datasetConfig));
-  const statementTimeoutMs =
-    postgresConnectionConfigSchema.parse(read.connectionConfig).statementTimeoutMs ??
-    DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS;
   let inTransaction = false;
   try {
     try {

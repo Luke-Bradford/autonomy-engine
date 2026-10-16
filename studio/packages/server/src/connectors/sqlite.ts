@@ -295,7 +295,7 @@ export async function* readSqliteDatasetBatches(
       if (!first) await yieldToEventLoop();
       if (read.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset read aborted');
       first = false;
-      clock.remainingMs();
+      clock.remainingMs(); // throws once the query timeout has passed
 
       const batch: SqliteRow[] = [];
       let done = false;

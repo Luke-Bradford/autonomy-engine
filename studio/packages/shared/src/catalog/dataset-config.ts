@@ -131,17 +131,19 @@ export const queryDatasetConfigSchema = z.object({
    *
    * WALL CLOCK from the statement's start to its last row, so it includes the
    * time a copy spends writing between batches: the cursor is open for all of
-   * it. Checked before each batch is pulled, so a read whose last rows arrive
-   * past the limit still succeeds. What bounds the overrun differs by store, and
-   * the claim is exactly this: postgres lowers `statement_timeout` for the
-   * final stretch, so a fetch is cancelled at the limit; sqlite steps
-   * synchronously and cannot be interrupted, so a one-batch read (an aggregate)
-   * is never cut short, and only a read of many batches is bounded.
+   * it. Both readers check it before pulling a batch after the first, so no pull
+   * starts past it. A read whose rows run out exactly at a batch boundary needs
+   * one more, empty pull, which is refused like any other. What bounds the pull
+   * in flight differs by store, and the claim is exactly this: postgres lowers
+   * `statement_timeout` to the time left in the final stretch, so a FETCH is
+   * cancelled at the limit; sqlite steps synchronously and cannot be
+   * interrupted, so a batch already being pulled finishes, its last batch
+   * included, and a one-batch read (an aggregate) is never cut short.
    */
   queryTimeoutSeconds: presented(z.number().int().positive().optional(), {
     title: 'Query timeout',
     unit: 'seconds',
-    description: `The whole read's limit, checked between batches. Blank means no limit; a new inline Query starts at ${String(NEW_QUERY_TIMEOUT_SECONDS)} (2 hours).`,
+    description: "The whole read's limit, checked between batches. Blank means no limit.",
   }),
 });
 

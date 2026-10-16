@@ -191,10 +191,20 @@ export function clientOptionsFor(
     // `_connect` and clears it once the session is ready, so a host that
     // completes the handshake quickly and then goes silent would leave the probe
     // waiting forever — a `testConnection` that neither resolves nor rejects.
-    statement_timeout: config.statementTimeoutMs ?? DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS,
-    query_timeout: config.statementTimeoutMs ?? DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS,
+    statement_timeout: statementTimeoutMsOf(config),
+    query_timeout: statementTimeoutMsOf(config),
   };
 }
+
+/** The cap on one statement, both timers' value: the connection's, or the default.
+ * The reader also reads it, to know when a query timeout is the nearer limit. */
+export function statementTimeoutMsOf(config: { statementTimeoutMs?: number }): number {
+  return config.statementTimeoutMs ?? DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS;
+}
+/** SQLSTATE `query_canceled`: a statement or query timeout fired. The reader
+ * also matches it to tell its own query-timeout cancel from the connection's. */
+export const QUERY_CANCELED = '57014';
+
 /**
  * SQLSTATEs and socket codes that make a READ worth retrying, FAIL-SAFE: only a
  * named code is `transient` and everything unrecognised is `permanent`, which is
@@ -204,10 +214,6 @@ export function clientOptionsFor(
  *
  * A read `partialWritePossible` is always false: a read writes nothing.
  */
-/** SQLSTATE `query_canceled`: a statement or query timeout fired. The reader
- * also matches it to tell its own query-timeout cancel from the connection's. */
-export const QUERY_CANCELED = '57014';
-
 const TRANSIENT_POSTGRES_CODES: ReadonlySet<string> = new Set([
   QUERY_CANCELED, // our own statement/query timeout fired
   '57P01', // admin_shutdown

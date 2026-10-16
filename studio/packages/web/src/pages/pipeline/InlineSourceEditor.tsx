@@ -390,16 +390,19 @@ function QueryFields({
           />
         ))}
       </RowList>
-      {/* Literal, like the statement: a run resolves `${}` in bind values only.
-          Commits on blur (`DraftNumberField`), so clearing to retype never
-          stores a 0. */}
+      {/* Literal, like the statement: a run resolves `${}` in bind values only. */}
       <DraftNumberField
         label={timeoutField.label?.title ?? timeoutField.name}
         unit={timeoutField.label?.unit}
         stored={typeof storedTimeout === 'number' ? storedTimeout : undefined}
         parse={parseTimeoutSeconds}
         placeholder="none"
-        about={about(timeoutField, 'Literal here.')?.note}
+        about={
+          about(
+            timeoutField,
+            `Literal here. A new Query starts at ${String(NEW_QUERY_TIMEOUT_SECONDS)} (2 hours).`,
+          )?.note
+        }
         onCommit={setTimeoutSeconds}
       />
     </>
