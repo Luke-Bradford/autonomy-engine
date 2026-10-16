@@ -118,6 +118,37 @@ export function renameKey(
   return Object.fromEntries(Object.entries(record).map(([k, v]) => [k === from ? to : k, v]));
 }
 
+/**
+ * #1725 — the order the rows show a record's keys in. `Object.keys` lists
+ * integer-like keys (`1`, `10`, which sqlite binds) first whatever the insertion
+ * order, so a row renamed to one would jump while its box, kept by position,
+ * showed another row's name. `prev` is the order shown; names still present
+ * keep their slot. One gone and one new is a rename (or its undo): the new name
+ * takes the gone one's slot. Otherwise a new name goes after the last row of
+ * the names the record lists before it: an undone Remove returns to its slot,
+ * and Add and Import, which append to the record, go last. Returns `prev`
+ * itself when nothing moved.
+ */
+export function reconcileKeyOrder(
+  prev: readonly string[],
+  keys: readonly string[],
+): readonly string[] {
+  const present = new Set(keys);
+  const known = new Set(prev);
+  const gone = prev.filter((k) => !present.has(k));
+  const added = keys.filter((k) => !known.has(k));
+  if (gone.length === 0 && added.length === 0) return prev;
+  if (gone.length === 1 && added.length === 1) {
+    return prev.map((k) => (k === gone[0] ? added[0]! : k));
+  }
+  const shown = prev.filter((k) => present.has(k));
+  for (const k of added) {
+    const before = keys.slice(0, keys.indexOf(k)).map((b) => shown.indexOf(b));
+    shown.splice(Math.max(-1, ...before) + 1, 0, k);
+  }
+  return shown;
+}
+
 /** `p1`, `p2`, … — the first not already taken; the author renames it to the statement's `:name`. */
 export function freshBindName(taken: readonly string[]): string {
   for (let i = 1; ; i += 1) if (!taken.includes(`p${i}`)) return `p${i}`;
