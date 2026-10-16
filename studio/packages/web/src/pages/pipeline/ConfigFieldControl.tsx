@@ -7,6 +7,7 @@ import {
   fieldSize,
   describeNumberRule,
   emptyControlValue,
+  enumDefaultLabel,
   isRowKind,
   isRowList,
   numberKeypad,
@@ -398,8 +399,11 @@ export function ConfigFieldControl({
               {/* #1694 OR42 item 9 — blank in an optional table cell, where
                   the same placeholder in every row was noise and empty means
                   the default (On error's "Fail the row"). A required cell keeps
-                  it: there, empty is a gap to fill. */}
-              <option value="">{cell && !required ? '' : '— none —'}</option>
+                  it: there, empty is a gap to fill. #1732 — a top-level
+                  field the schema defaults names that default instead. */}
+              <option value="">
+                {cell && !required ? '' : (enumDefaultLabel(field) ?? '— none —')}
+              </option>
               {(field.enumOptions ?? []).map((option) => (
                 <option key={option} value={option}>
                   {field.label?.options?.[option] ?? option}

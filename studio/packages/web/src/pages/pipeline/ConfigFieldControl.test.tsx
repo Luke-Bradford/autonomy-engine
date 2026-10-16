@@ -686,6 +686,43 @@ describe('ConfigFieldControl — units as suffixes, blank empty cells (#1694)', 
   });
 });
 
+describe("ConfigFieldControl — an unset enum names its default (#1732)", () => {
+  const field: ConfigField = {
+    name: 'onOverLimit',
+    kind: 'enum',
+    optional: true,
+    enumOptions: ['truncate', 'fail'],
+    defaultText: 'fail',
+    label: { options: { truncate: 'Truncate and warn', fail: 'Fail' } },
+  };
+  const empty = (root: HTMLElement) => root.querySelector('option[value=""]')?.textContent;
+
+  it('labels the empty choice with the schema default, and still writes nothing', () => {
+    const { getByRole } = render(<ConfigFieldControl field={field} value="" onChange={noop} />);
+    const select = getByRole('combobox') as HTMLSelectElement;
+    expect(empty(select)).toBe('Fail (default)');
+    expect(select.value).toBe('');
+  });
+
+  it('keeps — none — when there is no default, or the default is not a choice', () => {
+    const { defaultText: _unused, ...plain } = field;
+    const none = render(<ConfigFieldControl field={plain} value="" onChange={noop} />);
+    expect(empty(none.getByRole('combobox'))).toBe('— none —');
+    none.unmount();
+    const stray = render(
+      <ConfigFieldControl field={{ ...field, defaultText: 'gone' }} value="" onChange={noop} />,
+    );
+    expect(empty(stray.getByRole('combobox'))).toBe('— none —');
+  });
+
+  it("an optional cell's empty choice stays blank (#1694 OR42 item 9)", () => {
+    const { getByRole } = render(
+      <ConfigFieldControl field={field} name="mapping row 1 on error" value="" onChange={noop} />,
+    );
+    expect(empty(getByRole('combobox'))).toBe('');
+  });
+});
+
 describe('ConfigFieldControl — what a list holds is behind its `?`, not a paragraph (#1694 OR42)', () => {
   const secrets: ConfigField = {
     name: 'auth',
