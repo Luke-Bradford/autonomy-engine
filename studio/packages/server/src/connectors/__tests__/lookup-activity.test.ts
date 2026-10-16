@@ -830,7 +830,9 @@ describe('#1600 OR41 C7d — the workspace’s Lookup max rows', () => {
       ),
     );
     expect(end).toMatchObject({ type: 'failed', kind: 'permanent' });
-    expect(end.type === 'failed' ? end.error : '').toContain("workspace's Lookup max rows (100, in Settings)");
+    expect(end.type === 'failed' ? end.error : '').toContain(
+      "workspace's Lookup max rows (100, in Settings)",
+    );
   });
 
   it('First row only still reads one row under any ceiling', async () => {
