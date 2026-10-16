@@ -196,7 +196,7 @@ test.describe('#1600 C8a — Get metadata', () => {
               predicate: "${equals(item.type, 'file')}",
             },
           },
-          { id: 'w', type: 'wait', position: { x: 540, y: 0 }, config: { seconds: 1 } },
+          { id: 'w', type: 'wait', position: { x: 540, y: 0 }, config: { seconds: '${1}' } },
         ],
         edges: [
           { id: 'e1', from: 'list', to: 'files', on: 'success' },
