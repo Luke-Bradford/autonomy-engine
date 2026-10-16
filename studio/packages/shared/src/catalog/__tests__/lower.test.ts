@@ -5,6 +5,7 @@ import {
   lowerLlmStructuredOutputs,
   lowerNodeOutputs,
   lowerPipelineNodes,
+  refreshFormerOutputs,
 } from '../lower.js';
 import { getActivity } from '../registry.js';
 import { AGENT_TASK_ACTIVITY_TYPE, LLM_CALL_ACTIVITY_TYPE } from '../types.js';
@@ -505,5 +506,47 @@ describe('lowerPipelineNodes (#526) — the ONE composition of the four passes',
         lowerNodeOutputs(lowerAgentTaskStructuredOutputs(lowerLlmStructuredOutputs(nodes))),
       ),
     );
+  });
+});
+
+describe('refreshFormerOutputs (#1600 OR41 C7a)', () => {
+  const FOUR = [
+    { name: 'rows', type: 'json' },
+    { name: 'rowCount', type: 'number' },
+    { name: 'bytes', type: 'number' },
+    { name: 'truncated', type: 'boolean' },
+  ] as const;
+  const lookup = (outputs: unknown): Node =>
+    ({ id: 'l', type: 'lookup', config: { outputs }, position: { x: 0, y: 0 } }) as Node;
+
+  it('re-seeds a node holding EXACTLY a former contract with today’s, as a copy', () => {
+    const [node] = refreshFormerOutputs([lookup(FOUR.map((o) => ({ ...o })))]);
+    const today = getActivity('lookup')!.outputs;
+    expect(node!.config['outputs']).toEqual(today);
+    expect(node!.config['outputs']).not.toBe(today);
+    expect((node!.config['outputs'] as unknown[])[0]).not.toBe(today[0]);
+  });
+
+  it('keeps the rest of the node and its config', () => {
+    const node = {
+      ...lookup(FOUR.map((o) => ({ ...o }))),
+      connectionId: 'c',
+      config: { outputs: FOUR.map((o) => ({ ...o })), maxRows: 5 },
+    } as Node;
+    const [out] = refreshFormerOutputs([node]);
+    expect(out).toMatchObject({ id: 'l', connectionId: 'c', config: { maxRows: 5 } });
+  });
+
+  it('leaves every other contract, and every other node, by reference', () => {
+    const nodes = [
+      lookup(FOUR.slice(0, 3)),
+      lookup([...FOUR].reverse()),
+      lookup(FOUR.map((o) => ({ ...o, description: 'x' }))),
+      lookup(getActivity('lookup')!.outputs),
+      lookup(undefined),
+      { id: 'w', type: 'wait', config: { outputs: FOUR }, position: { x: 0, y: 0 } } as Node,
+    ];
+    const out = refreshFormerOutputs(nodes);
+    out.forEach((n, i) => expect(n).toBe(nodes[i]));
   });
 });

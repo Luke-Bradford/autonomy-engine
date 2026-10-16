@@ -41,15 +41,18 @@ export type ActivityCategory = (typeof ACTIVITY_CATEGORIES)[number];
  * The vocabulary is FIXED here, so a tab is spelled the same on every activity
  * that has one ("Source" on Copy and on Lookup) and a new tab is a deliberate
  * addition rather than a per-entry string. The order is the vocabulary's own.
+ * `settings` follows `mapping`, ADF's Copy order (Source · Sink · Mapping ·
+ * Settings), so a Lookup opens on its Source (#1600 C7a); an activity whose
+ * only or first tab is Settings is unaffected.
  *
  * Display-only metadata, like `description`: nothing persists it on a version,
  * so declaring or regrouping tabs never bumps `CATALOG_VERSION`.
  */
 export const ACTIVITY_TAB_KEYS = [
-  'settings',
   'source',
   'sink',
   'mapping',
+  'settings',
   'request',
   'auth',
   'model',
@@ -386,7 +389,8 @@ export const COPY_TYPES = [COPY_ACTIVITY_TYPE, COPY_FILES_ACTIVITY_TYPE] as cons
  * node's declared outputs. It is the one activity whose rows become DURABLE:
  * §5's rule that "rows never enter `run_events`" is a statement about `copy`,
  * and `lookup` is the deliberate exception — which is why §5 gives it a
- * CONCRETE bound (`LOOKUP_ROW_CAP`, `LOOKUP_BYTE_CAP` in `server/limits.ts`)
+ * CONCRETE bound (`LOOKUP_ROW_CAP` in `catalog/lookup-config.ts`, `LOOKUP_BYTE_CAP` in
+ * `server/limits.ts`)
  * rather than a "bounded" one, and why the truncation has to be VISIBLE in both
  * the outputs and the run log.
  *
@@ -543,6 +547,24 @@ export interface ActivityCatalogEntry {
   >;
   /** Canonical outputs (UI/metadata). See the class doc — not the runtime SSOT. */
   outputs: Output[];
+  /**
+   * #1600 OR41 C7a — earlier catalog defaults of `outputs`. A node saves its
+   * contract into `config.outputs` and keeps it, so a node saved before outputs
+   * were added still declares the old set, and the new names are dropped from
+   * its run. The editor re-seeds a node whose `config.outputs` is EXACTLY one of
+   * these with today's `outputs` when it loads (`refreshFormerOutputs`), and the
+   * next Save writes it. A contract that matches none is left alone. Authoring
+   * only, like `tabs`.
+   */
+  formerOutputs?: readonly (readonly Output[])[];
+  /**
+   * #1600 OR41 C7a — config written into a NEW node when the canvas adds it:
+   * ADF's new-node default where it differs from the schema's own default,
+   * which stays today's behaviour for stored nodes (catalogue §8). In the doc,
+   * so the JSON shows it; never applied at run time. Must parse against
+   * `configSchema` (`registry.test.ts`).
+   */
+  newNodeConfig?: Readonly<Record<string, unknown>>;
   /**
    * #1420 — the known fields of each ELEMENT of an array output, keyed by output
    * name: what the expression picker offers as `${item.<field>}` inside a foreach

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { LOOKUP_ACTIVITY_TYPE, WARNING_CODES } from '@autonomy-studio/shared';
-import { LOOKUP_BATCH_ROWS, LOOKUP_BYTE_CAP, LOOKUP_ROW_CAP } from '../../limits.js';
+import { LOOKUP_ACTIVITY_TYPE, LOOKUP_ROW_CAP, WARNING_CODES } from '@autonomy-studio/shared';
+import { LOOKUP_BATCH_ROWS, LOOKUP_BYTE_CAP } from '../../limits.js';
 import { estimateRowLowerBound } from '../lookup-bounds.js';
 import { runLookupActivity } from '../lookup.js';
 import { DatasetIoError } from '../dataset-io-error.js';
@@ -31,13 +31,15 @@ function sourceIo(
   };
 }
 
-function lookupCtx(over: { datasets?: unknown; signal?: AbortSignal } = {}): ActivityContext {
+function lookupCtx(
+  over: { datasets?: unknown; signal?: AbortSignal; input?: Record<string, unknown> } = {},
+): ActivityContext {
   return {
     runId: 'run-1',
     nodeId: 'n1',
     attemptId: 'a1',
     activityType: LOOKUP_ACTIVITY_TYPE,
-    input: {},
+    input: over.input ?? {},
     connectionConfig: {},
     ...(over.datasets === null
       ? {}
@@ -75,7 +77,7 @@ async function valueOf(raw: unknown, io: Partial<SourceIo> = {}): Promise<unknow
 }
 
 describe('the happy path contract', () => {
-  it('yields ONE terminal carrying exactly the four declared outputs', async () => {
+  it('yields ONE terminal carrying exactly the six declared outputs', async () => {
     const events = await run(
       lookupCtx(),
       sourceIo([[{ id: 1, name: 'a' }], [{ id: 2, name: 'b' }]]),
@@ -90,6 +92,8 @@ describe('the happy path contract', () => {
         { id: 2, name: 'b' },
       ],
       rowCount: 2,
+      count: 2,
+      firstRow: { id: 1, name: 'a' },
       bytes: Buffer.byteLength('{"id":1,"name":"a"}{"id":2,"name":"b"}', 'utf8'),
       truncated: false,
     });
@@ -202,7 +206,14 @@ describe('§5 the two caps — truncate and MARK, never fail', () => {
     // `[]` + true (above) means at least one row exists and none fit.
     const events = await run(lookupCtx(), sourceIo([[]]));
     const out = outputsOf(events);
-    expect(out).toEqual({ rows: [], rowCount: 0, bytes: 0, truncated: false });
+    expect(out).toEqual({
+      rows: [],
+      rowCount: 0,
+      count: 0,
+      firstRow: null,
+      bytes: 0,
+      truncated: false,
+    });
     expect(warnings(events)).toEqual([]);
   });
 });
@@ -606,5 +617,158 @@ describe('lookup — the pre-screen that bounds what is MATERIALISED (#1224)', (
 
     await run(lookupCtx(), io);
     expect(seen).toBe(LOOKUP_BATCH_ROWS);
+  });
+});
+
+describe('#1600 OR41 C7a — the Settings tab: First row only, Max rows, When over the limit', () => {
+  const many = (n: number) => Array.from({ length: n }, (_, i) => ({ i }));
+
+  it('an ABSENT config keeps the pre-C7a read: every row up to the cap, not the first only', async () => {
+    // Catalogue §8: a stored `lookup` node (config {}) lowers to "not first row
+    // only", so today's `rows` shape is kept. `{}` is also what Preview sends.
+    const out = outputsOf(await run(lookupCtx(), sourceIo([many(3)])));
+    expect(out.rows).toEqual(many(3));
+    expect(out.count).toBe(3);
+  });
+
+  it('First row only reads ONE row, and more rows in the source is not a truncation', async () => {
+    let pulled = 0;
+    const io = sourceIo([], {
+      async *readBatches() {
+        for (let b = 0; b < 5; b += 1) {
+          pulled += 1;
+          yield many(2);
+        }
+      },
+    });
+    const events = await run(lookupCtx({ input: { firstRowOnly: true } }), io);
+    const out = outputsOf(events);
+    expect(out.firstRow).toEqual({ i: 0 });
+    expect(out.rows).toEqual([{ i: 0 }]);
+    expect(out.count).toBe(1);
+    expect(out.rowCount).toBe(1);
+    // It asked for one row, and got it: there is nothing to warn about.
+    expect(out.truncated).toBe(false);
+    expect(warnings(events)).toEqual([]);
+    // It stops reading once it has its row, rather than draining the source.
+    expect(pulled).toBe(1);
+  });
+
+  it('First row only over an EMPTY source is firstRow null, count 0, not truncated', async () => {
+    const out = outputsOf(await run(lookupCtx({ input: { firstRowOnly: true } }), sourceIo([[]])));
+    expect(out).toMatchObject({ firstRow: null, count: 0, rows: [], truncated: false });
+  });
+
+  it('First row only whose one row is over the byte cap is firstRow null AND truncated', async () => {
+    const events = await run(
+      lookupCtx({ input: { firstRowOnly: true } }),
+      sourceIo([[{ v: 'z'.repeat(LOOKUP_BYTE_CAP + 1) }]]),
+    );
+    const out = outputsOf(events);
+    // `truncated` is what tells this null from an empty source's.
+    expect(out).toMatchObject({ firstRow: null, count: 0, truncated: true });
+    expect(warnings(events)).toHaveLength(1);
+  });
+
+  it('Max rows stops the read at the author’s limit and names THAT limit', async () => {
+    const events = await run(lookupCtx({ input: { maxRows: 2 } }), sourceIo([many(5)]));
+    const out = outputsOf(events);
+    expect(out.rows).toEqual(many(2));
+    expect(out.count).toBe(2);
+    expect(out.truncated).toBe(true);
+    const warned = warnings(events)[0];
+    expect(warned?.type === 'warned' ? warned.reason : '').toContain('2-row');
+  });
+
+  it('a source of exactly Max rows is complete, not truncated', async () => {
+    const events = await run(lookupCtx({ input: { maxRows: 2 } }), sourceIo([many(2)]));
+    expect(outputsOf(events).truncated).toBe(false);
+    expect(warnings(events)).toEqual([]);
+  });
+
+  it('When over the limit = Fail fails the activity, permanent, with no outputs', async () => {
+    const events = await run(
+      lookupCtx({ input: { maxRows: 2, overLimit: 'fail' } }),
+      sourceIo([many(5)]),
+    );
+    expect(events.filter((e) => e.type === 'succeeded')).toEqual([]);
+    expect(warnings(events)).toEqual([]);
+    const end = terminal(events);
+    expect(end).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(end.type === 'failed' ? end.error : '').toContain('2-row');
+    // It returns no rows, so it must not say it returned a prefix.
+    expect(end.type === 'failed' ? end.error : '').not.toContain('prefix');
+  });
+
+  it('Fail with First row only names an oversize first row, and claims no rows', async () => {
+    const events = await run(
+      lookupCtx({ input: { firstRowOnly: true, overLimit: 'fail' } }),
+      sourceIo([[{ v: 'z'.repeat(LOOKUP_BYTE_CAP + 1) }]]),
+    );
+    const end = terminal(events);
+    expect(end).toMatchObject({ type: 'failed', kind: 'permanent' });
+    const error = end.type === 'failed' ? end.error : '';
+    expect(error).toContain('FIRST row alone');
+    expect(error).not.toContain('materialised —');
+  });
+
+  it('asks the reader for no more rows than the limit can use', async () => {
+    const asked: (number | undefined)[] = [];
+    const io = sourceIo([], {
+      async *readBatches(args) {
+        asked.push(args.batchRows);
+        yield many(3);
+      },
+    });
+    await run(lookupCtx({ input: { firstRowOnly: true } }), io);
+    await run(lookupCtx({ input: { maxRows: 5 } }), io);
+    await run(lookupCtx(), io);
+    expect(asked).toEqual([1, 6, LOOKUP_BATCH_ROWS]);
+  });
+
+  it('Fail applies to the BYTE cap too, the other half of "the limit"', async () => {
+    const events = await run(
+      lookupCtx({ input: { overLimit: 'fail' } }),
+      sourceIo([[{ v: 'z'.repeat(LOOKUP_BYTE_CAP + 1) }]]),
+    );
+    expect(terminal(events)).toMatchObject({ type: 'failed', kind: 'permanent' });
+  });
+
+  it('Fail succeeds as normal when the source is within the limit', async () => {
+    const events = await run(
+      lookupCtx({ input: { maxRows: 5, overLimit: 'fail' } }),
+      sourceIo([many(5)]),
+    );
+    expect(outputsOf(events).count).toBe(5);
+  });
+
+  it('refuses a config it cannot honour, before reading anything', async () => {
+    let read = false;
+    const io = sourceIo([], {
+      async *readBatches() {
+        read = true;
+        yield [];
+      },
+    });
+    for (const input of [
+      { maxRows: 0 },
+      { maxRows: LOOKUP_ROW_CAP + 1 },
+      { maxRows: 1.5 },
+      { firstRowOnly: 'yes' },
+      { overLimit: 'drop' },
+    ]) {
+      const end = terminal(await run(lookupCtx({ input }), io));
+      expect(end).toMatchObject({ type: 'failed', kind: 'permanent' });
+      expect(end.type === 'failed' ? end.error : '').toContain('invalid lookup activity config');
+    }
+    expect(read).toBe(false);
+  });
+
+  it('ignores the node’s declared `outputs`, which the prepared input carries', async () => {
+    const events = await run(
+      lookupCtx({ input: { outputs: [{ name: 'rows', type: 'json' }], firstRowOnly: true } }),
+      sourceIo([many(2)]),
+    );
+    expect(outputsOf(events).count).toBe(1);
   });
 });

@@ -1,6 +1,7 @@
 import type { Node } from '../schemas/pipeline.js';
 import { protectEscapes, scanTemplateRefs } from '../engine/expr.js';
 import { copyFilesConfigSchema } from './copy-files-config.js';
+import { catalogOutputs } from './lower.js';
 import { getActivity } from './registry.js';
 import {
   COPY_FILES_ACTIVITY_TYPE,
@@ -123,7 +124,7 @@ function lowerFileTransfer(afterCopy: 'keep' | 'delete') {
     // The replacement's contract, deep-copied: every retired output name is in
     // it (`RETIRED_LOWERINGS[*].outputs`), so a `${nodes.x.output.dest}` still
     // resolves.
-    config['outputs'] = replacement.outputs.map((o) => ({ ...o }));
+    config['outputs'] = catalogOutputs(replacement);
     const { connectionId, ...rest } = node;
     return {
       ...rest,

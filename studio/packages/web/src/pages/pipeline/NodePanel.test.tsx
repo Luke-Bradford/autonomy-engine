@@ -2098,7 +2098,7 @@ describe('NodePanel — what each tab holds (#1396, #1477)', () => {
 
   it('puts a dataset picker on the Source tab of an unpaired activity', () => {
     mountOver(node('n_look', 'lookup', {}));
-    expect(tabNames()).toEqual(['General', 'Source']);
+    expect(tabNames()).toEqual(['General', 'Source', 'Settings']); // #1600 C7a — Settings after Source
     expect(selectedTab()).toBe('Source');
     const source = within(screen.getByRole('tabpanel', { name: 'Source' }));
     expect(source.getByRole('combobox', { name: 'Connection' })).toBeTruthy();

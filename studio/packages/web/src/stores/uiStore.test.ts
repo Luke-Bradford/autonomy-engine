@@ -679,9 +679,9 @@ describe('uiStore Problems column (#1475 OR27)', () => {
 });
 
 describe('uiStore dock tabs (#1475 OR27)', () => {
-  it('starts on Settings and Parameters', () => {
+  it('starts on no activity tab (each opens on its first) and Parameters', () => {
     const state = createUiStore(fakeStorage()).getState();
-    expect(state.dockNodeTab).toBe('settings');
+    expect(state.dockNodeTab).toBeNull();
     expect(state.dockPipelineTab).toBe('params');
   });
 
@@ -704,7 +704,7 @@ describe('uiStore dock tabs (#1475 OR27)', () => {
         [DOCK_PIPELINE_TAB_STORAGE_KEY]: 'Settings',
       }),
     ).getState();
-    expect(state.dockNodeTab).toBe('settings');
+    expect(state.dockNodeTab).toBeNull();
     expect(state.dockPipelineTab).toBe('params');
   });
 });

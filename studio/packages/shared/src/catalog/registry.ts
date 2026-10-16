@@ -30,6 +30,7 @@ import {
 import { agentTaskConfigSchema } from './agent-config.js';
 import { copyDispatchInputSchema, copyInputSchema } from './copy-config.js';
 import { copyFilesConfigSchema } from './copy-files-config.js';
+import { lookupConfigSchema } from './lookup-config.js';
 import { llmCallConfigSchema } from './llm-config.js';
 import {
   fileCopyConfigSchema,
@@ -869,13 +870,13 @@ const ENTRIES: ActivityCatalogEntry[] = [
      *
      * OUTPUTS, and the two the ticket required this slice to settle:
      *
-     *  - `rows` carries the materialised records. There is deliberately NO
-     *    `firstRow` convenience: `engine/expr.ts` parses an INDEX segment, so
-     *    `${nodes.x.output.rows[0].sku}` already addresses it, and a second
-     *    spelling would need a value for the empty case that a consumer could
-     *    not distinguish from "row 0 was null". An empty lookup must not
-     *    manufacture a row, and the cheapest way to honour that is not to offer
-     *    a field whose empty value has to be invented.
+     *  - `rows` carries the materialised records. M12 offered no `firstRow`;
+     *    #1600 OR41 C7a adds it with catalogue §4.2 (ADF's Lookup output). Its
+     *    empty value is `null`, which no row can be (a row is a record), and
+     *    `truncated` tells an empty source from a first row too large to keep.
+     *    So nothing is manufactured: `null` is "no row", not a row.
+     *  - `count` (C7a, ADF's name) and `rowCount` (M12's, kept so the nodes
+     *    that read it keep working, catalogue §8) are the same number.
      *  - `rowCount` is ALWAYS `rows.length`. On a truncated lookup the source
      *    total is unknown — the read stopped — and studio does not report what
      *    it did not count.
@@ -895,20 +896,26 @@ const ENTRIES: ActivityCatalogEntry[] = [
      * asserted: there is no sink half of this entry for a future slice to widen
      * without confronting this flag.
      *
-     * NO CONFIG. `configSchema` is an empty object because a `lookup` node has
-     * no settings: the table, the query and its parameters, the file path, the
-     * sheet and the header row are all the DATASET's, and it is the dataset's
-     * config that the reader re-validates at dispatch (§8). A `maxRows` knob was
-     * considered and CUT — §5 settles the bound as a constant, and a per-node
-     * override would make a durable-log guarantee configurable by the person the
-     * guarantee protects against.
+     * SETTINGS (#1600 OR41 C7a, catalogue §4.2): First row only, Max rows and
+     * When over the limit. The table, the query and its parameters, the file
+     * path, the sheet and the header row stay the DATASET's, re-validated by the
+     * reader at dispatch (§8). M12 cut a `maxRows` knob because a per-node
+     * override would make the durable-log bound configurable by the person it
+     * protects against. Max rows keeps that: it can only LOWER
+     * `LOOKUP_ROW_CAP`, and the byte cap is not configurable at all.
      */
     type: LOOKUP_ACTIVITY_TYPE,
     title: 'Lookup rows',
     description: 'Read a bounded set of rows from a dataset so later activities can use them.',
     kind: 'execution',
     category: 'general',
-    tabs: [{ key: 'source', bindings: ['connection', 'sourceDataset'], fields: [] }],
+    tabs: [
+      { key: 'source', bindings: ['connection', 'sourceDataset'], fields: [] },
+      { key: 'settings', fields: ['firstRowOnly', 'maxRows', 'overLimit'] },
+    ],
+    // ADF's new-node default. The schema's own default is off, so a stored
+    // node keeps returning `rows` (catalogue §8).
+    newNodeConfig: { firstRowOnly: true },
     idempotent: true,
     // The same three source stores `copy` reads from, and for the same reason:
     // the executor dispatches on the bound connection's kind, so a lookup is
@@ -924,10 +931,23 @@ const ENTRIES: ActivityCatalogEntry[] = [
     outputs: [
       out('rows', 'json'),
       out('rowCount', 'number'),
+      out('count', 'number'),
+      out('firstRow', 'json'),
       out('bytes', 'number'),
       out('truncated', 'boolean'),
     ],
-    configSchema: z.object({}),
+    // The four M12 declared, which a node saved before C7a still holds. Written
+    // out, not derived from `outputs`: it is a snapshot of an old default.
+    formerOutputs: [
+      [
+        out('rows', 'json'),
+        out('rowCount', 'number'),
+        out('bytes', 'number'),
+        out('truncated', 'boolean'),
+      ],
+    ],
+    configSchema: lookupConfigSchema,
+    dispatchConfigSchema: lookupConfigSchema,
   },
 ];
 

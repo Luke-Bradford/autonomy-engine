@@ -1,4 +1,4 @@
-import type { Node } from '../schemas/pipeline.js';
+import type { Node, Output } from '../schemas/pipeline.js';
 import { getActivity, isStructuralCallActivity } from './registry.js';
 import {
   findLlmMessagesRowIndex,
@@ -8,7 +8,11 @@ import {
   llmStructuredOutputSurfaceSchema,
   lowerOutputSchema,
 } from './llm-config.js';
-import { AGENT_TASK_ACTIVITY_TYPE, LLM_CALL_ACTIVITY_TYPE } from './types.js';
+import {
+  AGENT_TASK_ACTIVITY_TYPE,
+  LLM_CALL_ACTIVITY_TYPE,
+  type ActivityCatalogEntry,
+} from './types.js';
 
 /**
  * #1 F13b — LOWER the catalog's canonical `outputs` into a node's
@@ -83,6 +87,12 @@ import { AGENT_TASK_ACTIVITY_TYPE, LLM_CALL_ACTIVITY_TYPE } from './types.js';
  * the registry is module-level shared state, so handing out an alias would let a
  * later doc edit mutate the catalog for every other consumer.
  */
+/** A catalog entry's outputs as the node's own: fresh objects, never the
+ * registry's (see "Immutability" above). */
+export function catalogOutputs(entry: Pick<ActivityCatalogEntry, 'outputs'>): Output[] {
+  return entry.outputs.map((o) => ({ ...o }));
+}
+
 export function lowerNodeOutputs(nodes: Node[]): Node[] {
   return nodes.map((node) => {
     // Any present value — declared, empty [], or even corrupt — is left as-is;
@@ -96,10 +106,38 @@ export function lowerNodeOutputs(nodes: Node[]): Node[] {
     if (node.call !== undefined || isStructuralCallActivity(node.type)) return node;
     const entry = getActivity(node.type);
     if (entry === undefined) return node; // unknown type — no default to seed
-    return {
-      ...node,
-      config: { ...node.config, outputs: entry.outputs.map((o) => ({ ...o })) },
-    };
+    return { ...node, config: { ...node.config, outputs: catalogOutputs(entry) } };
+  });
+}
+
+/**
+ * #1600 OR41 C7a — re-seed a node whose `config.outputs` is EXACTLY an earlier
+ * catalog default (`ActivityCatalogEntry.formerOutputs`) with today's
+ * `outputs`. The editor runs it on load, beside `lowerRetiredTypes`, so the next
+ * Save writes the new contract; the server's write path does not, for the
+ * reason retired lowering keeps off it (a re-pulled or imported version must
+ * stay what it was). Matching is by name and type in order, so a contract the
+ * author or a structured mode wrote is never touched.
+ */
+export function refreshFormerOutputs(nodes: Node[]): Node[] {
+  return nodes.map((node) => {
+    const entry = getActivity(node.type);
+    const declared = node.config['outputs'];
+    if (entry?.formerOutputs === undefined || !Array.isArray(declared)) return node;
+    const matches = (former: readonly Output[]) =>
+      former.length === declared.length &&
+      former.every((o, i) => {
+        const d: unknown = declared[i];
+        return (
+          typeof d === 'object' &&
+          d !== null &&
+          Object.keys(d).length === 2 &&
+          (d as Output).name === o.name &&
+          (d as Output).type === o.type
+        );
+      });
+    if (!entry.formerOutputs.some(matches)) return node;
+    return { ...node, config: { ...node.config, outputs: catalogOutputs(entry) } };
   });
 }
 

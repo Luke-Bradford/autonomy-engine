@@ -11,6 +11,7 @@ import {
   authorsCallBlob,
   lowerPipelineNodes,
   lowerRetiredTypes,
+  refreshFormerOutputs,
   COPY_TYPES,
   referencedNodeIds,
   remapNodeRefs,
@@ -1747,7 +1748,11 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           // as its replacement, so the next Save writes it (catalogue §8). Not
           // `dirty` either, for the reason above; the stored version still runs
           // as the type it holds.
-          nodes: v ? lowerPipelineNodes(lowerRetiredTypes(v.nodes)).map((n) => ({ ...n })) : [],
+          nodes: v
+            ? lowerPipelineNodes(refreshFormerOutputs(lowerRetiredTypes(v.nodes))).map((n) => ({
+                ...n,
+              }))
+            : [],
           // #1139 — a half-picked binding names a node in the doc being REPLACED,
           // so it cannot outlive it. Cleared here rather than left to be masked,
           // because "masked" and "gone" look identical right up until a new doc
@@ -1842,7 +1847,9 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         const created: Node = {
           id: newLocalId('n'),
           type,
-          config: {},
+          // #1600 OR41 C7a — ADF's new-node defaults (e.g. a Lookup's First row
+          // only), COPIED out of the catalog like its outputs below.
+          config: { ...getActivity(type)?.newNodeConfig },
           // COPIED, never aliased: the store owns its graph, and holding a
           // caller's object would let that caller mutate a node's position from
           // outside the actions — the single mutation point this store's doc

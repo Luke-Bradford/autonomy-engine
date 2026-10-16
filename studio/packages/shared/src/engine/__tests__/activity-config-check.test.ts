@@ -194,12 +194,12 @@ describe('activityNodeErrors (#1480)', () => {
 
   it('validates every dispatched activity with the schema its adapter parses', () => {
     // An executor-dispatched entry (it names connection kinds) with no
-    // dispatch schema would be a type that saves anything — `lookup` alone is
-    // deliberate (it has no config).
+    // dispatch schema would be a type that saves anything. `lookup` was the one
+    // exception while it had no config; #1600 C7a gave it Settings.
     const unchecked = [...catalog.values()]
       .filter((e) => e.kind !== 'control' && e.dispatchConfigSchema === undefined)
       .map((e) => e.type);
-    expect(unchecked).toEqual(['lookup']);
+    expect(unchecked).toEqual([]);
   });
 });
 

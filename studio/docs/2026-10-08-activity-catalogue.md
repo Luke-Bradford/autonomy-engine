@@ -142,7 +142,7 @@ Three toggles decide the shape: *Copy mode* first on **General** (#1694 OR42 ite
 | Inline | **Content** ⓕ, either rows as a JSON array or text. This replaces Write File, e.g. writing an expression's value to a file |
 | Any (rows) | **Additional columns** table: name · value, where value is `$$FILEPATH`, `$$COLUMN:<src>`, a literal or ⓕ (ADF `additionalColumns`) |
 
-**Built (C1q-a, #1600):** an inline Table or Query is `Node.inlineDatasets.source`, a node-level field beside `datasetIds` (whose `source` became optional so a Copy can bind a saved sink beside it). It dispatches as the same resolved dataset a saved one becomes, so every reader runs unchanged. The SQL text, table and schema stay literal by construction: the reducer resolves `${}` only in the parameter **values**, and save refuses a `${` in the SQL, so a value can never become SQL and a name never comes from an expression (§8). At dispatch the node's source connection must be a store the kind can live in (sqlite or postgres). A Lookup's first row is read as `${nodes.<lookup>.output.rows[0].<column>}` until C7 adds `firstRow`; studio has no `activity('Name')` function, so the ticket's ADF spelling does not apply.
+**Built (C1q-a, #1600):** an inline Table or Query is `Node.inlineDatasets.source`, a node-level field beside `datasetIds` (whose `source` became optional so a Copy can bind a saved sink beside it). It dispatches as the same resolved dataset a saved one becomes, so every reader runs unchanged. The SQL text, table and schema stay literal by construction: the reducer resolves `${}` only in the parameter **values**, and save refuses a `${` in the SQL, so a value can never become SQL and a name never comes from an expression (§8). At dispatch the node's source connection must be a store the kind can live in (sqlite or postgres). A Lookup's first row is read as `${nodes.<lookup>.output.firstRow.<column>}` (C7a; `rows[0]` still works); studio has no `activity('Name')` function, so the ticket's ADF spelling does not apply.
 
 **Built (C1q-b, #1600):** the Source tab's *Use* Saved dataset · Table · Query edits `Node.inlineDatasets.source` for Copy and Lookup, writing through on each keystroke with one undo step per field. It shows when the source connection is a store an inline kind can live in, or when an inline source is already stored; a stored one under a connection that cannot hold it says so. The fields, titles and `?` notes come from the `table` and `query` dataset schemas, so the inline form and the saved dataset form cannot drift. This row's original ⓕ on the table and the SQL editor contradicted §8's literal rule, so they are literal here: only a bind value takes ⓕ, and the statement's ⤢ editor has no reference flyout. The issue list counts every inline-source problem on the Source tab. Left to **C1q-c**, and all built there (below): Table `[▾ from the connection]`, *Preview*, *Query timeout*, bind-value rows derived from the statement's `:name`s, and a type for a new literal bind value.
 
@@ -208,6 +208,20 @@ Source: [Lookup](https://learn.microsoft.com/azure/data-factory/control-flow-loo
   - `content` + `path` (whole-file text);
   - `truncated`, `bytes`.
 - **Monitor:** `count` maps to the rows column, which is not mapped today.
+
+**Built (C7a):** First row only, Max rows and When over the limit, on a Settings tab after Source.
+- **Defaults.** The schema's defaults are today's behaviour: off, 1000, Truncate and warn. A stored `lookup` (`config: {}`) is therefore already "Lookup · not first row only" (§8), with no lowering. A new Lookup is written `firstRowOnly: true` by the catalog entry's `newNodeConfig`, so ADF's default is in the JSON.
+- **Max rows** can only lower the 1000-row cap (`LOOKUP_ROW_CAP`, now in `shared`). The 1 MiB byte cap is not configurable. Raising the ceiling per workspace is C7b.
+- **When over the limit** applies to either bound, rows or bytes. Fail fails the activity `permanent` with the truncation reason.
+- **First row only** reads one row. A source with more rows is not a truncation. Its one row can still be over the byte cap, which is truncated (or fails).
+- **Outputs.** All six are always present, because every declared output is required: `rows`, `rowCount`, `count`, `firstRow`, `bytes`, `truncated`. That is a deliberate departure from "firstRow, or rows + count".
+  - `firstRow` is `null` when no row was kept. `truncated` tells an empty source from a first row too large to keep.
+  - `rowCount` stays as the old name for `count`.
+- **Stored contracts.** A node saved before C7a still declares the four old outputs in `config.outputs`, so its runs would drop `count` and `firstRow`. The editor re-seeds a node whose contract is exactly that former default when it loads it (`formerOutputs`, `refreshFormerOutputs`), and the next Save writes it. It runs on the editor's load only, for the reason C1b's lowering does (below). Any other contract is left alone.
+- **Two dock changes it needed.** The tab vocabulary puts Settings after Mapping (ADF's Copy order), so a Lookup opens on its Source. The dock's remembered tab starts unset rather than Settings, so an activity opens on its first tab until the author picks one.
+- **A stored config.** A stored `lookup` is now parsed at dispatch. A version that carries one of these keys with a value the schema refuses fails `permanent` where it used to ignore it. M12 offered no such key, so only a hand-written doc can hold one.
+- **Not built, C7b:** Read as *Whole file as text* and the `file_read` lowering; the workspace ceiling; the Monitor rows column; the title *Lookup*.
+  - The Monitor rows column needs the activity's type on the activity-runs row: the run-log projection has no doc to read it from.
 
 ### 4.3 Get metadata
 Sources: [Get Metadata](https://learn.microsoft.com/azure/data-factory/control-flow-get-metadata-activity), [Validation](https://learn.microsoft.com/azure/data-factory/control-flow-validation-activity).
@@ -349,7 +363,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C4 | Copy: mapping redesign (x → y rows from imported schemas, map-by-name default, type conversion settings, ƒx whole mapping, additional columns) | depends on OR10 import |
 | C5 | Copy: incremental (watermark Automatic / Expression; files modified-since-last-success) | OR15 incremental |
 | C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs | — |
-| C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read | — |
+| C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Whole file as text with the `file_read` lowering, the workspace Max rows ceiling, the Monitor rows column, the title *Lookup* | — |
 | C8 | Get metadata + wait-until. Lower file_list | OR17 #1408 |
 | C9 | Delete: wildcard, folders, dates, log. Lower file_delete | OR17 #1408 |
 | C10 | Script activity | OR12 #1403, OR15 sql_script |

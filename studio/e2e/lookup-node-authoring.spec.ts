@@ -78,12 +78,14 @@ test.describe('#1221 — lookup-node authoring', () => {
     }
     await expect(properties(page).getByRole('combobox', { name: 'Source dataset' })).toBeVisible();
 
-    // A lookup node has no settings of its own — everything that shapes the read
-    // belongs to the dataset — so its one tab (#1477: Source) holds the bindings
-    // and no config form, rather than degrading to a raw JSON textarea.
-    await expect(
-      properties(page).getByRole('tablist', { name: 'Activity properties' }).getByRole('tab'),
-    ).toHaveCount(2); // General, Source
+    // Everything that shapes the read belongs to the dataset, so the Source tab
+    // (#1477) holds the bindings and no config form, rather than a raw JSON
+    // textarea. Its own Settings (#1600 C7a) are a tab of their own, after it.
+    const tabStrip = properties(page).getByRole('tablist', { name: 'Activity properties' });
+    await expect(tabStrip.getByRole('tab')).toHaveCount(3);
+    for (const name of ['General', 'Source', 'Settings']) {
+      await expect(tabStrip.getByRole('tab', { name, exact: true })).toHaveCount(1);
+    }
     await expect(properties(page).getByRole('tab', { name: 'Source' })).toHaveAttribute(
       'aria-selected',
       'true',
@@ -153,7 +155,69 @@ test.describe('#1221 — lookup-node authoring', () => {
     // The bump this entry owes, stamped on the row the server minted. A LITERAL
     // on purpose: it is the tripwire that makes a catalog widening show up here
     // and not only in the shared package's own tests.
-    expect(latest.catalogVersion).toBe(39); // #1600 C1q-c — `queryTimeoutSeconds`
+    expect(latest.catalogVersion).toBe(40); // #1600 C7a — Lookup `count`/`firstRow`
+
+    await expectQuiet(page, problems);
+  });
+
+  test('#1600 C7a — Settings: a new lookup starts First row only, and the choices save', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const pipelineId = await openSeededCanvas(page, 'e2e 1600 c7a lookup row limit', {
+      nodes: [],
+    });
+    await addActivity(page, 'Lookup rows');
+    await canvasNodes(page).first().click();
+    await properties(page).getByRole('tab', { name: 'Settings' }).click();
+
+    const firstRowOnly = properties(page).getByRole('checkbox', { name: 'First row only' });
+    const maxRows = properties(page).getByRole('textbox', { name: 'Max rows', exact: true });
+    const overLimit = properties(page).getByRole('combobox', { name: 'When over the limit' });
+    // ADF's new-node default, written into the node rather than assumed.
+    await expect(firstRowOnly).toBeChecked();
+    await expect(maxRows).toBeVisible();
+    await expect(overLimit.locator('option')).toContainText(['Truncate and warn', 'Fail']);
+
+    // The whole tab is on screen at 1440x900, and the number box is number-sized.
+    const pane = (await properties(page).boundingBox())!;
+    const last = (await overLimit.boundingBox())!;
+    expect(last.y + last.height).toBeLessThanOrEqual(Math.min(pane.y + pane.height, 900));
+    expect((await maxRows.boundingBox())!.width).toBeLessThanOrEqual(140);
+
+    await firstRowOnly.uncheck();
+    await maxRows.fill('50');
+    await maxRows.blur();
+    await overLimit.selectOption({ label: 'Fail' });
+    await properties(page).getByRole('button', { name: 'Apply config', exact: true }).click();
+
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+    const versions = (await (
+      await page.request.get(`/api/pipelines/${pipelineId}/versions`)
+    ).json()) as { version: number; nodes: { type: string; config: Record<string, unknown> }[] }[];
+    const latest = versions.reduce((a, b) => (b.version > a.version ? b : a));
+    const config = latest.nodes.find((n) => n.type === 'lookup')!.config;
+    // Unticked is the schema's default, which the form writes as an absent key.
+    expect(config['firstRowOnly'] ?? false).toBe(false);
+    expect(config).toMatchObject({ maxRows: 50, overLimit: 'fail' });
+    expect((config['outputs'] as { name: string }[]).map((o) => o.name)).toEqual([
+      'rows',
+      'rowCount',
+      'count',
+      'firstRow',
+      'bytes',
+      'truncated',
+    ]);
+
+    // And it reads back into the form after a reload.
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+    await canvasNodes(page).first().click();
+    await properties(page).getByRole('tab', { name: 'Settings' }).click();
+    await expect(firstRowOnly).not.toBeChecked();
+    await expect(maxRows).toHaveValue('50');
+    await expect(overLimit).toHaveValue('fail');
 
     await expectQuiet(page, problems);
   });

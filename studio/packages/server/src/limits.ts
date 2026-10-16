@@ -209,22 +209,11 @@ export const XLSX_MAX_COLUMNS = 16_384;
  */
 export const XLSX_MAX_ENTRIES = 16_384;
 
-/**
- * #996 M12 slice 2 (#1221, data-movement spec §5) — how many rows a `lookup`
- * may materialise into its declared outputs.
- *
- * `lookup` is the one activity whose rows become DURABLE. §5's rule that "rows
- * never enter `run_events`" is a statement about `copy`, and `lookup` is the
- * deliberate exception — which is why §5 gives it a CONCRETE bound rather than
- * a "bounded" one: "there is no generic output cap in studio", so nothing else
- * on the path would stop a lookup over a large table from writing that table
- * into the run log, once per attempt, re-parsed on every read of the log.
- *
- * Behaviour at the cap is settled by §5 and is not this constant's to choose:
- * **truncate and mark, never fail** — "a lookup is a read for a decision, and a
- * bounded answer is usable where an error is not".
- */
-export const LOOKUP_ROW_CAP = 1000;
+// `LOOKUP_ROW_CAP` moved to `@autonomy-studio/shared`'s `catalog/lookup-config.ts`
+// (#1600 OR41 C7a), where it also bounds a Lookup's Max rows, as
+// `DEFAULT_MAX_LIST_ENTRIES` sits in shared for its note. Behaviour at a cap is
+// the node's When over the limit (default Truncate and warn, §5's "truncate
+// and mark").
 
 /**
  * §5's other `lookup` bound: how many bytes of materialised rows may reach the
@@ -277,7 +266,7 @@ export const LOOKUP_BYTE_CAP = 1024 * 1024;
  *
  * {@link COPY_BATCH_ROWS} is sized for a streaming copy, which wants long pulls
  * because every row it reads is a row it will write. A lookup is the opposite
- * shape: it keeps at most {@link LOOKUP_ROW_CAP} rows and
+ * shape: it keeps at most `LOOKUP_ROW_CAP` rows and
  * {@link LOOKUP_BYTE_CAP} bytes and discards the rest, so a 1000-row pull buys
  * it nothing and costs it up to 1000 fully-materialised rows resident at once —
  * which for the SQL kinds is the one quantity nothing else bounds.

@@ -534,7 +534,12 @@
 // unknown key: C1a's fails-at-first-run shape, so the doc must say it needs
 // this build. (A saved dataset's key is stripped by an older build, which then
 // reads with no limit: the bound is lost, the rows are not.)
-export const CATALOG_VERSION = 39;
+// BUMP 39→40 for #1600 OR41 C7a: `lookup` declares two more required outputs,
+// `count` and `firstRow`, and gains Settings (First row only, Max rows, When
+// over the limit). A pre-C7a build never yields the new outputs, so it fails
+// such a node "missing declared output"; it also strips `firstRowOnly`, and
+// would return every row where the doc asked for one.
+export const CATALOG_VERSION = 40;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

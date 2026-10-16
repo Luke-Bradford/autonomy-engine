@@ -16,3 +16,4 @@ export * from './dataset-config.js';
 // ahead of its consumer: slice 3's `copyConfigSchema` embeds it.
 export * from './copy-config.js';
 export * from './copy-files-config.js';
+export * from './lookup-config.js';

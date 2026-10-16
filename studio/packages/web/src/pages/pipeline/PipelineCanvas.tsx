@@ -2871,7 +2871,7 @@ function PropertyPanel({
       config={node.config}
       connectionId={node.connectionId}
       call={node.call}
-      tab={nodeTab}
+      tab={nodeTab ?? undefined}
       onTab={setNodeTab}
       onConnectionColumn={onConnectionColumn}
     />
