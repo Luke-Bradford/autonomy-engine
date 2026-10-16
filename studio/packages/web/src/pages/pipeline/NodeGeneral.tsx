@@ -16,7 +16,7 @@ import { Section } from '../../lib/Section';
 import { AutoGrowTextarea } from '../../lib/form/AutoGrowTextarea';
 import { FieldCell, FieldGrid } from '../../lib/form/FieldGrid';
 import type { FieldPicker } from './ConfigFieldControl';
-import type { FieldSize } from './configForm';
+import { fieldSize, fieldSpan, type FieldSize } from './configForm';
 import type { createCanvasStore } from './canvasStore';
 import { NodeUserProperties } from './NodeUserProperties';
 import { PolicyEditor } from './PolicyEditor';
@@ -195,14 +195,20 @@ export function GeneralBasics({
 function ActivityModeField({ type, onChange }: { type: string; onChange: (next: string) => void }) {
   const select = activityModeSelect(type);
   if (select === undefined) return null;
+  // Sized by its option names, as a catalog enum is (UI standard rule 5).
+  const asEnum = {
+    kind: 'enum',
+    enumOptions: select.types,
+    label: { title: select.label, options: select.options },
+  } as const;
   return (
     <FieldGrid className="field-stack">
-      <FieldCell span="short">
+      <FieldCell span={fieldSpan(asEnum)}>
         <LabelledControl label={select.label} about={{ name: select.label, note: select.note }}>
           {(id, describedBy) => (
             <select
               id={id}
-              data-size={'s' satisfies FieldSize}
+              data-size={fieldSize(asEnum)}
               aria-describedby={describedBy}
               value={type}
               onChange={(e) => onChange(e.target.value)}

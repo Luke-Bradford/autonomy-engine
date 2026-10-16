@@ -56,7 +56,8 @@ const HELP_LIMITS: Record<string, number> = {
   'List directory': 7,
   // +3 for C7a's Settings, each `?` a fact its label lacks: First row only names
   // the output it writes, Max rows its ceiling, When over the limit both bounds.
-  Lookup: 9,
+  // +1 for C7b's Read as, which says what each mode reads.
+  Lookup: 10,
   'Write file': 7,
   'Agent task': 8,
   'LLM call': 15,
@@ -330,10 +331,10 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   'List directory': 7,
   // +3 for C7a's Settings, each `?` a fact its label lacks: First row only names
   // the output it writes, Max rows its ceiling, When over the limit both bounds.
-  Lookup: 9,
-  'Lookup (inline table)': 12,
-  // #1600 C7b — Read file became Lookup's Whole file as text: +1 for the Read
-  // as select's `?`, which says what each mode reads.
+  // +1 on each Lookup for C7b's Read as, whose `?` says what each mode reads;
+  // Read file became Lookup's Whole file as text, and gained that one.
+  Lookup: 10,
+  'Lookup (inline table)': 13,
   'Lookup (whole file as text)': 8,
   'Write file': 7,
   'Agent task': 8,
