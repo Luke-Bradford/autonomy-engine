@@ -8,6 +8,7 @@ import {
   describeNumberRule,
   emptyControlValue,
   enumDefaultLabel,
+  enumOptionLabel,
   isRowKind,
   isRowList,
   numberKeypad,
@@ -406,7 +407,7 @@ export function ConfigFieldControl({
               </option>
               {(field.enumOptions ?? []).map((option) => (
                 <option key={option} value={option}>
-                  {field.label?.options?.[option] ?? option}
+                  {enumOptionLabel(field, option)}
                 </option>
               ))}
             </select>

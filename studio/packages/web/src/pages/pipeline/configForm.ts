@@ -78,7 +78,7 @@ export function fieldSpan(
 ): 'short' | 'long' {
   if (field.kind === 'number' || field.kind === 'boolean') return 'short';
   if (field.kind !== 'enum') return 'long';
-  const shown = (field.enumOptions ?? []).map((o) => field.label?.options?.[o] ?? o);
+  const shown = (field.enumOptions ?? []).map((o) => enumOptionLabel(field, o));
   const unset = enumDefaultLabel(field);
   if (unset !== undefined) shown.push(unset);
   return shown.every((text) => text.length <= SHORT_CHOICE_CHARS) ? 'short' : 'long';
@@ -95,7 +95,12 @@ export function enumDefaultLabel(
 ): string | undefined {
   const value = field.defaultText;
   if (value === undefined || !(field.enumOptions ?? []).includes(value)) return undefined;
-  return `${field.label?.options?.[value] ?? value} (default)`;
+  return `${enumOptionLabel(field, value)} (default)`;
+}
+
+/** An enum choice as the dock shows it: its display name, else the value itself. */
+export function enumOptionLabel(field: Pick<ConfigField, 'label'>, value: string): string {
+  return field.label?.options?.[value] ?? value;
 }
 
 /**

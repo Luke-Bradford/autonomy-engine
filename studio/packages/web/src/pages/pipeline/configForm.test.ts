@@ -14,7 +14,6 @@ import {
   singleLine,
 } from '@autonomy-studio/shared';
 import {
-  fieldSpan,
   assembleConfig,
   changeConfigKind,
   configDraftErrors,
@@ -25,6 +24,7 @@ import {
   deriveConfigFields,
   deriveFieldsWithCarried,
   describeNumberRule,
+  fieldSpan,
   formatFieldValue,
   numberKeypad,
   parseConfigText,
