@@ -60,21 +60,31 @@ export async function previewInlineSource(
 
 /**
  * The SQL that lists a store's tables and views, per store an inline Table can
- * live in. A test holds it to `DATASET_CONNECTION_KINDS.table`, so a store added
- * there fails until it says how its tables are listed.
+ * live in. Only a test holds it to `DATASET_CONNECTION_KINDS.table` (that map is
+ * not typed narrowly enough for the compiler to), so a store added there fails
+ * the test until it says how its tables are listed.
  *
- * sqlite: the main database's `sqlite_master`, without sqlite's own
- * `sqlite_`-prefixed tables. postgres: `information_schema.tables`, which lists
- * only what the connection's role holds a privilege on, without the system
- * schemas.
+ * sqlite: the main database's `sqlite_master`, as `sqlite-sink.ts` reads it,
+ * without sqlite's own `sqlite_`-prefixed tables (the reader never ATTACHes, so
+ * main is the only database). An FTS or R-tree index's shadow tables are listed;
+ * they are tables sqlite will read.
+ *
+ * postgres: `pg_class`, as `postgres-sink.ts` reads it rather than
+ * `information_schema`, which omits materialized views and lists a relation the
+ * role holds any privilege on. Here: tables, partitioned tables (not their
+ * partitions), views, materialized views and foreign tables the role can
+ * SELECT, outside the `pg_` and `information_schema` schemas.
  */
 export const TABLE_CATALOG_SQL: Partial<Record<ConnectionKind, string>> = {
   sqlite:
     "SELECT NULL AS schema, name FROM sqlite_master WHERE type IN ('table', 'view') " +
     "AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY name",
   postgres:
-    'SELECT table_schema AS schema, table_name AS name FROM information_schema.tables ' +
-    "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') ORDER BY 1, 2",
+    'SELECT n.nspname AS schema, c.relname AS name FROM pg_class c ' +
+    'JOIN pg_namespace n ON n.oid = c.relnamespace ' +
+    "WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f') AND NOT c.relispartition " +
+    "AND has_table_privilege(c.oid, 'SELECT') " +
+    "AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_' ORDER BY 1, 2",
 };
 
 /**
@@ -83,7 +93,8 @@ export const TABLE_CATALOG_SQL: Partial<Record<ConnectionKind, string>> = {
  *
  * It is the same read, not a second one: the catalogue query goes through the
  * store adapter's own Lookup arm as an inline Query, so it inherits the
- * read-only reader, the row and byte caps, the pool and the backstop.
+ * read-only reader, the row and byte caps, the backstop and Preview's pool (a
+ * listing takes one of its slots).
  */
 export async function listConnectionTables(
   args: Omit<PreviewInlineSourceArgs, 'inline'>,

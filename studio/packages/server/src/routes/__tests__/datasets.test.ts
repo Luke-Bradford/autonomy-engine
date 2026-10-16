@@ -13,6 +13,7 @@ import {
   CATALOG_VERSION,
   DatasetReferencesResponseSchema,
   DatasetPreviewResultSchema,
+  DatasetTablesResultSchema,
   DatasetSheetsResultSchema,
 } from '@autonomy-studio/shared';
 import { eq } from 'drizzle-orm';
@@ -354,18 +355,20 @@ describe('datasets routes', () => {
     });
   });
 
+  /** A caller's sqlite store holding `t (id, name)` with two rows. */
+  const sqliteStore = (ownerId = 'local') => {
+    const root = tempRoot('preview-route-');
+    const path = seedDb(root, 2);
+    return createConnection(app.db, {
+      ownerId,
+      name: 'Orders db',
+      kind: 'sqlite',
+      config: { roots: [root], path },
+      secretRef: null,
+    });
+  };
+
   describe('POST /preview (#1600 C1q-c)', () => {
-    const sqliteStore = (ownerId = 'local') => {
-      const root = tempRoot('preview-route-');
-      const path = seedDb(root, 2);
-      return createConnection(app.db, {
-        ownerId,
-        name: 'Orders db',
-        kind: 'sqlite',
-        config: { roots: [root], path },
-        secretRef: null,
-      });
-    };
     const preview = (connectionId: string, sql = 'SELECT id, name FROM t ORDER BY id') =>
       app.inject({
         method: 'POST',
@@ -417,6 +420,50 @@ describe('datasets routes', () => {
         url: '/api/datasets/preview',
         payload: { connectionId: store, source: { from: 'dataset', datasetId: 'x' } },
       });
+      expect(res.statusCode).toBe(400);
+    });
+  });
+
+  describe('POST /tables (#1600 C1q-c)', () => {
+    const tables = (connectionId: string) =>
+      app.inject({ method: 'POST', url: '/api/datasets/tables', payload: { connectionId } });
+
+    it('lists the tables of the caller’s connection', async () => {
+      const res = await tables(sqliteStore().id);
+      expect(res.statusCode).toBe(200);
+      expect(DatasetTablesResultSchema.parse(res.json())).toEqual({
+        ok: true,
+        tables: [{ schema: null, name: 't' }],
+        truncated: false,
+      });
+    });
+
+    // Preview's gate: readiness before any secret is decrypted.
+    it('refuses a disabled connection', async () => {
+      const conn = sqliteStore();
+      app.db.update(connections).set({ enabled: false }).where(eq(connections.id, conn.id)).run();
+      const res = await tables(conn.id);
+      expect(res.json()).toEqual({ ok: false, error: 'this connection is disabled' });
+    });
+
+    it('refuses a connection that is not the caller’s, without disclosing which', async () => {
+      const theirs = sqliteStore('someone_else');
+      const res = await tables(theirs.id);
+      expect(res.statusCode).toBe(400);
+      const missing = await tables('conn_does_not_exist');
+      expect(missing.statusCode).toBe(400);
+      expect(res.json().message.replace(theirs.id, 'X')).toBe(
+        missing.json().message.replace('conn_does_not_exist', 'X'),
+      );
+    });
+
+    it('refuses a store an inline Table cannot live in', async () => {
+      const res = await tables(store);
+      expect(res.json()).toEqual({ ok: false, error: "a 'fs' connection has no tables to list" });
+    });
+
+    it('rejects a body that is not a body', async () => {
+      const res = await app.inject({ method: 'POST', url: '/api/datasets/tables', payload: {} });
       expect(res.statusCode).toBe(400);
     });
   });
