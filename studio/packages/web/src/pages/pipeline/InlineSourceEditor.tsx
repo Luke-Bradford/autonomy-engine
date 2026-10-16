@@ -32,6 +32,7 @@ import {
 import type { createCanvasStore } from './canvasStore';
 import { ExpressionEditor } from './ExpressionEditor';
 import { PickableInput } from './PickableInput';
+import { ConnectionTables } from './ConnectionTables';
 import { SourcePreview } from './SourcePreview';
 import {
   bindNameProblem,
@@ -178,7 +179,9 @@ export function InlineSourceEditor({
         )}
       </LabelledControl>
       {inline === undefined && saved}
-      {inline?.kind === 'table' && <TableFields inline={inline} write={write} />}
+      {inline?.kind === 'table' && (
+        <TableFields inline={inline} write={write} connectionId={connectionId} />
+      )}
       {inline?.kind === 'query' && <QueryFields inline={inline} write={write} picker={picker} />}
       {mismatch !== null && (
         <p className="contract-advisory" role="status">
@@ -206,9 +209,11 @@ const LITERAL_NAME = 'A literal name, never an expression.';
 function TableFields({
   inline,
   write,
+  connectionId,
 }: {
   inline: InlineDataset;
   write: (next: InlineDataset, coalesceKey?: string) => void;
+  connectionId: string | undefined;
 }) {
   const set = (key: 'schema' | 'table', value: string) => {
     const config = { ...inline.config };
@@ -246,6 +251,18 @@ function TableFields({
           </LabelledControl>
         );
       })}
+      <ConnectionTables
+        inline={inline}
+        connectionId={connectionId}
+        // One choice is one undo step: no coalesce key, so it never merges
+        // into the typing before it.
+        choose={({ schema, name }) => {
+          const config: Record<string, unknown> = { ...inline.config, table: name };
+          if (schema === null) delete config['schema'];
+          else config['schema'] = schema;
+          write({ kind: 'table', config });
+        }}
+      />
     </>
   );
 }

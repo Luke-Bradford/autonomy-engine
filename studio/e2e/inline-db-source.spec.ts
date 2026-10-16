@@ -154,7 +154,24 @@ test.describe('#1600 C1q — an inline database source', () => {
       const pane = properties(page);
       const use = pane.getByRole('combobox', { name: 'Use' });
       await expect(use).toHaveValue('table');
-      await expect(pane.getByRole('textbox', { name: 'Table' })).toHaveValue('orders');
+      const tableBox = pane.getByRole('textbox', { name: 'Table' });
+      await expect(tableBox).toHaveValue('orders');
+
+      // C1q-c — Table [▾ from the connection]: the store's own tables, read on
+      // demand, and a choice writes the Table field.
+      await pane.getByRole('button', { name: 'List tables' }).click();
+      const listed = pane.getByRole('combobox', { name: 'Table in this connection' });
+      await expect(listed.locator('option')).toHaveText([
+        '— choose —',
+        'etl_control',
+        'orders',
+        'stage',
+      ]);
+      await expect(listed.locator('option:checked')).toHaveText('orders');
+      await listed.selectOption({ label: 'etl_control' });
+      await expect(tableBox).toHaveValue('etl_control');
+      await listed.selectOption({ label: 'orders' });
+      await expect(tableBox).toHaveValue('orders');
 
       // C1q-c — Preview data reads the table through the run's own Lookup read.
       const previewRows = pane.getByRole('table', { name: 'Preview rows' });

@@ -1,12 +1,16 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ConnectionKind, InlineDataset } from '@autonomy-studio/shared';
+import {
+  DATASET_CONNECTION_KINDS,
+  type ConnectionKind,
+  type InlineDataset,
+} from '@autonomy-studio/shared';
 import { sqliteAdapter } from '../../connectors/sqlite.js';
 import type { ConnectorRegistry } from '../../connectors/registry.js';
 import type { ActivityEvent, ConnectorAdapter } from '../../connectors/types.js';
 import { cleanupTempRoots, seedDb, tempRoot } from '../../connectors/__tests__/sqlite-fixtures.js';
 import { PREVIEW_CONCURRENCY, PREVIEW_ROW_CAP } from '../../limits.js';
-import { previewInlineSource } from '../preview.js';
+import { TABLE_CATALOG_SQL, listConnectionTables, previewInlineSource } from '../preview.js';
 
 /**
  * #1600 C1q-c — Preview reads through the store adapter's own Lookup arm, so
@@ -214,5 +218,80 @@ describe('previewInlineSource', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     // The queued caller reached a free slot after it had its answer, and read nothing.
     expect(started).toBe(PREVIEW_CONCURRENCY);
+  });
+});
+
+describe('listConnectionTables', () => {
+  it('lists the tables and views of a sqlite store, by name, without sqlite’s own', async () => {
+    const { path, connection } = sqliteDb(1);
+    const db = new Database(path);
+    // AUTOINCREMENT makes sqlite create its own `sqlite_sequence` table.
+    db.exec(
+      'CREATE TABLE orders (id INTEGER PRIMARY KEY AUTOINCREMENT, total REAL);' +
+        'CREATE VIEW big_orders AS SELECT * FROM orders WHERE total > 100;' +
+        'CREATE INDEX orders_total ON orders (total);' +
+        'INSERT INTO orders (total) VALUES (5);',
+    );
+    db.close();
+    const result = await listConnectionTables({ registry, connection, secret: null });
+    expect(result).toEqual({
+      ok: true,
+      tables: [
+        { schema: null, name: 'big_orders' },
+        { schema: null, name: 'orders' },
+        { schema: null, name: 't' },
+      ],
+      truncated: false,
+    });
+  });
+
+  it('keeps a table whose name only looks like sqlite’s own, as `sqliteX`', async () => {
+    const { path, connection } = sqliteDb(0);
+    const db = new Database(path);
+    db.exec('CREATE TABLE sqliteX (id INTEGER)');
+    db.close();
+    const result = await listConnectionTables({ registry, connection, secret: null });
+    expect(result).toMatchObject({ ok: true, tables: [{ name: 'sqliteX' }, { name: 't' }] });
+  });
+
+  it('says how every store an inline Table can live in lists its tables', () => {
+    for (const store of DATASET_CONNECTION_KINDS.table) {
+      expect(TABLE_CATALOG_SQL[store], store).toEqual(expect.any(String));
+    }
+  });
+
+  it('refuses a store with no tables to list', async () => {
+    const result = await listConnectionTables({
+      registry,
+      connection: { kind: 'fs' as ConnectionKind, config: { roots: ['/tmp'] } },
+      secret: null,
+    });
+    expect(result).toEqual({ ok: false, error: "a 'fs' connection has no tables to list" });
+  });
+
+  it('answers a caller that has left, under its own name', async () => {
+    const { connection } = sqliteDb(0);
+    const left = new AbortController();
+    left.abort();
+    const result = await listConnectionTables({
+      registry,
+      connection,
+      secret: null,
+      signal: left.signal,
+    });
+    expect(result).toEqual({ ok: false, error: 'listing tables was cancelled' });
+  });
+
+  it('answers a store error as a refusal', async () => {
+    const root = tempRoot('tables-');
+    const result = await listConnectionTables({
+      registry,
+      connection: {
+        kind: 'sqlite' as ConnectionKind,
+        config: { roots: [root], path: `${root}/missing.db` },
+      },
+      secret: null,
+    });
+    expect(result).toMatchObject({ ok: false, error: expect.any(String) });
   });
 });

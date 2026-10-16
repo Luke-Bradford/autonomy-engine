@@ -1,11 +1,13 @@
 import { z } from 'zod';
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import {
   DatasetPreviewRequestSchema,
+  DatasetTablesRequestSchema,
   NewDatasetSchema,
   canonicalStringify,
   type DatasetPreviewResult,
 } from '@autonomy-studio/shared';
+import type { Principal } from '../auth/principal.js';
 import {
   createDataset,
   deleteDataset,
@@ -18,7 +20,11 @@ import { datasetReferences } from '../datamove/dataset-references.js';
 import { exportDataset } from '../portability/index.js';
 import { listSheetsForConnection } from '../connectors/xlsx-sheets.js';
 import { connectionNotReadyReason } from '../repo/connections.js';
-import { previewInlineSource } from '../datamove/preview.js';
+import {
+  listConnectionTables,
+  previewInlineSource,
+  type PreviewInlineSourceArgs,
+} from '../datamove/preview.js';
 import { connectionSecretRefusal, readConnectionSecret } from '../secrets/connection-secret.js';
 import { pageArgsFromQuery, requireOwned, requireOwnedConnection } from './util.js';
 
@@ -127,6 +133,58 @@ export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   /**
+   * Aborted when the caller leaves before its answer, so the read stops. Called
+   * first, so a caller that leaves during the decrypt is seen too.
+   * `request.raw`'s `close` fires once the body is read, so it is the RESPONSE's
+   * close that says so.
+   */
+  function abortOnLeave(reply: FastifyReply): AbortSignal {
+    const left = new AbortController();
+    reply.raw.on('close', () => {
+      if (!reply.raw.writableFinished) left.abort();
+    });
+    return left.signal;
+  }
+
+  /**
+   * #1600 C1q-c — the gate `/preview` and `/tables` share before a store is read.
+   * Ownership first, with `/sheets`' non-disclosing gate (a connection shared
+   * with no owner is refused here, though a run may use it). Then the executor's
+   * own readiness gate, so a disabled connection or one missing its secret is
+   * refused BEFORE any secret is decrypted. The stored secret is spent only on
+   * the connection's stored config: the body names a connection, never a config,
+   * so it cannot point the credential somewhere else.
+   */
+  async function readableStore(
+    principal: Principal,
+    connectionId: string,
+  ): Promise<
+    | Extract<DatasetPreviewResult, { ok: false }>
+    | { ok: true; store: Pick<PreviewInlineSourceArgs, 'connection' | 'secret'> }
+  > {
+    const connection = requireOwnedConnection(db, principal, connectionId);
+    const notReady = connectionNotReadyReason(connection);
+    if (notReady !== null) {
+      return {
+        ok: false,
+        error:
+          notReady === 'disabled'
+            ? 'this connection is disabled'
+            : 'this connection is missing its required secret',
+      };
+    }
+    const read = await readConnectionSecret(db, masterKey, connection.secretRef);
+    if (!read.ok) return { ok: false, error: connectionSecretRefusal(read.reason) };
+    return {
+      ok: true,
+      store: {
+        connection: { kind: connection.kind, config: connection.config },
+        secret: read.secret,
+      },
+    };
+  }
+
+  /**
    * #1600 C1q-c — the first rows of a Copy or Lookup's inline Table or Query,
    * for the Source tab's Preview. Touches no dataset row and writes nothing.
    *
@@ -134,55 +192,44 @@ export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
    * operator is mid-way through writing, which a query string would put in logs.
    * A refusal is a 200 `{ ok: false, error }`; a 400 is a body that is not one.
    *
-   * SECURITY. Ownership first, with `/sheets`' non-disclosing gate (a connection
-   * shared with no owner is refused here, though a run may use it). Then the
-   * executor's own readiness gate, so a disabled connection or one missing its
-   * secret is refused BEFORE any secret is decrypted. The stored secret is spent
-   * only on the connection's stored config: the body names a connection, never
-   * a config, so it cannot point the credential somewhere else. The read is the
-   * run's Lookup read (`previewInlineSource`): sqlite read-only, postgres inside
-   * `BEGIN READ ONLY`, bounded in rows, bytes, time and concurrency. A statement
-   * can still call a side-effecting function postgres allows under READ ONLY;
-   * that is the same reach saving and running the pipeline already gives the
-   * same owner over the same connection.
+   * SECURITY. `readableStore`'s gate (ownership, then readiness, then the
+   * secret). The read is the run's Lookup read (`previewInlineSource`): sqlite
+   * read-only, postgres inside `BEGIN READ ONLY`, bounded in rows, bytes, time
+   * and concurrency. A statement can still call a side-effecting function
+   * postgres allows under READ ONLY; that is the same reach saving and running
+   * the pipeline already gives the same owner over the same connection.
    *
    * Not applied: a node's `connectionParams` (the form says so beside Preview).
    */
   fastify.post('/api/datasets/preview', async (request, reply) => {
-    // The caller left before the answer: stop the read. Registered first, so a
-    // caller that leaves during the decrypt is seen too. `request.raw`'s `close`
-    // fires once the body is read, so it is the RESPONSE's close that says so.
-    const left = new AbortController();
-    reply.raw.on('close', () => {
-      if (!reply.raw.writableFinished) left.abort();
-    });
+    const left = abortOnLeave(reply);
     const body = DatasetPreviewRequestSchema.parse(request.body);
-    const connection = requireOwnedConnection(db, request.principal, body.connectionId);
-    const notReady = connectionNotReadyReason(connection);
-    if (notReady !== null) {
-      const refused: DatasetPreviewResult = {
-        ok: false,
-        error:
-          notReady === 'disabled'
-            ? 'this connection is disabled'
-            : 'this connection is missing its required secret',
-      };
-      return refused;
-    }
-    const read = await readConnectionSecret(db, masterKey, connection.secretRef);
-    if (!read.ok) {
-      const refused: DatasetPreviewResult = {
-        ok: false,
-        error: connectionSecretRefusal(read.reason),
-      };
-      return refused;
-    }
+    const store = await readableStore(request.principal, body.connectionId);
+    if (!store.ok) return store;
     return previewInlineSource({
       registry: fastify.connectors,
-      connection: { kind: connection.kind, config: connection.config },
-      secret: read.secret,
+      ...store.store,
       inline: body.source.inline,
-      signal: left.signal,
+      signal: left,
+    });
+  });
+
+  /**
+   * #1600 C1q-c — the tables and views a connection's store lists, for the
+   * Source tab's Table `[▾ from the connection]`. Preview's gate and read: the
+   * catalogue query runs through the same Lookup read (`listConnectionTables`).
+   * It lists what the connection's credential can already read, so it shows the
+   * owner nothing a Preview or a run of theirs could not.
+   */
+  fastify.post('/api/datasets/tables', async (request, reply) => {
+    const left = abortOnLeave(reply);
+    const body = DatasetTablesRequestSchema.parse(request.body);
+    const store = await readableStore(request.principal, body.connectionId);
+    if (!store.ok) return store;
+    return listConnectionTables({
+      registry: fastify.connectors,
+      ...store.store,
+      signal: left,
     });
   });
 

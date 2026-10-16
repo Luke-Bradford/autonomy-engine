@@ -4,6 +4,7 @@ import {
   DatasetReferencesResponseSchema,
   DatasetSchema,
   DatasetSheetsResultSchema,
+  DatasetTablesResultSchema,
   NewDatasetSchema,
   paginatedResponseSchema,
   type Dataset,
@@ -11,6 +12,7 @@ import {
   type DatasetPreviewResult,
   type DatasetReferencesResponse,
   type DatasetSheetsResult,
+  type DatasetTablesResult,
 } from '@autonomy-studio/shared';
 import { apiFetch } from './client';
 import { fetchAllPages, pageQuery } from './pagination';
@@ -149,6 +151,23 @@ export function previewDatasetSource(
     method: 'POST',
     body,
     schema: DatasetPreviewResultSchema,
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+/**
+ * #1600 C1q-c — the tables and views a connection's store lists, for the Source
+ * tab's Table `[▾ from the connection]`. A refusal is a 200 `{ ok: false }` (it
+ * does not throw), as `previewDatasetSource`.
+ */
+export function listConnectionTables(
+  connectionId: string,
+  signal?: AbortSignal,
+): Promise<DatasetTablesResult> {
+  return apiFetch('/api/datasets/tables', {
+    method: 'POST',
+    body: { connectionId },
+    schema: DatasetTablesResultSchema,
     ...(signal === undefined ? {} : { signal }),
   });
 }
