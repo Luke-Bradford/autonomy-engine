@@ -1531,7 +1531,9 @@ describe('a query timeout on the postgres reader (#1600 OR41 C1q-c)', () => {
       void _batch;
       vi.setSystemTime(Date.now() + 1_500);
     }
-    const tail = rec.queries.filter((q) => q.startsWith('FETCH') || q.includes('statement_timeout'));
+    const tail = rec.queries.filter(
+      (q) => q.startsWith('FETCH') || q.includes('statement_timeout'),
+    );
     expect(tail).toEqual([
       'SET LOCAL statement_timeout = 5000',
       'FETCH FORWARD 1 FROM "__studio_copy"',
