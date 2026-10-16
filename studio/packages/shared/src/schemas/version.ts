@@ -539,7 +539,12 @@
 // over the limit). A pre-C7a build never yields the new outputs, so it fails
 // such a node "missing declared output"; it also strips `firstRowOnly`, and
 // would return every row where the doc asked for one.
-export const CATALOG_VERSION = 40;
+// BUMP 40→41 for #1600 OR41 C7c: `file_read` (Lookup · Whole file as text)
+// declares two more required outputs, `bytes` and `truncated`, and gains When
+// over the limit. A pre-C7c build never yields the new outputs, so it fails such
+// a node "missing declared output"; it also strips `overLimit` and fails an
+// over-limit file the doc asked to truncate (fail-safe, not a silent change).
+export const CATALOG_VERSION = 41;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

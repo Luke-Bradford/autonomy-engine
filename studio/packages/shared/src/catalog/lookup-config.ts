@@ -19,8 +19,13 @@ import { optionTitles, presented } from '../schemas/field-presentation.js';
  */
 export const LOOKUP_ROW_CAP = 1000;
 
-const overLimitSchema = z.enum(['truncate', 'fail']);
-export type LookupOverLimit = z.infer<typeof overLimitSchema>;
+export const lookupOverLimitSchema = z.enum(['truncate', 'fail']);
+export type LookupOverLimit = z.infer<typeof lookupOverLimitSchema>;
+/** The choice's labels, one place for both Lookup modes (#1600 C7c). */
+export const LOOKUP_OVER_LIMIT_OPTIONS = optionTitles(lookupOverLimitSchema, {
+  truncate: 'Truncate and warn',
+  fail: 'Fail',
+});
 
 /**
  * #1600 OR41 C7a — a Lookup's Settings tab (activity catalogue §4.2, after
@@ -43,10 +48,10 @@ export const lookupConfigSchema = z.object({
     title: 'Max rows',
     description: `Up to ${LOOKUP_ROW_CAP}. Not used with First row only.`,
   }),
-  overLimit: presented(overLimitSchema.default('truncate'), {
+  overLimit: presented(lookupOverLimitSchema.default('truncate'), {
     title: 'When over the limit',
     description: 'More than Max rows, or more data than a lookup may hold.',
-    options: optionTitles(overLimitSchema, { truncate: 'Truncate and warn', fail: 'Fail' }),
+    options: LOOKUP_OVER_LIMIT_OPTIONS,
   }),
 });
 export type LookupConfig = z.infer<typeof lookupConfigSchema>;

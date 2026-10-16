@@ -49,6 +49,14 @@ describe('fs activity config — shapes', () => {
     }
   });
 
+  it('file_read: When over the limit defaults to Fail, today’s read (#1600 C7c)', () => {
+    expect(fileReadConfigSchema.parse({ path: '/a' }).overLimit).toBe('fail');
+    expect(fileReadConfigSchema.parse({ path: '/a', overLimit: 'truncate' }).overLimit).toBe(
+      'truncate',
+    );
+    expect(fileReadConfigSchema.safeParse({ path: '/a', overLimit: 'maybe' }).success).toBe(false);
+  });
+
   it('file_write requires a non-empty path and string content', () => {
     expect(fileWriteConfigSchema.safeParse({ path: '/a', content: '' }).success).toBe(true);
     expect(fileWriteConfigSchema.safeParse({ path: '/a' }).success).toBe(false);

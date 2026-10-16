@@ -65,7 +65,10 @@ describe('fs connector — happy paths', () => {
     await writeFile(join(root, 'note.txt'), 'hello fs', 'utf8');
     const events = await drain(invoke(ctx('file_read', { path: 'note.txt' })));
     expect(events).toEqual([
-      { type: 'succeeded', outputs: { content: 'hello fs', path: join(root, 'note.txt') } },
+      {
+        type: 'succeeded',
+        outputs: { content: 'hello fs', path: join(root, 'note.txt'), bytes: 8, truncated: false },
+      },
     ]);
   });
 
@@ -208,6 +211,104 @@ describe('fs connector — failure classification', () => {
     );
     expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
     expect((events[0] as { error: string }).error).toMatch(/read limit/);
+  });
+
+  // #1600 OR41 C7c — Lookup · Whole file as text: When over the limit.
+  const overLimitRead = (path: string, overLimit?: string) =>
+    drain(
+      invoke(
+        ctx('file_read', overLimit === undefined ? { path } : { path, overLimit }, {
+          connectionConfig: { roots: [root], maxBytes: 10 },
+        }),
+      ),
+    );
+
+  it('a file over the byte cap still fails when the config says Fail', async () => {
+    await writeFile(join(root, 'big.txt'), 'x'.repeat(50), 'utf8');
+    const events = await overLimitRead('big.txt', 'fail');
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect((events[0] as { error: string }).error).toMatch(/read limit/);
+  });
+
+  it('Truncate and warn keeps the first maxBytes bytes, warns, and marks truncated', async () => {
+    await writeFile(join(root, 'big.txt'), 'abcdefghijklmnop', 'utf8');
+    const events = await overLimitRead('big.txt', 'truncate');
+    expect(events).toEqual([
+      {
+        type: 'warned',
+        code: 'lookup_truncated',
+        reason:
+          "the file is 16 bytes, over the connection's 10-byte Largest file read; kept the start of it",
+      },
+      {
+        type: 'succeeded',
+        outputs: { content: 'abcdefghij', path: join(root, 'big.txt'), bytes: 10, truncated: true },
+      },
+    ]);
+  });
+
+  it('truncation never splits a UTF-8 character, and bytes counts what was kept', async () => {
+    // 'é' is 2 bytes at offsets 9-10, so a 10-byte cut lands inside it.
+    await writeFile(join(root, 'u.txt'), 'abcdefghié!', 'utf8');
+    const events = await overLimitRead('u.txt', 'truncate');
+    expect(events[1]).toMatchObject({
+      type: 'succeeded',
+      outputs: { content: 'abcdefghi', bytes: 9, truncated: true },
+    });
+  });
+
+  it('a truncated read keeps a leading BOM, as a whole read does', async () => {
+    await writeFile(join(root, 'bom.txt'), '\uFEFFabcdefghijkl', 'utf8');
+    const whole = await drain(invoke(ctx('file_read', { path: 'bom.txt' })));
+    const cut = await overLimitRead('bom.txt', 'truncate');
+    const content = (e: ActivityEvent) =>
+      (e as Extract<ActivityEvent, { type: 'succeeded' }>).outputs['content'] as string;
+    expect(content(whole[0]!).startsWith('\uFEFF')).toBe(true);
+    expect(content(cut[1]!)).toBe('\uFEFFabcdefg');
+  });
+
+  it('a file within the cap is not truncated under Truncate and warn', async () => {
+    await writeFile(join(root, 'small.txt'), 'abcdefghij', 'utf8');
+    const events = await overLimitRead('small.txt', 'truncate');
+    expect(events).toEqual([
+      {
+        type: 'succeeded',
+        outputs: {
+          content: 'abcdefghij',
+          path: join(root, 'small.txt'),
+          bytes: 10,
+          truncated: false,
+        },
+      },
+    ]);
+  });
+
+  it('a file that shrank under the limit after its stat is read whole, not truncated', async () => {
+    const realFs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    await writeFile(join(root, 'shrunk.txt'), 'abcdé', 'utf8');
+    vi.mocked(open).mockImplementationOnce(async (...args: Parameters<typeof realFs.open>) => {
+      const fh = await realFs.open(...args);
+      const realStat = fh.stat.bind(fh);
+      // The size the stat saw before the file was rewritten shorter.
+      fh.stat = (async () => Object.assign(await realStat(), { size: 50 })) as typeof fh.stat;
+      return fh;
+    });
+    const events = await overLimitRead('shrunk.txt', 'truncate');
+    expect(events).toEqual([
+      {
+        type: 'succeeded',
+        outputs: { content: 'abcdé', path: join(root, 'shrunk.txt'), bytes: 6, truncated: false },
+      },
+    ]);
+  });
+
+  it('an unknown When over the limit is refused as config', async () => {
+    const events = await drain(invoke(ctx('file_read', { path: 'a.txt', overLimit: 'maybe' })));
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect((events[0] as { error: string }).error).toMatch(
+      /^invalid file_read activity config: .*overLimit/,
+    );
   });
 
   it('writing where the parent directory does not exist is permanent (no recursive mkdir)', async () => {

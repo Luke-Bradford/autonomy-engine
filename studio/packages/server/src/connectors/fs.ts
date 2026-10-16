@@ -11,6 +11,7 @@ import {
   FILE_MOVE_ACTIVITY_TYPE,
   FILE_READ_ACTIVITY_TYPE,
   FILE_WRITE_ACTIVITY_TYPE,
+  WARNING_CODES,
   fileCopyConfigSchema,
   fileDeleteConfigSchema,
   fileListConfigSchema,
@@ -192,30 +193,68 @@ async function resolveSourceDest(
   return { ok: true, source: s.path, dest: d.path };
 }
 
+/**
+ * `file_read` (Lookup · Whole file as text). A file over the connection's
+ * `maxBytes` fails, or with #1600 C7c's *Truncate and warn* keeps its first
+ * `maxBytes` bytes, cut back to a whole UTF-8 character, and warns. `bytes` is
+ * the UTF-8 size of the `content` returned, as rows mode counts what it kept.
+ */
 async function doRead(
   cfg: z.infer<typeof fsConnectionConfigSchema>,
-  requested: string,
+  input: z.infer<typeof fileReadConfigSchema>,
   signal: AbortSignal,
-): Promise<ActivityEvent> {
-  const r = await resolveOrFail(cfg, requested, signal);
-  if (!r.ok) return r.event;
+): Promise<ActivityEvent[]> {
+  const r = await resolveOrFail(cfg, input.path, signal);
+  if (!r.ok) return [r.event];
   const finalPath = r.path;
 
   const maxBytes = cfg.maxBytes ?? DEFAULT_MAX_READ_BYTES;
+  const read = (content: string, truncated: boolean): ActivityEvent => ({
+    type: 'succeeded',
+    outputs: { content, path: finalPath, bytes: Buffer.byteLength(content, 'utf8'), truncated },
+  });
   let fh: Awaited<ReturnType<typeof open>> | undefined;
   try {
     fh = await open(finalPath, fsConstants.O_RDONLY | O_NOFOLLOW);
     const st = await fh.stat();
     if (!st.isFile()) {
-      return failed('permanent', `'${finalPath}' is not a regular file`);
+      return [failed('permanent', `'${finalPath}' is not a regular file`)];
     }
-    if (st.size > maxBytes) {
-      return failed('permanent', `file is ${st.size} bytes, over the ${maxBytes}-byte read limit`);
+    if (st.size <= maxBytes) {
+      return [read(await fh.readFile({ encoding: 'utf8', signal }), false)];
     }
-    const content = await fh.readFile({ encoding: 'utf8', signal });
-    return { type: 'succeeded', outputs: { content, path: finalPath } };
+    // Only an explicit Truncate truncates: Fail is the read a stored node has
+    // always had, so anything else keeps it.
+    if (input.overLimit !== 'truncate') {
+      return [
+        failed('permanent', `file is ${st.size} bytes, over the ${maxBytes}-byte read limit`),
+      ];
+    }
+    // Only `buf.subarray(0, got)` is ever read, so the unfilled tail needs no zeroing.
+    const buf = Buffer.allocUnsafe(maxBytes);
+    let got = 0;
+    while (got < maxBytes) {
+      signal.throwIfAborted();
+      const { bytesRead } = await fh.read(buf, got, maxBytes - got, got);
+      if (bytesRead === 0) break;
+      got += bytesRead;
+    }
+    // A file that shrank under the limit since the stat was read whole.
+    const whole = got < maxBytes;
+    // `stream: true` holds back a character the cut splits rather than emitting
+    // U+FFFD for it; `ignoreBOM` keeps a leading BOM, as `readFile` does.
+    const content = new TextDecoder('utf-8', { ignoreBOM: true }).decode(buf.subarray(0, got), {
+      stream: !whole,
+    });
+    if (whole) return [read(content, false)];
+    // Sizes and the remedy only, never content. Not "kept N bytes": invalid
+    // UTF-8 decodes to U+FFFD, so `bytes` can differ from the bytes read.
+    const reason =
+      `the file is ${st.size} bytes, over the connection's ${maxBytes}-byte Largest file read; ` +
+      'kept the start of it';
+    return [{ type: 'warned', code: WARNING_CODES.LOOKUP_TRUNCATED, reason }, read(content, true)];
   } catch (err) {
-    return failFromError(err, signal);
+    return [failFromError(err, signal)];
   } finally {
     await closeQuietly(fh);
   }
@@ -630,7 +669,7 @@ export const fsAdapter: ConnectorAdapter = {
         );
         return;
       }
-      yield await doRead(cfg.data, input.data.path, ctx.signal);
+      yield* await doRead(cfg.data, input.data, ctx.signal);
       return;
     }
 

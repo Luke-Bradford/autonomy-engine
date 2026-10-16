@@ -66,7 +66,22 @@ test.describe('#1600 C7b — Lookup · Read as', () => {
 
       await readAs(page).selectOption({ label: 'Whole file as text' });
       await expect(readAs(page)).toHaveValue('file_read');
-      await expect(tab(page, 'Settings')).toHaveCount(0);
+
+      // #1600 C7c — the text mode's Settings: When over the limit. Unset is
+      // Fail, as a stored Read file has always read and ADF's Lookup fails.
+      await tab(page, 'Settings').click();
+      const overLimit = properties(page).getByRole('combobox', {
+        name: 'When over the limit',
+        exact: true,
+      });
+      await expect(overLimit.locator('option')).toContainText(['Truncate and warn', 'Fail']);
+      await expect(overLimit).toHaveValue('');
+      const limitBox = await overLimit.boundingBox();
+      expect(limitBox, 'When over the limit has a box').not.toBeNull();
+      expect(limitBox!.y + limitBox!.height).toBeLessThanOrEqual(900);
+      await overLimit.selectOption({ label: 'Truncate and warn' });
+      await properties(page).getByRole('button', { name: 'Apply config', exact: true }).click();
+
       await tab(page, 'Source').click();
       await expect(properties(page).getByRole('combobox', { name: 'Source dataset' })).toHaveCount(
         0,
@@ -101,7 +116,8 @@ test.describe('#1600 C7b — Lookup · Read as', () => {
       expect(latest.nodes[0]!.connectionId).toBe(fs);
       expect(latest.nodes[0]!.config).toMatchObject({
         path: 'notes.txt',
-        outputs: [{ name: 'content' }, { name: 'path' }],
+        overLimit: 'truncate',
+        outputs: [{ name: 'content' }, { name: 'path' }, { name: 'bytes' }, { name: 'truncated' }],
       });
 
       await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
@@ -114,6 +130,10 @@ test.describe('#1600 C7b — Lookup · Read as', () => {
       await expect(
         properties(page).getByRole('textbox', { name: 'File path', exact: true }),
       ).toHaveValue('notes.txt');
+      await tab(page, 'Settings').click();
+      await expect(
+        properties(page).getByRole('combobox', { name: 'When over the limit', exact: true }),
+      ).toHaveValue('truncate');
 
       // Back to rows starts as a new Lookup: First row only, on Settings.
       await tab(page, 'General').click();

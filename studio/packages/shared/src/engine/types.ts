@@ -1006,7 +1006,8 @@ export const WARNING_CODES = {
    * kept is a PREFIX of what the process wrote. The supervisor already computed
    * the fact; nothing consumed it, so a clipped transcript reached
    * `${nodes.x.output.output}` reading exactly like a complete one — the
-   * silent-truncation class `limits.ts` and `fs.ts`'s `file_read` already refuse.
+   * silent-truncation class `limits.ts` and `fs.ts`'s `file_read` already refuse
+   * (a `file_read` truncates only when asked, and then marks and warns).
    *
    * Advisory rather than a failure BY SHAPE: an over-long agent transcript is a
    * normal outcome (unlike a partial FILE, which is useless), so the honest move
@@ -1077,6 +1078,11 @@ export const WARNING_CODES = {
    *
    * #1600 C7a — or the node's Max rows. This is the default, Truncate and warn;
    * When over the limit = Fail fails instead and emits no warning.
+   *
+   * #1600 C7c — or Lookup · Whole file as text (`file_read`) kept the first
+   * `maxBytes` bytes of a larger file, under an explicit Truncate and warn (its
+   * default is Fail). The `reason` gives the file's size, the limit, and its
+   * remedy: the connection's Largest file read.
    *
    * §5 settles the behaviour this pairs with — "truncate and mark, never fail. A
    * lookup is a read for a decision, and a bounded answer is usable where an

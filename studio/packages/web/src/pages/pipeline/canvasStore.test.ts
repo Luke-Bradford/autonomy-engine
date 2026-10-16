@@ -360,6 +360,8 @@ describe('canvasStore', () => {
     expect((text.config['outputs'] as { name: string }[]).map((o) => o.name)).toEqual([
       'content',
       'path',
+      'bytes',
+      'truncated',
     ]);
     // One connection, kept with its overrides; the dataset binding goes.
     expect(text.connectionId).toBe('c_fs');
