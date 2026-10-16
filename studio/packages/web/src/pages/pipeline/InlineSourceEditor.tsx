@@ -46,6 +46,7 @@ import {
   bindValueText,
   freshBindName,
   isDynamicBindText,
+  reconcileKeyOrder,
   renameKey,
   sqlDialectOf,
   statementBindNames,
@@ -312,7 +313,10 @@ function QueryFields({
     raw !== null && typeof raw === 'object' && !Array.isArray(raw)
       ? (raw as Record<string, unknown>)
       : {};
-  const names = Object.keys(parameters);
+  // Shown in the rows' own order, not the record's (#1725, `reconcileKeyOrder`).
+  const [shownNames, setShownNames] = useState<readonly string[]>(() => Object.keys(parameters));
+  const names = reconcileKeyOrder(shownNames, Object.keys(parameters));
+  if (names !== shownNames) setShownNames(names);
   const sqlField = field('query', 'sql');
   const sqlTitle = configFieldTitle(sqlField);
   const bindField = field('query', 'parameters');

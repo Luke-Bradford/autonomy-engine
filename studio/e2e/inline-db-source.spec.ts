@@ -397,14 +397,48 @@ test.describe('#1600 C1q — an inline database source', () => {
       },
     });
 
-    // #1725: sqlite binds `:10`, and a record lists integer-like keys first.
-    // Renamed keystroke by keystroke, the row stays where it is and keeps its value.
-    await row(2, 'name').fill('');
-    await row(2, 'name').pressSequentially('10');
-    await expect(row(2, 'name')).toHaveValue('10');
-    await expect(row(2, 'value')).toHaveValue('${params.wm}');
-    await expect(row(1, 'name')).toHaveValue('a');
-    await expect(row(3, 'name')).toHaveValue('b');
+    await expectQuiet(page, problems);
+  });
+
+  // #1725: sqlite binds `:1` and `:10`, and a record lists integer-like keys first.
+  test('a bind value renamed to an integer-like name keystroke by keystroke stays in its row', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const conn = await seedConnection(page, {
+      name: 'e2e 1725 store',
+      kind: 'sqlite',
+      config: { path: 'e2e-1725.db', writable: true },
+    });
+    await openSeededCanvas(page, 'e2e 1725 bind order', {
+      nodes: [
+        {
+          id: 'copy1',
+          type: 'copy',
+          config: { mapping: [{ source: 'id', sink: 'id', type: 'integer' }], mode: 'append' },
+          connectionIds: { source: conn, sink: conn },
+          inlineDatasets: {
+            source: {
+              kind: 'query',
+              config: { sql: 'SELECT id FROM t WHERE a = :p2', parameters: { p2: 'x', a: 'y' } },
+            },
+          },
+          position: { x: 0, y: 0 },
+        },
+      ],
+    });
+    await nodeById(page, 'copy1').click();
+    await sourceTab(page).click();
+    const pane = properties(page);
+    const box = (n: number, part: 'name' | 'value') =>
+      pane.getByRole('textbox', { name: `Bind value ${n} ${part}` });
+
+    await box(2, 'name').fill('');
+    await box(2, 'name').pressSequentially('10');
+    await expect(box(2, 'name')).toHaveValue('10');
+    await expect(box(2, 'value')).toHaveValue('y');
+    await expect(box(1, 'name')).toHaveValue('p2');
+    await expect(box(1, 'value')).toHaveValue('x');
     await expectQuiet(page, problems);
   });
 });

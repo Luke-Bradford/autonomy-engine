@@ -100,6 +100,8 @@ describe('inline source bind values (#1600 C1q-b)', () => {
 
   it('drops a removed name, appends new ones, and returns the same array when nothing moved', () => {
     expect(reconcileKeyOrder(['b', 'a', 'c'], ['b', 'c'])).toEqual(['b', 'c']);
+    // An undone Remove comes back last, not in its old slot.
+    expect(reconcileKeyOrder(['b', 'c'], ['b', 'a', 'c'])).toEqual(['b', 'c', 'a']);
     expect(reconcileKeyOrder(['b', 'a'], ['2', 'a', 'b', '1'])).toEqual(['b', 'a', '2', '1']);
     expect(reconcileKeyOrder([], ['x', 'y'])).toEqual(['x', 'y']);
     // Two gone and two new is not one rename: the new names go to the end.
