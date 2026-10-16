@@ -527,14 +527,19 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
    */
   // The git part draws from the list's own sync read, chained after the
   // connection read and queued behind any git work for this owner, so it can
-  // land well after the live part (#1514). Wait for the read itself; a request
-  // registered before the navigation cannot be the editor's earlier one.
-  const listSync = page.waitForRequest(
-    (r) => r.method() === 'POST' && r.url().endsWith('/api/workspace/git/sync'),
+  // land well after the live part (#1514). Wait for a sync that ANSWERED ok:
+  // the editor can still fire one after this registers, and leaving the page
+  // aborts it, so a request wait could settle on that and read no response
+  // (#1699). An aborted request never produces a response, so this cannot.
+  // An editor sync that answers can still satisfy it, so this only paces the
+  // test: the proof that the list's own read landed is the git part's
+  // `uncommitted.` below, which waits SYNC_SETTLES for it.
+  const listSync = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && r.url().endsWith('/api/workspace/git/sync') && r.ok(),
   );
   await page.goto('/#/author/pipelines');
   await fluentRootReady(page);
-  expect((await (await listSync).response())?.ok()).toBe(true);
+  await listSync;
   const listRow = (n: string) => page.getByRole('group', { name: `${n} state` });
   const rowPart = (n: string, p: string) => listRow(n).locator(`[data-part="${p}"]`);
   // #1569 — no version number on the list, and in git mode the live part says

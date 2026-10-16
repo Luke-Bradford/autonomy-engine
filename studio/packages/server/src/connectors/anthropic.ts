@@ -1,4 +1,8 @@
-import { anthropicConnectionConfigSchema, formatZodIssues } from '@autonomy-studio/shared';
+import {
+  anthropicConnectionConfigSchema,
+  DEFAULT_ANTHROPIC_VERSION,
+  formatZodIssues,
+} from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 import {
   DEFAULT_LLM_TIMEOUT_MS,
@@ -44,7 +48,6 @@ const STRUCTURED_TOOL_NAME = 'structured_output';
  */
 
 const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
-const DEFAULT_ANTHROPIC_VERSION = '2023-06-01';
 /**
  * The Messages API REQUIRES max_tokens; used when the node sets none.
  *

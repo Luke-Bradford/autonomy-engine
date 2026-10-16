@@ -5,18 +5,15 @@
  * here for Get metadata (C8) and Delete (C9), which select files the same way.
  */
 
-/** Default read size cap (bytes) — bounds a huge file from OOM-ing a worker. */
-export const DEFAULT_MAX_READ_BYTES = 10 * 1024 * 1024; // 10 MiB
-
 /**
- * Default `file_list` entry cap — bounds a pathological directory (millions of
- * entries) from producing an unbounded `entries` output / OOM-ing a worker. The
- * adapter iterates lazily via `opendir` and STOPS at the cap (a `permanent`
- * failure), so it never materialises more than this many dirents. Copy · Files
- * as-is applies it to its WHOLE walk (every entry it visits, directories and
- * skipped names included), so a huge tree with nothing matching is bounded too.
+ * The two caps' defaults (#1712: shared, so the connection form's notes are
+ * built from them). The `file_list` adapter iterates lazily via `opendir` and
+ * STOPS at the entry cap (a `permanent` failure), so it never materialises more
+ * than that many dirents. Copy · Files as-is applies it to its WHOLE walk (every
+ * entry it visits, directories and skipped names included), so a huge tree with
+ * nothing matching is bounded too.
  */
-export const DEFAULT_MAX_LIST_ENTRIES = 10_000;
+export { DEFAULT_MAX_LIST_ENTRIES, DEFAULT_MAX_READ_BYTES } from '@autonomy-studio/shared';
 
 /**
  * A file-NAME wildcard as ADF's `wildcardFileName` reads one: `*` is any run of
