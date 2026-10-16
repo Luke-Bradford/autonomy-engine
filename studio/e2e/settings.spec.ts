@@ -183,7 +183,7 @@ for (const density of DENSITIES) {
         selects: [...document.querySelectorAll('.content select')].map((el) =>
           Math.round(el.getBoundingClientRect().height),
         ),
-        // #1600 C0f — Run defaults' one field is the same control.
+        // #1600 C0f/C7d — Run defaults' two fields are the same control.
         inputs: [...document.querySelectorAll('.content input[type="text"]')].map((el) =>
           Math.round(el.getBoundingClientRect().height),
         ),
@@ -191,7 +191,7 @@ for (const density of DENSITIES) {
     });
     expect(fit.factsGap).toBe(8);
     expect(fit.selects).toEqual([CONTROL_H[density], CONTROL_H[density]]);
-    expect(fit.inputs).toEqual([CONTROL_H[density]]);
+    expect(fit.inputs).toEqual([CONTROL_H[density], CONTROL_H[density]]);
 
     await expectQuiet(page, problems);
   });
