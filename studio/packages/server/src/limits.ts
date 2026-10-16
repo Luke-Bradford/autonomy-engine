@@ -266,13 +266,14 @@ export const LOOKUP_BYTE_CAP = 1024 * 1024;
  *
  * {@link COPY_BATCH_ROWS} is sized for a streaming copy, which wants long pulls
  * because every row it reads is a row it will write. A lookup is the opposite
- * shape: it keeps at most `LOOKUP_ROW_CAP` rows and
- * {@link LOOKUP_BYTE_CAP} bytes and discards the rest, so a 1000-row pull buys
+ * shape: it keeps at most the workspace's Lookup max rows (`LOOKUP_ROW_CAP`
+ * unless raised, #1600 C7d) and {@link LOOKUP_BYTE_CAP} bytes and discards the
+ * rest, so a 1000-row pull buys
  * it nothing and costs it up to 1000 fully-materialised rows resident at once —
  * which for the SQL kinds is the one quantity nothing else bounds.
  *
- * 100 is a tenth of the copy batch: still ten rows per event-loop yield short of
- * `LOOKUP_ROW_CAP`, so a full lookup is at most ten pulls, and a tenth of the
+ * 100 is a tenth of the copy batch, so a default (1000-row) lookup is at most
+ * ten pulls and a raised one at most fifty, and a tenth of the
  * peak. Not 1, which would make a bounded read a per-row round trip against the
  * store for no further bound — the largest single row still dominates.
  */

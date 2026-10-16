@@ -27,6 +27,7 @@ export function getWorkspaceSettings(db: Db, ownerId: string): WorkspaceSettings
   return {
     settings: WorkspaceSettingsSchema.parse({
       defaultActivityTimeoutSeconds: row.defaultActivityTimeoutSeconds,
+      lookupMaxRows: row.lookupMaxRows,
     }),
     stored: true,
   };

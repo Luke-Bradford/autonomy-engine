@@ -144,6 +144,12 @@ export interface ActivityContext {
    * reader that has no sink connection at all.
    */
   datasets?: { source: ResolvedDataset; sink?: ResolvedDataset };
+  /**
+   * #1600 OR41 C7d — a `lookup`'s workspace ceiling: the run's owner's Lookup
+   * max rows, read at dispatch. Set for a `lookup` only; absent means
+   * `LOOKUP_ROW_CAP`. The adapter gets the number, never the owner.
+   */
+  lookupMaxRows?: number;
   /** Aborts in-flight work (run cancel / server shutdown). */
   signal: AbortSignal;
 }

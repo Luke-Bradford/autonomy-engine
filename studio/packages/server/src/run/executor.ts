@@ -3,6 +3,7 @@ import pLimit from 'p-limit';
 import type { z } from 'zod';
 import {
   AGENT_CLI_CONNECTION_KIND,
+  DEFAULT_WORKSPACE_SETTINGS,
   catalog as sharedCatalog,
   captureDispatchInput,
   captureDispatchParams,
@@ -18,6 +19,7 @@ import {
   FAILURE_CODES,
   findLlmMessagesRowIndex,
   LLM_CALL_ACTIVITY_TYPE,
+  LOOKUP_ACTIVITY_TYPE,
   llmCallConfigSchema,
   llmCaptureModeSchema,
   normalizeLlmRequest,
@@ -40,6 +42,7 @@ import { ACTIVITY_TIMEOUT_REASON, activityTimeoutFailure, armDeadline } from './
 import { getRun } from '../repo/runs.js';
 import { connectionNotReadyReason, getConnection } from '../repo/connections.js';
 import { getDataset } from '../repo/datasets.js';
+import { getWorkspaceSettings } from '../repo/workspace-settings.js';
 import { getConnectionQuotaResetEpoch } from '../repo/connection-quota.js';
 import { getSecretByName } from '../repo/secrets.js';
 import { decrypt } from '../secrets/secrets.js';
@@ -1794,6 +1797,18 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     }
     const { secretFields } = resolvedSecrets;
 
+    // #1600 OR41 C7d — a lookup's workspace ceiling, a pure read like the two
+    // above, so it runs before `node.dispatched` too. Read at dispatch, as the
+    // connection's limits are: a retry after a Settings change uses the new
+    // value. A run with no owner reads the documented default.
+    const lookupMaxRows =
+      node.type === LOOKUP_ACTIVITY_TYPE
+        ? (ownerId === null
+            ? DEFAULT_WORKSPACE_SETTINGS
+            : getWorkspaceSettings(deps.db, ownerId).settings
+          ).lookupMaxRows
+        : undefined;
+
     // #890 — the input this attempt is dispatched with, for the run monitor.
     // `preparedInput` holds `{$secret}` marker NAMES, not values, and no other
     // secret reaches `${}` output (`dispatch-input.ts`). Scrubbed anyway against
@@ -1883,6 +1898,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       // that is not dataset-bound, so `'datasets' in ctx` stays an honest test.
       // M1's rule for `sink` directly above, followed rather than re-invented.
       ...(datasets !== undefined ? { datasets } : {}),
+      // #1600 C7d — omitted for every activity but a lookup, the same rule.
+      ...(lookupMaxRows !== undefined ? { lookupMaxRows } : {}),
       signal: controller.signal,
     };
     // F4 output/error redaction (item 7 / S3): an ADDITIVE executor-level choke
