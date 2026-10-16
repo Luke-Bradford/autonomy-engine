@@ -426,7 +426,7 @@ function pipelineDoc(key: PipelineKey, c: DocContext): Doc {
       const n = '${nodes.count_rejects.output.rows[0].n}';
       return doc(
         'ELT via query-as-source: a cleaning SELECT into orders_clean, then an aggregate into ' +
-          'sales_by_country, then a validation SELECT into rejects, counted by Lookup rows and ' +
+          'sales_by_country, then a validation SELECT into rejects, counted by a Lookup and ' +
           'branched on by If condition. Serial, because parallel copies into one SQLite file lock.',
         [
           copy('clean', 0, 'q_clean', 'clean', same(CLEAN_COLS), 'overwrite', 'warehouse'),

@@ -80,9 +80,9 @@ const BY_TYPE: Readonly<Record<string, Glyph>> = {
   /* #1221 M12 — `lookup` reads a store and writes nowhere, so it is the INBOUND
      twin of `copy`'s outbound arrow: the glyph says which way data moves, which
      is the whole distinction between these two activities. It follows the map's
-     own established grammar rather than inventing one — `file_read` was
-     `DocumentArrowDown` (until C7b made it Lookup's text mode), so arrow-down
-     ALREADY meant "read this into the pipeline" here, and a database with the same arrow says the same thing about
+     own established grammar rather than inventing one — `file_read` drew
+     `DocumentArrowDown` at the time, so arrow-down already meant "read this
+     into the pipeline" here, and a database with the same arrow says the same thing about
      a store. `DatabaseSearch` (a magnifying glass) was the other candidate and
      is worse: it reads as a UI affordance an operator might click, not as a data
      read a pipeline performs. */

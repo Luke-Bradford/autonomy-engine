@@ -341,6 +341,8 @@ describe('canvasStore', () => {
             connectionId: 'c_fs',
             connectionParams: { maxBytes: 2048 },
             datasetIds: { source: 'd_src' },
+            datasetParams: { source: { day: '1' } },
+            inlineDatasets: { source: { kind: 'table', config: { table: 't' } } },
             position: { x: 10, y: 20 },
           },
           { id: 'n_c', type: 'copy', config: {}, position: { x: 100, y: 20 } },
@@ -363,6 +365,8 @@ describe('canvasStore', () => {
     expect(text.connectionId).toBe('c_fs');
     expect(text.connectionParams).toEqual({ maxBytes: 2048 });
     expect('datasetIds' in text).toBe(false);
+    expect('datasetParams' in text).toBe(false);
+    expect('inlineDatasets' in text).toBe(false);
 
     s.getState().undo();
     expect(s.getState().nodes[0]).toEqual(before);

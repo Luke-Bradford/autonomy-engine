@@ -2088,6 +2088,11 @@ describe('NodePanel — what each tab holds (#1396, #1477)', () => {
     fireEvent.change(mode, { target: { value: 'file_read' } });
     expect(store.getState().nodes[0]!.type).toBe('file_read');
     expect(tabNames()).toEqual(['General', 'Source']);
+    // The file path and the connection sit on Source.
+    fireEvent.click(screen.getByRole('tab', { name: 'Source' }));
+    const source = within(screen.getByRole('tabpanel', { name: 'Source' }));
+    expect(source.getByRole('textbox', { name: 'File path' })).toBeTruthy();
+    expect(source.getByRole('combobox', { name: 'Connection' })).toBeTruthy();
     // A one-mode activity has no mode select at all.
     cleanup();
     mountOver(node('n_llm', 'llm_call', {}));

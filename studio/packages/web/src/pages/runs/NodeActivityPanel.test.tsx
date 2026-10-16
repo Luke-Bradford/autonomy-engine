@@ -1106,6 +1106,14 @@ describe('NodeActivityPanel — the activity type (#1449)', () => {
     expect(typeLine(panel)?.querySelector('code')?.textContent).toBe('http_request');
   });
 
+  it('#1600 C7b — names the mode of a palette item with two types', () => {
+    const panel = renderPanel(row({ nodeId: 'n_1', status: 'success' }), 'success', 'file_read');
+    expect(typeLine(panel)?.textContent).toBe('Type Lookup (whole file as text) file_read');
+    cleanup();
+    const rows = renderPanel(row({ nodeId: 'n_2', status: 'success' }), 'success', 'lookup');
+    expect(typeLine(rows)?.textContent).toBe('Type Lookup lookup');
+  });
+
   it('shows a type the catalog does not know as the raw id alone, not invented', () => {
     const panel = renderPanel(row({ nodeId: 'n_1', status: 'success' }), 'success', 'mystery');
     expect(typeLine(panel)?.textContent).toBe('Type mystery');

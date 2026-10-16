@@ -26,7 +26,7 @@ const SELECTS: Readonly<Record<string, ActivityModeSelect>> = {
   },
   [LOOKUP_ACTIVITY_TYPE]: {
     label: 'Read as',
-    note: "Rows reads a dataset, table or query into rows, or firstRow. Whole file as text reads one file on a file system connection into content. Switching starts the other mode's settings fresh, as a new Lookup (First row only on); Undo brings these back.",
+    note: "Rows reads a dataset, table or query. Whole file as text reads one file on a file system connection into content. Switching starts the other mode's settings as a new Lookup has them; Undo brings these back.",
     options: { [LOOKUP_ACTIVITY_TYPE]: 'Rows', [FILE_READ_ACTIVITY_TYPE]: 'Whole file as text' },
   },
 };
@@ -36,8 +36,9 @@ export function activityModeSelect(
   type: string,
 ): (ActivityModeSelect & { types: readonly string[] }) | undefined {
   const types = activityModeGroup(type);
-  const select = types === undefined ? undefined : SELECTS[types[0]!];
-  return select === undefined || types === undefined ? undefined : { ...select, types };
+  if (types === undefined) return undefined;
+  const select = SELECTS[types[0]!];
+  return select === undefined ? undefined : { ...select, types };
 }
 
 /**

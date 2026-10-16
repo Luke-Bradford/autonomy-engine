@@ -4211,7 +4211,7 @@ export function NodePanel({
         {showConfig && (
           <ConfigEditor
             editor={editor}
-            kindLabel={entry?.title ?? nodeType}
+            kindLabel={activityModeTitle(nodeType, entry?.title ?? nodeType)}
             className="contract-section"
             maxRows={10}
             advisory={null}

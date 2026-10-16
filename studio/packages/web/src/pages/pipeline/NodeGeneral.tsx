@@ -50,8 +50,9 @@ const LABELS = {
  * view shows it, and the next Deactivate resumes it.
  *
  * #1694 OR42 item 8 — a Copy node's *Copy mode* (Rows or Files as-is) leads
- * Basics. It shapes the whole activity (which tabs it has), so it is chosen
- * here rather than on the Source tab.
+ * Basics; #1600 C7b — and a Lookup's *Read as* (Rows or Whole file as text).
+ * Each shapes the whole activity (which tabs it has), so it is chosen here
+ * rather than on the Source tab.
  *
  * #1600 C0d — User properties, last, on an activity that records them
  * (`userPropertiesApply`): the save refuses them anywhere else. A node of
