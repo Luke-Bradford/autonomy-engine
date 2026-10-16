@@ -94,6 +94,9 @@ describe('inline source bind values (#1600 C1q-b)', () => {
     expect(Object.keys(renameKey({ p2: 1, a: 2 }, 'a', '1'))).toEqual(['1', 'p2']);
     expect(reconcileKeyOrder(shown, ['1', 'p2'])).toEqual(['p2', '1']);
     expect(reconcileKeyOrder(['p2', '1'], ['10', 'p2'])).toEqual(['p2', '10']);
+    // A middle row keeps its slot, and so does the undo of its rename.
+    expect(reconcileKeyOrder(['a', 'b', 'c'], ['1', 'a', 'c'])).toEqual(['a', '1', 'c']);
+    expect(reconcileKeyOrder(['a', '1', 'c'], ['a', 'b', 'c'])).toEqual(['a', 'b', 'c']);
     // Undo of that rename puts the name back in the same slot.
     expect(reconcileKeyOrder(['p2', '10'], ['p2', 'a'])).toEqual(['p2', 'a']);
   });
