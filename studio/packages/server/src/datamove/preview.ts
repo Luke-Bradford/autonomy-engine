@@ -16,6 +16,7 @@ import {
   PREVIEW_CONCURRENCY,
   PREVIEW_ROW_CAP,
 } from '../limits.js';
+import { runBounded } from '../util/bounded-attempt.js';
 import { resolveInlineSource } from './inline-source.js';
 
 const previewLimit = pLimit(PREVIEW_CONCURRENCY);
@@ -115,8 +116,8 @@ export async function listConnectionTables(
  * Read an inline source through the store adapter's `lookup` arm and answer the
  * caller with `toResult` of its outputs, or a refusal.
  *
- * CONCURRENCY is probe's split (`connectors/probe.ts`): the slot is held until
- * the REAL read settles, and the caller is answered on its own timer.
+ * CONCURRENCY is `runBounded`'s (#1720): the slot is held until the REAL read
+ * settles, and the caller is answered on its own timer.
  */
 async function readThroughLookup<R extends { ok: true }>(
   args: PreviewInlineSourceArgs,
@@ -134,51 +135,25 @@ async function readThroughLookup<R extends { ok: true }>(
     return { ok: false, error: `no adapter for connection kind '${connection.kind}'` };
   }
 
-  const controller = new AbortController();
-  const onCallerAbort = () => stop(`${what} was cancelled`);
-  const timer = setTimeout(
-    () => stop(`${what} did not finish within ${Math.round(backstopMs / 1000)}s and was stopped`),
+  return runBounded<R | Refusal>({
+    limit: previewLimit,
     backstopMs,
-  );
-  timer.unref?.();
-  let settle!: (result: R | Refusal) => void;
-  let settled = false;
-  const answer = new Promise<R | Refusal>((resolve) => {
-    // Once the caller has its answer nothing needs the timer or the listener,
-    // however it was answered: the read, the backstop or the caller leaving.
-    // The SLOT is a separate matter and stays held until the read ends.
-    settle = (result) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', onCallerAbort);
-      resolve(result);
-    };
+    signal,
+    work: (abort) => readOutputs(args, adapter, resolved.dataset, abort, toResult),
+    onStop: (stop) => ({
+      ok: false,
+      error:
+        stop === 'cancelled'
+          ? `${what} was cancelled`
+          : `${what} did not finish within ${Math.round(backstopMs / 1000)}s and was stopped`,
+    }),
+    // An adapter's stream threw rather than yielding `failed`. Its message is
+    // the least trusted string here, so it is redacted like a failure's.
+    onThrow: (err) => ({
+      ok: false,
+      error: redactSecrets(err instanceof Error ? err.message : String(err), [secret]),
+    }),
   });
-  function stop(error: string) {
-    settle({ ok: false, error });
-    controller.abort();
-  }
-  if (signal?.aborted === true) onCallerAbort();
-  else signal?.addEventListener('abort', onCallerAbort, { once: true });
-
-  void previewLimit(async () => {
-    // Answered while queued (the backstop, or the caller left): reading now
-    // would spend a session on rows nobody will see.
-    if (settled) return;
-    try {
-      settle(await readOutputs(args, adapter, resolved.dataset, controller.signal, toResult));
-    } catch (err) {
-      // An adapter's stream threw rather than yielding `failed`. Its message is
-      // the least trusted string here, so it is redacted like a failure's.
-      settle({
-        ok: false,
-        error: redactSecrets(err instanceof Error ? err.message : String(err), [secret]),
-      });
-    }
-  });
-
-  return answer;
 }
 
 type Refusal = { ok: false; error: string };
