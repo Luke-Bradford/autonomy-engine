@@ -128,7 +128,7 @@ test.describe('#1600 C7d — the workspace Lookup max rows', () => {
   const rowsField = (page: Page) =>
     page
       .getByRole('region', { name: 'Run defaults' })
-      .getByLabel('Lookup max rows (rows)', { exact: true });
+      .getByLabel('Lookup max rows', { exact: true });
 
   test('Settings saves Lookup max rows beside the timeout, without undoing it, at 1440x900', async ({
     page,

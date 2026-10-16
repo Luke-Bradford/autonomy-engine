@@ -1802,12 +1802,11 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // connection's limits are: a retry after a Settings change uses the new
     // value. A run with no owner reads the documented default.
     const lookupMaxRows =
-      node.type === LOOKUP_ACTIVITY_TYPE
-        ? (ownerId === null
-            ? DEFAULT_WORKSPACE_SETTINGS
-            : getWorkspaceSettings(deps.db, ownerId).settings
-          ).lookupMaxRows
-        : undefined;
+      node.type !== LOOKUP_ACTIVITY_TYPE
+        ? undefined
+        : ownerId === null
+          ? DEFAULT_WORKSPACE_SETTINGS.lookupMaxRows
+          : getWorkspaceSettings(deps.db, ownerId).settings.lookupMaxRows;
 
     // #890 — the input this attempt is dispatched with, for the run monitor.
     // `preparedInput` holds `{$secret}` marker NAMES, not values, and no other

@@ -210,7 +210,8 @@ export const XLSX_MAX_COLUMNS = 16_384;
 export const XLSX_MAX_ENTRIES = 16_384;
 
 // `LOOKUP_ROW_CAP` moved to `@autonomy-studio/shared`'s `catalog/lookup-config.ts`
-// (#1600 OR41 C7a), where it also bounds a Lookup's Max rows, as
+// (#1600 OR41 C7a), where it is also the default of a Lookup's Max rows and (C7d)
+// of the workspace's Lookup max rows, `LOOKUP_ROW_CEILING_MAX` bounding both, as
 // `DEFAULT_MAX_LIST_ENTRIES` sits in shared for its note. Behaviour at a cap is
 // the node's When over the limit (default Truncate and warn, §5's "truncate
 // and mark").

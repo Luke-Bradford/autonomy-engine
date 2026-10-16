@@ -61,21 +61,31 @@ function parseLookupMaxRows(raw: string): DraftNumberParse<number> {
  *
  * The PUT takes the whole document, so each save is built from `latest`, the
  * last document sent or received, never from the render's `settings`: two
- * quick saves in a row must not undo each other (#1581).
+ * quick saves in a row must not undo each other (#1581). A refused save resets
+ * it to the last confirmed one. Another tab's change made since this page
+ * loaded is overwritten by the next save here: the cost of a whole-document
+ * PUT, which is what keeps an omitted field from being written as its default.
  */
 function RunDefaults() {
   const [settings, setSettings] = useState<WorkspaceSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
   const latest = useRef<WorkspaceSettings | null>(null);
+  /** The last document the server confirmed, which a refused save falls back to. */
+  const confirmed = useRef<WorkspaceSettings | null>(null);
   const guarded = useGuardedLoad();
   const handlers = useMemo<GuardedHandlers<WorkspaceSettingsResponse>>(
     () => ({
       onData: (answer) => {
         latest.current = answer.settings;
+        confirmed.current = answer.settings;
         setSettings(answer.settings);
         setError(null);
       },
-      onError: (cause) => setError(cause instanceof Error ? cause.message : String(cause)),
+      onError: (cause) => {
+        // A refused save must not ride along with the next one.
+        latest.current = confirmed.current;
+        setError(cause instanceof Error ? cause.message : String(cause));
+      },
     }),
     [],
   );
@@ -118,13 +128,12 @@ function RunDefaults() {
           <FieldCell span="short">
             <DraftNumberField
               label="Lookup max rows"
-              unit="rows"
               stored={settings.lookupMaxRows}
               parse={parseLookupMaxRows}
               about={
-                `The most rows any Lookup returns, existing pipelines included; a Lookup's ` +
-                `own Max rows can only ask for less. The default is ${LOOKUP_ROW_CAP}, up to ` +
-                `${LOOKUP_ROW_CEILING_MAX}. Lowering it truncates or fails Lookups that return more.`
+                `The most rows a Lookup may return. Each Lookup's own Max rows (default ` +
+                `${LOOKUP_ROW_CAP}) can ask for up to this. The default is ${LOOKUP_ROW_CAP}, up to ` +
+                `${LOOKUP_ROW_CEILING_MAX}. Lowering it also holds existing Lookups to it.`
               }
               onCommit={(rows) => save({ lookupMaxRows: rows })}
             />

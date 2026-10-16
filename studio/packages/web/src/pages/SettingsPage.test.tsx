@@ -240,7 +240,7 @@ describe('SettingsPage — run defaults', () => {
 
 /** #1600 OR41 C7d — the workspace's Lookup max rows. */
 describe('SettingsPage — Lookup max rows', () => {
-  const rowsField = () => screen.findByRole('textbox', { name: /Lookup max rows \(rows\)/ });
+  const rowsField = () => screen.findByRole('textbox', { name: 'Lookup max rows' });
 
   it('shows the stored value, saves a new one in the whole document, and refuses out of range', async () => {
     getSettingsMock.mockResolvedValue(settings('env', null));
@@ -266,6 +266,30 @@ describe('SettingsPage — Lookup max rows', () => {
     expect(putWorkspaceSettingsMock).toHaveBeenCalledWith({
       defaultActivityTimeoutSeconds: 43_200,
       lookupMaxRows: 2500,
+    });
+  });
+
+  it('a refused save does not ride along with the next one', async () => {
+    getSettingsMock.mockResolvedValue(settings('env', null));
+    putWorkspaceSettingsMock.mockRejectedValueOnce(new Error('refused by the server'));
+    putWorkspaceSettingsMock.mockResolvedValue({
+      settings: { defaultActivityTimeoutSeconds: 600, lookupMaxRows: 1000 },
+      stored: true,
+    });
+    render(<SettingsPage />);
+    const rows = await rowsField();
+    await userEvent.clear(rows);
+    await userEvent.type(rows, '300');
+    await userEvent.tab();
+    expect(await screen.findByText('refused by the server')).toBeInTheDocument();
+
+    const timeout = screen.getByRole('textbox', { name: /Activity timeout \(seconds\)/ });
+    await userEvent.clear(timeout);
+    await userEvent.type(timeout, '600');
+    await userEvent.tab();
+    expect(putWorkspaceSettingsMock).toHaveBeenLastCalledWith({
+      defaultActivityTimeoutSeconds: 600,
+      lookupMaxRows: 1000,
     });
   });
 

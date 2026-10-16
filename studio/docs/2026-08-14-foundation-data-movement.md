@@ -958,7 +958,9 @@ sit beside `ISSUE_LIST_CAP`, which moved to `shared/src/schemas/zod-issues.ts` w
 `formatZodIssues` — in `shared`, which cannot import from `server` — became its third consumer.
 The lookup caps have no `shared` consumer, so `server/src/limits.ts` stays their home:
 
-- `LOOKUP_ROW_CAP = 1000` **and** `LOOKUP_BYTE_CAP = 1 MiB`, whichever binds first;
+- `LOOKUP_ROW_CAP = 1000` **and** `LOOKUP_BYTE_CAP = 1 MiB`, whichever binds first (amended by
+  #1600: since C7a the row cap is the default of a node's Max rows, moved to `shared`, and since C7d a
+  workspace may raise it to 5000; the byte cap stays fixed);
 - **behaviour at the cap: truncate and mark**, never fail. A lookup is a read for a decision, and a
   bounded answer is usable where an error is not. `truncated: true` reaches the output and an
   `activity.warned` reaches the log, so no consumer can mistake a prefix for the whole.

@@ -315,7 +315,7 @@ function truncationReason(
   // Under Fail no rows are returned, so the consequence clause would be false.
   if (cause === 'rows') {
     const limit = bound.workspace
-      ? `workspace's ${bound.rows}-row Lookup max rows (Settings)`
+      ? `workspace's Lookup max rows (${bound.rows}, in Settings)`
       : `${bound.rows}-row limit`;
     return (
       `the source has more rows than this lookup may materialise: stopped at the ` +
@@ -444,7 +444,7 @@ export async function* runLookupActivity(
     // can bound nothing the reader already materialised — and a reader hands
     // over a whole batch. `COPY_BATCH_ROWS` is sized for a streaming copy, which
     // wants long pulls; a lookup keeps at most its Max rows and 1 MiB
-    // and so gains nothing from them while paying up to 1000 resident rows for
+    // and so gains nothing from them while paying up to a whole batch of resident rows for
     // them. A smaller batch also yields to the event loop more often, which §9
     // asks of a bounded read anyway.
     outer: for await (const batch of io.readBatches({

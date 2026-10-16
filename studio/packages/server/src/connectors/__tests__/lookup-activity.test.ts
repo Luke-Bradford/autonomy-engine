@@ -799,7 +799,7 @@ describe('#1600 OR41 C7d — the workspace’s Lookup max rows', () => {
     const out = outputsOf(events);
     expect(out.count).toBe(200);
     expect(out.truncated).toBe(true);
-    expect(reasonOf(events)).toContain("workspace's 200-row Lookup max rows");
+    expect(reasonOf(events)).toContain("workspace's Lookup max rows (200, in Settings)");
   });
 
   it('a raised ceiling lets a node ask for more than 1000 rows', async () => {
@@ -830,7 +830,7 @@ describe('#1600 OR41 C7d — the workspace’s Lookup max rows', () => {
       ),
     );
     expect(end).toMatchObject({ type: 'failed', kind: 'permanent' });
-    expect(end.type === 'failed' ? end.error : '').toContain("workspace's 100-row Lookup max rows");
+    expect(end.type === 'failed' ? end.error : '').toContain("workspace's Lookup max rows (100, in Settings)");
   });
 
   it('First row only still reads one row under any ceiling', async () => {
