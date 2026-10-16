@@ -8,6 +8,8 @@ import {
   type SqlParameterValue,
 } from '@autonomy-studio/shared';
 
+import { NUMERIC_TEXT } from './paramRules';
+
 /**
  * #1600 OR41 C1q-b — the pure rules behind the inline source's bind values
  * (`InlineSourceEditor`): the `:name`s an inline query binds, stored in its
@@ -37,12 +39,17 @@ export function bindTypeOf(value: unknown): BindType {
   return value === null ? 'null' : 'text';
 }
 
+/** Why a Number row's text stores nothing yet. */
+const NOT_A_NUMBER = 'Not saved: enter a number, or a ${} value.';
+
 /**
  * The value a row stores for its type and its box's text, or why it stores
- * nothing yet. A `${}` is stored as typed whatever the type: a run resolves it
- * keeping the type it resolves to. A number is a plain decimal, the literal a
- * `number` pipeline parameter accepts, so `0x10` and `1e3` are not numbers here
- * (nor is `150.` while it is being typed: the stored value waits for `150.5`).
+ * nothing yet (the row keeps its stored value until then). A `${}` is stored as
+ * typed whatever the type: a run resolves it keeping the type it resolves to. A
+ * number is a plain decimal, the literal a `number` pipeline parameter accepts
+ * (`NUMERIC_TEXT`), so `0x10` and `1e3` are not numbers here, nor is `150.`
+ * while it is being typed. A stored number's own text (`1e-7`) reads back as
+ * itself. An integer past 2^53 is refused rather than stored rounded.
  */
 export function bindValueFor(
   type: BindType,
@@ -50,11 +57,16 @@ export function bindValueFor(
 ): { value: SqlParameterValue } | { problem: string } {
   if (type === 'null') return { value: null };
   if (type === 'text' || isDynamicBindText(text)) return { value: text };
-  if (/^-?\d+(\.\d+)?$/.test(text.trim())) {
-    const n = Number(text.trim());
-    if (Number.isFinite(n)) return { value: n };
+  const t = text.trim();
+  const n = Number(t);
+  if (t === '' || !Number.isFinite(n)) return { problem: NOT_A_NUMBER };
+  if (NUMERIC_TEXT.test(t)) {
+    if (/^-?\d+$/.test(t) && !Number.isSafeInteger(n)) {
+      return { problem: 'Not saved: too large to store exactly. Choose Text to keep every digit.' };
+    }
+    return { value: n };
   }
-  return { problem: 'Enter a number, or a ${} value.' };
+  return String(n) === t ? { value: n } : { problem: NOT_A_NUMBER };
 }
 
 /** Whether a box's text is a `${}` the run evaluates (the row's type then follows it). */
@@ -117,7 +129,7 @@ export function freshBindName(taken: readonly string[]): string {
  * uses), so a `$${` escape is literal here exactly as it is there.
  */
 function isDynamic(value: unknown): value is string {
-  return typeof value === 'string' && interpolationMode(value).mode !== 'literal';
+  return typeof value === 'string' && isDynamicBindText(value);
 }
 
 /**

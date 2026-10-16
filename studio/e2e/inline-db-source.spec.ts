@@ -359,6 +359,7 @@ test.describe('#1600 C1q — an inline database source', () => {
     await expect(row(4, 'type')).toHaveValue('text');
     await expect(importButton).toBeDisabled();
     await expect(pane.getByText(/^Not bound:/)).toHaveCount(0);
+    await expect(pane.getByText('Every :name is bound', { exact: true })).toBeVisible();
     // One undo step takes both imported rows back out.
     await page.getByRole('button', { name: 'Undo', exact: true }).click();
     await expect(row(3, 'name')).toHaveCount(0);
@@ -368,9 +369,9 @@ test.describe('#1600 C1q — an inline database source', () => {
     // A Number holds text that is not a number yet, and stores one when it is.
     await row(3, 'type').selectOption('number');
     await row(3, 'value').fill('150.');
-    await expect(pane.getByText('Enter a number, or a ${} value.')).toBeVisible();
+    await expect(pane.getByText('Not saved: enter a number, or a ${} value.')).toBeVisible();
     await row(3, 'value').fill('150');
-    await expect(pane.getByText('Enter a number, or a ${} value.')).toHaveCount(0);
+    await expect(pane.getByText('Not saved: enter a number, or a ${} value.')).toHaveCount(0);
     // Null stores null, and there is no value to type.
     await row(1, 'type').selectOption('null');
     await expect(row(1, 'value')).toBeDisabled();

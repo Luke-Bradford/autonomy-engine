@@ -20,6 +20,7 @@ const CORPUS = [
   "select x'00', 1 as a$b, :a",
   "select 'it''s :q', :a, :a",
   'select :$a',
+  'select ?1, ?2, ?1, :a',
 ];
 
 describe('sqlite bind names agree with better-sqlite3', () => {

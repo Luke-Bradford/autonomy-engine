@@ -54,6 +54,7 @@ import type { ConnectionKind } from '../schemas/connection.js';
  * | text | what sqlite does |
  * | --- | --- |
  * | `:a`, `@a`, `$a`, `#a` | the bind name `a`, whichever prefix |
+ * | `?1` | the bind name `1` (a bare `?` is positional) |
  * | `:1`, `:a$b`, `:é` | names: a digit may start one, `$` and non-ASCII continue one |
  * | `[x:y]`, `` `x:y` ``, `"x:y"` | quoted identifiers |
  * | a block comment inside a block comment | the first close ends both — they do NOT nest |
@@ -181,6 +182,15 @@ function endOfEscapeStringRegion(sql: string, openQuote: number): number {
 }
 
 /**
+ * What CONTINUES a dollar-quote tag: `isIdentifierChar` minus `$`, because a `$`
+ * is what closes the tag rather than extending it. Same non-ASCII rule, for the
+ * same measured reason — `$😀$ … $😀$` and `$é$ … $é$` are both real literals.
+ */
+function isTagChar(char: string): boolean {
+  return isNonAscii(char) || /[A-Za-z0-9_]/.test(char);
+}
+
+/**
  * The `$tag$` delimiter opening at `start`, or `null` if this `$` opens no
  * dollar-quoted string. A tag follows unquoted-identifier rules and cannot
  * itself contain `$`, so `$1` is not a tag (a digit cannot start one) — MEASURED,
@@ -193,15 +203,6 @@ function endOfEscapeStringRegion(sql: string, openQuote: number): number {
  * direction, and the reason the whole module asks postgres's lexical question
  * rather than this repo's identifier-validation one.
  */
-/**
- * What CONTINUES a dollar-quote tag: `isIdentifierChar` minus `$`, because a `$`
- * is what closes the tag rather than extending it. Same non-ASCII rule, for the
- * same measured reason — `$😀$ … $😀$` and `$é$ … $é$` are both real literals.
- */
-function isTagChar(char: string): boolean {
-  return isNonAscii(char) || /[A-Za-z0-9_]/.test(char);
-}
-
 function dollarQuoteTagAt(sql: string, start: number): string | null {
   let i = start + 1;
   if (isNameStart(sql[i])) {
@@ -339,6 +340,15 @@ function scanSqlite(sql: string): SqlPlaceholder[] {
     if (char === ':' || char === '@' || char === '#' || char === '$') {
       let end = i + 1;
       while (isIdentifierChar(sql[end])) end += 1;
+      if (end > i + 1) found.push({ kind: 'name', name: sql.slice(i + 1, end), start: i, end });
+      i = Math.max(end, i + 1);
+      continue;
+    }
+    // `?NNN` binds the key `NNN` from the record (measured); a bare `?` is
+    // anonymous and positional, which a named record cannot bind.
+    if (char === '?') {
+      let end = i + 1;
+      while (/[0-9]/.test(sql[end] ?? '')) end += 1;
       if (end > i + 1) found.push({ kind: 'name', name: sql.slice(i + 1, end), start: i, end });
       i = Math.max(end, i + 1);
       continue;

@@ -414,11 +414,15 @@ function QueryFields({
               >
                 Import from statement
               </button>
-              {unbound.length > 0 && (
-                <span className="page-hint" role="status">
-                  {`Not bound: ${unbound.map((n) => `:${n}`).join(', ')}`}
-                </span>
-              )}
+              {/* Said beside the button, not only in its hover: a disabled
+                  button gets no hover in every browser (`RowList`). */}
+              <span className="page-hint" role="status">
+                {unbound.length > 0
+                  ? `Not bound: ${unbound.map((n) => `:${n}`).join(', ')}`
+                  : used.length > 0
+                    ? 'Every :name is bound'
+                    : 'No :name in the statement'}
+              </span>
             </>
           )
         }

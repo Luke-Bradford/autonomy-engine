@@ -28,13 +28,23 @@ describe('inline source bind values (#1600 C1q-b)', () => {
     expect(bindValueFor('text', '150')).toEqual({ value: '150' });
     expect(bindValueFor('number', '150')).toEqual({ value: 150 });
     expect(bindValueFor('number', ' -1.5 ')).toEqual({ value: -1.5 });
-    for (const t of ['', '150.', '0x10', '1e3', 'abc', 'Infinity']) {
-      expect(bindValueFor('number', t)).toEqual({ problem: 'Enter a number, or a ${} value.' });
+    for (const t of ['', '150.', '0x10', '1e3', 'abc', 'Infinity', '1e999']) {
+      expect(bindValueFor('number', t)).toEqual({
+        problem: 'Not saved: enter a number, or a ${} value.',
+      });
     }
+    // A stored number's own text reads back as itself, so it loads without a problem.
+    expect(bindValueFor('number', bindValueText(1e-7))).toEqual({ value: 1e-7 });
+    expect(bindValueFor('number', bindValueText(1e21))).toEqual({ value: 1e21 });
+    // Stored rounded, it would be a different value than the one typed.
+    expect(bindValueFor('number', '12345678901234567890')).toEqual({
+      problem: 'Not saved: too large to store exactly. Choose Text to keep every digit.',
+    });
+    expect(bindValueFor('number', '9007199254740991')).toEqual({ value: 9007199254740991 });
     // A `${}` is stored as typed whatever the type: the run keeps what it resolves to.
     expect(bindValueFor('number', '${params.wm}')).toEqual({ value: '${params.wm}' });
     expect(bindValueFor('number', '$${literal}')).toEqual({
-      problem: 'Enter a number, or a ${} value.',
+      problem: 'Not saved: enter a number, or a ${} value.',
     });
     expect(bindValueFor('null', 'anything')).toEqual({ value: null });
     expect(bindTypeOf(7)).toBe('number');

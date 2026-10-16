@@ -29,6 +29,10 @@ describe('sqlBindNames', () => {
     expect(sqlBindNames('select :a, @b, $c, #d, :a', 'sqlite')).toEqual(['a', 'b', 'c', 'd']);
   });
 
+  it('sqlite: ?NNN binds the key NNN, and a bare ? binds no name', () => {
+    expect(sqlBindNames('select ?1, ?, ?12', 'sqlite')).toEqual(['1', '12']);
+  });
+
   it('sqlite: a digit starts a name, and $ and non-ASCII continue one', () => {
     expect(sqlBindNames('select :1, :a$b, :é', 'sqlite')).toEqual(['1', 'a$b', 'é']);
   });
