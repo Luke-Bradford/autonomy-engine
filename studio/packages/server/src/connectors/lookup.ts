@@ -1,6 +1,5 @@
 import {
   LOOKUP_ROW_CAP,
-  LOOKUP_ROW_CEILING_MAX,
   WARNING_CODES,
   formatZodIssues,
   lookupConfigSchema,
@@ -418,10 +417,9 @@ export async function* runLookupActivity(
     return;
   }
   const { firstRowOnly, maxRows: asked, overLimit } = settings.data;
-  // #1600 C7d — the node asks, the workspace's Lookup max rows bounds. Clamped to
-  // ADF's 5000 here too: the settings row is decoded for SHAPE only, so a row
-  // written under a looser rule must still not lift the bound.
-  const ceiling = Math.min(ctx.lookupMaxRows ?? LOOKUP_ROW_CAP, LOOKUP_ROW_CEILING_MAX);
+  // #1600 C7d — the node asks (up to ADF's 5000, by its schema), the workspace's
+  // Lookup max rows bounds: whichever is lower.
+  const ceiling = ctx.lookupMaxRows ?? LOOKUP_ROW_CAP;
   const maxRows = Math.min(asked, ceiling);
   const rowBound: RowBound = { rows: maxRows, workspace: ceiling < asked };
   const rowLimit = firstRowOnly ? 1 : maxRows;
