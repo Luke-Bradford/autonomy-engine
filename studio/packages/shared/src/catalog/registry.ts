@@ -516,12 +516,19 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // also the `dispatchConfigSchema`: the adapter validates the live
     // (`${}`-substituted) `path` with it, and the save gate a literal one
     // (#1480). No `secretSinkFields` — `fs` is credential-less.
+    //
+    // #1600 OR41 C7b — Lookup · *Whole file as text* (`LOOKUP_TYPES`): the
+    // second type under the ONE Lookup palette item, as `copy_files` is under
+    // Copy, so it shares Lookup's title and is not offered on its own. Its read
+    // is unchanged: the connection's `maxBytes` (not Lookup's byte cap) and a
+    // file over it fails rather than truncating.
     type: FILE_READ_ACTIVITY_TYPE,
-    title: 'Read file',
+    title: 'Lookup',
     description: 'Read the contents of a file on a file system connection.',
     kind: 'execution',
     category: 'general',
-    tabs: [{ key: 'location', bindings: ['connection'], fields: ['path'] }],
+    inPalette: false,
+    tabs: [{ key: 'source', bindings: ['connection'], fields: ['path'] }],
     idempotent: true,
     connectionKinds: ['fs'],
     outputs: [out('content', 'string'), out('path', 'string')],
@@ -905,8 +912,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
      * `LOOKUP_ROW_CAP`, and the byte cap is not configurable at all.
      */
     type: LOOKUP_ACTIVITY_TYPE,
-    title: 'Lookup rows',
-    description: 'Read a bounded set of rows from a dataset so later activities can use them.',
+    title: 'Lookup',
+    description:
+      'Read a bounded set of rows from a dataset, or a whole file as text, so later activities can use them.',
     kind: 'execution',
     category: 'general',
     tabs: [

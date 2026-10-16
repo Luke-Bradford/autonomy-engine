@@ -404,6 +404,30 @@ export const COPY_TYPES = [COPY_ACTIVITY_TYPE, COPY_FILES_ACTIVITY_TYPE] as cons
 export const LOOKUP_ACTIVITY_TYPE = 'lookup';
 
 /**
+ * #1600 OR41 C7b — the two types the one Lookup palette item stands for, rows
+ * first (the *Read as* select's order). *Whole file as text* IS `file_read`:
+ * its shape (an `fs` connection and a `path`, giving `content` and `path`) is
+ * already that mode, so a new type would be a second dispatch arm doing the
+ * same read. `copy_files` needed a new type only because its config differs
+ * from `file_copy`'s. So `file_read` is a mode, not a retired type, and it has
+ * no entry in `RETIRED_LOWERINGS`.
+ */
+export const LOOKUP_TYPES = [LOOKUP_ACTIVITY_TYPE, FILE_READ_ACTIVITY_TYPE] as const;
+
+/**
+ * #1600 OR41 C7b — every palette item that stands for more than one type, each
+ * listed in its mode select's order. A node switches type only within its own
+ * group (`canvasStore.setActivityMode`), and the dock draws the select for a
+ * node whose type is in one.
+ */
+export const ACTIVITY_MODE_GROUPS: readonly (readonly string[])[] = [COPY_TYPES, LOOKUP_TYPES];
+
+/** The mode group `type` belongs to, or `undefined` when it has one mode. */
+export function activityModeGroup(type: string): readonly string[] | undefined {
+  return ACTIVITY_MODE_GROUPS.find((group) => group.includes(type));
+}
+
+/**
  * P3 — the ACTIVITY CATALOG entry: the static, pure metadata for one activity
  * `type` (the `type` on a pipeline `Node`). Lives in `shared` (no I/O) so the
  * SAME entry drives:

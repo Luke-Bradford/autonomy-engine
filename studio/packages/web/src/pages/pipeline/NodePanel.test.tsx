@@ -2078,6 +2078,25 @@ describe('NodePanel — what each tab holds (#1396, #1477)', () => {
     );
   });
 
+  it('#1600 C7b — Lookup leads General with Read as, which swaps the node to a whole-file read', () => {
+    const { store } = mountOver(node('n_look', 'lookup', {}));
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }));
+    const general = within(screen.getByRole('tabpanel', { name: 'General' }));
+    const mode = general.getByRole('combobox', { name: 'Read as' }) as HTMLSelectElement;
+    expect([...mode.options].map((o) => o.text)).toEqual(['Rows', 'Whole file as text']);
+    expect(mode.value).toBe('lookup');
+    fireEvent.change(mode, { target: { value: 'file_read' } });
+    expect(store.getState().nodes[0]!.type).toBe('file_read');
+    expect(tabNames()).toEqual(['General', 'Source']);
+    // A one-mode activity has no mode select at all.
+    cleanup();
+    mountOver(node('n_llm', 'llm_call', {}));
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }));
+    const llm = within(screen.getByRole('tabpanel', { name: 'General' }));
+    expect(llm.queryByRole('combobox', { name: 'Read as' })).toBeNull();
+    expect(llm.queryByRole('combobox', { name: 'Copy mode' })).toBeNull();
+  });
+
   it('splits a paired activity’s pickers over Source and Sink, opening on Source', () => {
     mountOver(node('n_copy', 'copy', {}));
     expect(tabNames()).toEqual(['General', 'Source', 'Sink', 'Mapping']);

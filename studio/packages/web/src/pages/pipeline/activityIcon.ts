@@ -11,7 +11,6 @@ import {
   DatabaseArrowRight20Regular,
   Delete20Regular,
   Document20Regular,
-  DocumentArrowDown20Regular,
   DocumentEdit20Regular,
   ErrorCircle20Regular,
   Filter20Regular,
@@ -63,7 +62,6 @@ const BY_TYPE: Readonly<Record<string, Glyph>> = {
   // The structural call activity (P2c) draws as what it is — the same routing
   // glyph, because to an operator it is the same act.
   call_pipeline: ArrowRouting20Regular,
-  file_read: DocumentArrowDown20Regular,
   file_write: DocumentEdit20Regular,
   file_copy: Copy20Regular,
   file_move: FolderArrowRight20Regular,
@@ -82,13 +80,17 @@ const BY_TYPE: Readonly<Record<string, Glyph>> = {
   /* #1221 M12 — `lookup` reads a store and writes nowhere, so it is the INBOUND
      twin of `copy`'s outbound arrow: the glyph says which way data moves, which
      is the whole distinction between these two activities. It follows the map's
-     own established grammar rather than inventing one — `file_read` is already
-     `DocumentArrowDown`, so arrow-down ALREADY means "read this into the
-     pipeline" here, and a database with the same arrow says the same thing about
+     own established grammar rather than inventing one — `file_read` was
+     `DocumentArrowDown` (until C7b made it Lookup's text mode), so arrow-down
+     ALREADY meant "read this into the pipeline" here, and a database with the same arrow says the same thing about
      a store. `DatabaseSearch` (a magnifying glass) was the other candidate and
      is worse: it reads as a UI affordance an operator might click, not as a data
      read a pipeline performs. */
   lookup: DatabaseArrowDown20Regular,
+  /* #1600 OR41 C7b — Lookup reading a whole file as text: the SAME activity to
+     an author (one palette item, *Read as* in the dock), so the same glyph, as
+     `copy_files` shares `copy`'s. */
+  file_read: DatabaseArrowDown20Regular,
   /* #844 V5 — the variable writers. `set` draws the braces of a `${vars.x}`
      reference, which is what it feeds; `append` draws a list gaining a row,
      because it only ever adds one element to an array. */

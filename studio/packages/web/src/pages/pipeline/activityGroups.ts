@@ -79,7 +79,7 @@ export function toolboxGroups(query: string): ToolboxGroup[] {
       .filter((e) => e.category === category && e.inPalette !== false)
       // Title AND type: the title is what the toolbox shows, but the type is what
       // the docs, an export envelope and an error message all name, so an author
-      // who knows `file_read` should not have to guess it is called "Read file".
+      // who knows `file_write` should not have to guess it is called "Write file".
       // And the description (#1449): an author searches for what they want done.
       .filter((e) => matchesQuery(query, [e.title, e.type, e.description]))
       .sort((a, b) => a.title.localeCompare(b.title));

@@ -150,6 +150,7 @@ import {
   type ConfigField,
 } from './configForm';
 import { applicableFieldNames, nodeTypeTabs } from './activityTabs';
+import { activityModeTitle } from './activityModes';
 import { containerLabels, issuesBySubject, readableIssue, sameAttribution } from './containerRules';
 import { nameIssues, propertyIssues } from './paramRules';
 import { PipelineGeneral } from './PipelineGeneral';
@@ -3985,7 +3986,11 @@ export function NodePanel({
     side: ConnectionSlotSide,
     bind: (connectionId: string | undefined) => void,
   ) {
-    const disabledReason = connectionSlotReason(accepted, entry?.title ?? nodeType, side);
+    const disabledReason = connectionSlotReason(
+      accepted,
+      activityModeTitle(nodeType, entry?.title ?? nodeType),
+      side,
+    );
     return (
       <ConnectionPicker
         label={label}

@@ -274,7 +274,7 @@ describe('canvasStore', () => {
   // #1600 OR41 C1a — Copy's *Copy mode* toggle: Rows (`copy`) ⇄ Files as-is
   // (`copy_files`). The modes share no settings, so the config starts fresh and
   // the dataset bindings (rows only) go; the connection pair stays; one undo.
-  it('setCopyMode switches a copy node between rows and files as-is, in one undo step', () => {
+  it('setActivityMode switches a copy node between rows and files as-is, in one undo step', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(
       version({
@@ -296,7 +296,7 @@ describe('canvasStore', () => {
     );
     const before = s.getState().nodes[0]!;
 
-    s.getState().setCopyMode('n_c', 'copy_files');
+    s.getState().setActivityMode('n_c', 'copy_files');
     const switched = s.getState().nodes[0]!;
     expect(switched.type).toBe('copy_files');
     expect(switched.config['mode']).toBeUndefined();
@@ -311,23 +311,76 @@ describe('canvasStore', () => {
     expect(s.getState().nodes[0]!.type).toBe('copy_files');
 
     // Back to rows, and the same-type no-op writes nothing.
-    s.getState().setCopyMode('n_c', 'copy');
+    s.getState().setActivityMode('n_c', 'copy');
     expect(s.getState().nodes[0]!.type).toBe('copy');
     const settled = s.getState().nodes;
-    s.getState().setCopyMode('n_c', 'copy');
+    s.getState().setActivityMode('n_c', 'copy');
     expect(s.getState().nodes).toBe(settled);
 
     // Never a type change the toggle cannot make: not a non-copy node, not a
     // target outside the pair, not a missing node.
-    s.getState().setCopyMode('n_b', 'copy_files');
+    s.getState().setActivityMode('n_b', 'copy_files');
     expect(s.getState().nodes[1]!.type).toBe('llm_call');
-    s.getState().setCopyMode('n_c', 'llm_call' as 'copy');
+    s.getState().setActivityMode('n_c', 'llm_call');
     expect(s.getState().nodes[0]!.type).toBe('copy');
-    s.getState().setCopyMode('n_missing', 'copy_files');
+    s.getState().setActivityMode('n_missing', 'copy_files');
     expect(s.getState().nodes).toBe(settled);
   });
 
-  it('setCopyMode drops a half-picked dataset end, and keeps a half-picked connection end', () => {
+  // #1600 OR41 C7b — Lookup's *Read as*: Rows (`lookup`) ⇄ Whole file as text
+  // (`file_read`). The same switch as Copy's, within Lookup's own group only.
+  it('setActivityMode switches a Lookup between rows and whole file as text', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        nodes: [
+          {
+            id: 'n_l',
+            type: 'lookup',
+            config: { firstRowOnly: false, maxRows: 10 },
+            connectionId: 'c_fs',
+            connectionParams: { maxBytes: 2048 },
+            datasetIds: { source: 'd_src' },
+            position: { x: 10, y: 20 },
+          },
+          { id: 'n_c', type: 'copy', config: {}, position: { x: 100, y: 20 } },
+        ],
+        edges: [],
+      }),
+    );
+    const before = s.getState().nodes[0]!;
+
+    s.getState().setActivityMode('n_l', 'file_read');
+    const text = s.getState().nodes[0]!;
+    expect(text.type).toBe('file_read');
+    expect(text.config['maxRows']).toBeUndefined();
+    // The text mode's own contract, so `${nodes.n_l.output.content}` resolves.
+    expect((text.config['outputs'] as { name: string }[]).map((o) => o.name)).toEqual([
+      'content',
+      'path',
+    ]);
+    // One connection, kept with its overrides; the dataset binding goes.
+    expect(text.connectionId).toBe('c_fs');
+    expect(text.connectionParams).toEqual({ maxBytes: 2048 });
+    expect('datasetIds' in text).toBe(false);
+
+    s.getState().undo();
+    expect(s.getState().nodes[0]).toEqual(before);
+
+    // Back to rows starts as a NEW Lookup does: First row only, ADF's default.
+    s.getState().redo();
+    s.getState().setActivityMode('n_l', 'lookup');
+    expect(s.getState().nodes[0]!.type).toBe('lookup');
+    expect(s.getState().nodes[0]!.config['firstRowOnly']).toBe(true);
+
+    // Never across groups: a Lookup is not a Copy mode, nor a Copy a Lookup mode.
+    const settled = s.getState().nodes;
+    s.getState().setActivityMode('n_l', 'copy_files');
+    s.getState().setActivityMode('n_c', 'file_read');
+    expect(s.getState().nodes).toBe(settled);
+  });
+
+  it('setActivityMode drops a half-picked dataset end, and keeps a half-picked connection end', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(null);
     s.getState().addNode('copy');
@@ -335,7 +388,7 @@ describe('canvasStore', () => {
     s.getState().setNodeBindingEnd(id, 'datasets', 'source', 'd_src');
     s.getState().setNodeBindingEnd(id, 'connections', 'source', 'c_src');
     expect(s.getState().pendingBindings[id]?.datasets).toBeDefined();
-    s.getState().setCopyMode(id, 'copy_files');
+    s.getState().setActivityMode(id, 'copy_files');
     expect(s.getState().pendingBindings[id]).toEqual({
       connections: { source: 'c_src', sink: undefined },
     });

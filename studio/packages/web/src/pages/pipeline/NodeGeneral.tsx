@@ -1,9 +1,6 @@
 import type { ReactNode } from 'react';
 import { useStore } from 'zustand';
 import {
-  COPY_ACTIVITY_TYPE,
-  COPY_FILES_ACTIVITY_TYPE,
-  COPY_TYPES,
   DESCRIPTION_MAX_CHARS,
   InactiveMarkAsSchema,
   ContainerSchema,
@@ -23,6 +20,7 @@ import type { FieldSize } from './configForm';
 import type { createCanvasStore } from './canvasStore';
 import { NodeUserProperties } from './NodeUserProperties';
 import { PolicyEditor } from './PolicyEditor';
+import { activityModeSelect } from './activityModes';
 
 /** #1600 C0c — Mark as's label and option names, from the schema;
  * C0e — a container's own wording, from `ContainerSchema`. */
@@ -86,21 +84,17 @@ export function NodeGeneral({
     const n = s.nodes.find((x) => x.id === nodeId);
     return n !== undefined && (userPropertiesApply(n) || n.userProperties !== undefined);
   });
-  // #1600 OR41 C1a — the one Copy palette item stands for two types.
-  const copyMode = useStore(store, (s) => {
-    const type = s.nodes.find((x) => x.id === nodeId)?.type;
-    return (COPY_TYPES as readonly (string | undefined)[]).includes(type)
-      ? (type as (typeof COPY_TYPES)[number])
-      : undefined;
-  });
+  // #1600 OR41 C1a — the one Copy palette item stands for two types; C7b, and
+  // the one Lookup item.
+  const type = useStore(store, (s) => s.nodes.find((x) => x.id === nodeId)?.type);
   return (
     <>
       <GeneralBasics
         lead={
-          copyMode === undefined ? undefined : (
-            <CopyModeField
-              value={copyMode}
-              onChange={(next) => store.getState().setCopyMode(nodeId, next)}
+          type === undefined ? undefined : (
+            <ActivityModeField
+              type={type}
+              onChange={(next) => store.getState().setActivityMode(nodeId, next)}
             />
           )
         }
@@ -193,36 +187,31 @@ export function GeneralBasics({
 
 /**
  * #1600 OR41 C1a — Copy's *Copy mode*: Rows (`copy`) or Files as-is
- * (`copy_files`). Switching swaps the node's type and starts the other mode's
- * settings fresh (`setCopyMode`); Undo brings them back.
+ * (`copy_files`); C7b — Lookup's *Read as*: Rows (`lookup`) or Whole file as
+ * text (`file_read`). Nothing for a type with one mode. Switching swaps the
+ * node's type and starts the other mode's settings fresh (`setActivityMode`);
+ * Undo brings them back.
  */
-function CopyModeField({
-  value,
-  onChange,
-}: {
-  value: (typeof COPY_TYPES)[number];
-  onChange: (next: (typeof COPY_TYPES)[number]) => void;
-}) {
+function ActivityModeField({ type, onChange }: { type: string; onChange: (next: string) => void }) {
+  const select = activityModeSelect(type);
+  if (select === undefined) return null;
   return (
     <FieldGrid className="field-stack">
       <FieldCell span="short">
-        <LabelledControl
-          label="Copy mode"
-          about={{
-            name: 'Copy mode',
-            note: "Rows reads the data, maps its columns and converts their types. Files as-is copies files byte for byte, without reading them. Switching starts the other mode's settings fresh; Undo brings these back.",
-          }}
-        >
+        <LabelledControl label={select.label} about={{ name: select.label, note: select.note }}>
           {(id, describedBy) => (
             <select
               id={id}
               data-size={'s' satisfies FieldSize}
               aria-describedby={describedBy}
-              value={value}
-              onChange={(e) => onChange(e.target.value as (typeof COPY_TYPES)[number])}
+              value={type}
+              onChange={(e) => onChange(e.target.value)}
             >
-              <option value={COPY_ACTIVITY_TYPE}>Rows</option>
-              <option value={COPY_FILES_ACTIVITY_TYPE}>Files as-is</option>
+              {select.types.map((t) => (
+                <option key={t} value={t}>
+                  {select.options[t]}
+                </option>
+              ))}
             </select>
           )}
         </LabelledControl>

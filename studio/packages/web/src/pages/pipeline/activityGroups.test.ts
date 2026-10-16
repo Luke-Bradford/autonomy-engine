@@ -72,11 +72,18 @@ describe('toolboxGroups', () => {
   });
 
   it('matches on the activity TYPE too, which is what an author who knows the docs types', () => {
-    // "file_" appears in no title (`Read file`, `Write file`, …) — only in the type.
+    // "file_" appears in no title (`Write file`, `Delete file`, …) — only in the type.
     const types = typesOf(toolboxGroups('file_'));
-    expect(types).toContain('file_read');
     expect(types).toContain('file_write');
     expect(types.every((t) => t.startsWith('file_'))).toBe(true);
+  });
+
+  it('#1600 OR41 C7b — offers ONE Lookup, which a search for reading a file finds', () => {
+    const all = typesOf(toolboxGroups(''));
+    expect(all).toContain('lookup');
+    // Whole file as text is Lookup's other mode, chosen in the dock.
+    expect(all).not.toContain('file_read');
+    expect(typesOf(toolboxGroups('read file'))).toContain('lookup');
   });
 
   it('ignores surrounding whitespace so a trailing space does not empty the list', () => {
