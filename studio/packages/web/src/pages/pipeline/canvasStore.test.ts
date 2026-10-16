@@ -120,6 +120,38 @@ describe('canvasStore', () => {
     expect(s.getState().loaded?.nodes[0]?.type).toBe('file_copy');
   });
 
+  // #1600 OR41 C8b — a stored List directory opens as Get metadata · Child
+  // items, and a ForEach over its `entries` reads `childItems`; `loaded` keeps
+  // the stored doc, and opening it is not an edit.
+  it('opens a retired file_list as Get metadata, its ForEach items renamed, not dirty', () => {
+    const s = createCanvasStore();
+    const v = version({
+      nodes: [
+        {
+          id: 'list',
+          type: 'file_list',
+          config: { path: 'landing' },
+          connectionId: 'conn_fs',
+          position: { x: 1, y: 2 },
+        },
+        { id: 'w', type: 'wait', config: { seconds: 1 }, position: { x: 3, y: 4 } },
+      ],
+      containers: [
+        { id: 'each', kind: 'foreach', children: ['w'], items: '${nodes.list.output.entries}' },
+      ],
+    });
+    s.getState().loadVersion(v);
+    expect(s.getState().nodes[0]).toMatchObject({
+      type: 'get_metadata',
+      connectionId: 'conn_fs',
+      config: { path: 'landing', fieldList: ['childItems'] },
+    });
+    expect(s.getState().containers[0]?.items).toBe('${nodes.list.output.childItems}');
+    expect(s.getState().dirty).toBe(false);
+    expect(s.getState().loaded?.nodes[0]?.type).toBe('file_list');
+    expect(s.getState().loaded?.containers[0]?.items).toBe('${nodes.list.output.entries}');
+  });
+
   // #844 GL3 — the workspace's globals are not document state: setting them
   // neither dirties the doc nor pushes an undo entry, and opening another
   // version keeps them.
