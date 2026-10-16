@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { LOOKUP_ACTIVITY_TYPE, WARNING_CODES } from '@autonomy-studio/shared';
-import { LOOKUP_BATCH_ROWS, LOOKUP_BYTE_CAP, LOOKUP_ROW_CAP } from '../../limits.js';
+import { LOOKUP_ACTIVITY_TYPE, LOOKUP_ROW_CAP, WARNING_CODES } from '@autonomy-studio/shared';
+import { LOOKUP_BATCH_ROWS, LOOKUP_BYTE_CAP } from '../../limits.js';
 import { estimateRowLowerBound } from '../lookup-bounds.js';
 import { runLookupActivity } from '../lookup.js';
 import { DatasetIoError } from '../dataset-io-error.js';

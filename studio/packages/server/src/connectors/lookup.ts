@@ -6,7 +6,7 @@ import {
 } from '@autonomy-studio/shared';
 import { failed } from './activity-events.js';
 import { DatasetIoError } from './dataset-io-error.js';
-import { LOOKUP_BATCH_ROWS, LOOKUP_BYTE_CAP, LOOKUP_ROW_CAP } from '../limits.js';
+import { LOOKUP_BATCH_ROWS, LOOKUP_BYTE_CAP } from '../limits.js';
 import { MAX_VALUE_DEPTH, estimateRowLowerBound } from './lookup-bounds.js';
 import type { SourceIo } from './source-io.js';
 import type { ActivityContext, ActivityEvent } from './types.js';
