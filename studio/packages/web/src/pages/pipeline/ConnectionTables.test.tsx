@@ -84,7 +84,7 @@ describe('ConnectionTables (#1600 C1q-c)', () => {
       truncated: true,
     });
     await act(async () => fireEvent.click(button()));
-    expect(screen.getByText('First 1 tables; type a name to use another')).toBeTruthy();
+    expect(screen.getByText('First 1 table')).toBeTruthy();
   });
 
   it('drops a list, and aborts its request, when the connection changes', async () => {
@@ -113,6 +113,20 @@ describe('ConnectionTables (#1600 C1q-c)', () => {
     expect(chooser()).not.toBeNull();
     rerender(<ConnectionTables inline={table({})} connectionId="c1" choose={() => {}} />);
     expect(chooser()).toBeNull();
+  });
+
+  it('is not stuck listing when the connection comes back to one whose request was aborted', async () => {
+    list.mockReturnValueOnce(new Promise(() => {}));
+    const { rerender } = render(
+      <ConnectionTables inline={table({})} connectionId="c1" choose={() => {}} />,
+    );
+    await act(async () => fireEvent.click(button()));
+    expect(button().textContent).toBe('Listing…');
+    rerender(<ConnectionTables inline={table({})} connectionId="c2" choose={() => {}} />);
+    rerender(<ConnectionTables inline={table({})} connectionId="c1" choose={() => {}} />);
+    // The c1 request was aborted and will never answer: the button is usable.
+    expect(button().textContent).toBe('List tables');
+    expect((button() as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('cannot list without a saved connection', () => {

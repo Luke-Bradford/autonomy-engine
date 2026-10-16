@@ -52,10 +52,13 @@ export type DatasetTablesRequest = z.infer<typeof DatasetTablesRequestSchema>;
  * read stopped at Lookup's row or byte cap. A refusal is a 200 with `ok: false`,
  * as `DatasetPreviewResultSchema`.
  */
+export const DatasetTableSchema = z.object({ schema: z.string().nullable(), name: z.string() });
+export type DatasetTable = z.infer<typeof DatasetTableSchema>;
+
 export const DatasetTablesResultSchema = z.union([
   z.object({
     ok: z.literal(true),
-    tables: z.array(z.object({ schema: z.string().nullable(), name: z.string() })),
+    tables: z.array(DatasetTableSchema),
     truncated: z.boolean(),
   }),
   z.object({ ok: z.literal(false), error: z.string().min(1) }),

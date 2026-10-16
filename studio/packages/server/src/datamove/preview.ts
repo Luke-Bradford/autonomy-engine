@@ -73,7 +73,7 @@ export async function previewInlineSource(
  * `information_schema`, which omits materialized views and lists a relation the
  * role holds any privilege on. Here: tables, partitioned tables (not their
  * partitions), views, materialized views and foreign tables the role can
- * SELECT, outside the `pg_` and `information_schema` schemas.
+ * SELECT in a schema it can use, outside the `pg_` and `information_schema` schemas.
  */
 export const TABLE_CATALOG_SQL: Partial<Record<ConnectionKind, string>> = {
   sqlite:
@@ -83,7 +83,7 @@ export const TABLE_CATALOG_SQL: Partial<Record<ConnectionKind, string>> = {
     'SELECT n.nspname AS schema, c.relname AS name FROM pg_class c ' +
     'JOIN pg_namespace n ON n.oid = c.relnamespace ' +
     "WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f') AND NOT c.relispartition " +
-    "AND has_table_privilege(c.oid, 'SELECT') " +
+    "AND has_table_privilege(c.oid, 'SELECT') AND has_schema_privilege(n.oid, 'USAGE') " +
     "AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_' ORDER BY 1, 2",
 };
 

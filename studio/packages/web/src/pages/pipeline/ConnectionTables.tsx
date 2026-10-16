@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { DatasetTablesResult, InlineDataset } from '@autonomy-studio/shared';
+import type { DatasetTable, DatasetTablesResult, InlineDataset } from '@autonomy-studio/shared';
 import { listConnectionTables } from '../../api/datasets';
 import { LabelledControl } from '../../lib/LabelledControl';
 import type { FieldSize } from './configForm';
@@ -8,9 +8,7 @@ type Shown =
   | { readonly key: string; readonly loading: true; readonly request: AbortController }
   | { readonly key: string; readonly loading: false; readonly result: DatasetTablesResult };
 
-type Listed = { readonly schema: string | null; readonly name: string };
-
-const qualified = (t: Listed) => (t.schema === null ? t.name : `${t.schema}.${t.name}`);
+const qualified = (t: DatasetTable) => (t.schema === null ? t.name : `${t.schema}.${t.name}`);
 
 /**
  * #1600 C1q-c — Table `[▾ from the connection]`: the tables and views the source
@@ -19,8 +17,8 @@ const qualified = (t: Listed) => (t.schema === null ? t.name : `${t.schema}.${t.
  * and name together; the Schema and Table boxes stay, so a name the list does
  * not hold can still be typed.
  *
- * A list belongs to the connection it was read for: change it and the list is
- * cleared and its request aborted, SourcePreview's keyed shape.
+ * A list belongs to the connection it was read for: while another connection is
+ * chosen it is hidden and its request aborted, SourcePreview's keyed shape.
  *
  * Not `ConfigFieldControl`'s `FieldChoices`: that offers one string per field,
  * and a table is a (schema, name) pair whose name can repeat across schemas and
@@ -34,7 +32,7 @@ export function ConnectionTables({
   inline: InlineDataset;
   /** `undefined` when the source connection is not a saved one (unset, or a `${}`). */
   connectionId: string | undefined;
-  choose: (table: Listed) => void;
+  choose: (table: DatasetTable) => void;
 }) {
   const key = connectionId ?? '';
   const [shown, setShown] = useState<Shown | null>(null);
@@ -120,7 +118,7 @@ export function ConnectionTables({
           </LabelledControl>
           {result.truncated && (
             <p role="status" className="page-hint">
-              First {result.tables.length} tables; type a name to use another
+              First {result.tables.length} {result.tables.length === 1 ? 'table' : 'tables'}
             </p>
           )}
         </>

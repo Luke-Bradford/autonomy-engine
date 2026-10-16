@@ -269,6 +269,19 @@ describe('listConnectionTables', () => {
     expect(result).toEqual({ ok: false, error: "a 'fs' connection has no tables to list" });
   });
 
+  it('answers a caller that has left, under its own name', async () => {
+    const { connection } = sqliteDb(0);
+    const left = new AbortController();
+    left.abort();
+    const result = await listConnectionTables({
+      registry,
+      connection,
+      secret: null,
+      signal: left.signal,
+    });
+    expect(result).toEqual({ ok: false, error: 'listing tables was cancelled' });
+  });
+
   it('answers a store error as a refusal', async () => {
     const root = tempRoot('tables-');
     const result = await listConnectionTables({

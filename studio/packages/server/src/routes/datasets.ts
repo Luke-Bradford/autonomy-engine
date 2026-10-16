@@ -5,6 +5,7 @@ import {
   DatasetTablesRequestSchema,
   NewDatasetSchema,
   canonicalStringify,
+  type DatasetPreviewResult,
 } from '@autonomy-studio/shared';
 import type { Principal } from '../auth/principal.js';
 import {
@@ -19,7 +20,11 @@ import { datasetReferences } from '../datamove/dataset-references.js';
 import { exportDataset } from '../portability/index.js';
 import { listSheetsForConnection } from '../connectors/xlsx-sheets.js';
 import { connectionNotReadyReason } from '../repo/connections.js';
-import { listConnectionTables, previewInlineSource } from '../datamove/preview.js';
+import {
+  listConnectionTables,
+  previewInlineSource,
+  type PreviewInlineSourceArgs,
+} from '../datamove/preview.js';
 import { connectionSecretRefusal, readConnectionSecret } from '../secrets/connection-secret.js';
 import { pageArgsFromQuery, requireOwned, requireOwnedConnection } from './util.js';
 
@@ -128,15 +133,6 @@ export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   /**
-   * #1600 C1q-c — the gate `/preview` and `/tables` share before a store is read.
-   * Ownership first, with `/sheets`' non-disclosing gate (a connection shared
-   * with no owner is refused here, though a run may use it). Then the executor's
-   * own readiness gate, so a disabled connection or one missing its secret is
-   * refused BEFORE any secret is decrypted. The stored secret is spent only on
-   * the connection's stored config: the body names a connection, never a config,
-   * so it cannot point the credential somewhere else.
-   */
-  /**
    * Aborted when the caller leaves before its answer, so the read stops. Called
    * first, so a caller that leaves during the decrypt is seen too.
    * `request.raw`'s `close` fires once the body is read, so it is the RESPONSE's
@@ -150,12 +146,27 @@ export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
     return left.signal;
   }
 
-  async function readableStore(principal: Principal, connectionId: string) {
+  /**
+   * #1600 C1q-c — the gate `/preview` and `/tables` share before a store is read.
+   * Ownership first, with `/sheets`' non-disclosing gate (a connection shared
+   * with no owner is refused here, though a run may use it). Then the executor's
+   * own readiness gate, so a disabled connection or one missing its secret is
+   * refused BEFORE any secret is decrypted. The stored secret is spent only on
+   * the connection's stored config: the body names a connection, never a config,
+   * so it cannot point the credential somewhere else.
+   */
+  async function readableStore(
+    principal: Principal,
+    connectionId: string,
+  ): Promise<
+    | Extract<DatasetPreviewResult, { ok: false }>
+    | { ok: true; store: Pick<PreviewInlineSourceArgs, 'connection' | 'secret'> }
+  > {
     const connection = requireOwnedConnection(db, principal, connectionId);
     const notReady = connectionNotReadyReason(connection);
     if (notReady !== null) {
       return {
-        ok: false as const,
+        ok: false,
         error:
           notReady === 'disabled'
             ? 'this connection is disabled'
@@ -163,9 +174,9 @@ export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
       };
     }
     const read = await readConnectionSecret(db, masterKey, connection.secretRef);
-    if (!read.ok) return { ok: false as const, error: connectionSecretRefusal(read.reason) };
+    if (!read.ok) return { ok: false, error: connectionSecretRefusal(read.reason) };
     return {
-      ok: true as const,
+      ok: true,
       store: {
         connection: { kind: connection.kind, config: connection.config },
         secret: read.secret,
@@ -183,10 +194,10 @@ export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
    *
    * SECURITY. `readableStore`'s gate (ownership, then readiness, then the
    * secret). The read is the run's Lookup read (`previewInlineSource`): sqlite
-   * read-only, postgres inside `BEGIN READ ONLY`, bounded in rows, bytes, time and concurrency. A statement
-   * can still call a side-effecting function postgres allows under READ ONLY;
-   * that is the same reach saving and running the pipeline already gives the
-   * same owner over the same connection.
+   * read-only, postgres inside `BEGIN READ ONLY`, bounded in rows, bytes, time
+   * and concurrency. A statement can still call a side-effecting function
+   * postgres allows under READ ONLY; that is the same reach saving and running
+   * the pipeline already gives the same owner over the same connection.
    *
    * Not applied: a node's `connectionParams` (the form says so beside Preview).
    */
