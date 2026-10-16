@@ -217,8 +217,10 @@ const DEFAULT_ROWS_READ_OUTPUTS: readonly string[] = ['rowsRead'];
 
 /** The Rows read outputs of a doc node's type (`ActivityCatalogEntry.rowsReadOutputs`). */
 function rowsReadOutputsOf(type: string | undefined): readonly string[] {
-  return (type === undefined ? undefined : catalog.get(type)?.rowsReadOutputs) ??
-    DEFAULT_ROWS_READ_OUTPUTS;
+  return (
+    (type === undefined ? undefined : catalog.get(type)?.rowsReadOutputs) ??
+    DEFAULT_ROWS_READ_OUTPUTS
+  );
 }
 
 /** The first of `names` that logged a count, or `null`. */
@@ -484,7 +486,8 @@ export function projectActivityRuns(
     };
     if (ref !== null) {
       const row = detail(ref.attemptId);
-      if (row !== undefined) fillDetail(row, e, payload, rowsReadOutputsOf(typeOf.get(row.activityId)));
+      if (row !== undefined)
+        fillDetail(row, e, payload, rowsReadOutputsOf(typeOf.get(row.activityId)));
     }
 
     const result = resultOf(e);

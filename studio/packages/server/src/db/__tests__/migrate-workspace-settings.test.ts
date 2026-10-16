@@ -40,7 +40,9 @@ describe('0047 migration: workspace_settings', () => {
     expect(() => insert.run('other', 0)).toThrow(/CHECK/);
     insert.run('third', null);
     expect(
-      sqlite.prepare('SELECT lookup_max_rows FROM workspace_settings WHERE owner_id = ?').get('third'),
+      sqlite
+        .prepare('SELECT lookup_max_rows FROM workspace_settings WHERE owner_id = ?')
+        .get('third'),
     ).toEqual({ lookup_max_rows: 1000 });
     expect(() =>
       sqlite

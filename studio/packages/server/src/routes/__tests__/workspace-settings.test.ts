@@ -85,7 +85,10 @@ describe('workspace settings routes (#1600 C0f, C7d)', () => {
       const res = await put(body);
       expect(res.statusCode, JSON.stringify(body)).toBe(400);
     }
-    const top = { defaultActivityTimeoutSeconds: 31_536_000, lookupMaxRows: LOOKUP_ROW_CEILING_MAX };
+    const top = {
+      defaultActivityTimeoutSeconds: 31_536_000,
+      lookupMaxRows: LOOKUP_ROW_CEILING_MAX,
+    };
     expect((await put(top)).statusCode).toBe(200);
     // Nothing refused was written over the last good value.
     const read = await app.inject({ method: 'GET', url: '/api/workspace/settings' });

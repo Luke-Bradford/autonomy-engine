@@ -5788,7 +5788,13 @@ describe('createExecutor — a Lookup’s workspace Lookup max rows (#1600 OR41 
     putWorkspaceSettings(db, 'local', { defaultActivityTimeoutSeconds: null, lookupMaxRows: 250 });
     putWorkspaceSettings(db, 'other', { defaultActivityTimeoutSeconds: null, lookupMaxRows: 4000 });
     // Owned like the run, so the connection resolves for a run with no owner too.
-    const connId = createConnection(db, { ownerId, name: 'C', kind: 'http', config: {}, secretRef: null }).id;
+    const connId = createConnection(db, {
+      ownerId,
+      name: 'C',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    }).id;
     const pvId = seedLegacyVersion(db, [
       { id: 'n1', type, config: {}, connectionId: connId, position: { x: 0, y: 0 } },
     ]);
@@ -5814,6 +5820,9 @@ describe('createExecutor — a Lookup’s workspace Lookup max rows (#1600 OR41 
   });
 
   it('omits the field for every other activity', async () => {
-    expect(await ceilingSeen('http_request', 'local')).toEqual({ present: false, value: undefined });
+    expect(await ceilingSeen('http_request', 'local')).toEqual({
+      present: false,
+      value: undefined,
+    });
   });
 });
