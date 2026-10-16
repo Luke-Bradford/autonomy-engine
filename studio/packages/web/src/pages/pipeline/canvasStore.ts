@@ -12,7 +12,7 @@ import {
   lowerPipelineNodes,
   lowerRetiredTypes,
   refreshFormerOutputs,
-  COPY_TYPES,
+  activityModeGroup,
   referencedNodeIds,
   remapNodeRefs,
   type CallConfig,
@@ -1463,15 +1463,18 @@ export interface CanvasState {
   updateNodeCall(id: string, call: CallConfig | undefined): void;
   setNodeConnection(id: string, connectionId: string | undefined): void;
   /**
-   * #1600 OR41 C1a — the Copy activity's *Copy* toggle: switch a Copy node
-   * between Rows (`copy`) and Files as-is (`copy_files`). The two modes share no
-   * settings, so the config starts fresh with the new type's output contract,
-   * and the dataset bindings (rows only) are dropped; the connection pair is
-   * kept, and the pickers flag an end the new mode cannot use. One undo step
-   * brings the old mode back whole. REFUSES any type outside `COPY_TYPES`, on
-   * `updateNodeCall`'s rail: never write a type change the toggle cannot make.
+   * #1600 OR41 C1a — the Copy activity's *Copy mode*: switch a Copy node
+   * between Rows (`copy`) and Files as-is (`copy_files`). C7b — the same switch
+   * is Lookup's *Read as*: Rows (`lookup`) or Whole file as text (`file_read`).
+   * One rule for every `ACTIVITY_MODE_GROUPS` group. The modes share no
+   * settings, so the config starts as a NEW node of the new type does (its
+   * `newNodeConfig`, then its output contract), and the dataset bindings (rows
+   * only) are dropped; the connection (or pair) is kept with its overrides, and
+   * the pickers flag one the new mode cannot use. One undo step brings the old
+   * mode back whole. REFUSES a switch outside the node's own group, on
+   * `updateNodeCall`'s rail: never write a type change the select cannot make.
    */
-  setCopyMode(id: string, type: (typeof COPY_TYPES)[number]): void;
+  setActivityMode(id: string, type: string): void;
   /**
    * #1139 — set ONE END of a paired binding (`connectionIds` / `datasetIds`).
    *
@@ -2453,12 +2456,11 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         }));
       },
 
-      setCopyMode(id, type) {
+      setActivityMode(id, type) {
         const current = get().nodes.find((n) => n.id === id);
-        const copyTypes: readonly string[] = COPY_TYPES;
         if (current === undefined || current.type === type) return;
-        if (!copyTypes.includes(current.type) || !copyTypes.includes(type)) return;
-        const next: Node = { ...current, type, config: {} };
+        if (!activityModeGroup(current.type)?.includes(type)) return;
+        const next: Node = { ...current, type, config: { ...getActivity(type)?.newNodeConfig } };
         delete next.datasetIds;
         delete next.datasetParams;
         // #1600 C1q — an inline source is a dataset binding too; Files as-is has none.

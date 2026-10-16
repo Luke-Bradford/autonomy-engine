@@ -5,7 +5,10 @@ import { catalog, getActivity, isStructuralCallActivity } from '../registry.js';
 import {
   ACTIVITY_CATEGORIES,
   ACTIVITY_CATEGORY_LABELS,
+  ACTIVITY_MODE_GROUPS,
   EXECUTE_PIPELINE_ACTIVITY_TYPE,
+  LOOKUP_TYPES,
+  activityModeGroup,
 } from '../types.js';
 
 describe('activity catalog', () => {
@@ -457,5 +460,26 @@ describe('new-node config and former outputs (#1600 OR41 C7a)', () => {
         for (const o of former) expect(entry.outputs).toContainEqual(o);
       }
     }
+  });
+});
+
+// #1600 OR41 C7b — a palette item that stands for several types (Copy, Lookup).
+describe('activity mode groups (#1600 OR41 C7b)', () => {
+  it.each(ACTIVITY_MODE_GROUPS.map((group) => [group.join(' · '), group] as const))(
+    '%s: one title, offered once in the palette as its first mode',
+    (_name, group) => {
+      const entries = group.map((type) => getActivity(type)!);
+      expect(new Set(entries.map((e) => e.title)).size).toBe(1);
+      expect(entries.filter((e) => e.inPalette !== false).map((e) => e.type)).toEqual([group[0]]);
+      for (const type of group) expect(activityModeGroup(type)).toBe(group);
+    },
+  );
+
+  it('Lookup is rows or a whole file as text, and the text mode is the fs read', () => {
+    expect(LOOKUP_TYPES).toEqual(['lookup', 'file_read']);
+    expect(getActivity('lookup')!.title).toBe('Lookup');
+    expect(getActivity('file_read')!.connectionKinds).toEqual(['fs']);
+    expect(getActivity('file_read')!.tabs?.map((t) => t.key)).toEqual(['source']);
+    expect(activityModeGroup('llm_call')).toBeUndefined();
   });
 });

@@ -29,6 +29,7 @@ import { useDisplayTimeZone } from '../../lib/useDisplayTimeZone';
 import { formatTimeOfDay, zoneLabel } from '../../lib/displayTime';
 import type { StreamedLine } from './attemptActivity';
 import { defaultDrawerTab, drawerFileStem, type DrawerTab } from './drawerTab';
+import { activityModeTitle } from '../pipeline/activityModes';
 import { Section } from '../../lib/Section';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 
@@ -181,7 +182,9 @@ export function NodeActivityPanel({
   const chosen = onTab === undefined ? ownTab : (tab ?? null);
   const stem = fileStem ?? drawerFileStem([name ?? node.nodeId]);
   const lines = run?.lines;
-  const typeTitle = type ? getActivity(type)?.title : undefined;
+  // #1600 C7b — with its mode, so a run of a whole-file Lookup says so.
+  const title = type ? getActivity(type)?.title : undefined;
+  const typeTitle = type && title ? activityModeTitle(type, title) : title;
   return (
     <section
       id={PANEL_ID}

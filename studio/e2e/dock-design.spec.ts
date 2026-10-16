@@ -192,7 +192,7 @@ for (const { density, theme } of DESIGN_RUNS) {
     await lookup.setViewportSize({ width: 1440, height: 900 });
     await preferAppearance(lookup, theme, d);
     await openSeededCanvas(lookup, `S6l overrides ${density} ${Date.now()}`, { nodes: [] });
-    await addActivity(lookup, 'Lookup rows');
+    await addActivity(lookup, 'Lookup');
     await canvasNodes(lookup).first().click();
     // The dock reopens the tab last chosen (#852): this test picked Settings
     // for the call node above, and a Lookup has one since #1600 C7a.

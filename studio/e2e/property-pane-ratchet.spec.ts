@@ -56,8 +56,8 @@ const HELP_LIMITS: Record<string, number> = {
   'List directory': 7,
   // +3 for C7a's Settings, each `?` a fact its label lacks: First row only names
   // the output it writes, Max rows its ceiling, When over the limit both bounds.
-  'Lookup rows': 9,
-  'Read file': 7,
+  // +1 for C7b's Read as, which says what each mode reads.
+  Lookup: 10,
   'Write file': 7,
   'Agent task': 8,
   'LLM call': 15,
@@ -331,9 +331,11 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   'List directory': 7,
   // +3 for C7a's Settings, each `?` a fact its label lacks: First row only names
   // the output it writes, Max rows its ceiling, When over the limit both bounds.
-  'Lookup rows': 9,
-  'Lookup rows (inline table)': 12,
-  'Read file': 7,
+  // +1 on each Lookup for C7b's Read as, whose `?` says what each mode reads;
+  // Read file became Lookup's Whole file as text, and gained that one.
+  Lookup: 10,
+  'Lookup (inline table)': 13,
+  'Lookup (whole file as text)': 8,
   'Write file': 7,
   'Agent task': 8,
   'LLM call': 15,
@@ -364,13 +366,13 @@ const SHOWS: Record<string, string[]> = {
   'Copy data (files as-is)': ['files.txt', '/tmp/e2e/done', 'merged.txt', 'E2E-1'],
   'Copy data (files from a folder)': ['*.csv', '/tmp/e2e/in'],
   'Copy data (inline query)': [INLINE_SQL, 'region', 'EU', '${run.runId}'],
-  'Lookup rows (inline table)': ['main', 'orders'],
+  'Lookup (inline table)': ['main', 'orders'],
   'Delete file': ['/tmp/e2e/old.txt', '2048', 'E2E-1'],
   'List directory': ['/tmp/e2e', '2048', 'E2E-1'],
-  'Read file': ['/tmp/e2e/in.txt', '2048', 'E2E-1'],
+  'Lookup (whole file as text)': ['/tmp/e2e/in.txt', '2048', 'E2E-1'],
   'Write file': ['/tmp/e2e/out.txt', '2048', 'E2E-1'],
   'HTTP request': ['/v1/orders', 'X-Trace', '15000', 'E2E-1'],
-  'Lookup rows': ['orders_2026.csv', '4096', 'E2E-1'],
+  Lookup: ['orders_2026.csv', '4096', 'E2E-1'],
   'Agent task': ['Summarise the repo', '/tmp/e2e', 'E2E-1'],
   'LLM call': ['Price of SKU-1?', 'lookup_price', 'claude-haiku-4-5', 'E2E-1'],
   'LLM call (structured)': ['Classify'],
@@ -502,7 +504,7 @@ function seeds(ids: SeedIds): Record<string, Seed> {
         config: { mode: 'append', mapping: [{ source: 'id', sink: 'id', type: 'integer' }] },
       },
     },
-    'Lookup rows (inline table)': {
+    'Lookup (inline table)': {
       node: {
         ...exec,
         type: 'lookup',
@@ -513,7 +515,7 @@ function seeds(ids: SeedIds): Record<string, Seed> {
     },
     'Delete file': fsNode('file_delete', { path: '/tmp/e2e/old.txt' }),
     'List directory': fsNode('file_list', { path: '/tmp/e2e' }),
-    'Read file': fsNode('file_read', { path: '/tmp/e2e/in.txt' }),
+    'Lookup (whole file as text)': fsNode('file_read', { path: '/tmp/e2e/in.txt' }),
     'Write file': fsNode('file_write', { path: '/tmp/e2e/out.txt', content: 'one\ntwo' }),
     'HTTP request': {
       node: {
@@ -530,7 +532,7 @@ function seeds(ids: SeedIds): Record<string, Seed> {
         },
       },
     },
-    'Lookup rows': {
+    Lookup: {
       node: {
         ...exec,
         type: 'lookup',
@@ -830,7 +832,7 @@ test('a picker’s Test, Edit and New are icon buttons; overrides are a name/val
     columns: [{ name: 'id', type: 'integer', nullable: false }],
   });
   await openSeededCanvas(page, 'or42 picker icons', { nodes: [] });
-  await addActivity(page, 'Lookup rows');
+  await addActivity(page, 'Lookup');
   await canvasNodes(page).first().click();
   await pickConnection(page, 'Connection', { id: connId });
   await properties(page).getByRole('combobox', { name: 'Source dataset' }).selectOption(setId);
