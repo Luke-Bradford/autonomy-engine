@@ -460,8 +460,9 @@ export async function describePostgresDatasetColumns(read: PostgresDatasetRead):
  * `DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS`) arms both pg timers per statement, and each `FETCH` is a statement — so
  * it caps how long ONE batch may take, and a copy of any total duration is fine
  * so long as no single batch stalls. A slow first batch on an unindexed scan is
- * the shape that trips it, and it surfaces as SQLSTATE `57014`, which this
- * module classifies `transient`. A `query` source's `queryTimeoutSeconds`
+ * the shape that trips it. It surfaces as SQLSTATE `57014` or, more often, as
+ * pg's code-less client `Query read timeout` (#1741), and this module classifies
+ * both `transient`. A `query` source's `queryTimeoutSeconds`
  * (#1600 C1q-c) is the one bound on the whole read: no FETCH starts past it, and
  * in its final stretch the FETCH in flight is cancelled at it.
  */

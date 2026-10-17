@@ -215,7 +215,7 @@ export const QUERY_CANCELED = '57014';
  * A read `partialWritePossible` is always false: a read writes nothing.
  */
 const TRANSIENT_POSTGRES_CODES: ReadonlySet<string> = new Set([
-  QUERY_CANCELED, // our own statement/query timeout fired
+  QUERY_CANCELED, // our own statement timeout fired (pg's client timer: `isTransientPostgresError`)
   '57P01', // admin_shutdown
   '57P02', // crash_shutdown
   '57P03', // cannot_connect_now — the server is starting up
@@ -244,6 +244,24 @@ export function isTransientPostgresCode(code: string): boolean {
 }
 
 /**
+ * The message of pg's CLIENT-side `query_timeout` (pg@8.23.0 `lib/client.js`): a
+ * plain `Error` with no `code`. `clientOptionsFor` arms it at the same value as
+ * `statement_timeout`, and because it starts at submit rather than at the
+ * server's receipt it usually fires first (#1741), so it is the same timeout as
+ * `QUERY_CANCELED` and as transient. Matched exactly, and only when there is no
+ * string `code`, so every other code-less throw stays `permanent`.
+ */
+const PG_CLIENT_QUERY_TIMEOUT_MESSAGE = 'Query read timeout';
+
+/** Whether a `pg` throw is a retryable READ failure: a named code, or pg's own
+ * code-less client query timeout. */
+function isTransientPostgresError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code === 'string') return isTransientPostgresCode(code);
+  return err instanceof Error && err.message === PG_CLIENT_QUERY_TIMEOUT_MESSAGE;
+}
+
+/**
  * Classify a `pg` throw into the failure model, SCRUBBING the secret.
  *
  * The scrub is not belt-and-braces over `probeFailureSentence`'s: that one
@@ -255,9 +273,7 @@ export function isTransientPostgresCode(code: string): boolean {
  */
 export function readFailure(err: unknown, context: string, secret: string | null): DatasetIoError {
   if (err instanceof DatasetIoError) return err;
-  const code = (err as { code?: unknown } | null)?.code;
-  const kind: ConnectorErrorKind =
-    typeof code === 'string' && isTransientPostgresCode(code) ? 'transient' : 'permanent';
+  const kind: ConnectorErrorKind = isTransientPostgresError(err) ? 'transient' : 'permanent';
   const raw = err instanceof Error ? err.message : String(err);
   return new DatasetIoError(kind, `${context}: ${redactSecrets(raw, [secret])}`, { cause: err });
 }

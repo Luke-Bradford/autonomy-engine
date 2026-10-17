@@ -22,6 +22,7 @@ import {
   type PostgresClientOptions,
   type PostgresClient,
 } from '../postgres.js';
+import { readFailure } from '../postgres-session.js';
 import { COPY_BATCH_ROWS } from '../../limits.js';
 import { sameDatasetAddress, type DatasetKind } from '@autonomy-studio/shared';
 import { liveSuiteMustRun } from './live-postgres.js';
@@ -705,6 +706,30 @@ describe('isTransientPostgresCode (#1190 M10)', () => {
       expect(isTransientPostgresCode(code)).toBe(false);
     },
   );
+});
+
+describe('readFailure (#1741)', () => {
+  // pg's CLIENT-side `query_timeout` starts at submit, the server's
+  // `statement_timeout` at receipt, so at equal values the client timer wins and
+  // rejects with a code-less `Error('Query read timeout')` (pg@8.23.0
+  // `lib/client.js`). It is the same timeout as 57014, so it is just as transient.
+  it("classifies pg's code-less client query timeout as transient, like 57014", () => {
+    expect(
+      readFailure(new Error('Query read timeout'), 'the source could not be read', null).kind,
+    ).toBe('transient');
+    expect(
+      readFailure(Object.assign(new Error('canceling statement'), { code: '57014' }), 'x', null)
+        .kind,
+    ).toBe('transient');
+  });
+  it('keeps any other code-less error permanent (fail-safe)', () => {
+    expect(readFailure(new Error('Query read timeout!'), 'x', null).kind).toBe('permanent');
+    expect(readFailure(new Error('boom'), 'x', null).kind).toBe('permanent');
+    expect(
+      readFailure(Object.assign(new Error('Query read timeout'), { code: '42P01' }), 'x', null)
+        .kind,
+    ).toBe('permanent');
+  });
 });
 
 /**
