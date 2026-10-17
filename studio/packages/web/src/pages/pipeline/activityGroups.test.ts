@@ -129,6 +129,7 @@ describe('toolboxGroups', () => {
     // List directory is retired too (#1600 C8b): a folder search finds Get metadata.
     expect(typesOf(toolboxGroups('list directory'))).not.toContain('file_list');
     expect(typesOf(toolboxGroups('folder'))).toContain('get_metadata');
+    expect(typesOf(toolboxGroups('list'))).toContain('get_metadata');
     expect(typesOf(toolboxGroups('copy file zebra'))).toEqual([]);
   });
 });
