@@ -58,6 +58,9 @@ function emptyFields(): FieldValues {
     lastModified: null,
     contentMD5: null,
     childItems: null,
+    structure: null,
+    columnCount: null,
+    rowCount: null,
   };
 }
 
@@ -217,7 +220,8 @@ const isEvent = (v: unknown): v is ActivityEvent =>
 
 export async function doGetMetadata(
   cfg: FsConfig,
-  input: GetMetadataConfig,
+  // C8c — the dispatch arm has refused a missing path (`getMetadataKindIssue`).
+  input: GetMetadataConfig & { readonly path: string },
   signal: AbortSignal,
 ): Promise<ActivityEvent> {
   const ticked = new Set<GetMetadataField>(input.fieldList);

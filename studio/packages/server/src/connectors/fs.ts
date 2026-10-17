@@ -13,6 +13,7 @@ import {
   FILE_WRITE_ACTIVITY_TYPE,
   GET_METADATA_ACTIVITY_TYPE,
   getMetadataConfigSchema,
+  getMetadataKindIssue,
   WARNING_CODES,
   fileCopyConfigSchema,
   fileDeleteConfigSchema,
@@ -743,7 +744,14 @@ export const fsAdapter: ConnectorAdapter = {
         );
         return;
       }
-      yield await doGetMetadata(cfg.data, input.data, ctx.signal);
+      // C8c — a path, and only a path's fields: the config cannot see the kind.
+      const { path } = input.data;
+      const issue = getMetadataKindIssue(input.data, 'fs');
+      if (issue !== undefined || path === undefined) {
+        yield failed('permanent', issue ?? 'File or folder path is required');
+        return;
+      }
+      yield await doGetMetadata(cfg.data, { ...input.data, path }, ctx.signal);
       return;
     }
 

@@ -1579,7 +1579,17 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // an activity that declares none must not change how that activity
     // dispatches. It stays inert, exactly as it has been since M3.
     const datasetKinds = entry.datasetKinds;
-    if (datasetKinds !== undefined) {
+    // #1600 OR41 C8c — a dataset OPTIONAL on the bound store's kind (Get
+    // metadata reads a file system path without one) is skipped only when the
+    // node binds nothing at all: a stray saved or inline dataset is still
+    // resolved and checked below, never silently dropped. An id that resolved
+    // to `''` is bound-but-empty and falls through to NOT_FOUND as before.
+    const datasetSkipped =
+      datasetKinds?.optionalOn?.includes(adapter.kind) === true &&
+      command.resolvedInlineDatasets?.source === undefined &&
+      command.resolvedDatasetIds?.source === undefined &&
+      command.resolvedDatasetIds?.sink === undefined;
+    if (datasetKinds !== undefined && !datasetSkipped) {
       // Source first, and it SHORT-CIRCUITS the sink — `resolveConnection`'s
       // stated posture: a node with both ends wrong reports the source only,
       // rather than doing work for a dispatch that cannot happen.

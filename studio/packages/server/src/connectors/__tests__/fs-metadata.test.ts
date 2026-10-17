@@ -376,6 +376,19 @@ describe('get_metadata — dispatch', () => {
     expect(ev.error).toMatch(/^invalid get_metadata activity config: .*tick at least one field/);
   });
 
+  // #1600 OR41 C8c — the config no longer requires a path (a table needs none),
+  // so the file system arm does: and a table's fields are not a path's.
+  it('needs a path, and refuses a table field', async () => {
+    expect(await failureOf({ fieldList: ['exists'] })).toMatchObject({
+      kind: 'permanent',
+      error: 'File or folder path is required on a file system connection',
+    });
+    expect(await failureOf({ path: '.', fieldList: ['exists', 'columnCount'] })).toMatchObject({
+      kind: 'permanent',
+      error: 'Column count read a database table, not a file system path',
+    });
+  });
+
   // A pre-aborted signal is refused before dispatch (`fs.ts`), so this pins
   // the outcome only. The activity's own checks, mid-listing and mid-Content
   // MD5, are in fs-metadata-interleave.test.ts (#1736).

@@ -1,6 +1,7 @@
 import pg from 'pg';
 import {
   COPY_ACTIVITY_TYPE,
+  GET_METADATA_ACTIVITY_TYPE,
   LOOKUP_ACTIVITY_TYPE,
   datasetConfigSchema,
   formatZodIssues,
@@ -16,6 +17,8 @@ import { COPY_BATCH_ROWS } from '../limits.js';
 import { DatasetIoError } from './dataset-io-error.js';
 import { runCopyActivity } from './copy.js';
 import { runLookupActivity } from './lookup.js';
+import { postgresTableMetadata } from './postgres-table-metadata.js';
+import { runTableMetadata } from './table-metadata.js';
 import type { SourceIo } from './source-io.js';
 import {
   rewriteNamedParametersToPositional,
@@ -266,6 +269,15 @@ export function createPostgresAdapter(
       // mapping for §7's drift gate to check one against).
       if (ctx.activityType === LOOKUP_ACTIVITY_TYPE) {
         yield* runLookupActivity(ctx, source);
+        return;
+      }
+
+      // #1600 OR41 C8c — Get metadata on a table: read-only, writes nowhere.
+      if (ctx.activityType === GET_METADATA_ACTIVITY_TYPE) {
+        yield* runTableMetadata(
+          ctx,
+          postgresTableMetadata({ createClient, connectionConfig: ctx.connectionConfig, secret }),
+        );
         return;
       }
 

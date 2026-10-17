@@ -8,6 +8,7 @@ import {
   queryDatasetConfigSchema,
   tableDatasetConfigSchema,
   COPY_ACTIVITY_TYPE,
+  GET_METADATA_ACTIVITY_TYPE,
   LOOKUP_ACTIVITY_TYPE,
   type DatasetAddress,
   type DatasetKind,
@@ -49,6 +50,7 @@ import { DatasetIoError } from './dataset-io-error.js';
 import { quoteIdentifier } from './sql-identifier.js';
 import { runCopyActivity } from './copy.js';
 import { runLookupActivity } from './lookup.js';
+import { runTableMetadata, type TableMetadataIo } from './table-metadata.js';
 import type { SourceIo } from './source-io.js';
 // #1165 M7 slice 2 — §9's batch-yield primitive, shared with the `delimited`
 // reader rather than duplicated (the macrotask choice is not the obvious one).
@@ -226,6 +228,101 @@ function sqliteSource(connectionConfig: z.infer<typeof sqliteConnectionConfigSch
 }
 
 /**
+ * The one READ-ONLY open every sqlite read uses: the path confined to the
+ * connection's roots, the file required to exist (a missing store is a store
+ * failure, never an empty one), and the busy timeout. Cancellation is checked
+ * after the confinement's awaits and before the open.
+ */
+async function openSqliteReadOnly(
+  cfg: z.infer<typeof sqliteConnectionConfigSchema>,
+  signal: AbortSignal | undefined,
+  abortMessage: string,
+): Promise<Database.Database> {
+  const dbPath = await confineStorePath(cfg.roots, cfg.path);
+  if (signal?.aborted) throw new DatasetIoError('cancelled', abortMessage);
+  try {
+    return new Database(dbPath, {
+      readonly: true,
+      fileMustExist: true,
+      timeout: SQLITE_BUSY_TIMEOUT_MS,
+    });
+  } catch (err) {
+    throw storeFailure(err, `cannot open the sqlite database at '${cfg.path}'`);
+  }
+}
+
+/** Run `use` against a read-only open of the store, closing it whatever happens. */
+async function withSqliteReadOnly<T>(
+  cfg: z.infer<typeof sqliteConnectionConfigSchema>,
+  signal: AbortSignal,
+  context: string,
+  use: (db: Database.Database) => T,
+): Promise<T> {
+  const db = await openSqliteReadOnly(cfg, signal, 'Get metadata aborted');
+  try {
+    db.defaultSafeIntegers(true);
+    return use(db);
+  } catch (err) {
+    if (err instanceof DatasetIoError) throw err;
+    throw storeFailure(err, context);
+  } finally {
+    try {
+      db.close();
+    } catch {
+      // Never let a close failure replace the outcome the caller is unwinding with.
+    }
+  }
+}
+
+/**
+ * #1600 OR41 C8c — sqlite's half of Get metadata on a table.
+ *
+ * Existence is `sqlite_master`, as the sink's describe reads it: `COLLATE
+ * NOCASE` because SQLite resolves names case-insensitively, and a table or a
+ * view only, so an index's name is not a table that exists. A schema the store
+ * does not have fails (`unknown database`), not `exists: false`. The columns
+ * are `pragma_table_info`, in order, each with its declared type (`''` when it
+ * declares none).
+ *
+ * Row count is a synchronous `count(*)`, which better-sqlite3 cannot interrupt:
+ * on a very large table it holds the server's event loop until it finishes. The
+ * spec records that residual; cancel is checked before it starts.
+ */
+function sqliteTableMetadata(cfg: z.infer<typeof sqliteConnectionConfigSchema>): TableMetadataIo {
+  return {
+    kind: 'sqlite',
+    describeTable: ({ config }, signal) => {
+      const { schema, table } = parseTableTarget(config);
+      const qualifiedSchema = quoteIdentifier(schema, 'schema');
+      quoteIdentifier(table, 'table');
+      return withSqliteReadOnly(cfg, signal, 'the table could not be described', (db) => {
+        const found = db
+          .prepare(
+            `SELECT name FROM ${qualifiedSchema}.sqlite_master WHERE name = ? COLLATE NOCASE AND type IN ('table', 'view')`,
+          )
+          .get(table) as { name: string } | undefined;
+        if (found === undefined) return null;
+        const columns = db
+          .prepare('SELECT name, type FROM pragma_table_info(?, ?)')
+          .all(found.name, schema) as { name: string; type: unknown }[];
+        return columns.map((c) => ({
+          name: c.name,
+          type: typeof c.type === 'string' ? c.type : '',
+        }));
+      });
+    },
+    countRows: ({ config }, signal) => {
+      const { schema, table } = parseTableTarget(config);
+      const qualified = `${quoteIdentifier(schema, 'schema')}.${quoteIdentifier(table, 'table')}`;
+      return withSqliteReadOnly(cfg, signal, "the table's rows could not be counted", (db) => {
+        const row = db.prepare(`SELECT count(*) AS n FROM ${qualified}`).get() as { n: unknown };
+        return row.n;
+      });
+    },
+  };
+}
+
+/**
  * Stream a `table`/`query` dataset out of a `sqlite` store in bounded batches,
  * yielding to the event loop between them (§9's batch-yield).
  *
@@ -254,20 +351,7 @@ export async function* readSqliteDatasetBatches(
 
   const statement = statementFor(read.datasetKind, read.datasetConfig);
 
-  const dbPath = await confineStorePath(cfg.data.roots, cfg.data.path);
-
-  if (read.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset read aborted');
-
-  let db: Database.Database;
-  try {
-    db = new Database(dbPath, {
-      readonly: true,
-      fileMustExist: true,
-      timeout: SQLITE_BUSY_TIMEOUT_MS,
-    });
-  } catch (err) {
-    throw storeFailure(err, `cannot open the sqlite database at '${cfg.data.path}'`);
-  }
+  const db = await openSqliteReadOnly(cfg.data, read.signal, 'dataset read aborted');
 
   let iterator: IterableIterator<unknown> | undefined;
   try {
@@ -376,21 +460,9 @@ export async function describeSqliteDatasetColumns(read: SqliteDatasetRead): Pro
     );
   }
   const statement = statementFor(read.datasetKind, read.datasetConfig);
-  const dbPath = await confineStorePath(cfg.data.roots, cfg.data.path);
-  if (read.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset describe aborted');
-
-  let db: Database.Database;
-  try {
-    // A second read-only open, separate from the scan's. It creates the usual
-    // `-wal`/`-shm` sidecars beside a WAL store, as the reader already does.
-    db = new Database(dbPath, {
-      readonly: true,
-      fileMustExist: true,
-      timeout: SQLITE_BUSY_TIMEOUT_MS,
-    });
-  } catch (err) {
-    throw storeFailure(err, `cannot open the sqlite database at '${cfg.data.path}'`);
-  }
+  // A second read-only open, separate from the scan's. It creates the usual
+  // `-wal`/`-shm` sidecars beside a WAL store, as the reader already does.
+  const db = await openSqliteReadOnly(cfg.data, read.signal, 'dataset describe aborted');
   try {
     return db
       .prepare(statement.sql)
@@ -623,6 +695,20 @@ export const sqliteAdapter: ConnectorAdapter = {
         return;
       }
       yield* runLookupActivity(ctx, sqliteSource(cfg.data));
+      return;
+    }
+
+    // #1600 OR41 C8c — Get metadata on a table: read-only, writes nowhere.
+    if (ctx.activityType === GET_METADATA_ACTIVITY_TYPE) {
+      const cfg = sqliteConnectionConfigSchema.safeParse(ctx.connectionConfig);
+      if (!cfg.success) {
+        yield failed(
+          'permanent',
+          `invalid sqlite connection config: ${formatZodIssues(cfg.error.issues)}`,
+        );
+        return;
+      }
+      yield* runTableMetadata(ctx, sqliteTableMetadata(cfg.data));
       return;
     }
 
