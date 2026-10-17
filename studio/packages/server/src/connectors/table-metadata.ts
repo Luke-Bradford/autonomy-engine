@@ -1,12 +1,14 @@
 import {
+  emptyGetMetadataFields,
   formatZodIssues,
   getMetadataConfigSchema,
+  tableDatasetConfigSchema,
   getMetadataKindIssue,
   type GetMetadataField,
 } from '@autonomy-studio/shared';
 import { failed } from './activity-events.js';
 import { DatasetIoError } from './dataset-io-error.js';
-import type { ActivityContext, ActivityEvent, ResolvedDataset } from './types.js';
+import type { ActivityContext, ActivityEvent } from './types.js';
 
 /**
  * #1600 OR41 C8c — Get metadata on a database TABLE (catalogue §4.3), the
@@ -29,15 +31,32 @@ export interface TableColumn {
   readonly type: string;
 }
 
-export interface TableMetadataIo {
-  readonly kind: 'sqlite' | 'postgres';
-  /** The table's columns in order, or `null` when there is no such table or view. */
-  describeTable(dataset: ResolvedDataset, signal: AbortSignal): Promise<TableColumn[] | null>;
-  /** `SELECT count(*)`, as the store returns it. */
-  countRows(dataset: ResolvedDataset, signal: AbortSignal): Promise<unknown>;
+/** What one store says about a table: its columns, and its row count when asked. */
+export interface TableFacts {
+  readonly columns: readonly TableColumn[];
+  /** `count(*)` as the store returns it; `undefined` when not asked for. */
+  readonly rowCount: unknown;
 }
 
-type FieldValues = Record<GetMetadataField, unknown>;
+export interface TableMetadataIo {
+  readonly kind: 'sqlite' | 'postgres';
+  /**
+   * The table's facts from ONE session, so the columns and the count describe
+   * the same table, or `null` when there is no such table or view. Each store
+   * checks for cancel before it reads anything.
+   */
+  inspectTable(
+    table: TableTarget,
+    signal: AbortSignal,
+    withRowCount: boolean,
+  ): Promise<TableFacts | null>;
+}
+
+/** The dataset's table, validated: `schema` absent means the store's default. */
+export interface TableTarget {
+  readonly schema?: string;
+  readonly table: string;
+}
 
 /** A store's count as a `number`, refused above what a `number` holds exactly. */
 export function rowCountOf(value: unknown): number {
@@ -50,7 +69,7 @@ export function rowCountOf(value: unknown): number {
           ? BigInt(value)
           : undefined;
   if (n === undefined) {
-    throw new DatasetIoError('permanent', `the store returned a row count that is not a count`);
+    throw new DatasetIoError('permanent', 'the store returned a row count that is not a count');
   }
   if (n > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw new DatasetIoError(
@@ -62,10 +81,8 @@ export function rowCountOf(value: unknown): number {
 }
 
 /** The table as the dataset writes it: `schema.table`, or the bare name. */
-function tableRef(dataset: ResolvedDataset): string {
-  const { schema, table } = dataset.config as { schema?: unknown; table?: unknown };
-  const name = typeof table === 'string' ? table : dataset.name;
-  return typeof schema === 'string' ? `${schema}.${name}` : name;
+export function tableRef({ schema, table }: TableTarget): string {
+  return schema === undefined ? table : `${schema}.${table}`;
 }
 
 export async function* runTableMetadata(
@@ -97,25 +114,20 @@ export async function* runTableMetadata(
     return;
   }
 
+  const target = tableDatasetConfigSchema.safeParse(dataset.config);
+  if (!target.success) {
+    yield failed(
+      'permanent',
+      `invalid table dataset config: ${formatZodIssues(target.error.issues)}`,
+    );
+    return;
+  }
   const ticked = new Set<GetMetadataField>(input.data.fieldList);
-  const fields: FieldValues = {
-    exists: null,
-    itemName: null,
-    itemType: null,
-    size: null,
-    created: null,
-    lastModified: null,
-    contentMD5: null,
-    childItems: null,
-    structure: null,
-    columnCount: null,
-    rowCount: null,
-  };
-  const path = tableRef(dataset);
+  const fields = emptyGetMetadataFields();
+  const path = tableRef(target.data);
   try {
-    // Cancel is checked by each store's open, before it reads anything.
-    const columns = await io.describeTable(dataset, ctx.signal);
-    if (columns === null) {
+    const facts = await io.inspectTable(target.data, ctx.signal, ticked.has('rowCount'));
+    if (facts === null) {
       if (!ticked.has('exists')) {
         yield failed('permanent', `there is no table '${path}'`);
         return;
@@ -124,12 +136,11 @@ export async function* runTableMetadata(
       return;
     }
     if (ticked.has('exists')) fields.exists = true;
-    if (ticked.has('structure'))
-      fields.structure = columns.map(({ name, type }) => ({ name, type }));
-    if (ticked.has('columnCount')) fields.columnCount = columns.length;
-    if (ticked.has('rowCount')) {
-      fields.rowCount = rowCountOf(await io.countRows(dataset, ctx.signal));
+    if (ticked.has('structure')) {
+      fields.structure = facts.columns.map(({ name, type }) => ({ name, type }));
     }
+    if (ticked.has('columnCount')) fields.columnCount = facts.columns.length;
+    if (ticked.has('rowCount')) fields.rowCount = rowCountOf(facts.rowCount);
   } catch (err) {
     // The store's own verdict passes through, as Lookup's does: a busy store is
     // `transient`, a missing file `permanent`.

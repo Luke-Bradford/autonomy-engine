@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
+import { bindsSourceDataset } from '../schemas/dataset.js';
 import { instant, modifiedWindowIssue, wildcardIssue } from './file-selection.js';
 
 /**
@@ -51,6 +52,17 @@ export const GET_METADATA_FIELDS_BY_CONNECTION_KIND = {
   postgres: GET_METADATA_TABLE_FIELDS,
 } as const satisfies Record<string, readonly GetMetadataField[]>;
 type GetMetadataConnectionKind = keyof typeof GET_METADATA_FIELDS_BY_CONNECTION_KIND;
+
+/**
+ * Every field output `null`: the one fixed contract each store fills in, so a
+ * new field reaches the file system and the databases alike.
+ */
+export function emptyGetMetadataFields(): Record<GetMetadataField, unknown> {
+  return Object.fromEntries(GET_METADATA_FIELDS.map((f) => [f, null])) as Record<
+    GetMetadataField,
+    unknown
+  >;
+}
 
 const fieldSchema = z.enum(GET_METADATA_FIELDS);
 export const GET_METADATA_FIELD_TITLES = optionTitles(fieldSchema, {
@@ -208,8 +220,7 @@ export function getMetadataNodeIssue(node: {
   readonly inlineDatasets?: { readonly source?: unknown } | undefined;
 }): string | undefined {
   const hasPath = node.config['path'] !== undefined;
-  const hasTable =
-    node.datasetIds?.source !== undefined || node.inlineDatasets?.source !== undefined;
+  const hasTable = bindsSourceDataset(node);
   // Says both, because on a database the path is not drawn and the Source
   // tab's table is the step.
   if (!hasPath && !hasTable) {

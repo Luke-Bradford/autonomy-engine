@@ -747,10 +747,12 @@ export const fsAdapter: ConnectorAdapter = {
       // C8c — a path, and only a path's fields: the config cannot see the kind.
       const { path } = input.data;
       const issue = getMetadataKindIssue(input.data, 'fs');
-      if (issue !== undefined || path === undefined) {
-        yield failed('permanent', issue ?? 'File or folder path is required');
+      if (issue !== undefined) {
+        yield failed('permanent', issue);
         return;
       }
+      // Narrowing only: `getMetadataKindIssue` has refused a missing path.
+      if (path === undefined) return;
       yield await doGetMetadata(cfg.data, { ...input.data, path }, ctx.signal);
       return;
     }

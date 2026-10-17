@@ -555,6 +555,26 @@ describe('refreshFormerOutputs (#1600 OR41 C7a)', () => {
     expect(out!.config['path']).toBe('a.txt');
   });
 
+  // #1600 OR41 C8c — a former contract with OPTIONAL outputs matches too, and
+  // only with its optionality: a node saved under C8a (or a lowered List
+  // directory) gains a table's three outputs.
+  it('re-seeds a Get metadata saved before C8c, matching optional outputs by optionality', () => {
+    const former = getActivity('get_metadata')!.formerOutputs![0]!.map((o) => ({ ...o }));
+    const meta = (outputs: unknown): Node =>
+      ({
+        id: 'm',
+        type: 'get_metadata',
+        config: { path: '.', outputs },
+        position: { x: 0, y: 0 },
+      }) as Node;
+    const [node] = refreshFormerOutputs([meta(former)]);
+    expect(node!.config['outputs']).toEqual(getActivity('get_metadata')!.outputs);
+    // The same names and types written as required are not that contract.
+    const required = former.map(({ name, type }) => ({ name, type }));
+    const kept = meta(required);
+    expect(refreshFormerOutputs([kept])[0]).toBe(kept);
+  });
+
   it('leaves every other contract, and every other node, by reference', () => {
     const nodes = [
       lookup(FOUR.slice(0, 3)),

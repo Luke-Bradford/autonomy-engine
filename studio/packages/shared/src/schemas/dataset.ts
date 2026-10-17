@@ -105,6 +105,18 @@ export type InlineDatasetKind = z.infer<typeof InlineDatasetKindSchema>;
 export const INLINE_SOURCE_DATASET_ID = 'inline:source';
 
 /**
+ * #1600 OR41 C8c — whether a node binds a SOURCE dataset at all, saved or inline
+ * (C1q): the stored form of what the executor resolves. One reading for the save
+ * gate's Get metadata rule and the editor's optional-dataset picker.
+ */
+export function bindsSourceDataset(node: {
+  readonly datasetIds?: { readonly source?: string } | undefined;
+  readonly inlineDatasets?: { readonly source?: unknown } | undefined;
+}): boolean {
+  return node.datasetIds?.source !== undefined || node.inlineDatasets?.source !== undefined;
+}
+
+/**
  * #1396 — what a form or a list CALLS each kind, as `CONNECTION_KIND_LABELS`
  * does for connections. The enum value stays the identifier everywhere it is
  * stored or sent; this is display only, and a `Record` so a new kind cannot

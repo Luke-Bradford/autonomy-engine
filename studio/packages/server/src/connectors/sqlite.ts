@@ -19,6 +19,7 @@ import { COPY_BATCH_ROWS, SQLITE_BUSY_TIMEOUT_MS } from '../limits.js';
 // call site outside `connectors/` is unchanged.
 import {
   confineStorePath,
+  findSqliteRelation,
   notASqliteKind,
   parseTableTarget,
   SQLITE_DATASET_KINDS,
@@ -251,73 +252,52 @@ async function openSqliteReadOnly(
   }
 }
 
-/** Run `use` against a read-only open of the store, closing it whatever happens. */
-async function withSqliteReadOnly<T>(
-  cfg: z.infer<typeof sqliteConnectionConfigSchema>,
-  signal: AbortSignal,
-  context: string,
-  use: (db: Database.Database) => T,
-): Promise<T> {
-  const db = await openSqliteReadOnly(cfg, signal, 'Get metadata aborted');
-  try {
-    db.defaultSafeIntegers(true);
-    return use(db);
-  } catch (err) {
-    if (err instanceof DatasetIoError) throw err;
-    throw storeFailure(err, context);
-  } finally {
-    try {
-      db.close();
-    } catch {
-      // Never let a close failure replace the outcome the caller is unwinding with.
-    }
-  }
-}
-
 /**
- * #1600 OR41 C8c — sqlite's half of Get metadata on a table.
+ * #1600 OR41 C8c — sqlite's half of Get metadata on a table, from ONE read-only
+ * open.
  *
- * Existence is `sqlite_master`, as the sink's describe reads it: `COLLATE
- * NOCASE` because SQLite resolves names case-insensitively, and a table or a
- * view only, so an index's name is not a table that exists. A schema the store
- * does not have fails (`unknown database`), not `exists: false`. The columns
- * are `pragma_table_info`, in order, each with its declared type (`''` when it
- * declares none).
+ * Existence is `findSqliteRelation` (the sink's lookup), a table or a view only,
+ * so an index's name is not a table that exists. A schema the store does not
+ * have fails, not `exists: false`. The columns are `pragma_table_xinfo` minus
+ * a virtual table's hidden columns (`hidden` 1): `pragma_table_info` leaves out
+ * GENERATED columns, which `SELECT *` returns and Postgres lists. Each carries
+ * its declared type (`''` when it declares none).
  *
  * Row count is a synchronous `count(*)`, which better-sqlite3 cannot interrupt:
- * on a very large table it holds the server's event loop until it finishes. The
- * spec records that residual; cancel is checked before it starts.
+ * on a very large table, or a costly view, it holds the server's event loop
+ * until it finishes. The spec records that residual; cancel is checked before
+ * the store is opened.
  */
 function sqliteTableMetadata(cfg: z.infer<typeof sqliteConnectionConfigSchema>): TableMetadataIo {
   return {
     kind: 'sqlite',
-    describeTable: ({ config }, signal) => {
-      const { schema, table } = parseTableTarget(config);
+    inspectTable: async ({ schema = 'main', table }, signal, withRowCount) => {
       const qualifiedSchema = quoteIdentifier(schema, 'schema');
-      quoteIdentifier(table, 'table');
-      return withSqliteReadOnly(cfg, signal, 'the table could not be described', (db) => {
-        const found = db
-          .prepare(
-            `SELECT name FROM ${qualifiedSchema}.sqlite_master WHERE name = ? COLLATE NOCASE AND type IN ('table', 'view')`,
-          )
-          .get(table) as { name: string } | undefined;
-        if (found === undefined) return null;
-        const columns = db
-          .prepare('SELECT name, type FROM pragma_table_info(?, ?)')
-          .all(found.name, schema) as { name: string; type: unknown }[];
-        return columns.map((c) => ({
-          name: c.name,
-          type: typeof c.type === 'string' ? c.type : '',
-        }));
-      });
-    },
-    countRows: ({ config }, signal) => {
-      const { schema, table } = parseTableTarget(config);
-      const qualified = `${quoteIdentifier(schema, 'schema')}.${quoteIdentifier(table, 'table')}`;
-      return withSqliteReadOnly(cfg, signal, "the table's rows could not be counted", (db) => {
-        const row = db.prepare(`SELECT count(*) AS n FROM ${qualified}`).get() as { n: unknown };
-        return row.n;
-      });
+      const qualified = `${qualifiedSchema}.${quoteIdentifier(table, 'table')}`;
+      const db = await openSqliteReadOnly(cfg, signal, 'Get metadata aborted');
+      try {
+        db.defaultSafeIntegers(true);
+        const found = findSqliteRelation(db, schema, table);
+        if (found === undefined || (found.type !== 'table' && found.type !== 'view')) return null;
+        const columns = (
+          db
+            .prepare('SELECT name, type FROM pragma_table_xinfo(?, ?) WHERE hidden <> 1')
+            .all(found.name, schema) as { name: string; type: unknown }[]
+        ).map((c) => ({ name: c.name, type: typeof c.type === 'string' ? c.type : '' }));
+        const rowCount = withRowCount
+          ? (db.prepare(`SELECT count(*) AS n FROM ${qualified}`).get() as { n: unknown }).n
+          : undefined;
+        return { columns, rowCount };
+      } catch (err) {
+        if (err instanceof DatasetIoError) throw err;
+        throw storeFailure(err, 'the table could not be read');
+      } finally {
+        try {
+          db.close();
+        } catch {
+          // Never let a close failure replace the outcome the caller is unwinding with.
+        }
+      }
     },
   };
 }

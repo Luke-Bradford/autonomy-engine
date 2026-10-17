@@ -67,6 +67,7 @@ import {
   type WorkspaceGitStatus,
   type WorkspaceGitPullRequestReading,
   type ActivityBindingSlot,
+  bindsSourceDataset,
 } from '@autonomy-studio/shared';
 import { InlineSourceEditor } from './InlineSourceEditor';
 import {
@@ -3703,8 +3704,7 @@ export function NodePanel({
   const datasetOptionalHere =
     sourceConnection !== undefined &&
     entry?.datasetKinds?.optionalOn?.includes(sourceConnection.kind) === true &&
-    thisNode?.datasetIds?.source === undefined &&
-    thisNode?.inlineDatasets === undefined &&
+    (thisNode === undefined || !bindsSourceDataset(thisNode)) &&
     pending?.datasets?.source === undefined;
   // A pair the author has STARTED but not finished. It is not on the node, so it
   // is not saved — and saying so is the point: without this the first pick would

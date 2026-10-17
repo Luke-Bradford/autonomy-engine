@@ -77,7 +77,10 @@ describe('Get metadata on a sqlite table (C8c)', () => {
     const root = tempRoot();
     const path = seedDb(root, 3, 'src.db');
     const db = new Database(path);
-    db.exec('CREATE TABLE loose (a, b NUMERIC(10, 2)); CREATE VIEW v AS SELECT id FROM t;');
+    db.exec(
+      'CREATE TABLE loose (a, b NUMERIC(10, 2), c INTEGER GENERATED ALWAYS AS (a + 1) VIRTUAL, ' +
+        'd TEXT GENERATED ALWAYS AS (b) STORED); CREATE VIEW v AS SELECT id FROM t;',
+    );
     db.exec('CREATE INDEX t_name ON t (name);');
     db.close();
     return writableConfig(root, path);
@@ -106,9 +109,12 @@ describe('Get metadata on a sqlite table (C8c)', () => {
       ),
     );
     expect(out.path).toBe('main.LOOSE');
+    // Generated columns too, as `SELECT *` returns them.
     expect(out.structure).toEqual([
       { name: 'a', type: '' },
       { name: 'b', type: 'NUMERIC(10, 2)' },
+      { name: 'c', type: 'INTEGER' },
+      { name: 'd', type: 'TEXT' },
     ]);
     expect([out.exists, out.columnCount, out.rowCount]).toEqual([null, null, null]);
   });
@@ -301,6 +307,15 @@ describe.skipIf(LIVE_HOST === undefined)('Get metadata on a live postgres table 
     }
   });
 
+  it('answers a schema the server does not have', async () => {
+    const out = await run(
+      adapter,
+      ctx(live, { fieldList: ['exists'] }, table({ schema: `${schema}_none`, table: 'orders' })),
+      password,
+    );
+    expect(out).toEqual({ type: 'succeeded', outputs: expect.objectContaining({ exists: false }) });
+  });
+
   it("refuses a table the connection's role cannot read", async () => {
     const f = failure(
       await run(
@@ -311,7 +326,7 @@ describe.skipIf(LIVE_HOST === undefined)('Get metadata on a live postgres table 
     );
     expect(f).toEqual({
       kind: 'permanent',
-      error: `the connection's role cannot read the table '"${schema}"."secret"'`,
+      error: `the connection's role cannot read the table '${schema}.secret'`,
     });
     const ok = succeeded(
       await run(

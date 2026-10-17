@@ -116,7 +116,7 @@ export function lowerNodeOutputs(nodes: Node[]): Node[] {
  * `outputs`. The editor runs it on load, beside `lowerRetiredTypes`, so the next
  * Save writes the new contract; the server's write path does not, for the
  * reason retired lowering keeps off it (a re-pulled or imported version must
- * stay what it was). Matching is by name and type in order, so a contract the
+ * stay what it was). Matching is by name, type and optionality in order, so a contract the
  * author or a structured mode wrote is never touched.
  */
 export function refreshFormerOutputs(nodes: Node[]): Node[] {
@@ -131,9 +131,12 @@ export function refreshFormerOutputs(nodes: Node[]): Node[] {
         return (
           typeof d === 'object' &&
           d !== null &&
-          Object.keys(d).length === 2 &&
+          // Exactly the former entry's keys: `name`, `type` and, for an
+          // optional output (#1600 C8c, Get metadata's), `optional: true`.
+          Object.keys(d).length === Object.keys(o).length &&
           (d as Output).name === o.name &&
-          (d as Output).type === o.type
+          (d as Output).type === o.type &&
+          (d as Output).optional === o.optional
         );
       });
     if (!entry.formerOutputs.some(matches)) return node;
