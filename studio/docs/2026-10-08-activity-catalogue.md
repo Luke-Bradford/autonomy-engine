@@ -422,7 +422,7 @@ Source: [Delete](https://learn.microsoft.com/azure/data-factory/delete-activity)
 - **Outputs:** `filesDeleted`, `foldersDeleted`, `logPath`.
 - Tables are not deleted here. That is Script.
 
-**Built (C9a, 2026-10-17):** Delete on a file system connection, as the new `delete` type. It is in the palette as *Delete*, beside *Delete file* until C9b lowers that to it.
+**Built (C9a, 2026-10-17):** Delete on a file system connection, as the new `delete` type. It is in the palette as *Delete*. *Delete file* left the palette in C9b, which lowers it to Delete (below).
 
 - **Source:** connection, *File or folder path* ⓕ, *Path type* (Folder by default, or File, as Copy · Files as-is), and, for a folder only, *Wildcard* ⓕ (default `*`) and *Include subfolders* (default off, as ADF's `recursive`). *Modified from* / *Modified before* apply to a file as well. A wildcard or Include subfolders on a File path type is refused at save, not ignored.
 - **Settings:** *Max concurrent deletes* (ADF's `maxConcurrentConnections`, 1 by default, 1 to 64), *Fail if nothing matched* (off), *Delete empty folders* (off; drawn and accepted only with Include subfolders on). A boolean field can now control `appliesWhen` (read as `'true'`/`'false'`).
@@ -438,6 +438,19 @@ Source: [Delete](https://learn.microsoft.com/azure/data-factory/delete-activity)
   - A missing path matches nothing and succeeds with zero counts. *Fail if nothing matched* makes it fail. A file removed by someone else after it was chosen is skipped, not counted and not a failure.
 - **Not in C9a:** the session log and `logPath` (C9c, shared with Copy's in C6), progress output while it runs (§5), and the `file_delete` lowering (C9b).
 - `CATALOG_VERSION` 49→50 (a new runnable type).
+
+**Built (C9b, 2026-10-17):** a stored *Delete file* (`file_delete`) opens in the editor as Delete on the same connection and path, *Path type* File and *Fail if nothing matched* on, and the next Save writes it as `delete` (`lowerFileDelete` in `retired.ts`, §8). *Delete file* is no longer offered in the palette. A stored version still runs through `file_delete`'s own arm.
+
+- **Why those settings:** Delete file deleted one named file and failed when it was missing. File is the one-file path type; Fail if nothing matched keeps the missing-file failure. Delete's other defaults (every modification time, one at a time) delete what it deleted.
+- **`path` keeps its name and value.** Both resolve the path the same way and report the canonical path, so a `${nodes.x.output.path}` read needs no rewrite. `filesDeleted` and `foldersDeleted` are new outputs.
+- **The same outcome** for a file (deleted), and a `permanent` failure with nothing removed for a missing file or folder, a folder, a link at the path, and a path outside the allowed folders. A server test runs each case both ways.
+- **Faithful or not at all,** as the other lowerings: a node that carries something Delete would refuse or drop (`connectionParams`, datasets, a call), or whose path is not a string the Delete schema accepts, stays Delete file.
+- **Deliberate differences of the saved node from Delete file** (a stored version keeps the old behaviour until it is saved again):
+  - It needs *Allow writes* on the connection, which Delete file never read. The Problems list warns first (`writeAccessWarnings`), as for a lowered Copy file.
+  - Only a regular file is deleted. A FIFO, socket or device file at the path fails as "not a file", where Delete file unlinked it.
+  - A file deleted by someone else after it was chosen is skipped and the node succeeds with `filesDeleted` 0, where Delete file failed on the missing file.
+  - Failure messages are Delete's, a cancel included.
+- No `CATALOG_VERSION` change: Delete already declares `path`, and leaving the palette stores nothing.
 
 ### 4.5 Script
 Sources: [Script](https://learn.microsoft.com/azure/data-factory/transform-data-using-script), [Stored procedure](https://learn.microsoft.com/azure/data-factory/transform-data-using-stored-procedure).
@@ -554,7 +567,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs | — |
 | C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Rows · Whole file as text (`file_read` as Lookup's second type), the title *Lookup* (built); **C7c** *When over the limit* and `bytes`/`truncated` for the text mode, limited by the connection's `maxBytes` rather than the 1 MiB byte cap (built); **C7d** the workspace Lookup max rows (1000 by default, up to ADF's 5000) and the Monitor Rows read column (built) | — |
 | C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c-1** tables (SQLite, Postgres) with per-kind field options (built); **C8c-2** a delimited or Excel dataset source's structure and column count (built); **C8d-1** Wait until on a file system path (built); **C8d-2a** Wait until on a delimited or Excel dataset, with #1743 (built); **C8d-2b** Wait until on a table dataset (built); **C8e** Include subfolders (built) | OR17 #1408 |
-| C9 | Delete: wildcard, folders, dates, log. Lower file_delete. Split: **C9a** the `delete` type on a file system connection, with path type, wildcard, Include subfolders, modified window, Max concurrent deletes, Fail if nothing matched and Delete empty folders, on Get metadata's walk (built); **C9b** the `file_delete` lowering (Path type File, Fail if nothing matched on, `path` kept), Delete file retired from the palette; **C9c** the session log and `logPath` (a new output, so a `formerOutputs` snapshot and a version bump), shared with Copy's | OR17 #1408 |
+| C9 | Delete: wildcard, folders, dates, log. Lower file_delete. Split: **C9a** the `delete` type on a file system connection, with path type, wildcard, Include subfolders, modified window, Max concurrent deletes, Fail if nothing matched and Delete empty folders, on Get metadata's walk (built); **C9b** the `file_delete` lowering (Path type File, Fail if nothing matched on, `path` kept), Delete file retired from the palette (built); **C9c** the session log and `logPath` (a new output, so a `formerOutputs` snapshot and a version bump), shared with Copy's | OR17 #1408 |
 | C10 | Script activity | OR12 #1403, OR15 sql_script |
 | C11 | Web: fail-on-error, response cap, parse, retry-after, wait-for-callback. Lower http_request and webhook | — |
 | C12 | Set variable operations + pipeline return value. Lower append_variable | OR34 outputs |
@@ -575,7 +588,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
   | `file_write` | Copy · Inline → file |
   | `file_read` | Lookup · Whole file as text (C7b: the same type, offered as Lookup's mode; no lowering) |
   | `file_list` | Get metadata · Child items |
-  | `file_delete` | Delete |
+  | `file_delete` | Delete · File · Fail if nothing matched (C9b) |
   | `lookup` | Lookup · not first-row-only, so today's `rows` shape is kept |
   | `http_request` | Web · Fail on HTTP error **off**, so today's behaviour is kept |
   | `webhook` | Web · Wait for callback, no URL |
@@ -591,7 +604,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
     4. A move becomes a copy then a delete: it succeeds across file systems where Move file fails, and it copies the bytes where Move file renamed. A move onto its own source, a case-only rename included, is refused.
   - **Not on the server's write path.** `lowerPipelineNodes` also runs for workspace-git apply and portable import, which keep a file's version id and re-mint history. Lowering there would make a re-pulled branch file differ from its own stored row, and change what an imported OLD version does. The server keeps accepting the retired types until C13 decides otherwise.
   - **Faithful or not at all.** A node is left as its retired type when it carries `connectionParams` (a paired node refuses them), when its destination's file name begins with an expression or its folder is one bare expression (either may resolve absolute, empty or to a number, which the split fields refuse where the old string join wrote it), or when the lowered config would not validate. C13's Convert has to explain those, since they never lower.
-  - **Allow writes.** A saved lowered node is a real `copy_files` and needs Allow writes on its connection. The Problems list warns while the connection lacks it, for every Files as-is copy, so the author hears it before the run refuses.
+  - **Allow writes.** A saved lowered node is a real `copy_files` and needs Allow writes on its connection. The Problems list warns while the connection lacks it, for every Files as-is copy, so the author hears it before the run refuses. A lowered Delete file is the same: a saved `delete` needs it too, and the same warning covers every Delete (C9b, §4.4).
 - **Output aliases.** Old output names stay readable. For example `nodes.x.output.entries` (List Directory) is rewritten to `childItems` in the doc as the node is lowered, and the node is not lowered where a read cannot be rewritten (C8b). `output.content` from Read File works on the Lookup. Each lowering declares its aliases, and a unit test checks every retired output name. Copy file and Move file need no renaming: Files as-is yields `bytesWritten`, `source` and `dest` under the same names and types (C1b).
 - **Defaults keep today's behaviour** where the new default would change a running pipeline's result: Web *Fail on HTTP error*, Lookup *first row only*, Copy *after copy*. The *new-node* defaults are ADF's. The *lowered-node* defaults are today's behaviour.
 - **Palette:** retired types are not offered. A pipeline that still contains one shows it under its new name, with a one-click *Convert*. Convert is the lowering written back, and it shows a diff before saving.

@@ -130,6 +130,10 @@ describe('toolboxGroups', () => {
     expect(typesOf(toolboxGroups('list directory'))).not.toContain('file_list');
     expect(typesOf(toolboxGroups('folder'))).toContain('get_metadata');
     expect(typesOf(toolboxGroups('list'))).toContain('get_metadata');
+    // So is Delete file (#1600 C9b): "delete file" finds Delete, whose
+    // description begins "Delete a file".
+    expect(typesOf(toolboxGroups('delete file'))).not.toContain('file_delete');
+    expect(typesOf(toolboxGroups('delete file'))).toContain('delete');
     expect(typesOf(toolboxGroups('copy file zebra'))).toEqual([]);
   });
 });
