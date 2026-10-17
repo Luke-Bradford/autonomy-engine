@@ -491,8 +491,13 @@ test.describe('#1600 C8a — Get metadata', () => {
       await tab(page, 'Settings').click();
       const pane = properties(page);
       const waitUntil = pane.getByRole('combobox', { name: 'Wait until', exact: true });
-      // A table has no size to wait for.
-      await expect(waitUntil.locator('option')).toHaveText(['Off', 'It exists', 'It is not empty']);
+      // A table has no size to wait for. The first is the unset choice (#1732).
+      await expect(waitUntil.locator('option')).toHaveText([
+        'Off (default)',
+        'Off',
+        'It exists',
+        'It is not empty',
+      ]);
       await waitUntil.selectOption({ label: 'It is not empty' });
       await pane.getByLabel('Check every (seconds)', { exact: true }).fill('1');
       await pane.getByLabel('Give up after (seconds)', { exact: true }).fill('120');
