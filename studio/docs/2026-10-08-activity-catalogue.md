@@ -316,7 +316,22 @@ Sources: [Get Metadata](https://learn.microsoft.com/azure/data-factory/control-f
 - **Deliberate difference from ADF:** ADF's Child items lists one level and has no such setting. This is a studio addition.
 - `CATALOG_VERSION` 43→44: a pre-C8e build strips `recursive` and lists the top level only.
 
-Still open in C8: **C8c** adds tables on SQLite and Postgres (exists, structure, column count, row count), Structure and Column count for delimited and Excel files through a saved dataset source, and per-connection-kind field options. **C8d** adds *Wait until* (the durable park).
+**Built (C8c-1, 2026-10-17):** Get metadata on a SQLite or Postgres **table**.
+- **Source:** on a database connection the table is the Source tab's dataset, a saved `table` dataset or an inline Table (C1q's block, Table only, since Get metadata reads no query). *File or folder path* is drawn only on a file system connection (`appliesWhen` now also takes a `connectionKind` condition) and is optional in the config.
+  - **Deliberate difference from §4.3's "table path ⓕ":** a table is never named by a path or an expression, C1q's one way to name a table (§8). A table name is a literal in the dataset; its bind values are what take dynamic content.
+  - The dataset is **optional on a file system only** (`datasetKinds.optionalOn: ['fs']`). The executor skips the dataset block only when the node binds none; a stray dataset is still resolved and refused. On a file system with nothing bound the editor draws no dataset picker.
+- **Field list per kind** (`fieldOptionsByConnectionKind`): a path's eight on `fs`; Exists, Structure, Column count and Row count on `sqlite` and `postgres`. Every field is offered while the kind is unknown (no connection, or a `${}`), and a field already ticked is always drawn so it can be unticked.
+  - **At save** (`getMetadataNodeIssue`, beside the config's own issues): a node with neither a path nor a table, so a new node still shows its next step, and one with both.
+  - **At dispatch** (`getMetadataKindIssue`, one sentence per mistake for all three stores), because only then is the connection's kind known: a field the kind cannot answer, a table on `fs` (refused by the dataset's connection check), and a path on a database.
+- **Outputs:** `structure` (`[{name, type}]`), `columnCount`, `rowCount`, each `null` unless ticked, in the one fixed contract. `path` is the table as the dataset writes it (`schema.table`, or the bare name). A node saved before C8c holds the nine C8a outputs; `formerOutputs` re-seeds it on load.
+- **Exists:** with Exists ticked, a missing table, or a name that is an index, sequence or type rather than a table or view, gives `exists: false`; without it the run fails `permanent`. A schema the store does not have, and a missing SQLite file, fail rather than say `false`.
+- **SQLite:** `sqlite_master` (`COLLATE NOCASE`, tables and views) and `pragma_table_info`, on the one read-only open every SQLite read now shares.
+- **Postgres:** one catalog query (`to_regclass`, so a bare name resolves through `search_path`; `relkind` is List tables' set). A table the connection's role cannot SELECT is refused (`permanent`) rather than described, as List tables leaves it out. Both statements run `READ ONLY`, because counting a view runs its query.
+- **Deliberate differences from ADF:** Structure's `type` is the store's own type name (Postgres `format_type`, e.g. `character varying(20)`; SQLite's declared type, `''` where a column declares none), not ADF's interim types. Row count is a studio addition. A count above 2^53 fails `permanent` rather than report an inexact number.
+- **Residuals:** Row count is `count(*)`, a full scan. On Postgres the connection's statement timeout bounds it (a timeout fails `transient`). On SQLite better-sqlite3 runs it synchronously and cannot interrupt it, so a very large table holds the server's event loop until it finishes; cancel is checked before it starts.
+- `CATALOG_VERSION` 44→45.
+
+Still open in C8: **C8c-2** adds Structure and Column count for delimited and Excel files through a saved dataset source on a file system connection. **C8d** adds *Wait until* (the durable park).
 
 ### 4.4 Delete
 Source: [Delete](https://learn.microsoft.com/azure/data-factory/delete-activity).
@@ -421,7 +436,7 @@ The **capture level** (workspace setting, overridable per pipeline and per activ
 | Copy sink, rows | T delimited (OR14 writer) | ✓ append/overwrite; **T** truncate, upsert, auto-create, pre-copy | ✓ same | — | OR13 | OR15 |
 | Copy, files as-is | ✓ copy/move (single file); **T** folder, wildcard, list, delete-after | — | — | T (download to file) | OR13 | — |
 | Lookup | ✓ | ✓ | ✓ | (use Web) | OR13 | OR15 |
-| Get metadata | ✓ full field list (C8a); **T** wait | **T** exists, structure, columns, rows | **T** same | — | OR13 | OR15 |
+| Get metadata | ✓ full field list (C8a); **T** wait, a file dataset's structure (C8c-2) | ✓ exists, structure, columns, rows (C8c-1) | ✓ same | — | OR13 | OR15 |
 | Delete | ✓ one file; **T** wildcard, folders, dates, log | — (Script) | — (Script) | — | OR13 | — |
 | Script | — | **T** | **T** | — | — | OR15 |
 | Web | — | — | — | ✓; **T** fail-on-error, cap, callback | — | — |
@@ -445,7 +460,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C5 | Copy: incremental (watermark Automatic / Expression; files modified-since-last-success) | OR15 incremental |
 | C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs | — |
 | C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Rows · Whole file as text (`file_read` as Lookup's second type), the title *Lookup* (built); **C7c** *When over the limit* and `bytes`/`truncated` for the text mode, limited by the connection's `maxBytes` rather than the 1 MiB byte cap (built); **C7d** the workspace Lookup max rows (1000 by default, up to ADF's 5000) and the Monitor Rows read column (built) | — |
-| C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c** tables (SQLite, Postgres) and a dataset source's structure and column count; **C8d** Wait until; **C8e** Include subfolders (built) | OR17 #1408 |
+| C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c-1** tables (SQLite, Postgres) with per-kind field options (built); **C8c-2** a delimited or Excel dataset source's structure and column count; **C8d** Wait until; **C8e** Include subfolders (built) | OR17 #1408 |
 | C9 | Delete: wildcard, folders, dates, log. Lower file_delete | OR17 #1408 |
 | C10 | Script activity | OR12 #1403, OR15 sql_script |
 | C11 | Web: fail-on-error, response cap, parse, retry-after, wait-for-callback. Lower http_request and webhook | — |

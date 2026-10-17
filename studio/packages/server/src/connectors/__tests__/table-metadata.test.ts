@@ -185,9 +185,9 @@ describe('Get metadata on a sqlite table (C8c)', () => {
         ),
       ).error,
     ).toBe('Get metadata reads a table, not a query dataset');
-    expect(
-      failure(await run(sqliteAdapter, ctx(cfg, { fieldList: ['exists'] }, null))).error,
-    ).toBe('Get metadata on a database reads a table — choose one on Source');
+    expect(failure(await run(sqliteAdapter, ctx(cfg, { fieldList: ['exists'] }, null))).error).toBe(
+      'Get metadata on a database reads a table — choose one on Source',
+    );
   });
 
   it('does not start when the run is already cancelled', async () => {

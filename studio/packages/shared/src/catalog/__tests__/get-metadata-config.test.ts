@@ -6,10 +6,12 @@ import {
   GET_METADATA_FS_FIELDS,
   GET_METADATA_TABLE_FIELDS,
   getMetadataKindIssue,
+  getMetadataNodeIssue,
   getActivity,
   getMetadataConfigSchema,
 } from '../../index.js';
 import { enumSetValuesOf } from '../../schemas/field-presentation.js';
+import { activityNodeErrors } from '../../engine/activity-config-check.js';
 
 const ok = (cfg: Record<string, unknown>) => getMetadataConfigSchema.safeParse(cfg).success;
 const issuesOf = (cfg: Record<string, unknown>) => {
@@ -157,5 +159,32 @@ describe('getMetadataKindIssue (#1600 OR41 C8c)', () => {
       'rowCount',
     ]);
     expect(GET_METADATA_FIELDS_BY_CONNECTION_KIND.postgres).toEqual(GET_METADATA_TABLE_FIELDS);
+  });
+});
+
+describe('getMetadataNodeIssue (#1600 OR41 C8c)', () => {
+  it('takes a path or a table, not neither and not both', () => {
+    expect(getMetadataNodeIssue({ config: { path: '/d' } })).toBeUndefined();
+    expect(getMetadataNodeIssue({ config: {}, datasetIds: { source: 'ds' } })).toBeUndefined();
+    expect(
+      getMetadataNodeIssue({ config: {}, inlineDatasets: { source: { kind: 'table' } } }),
+    ).toBeUndefined();
+    expect(getMetadataNodeIssue({ config: {} })).toBe(
+      'config.path: required: a file or folder path, or a table chosen on Source',
+    );
+    expect(getMetadataNodeIssue({ config: { path: 't' }, datasetIds: { source: 'ds' } })).toBe(
+      'config.path: a table chosen on Source names what to read; clear File or folder path',
+    );
+  });
+
+  it('is a save-time refusal of the node', () => {
+    const node = (over: Record<string, unknown>) =>
+      ({ id: 'm', type: 'get_metadata', position: { x: 0, y: 0 }, ...over }) as never;
+    expect(activityNodeErrors(node({ config: { fieldList: ['exists'] } }))).toEqual([
+      "node 'm': config.path: required: a file or folder path, or a table chosen on Source",
+    ]);
+    expect(
+      activityNodeErrors(node({ config: { fieldList: ['exists'] }, datasetIds: { source: 'd' } })),
+    ).toEqual([]);
   });
 });

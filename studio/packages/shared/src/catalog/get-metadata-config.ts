@@ -192,3 +192,31 @@ export function getMetadataKindIssue(
 
 const titles = (fields: readonly GetMetadataField[]): string =>
   fields.map((f) => GET_METADATA_FIELD_TITLES[f]).join(', ');
+
+/**
+ * #1600 OR41 C8c — the save-time half of {@link getMetadataKindIssue}: what the
+ * NODE, not the config, says about where Get metadata reads. A path addresses a
+ * file system item and a source dataset (saved or inline) a table, so a node
+ * with neither names nothing on any connection, and one with both names two
+ * things. Both are refused at save, beside the config's own issues, so a new
+ * node still shows its path as the next step. Which of the two the bound
+ * connection's kind wants is checked at dispatch, where the kind is known.
+ */
+export function getMetadataNodeIssue(node: {
+  readonly config: Readonly<Record<string, unknown>>;
+  readonly datasetIds?: { readonly source?: string } | undefined;
+  readonly inlineDatasets?: { readonly source?: unknown } | undefined;
+}): string | undefined {
+  const hasPath = node.config['path'] !== undefined;
+  const hasTable =
+    node.datasetIds?.source !== undefined || node.inlineDatasets?.source !== undefined;
+  // Says both, because on a database the path is not drawn and the Source
+  // tab's table is the step.
+  if (!hasPath && !hasTable) {
+    return 'config.path: required: a file or folder path, or a table chosen on Source';
+  }
+  if (hasPath && hasTable) {
+    return 'config.path: a table chosen on Source names what to read; clear File or folder path';
+  }
+  return undefined;
+}
