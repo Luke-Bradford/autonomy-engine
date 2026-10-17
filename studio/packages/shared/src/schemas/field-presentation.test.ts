@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
   unnamedEnumValues,
+  enumSetValuesOf,
+  enumValuesOf,
   optionTitles,
   authoredAsExpression,
   fieldLabelOf,
@@ -117,6 +119,30 @@ describe('unnamedEnumValues (#1396)', () => {
       options: optionTitles(mode, { a: 'Alpha', b: 'Beta' }),
     });
     expect(unnamedEnumValues({ deep: named.default('a').nullable() })).toEqual([]);
+  });
+
+  it('checks a set of choices titled on the field, where its checkbox labels are read (#1736)', () => {
+    // #1600 C8a — an array of an enum titled on the ARRAY: an untitled option
+    // there, or one two options share, is a checkbox with no label.
+    const set = (options: Record<string, string>) =>
+      presented(z.array(mode).min(1), { title: 'Set', options });
+    expect(
+      unnamedEnumValues({
+        missing: set({ a: 'Alpha' }),
+        shared: set({ a: 'Same', b: 'Same' }),
+        fine: set({ a: 'Alpha', b: 'Beta' }),
+        defaulted: presented(z.array(mode).default(['a']), { title: 'D', options: { b: 'B' } }),
+      }),
+    ).toEqual(['missing.b', 'shared.a', 'shared.b', 'defaulted.a']);
+  });
+
+  it('enumValuesOf and enumSetValuesOf read through the wrappers, and only their own shape (#1736)', () => {
+    expect(enumValuesOf(mode.optional().default('a'))).toEqual(['a', 'b']);
+    expect(enumValuesOf(z.array(mode))).toBeUndefined();
+    expect(enumSetValuesOf(z.array(mode).optional().default([]))).toEqual(['a', 'b']);
+    expect(enumSetValuesOf(mode)).toBeUndefined();
+    expect(enumSetValuesOf(z.array(z.string()))).toBeUndefined();
+    expect(enumValuesOf('not a schema')).toBeUndefined();
   });
 
   it('passes a field whose every value is named', () => {
