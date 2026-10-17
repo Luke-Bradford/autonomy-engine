@@ -5,6 +5,8 @@
  * here for Get metadata (C8) and Delete (C9), which select files the same way.
  */
 import type { Dirent } from 'node:fs';
+import { lstat } from 'node:fs/promises';
+import { isAbsolute, relative, sep } from 'node:path';
 
 /**
  * The two caps' defaults (#1712: shared, so the connection form's notes are
@@ -96,4 +98,30 @@ export function modifiedWindow(
     contains: (mtimeMs) =>
       (from.ms === undefined || mtimeMs >= from.ms) && (to.ms === undefined || mtimeMs < to.ms),
   };
+}
+
+/**
+ * `bigint`, so a device or inode number above 2^53 (some network file systems)
+ * is compared exactly: two files must never share an identity by rounding.
+ */
+export async function lstatOrNull(path: string) {
+  try {
+    return await lstat(path, { bigint: true });
+  } catch (err) {
+    // ENOTDIR: a parent is a file, so nothing can be at this path either.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return null;
+    throw err;
+  }
+}
+
+/** True when `child` is `parent` or sits under it (both canonical). */
+export function within(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel === '' || !escapes(rel);
+}
+
+/** A `relative()` result that leaves its base. `..foo` is a name, not an escape. */
+export function escapes(rel: string): boolean {
+  return rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel);
 }

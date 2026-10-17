@@ -1,7 +1,7 @@
 import type { Stats } from 'node:fs';
 import { lstat, open, opendir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { basename, join } from 'node:path';
+import { basename } from 'node:path';
 import type { z } from 'zod';
 import {
   GET_METADATA_FIELD_TITLES,
@@ -24,6 +24,7 @@ import {
   wildcardMatcher,
 } from './fs-select.js';
 import { DatasetIoError } from './dataset-io-error.js';
+import { walkFolder } from './fs-walk.js';
 import { closeQuietly, failFromError } from './fs-write.js';
 import type { ActivityEvent } from './types.js';
 
@@ -135,81 +136,30 @@ async function childItemsOf(
   // runs across the whole tree, as Copy · Files as-is's walk does.
   const maxEntries = cfg.maxEntries ?? DEFAULT_MAX_LIST_ENTRIES;
   const items: ChildItem[] = [];
-  let visited = 0;
-  // Relative names, `/`-separated on every host so the output is the same
-  // everywhere; the paths opened are built with the host's `join`.
-  const pending: string[] = [''];
   try {
-    while (pending.length > 0) {
-      const rel = pending.pop()!;
-      const at = rel === '' ? folder : join(folder, ...rel.split('/'));
-      let dir: Awaited<ReturnType<typeof opendir>>;
-      try {
-        // `opendir` has no `O_NOFOLLOW`. The top folder was confined and
-        // `lstat`ed just before this; a subfolder is `lstat`ed again here, so
-        // one swapped for a link while it waited on the stack is skipped. The
-        // residual is the gap between this `lstat` and the `opendir`, as in
-        // `file_list` and Copy's walk; a swap there would expose names, sizes
-        // and times, not contents.
-        if (rel !== '' && !(await lstat(at)).isDirectory()) continue;
-        dir = await opendir(at);
-      } catch (err) {
-        // A subfolder removed since it was listed is skipped. The top folder
-        // is not a child item, so its errors are the activity's.
-        if (rel !== '' && isMissingErrno(err)) continue;
-        throw err;
-      }
-      try {
-        for (;;) {
-          if (signal.aborted) return failed('cancelled', 'file activity aborted');
-          const dirent = await dir.read();
-          if (dirent === null) break;
-          visited += 1;
-          if (visited > maxEntries) {
-            return failed(
-              'permanent',
-              input.recursive
-                ? `the folder and its subfolders have more than the ${maxEntries}-entry list limit`
-                : `folder has more than the ${maxEntries}-entry list limit`,
-            );
-          }
-          const name = rel === '' ? dirent.name : `${rel}/${dirent.name}`;
-          const matched = matches(dirent.name);
-          // With Include subfolders every entry is `lstat`ed, one call each,
-          // because a folder is walked whether or not it is listed; without it
-          // only a match is. The `lstat` rather than the dirent's type, as below.
-          if (!input.recursive && !matched) continue;
-          let st: Stats;
-          try {
-            st = await lstat(join(dir.path, dirent.name));
-          } catch (err) {
-            if (isMissingErrno(err)) continue; // removed since it was listed
-            throw err;
-          }
-          // Typed from the `lstat`, not the dirent: a file system that does not
-          // report a dirent's type would otherwise list everything as `other`.
-          const type = direntType(st);
-          // A link is never followed, to a folder or anywhere else.
-          if (input.recursive && type === 'directory') pending.push(name);
-          if (!matched) continue;
-          if (input.childType === 'files' && type !== 'file') continue;
-          if (input.childType === 'folders' && type !== 'directory') continue;
-          // ADF: with a modified window set, child items hold files only.
-          if (timed && (type !== 'file' || !window.contains(st.mtimeMs))) continue;
-          items.push({
-            name,
-            type,
-            size: type === 'file' ? st.size : null,
-            lastModified: st.mtime.toISOString(),
-          });
-        }
-      } finally {
-        try {
-          await dir.close();
-        } catch {
-          // Already closed by a finished iteration.
-        }
-      }
+    const walked = await walkFolder(folder, {
+      recursive: input.recursive,
+      maxEntries,
+      matches,
+      signal,
+      aborted: 'file activity aborted',
+    });
+    if (!walked.ok) return walked.event;
+    for (const { name, base, type, st } of walked.entries) {
+      if (!matches(base)) continue;
+      if (input.childType === 'files' && type !== 'file') continue;
+      if (input.childType === 'folders' && type !== 'directory') continue;
+      // ADF: with a modified window set, child items hold files only. A
+      // `bigint` mtime is whole milliseconds, and the window's bounds are too.
+      if (timed && (type !== 'file' || !window.contains(Number(st.mtimeMs)))) continue;
+      items.push({
+        name,
+        type,
+        size: type === 'file' ? Number(st.size) : null,
+        // Rounded to the millisecond as a number `lstat`'s `mtime` is, where a
+        // `bigint` one truncates.
+        lastModified: new Date(Math.round(Number(st.mtimeNs) / 1e6)).toISOString(),
+      });
     }
   } catch (err) {
     return failFromError(err, signal);

@@ -9,6 +9,7 @@ import {
   FAIL_ACTIVITY_TYPE,
   FILE_COPY_ACTIVITY_TYPE,
   FILE_DELETE_ACTIVITY_TYPE,
+  DELETE_ACTIVITY_TYPE,
   FILE_LIST_ACTIVITY_TYPE,
   FILE_MOVE_ACTIVITY_TYPE,
   FILE_READ_ACTIVITY_TYPE,
@@ -110,6 +111,10 @@ const CASES: Record<string, [Node, string]> = {
   [FILE_DELETE_ACTIVITY_TYPE]: [
     node(FILE_DELETE_ACTIVITY_TYPE, { config: { path: 'tmp/x' } }),
     'delete tmp/x',
+  ],
+  [DELETE_ACTIVITY_TYPE]: [
+    node(DELETE_ACTIVITY_TYPE, { config: { path: 'in', wildcard: '*.txt', recursive: true } }),
+    'delete in/*.txt · subfolders',
   ],
   [FILE_LIST_ACTIVITY_TYPE]: [node(FILE_LIST_ACTIVITY_TYPE, { config: { path: 'in' } }), 'in'],
   [GET_METADATA_ACTIVITY_TYPE]: [

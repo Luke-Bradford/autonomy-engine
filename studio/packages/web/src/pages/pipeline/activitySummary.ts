@@ -12,6 +12,7 @@ import {
   FAIL_ACTIVITY_TYPE,
   FILE_COPY_ACTIVITY_TYPE,
   FILE_DELETE_ACTIVITY_TYPE,
+  DELETE_ACTIVITY_TYPE,
   FILE_LIST_ACTIVITY_TYPE,
   FILE_MOVE_ACTIVITY_TYPE,
   FILE_READ_ACTIVITY_TYPE,
@@ -113,6 +114,13 @@ export function activitySummary(
       return prefixed('→ ', text(c.path));
     case FILE_DELETE_ACTIVITY_TYPE:
       return prefixed('delete ', text(c.path));
+    case DELETE_ACTIVITY_TYPE: {
+      // #1600 OR41 C9a — a folder's selection reads as path/wildcard.
+      const path = text(c.path);
+      if (c.pathType === 'file' || path === undefined) return prefixed('delete ', path);
+      const wildcard = text(c.wildcard) ?? '*';
+      return `delete ${path}/${wildcard}${c.recursive === true ? ' · subfolders' : ''}`;
+    }
     case FILE_COPY_ACTIVITY_TYPE:
     case FILE_MOVE_ACTIVITY_TYPE:
       return arrow(text(c.source), text(c.dest));

@@ -199,6 +199,20 @@ describe('get_metadata — a folder', () => {
   });
 });
 
+describe('get_metadata — the shared walk (C9a)', () => {
+  it("a child item's last modified rounds to the millisecond, as the item's own does", async () => {
+    await mkdir(join(root, 'in'));
+    await writeFile(join(root, 'in', 'a.csv'), 'x');
+    // .7896 s: a `bigint` lstat's mtime would truncate it to .789.
+    await utimes(join(root, 'in', 'a.csv'), 1_700_000_000.7896, 1_700_000_000.7896);
+    const folder = await outputsOf({ path: 'in', fieldList: ['childItems'] });
+    const file = await outputsOf({ path: 'in/a.csv', fieldList: ['lastModified'] });
+    const child = (folder['childItems'] as { lastModified: string }[])[0]!;
+    expect(child.lastModified).toBe(file['lastModified']);
+    expect(child.lastModified).toBe('2023-11-14T22:13:20.790Z');
+  });
+});
+
 describe('get_metadata — Include subfolders (C8e)', () => {
   const listed = async (extra: Record<string, unknown>) =>
     (

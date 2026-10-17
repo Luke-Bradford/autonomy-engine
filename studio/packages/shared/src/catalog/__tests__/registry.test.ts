@@ -27,6 +27,8 @@ describe('activity catalog', () => {
       'copy',
       // #1600 OR41 C1a — Copy · Files as-is, behind Copy's toggle.
       'copy_files',
+      // #1600 OR41 C9a — Delete.
+      'delete',
       'execute_pipeline',
       'fail',
       'file_copy',
@@ -75,7 +77,7 @@ describe('activity catalog', () => {
     // it stats and lists, and writes nowhere.
     expect(idempotent).toEqual(['file_read', 'file_list', 'get_metadata', 'lookup']);
     // file_write/copy/move/delete MUST stay non-idempotent — each is a side effect.
-    for (const type of ['file_write', 'file_copy', 'file_move', 'file_delete']) {
+    for (const type of ['file_write', 'file_copy', 'file_move', 'file_delete', 'delete']) {
       expect(getActivity(type)!.idempotent).toBe(false);
     }
   });

@@ -22,8 +22,11 @@ import { fsConnectionConfigSchema } from './fs-connection.js';
 import {
   DEFAULT_MAX_LIST_ENTRIES,
   DEFAULT_MAX_READ_BYTES,
+  escapes,
+  lstatOrNull,
   modifiedWindow,
   wildcardMatcher,
+  within,
 } from './fs-select.js';
 import {
   LINK_UNSUPPORTED,
@@ -153,32 +156,6 @@ function outputsOf(c: Counters, paths: CopyPaths | undefined): Record<string, un
 async function confined(roots: readonly string[], requested: string): Promise<string> {
   const r = await resolveWithinRoots(roots, requested, 'fs');
   return r.ok ? r.path : refuse(r.error);
-}
-
-/**
- * `bigint`, so a device or inode number above 2^53 (some network file systems)
- * is compared exactly: two files must never share an identity by rounding.
- */
-async function lstatOrNull(path: string) {
-  try {
-    return await lstat(path, { bigint: true });
-  } catch (err) {
-    // ENOTDIR: a parent is a file, so nothing can be at this path either.
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'ENOTDIR') return null;
-    throw err;
-  }
-}
-
-/** True when `child` is `parent` or sits under it (both canonical). */
-function within(parent: string, child: string): boolean {
-  const rel = relative(parent, child);
-  return rel === '' || !escapes(rel);
-}
-
-/** A `relative()` result that leaves its base. `..foo` is a name, not an escape. */
-function escapes(rel: string): boolean {
-  return rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel);
 }
 
 /** The first allowed root that resolves, canonical: `resolveWithinRoots`'s base. */

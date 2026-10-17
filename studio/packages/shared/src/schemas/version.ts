@@ -573,7 +573,8 @@
 // A pre-C8d-2a build refuses it at save and at dispatch.
 // BUMP 48→49 for #1600 OR41 C8d-2b: Wait until on a table (SQLite, Postgres).
 // A pre-C8d-2b build refuses it at dispatch (and an inline Table's at save).
-export const CATALOG_VERSION = 49;
+// BUMP 49→50 for #1600 OR41 C9a: a new runnable type, `delete`, C8a's reason.
+export const CATALOG_VERSION = 50;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the
