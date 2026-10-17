@@ -263,6 +263,11 @@ export interface RetryAlarms {
  */
 export const RETRY_WAKEUP_KIND = 'node_retry';
 
+/** The driver's clock: `deps.now`, or the wall clock when a caller gives none. */
+function clockOf(deps: Pick<DriverDeps, 'now'>): () => number {
+  return deps.now ?? (() => Date.now());
+}
+
 /**
  * The `kind` under which a `wait` node's timer alarm is armed (#4 A5/A6). Matches
  * the handler registered in `scheduler/wait-alarm.ts` — the clock refuses to arm a
@@ -484,7 +489,7 @@ export function retryArmInput(
     retryAfterSeconds?: number;
   },
 ): ArmWakeupInput {
-  const now = deps.now ?? (() => Date.now());
+  const now = clockOf(deps);
   const doc = deps.resolveDoc(args.pipelineVersionId);
   // #4 A4b — a retry held inside a PARALLEL foreach body names an instance key;
   // the policy lives on the doc node behind it (exact id first — a legacy
@@ -580,7 +585,7 @@ export function waitArmInput(
   deps: Pick<DriverDeps, 'now'>,
   args: { runId: string; nodeId: string; attemptId: string; seconds: number },
 ): ArmWakeupInput {
-  const now = deps.now ?? (() => Date.now());
+  const now = clockOf(deps);
   return {
     kind: WAIT_WAKEUP_KIND,
     // The per-kind `ref` shape S1 declares for wait. `attemptId` is the freshness
@@ -657,7 +662,7 @@ function armRecheck(
   state: RunState,
   command: Extract<EngineCommand, { type: 'scheduleRecheck' }>,
 ): EngineEvent {
-  const now = (deps.now ?? (() => Date.now()))();
+  const now = clockOf(deps)();
   const giveUpAt = command.giveUpAt ?? now + command.giveUpAfterSeconds * 1000;
   if (now >= giveUpAt) {
     return {
@@ -713,7 +718,7 @@ export function containerTimeoutArmInput(
   deps: Pick<DriverDeps, 'now'>,
   args: { runId: string; containerId: string; seconds: number },
 ): ArmWakeupInput {
-  const now = deps.now ?? (() => Date.now());
+  const now = clockOf(deps);
   const bounded = Math.min(args.seconds, MAX_WAIT_SECONDS);
   return {
     kind: CONTAINER_TIMEOUT_WAKEUP_KIND,
@@ -773,7 +778,7 @@ export function externalWaitArmInput(
   deps: Pick<DriverDeps, 'now'>,
   args: { runId: string; nodeId: string; attemptId: string; timeoutSeconds: number },
 ): ArmWakeupInput {
-  const now = deps.now ?? (() => Date.now());
+  const now = clockOf(deps);
   return {
     kind: EXTERNAL_WAIT_WAKEUP_KIND,
     ref: { runId: args.runId, nodeId: args.nodeId, attemptId: args.attemptId },
@@ -821,7 +826,7 @@ function armExternalWait(
       timeoutSeconds: command.timeoutSeconds,
     }),
   );
-  const now = deps.now ?? (() => Date.now());
+  const now = clockOf(deps);
   recordExternalWait(deps.db, {
     runId: state.runId,
     nodeId: command.nodeId,
