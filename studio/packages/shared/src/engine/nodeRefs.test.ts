@@ -323,16 +323,79 @@ describe('#1600 C8b — renameNodeOutputRefs (one node, one output renamed)', ()
       'default(nodes.list.output.entries, nodes.b.output.entries)',
       'nodes.b.output.rows[nodes.list.output.entries].name',
     ];
-    const norm = (e: unknown): unknown =>
-      JSON.parse(JSON.stringify(e).split('childItems').join('entries'));
+    // Only `nodes.list.output.<field>` may differ, and only from `entries` to
+    // `childItems`; every other segment, `nodes.b.output.entries` included,
+    // must parse the same.
+    const swap = (e: unknown): unknown => {
+      const node = e as { kind: string; [k: string]: unknown };
+      if (node.kind === 'call') {
+        return { kind: 'call', name: node.name, args: (node.args as unknown[]).map(swap) };
+      }
+      if (node.kind === 'ref') {
+        const segs = node.segments as { kind: string; name?: string; expr?: unknown }[];
+        const ours = segs[0]?.name === 'nodes' && segs[1]?.name === 'list';
+        return {
+          kind: 'ref',
+          segments: segs.map((seg, i) =>
+            seg.kind === 'index'
+              ? { kind: 'index', expr: swap(seg.expr) }
+              : {
+                  kind: 'field',
+                  name: ours && i === 3 && seg.name === 'childItems' ? 'entries' : seg.name,
+                },
+          ),
+        };
+      }
+      return { kind: node.kind, value: node.value };
+    };
     for (const body of bodies) {
       const after = rename(`\${${body}}`) as string;
-      expect(after).toContain('childItems');
+      expect(after).toContain('nodes.list.output.childItems');
       const scan = scanTemplateRefs(protectEscapes(after));
       expect(scan.unterminatedAt).toBeNull();
-      expect(norm(parseExpr((scan.matches[0] as { body: string }).body))).toEqual(
-        norm(parseExpr(body)),
+      expect(swap(parseExpr((scan.matches[0] as { body: string }).body))).toEqual(
+        swap(parseExpr(body)),
       );
     }
+    expect(rename('${default(nodes.list.output.entries, nodes.b.output.entries)}')).toBe(
+      '${default(nodes.list.output.childItems, nodes.b.output.entries)}',
+    );
+  });
+
+  it('matches the minted id shape literally, and the longer of two prefix ids', () => {
+    const id = 'n_d30cd1b0-cf27-49f2-b293-2f6a9a37490b';
+    expect(renameNodeOutputRefs(`\${nodes.${id}.output.entries}`, id, R)).toBe(
+      `\${nodes.${id}.output.childItems}`,
+    );
+    expect(renameNodeOutputRefs('${nodes.n_1-extra.output.entries}', 'n_1', R)).toBe(
+      '${nodes.n_1-extra.output.entries}',
+    );
+    expect(renameNodeOutputRefs('${nodes.n_1.output.entries}', 'n_1-extra', R)).toBe(
+      '${nodes.n_1.output.entries}',
+    );
+  });
+
+  it('reads `nodes` only at the start of a path', () => {
+    for (const s of ['${item.nodes.list.output.entries}', '${a.childnodes.list.output.entries}']) {
+      expect(rename(s)).toBe(s);
+    }
+    expect(rename('${add(1, nodes.list.output.entries.length)}')).toBe(
+      '${add(1, nodes.list.output.childItems.length)}',
+    );
+  });
+
+  it('refuses a field the grammar reads past whitespace, and renames one a delimiter ends', () => {
+    expect(rename('${nodes.list.output.entries x}')).toBeUndefined();
+    expect(rename('${length(nodes.list.output.entries )}')).toBe(
+      '${length(nodes.list.output.childItems )}',
+    );
+  });
+
+  it('keeps a parsed `__proto__` key a key', () => {
+    const tree = JSON.parse('{"__proto__": {"a": 1}, "x": "${nodes.list.output.entries}"}');
+    const out = rename(tree) as Record<string, unknown>;
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype);
+    expect(Object.hasOwn(out, '__proto__')).toBe(true);
+    expect(out['x']).toBe('${nodes.list.output.childItems}');
   });
 });

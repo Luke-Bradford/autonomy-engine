@@ -271,6 +271,36 @@ describe('#1600 C8b — file_list → Get metadata · Child items', () => {
     expect(nodes[1]!.config['sourcePath']).toBe('${nodes.list.output.childItems[0].name}');
   });
 
+  it('a retired reader BEFORE the list node is renamed after it is lowered', () => {
+    const copy = fileNode(
+      'file_copy',
+      { source: '${nodes.list.output.entries[0].name}', dest: 'out/a.csv' },
+      { id: 'cp' },
+    );
+    const { nodes } = lowerRetiredTypes({ nodes: [copy, list()], containers: [] });
+    expect(nodes.map((n) => n.type)).toEqual(['copy_files', 'get_metadata']);
+    expect(nodes[0]!.config['sourcePath']).toBe('${nodes.list.output.childItems[0].name}');
+  });
+
+  it('each List directory is judged on its own reads', () => {
+    const clean = list({ path: 'a' }, { id: 'l1' });
+    const doubtful = list({ path: 'b' }, { id: 'l2' });
+    const { nodes } = lowerRetiredTypes({
+      nodes: [
+        clean,
+        doubtful,
+        reader({ a: '${nodes.l1.output.entries}', b: '${nodes.l2.output}' }),
+      ],
+      containers: [],
+    });
+    expect(nodes.map((n) => n.type)).toEqual(['get_metadata', 'file_list', 'filter']);
+    expect(nodes[1]).toBe(doubtful);
+    expect(nodes[2]!.config).toEqual({
+      a: '${nodes.l1.output.childItems}',
+      b: '${nodes.l2.output}',
+    });
+  });
+
   it('returns the doc itself when nothing is retired', () => {
     const doc = { nodes: [reader({ items: '${nodes.list.output.entries}' })], containers: [] };
     expect(lowerRetiredTypes(doc)).toBe(doc);

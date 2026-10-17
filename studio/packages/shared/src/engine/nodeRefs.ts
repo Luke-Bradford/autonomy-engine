@@ -31,6 +31,12 @@
 // It shares the ONE quoting rule (`isQuote`/`quotedSpanEnd`) and the ONE `${}`
 // boundary scan (`scanTemplateRefs`) with everything else in `expr.ts`, so it
 // cannot drift on where a string literal or a ref begins and ends.
+//
+// #1600 C8b — it also renames an OUTPUT read from one node
+// (`renameNodeOutputRefs`), for a retired type whose replacement renames an
+// output. That is not a fourth scanner: both rewrites run on the one body walk
+// (`walkBody`) and differ only in what they do at a matched `nodes.<id>`, and
+// the rename has its own grammar property test beside the id one.
 // ---------------------------------------------------------------------------
 
 import { isQuote, quotedSpanEnd, scanTemplateRefs } from './expr.js';
@@ -132,11 +138,29 @@ function matchMappedId(s: string, i: number, idMap: ReadonlyMap<string, string>)
 }
 
 /**
- * Rewrite every `nodes.<id>` in ONE `${}` body, skipping quoted string literals
- * so an id that appears inside a literal is never touched. Returns the body
- * unchanged when nothing matched.
+ * What a `walkBody` visitor does at one `nodes.<id>` of a mapped id: splice
+ * `text` over `[from, to)` (or leave the body as is) and carry on at `resume`,
+ * or give up on the whole body.
  */
-function remapBody(body: string, idMap: ReadonlyMap<string, string>, seen?: Set<string>): string {
+type Visit = { splice?: { from: number; to: number; text: string }; resume: number } | 'refuse';
+
+/**
+ * The ONE walk of a `${}` body, shared by the id rewriter (`remapBody`) and the
+ * output renamer (`renameOutputsInBody`), so they cannot disagree on where a
+ * reference is: quoted literals are skipped, and `visit` is called at each
+ * `nodes.<id>` whose id is a key of `idMap`, with the offset just past the id.
+ *
+ * An unterminated quote leaves what follows structurally unknowable, so the
+ * walk stops there: `onUnterminated` says whether the body so far stands
+ * (`'stop'`) or the whole body is refused. Returns the body unchanged (the same
+ * string) when nothing was spliced, `undefined` when refused.
+ */
+function walkBody(
+  body: string,
+  idMap: ReadonlyMap<string, string>,
+  visit: (id: string, idStart: number, idEnd: number) => Visit,
+  onUnterminated: (at: number) => 'stop' | 'refuse',
+): string | undefined {
   let out = '';
   let cut = 0;
   let i = 0;
@@ -144,9 +168,10 @@ function remapBody(body: string, idMap: ReadonlyMap<string, string>, seen?: Set<
     const ch = body[i] as string;
     if (isQuote(ch)) {
       const close = quotedSpanEnd(body, i);
-      // An unterminated quote: nothing after it is structurally knowable, so stop
-      // rewriting rather than guess. The save gate reports the real defect.
-      if (close === -1) break;
+      if (close === -1) {
+        if (onUnterminated(i) === 'refuse') return undefined;
+        break;
+      }
       i = close + 1;
       continue;
     }
@@ -155,17 +180,39 @@ function remapBody(body: string, idMap: ReadonlyMap<string, string>, seen?: Set<
       continue;
     }
     const idStart = i + NS.length + 1;
-    const oldId = matchMappedId(body, idStart, idMap);
-    if (oldId === null) {
+    const id = matchMappedId(body, idStart, idMap);
+    if (id === null) {
       i = idStart;
       continue;
     }
-    seen?.add(oldId);
-    out += body.slice(cut, idStart) + (idMap.get(oldId) as string);
-    cut = idStart + oldId.length;
-    i = cut;
+    const step = visit(id, idStart, idStart + id.length);
+    if (step === 'refuse') return undefined;
+    if (step.splice !== undefined) {
+      out += body.slice(cut, step.splice.from) + step.splice.text;
+      cut = step.splice.to;
+    }
+    i = step.resume;
   }
   return cut === 0 ? body : out + body.slice(cut);
+}
+
+/**
+ * Rewrite every `nodes.<id>` in ONE `${}` body, skipping quoted string literals
+ * so an id that appears inside a literal is never touched. Returns the body
+ * unchanged when nothing matched.
+ */
+function remapBody(body: string, idMap: ReadonlyMap<string, string>, seen?: Set<string>): string {
+  // An unterminated quote: stop rewriting rather than guess. The save gate
+  // reports the real defect.
+  return walkBody(
+    body,
+    idMap,
+    (id, idStart, idEnd) => {
+      seen?.add(id);
+      return { splice: { from: idStart, to: idEnd, text: idMap.get(id) as string }, resume: idEnd };
+    },
+    () => 'stop',
+  ) as string;
 }
 
 /**
@@ -309,7 +356,7 @@ export function renameNodeOutputRefs<T>(
   const walk = (v: unknown, depth: number): unknown => {
     if (typeof v === 'string') return renameOutputsInString(v, token, idMap, renames) ?? REFUSED;
     if (v === null || typeof v !== 'object') return v;
-    if (depth > MAX_CONFIG_DEPTH) return JSON.stringify(v).includes(token) ? REFUSED : v;
+    if (depth > MAX_CONFIG_DEPTH) return namesAnywhere(v, token) ? REFUSED : v;
     if (Array.isArray(v)) {
       let changed = false;
       const out: unknown[] = [];
@@ -322,17 +369,39 @@ export function renameNodeOutputRefs<T>(
       return changed ? out : v;
     }
     let changed = false;
-    const out: Record<string, unknown> = {};
+    const out: [string, unknown][] = [];
     for (const [k, child] of Object.entries(v as Record<string, unknown>)) {
       const next = walk(child, depth + 1);
       if (next === REFUSED) return REFUSED;
       changed ||= next !== child;
-      out[k] = next;
+      out.push([k, next]);
     }
-    return changed ? out : v;
+    // `fromEntries` defines each key as an own property, so a parsed doc's own
+    // `__proto__` key stays a key rather than becoming the prototype.
+    return changed ? Object.fromEntries(out) : v;
   };
   const result = walk(value, 0);
   return result === REFUSED ? undefined : (result as T);
+}
+
+/**
+ * Does any string leaf of `v` contain `token`? Iterative, so no depth can
+ * overflow it, and on the leaves themselves rather than a JSON encoding, which
+ * would escape an id's quote or backslash out of reach.
+ */
+function namesAnywhere(v: unknown, token: string): boolean {
+  const pending: unknown[] = [v];
+  while (pending.length > 0) {
+    const x = pending.pop();
+    if (typeof x === 'string') {
+      if (x.includes(token)) return true;
+    } else if (Array.isArray(x)) {
+      pending.push(...x);
+    } else if (x !== null && typeof x === 'object') {
+      pending.push(...Object.values(x as Record<string, unknown>));
+    }
+  }
+  return false;
 }
 
 /** `renameNodeOutputRefs` on one string: the renamed string, or `undefined` when unsure. */
@@ -362,53 +431,43 @@ function renameOutputsInString(
 const OUTPUT_SEGMENT = '.output.';
 const STATUS_SEGMENT = '.status';
 
-/** One `${}` body of `renameOutputsInString`, walked as `remapBody` walks it. */
+/**
+ * One `${}` body of `renameOutputsInString`, on `walkBody`. At `nodes.<id>`: a
+ * `.status` read is left alone, `.output.<field>` has its field renamed when it
+ * is one of `renames`, and anything else is refused.
+ *
+ * The field ends where the grammar's would only if what follows is a path
+ * delimiter. `readField` reads up to `.`/`[`/`]`, so `output.entries x` is the
+ * one field `entries x`: whitespace followed by more field text is refused
+ * rather than read as `entries`.
+ */
 function renameOutputsInBody(
   body: string,
   token: string,
   idMap: ReadonlyMap<string, string>,
   renames: ReadonlyMap<string, string>,
 ): string | undefined {
-  let out = '';
-  let cut = 0;
-  const finish = () => (cut === 0 ? body : out + body.slice(cut));
-  let i = 0;
-  while (i < body.length) {
-    const ch = body[i] as string;
-    if (isQuote(ch)) {
-      const close = quotedSpanEnd(body, i);
-      // Unterminated: where the literal ends is unknowable, so a read after it
-      // cannot be ruled out.
-      if (close === -1) return body.includes(token, i) ? undefined : finish();
-      i = close + 1;
-      continue;
-    }
-    if (!atNamespace(body, i)) {
-      i += 1;
-      continue;
-    }
-    const idStart = i + NS.length + 1;
-    const matched = matchMappedId(body, idStart, idMap);
-    if (matched === null) {
-      i = idStart;
-      continue;
-    }
-    const p = idStart + matched.length;
-    if (body.startsWith(STATUS_SEGMENT, p) && endsPath(body[p + STATUS_SEGMENT.length])) {
-      i = p + STATUS_SEGMENT.length;
-      continue;
-    }
-    if (!body.startsWith(OUTPUT_SEGMENT, p)) return undefined;
-    const fieldStart = p + OUTPUT_SEGMENT.length;
-    let fieldEnd = fieldStart;
-    while (fieldEnd < body.length && !endsPath(body[fieldEnd])) fieldEnd += 1;
-    if (fieldEnd === fieldStart) return undefined;
-    const renamed = renames.get(body.slice(fieldStart, fieldEnd));
-    if (renamed !== undefined) {
-      out += body.slice(cut, fieldStart) + renamed;
-      cut = fieldEnd;
-    }
-    i = fieldEnd;
-  }
-  return finish();
+  return walkBody(
+    body,
+    idMap,
+    (_id, _idStart, p) => {
+      if (body.startsWith(STATUS_SEGMENT, p) && endsPath(body[p + STATUS_SEGMENT.length])) {
+        return { resume: p + STATUS_SEGMENT.length };
+      }
+      if (!body.startsWith(OUTPUT_SEGMENT, p)) return 'refuse';
+      const fieldStart = p + OUTPUT_SEGMENT.length;
+      let fieldEnd = fieldStart;
+      while (fieldEnd < body.length && !endsPath(body[fieldEnd])) fieldEnd += 1;
+      if (fieldEnd === fieldStart) return 'refuse';
+      let next = fieldEnd;
+      while (next < body.length && /\s/.test(body[next] as string)) next += 1;
+      if (next > fieldEnd && !endsPath(body[next])) return 'refuse';
+      const renamed = renames.get(body.slice(fieldStart, fieldEnd));
+      return renamed === undefined
+        ? { resume: fieldEnd }
+        : { splice: { from: fieldStart, to: fieldEnd, text: renamed }, resume: fieldEnd };
+    },
+    // Where the literal ends is unknowable, so a read after it cannot be ruled out.
+    (at) => (body.includes(token, at) ? 'refuse' : 'stop'),
+  );
 }
