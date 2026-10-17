@@ -422,6 +422,23 @@ Source: [Delete](https://learn.microsoft.com/azure/data-factory/delete-activity)
 - **Outputs:** `filesDeleted`, `foldersDeleted`, `logPath`.
 - Tables are not deleted here. That is Script.
 
+**Built (C9a, 2026-10-17):** Delete on a file system connection, as the new `delete` type. It is in the palette as *Delete*, beside *Delete file* until C9b lowers that to it.
+
+- **Source:** connection, *File or folder path* ⓕ, *Path type* (Folder by default, or File, as Copy · Files as-is), and, for a folder only, *Wildcard* ⓕ (default `*`) and *Include subfolders* (default off, as ADF's `recursive`). *Modified from* / *Modified before* apply to a file as well. A wildcard or Include subfolders on a File path type is refused at save, not ignored.
+- **Settings:** *Max concurrent deletes* (ADF's `maxConcurrentConnections`, 1 by default, 1 to 64), *Fail if nothing matched* (off), *Delete empty folders* (off; drawn and accepted only with Include subfolders on). A boolean field can now control `appliesWhen` (read as `'true'`/`'false'`).
+- **Outputs:** `path` (the canonical path, as `file_delete`'s, so C9b can alias it), `filesDeleted`, `foldersDeleted`. `logPath` comes with the session log in C9c.
+- **Needs Allow writes** on the connection; the run refuses it otherwise, and the Problems list warns first (`writeAccessWarnings`, as for Copy · Files as-is).
+- **Plan, then delete.** Every file is chosen before any is deleted, so the entry limit (`maxEntries`), a bad window or Fail if nothing matched fail the node with every file still there. Deletes then run on that many workers, taking the files in name order. The first error stops new ones; the deletes under way finish and are counted, and the counts so far are reported as outputs before the failure, as Copy · Files as-is reports its own. A cancel does the same.
+- **The walk is Get metadata's.** Child items' folder walk moved to `fs-walk.ts` and both activities use it, typed by `lstat` and never following a link, so Delete is not a third copy (Copy · Files as-is keeps its dirent-typed walk: #1691).
+- **Containment on a destructive walk.** Before each `unlink` and `rmdir`, the entry is checked again: still the one planned (device and inode, compared as `bigint`), still a file (or folder) and still in the window, and its folder, resolved again, still the folder at the path or under it. So a subfolder swapped for a link during the walk deletes nothing through it. The folder compared against is the path's `realpath`, so a path typed in another case on a case-insensitive file system still matches its files. The residual is the gap between that check and the call, which Node cannot close without `unlinkat`, the same gap Copy's delete-source has.
+- **Deliberate differences from ADF:**
+  - The folder at the path is never removed. ADF's recursive delete of a folder with no file name removes the folder too. Here *Delete empty folders* removes every subfolder left empty, deepest first, including ones that were empty already and ones no file matched, and stops at the path. The path may name an allowed folder itself.
+  - Only regular files are deleted. A link, and an entry of any other type, is left in place.
+  - A folder `rmdir` cannot remove because it is a mount point (`EBUSY`) is kept, as a non-empty one is. Any other `rmdir` error fails the node after the files, with the counts.
+  - A missing path matches nothing and succeeds with zero counts. *Fail if nothing matched* makes it fail. A file removed by someone else after it was chosen is skipped, not counted and not a failure.
+- **Not in C9a:** the session log and `logPath` (C9c, shared with Copy's in C6), progress output while it runs (§5), and the `file_delete` lowering (C9b).
+- `CATALOG_VERSION` 49→50 (a new runnable type).
+
 ### 4.5 Script
 Sources: [Script](https://learn.microsoft.com/azure/data-factory/transform-data-using-script), [Stored procedure](https://learn.microsoft.com/azure/data-factory/transform-data-using-stored-procedure).
 
@@ -513,7 +530,7 @@ The **capture level** (workspace setting, overridable per pipeline and per activ
 | Copy, files as-is | ✓ copy/move (single file); **T** folder, wildcard, list, delete-after | — | — | T (download to file) | OR13 | — |
 | Lookup | ✓ | ✓ | ✓ | (use Web) | OR13 | OR15 |
 | Get metadata | ✓ full field list (C8a), a file dataset's structure and column count (C8c-2); **T** wait | ✓ exists, structure, columns, rows (C8c-1) | ✓ same | — | OR13 | OR15 |
-| Delete | ✓ one file; **T** wildcard, folders, dates, log | — (Script) | — (Script) | — | OR13 | — |
+| Delete | ✓ one file, wildcard, subfolders, dates, empty folders (C9a); **T** log | — (Script) | — (Script) | — | OR13 | — |
 | Script | — | **T** | **T** | — | — | OR15 |
 | Web | — | — | — | ✓; **T** fail-on-error, cap, callback | — | — |
 | Test connection | ✓ roots | ✓ `select 1` | ✓ `select 1` | ✓ HEAD | OR13 | OR15 |
@@ -537,7 +554,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs | — |
 | C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Rows · Whole file as text (`file_read` as Lookup's second type), the title *Lookup* (built); **C7c** *When over the limit* and `bytes`/`truncated` for the text mode, limited by the connection's `maxBytes` rather than the 1 MiB byte cap (built); **C7d** the workspace Lookup max rows (1000 by default, up to ADF's 5000) and the Monitor Rows read column (built) | — |
 | C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c-1** tables (SQLite, Postgres) with per-kind field options (built); **C8c-2** a delimited or Excel dataset source's structure and column count (built); **C8d-1** Wait until on a file system path (built); **C8d-2a** Wait until on a delimited or Excel dataset, with #1743 (built); **C8d-2b** Wait until on a table dataset (built); **C8e** Include subfolders (built) | OR17 #1408 |
-| C9 | Delete: wildcard, folders, dates, log. Lower file_delete | OR17 #1408 |
+| C9 | Delete: wildcard, folders, dates, log. Lower file_delete. Split: **C9a** the `delete` type on a file system connection, with path type, wildcard, Include subfolders, modified window, Max concurrent deletes, Fail if nothing matched and Delete empty folders, on Get metadata's walk (built); **C9b** the `file_delete` lowering (Path type File, Fail if nothing matched on, `path` kept), Delete file retired from the palette; **C9c** the session log and `logPath` (a new output, so a `formerOutputs` snapshot and a version bump), shared with Copy's | OR17 #1408 |
 | C10 | Script activity | OR12 #1403, OR15 sql_script |
 | C11 | Web: fail-on-error, response cap, parse, retry-after, wait-for-callback. Lower http_request and webhook | — |
 | C12 | Set variable operations + pipeline return value. Lower append_variable | OR34 outputs |

@@ -183,6 +183,15 @@ export function enumValuesOf(schema: unknown): readonly string[] | undefined {
 }
 
 /**
+ * #1600 OR41 C9a — a boolean field's two values as a condition reads them
+ * (`'true'`, `'false'`), seen through the same wrappers as {@link enumValuesOf},
+ * or `undefined` when the field is not a boolean.
+ */
+export function booleanValuesOf(schema: unknown): readonly string[] | undefined {
+  return coreSchema(schema)?._zod.def.type === 'boolean' ? ['true', 'false'] : undefined;
+}
+
+/**
  * #1600 OR41 C8a — the values of a set-of-choices field (an array of a string
  * enum, such as Get metadata's field list), seen through the same wrappers as
  * {@link enumValuesOf}, or `undefined` when the field is not one.

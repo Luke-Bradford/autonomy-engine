@@ -433,6 +433,26 @@ describe('writeAccessWarnings (#1600 OR41 C1b)', () => {
     ]);
   });
 
+  it('names a Delete whose connection does not allow writes (C9a), and skips an inactive one', () => {
+    const del = (id: string, connectionId: string, extra: Partial<Node> = {}): Node => ({
+      ...node(id, { path: 'in' }),
+      type: 'delete',
+      connectionId,
+      ...extra,
+    });
+    expect(
+      writeAccessWarnings(
+        [
+          del('a', 'ro'),
+          del('b', 'rw'),
+          del('c', 'ro', { state: 'inactive' }),
+          del('d', '${pipeline.parameters.c}'),
+        ],
+        connections,
+      ),
+    ).toEqual(["node 'a': the connection 'Conn ro' does not allow writes, which a delete needs"]);
+  });
+
   it('names the source only when After copy removes it, and once when it is the sink too', () => {
     expect(writeAccessWarnings([copy('a', { source: 'ro', sink: 'rw' })], connections)).toEqual([]);
     expect(

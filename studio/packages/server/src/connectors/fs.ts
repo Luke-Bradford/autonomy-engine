@@ -4,6 +4,8 @@ import { z } from 'zod';
 import {
   COPY_ACTIVITY_TYPE,
   COPY_FILES_ACTIVITY_TYPE,
+  DELETE_ACTIVITY_TYPE,
+  deleteConfigSchema,
   DATASET_CONFIG_SCHEMAS,
   LOOKUP_ACTIVITY_TYPE,
   FILE_COPY_ACTIVITY_TYPE,
@@ -55,6 +57,7 @@ import { fsConnectionConfigSchema, notAnFsKind } from './fs-connection.js';
 // imports neither store, which is the property its own docblock protects.
 import { runCopyActivity } from './copy.js';
 import { runFilesCopy } from './fs-files-copy.js';
+import { DELETE_ABORTED, runDelete } from './fs-delete.js';
 import { doGetMetadata } from './fs-metadata.js';
 import { refuseForeignSink, writeRowsToSink } from './copy-sink.js';
 import {
@@ -154,6 +157,7 @@ import {
 const ABORT_REASONS: Readonly<Record<string, string>> = {
   [COPY_ACTIVITY_TYPE]: 'dataset copy aborted',
   [COPY_FILES_ACTIVITY_TYPE]: 'file copy aborted',
+  [DELETE_ACTIVITY_TYPE]: DELETE_ABORTED,
   [LOOKUP_ACTIVITY_TYPE]: 'dataset lookup aborted',
 };
 
@@ -716,6 +720,20 @@ export const fsAdapter: ConnectorAdapter = {
         return;
       }
       yield await doMove(cfg.data, input.data, ctx.signal);
+      return;
+    }
+
+    // #1600 OR41 C9a — Delete (`fs-delete.ts`).
+    if (ctx.activityType === DELETE_ACTIVITY_TYPE) {
+      const input = deleteConfigSchema.safeParse(ctx.input);
+      if (!input.success) {
+        yield failed(
+          'permanent',
+          `invalid delete activity config: ${formatZodIssues(input.error.issues)}`,
+        );
+        return;
+      }
+      yield* runDelete(cfg.data, input.data, ctx.signal);
       return;
     }
 

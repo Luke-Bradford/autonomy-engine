@@ -105,7 +105,8 @@ export interface ActivityTab {
 /**
  * #1686 — one condition under which a config field applies: the CONTROLLING
  * field's value is one of `in` (#1600 OR41 C8a: or, for a set of choices such
- * as Get metadata's field list, any ticked value is). #1600 OR41 C8c: or the
+ * as Get metadata's field list, any ticked value is; C9a: a boolean's value is
+ * `'true'` or `'false'`). #1600 OR41 C8c: or the
  * bound connection's kind is one of `connectionKind`. See
  * `ActivityCatalogEntry.appliesWhen`.
  */
@@ -357,6 +358,13 @@ export const FILE_LIST_ACTIVITY_TYPE = 'file_list';
  * `file_list` is lowered to it (C8b, §8).
  */
 export const GET_METADATA_ACTIVITY_TYPE = 'get_metadata';
+
+/**
+ * #1600 OR41 C9a — Delete (catalogue §4.4). A new runnable type, read by its
+ * catalog entry and the `fs` adapter's dispatch arm. `file_delete` is lowered to
+ * it in C9b (§8).
+ */
+export const DELETE_ACTIVITY_TYPE = 'delete';
 
 /**
  * #996 M5 — the `copy` activity's `Node.type` (#1134 slice 4b).

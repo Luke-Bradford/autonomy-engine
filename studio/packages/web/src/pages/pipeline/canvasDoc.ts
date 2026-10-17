@@ -1,5 +1,6 @@
 import {
   COPY_FILES_ACTIVITY_TYPE,
+  DELETE_ACTIVITY_TYPE,
   StrictNodeSchema,
   isInactive,
   validatePipelineDoc,
@@ -155,7 +156,8 @@ export function descriptionIssues(nodes: Node[]): string[] {
 
 /**
  * #1600 OR41 C1b — a Copy · Files as-is whose sink connection, or whose source
- * when After copy deletes or moves, does not allow writes. The run refuses it
+ * when After copy deletes or moves, does not allow writes (C9a: and a Delete
+ * whose connection does not). The run refuses it
  * (`runFilesCopy`), so the author hears it here first. Above all for a stored
  * Copy file or Move file, which opens as this type (`lowerRetiredTypes`) while
  * its connection never needed the permission. A warning, not an issue: the
@@ -172,7 +174,17 @@ export function writeAccessWarnings(
     return c?.kind === 'fs' && c.config['writable'] !== true ? c : undefined;
   };
   return nodes.flatMap((n) => {
-    if (n.type !== COPY_FILES_ACTIVITY_TYPE || isInactive(n)) return [];
+    if (isInactive(n)) return [];
+    // #1600 OR41 C9a — Delete removes files on its one connection (`runDelete`).
+    if (n.type === DELETE_ACTIVITY_TYPE) {
+      const c = readOnly(n.connectionId);
+      return c === undefined
+        ? []
+        : [
+            `node '${n.id}': the connection '${c.name}' does not allow writes, which a delete needs`,
+          ];
+    }
+    if (n.type !== COPY_FILES_ACTIVITY_TYPE) return [];
     const sink = readOnly(n.connectionIds?.sink);
     const removes = n.config['afterCopy'] === 'delete' || n.config['afterCopy'] === 'move';
     const source = removes ? readOnly(n.connectionIds?.source) : undefined;

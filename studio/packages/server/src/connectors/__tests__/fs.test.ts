@@ -407,6 +407,7 @@ describe('fs connector — failure classification', () => {
     ['file_delete', { path: 42 }, 'path: '],
     ['file_list', { path: 42 }, 'path: '],
     ['get_metadata', { path: 42, fieldList: ['exists'] }, 'path: '],
+    ['delete', { path: 42 }, 'path: '],
   ];
 
   it.each(ACTIVITY_CONFIG_FAULTS)(

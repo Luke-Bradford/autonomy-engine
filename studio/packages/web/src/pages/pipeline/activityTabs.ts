@@ -90,7 +90,7 @@ export function nodeTypeTabs(
  * A field applies when any of its conditions holds on the CONTROL's value: the
  * draft's, or the schema default while the control is empty. A `${}` there is
  * decided at dispatch, so the field is drawn, as it is when the control has no
- * value at all (the shared suite pins every control to an enum field, so that
+ * value at all (the shared suite pins every control to an enum or boolean field, so that
  * is a malformed rule rather than a state). A field that does not apply is
  * still drawn while it holds a value, stored or typed, so the author can see and
  * clear what the schema will refuse: nothing in the JSON is unreachable from the
@@ -115,6 +115,8 @@ export function applicableFieldNames(
     const input = inputs[name];
     // A set with nothing ticked is known to hold none, not unknown.
     if (byName.get(name)?.kind === 'enumSet') return typeof input === 'string' ? input : undefined;
+    // #1600 OR41 C9a — a checkbox holds a boolean, read as a condition's 'true'/'false'.
+    if (typeof input === 'boolean') return String(input);
     if (typeof input === 'string' && input !== '') return input;
     return byName.get(name)?.defaultText;
   };

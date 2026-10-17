@@ -195,6 +195,7 @@ const SEED_CONFIG: Record<string, Record<string, unknown>> = {
   file_read: { path: '/tmp/seed.txt' },
   file_list: { path: '/tmp' },
   file_delete: { path: '/tmp/seed.txt' },
+  delete: { path: '/tmp' },
 };
 
 /**

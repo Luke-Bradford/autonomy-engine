@@ -27,10 +27,12 @@ import {
   WAIT_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
   COPY_FILES_ACTIVITY_TYPE,
+  DELETE_ACTIVITY_TYPE,
 } from './types.js';
 import { agentTaskConfigSchema } from './agent-config.js';
 import { copyDispatchInputSchema, copyInputSchema } from './copy-config.js';
 import { copyFilesConfigSchema } from './copy-files-config.js';
+import { deleteConfigSchema } from './delete-config.js';
 import {
   GET_METADATA_FIELDS_BY_CONNECTION_KIND,
   GET_METADATA_WAIT_UNTIL_BY_CONNECTION_KIND,
@@ -775,6 +777,46 @@ const ENTRIES: ActivityCatalogEntry[] = [
     },
     configSchema: getMetadataConfigSchema,
     dispatchConfigSchema: getMetadataConfigSchema,
+  },
+  {
+    // #1600 OR41 C9a — Delete (catalogue §4.4): the files at a path on a file
+    // system connection, one file or a folder's matches, with Include
+    // subfolders, a modified window and, after them, the subfolders left empty.
+    // The walk is Get metadata's (`fs-walk.ts`). `idempotent:false`: a delete
+    // is a side effect, as Copy · Files as-is's is. Needs Allow writes on the
+    // connection. `file_delete` is lowered to it in C9b.
+    type: DELETE_ACTIVITY_TYPE,
+    title: 'Delete',
+    description:
+      'Delete a file, or the files in a folder that match a wildcard, on a file system connection.',
+    kind: 'execution',
+    category: 'general',
+    tabs: [
+      {
+        key: 'source',
+        bindings: ['connection'],
+        fields: ['path', 'pathType', 'wildcard', 'recursive', 'modifiedStart', 'modifiedEnd'],
+      },
+      {
+        key: 'settings',
+        fields: ['maxConcurrentConnections', 'failIfNothingMatched', 'deleteEmptyFolders'],
+      },
+    ],
+    // The rules `deleteConfigSchema`'s superRefine enforces.
+    appliesWhen: {
+      wildcard: [{ field: 'pathType', in: ['folder'] }],
+      recursive: [{ field: 'pathType', in: ['folder'] }],
+      deleteEmptyFolders: [{ field: 'recursive', in: ['true'] }],
+    },
+    idempotent: false,
+    connectionKinds: ['fs'],
+    outputs: [
+      out('path', 'string'),
+      out('filesDeleted', 'number'),
+      out('foldersDeleted', 'number'),
+    ],
+    configSchema: deleteConfigSchema,
+    dispatchConfigSchema: deleteConfigSchema,
   },
   {
     /*

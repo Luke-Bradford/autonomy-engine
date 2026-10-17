@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { catalog, isStructuralCallActivity } from '../registry.js';
-import { enumSetValuesOf, enumValuesOf } from '../../schemas/field-presentation.js';
+import {
+  booleanValuesOf,
+  enumSetValuesOf,
+  enumValuesOf,
+} from '../../schemas/field-presentation.js';
 import { ACTIVITY_TAB_KEYS, applicableBindingSlots } from '../types.js';
 
 /**
@@ -68,7 +72,7 @@ describe('activity tabs (#1477)', () => {
   );
 
   it.each(FORM_ACTIVITIES.map((e) => [e.type, e] as const))(
-    '%s conditions a field only on another enum field, and only on its values (#1686)',
+    '%s conditions a field only on another enum or boolean field, and only on its values (#1686)',
     (_type, entry) => {
       const shape = shapeOf(entry.configSchema);
       for (const [name, conditions] of Object.entries(entry.appliesWhen ?? {})) {
@@ -84,7 +88,11 @@ describe('activity tabs (#1477)', () => {
           expect(c.field, `${name} conditions on itself`).not.toBe(name);
           // #1600 OR41 C8a — or a set of choices (Get metadata's field list),
           // which a condition holds on when any ticked value is one of `in`.
-          const values = enumValuesOf(shape[c.field]) ?? enumSetValuesOf(shape[c.field]);
+          // C9a — or a boolean (Delete's Include subfolders), read as 'true'/'false'.
+          const values =
+            enumValuesOf(shape[c.field]) ??
+            enumSetValuesOf(shape[c.field]) ??
+            booleanValuesOf(shape[c.field]);
           expect(values, `${name}: ${c.field} is not an enum field`).toBeDefined();
           for (const v of c.in) expect(values, `${name}: ${c.field} has no ${v}`).toContain(v);
         }

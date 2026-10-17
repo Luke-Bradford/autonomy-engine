@@ -89,6 +89,19 @@ describe('nodeTypeTabs (#1477)', () => {
 });
 
 describe('applicableFieldNames (#1686)', () => {
+  it('reads a boolean control as true or false (#1600 OR41 C9a, Delete empty folders)', () => {
+    const del = getActivity('delete');
+    if (del === undefined) throw new Error('delete is catalogued');
+    const delFields = fieldsOf(del);
+    const names = delFields.map((f) => f.name);
+    const shown = (config: Record<string, unknown>, inputs = seedFieldInputs(delFields, config)) =>
+      applicableFieldNames(del, names, delFields, inputs, config).includes('deleteEmptyFolders');
+    expect(shown({})).toBe(false);
+    // The checkbox as the author ticks it: a boolean draft over an unticked store.
+    expect(shown({}, { ...seedFieldInputs(delFields, {}), recursive: true })).toBe(true);
+    expect(shown({}, { ...seedFieldInputs(delFields, {}), recursive: false })).toBe(false);
+  });
+
   const copyFiles = getActivity('copy_files');
   if (copyFiles === undefined) throw new Error('copy_files is catalogued');
   const fields = fieldsOf(copyFiles);

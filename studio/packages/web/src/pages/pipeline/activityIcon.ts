@@ -67,6 +67,8 @@ const BY_TYPE: Readonly<Record<string, Glyph>> = {
   file_copy: Copy20Regular,
   file_move: FolderArrowRight20Regular,
   file_delete: Delete20Regular,
+  // #1600 OR41 C9a — Delete, which `file_delete` lowers to (C9b): the same glyph.
+  delete: Delete20Regular,
   file_list: Folder20Regular,
   /* #1600 OR41 C8a — Get metadata looks a file or folder over and changes
      nothing: a document under a magnifier. */
