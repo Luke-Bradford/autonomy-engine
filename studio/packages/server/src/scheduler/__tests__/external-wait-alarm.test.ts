@@ -10,7 +10,12 @@ import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun, getRun } from '../../repo/runs.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
-import { getWakeupByKey, listPendingWakeups } from '../../repo/scheduled-wakeups.js';
+import {
+  armWakeup,
+  getWakeupByKey,
+  listPendingWakeups,
+  settleWakeup,
+} from '../../repo/scheduled-wakeups.js';
 import {
   getExternalWaitByTokenHash,
   listPendingExternalWaitsByRun,
@@ -18,6 +23,7 @@ import {
 import type { Db } from '../../repo/types.js';
 import {
   buildEngine,
+  driveRun,
   startRun,
   type DocResolver,
   type DriveDeps,
@@ -227,6 +233,56 @@ describe('A13 — arming a webhook (the driver half)', () => {
     expect(listPendingExternalWaitsByRun(db, run.id)).toHaveLength(1);
     expect(rearmed.id).toBe(first[0]!.id);
     expect(rearmed.expiresAt).toBe(first[0]!.expiresAt); // ORIGINAL expiry kept
+  });
+  it('after a crash, re-arms a fresh expiry when the first came due while the node was not parked (#1745)', async () => {
+    // The process died between the arm and `externalWait.created` and stayed
+    // down past the expiry. The boot tick suppressed the overdue row while the
+    // node was still `ready`. Resuming must not park on that spent row.
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [webhookNode('w', '${30}')]);
+    const run = seedRun(db, pvId);
+    const resolveDoc: DocResolver = (id) => getPipelineVersion(db, id)!;
+    const crashing: DriverDeps = {
+      db,
+      resolveDoc,
+      executor: makeStubExecutor(),
+      alarms: {
+        arm: (input) => {
+          armWakeup(db, input);
+          throw new Error('crash after arm');
+        },
+        find: () => null,
+      },
+      now: () => NOW,
+      signExternalWaitToken: sign,
+    };
+    await expect(startRun(crashing, run)).rejects.toThrow('crash after arm');
+    const spent = listPendingWakeups(db);
+    expect(spent).toHaveLength(1);
+    settleWakeup(db, spent[0]!.id, { status: 'suppressed', firedAt: NOW + 59_000 });
+
+    let t = NOW + 60_000;
+    const { deps, clock } = harness(db, {}, () => t);
+    await driveRun(deps, run.id);
+
+    expect(getRunState(db, deps, run.id).nodes.w!.status).toBe('external_wait_pending');
+    // A live expiry at the ORIGINAL time, agreeing with the correlation row.
+    expect(listPendingWakeups(db)).toEqual([
+      expect.objectContaining({
+        kind: KIND,
+        ref: { runId: run.id, nodeId: 'w', attemptId: 'w#0' },
+        dueAt: NOW + 30_000,
+      }),
+    ]);
+    expect(listPendingExternalWaitsByRun(db, run.id)).toEqual([
+      expect.objectContaining({ expiresAt: NOW + 30_000 }),
+    ]);
+
+    t += 1;
+    clock.tick();
+    await settle();
+    expect(getRun(db, run.id)!.status).toBe('failure');
+    expect(loadEngineEvents(db, run.id).map((e) => e.type)).toContain('externalWait.expired');
   });
 });
 

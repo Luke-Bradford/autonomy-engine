@@ -25,8 +25,10 @@ import type { WakeupHandler } from './alarms.js';
  * from the shared skeleton is the freshness status (`wait_pending`) and the due
  * event (`timer.due`), which SUCCEEDS the node rather than re-dispatching it. Like
  * the others, a `wait_pending` node always has a live alarm (the arm precedes the
- * `timer.waitScheduled` append that enters the hold), so the boot reconciler does
- * not touch this kind's rows — the durable alarm the clock re-scans IS the recovery.
+ * `timer.waitScheduled` append that enters the hold, and `armLive` replaces a row
+ * the clock spent while the node was still `ready`, #1745), so the boot reconciler
+ * does not touch this kind's rows — the durable alarm the clock re-scans IS the
+ * recovery.
  */
 
 /**

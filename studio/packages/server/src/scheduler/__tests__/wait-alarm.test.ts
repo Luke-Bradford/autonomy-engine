@@ -10,11 +10,17 @@ import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun, getRun } from '../../repo/runs.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
-import { getWakeupByKey, listPendingWakeups } from '../../repo/scheduled-wakeups.js';
+import {
+  armWakeup,
+  getWakeupByKey,
+  listPendingWakeups,
+  settleWakeup,
+} from '../../repo/scheduled-wakeups.js';
 import type { Db } from '../../repo/types.js';
 import {
   buildEngine,
   DocUnresolvableError,
+  driveRun,
   startRun,
   type DocResolver,
   type DriveDeps,
@@ -213,6 +219,56 @@ describe('A6 — arming a wait (the driver half)', () => {
 
     expect(listPendingWakeups(db)).toHaveLength(1);
     expect(rearmed.dueAt).toBe(first[0]!.dueAt);
+  });
+  it('after a crash, re-arms a fresh alarm when the first came due while the node was not parked (#1745)', async () => {
+    // The process died between the arm and `timer.waitScheduled`, and stayed
+    // down past the due time. At boot the clock fired the overdue row while the
+    // node was still `ready`, so it was suppressed. Resuming must not park the
+    // node on that spent row: it would wait forever.
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [waitNode('w', '${30}'), activity('after')],
+      [{ id: 'w->after', from: 'w', to: 'after', on: 'success' }],
+    );
+    const run = seedRun(db, pvId);
+    const resolveDoc: DocResolver = (id) => getPipelineVersion(db, id)!;
+    const crashing: DriverDeps = {
+      db,
+      resolveDoc,
+      executor: makeStubExecutor(),
+      alarms: {
+        arm: (input) => {
+          armWakeup(db, input);
+          throw new Error('crash after arm');
+        },
+        find: () => null,
+      },
+      now: () => NOW,
+    };
+    await expect(startRun(crashing, run)).rejects.toThrow('crash after arm');
+    const spent = listPendingWakeups(db);
+    expect(spent).toHaveLength(1);
+    settleWakeup(db, spent[0]!.id, { status: 'suppressed', firedAt: NOW + 59_000 });
+
+    let t = NOW + 60_000;
+    const { deps, clock } = harness(db, {}, () => t);
+    await driveRun(deps, run.id);
+
+    expect(getRunState(db, deps, run.id).nodes.w!.status).toBe('wait_pending');
+    // A live alarm, still at the ORIGINAL due time: the wait already elapsed.
+    expect(listPendingWakeups(db)).toEqual([
+      expect.objectContaining({
+        kind: WAIT_KIND,
+        ref: { runId: run.id, nodeId: 'w', attemptId: 'w#0' },
+        dueAt: NOW + 30_000,
+      }),
+    ]);
+
+    t += 1;
+    clock.tick();
+    await settle();
+    expect(getRun(db, run.id)!.status).toBe('success');
   });
 });
 

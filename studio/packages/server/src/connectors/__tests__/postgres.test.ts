@@ -22,6 +22,7 @@ import {
   type PostgresClientOptions,
   type PostgresClient,
 } from '../postgres.js';
+import { readFailure } from '../postgres-session.js';
 import { COPY_BATCH_ROWS } from '../../limits.js';
 import { sameDatasetAddress, type DatasetKind } from '@autonomy-studio/shared';
 import { liveSuiteMustRun } from './live-postgres.js';
@@ -707,6 +708,41 @@ describe('isTransientPostgresCode (#1190 M10)', () => {
   );
 });
 
+describe('readFailure (#1741)', () => {
+  // pg's CLIENT-side `query_timeout` starts at submit, the server's
+  // `statement_timeout` at receipt, so at equal values the client timer wins and
+  // rejects with a code-less `Error('Query read timeout')` (pg@8.23.0
+  // `lib/client.js`). It is the same timeout as 57014, so it is just as transient.
+  it("classifies pg's code-less client query timeout as transient, like 57014", () => {
+    expect(
+      readFailure(new Error('Query read timeout'), 'the source could not be read', null).kind,
+    ).toBe('transient');
+    expect(
+      readFailure(Object.assign(new Error('canceling statement'), { code: '57014' }), 'x', null)
+        .kind,
+    ).toBe('transient');
+  });
+  it('keeps it permanent on the write path: an abandoned COMMIT may have landed', () => {
+    expect(readFailure(new Error('Query read timeout'), 'x', null, 'write').kind).toBe('permanent');
+    expect(
+      readFailure(
+        Object.assign(new Error('canceling statement'), { code: '57014' }),
+        'x',
+        null,
+        'write',
+      ).kind,
+    ).toBe('transient');
+  });
+  it('keeps any other code-less error permanent (fail-safe)', () => {
+    expect(readFailure(new Error('Query read timeout!'), 'x', null).kind).toBe('permanent');
+    expect(readFailure(new Error('boom'), 'x', null).kind).toBe('permanent');
+    expect(
+      readFailure(Object.assign(new Error('Query read timeout'), { code: '42P01' }), 'x', null)
+        .kind,
+    ).toBe('permanent');
+  });
+});
+
 /**
  * A session that answers the ADDRESS seam's two questions.
  *
@@ -1086,6 +1122,25 @@ describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
       message: 'the query ran past its query timeout of 1 seconds',
     });
     expect(Date.now() - started).toBeLessThan(4_000);
+  });
+
+  // #1741 — at equal statement and query timeouts pg's client timer usually
+  // wins, with a code-less `Query read timeout`. Whichever timer fires, a read
+  // that hits the connection's statement timeout must be retryable.
+  it('fails a read that hits the connection statement timeout transient, whichever timer wins', async () => {
+    await expect(
+      (async () => {
+        for await (const _batch of readPostgresDatasetBatches({
+          connectionConfig: { ...live, statementTimeoutMs: 300 },
+          secret: password,
+          datasetKind: 'query',
+          datasetConfig: { sql: 'select pg_sleep(2) as slept' },
+          createClient: realClientFactory,
+        })) {
+          void _batch;
+        }
+      })(),
+    ).rejects.toMatchObject({ kind: 'transient' });
   });
 
   /**
