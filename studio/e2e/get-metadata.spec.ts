@@ -390,6 +390,9 @@ test.describe('#1600 C8a — Get metadata', () => {
             type: 'get_metadata',
             config: { fieldList: ['exists'] },
             connectionId: conn,
+            // Seeded on another table: a node with neither a path nor a table
+            // is refused at save, so the author re-points this one below.
+            inlineDatasets: { source: { kind: 'table', config: { table: 'other' } } },
             position: { x: 0, y: 0 },
           },
         ],
@@ -400,9 +403,9 @@ test.describe('#1600 C8a — Get metadata', () => {
       const pane = properties(page);
       await expect(pane.getByRole('textbox', { name: 'File or folder path' })).toHaveCount(0);
       const use = pane.getByRole('combobox', { name: 'Use' });
+      await expect(use).toHaveValue('table');
       // A table only: Get metadata reads no query.
       await expect(use.locator('option')).not.toContainText(['Query']);
-      await use.selectOption('table');
       await pane.getByRole('textbox', { name: 'Table' }).fill('orders');
 
       await tab(page, 'Settings').click();
