@@ -215,7 +215,7 @@ export const QUERY_CANCELED = '57014';
  * A read `partialWritePossible` is always false: a read writes nothing.
  */
 const TRANSIENT_POSTGRES_CODES: ReadonlySet<string> = new Set([
-  QUERY_CANCELED, // our own statement timeout fired (pg's client timer: `isTransientPostgresError`)
+  QUERY_CANCELED, // our own statement timeout fired (pg's code-less client timer: see below)
   '57P01', // admin_shutdown
   '57P02', // crash_shutdown
   '57P03', // cannot_connect_now — the server is starting up
@@ -247,18 +247,24 @@ export function isTransientPostgresCode(code: string): boolean {
  * The message of pg's CLIENT-side `query_timeout` (pg@8.23.0 `lib/client.js`): a
  * plain `Error` with no `code`. `clientOptionsFor` arms it at the same value as
  * `statement_timeout`, and because it starts at submit rather than at the
- * server's receipt it usually fires first (#1741), so it is the same timeout as
- * `QUERY_CANCELED` and as transient. Matched exactly, and only when there is no
- * string `code`, so every other code-less throw stays `permanent`.
+ * server's receipt it usually fires first (#1741). On a READ it is the same
+ * timeout as `QUERY_CANCELED` and as transient. Matched exactly, and only when
+ * there is no string `code`, so every other code-less throw stays `permanent`.
+ *
+ * Never on a WRITE. 57014 is the server's verdict that the statement was
+ * cancelled; this timer only means the client stopped waiting, and it cancels
+ * nothing. A `COMMIT` it abandons may still land, the sink's `ROLLBACK` then
+ * succeeds against no transaction and reports nothing landed, and a `transient`
+ * verdict would retry the copy from row 0 into rows that are already there.
  */
 const PG_CLIENT_QUERY_TIMEOUT_MESSAGE = 'Query read timeout';
 
-/** Whether a `pg` throw is a retryable READ failure: a named code, or pg's own
+/** Whether a `pg` throw is retryable: a named code, or, on a read only, pg's own
  * code-less client query timeout. */
-function isTransientPostgresError(err: unknown): boolean {
+function isTransientPostgresError(err: unknown, path: 'read' | 'write'): boolean {
   const code = (err as { code?: unknown } | null)?.code;
   if (typeof code === 'string') return isTransientPostgresCode(code);
-  return err instanceof Error && err.message === PG_CLIENT_QUERY_TIMEOUT_MESSAGE;
+  return path === 'read' && err instanceof Error && err.message === PG_CLIENT_QUERY_TIMEOUT_MESSAGE;
 }
 
 /**
@@ -270,10 +276,18 @@ function isTransientPostgresError(err: unknown): boolean {
  * and the UI. `redactSecrets` is the shared helper `http.ts`, `agent.ts` and
  * `llm-shared.ts` already use — a third hand-rolled `split/join` is how the
  * halves drift.
+ *
+ * `path` is `'write'` from the sink, where pg's client timeout stays `permanent`
+ * (see `PG_CLIENT_QUERY_TIMEOUT_MESSAGE`).
  */
-export function readFailure(err: unknown, context: string, secret: string | null): DatasetIoError {
+export function readFailure(
+  err: unknown,
+  context: string,
+  secret: string | null,
+  path: 'read' | 'write' = 'read',
+): DatasetIoError {
   if (err instanceof DatasetIoError) return err;
-  const kind: ConnectorErrorKind = isTransientPostgresError(err) ? 'transient' : 'permanent';
+  const kind: ConnectorErrorKind = isTransientPostgresError(err, path) ? 'transient' : 'permanent';
   const raw = err instanceof Error ? err.message : String(err);
   return new DatasetIoError(kind, `${context}: ${redactSecrets(raw, [secret])}`, { cause: err });
 }

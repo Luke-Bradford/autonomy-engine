@@ -722,6 +722,17 @@ describe('readFailure (#1741)', () => {
         .kind,
     ).toBe('transient');
   });
+  it('keeps it permanent on the write path: an abandoned COMMIT may have landed', () => {
+    expect(readFailure(new Error('Query read timeout'), 'x', null, 'write').kind).toBe('permanent');
+    expect(
+      readFailure(
+        Object.assign(new Error('canceling statement'), { code: '57014' }),
+        'x',
+        null,
+        'write',
+      ).kind,
+    ).toBe('transient');
+  });
   it('keeps any other code-less error permanent (fail-safe)', () => {
     expect(readFailure(new Error('Query read timeout!'), 'x', null).kind).toBe('permanent');
     expect(readFailure(new Error('boom'), 'x', null).kind).toBe('permanent');
@@ -1111,6 +1122,25 @@ describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
       message: 'the query ran past its query timeout of 1 seconds',
     });
     expect(Date.now() - started).toBeLessThan(4_000);
+  });
+
+  // #1741 — at equal statement and query timeouts pg's client timer usually
+  // wins, with a code-less `Query read timeout`. Whichever timer fires, a read
+  // that hits the connection's statement timeout must be retryable.
+  it('fails a read that hits the connection statement timeout transient, whichever timer wins', async () => {
+    await expect(
+      (async () => {
+        for await (const _batch of readPostgresDatasetBatches({
+          connectionConfig: { ...live, statementTimeoutMs: 300 },
+          secret: password,
+          datasetKind: 'query',
+          datasetConfig: { sql: 'select pg_sleep(2) as slept' },
+          createClient: realClientFactory,
+        })) {
+          void _batch;
+        }
+      })(),
+    ).rejects.toMatchObject({ kind: 'transient' });
   });
 
   /**

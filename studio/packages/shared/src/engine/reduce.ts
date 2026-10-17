@@ -4870,7 +4870,8 @@ export function createEngine(doc: EngineDoc): Engine {
         // `scheduleRecheck` was lost (before the arm, or between the arm and
         // `node.recheckScheduled`). Re-emit it, never a dispatch: the check is
         // owed only once the interval passes. `armRecheck` is idempotent by the
-        // alarm's `(kind, dedupeKey)`. A `ready` node whose `recheck` names an
+        // alarm's `(kind, dedupeKey)`, and re-arms past a row the clock already
+        // spent (#1745). A `ready` node whose `recheck` names an
         // EARLIER attempt lost a `dispatchNode` instead, and falls through.
         commands.push(recheckCommand(id, ns.currentAttemptId, ns.recheck));
         continue;

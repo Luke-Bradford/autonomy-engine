@@ -675,8 +675,8 @@ function armWait(
 /**
  * #1600 OR41 C8d — perform a `scheduleRecheck`: fix the *Give up after*
  * deadline, then either ARM the re-check alarm and hand back
- * `node.recheckScheduled` (arm before append, as `armWait`, so a parked node
- * always has a live alarm), or, when the check that just answered "not yet"
+ * `node.recheckScheduled` (arm before append through `armLive`, as `armWait`,
+ * so a parked node always has a live alarm), or, when the check that just answered "not yet"
  * ran at or after the deadline, hand back the permanent `wait_until_timeout`
  * failure instead.
  *
@@ -819,9 +819,10 @@ export function externalWaitArmInput(
  * webhook ALWAYS has a live alarm + a live correlation row — a crash before the
  * append leaves the node `ready` (its `scheduleExternalWait` re-emitted by
  * `resume`, which re-derives the SAME deterministic token → re-arms + re-records
- * idempotently). `dueAt` is read back from the ARMED ROW (idempotent by
- * `(kind, dedupeKey)`), so a replayed command keeps the ORIGINAL expiry, and the
- * correlation row's `expiresAt` is stamped from that same `dueAt`.
+ * idempotently, or past a spent alarm via `armLive`). `dueAt` is read back from
+ * the ARMED ROW (idempotent by `(kind, dedupeKey)`), so a replayed command keeps
+ * the ORIGINAL expiry, and the correlation row's `expiresAt` is stamped from that
+ * same `dueAt`.
  *
  * THROWS if `signExternalWaitToken` is unwired — a deployment/config error surfaced
  * loudly (a webhook doc on a server that never wired the signer), never a silent

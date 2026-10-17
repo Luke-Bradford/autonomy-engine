@@ -42,9 +42,9 @@ import type { WakeupHandler } from './alarms.js';
  * `run_not_found`/`doc_unresolvable`.
  *
  * Like `wait-alarm.ts`, an `external_wait_pending` node always has a live alarm (the
- * arm precedes the `externalWait.created` append that enters the park), so the boot
- * reconciler does not touch this kind's rows — the durable alarm the clock re-scans
- * IS the recovery.
+ * arm precedes the `externalWait.created` append that enters the park, and
+ * `armLive` replaces a spent row, #1745), so the boot reconciler does not touch
+ * this kind's rows — the durable alarm the clock re-scans IS the recovery.
  */
 
 /** S1's typed `ref` for the expiry alarm. `attemptId` is the PARKED attempt — the

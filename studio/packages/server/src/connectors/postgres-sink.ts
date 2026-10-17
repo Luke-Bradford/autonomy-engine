@@ -528,7 +528,7 @@ export async function writePostgresDatasetRows(
       const failure =
         err instanceof DatasetIoError
           ? err
-          : readFailure(err, `the copy into '${spelled}' failed`, write.secret);
+          : readFailure(err, `the copy into '${spelled}' failed`, write.secret, 'write');
       // Only NOW can the honest answer to "did anything land?" be given. A
       // blanket swallowed rollback would report `partialWritePossible: false`
       // unconditionally — fail-open in the one place §4.2 exists.
