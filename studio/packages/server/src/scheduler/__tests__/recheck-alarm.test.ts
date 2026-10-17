@@ -19,7 +19,7 @@ import {
   type Executor,
 } from '../../run/driver.js';
 import { createRunDrives } from '../../run/drives.js';
-import { appendEngineEvent, loadEngineEvents } from '../../run/events.js';
+import { loadEngineEvents } from '../../run/events.js';
 import { createAlarmClock, type AlarmClock } from '../alarms.js';
 import { createRecheckAlarmHandler } from '../recheck-alarm.js';
 import { silentLog } from './testLog.js';
@@ -105,7 +105,6 @@ function harness(db: Db, executor: Executor, now: () => number) {
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 20));
-const types = (db: Db, runId: string) => loadEngineEvents(db, runId).map((e) => e.type);
 function stateOf(db: Db, deps: DriveDeps, runId: string) {
   const run = getRun(db, runId)!;
   return buildEngine(deps.resolveDoc(run.pipelineVersionId)).projectRunState(
@@ -190,24 +189,5 @@ describe('#1600 C8d — the re-check alarm', () => {
       error: "Wait until gave up after 25s: 'in/a.csv' does not exist yet",
     });
     expect(listPendingWakeups(db)).toEqual([]);
-  });
-
-  it('refuses a due re-check on a run whose cancel is folded', async () => {
-    const { db } = freshDb();
-    const run = seed(db);
-    let t = NOW;
-    const exec = checker(() => true);
-    const { deps, clock } = harness(db, exec, () => t);
-    await startRun(deps, run);
-    appendEngineEvent(db, {
-      type: 'run.cancelRequested',
-      runId: run.id,
-      source: { kind: 'operator' },
-    });
-    t = NOW + 10_000;
-    clock.tick();
-    await settle();
-    expect(exec.checks).toEqual(['g#0']);
-    expect(types(db, run.id)).not.toContain('node.recheckDue');
   });
 });

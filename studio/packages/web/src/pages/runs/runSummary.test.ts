@@ -3707,3 +3707,62 @@ describe('streamStillLive', () => {
     expect(streamStillLive('replaying', 'running')).toBe(false);
   });
 });
+
+describe('deriveNodeActivity — a Get metadata Wait until (#1600 OR41 C8d)', () => {
+  const dispatched = (attemptId: string, at: number) =>
+    envelope({ type: 'node.dispatched', runId: 'r', nodeId: 'g', attemptId, idempotent: true }, at);
+  const notReady = (attemptId: string, at: number) =>
+    envelope(
+      {
+        type: 'node.notReady',
+        runId: 'r',
+        nodeId: 'g',
+        attemptId,
+        reason: 'not yet',
+        recheckAfterSeconds: 10,
+        giveUpAfterSeconds: 60,
+      },
+      at,
+    );
+  const scheduled = (attemptId: string, at: number) =>
+    envelope(
+      {
+        type: 'node.recheckScheduled',
+        runId: 'r',
+        nodeId: 'g',
+        attemptId,
+        nextCheckAt: at + 10_000,
+        giveUpAt: 61_000,
+      },
+      at,
+    );
+  const due = (previousAttemptId: string, at: number) =>
+    envelope({ type: 'node.recheckDue', runId: 'r', nodeId: 'g', previousAttemptId }, at);
+
+  it('waits on the timer between checks, as one attempt and one span', () => {
+    const waiting = [dispatched('g#0', 1_000), notReady('g#0', 1_100), scheduled('g#0', 1_100)];
+    expect(deriveNodeActivity(waiting)[0]).toMatchObject({
+      status: 'wait_pending',
+      attempts: 1,
+      startedAtMs: 1_000,
+      endedAtMs: undefined,
+    });
+    const done = [
+      ...waiting,
+      due('g#0', 11_100),
+      dispatched('g#1', 11_200),
+      envelope(
+        { type: 'node.succeeded', runId: 'r', nodeId: 'g', attemptId: 'g#1', outputs: {} },
+        11_300,
+      ),
+    ];
+    const row = deriveNodeActivity(done)[0]!;
+    expect(row).toMatchObject({
+      status: 'success',
+      attempts: 1,
+      startedAtMs: 1_000,
+      endedAtMs: 11_300,
+    });
+    expect(row.spans).toHaveLength(1);
+  });
+});

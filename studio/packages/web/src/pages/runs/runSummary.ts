@@ -673,6 +673,8 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
      `activity.toolCalled`, so for any node reaching that case this counter and
      `attempts` agree exactly where there are no instances. */
   const dispatchesByRawNode = new Map<string, number>();
+  /** #1600 C8d — raw node ids whose next dispatch is a Wait until re-check. */
+  const rechecking = new Set<string>();
   // #566 slice 2 / #4 A4b — a PARALLEL foreach's body events carry per-item
   // INSTANCE keys (`w@1`); fold them onto the CANVAS node's row (`w`) so item
   // instances light up the one node the author drew — last-write-wins, the same
@@ -917,10 +919,15 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
     if (e === null) continue;
     switch (e.type) {
       case 'node.dispatched': {
-        dispatchesByRawNode.set(e.nodeId, (dispatchesByRawNode.get(e.nodeId) ?? 0) + 1);
+        // #1600 C8d — a Wait until re-check continues its first check's attempt
+        // and span, as the Monitor's activity run does: no new attempt.
+        const recheck = rechecking.delete(e.nodeId);
+        if (!recheck) {
+          dispatchesByRawNode.set(e.nodeId, (dispatchesByRawNode.get(e.nodeId) ?? 0) + 1);
+        }
         const n = ensure(e.nodeId);
         n.status = 'dispatched';
-        n.attempts += 1;
+        if (!recheck) n.attempts += 1;
         clearResult(n);
         n.lastOutput = undefined;
         /* #1162 — assigned UNCONDITIONALLY, absence included. A dataset-bound
@@ -939,7 +946,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
           params: e.params,
           datasetAddresses: e.datasetAddresses,
         });
-        openSpan(n, e.nodeId, row.ts);
+        if (!recheck) openSpan(n, e.nodeId, row.ts);
         break;
       }
       case 'node.output': {
@@ -1055,6 +1062,17 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
       // was the last place the distinction was lost: the log names which alarm a
       // node is parked on, the engine keeps them apart (`wait_pending` vs
       // `external_wait_pending`), and only this reader collapsed them.
+      // #1600 OR41 C8d — a Get metadata Wait until that does not hold yet waits
+      // on a re-check timer (the same park as a `wait`), and its span stays open
+      // until a check finally settles it.
+      case 'node.notReady':
+      case 'node.recheckScheduled':
+        ensure(e.nodeId).status = 'wait_pending';
+        break;
+      case 'node.recheckDue':
+        ensure(e.nodeId).status = 'dispatched';
+        rechecking.add(e.nodeId);
+        break;
       case 'timer.waitScheduled': {
         const n = ensure(e.nodeId);
         n.status = 'wait_pending';

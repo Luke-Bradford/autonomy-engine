@@ -4,7 +4,6 @@ import { RECHECK_WAKEUP_KIND, type DriveDeps } from '../run/driver.js';
 import {
   createDurableAlarmHandler,
   nodeParkedAtAttemptGuard,
-  RUN_CANCEL_REQUESTED,
   type DurableAlarmConfig,
 } from './durable-alarm-handler.js';
 import type { WakeupHandler } from './alarms.js';
@@ -14,8 +13,9 @@ import type { WakeupHandler } from './alarms.js';
  * `wait_pending` is due for its next check. Appends `node.recheckDue`, whose
  * fold re-dispatches the node under a new attempt.
  *
- * Unlike wait's timer, a due re-check STARTS work, so a run whose cancel is
- * folded is refused here (CX5's container-timeout rule), as well as in the fold.
+ * A due re-check STARTS work, but a cancel needs no guard here: the cancel's
+ * fold fails the parked node (`onCancelRequested`), so the attempt guard below
+ * refuses its alarm, and `onRecheckDue` refuses one in cancel mode too.
  */
 export const RecheckWakeupRefSchema = z.object({
   runId: z.string().min(1),
@@ -23,15 +23,10 @@ export const RecheckWakeupRefSchema = z.object({
   attemptId: z.string().min(1),
 });
 
-const parkedAtAttempt = nodeParkedAtAttemptGuard('wait_pending', 'node_not_parked_at_attempt');
-
 const config: DurableAlarmConfig<z.infer<typeof RecheckWakeupRefSchema>> = {
   kind: RECHECK_WAKEUP_KIND,
   refSchema: RecheckWakeupRefSchema,
-  checkFreshness: (state, ref) =>
-    state.cancelRequested !== null
-      ? { fresh: false, reason: RUN_CANCEL_REQUESTED }
-      : parkedAtAttempt(state, ref),
+  checkFreshness: nodeParkedAtAttemptGuard('wait_pending', 'node_not_parked_at_attempt'),
   buildDueEvent: (ref): EngineEvent => ({
     type: 'node.recheckDue',
     runId: ref.runId,
