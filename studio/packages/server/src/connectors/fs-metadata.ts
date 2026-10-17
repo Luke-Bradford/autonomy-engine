@@ -61,6 +61,26 @@ const isMissing = (err: unknown): boolean => {
   return code === 'ENOENT' || code === 'ENOTDIR';
 };
 
+/** C8d — a Wait until that does not hold yet: check again later. */
+function notYet(input: GetMetadataConfig, reason: string): ActivityEvent {
+  return {
+    type: 'notReady',
+    reason,
+    recheckAfterSeconds: input.checkEverySeconds,
+    giveUpAfterSeconds: input.giveUpAfterSeconds,
+  };
+}
+
+/** C8d — whether a folder holds at least one entry, reading only the first. */
+async function hasEntry(path: string): Promise<boolean> {
+  const dir = await opendir(path);
+  try {
+    return (await dir.read()) !== null;
+  } finally {
+    await dir.close().catch(() => undefined);
+  }
+}
+
 /** What Exists ticked answers for a missing path. */
 function notThere(path: string): ActivityEvent {
   return { type: 'succeeded', outputs: { path, ...emptyFields(), exists: false } };
@@ -218,6 +238,46 @@ export type FileColumnsReader = () => Promise<
   readonly { readonly name: string; readonly type: string }[]
 >;
 
+/**
+ * C8d — the Wait until condition on a path that exists: `null` when it holds,
+ * else `notReady`, or a permanent failure for a condition the item can never
+ * meet (a size on a folder). Before any field is read, so nothing slow runs on
+ * a check that will be repeated.
+ */
+async function waitUntilUnmet(
+  input: GetMetadataConfig & { readonly path: string },
+  path: string,
+  st: Stats,
+  type: string,
+): Promise<ActivityEvent | null> {
+  switch (input.waitUntil) {
+    case 'exists':
+    case 'off':
+      return null;
+    case 'nonEmpty':
+      if (type === 'file') return st.size > 0 ? null : notYet(input, `'${input.path}' is empty`);
+      if (type === 'directory') {
+        return (await hasEntry(path)) ? null : notYet(input, `'${input.path}' is an empty folder`);
+      }
+      return failed(
+        'permanent',
+        `It is not empty needs a file or folder, and '${input.path}' is a ${type}`,
+      );
+    case 'minimumSize': {
+      if (type !== 'file') {
+        return failed(
+          'permanent',
+          `It is at least N bytes needs a file, and '${input.path}' is a ${type}`,
+        );
+      }
+      const min = input.minimumSize ?? 1;
+      return st.size >= min
+        ? null
+        : notYet(input, `'${input.path}' is ${st.size} bytes, waiting for ${min}`);
+    }
+  }
+}
+
 export async function doGetMetadata(
   cfg: FsConfig,
   // C8c — the dispatch arm has refused a missing path (`getMetadataKindIssue`).
@@ -228,7 +288,10 @@ export async function doGetMetadata(
   readColumns?: FileColumnsReader,
 ): Promise<ActivityEvent> {
   const ticked = new Set<GetMetadataField>(input.fieldList);
-  const answersMissing = ticked.has('exists');
+  // C8d — while waiting, a missing path is "not yet", whatever Exists says.
+  const waiting = input.waitUntil !== 'off';
+  const missing = `'${input.path}' does not exist yet`;
+  const answersMissing = ticked.has('exists') || waiting;
   const readsColumns = ticked.has('structure') || ticked.has('columnCount');
 
   let resolved: Awaited<ReturnType<typeof resolveWithinRoots>>;
@@ -238,7 +301,7 @@ export async function doGetMetadata(
     if (answersMissing && isMissing(err)) {
       try {
         const where = await missingWithinRoots(cfg.roots, input.path);
-        if (where !== null) return notThere(where);
+        if (where !== null) return waiting ? notYet(input, missing) : notThere(where);
       } catch {
         // Report the original error below.
       }
@@ -252,11 +315,20 @@ export async function doGetMetadata(
   try {
     st = await lstat(path);
   } catch (err) {
-    if (answersMissing && isMissing(err)) return notThere(path);
+    if (answersMissing && isMissing(err)) return waiting ? notYet(input, missing) : notThere(path);
     return failFromError(err, signal);
   }
 
   const type = direntType(st);
+  if (waiting) {
+    let unmet: ActivityEvent | null;
+    try {
+      unmet = await waitUntilUnmet(input, path, st, type);
+    } catch (err) {
+      return failFromError(err, signal);
+    }
+    if (unmet !== null) return unmet;
+  }
   // Child items read a folder only. Checked before anything slow (Content MD5).
   if (ticked.has('childItems') && type !== 'directory') {
     return failed('permanent', `Child items needs a folder, and '${input.path}' is a ${type}`);

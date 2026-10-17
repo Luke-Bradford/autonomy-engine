@@ -477,6 +477,91 @@ describe('#1484 activity runs — one row per attempt', () => {
     expect(row!.finishedAt).toBeGreaterThan(row!.startedAt!);
   });
 
+  it('#1600 C8d — keeps a Wait until and its re-checks as ONE row, from the first check to the last', () => {
+    const doc = {
+      nodes: [node('g')],
+      edges: [],
+      containers: [],
+      variables: [],
+    } as never as Parameters<typeof buildEngine>[0];
+    const at = (ts: number, event: EngineEvent) => ({ ts, event, payload: event });
+    const runId = 'R';
+    const notReady = (attemptId: string) =>
+      ({
+        type: 'node.notReady',
+        runId,
+        nodeId: 'g',
+        attemptId,
+        reason: "'/in/a.csv' does not exist yet",
+        recheckAfterSeconds: 10,
+        giveUpAfterSeconds: 60,
+      }) satisfies EngineEvent;
+    const log = [
+      at(1, {
+        type: 'run.started',
+        runId,
+        pipelineVersionId: 'pv',
+        params: {},
+      } satisfies EngineEvent),
+      at(2, {
+        type: 'node.dispatched',
+        runId,
+        nodeId: 'g',
+        attemptId: 'g#0',
+        idempotent: true,
+      } satisfies EngineEvent),
+      at(3, notReady('g#0')),
+      at(3, {
+        type: 'node.recheckScheduled',
+        runId,
+        nodeId: 'g',
+        attemptId: 'g#0',
+        nextCheckAt: 13,
+        giveUpAt: 63,
+      } satisfies EngineEvent),
+    ];
+    const engine = buildEngine(doc);
+    expect(projectActivityRuns(doc, engine, log).rows).toEqual([
+      expect.objectContaining({
+        attemptId: 'g#0',
+        status: 'wait_pending',
+        startedAt: 2,
+        finishedAt: null,
+      }),
+    ]);
+    log.push(
+      at(13, {
+        type: 'node.recheckDue',
+        runId,
+        nodeId: 'g',
+        previousAttemptId: 'g#0',
+      } satisfies EngineEvent),
+      at(14, {
+        type: 'node.dispatched',
+        runId,
+        nodeId: 'g',
+        attemptId: 'g#1',
+        idempotent: true,
+      } satisfies EngineEvent),
+      at(15, {
+        type: 'node.succeeded',
+        runId,
+        nodeId: 'g',
+        attemptId: 'g#1',
+        outputs: {},
+      } satisfies EngineEvent),
+    );
+    const rows = projectActivityRuns(doc, engine, log).rows;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      attemptId: 'g#1',
+      attempt: 1,
+      status: 'success',
+      startedAt: 2,
+      finishedAt: 15,
+    });
+  });
+
   it('settles an attempt a loop timeout abandoned as that row, not as a second one', async () => {
     const { db } = freshDb();
     const pvId = seedVersion(

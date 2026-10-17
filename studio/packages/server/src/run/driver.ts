@@ -282,6 +282,13 @@ export const WAIT_WAKEUP_KIND = 'node_wait';
 export const EXTERNAL_WAIT_WAKEUP_KIND = 'node_external_wait';
 
 /**
+ * #1600 OR41 C8d — the `kind` under which a Get metadata *Wait until* re-check
+ * alarm is armed. Matches the handler in `scheduler/recheck-alarm.ts`; its due
+ * fold re-dispatches the node (`node.recheckDue`), unlike wait's `success`.
+ */
+export const RECHECK_WAKEUP_KIND = 'node_recheck';
+
+/**
  * The `kind` under which a `loop` container's WALL-CLOCK timeout alarm is armed
  * (#4 A17). Matches the handler registered in `scheduler/container-timeout-alarm.ts`.
  * Distinct from the node-scoped kinds so each consumer's rows never collide — this
@@ -627,6 +634,56 @@ function armWait(
     nodeId: command.nodeId,
     attemptId: command.attemptId,
     dueAt: row.dueAt,
+  };
+}
+
+/**
+ * #1600 OR41 C8d — perform a `scheduleRecheck`: fix the *Give up after*
+ * deadline, then either ARM the re-check alarm and hand back
+ * `node.recheckScheduled` (arm before append, as `armWait`, so a parked node
+ * always has a live alarm), or, when the check that just answered "not yet"
+ * ran at or after the deadline, hand back the permanent `wait_until_timeout`
+ * failure instead.
+ *
+ * The deadline is the first check's time + *Give up after*, carried on the
+ * command from the node's state after the first `node.recheckScheduled`. A
+ * crash before that first event recomputes it from the resume time, a small,
+ * stated extension. The last alarm is clamped to the deadline, so the final
+ * check runs at it. Both times are STORED on the event, so replay never reads
+ * the clock.
+ */
+function armRecheck(
+  deps: DriverDeps,
+  state: RunState,
+  command: Extract<EngineCommand, { type: 'scheduleRecheck' }>,
+): EngineEvent {
+  const now = (deps.now ?? (() => Date.now()))();
+  const giveUpAt = command.giveUpAt ?? now + command.giveUpAfterSeconds * 1000;
+  if (now >= giveUpAt) {
+    return {
+      type: 'node.failed',
+      runId: state.runId,
+      nodeId: command.nodeId,
+      attemptId: command.attemptId,
+      error: `Wait until gave up after ${command.giveUpAfterSeconds}s: ${command.reason}`,
+      kind: 'permanent',
+      code: FAILURE_CODES.WAIT_UNTIL_TIMEOUT,
+    };
+  }
+  const row = deps.alarms.arm({
+    kind: RECHECK_WAKEUP_KIND,
+    ref: { runId: state.runId, nodeId: command.nodeId, attemptId: command.attemptId },
+    dueAt: Math.min(now + command.afterSeconds * 1000, giveUpAt),
+    // Vacuous for a ref that pins the attempt, as for wait.
+    discriminator: `recheck-${command.attemptId}`,
+  });
+  return {
+    type: 'node.recheckScheduled',
+    runId: state.runId,
+    nodeId: command.nodeId,
+    attemptId: command.attemptId,
+    nextCheckAt: row.dueAt,
+    giveUpAt,
   };
 }
 
@@ -1275,6 +1332,10 @@ export async function pump(
       let source: EngineEvent[];
       if (command.type === 'scheduleRetry') {
         source = [armRetry(deps, state, command)];
+      } else if (command.type === 'scheduleRecheck') {
+        // #1600 OR41 C8d — a Get metadata Wait until re-check: arm then append
+        // `node.recheckScheduled` (parks the node), or fail it past the deadline.
+        source = [armRecheck(deps, state, command)];
       } else if (command.type === 'scheduleWait') {
         // #4 A6 — the driver's OWN `scheduleWait` command (a `control` `wait` parks
         // on a durable timer): ARM S1's alarm then append `timer.waitScheduled`, whose

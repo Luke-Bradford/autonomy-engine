@@ -279,6 +279,18 @@ export type ActivityEvent =
    */
   | { type: 'warned'; code: WarningCode; reason: string }
   | { type: 'succeeded'; outputs: Record<string, unknown> }
+  /**
+   * #1600 OR41 C8d — a Get metadata *Wait until* checked and the condition does
+   * not hold yet. A terminal of the attempt, like `succeeded`/`failed`; the
+   * executor maps it to `node.notReady` and the engine re-checks later. The two
+   * numbers are the node's resolved *Check every* and *Give up after*.
+   */
+  | {
+      type: 'notReady';
+      reason: string;
+      recheckAfterSeconds: number;
+      giveUpAfterSeconds: number;
+    }
   | {
       type: 'failed';
       kind: ConnectorErrorKind;

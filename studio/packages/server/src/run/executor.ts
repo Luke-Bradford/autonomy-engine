@@ -253,6 +253,9 @@ function redactEventPlaintexts(
   if (ev.type === 'node.failed') {
     return { ...ev, error: redactSecrets(ev.error, plaintexts) };
   }
+  if (ev.type === 'node.notReady') {
+    return { ...ev, reason: redactSecrets(ev.reason, plaintexts) };
+  }
   return ev;
 }
 
@@ -1311,6 +1314,19 @@ export function createExecutor(deps: ExecutorDeps): Executor {
             outputs: withTranscript(ctx, ev.outputs),
           });
           return;
+        } else if (ev.type === 'notReady') {
+          // #1600 OR41 C8d — a Wait until that does not hold yet ends the attempt;
+          // the engine parks the node and re-checks (`node.notReady`).
+          emit({
+            type: 'node.notReady',
+            runId,
+            nodeId,
+            attemptId,
+            reason: ev.reason,
+            recheckAfterSeconds: ev.recheckAfterSeconds,
+            giveUpAfterSeconds: ev.giveUpAfterSeconds,
+          });
+          return;
         } else {
           // F0: map the adapter's PROVIDER kind onto the engine's retry axis and
           // carry the message through RAW. This used to be `${ev.kind}: ${ev.error}`
@@ -1388,9 +1404,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     }
   }
 
-  /** The two events that end an attempt — the only ones `runAdapter` holds. */
+  /** The events that end an attempt — the only ones `runAdapter` holds. */
   const isNodeTerminal = (ev: EngineEvent): boolean =>
-    ev.type === 'node.succeeded' || ev.type === 'node.failed';
+    ev.type === 'node.succeeded' || ev.type === 'node.failed' || ev.type === 'node.notReady';
 
   async function* performDispatch(
     command: Extract<ExecutorCommand, { type: 'dispatchNode' }>,

@@ -96,6 +96,7 @@ function attemptOf(e: EngineEvent): { nodeId: string; attemptId: string } | null
     case 'variable.append':
     case 'timer.waitScheduled':
     case 'externalWait.created':
+    case 'node.notReady':
       return { nodeId: e.nodeId, attemptId: e.attemptId };
     case 'call.started':
     case 'call.detached':
@@ -452,6 +453,18 @@ export function projectActivityRuns(
     state = reduced.state;
 
     if (state.containers !== before.containers) trackGroups(e, ts, before, state);
+
+    // #1600 C8d — a Wait until's re-checks are ONE activity run, as ADF's
+    // Validation is: the check a `node.recheckDue` starts carries on the row the
+    // first check opened (its start, its status) instead of opening its own.
+    if (e.type === 'node.recheckDue') {
+      const row = byAttempt.get(e.previousAttemptId);
+      const next = state.nodes[e.nodeId]?.currentAttemptId;
+      if (row !== undefined && open.has(row) && next !== undefined && next !== row.attemptId) {
+        row.attemptId = next;
+        byAttempt.set(next, row);
+      }
+    }
 
     const ref = attemptOf(e);
     if (ref !== null && !byAttempt.has(ref.attemptId)) {
