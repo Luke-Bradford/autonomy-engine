@@ -79,16 +79,16 @@ describe('resolveWithinRoots — refusals attribute the CALLING connector', () =
  * raw errno, and never an answer for a path outside the roots.
  */
 describe('resolveWithinRootsOrMissing — a missing folder inside the roots', () => {
-  it('answers the would-be canonical path, marked missing', async () => {
+  it('answers the would-be canonical path', async () => {
     const root = tempRoot();
     expect(await resolveWithinRootsOrMissing([root], 'later/in/a.csv', 'fs')).toEqual({
       ok: true,
       path: join(root, 'later', 'in', 'a.csv'),
-      missing: true,
     });
-    expect(
-      await resolveWithinRootsOrMissing([root], join(root, 'later', 'a.csv'), 'fs'),
-    ).toEqual({ ok: true, path: join(root, 'later', 'a.csv'), missing: true });
+    expect(await resolveWithinRootsOrMissing([root], join(root, 'later', 'a.csv'), 'fs')).toEqual({
+      ok: true,
+      path: join(root, 'later', 'a.csv'),
+    });
   });
 
   it("is resolveWithinRoots' own answer when the folder exists", async () => {
@@ -116,8 +116,8 @@ describe('resolveWithinRootsOrMissing — a missing folder inside the roots', ()
       resolveWithinRootsOrMissing([root], 'out/later/a.csv', 'fs'),
     ).rejects.toMatchObject({ code: 'ENOENT' });
     symlinkSync(join(outside, 'gone'), join(root, 'dangling'));
-    await expect(
-      resolveWithinRootsOrMissing([root], 'dangling/a.csv', 'fs'),
-    ).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(resolveWithinRootsOrMissing([root], 'dangling/a.csv', 'fs')).rejects.toMatchObject(
+      { code: 'ENOENT' },
+    );
   });
 });

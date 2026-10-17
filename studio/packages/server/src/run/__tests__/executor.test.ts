@@ -1031,9 +1031,9 @@ describe('createExecutor — fs connector end-to-end (#4 A11, real fsAdapter)', 
       const state = await startRun(deps(db), run);
 
       expect(state.status).toBe('success');
-      expect(
-        loadEngineEvents(db, run.id).find((e) => e.type === 'node.succeeded'),
-      ).toMatchObject({ outputs: { exists: false, columnCount: null } });
+      expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.succeeded')).toMatchObject({
+        outputs: { exists: false, columnCount: null },
+      });
     });
 
     it('Get metadata · Wait until parks on a re-check instead of failing the pre-flight', async () => {
@@ -1048,9 +1048,9 @@ describe('createExecutor — fs connector end-to-end (#4 A11, real fsAdapter)', 
       await startRun({ ...deps(db), alarms: stubAlarms() }, run);
 
       expect(eventTypes(db, run.id)).toContain('node.dispatched');
-      expect(
-        loadEngineEvents(db, run.id).find((e) => e.type === 'node.notReady'),
-      ).toMatchObject({ reason: "'not-yet/orders.csv' does not exist yet" });
+      expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.notReady')).toMatchObject({
+        reason: "'not-yet/orders.csv' does not exist yet",
+      });
       expect(eventTypes(db, run.id)).not.toContain('node.failed');
     });
 

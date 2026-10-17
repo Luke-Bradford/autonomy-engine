@@ -218,7 +218,12 @@ describe('get_metadata — an Excel dataset', () => {
 // the dataset's own file, as C8d-1's is on a path.
 describe('get_metadata — Wait until on a file dataset', () => {
   const timers = { checkEverySeconds: 5, giveUpAfterSeconds: 60 };
-  const notReady = (reason: string) => ({ type: 'notReady', reason, ...timers });
+  const notReady = (reason: string) => ({
+    type: 'notReady',
+    reason,
+    recheckAfterSeconds: 5,
+    giveUpAfterSeconds: 60,
+  });
 
   it('It exists: not ready while its folder is missing, then its columns', async () => {
     const input = { fieldList: ['columnCount'], waitUntil: 'exists', ...timers };
@@ -238,9 +243,7 @@ describe('get_metadata — Wait until on a file dataset', () => {
     );
     const atLeast = { fieldList: ['size'], waitUntil: 'minimumSize', minimumSize: 8, ...timers };
     await writeFile(join(root, 'orders.csv'), 'id\n1\n', 'utf8');
-    expect(await run(atLeast, source)).toEqual(
-      notReady("'orders.csv' is 5 bytes, waiting for 8"),
-    );
+    expect(await run(atLeast, source)).toEqual(notReady("'orders.csv' is 5 bytes, waiting for 8"));
     await writeFile(join(root, 'orders.csv'), 'id\n1\n2\n3\n', 'utf8');
     expect(await outputsOf(atLeast, source)).toMatchObject({ size: 9 });
   });

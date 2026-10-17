@@ -195,9 +195,11 @@ async function prepareRead(
 
   let confined: Awaited<ReturnType<typeof resolveWithinRoots>>;
   try {
-    confined = await (
-      options.missingFolderOk ? resolveWithinRootsOrMissing : resolveWithinRoots
-    )(cfg.data.roots, config.data.path, 'fs');
+    confined = await (options.missingFolderOk ? resolveWithinRootsOrMissing : resolveWithinRoots)(
+      cfg.data.roots,
+      config.data.path,
+      'fs',
+    );
   } catch (err) {
     // `resolveWithinRoots` leaves `realpath` on the target's PARENT unguarded on
     // purpose, so a missing or unreadable directory arrives as a raw errno. Its

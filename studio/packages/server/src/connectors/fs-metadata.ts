@@ -297,8 +297,9 @@ export async function doGetMetadata(
 
   let resolved: Awaited<ReturnType<typeof resolveWithinRootsOrMissing>>;
   try {
-    // A missing folder is a missing path only where that has an answer; the
-    // fallback never answers for a path outside the roots (it rethrows).
+    // A missing folder is a missing path only where that has an answer, which
+    // the `lstat` below then gives; the fallback never answers for a path
+    // outside the roots (it rethrows).
     resolved = await (answersMissing ? resolveWithinRootsOrMissing : resolveWithinRoots)(
       cfg.roots,
       input.path,
@@ -308,7 +309,6 @@ export async function doGetMetadata(
     return failFromError(err, signal);
   }
   if (!resolved.ok) return failed('permanent', resolved.error);
-  if (resolved.missing) return waiting ? notYet(input, missing) : notThere(resolved.path);
   const path = resolved.path;
 
   let st: Stats;

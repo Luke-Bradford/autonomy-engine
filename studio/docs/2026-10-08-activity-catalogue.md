@@ -350,7 +350,7 @@ Sources: [Get Metadata](https://learn.microsoft.com/azure/data-factory/control-f
   - A file with no rows has no header to read, and fails `permanent` with the reader's reason.
   - Exists answers for the **file**. On an Excel dataset whose sheet is missing, the run fails rather than say `false`.
 - **Structure `type`** is the format's own, in lowercase, as a table's is the store's (C8c-1). For a delimited file it is `string` for every column, because the file holds text (ADF says `String`). For Excel it is `''`, because a sheet declares no column type (its cells are typed one by one), as an undeclared SQLite column is `''`. No type is inferred from the data, which would be a guess.
-- **Deliberate difference (#1743):** with Exists ticked, a dataset whose **folder** is missing fails at dispatch (`dataset_address_unresolvable`) rather than say `exists: false`. Every dataset's address is resolved before dispatch, and that step needs the folder. A missing file in an existing folder does say `false`.
+- **A missing folder (#1743, fixed in C8d-2a):** with Exists ticked, a dataset whose folder is missing says `exists: false`, as a missing file does. C8c-2 failed it at dispatch (`dataset_address_unresolvable`).
 - **Shown together with the path field** on a file system. The author sees both inputs, and the save refusal says which to clear.
 - `CATALOG_VERSION` 45→46: a pre-C8c-2 build refuses the dataset's kind at dispatch.
 
@@ -378,10 +378,25 @@ Sources: [Get Metadata](https://learn.microsoft.com/azure/data-factory/control-f
 - **Crash recovery:** a not-ready node whose park was lost re-arms its alarm on resume, and a fresh one if the first was spent while the node was not parked.
 - **Deliberate differences from ADF:**
   - The settings are on Get metadata, not a separate Validation activity (§1).
-  - A dataset is not supported yet. Save refuses Wait until with a dataset bound, and dispatch does too. That waits for **C8d-2**, decided together with #1743, because a dataset's address is resolved before dispatch and needs its folder.
+  - A dataset was not supported in C8d-1. C8d-2a adds a delimited or Excel dataset; a table waits for C8d-2b.
 - `CATALOG_VERSION` 46→47: a pre-C8d build strips the keys and reads once.
 
-Still open in C8: **C8d-2** adds *Wait until* on a delimited, Excel or table dataset (with #1743).
+**Built (C8d-2a, 2026-10-17):** *Wait until* on a **delimited or Excel dataset** on a file system connection, with #1743.
+
+- **The wait is on the dataset's file**, the path C8c-2 reads its fields from. The conditions, the timers, the durable park, the deadline and the one activity run are C8d-1's, unchanged. Once the condition holds, the node reads its ticked fields and the file's columns as without a wait.
+- **A missing folder has an address (#1743).** Every dataset's address is resolved before dispatch. On a file system it used to `realpath` the dataset's folder, so a missing folder failed the node `dataset_address_unresolvable` before the activity ran. Now:
+  - The address step takes `confine.ts`'s `resolveWithinRootsOrMissing`. A missing folder inside the roots resolves to its would-be canonical path (`missingWithinRoots`), with a `null` store identity, as a missing file in an existing folder already did.
+  - A missing folder outside the roots, through a link out of a root, or past a dangling link, is still refused, with the original error.
+  - Get metadata takes the same helper, so the missing-path fallback is written once.
+  - **Behaviour change for Copy and Lookup:** a source in a missing folder now dispatches and fails at the read (`permanent`, the reader's message), as a missing file in an existing folder did. It used to fail before dispatch with `dataset_address_unresolvable`. Copy reads its source's columns before it opens the sink, so nothing is written. Copy · Files as-is and the path activities have no dataset address and are unchanged.
+- **Where it is refused:**
+  - At save, an inline source dataset with Wait until on. An inline dataset is a Table or a Query, never a file.
+  - At dispatch, Wait until on a database connection (a table).
+  - **Tradeoff:** a saved dataset's kind is not known at save, so a saved table dataset with Wait until on now saves and fails at its first run, where C8d-1 refused it at save. The editor draws Wait until only on a file system connection, so only a hand-written doc can reach it.
+- **Deliberate differences from ADF:** a delimited file of only a header, or an Excel workbook, is *not empty* once it has a byte. An Excel workbook is waited on as a file: when its sheet is missing, the wait holds and the column read then fails `permanent`.
+- `CATALOG_VERSION` 47→48: a pre-C8d-2a build refuses Wait until on a dataset at dispatch.
+
+Still open in C8: **C8d-2b** adds *Wait until* on a table dataset (SQLite, Postgres). It will bump `CATALOG_VERSION` 48→49.
 
 ### 4.4 Delete
 Source: [Delete](https://learn.microsoft.com/azure/data-factory/delete-activity).
@@ -510,7 +525,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C5 | Copy: incremental (watermark Automatic / Expression; files modified-since-last-success) | OR15 incremental |
 | C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs | — |
 | C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Rows · Whole file as text (`file_read` as Lookup's second type), the title *Lookup* (built); **C7c** *When over the limit* and `bytes`/`truncated` for the text mode, limited by the connection's `maxBytes` rather than the 1 MiB byte cap (built); **C7d** the workspace Lookup max rows (1000 by default, up to ADF's 5000) and the Monitor Rows read column (built) | — |
-| C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c-1** tables (SQLite, Postgres) with per-kind field options (built); **C8c-2** a delimited or Excel dataset source's structure and column count (built); **C8d-1** Wait until on a file system path (built); **C8d-2** Wait until on a dataset, with #1743; **C8e** Include subfolders (built) | OR17 #1408 |
+| C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c-1** tables (SQLite, Postgres) with per-kind field options (built); **C8c-2** a delimited or Excel dataset source's structure and column count (built); **C8d-1** Wait until on a file system path (built); **C8d-2a** Wait until on a delimited or Excel dataset, with #1743 (built); **C8d-2b** Wait until on a table dataset; **C8e** Include subfolders (built) | OR17 #1408 |
 | C9 | Delete: wildcard, folders, dates, log. Lower file_delete | OR17 #1408 |
 | C10 | Script activity | OR12 #1403, OR15 sql_script |
 | C11 | Web: fail-on-error, response cap, parse, retry-after, wait-for-callback. Lower http_request and webhook | — |

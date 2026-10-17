@@ -121,7 +121,8 @@ export const isMissingErrno = (err: unknown): boolean => {
 /**
  * #1743 — {@link resolveWithinRoots} for a path that may not exist yet, folders
  * included: where the target's parent folder is missing, the answer is the
- * would-be canonical path from {@link missingWithinRoots}, marked `missing`.
+ * would-be canonical path from {@link missingWithinRoots}, for the caller's own
+ * open or `lstat` to find missing.
  *
  * A dataset's ADDRESS takes this, because "the file is not there yet" is a fact
  * for the READ to report, or for Get metadata to answer `exists: false` or wait
@@ -139,7 +140,7 @@ export async function resolveWithinRootsOrMissing(
   roots: readonly string[],
   requested: string,
   connector: ConnectorLabel,
-): Promise<{ ok: true; path: string; missing?: true } | { ok: false; error: string }> {
+): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
   try {
     return await resolveWithinRoots(roots, requested, connector);
   } catch (err) {
@@ -151,7 +152,7 @@ export async function resolveWithinRootsOrMissing(
       throw err;
     }
     if (where === null) throw err;
-    return { ok: true, path: where, missing: true };
+    return { ok: true, path: where };
   }
 }
 
