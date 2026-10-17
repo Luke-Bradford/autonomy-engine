@@ -679,8 +679,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // stale when they change). A reference to an unticked field therefore
     // resolves to null where ADF fails it; the spec records the difference.
     // Side-effect-free, so `idempotent:true`, like `file_list`, which is
-    // lowered to its Child items (C8b). Tables are C8c, Wait until C8d,
-    // Include subfolders C8e.
+    // lowered to its Child items (C8b). Tables are C8c, Wait until C8d.
+    // Include subfolders (C8e) names each child by its path below the folder.
     type: GET_METADATA_ACTIVITY_TYPE,
     title: 'Get metadata',
     description:
@@ -691,12 +691,20 @@ const ENTRIES: ActivityCatalogEntry[] = [
       { key: 'source', bindings: ['connection'], fields: ['path'] },
       {
         key: 'settings',
-        fields: ['fieldList', 'childFilter', 'childType', 'modifiedStart', 'modifiedEnd'],
+        fields: [
+          'fieldList',
+          'childFilter',
+          'childType',
+          'recursive',
+          'modifiedStart',
+          'modifiedEnd',
+        ],
       },
     ],
     appliesWhen: {
       childFilter: [{ field: 'fieldList', in: ['childItems'] }],
       childType: [{ field: 'fieldList', in: ['childItems'] }],
+      recursive: [{ field: 'fieldList', in: ['childItems'] }],
       modifiedStart: [{ field: 'fieldList', in: ['childItems'] }],
       modifiedEnd: [{ field: 'fieldList', in: ['childItems'] }],
     },

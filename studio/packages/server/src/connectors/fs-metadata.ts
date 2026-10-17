@@ -32,6 +32,9 @@ import type { ActivityEvent } from './types.js';
  * - Child items are sorted by name (code-unit order, not the host's locale),
  *   where a directory read's order depends on the OS. Each carries its size and
  *   last-modified time.
+ * - Include subfolders (C8e) is a studio addition: ADF's Child items lists one
+ *   level. Each item is then named by its `/`-separated path below the folder,
+ *   in tree order.
  * - Child items on a file FAIL rather than come back null, so a lowered
  *   `file_list` on a file still fails as it did. Size and Content MD5 on a
  *   folder are null.
@@ -99,6 +102,18 @@ interface ChildItem {
   lastModified: string;
 }
 
+/**
+ * Tree order: compare with `/` as the lowest code unit, so a folder's contents
+ * follow it (`a`, `a/x`, `a-b`) where a plain code-unit sort would put `a-b`
+ * between them. NUL can never be in a file name, so it is a safe stand-in.
+ */
+const treeKey = (name: string): string => name.replaceAll('/', '\0');
+const byTreeOrder = (a: ChildItem, b: ChildItem): number => {
+  const ka = treeKey(a.name);
+  const kb = treeKey(b.name);
+  return ka < kb ? -1 : ka > kb ? 1 : 0;
+};
+
 async function childItemsOf(
   cfg: FsConfig,
   folder: string,
@@ -110,55 +125,83 @@ async function childItemsOf(
   const timed = input.modifiedStart !== undefined || input.modifiedEnd !== undefined;
   const matches = wildcardMatcher(input.childFilter);
   // Counted on every entry VISITED, as `file_list` counts, so a huge folder
-  // with no matches is still bounded.
+  // with no matches is still bounded. With Include subfolders (C8e) the count
+  // runs across the whole tree, as Copy · Files as-is's walk does.
   const maxEntries = cfg.maxEntries ?? DEFAULT_MAX_LIST_ENTRIES;
   const items: ChildItem[] = [];
   let visited = 0;
-  let dir: Awaited<ReturnType<typeof opendir>> | undefined;
+  // Relative names, `/`-separated on every host so the output is the same
+  // everywhere; the paths opened are built with the host's `join`.
+  const pending: string[] = [''];
   try {
-    // `opendir` has no `O_NOFOLLOW`; the target-symlink guard is the confine
-    // step's `lstat`, the same residual `file_list` states.
-    dir = await opendir(folder);
-    for (;;) {
-      if (signal.aborted) return failed('cancelled', 'file activity aborted');
-      const dirent = await dir.read();
-      if (dirent === null) break;
-      visited += 1;
-      if (visited > maxEntries) {
-        return failed('permanent', `folder has more than the ${maxEntries}-entry list limit`);
-      }
-      if (!matches(dirent.name)) continue;
-      let st: Stats;
+    while (pending.length > 0) {
+      const rel = pending.pop()!;
+      let dir: Awaited<ReturnType<typeof opendir>>;
       try {
-        st = await lstat(join(folder, dirent.name));
+        // `opendir` has no `O_NOFOLLOW`; the target-symlink guard is the
+        // confine step's `lstat` for the folder itself, and the `lstat` below
+        // for a subfolder, the same residual `file_list` and Copy's walk
+        // state. A subfolder swapped for a link between the two could still
+        // be read; it would leak names, sizes and times, not contents.
+        dir = await opendir(rel === '' ? folder : join(folder, ...rel.split('/')));
       } catch (err) {
-        if (isMissing(err)) continue; // removed since it was listed
+        if (rel !== '' && isMissing(err)) continue; // removed since it was listed
         throw err;
       }
-      // Typed from the `lstat`, not the dirent: a file system that does not
-      // report a dirent's type would otherwise list everything as `other`.
-      const type = direntType(st);
-      if (input.childType === 'files' && type !== 'file') continue;
-      if (input.childType === 'folders' && type !== 'directory') continue;
-      // ADF: with a modified window set, child items hold files only.
-      if (timed && (type !== 'file' || !window.contains(st.mtimeMs))) continue;
-      items.push({
-        name: dirent.name,
-        type,
-        size: type === 'file' ? st.size : null,
-        lastModified: st.mtime.toISOString(),
-      });
+      try {
+        for (;;) {
+          if (signal.aborted) return failed('cancelled', 'file activity aborted');
+          const dirent = await dir.read();
+          if (dirent === null) break;
+          visited += 1;
+          if (visited > maxEntries) {
+            return failed(
+              'permanent',
+              input.recursive
+                ? `the folder and its subfolders have more than the ${maxEntries}-entry list limit`
+                : `folder has more than the ${maxEntries}-entry list limit`,
+            );
+          }
+          const name = rel === '' ? dirent.name : `${rel}/${dirent.name}`;
+          // With Include subfolders every entry is typed, because a folder is
+          // walked whether or not it is listed; without it only a match is.
+          if (!input.recursive && !matches(dirent.name)) continue;
+          let st: Stats;
+          try {
+            st = await lstat(join(dir.path, dirent.name));
+          } catch (err) {
+            if (isMissing(err)) continue; // removed since it was listed
+            throw err;
+          }
+          // Typed from the `lstat`, not the dirent: a file system that does not
+          // report a dirent's type would otherwise list everything as `other`.
+          const type = direntType(st);
+          // A link is never followed, to a folder or anywhere else.
+          if (input.recursive && type === 'directory') pending.push(name);
+          if (!matches(dirent.name)) continue;
+          if (input.childType === 'files' && type !== 'file') continue;
+          if (input.childType === 'folders' && type !== 'directory') continue;
+          // ADF: with a modified window set, child items hold files only.
+          if (timed && (type !== 'file' || !window.contains(st.mtimeMs))) continue;
+          items.push({
+            name,
+            type,
+            size: type === 'file' ? st.size : null,
+            lastModified: st.mtime.toISOString(),
+          });
+        }
+      } finally {
+        try {
+          await dir.close();
+        } catch {
+          // Already closed by a finished iteration.
+        }
+      }
     }
   } catch (err) {
     return failFromError(err, signal);
-  } finally {
-    try {
-      await dir?.close();
-    } catch {
-      // Already closed by a finished iteration.
-    }
   }
-  return items.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return items.sort(byTreeOrder);
 }
 
 const isEvent = (v: unknown): v is ActivityEvent =>

@@ -66,6 +66,12 @@ export const getMetadataConfigSchema = z
         folders: 'Folders only',
       }),
     }),
+    // C8e. Off by default: the lowered `file_list` (C8b) never recursed.
+    recursive: presented(z.boolean().default(false), {
+      title: 'Include subfolders',
+      description:
+        'Also lists what every subfolder holds, each named by its path below this folder, e.g. 2026/a.csv.',
+    }),
     modifiedStart: instant(
       'Modified from',
       'Only files last modified at or after this UTC time. Folders are left out when set.',
@@ -88,6 +94,7 @@ export const getMetadataConfigSchema = z
     if (!seen.has('childItems')) {
       if (cfg.childFilter !== '*') issue('childFilter', 'only read when Child items is ticked');
       if (cfg.childType !== 'all') issue('childType', 'only read when Child items is ticked');
+      if (cfg.recursive) issue('recursive', 'only read when Child items is ticked');
       if (cfg.modifiedStart !== undefined) {
         issue('modifiedStart', 'only read when Child items is ticked');
       }
