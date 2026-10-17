@@ -751,8 +751,11 @@ export const fsAdapter: ConnectorAdapter = {
         yield failed('permanent', issue);
         return;
       }
-      // Narrowing only: `getMetadataKindIssue` has refused a missing path.
-      if (path === undefined) return;
+      // `getMetadataKindIssue` has refused a missing path; never end silently.
+      if (path === undefined) {
+        yield failed('permanent', 'File or folder path is required on a file system connection');
+        return;
+      }
       yield await doGetMetadata(cfg.data, { ...input.data, path }, ctx.signal);
       return;
     }

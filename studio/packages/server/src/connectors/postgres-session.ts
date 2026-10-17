@@ -378,6 +378,14 @@ export async function resolveStoreIdentity(client: PostgresClient): Promise<stri
 }
 
 /**
+ * #1600 OR41 C8c — the `pg_class.relkind`s that are a TABLE to read: tables,
+ * partitioned tables, views, materialized views and foreign tables. List tables
+ * offers exactly these, and Get metadata answers `exists` for exactly these, so
+ * an index or sequence of that name is not a table either one sees.
+ */
+export const READABLE_RELKINDS_SQL = "('r', 'p', 'v', 'm', 'f')";
+
+/**
  * The CANONICAL `schema.relation` a name addresses in this session, or `null`.
  *
  * `to_regclass` is what applies `search_path`, which is why this needs a session
@@ -408,14 +416,6 @@ export async function resolveStoreIdentity(client: PostgresClient): Promise<stri
  * NULL — and that throw is left to the caller, which treats every query-level
  * failure here alike.
  */
-/**
- * #1600 OR41 C8c — the `pg_class.relkind`s that are a TABLE to read: tables,
- * partitioned tables, views, materialized views and foreign tables. List tables
- * offers exactly these, and Get metadata answers `exists` for exactly these, so
- * an index or sequence of that name is not a table either one sees.
- */
-export const READABLE_RELKINDS_SQL = "('r', 'p', 'v', 'm', 'f')";
-
 const RELATION_NAME_SQL = `
   select n.nspname || '.' || c.relname as name
     from pg_class c
