@@ -154,6 +154,8 @@ export async function resolveWithinRootsOrMissing(
     try {
       where = await missingWithinRoots(roots, requested);
     } catch {
+      // The fallback's own failure is not the caller's question: report the
+      // error `resolveWithinRoots` gave, as before this helper existed.
       throw err;
     }
     if (where === null) throw err;

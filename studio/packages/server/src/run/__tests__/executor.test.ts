@@ -1069,6 +1069,49 @@ describe('createExecutor — fs connector end-to-end (#4 A11, real fsAdapter)', 
       expect(failed).not.toMatchObject({ code: FAILURE_CODES.DATASET_ADDRESS_UNRESOLVABLE });
     });
 
+    it('C8d-2a — a saved TABLE dataset with Wait until saves, and dispatch refuses it', async () => {
+      // A saved dataset's kind is not known at save, so the refusal is dispatch's.
+      const store = await realpath(await mkdtemp(join(tmpdir(), 'exec-c8d2-table-')));
+      try {
+        const file = new Database(join(store, 'db.sqlite'));
+        file.exec('CREATE TABLE t (id INTEGER)');
+        file.close();
+        const db = freshDb().db;
+        const conn = await seedConnection(
+          db,
+          'sqlite',
+          { roots: [store], path: 'db.sqlite' },
+          null,
+        );
+        const ds = createDataset(db, {
+          ownerId: 'local',
+          name: `D${(seq += 1)}`,
+          connectionId: conn,
+          kind: 'table',
+          config: { table: 't' },
+          columns: [],
+          parameters: [],
+        }).id;
+        const run = seedRun(
+          db,
+          seedVersion(db, [
+            datasetNode('get_metadata', conn, ds, { fieldList: ['exists'], waitUntil: 'exists' }),
+          ]),
+        );
+
+        const state = await startRun({ ...deps(db), alarms: stubAlarms() }, run);
+
+        expect(state.status).toBe('failure');
+        expect(eventTypes(db, run.id)).not.toContain('node.notReady');
+        expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
+          kind: 'permanent',
+          error: expect.stringContaining('on a table it is not supported yet'),
+        });
+      } finally {
+        await rm(store, { recursive: true, force: true });
+      }
+    });
+
     it('a Copy dispatches and fails at the read, permanent, writing nothing', async () => {
       const store = await realpath(await mkdtemp(join(tmpdir(), 'exec-1743-sink-')));
       try {
