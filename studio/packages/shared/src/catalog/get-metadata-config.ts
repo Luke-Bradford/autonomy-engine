@@ -36,6 +36,21 @@ export const GET_METADATA_TABLE_FIELDS = [
   'columnCount',
   'rowCount',
 ] as const;
+/**
+ * C8c-2 — a delimited or Excel dataset's fields: its file's, without Child items
+ * (a dataset names one file, never a folder to list), and its columns.
+ */
+export const GET_METADATA_FILE_DATASET_FIELDS = [
+  'exists',
+  'itemName',
+  'itemType',
+  'size',
+  'created',
+  'lastModified',
+  'contentMD5',
+  'structure',
+  'columnCount',
+] as const;
 /** Every field, in the order the tick boxes are drawn and the array is written. */
 export const GET_METADATA_FIELDS = [
   ...GET_METADATA_FS_FIELDS,
@@ -45,9 +60,13 @@ export const GET_METADATA_FIELDS = [
 ] as const;
 export type GetMetadataField = (typeof GET_METADATA_FIELDS)[number];
 
-/** The fields each connection kind can answer (the catalog's field options). */
+/**
+ * The fields each connection kind can answer (the catalog's field options). On
+ * a file system that is a path's and a file dataset's together: which of the two
+ * the node reads is checked at save ({@link getMetadataNodeIssue}) and dispatch.
+ */
 export const GET_METADATA_FIELDS_BY_CONNECTION_KIND = {
-  fs: GET_METADATA_FS_FIELDS,
+  fs: [...GET_METADATA_FS_FIELDS, 'structure', 'columnCount'],
   sqlite: GET_METADATA_TABLE_FIELDS,
   postgres: GET_METADATA_TABLE_FIELDS,
 } as const satisfies Record<string, readonly GetMetadataField[]>;
@@ -179,22 +198,29 @@ export function untickedGetMetadataFields(
  * dispatch (`permanent`); the config schema cannot, because it does not see the
  * connection. One sentence per store, so the file system and the two databases
  * say the same thing about the same mistake.
+ *
+ * C8c-2 — on a file system the node reads a path or a delimited or Excel
+ * dataset (`bindsDataset`, from the dispatch's resolved source), each with its
+ * own fields. A database always reads its dataset, so it ignores the flag.
  */
 export function getMetadataKindIssue(
   config: GetMetadataConfig,
   connectionKind: GetMetadataConnectionKind,
+  bindsDataset: boolean,
 ): string | undefined {
+  if (connectionKind === 'fs') {
+    if (bindsDataset) {
+      if (config.path !== undefined) return BOTH_PATH_AND_DATASET;
+      return fileDatasetFieldIssue(config.fieldList);
+    }
+    if (config.path === undefined) {
+      return 'File or folder path, or a delimited or Excel dataset chosen on Source, is required on a file system connection';
+    }
+    return pathFieldIssue(config.fieldList);
+  }
   const allowed: readonly GetMetadataField[] =
     GET_METADATA_FIELDS_BY_CONNECTION_KIND[connectionKind];
   const foreign = config.fieldList.filter((f) => !allowed.includes(f));
-  if (connectionKind === 'fs') {
-    if (config.path === undefined)
-      return 'File or folder path is required on a file system connection';
-    if (foreign.length > 0) {
-      return `${titles(foreign)} read a database table, not a file system path`;
-    }
-    return undefined;
-  }
   if (config.path !== undefined) {
     return 'a table is chosen on the Source tab; clear File or folder path';
   }
@@ -205,6 +231,34 @@ export function getMetadataKindIssue(
 const titles = (fields: readonly GetMetadataField[]): string =>
   fields.map((f) => GET_METADATA_FIELD_TITLES[f]).join(', ');
 
+const BOTH_PATH_AND_DATASET =
+  'a dataset chosen on Source names what to read; clear File or folder path';
+
+/** C8c-2 — a ticked field a path cannot answer, named by what does answer it. */
+function pathFieldIssue(fields: readonly GetMetadataField[]): string | undefined {
+  const foreign = fields.filter((f) => !includes(GET_METADATA_FS_FIELDS, f));
+  const tableOnly = foreign.filter((f) => !includes(GET_METADATA_FILE_DATASET_FIELDS, f));
+  if (tableOnly.length > 0) {
+    return `${titles(tableOnly)} read a database table, not a file system path`;
+  }
+  if (foreign.length > 0) {
+    return `${titles(foreign)} read a delimited or Excel dataset chosen on Source, not a path`;
+  }
+  return undefined;
+}
+
+/** C8c-2 — a ticked field a delimited or Excel dataset cannot answer. */
+function fileDatasetFieldIssue(fields: readonly GetMetadataField[]): string | undefined {
+  const foreign = fields.filter((f) => !includes(GET_METADATA_FILE_DATASET_FIELDS, f));
+  const folder = foreign.filter((f) => includes(GET_METADATA_FS_FIELDS, f));
+  if (folder.length > 0) return `${titles(folder)} read a folder path, not a dataset`;
+  if (foreign.length > 0) return `${titles(foreign)} read a database table, not a file`;
+  return undefined;
+}
+
+const includes = (list: readonly GetMetadataField[], field: GetMetadataField): boolean =>
+  list.includes(field);
+
 /**
  * #1600 OR41 C8c — the save-time half of {@link getMetadataKindIssue}: what the
  * NODE, not the config, says about where Get metadata reads. A path addresses a
@@ -213,6 +267,11 @@ const titles = (fields: readonly GetMetadataField[]): string =>
  * things. Both are refused at save, beside the config's own issues, so a new
  * node still shows its path as the next step. Which of the two the bound
  * connection's kind wants is checked at dispatch, where the kind is known.
+ *
+ * C8c-2 — so are the fields its path or dataset can never answer, whatever the
+ * kind: a path is a file system item's, so its columns and rows come through a
+ * dataset, and a dataset names one file or table, never a folder to list. A
+ * saved dataset's kind is not known here, so the rest waits for dispatch.
  */
 export function getMetadataNodeIssue(node: {
   readonly config: Readonly<Record<string, unknown>>;
@@ -222,12 +281,21 @@ export function getMetadataNodeIssue(node: {
   const hasPath = node.config['path'] !== undefined;
   const hasTable = bindsSourceDataset(node);
   // Says both, because on a database the path is not drawn and the Source
-  // tab's table is the step.
+  // tab's dataset is the step.
   if (!hasPath && !hasTable) {
-    return 'config.path: required: a file or folder path, or a table chosen on Source';
+    return 'config.path: required: a file or folder path, or a dataset chosen on Source';
   }
-  if (hasPath && hasTable) {
-    return 'config.path: a table chosen on Source names what to read; clear File or folder path';
-  }
-  return undefined;
+  if (hasPath && hasTable) return `config.path: ${BOTH_PATH_AND_DATASET}`;
+  const list = node.config['fieldList'];
+  // Not a list of fields: the config's own check reports it.
+  if (!Array.isArray(list) || !list.every(isField)) return undefined;
+  const issue = hasPath
+    ? pathFieldIssue(list)
+    : list.includes('childItems')
+      ? `${titles(['childItems'])} read a folder path, not a dataset`
+      : undefined;
+  return issue === undefined ? undefined : `config.fieldList: ${issue}`;
 }
+
+const isField = (v: unknown): v is GetMetadataField =>
+  typeof v === 'string' && (GET_METADATA_FIELDS as readonly string[]).includes(v);

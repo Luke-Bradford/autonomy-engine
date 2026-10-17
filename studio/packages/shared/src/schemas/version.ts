@@ -561,7 +561,11 @@
 // (`structure`, `columnCount`, `rowCount`) and their outputs, and `path` now
 // optional. A pre-C8c build refuses the connection at dispatch and the new
 // fields at its schema.
-export const CATALOG_VERSION = 45;
+// BUMP 45→46 for #1600 OR41 C8c-2: `get_metadata` on a delimited or Excel
+// dataset (Structure and Column count of a file). A pre-C8c-2 build refuses the
+// dataset's kind at dispatch, so it imports such a doc and fails the node at its
+// first run: C7d's fails-at-first-run reason.
+export const CATALOG_VERSION = 46;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

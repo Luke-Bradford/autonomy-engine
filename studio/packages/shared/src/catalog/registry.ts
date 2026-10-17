@@ -720,7 +720,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     fieldOptionsByConnectionKind: { fieldList: GET_METADATA_FIELDS_BY_CONNECTION_KIND },
     idempotent: true,
     connectionKinds: ['fs', 'sqlite', 'postgres'],
-    datasetKinds: { source: ['table'], optionalOn: ['fs'] },
+    datasetKinds: { source: ['table', 'delimited', 'excel'], optionalOn: ['fs'] },
     outputs: [
       out('path', 'string'),
       optionalOut('exists', 'boolean'),

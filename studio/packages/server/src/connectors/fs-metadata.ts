@@ -17,6 +17,7 @@ import {
   modifiedWindow,
   wildcardMatcher,
 } from './fs-select.js';
+import { DatasetIoError } from './dataset-io-error.js';
 import { closeQuietly, failFromError } from './fs-write.js';
 import type { ActivityEvent } from './types.js';
 
@@ -208,14 +209,26 @@ async function childItemsOf(
 const isEvent = (v: unknown): v is ActivityEvent =>
   typeof v === 'object' && v !== null && 'type' in v && !Array.isArray(v);
 
+/**
+ * #1600 OR41 C8c-2 — a delimited or Excel dataset's columns, each `{name, type}`,
+ * read by the dataset's own reader (`fs.ts`), for Structure and Column count.
+ */
+export type FileColumnsReader = () => Promise<
+  readonly { readonly name: string; readonly type: string }[]
+>;
+
 export async function doGetMetadata(
   cfg: FsConfig,
   // C8c — the dispatch arm has refused a missing path (`getMetadataKindIssue`).
+  // C8c-2 — on a file dataset it is the dataset's own path.
   input: GetMetadataConfig & { readonly path: string },
   signal: AbortSignal,
+  // C8c-2 — given only for a file dataset, the one source of a file's columns.
+  readColumns?: FileColumnsReader,
 ): Promise<ActivityEvent> {
   const ticked = new Set<GetMetadataField>(input.fieldList);
   const answersMissing = ticked.has('exists');
+  const readsColumns = ticked.has('structure') || ticked.has('columnCount');
 
   let resolved: Awaited<ReturnType<typeof resolveWithinRoots>>;
   try {
@@ -247,6 +260,14 @@ export async function doGetMetadata(
   if (ticked.has('childItems') && type !== 'directory') {
     return failed('permanent', `Child items needs a folder, and '${input.path}' is a ${type}`);
   }
+  // C8c-2 — and a file's columns a file only, before its reader is handed a
+  // folder to open.
+  if (readsColumns && type !== 'file') {
+    return failed(
+      'permanent',
+      `Structure and Column count need a file, and '${input.path}' is a ${type}`,
+    );
+  }
   const fields = emptyFields();
   try {
     if (ticked.has('exists')) fields.exists = true;
@@ -268,6 +289,26 @@ export async function doGetMetadata(
     const items = await childItemsOf(cfg, path, input, signal);
     if (isEvent(items)) return items;
     fields.childItems = items;
+  }
+  if (readsColumns) {
+    // `getMetadataKindIssue` has refused a file's columns on a bare path; never
+    // end silently.
+    if (readColumns === undefined) {
+      return failed('permanent', 'Structure and Column count read a dataset chosen on Source');
+    }
+    let columns: Awaited<ReturnType<FileColumnsReader>>;
+    try {
+      columns = await readColumns();
+    } catch (err) {
+      // The reader's own verdict passes through, as the table's does.
+      return err instanceof DatasetIoError
+        ? failed(err.kind, err.message)
+        : failFromError(err, signal);
+    }
+    if (ticked.has('structure')) {
+      fields.structure = columns.map(({ name, type }) => ({ name, type }));
+    }
+    if (ticked.has('columnCount')) fields.columnCount = columns.length;
   }
   return { type: 'succeeded', outputs: { path, ...fields } };
 }

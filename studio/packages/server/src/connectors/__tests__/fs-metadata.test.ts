@@ -385,11 +385,17 @@ describe('get_metadata — dispatch', () => {
   it('needs a path, and refuses a table field', async () => {
     expect(await failureOf({ fieldList: ['exists'] })).toMatchObject({
       kind: 'permanent',
-      error: 'File or folder path is required on a file system connection',
+      error:
+        'File or folder path, or a delimited or Excel dataset chosen on Source, is required on a file system connection',
     });
+    // C8c-2 — a file's columns come through its dataset, a row count a table's.
     expect(await failureOf({ path: '.', fieldList: ['exists', 'columnCount'] })).toMatchObject({
       kind: 'permanent',
-      error: 'Column count read a database table, not a file system path',
+      error: 'Column count read a delimited or Excel dataset chosen on Source, not a path',
+    });
+    expect(await failureOf({ path: '.', fieldList: ['rowCount'] })).toMatchObject({
+      kind: 'permanent',
+      error: 'Row count read a database table, not a file system path',
     });
   });
 
