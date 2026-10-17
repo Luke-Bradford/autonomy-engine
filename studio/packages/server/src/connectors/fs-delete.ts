@@ -84,6 +84,10 @@ const KEPT_FOLDER: Readonly<Record<string, string>> = {
   EBUSY: 'kept: a mount point',
 };
 
+/** Ascending by the entry's name relative to the path, the same on every host. */
+const byName = (a: { name: string }, b: { name: string }) =>
+  a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /**
@@ -276,20 +280,21 @@ export async function* runDelete(
       // folder read's order is the OS's).
       files = walked.entries
         .filter((e) => e.type === 'file' && matches(e.base) && inWindow(e.st))
-        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-      // A link, or an entry of another type, is left in place: say so.
-      for (const e of walked.entries) {
-        if (e.type !== 'file' && e.type !== 'directory' && matches(e.base) && inWindow(e.st)) {
-          log.add('Warning', 'FileSkip', e.name, 'skipped: not a regular file, so left in place');
-        }
+        .sort(byName);
+      // A link, or an entry of another type, is left in place: say so, in
+      // name order too, so the log reads the same on every host.
+      for (const e of walked.entries
+        .filter(
+          (e) => e.type !== 'file' && e.type !== 'directory' && matches(e.base) && inWindow(e.st),
+        )
+        .sort(byName)) {
+        log.add('Warning', 'FileSkip', e.name, 'skipped: not a regular file, so left in place');
       }
       if (input.deleteEmptyFolders) {
         // Deepest first, so a folder emptied by removing its own subfolder goes
         // too: a folder's name is a prefix of its contents', so a plain
         // descending sort puts every subfolder before its parent.
-        folders = walked.entries
-          .filter((e) => e.type === 'directory')
-          .sort((a, b) => (a.name < b.name ? 1 : a.name > b.name ? -1 : 0));
+        folders = walked.entries.filter((e) => e.type === 'directory').sort((a, b) => byName(b, a));
       }
     }
   } catch (err) {
