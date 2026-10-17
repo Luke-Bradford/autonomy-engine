@@ -304,7 +304,18 @@ Sources: [Get Metadata](https://learn.microsoft.com/azure/data-factory/control-f
   - A server test runs both on one folder and compares names, types, path, failures and the limit (`fs-metadata.test.ts`).
 - No `CATALOG_VERSION` bump: there is no new type or field, and `get_metadata` already needs 43.
 
-Still open in C8: **C8c** adds tables on SQLite and Postgres (exists, structure, column count, row count), Structure and Column count for delimited and Excel files through a saved dataset source, and per-connection-kind field options. **C8d** adds *Wait until* (the durable park). **C8e** adds *Include subfolders* for child items. It was planned for C8b and split out so the lowering landed on its own; List directory never recursed, so the lowering does not depend on it.
+**Built (C8e, 2026-10-17):** *Include subfolders* for Child items, the config's `recursive`. It is a tick box in Settings after *Child entries*, drawn only while Child items is ticked and refused at save when set without it. It is off by default, so the C8b lowering of List directory, which never recursed, is unchanged.
+- **Names:** each item is named by its path below the listed folder, `/`-separated on every host (`2026/10/c.csv`). The item shape and the output contract are unchanged, so a template's `concat(path, '/', item.name)` still builds the item's path.
+- **Order:** tree order, a folder's contents straight after it (`a`, `a/x.csv`, `a-b.csv`): code-unit order with `/` sorted lowest.
+- **What is walked and what is listed:** every subfolder is walked, whatever the Filter, *Child entries* or modified window. Those decide only what is listed. The Filter matches an entry's own name, not its path, and the modified window still lists files only, at every depth.
+- **Links:** a link is listed as `symlink` and never walked into, to a folder or anywhere else.
+- **Limits:** the list limit counts every entry visited across the whole tree, as Copy · Files as-is's walk does, and the failure says "the folder and its subfolders". The output can therefore hold up to the limit's items from the whole tree; OR36 #1567 owns capture caps.
+- **Failures:** a subfolder that cannot be opened fails the run, as in Copy's walk. A subfolder removed during the walk is skipped. Every entry visited is `lstat`ed, matched or not, because a folder is walked whether or not it is listed, so an entry whose `lstat` fails fails the run even where the Filter would have left it out. Without Include subfolders only a matched entry is `lstat`ed, as before.
+- **Residual:** `opendir` has no `O_NOFOLLOW`. A subfolder swapped for a link between its `lstat` and its `opendir` could still be read, the residual List directory and Copy's walk already state. Here it would expose names, sizes and times, not contents.
+- **Deliberate difference from ADF:** ADF's Child items lists one level and has no such setting. This is a studio addition.
+- `CATALOG_VERSION` 43→44: a pre-C8e build strips `recursive` and lists the top level only.
+
+Still open in C8: **C8c** adds tables on SQLite and Postgres (exists, structure, column count, row count), Structure and Column count for delimited and Excel files through a saved dataset source, and per-connection-kind field options. **C8d** adds *Wait until* (the durable park).
 
 ### 4.4 Delete
 Source: [Delete](https://learn.microsoft.com/azure/data-factory/delete-activity).
@@ -433,7 +444,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C5 | Copy: incremental (watermark Automatic / Expression; files modified-since-last-success) | OR15 incremental |
 | C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs | — |
 | C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Rows · Whole file as text (`file_read` as Lookup's second type), the title *Lookup* (built); **C7c** *When over the limit* and `bytes`/`truncated` for the text mode, limited by the connection's `maxBytes` rather than the 1 MiB byte cap (built); **C7d** the workspace Lookup max rows (1000 by default, up to ADF's 5000) and the Monitor Rows read column (built) | — |
-| C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c** tables (SQLite, Postgres) and a dataset source's structure and column count; **C8d** Wait until; **C8e** Include subfolders | OR17 #1408 |
+| C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c** tables (SQLite, Postgres) and a dataset source's structure and column count; **C8d** Wait until; **C8e** Include subfolders (built) | OR17 #1408 |
 | C9 | Delete: wildcard, folders, dates, log. Lower file_delete | OR17 #1408 |
 | C10 | Script activity | OR12 #1403, OR15 sql_script |
 | C11 | Web: fail-on-error, response cap, parse, retry-after, wait-for-callback. Lower http_request and webhook | — |

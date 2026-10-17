@@ -265,4 +265,84 @@ test.describe('#1600 C8a — Get metadata', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+  /**
+   * #1600 C8e — Include subfolders. Drawn only once Child items is ticked,
+   * off for a new node, saved as `recursive`, and the run names each nested
+   * item by its path below the folder, in tree order.
+   */
+  test('Include subfolders lists the whole tree, each item by its path', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1600-c8e-')));
+    try {
+      mkdirSync(join(root, 'in', '2026', '10'), { recursive: true });
+      writeFileSync(join(root, 'in', 'a.csv'), 'id\n1\n');
+      writeFileSync(join(root, 'in', '2026', 'b.csv'), 'id\n2\n');
+      writeFileSync(join(root, 'in', '2026', '10', 'c.csv'), 'id\n3\n');
+      writeFileSync(join(root, 'in', '2026', 'skip.txt'), 'no');
+      const fs = await seedConnection(page, {
+        name: 'e2e 1600 c8e files',
+        kind: 'fs',
+        config: { roots: [root] },
+      });
+      const pipelineId = await openSeededCanvas(page, 'e2e 1600 c8e subfolders', { nodes: [] });
+      await addActivity(page, 'Get metadata');
+      await canvasNodes(page).first().click();
+      await tab(page, 'Settings').click();
+
+      const subfolders = properties(page).getByRole('checkbox', {
+        name: 'Include subfolders',
+        exact: true,
+      });
+      await expect(subfolders).toHaveCount(0);
+      await box(page, 'Child items').check();
+      await expect(subfolders).toBeVisible();
+      await expect(subfolders).not.toBeChecked();
+      await subfolders.check();
+      await properties(page)
+        .getByRole('combobox', { name: 'Child entries', exact: true })
+        .selectOption({ label: 'Files only' });
+      // Measured at 1440x900: the whole Settings tab fits, the new box included.
+      const last = await properties(page)
+        .getByRole('textbox', { name: 'Modified before', exact: true })
+        .boundingBox();
+      expect(last, 'Modified before is drawn').not.toBeNull();
+      expect(last!.y + last!.height).toBeLessThanOrEqual(900);
+      await properties(page).getByRole('button', { name: 'Apply config', exact: true }).click();
+
+      await tab(page, 'Source').click();
+      await pickConnection(page, 'Connection', { id: fs });
+      await fillSelectedNodeConfig(page, { 'File or folder path': 'in', Filter: '*.csv' });
+      await page.getByRole('button', { name: 'Save version' }).click();
+      await expect(page.locator('.notice')).toHaveText('Saved v2.');
+
+      const versions = (await (
+        await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+      ).json()) as { id: string; version: number; nodes: { config: Record<string, unknown> }[] }[];
+      const latest = versions.sort((a, b) => b.version - a.version)[0]!;
+      expect(latest.nodes[0]!.config).toMatchObject({
+        fieldList: ['childItems'],
+        childFilter: '*.csv',
+        childType: 'files',
+        recursive: true,
+      });
+
+      const runId = await fireAndSettle(page, latest.id, 'e2e 1600 c8e');
+      const events = (await (
+        await page.request.get(`/api/runs/${encodeURIComponent(runId)}/events`)
+      ).json()) as { type: string; payload: Record<string, unknown> }[];
+      const done = events.find((e) => e.type === 'node.succeeded');
+      expect(done, `events: ${JSON.stringify(events.map((e) => e.type))}`).toBeDefined();
+      const items = (done!.payload.outputs as { childItems: { name: string }[] }).childItems;
+      expect(items.map((c) => c.name)).toEqual(['2026/10/c.csv', '2026/b.csv', 'a.csv']);
+
+      // Back in the editor the box reads what was saved.
+      await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+      await canvasNodes(page).first().click();
+      await tab(page, 'Settings').click();
+      await expect(subfolders).toBeChecked();
+      await expectQuiet(page, problems);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

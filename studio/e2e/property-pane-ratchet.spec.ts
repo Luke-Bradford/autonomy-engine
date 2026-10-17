@@ -520,12 +520,14 @@ function seeds(ids: SeedIds): Record<string, Seed> {
       },
     },
     'Delete file': fsNode('file_delete', { path: '/tmp/e2e/old.txt' }),
-    // #1600 OR41 C8a — Child items ticked, so its settings draw too.
+    // #1600 OR41 C8a — Child items ticked, so its settings draw too (C8e's
+    // Include subfolders among them).
     'Get metadata': fsNode('get_metadata', {
       path: '/tmp/e2e',
       fieldList: ['exists', 'childItems'],
       childFilter: '*.csv',
       childType: 'files',
+      recursive: true,
       modifiedStart: '2026-10-01T00:00:00Z',
     }),
     'Lookup (whole file as text)': fsNode('file_read', { path: '/tmp/e2e/in.txt' }),
