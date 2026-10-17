@@ -97,7 +97,7 @@ export async function* runTableMetadata(
     );
     return;
   }
-  const issue = getMetadataKindIssue(input.data, io.kind);
+  const issue = getMetadataKindIssue(input.data, io.kind, ctx.datasets?.source !== undefined);
   if (issue !== undefined) {
     yield failed('permanent', issue);
     return;

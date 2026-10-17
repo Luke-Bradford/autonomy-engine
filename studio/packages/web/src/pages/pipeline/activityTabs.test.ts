@@ -207,6 +207,9 @@ describe('Get metadata on the bound connection kind (#1600 OR41 C8c)', () => {
       'lastModified',
       'contentMD5',
       'childItems',
+      // C8c-2 — a delimited or Excel dataset's columns, on a file system too.
+      'structure',
+      'columnCount',
     ]);
     expect(offered('postgres', ['size'])).toEqual([
       'exists',

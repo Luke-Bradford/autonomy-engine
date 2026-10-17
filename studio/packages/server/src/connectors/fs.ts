@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   COPY_ACTIVITY_TYPE,
   COPY_FILES_ACTIVITY_TYPE,
+  DATASET_CONFIG_SCHEMAS,
   LOOKUP_ACTIVITY_TYPE,
   FILE_COPY_ACTIVITY_TYPE,
   FILE_DELETE_ACTIVITY_TYPE,
@@ -454,6 +455,13 @@ interface FsDatasetRead {
 
 interface FsDatasetIo {
   readonly describeColumns: (read: FsDatasetRead) => Promise<readonly string[]>;
+  /**
+   * #1600 OR41 C8c-2 — Get metadata's Structure `type` for every column: the
+   * format's own, as a table's is the store's. A delimited file holds text, so
+   * `string`; a sheet declares no column type (its cells are typed one by one),
+   * so `''`, as SQLite's undeclared column is.
+   */
+  readonly structureType: string;
   readonly readBatches: (
     read: FsDatasetRead,
   ) => AsyncGenerator<Record<string, unknown>[], void, undefined>;
@@ -466,6 +474,7 @@ interface FsDatasetIo {
 
 const DELIMITED_IO: FsDatasetIo = {
   describeColumns: describeDelimitedDatasetColumns,
+  structureType: 'string',
   readBatches: readDelimitedDatasetBatches,
   resolveAddress: resolveDelimitedDatasetAddress,
   coercionFor: delimitedCoercionFor,
@@ -473,6 +482,7 @@ const DELIMITED_IO: FsDatasetIo = {
 
 const EXCEL_IO: FsDatasetIo = {
   describeColumns: describeExcelDatasetColumns,
+  structureType: '',
   readBatches: readExcelDatasetBatches,
   resolveAddress: resolveExcelDatasetAddress,
   coercionFor: excelCoercionFor,
@@ -745,15 +755,54 @@ export const fsAdapter: ConnectorAdapter = {
         return;
       }
       // C8c — a path, and only a path's fields: the config cannot see the kind.
+      // C8c-2 — or a delimited or Excel dataset, and a file's fields.
       const { path } = input.data;
-      const issue = getMetadataKindIssue(input.data, 'fs');
+      const dataset = ctx.datasets?.source;
+      // The executor's connection check keeps a table off a file system, and its
+      // address step has already run this reader fork; re-stated first, so a
+      // wrong kind is named as one rather than as a wrong field.
+      const io = dataset === undefined ? undefined : fsReaderFor(dataset.kind);
+      if (dataset !== undefined && io === null) {
+        yield failed('permanent', notAnFsKind(dataset.kind));
+        return;
+      }
+      const issue = getMetadataKindIssue(input.data, 'fs', dataset !== undefined);
       if (issue !== undefined) {
         yield failed('permanent', issue);
         return;
       }
+      if (dataset !== undefined && io) {
+        // Parameter overrides are merged in already; the reader re-validates
+        // the whole config again when the columns are read.
+        const target = DATASET_CONFIG_SCHEMAS[dataset.kind].safeParse(dataset.config);
+        const datasetPath = target.success ? target.data['path'] : undefined;
+        if (!target.success || typeof datasetPath !== 'string') {
+          yield failed(
+            'permanent',
+            target.success
+              ? `the ${dataset.kind} dataset names no path`
+              : `invalid ${dataset.kind} dataset config: ${formatZodIssues(target.error.issues)}`,
+          );
+          return;
+        }
+        yield await doGetMetadata(
+          cfg.data,
+          { ...input.data, path: datasetPath },
+          ctx.signal,
+          async () =>
+            (await io.describeColumns(readOf(dataset, ctx.signal))).map((name) => ({
+              name,
+              type: io.structureType,
+            })),
+        );
+        return;
+      }
       // `getMetadataKindIssue` has refused a missing path; never end silently.
       if (path === undefined) {
-        yield failed('permanent', 'File or folder path is required on a file system connection');
+        yield failed(
+          'permanent',
+          'File or folder path, or a delimited or Excel dataset chosen on Source, is required on a file system connection',
+        );
         return;
       }
       yield await doGetMetadata(cfg.data, { ...input.data, path }, ctx.signal);

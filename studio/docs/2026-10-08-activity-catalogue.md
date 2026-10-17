@@ -332,7 +332,29 @@ Sources: [Get Metadata](https://learn.microsoft.com/azure/data-factory/control-f
 - **Residuals:** Row count is `count(*)`, a full scan. On Postgres the connection's statement timeout bounds it; such a timeout is classified `permanent` today, as every Postgres read's is (#1741), and a cancel waits for it. On SQLite better-sqlite3 runs it synchronously and cannot interrupt it, so a very large table holds the server's event loop until it finishes; cancel is checked before it starts.
 - `CATALOG_VERSION` 44→45.
 
-Still open in C8: **C8c-2** adds Structure and Column count for delimited and Excel files through a saved dataset source on a file system connection. **C8d** adds *Wait until* (the durable park).
+**Built (C8c-2, 2026-10-17):** Get metadata on a **delimited or Excel dataset** on a file system connection. It gives Structure and Column count of a file, as ADF's Get Metadata does for a DelimitedText or Excel dataset.
+- **Source:** on a file system, the Source tab now draws *Source dataset* as well as *File or folder path*. It lists the connection's delimited and Excel datasets, with *— none —* by default. The node reads one or the other:
+  - both set is refused at save ("a dataset chosen on Source names what to read; clear File or folder path") and again at dispatch;
+  - neither set is refused at save, as before.
+  - `datasetKinds.source` is now `['table', 'delimited', 'excel']`. The executor's connection check still keeps a file dataset off a database and a table off a file system.
+- **Fields:** a file dataset answers a file's fields (Exists, Item name, Item type, Size, Created, Last modified, Content MD5) for the dataset's own path, plus Structure and Column count. The file system now offers ten tick boxes, a path's eight and these two.
+  - **At save** (`getMetadataNodeIssue`), whatever the kind:
+    - a path with Structure, Column count or Row count is refused, because a path's columns come through a dataset;
+    - a dataset with Child items is refused, because a dataset names one file or table, never a folder.
+  - **At dispatch** (`getMetadataKindIssue`, now told whether a dataset is bound): Row count on a file dataset is refused, since it is a table's.
+  - The save check is stricter than C8c-1's: a table dataset with Child items, which used to save and then always fail at dispatch, is now refused at save, so such a doc no longer imports.
+  - The path's help and the Field list's help say a file's columns come through *Source dataset*.
+- **One path, then one reader.** The path fields, the Exists answer and the roots' confinement are C8a's (`doGetMetadata` on the dataset's path, with parameter overrides already merged). The columns are read by the dataset's own reader, the one Copy uses to describe its source (`describeColumns` through `fs.ts`'s reader fork), so Get metadata and Copy name a file's columns the same way.
+  - A path that is not a file is refused before its reader opens it ("Structure and Column count need a file").
+  - With *First row as header* off, columns are named by position (`column1`…), as Copy names them. ADF requires the header for a real structure; studio gives the positional one instead.
+  - A file with no rows has no header to read, and fails `permanent` with the reader's reason.
+  - Exists answers for the **file**. On an Excel dataset whose sheet is missing, the run fails rather than say `false`.
+- **Structure `type`** is the format's own, in lowercase, as a table's is the store's (C8c-1). For a delimited file it is `string` for every column, because the file holds text (ADF says `String`). For Excel it is `''`, because a sheet declares no column type (its cells are typed one by one), as an undeclared SQLite column is `''`. No type is inferred from the data, which would be a guess.
+- **Deliberate difference (#1743):** with Exists ticked, a dataset whose **folder** is missing fails at dispatch (`dataset_address_unresolvable`) rather than say `exists: false`. Every dataset's address is resolved before dispatch, and that step needs the folder. A missing file in an existing folder does say `false`.
+- **Shown together with the path field** on a file system. The author sees both inputs, and the save refusal says which to clear.
+- `CATALOG_VERSION` 45→46: a pre-C8c-2 build refuses the dataset's kind at dispatch.
+
+Still open in C8: **C8d** adds *Wait until* (the durable park).
 
 ### 4.4 Delete
 Source: [Delete](https://learn.microsoft.com/azure/data-factory/delete-activity).
@@ -437,7 +459,7 @@ The **capture level** (workspace setting, overridable per pipeline and per activ
 | Copy sink, rows | T delimited (OR14 writer) | ✓ append/overwrite; **T** truncate, upsert, auto-create, pre-copy | ✓ same | — | OR13 | OR15 |
 | Copy, files as-is | ✓ copy/move (single file); **T** folder, wildcard, list, delete-after | — | — | T (download to file) | OR13 | — |
 | Lookup | ✓ | ✓ | ✓ | (use Web) | OR13 | OR15 |
-| Get metadata | ✓ full field list (C8a); **T** wait, a file dataset's structure (C8c-2) | ✓ exists, structure, columns, rows (C8c-1) | ✓ same | — | OR13 | OR15 |
+| Get metadata | ✓ full field list (C8a), a file dataset's structure and column count (C8c-2); **T** wait | ✓ exists, structure, columns, rows (C8c-1) | ✓ same | — | OR13 | OR15 |
 | Delete | ✓ one file; **T** wildcard, folders, dates, log | — (Script) | — (Script) | — | OR13 | — |
 | Script | — | **T** | **T** | — | — | OR15 |
 | Web | — | — | — | ✓; **T** fail-on-error, cap, callback | — | — |
@@ -461,7 +483,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C5 | Copy: incremental (watermark Automatic / Expression; files modified-since-last-success) | OR15 incremental |
 | C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs | — |
 | C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Rows · Whole file as text (`file_read` as Lookup's second type), the title *Lookup* (built); **C7c** *When over the limit* and `bytes`/`truncated` for the text mode, limited by the connection's `maxBytes` rather than the 1 MiB byte cap (built); **C7d** the workspace Lookup max rows (1000 by default, up to ADF's 5000) and the Monitor Rows read column (built) | — |
-| C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c-1** tables (SQLite, Postgres) with per-kind field options (built); **C8c-2** a delimited or Excel dataset source's structure and column count; **C8d** Wait until; **C8e** Include subfolders (built) | OR17 #1408 |
+| C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c-1** tables (SQLite, Postgres) with per-kind field options (built); **C8c-2** a delimited or Excel dataset source's structure and column count (built); **C8d** Wait until; **C8e** Include subfolders (built) | OR17 #1408 |
 | C9 | Delete: wildcard, folders, dates, log. Lower file_delete | OR17 #1408 |
 | C10 | Script activity | OR12 #1403, OR15 sql_script |
 | C11 | Web: fail-on-error, response cap, parse, retry-after, wait-for-callback. Lower http_request and webhook | — |

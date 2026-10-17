@@ -3700,7 +3700,9 @@ export function NodePanel({
   const sourceConnectionId = boundConnections?.source ?? thisNode?.connectionId;
   const sourceConnection = connections.find((c) => c.id === sourceConnectionId);
   // #1600 OR41 C8c — `datasetKinds.optionalOn`: on this kind the node may bind
-  // no dataset at all, so an empty picker is not drawn until one is bound.
+  // no dataset at all, so the Source tab asks nothing of it while none is bound.
+  // C8c-2 — the picker is still drawn there, with "— none —": a file system's
+  // Get metadata reads a path or a delimited or Excel dataset.
   const datasetOptionalHere =
     sourceConnection !== undefined &&
     entry?.datasetKinds?.optionalOn?.includes(sourceConnection.kind) === true &&
@@ -4097,7 +4099,7 @@ export function NodePanel({
           </Fragment>
         );
       case 'sourceDataset': {
-        if (datasetKinds === undefined || datasetOptionalHere) return null;
+        if (datasetKinds === undefined) return null;
         const saved = (
           <>
             {/* #1139 — the dataset ADDRESSES within those stores. Narrowed by the
