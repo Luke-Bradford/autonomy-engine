@@ -276,7 +276,8 @@ describe('Get metadata Wait until on a sqlite table (C8d-2b)', () => {
     );
     expect(failure(sized)).toEqual({
       kind: 'permanent',
-      error: 'It is at least N bytes needs a file; wait for a table with It exists or It is not empty',
+      error:
+        'It is at least N bytes needs a file; wait for a table with It exists or It is not empty',
     });
     const other = await run(
       sqliteAdapter,
@@ -447,7 +448,11 @@ describe.skipIf(LIVE_HOST === undefined)('Get metadata on a live postgres table 
     });
     const sized = await run(
       adapter,
-      ctx(live, { fieldList: ['exists'], waitUntil: 'minimumSize', minimumSize: 1, ...WAIT }, at('orders')),
+      ctx(
+        live,
+        { fieldList: ['exists'], waitUntil: 'minimumSize', minimumSize: 1, ...WAIT },
+        at('orders'),
+      ),
       password,
     );
     expect(failure(sized).error).toMatch(/^It is at least N bytes needs a file/);

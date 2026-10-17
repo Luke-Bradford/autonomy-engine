@@ -288,7 +288,9 @@ function sqliteTableMetadata(cfg: z.infer<typeof sqliteConnectionConfigSchema>):
             .all(found.name, schema) as { name: string; type: unknown }[]
         ).map((c) => ({ name: c.name, type: typeof c.type === 'string' ? c.type : '' }));
         if (reads.rowCount) {
-          const { n } = db.prepare(`SELECT count(*) AS n FROM ${qualified}`).get() as { n: unknown };
+          const { n } = db.prepare(`SELECT count(*) AS n FROM ${qualified}`).get() as {
+            n: unknown;
+          };
           return { columns, rowCount: n };
         }
         if (!reads.anyRow) return { columns, rowCount: undefined };

@@ -324,7 +324,10 @@ describe('get_metadata Wait until (#1600 OR41 C8d)', () => {
     // An inline dataset is a Table or a Query, never a file: a size is refused at save.
     expect(getMetadataNodeIssue({ config: waiting, inlineDatasets: inline })).toBeUndefined();
     expect(
-      getMetadataNodeIssue({ config: { ...waiting, waitUntil: 'nonEmpty' }, inlineDatasets: inline }),
+      getMetadataNodeIssue({
+        config: { ...waiting, waitUntil: 'nonEmpty' },
+        inlineDatasets: inline,
+      }),
     ).toBeUndefined();
     expect(getMetadataNodeIssue({ config: sized, inlineDatasets: inline })).toBe(
       `config.waitUntil: ${onTable}`,

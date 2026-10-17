@@ -62,7 +62,11 @@ export interface TableMetadataIo {
    * the same table, or `null` when there is no such table or view. Each store
    * checks for cancel before it reads anything.
    */
-  inspectTable(table: TableTarget, signal: AbortSignal, reads: TableReads): Promise<TableFacts | null>;
+  inspectTable(
+    table: TableTarget,
+    signal: AbortSignal,
+    reads: TableReads,
+  ): Promise<TableFacts | null>;
 }
 
 /** The dataset's table, validated: `schema` absent means the store's default. */

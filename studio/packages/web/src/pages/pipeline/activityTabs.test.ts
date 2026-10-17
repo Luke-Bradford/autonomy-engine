@@ -260,7 +260,11 @@ describe('Get metadata on the bound connection kind (#1600 OR41 C8c)', () => {
     if (waitUntil === undefined) throw new Error('waitUntil is a field');
     const all = ['off', 'exists', 'nonEmpty', 'minimumSize'];
     for (const kind of ['sqlite', 'postgres']) {
-      expect(offeredFieldOptions(meta, waitUntil, kind, 'off')).toEqual(['off', 'exists', 'nonEmpty']);
+      expect(offeredFieldOptions(meta, waitUntil, kind, 'off')).toEqual([
+        'off',
+        'exists',
+        'nonEmpty',
+      ]);
       expect(offeredFieldOptions(meta, waitUntil, kind, 'minimumSize')).toEqual(all);
     }
     expect(offeredFieldOptions(meta, waitUntil, 'fs', 'off')).toEqual(all);
