@@ -6,7 +6,7 @@ import {
   getMetadataKindIssue,
   type GetMetadataField,
 } from '@autonomy-studio/shared';
-import { failed } from './activity-events.js';
+import { failed, notYet } from './activity-events.js';
 import { DatasetIoError } from './dataset-io-error.js';
 import type { ActivityContext, ActivityEvent } from './types.js';
 
@@ -25,6 +25,8 @@ import type { ActivityContext, ActivityEvent } from './types.js';
  *   interim types.
  * - Row count is a studio addition.
  * - The `path` output holds the table reference as the dataset writes it.
+ * - C8d-2b — *Wait until* on a table (It exists, It is not empty: one row) is a
+ *   studio addition; ADF's Validation waits for a file or a folder only.
  */
 export interface TableColumn {
   readonly name: string;
@@ -36,6 +38,21 @@ export interface TableFacts {
   readonly columns: readonly TableColumn[];
   /** `count(*)` as the store returns it; `undefined` when not asked for. */
   readonly rowCount: unknown;
+  /**
+   * C8d-2b — whether a one-row probe found a row; `undefined` when not asked
+   * for, or when the count was asked for too (the count answers it).
+   */
+  readonly hasRow?: boolean;
+}
+
+/**
+ * What to read beyond the columns. `rowCount` is a full `count(*)`; `anyRow`
+ * (C8d-2b, *It is not empty*) a one-row probe, run only without `rowCount`, so
+ * the probe and the count can never disagree about one table.
+ */
+export interface TableReads {
+  readonly rowCount: boolean;
+  readonly anyRow: boolean;
 }
 
 export interface TableMetadataIo {
@@ -45,11 +62,7 @@ export interface TableMetadataIo {
    * the same table, or `null` when there is no such table or view. Each store
    * checks for cancel before it reads anything.
    */
-  inspectTable(
-    table: TableTarget,
-    signal: AbortSignal,
-    withRowCount: boolean,
-  ): Promise<TableFacts | null>;
+  inspectTable(table: TableTarget, signal: AbortSignal, reads: TableReads): Promise<TableFacts | null>;
 }
 
 /** The dataset's table, validated: `schema` absent means the store's default. */
@@ -125,9 +138,18 @@ export async function* runTableMetadata(
   const ticked = new Set<GetMetadataField>(input.data.fieldList);
   const fields = emptyGetMetadataFields();
   const path = tableRef(target.data);
+  // C8d-2b — while waiting, a missing table is "not yet", whatever Exists says.
+  const { waitUntil } = input.data;
   try {
-    const facts = await io.inspectTable(target.data, ctx.signal, ticked.has('rowCount'));
+    const facts = await io.inspectTable(target.data, ctx.signal, {
+      rowCount: ticked.has('rowCount'),
+      anyRow: waitUntil === 'nonEmpty',
+    });
     if (facts === null) {
+      if (waitUntil !== 'off') {
+        yield notYet(input.data, `there is no table '${path}' yet`);
+        return;
+      }
       if (!ticked.has('exists')) {
         yield failed('permanent', `there is no table '${path}'`);
         return;
@@ -135,12 +157,19 @@ export async function* runTableMetadata(
       yield { type: 'succeeded', outputs: { path, ...fields, exists: false } };
       return;
     }
+    if (ticked.has('rowCount')) fields.rowCount = rowCountOf(facts.rowCount);
+    if (waitUntil === 'nonEmpty') {
+      const hasRow = ticked.has('rowCount') ? fields.rowCount !== 0 : facts.hasRow === true;
+      if (!hasRow) {
+        yield notYet(input.data, `'${path}' has no rows yet`);
+        return;
+      }
+    }
     if (ticked.has('exists')) fields.exists = true;
     if (ticked.has('structure')) {
       fields.structure = facts.columns.map(({ name, type }) => ({ name, type }));
     }
     if (ticked.has('columnCount')) fields.columnCount = facts.columns.length;
-    if (ticked.has('rowCount')) fields.rowCount = rowCountOf(facts.rowCount);
   } catch (err) {
     // The store's own verdict passes through, as Lookup's does: a busy store is
     // `transient`, a missing file `permanent`.

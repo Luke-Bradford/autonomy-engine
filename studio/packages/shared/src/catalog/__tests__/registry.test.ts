@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { expectOneSentence, withoutStop } from '../../__tests__/helpers/description.js';
 import { DATASET_CONNECTION_KINDS } from '../dataset-config.js';
-import { enumSetValuesOf } from '../../schemas/field-presentation.js';
+import { enumSetValuesOf, enumValuesOf } from '../../schemas/field-presentation.js';
 import { catalog, getActivity, isStructuralCallActivity } from '../registry.js';
 import {
   ACTIVITY_CATEGORIES,
@@ -172,7 +172,8 @@ describe('activity catalog', () => {
     for (const entry of catalog.values()) {
       for (const [field, byKind] of Object.entries(entry.fieldOptionsByConnectionKind ?? {})) {
         const shape = (entry.configSchema as unknown as { shape: Record<string, unknown> }).shape;
-        const all = enumSetValuesOf(shape[field]) ?? [];
+        // C8d-2b — an enum (Wait until) as well as an enum set (the field list).
+        const all = enumSetValuesOf(shape[field]) ?? enumValuesOf(shape[field]) ?? [];
         expect(all.length, `${entry.type}.${field}`).toBeGreaterThan(0);
         const offered = new Set<string>();
         for (const [kind, options] of Object.entries(byKind)) {

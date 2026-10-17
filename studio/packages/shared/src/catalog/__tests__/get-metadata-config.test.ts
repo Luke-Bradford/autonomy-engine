@@ -312,24 +312,34 @@ describe('get_metadata Wait until (#1600 OR41 C8d)', () => {
     ).toBe(false);
   });
 
-  it('checks a path or a file dataset; a table is refused at save and at dispatch (C8d-2a)', () => {
+  it('waits for a table to exist or hold a row; only It is at least N bytes is refused (C8d-2b)', () => {
     const waiting = { fieldList: ['exists'], waitUntil: 'exists' };
+    const sized = { ...waiting, waitUntil: 'minimumSize', minimumSize: 1 };
     const onTable =
-      'Wait until checks a file, a folder or a delimited or Excel dataset; on a table it is not supported yet';
+      'It is at least N bytes needs a file; wait for a table with It exists or It is not empty';
+    const inline = { source: { kind: 'table', config: { table: 't' } } };
     // A saved dataset's kind is not known at save: dispatch decides.
     expect(getMetadataNodeIssue({ config: waiting, datasetIds: { source: 'ds' } })).toBeUndefined();
-    // An inline dataset is a Table or a Query, never a file.
+    expect(getMetadataNodeIssue({ config: sized, datasetIds: { source: 'ds' } })).toBeUndefined();
+    // An inline dataset is a Table or a Query, never a file: a size is refused at save.
+    expect(getMetadataNodeIssue({ config: waiting, inlineDatasets: inline })).toBeUndefined();
     expect(
-      getMetadataNodeIssue({
-        config: waiting,
-        inlineDatasets: { source: { kind: 'table', config: { table: 't' } } },
-      }),
-    ).toBe(`config.waitUntil: ${onTable}`);
+      getMetadataNodeIssue({ config: { ...waiting, waitUntil: 'nonEmpty' }, inlineDatasets: inline }),
+    ).toBeUndefined();
+    expect(getMetadataNodeIssue({ config: sized, inlineDatasets: inline })).toBe(
+      `config.waitUntil: ${onTable}`,
+    );
     expect(getMetadataNodeIssue({ config: { ...waiting, path: '/in' } })).toBeUndefined();
     const cfg = getMetadataConfigSchema.parse(waiting);
+    const nonEmpty = getMetadataConfigSchema.parse({ ...waiting, waitUntil: 'nonEmpty' });
+    const size = getMetadataConfigSchema.parse(sized);
+    for (const kind of ['sqlite', 'postgres'] as const) {
+      expect(getMetadataKindIssue(cfg, kind, true)).toBeUndefined();
+      expect(getMetadataKindIssue(nonEmpty, kind, true)).toBeUndefined();
+      expect(getMetadataKindIssue(size, kind, true)).toBe(onTable);
+    }
     expect(getMetadataKindIssue(cfg, 'fs', true)).toBeUndefined();
-    expect(getMetadataKindIssue(cfg, 'sqlite', true)).toBe(onTable);
-    expect(getMetadataKindIssue(cfg, 'postgres', true)).toBe(onTable);
-    expect(getMetadataKindIssue({ ...cfg, path: '/in' }, 'fs', false)).toBeUndefined();
+    expect(getMetadataKindIssue(size, 'fs', true)).toBeUndefined();
+    expect(getMetadataKindIssue({ ...size, path: '/in' }, 'fs', false)).toBeUndefined();
   });
 });

@@ -24,7 +24,9 @@ import { tableRef, type TableColumn, type TableMetadataIo } from './table-metada
  * bounds each, the count included, so a `count(*)` over a huge table is cut off
  * there and fails as a timed-out read does (#1741 has its classification).
  * Cancel is checked before connecting and before the count; a count already
- * running waits for that timeout.
+ * running waits for that timeout. C8d-2b — *It is not empty* without Row count
+ * is an `exists (select 1 …)` probe in the same session, bounded and
+ * cancel-checked the same way.
  */
 const DESCRIBE_TABLE_SQL = `
   select has_table_privilege(c.oid, 'SELECT') as readable,
@@ -49,7 +51,7 @@ export interface PostgresTableMetadataDeps {
 export function postgresTableMetadata(deps: PostgresTableMetadataDeps): TableMetadataIo {
   return {
     kind: 'postgres',
-    inspectTable: async (target, signal, withRowCount) => {
+    inspectTable: async (target, signal, reads) => {
       const qualified = qualifiedTable(target);
       if (signal.aborted) throw new DatasetIoError('cancelled', 'Get metadata aborted');
       const client = await openSession(
@@ -71,14 +73,17 @@ export function postgresTableMetadata(deps: PostgresTableMetadataDeps): TableMet
             `the connection's role cannot read the table '${tableRef(target)}'`,
           );
         }
+        const columns = row.columns.map(({ name, type }) => ({ name, type }));
+        if (!reads.rowCount && !reads.anyRow) return { columns, rowCount: undefined };
         if (signal.aborted) throw new DatasetIoError('cancelled', 'Get metadata aborted');
-        const rowCount = withRowCount
-          ? (
-              (await client.query(`select count(*) as n from ${qualified}`)).rows[0] as
-                { n: unknown } | undefined
-            )?.n
-          : undefined;
-        return { columns: row.columns.map(({ name, type }) => ({ name, type })), rowCount };
+        if (reads.rowCount) {
+          const counted = await client.query(`select count(*) as n from ${qualified}`);
+          return { columns, rowCount: (counted.rows[0] as { n: unknown } | undefined)?.n };
+        }
+        // C8d-2b — It is not empty: one row, never a scan.
+        const probed = await client.query(`select exists (select 1 from ${qualified}) as found`);
+        const hasRow = (probed.rows[0] as { found: boolean } | undefined)?.found === true;
+        return { columns, rowCount: undefined, hasRow };
       } catch (err) {
         if (err instanceof DatasetIoError) throw err;
         throw readFailure(err, 'the table could not be read', deps.secret);

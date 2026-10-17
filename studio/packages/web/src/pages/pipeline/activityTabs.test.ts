@@ -215,10 +215,15 @@ describe('Get metadata on the bound connection kind (#1600 OR41 C8c)', () => {
   it('draws the path on a file system connection, or while the kind is unknown, and not on a database', () => {
     expect(shown({ fieldList: ['exists'] }, 'fs')).toEqual(['path', 'fieldList', 'waitUntil']);
     expect(shown({ fieldList: ['exists'] }, undefined)).toEqual(['path', 'fieldList', 'waitUntil']);
-    expect(shown({ fieldList: ['exists'] }, 'sqlite')).toEqual(['fieldList']);
-    expect(shown({ fieldList: ['exists'] }, 'postgres')).toEqual(['fieldList']);
+    // C8d-2b — Wait until on a table too.
+    expect(shown({ fieldList: ['exists'] }, 'sqlite')).toEqual(['fieldList', 'waitUntil']);
+    expect(shown({ fieldList: ['exists'] }, 'postgres')).toEqual(['fieldList', 'waitUntil']);
     // A path a database node still holds stays in view, so it can be cleared.
-    expect(shown({ path: 't', fieldList: ['exists'] }, 'sqlite')).toEqual(['path', 'fieldList']);
+    expect(shown({ path: 't', fieldList: ['exists'] }, 'sqlite')).toEqual([
+      'path',
+      'fieldList',
+      'waitUntil',
+    ]);
   });
 
   it("offers the kind's own fields, keeps any already ticked, and every field while the kind is unknown", () => {
@@ -248,5 +253,17 @@ describe('Get metadata on the bound connection kind (#1600 OR41 C8c)', () => {
     expect(offeredFieldOptions(meta, { name: 'childType', enumOptions: ['all'] }, 'fs', '')).toBe(
       undefined,
     );
+  });
+
+  it('C8d-2b: a table waits until it exists or is not empty; a stored size stays offered', () => {
+    const waitUntil = fields.find((f) => f.name === 'waitUntil');
+    if (waitUntil === undefined) throw new Error('waitUntil is a field');
+    const all = ['off', 'exists', 'nonEmpty', 'minimumSize'];
+    for (const kind of ['sqlite', 'postgres']) {
+      expect(offeredFieldOptions(meta, waitUntil, kind, 'off')).toEqual(['off', 'exists', 'nonEmpty']);
+      expect(offeredFieldOptions(meta, waitUntil, kind, 'minimumSize')).toEqual(all);
+    }
+    expect(offeredFieldOptions(meta, waitUntil, 'fs', 'off')).toEqual(all);
+    expect(offeredFieldOptions(meta, waitUntil, undefined, 'off')).toBeUndefined();
   });
 });
