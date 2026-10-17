@@ -287,7 +287,22 @@ Sources: [Get Metadata](https://learn.microsoft.com/azure/data-factory/control-f
   - Up to `maxEntries` child items, each with a size and a time, can make a large output (ADF caps an activity's output at 4 MB). OR36 #1567 owns capture caps.
 - `CATALOG_VERSION` 42→43 (a new runnable type).
 
-Still open in C8: **C8b** lowers `file_list` to Get metadata · Child items and retires List directory from the palette. Its `entries` → `childItems` alias is a real rename, unlike C1b's, so it needs the downstream references rewritten, and the starter templates move with it. **C8c** adds tables on SQLite and Postgres (exists, structure, column count, row count), Structure and Column count for delimited and Excel files through a saved dataset source, and per-connection-kind field options. **C8d** adds *Wait until* (the durable park). Include subfolders for child items goes in C8b.
+**Built (C8b, 2026-10-17):** `file_list` is lowered to Get metadata · Child items (`retired.ts`), and List directory is retired from the palette. It still runs, and the server still accepts it.
+- **The lowered node:** same connection and path, `fieldList: ['childItems']`, and Get metadata's contract. The child item defaults (Filter `*`, which matches a dotfile, All entries, no window) list what List directory listed.
+- **The rename is rewritten, not aliased.** Get metadata has no `entries` output, so each `${nodes.<id>.output.entries…}` in the doc is rewritten to `childItems` when the node is lowered (`renameNodeOutputRefs` in `nodeRefs.ts`). That includes another node's config, user properties and bindings, a ForEach's `items` and a loop's `exitWhen`, but not a description, which is prose. So the lowering now runs over the doc (`lowerRetiredTypes({nodes, containers})`), not node by node.
+- **Faithful or not at all, as C1b.** The node stays List directory, and none of its readers changes, if any read cannot be rewritten for sure: a bare or indexed `.output`, or a string naming the node that cannot be scanned (an unterminated `${`). It also stays when it has no path or carries `connectionParams`, `connectionIds`, datasets or a call.
+- **The starter templates and the demo** use Get metadata · Child items.
+- **Deliberate differences after the next Save,** while the stored version keeps running as `file_list`:
+  - child items are sorted by name, where List directory gave the OS's order;
+  - each item also has `size` and `lastModified`;
+  - a child's type comes from an `lstat`, not the directory entry;
+  - a child removed during the listing is skipped;
+  - a child whose `lstat` fails (a folder that can be read but not searched) fails the run, where List directory listed it;
+  - error wording differs, but a file or a missing path still fails `permanent`, and the list limit counts the same.
+  - A server test runs both on one folder and compares names, types, path, failures and the limit (`fs-metadata.test.ts`).
+- No `CATALOG_VERSION` bump: there is no new type or field, and `get_metadata` already needs 43.
+
+Still open in C8: **C8c** adds tables on SQLite and Postgres (exists, structure, column count, row count), Structure and Column count for delimited and Excel files through a saved dataset source, and per-connection-kind field options. **C8d** adds *Wait until* (the durable park). **C8e** adds *Include subfolders* for child items. It was planned for C8b and split out so the lowering landed on its own; List directory never recursed, so the lowering does not depend on it.
 
 ### 4.4 Delete
 Source: [Delete](https://learn.microsoft.com/azure/data-factory/delete-activity).
@@ -416,7 +431,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C5 | Copy: incremental (watermark Automatic / Expression; files modified-since-last-success) | OR15 incremental |
 | C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs | — |
 | C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Rows · Whole file as text (`file_read` as Lookup's second type), the title *Lookup* (built); **C7c** *When over the limit* and `bytes`/`truncated` for the text mode, limited by the connection's `maxBytes` rather than the 1 MiB byte cap (built); **C7d** the workspace Lookup max rows (1000 by default, up to ADF's 5000) and the Monitor Rows read column (built) | — |
-| C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, Include subfolders, List directory retired from the palette; **C8c** tables (SQLite, Postgres) and a dataset source's structure and column count; **C8d** Wait until | OR17 #1408 |
+| C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c** tables (SQLite, Postgres) and a dataset source's structure and column count; **C8d** Wait until; **C8e** Include subfolders | OR17 #1408 |
 | C9 | Delete: wildcard, folders, dates, log. Lower file_delete | OR17 #1408 |
 | C10 | Script activity | OR12 #1403, OR15 sql_script |
 | C11 | Web: fail-on-error, response cap, parse, retry-after, wait-for-callback. Lower http_request and webhook | — |
@@ -455,7 +470,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
   - **Not on the server's write path.** `lowerPipelineNodes` also runs for workspace-git apply and portable import, which keep a file's version id and re-mint history. Lowering there would make a re-pulled branch file differ from its own stored row, and change what an imported OLD version does. The server keeps accepting the retired types until C13 decides otherwise.
   - **Faithful or not at all.** A node is left as its retired type when it carries `connectionParams` (a paired node refuses them), when its destination's file name begins with an expression or its folder is one bare expression (either may resolve absolute, empty or to a number, which the split fields refuse where the old string join wrote it), or when the lowered config would not validate. C13's Convert has to explain those, since they never lower.
   - **Allow writes.** A saved lowered node is a real `copy_files` and needs Allow writes on its connection. The Problems list warns while the connection lacks it, for every Files as-is copy, so the author hears it before the run refuses.
-- **Output aliases.** Old output names stay readable. For example `nodes.x.output.entries` (List Directory) resolves to `childItems`, and `output.content` from Read File works on the Lookup. Each lowering declares its aliases, and a unit test checks every retired output name. Copy file and Move file need no renaming: Files as-is yields `bytesWritten`, `source` and `dest` under the same names and types (C1b).
+- **Output aliases.** Old output names stay readable. For example `nodes.x.output.entries` (List Directory) is rewritten to `childItems` in the doc as the node is lowered, and the node is not lowered where a read cannot be rewritten (C8b). `output.content` from Read File works on the Lookup. Each lowering declares its aliases, and a unit test checks every retired output name. Copy file and Move file need no renaming: Files as-is yields `bytesWritten`, `source` and `dest` under the same names and types (C1b).
 - **Defaults keep today's behaviour** where the new default would change a running pipeline's result: Web *Fail on HTTP error*, Lookup *first row only*, Copy *after copy*. The *new-node* defaults are ADF's. The *lowered-node* defaults are today's behaviour.
 - **Palette:** retired types are not offered. A pipeline that still contains one shows it under its new name, with a one-click *Convert*. Convert is the lowering written back, and it shows a diff before saving.
 
