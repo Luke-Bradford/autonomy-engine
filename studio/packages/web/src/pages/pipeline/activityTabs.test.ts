@@ -153,7 +153,7 @@ describe('applicableFieldNames on a set of choices (#1600 OR41 C8a)', () => {
   const all = fields.map((f) => f.name);
   const shown = (config: Record<string, unknown>) =>
     applicableFieldNames(meta, all, fields, seedFieldInputs(fields, config), config);
-  const CHILD = ['childFilter', 'childType', 'modifiedStart', 'modifiedEnd'];
+  const CHILD = ['childFilter', 'childType', 'recursive', 'modifiedStart', 'modifiedEnd'];
 
   it('draws the child item settings only while Child items is ticked', () => {
     expect(shown({ path: '.', fieldList: ['size', 'exists'] })).toEqual(['path', 'fieldList']);
