@@ -46,6 +46,7 @@
  * `number` output's marker would judge the marker string itself and flip it to
  * invalid. Nothing re-redacts, and a second caller must not be added.
  */
+import { SESSION_LOG_OUTPUT } from '../catalog/session-log.js';
 import type { Node } from '../schemas/pipeline.js';
 import type { CapturedContent, EngineEvent } from './types.js';
 import {
@@ -133,7 +134,11 @@ export function redactSecureEvent(node: Node | undefined, event: EngineEvent): E
         ? { ...event, outputs: redactOutputs(node, event.outputs) }
         : event;
     case 'node.output':
-      return secureOut ? { ...event, name: SECURE_REDACTED, value: SECURE_REDACTED } : event;
+      // #1600 OR41 C9c — a session log line carries an item's error, as a
+      // failure does, so EITHER flag withholds it, as for `node.failed`.
+      return secureOut || event.name === SESSION_LOG_OUTPUT
+        ? { ...event, name: SECURE_REDACTED, value: SECURE_REDACTED }
+        : event;
     case 'node.failed':
       return { ...event, error: SECURE_ERROR_WITHHELD };
     // #1600 C8d — a Wait until's reason names the path, as a failure would.

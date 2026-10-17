@@ -733,7 +733,7 @@ export const fsAdapter: ConnectorAdapter = {
         );
         return;
       }
-      yield* runDelete(cfg.data, input.data, ctx.signal);
+      yield* runDelete(cfg.data, input.data, ctx.signal, makeTmpSuffix(ctx));
       return;
     }
 

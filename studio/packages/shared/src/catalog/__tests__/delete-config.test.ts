@@ -23,6 +23,9 @@ describe('delete config (#1600 OR41 C9a)', () => {
       maxConcurrentConnections: 1,
       failIfNothingMatched: false,
       deleteEmptyFolders: false,
+      // C9c — §4.1's session log default: warnings, to the run log.
+      logLevel: 'warning',
+      logTo: 'run',
     });
   });
 
@@ -92,6 +95,31 @@ describe('delete config (#1600 OR41 C9a)', () => {
       ['path', 'string'],
       ['filesDeleted', 'number'],
       ['foldersDeleted', 'number'],
+      ['logPath', 'string'],
     ]);
+    // C9c — present-null when no log file is written, and a node saved before
+    // it is re-seeded with it.
+    expect(entry.outputs.at(-1)).toEqual({ name: 'logPath', type: 'string', optional: true });
+    expect(entry.formerOutputs).toEqual([
+      [
+        { name: 'path', type: 'string' },
+        { name: 'filesDeleted', type: 'number' },
+        { name: 'foldersDeleted', type: 'number' },
+      ],
+    ]);
+  });
+
+  it('refuses a session log setting that would be ignored or cannot run (C9c)', () => {
+    expect(issuesOf({ path: '/in', logTo: 'folder', logFolder: '/logs' })).toEqual([]);
+    expect(issuesOf({ path: '/in', logLevel: 'off', logTo: 'folder', logFolder: '/logs' })).toEqual(
+      ['logLevel: the session log is off, but it is set to write to a folder'],
+    );
+    expect(issuesOf({ path: '/in', logTo: 'folder' })).toEqual([
+      'logFolder: needed to write the session log to a folder',
+    ]);
+    expect(issuesOf({ path: '/in', logFolder: '/logs' })).toEqual([
+      'logFolder: only read when the session log is written to a folder',
+    ]);
+    expect(issuesOf({ path: '/in', logLevel: 'everything' })).toHaveLength(1);
   });
 });
