@@ -991,6 +991,173 @@ describe('createExecutor — fs connector end-to-end (#4 A11, real fsAdapter)', 
     expect(state.status).toBe('success');
     expect(await readFile(join(root, 'written.txt'), 'utf8')).toBe('payload');
   });
+
+  // #1743 / #1600 OR41 C8d-2a — a dataset whose FOLDER does not exist yet passes
+  // the address pre-flight, so Get metadata can answer for it and wait for it,
+  // and a read of it fails at the read, as a missing file already did.
+  describe('a delimited dataset in a folder that does not exist yet (#1743)', () => {
+    function seedCsv(db: Db, connectionId: string, path: string): string {
+      return createDataset(db, {
+        ownerId: 'local',
+        name: `D${(seq += 1)}`,
+        connectionId,
+        kind: 'delimited',
+        config: { path, header: true },
+        columns: [],
+        parameters: [],
+      }).id;
+    }
+    function datasetNode(type: string, connectionId: string, source: string, config = {}): Node {
+      seq += 1;
+      return {
+        id: 'n1',
+        type,
+        config,
+        connectionId,
+        datasetIds: { source },
+        position: { x: seq, y: 0 },
+      };
+    }
+
+    it('Get metadata with Exists ticked answers exists: false', async () => {
+      const db = freshDb().db;
+      const conn = await seedConnection(db, 'fs', { roots: [root] }, null);
+      const ds = seedCsv(db, conn, 'not-yet/orders.csv');
+      const pvId = seedVersion(db, [
+        datasetNode('get_metadata', conn, ds, { fieldList: ['exists', 'columnCount'] }),
+      ]);
+      const run = seedRun(db, pvId);
+
+      const state = await startRun(deps(db), run);
+
+      expect(state.status).toBe('success');
+      expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.succeeded')).toMatchObject({
+        outputs: { exists: false, columnCount: null },
+      });
+    });
+
+    it('Get metadata · Wait until parks on a re-check instead of failing the pre-flight', async () => {
+      const db = freshDb().db;
+      const conn = await seedConnection(db, 'fs', { roots: [root] }, null);
+      const ds = seedCsv(db, conn, 'not-yet/orders.csv');
+      const pvId = seedVersion(db, [
+        datasetNode('get_metadata', conn, ds, { fieldList: ['columnCount'], waitUntil: 'exists' }),
+      ]);
+      const run = seedRun(db, pvId);
+
+      await startRun({ ...deps(db), alarms: stubAlarms() }, run);
+
+      expect(eventTypes(db, run.id)).toContain('node.dispatched');
+      expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.notReady')).toMatchObject({
+        reason: "'not-yet/orders.csv' does not exist yet",
+      });
+      expect(eventTypes(db, run.id)).not.toContain('node.failed');
+    });
+
+    it('a Lookup dispatches and fails at the read, permanent', async () => {
+      const db = freshDb().db;
+      const conn = await seedConnection(db, 'fs', { roots: [root] }, null);
+      const ds = seedCsv(db, conn, 'not-yet/orders.csv');
+      const run = seedRun(db, seedVersion(db, [datasetNode('lookup', conn, ds)]));
+
+      const state = await startRun(deps(db), run);
+
+      expect(state.status).toBe('failure');
+      expect(eventTypes(db, run.id)).toContain('node.dispatched');
+      const failed = loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed');
+      expect(failed).toMatchObject({ kind: 'permanent' });
+      expect(failed).not.toMatchObject({ code: FAILURE_CODES.DATASET_ADDRESS_UNRESOLVABLE });
+    });
+
+    it('C8d-2a — a saved TABLE dataset with Wait until saves, and dispatch refuses it', async () => {
+      // A saved dataset's kind is not known at save, so the refusal is dispatch's.
+      const store = await realpath(await mkdtemp(join(tmpdir(), 'exec-c8d2-table-')));
+      try {
+        const file = new Database(join(store, 'db.sqlite'));
+        file.exec('CREATE TABLE t (id INTEGER)');
+        file.close();
+        const db = freshDb().db;
+        const conn = await seedConnection(
+          db,
+          'sqlite',
+          { roots: [store], path: 'db.sqlite' },
+          null,
+        );
+        const ds = createDataset(db, {
+          ownerId: 'local',
+          name: `D${(seq += 1)}`,
+          connectionId: conn,
+          kind: 'table',
+          config: { table: 't' },
+          columns: [],
+          parameters: [],
+        }).id;
+        const run = seedRun(
+          db,
+          seedVersion(db, [
+            datasetNode('get_metadata', conn, ds, { fieldList: ['exists'], waitUntil: 'exists' }),
+          ]),
+        );
+
+        const state = await startRun({ ...deps(db), alarms: stubAlarms() }, run);
+
+        expect(state.status).toBe('failure');
+        expect(eventTypes(db, run.id)).not.toContain('node.notReady');
+        expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
+          kind: 'permanent',
+          error: expect.stringContaining('on a table it is not supported yet'),
+        });
+      } finally {
+        await rm(store, { recursive: true, force: true });
+      }
+    });
+
+    it('a Copy dispatches and fails at the read, permanent, writing nothing', async () => {
+      const store = await realpath(await mkdtemp(join(tmpdir(), 'exec-1743-sink-')));
+      try {
+        const dst = new Database(join(store, 'dst.db'));
+        dst.exec("CREATE TABLE stage (id TEXT); INSERT INTO stage VALUES ('kept')");
+        dst.close();
+        const db = freshDb().db;
+        const conn = await seedConnection(db, 'fs', { roots: [root] }, null);
+        const sinkConn = await seedConnection(
+          db,
+          'sqlite',
+          { roots: [store], path: 'dst.db', writable: true },
+          null,
+        );
+        const sinkDs = createDataset(db, {
+          ownerId: 'local',
+          name: `D${(seq += 1)}`,
+          connectionId: sinkConn,
+          kind: 'table',
+          config: { table: 'stage' },
+          columns: [{ name: 'id', type: 'string', nullable: true }],
+          parameters: [],
+        }).id;
+        const copy: Node = {
+          id: 'n1',
+          type: 'copy',
+          config: { mapping: [{ source: 'id', sink: 'id', type: 'string' }], mode: 'append' },
+          connectionIds: { source: conn, sink: sinkConn },
+          datasetIds: { source: seedCsv(db, conn, 'not-yet/orders.csv'), sink: sinkDs },
+          position: { x: 0, y: 0 },
+        };
+        const run = seedRun(db, seedVersion(db, [copy]));
+
+        const state = await startRun(deps(db), run);
+
+        expect(state.status).toBe('failure');
+        expect(eventTypes(db, run.id)).toContain('node.dispatched');
+        const failed = loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed');
+        expect(failed).toMatchObject({ kind: 'permanent' });
+        expect(failed).not.toMatchObject({ code: FAILURE_CODES.DATASET_ADDRESS_UNRESOLVABLE });
+        expect(rowsOf(join(store, 'dst.db'), 'SELECT id FROM stage')).toEqual([{ id: 'kept' }]);
+      } finally {
+        await rm(store, { recursive: true, force: true });
+      }
+    });
+  });
 });
 
 describe('createExecutor — loud pre-flight failures (no bogus node.dispatched)', () => {

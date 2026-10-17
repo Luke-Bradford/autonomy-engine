@@ -168,7 +168,7 @@ export const getMetadataConfigSchema = z
     waitUntil: presented(waitUntilSchema.default('off'), {
       title: 'Wait until',
       description:
-        "Check the path again on a timer until this holds, then read the ticked fields (ADF's Validation). A missing path counts as not yet. The run waits without holding a worker.",
+        "Check the path, or the Source dataset's file, again on a timer until this holds, then read the ticked fields (ADF's Validation). A missing file or folder counts as not yet. The run waits without holding a worker.",
       options: optionTitles(waitUntilSchema, {
         off: 'Off',
         exists: 'It exists',
@@ -272,6 +272,8 @@ export function untickedGetMetadataFields(
  * C8c-2 — on a file system the node reads a path or a delimited or Excel
  * dataset (`bindsDataset`, from the dispatch's resolved source), each with its
  * own fields. A database always reads its dataset, so it ignores the flag.
+ *
+ * C8d-2a — Wait until is refused on a database (a table's waits for C8d-2b).
  */
 export function getMetadataKindIssue(
   config: GetMetadataConfig,
@@ -281,7 +283,6 @@ export function getMetadataKindIssue(
   if (connectionKind === 'fs') {
     if (bindsDataset) {
       if (config.path !== undefined) return BOTH_PATH_AND_DATASET;
-      if (config.waitUntil !== 'off') return WAIT_UNTIL_NEEDS_PATH;
       return fileDatasetFieldIssue(config.fieldList);
     }
     if (config.path === undefined) {
@@ -296,13 +297,16 @@ export function getMetadataKindIssue(
     return 'a table is chosen on the Source tab; clear File or folder path';
   }
   if (foreign.length > 0) return `${titles(foreign)} read a file system path, not a table`;
-  if (config.waitUntil !== 'off') return WAIT_UNTIL_NEEDS_PATH;
+  if (config.waitUntil !== 'off') return WAIT_UNTIL_NOT_ON_TABLE;
   return undefined;
 }
 
-/** C8d-1 — Wait until checks a file system path; a dataset's waits for C8d-2. */
-const WAIT_UNTIL_NEEDS_PATH =
-  'Wait until checks a file or folder path; on a dataset it is not supported yet';
+/**
+ * C8d — Wait until checks a file system path (C8d-1) or a delimited or Excel
+ * dataset's file (C8d-2a); a table's waits for C8d-2b.
+ */
+const WAIT_UNTIL_NOT_ON_TABLE =
+  'Wait until checks a file, a folder or a delimited or Excel dataset; on a table it is not supported yet';
 
 const titles = (fields: readonly GetMetadataField[]): string =>
   fields.map((f) => GET_METADATA_FIELD_TITLES[f]).join(', ');
@@ -348,6 +352,8 @@ const includes = (list: readonly GetMetadataField[], field: GetMetadataField): b
  * kind: a path is a file system item's, so its columns and rows come through a
  * dataset, and a dataset names one file or table, never a folder to list. A
  * saved dataset's kind is not known here, so the rest waits for dispatch.
+ *
+ * C8d-2a — so does Wait until on an inline dataset, which is never a file.
  */
 export function getMetadataNodeIssue(node: {
   readonly config: Readonly<Record<string, unknown>>;
@@ -362,9 +368,12 @@ export function getMetadataNodeIssue(node: {
     return 'config.path: required: a file or folder path, or a dataset chosen on Source';
   }
   if (hasPath && hasTable) return `config.path: ${BOTH_PATH_AND_DATASET}`;
+  // C8d-2a — an inline dataset is a Table or a Query, never a file, so it
+  // cannot be waited on. A saved dataset's kind is not known here: dispatch
+  // refuses a table's.
   const wait = node.config['waitUntil'];
-  if (hasTable && wait !== undefined && wait !== 'off') {
-    return `config.waitUntil: ${WAIT_UNTIL_NEEDS_PATH}`;
+  if (node.inlineDatasets?.source !== undefined && wait !== undefined && wait !== 'off') {
+    return `config.waitUntil: ${WAIT_UNTIL_NOT_ON_TABLE}`;
   }
   const list = node.config['fieldList'];
   // Not a list of fields: the config's own check reports it.
