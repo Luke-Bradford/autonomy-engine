@@ -263,6 +263,11 @@ async function openSqliteReadOnly(
  * GENERATED columns, which `SELECT *` returns and Postgres lists. Each carries
  * its declared type (`''` when it declares none).
  *
+ * C8d-2b — *It is not empty* without Row count is a `LIMIT 1` probe in the same
+ * open. It stops at the first row, so it scans only when there is none to find:
+ * an empty view over a large table runs its whole query, synchronously, on
+ * every check, as Row count does.
+ *
  * Row count is a synchronous `count(*)`, which better-sqlite3 cannot interrupt:
  * on a very large table, or a costly view, it holds the server's event loop
  * until it finishes. The spec records that residual; cancel is checked before
@@ -271,7 +276,7 @@ async function openSqliteReadOnly(
 function sqliteTableMetadata(cfg: z.infer<typeof sqliteConnectionConfigSchema>): TableMetadataIo {
   return {
     kind: 'sqlite',
-    inspectTable: async ({ schema = 'main', table }, signal, withRowCount) => {
+    inspectTable: async ({ schema = 'main', table }, signal, reads) => {
       const qualifiedSchema = quoteIdentifier(schema, 'schema');
       const qualified = `${qualifiedSchema}.${quoteIdentifier(table, 'table')}`;
       const db = await openSqliteReadOnly(cfg, signal, 'Get metadata aborted');
@@ -284,10 +289,16 @@ function sqliteTableMetadata(cfg: z.infer<typeof sqliteConnectionConfigSchema>):
             .prepare('SELECT name, type FROM pragma_table_xinfo(?, ?) WHERE hidden <> 1')
             .all(found.name, schema) as { name: string; type: unknown }[]
         ).map((c) => ({ name: c.name, type: typeof c.type === 'string' ? c.type : '' }));
-        const rowCount = withRowCount
-          ? (db.prepare(`SELECT count(*) AS n FROM ${qualified}`).get() as { n: unknown }).n
-          : undefined;
-        return { columns, rowCount };
+        if (reads.rowCount) {
+          const { n } = db.prepare(`SELECT count(*) AS n FROM ${qualified}`).get() as {
+            n: unknown;
+          };
+          return { columns, rowCount: n };
+        }
+        if (!reads.anyRow) return { columns, rowCount: undefined };
+        // C8d-2b — It is not empty: stops at the first row.
+        const hasRow = db.prepare(`SELECT 1 FROM ${qualified} LIMIT 1`).get() !== undefined;
+        return { columns, rowCount: undefined, hasRow };
       } catch (err) {
         if (err instanceof DatasetIoError) throw err;
         throw storeFailure(err, 'the table could not be read');

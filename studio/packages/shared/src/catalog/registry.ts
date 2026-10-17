@@ -33,6 +33,7 @@ import { copyDispatchInputSchema, copyInputSchema } from './copy-config.js';
 import { copyFilesConfigSchema } from './copy-files-config.js';
 import {
   GET_METADATA_FIELDS_BY_CONNECTION_KIND,
+  GET_METADATA_WAIT_UNTIL_BY_CONNECTION_KIND,
   getMetadataConfigSchema,
 } from './get-metadata-config.js';
 import { lookupConfigSchema } from './lookup-config.js';
@@ -682,9 +683,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // stale when they change). A reference to an unticked field therefore
     // resolves to null where ADF fails it; the spec records the difference.
     // Side-effect-free, so `idempotent:true`, like `file_list`, which is
-    // lowered to its Child items (C8b). Wait until (C8d) re-checks a path, or a
-    // delimited or Excel dataset's file (C8d-2a), on a durable timer: the
-    // adapter answers `notReady` until it holds.
+    // lowered to its Child items (C8b). Wait until (C8d) re-checks a path, a
+    // delimited or Excel dataset's file (C8d-2a) or a table (C8d-2b) on a
+    // durable timer: the adapter answers `notReady` until it holds.
     // Include subfolders (C8e) names each child by its path below the folder.
     //
     // C8c — a database TABLE as well: on a sqlite or postgres connection the
@@ -717,8 +718,6 @@ const ENTRIES: ActivityCatalogEntry[] = [
     ],
     appliesWhen: {
       path: [{ connectionKind: ['fs'] }],
-      // C8d — Wait until checks a path, which only a file system has.
-      waitUntil: [{ connectionKind: ['fs'] }],
       minimumSize: [{ field: 'waitUntil', in: ['minimumSize'] }],
       checkEverySeconds: [{ field: 'waitUntil', in: ['exists', 'nonEmpty', 'minimumSize'] }],
       giveUpAfterSeconds: [{ field: 'waitUntil', in: ['exists', 'nonEmpty', 'minimumSize'] }],
@@ -728,7 +727,11 @@ const ENTRIES: ActivityCatalogEntry[] = [
       modifiedStart: [{ field: 'fieldList', in: ['childItems'] }],
       modifiedEnd: [{ field: 'fieldList', in: ['childItems'] }],
     },
-    fieldOptionsByConnectionKind: { fieldList: GET_METADATA_FIELDS_BY_CONNECTION_KIND },
+    fieldOptionsByConnectionKind: {
+      fieldList: GET_METADATA_FIELDS_BY_CONNECTION_KIND,
+      // C8d-2b — a table waits until it exists or holds a row, never for a size.
+      waitUntil: GET_METADATA_WAIT_UNTIL_BY_CONNECTION_KIND,
+    },
     idempotent: true,
     connectionKinds: ['fs', 'sqlite', 'postgres'],
     datasetKinds: { source: ['table', 'delimited', 'excel'], optionalOn: ['fs'] },

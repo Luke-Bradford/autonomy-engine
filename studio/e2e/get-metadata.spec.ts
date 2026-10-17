@@ -455,6 +455,99 @@ test.describe('#1600 C8a — Get metadata', () => {
   });
 
   /**
+   * #1600 OR41 C8d-2b — Wait until on a table. A database offers Off, It exists
+   * and It is not empty (no size), and a run on an empty table PARKS until a
+   * row lands, then reads the ticked fields of the table it waited for.
+   */
+  test('C8d-2b: on a SQLite table, Wait until It is not empty parks until a row lands', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1600-c8d2b-')));
+    try {
+      const dbPath = join(root, 'warehouse.db');
+      const seed = new DatabaseSync(dbPath);
+      seed.exec('CREATE TABLE staging (id INTEGER PRIMARY KEY, note TEXT);');
+      seed.close();
+      const conn = await seedConnection(page, {
+        name: 'e2e 1600 c8d2b warehouse',
+        kind: 'sqlite',
+        config: { roots: [root], path: dbPath },
+      });
+      const pipelineId = await openSeededCanvas(page, 'e2e 1600 c8d2b wait on a table', {
+        nodes: [
+          {
+            id: 'meta1',
+            type: 'get_metadata',
+            config: { fieldList: ['rowCount'] },
+            connectionId: conn,
+            inlineDatasets: { source: { kind: 'table', config: { table: 'staging' } } },
+            position: { x: 0, y: 0 },
+          },
+        ],
+      });
+
+      await canvasNodes(page).first().click();
+      await tab(page, 'Settings').click();
+      const pane = properties(page);
+      const waitUntil = pane.getByRole('combobox', { name: 'Wait until', exact: true });
+      // A table has no size to wait for. The first is the unset choice (#1732).
+      await expect(waitUntil.locator('option')).toHaveText([
+        'Off (default)',
+        'Off',
+        'It exists',
+        'It is not empty',
+      ]);
+      await waitUntil.selectOption({ label: 'It is not empty' });
+      await pane.getByLabel('Check every (seconds)', { exact: true }).fill('1');
+      await pane.getByLabel('Give up after (seconds)', { exact: true }).fill('120');
+      await pane.getByRole('button', { name: 'Apply config', exact: true }).click();
+      await page.getByRole('button', { name: 'Save version' }).click();
+      await expect(page.locator('.notice')).toHaveText('Saved v2.');
+
+      const versions = (await (
+        await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+      ).json()) as { id: string; version: number; nodes: { config: Record<string, unknown> }[] }[];
+      const latest = versions.sort((a, b) => b.version - a.version)[0]!;
+      expect(latest.nodes[0]!.config).toMatchObject({
+        fieldList: ['rowCount'],
+        waitUntil: 'nonEmpty',
+        checkEverySeconds: 1,
+        giveUpAfterSeconds: 120,
+      });
+
+      const runId = await fireManualTrigger(page, latest.id, 'e2e 1600 c8d2b');
+      const statusOf = async () =>
+        (
+          (await (await page.request.get(`/api/runs/${encodeURIComponent(runId)}`)).json()) as {
+            status: string;
+          }
+        ).status;
+      const eventsOf = async () =>
+        (await (
+          await page.request.get(`/api/runs/${encodeURIComponent(runId)}/events`)
+        ).json()) as { type: string; payload: Record<string, unknown> }[];
+      await expect.poll(statusOf, { timeout: 15_000 }).toBe('waiting');
+      expect((await eventsOf()).find((e) => e.type === 'node.notReady')?.payload.reason).toBe(
+        "'staging' has no rows yet",
+      );
+      const writer = new DatabaseSync(dbPath);
+      writer.exec("INSERT INTO staging VALUES (1, 'landed');");
+      writer.close();
+      await waitForRunToSettle(page, runId);
+      expect(await statusOf()).toBe('success');
+
+      const events = await eventsOf();
+      expect(events.map((e) => e.type)).toContain('node.recheckDue');
+      const done = events.find((e) => e.type === 'node.succeeded');
+      expect(done!.payload.outputs).toMatchObject({ path: 'staging', rowCount: 1 });
+      await expectQuiet(page, problems);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
    * #1600 OR41 C8c — the same activity on a database connection: the table is
    * the Source tab's inline Table (no path), the field list offers a table's
    * four fields only, and the run answers them from a real SQLite file.

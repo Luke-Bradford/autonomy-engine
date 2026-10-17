@@ -1069,9 +1069,9 @@ describe('createExecutor — fs connector end-to-end (#4 A11, real fsAdapter)', 
       expect(failed).not.toMatchObject({ code: FAILURE_CODES.DATASET_ADDRESS_UNRESOLVABLE });
     });
 
-    it('C8d-2a — a saved TABLE dataset with Wait until saves, and dispatch refuses it', async () => {
-      // A saved dataset's kind is not known at save, so the refusal is dispatch's.
-      const store = await realpath(await mkdtemp(join(tmpdir(), 'exec-c8d2-table-')));
+    /** #1600 OR41 C8d-2b — Wait until on a saved TABLE dataset, end to end. */
+    async function tableWait(config: Record<string, unknown>) {
+      const store = await realpath(await mkdtemp(join(tmpdir(), 'exec-c8d2b-table-')));
       try {
         const file = new Database(join(store, 'db.sqlite'));
         file.exec('CREATE TABLE t (id INTEGER)');
@@ -1092,24 +1092,39 @@ describe('createExecutor — fs connector end-to-end (#4 A11, real fsAdapter)', 
           columns: [],
           parameters: [],
         }).id;
-        const run = seedRun(
-          db,
-          seedVersion(db, [
-            datasetNode('get_metadata', conn, ds, { fieldList: ['exists'], waitUntil: 'exists' }),
-          ]),
-        );
-
+        const run = seedRun(db, seedVersion(db, [datasetNode('get_metadata', conn, ds, config)]));
         const state = await startRun({ ...deps(db), alarms: stubAlarms() }, run);
-
-        expect(state.status).toBe('failure');
-        expect(eventTypes(db, run.id)).not.toContain('node.notReady');
-        expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
-          kind: 'permanent',
-          error: expect.stringContaining('on a table it is not supported yet'),
-        });
+        return { state, events: loadEngineEvents(db, run.id) };
       } finally {
         await rm(store, { recursive: true, force: true });
       }
+    }
+
+    it('C8d-2b — a saved TABLE dataset waits: an empty table parks the run until a row lands', async () => {
+      const { state, events } = await tableWait({ fieldList: ['exists'], waitUntil: 'nonEmpty' });
+
+      expect(state.status).toBe('waiting');
+      expect(events.find((e) => e.type === 'node.notReady')).toMatchObject({
+        reason: "'t' has no rows yet",
+      });
+      expect(events.map((e) => e.type)).toContain('node.recheckScheduled');
+      expect(events.map((e) => e.type)).not.toContain('node.failed');
+    });
+
+    it('C8d-2b — a saved TABLE dataset with It is at least N bytes saves, and dispatch refuses it', async () => {
+      // A saved dataset's kind is not known at save, so the refusal is dispatch's.
+      const { state, events } = await tableWait({
+        fieldList: ['exists'],
+        waitUntil: 'minimumSize',
+        minimumSize: 1,
+      });
+
+      expect(state.status).toBe('failure');
+      expect(events.map((e) => e.type)).not.toContain('node.notReady');
+      expect(events.find((e) => e.type === 'node.failed')).toMatchObject({
+        kind: 'permanent',
+        error: expect.stringContaining('It is at least N bytes needs a file'),
+      });
     });
 
     it('a Copy dispatches and fails at the read, permanent, writing nothing', async () => {

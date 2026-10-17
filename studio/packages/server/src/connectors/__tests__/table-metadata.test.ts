@@ -209,6 +209,88 @@ describe('Get metadata on a sqlite table (C8c)', () => {
   });
 });
 
+/** #1600 OR41 C8d-2b — Wait until on a table: the adapter answers `notReady` until it holds. */
+const notReady = (e: ActivityEvent) => {
+  expect(e.type, e.type === 'failed' ? e.error : '').toBe('notReady');
+  return e.type === 'notReady' ? e : undefined;
+};
+const WAIT = { checkEverySeconds: 5, giveUpAfterSeconds: 60 };
+
+describe('Get metadata Wait until on a sqlite table (C8d-2b)', () => {
+  function store() {
+    const root = tempRoot();
+    const path = seedDb(root, 3, 'src.db');
+    const db = new Database(path);
+    db.exec('CREATE TABLE empty (id INTEGER); CREATE VIEW none AS SELECT id FROM t WHERE 0;');
+    db.close();
+    return writableConfig(root, path);
+  }
+  const wait = (waitUntil: string, fieldList: string[], name: string, cfg = store()) =>
+    run(sqliteAdapter, ctx(cfg, { fieldList, waitUntil, ...WAIT }, table({ table: name })));
+
+  it('a missing table is not yet, with or without Exists ticked, carrying the timers', async () => {
+    for (const fieldList of [['exists'], ['structure']]) {
+      expect(notReady(await wait('exists', fieldList, 'later'))).toEqual({
+        type: 'notReady',
+        reason: "there is no table 'later' yet",
+        recheckAfterSeconds: 5,
+        giveUpAfterSeconds: 60,
+      });
+    }
+  });
+
+  it('once it exists, reads the ticked fields', async () => {
+    expect(succeeded(await wait('exists', ['exists', 'rowCount'], 'empty'))).toMatchObject({
+      path: 'empty',
+      exists: true,
+      rowCount: 0,
+    });
+  });
+
+  it('It is not empty waits for a row, in a table or a view, then reads the fields', async () => {
+    for (const name of ['empty', 'none']) {
+      for (const fieldList of [['exists'], ['exists', 'rowCount']]) {
+        expect(notReady(await wait('nonEmpty', fieldList, name))?.reason).toBe(
+          `'${name}' has no rows yet`,
+        );
+      }
+    }
+    expect(notReady(await wait('nonEmpty', ['exists'], 'later'))?.reason).toBe(
+      "there is no table 'later' yet",
+    );
+    expect(succeeded(await wait('nonEmpty', ['columnCount', 'rowCount'], 't'))).toMatchObject({
+      columnCount: 2,
+      rowCount: 3,
+    });
+    expect(succeeded(await wait('nonEmpty', ['exists'], 't'))).toMatchObject({ exists: true });
+  });
+
+  it('refuses It is at least N bytes, and still fails a schema the store does not have', async () => {
+    const sized = await run(
+      sqliteAdapter,
+      ctx(
+        store(),
+        { fieldList: ['exists'], waitUntil: 'minimumSize', minimumSize: 1, ...WAIT },
+        table({ table: 't' }),
+      ),
+    );
+    expect(failure(sized)).toEqual({
+      kind: 'permanent',
+      error:
+        'It is at least N bytes needs a file; wait for a table with It exists or It is not empty',
+    });
+    const other = await run(
+      sqliteAdapter,
+      ctx(
+        store(),
+        { fieldList: ['exists'], waitUntil: 'exists', ...WAIT },
+        table({ schema: 'other', table: 't' }),
+      ),
+    );
+    expect(failure(other).kind).toBe('permanent');
+  });
+});
+
 describe('rowCountOf (C8c)', () => {
   it('reads a number, a bigint or postgres text, and refuses what a number cannot hold', () => {
     expect(rowCountOf(3)).toBe(3);
@@ -263,6 +345,8 @@ describe.skipIf(LIVE_HOST === undefined)('Get metadata on a live postgres table 
         `CREATE VIEW ${schema}.recent AS SELECT id FROM ${schema}.orders;` +
         `CREATE SEQUENCE ${schema}.ids;` +
         `CREATE TABLE ${schema}.secret (x int);` +
+        `CREATE TABLE ${schema}.empty (id int);` +
+        `CREATE MATERIALIZED VIEW ${schema}.unfilled AS SELECT 1 AS x WITH NO DATA;` +
         `CREATE ROLE ${role} LOGIN PASSWORD 'pw';` +
         `GRANT USAGE ON SCHEMA ${schema} TO ${role};` +
         `GRANT SELECT ON ${schema}.orders TO ${role};`,
@@ -336,5 +420,63 @@ describe.skipIf(LIVE_HOST === undefined)('Get metadata on a live postgres table 
       ),
     );
     expect(ok.rowCount).toBe(2);
+  });
+  // #1600 OR41 C8d-2b — Wait until on a table.
+  const waitOn = (waitUntil: string, fieldList: string[], target: ResolvedDataset) =>
+    run(adapter, ctx(live, { fieldList, waitUntil, ...WAIT }, target), password);
+
+  it('C8d-2b: a missing table, or one in a schema the server does not have, is not yet', async () => {
+    expect(notReady(await waitOn('exists', ['structure'], at('later')))?.reason).toBe(
+      `there is no table '${schema}.later' yet`,
+    );
+    expect(
+      notReady(await waitOn('exists', ['exists'], table({ schema: `${schema}_none`, table: 'x' })))
+        ?.reason,
+    ).toBe(`there is no table '${schema}_none.x' yet`);
+  });
+
+  it('C8d-2b: It is not empty waits for a row, then reads the fields', async () => {
+    for (const fieldList of [['exists'], ['exists', 'rowCount']]) {
+      expect(notReady(await waitOn('nonEmpty', fieldList, at('empty')))?.reason).toBe(
+        `'${schema}.empty' has no rows yet`,
+      );
+    }
+    expect(succeeded(await waitOn('nonEmpty', ['rowCount'], at('orders')))).toMatchObject({
+      rowCount: 2,
+    });
+    expect(succeeded(await waitOn('nonEmpty', ['exists'], at('recent')))).toMatchObject({
+      exists: true,
+    });
+    const sized = await run(
+      adapter,
+      ctx(
+        live,
+        { fieldList: ['exists'], waitUntil: 'minimumSize', minimumSize: 1, ...WAIT },
+        at('orders'),
+      ),
+      password,
+    );
+    expect(failure(sized).error).toMatch(/^It is at least N bytes needs a file/);
+  });
+
+  it('C8d-2b: an unpopulated materialized view, or a table the role cannot read, fails while waiting', async () => {
+    const unfilled = failure(await waitOn('nonEmpty', ['exists'], at('unfilled')));
+    expect(unfilled.kind).toBe('permanent');
+    expect(unfilled.error).toMatch(/has not been populated/);
+    const unreadable = failure(
+      await run(
+        adapter,
+        ctx(
+          { ...live, user: role },
+          { fieldList: ['exists'], waitUntil: 'exists', ...WAIT },
+          at('secret'),
+        ),
+        'pw',
+      ),
+    );
+    expect(unreadable).toEqual({
+      kind: 'permanent',
+      error: `the connection's role cannot read the table '${schema}.secret'`,
+    });
   });
 });

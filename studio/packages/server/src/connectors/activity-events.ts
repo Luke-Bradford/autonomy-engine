@@ -20,3 +20,20 @@ import type { ActivityEvent, ConnectorErrorKind } from './types.js';
 export function failed(kind: ConnectorErrorKind, error: string): ActivityEvent {
   return { type: 'failed', kind, error };
 }
+
+/**
+ * #1600 OR41 C8d — a Get metadata *Wait until* that does not hold yet: check
+ * again after the node's *Check every*. Shared by the path and the table halves
+ * (C8d-2b) so the two answer it in one shape.
+ */
+export function notYet(
+  timers: { readonly checkEverySeconds: number; readonly giveUpAfterSeconds: number },
+  reason: string,
+): ActivityEvent {
+  return {
+    type: 'notReady',
+    reason,
+    recheckAfterSeconds: timers.checkEverySeconds,
+    giveUpAfterSeconds: timers.giveUpAfterSeconds,
+  };
+}

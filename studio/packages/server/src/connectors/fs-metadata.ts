@@ -9,7 +9,7 @@ import {
   type GetMetadataConfig,
   type GetMetadataField,
 } from '@autonomy-studio/shared';
-import { failed } from './activity-events.js';
+import { failed, notYet } from './activity-events.js';
 import {
   CONFINED_READ_FLAGS,
   isMissingErrno,
@@ -60,16 +60,6 @@ type FieldValues = Record<GetMetadataField, unknown>;
 const MD5_CHUNK_BYTES = 1 << 16;
 
 const emptyFields = (): FieldValues => emptyGetMetadataFields();
-
-/** C8d — a Wait until that does not hold yet: check again later. */
-function notYet(input: GetMetadataConfig, reason: string): ActivityEvent {
-  return {
-    type: 'notReady',
-    reason,
-    recheckAfterSeconds: input.checkEverySeconds,
-    giveUpAfterSeconds: input.giveUpAfterSeconds,
-  };
-}
 
 /** C8d — whether a folder holds at least one entry, reading only the first. */
 async function hasEntry(path: string): Promise<boolean> {

@@ -151,10 +151,10 @@ export function applicableFieldNames(
 }
 
 /**
- * #1600 OR41 C8c — the choices an enum-set field offers on the bound connection's
- * kind (`ActivityCatalogEntry.fieldOptionsByConnectionKind`): that kind's own,
- * plus any already ticked, so a stored value is never hidden (UI STANDARD rule
- * 3) and a click never drops it. `undefined` means every choice: no rule, or the
+ * #1600 OR41 C8c — the choices an enum or enum-set field offers on the bound
+ * connection's kind (`ActivityCatalogEntry.fieldOptionsByConnectionKind`):
+ * that kind's own, plus any already ticked, so a stored value is never hidden
+ * (UI STANDARD rule 3) and a click never drops it. `undefined` means every choice: no rule, or the
  * kind is unknown.
  */
 export function offeredFieldOptions(
