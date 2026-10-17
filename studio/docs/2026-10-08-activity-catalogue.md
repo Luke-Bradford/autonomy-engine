@@ -354,7 +354,33 @@ Sources: [Get Metadata](https://learn.microsoft.com/azure/data-factory/control-f
 - **Shown together with the path field** on a file system. The author sees both inputs, and the save refusal says which to clear.
 - `CATALOG_VERSION` 45→46: a pre-C8c-2 build refuses the dataset's kind at dispatch.
 
-Still open in C8: **C8d** adds *Wait until* (the durable park).
+**Built (C8d-1, 2026-10-17):** *Wait until* on a file system **path**, on the Settings tab.
+
+- **Fields** (ADF's Validation: https://learn.microsoft.com/azure/data-factory/control-flow-validation-activity):
+  - *Wait until*: Off (the default, which reads once as before) · It exists · It is not empty · It is at least N bytes (`waitUntil`).
+  - *Minimum size (bytes)*, only with the last choice (`minimumSize`).
+  - *Check every (seconds)*, default 10, ADF's `sleep` (`checkEverySeconds`).
+  - *Give up after (seconds)*, default 43200 (12 h), at most 7 days, ADF's `timeout` (`giveUpAfterSeconds`).
+  - Plain numbers, as Lookup's Max rows. A timer setting with Wait until off is refused, as the child-item settings are.
+- **The conditions:**
+  - *It exists*: a file or a folder at the path.
+  - *It is not empty*: a file of at least one byte, or a folder holding any entry (unfiltered, as ADF's `childItems: true`).
+  - *It is at least N bytes*: a file only. A folder fails the node `permanent`.
+  - While waiting, a missing path is "not yet" whether or not Exists is ticked. The roots' confinement is unchanged: a path outside them fails rather than waits. Once the condition holds, the node reads its ticked fields as without a wait.
+- **The durable park.** An unmet check ends the attempt with `notReady`, mapped to `node.notReady`. The node is held `ready` and the driver either:
+  - arms a `node_recheck` alarm and appends `node.recheckScheduled`, which parks it `wait_pending` (the run goes `waiting`, nothing is in flight, the same park as Wait); or
+  - fails it `permanent` `wait_until_timeout`, once the check that answered ran at or after the deadline.
+  - The alarm's `node.recheckDue` re-dispatches the node under a new attempt that spends no retry budget.
+- **The deadline** is the first check's time + *Give up after*. It is fixed then and kept across every check and policy retry. The last alarm is clamped to it, so the final check runs at the deadline.
+- **Checks are bounded:** *Give up after* / *Check every* ≤ 5000 (`MAX_WAIT_UNTIL_CHECKS`), because every check is a dispatch on the run's log and every alarm re-reads that log. ADF's defaults make 4,320.
+- **One activity run.** The Monitor's activity-runs row and the run view's node row keep the first check's start and attempt number across the re-checks, as ADF shows one Validation run, not one per check.
+- **Cancel:** a cancel fails a parked re-check (work it stopped), like a held retry, and a due re-check starts nothing on a cancelled run.
+- **Deliberate differences from ADF:**
+  - The settings are on Get metadata, not a separate Validation activity (§1).
+  - A dataset is not supported yet. Save refuses Wait until with a dataset bound, and dispatch does too. That waits for **C8d-2**, decided together with #1743, because a dataset's address is resolved before dispatch and needs its folder.
+- `CATALOG_VERSION` 46→47: a pre-C8d build strips the keys and reads once.
+
+Still open in C8: **C8d-2** adds *Wait until* on a delimited, Excel or table dataset (with #1743).
 
 ### 4.4 Delete
 Source: [Delete](https://learn.microsoft.com/azure/data-factory/delete-activity).
@@ -483,7 +509,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C5 | Copy: incremental (watermark Automatic / Expression; files modified-since-last-success) | OR15 incremental |
 | C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs | — |
 | C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Rows · Whole file as text (`file_read` as Lookup's second type), the title *Lookup* (built); **C7c** *When over the limit* and `bytes`/`truncated` for the text mode, limited by the connection's `maxBytes` rather than the 1 MiB byte cap (built); **C7d** the workspace Lookup max rows (1000 by default, up to ADF's 5000) and the Monitor Rows read column (built) | — |
-| C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c-1** tables (SQLite, Postgres) with per-kind field options (built); **C8c-2** a delimited or Excel dataset source's structure and column count (built); **C8d** Wait until; **C8e** Include subfolders (built) | OR17 #1408 |
+| C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c-1** tables (SQLite, Postgres) with per-kind field options (built); **C8c-2** a delimited or Excel dataset source's structure and column count (built); **C8d-1** Wait until on a file system path (built); **C8d-2** Wait until on a dataset, with #1743; **C8e** Include subfolders (built) | OR17 #1408 |
 | C9 | Delete: wildcard, folders, dates, log. Lower file_delete | OR17 #1408 |
 | C10 | Script activity | OR12 #1403, OR15 sql_script |
 | C11 | Web: fail-on-error, response cap, parse, retry-after, wait-for-callback. Lower http_request and webhook | — |

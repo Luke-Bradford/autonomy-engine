@@ -231,20 +231,26 @@ test.describe('#1600 C8a — Get metadata', () => {
             status: string;
           }
         ).status;
+      const eventsOf = async () =>
+        (await (
+          await page.request.get(`/api/runs/${encodeURIComponent(runId)}/events`)
+        ).json()) as { type: string; payload: Record<string, unknown> }[];
+      const reasons = async () =>
+        (await eventsOf()).filter((e) => e.type === 'node.notReady').map((e) => e.payload.reason);
       await expect.poll(statusOf, { timeout: 15_000 }).toBe('waiting');
-      // Too small first: it re-checks and stays parked.
+      expect(await reasons()).toEqual(["'in/late.csv' does not exist yet"]);
+      // Too small first: the next check says so and parks again.
       writeFileSync(join(root, 'in', 'late.csv'), 'id');
-      await expect.poll(statusOf, { timeout: 15_000 }).toBe('waiting');
+      await expect
+        .poll(async () => (await reasons()).at(-1), { timeout: 15_000 })
+        .toBe("'in/late.csv' is 2 bytes, waiting for 4");
+      expect(await statusOf()).toBe('waiting');
       writeFileSync(join(root, 'in', 'late.csv'), 'id\n1\n');
       await waitForRunToSettle(page, runId);
       expect(await statusOf()).toBe('success');
 
-      const events = (await (
-        await page.request.get(`/api/runs/${encodeURIComponent(runId)}/events`)
-      ).json()) as { type: string; payload: Record<string, unknown> }[];
-      const types = events.map((e) => e.type);
-      expect(types.filter((t) => t === 'node.notReady').length).toBeGreaterThanOrEqual(2);
-      expect(types).toContain('node.recheckDue');
+      const events = await eventsOf();
+      expect(events.map((e) => e.type)).toContain('node.recheckDue');
       const done = events.find((e) => e.type === 'node.succeeded');
       expect((done!.payload.outputs as Record<string, unknown>).size).toBe(5);
       await expectQuiet(page, problems);
