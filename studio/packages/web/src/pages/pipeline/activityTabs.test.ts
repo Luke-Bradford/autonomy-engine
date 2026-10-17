@@ -156,14 +156,19 @@ describe('applicableFieldNames on a set of choices (#1600 OR41 C8a)', () => {
   const CHILD = ['childFilter', 'childType', 'recursive', 'modifiedStart', 'modifiedEnd'];
 
   it('draws the child item settings only while Child items is ticked', () => {
-    expect(shown({ path: '.', fieldList: ['size', 'exists'] })).toEqual(['path', 'fieldList']);
+    expect(shown({ path: '.', fieldList: ['size', 'exists'] })).toEqual([
+      'path',
+      'fieldList',
+      'waitUntil',
+    ]);
     expect(shown({ path: '.', fieldList: ['exists', 'childItems'] })).toEqual([
       'path',
       'fieldList',
       ...CHILD,
+      'waitUntil',
     ]);
     // Nothing ticked is known to hold none, not unknown.
-    expect(shown({ path: '.' })).toEqual(['path', 'fieldList']);
+    expect(shown({ path: '.' })).toEqual(['path', 'fieldList', 'waitUntil']);
   });
 
   it('keeps a stored child setting in view so it can be removed', () => {
@@ -171,6 +176,26 @@ describe('applicableFieldNames on a set of choices (#1600 OR41 C8a)', () => {
       'path',
       'fieldList',
       'childFilter',
+      'waitUntil',
+    ]);
+  });
+
+  it('#1600 C8d — draws the timer settings only once Wait until is set, and Minimum size with its choice', () => {
+    const base = { path: '.', fieldList: ['size'] };
+    expect(shown({ ...base, waitUntil: 'off' })).toEqual(['path', 'fieldList', 'waitUntil']);
+    const timer = ['checkEverySeconds', 'giveUpAfterSeconds'];
+    expect(shown({ ...base, waitUntil: 'exists' })).toEqual([
+      'path',
+      'fieldList',
+      'waitUntil',
+      ...timer,
+    ]);
+    expect(shown({ ...base, waitUntil: 'minimumSize' })).toEqual([
+      'path',
+      'fieldList',
+      'waitUntil',
+      'minimumSize',
+      ...timer,
     ]);
   });
 });
@@ -188,8 +213,8 @@ describe('Get metadata on the bound connection kind (#1600 OR41 C8c)', () => {
     offeredFieldOptions(meta, fieldList, kind, ticked.join('\n'));
 
   it('draws the path on a file system connection, or while the kind is unknown, and not on a database', () => {
-    expect(shown({ fieldList: ['exists'] }, 'fs')).toEqual(['path', 'fieldList']);
-    expect(shown({ fieldList: ['exists'] }, undefined)).toEqual(['path', 'fieldList']);
+    expect(shown({ fieldList: ['exists'] }, 'fs')).toEqual(['path', 'fieldList', 'waitUntil']);
+    expect(shown({ fieldList: ['exists'] }, undefined)).toEqual(['path', 'fieldList', 'waitUntil']);
     expect(shown({ fieldList: ['exists'] }, 'sqlite')).toEqual(['fieldList']);
     expect(shown({ fieldList: ['exists'] }, 'postgres')).toEqual(['fieldList']);
     // A path a database node still holds stays in view, so it can be cleared.

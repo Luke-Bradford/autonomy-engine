@@ -95,7 +95,14 @@ describe('node panel labels (#1396)', () => {
           // cannot show sends the whole node to the JSON editor.
           .map((f) => [
             f.name,
-            f.kind === 'boolean' ? true : f.kind === 'enum' ? f.enumOptions![0] : 'x',
+            f.kind === 'boolean'
+              ? true
+              : f.kind === 'enum'
+                ? f.enumOptions![0]
+                : // #1600 C8d — a number (Wait until's timer settings) takes a number.
+                  f.kind === 'number'
+                  ? 1
+                  : 'x',
           ]),
       ]);
       const overrides =

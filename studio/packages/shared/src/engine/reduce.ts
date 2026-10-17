@@ -3822,7 +3822,10 @@ export function createEngine(doc: EngineDoc): Engine {
             ? `node '${event.nodeId}' has invalid config: ${errs.join('; ')}`
             : `node '${event.nodeId}' produced invalid outputs: ${errs.join('; ')}`,
         );
-        return settle(withNode(state, event.nodeId, { status: 'failure' }), diagnostics);
+        return settle(
+          withoutRecheck(withNode(state, event.nodeId, { status: 'failure' }), event.nodeId),
+          diagnostics,
+        );
       }
       const stored = storeOutputs(checked, event.outputs);
       let next = withoutRecheck(withNode(state, event.nodeId, { status: 'success' }), event.nodeId);
@@ -4356,6 +4359,16 @@ export function createEngine(doc: EngineDoc): Engine {
     ) {
       return { state, commands: [], diagnostics };
     }
+    if (state.cancelRequested !== null) {
+      // A cancel folded between `node.notReady` and this arm: the wait it
+      // stopped ends here, as `onNotReady`'s cancel branch would have ended it.
+      return settle(
+        markStoppedWork(
+          withoutRecheck(withNode(state, event.nodeId, { status: 'failure' }), event.nodeId),
+        ),
+        diagnostics,
+      );
+    }
     const parked = withNode(state, event.nodeId, {
       status: 'wait_pending',
       recheck: { ...ns.recheck, giveUpAt: event.giveUpAt },
@@ -4765,7 +4778,8 @@ export function createEngine(doc: EngineDoc): Engine {
     for (const [id, ns] of Object.entries(state.nodes)) {
       const lost =
         ns.status === 'ready' || (ns.status === 'waiting' && docNodeFor(id)?.call !== undefined);
-      if (lost) next = markStoppedWork(withNode(next, id, { status: 'failure' }));
+      if (lost)
+        next = markStoppedWork(withoutRecheck(withNode(next, id, { status: 'failure' }), id));
     }
     return settle(next, diagnostics);
   }
@@ -5122,14 +5136,15 @@ export function createEngine(doc: EngineDoc): Engine {
       cancelRequested: { source: event.source, stoppedWork: false },
     };
     for (const [id, ns] of Object.entries(next.nodes)) {
-      // #1600 C8d — a Wait until re-check park is a hold too: the check the
-      // cancel prevented is work it stopped.
-      const held =
-        ns.status === 'retry_pending' || (ns.status === 'wait_pending' && ns.recheck !== undefined);
-      if (!held) continue;
-      const failed = heldRetryToFailure(ns);
-      delete failed.recheck;
-      next = markStoppedWork({ ...next, nodes: { ...next.nodes, [id]: failed } });
+      if (ns.status === 'retry_pending') {
+        next = markStoppedWork({ ...next, nodes: { ...next.nodes, [id]: heldRetryToFailure(ns) } });
+      } else if (ns.status === 'wait_pending' && ns.recheck !== undefined) {
+        // #1600 C8d — a Wait until re-check park is a hold too: the check the
+        // cancel prevented is work it stopped. Its attempt is KEPT (unlike a
+        // retry hold's, whose failure already settled that attempt), because
+        // this failure is what ends the attempt the Monitor still shows open.
+        next = markStoppedWork(withoutRecheck(withNode(next, id, { status: 'failure' }), id));
+      }
     }
     return settle(next, diagnostics);
   }

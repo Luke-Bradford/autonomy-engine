@@ -177,7 +177,7 @@ export const getMetadataConfigSchema = z
       }),
     }),
     minimumSize: presented(z.number().int().min(1).optional(), {
-      title: 'Minimum size (bytes)',
+      title: 'Minimum bytes',
       description:
         'The file must be at least this many bytes. A folder at the path fails the node.',
     }),

@@ -250,6 +250,8 @@ describe('#1600 C8d — the park and the re-check', () => {
     });
     expect(r.state.nodes.g!.status).toBe('failure');
     expect(r.state.nodes.g!.recheck).toBeUndefined();
+    // The attempt is kept: this failure ends the check the Monitor shows open.
+    expect(r.state.nodes.g!.currentAttemptId).toBe('g#0');
     expect(r.commands).toContainEqual(
       expect.objectContaining({ type: 'finishRun', outcome: 'cancelled' }),
     );
@@ -274,5 +276,23 @@ describe('#1600 C8d — crash recovery (run.resumed)', () => {
     expect(r.commands).toEqual([
       expect.objectContaining({ type: 'dispatchNode', attemptId: 'g#1' }),
     ]);
+  });
+});
+
+describe('#1600 C8d — a cancel around the park', () => {
+  it('a cancel folded before the arm lands ends the wait as stopped work, not a park', () => {
+    const eng = engine([gm('g')]);
+    const { state, commands } = fold(eng, [
+      started,
+      dispatched('g', 'g#0'),
+      notReady('g', 'g#0'),
+      { type: 'run.cancelRequested', runId: RUN, source: { kind: 'operator' } },
+      scheduled('g', 'g#0'),
+    ]);
+    expect(state.nodes.g).toMatchObject({ status: 'failure' });
+    expect(state.nodes.g!.recheck).toBeUndefined();
+    expect(commands).toContainEqual(
+      expect.objectContaining({ type: 'finishRun', outcome: 'cancelled' }),
+    );
   });
 });
