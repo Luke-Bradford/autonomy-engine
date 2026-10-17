@@ -1726,6 +1726,10 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         // unknown endpoint against — see `edgeEndpointIds` for why containers
         // belong in it.
         const endpointIds = v ? edgeEndpointIds(v.nodes, v.containers) : new Set<string>();
+        // #1600 C1b/C8b — a node of a RETIRED type opens as its replacement. Over
+        // the doc, not the nodes alone: List directory's `entries` is Get
+        // metadata's `childItems`, and a ForEach's `items` reads it too.
+        const retiredLowered = v ? lowerRetiredTypes(v) : undefined;
         set({
           // #526 — `loaded` keeps the SERVER's doc, un-lowered. It is the rebase
           // basis and the carry-forward source for the parts of the doc this slice
@@ -1747,12 +1751,12 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           // load-bearing after the lowering — `lowerPipelineNodes` is
           // copy-on-write and hands back an unchanged node BY REFERENCE.
           //
-          // #1600 C1b — and a node of a RETIRED type (Copy file, Move file) opens
-          // as its replacement, so the next Save writes it (catalogue §8). Not
-          // `dirty` either, for the reason above; the stored version still runs
-          // as the type it holds.
-          nodes: v
-            ? lowerPipelineNodes(refreshFormerOutputs(lowerRetiredTypes(v.nodes))).map((n) => ({
+          // #1600 C1b — and a node of a RETIRED type (Copy file, Move file, List
+          // directory) opens as its replacement, so the next Save writes it
+          // (catalogue §8). Not `dirty` either, for the reason above; the stored
+          // version still runs as the type it holds.
+          nodes: retiredLowered
+            ? lowerPipelineNodes(refreshFormerOutputs(retiredLowered.nodes)).map((n) => ({
                 ...n,
               }))
             : [],
@@ -1805,7 +1809,9 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           // not (`assignContainerChild` is copy-on-write), so this stays a standing
           // invariant rather than a bug waiting on U23 — latent sharing
           // that is free to rule out here.
-          containers: v ? v.containers.map((c) => ({ ...c, children: [...c.children] })) : [],
+          containers: retiredLowered
+            ? retiredLowered.containers.map((c) => ({ ...c, children: [...c.children] }))
+            : [],
           // U16 — seeded as working state, and the copy is DEEPER than the
           // containers copy above rather than a spread. `children` is a flat array
           // of strings, so one level covers it; a param's `default` is

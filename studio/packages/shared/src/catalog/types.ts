@@ -353,7 +353,7 @@ export const FILE_LIST_ACTIVITY_TYPE = 'file_list';
 /**
  * #1600 OR41 C8a — Get metadata (catalogue §4.3). A new runnable type, read by
  * its catalog entry and the `fs` adapter's dispatch arm, so it lives once here.
- * `file_list` is lowered to it in C8b (§8).
+ * `file_list` is lowered to it (C8b, §8).
  */
 export const GET_METADATA_ACTIVITY_TYPE = 'get_metadata';
 

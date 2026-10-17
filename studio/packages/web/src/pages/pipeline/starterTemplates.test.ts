@@ -3,7 +3,7 @@ import {
   ContainerSchema,
   COPY_ACTIVITY_TYPE,
   EdgeSchema,
-  FILE_LIST_ACTIVITY_TYPE,
+  GET_METADATA_ACTIVITY_TYPE,
   HTTP_REQUEST_ACTIVITY_TYPE,
   getActivity,
   lowerPipelineNodes,
@@ -20,7 +20,7 @@ import { STARTER_TEMPLATES, type StarterTemplate } from './starterTemplates';
  * adapter parses, so a template node is held until its required field is filled.
  */
 const OPERATOR_FIELDS: Readonly<Record<string, Record<string, unknown>>> = {
-  [FILE_LIST_ACTIVITY_TYPE]: { path: 'inbox' },
+  [GET_METADATA_ACTIVITY_TYPE]: { path: 'inbox' },
   [HTTP_REQUEST_ACTIVITY_TYPE]: { url: 'https://example.test/status' },
 };
 

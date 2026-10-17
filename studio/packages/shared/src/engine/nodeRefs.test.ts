@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { parseExpr, protectEscapes, scanTemplateRefs } from './expr.js';
 import { MAX_CONFIG_DEPTH } from './params.js';
-import { referencedNodeIds, remapNodeRefs, remapNodeRefsInString } from './nodeRefs.js';
+import {
+  referencedNodeIds,
+  remapNodeRefs,
+  remapNodeRefsInString,
+  renameNodeOutputRefs,
+} from './nodeRefs.js';
 
 // The ids a real paste carries. `newLocalId` is `${prefix}_${crypto.randomUUID()}`,
 // so EVERY canvas-minted id contains hyphens — a scanner that reads "identifier
@@ -239,5 +244,158 @@ describe('referencedNodeIds reads at ANY depth', () => {
     let deep: unknown = `\${nodes.${A}.output.y}`;
     for (let i = 0; i < MAX_CONFIG_DEPTH + 5; i += 1) deep = { d: deep };
     expect(referencedNodeIds(deep, [A])).toEqual([A]);
+  });
+});
+
+describe('#1600 C8b — renameNodeOutputRefs (one node, one output renamed)', () => {
+  const R = new Map([['entries', 'childItems']]);
+  const rename = (v: unknown) => renameNodeOutputRefs(v, 'list', R);
+
+  it('renames the output field, keeping its tail, index and the rest of the span', () => {
+    expect(rename('${nodes.list.output.entries}')).toBe('${nodes.list.output.childItems}');
+    expect(rename("${concat(nodes.list.output.entries[0].name, '/x')}")).toBe(
+      "${concat(nodes.list.output.childItems[0].name, '/x')}",
+    );
+    expect(rename('a ${nodes.list.output.entries.length} b ${nodes.list.output.entries}')).toBe(
+      'a ${nodes.list.output.childItems.length} b ${nodes.list.output.childItems}',
+    );
+  });
+
+  it('leaves another output, a status read, another node and literals alone', () => {
+    for (const s of [
+      '${nodes.list.output.path}',
+      '${nodes.list.status}',
+      '${nodes.list2.output.entries}',
+      "${concat('nodes.list.output.entries', 'x')}",
+      'prose nodes.list.output.entries',
+      '$${nodes.list.output.entries}',
+      '${nodes.list.output.entriesX}',
+    ]) {
+      expect(rename(s)).toBe(s);
+    }
+  });
+
+  it('refuses a read it cannot rename faithfully', () => {
+    for (const s of [
+      '${nodes.list.output}',
+      "${nodes.list.output['entries']}",
+      '${nodes.list[0]}',
+      '${nodes.list.output.entries',
+      `\${nodes.list.output.entries}\u0000`,
+      "${concat('x, nodes.list.output.entries)}",
+    ]) {
+      expect(rename(s), s).toBeUndefined();
+    }
+  });
+
+  it('walks every leaf, copy-on-write: unchanged subtrees keep their identity', () => {
+    const untouched = { a: '${nodes.other.output.x}', b: [1, true, null] };
+    const tree = { untouched, deep: [{ items: '${nodes.list.output.entries}' }] };
+    const out = rename(tree) as typeof tree;
+    expect(out.deep[0]).toEqual({ items: '${nodes.list.output.childItems}' });
+    expect(out.untouched).toBe(untouched);
+    expect(tree.deep[0]?.items).toBe('${nodes.list.output.entries}');
+    const same = { a: '${nodes.list.output.path}' };
+    expect(rename(same)).toBe(same);
+  });
+
+  it('one refused leaf refuses the whole tree', () => {
+    expect(rename({ ok: '${nodes.list.output.entries}', bad: '${nodes.list.output}' })).toBe(
+      undefined,
+    );
+  });
+
+  it('past MAX_CONFIG_DEPTH, refuses a subtree that names the node and passes one that does not', () => {
+    const nest = (leaf: string) => {
+      let v: unknown = leaf;
+      for (let d = 0; d <= MAX_CONFIG_DEPTH + 1; d += 1) v = { v };
+      return v;
+    };
+    expect(rename(nest('${nodes.list.output.entries}'))).toBeUndefined();
+    const plain = nest('${nodes.other.output.entries}');
+    expect(rename(plain)).toBe(plain);
+  });
+
+  it('AGREES WITH THE GRAMMAR: the parsed shape is identical except the renamed field', () => {
+    const bodies = [
+      'nodes.list.output.entries',
+      'nodes.list.output.entries[0].name',
+      'default(nodes.list.output.entries, nodes.b.output.entries)',
+      'nodes.b.output.rows[nodes.list.output.entries].name',
+    ];
+    // Only `nodes.list.output.<field>` may differ, and only from `entries` to
+    // `childItems`; every other segment, `nodes.b.output.entries` included,
+    // must parse the same.
+    const swap = (e: unknown): unknown => {
+      const node = e as { kind: string; [k: string]: unknown };
+      if (node.kind === 'call') {
+        return { kind: 'call', name: node.name, args: (node.args as unknown[]).map(swap) };
+      }
+      if (node.kind === 'ref') {
+        const segs = node.segments as { kind: string; name?: string; expr?: unknown }[];
+        const ours = segs[0]?.name === 'nodes' && segs[1]?.name === 'list';
+        return {
+          kind: 'ref',
+          segments: segs.map((seg, i) =>
+            seg.kind === 'index'
+              ? { kind: 'index', expr: swap(seg.expr) }
+              : {
+                  kind: 'field',
+                  name: ours && i === 3 && seg.name === 'childItems' ? 'entries' : seg.name,
+                },
+          ),
+        };
+      }
+      return { kind: node.kind, value: node.value };
+    };
+    for (const body of bodies) {
+      const after = rename(`\${${body}}`) as string;
+      expect(after).toContain('nodes.list.output.childItems');
+      const scan = scanTemplateRefs(protectEscapes(after));
+      expect(scan.unterminatedAt).toBeNull();
+      expect(swap(parseExpr((scan.matches[0] as { body: string }).body))).toEqual(
+        swap(parseExpr(body)),
+      );
+    }
+    expect(rename('${default(nodes.list.output.entries, nodes.b.output.entries)}')).toBe(
+      '${default(nodes.list.output.childItems, nodes.b.output.entries)}',
+    );
+  });
+
+  it('matches the minted id shape literally, and the longer of two prefix ids', () => {
+    const id = 'n_d30cd1b0-cf27-49f2-b293-2f6a9a37490b';
+    expect(renameNodeOutputRefs(`\${nodes.${id}.output.entries}`, id, R)).toBe(
+      `\${nodes.${id}.output.childItems}`,
+    );
+    expect(renameNodeOutputRefs('${nodes.n_1-extra.output.entries}', 'n_1', R)).toBe(
+      '${nodes.n_1-extra.output.entries}',
+    );
+    expect(renameNodeOutputRefs('${nodes.n_1.output.entries}', 'n_1-extra', R)).toBe(
+      '${nodes.n_1.output.entries}',
+    );
+  });
+
+  it('reads `nodes` only at the start of a path', () => {
+    for (const s of ['${item.nodes.list.output.entries}', '${a.childnodes.list.output.entries}']) {
+      expect(rename(s)).toBe(s);
+    }
+    expect(rename('${add(1, nodes.list.output.entries.length)}')).toBe(
+      '${add(1, nodes.list.output.childItems.length)}',
+    );
+  });
+
+  it('refuses a field the grammar reads past whitespace, and renames one a delimiter ends', () => {
+    expect(rename('${nodes.list.output.entries x}')).toBeUndefined();
+    expect(rename('${length(nodes.list.output.entries )}')).toBe(
+      '${length(nodes.list.output.childItems )}',
+    );
+  });
+
+  it('keeps a parsed `__proto__` key a key', () => {
+    const tree = JSON.parse('{"__proto__": {"a": 1}, "x": "${nodes.list.output.entries}"}');
+    const out = rename(tree) as Record<string, unknown>;
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype);
+    expect(Object.hasOwn(out, '__proto__')).toBe(true);
+    expect(out['x']).toBe('${nodes.list.output.childItems}');
   });
 });

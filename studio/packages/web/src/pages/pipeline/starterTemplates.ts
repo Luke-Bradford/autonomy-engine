@@ -1,9 +1,9 @@
 import {
   COPY_ACTIVITY_TYPE,
   FAIL_ACTIVITY_TYPE,
-  FILE_LIST_ACTIVITY_TYPE,
   FILE_READ_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
+  GET_METADATA_ACTIVITY_TYPE,
   HTTP_REQUEST_ACTIVITY_TYPE,
   IF_ACTIVITY_TYPE,
   LLM_CALL_ACTIVITY_TYPE,
@@ -51,18 +51,24 @@ export interface StarterTemplate {
 }
 
 /**
- * The `List directory → Filter` head two templates share. The filter drops the
- * folder's sub-directories, and whatever `keep` adds on top: a directory handed
- * to a read or a copy fails the run rather than being skipped.
+ * The `Get metadata → Filter` head two templates share (#1600 C8b: Child items,
+ * where it was List directory). The filter drops the folder's sub-directories,
+ * and whatever `keep` adds on top: a directory handed to a read or a copy fails
+ * the run rather than being skipped.
  */
 function listFilesHead(keep = "equals(item.type, 'file')"): Node[] {
   return [
-    { id: 'list', type: FILE_LIST_ACTIVITY_TYPE, position: { x: 0, y: 0 }, config: {} },
+    {
+      id: 'list',
+      type: GET_METADATA_ACTIVITY_TYPE,
+      position: { x: 0, y: 0 },
+      config: { fieldList: ['childItems'] },
+    },
     {
       id: 'files',
       type: FILTER_ACTIVITY_TYPE,
       position: { x: 0, y: 0 },
-      config: { items: '${nodes.list.output.entries}', predicate: `\${${keep}}` },
+      config: { items: '${nodes.list.output.childItems}', predicate: `\${${keep}}` },
     },
   ];
 }

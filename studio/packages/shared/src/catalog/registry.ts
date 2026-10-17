@@ -660,6 +660,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
     description: 'List the files and folders in a directory on a file system connection.',
     kind: 'execution',
     category: 'general',
+    // #1600 C8b — retired from the palette: Get metadata · Child items covers
+    // it, and a stored node opens as that (`retired.ts`). It still runs.
+    inPalette: false,
     tabs: [{ key: 'location', bindings: ['connection'], fields: ['path'] }],
     idempotent: true,
     connectionKinds: ['fs'],
@@ -675,12 +678,13 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // contract is fixed, not derived from the ticks (a derived one would go
     // stale when they change). A reference to an unticked field therefore
     // resolves to null where ADF fails it; the spec records the difference.
-    // Side-effect-free, so `idempotent:true`, like `file_list`. `file_list` is
-    // lowered to its Child items in C8b; tables are C8c, Wait until C8d.
+    // Side-effect-free, so `idempotent:true`, like `file_list`, which is
+    // lowered to its Child items (C8b). Tables are C8c, Wait until C8d,
+    // Include subfolders C8e.
     type: GET_METADATA_ACTIVITY_TYPE,
     title: 'Get metadata',
     description:
-      'Read facts about a file or folder: whether it exists, its size and dates, and what it holds.',
+      'Read facts about a file or folder: whether it exists, its size and dates, or list what it holds.',
     kind: 'execution',
     category: 'general',
     tabs: [

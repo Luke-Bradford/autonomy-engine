@@ -42,7 +42,7 @@ test.describe('starter templates on an empty canvas (#1413)', () => {
        first inserted activity rather than <body>, and the insert is announced. */
     const focused = page.locator('.react-flow__node:focus');
     await expect(focused).toHaveCount(1);
-    await expect(focused).toContainText('List directory');
+    await expect(focused).toContainText('Get metadata');
     await expect(
       page.getByRole('status').filter({ hasText: 'Added Load every CSV in a folder into a table' }),
     ).toHaveText('Added Load every CSV in a folder into a table: 3 activities and 1 container.');
@@ -59,7 +59,7 @@ test.describe('starter templates on an empty canvas (#1413)', () => {
     await expect
       .poll(() => validationIssues(page))
       .toEqual([
-        expect.stringMatching(/^node 'List directory 1': config\.path:/),
+        expect.stringMatching(/^node 'Get metadata 1': config\.path:/),
         expect.stringMatching(/^node 'Copy data 1': config\.mapping:/),
         expect.stringMatching(/^node 'Copy data 1': .*bind a dataset/),
       ]);

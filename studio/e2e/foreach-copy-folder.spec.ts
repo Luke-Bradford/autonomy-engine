@@ -20,7 +20,7 @@ import { fluentRootReady } from './support/theme';
  * file to copy them into a database". The operator's recipe, composed from
  * parts that each had coverage and had never been run TOGETHER:
  *
- *   List directory → Filter (files only) → ForEach { Copy data }
+ *   Get metadata · Child items → Filter (files only) → ForEach { Copy data }
  *
  * with the copy's source path overridden PER ITEM through `datasetParams`, so
  * one CSV dataset serves every file in the folder. The folder holds a
@@ -92,7 +92,7 @@ test('#1420 — ForEach over a listed folder copies every CSV into a table', asy
     });
 
     /* #1413 — built FROM the starter template the empty canvas offers, bound
-       the way an operator binds it: the folder on List directory, and the two
+       the way an operator binds it: the folder on Get metadata, and the two
        stores, the two datasets and a mapping on Copy data. So this run is the
        proof that the template, not a hand-written lookalike, works end to end;
        a template edit that breaks its wiring fails here. */

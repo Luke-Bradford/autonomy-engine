@@ -201,7 +201,7 @@ describe('FlowCanvas empty-canvas guide (#1413 OR22)', () => {
     const { store, container } = mountCanvas();
     const region = guide(container) as HTMLElement;
     fireEvent.click(within(region).getAllByRole('button')[0]!);
-    expect(store.getState().nodes.map((n) => n.type)).toEqual(['file_list', 'filter', 'copy']);
+    expect(store.getState().nodes.map((n) => n.type)).toEqual(['get_metadata', 'filter', 'copy']);
     expect(store.getState().containers).toHaveLength(1);
     expect(guide(container)).toBeNull();
   });

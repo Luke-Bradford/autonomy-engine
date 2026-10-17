@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { addActivity, canvasNodes, fillSelectedNodeConfig, toolbox } from './support/canvasGraph';
-import { fireAndSettle, openSeededCanvas } from './support/seedDoc';
+import { fireAndSettle, openSeededCanvas, seedVersion } from './support/seedDoc';
 import { pickConnection, properties } from './support/panels';
 import { seedConnection } from './support/seedResources';
 
@@ -151,6 +151,115 @@ test.describe('#1600 C8a — Get metadata', () => {
       await expect(box(page, 'Exists')).toBeChecked();
       await expect(box(page, 'Child items')).toBeChecked();
       await expect(box(page, 'Size')).not.toBeChecked();
+      await expectQuiet(page, problems);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * #1600 C8b — catalogue §8. A stored List directory keeps running as it was.
+   * Opened in the editor it IS Get metadata with Child items ticked, and every
+   * read of its `entries` (a Filter's items, a ForEach's items) reads
+   * `childItems`. Save writes all of that, and the saved version keeps the
+   * Filter's answer.
+   */
+  test('a stored List directory runs as before, opens as Get metadata, and saves as one', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1600-c8b-')));
+    try {
+      mkdirSync(join(root, 'in', 'archive'), { recursive: true });
+      writeFileSync(join(root, 'in', 'b.csv'), 'id\n2\n');
+      writeFileSync(join(root, 'in', 'a.csv'), 'id\n1\n');
+      const store = await seedConnection(page, {
+        name: 'e2e 1600 c8b store',
+        kind: 'fs',
+        config: { roots: [root] },
+      });
+      const { pipelineId, pipelineVersionId } = await seedVersion(page, 'e2e 1600 c8b legacy', {
+        nodes: [
+          {
+            id: 'list',
+            type: 'file_list',
+            position: { x: 0, y: 0 },
+            connectionId: store,
+            config: { path: 'in' },
+          },
+          {
+            id: 'files',
+            type: 'filter',
+            position: { x: 260, y: 0 },
+            config: {
+              items: '${nodes.list.output.entries}',
+              predicate: "${equals(item.type, 'file')}",
+            },
+          },
+          { id: 'w', type: 'wait', position: { x: 540, y: 0 }, config: { seconds: '${1}' } },
+        ],
+        edges: [
+          { id: 'e1', from: 'list', to: 'files', on: 'success' },
+          { id: 'e2', from: 'list', to: 'each', on: 'success' },
+        ],
+        containers: [
+          { id: 'each', kind: 'foreach', children: ['w'], items: '${nodes.list.output.entries}' },
+        ],
+      });
+      const filtered = async (versionId: string, name: string) => {
+        const runId = await fireAndSettle(page, versionId, name);
+        const run = await (await page.request.get(`/api/runs/${encodeURIComponent(runId)}`)).json();
+        expect(run.status, `run: ${JSON.stringify(run)}`).toBe('success');
+        const events = (await (
+          await page.request.get(`/api/runs/${encodeURIComponent(runId)}/events`)
+        ).json()) as {
+          type: string;
+          payload: { nodeId?: string; outputs?: { result?: unknown } };
+        }[];
+        const done = events.find(
+          (e) => e.type === 'node.succeeded' && e.payload.nodeId === 'files',
+        );
+        return (done?.payload.outputs?.result as { name: string }[] | undefined)
+          ?.map((f) => f.name)
+          .sort();
+      };
+      // The stored version is untouched by the lowering: it runs as file_list.
+      expect(await filtered(pipelineVersionId, 'e2e 1600 c8b old')).toEqual(['a.csv', 'b.csv']);
+
+      await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+      // Three activities and the ForEach box.
+      await expect(canvasNodes(page)).toHaveCount(4);
+      await canvasNodes(page).filter({ hasText: 'Get metadata' }).click();
+      await tab(page, 'Settings').click();
+      await expect(box(page, 'Child items')).toBeChecked();
+      await expect(box(page, 'Exists')).not.toBeChecked();
+      // Any edit saves the node as its replacement. (Opening it is not one: the
+      // canvas is not dirty, which canvasStore.test.ts asserts.)
+      await tab(page, 'General').click();
+      await properties(page)
+        .getByRole('textbox', { name: 'Activity description' })
+        .fill('lowered from List directory');
+      await page.getByRole('button', { name: 'Save version' }).click();
+      await expect(page.locator('.notice')).toHaveText('Saved v2.');
+
+      const versions = (await (
+        await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+      ).json()) as {
+        id: string;
+        version: number;
+        nodes: { id: string; type: string; config: Record<string, unknown> }[];
+        containers: { id: string; items?: string }[];
+      }[];
+      const latest = versions.sort((a, b) => b.version - a.version)[0]!;
+      const byId = new Map(latest.nodes.map((n) => [n.id, n]));
+      expect(byId.get('list')).toMatchObject({
+        type: 'get_metadata',
+        config: { path: 'in', fieldList: ['childItems'] },
+      });
+      expect(byId.get('files')!.config.items).toBe('${nodes.list.output.childItems}');
+      expect(latest.containers[0]!.items).toBe('${nodes.list.output.childItems}');
+
+      expect(await filtered(latest.id, 'e2e 1600 c8b new')).toEqual(['a.csv', 'b.csv']);
       await expectQuiet(page, problems);
     } finally {
       rmSync(root, { recursive: true, force: true });

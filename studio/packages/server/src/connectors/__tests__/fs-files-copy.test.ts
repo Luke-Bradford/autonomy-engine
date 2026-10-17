@@ -737,9 +737,10 @@ describe('#1600 C1b — a lowered file_copy / file_move runs as the retired type
     return out;
   }
   const lowered = (type: string, config: Record<string, unknown>) => {
-    const node = lowerRetiredTypes([
-      { id: 'n1', type, config, connectionId: 'c', position: { x: 0, y: 0 } } as Node,
-    ])[0]!;
+    const node = lowerRetiredTypes({
+      nodes: [{ id: 'n1', type, config, connectionId: 'c', position: { x: 0, y: 0 } } as Node],
+      containers: [],
+    }).nodes[0]!;
     expect(node.type).toBe(COPY_FILES_ACTIVITY_TYPE);
     const input = { ...node.config };
     delete input['outputs'];
