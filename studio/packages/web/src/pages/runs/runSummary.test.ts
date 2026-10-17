@@ -1220,6 +1220,23 @@ describe('deriveNodeActivity — a cancel settles the holds the reducer fails (#
     expect(g!.status).toBe('failure');
     expect(g!.endedAtMs).toBe(400);
   });
+
+  it('two parallel instances parked on one row end the span they share, not drop it', () => {
+    const [g] = deriveNodeActivity([
+      dispatched('g@1', 0, 100),
+      notReady('g@1', 150),
+      dispatched('g@2', 0, 110),
+      notReady('g@2', 160),
+      cancel(400),
+    ]);
+    expect(g!.status).toBe('failure');
+    expect(g!.endedAtMs).toBe(400);
+    expect(g!.spans.at(-1)).toMatchObject({
+      instanceId: 'g@2',
+      endedAtMs: 400,
+      endedAs: 'failure',
+    });
+  });
 });
 
 describe('deriveNodeActivity — attempts for the never-dispatched activities (#483)', () => {

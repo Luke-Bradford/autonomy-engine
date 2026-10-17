@@ -216,11 +216,13 @@ test('CX4 — cancelling a PARKED run finishes it at once, and the page says can
 /**
  * #1746 — a Get metadata *Wait until* parked on its re-check is a HOLD, not a
  * timer: the reducer fails it on the cancel (the check it stopped is work), and
- * the Monitor's activity run already said `failure`. The run view's graph reads
- * the doc-free fold, which ignored the cancel and drew the row as the plain
- * `wait` above, "stopped (cancelled)". Both surfaces now say what the reducer did.
+ * the Monitor's activity run already says `failure`. In a PARALLEL ForEach the
+ * run view's node status is the doc-free fold's alone (the projection has no
+ * bare state for a parallel body node, `reconcileNodeActivity`), and that fold
+ * ignored the cancel, so the Gantt drew the hold as a parked `wait`, open and
+ * "stopped (cancelled)". Both surfaces now say what the reducer did.
  */
-test('#1746 — a cancelled Wait until reads failure on the graph, as its activity run does', async ({
+test('#1746 — a cancelled Wait until in a parallel ForEach reads failure on the Gantt, as its activity run does', async ({
   page,
 }) => {
   const problems = collectPageProblems(page);
@@ -248,6 +250,15 @@ test('#1746 — a cancelled Wait until reads failure on the graph, as its activi
           },
         },
       ],
+      containers: [
+        {
+          id: 'each',
+          kind: 'foreach',
+          children: ['gate'],
+          items: '${createArray(1, 2)}',
+          batchCount: 2,
+        },
+      ],
     });
     const runId = await fireManualTrigger(page, pipelineVersionId, 'e2e 1746');
     await expect
@@ -258,12 +269,17 @@ test('#1746 — a cancelled Wait until reads failure on the graph, as its activi
 
     await cancelFromPage(page, runId);
     await expect(headerPill(page)).toHaveText('cancelled', { timeout: 20_000 });
-    await expect(nodeRowStatus(page, 'Get metadata')).toHaveText('failure');
+    await expect(nodeRowStatus(page, 'Get metadata')).toHaveText(['failure', 'failure']);
 
-    await openRunView(page, 'Graph');
-    await expect(page.locator('.react-flow__node[data-id="gate"] .run-node-status')).toHaveText(
-      'failure',
-    );
+    // The Gantt draws the fold's row: its span ENDS at the cancel, as a failure,
+    // where it was left open and hatched as "stopped (cancelled)".
+    await openRunView(page, 'Gantt');
+    const span = page
+      .locator('.timeline-row', { has: page.locator('.timeline-row-label[title="gate"]') })
+      .locator('.timeline-span');
+    await expect(span).toHaveCount(1);
+    await expect(span).not.toHaveAttribute('data-open', 'true');
+    await expect(span).toHaveAttribute('title', /· failure ·/);
     await expectQuiet(page, problems);
   } finally {
     rmSync(root, { recursive: true, force: true });

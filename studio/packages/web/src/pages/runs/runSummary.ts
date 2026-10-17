@@ -1384,13 +1384,20 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
           // A held retry's attempt already ended at its `node.failed`.
           if (n.status === 'retry_pending') n.status = 'failure';
         }
+        // Parallel instances share their canvas row, so settle each row once and
+        // end its span through the instance that span belongs to.
+        const parkedRows = new Map<FoldingNode, string[]>();
         for (const raw of recheckParked) {
           const n = ensure(raw);
-          if (n.status !== 'wait_pending') continue;
-          n.status = 'failure';
-          closeSpan(n, raw, row.ts);
+          parkedRows.set(n, [...(parkedRows.get(n) ?? []), raw]);
         }
         recheckParked.clear();
+        for (const [n, raws] of parkedRows) {
+          if (n.status !== 'wait_pending') continue;
+          n.status = 'failure';
+          const spanned = trackedSpan(n)?.instanceId;
+          closeSpan(n, raws.find((raw) => instanceOf(raw) === spanned) ?? raws[0]!, row.ts);
+        }
         break;
       }
       case 'run.started':
