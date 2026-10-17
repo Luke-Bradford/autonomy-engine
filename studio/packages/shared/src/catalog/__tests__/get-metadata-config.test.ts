@@ -312,19 +312,24 @@ describe('get_metadata Wait until (#1600 OR41 C8d)', () => {
     ).toBe(false);
   });
 
-  it('checks a path only: a dataset is refused at save and at dispatch', () => {
+  it('checks a path or a file dataset; a table is refused at save and at dispatch (C8d-2a)', () => {
     const waiting = { fieldList: ['exists'], waitUntil: 'exists' };
-    expect(getMetadataNodeIssue({ config: waiting, datasetIds: { source: 'ds' } })).toBe(
-      'config.waitUntil: Wait until checks a file or folder path; on a dataset it is not supported yet',
-    );
+    const onTable =
+      'Wait until checks a file, a folder or a delimited or Excel dataset; on a table it is not supported yet';
+    // A saved dataset's kind is not known at save: dispatch decides.
+    expect(getMetadataNodeIssue({ config: waiting, datasetIds: { source: 'ds' } })).toBeUndefined();
+    // An inline dataset is a Table or a Query, never a file.
+    expect(
+      getMetadataNodeIssue({
+        config: waiting,
+        inlineDatasets: { source: { kind: 'table', config: { table: 't' } } },
+      }),
+    ).toBe(`config.waitUntil: ${onTable}`);
     expect(getMetadataNodeIssue({ config: { ...waiting, path: '/in' } })).toBeUndefined();
     const cfg = getMetadataConfigSchema.parse(waiting);
-    expect(getMetadataKindIssue(cfg, 'fs', true)).toBe(
-      'Wait until checks a file or folder path; on a dataset it is not supported yet',
-    );
-    expect(getMetadataKindIssue(cfg, 'sqlite', true)).toBe(
-      'Wait until checks a file or folder path; on a dataset it is not supported yet',
-    );
+    expect(getMetadataKindIssue(cfg, 'fs', true)).toBeUndefined();
+    expect(getMetadataKindIssue(cfg, 'sqlite', true)).toBe(onTable);
+    expect(getMetadataKindIssue(cfg, 'postgres', true)).toBe(onTable);
     expect(getMetadataKindIssue({ ...cfg, path: '/in' }, 'fs', false)).toBeUndefined();
   });
 });

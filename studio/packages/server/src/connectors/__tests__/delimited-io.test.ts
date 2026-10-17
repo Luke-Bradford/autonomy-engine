@@ -663,6 +663,22 @@ describe('where a delimited dataset physically is', () => {
     expect(address).toMatchObject({ store: join(root, 'not-here.csv'), storeIdentity: null });
   });
 
+  it('#1743 — a file in a folder that does not exist yet has an address, unidentified', async () => {
+    // The pre-flight must not refuse it: Get metadata answers `exists: false`
+    // for it, and Wait until waits for the folder. The READ still refuses it.
+    const where = join(root, 'later', 'a.csv');
+    expect(await resolve('later/a.csv')).toEqual({
+      kind: 'fs',
+      store: where,
+      storeIdentity: null,
+      object: where,
+    });
+  });
+
+  it('#1743 — still refuses a missing folder outside the connection roots', async () => {
+    await expect(resolve(join(outside, 'later', 'a.csv'))).rejects.toBeInstanceOf(DatasetIoError);
+  });
+
   it('refuses a path outside the connection roots', async () => {
     const path = join(outside, 'escape.csv');
     await writeFile(path, 'id\n1\n');

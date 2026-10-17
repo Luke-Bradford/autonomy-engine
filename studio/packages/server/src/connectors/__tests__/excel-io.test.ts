@@ -571,6 +571,22 @@ describe('where an excel dataset physically is (§2.1)', () => {
     expect(address).toMatchObject({ store: join(root, 'not-here.xlsx'), storeIdentity: null });
   });
 
+  it('#1743 — a workbook in a folder that does not exist yet has an address, unidentified', async () => {
+    const where = join(root, 'later', 'b.xlsx');
+    expect(await resolve('later/b.xlsx')).toEqual({
+      kind: 'fs',
+      store: where,
+      storeIdentity: null,
+      object: where,
+    });
+  });
+
+  it('#1743 — still refuses a missing folder outside the connection roots', async () => {
+    await expect(resolve(join(outside, 'later', 'b.xlsx'))).rejects.toMatchObject({
+      kind: 'permanent',
+    });
+  });
+
   it('refuses a kind this reader does not read, BY NAME', async () => {
     await expect(
       resolveExcelDatasetAddress({

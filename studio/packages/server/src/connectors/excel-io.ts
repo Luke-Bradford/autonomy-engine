@@ -152,7 +152,11 @@ function readFailure(
  * dataset has a routing fault, not a store one. The store-level sentence (for a
  * kind NEITHER fs reader handles) is `fs-connection.ts`'s `notAnFsKind`.
  */
-async function prepareRead(read: ExcelDatasetRead): Promise<{
+async function prepareRead(
+  read: ExcelDatasetRead,
+  // #1743 — the address only, as `delimited-io.ts`'s.
+  options: { readonly missingFolderOk?: boolean } = {},
+): Promise<{
   readonly path: string;
   readonly config: ExcelConfig;
 }> {
@@ -185,7 +189,7 @@ async function prepareRead(read: ExcelDatasetRead): Promise<{
   // or unreadable directory arrives as a raw errno. The three-case outcome is
   // what lets this reader keep classifying that errno through `readFailure`
   // (which may call it TRANSIENT) while a policy refusal stays permanent.
-  const confined = await confineFsPath(read.connectionConfig, config.data.path);
+  const confined = await confineFsPath(read.connectionConfig, config.data.path, options);
   if (!confined.ok) {
     if (confined.kind === 'errno') {
       throw readFailure(confined.cause, read.signal, `the excel file '${config.data.path}'`);
@@ -623,6 +627,12 @@ export async function describeExcelDatasetColumns(
  * no fs writer, so two `fs` ends cannot both exist in one copy — and it belongs
  * on the same list for whichever writer lands first.
  *
+ * #1743 — a file in a folder that does not exist yet has an address too (the
+ * would-be canonical path, `null` identity), as a missing file in a folder that
+ * exists always had: the pre-flight is not where "it is not there" is decided.
+ * Get metadata answers `exists: false` for it or waits for it, and a read of it
+ * fails at the read. A missing folder outside the roots is still refused.
+ *
  * A `stat` failure yields `null` UNIFORMLY across errno: every way it can fail
  * leaves the READ unable to proceed anyway, so the degraded comparison cannot
  * admit a copy that would otherwise be refused, and an unidentifiable store
@@ -636,11 +646,14 @@ export async function resolveExcelDatasetAddress(args: {
   // the confinement are the same facts the read needs, and a second copy would
   // be a second place for the address and the read to disagree about which file
   // they mean. Nothing is opened — §2.1's "a pure read".
-  const { path } = await prepareRead({
-    connectionConfig: args.connectionConfig,
-    datasetKind: args.dataset.kind,
-    datasetConfig: args.dataset.config,
-  });
+  const { path } = await prepareRead(
+    {
+      connectionConfig: args.connectionConfig,
+      datasetKind: args.dataset.kind,
+      datasetConfig: args.dataset.config,
+    },
+    { missingFolderOk: true },
+  );
 
   let storeIdentity: string | null = null;
   try {

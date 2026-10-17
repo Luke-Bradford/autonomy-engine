@@ -10,7 +10,12 @@ import {
   type GetMetadataField,
 } from '@autonomy-studio/shared';
 import { failed } from './activity-events.js';
-import { CONFINED_READ_FLAGS, missingWithinRoots, resolveWithinRoots } from './confine.js';
+import {
+  CONFINED_READ_FLAGS,
+  isMissingErrno as isMissing,
+  resolveWithinRoots,
+  resolveWithinRootsOrMissing,
+} from './confine.js';
 import type { fsConnectionConfigSchema } from './fs-connection.js';
 import {
   DEFAULT_MAX_LIST_ENTRIES,
@@ -55,11 +60,6 @@ type FieldValues = Record<GetMetadataField, unknown>;
 const MD5_CHUNK_BYTES = 1 << 16;
 
 const emptyFields = (): FieldValues => emptyGetMetadataFields();
-
-const isMissing = (err: unknown): boolean => {
-  const code = (err as NodeJS.ErrnoException | undefined)?.code;
-  return code === 'ENOENT' || code === 'ENOTDIR';
-};
 
 /** C8d — a Wait until that does not hold yet: check again later. */
 function notYet(input: GetMetadataConfig, reason: string): ActivityEvent {
@@ -295,21 +295,20 @@ export async function doGetMetadata(
   const answersMissing = ticked.has('exists') || waiting;
   const readsColumns = ticked.has('structure') || ticked.has('columnCount');
 
-  let resolved: Awaited<ReturnType<typeof resolveWithinRoots>>;
+  let resolved: Awaited<ReturnType<typeof resolveWithinRootsOrMissing>>;
   try {
-    resolved = await resolveWithinRoots(cfg.roots, input.path, 'fs');
+    // A missing folder is a missing path only where that has an answer; the
+    // fallback never answers for a path outside the roots (it rethrows).
+    resolved = await (answersMissing ? resolveWithinRootsOrMissing : resolveWithinRoots)(
+      cfg.roots,
+      input.path,
+      'fs',
+    );
   } catch (err) {
-    if (answersMissing && isMissing(err)) {
-      try {
-        const where = await missingWithinRoots(cfg.roots, input.path);
-        if (where !== null) return waiting ? notYet(input, missing) : notThere(where);
-      } catch {
-        // Report the original error below.
-      }
-    }
     return failFromError(err, signal);
   }
   if (!resolved.ok) return failed('permanent', resolved.error);
+  if (resolved.missing) return waiting ? notYet(input, missing) : notThere(resolved.path);
   const path = resolved.path;
 
   let st: Stats;

@@ -569,7 +569,10 @@
 // `minimumSize`, `checkEverySeconds`, `giveUpAfterSeconds`). A pre-C8d build's
 // schema strips the keys and reads the path once, so a node meant to wait for a
 // file fails or answers early: a silent change, C8e's reason.
-export const CATALOG_VERSION = 47;
+// BUMP 47→48 for #1600 OR41 C8d-2a: Wait until on a delimited or Excel dataset.
+// A pre-C8d-2a build refuses it at dispatch, so it imports such a doc and fails
+// the node at its first run: C8c-2's reason.
+export const CATALOG_VERSION = 48;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

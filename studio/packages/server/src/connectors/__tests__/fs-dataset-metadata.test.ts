@@ -213,3 +213,42 @@ describe('get_metadata — an Excel dataset', () => {
     expect(ev.error).toMatch(/Returns/);
   });
 });
+
+// #1600 OR41 C8d-2a — Wait until on a delimited or Excel dataset: the wait is on
+// the dataset's own file, as C8d-1's is on a path.
+describe('get_metadata — Wait until on a file dataset', () => {
+  const timers = { checkEverySeconds: 5, giveUpAfterSeconds: 60 };
+  const notReady = (reason: string) => ({ type: 'notReady', reason, ...timers });
+
+  it('It exists: not ready while its folder is missing, then its columns', async () => {
+    const input = { fieldList: ['columnCount'], waitUntil: 'exists', ...timers };
+    const source = csv({ path: 'later/orders.csv' });
+    expect(await run(input, source)).toEqual(notReady("'later/orders.csv' does not exist yet"));
+    await mkdir(join(root, 'later'));
+    expect(await run(input, source)).toEqual(notReady("'later/orders.csv' does not exist yet"));
+    await writeFile(join(root, 'later', 'orders.csv'), 'id,name\n1,a\n', 'utf8');
+    expect(await outputsOf(input, source)).toMatchObject({ columnCount: 2 });
+  });
+
+  it('It is not empty and It is at least N bytes: on the dataset file', async () => {
+    await writeFile(join(root, 'orders.csv'), '', 'utf8');
+    const source = csv({ path: 'orders.csv' });
+    expect(await run({ fieldList: ['size'], waitUntil: 'nonEmpty', ...timers }, source)).toEqual(
+      notReady("'orders.csv' is empty"),
+    );
+    const atLeast = { fieldList: ['size'], waitUntil: 'minimumSize', minimumSize: 8, ...timers };
+    await writeFile(join(root, 'orders.csv'), 'id\n1\n', 'utf8');
+    expect(await run(atLeast, source)).toEqual(
+      notReady("'orders.csv' is 5 bytes, waiting for 8"),
+    );
+    await writeFile(join(root, 'orders.csv'), 'id\n1\n2\n3\n', 'utf8');
+    expect(await outputsOf(atLeast, source)).toMatchObject({ size: 9 });
+  });
+
+  it('waits for an Excel workbook the same way', async () => {
+    const input = { fieldList: ['exists'], waitUntil: 'exists', ...timers };
+    expect(await run(input, sheet({ path: 'in/sales.xlsx' }))).toEqual(
+      notReady("'in/sales.xlsx' does not exist yet"),
+    );
+  });
+});

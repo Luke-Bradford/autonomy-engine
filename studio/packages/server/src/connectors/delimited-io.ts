@@ -8,7 +8,7 @@ import {
   type DatasetAddress,
   type DatasetKind,
 } from '@autonomy-studio/shared';
-import { CONFINED_READ_FLAGS, resolveWithinRoots } from './confine.js';
+import { CONFINED_READ_FLAGS, resolveWithinRoots, resolveWithinRootsOrMissing } from './confine.js';
 import { DatasetIoError } from './dataset-io-error.js';
 import { classifyFsError, fsConnectionConfigSchema } from './fs-connection.js';
 import { yieldToEventLoop } from './scheduling.js';
@@ -163,7 +163,12 @@ function readFailure(
  * which is defence in depth behind `fs.ts`'s fork rather than the routing
  * itself. That is why the message names this READER and not the store.
  */
-async function prepareRead(read: DelimitedDatasetRead): Promise<{
+async function prepareRead(
+  read: DelimitedDatasetRead,
+  // #1743 — the address only: a folder that does not exist yet is the READ's
+  // to refuse, as a missing file in a folder that exists already is.
+  options: { readonly missingFolderOk?: boolean } = {},
+): Promise<{
   readonly path: string;
   readonly config: DelimitedConfig;
 }> {
@@ -190,7 +195,9 @@ async function prepareRead(read: DelimitedDatasetRead): Promise<{
 
   let confined: Awaited<ReturnType<typeof resolveWithinRoots>>;
   try {
-    confined = await resolveWithinRoots(cfg.data.roots, config.data.path, 'fs');
+    confined = await (
+      options.missingFolderOk ? resolveWithinRootsOrMissing : resolveWithinRoots
+    )(cfg.data.roots, config.data.path, 'fs');
   } catch (err) {
     // `resolveWithinRoots` leaves `realpath` on the target's PARENT unguarded on
     // purpose, so a missing or unreadable directory arrives as a raw errno. Its
@@ -511,6 +518,12 @@ export async function describeDelimitedDatasetColumns(
  * principle: better-sqlite3 refuses a CSV as a database on its first statement,
  * so the copy fails with a message about the store.
  *
+ * #1743 — a file in a folder that does not exist yet has an address too (the
+ * would-be canonical path, `null` identity), as a missing file in a folder that
+ * exists always had: the pre-flight is not where "it is not there" is decided.
+ * Get metadata answers `exists: false` for it or waits for it, and a read of it
+ * fails at the read. A missing folder outside the roots is still refused.
+ *
  * A `stat` failure yields `null` UNIFORMLY across errno, on
  * `resolveSqliteDatasetAddress`'s argument: every way it can fail leaves the
  * READ unable to proceed anyway (`stat` needs what `open` needs), so the
@@ -525,11 +538,14 @@ export async function resolveDelimitedDatasetAddress(args: {
   // the confinement are the same facts the read needs, and a second copy of them
   // here is a second place for the address and the read to disagree about which
   // file they mean. Nothing is opened — §2.1's "a pure read".
-  const { path } = await prepareRead({
-    connectionConfig: args.connectionConfig,
-    datasetKind: args.dataset.kind,
-    datasetConfig: args.dataset.config,
-  });
+  const { path } = await prepareRead(
+    {
+      connectionConfig: args.connectionConfig,
+      datasetKind: args.dataset.kind,
+      datasetConfig: args.dataset.config,
+    },
+    { missingFolderOk: true },
+  );
 
   let storeIdentity: string | null = null;
   try {

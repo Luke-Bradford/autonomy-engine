@@ -3,7 +3,8 @@ import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { resolveWithinRoots } from '../confine.js';
+import { mkdirSync } from 'node:fs';
+import { resolveWithinRoots, resolveWithinRootsOrMissing } from '../confine.js';
 
 /**
  * #1119 M4 follow-up — the shared confinement guard NAMES THE RIGHT CONNECTOR.
@@ -69,5 +70,54 @@ describe('resolveWithinRoots — refusals attribute the CALLING connector', () =
     const res = await resolveWithinRoots([root], join(outside, 'secret.txt'), 'sqlite');
     expect(res.ok).toBe(false);
     expect(res.ok === false && res.error).toMatch(/resolves outside the allowed roots/);
+  });
+});
+
+/**
+ * #1743 — the confinement a dataset ADDRESS takes: a missing folder is a path
+ * that does not exist yet, judged by its nearest existing ancestor, never a
+ * raw errno, and never an answer for a path outside the roots.
+ */
+describe('resolveWithinRootsOrMissing — a missing folder inside the roots', () => {
+  it('answers the would-be canonical path, marked missing', async () => {
+    const root = tempRoot();
+    expect(await resolveWithinRootsOrMissing([root], 'later/in/a.csv', 'fs')).toEqual({
+      ok: true,
+      path: join(root, 'later', 'in', 'a.csv'),
+      missing: true,
+    });
+    expect(
+      await resolveWithinRootsOrMissing([root], join(root, 'later', 'a.csv'), 'fs'),
+    ).toEqual({ ok: true, path: join(root, 'later', 'a.csv'), missing: true });
+  });
+
+  it("is resolveWithinRoots' own answer when the folder exists", async () => {
+    const root = tempRoot();
+    mkdirSync(join(root, 'in'));
+    expect(await resolveWithinRootsOrMissing([root], 'in/a.csv', 'fs')).toEqual({
+      ok: true,
+      path: join(root, 'in', 'a.csv'),
+    });
+  });
+
+  it('rethrows for a missing folder outside the roots', async () => {
+    const root = tempRoot();
+    const outside = tempRoot();
+    await expect(
+      resolveWithinRootsOrMissing([root], join(outside, 'later', 'a.csv'), 'fs'),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rethrows through a link out of the roots, and through a dangling link', async () => {
+    const root = tempRoot();
+    const outside = tempRoot();
+    symlinkSync(outside, join(root, 'out'));
+    await expect(
+      resolveWithinRootsOrMissing([root], 'out/later/a.csv', 'fs'),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    symlinkSync(join(outside, 'gone'), join(root, 'dangling'));
+    await expect(
+      resolveWithinRootsOrMissing([root], 'dangling/a.csv', 'fs'),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

@@ -94,8 +94,7 @@ export async function missingWithinRoots(
       if (!isWithinCanonicalRoots(ancestor, canonicalRoots)) return null;
       return missing.length === 0 ? ancestor : join(ancestor, ...missing);
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err;
+      if (!isMissingErrno(err)) throw err;
     }
     // A component `realpath` cannot resolve but `lstat` finds is a dangling
     // link, whose target may be outside: walking past it would answer for that
@@ -104,13 +103,55 @@ export async function missingWithinRoots(
       await lstat(dir);
       return null;
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err;
+      if (!isMissingErrno(err)) throw err;
     }
     const parent = dirname(dir);
     if (parent === dir) return null;
     missing.unshift(basename(dir));
     dir = parent;
+  }
+}
+
+/** A path, or one of its folders, that does not exist (`ENOENT`, `ENOTDIR`). */
+export const isMissingErrno = (err: unknown): boolean => {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+};
+
+/**
+ * #1743 — {@link resolveWithinRoots} for a path that may not exist yet, folders
+ * included: where the target's parent folder is missing, the answer is the
+ * would-be canonical path from {@link missingWithinRoots}, marked `missing`.
+ *
+ * A dataset's ADDRESS takes this, because "the file is not there yet" is a fact
+ * for the READ to report, or for Get metadata to answer `exists: false` or wait
+ * on; and a missing folder is the same fact as a missing file in a folder that
+ * exists, which `resolveWithinRoots` already lets through. Get metadata takes it
+ * too, so the fallback is written once.
+ *
+ * It never answers for a path outside the roots: when `missingWithinRoots` says
+ * so (a link out of a root, a dangling link, no root at all), or fails, the
+ * ORIGINAL error is rethrown, exactly as `resolveWithinRoots` would have thrown
+ * it. So a caller sees nothing it would not have seen before for such a path,
+ * and keeps classifying it through its own errno mapper.
+ */
+export async function resolveWithinRootsOrMissing(
+  roots: readonly string[],
+  requested: string,
+  connector: ConnectorLabel,
+): Promise<{ ok: true; path: string; missing?: true } | { ok: false; error: string }> {
+  try {
+    return await resolveWithinRoots(roots, requested, connector);
+  } catch (err) {
+    if (!isMissingErrno(err)) throw err;
+    let where: string | null;
+    try {
+      where = await missingWithinRoots(roots, requested);
+    } catch {
+      throw err;
+    }
+    if (where === null) throw err;
+    return { ok: true, path: where, missing: true };
   }
 }
 
@@ -302,6 +343,9 @@ export type FsConfinement =
 export async function confineFsPath(
   connectionConfig: unknown,
   requested: string,
+  // #1743 — a dataset ADDRESS asks for a path whose folder may not exist yet
+  // (`resolveWithinRootsOrMissing`); every read keeps the strict answer.
+  options: { readonly missingFolderOk?: boolean } = {},
 ): Promise<FsConfinement> {
   const cfg = fsConnectionConfigSchema.safeParse(connectionConfig);
   if (!cfg.success) {
@@ -314,7 +358,11 @@ export async function confineFsPath(
 
   let confined: Awaited<ReturnType<typeof resolveWithinRoots>>;
   try {
-    confined = await resolveWithinRoots(cfg.data.roots, requested, 'fs');
+    confined = await (options.missingFolderOk ? resolveWithinRootsOrMissing : resolveWithinRoots)(
+      cfg.data.roots,
+      requested,
+      'fs',
+    );
   } catch (err) {
     return {
       ok: false,
