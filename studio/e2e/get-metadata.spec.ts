@@ -7,7 +7,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { addActivity, canvasNodes, fillSelectedNodeConfig, toolbox } from './support/canvasGraph';
 import { fireAndSettle, openSeededCanvas, seedVersion } from './support/seedDoc';
 import { pickConnection, properties } from './support/panels';
-import { seedConnection } from './support/seedResources';
+import { seedConnection, seedDataset } from './support/seedResources';
 
 /**
  * #1600 OR41 C8a — Get metadata on a file system connection (activity
@@ -101,9 +101,9 @@ test.describe('#1600 C8a — Get metadata', () => {
 
       await tab(page, 'Source').click();
       await pickConnection(page, 'Connection', { id: fs });
-      // C8c — a path needs no dataset, so none is asked for on a file system.
-      await expect(properties(page).getByRole('combobox', { name: 'Source dataset' })).toHaveCount(
-        0,
+      // C8c — a path needs no dataset; C8c-2 — the picker offers one, unset.
+      await expect(properties(page).getByRole('combobox', { name: 'Source dataset' })).toHaveValue(
+        '',
       );
       await fillSelectedNodeConfig(page, { 'File or folder path': 'in', Filter: '*.csv' });
 
@@ -321,9 +321,9 @@ test.describe('#1600 C8a — Get metadata', () => {
 
       await tab(page, 'Source').click();
       await pickConnection(page, 'Connection', { id: fs });
-      // C8c — a path needs no dataset, so none is asked for on a file system.
-      await expect(properties(page).getByRole('combobox', { name: 'Source dataset' })).toHaveCount(
-        0,
+      // C8c — a path needs no dataset; C8c-2 — the picker offers one, unset.
+      await expect(properties(page).getByRole('combobox', { name: 'Source dataset' })).toHaveValue(
+        '',
       );
       await fillSelectedNodeConfig(page, { 'File or folder path': 'in', Filter: '*.csv' });
       await page.getByRole('button', { name: 'Save version' }).click();
@@ -449,6 +449,103 @@ test.describe('#1600 C8a — Get metadata', () => {
         columnCount: 2,
         rowCount: 3,
         size: null,
+        childItems: null,
+      });
+      await expectQuiet(page, problems);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("C8c-2: on a file system, a delimited dataset's file and its header's columns", async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1600-c8c2-')));
+    try {
+      writeFileSync(join(root, 'orders.csv'), 'id,name,total\n1,a,3\n');
+      writeFileSync(join(root, 'other.csv'), 'x\n1\n');
+      const fs = await seedConnection(page, {
+        name: 'e2e 1600 c8c2 files',
+        kind: 'fs',
+        config: { roots: [root] },
+      });
+      const column = (name: string) => ({ name, type: 'string', nullable: true });
+      const other = await seedDataset(page, {
+        name: 'e2e 1600 c8c2 other',
+        kind: 'delimited',
+        connectionId: fs,
+        config: { path: 'other.csv', header: true },
+        columns: [column('x')],
+      });
+      const orders = await seedDataset(page, {
+        name: 'e2e 1600 c8c2 orders',
+        kind: 'delimited',
+        connectionId: fs,
+        config: { path: 'orders.csv', header: true },
+        columns: [column('id'), column('name'), column('total')],
+      });
+      const pipelineId = await openSeededCanvas(page, 'e2e 1600 c8c2 file metadata', {
+        nodes: [
+          {
+            id: 'meta1',
+            type: 'get_metadata',
+            config: { fieldList: ['exists'] },
+            connectionId: fs,
+            // Seeded on another file, so the author re-points it below.
+            datasetIds: { source: other },
+            position: { x: 0, y: 0 },
+          },
+        ],
+      });
+
+      await canvasNodes(page).first().click();
+      await tab(page, 'Source').click();
+      const picker = properties(page).getByRole('combobox', { name: 'Source dataset' });
+      await expect(picker).toHaveValue(other);
+      await picker.selectOption({ value: orders });
+
+      await tab(page, 'Settings').click();
+      // A path's eight and a file dataset's two: Row count is a table's.
+      await expect(fieldList(page).getByRole('checkbox')).toHaveCount(10);
+      await expect(box(page, 'Row count')).toHaveCount(0);
+      for (const name of ['Size', 'Structure', 'Column count']) await box(page, name).check();
+      // Measured at 1440x900: the last box is still in the viewport.
+      const last = await box(page, 'Column count').boundingBox();
+      expect(last, 'Column count has a box').not.toBeNull();
+      expect(last!.y + last!.height).toBeLessThanOrEqual(900);
+      await properties(page).getByRole('button', { name: 'Apply config', exact: true }).click();
+
+      await page.getByRole('button', { name: 'Save version' }).click();
+      await expect(page.locator('.notice')).toHaveText('Saved v2.');
+      const versions = (await (
+        await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+      ).json()) as { id: string; version: number; nodes: Record<string, unknown>[] }[];
+      const latest = versions.sort((a, b) => b.version - a.version)[0]!;
+      const node = latest.nodes[0]!;
+      expect(node['config']).toMatchObject({
+        fieldList: ['exists', 'size', 'structure', 'columnCount'],
+      });
+      expect((node['config'] as Record<string, unknown>)['path']).toBeUndefined();
+      expect(node['datasetIds']).toEqual({ source: orders });
+
+      const runId = await fireAndSettle(page, latest.id, 'e2e 1600 c8c2');
+      const events = (await (
+        await page.request.get(`/api/runs/${encodeURIComponent(runId)}/events`)
+      ).json()) as { type: string; payload: Record<string, unknown> }[];
+      const done = events.find((e) => e.type === 'node.succeeded');
+      expect(done, `events: ${JSON.stringify(events)}`).toBeDefined();
+      expect(done!.payload.outputs).toMatchObject({
+        path: join(root, 'orders.csv'),
+        exists: true,
+        size: 20,
+        structure: [
+          { name: 'id', type: 'string' },
+          { name: 'name', type: 'string' },
+          { name: 'total', type: 'string' },
+        ],
+        columnCount: 3,
+        rowCount: null,
         childItems: null,
       });
       await expectQuiet(page, problems);
