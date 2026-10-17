@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireManualTrigger, seedVersion } from './support/seedDoc';
@@ -208,4 +211,61 @@ test('CX4 — cancelling a PARKED run finishes it at once, and the page says can
   expect(stopped.spanText).toContain('stopped (cancelled)');
 
   await expectQuiet(page, problems);
+});
+
+/**
+ * #1746 — a Get metadata *Wait until* parked on its re-check is a HOLD, not a
+ * timer: the reducer fails it on the cancel (the check it stopped is work), and
+ * the Monitor's activity run already said `failure`. The run view's graph reads
+ * the doc-free fold, which ignored the cancel and drew the row as the plain
+ * `wait` above, "stopped (cancelled)". Both surfaces now say what the reducer did.
+ */
+test('#1746 — a cancelled Wait until reads failure on the graph, as its activity run does', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1746-')));
+  try {
+    mkdirSync(join(root, 'in'));
+    const files = await seedConnection(page, {
+      name: 'e2e 1746 files',
+      kind: 'fs',
+      config: { roots: [root] },
+    });
+    const { pipelineVersionId } = await seedVersion(page, 'e2e 1746 wait until', {
+      nodes: [
+        {
+          id: 'gate',
+          type: 'get_metadata',
+          position: { x: 0, y: 0 },
+          connectionId: files,
+          config: {
+            path: 'in/never.csv',
+            fieldList: ['exists'],
+            waitUntil: 'exists',
+            checkEverySeconds: 3600,
+            giveUpAfterSeconds: 7200,
+          },
+        },
+      ],
+    });
+    const runId = await fireManualTrigger(page, pipelineVersionId, 'e2e 1746');
+    await expect
+      .poll(() => runStatus(page, runId), { message: 'run never parked', timeout: 20_000 })
+      .toBe('waiting');
+    // The PREMISE: parked on the re-check, not on a timer activity.
+    expect(await eventTypes(page, runId)).toContain('node.recheckScheduled');
+
+    await cancelFromPage(page, runId);
+    await expect(headerPill(page)).toHaveText('cancelled', { timeout: 20_000 });
+    await expect(nodeRowStatus(page, 'Get metadata')).toHaveText('failure');
+
+    await openRunView(page, 'Graph');
+    await expect(page.locator('.react-flow__node[data-id="gate"] .run-node-status')).toHaveText(
+      'failure',
+    );
+    await expectQuiet(page, problems);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

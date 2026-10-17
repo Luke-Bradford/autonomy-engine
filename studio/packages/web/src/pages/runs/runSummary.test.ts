@@ -1086,6 +1086,142 @@ describe('deriveNodeActivity — the non-dispatch node lifecycles (#483)', () =>
   });
 });
 
+describe('deriveNodeActivity — a cancel settles the holds the reducer fails (#1746)', () => {
+  // `onCancelRequested` (engine/reduce.ts) fails a held retry and a parked Wait
+  // until re-check with no node event of its own, so this fold has to read the
+  // cancel itself or the row stays parked on a cancelled run forever.
+  const cancel = (at: number) =>
+    envelope({ type: 'run.cancelRequested', runId: 'r', source: { kind: 'operator' } }, at);
+  const dispatched = (nodeId: string, attempt: number, at: number) =>
+    envelope(
+      {
+        type: 'node.dispatched',
+        runId: 'r',
+        nodeId,
+        attemptId: `${nodeId}#${attempt}`,
+        idempotent: true,
+      },
+      at,
+    );
+  const failedTransient = (at: number) =>
+    envelope(
+      {
+        type: 'node.failed',
+        runId: 'r',
+        nodeId: 'a',
+        attemptId: 'a#0',
+        error: 'timeout',
+        kind: 'transient',
+      },
+      at,
+    );
+  const retryScheduled = (at: number) =>
+    envelope(
+      { type: 'node.retryScheduled', runId: 'r', nodeId: 'a', attemptId: 'a#0', nextAttemptAt: 1 },
+      at,
+    );
+  const notReady = (nodeId: string, at: number) =>
+    envelope(
+      {
+        type: 'node.notReady',
+        runId: 'r',
+        nodeId,
+        attemptId: `${nodeId.split('@')[0]}#0`,
+        reason: "'in/a.csv' does not exist yet",
+        recheckAfterSeconds: 10,
+        giveUpAfterSeconds: 600,
+      },
+      at,
+    );
+  const recheckScheduled = (nodeId: string, at: number) =>
+    envelope(
+      {
+        type: 'node.recheckScheduled',
+        runId: 'r',
+        nodeId,
+        attemptId: `${nodeId.split('@')[0]}#0`,
+        nextCheckAt: 1,
+        giveUpAt: 2,
+      },
+      at,
+    );
+
+  it('a held retry reads `failure` once the run is cancelled, keeping its error', () => {
+    const [a] = deriveNodeActivity([
+      dispatched('a', 0, 100),
+      failedTransient(200),
+      retryScheduled(210),
+      cancel(300),
+    ]);
+    expect(a!.status).toBe('failure');
+    expect(a!.error).toBe('timeout');
+    expect(a!.attempts).toBe(1);
+    // The failed attempt already ended at its node.failed, not at the cancel.
+    expect(a!.endedAtMs).toBe(200);
+  });
+
+  it('a retry hold appended after the cancel does not re-hold the node', () => {
+    const [a] = deriveNodeActivity([
+      dispatched('a', 0, 100),
+      failedTransient(200),
+      cancel(300),
+      retryScheduled(310),
+    ]);
+    expect(a!.status).toBe('failure');
+  });
+
+  it('a parked Wait until re-check fails at the cancel, and its span ends there', () => {
+    const [g] = deriveNodeActivity([
+      dispatched('g', 0, 100),
+      notReady('g', 150),
+      recheckScheduled('g', 160),
+      cancel(400),
+    ]);
+    expect(g!.status).toBe('failure');
+    expect(g!.attempts).toBe(1);
+    expect(g!.endedAtMs).toBe(400);
+    expect(g!.spans.at(-1)).toMatchObject({ endedAtMs: 400, endedAs: 'failure' });
+  });
+
+  it('a not-ready check or its re-check arm folded after the cancel fails too', () => {
+    const [late] = deriveNodeActivity([dispatched('g', 0, 100), cancel(120), notReady('g', 150)]);
+    expect(late!.status).toBe('failure');
+    expect(late!.endedAtMs).toBe(150);
+
+    const [armed] = deriveNodeActivity([
+      dispatched('g', 0, 100),
+      notReady('g', 150),
+      cancel(170),
+      recheckScheduled('g', 180),
+    ]);
+    expect(armed!.status).toBe('failure');
+    expect(armed!.endedAtMs).toBe(170);
+  });
+
+  it('a parked `wait` timer is left as the reducer leaves it: not in flight, not failed', () => {
+    const [w] = deriveNodeActivity([
+      envelope(
+        { type: 'timer.waitScheduled', runId: 'r', nodeId: 'w', attemptId: 'w#0', dueAt: 1 },
+        100,
+      ),
+      cancel(200),
+    ]);
+    expect(w!.status).toBe('wait_pending');
+  });
+
+  it('a parallel instance parked on a re-check settles on the canvas row', () => {
+    const [g] = deriveNodeActivity([
+      dispatched('g@1', 0, 100),
+      notReady('g@1', 150),
+      recheckScheduled('g@1', 160),
+      cancel(400),
+    ]);
+    expect(g!.nodeId).toBe('g');
+    expect(g!.status).toBe('failure');
+    expect(g!.endedAtMs).toBe(400);
+  });
+});
+
 describe('deriveNodeActivity — attempts for the never-dispatched activities (#483)', () => {
   it('counts a `fail` / `filter` control node, whose ONLY event is its terminal one', () => {
     // `fail` and `filter` are engine-evaluated: the reducer emits `failNode` /
