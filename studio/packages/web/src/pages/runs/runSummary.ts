@@ -1052,16 +1052,6 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         ensure(e.nodeId).status = 'retry_pending';
         break;
       }
-      // #4 A5/A6 + A13 — the node PARKED on an alarm (a `wait`'s timer) or on an
-      // inbound callback (a `webhook`). These are the START of a control node's
-      // life, not a transition within it: such nodes are engine-evaluated and
-      // never dispatched, so this is also the event that counts their attempt.
-      //
-      // TWO cases rather than one, since U25. They shared a branch while the
-      // monitor had a single `waiting` word for both, and folding them together
-      // was the last place the distinction was lost: the log names which alarm a
-      // node is parked on, the engine keeps them apart (`wait_pending` vs
-      // `external_wait_pending`), and only this reader collapsed them.
       // #1600 OR41 C8d — a Get metadata Wait until that does not hold yet waits
       // on a re-check timer (the same park as a `wait`), and its span stays open
       // until a check finally settles it.
@@ -1073,6 +1063,16 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         ensure(e.nodeId).status = 'dispatched';
         rechecking.add(e.nodeId);
         break;
+      // #4 A5/A6 + A13 — the node PARKED on an alarm (a `wait`'s timer) or on an
+      // inbound callback (a `webhook`). These are the START of a control node's
+      // life, not a transition within it: such nodes are engine-evaluated and
+      // never dispatched, so this is also the event that counts their attempt.
+      //
+      // TWO cases rather than one, since U25. They shared a branch while the
+      // monitor had a single `waiting` word for both, and folding them together
+      // was the last place the distinction was lost: the log names which alarm a
+      // node is parked on, the engine keeps them apart (`wait_pending` vs
+      // `external_wait_pending`), and only this reader collapsed them.
       case 'timer.waitScheduled': {
         const n = ensure(e.nodeId);
         n.status = 'wait_pending';

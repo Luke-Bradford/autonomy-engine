@@ -270,6 +270,7 @@ async function waitUntilUnmet(
           `It is at least N bytes needs a file, and '${input.path}' is a ${type}`,
         );
       }
+      // The config refuses this choice without a size; 1 only satisfies the type.
       const min = input.minimumSize ?? 1;
       return st.size >= min
         ? null
@@ -325,7 +326,8 @@ export async function doGetMetadata(
     try {
       unmet = await waitUntilUnmet(input, path, st, type);
     } catch (err) {
-      return failFromError(err, signal);
+      // A folder removed between the stat and the read is not there yet.
+      return isMissing(err) ? notYet(input, missing) : failFromError(err, signal);
     }
     if (unmet !== null) return unmet;
   }

@@ -122,6 +122,19 @@ describe('#1 F4 — Engine.redact (emit-time)', () => {
     });
   });
 
+  it("#1600 C8d — withholds a Wait until's not-ready reason, which names the path", () => {
+    const ev = eng.redact({
+      type: 'node.notReady',
+      runId: RUN,
+      nodeId: 's',
+      attemptId: 's#0',
+      reason: "'/in/hunter2.csv' does not exist yet",
+      recheckAfterSeconds: 10,
+      giveUpAfterSeconds: 60,
+    });
+    expect(ev).toMatchObject({ reason: SECURE_ERROR_WITHHELD, recheckAfterSeconds: 10 });
+  });
+
   it('secureInput alone withholds failure prose and hashes, but not outputs', () => {
     const n = node('i', { policy: { secureInput: true } });
     const e = createEngine({ nodes: [n], edges: [] });

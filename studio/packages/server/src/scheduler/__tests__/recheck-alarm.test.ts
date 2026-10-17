@@ -9,17 +9,23 @@ import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun, getRun } from '../../repo/runs.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
-import { getWakeupByKey, listPendingWakeups } from '../../repo/scheduled-wakeups.js';
+import {
+  armWakeup,
+  getWakeupByKey,
+  listPendingWakeups,
+  settleWakeup,
+} from '../../repo/scheduled-wakeups.js';
 import type { Db } from '../../repo/types.js';
 import {
   buildEngine,
+  driveRun,
   startRun,
   type DocResolver,
   type DriveDeps,
   type Executor,
 } from '../../run/driver.js';
 import { createRunDrives } from '../../run/drives.js';
-import { loadEngineEvents } from '../../run/events.js';
+import { appendEngineEvent, loadEngineEvents } from '../../run/events.js';
 import { createAlarmClock, type AlarmClock } from '../alarms.js';
 import { createRecheckAlarmHandler } from '../recheck-alarm.js';
 import { silentLog } from './testLog.js';
@@ -189,5 +195,46 @@ describe('#1600 C8d — the re-check alarm', () => {
       error: "Wait until gave up after 25s: 'in/a.csv' does not exist yet",
     });
     expect(listPendingWakeups(db)).toEqual([]);
+  });
+
+  it('after a crash, re-arms a fresh alarm when the first came due while the node was not parked', async () => {
+    const { db } = freshDb();
+    const run = seed(db);
+    const t = NOW + 60_000;
+    const exec = checker(() => false);
+    const { deps } = harness(db, exec, () => t);
+    // The log a crash left: the check said "not yet", the alarm was armed, and
+    // the process died before `node.recheckScheduled`. The overdue alarm then
+    // fired at boot while the node was still `ready`, so the clock suppressed it.
+    const at = { runId: run.id, nodeId: 'g', attemptId: 'g#0' };
+    appendEngineEvent(db, {
+      type: 'run.started',
+      runId: run.id,
+      pipelineVersionId: run.pipelineVersionId,
+      params: {},
+    });
+    appendEngineEvent(db, { type: 'node.dispatched', ...at, idempotent: true });
+    appendEngineEvent(db, {
+      type: 'node.notReady',
+      ...at,
+      reason: 'not yet',
+      recheckAfterSeconds: 10,
+      giveUpAfterSeconds: 600,
+    });
+    const spent = armWakeup(db, {
+      kind: 'node_recheck',
+      ref: at,
+      dueAt: NOW + 10_000,
+      discriminator: 'recheck-g#0',
+    });
+    settleWakeup(db, spent.id, { status: 'suppressed', firedAt: NOW + 59_000 });
+
+    await driveRun(deps, run.id);
+
+    expect(stateOf(db, deps, run.id).nodes.g!.status).toBe('wait_pending');
+    expect(listPendingWakeups(db)).toEqual([
+      expect.objectContaining({ kind: 'node_recheck', ref: at, dueAt: t + 10_000 }),
+    ]);
+    expect(exec.checks).toEqual([]);
   });
 });

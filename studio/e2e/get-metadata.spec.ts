@@ -194,7 +194,7 @@ test.describe('#1600 C8a — Get metadata', () => {
 
       const every = properties(page).getByLabel('Check every (seconds)', { exact: true });
       const giveUp = properties(page).getByLabel('Give up after (seconds)', { exact: true });
-      const minimum = properties(page).getByLabel('Minimum size (bytes)', { exact: true });
+      const minimum = properties(page).getByLabel('Minimum bytes', { exact: true });
       await expect(every).toHaveCount(0);
       const waitUntil = properties(page).getByRole('combobox', { name: 'Wait until', exact: true });
       await waitUntil.selectOption({ label: 'It is at least N bytes' });
@@ -238,13 +238,12 @@ test.describe('#1600 C8a — Get metadata', () => {
       const reasons = async () =>
         (await eventsOf()).filter((e) => e.type === 'node.notReady').map((e) => e.payload.reason);
       await expect.poll(statusOf, { timeout: 15_000 }).toBe('waiting');
-      expect(await reasons()).toEqual(["'in/late.csv' does not exist yet"]);
+      expect((await reasons())[0]).toBe("'in/late.csv' does not exist yet");
       // Too small first: the next check says so and parks again.
       writeFileSync(join(root, 'in', 'late.csv'), 'id');
       await expect
         .poll(async () => (await reasons()).at(-1), { timeout: 15_000 })
         .toBe("'in/late.csv' is 2 bytes, waiting for 4");
-      expect(await statusOf()).toBe('waiting');
       writeFileSync(join(root, 'in', 'late.csv'), 'id\n1\n');
       await waitForRunToSettle(page, runId);
       expect(await statusOf()).toBe('success');

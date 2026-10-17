@@ -147,7 +147,10 @@ export class ParamResolveError extends Error {
  *                  AFTER arming the alarm — so a `wait_pending` node ALWAYS has a
  *                  live alarm row (unlike `retry_pending`, entered by `node.failed`
  *                  BEFORE the arm, which is why retry needs a boot re-arm and wait
- *                  does not).
+ *                  does not). #1600 C8d — also a Get metadata *Wait until* parked
+ *                  between checks (the node carries `recheck`): entered by
+ *                  `node.recheckScheduled`, also appended after its arm, and
+ *                  resolved by `node.recheckDue` (a new check), never `timer.due`.
  * - `external_wait_pending` — #4 A13's durable **external PARK**: a `webhook`
  *                  control node paused awaiting an inbound HTTP callback. NON-
  *                  terminal, resolved by `externalWait.completed` (→ `success`) or
@@ -368,7 +371,8 @@ export type RunLifecycleStatus = z.infer<typeof RunLifecycleStatusSchema>;
 /**
  * #5 S3 — WHY a run is `waiting`. The reasons are the run-level twins of the
  * node parked-states `awaitsExternalEvent` (`reduce.ts`) recognises:
- *   - `waiting_timer`       — a `wait` node parked `wait_pending` (#4 A6 timer).
+ *   - `waiting_timer`       — a `wait` node parked `wait_pending` (#4 A6 timer),
+ *                             or a Wait until between checks (#1600 C8d).
  *   - `waiting_external`    — a `webhook` node parked `external_wait_pending`
  *                             (#4 A13), or any inbound external-wait.
  *   - `waiting_concurrency` — admission held the run for a capacity slot. NO

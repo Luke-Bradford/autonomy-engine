@@ -358,7 +358,7 @@ Sources: [Get Metadata](https://learn.microsoft.com/azure/data-factory/control-f
 
 - **Fields** (ADF's Validation: https://learn.microsoft.com/azure/data-factory/control-flow-validation-activity):
   - *Wait until*: Off (the default, which reads once as before) · It exists · It is not empty · It is at least N bytes (`waitUntil`).
-  - *Minimum size (bytes)*, only with the last choice (`minimumSize`).
+  - *Minimum bytes*, only with the last choice (`minimumSize`).
   - *Check every (seconds)*, default 10, ADF's `sleep` (`checkEverySeconds`).
   - *Give up after (seconds)*, default 43200 (12 h), at most 7 days, ADF's `timeout` (`giveUpAfterSeconds`).
   - Plain numbers, as Lookup's Max rows. A timer setting with Wait until off is refused, as the child-item settings are.
@@ -371,10 +371,11 @@ Sources: [Get Metadata](https://learn.microsoft.com/azure/data-factory/control-f
   - arms a `node_recheck` alarm and appends `node.recheckScheduled`, which parks it `wait_pending` (the run goes `waiting`, nothing is in flight, the same park as Wait); or
   - fails it `permanent` `wait_until_timeout`, once the check that answered ran at or after the deadline.
   - The alarm's `node.recheckDue` re-dispatches the node under a new attempt that spends no retry budget.
-- **The deadline** is the first check's time + *Give up after*. It is fixed then and kept across every check and policy retry. The last alarm is clamped to it, so the final check runs at the deadline.
+- **The deadline** is the first check's time + *Give up after*. It is fixed then and kept across every check and policy retry. The last alarm is clamped to it, so the final check runs at the deadline. A crash before the first park recomputes it from the resume, extending it by the downtime.
 - **Checks are bounded:** *Give up after* / *Check every* ≤ 5000 (`MAX_WAIT_UNTIL_CHECKS`), because every check is a dispatch on the run's log and every alarm re-reads that log. ADF's defaults make 4,320.
 - **One activity run.** The Monitor's activity-runs row and the run view's node row keep the first check's start and attempt number across the re-checks, as ADF shows one Validation run, not one per check.
 - **Cancel:** a cancel fails a parked re-check (work it stopped), like a held retry, and a due re-check starts nothing on a cancelled run.
+- **Crash recovery:** a not-ready node whose park was lost re-arms its alarm on resume, and a fresh one if the first was spent while the node was not parked.
 - **Deliberate differences from ADF:**
   - The settings are on Get metadata, not a separate Validation activity (§1).
   - A dataset is not supported yet. Save refuses Wait until with a dataset bound, and dispatch does too. That waits for **C8d-2**, decided together with #1743, because a dataset's address is resolved before dispatch and needs its folder.

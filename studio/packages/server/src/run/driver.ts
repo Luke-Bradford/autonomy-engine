@@ -670,13 +670,19 @@ function armRecheck(
       code: FAILURE_CODES.WAIT_UNTIL_TIMEOUT,
     };
   }
-  const row = deps.alarms.arm({
+  const input = {
     kind: RECHECK_WAKEUP_KIND,
     ref: { runId: state.runId, nodeId: command.nodeId, attemptId: command.attemptId },
     dueAt: Math.min(now + command.afterSeconds * 1000, giveUpAt),
-    // Vacuous for a ref that pins the attempt, as for wait.
     discriminator: `recheck-${command.attemptId}`,
-  });
+  };
+  let row = deps.alarms.arm(input);
+  if (row.status !== 'pending') {
+    // A re-emitted command (crash recovery) whose alarm already came due while
+    // the node was still `ready`: the clock suppressed it, and parking on that
+    // spent row would leave the node with no live alarm. Arm a fresh one.
+    row = deps.alarms.arm({ ...input, discriminator: `${input.discriminator}-${now}` });
+  }
   return {
     type: 'node.recheckScheduled',
     runId: state.runId,

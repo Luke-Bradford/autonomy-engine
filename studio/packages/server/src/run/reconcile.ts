@@ -422,8 +422,9 @@ function dispatchedNodes(state: RunState): { id: string; attemptId: string }[] {
 }
 
 /**
- * A run parked on a DURABLE node alarm: at least one node is `wait_pending` (#4 A6)
- * or `external_wait_pending` (#4 A13). BOTH are entered by an event appended AFTER
+ * A run parked on a DURABLE node alarm: at least one node is `wait_pending` (#4 A6,
+ * and a Get metadata Wait until between checks, #1600 C8d) or
+ * `external_wait_pending` (#4 A13). ALL are entered by an event appended AFTER
  * the alarm/row arm, so a parked node always has a live alarm and needs no boot
  * re-arm — the same disposition, and the same reason to catch it here rather than
  * let it fall through the finalize path (a spurious `run.resumed` + a `finalized`

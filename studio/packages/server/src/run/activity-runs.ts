@@ -627,6 +627,8 @@ export function projectActivityRunsFromLog(
   const open = new Set<ProjectedActivityRun>();
   let frontier: readonly string[] = [];
   let copiedInactive: ReadonlySet<string> = new Set();
+  /** #1600 C8d — a Wait until's row, by node, awaiting its next check's attempt. */
+  const rechecks = new Map<string, ProjectedActivityRun>();
   for (const { event: e, ts, payload } of log) {
     if (e.type === 'run.reseeded') {
       frontier = e.frontier;
@@ -634,7 +636,19 @@ export function projectActivityRunsFromLog(
       // reducer's "inactive in the pinned version" guard against (#1669).
       copiedInactive = new Set(e.copiedInactive);
     }
+    if (e.type === 'node.recheckDue') {
+      const row = byAttempt.get(e.previousAttemptId);
+      if (row !== undefined && open.has(row)) rechecks.set(e.nodeId, row);
+    }
     const ref = attemptOf(e);
+    // The check a `node.recheckDue` started carries on its first check's row,
+    // as in `projectActivityRuns`.
+    const carried = ref === null ? undefined : rechecks.get(ref.nodeId);
+    if (ref !== null && carried !== undefined && !byAttempt.has(ref.attemptId)) {
+      rechecks.delete(ref.nodeId);
+      carried.attemptId = ref.attemptId;
+      byAttempt.set(ref.attemptId, carried);
+    }
     let opened: ProjectedActivityRun | undefined;
     if (ref !== null && !byAttempt.has(ref.attemptId)) {
       opened = {
@@ -662,12 +676,12 @@ export function projectActivityRunsFromLog(
       open.clear();
     }
   }
-  const carried = frontier.map((id) => ({
+  const reusedRows = frontier.map((id) => ({
     ...emptyRow(`reused:${id}`, id, 'success', null),
     reused: true,
     inactive: copiedInactive.has(id),
   }));
-  return { rows: [...carried, ...rows], groups: [] };
+  return { rows: [...reusedRows, ...rows], groups: [] };
 }
 
 /**

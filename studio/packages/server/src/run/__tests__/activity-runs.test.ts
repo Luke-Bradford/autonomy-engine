@@ -552,6 +552,15 @@ describe('#1484 activity runs — one row per attempt', () => {
       } satisfies EngineEvent),
     );
     const rows = projectActivityRuns(doc, engine, log).rows;
+    // The log-only projection (no doc) collapses them the same way.
+    expect(projectActivityRunsFromLog(log).rows).toEqual([
+      expect.objectContaining({
+        attemptId: 'g#1',
+        status: 'success',
+        startedAt: 2,
+        finishedAt: 15,
+      }),
+    ]);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       attemptId: 'g#1',

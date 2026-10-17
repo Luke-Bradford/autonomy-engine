@@ -241,10 +241,11 @@ export interface ToolCallTelemetry {
  * `toolCalled` and `warned` are observability only (partial progress / a
  * per-response metering fact / a per-response prompt-completion capture fact /
  * an `agent_task` subprocess telemetry fact / an executed-tool-call fact / a
- * non-fatal advisory); exactly one terminal `succeeded`/`failed` ends the
- * stream. The executor maps these to engine events (`node.output` /
- * `activity.metered` / `activity.captured` / `activity.agentTelemetry` /
- * `activity.toolCalled` / `activity.warned` / `node.succeeded` / `node.failed`).
+ * non-fatal advisory); exactly one terminal `succeeded`/`failed`/`notReady`
+ * (#1600 C8d) ends the stream. The executor maps these to engine events
+ * (`node.output` / `activity.metered` / `activity.captured` /
+ * `activity.agentTelemetry` / `activity.toolCalled` / `activity.warned` /
+ * `node.succeeded` / `node.failed` / `node.notReady`).
  *
  * ONE terminal can mint TWO engine events (#725): a `failed` carrying a
  * `spendFact` yields an `activity.metered` BEFORE its `node.failed`, because a
