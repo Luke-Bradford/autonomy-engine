@@ -675,6 +675,21 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
   const dispatchesByRawNode = new Map<string, number>();
   /** #1600 C8d — raw node ids whose next dispatch is a Wait until re-check. */
   const rechecking = new Set<string>();
+  /**
+   * #1746 — raw node ids parked on a Wait until re-check alarm: the phase before
+   * `rechecking` (alarm armed, not yet due). Never pruned on a reset, which is
+   * safe because a cancel only fails a row still showing `wait_pending`.
+   */
+  const recheckParked = new Set<string>();
+  /**
+   * #1746 — whether a `run.cancelRequested` has been folded. The reducer's
+   * `onCancelRequested` fails every held retry and every parked re-check with no
+   * node event of its own, and from then on fails a not-ready check instead of
+   * parking it and schedules no retry. This fold mirrors those four rules, or a
+   * cancelled run keeps such a row parked forever. A plain `wait` timer is not
+   * touched: the reducer leaves it parked too (it is not in flight).
+   */
+  let cancelled = false;
   // #566 slice 2 / #4 A4b — a PARALLEL foreach's body events carry per-item
   // INSTANCE keys (`w@1`); fold them onto the CANVAS node's row (`w`) so item
   // instances light up the one node the author drew — last-write-wins, the same
@@ -1003,6 +1018,18 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // retry would be counted twice. (`retryRequested` is the boot
         // reconciler's crash-recovery decision, `retryDue` is F2b/F2c's policy
         // retry firing; they differ in the engine, not in what the monitor shows.)
+        if (cancelled) {
+          // #1746 — under a cancel neither re-opens anything. A `retryDue` finds
+          // no hold left (the cancel failed it), and the reducer fails the
+          // in-flight node a `retryRequested` names instead of re-dispatching it
+          // (CX1 D7).
+          const n = ensure(e.nodeId);
+          if (e.type === 'node.retryRequested' && n.status === 'dispatched') {
+            n.status = 'failure';
+            closeSpan(n, e.nodeId, row.ts);
+          }
+          break;
+        }
         const n = ensure(e.nodeId);
         n.status = 'dispatched';
         clearResult(n);
@@ -1049,19 +1076,36 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // U24: the failure CLASS is kept for the same reason and cleared by the
         // same events — `clearResult` moves the whole result as one fact, so the
         // kind can never outlive the message it classifies.
-        ensure(e.nodeId).status = 'retry_pending';
+        // #1746 — cancel mode schedules no retry, so an arm appended after the
+        // cancel leaves the failure standing, as the reducer does.
+        if (!cancelled) ensure(e.nodeId).status = 'retry_pending';
         break;
       }
       // #1600 OR41 C8d — a Get metadata Wait until that does not hold yet waits
       // on a re-check timer (the same park as a `wait`), and its span stays open
       // until a check finally settles it.
       case 'node.notReady':
-      case 'node.recheckScheduled':
-        ensure(e.nodeId).status = 'wait_pending';
+      case 'node.recheckScheduled': {
+        const n = ensure(e.nodeId);
+        if (cancelled) {
+          // #1746 — `onNotReady`/`onRecheckScheduled` fail the check under a
+          // cancel. A row the cancel already settled stays as it is.
+          if (n.status === 'dispatched') {
+            n.status = 'failure';
+            closeSpan(n, e.nodeId, row.ts);
+          }
+          break;
+        }
+        n.status = 'wait_pending';
+        recheckParked.add(e.nodeId);
         break;
+      }
       case 'node.recheckDue':
+        // #1746 — the cancel already failed the park this alarm answers.
+        if (cancelled) break;
         ensure(e.nodeId).status = 'dispatched';
         rechecking.add(e.nodeId);
+        recheckParked.delete(e.nodeId);
         break;
       // #4 A5/A6 + A13 — the node PARKED on an alarm (a `wait`'s timer) or on an
       // inbound callback (a `webhook`). These are the START of a control node's
@@ -1334,9 +1378,10 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
       //     `run.waiting` and the terminal pair are folded by
       //     `deriveRunLifecycle` below. `run.triggerContext` is folded by
       //     NOTHING today — it is provenance that only the raw event feed
-      //     renders. `run.reseeded` was in that group until #918 and is now the
-      //     one run-level event with its own arm above, because it is the only
-      //     one carrying per-NODE results.
+      //     renders. `run.reseeded` was in that group until #918 and has its own
+      //     arm above, because it is the only one carrying per-NODE results;
+      //     `run.cancelRequested` has one just below (#1746), because it
+      //     settles holds.
       //   - `container.*` — CONTAINER-level: they carry a `containerId` and NO
       //     `nodeId`, so in a per-node table there is no row for them to land in.
       //     Surfacing container state needs the version doc this page does not
@@ -1350,12 +1395,37 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
       //     exists — as, since #605, is `activity.captured`'s text.
       //     `agentTelemetry`/`warned` remain wholly inert (#750 pins `warned`'s
       //     inertness).
+      // #1746 — the one run-level event that settles node rows (`cancelled`).
+      case 'run.cancelRequested': {
+        // A repeat cancel finds nothing left to settle.
+        cancelled = true;
+        for (const n of byNode.values()) {
+          // A held retry's attempt already ended at its `node.failed`.
+          if (n.status === 'retry_pending') n.status = 'failure';
+        }
+        // Parallel instances share their canvas row, so settle each row once and
+        // end its span through the instance that span belongs to. A row a later
+        // instance has moved off `wait_pending` keeps that instance's status:
+        // the same last-write-wins collapse as everywhere else in this fold.
+        const parkedRows = new Map<FoldingNode, string[]>();
+        for (const raw of recheckParked) {
+          const n = ensure(raw);
+          parkedRows.set(n, [...(parkedRows.get(n) ?? []), raw]);
+        }
+        recheckParked.clear();
+        for (const [n, raws] of parkedRows) {
+          if (n.status !== 'wait_pending') continue;
+          n.status = 'failure';
+          const spanned = trackedSpan(n)?.instanceId;
+          closeSpan(n, raws.find((raw) => instanceOf(raw) === spanned) ?? raws[0]!, row.ts);
+        }
+        break;
+      }
       case 'run.started':
       case 'run.finished':
       case 'run.resumed':
       case 'run.interrupted':
       case 'run.waiting':
-      case 'run.cancelRequested':
       case 'run.triggerContext':
       case 'container.timeoutScheduled':
       case 'container.timedOut':

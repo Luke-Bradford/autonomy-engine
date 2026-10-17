@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireManualTrigger, seedVersion } from './support/seedDoc';
@@ -208,4 +211,77 @@ test('CX4 — cancelling a PARKED run finishes it at once, and the page says can
   expect(stopped.spanText).toContain('stopped (cancelled)');
 
   await expectQuiet(page, problems);
+});
+
+/**
+ * #1746 — a Get metadata *Wait until* parked on its re-check is a HOLD, not a
+ * timer: the reducer fails it on the cancel (the check it stopped is work), and
+ * the Monitor's activity run already says `failure`. In a PARALLEL ForEach the
+ * run view's node status is the doc-free fold's alone (the projection has no
+ * bare state for a parallel body node, `reconcileNodeActivity`), and that fold
+ * ignored the cancel, so the Gantt drew the hold as a parked `wait`, open and
+ * "stopped (cancelled)". The activity-run check is parity; the Gantt is the fix.
+ */
+test('#1746 — a cancelled Wait until in a parallel ForEach reads failure on the Gantt, as its activity run does', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1746-')));
+  try {
+    mkdirSync(join(root, 'in'));
+    const files = await seedConnection(page, {
+      name: 'e2e 1746 files',
+      kind: 'fs',
+      config: { roots: [root] },
+    });
+    const { pipelineVersionId } = await seedVersion(page, 'e2e 1746 wait until', {
+      nodes: [
+        {
+          id: 'gate',
+          type: 'get_metadata',
+          position: { x: 0, y: 0 },
+          connectionId: files,
+          config: {
+            path: 'in/never.csv',
+            fieldList: ['exists'],
+            waitUntil: 'exists',
+            checkEverySeconds: 3600,
+            giveUpAfterSeconds: 7200,
+          },
+        },
+      ],
+      containers: [
+        {
+          id: 'each',
+          kind: 'foreach',
+          children: ['gate'],
+          items: '${createArray(1, 2)}',
+          batchCount: 2,
+        },
+      ],
+    });
+    const runId = await fireManualTrigger(page, pipelineVersionId, 'e2e 1746');
+    await expect
+      .poll(() => runStatus(page, runId), { message: 'run never parked', timeout: 20_000 })
+      .toBe('waiting');
+    // The PREMISE: parked on the re-check, not on a timer activity.
+    expect(await eventTypes(page, runId)).toContain('node.recheckScheduled');
+
+    await cancelFromPage(page, runId);
+    await expect(headerPill(page)).toHaveText('cancelled', { timeout: 20_000 });
+    await expect(nodeRowStatus(page, 'Get metadata')).toHaveText(['failure', 'failure']);
+
+    // The Gantt draws the fold's row: its span ENDS at the cancel, as a failure,
+    // where it was left open and hatched as "stopped (cancelled)".
+    await openRunView(page, 'Gantt');
+    const span = page
+      .locator('.timeline-row', { has: page.locator('.timeline-row-label[title="gate"]') })
+      .locator('.timeline-span');
+    await expect(span).toHaveCount(1);
+    await expect(span).not.toHaveAttribute('data-open', 'true');
+    await expect(span).toHaveAttribute('title', /· failure ·/);
+    await expectQuiet(page, problems);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
