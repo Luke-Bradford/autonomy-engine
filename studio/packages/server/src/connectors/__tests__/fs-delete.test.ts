@@ -102,6 +102,7 @@ describe('delete — choosing the files', () => {
       path: join(realpathSync(root), 'one.txt'),
       filesDeleted: 1,
       foldersDeleted: 0,
+      logPath: null,
     });
     expect(Object.keys(outputs).sort()).toEqual(
       getActivity(DELETE_ACTIVITY_TYPE)!
@@ -182,6 +183,7 @@ describe('delete — nothing matched', () => {
       path: join(realpathSync(root), 'nope', 'deeper'),
       filesDeleted: 0,
       foldersDeleted: 0,
+      logPath: null,
     });
   });
 
@@ -270,8 +272,16 @@ describe('delete — refusals', () => {
     await writeFile(join(outside, 'y.txt'), 'y');
     await symlink(join(outside, 'far'), join(root, 'in', 'dirlink'));
     await symlink(join(outside, 'y.txt'), join(root, 'in', 'filelink.txt'));
-    const outputs = await outputsOf({ path: 'in', recursive: true, deleteEmptyFolders: true });
-    expect(outputs).toMatchObject({ filesDeleted: 0, foldersDeleted: 0 });
+    const events = await run({ path: 'in', recursive: true, deleteEmptyFolders: true });
+    // C9c — each is a Warning in the session log, which goes to the run log by default.
+    expect(events.slice(0, -1).map((e) => e.type === 'output' && e.value)).toEqual([
+      expect.stringMatching(/Z Warning FileSkip dirlink skipped: not a regular file/),
+      expect.stringMatching(/Z Warning FileSkip filelink\.txt skipped: not a regular file/),
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      type: 'succeeded',
+      outputs: { filesDeleted: 0, foldersDeleted: 0 },
+    });
     // A plain listing: a recursive `readdir` would itself follow the link.
     expect((await readdir(join(root, 'in'))).sort()).toEqual(['dirlink', 'filelink.txt']);
     expect(existsSync(join(outside, 'far', 'x.txt'))).toBe(true);

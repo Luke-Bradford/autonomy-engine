@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -23,12 +24,16 @@ import { seedConnection } from './support/seedResources';
  * What only a browser can show: the palette offers Delete, its Source and
  * Settings tabs draw inside 1440x900, Delete empty folders appears only once
  * Include subfolders is ticked, the form saves the config, and the saved version
- * deletes exactly the matching files and the folders they leave empty.
+ * deletes exactly the matching files and the folders they leave empty. C9c: the
+ * session log's Write to shows while it is on, Log folder once Folder is picked,
+ * and the run writes the CSV and names it as `logPath`.
  */
 
 const tab = (page: Page, name: string) => properties(page).getByRole('tab', { name, exact: true });
 const checkbox = (page: Page, name: string) =>
   properties(page).getByRole('checkbox', { name, exact: true });
+const combobox = (page: Page, name: string) =>
+  properties(page).getByRole('combobox', { name, exact: true });
 
 test.describe('#1600 C9a — Delete', () => {
   test.use({ viewport: { width: 1440, height: 900 } });
@@ -45,6 +50,7 @@ test.describe('#1600 C9a — Delete', () => {
       writeFileSync(join(root, 'in', 'day1', 'b.txt'), 'b');
       writeFileSync(join(root, 'in', 'day2', 'c.txt'), 'c');
       writeFileSync(join(root, 'in', 'day2', 'keep.csv'), 'k');
+      mkdirSync(join(root, 'logs'));
       const fs = await seedConnection(page, {
         name: 'e2e 1600 c9a files',
         kind: 'fs',
@@ -85,7 +91,28 @@ test.describe('#1600 C9a — Delete', () => {
       expect(last, 'Delete empty folders has a box').not.toBeNull();
       expect(last!.y + last!.height).toBeLessThanOrEqual(900);
       await checkbox(page, 'Delete empty folders').check();
-      await fillSelectedNodeConfig(page, { 'File or folder path': 'in', Wildcard: '*.txt' });
+
+      // C9c — the session log: Warnings to the run log by default, so Write to
+      // shows and Log folder waits for Folder.
+      await expect(combobox(page, 'Session log').locator('option:checked')).toHaveText(
+        'Warnings (default)',
+      );
+      await expect(combobox(page, 'Write to')).toBeVisible();
+      await expect(properties(page).getByRole('textbox', { name: 'Log folder' })).toHaveCount(0);
+      await combobox(page, 'Session log').selectOption({ label: 'Everything' });
+      await combobox(page, 'Write to').selectOption({ label: 'Folder' });
+      await fillSelectedNodeConfig(page, {
+        'File or folder path': 'in',
+        Wildcard: '*.txt',
+        'Log folder': 'logs',
+      });
+      // The Settings tab still fits the docked pane at 1440x900.
+      await tab(page, 'Settings').click();
+      const logFolder = await properties(page)
+        .getByRole('textbox', { name: 'Log folder', exact: true })
+        .boundingBox();
+      expect(logFolder, 'Log folder has a box').not.toBeNull();
+      expect(logFolder!.y + logFolder!.height).toBeLessThanOrEqual(900);
 
       await page.getByRole('button', { name: 'Save version' }).click();
       await expect(page.locator('.notice')).toHaveText('Saved v2.');
@@ -104,6 +131,9 @@ test.describe('#1600 C9a — Delete', () => {
         wildcard: '*.txt',
         recursive: true,
         deleteEmptyFolders: true,
+        logLevel: 'info',
+        logTo: 'folder',
+        logFolder: 'logs',
       });
 
       const runId = await fireAndSettle(page, latest.id, 'e2e 1600 c9a');
@@ -112,11 +142,26 @@ test.describe('#1600 C9a — Delete', () => {
       ).json()) as { type: string; payload: Record<string, unknown> }[];
       const done = events.find((e) => e.type === 'node.succeeded');
       expect(done, `events: ${JSON.stringify(events.map((e) => e.type))}`).toBeDefined();
+      const logPath = join(root, 'logs', readdirSync(join(root, 'logs'))[0]!);
+      expect(logPath).toMatch(/session-log\.[^/]+\.csv$/);
       expect(done!.payload.outputs).toEqual({
         path: join(root, 'in'),
         filesDeleted: 3,
         foldersDeleted: 1,
+        logPath,
       });
+      // Every item, with its time; day2 is kept because it still holds its csv.
+      const rows = readFileSync(logPath, 'utf8')
+        .split('\r\n')
+        .slice(1, -1)
+        .map((r) => r.slice(r.indexOf(',') + 1));
+      expect(rows.sort()).toEqual([
+        'Info,FileDelete,a.txt,deleted',
+        'Info,FileDelete,day1/b.txt,deleted',
+        'Info,FileDelete,day2/c.txt,deleted',
+        'Info,FolderDelete,day1,deleted',
+        'Info,FolderSkip,day2,kept: not empty',
+      ]);
       // day1 is emptied and goes; day2 keeps its csv; the folder at the path stays.
       expect(readdirSync(join(root, 'in')).sort()).toEqual(['day2', 'keep.csv']);
       expect(readdirSync(join(root, 'in', 'day2'))).toEqual(['keep.csv']);
@@ -217,6 +262,7 @@ test.describe('#1600 C9a — Delete', () => {
         path: join(root, 'in', 'old.csv'),
         filesDeleted: 1,
         foldersDeleted: 0,
+        logPath: null,
       });
       expect(readdirSync(join(root, 'in'))).toEqual(['keep.csv']);
       await expectQuiet(page, problems);

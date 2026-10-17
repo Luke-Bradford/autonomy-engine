@@ -13,9 +13,10 @@ vi.mock('node:fs/promises', async (importActual) => {
   };
 });
 import * as fsp from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DELETE_ACTIVITY_TYPE } from '@autonomy-studio/shared';
+import { DELETE_ACTIVITY_TYPE, SESSION_LOG_OUTPUT } from '@autonomy-studio/shared';
 import { fsAdapter } from '../fs.js';
 import { cleanupTempRoots, tempRoot } from './temp-roots.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
@@ -109,6 +110,11 @@ describe('delete — inside the delete loop', () => {
     });
     const events = await run({ path: 'in' }, new AbortController().signal);
     expect(events).toEqual([
+      {
+        type: 'output',
+        name: SESSION_LOG_OUTPUT,
+        value: expect.stringMatching(/Z Warning FileSkip b\.txt skipped: removed by someone else$/),
+      },
       {
         type: 'succeeded',
         outputs: expect.objectContaining({ filesDeleted: 3, foldersDeleted: 0 }),
@@ -227,6 +233,11 @@ describe('delete — inside the delete loop', () => {
     );
     expect(events).toEqual([
       {
+        type: 'output',
+        name: SESSION_LOG_OUTPUT,
+        value: expect.stringMatching(/Z Warning FolderSkip mnt kept: a mount point$/),
+      },
+      {
         type: 'succeeded',
         outputs: expect.objectContaining({ filesDeleted: 4, foldersDeleted: 0 }),
       },
@@ -250,5 +261,77 @@ describe('delete — inside the delete loop', () => {
     });
     expect(events.at(-1)).toMatchObject({ type: 'failed', kind: 'cancelled' });
     expect(await readdir(join(root, 'in'))).toHaveLength(1);
+  });
+});
+
+describe('delete — the session log on a failure or a cancel (#1600 OR41 C9c)', () => {
+  const logFile = () => join(root, 'logs', 'session-log.run_1.n1.n1_0.csv');
+  /** The CSV's rows after its header, without the timestamp. */
+  const rows = () =>
+    readFileSync(logFile(), 'utf8')
+      .split('\r\n')
+      .slice(1, -1)
+      .map((r) => r.slice(r.indexOf(',') + 1));
+
+  it('a failed delete logs an Error line for its file, and the folder log is still written', async () => {
+    await mkdir(join(root, 'logs'));
+    const unlink = await realUnlink();
+    vi.mocked(fsp.unlink).mockImplementation(async (p) => {
+      if (String(p).endsWith('b.txt'))
+        throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      await unlink(p);
+    });
+    const events = await run(
+      { path: 'in', logLevel: 'info', logTo: 'folder', logFolder: 'logs' },
+      new AbortController().signal,
+    );
+    expect(events.at(-1)).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(events).toContainEqual({ type: 'output', name: 'logPath', value: logFile() });
+    const lines = rows();
+    expect(lines[0]).toBe('Info,FileDelete,a.txt,deleted');
+    expect(lines[1]).toMatch(/^Error,FileDelete,b\.txt,.*permission denied/);
+    expect(lines).toHaveLength(2);
+  });
+
+  it('in the run log, the Error line comes ahead of the outputs and the failure', async () => {
+    vi.mocked(fsp.unlink).mockImplementation(async () => {
+      throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    });
+    const events = await run({ path: 'in' }, new AbortController().signal);
+    expect(events[0]).toMatchObject({
+      type: 'output',
+      name: SESSION_LOG_OUTPUT,
+      value: expect.stringMatching(/Z Error FileDelete a\.txt .*permission denied/),
+    });
+    expect(events.at(-1)).toMatchObject({ type: 'failed' });
+  });
+
+  it('a cancel right after a failed delete keeps that delete’s own error on its line', async () => {
+    await mkdir(join(root, 'logs'));
+    const ac = new AbortController();
+    vi.mocked(fsp.unlink).mockImplementation(async () => {
+      ac.abort();
+      throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    });
+    const events = await run({ path: 'in', logTo: 'folder', logFolder: 'logs' }, ac.signal);
+    expect(events.at(-1)).toMatchObject({ type: 'failed', kind: 'cancelled' });
+    expect(rows()).toEqual([expect.stringMatching(/^Error,FileDelete,a\.txt,.*permission denied/)]);
+  });
+
+  it('a cancel still writes the folder log, with the deletes done', async () => {
+    await mkdir(join(root, 'logs'));
+    const ac = new AbortController();
+    const unlink = await realUnlink();
+    vi.mocked(fsp.unlink).mockImplementation(async (p) => {
+      await unlink(p);
+      ac.abort();
+    });
+    const events = await run(
+      { path: 'in', logLevel: 'info', logTo: 'folder', logFolder: 'logs' },
+      ac.signal,
+    );
+    expect(events.at(-1)).toMatchObject({ type: 'failed', kind: 'cancelled' });
+    expect(events).toContainEqual({ type: 'output', name: 'logPath', value: logFile() });
+    expect(rows()).toEqual(['Info,FileDelete,a.txt,deleted']);
   });
 });

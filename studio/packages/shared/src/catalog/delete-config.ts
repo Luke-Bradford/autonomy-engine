@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
 import { instant, modifiedWindowIssue, wildcardIssue } from './file-selection.js';
+import { sessionLogConfigFields, sessionLogIssues } from './session-log.js';
 
 /**
  * #1600 OR41 C9a — Delete's config (catalogue §4.4), the SINGLE SOURCE OF TRUTH
@@ -64,6 +65,8 @@ export const deleteConfigSchema = z
       description:
         'After the files, remove every subfolder left empty, ones empty already included. Never the folder at the path.',
     }),
+    // C9c — the session log (§4.4: the same options as Copy's).
+    ...sessionLogConfigFields,
   })
   .superRefine((cfg, ctx) => {
     // As in `copyFilesConfigSchema`: refuse a setting that would be ignored,
@@ -81,6 +84,7 @@ export const deleteConfigSchema = z
     }
     const window = modifiedWindowIssue(cfg.modifiedStart, cfg.modifiedEnd);
     if (window !== undefined) issue('modifiedEnd', window);
+    sessionLogIssues(cfg, issue);
   });
 
 export type DeleteConfig = z.infer<typeof deleteConfigSchema>;

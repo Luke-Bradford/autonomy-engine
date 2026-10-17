@@ -53,8 +53,9 @@ const HELP_LIMITS: Record<string, number> = {
   'Copy data': 9,
   // #1600 OR41 C9a — Delete, measured: the pane's own `?`s and one on each
   // Source and Settings field but Delete empty folders, which waits for
-  // Include subfolders.
-  Delete: 14,
+  // Include subfolders. +2 for C9c's Session log and Write to (Log folder
+  // waits for Folder).
+  Delete: 16,
   // #1600 OR41 C8a — List directory's 7 (retired from the palette by C8b) and
   // the Field list's, which says the unticked outputs are null and what Exists
   // does for a missing path.
@@ -335,7 +336,8 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   'Copy data (inline query)': 13,
   // #1600 OR41 C9a — Delete with every setting showing: the 14 above and
   // Delete empty folders', which says it never removes the folder at the path.
-  Delete: 15,
+  // +3 for C9c's Session log, Write to and Log folder.
+  Delete: 18,
   // #1600 OR41 C8a — the 8 above and Child items' four settings: Filter's
   // wildcard syntax, Child entries' All, and the window's UTC and folders.
   // +1 for C8e's Include subfolders: each item is then named by its path.
@@ -383,7 +385,7 @@ const SHOWS: Record<string, string[]> = {
   'Copy data (files from a folder)': ['*.csv', '/tmp/e2e/in'],
   'Copy data (inline query)': [INLINE_SQL, 'region', 'EU', '${run.runId}'],
   'Lookup (inline table)': ['main', 'orders'],
-  Delete: ['/tmp/e2e/in', '*.csv', '2026-10-01T00:00:00Z', '4', 'E2E-1'],
+  Delete: ['/tmp/e2e/in', '*.csv', '2026-10-01T00:00:00Z', '4', '/tmp/e2e/logs', 'E2E-1'],
   'Get metadata': ['/tmp/e2e', '*.csv', '2026-10-01T00:00:00Z', '1024', '3600', '2048', 'E2E-1'],
   'Lookup (whole file as text)': ['/tmp/e2e/in.txt', '2048', 'E2E-1'],
   'Write file': ['/tmp/e2e/out.txt', '2048', 'E2E-1'],
@@ -538,6 +540,10 @@ function seeds(ids: SeedIds): Record<string, Seed> {
       maxConcurrentConnections: 4,
       failIfNothingMatched: true,
       deleteEmptyFolders: true,
+      // C9c — to a folder, so Log folder draws too.
+      logLevel: 'info',
+      logTo: 'folder',
+      logFolder: '/tmp/e2e/logs',
     }),
     // #1600 OR41 C8a — Child items ticked, so its settings draw too (C8e's
     // Include subfolders among them).

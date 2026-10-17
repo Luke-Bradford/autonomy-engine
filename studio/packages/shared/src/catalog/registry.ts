@@ -802,7 +802,14 @@ const ENTRIES: ActivityCatalogEntry[] = [
       },
       {
         key: 'settings',
-        fields: ['maxConcurrentConnections', 'failIfNothingMatched', 'deleteEmptyFolders'],
+        fields: [
+          'maxConcurrentConnections',
+          'failIfNothingMatched',
+          'deleteEmptyFolders',
+          'logLevel',
+          'logTo',
+          'logFolder',
+        ],
       },
     ],
     // The rules `deleteConfigSchema`'s superRefine enforces.
@@ -810,6 +817,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
       wildcard: [{ field: 'pathType', in: ['folder'] }],
       recursive: [{ field: 'pathType', in: ['folder'] }],
       deleteEmptyFolders: [{ field: 'recursive', in: ['true'] }],
+      logTo: [{ field: 'logLevel', in: ['warning', 'info'] }],
+      logFolder: [{ field: 'logTo', in: ['folder'] }],
     },
     idempotent: false,
     connectionKinds: ['fs'],
@@ -817,6 +826,12 @@ const ENTRIES: ActivityCatalogEntry[] = [
       out('path', 'string'),
       out('filesDeleted', 'number'),
       out('foldersDeleted', 'number'),
+      // C9c — the session log file written, or null when none is (§4.4).
+      optionalOut('logPath', 'string'),
+    ],
+    formerOutputs: [
+      // C9a/C9b, before the session log.
+      [out('path', 'string'), out('filesDeleted', 'number'), out('foldersDeleted', 'number')],
     ],
     configSchema: deleteConfigSchema,
     dispatchConfigSchema: deleteConfigSchema,

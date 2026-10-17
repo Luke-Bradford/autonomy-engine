@@ -416,7 +416,7 @@ Source: [Delete](https://learn.microsoft.com/azure/data-factory/delete-activity)
 - **Source:** connection, then Path ⓕ, *Wildcard* ⓕ, *Include subfolders* (default **off**, as ADF), *Modified between*.
 - **Settings:**
   - *Max concurrent deletes* (1).
-  - **Session log** (same options as Copy): every deleted item, with its status.
+  - **Session log** (same options as Copy): the items deleted, skipped or kept, by level.
   - *Fail if nothing matched* (off).
   - *Delete empty folders* (off).
 - **Outputs:** `filesDeleted`, `foldersDeleted`, `logPath`.
@@ -426,7 +426,7 @@ Source: [Delete](https://learn.microsoft.com/azure/data-factory/delete-activity)
 
 - **Source:** connection, *File or folder path* ⓕ, *Path type* (Folder by default, or File, as Copy · Files as-is), and, for a folder only, *Wildcard* ⓕ (default `*`) and *Include subfolders* (default off, as ADF's `recursive`). *Modified from* / *Modified before* apply to a file as well. A wildcard or Include subfolders on a File path type is refused at save, not ignored.
 - **Settings:** *Max concurrent deletes* (ADF's `maxConcurrentConnections`, 1 by default, 1 to 64), *Fail if nothing matched* (off), *Delete empty folders* (off; drawn and accepted only with Include subfolders on). A boolean field can now control `appliesWhen` (read as `'true'`/`'false'`).
-- **Outputs:** `path` (the canonical path, as `file_delete`'s, so C9b can alias it), `filesDeleted`, `foldersDeleted`. `logPath` comes with the session log in C9c.
+- **Outputs:** `path` (the canonical path, as `file_delete`'s, so C9b can alias it), `filesDeleted`, `foldersDeleted`. C9c adds `logPath`.
 - **Needs Allow writes** on the connection; the run refuses it otherwise, and the Problems list warns first (`writeAccessWarnings`, as for Copy · Files as-is).
 - **Plan, then delete.** Every file is chosen before any is deleted, so the entry limit (`maxEntries`), a bad window or Fail if nothing matched fail the node with every file still there. Deletes then run on that many workers, taking the files in name order. The first error stops new ones; the deletes under way finish and are counted, and the counts so far are reported as outputs before the failure, as Copy · Files as-is reports its own. A cancel does the same.
 - **The walk is Get metadata's.** Child items' folder walk moved to `fs-walk.ts` and both activities use it, typed by `lstat` and never following a link, so Delete is not a third copy (Copy · Files as-is keeps its dirent-typed walk: #1691).
@@ -436,7 +436,7 @@ Source: [Delete](https://learn.microsoft.com/azure/data-factory/delete-activity)
   - Only regular files are deleted. A link, and an entry of any other type, is left in place.
   - A folder `rmdir` cannot remove because it is a mount point (`EBUSY`) is kept, as a non-empty one is. Any other `rmdir` error fails the node after the files, with the counts.
   - A missing path matches nothing and succeeds with zero counts. *Fail if nothing matched* makes it fail. A file removed by someone else after it was chosen is skipped, not counted and not a failure.
-- **Not in C9a:** the session log and `logPath` (C9c, shared with Copy's in C6), progress output while it runs (§5), and the `file_delete` lowering (C9b).
+- **Not in C9a:** the session log and `logPath` (C9c, built below), progress output while it runs (§5), and the `file_delete` lowering (C9b).
 - `CATALOG_VERSION` 49→50 (a new runnable type).
 
 **Built (C9b, 2026-10-17):** a stored *Delete file* (`file_delete`) opens in the editor as Delete on the same connection and path, *Path type* File and *Fail if nothing matched* on, and the next Save writes it as `delete` (`lowerFileDelete` in `retired.ts`, §8). *Delete file* is no longer offered in the palette. A stored version still runs through `file_delete`'s own arm.
@@ -454,6 +454,21 @@ Source: [Delete](https://learn.microsoft.com/azure/data-factory/delete-activity)
   - Failure messages are Delete's.
 - No `CATALOG_VERSION` change: Delete already declares `path`, and leaving the palette stores nothing.
 
+
+**Built (C9c, 2026-10-17):** Delete's session log and its `logPath` output. The settings, the line shape, the level filter and the run log's cap are shared (`catalog/session-log.ts`), and so is the folder writer (`session-log-file.ts`). Copy's C6 spreads the same fields; its log can run to a line per skipped row, so it needs an appending writer rather than lines held until the end.
+
+- **Settings:** *Session log* Off · Warnings · Everything (`logLevel` off · warning · info, ADF's copy log names; default **Warnings**, §4.1's default), *Write to* Run log · Folder (`logTo`, default Run log; drawn while the log is on), *Log folder* ⓕ (`logFolder`; drawn for Folder). A setting that would be ignored is refused at save: Folder while Off (reported on *Session log*, the field still drawn), a Log folder without Folder, Folder without a Log folder.
+- **Lines:** Timestamp, Level, Operation, Item, Message (§5). The item is relative to the path (File: the file's name). *Info*: `FileDelete` and `FolderDelete` for each item removed, and `FolderSkip` for a folder kept because it still holds files. *Warning*: `FileSkip` for a file no longer the one chosen, removed by someone else, or a link (or other non-file) that matched and is left in place; `FolderSkip` for a folder gone, no longer a folder, or a mount point. *Error*: the file or folder a delete failed on, with the error. A failure before any item (a refusal, the entry limit) is the node's error alone. Warnings keeps Warning and Error lines; Everything keeps all.
+- **Run log:** each line is a `node.output` named `sessionLog` (folded inert, as Copy's progress), streamed ahead of the terminal and shown in the Monitor's Logs tab. At most 1000 lines (`SESSION_LOG_RUN_MAX_LINES`); past that the first 1000 are kept, then the Error line if there is one, and a last Warning line says how many were not kept. `logPath` is null.
+- **Folder:** one CSV per attempt, `session-log.<run>.<node>.<attempt>.csv` (hashed when that is too long for a file name), through the same atomic write as `file_write`, and `logPath` is its path. The name is the attempt's own, so it is a plain rename, not Copy's no-overwrite `link`, which a file system without hard links refuses. It is `util/csv.ts`'s CSV (BOM, CRLF), so an item a spreadsheet would read as a formula gets a leading `'`. The folder is on the **same connection**. Before anything is planned it must exist, be a folder and be writable. Before the walk, a folder this Delete could remove, or whose later log files its wildcard could match (the folder at the path, or under it with Include subfolders on), is refused, and nothing is written. A File path's own folder is allowed.
+- **Every terminal after those checks keeps the log:** success (a missing path writes a header-only file), Fail if nothing matched, a failure mid-delete and a cancel. The file write has its own 10 s bound (`SESSION_LOG_WRITE_TIMEOUT_MS`, a race, since `open` and `rename` take no signal), so a hung mount cannot hold a cancelled attempt open. A log that cannot be written fails a successful delete `permanent`, reporting the counts first; an attempt already failing keeps its own error, with `logPath` null.
+- **Secure flags:** either flag withholds the run-log lines, since an Error line carries an error as `node.failed` does (`redactSecureEvent`); Secure output also withholds `logPath`. A folder log is a file the author asked for, so item names in it are not redacted, as Copy's written data is not.
+- **Deliberate differences from ADF:**
+  - The log folder is on the Delete's own connection. ADF's `logStorageSettings` names any storage linked service; studio's node binds one connection (a source/sink pair is Copy's), so another connection is deferred.
+  - The columns are §5's shared ones, not ADF Delete's Name, Category, Status, Error.
+  - The run log as a destination, and Warnings as the default, are studio's (ADF's `enableLogging` is off by default).
+- **Not in C9c:** ADF Copy's *Best effort · Reliable* mode. The lines are held in memory (bounded by the connection's entry limit) and written at the end, so a server that dies mid-delete loses them.
+- `CATALOG_VERSION` 50→51: `logPath` is a new output (with a `formerOutputs` snapshot of C9a's three), which a pre-C9c build never yields.
 ### 4.5 Script
 Sources: [Script](https://learn.microsoft.com/azure/data-factory/transform-data-using-script), [Stored procedure](https://learn.microsoft.com/azure/data-factory/transform-data-using-stored-procedure).
 
@@ -545,7 +560,7 @@ The **capture level** (workspace setting, overridable per pipeline and per activ
 | Copy, files as-is | ✓ copy/move (single file); **T** folder, wildcard, list, delete-after | — | — | T (download to file) | OR13 | — |
 | Lookup | ✓ | ✓ | ✓ | (use Web) | OR13 | OR15 |
 | Get metadata | ✓ full field list (C8a), a file dataset's structure and column count (C8c-2); **T** wait | ✓ exists, structure, columns, rows (C8c-1) | ✓ same | — | OR13 | OR15 |
-| Delete | ✓ one file, wildcard, subfolders, dates, empty folders (C9a); **T** log | — (Script) | — (Script) | — | OR13 | — |
+| Delete | ✓ one file, wildcard, subfolders, dates, empty folders (C9a); session log (C9c) | — (Script) | — (Script) | — | OR13 | — |
 | Script | — | **T** | **T** | — | — | OR15 |
 | Web | — | — | — | ✓; **T** fail-on-error, cap, callback | — | — |
 | Test connection | ✓ roots | ✓ `select 1` | ✓ `select 1` | ✓ HEAD | OR13 | OR15 |
@@ -569,7 +584,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs | — |
 | C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Rows · Whole file as text (`file_read` as Lookup's second type), the title *Lookup* (built); **C7c** *When over the limit* and `bytes`/`truncated` for the text mode, limited by the connection's `maxBytes` rather than the 1 MiB byte cap (built); **C7d** the workspace Lookup max rows (1000 by default, up to ADF's 5000) and the Monitor Rows read column (built) | — |
 | C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c-1** tables (SQLite, Postgres) with per-kind field options (built); **C8c-2** a delimited or Excel dataset source's structure and column count (built); **C8d-1** Wait until on a file system path (built); **C8d-2a** Wait until on a delimited or Excel dataset, with #1743 (built); **C8d-2b** Wait until on a table dataset (built); **C8e** Include subfolders (built) | OR17 #1408 |
-| C9 | Delete: wildcard, folders, dates, log. Lower file_delete. Split: **C9a** the `delete` type on a file system connection, with path type, wildcard, Include subfolders, modified window, Max concurrent deletes, Fail if nothing matched and Delete empty folders, on Get metadata's walk (built); **C9b** the `file_delete` lowering (Path type File, Fail if nothing matched on, `path` kept), Delete file retired from the palette (built); **C9c** the session log and `logPath` (a new output, so a `formerOutputs` snapshot and a version bump), shared with Copy's | OR17 #1408 |
+| C9 | Delete: wildcard, folders, dates, log. Lower file_delete. Split: **C9a** the `delete` type on a file system connection, with path type, wildcard, Include subfolders, modified window, Max concurrent deletes, Fail if nothing matched and Delete empty folders, on Get metadata's walk (built); **C9b** the `file_delete` lowering (Path type File, Fail if nothing matched on, `path` kept), Delete file retired from the palette (built); **C9c** the session log and `logPath` (a new output, so a `formerOutputs` snapshot and a version bump), shared with Copy's (built) | OR17 #1408 |
 | C10 | Script activity | OR12 #1403, OR15 sql_script |
 | C11 | Web: fail-on-error, response cap, parse, retry-after, wait-for-callback. Lower http_request and webhook | — |
 | C12 | Set variable operations + pipeline return value. Lower append_variable | OR34 outputs |

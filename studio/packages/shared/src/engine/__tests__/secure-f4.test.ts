@@ -5,6 +5,7 @@
  * (a secure node is never copied by rerun-from-failed).
  */
 import { describe, expect, it } from 'vitest';
+import { SESSION_LOG_OUTPUT } from '../../catalog/session-log.js';
 import type { Container, Edge, EngineEvent, Node, NodeRunState, RunState } from '../types.js';
 import { createEngine, type Engine } from '../reduce.js';
 import { availableRefs } from '../params.js';
@@ -133,6 +134,20 @@ describe('#1 F4 — Engine.redact (emit-time)', () => {
       giveUpAfterSeconds: 60,
     });
     expect(ev).toMatchObject({ reason: SECURE_ERROR_WITHHELD, recheckAfterSeconds: 10 });
+  });
+
+  it('#1600 C9c — secureInput alone withholds a session log line, which can carry an error', () => {
+    const e = createEngine({ nodes: [node('i', { policy: { secureInput: true } })], edges: [] });
+    const line = (name: string): EngineEvent => ({
+      type: 'node.output',
+      runId: RUN,
+      nodeId: 'i',
+      name,
+      value: 'Error FileDelete a.txt hunter2',
+    });
+    expect(JSON.stringify(e.redact(line(SESSION_LOG_OUTPUT)))).not.toContain('hunter2');
+    // Any other streamed output stays readable on secureInput alone, as before.
+    expect(e.redact(line('filesDeleted'))).toEqual(line('filesDeleted'));
   });
 
   it('secureInput alone withholds failure prose and hashes, but not outputs', () => {
