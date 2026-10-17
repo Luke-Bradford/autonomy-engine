@@ -108,6 +108,10 @@ describe('get_metadata — a file', () => {
       lastModified: null,
       contentMD5: null,
       childItems: null,
+      // C8c — a table's fields are in the one fixed contract too.
+      structure: null,
+      columnCount: null,
+      rowCount: null,
     });
   });
 
@@ -374,6 +378,19 @@ describe('get_metadata — dispatch', () => {
   it('refuses a config its schema refuses', async () => {
     const ev = await failureOf({ path: '.', fieldList: [] });
     expect(ev.error).toMatch(/^invalid get_metadata activity config: .*tick at least one field/);
+  });
+
+  // #1600 OR41 C8c — the config no longer requires a path (a table needs none),
+  // so the file system arm does: and a table's fields are not a path's.
+  it('needs a path, and refuses a table field', async () => {
+    expect(await failureOf({ fieldList: ['exists'] })).toMatchObject({
+      kind: 'permanent',
+      error: 'File or folder path is required on a file system connection',
+    });
+    expect(await failureOf({ path: '.', fieldList: ['exists', 'columnCount'] })).toMatchObject({
+      kind: 'permanent',
+      error: 'Column count read a database table, not a file system path',
+    });
   });
 
   // A pre-aborted signal is refused before dispatch (`fs.ts`), so this pins

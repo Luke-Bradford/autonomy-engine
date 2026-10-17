@@ -74,6 +74,13 @@ describe('activity tabs (#1477)', () => {
       for (const [name, conditions] of Object.entries(entry.appliesWhen ?? {})) {
         expect(Object.keys(shape), `${name} is not a config key`).toContain(name);
         for (const c of conditions) {
+          // #1600 OR41 C8c — or the bound connection's kind, one the entry binds.
+          if ('connectionKind' in c) {
+            for (const k of c.connectionKind) {
+              expect(entry.connectionKinds, `${name}: binds no ${k}`).toContain(k);
+            }
+            continue;
+          }
           expect(c.field, `${name} conditions on itself`).not.toBe(name);
           // #1600 OR41 C8a — or a set of choices (Get metadata's field list),
           // which a condition holds on when any ticked value is one of `in`.

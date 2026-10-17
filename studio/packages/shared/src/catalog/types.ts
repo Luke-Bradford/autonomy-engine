@@ -105,12 +105,13 @@ export interface ActivityTab {
 /**
  * #1686 — one condition under which a config field applies: the CONTROLLING
  * field's value is one of `in` (#1600 OR41 C8a: or, for a set of choices such
- * as Get metadata's field list, any ticked value is). See `ActivityCatalogEntry.appliesWhen`.
+ * as Get metadata's field list, any ticked value is). #1600 OR41 C8c: or the
+ * bound connection's kind is one of `connectionKind`. See
+ * `ActivityCatalogEntry.appliesWhen`.
  */
-export interface ActivityFieldCondition {
-  readonly field: string;
-  readonly in: readonly [string, ...string[]];
-}
+export type ActivityFieldCondition =
+  | { readonly field: string; readonly in: readonly [string, ...string[]] }
+  | { readonly connectionKind: readonly [ConnectionKind, ...ConnectionKind[]] };
 
 /**
  * #1477 — which binding slots an entry has. One reading of the entry for the
@@ -555,7 +556,19 @@ export interface ActivityCatalogEntry {
    * NO entry declares this at slice 4a — `copy` (slice 4b) is the first, and
    * owes the `CATALOG_VERSION` bump for POPULATING it (see `schemas/version.ts`).
    */
-  datasetKinds?: { source: DatasetKind[]; sink?: DatasetKind[] };
+  datasetKinds?: {
+    source: DatasetKind[];
+    sink?: DatasetKind[];
+    /**
+     * #1600 OR41 C8c — the connection kinds on which the source dataset is
+     * OPTIONAL: a node bound to one of them, with neither a saved nor an inline
+     * dataset, dispatches with no `ctx.datasets` instead of failing
+     * `DATASET_MISSING`. Get metadata reads a file system path without one and a
+     * table only through one. A node that does bind a dataset is resolved and
+     * checked as on any other kind. Absent means required everywhere.
+     */
+    optionalOn?: readonly ConnectionKind[];
+  };
   /**
    * #1477 OR29 — the property dock's tabs after "General", in order. Required on
    * every entry the generic panel renders; a structural call (`execute_pipeline`)
@@ -576,6 +589,16 @@ export interface ActivityCatalogEntry {
    */
   appliesWhen?: Readonly<
     Record<string, readonly [ActivityFieldCondition, ...ActivityFieldCondition[]]>
+  >;
+  /**
+   * #1600 OR41 C8c — the choices of an enum-set field that each connection kind
+   * can answer (Get metadata's field list: a path's fields on `fs`, a table's on
+   * a database). The editor offers only the bound kind's, plus any already
+   * ticked, and every choice while the kind is unknown. Display-only like
+   * `appliesWhen`; the adapters refuse the rest at dispatch.
+   */
+  fieldOptionsByConnectionKind?: Readonly<
+    Record<string, Readonly<Partial<Record<ConnectionKind, readonly string[]>>>>
   >;
   /** Canonical outputs (UI/metadata). See the class doc — not the runtime SSOT. */
   outputs: Output[];

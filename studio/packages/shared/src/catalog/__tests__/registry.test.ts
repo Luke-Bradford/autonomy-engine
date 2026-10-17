@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { expectOneSentence, withoutStop } from '../../__tests__/helpers/description.js';
 import { DATASET_CONNECTION_KINDS } from '../dataset-config.js';
+import { enumSetValuesOf } from '../../schemas/field-presentation.js';
 import { catalog, getActivity, isStructuralCallActivity } from '../registry.js';
 import {
   ACTIVITY_CATEGORIES,
@@ -149,7 +150,42 @@ describe('activity catalog', () => {
     const bound = [...catalog.values()]
       .filter((entry) => entry.datasetKinds !== undefined)
       .map((entry) => entry.type);
-    expect(bound).toEqual(['copy', 'lookup']);
+    // #1600 OR41 C8c makes it THREE: Get metadata reads a table through a
+    // source dataset, and only there (`optionalOn` pins below).
+    expect(bound).toEqual(['get_metadata', 'copy', 'lookup']);
+  });
+
+  it('C8c: every bound connection kind can hold a source dataset kind, or the dataset is optional on it', () => {
+    for (const entry of catalog.values()) {
+      const kinds = entry.datasetKinds;
+      if (kinds === undefined) continue;
+      const optionalOn = kinds.optionalOn ?? [];
+      for (const k of optionalOn) expect(entry.connectionKinds, entry.type).toContain(k);
+      for (const k of entry.connectionKinds) {
+        const holds = kinds.source.some((d) => DATASET_CONNECTION_KINDS[d].includes(k));
+        expect(holds || optionalOn.includes(k), `${entry.type} on ${k}`).toBe(true);
+      }
+    }
+  });
+
+  it('C8c: field options per connection kind cover the field exactly, on kinds the entry binds', () => {
+    for (const entry of catalog.values()) {
+      for (const [field, byKind] of Object.entries(entry.fieldOptionsByConnectionKind ?? {})) {
+        const shape = (entry.configSchema as unknown as { shape: Record<string, unknown> }).shape;
+        const all = enumSetValuesOf(shape[field]) ?? [];
+        expect(all.length, `${entry.type}.${field}`).toBeGreaterThan(0);
+        const offered = new Set<string>();
+        for (const [kind, options] of Object.entries(byKind)) {
+          expect(entry.connectionKinds, `${entry.type}.${field}`).toContain(kind);
+          for (const o of options ?? []) {
+            expect(all, `${entry.type}.${field} on ${kind}`).toContain(o);
+            offered.add(o);
+          }
+        }
+        expect([...offered].sort()).toEqual([...all].sort());
+        expect(Object.keys(byKind).sort()).toEqual([...entry.connectionKinds].sort());
+      }
+    }
   });
 
   it('`copy` declares a sink of `table` only — a query dataset has nothing to write into', () => {

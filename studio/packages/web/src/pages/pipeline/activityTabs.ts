@@ -103,6 +103,10 @@ export function applicableFieldNames(
   fields: readonly ConfigField[],
   inputs: Readonly<Record<string, FieldInput>>,
   stored: Readonly<Record<string, unknown>>,
+  // #1600 OR41 C8c — the bound connection's kind; `undefined` while unknown
+  // (none bound, or a `${}`), when a kind condition applies, as an unknown
+  // value does.
+  connectionKind?: string,
 ): string[] {
   const rules = entry?.appliesWhen;
   if (rules === undefined) return [...names];
@@ -128,6 +132,12 @@ export function applicableFieldNames(
     const conditions = rules[name];
     if (conditions === undefined || holds(name)) return true;
     return conditions.some((c) => {
+      if ('connectionKind' in c) {
+        return (
+          connectionKind === undefined ||
+          (c.connectionKind as readonly string[]).includes(connectionKind)
+        );
+      }
       const value = valueOf(c.field);
       // #1600 OR41 C8a — a set of choices holds its ticks one per line, and
       // applies when any is one of `in`; a single choice is the one-line case.
@@ -138,4 +148,27 @@ export function applicableFieldNames(
       );
     });
   });
+}
+
+/**
+ * #1600 OR41 C8c — the choices an enum-set field offers on the bound connection's
+ * kind (`ActivityCatalogEntry.fieldOptionsByConnectionKind`): that kind's own,
+ * plus any already ticked, so a stored value is never hidden (UI STANDARD rule
+ * 3) and a click never drops it. `undefined` means every choice: no rule, or the
+ * kind is unknown.
+ */
+export function offeredFieldOptions(
+  entry: Pick<ActivityCatalogEntry, 'fieldOptionsByConnectionKind'> | undefined,
+  field: Pick<ConfigField, 'name' | 'enumOptions'>,
+  connectionKind: string | undefined,
+  input: FieldInput | undefined,
+): readonly string[] | undefined {
+  const byKind = entry?.fieldOptionsByConnectionKind?.[field.name];
+  if (byKind === undefined || connectionKind === undefined) return undefined;
+  const own: readonly string[] | undefined = (
+    byKind as Readonly<Record<string, readonly string[] | undefined>>
+  )[connectionKind];
+  if (own === undefined) return undefined;
+  const ticked = new Set(typeof input === 'string' ? input.split('\n') : []);
+  return (field.enumOptions ?? []).filter((o) => own.includes(o) || ticked.has(o));
 }

@@ -2119,6 +2119,73 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
     expect(eventTypes(db, run.id)).not.toContain('node.dispatched');
   });
 
+  describe('#1600 OR41 C8c — a source dataset OPTIONAL on a connection kind (`optionalOn`)', () => {
+    const optionalCatalog = () =>
+      catalogOf({
+        type: 'test_copy',
+        kind: 'execution',
+        connectionKinds: ['http', 'anthropic_api'],
+        datasetKinds: { source: ['table'], optionalOn: ['http'] },
+      });
+    const metaNode = (connectionId: string, datasetIds?: { source: string }): Node => ({
+      id: 'n1',
+      type: 'test_copy',
+      config: {},
+      connectionId,
+      ...(datasetIds === undefined ? {} : { datasetIds }),
+      position: { x: 0, y: 0 },
+    });
+
+    it('dispatches with no ctx.datasets on that kind when the node binds none', async () => {
+      let hasDatasets = true;
+      const adapters = pairedRegistry(async function* (ctx) {
+        hasDatasets = 'datasets' in ctx;
+        yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+      });
+      const db = freshDb().db;
+      const conn = await seedConnection(db, 'http', {}, null);
+      const run = seedRun(db, seedVersion(db, [metaNode(conn)]));
+
+      const state = await startRun(deps(db, { adapters, catalog: optionalCatalog() }), run);
+
+      expect(state.status).toBe('success');
+      expect(hasDatasets).toBe(false);
+    });
+
+    it('still resolves and checks a dataset the node does bind there', async () => {
+      const db = freshDb().db;
+      const conn = await seedConnection(db, 'http', {}, null);
+      const other = await seedConnection(db, 'anthropic_api', {}, 'K');
+      const ds = seedDataset(db, other);
+      const run = seedRun(db, seedVersion(db, [metaNode(conn, { source: ds })]));
+
+      const state = await startRun(
+        deps(db, { adapters: pairedRegistry(async function* () {}), catalog: optionalCatalog() }),
+        run,
+      );
+
+      expect(state.status).toBe('failure');
+      expect(failureOf(db, run.id)).toMatchObject({
+        code: FAILURE_CODES.DATASET_CONNECTION_MISMATCH,
+      });
+    });
+
+    it('still requires one on every other kind', async () => {
+      const db = freshDb().db;
+      const conn = await seedConnection(db, 'anthropic_api', {}, 'K');
+      const run = seedRun(db, seedVersion(db, [metaNode(conn)]));
+
+      const state = await startRun(
+        deps(db, { adapters: pairedRegistry(async function* () {}), catalog: optionalCatalog() }),
+        run,
+      );
+
+      expect(state.status).toBe('failure');
+      expect(failureOf(db, run.id)).toMatchObject({ code: 'dataset_missing', kind: 'permanent' });
+      expect(eventTypes(db, run.id)).not.toContain('node.dispatched');
+    });
+  });
+
   it('distinguishes a BOUND-but-empty ${} ref (NOT_FOUND) from naming none (MISSING)', async () => {
     const db = freshDb().db;
     const sourceConn = await seedConnection(db, 'http', {}, null);

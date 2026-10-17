@@ -7,6 +7,7 @@ import {
   type DatasetTablesResult,
   type InlineDataset,
 } from '@autonomy-studio/shared';
+import { READABLE_RELKINDS_SQL } from '../connectors/postgres-session.js';
 import type { ConnectorRegistry } from '../connectors/registry.js';
 import { redactSecrets } from '../connectors/redact.js';
 import type { ConnectorAdapter, ResolvedDataset } from '../connectors/types.js';
@@ -83,7 +84,7 @@ export const TABLE_CATALOG_SQL: Partial<Record<ConnectionKind, string>> = {
   postgres:
     'SELECT n.nspname AS schema, c.relname AS name FROM pg_class c ' +
     'JOIN pg_namespace n ON n.oid = c.relnamespace ' +
-    "WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f') AND NOT c.relispartition " +
+    `WHERE c.relkind IN ${READABLE_RELKINDS_SQL} AND NOT c.relispartition ` +
     "AND has_table_privilege(c.oid, 'SELECT') AND has_schema_privilege(n.oid, 'USAGE') " +
     "AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_' ORDER BY 1, 2",
 };

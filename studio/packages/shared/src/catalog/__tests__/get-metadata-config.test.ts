@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
   GET_METADATA_ACTIVITY_TYPE,
+  GET_METADATA_FIELDS,
+  GET_METADATA_FIELDS_BY_CONNECTION_KIND,
   GET_METADATA_FS_FIELDS,
+  GET_METADATA_TABLE_FIELDS,
+  getMetadataKindIssue,
+  getMetadataNodeIssue,
   getActivity,
   getMetadataConfigSchema,
 } from '../../index.js';
 import { enumSetValuesOf } from '../../schemas/field-presentation.js';
+import { activityNodeErrors } from '../../engine/activity-config-check.js';
 
 const ok = (cfg: Record<string, unknown>) => getMetadataConfigSchema.safeParse(cfg).success;
 const issuesOf = (cfg: Record<string, unknown>) => {
@@ -20,9 +26,10 @@ describe('get_metadata config (#1600 OR41 C8a)', () => {
     expect(ok({ path: '', fieldList: ['exists'] })).toBe(false);
   });
 
-  it('takes only the file system fields, each once', () => {
+  it('takes only the known fields, each once', () => {
     expect(ok({ path: '/d', fieldList: [...GET_METADATA_FS_FIELDS] })).toBe(true);
-    expect(ok({ path: '/d', fieldList: ['rowCount'] })).toBe(false);
+    expect(ok({ fieldList: [...GET_METADATA_TABLE_FIELDS] })).toBe(true);
+    expect(ok({ path: '/d', fieldList: ['rowCounts'] })).toBe(false);
     expect(issuesOf({ path: '/d', fieldList: ['size', 'size'] })).toEqual([
       'fieldList: Size is ticked twice',
     ]);
@@ -75,13 +82,22 @@ describe('get_metadata config (#1600 OR41 C8a)', () => {
     const entry = getActivity(GET_METADATA_ACTIVITY_TYPE);
     expect(entry?.title).toBe('Get metadata');
     expect(entry?.kind).toBe('execution');
-    expect(entry?.connectionKinds).toEqual(['fs']);
+    expect(entry?.connectionKinds).toEqual(['fs', 'sqlite', 'postgres']);
+    // C8c — a table only through a dataset, which a path does not need.
+    expect(entry?.datasetKinds).toEqual({ source: ['table'], optionalOn: ['fs'] });
     expect(entry?.inPalette).not.toBe(false);
     const outputs = entry?.outputs ?? [];
     expect(outputs.find((o) => o.name === 'path')?.optional).toBeUndefined();
-    for (const field of GET_METADATA_FS_FIELDS) {
+    for (const field of GET_METADATA_FIELDS) {
       expect(outputs.find((o) => o.name === field)?.optional, field).toBe(true);
     }
+    expect(outputs.map((o) => o.name)).toEqual(['path', ...GET_METADATA_FIELDS]);
+    expect(entry?.outputElements?.structure?.map((o) => o.name)).toEqual(['name', 'type']);
+    // A node saved under C8a (and the C8b lowering) holds the nine.
+    expect(entry?.formerOutputs?.[0]?.map((o) => o.name)).toEqual([
+      'path',
+      ...GET_METADATA_FS_FIELDS,
+    ]);
     expect(entry?.outputElements?.childItems?.map((o) => o.name)).toEqual([
       'name',
       'type',
@@ -94,7 +110,81 @@ describe('get_metadata config (#1600 OR41 C8a)', () => {
 
   it('reads the field list as a set of choices', () => {
     const shape = (getMetadataConfigSchema as unknown as { shape: Record<string, unknown> }).shape;
-    expect(enumSetValuesOf(shape.fieldList)).toEqual([...GET_METADATA_FS_FIELDS]);
+    expect(enumSetValuesOf(shape.fieldList)).toEqual([...GET_METADATA_FIELDS]);
     expect(enumSetValuesOf(shape.childType)).toBeUndefined();
+  });
+
+  it('C8c: a path is optional in the config, so a table node needs none', () => {
+    expect(ok({ fieldList: ['exists', 'rowCount'] })).toBe(true);
+    expect(ok({ path: '', fieldList: ['exists'] })).toBe(false);
+  });
+});
+
+describe('getMetadataKindIssue (#1600 OR41 C8c)', () => {
+  const cfg = (c: Record<string, unknown>) => getMetadataConfigSchema.parse(c);
+
+  it('takes a path and its fields on a file system connection', () => {
+    expect(
+      getMetadataKindIssue(cfg({ path: '/d', fieldList: [...GET_METADATA_FS_FIELDS] }), 'fs'),
+    ).toBeUndefined();
+    expect(getMetadataKindIssue(cfg({ fieldList: ['exists'] }), 'fs')).toBe(
+      'File or folder path is required on a file system connection',
+    );
+    expect(
+      getMetadataKindIssue(
+        cfg({ path: '/d', fieldList: ['exists', 'structure', 'rowCount'] }),
+        'fs',
+      ),
+    ).toBe('Structure, Row count read a database table, not a file system path');
+  });
+
+  it.each(['sqlite', 'postgres'] as const)("takes no path and a table's fields on %s", (kind) => {
+    expect(
+      getMetadataKindIssue(cfg({ fieldList: [...GET_METADATA_TABLE_FIELDS] }), kind),
+    ).toBeUndefined();
+    expect(getMetadataKindIssue(cfg({ path: 'orders', fieldList: ['exists'] }), kind)).toBe(
+      'a table is chosen on the Source tab; clear File or folder path',
+    );
+    expect(getMetadataKindIssue(cfg({ fieldList: ['exists', 'size', 'childItems'] }), kind)).toBe(
+      'Size, Child items read a file system path, not a table',
+    );
+  });
+
+  it('offers each kind exactly its own fields', () => {
+    expect(GET_METADATA_FIELDS_BY_CONNECTION_KIND.fs).toEqual(GET_METADATA_FS_FIELDS);
+    expect(GET_METADATA_FIELDS_BY_CONNECTION_KIND.sqlite).toEqual([
+      'exists',
+      'structure',
+      'columnCount',
+      'rowCount',
+    ]);
+    expect(GET_METADATA_FIELDS_BY_CONNECTION_KIND.postgres).toEqual(GET_METADATA_TABLE_FIELDS);
+  });
+});
+
+describe('getMetadataNodeIssue (#1600 OR41 C8c)', () => {
+  it('takes a path or a table, not neither and not both', () => {
+    expect(getMetadataNodeIssue({ config: { path: '/d' } })).toBeUndefined();
+    expect(getMetadataNodeIssue({ config: {}, datasetIds: { source: 'ds' } })).toBeUndefined();
+    expect(
+      getMetadataNodeIssue({ config: {}, inlineDatasets: { source: { kind: 'table' } } }),
+    ).toBeUndefined();
+    expect(getMetadataNodeIssue({ config: {} })).toBe(
+      'config.path: required: a file or folder path, or a table chosen on Source',
+    );
+    expect(getMetadataNodeIssue({ config: { path: 't' }, datasetIds: { source: 'ds' } })).toBe(
+      'config.path: a table chosen on Source names what to read; clear File or folder path',
+    );
+  });
+
+  it('is a save-time refusal of the node', () => {
+    const node = (over: Record<string, unknown>) =>
+      ({ id: 'm', type: 'get_metadata', position: { x: 0, y: 0 }, ...over }) as never;
+    expect(activityNodeErrors(node({ config: { fieldList: ['exists'] } }))).toEqual([
+      "node 'm': config.path: required: a file or folder path, or a table chosen on Source",
+    ]);
+    expect(
+      activityNodeErrors(node({ config: { fieldList: ['exists'] }, datasetIds: { source: 'd' } })),
+    ).toEqual([]);
   });
 });

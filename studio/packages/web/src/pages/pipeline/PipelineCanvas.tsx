@@ -67,6 +67,7 @@ import {
   type WorkspaceGitStatus,
   type WorkspaceGitPullRequestReading,
   type ActivityBindingSlot,
+  bindsSourceDataset,
 } from '@autonomy-studio/shared';
 import { InlineSourceEditor } from './InlineSourceEditor';
 import {
@@ -149,7 +150,7 @@ import {
   type ConfigDraft,
   type ConfigField,
 } from './configForm';
-import { applicableFieldNames, nodeTypeTabs } from './activityTabs';
+import { applicableFieldNames, nodeTypeTabs, offeredFieldOptions } from './activityTabs';
 import { activityModeTitle } from './activityModes';
 import { containerLabels, issuesBySubject, readableIssue, sameAttribution } from './containerRules';
 import { nameIssues, propertyIssues } from './paramRules';
@@ -3698,6 +3699,13 @@ export function NodePanel({
   // refuses the two fields together, so they can never disagree.
   const sourceConnectionId = boundConnections?.source ?? thisNode?.connectionId;
   const sourceConnection = connections.find((c) => c.id === sourceConnectionId);
+  // #1600 OR41 C8c — `datasetKinds.optionalOn`: on this kind the node may bind
+  // no dataset at all, so an empty picker is not drawn until one is bound.
+  const datasetOptionalHere =
+    sourceConnection !== undefined &&
+    entry?.datasetKinds?.optionalOn?.includes(sourceConnection.kind) === true &&
+    (thisNode === undefined || !bindsSourceDataset(thisNode)) &&
+    pending?.datasets?.source === undefined;
   // A pair the author has STARTED but not finished. It is not on the node, so it
   // is not saved — and saying so is the point: without this the first pick would
   // survive on screen, vanish on reload, and look like the canvas lost it.
@@ -3951,6 +3959,9 @@ export function NodePanel({
     boundSlots.add('sourceDataset');
   }
   if (thisNode?.datasetIds?.sink !== undefined) boundSlots.add('sinkDataset');
+  // #1600 OR41 C8c — a source dataset optional on the bound kind (Get metadata
+  // on a file system) asks nothing of the Source tab while none is bound.
+  if (datasetOptionalHere) boundSlots.add('sourceDataset');
   const refusalPaths =
     applyRefusal !== null && applyRefusal.message === error ? applyRefusal.paths : [];
   const statuses = tabStatuses({
@@ -4086,7 +4097,7 @@ export function NodePanel({
           </Fragment>
         );
       case 'sourceDataset': {
-        if (datasetKinds === undefined) return null;
+        if (datasetKinds === undefined || datasetOptionalHere) return null;
         const saved = (
           <>
             {/* #1139 — the dataset ADDRESSES within those stores. Narrowed by the
@@ -4224,7 +4235,11 @@ export function NodePanel({
               fields ?? [],
               editor.inputs,
               editable,
+              sourceConnection?.kind,
             )}
+            optionsFor={(field) =>
+              offeredFieldOptions(entry, field, sourceConnection?.kind, editor.inputs[field.name])
+            }
             toolbar={false}
             fieldActions={(name) =>
               /* #1694 OR42 — Auto-map in the mapping list's own toolbar, beside

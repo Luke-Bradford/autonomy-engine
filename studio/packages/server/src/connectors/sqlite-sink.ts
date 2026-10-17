@@ -12,6 +12,7 @@ import { quoteIdentifier } from './sql-identifier.js';
 import { refuseNullOnNonNullable, resolveSinkColumns } from './sink-columns.js';
 import {
   confineStorePath,
+  findSqliteRelation,
   parseTableTarget,
   quoteStoreIdentifier,
   sqliteConnectionConfigSchema,
@@ -135,18 +136,9 @@ function describeSinkTable(
   | { ok: true; name: string; columns: string[]; notNull: ReadonlySet<string> }
   | { ok: false; reason: string } {
   const qualifiedSchema = quoteIdentifier(schemaName, 'schema');
-  // `COLLATE NOCASE`, for the same reason `resolveSinkColumns` lower-cases:
-  // SQLite resolves identifiers case-insensitively, so `SELECT * FROM "SINK"`
-  // finds a table created as `sink` — but `sqlite_master.name` compares with
-  // BINARY collation, so an exact match would refuse a dataset SQLite would
-  // happily have executed. Getting this right for columns and wrong for the
-  // table would have been one bug in two spellings. At most one row can come
-  // back: SQLite refuses to create `SINK` alongside `sink`.
-  const found = db
-    .prepare(
-      `SELECT name, type, sql FROM ${qualifiedSchema}.sqlite_master WHERE name = ? COLLATE NOCASE`,
-    )
-    .get(table) as { name: string; type?: unknown; sql?: unknown } | undefined;
+  // `COLLATE NOCASE` — `findSqliteRelation` says why; `resolveSinkColumns`
+  // lower-cases for the same reason, so the table and its columns agree.
+  const found = findSqliteRelation(db, schemaName, table);
   if (found === undefined) {
     return { ok: false, reason: `there is no table '${table}' in the store` };
   }

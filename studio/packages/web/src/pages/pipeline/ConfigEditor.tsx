@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from 'react';
 import { ConfigFieldControl, type FieldChoices, type FieldPicker } from './ConfigFieldControl';
-import { emptyControlValue, fieldSpan } from './configForm';
+import { emptyControlValue, fieldSpan, type ConfigField } from './configForm';
 import type { ConfigEditorState } from './useConfigEditor';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { FieldError } from '../../lib/form/FieldError';
@@ -22,6 +22,7 @@ export function ConfigEditor<K extends string>({
   maxRows,
   advisory,
   choicesFor,
+  optionsFor,
   picker,
   emptyHint = 'This kind has no settings.',
   fieldModeExtra,
@@ -42,6 +43,12 @@ export function ConfigEditor<K extends string>({
   maxRows: number;
   advisory: string | null;
   choicesFor?: (fieldName: string) => FieldChoices | undefined;
+  /**
+   * #1600 OR41 C8c — the choices to DRAW for an enum-set field, when fewer than
+   * its schema's (Get metadata's field list on the bound connection's kind).
+   * Display only: the editor still parses and writes against every choice.
+   */
+  optionsFor?: (field: ConfigField) => readonly string[] | undefined;
   /** The canvas's expression picker (U8a) — a resource form has no graph to pick from. */
   picker?: FieldPicker;
   /** Shown when the kind declares no fields at all. */
@@ -121,13 +128,14 @@ export function ConfigEditor<K extends string>({
           {fields.length === 0 && <p className="page-hint">{emptyHint}</p>}
           {fields.map((field) => {
             const choices = choicesFor?.(field.name);
+            const offered = optionsFor?.(field);
             // #1477 OR29 — one box per field, so the property dock's grid can
             // pack or span it. `display: contents` everywhere else, which
             // leaves a resource form's column exactly as it was.
             return (
               <FieldCell key={field.name} span={fieldSpan(field)}>
                 <ConfigFieldControl
-                  field={field}
+                  field={offered === undefined ? field : { ...field, enumOptions: [...offered] }}
                   value={editor.inputs[field.name] ?? emptyControlValue(field)}
                   onChange={(next) => editor.setInput(field.name, next)}
                   {...(choices === undefined ? {} : { choices })}

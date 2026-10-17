@@ -6,7 +6,8 @@ import {
   type DatasetKind,
 } from '@autonomy-studio/shared';
 import { DatasetIoError } from './dataset-io-error.js';
-import { doubleQuoted } from './sql-identifier.js';
+import type Database from 'better-sqlite3';
+import { doubleQuoted, quoteIdentifier } from './sql-identifier.js';
 import { resolveWithinRoots } from './confine.js';
 import type { ConnectorErrorKind } from './types.js';
 
@@ -239,4 +240,27 @@ export function parseTableTarget(datasetConfig: Record<string, unknown>): {
     );
   }
   return { schema: parsed.data.schema ?? 'main', table: parsed.data.table };
+}
+
+/**
+ * The `sqlite_master` row a name resolves to in `schema`, or `undefined`: the
+ * sink's describe and Get metadata (#1600 C8c) read it here, once.
+ *
+ * `COLLATE NOCASE`, because SQLite resolves identifiers case-insensitively, so
+ * `SELECT * FROM "SINK"` finds a table created as `sink` — but
+ * `sqlite_master.name` compares with BINARY collation, so an exact match would
+ * refuse a dataset SQLite would happily have executed. At most one row can come
+ * back: SQLite refuses to create `SINK` alongside `sink`. A schema the store
+ * does not have throws (`no such table: other.sqlite_master`).
+ */
+export function findSqliteRelation(
+  db: Database.Database,
+  schema: string,
+  table: string,
+): { name: string; type?: unknown; sql?: unknown } | undefined {
+  return db
+    .prepare(
+      `SELECT name, type, sql FROM ${quoteIdentifier(schema, 'schema')}.sqlite_master WHERE name = ? COLLATE NOCASE`,
+    )
+    .get(table) as { name: string; type?: unknown; sql?: unknown } | undefined;
 }

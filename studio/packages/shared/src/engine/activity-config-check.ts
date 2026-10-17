@@ -40,6 +40,8 @@ import { isSecretRef } from '../schemas/secret-ref.js';
 import { isPresenceOnlyIssue } from '../schemas/zod-issues.js';
 import type { ActivityCatalog } from '../catalog/types.js';
 import { catalog as sharedCatalog } from '../catalog/registry.js';
+import { getMetadataNodeIssue } from '../catalog/get-metadata-config.js';
+import { GET_METADATA_ACTIVITY_TYPE } from '../catalog/types.js';
 import { interpolationMode } from './expr.js';
 import { MAX_CONFIG_DEPTH } from './limits.js';
 
@@ -144,18 +146,25 @@ export function activityNodeErrors(node: Node, catalog: ActivityCatalog = shared
     const hint = closest.length > 0 ? ` (closest: ${closest.join(', ')})` : '';
     return [`node '${node.id}': type: unknown activity type '${node.type}'${hint}`];
   }
+  // #1600 OR41 C8c — Get metadata's path-or-table rule reads the node's
+  // dataset binding, which its config schema cannot see.
+  const nodeIssue =
+    node.type === GET_METADATA_ACTIVITY_TYPE ? getMetadataNodeIssue(node) : undefined;
+  const nodeErrors = nodeIssue === undefined ? [] : [`node '${node.id}': ${nodeIssue}`];
   const schema = entry.dispatchConfigSchema;
-  if (schema === undefined) return [];
+  if (schema === undefined) return nodeErrors;
   const parsed = schema.safeParse(node.config);
-  if (parsed.success) return [];
-  return parsed.error.issues
-    .filter((issue) => !decidedByExpression(node.config, issue))
-    .map((issue) => {
-      const path = ['config', ...issue.path.map(String)].join('.');
-      // A field that is simply absent reads as Zod's "expected string, received
-      // undefined"; the operator's next step is to fill it, so say that.
-      const values = valuesAlong(node.config, issue.path);
-      const missing = issue.code === 'invalid_type' && values[issue.path.length] === undefined;
-      return `node '${node.id}': ${path}: ${missing ? 'required' : issue.message}`;
-    });
+  if (parsed.success) return nodeErrors;
+  return nodeErrors.concat(
+    parsed.error.issues
+      .filter((issue) => !decidedByExpression(node.config, issue))
+      .map((issue) => {
+        const path = ['config', ...issue.path.map(String)].join('.');
+        // A field that is simply absent reads as Zod's "expected string, received
+        // undefined"; the operator's next step is to fill it, so say that.
+        const values = valuesAlong(node.config, issue.path);
+        const missing = issue.code === 'invalid_type' && values[issue.path.length] === undefined;
+        return `node '${node.id}': ${path}: ${missing ? 'required' : issue.message}`;
+      }),
+  );
 }

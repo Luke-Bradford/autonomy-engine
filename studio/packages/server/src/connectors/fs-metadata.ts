@@ -3,7 +3,11 @@ import { lstat, open, opendir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { basename, join } from 'node:path';
 import type { z } from 'zod';
-import type { GetMetadataConfig, GetMetadataField } from '@autonomy-studio/shared';
+import {
+  emptyGetMetadataFields,
+  type GetMetadataConfig,
+  type GetMetadataField,
+} from '@autonomy-studio/shared';
 import { failed } from './activity-events.js';
 import { CONFINED_READ_FLAGS, missingWithinRoots, resolveWithinRoots } from './confine.js';
 import type { fsConnectionConfigSchema } from './fs-connection.js';
@@ -48,18 +52,7 @@ type FieldValues = Record<GetMetadataField, unknown>;
 
 const MD5_CHUNK_BYTES = 1 << 16;
 
-function emptyFields(): FieldValues {
-  return {
-    exists: null,
-    itemName: null,
-    itemType: null,
-    size: null,
-    created: null,
-    lastModified: null,
-    contentMD5: null,
-    childItems: null,
-  };
-}
+const emptyFields = (): FieldValues => emptyGetMetadataFields();
 
 const isMissing = (err: unknown): boolean => {
   const code = (err as NodeJS.ErrnoException | undefined)?.code;
@@ -217,7 +210,8 @@ const isEvent = (v: unknown): v is ActivityEvent =>
 
 export async function doGetMetadata(
   cfg: FsConfig,
-  input: GetMetadataConfig,
+  // C8c — the dispatch arm has refused a missing path (`getMetadataKindIssue`).
+  input: GetMetadataConfig & { readonly path: string },
   signal: AbortSignal,
 ): Promise<ActivityEvent> {
   const ticked = new Set<GetMetadataField>(input.fieldList);
