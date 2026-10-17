@@ -108,6 +108,7 @@ const childTypeSchema = z.enum(['all', 'files', 'folders']);
  * up after*, with ADF's defaults (10 s, 12 h) and ADF's 7-day ceiling.
  */
 export const GET_METADATA_WAIT_UNTIL = ['off', 'exists', 'nonEmpty', 'minimumSize'] as const;
+type GetMetadataWaitUntil = (typeof GET_METADATA_WAIT_UNTIL)[number];
 const waitUntilSchema = z.enum(GET_METADATA_WAIT_UNTIL);
 export const WAIT_UNTIL_CHECK_EVERY_DEFAULT = 10;
 export const WAIT_UNTIL_GIVE_UP_DEFAULT = 12 * 3600;
@@ -118,7 +119,14 @@ const WAIT_UNTIL_GIVE_UP_MAX = 7 * 24 * 3600;
  * so the count is bounded. ADF's defaults make 4,320.
  */
 export const MAX_WAIT_UNTIL_CHECKS = 5000;
-type GetMetadataWaitUntil = (typeof GET_METADATA_WAIT_UNTIL)[number];
+
+/** C8d-2b — what a table can be waited for: it exists, or it holds a row. */
+const TABLE_WAIT_UNTIL = [
+  'off',
+  'exists',
+  'nonEmpty',
+] as const satisfies readonly GetMetadataWaitUntil[];
+
 /**
  * C8d-2b — the Wait until choices each connection kind can answer (the catalog's
  * field options, and the dispatch refusal in {@link getMetadataKindIssue}). A
@@ -126,8 +134,8 @@ type GetMetadataWaitUntil = (typeof GET_METADATA_WAIT_UNTIL)[number];
  */
 export const GET_METADATA_WAIT_UNTIL_BY_CONNECTION_KIND = {
   fs: GET_METADATA_WAIT_UNTIL,
-  sqlite: ['off', 'exists', 'nonEmpty'],
-  postgres: ['off', 'exists', 'nonEmpty'],
+  sqlite: TABLE_WAIT_UNTIL,
+  postgres: TABLE_WAIT_UNTIL,
 } as const satisfies Record<GetMetadataConnectionKind, readonly GetMetadataWaitUntil[]>;
 
 export const getMetadataConfigSchema = z
@@ -386,7 +394,12 @@ export function getMetadataNodeIssue(node: {
   // C8d-2b — an inline dataset is a Table or a Query, never a file, so it has
   // no size to wait for. A saved dataset's kind is not known here: dispatch
   // refuses a table's.
-  if (node.inlineDatasets?.source !== undefined && node.config['waitUntil'] === 'minimumSize') {
+  const wait = node.config['waitUntil'];
+  if (
+    node.inlineDatasets?.source !== undefined &&
+    GET_METADATA_WAIT_UNTIL.some((w) => w === wait) &&
+    !TABLE_WAIT_UNTIL.some((w) => w === wait)
+  ) {
     return `config.waitUntil: ${WAIT_UNTIL_SIZE_NOT_ON_TABLE}`;
   }
   const list = node.config['fieldList'];

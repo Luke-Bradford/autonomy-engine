@@ -39,16 +39,16 @@ export interface TableFacts {
   /** `count(*)` as the store returns it; `undefined` when not asked for. */
   readonly rowCount: unknown;
   /**
-   * C8d-2b — whether a one-row probe found a row; `undefined` when not asked
-   * for, or when the count was asked for too (the count answers it).
+   * C8d-2b — whether the one-row probe found a row; `undefined` when it was not
+   * asked for.
    */
   readonly hasRow?: boolean;
 }
 
 /**
  * What to read beyond the columns. `rowCount` is a full `count(*)`; `anyRow`
- * (C8d-2b, *It is not empty*) a one-row probe, run only without `rowCount`, so
- * the probe and the count can never disagree about one table.
+ * (C8d-2b, *It is not empty*) a one-row probe. {@link runTableMetadata} asks for
+ * the probe only without the count, so the two never disagree about one table.
  */
 export interface TableReads {
   readonly rowCount: boolean;
@@ -147,7 +147,8 @@ export async function* runTableMetadata(
   try {
     const facts = await io.inspectTable(target.data, ctx.signal, {
       rowCount: ticked.has('rowCount'),
-      anyRow: waitUntil === 'nonEmpty',
+      // With Row count ticked, the count answers It is not empty.
+      anyRow: waitUntil === 'nonEmpty' && !ticked.has('rowCount'),
     });
     if (facts === null) {
       if (waitUntil !== 'off') {

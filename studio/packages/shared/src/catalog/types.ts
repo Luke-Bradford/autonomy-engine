@@ -593,8 +593,9 @@ export interface ActivityCatalogEntry {
   /**
    * #1600 OR41 C8c — the choices of an enum or enum-set field that each
    * connection kind can answer (Get metadata's field list: a path's fields on
-   * `fs`, a table's on a database; C8d-2b its Wait until, no size on a table). The editor offers only the bound kind's, plus any already
-   * ticked, and every choice while the kind is unknown. Display-only like
+   * `fs`, a table's on a database; C8d-2b its Wait until, no size on a table).
+   * The editor offers only the bound kind's, plus any already ticked, and
+   * every choice while the kind is unknown. Display-only like
    * `appliesWhen`; the adapters refuse the rest at dispatch.
    */
   fieldOptionsByConnectionKind?: Readonly<

@@ -26,7 +26,7 @@ import { tableRef, type TableColumn, type TableMetadataIo } from './table-metada
  * Cancel is checked before connecting and before the count; a count already
  * running waits for that timeout. C8d-2b — *It is not empty* without Row count
  * is an `exists (select 1 …)` probe in the same session, bounded and
- * cancel-checked the same way.
+ * cancel-checked the same way; it stops at the first row.
  */
 const DESCRIBE_TABLE_SQL = `
   select has_table_privilege(c.oid, 'SELECT') as readable,
@@ -73,14 +73,14 @@ export function postgresTableMetadata(deps: PostgresTableMetadataDeps): TableMet
             `the connection's role cannot read the table '${tableRef(target)}'`,
           );
         }
+        if (signal.aborted) throw new DatasetIoError('cancelled', 'Get metadata aborted');
         const columns = row.columns.map(({ name, type }) => ({ name, type }));
         if (!reads.rowCount && !reads.anyRow) return { columns, rowCount: undefined };
-        if (signal.aborted) throw new DatasetIoError('cancelled', 'Get metadata aborted');
         if (reads.rowCount) {
           const counted = await client.query(`select count(*) as n from ${qualified}`);
           return { columns, rowCount: (counted.rows[0] as { n: unknown } | undefined)?.n };
         }
-        // C8d-2b — It is not empty: one row, never a scan.
+        // C8d-2b — It is not empty: stops at the first row.
         const probed = await client.query(`select exists (select 1 from ${qualified}) as found`);
         const hasRow = (probed.rows[0] as { found: boolean } | undefined)?.found === true;
         return { columns, rowCount: undefined, hasRow };

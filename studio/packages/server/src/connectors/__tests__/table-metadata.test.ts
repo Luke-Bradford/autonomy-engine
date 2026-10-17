@@ -346,6 +346,7 @@ describe.skipIf(LIVE_HOST === undefined)('Get metadata on a live postgres table 
         `CREATE SEQUENCE ${schema}.ids;` +
         `CREATE TABLE ${schema}.secret (x int);` +
         `CREATE TABLE ${schema}.empty (id int);` +
+        `CREATE MATERIALIZED VIEW ${schema}.unfilled AS SELECT 1 AS x WITH NO DATA;` +
         `CREATE ROLE ${role} LOGIN PASSWORD 'pw';` +
         `GRANT USAGE ON SCHEMA ${schema} TO ${role};` +
         `GRANT SELECT ON ${schema}.orders TO ${role};`,
@@ -456,5 +457,26 @@ describe.skipIf(LIVE_HOST === undefined)('Get metadata on a live postgres table 
       password,
     );
     expect(failure(sized).error).toMatch(/^It is at least N bytes needs a file/);
+  });
+
+  it('C8d-2b: an unpopulated materialized view, or a table the role cannot read, fails while waiting', async () => {
+    const unfilled = failure(await waitOn('nonEmpty', ['exists'], at('unfilled')));
+    expect(unfilled.kind).toBe('permanent');
+    expect(unfilled.error).toMatch(/has not been populated/);
+    const unreadable = failure(
+      await run(
+        adapter,
+        ctx(
+          { ...live, user: role },
+          { fieldList: ['exists'], waitUntil: 'exists', ...WAIT },
+          at('secret'),
+        ),
+        'pw',
+      ),
+    );
+    expect(unreadable).toEqual({
+      kind: 'permanent',
+      error: `the connection's role cannot read the table '${schema}.secret'`,
+    });
   });
 });

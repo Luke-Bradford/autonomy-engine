@@ -264,7 +264,9 @@ async function openSqliteReadOnly(
  * its declared type (`''` when it declares none).
  *
  * C8d-2b — *It is not empty* without Row count is a `LIMIT 1` probe in the same
- * open (a view's runs the view's query until its first row).
+ * open. It stops at the first row, so it scans only when there is none to find:
+ * an empty view over a large table runs its whole query, synchronously, on
+ * every check, as Row count does.
  *
  * Row count is a synchronous `count(*)`, which better-sqlite3 cannot interrupt:
  * on a very large table, or a costly view, it holds the server's event loop
@@ -294,7 +296,7 @@ function sqliteTableMetadata(cfg: z.infer<typeof sqliteConnectionConfigSchema>):
           return { columns, rowCount: n };
         }
         if (!reads.anyRow) return { columns, rowCount: undefined };
-        // C8d-2b — It is not empty: one row, never a scan.
+        // C8d-2b — It is not empty: stops at the first row.
         const hasRow = db.prepare(`SELECT 1 FROM ${qualified} LIMIT 1`).get() !== undefined;
         return { columns, rowCount: undefined, hasRow };
       } catch (err) {
