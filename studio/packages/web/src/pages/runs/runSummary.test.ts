@@ -1198,6 +1198,68 @@ describe('deriveNodeActivity — a cancel settles the holds the reducer fails (#
     expect(armed!.endedAtMs).toBe(170);
   });
 
+  it('a second cancel changes nothing, and a re-check already due stays running', () => {
+    const [g] = deriveNodeActivity([
+      dispatched('g', 0, 100),
+      notReady('g', 150),
+      recheckScheduled('g', 160),
+      cancel(400),
+      cancel(500),
+    ]);
+    expect(g!.status).toBe('failure');
+    expect(g!.endedAtMs).toBe(400);
+
+    // Its check is in flight, not parked: the cancel waits for it, as the reducer does.
+    const [due] = deriveNodeActivity([
+      dispatched('g', 0, 100),
+      notReady('g', 150),
+      recheckScheduled('g', 160),
+      envelope({ type: 'node.recheckDue', runId: 'r', nodeId: 'g', previousAttemptId: 'g#0' }, 300),
+      cancel(400),
+    ]);
+    expect(due!.status).toBe('dispatched');
+  });
+
+  it('a retry or re-check alarm folded after the cancel re-opens nothing', () => {
+    const [a] = deriveNodeActivity([
+      dispatched('a', 0, 100),
+      failedTransient(200),
+      retryScheduled(210),
+      cancel(300),
+      envelope({ type: 'node.retryDue', runId: 'r', nodeId: 'a', previousAttemptId: 'a#0' }, 310),
+    ]);
+    expect(a!.status).toBe('failure');
+    expect(a!.endedAtMs).toBe(200);
+
+    const [g] = deriveNodeActivity([
+      dispatched('g', 0, 100),
+      notReady('g', 150),
+      recheckScheduled('g', 160),
+      cancel(400),
+      envelope({ type: 'node.recheckDue', runId: 'r', nodeId: 'g', previousAttemptId: 'g#0' }, 410),
+    ]);
+    expect(g!.status).toBe('failure');
+  });
+
+  it("the boot reconciler's retry of an in-flight node fails it under a cancel (CX1 D7)", () => {
+    const [a] = deriveNodeActivity([
+      dispatched('a', 0, 100),
+      cancel(200),
+      envelope(
+        {
+          type: 'node.retryRequested',
+          runId: 'r',
+          nodeId: 'a',
+          previousAttemptId: 'a#0',
+          reason: 'interrupted',
+        },
+        300,
+      ),
+    ]);
+    expect(a!.status).toBe('failure');
+    expect(a!.endedAtMs).toBe(300);
+  });
+
   it('a parked `wait` timer is left as the reducer leaves it: not in flight, not failed', () => {
     const [w] = deriveNodeActivity([
       envelope(

@@ -220,7 +220,7 @@ test('CX4 — cancelling a PARKED run finishes it at once, and the page says can
  * run view's node status is the doc-free fold's alone (the projection has no
  * bare state for a parallel body node, `reconcileNodeActivity`), and that fold
  * ignored the cancel, so the Gantt drew the hold as a parked `wait`, open and
- * "stopped (cancelled)". Both surfaces now say what the reducer did.
+ * "stopped (cancelled)". The activity-run check is parity; the Gantt is the fix.
  */
 test('#1746 — a cancelled Wait until in a parallel ForEach reads failure on the Gantt, as its activity run does', async ({
   page,
