@@ -352,8 +352,6 @@ export type FsConfinement =
 export async function confineFsPath(
   connectionConfig: unknown,
   requested: string,
-  // #1743 — a dataset ADDRESS asks for a path whose folder may not exist yet
-  // (`resolveWithinRootsOrMissing`); every read keeps the strict answer.
   options: { readonly missingFolderOk?: boolean } = {},
 ): Promise<FsConfinement> {
   const cfg = fsConnectionConfigSchema.safeParse(connectionConfig);
