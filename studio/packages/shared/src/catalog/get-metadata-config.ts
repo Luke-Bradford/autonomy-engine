@@ -26,7 +26,7 @@ export const GET_METADATA_FS_FIELDS = [
 export type GetMetadataField = (typeof GET_METADATA_FS_FIELDS)[number];
 
 const fieldSchema = z.enum(GET_METADATA_FS_FIELDS);
-const FIELD_TITLES = optionTitles(fieldSchema, {
+export const GET_METADATA_FIELD_TITLES = optionTitles(fieldSchema, {
   exists: 'Exists',
   itemName: 'Item name',
   itemType: 'Item type',
@@ -51,7 +51,7 @@ export const getMetadataConfigSchema = z
       title: 'Field list',
       description:
         'Each ticked field fills the output of the same name; the rest are null. With Exists ticked, a missing path gives false instead of failing.',
-      options: FIELD_TITLES,
+      options: GET_METADATA_FIELD_TITLES,
     }),
     childFilter: presented(singleLine(z.string()).min(1).default('*'), {
       title: 'Filter',
@@ -88,7 +88,8 @@ export const getMetadataConfigSchema = z
       ctx.addIssue({ code: 'custom', path: [field], message });
     const seen = new Set<string>();
     for (const field of cfg.fieldList) {
-      if (seen.has(field)) issue('fieldList', `${FIELD_TITLES[field]} is ticked twice`);
+      if (seen.has(field))
+        issue('fieldList', `${GET_METADATA_FIELD_TITLES[field]} is ticked twice`);
       seen.add(field);
     }
     if (!seen.has('childItems')) {
@@ -107,3 +108,21 @@ export const getMetadataConfigSchema = z
     if (window !== undefined) issue('modifiedEnd', window);
   });
 export type GetMetadataConfig = z.infer<typeof getMetadataConfigSchema>;
+
+/**
+ * #1736 — the field outputs a Get metadata config leaves null: every field its
+ * Field list does not tick. The output contract stays fixed (a contract derived
+ * from the ticks would go stale when they change), so the validator warns on a
+ * read of one of these instead. `undefined` when the field list is not a list,
+ * which the config check already reports.
+ */
+export function untickedGetMetadataFields(
+  config: unknown,
+): ReadonlySet<GetMetadataField> | undefined {
+  const list =
+    typeof config === 'object' && config !== null
+      ? (config as { fieldList?: unknown }).fieldList
+      : undefined;
+  if (!Array.isArray(list)) return undefined;
+  return new Set(GET_METADATA_FS_FIELDS.filter((f) => !list.includes(f)));
+}
