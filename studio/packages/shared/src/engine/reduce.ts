@@ -397,6 +397,8 @@ function heldRetryToFailure(ns: NodeRunState): NodeRunState {
  */
 export const UNPARK_EVENTS = new Set<EngineEvent['type']>([
   'timer.due',
+  // #1600 OR41 C8d — a Get metadata *Wait until* re-check, parked the same way.
+  'node.recheckDue',
   'externalWait.completed',
   'externalWait.expired',
   'run.resumed',
@@ -3084,6 +3086,7 @@ export function createEngine(doc: EngineDoc): Engine {
       };
       delete reset.skipReason;
       delete reset.inactive; // #1600 C0c — the same rule as the skip's reason
+      delete reset.recheck; // #1600 C8d — each round gets its own Wait until deadline
       nodes[id] = reset;
       if (Object.prototype.hasOwnProperty.call(outputs, id)) {
         if (outputs === state.outputs) outputs = { ...outputs };
@@ -3820,7 +3823,7 @@ export function createEngine(doc: EngineDoc): Engine {
         return settle(withNode(state, event.nodeId, { status: 'failure' }), diagnostics);
       }
       const stored = storeOutputs(checked, event.outputs);
-      let next = withNode(state, event.nodeId, { status: 'success' });
+      let next = withoutRecheck(withNode(state, event.nodeId, { status: 'success' }), event.nodeId);
       next = { ...next, outputs: { ...next.outputs, [event.nodeId]: stored } };
       return settle(next, diagnostics);
     }
@@ -4011,7 +4014,10 @@ export function createEngine(doc: EngineDoc): Engine {
         // CX1 (#1320) D2 — cancel mode schedules no retry: the failure is
         // terminal. The cancel STOPPED work if this is the abort it caused, or if
         // it refused a retry the policy would have run (D3).
-        const failedNode = withNode(state, event.nodeId, { status: 'failure' });
+        const failedNode = withoutRecheck(
+          withNode(state, event.nodeId, { status: 'failure' }),
+          event.nodeId,
+        );
         const stopped =
           event.kind === 'cancelled' || retryEligible(docNodeFor(event.nodeId)!, ns, event.kind);
         return settle(stopped ? markStoppedWork(failedNode) : failedNode, diagnostics);
@@ -4042,7 +4048,10 @@ export function createEngine(doc: EngineDoc): Engine {
           diagnostics,
         };
       }
-      return settle(withNode(state, event.nodeId, { status: 'failure' }), diagnostics);
+      return settle(
+        withoutRecheck(withNode(state, event.nodeId, { status: 'failure' }), event.nodeId),
+        diagnostics,
+      );
     }
     if (ns.status === 'pending') {
       diagnostics.push(`impossible node.failed for never-dispatched node '${event.nodeId}'`);
@@ -4232,6 +4241,151 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
+   * Re-dispatch a held node under a NEW attempt: a policy retry (`onRetryDue`,
+   * which also spends the retry budget) or a Wait until re-check
+   * (`onRecheckDue`, which does not). `event.nodeId` may be an instance key;
+   * prep against it so the attempt re-resolves the ITEM's own env.
+   */
+  function redispatch(
+    state: RunState,
+    nodeId: string,
+    patch: Partial<NodeRunState>,
+    diagnostics: string[],
+  ): ReduceResult {
+    const ns = state.nodes[nodeId]!;
+    const attemptId = `${nodeId}#${ns.attempts}`;
+    const next = withNode(state, nodeId, {
+      ...patch,
+      status: 'ready',
+      attempts: ns.attempts + 1,
+      currentAttemptId: attemptId,
+    });
+    let prepared: PreparedDispatch;
+    try {
+      prepared = prepDispatch(next, docNodeFor(nodeId)!, nodeId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      diagnostics.push(`dispatch prep failed for node '${nodeId}': ${msg}`);
+      return {
+        state: next,
+        commands: [{ type: 'finishRun', outcome: 'failure', reason: 'invalid_event' }],
+        diagnostics,
+      };
+    }
+    return {
+      state: next,
+      commands: [dispatchNodeCommand(nodeId, attemptId, prepared)],
+      diagnostics,
+    };
+  }
+
+  /**
+   * #1600 OR41 C8d — fold `node.notReady`: a Get metadata *Wait until* checked
+   * and the condition is not met yet. The attempt ends here, but the node is not
+   * terminal: hold it `ready` (the driver owes `node.recheckScheduled`, wait's
+   * handshake) and ask the driver to re-check. A deadline already fixed by an
+   * earlier check is kept, so retries and re-checks share one *Give up after*.
+   * Guarded like `onFailed`; in cancel mode the cancel stops the wait (CX1 D2).
+   */
+  function onNotReady(
+    state: RunState,
+    event: Extract<EngineEvent, { type: 'node.notReady' }>,
+    diagnostics: string[],
+  ): ReduceResult {
+    const ns = state.nodes[event.nodeId];
+    if (ns === undefined || !LIVE_NODE.has(ns.status)) return { state, commands: [], diagnostics };
+    if (event.attemptId !== ns.currentAttemptId) return { state, commands: [], diagnostics };
+    if (state.cancelRequested !== null) {
+      return settle(
+        markStoppedWork(
+          withoutRecheck(withNode(state, event.nodeId, { status: 'failure' }), event.nodeId),
+        ),
+        diagnostics,
+      );
+    }
+    const giveUpAt = ns.recheck?.giveUpAt;
+    const recheck: NonNullable<NodeRunState['recheck']> = {
+      notReadyAttemptId: event.attemptId,
+      reason: event.reason,
+      afterSeconds: event.recheckAfterSeconds,
+      giveUpAfterSeconds: event.giveUpAfterSeconds,
+      ...(giveUpAt !== undefined ? { giveUpAt } : {}),
+    };
+    return {
+      state: withNode(state, event.nodeId, { status: 'ready', recheck }),
+      commands: [recheckCommand(event.nodeId, event.attemptId, recheck)],
+      diagnostics,
+    };
+  }
+
+  function recheckCommand(
+    nodeId: string,
+    attemptId: string,
+    recheck: NonNullable<NodeRunState['recheck']>,
+  ): EngineCommand {
+    return {
+      type: 'scheduleRecheck',
+      nodeId,
+      attemptId,
+      reason: recheck.reason,
+      afterSeconds: recheck.afterSeconds,
+      giveUpAfterSeconds: recheck.giveUpAfterSeconds,
+      giveUpAt: recheck.giveUpAt ?? null,
+    };
+  }
+
+  /**
+   * #1600 OR41 C8d — fold `node.recheckScheduled`: the re-check alarm is armed,
+   * so PARK the node `wait_pending` (the same park as a `wait`: the run goes
+   * `waiting`, nothing is in flight) and stamp the deadline. Guarded on the held
+   * not-ready attempt; anything else is a duplicate or a reset node, a no-op.
+   */
+  function onRecheckScheduled(
+    state: RunState,
+    event: Extract<EngineEvent, { type: 'node.recheckScheduled' }>,
+    diagnostics: string[],
+  ): ReduceResult {
+    const ns = state.nodes[event.nodeId];
+    if (
+      ns === undefined ||
+      ns.status !== 'ready' ||
+      ns.currentAttemptId !== event.attemptId ||
+      ns.recheck?.notReadyAttemptId !== event.attemptId
+    ) {
+      return { state, commands: [], diagnostics };
+    }
+    const parked = withNode(state, event.nodeId, {
+      status: 'wait_pending',
+      recheck: { ...ns.recheck, giveUpAt: event.giveUpAt },
+    });
+    return settle(parked, diagnostics);
+  }
+
+  /**
+   * #1600 OR41 C8d — fold `node.recheckDue`: re-dispatch the parked Get metadata
+   * under a NEW attempt. A re-check is not a retry, so `retries` is untouched.
+   * Guarded like `onWaitDue`; a cancelled run starts no new check (CX1 D2), and
+   * its `onCancelRequested` already failed the park, so that is defence only.
+   */
+  function onRecheckDue(
+    state: RunState,
+    event: Extract<EngineEvent, { type: 'node.recheckDue' }>,
+    diagnostics: string[],
+  ): ReduceResult {
+    const ns = state.nodes[event.nodeId];
+    if (
+      ns === undefined ||
+      ns.status !== 'wait_pending' ||
+      ns.recheck === undefined ||
+      ns.currentAttemptId !== event.previousAttemptId ||
+      state.cancelRequested !== null
+    ) {
+      return { state, commands: [], diagnostics };
+    }
+    return redispatch(unparkIfWaiting(state), event.nodeId, {}, diagnostics);
+  }
+
+  /**
    * `node.retryDue` (F2b/F2c): the alarm fired — re-dispatch a HELD node under a
    * NEW attempt.
    *
@@ -4265,13 +4419,6 @@ export function createEngine(doc: EngineDoc): Engine {
       // A stale alarm naming an attempt this node has moved past.
       return { state, commands: [], diagnostics };
     }
-    const attemptId = `${event.nodeId}#${ns.attempts}`;
-    const next = withNode(state, event.nodeId, {
-      status: 'ready',
-      attempts: ns.attempts + 1,
-      retries: ns.retries + 1,
-      currentAttemptId: attemptId,
-    });
     // No stale-output clear here, unlike `onRetryRequested` below: a
     // `retry_pending` node can ONLY have come from `onFailed`'s LIVE_NODE branch,
     // and no failure path there stores outputs (`onCallReturned` is the one
@@ -4279,25 +4426,7 @@ export function createEngine(doc: EngineDoc): Engine {
     // reach). `onRetryRequested` recovers a node from `ready`/`dispatched`, which
     // a `node.output` observability event cannot populate either — but it has the
     // clear, so this asymmetry is deliberate and stated rather than silent.
-    let prepared: PreparedDispatch;
-    try {
-      // #4 A4b — `event.nodeId` may be an instance key; prep against it so the
-      // retry re-resolves the ITEM's own env (docNodeFor strips the suffix).
-      prepared = prepDispatch(next, docNodeFor(event.nodeId)!, event.nodeId);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      diagnostics.push(`dispatch prep failed for node '${event.nodeId}': ${msg}`);
-      return {
-        state: next,
-        commands: [{ type: 'finishRun', outcome: 'failure', reason: 'invalid_event' }],
-        diagnostics,
-      };
-    }
-    return {
-      state: next,
-      commands: [dispatchNodeCommand(event.nodeId, attemptId, prepared)],
-      diagnostics,
-    };
+    return redispatch(state, event.nodeId, { retries: ns.retries + 1 }, diagnostics);
   }
 
   /**
@@ -4349,7 +4478,12 @@ export function createEngine(doc: EngineDoc): Engine {
   ): ReduceResult {
     const ns = state.nodes[event.nodeId];
     if (ns === undefined) return { state, commands: [], diagnostics };
-    if (ns.status !== 'wait_pending' || ns.currentAttemptId !== event.previousAttemptId) {
+    if (
+      ns.status !== 'wait_pending' ||
+      ns.currentAttemptId !== event.previousAttemptId ||
+      // #1600 C8d — a re-check park is completed by a new check, never by a timer.
+      ns.recheck !== undefined
+    ) {
       return { state, commands: [], diagnostics };
     }
     // #5 S3 (#619) — un-park FIRST (waiting→running) so the resumed walk re-parks
@@ -4715,6 +4849,16 @@ export function createEngine(doc: EngineDoc): Engine {
         commands.push(inactivateCommand(node, id, ns.currentAttemptId));
         continue;
       }
+      if (ns.status === 'ready' && ns.recheck?.notReadyAttemptId === ns.currentAttemptId) {
+        // #1600 C8d crash recovery: `node.notReady` held the node `ready` and its
+        // `scheduleRecheck` was lost (before the arm, or between the arm and
+        // `node.recheckScheduled`). Re-emit it, never a dispatch: the check is
+        // owed only once the interval passes. `armRecheck` is idempotent by the
+        // alarm's `(kind, dedupeKey)`. A `ready` node whose `recheck` names an
+        // EARLIER attempt lost a `dispatchNode` instead, and falls through.
+        commands.push(recheckCommand(id, ns.currentAttemptId, ns.recheck));
+        continue;
+      }
       if (ns.status === 'ready') {
         const controlEvent = controlBranchEvent(node.type);
         if (controlEvent !== undefined) {
@@ -4976,8 +5120,14 @@ export function createEngine(doc: EngineDoc): Engine {
       cancelRequested: { source: event.source, stoppedWork: false },
     };
     for (const [id, ns] of Object.entries(next.nodes)) {
-      if (ns.status !== 'retry_pending') continue;
-      next = markStoppedWork({ ...next, nodes: { ...next.nodes, [id]: heldRetryToFailure(ns) } });
+      // #1600 C8d — a Wait until re-check park is a hold too: the check the
+      // cancel prevented is work it stopped.
+      const held =
+        ns.status === 'retry_pending' || (ns.status === 'wait_pending' && ns.recheck !== undefined);
+      if (!held) continue;
+      const failed = heldRetryToFailure(ns);
+      delete failed.recheck;
+      next = markStoppedWork({ ...next, nodes: { ...next.nodes, [id]: failed } });
     }
     return settle(next, diagnostics);
   }
@@ -5191,6 +5341,12 @@ export function createEngine(doc: EngineDoc): Engine {
         return onWaitScheduled(state, event, diagnostics);
       case 'timer.due':
         return onWaitDue(state, event, diagnostics);
+      case 'node.notReady':
+        return onNotReady(state, event, diagnostics);
+      case 'node.recheckScheduled':
+        return onRecheckScheduled(state, event, diagnostics);
+      case 'node.recheckDue':
+        return onRecheckDue(state, event, diagnostics);
       case 'container.timeoutScheduled':
         // #4 A17 — NOT inert: stamps the loop's `timeoutDueAt` (audit + the
         // crash-recovery marker `onResumed` reads). Parks nothing.
@@ -5379,6 +5535,15 @@ function defineVariable(out: Record<string, unknown>, name: string, value: unkno
 function withNode(state: RunState, id: string, patch: Partial<NodeRunState>): RunState {
   const prev = state.nodes[id]!;
   return { ...state, nodes: { ...state.nodes, [id]: { ...prev, ...patch } } };
+}
+
+/** #1600 C8d — remove a settled node's Wait until record (no key left behind). */
+function withoutRecheck(state: RunState, id: string): RunState {
+  const prev = state.nodes[id]!;
+  if (prev.recheck === undefined) return state;
+  const next = { ...prev };
+  delete next.recheck;
+  return { ...state, nodes: { ...state.nodes, [id]: next } };
 }
 
 /** Immutable single-container patch. */
