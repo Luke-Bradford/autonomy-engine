@@ -55,7 +55,8 @@ const HELP_LIMITS: Record<string, number> = {
   // #1600 OR41 C8a — List directory's 7 (retired from the palette by C8b) and
   // the Field list's, which says the unticked outputs are null and what Exists
   // does for a missing path.
-  'Get metadata': 8,
+  // +1 for C8d's Wait until, which says a missing path counts as not yet.
+  'Get metadata': 9,
   'HTTP request': 9,
   // +3 for C7a's Settings, each `?` a fact its label lacks: First row only names
   // the output it writes, Max rows its ceiling, When over the limit both bounds.
@@ -333,7 +334,10 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   // #1600 OR41 C8a — the 8 above and Child items' four settings: Filter's
   // wildcard syntax, Child entries' All, and the window's UTC and folders.
   // +1 for C8e's Include subfolders: each item is then named by its path.
-  'Get metadata': 13,
+  // +4 for C8d's Wait until (a missing path is not yet) and its three settings:
+  // Minimum bytes says a folder fails, Check every and Give up after their
+  // ADF names, defaults and bounds.
+  'Get metadata': 17,
   'HTTP request': 9,
   // +3 for C7a's Settings, each `?` a fact its label lacks: First row only names
   // the output it writes, Max rows its ceiling, When over the limit both bounds.
@@ -375,7 +379,7 @@ const SHOWS: Record<string, string[]> = {
   'Copy data (inline query)': [INLINE_SQL, 'region', 'EU', '${run.runId}'],
   'Lookup (inline table)': ['main', 'orders'],
   'Delete file': ['/tmp/e2e/old.txt', '2048', 'E2E-1'],
-  'Get metadata': ['/tmp/e2e', '*.csv', '2026-10-01T00:00:00Z', '2048', 'E2E-1'],
+  'Get metadata': ['/tmp/e2e', '*.csv', '2026-10-01T00:00:00Z', '1024', '3600', '2048', 'E2E-1'],
   'Lookup (whole file as text)': ['/tmp/e2e/in.txt', '2048', 'E2E-1'],
   'Write file': ['/tmp/e2e/out.txt', '2048', 'E2E-1'],
   'HTTP request': ['/v1/orders', 'X-Trace', '15000', 'E2E-1'],
@@ -530,6 +534,11 @@ function seeds(ids: SeedIds): Record<string, Seed> {
       childType: 'files',
       recursive: true,
       modifiedStart: '2026-10-01T00:00:00Z',
+      // C8d — set, so Wait until's three settings draw (and are sized) too.
+      waitUntil: 'minimumSize',
+      minimumSize: 1024,
+      checkEverySeconds: 30,
+      giveUpAfterSeconds: 3600,
     }),
     'Lookup (whole file as text)': fsNode('file_read', { path: '/tmp/e2e/in.txt' }),
     'Write file': fsNode('file_write', { path: '/tmp/e2e/out.txt', content: 'one\ntwo' }),
