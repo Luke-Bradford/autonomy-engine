@@ -682,7 +682,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // stale when they change). A reference to an unticked field therefore
     // resolves to null where ADF fails it; the spec records the difference.
     // Side-effect-free, so `idempotent:true`, like `file_list`, which is
-    // lowered to its Child items (C8b). Wait until is C8d.
+    // lowered to its Child items (C8b). Wait until (C8d) re-checks a path on a
+    // durable timer: the adapter answers `notReady` until it holds.
     // Include subfolders (C8e) names each child by its path below the folder.
     //
     // C8c — a database TABLE as well: on a sqlite or postgres connection the
@@ -706,11 +707,20 @@ const ENTRIES: ActivityCatalogEntry[] = [
           'recursive',
           'modifiedStart',
           'modifiedEnd',
+          'waitUntil',
+          'minimumSize',
+          'checkEverySeconds',
+          'giveUpAfterSeconds',
         ],
       },
     ],
     appliesWhen: {
       path: [{ connectionKind: ['fs'] }],
+      // C8d — Wait until checks a path, which only a file system has.
+      waitUntil: [{ connectionKind: ['fs'] }],
+      minimumSize: [{ field: 'waitUntil', in: ['minimumSize'] }],
+      checkEverySeconds: [{ field: 'waitUntil', in: ['exists', 'nonEmpty', 'minimumSize'] }],
+      giveUpAfterSeconds: [{ field: 'waitUntil', in: ['exists', 'nonEmpty', 'minimumSize'] }],
       childFilter: [{ field: 'fieldList', in: ['childItems'] }],
       childType: [{ field: 'fieldList', in: ['childItems'] }],
       recursive: [{ field: 'fieldList', in: ['childItems'] }],

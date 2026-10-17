@@ -565,7 +565,11 @@
 // dataset (Structure and Column count of a file). A pre-C8c-2 build refuses the
 // dataset's kind at dispatch, so it imports such a doc and fails the node at its
 // first run: C7d's fails-at-first-run reason.
-export const CATALOG_VERSION = 46;
+// BUMP 46→47 for #1600 OR41 C8d: `get_metadata`'s Wait until (`waitUntil`,
+// `minimumSize`, `checkEverySeconds`, `giveUpAfterSeconds`). A pre-C8d build's
+// schema strips the keys and reads the path once, so a node meant to wait for a
+// file fails or answers early: a silent change, C8e's reason.
+export const CATALOG_VERSION = 47;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

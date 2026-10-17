@@ -3086,7 +3086,9 @@ export function createEngine(doc: EngineDoc): Engine {
       };
       delete reset.skipReason;
       delete reset.inactive; // #1600 C0c — the same rule as the skip's reason
-      delete reset.recheck; // #1600 C8d — each round gets its own Wait until deadline
+      // #1600 C8d — each round gets its own Wait until deadline. Settling already
+      // drops the record; this covers a node abandoned while parked.
+      delete reset.recheck;
       nodes[id] = reset;
       if (Object.prototype.hasOwnProperty.call(outputs, id)) {
         if (outputs === state.outputs) outputs = { ...outputs };
