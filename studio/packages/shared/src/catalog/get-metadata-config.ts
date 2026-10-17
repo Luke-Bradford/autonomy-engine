@@ -4,14 +4,16 @@ import { instant, modifiedWindowIssue, wildcardIssue } from './file-selection.js
 
 /**
  * #1600 OR41 C8a — Get metadata's config (catalogue §4.3), the SINGLE SOURCE OF
- * TRUTH read by the catalog entry and the `fs` adapter's dispatch arm, as the
+ * TRUTH read by the catalog entry and the adapters' dispatch arms, as the
  * `file_*` shapes in `fs-activity-config.ts` are.
  *
- * C8a is the file system half. The field names are ADF's
+ * The field names are ADF's
  * (https://learn.microsoft.com/azure/data-factory/control-flow-get-metadata-activity).
- * C8c adds the table fields (structure, column count, row count) for database
- * connections, and the options then depend on the connection's kind, which is
- * why this list is named for the file system.
+ * C8a is the file system half; C8c adds a database table's fields. Which fields
+ * a node may tick depends on its connection's kind
+ * ({@link GET_METADATA_FIELDS_BY_CONNECTION_KIND}), which the config alone
+ * cannot see, so the adapters refuse the rest at dispatch
+ * ({@link getMetadataKindIssue}) and the editor offers only the kind's own.
  */
 export const GET_METADATA_FS_FIELDS = [
   'exists',
@@ -23,9 +25,34 @@ export const GET_METADATA_FS_FIELDS = [
   'contentMD5',
   'childItems',
 ] as const;
-export type GetMetadataField = (typeof GET_METADATA_FS_FIELDS)[number];
+/**
+ * C8c — a database table's fields. Row count is a studio addition; ADF offers
+ * Exists, Structure and Column count for a table.
+ */
+export const GET_METADATA_TABLE_FIELDS = [
+  'exists',
+  'structure',
+  'columnCount',
+  'rowCount',
+] as const;
+/** Every field, in the order the tick boxes are drawn and the array is written. */
+export const GET_METADATA_FIELDS = [
+  ...GET_METADATA_FS_FIELDS,
+  'structure',
+  'columnCount',
+  'rowCount',
+] as const;
+export type GetMetadataField = (typeof GET_METADATA_FIELDS)[number];
 
-const fieldSchema = z.enum(GET_METADATA_FS_FIELDS);
+/** The fields each connection kind can answer (the catalog's field options). */
+export const GET_METADATA_FIELDS_BY_CONNECTION_KIND = {
+  fs: GET_METADATA_FS_FIELDS,
+  sqlite: GET_METADATA_TABLE_FIELDS,
+  postgres: GET_METADATA_TABLE_FIELDS,
+} as const satisfies Record<string, readonly GetMetadataField[]>;
+type GetMetadataConnectionKind = keyof typeof GET_METADATA_FIELDS_BY_CONNECTION_KIND;
+
+const fieldSchema = z.enum(GET_METADATA_FIELDS);
 export const GET_METADATA_FIELD_TITLES = optionTitles(fieldSchema, {
   exists: 'Exists',
   itemName: 'Item name',
@@ -35,13 +62,20 @@ export const GET_METADATA_FIELD_TITLES = optionTitles(fieldSchema, {
   lastModified: 'Last modified',
   contentMD5: 'Content MD5',
   childItems: 'Child items',
+  structure: 'Structure',
+  columnCount: 'Column count',
+  rowCount: 'Row count',
 });
 
 const childTypeSchema = z.enum(['all', 'files', 'folders']);
 
 export const getMetadataConfigSchema = z
   .object({
-    path: presented(singleLine(z.string()).min(1), {
+    // C8c — optional, because a database table is chosen on the Source tab (a
+    // saved table dataset or an inline Table), never by a path: one way to name
+    // a table (C1q). A file system connection still needs it, refused at
+    // dispatch by `getMetadataKindIssue`.
+    path: presented(singleLine(z.string()).min(1).optional(), {
       title: 'File or folder path',
       description: "Absolute, or relative to the connection's first allowed folder.",
     }),
@@ -124,5 +158,37 @@ export function untickedGetMetadataFields(
       ? (config as { fieldList?: unknown }).fieldList
       : undefined;
   if (!Array.isArray(list)) return undefined;
-  return new Set(GET_METADATA_FS_FIELDS.filter((f) => !list.includes(f)));
+  return new Set(GET_METADATA_FIELDS.filter((f) => !list.includes(f)));
 }
+
+/**
+ * #1600 OR41 C8c — what a Get metadata config asks that its connection's kind
+ * cannot answer, or `undefined` when nothing. The adapters refuse it at
+ * dispatch (`permanent`); the config schema cannot, because it does not see the
+ * connection. One sentence per store, so the file system and the two databases
+ * say the same thing about the same mistake.
+ */
+export function getMetadataKindIssue(
+  config: GetMetadataConfig,
+  connectionKind: GetMetadataConnectionKind,
+): string | undefined {
+  const allowed: readonly GetMetadataField[] =
+    GET_METADATA_FIELDS_BY_CONNECTION_KIND[connectionKind];
+  const foreign = config.fieldList.filter((f) => !allowed.includes(f));
+  if (connectionKind === 'fs') {
+    if (config.path === undefined)
+      return 'File or folder path is required on a file system connection';
+    if (foreign.length > 0) {
+      return `${titles(foreign)} read a database table, not a file system path`;
+    }
+    return undefined;
+  }
+  if (config.path !== undefined) {
+    return 'a table is chosen on the Source tab; clear File or folder path';
+  }
+  if (foreign.length > 0) return `${titles(foreign)} read a file system path, not a table`;
+  return undefined;
+}
+
+const titles = (fields: readonly GetMetadataField[]): string =>
+  fields.map((f) => GET_METADATA_FIELD_TITLES[f]).join(', ');

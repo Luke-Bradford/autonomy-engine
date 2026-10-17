@@ -31,7 +31,10 @@ import {
 import { agentTaskConfigSchema } from './agent-config.js';
 import { copyDispatchInputSchema, copyInputSchema } from './copy-config.js';
 import { copyFilesConfigSchema } from './copy-files-config.js';
-import { getMetadataConfigSchema } from './get-metadata-config.js';
+import {
+  GET_METADATA_FIELDS_BY_CONNECTION_KIND,
+  getMetadataConfigSchema,
+} from './get-metadata-config.js';
 import { lookupConfigSchema } from './lookup-config.js';
 import { llmCallConfigSchema } from './llm-config.js';
 import {
@@ -679,16 +682,21 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // stale when they change). A reference to an unticked field therefore
     // resolves to null where ADF fails it; the spec records the difference.
     // Side-effect-free, so `idempotent:true`, like `file_list`, which is
-    // lowered to its Child items (C8b). Tables are C8c, Wait until C8d.
+    // lowered to its Child items (C8b). Wait until is C8d.
     // Include subfolders (C8e) names each child by its path below the folder.
+    //
+    // C8c — a database TABLE as well: on a sqlite or postgres connection the
+    // table is the Source tab's dataset (a saved `table` dataset or an inline
+    // Table, C1q), never a path, and the field list offers a table's fields.
+    // The dataset is optional on `fs` only, where the path is the address.
     type: GET_METADATA_ACTIVITY_TYPE,
     title: 'Get metadata',
     description:
-      'Read facts about a file or folder: whether it exists, its size and dates, or list what it holds.',
+      'Read facts about a file, folder or table: whether it exists, its size, dates or columns, or list what a folder holds.',
     kind: 'execution',
     category: 'general',
     tabs: [
-      { key: 'source', bindings: ['connection'], fields: ['path'] },
+      { key: 'source', bindings: ['connection', 'sourceDataset'], fields: ['path'] },
       {
         key: 'settings',
         fields: [
@@ -702,14 +710,17 @@ const ENTRIES: ActivityCatalogEntry[] = [
       },
     ],
     appliesWhen: {
+      path: [{ connectionKind: ['fs'] }],
       childFilter: [{ field: 'fieldList', in: ['childItems'] }],
       childType: [{ field: 'fieldList', in: ['childItems'] }],
       recursive: [{ field: 'fieldList', in: ['childItems'] }],
       modifiedStart: [{ field: 'fieldList', in: ['childItems'] }],
       modifiedEnd: [{ field: 'fieldList', in: ['childItems'] }],
     },
+    fieldOptionsByConnectionKind: { fieldList: GET_METADATA_FIELDS_BY_CONNECTION_KIND },
     idempotent: true,
-    connectionKinds: ['fs'],
+    connectionKinds: ['fs', 'sqlite', 'postgres'],
+    datasetKinds: { source: ['table'], optionalOn: ['fs'] },
     outputs: [
       out('path', 'string'),
       optionalOut('exists', 'boolean'),
@@ -720,6 +731,24 @@ const ENTRIES: ActivityCatalogEntry[] = [
       optionalOut('lastModified', 'string'),
       optionalOut('contentMD5', 'string'),
       optionalOut('childItems', 'json'),
+      optionalOut('structure', 'json'),
+      optionalOut('columnCount', 'number'),
+      optionalOut('rowCount', 'number'),
+    ],
+    // The nine C8a declared, which a node saved before C8c (and C8b's lowered
+    // List directory, and the demo) still holds. A snapshot, not derived.
+    formerOutputs: [
+      [
+        out('path', 'string'),
+        optionalOut('exists', 'boolean'),
+        optionalOut('itemName', 'string'),
+        optionalOut('itemType', 'string'),
+        optionalOut('size', 'number'),
+        optionalOut('created', 'string'),
+        optionalOut('lastModified', 'string'),
+        optionalOut('contentMD5', 'string'),
+        optionalOut('childItems', 'json'),
+      ],
     ],
     outputElements: {
       childItems: [
@@ -728,6 +757,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
         optionalOut('size', 'number'),
         out('lastModified', 'string'),
       ],
+      structure: [out('name', 'string'), out('type', 'string')],
     },
     configSchema: getMetadataConfigSchema,
     dispatchConfigSchema: getMetadataConfigSchema,

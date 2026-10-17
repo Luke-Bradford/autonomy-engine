@@ -556,7 +556,12 @@
 // (`recursive`). A pre-C8e build's schema strips the key and lists the top
 // level only, a silent change to what the node returns, so the doc must say it
 // needs this build.
-export const CATALOG_VERSION = 44;
+// BUMP 44→45 for #1600 OR41 C8c: `get_metadata` on a sqlite or postgres
+// table — two new connection kinds, a source dataset, three new fields
+// (`structure`, `columnCount`, `rowCount`) and their outputs, and `path` now
+// optional. A pre-C8c build refuses the connection at dispatch and the new
+// fields at its schema.
+export const CATALOG_VERSION = 45;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

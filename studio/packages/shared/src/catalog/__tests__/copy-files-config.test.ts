@@ -125,7 +125,9 @@ describe('copy_files appliesWhen (#1686)', () => {
     ),
   );
   const applies = (name: string, controls: Record<string, string>) =>
-    (rules[name] ?? []).some((c) => (c.in as readonly string[]).includes(controls[c.field]!));
+    (rules[name] ?? []).some(
+      (c) => 'field' in c && (c.in as readonly string[]).includes(controls[c.field]!),
+    );
   const refusedOn = (name: string, config: Record<string, unknown>) =>
     issues(config).some((i) => i.startsWith(`${name}:`));
 
