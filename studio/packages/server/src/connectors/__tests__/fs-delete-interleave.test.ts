@@ -145,8 +145,11 @@ describe('delete — inside the delete loop', () => {
     vi.mocked(fsp.unlink).mockImplementation(async (p) => {
       if (String(p).endsWith('a.txt')) {
         // A new b.txt arrives in the gap: a different file, not the one chosen.
+        // Written before the old one goes, so it cannot reuse the old inode
+        // number (ext4 hands a freed one straight back).
+        await writeFile(join(root, 'in', 'b.new'), 'new');
         await rm(join(root, 'in', 'b.txt'));
-        await writeFile(join(root, 'in', 'b.txt'), 'new');
+        await rename(join(root, 'in', 'b.new'), join(root, 'in', 'b.txt'));
       }
       await unlink(p);
     });

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, readdir, symlink, utimes, writeFile } from 'node:fs/promises';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DELETE_ACTIVITY_TYPE, getActivity } from '@autonomy-studio/shared';
 import { fsAdapter } from '../fs.js';
@@ -58,6 +59,17 @@ async function failureOf(input: Record<string, unknown>, over: Over = {}) {
   const ev = events.at(-1)!;
   if (ev.type !== 'failed') throw new Error(`expected failure, got ${JSON.stringify(ev)}`);
   return ev;
+}
+
+/** Whether the temp file system folds case, probed once when the tests are defined. */
+function foldsCase(): boolean {
+  const dir = mkdtempSync(join(tmpdir(), 'fs-delete-case-'));
+  try {
+    mkdirSync(join(dir, 'Ab'));
+    return existsSync(join(dir, 'AB'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** Every file and folder under `dir`, relative and sorted. */
@@ -187,14 +199,17 @@ describe('delete — nothing matched', () => {
 });
 
 describe('delete — a path typed in another case', () => {
-  it("on a case-insensitive file system, deletes the folder's files all the same", async () => {
-    await mkdir(join(root, 'Out'));
-    await writeFile(join(root, 'Out', 'a.txt'), 'a');
-    // Only meaningful where the file system folds case (macOS by default).
-    if (!existsSync(join(root, 'OUT'))) return;
-    expect(await outputsOf({ path: 'out' })).toMatchObject({ filesDeleted: 1 });
-    expect(await readdir(join(root, 'Out'))).toEqual([]);
-  });
+  // Only meaningful where the temp file system folds case (macOS by default),
+  // so it is skipped, and reported as skipped, elsewhere.
+  it.skipIf(!foldsCase())(
+    "on a case-insensitive file system, deletes the folder's files all the same",
+    async () => {
+      await mkdir(join(root, 'Out'));
+      await writeFile(join(root, 'Out', 'a.txt'), 'a');
+      expect(await outputsOf({ path: 'out' })).toMatchObject({ filesDeleted: 1 });
+      expect(await readdir(join(root, 'Out'))).toEqual([]);
+    },
+  );
 });
 
 describe('delete — empty folders', () => {
