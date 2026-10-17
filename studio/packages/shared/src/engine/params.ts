@@ -29,6 +29,7 @@ import type { Expr, ExprSegment, TemplateMode } from './expr.js';
 import { infixOperatorHint, interpolationMode, parseExpr, restoreEscapes } from './expr.js';
 import { getActivity, timeoutApplies, userPropertiesApply } from '../catalog/registry.js';
 import type { ActivityCatalog } from '../catalog/types.js';
+import { GET_METADATA_ACTIVITY_TYPE } from '../catalog/types.js';
 import { activityNodeErrors } from './activity-config-check.js';
 import { MAX_CONFIG_DEPTH } from './limits.js';
 import {
@@ -60,6 +61,11 @@ import {
   lowerOutputSchema,
 } from '../catalog/llm-config.js';
 import { copyMappingShapeIssues } from '../catalog/copy-config.js';
+import type { GetMetadataField } from '../catalog/get-metadata-config.js';
+import {
+  GET_METADATA_FIELD_TITLES,
+  untickedGetMetadataFields,
+} from '../catalog/get-metadata-config.js';
 import { inlineDatasetConfigIssues, inlineQuerySqlIssue } from '../catalog/dataset-config.js';
 import { SecretRefSchema, isSecretRef } from '../schemas/secret-ref.js';
 import type { ContainerKind, Output } from '../schemas/pipeline.js';
@@ -2678,7 +2684,7 @@ export interface ValidateDocOptions {
  */
 type GlobalScope = Pick<
   ScanScope,
-  'globals' | 'globalReads' | 'advisories' | 'inactiveSucceededIds'
+  'globals' | 'globalReads' | 'advisories' | 'inactiveSucceededIds' | 'nullOutputsById'
 >;
 
 /**
@@ -2699,6 +2705,7 @@ function globalScopeOf(
       ? {
           advisories: options.advisories,
           inactiveSucceededIds: inactiveSucceededIds(nodes, containers),
+          nullOutputsById: nullOutputsById(nodes),
         }
       : {}),
   };
@@ -2719,6 +2726,21 @@ function inactiveSucceededIds(
       .filter((n) => isInactive(n) && inactiveMarkAs(n) === 'success')
       .map((n) => n.id),
   );
+}
+
+/**
+ * #1736 — the outputs each node's config leaves null though its contract
+ * declares them: a Get metadata node's unticked fields. Only nodes with such
+ * outputs are keyed.
+ */
+function nullOutputsById(nodes: readonly Node[]): ReadonlyMap<string, ReadonlySet<string>> {
+  const byId = new Map<string, ReadonlySet<string>>();
+  for (const n of nodes) {
+    if (n.type !== GET_METADATA_ACTIVITY_TYPE) continue;
+    const unticked = untickedGetMetadataFields(n.config);
+    if (unticked !== undefined && unticked.size > 0) byId.set(n.id, unticked);
+  }
+  return byId;
 }
 
 /**
@@ -4724,6 +4746,8 @@ interface ScanScope {
   advisories?: string[];
   /** #1669 — the inactive nodes marked Succeeded; set only with `advisories`. */
   inactiveSucceededIds?: ReadonlySet<string>;
+  /** #1736 — node id → the declared outputs its config leaves null; set only with `advisories`. */
+  nullOutputsById?: ReadonlyMap<string, ReadonlySet<string>>;
   /** Node ids whose SUCCESS (outputs) is guaranteed on every path here. */
   guaranteed: Set<string>;
   /**
@@ -5548,6 +5572,16 @@ function checkRefRoot(
           `${where}: \${nodes.${id}.output.${name}} — node '${id}' is inactive, so it ` +
           "has no outputs and this read fails when it runs; make it default()'s first argument";
         // Once per field and ref: the same read twice in a field is one thing to fix.
+        if (scope.advisories?.includes(msg) === false) scope.advisories.push(msg);
+      } else if (!softOk && scope.nullOutputsById?.get(id)?.has(name)) {
+        // #1736 — an unticked Get metadata field reads null, where ADF fails
+        // the reference. Silent as `default()`'s first argument, the one place
+        // `softOk` marks; another null-tolerant fn (`coalesce`, `empty`) still
+        // warns, which is true: the read can only ever take its fallback.
+        const title = GET_METADATA_FIELD_TITLES[name as GetMetadataField];
+        const msg =
+          `${where}: \${nodes.${id}.output.${name}} — node '${id}' does not tick ${title} in ` +
+          'its Field list, so this always reads null; tick it, or read it through default()';
         if (scope.advisories?.includes(msg) === false) scope.advisories.push(msg);
       }
       return;

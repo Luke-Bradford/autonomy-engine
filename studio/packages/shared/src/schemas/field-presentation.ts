@@ -174,19 +174,12 @@ export function optionTitles<const V extends string>(
  * "every enum value is named" gates walk.
  */
 export function enumValuesOf(schema: unknown): readonly string[] | undefined {
-  let current: unknown = schema;
-  for (let depth = 0; depth < 8; depth += 1) {
-    if (typeof current !== 'object' || current === null || !('_zod' in current)) return undefined;
-    const def = (current as { _zod: { def: { type?: string; innerType?: unknown } } })._zod.def;
-    if (def.type === 'enum') {
-      const options = (current as { options?: unknown }).options;
-      return Array.isArray(options) && options.every((o) => typeof o === 'string')
-        ? (options as string[])
-        : undefined;
-    }
-    current = def.innerType;
-  }
-  return undefined;
+  const core = coreSchema(schema);
+  if (core?._zod.def.type !== 'enum') return undefined;
+  const options = (core as { options?: unknown }).options;
+  return Array.isArray(options) && options.every((o) => typeof o === 'string')
+    ? (options as string[])
+    : undefined;
 }
 
 /**
@@ -195,16 +188,8 @@ export function enumValuesOf(schema: unknown): readonly string[] | undefined {
  * {@link enumValuesOf}, or `undefined` when the field is not one.
  */
 export function enumSetValuesOf(schema: unknown): readonly string[] | undefined {
-  let current: unknown = schema;
-  for (let depth = 0; depth < 8; depth += 1) {
-    if (typeof current !== 'object' || current === null || !('_zod' in current)) return undefined;
-    const def = (
-      current as { _zod: { def: { type?: string; innerType?: unknown; element?: unknown } } }
-    )._zod.def;
-    if (def.type === 'array') return enumValuesOf(def.element);
-    current = def.innerType;
-  }
-  return undefined;
+  const def = coreDef(schema);
+  return def?.type === 'array' ? enumValuesOf(def.element) : undefined;
 }
 
 /**
@@ -303,16 +288,24 @@ interface CoreDef {
   options?: unknown;
 }
 
-/** The def under every `.optional()`/`.default()`/`.nullable()` wrapper. */
-function coreDef(schema: unknown): CoreDef | undefined {
+/**
+ * `schema` seen through every `.optional()`/`.default()`/`.nullable()` wrapper: the innermost
+ * zod schema, or `undefined` when it is not one. The ONE unwrap walk the enum
+ * reads and the label gates share (#1736).
+ */
+function coreSchema(schema: unknown): { _zod: { def: CoreDef } } | undefined {
   let current: unknown = schema;
   for (let depth = 0; depth < 8; depth += 1) {
     if (typeof current !== 'object' || current === null || !('_zod' in current)) return undefined;
-    const def = (current as { _zod: { def: CoreDef } })._zod.def;
-    if (def.innerType === undefined) return def;
-    current = def.innerType;
+    const zodded = current as { _zod: { def: CoreDef } };
+    if (zodded._zod.def.innerType === undefined) return zodded;
+    current = zodded._zod.def.innerType;
   }
   return undefined;
+}
+/** The def of {@link coreSchema}. */
+function coreDef(schema: unknown): CoreDef | undefined {
+  return coreSchema(schema)?._zod.def;
 }
 
 /** `schema`'s own presentation entry (not a wrapper's), if it has one. */

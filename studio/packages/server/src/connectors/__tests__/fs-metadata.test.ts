@@ -294,6 +294,9 @@ describe('get_metadata — Include subfolders (C8e)', () => {
     });
   });
 
+  // A pre-aborted signal is refused before dispatch (`fs.ts`), so this pins
+  // the outcome only. The activity's own checks, mid-listing and mid-Content
+  // MD5, are in fs-metadata-interleave.test.ts (#1736).
   it('stops on cancel', async () => {
     await tree();
     const ac = new AbortController();
@@ -373,6 +376,9 @@ describe('get_metadata — dispatch', () => {
     expect(ev.error).toMatch(/^invalid get_metadata activity config: .*tick at least one field/);
   });
 
+  // A pre-aborted signal is refused before dispatch (`fs.ts`), so this pins
+  // the outcome only. The activity's own checks, mid-listing and mid-Content
+  // MD5, are in fs-metadata-interleave.test.ts (#1736).
   it('stops on cancel', async () => {
     await writeFile(join(root, 'a.txt'), 'a', 'utf8');
     const ac = new AbortController();
@@ -413,6 +419,26 @@ describe('get_metadata — edges the lenses asked for', () => {
     const ev = await run({ path: '.', fieldList: ['childItems'] }, { maxEntries: 2 });
     expect(ev.type).toBe('succeeded');
   });
+
+  // A FIFO is neither a file, a folder nor a link. Windows has no `mkfifo`.
+  it.skipIf(process.platform === 'win32')(
+    'types a FIFO as other, and lists it under All but not Files only (#1736)',
+    async () => {
+      const { execFileSync } = await import('node:child_process');
+      execFileSync('mkfifo', [join(root, 'pipe')]);
+      await writeFile(join(root, 'a.txt'), 'a', 'utf8');
+      expect(
+        await outputsOf({ path: 'pipe', fieldList: ['itemType', 'size', 'contentMD5'] }),
+      ).toMatchObject({ itemType: 'other', size: null, contentMD5: null });
+      const all = await outputsOf({ path: '.', fieldList: ['childItems'] });
+      expect(all.childItems).toEqual([
+        expect.objectContaining({ name: 'a.txt', type: 'file' }),
+        { name: 'pipe', type: 'other', size: null, lastModified: expect.any(String) },
+      ]);
+      const files = await outputsOf({ path: '.', fieldList: ['childItems'], childType: 'files' });
+      expect((files.childItems as Array<{ name: string }>).map((i) => i.name)).toEqual(['a.txt']);
+    },
+  );
 
   it('says a folder exists and has no size or MD5', async () => {
     await mkdir(join(root, 'd'));

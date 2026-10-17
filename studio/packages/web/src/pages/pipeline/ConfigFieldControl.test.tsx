@@ -772,3 +772,54 @@ describe('ConfigFieldControl — what a list holds is behind its `?`, not a para
     expect(group.getAttribute('aria-describedby')?.split(' ')).toContain(note.id);
   });
 });
+
+describe('ConfigFieldControl — a set of choices (#1600 C8a, #1736)', () => {
+  const field: ConfigField = {
+    name: 'fieldList',
+    kind: 'enumSet',
+    optional: false,
+    enumOptions: ['exists', 'size', 'childItems'],
+    label: {
+      title: 'Field list',
+      options: { exists: 'Exists', size: 'Size', childItems: 'Child items' },
+    },
+  };
+  const boxes = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
+
+  it('is a group named by its title, one tick box per option, named by its option title', () => {
+    const { getByRole } = render(
+      <ConfigFieldControl field={field} value={'size'} onChange={noop} />,
+    );
+    const group = getByRole('group', { name: 'Field list' });
+    const ticks = boxes(group);
+    expect(ticks.map((b) => b.labels?.[0]?.textContent)).toEqual(['Exists', 'Size', 'Child items']);
+    expect(ticks.map((b) => b.checked)).toEqual([false, true, false]);
+  });
+
+  it('writes the ticks in the options’ order, whatever order they were ticked in', () => {
+    const changes: string[] = [];
+    const { container } = render(
+      <ConfigFieldControl
+        field={field}
+        value={'childItems'}
+        onChange={(v) => changes.push(String(v))}
+      />,
+    );
+    fireEvent.click(boxes(container)[0]!);
+    expect(changes).toEqual(['exists\nchildItems']);
+  });
+
+  it('unticking removes only that option', () => {
+    const changes: string[] = [];
+    const { container } = render(
+      <ConfigFieldControl
+        field={field}
+        value={'exists\nsize\nchildItems'}
+        onChange={(v) => changes.push(String(v))}
+      />,
+    );
+    fireEvent.click(boxes(container)[1]!);
+    expect(changes).toEqual(['exists\nchildItems']);
+  });
+});
