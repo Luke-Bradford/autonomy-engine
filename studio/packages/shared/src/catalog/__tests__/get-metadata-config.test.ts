@@ -31,11 +31,13 @@ describe('get_metadata config (#1600 OR41 C8a)', () => {
   it('reads the child item settings only with Child items ticked', () => {
     // Left at their defaults they are accepted either way.
     expect(ok({ path: '/d', fieldList: ['size'], childFilter: '*', childType: 'all' })).toBe(true);
+    expect(ok({ path: '/d', fieldList: ['size'], recursive: false })).toBe(true);
     for (const extra of [
       { childFilter: '*.csv' },
       { childType: 'files' },
       { modifiedStart: '2026-10-01T00:00:00Z' },
       { modifiedEnd: '2026-10-01T00:00:00Z' },
+      { recursive: true },
     ]) {
       const [key] = Object.keys(extra);
       expect(issuesOf({ path: '/d', fieldList: ['size'], ...extra })).toEqual([
@@ -43,6 +45,12 @@ describe('get_metadata config (#1600 OR41 C8a)', () => {
       ]);
       expect(ok({ path: '/d', fieldList: ['childItems'], ...extra })).toBe(true);
     }
+  });
+
+  it('lists the top level only unless Include subfolders is ticked (C8e)', () => {
+    const parsed = getMetadataConfigSchema.parse({ path: '/d', fieldList: ['childItems'] });
+    expect(parsed.recursive).toBe(false);
+    expect(ok({ path: '/d', fieldList: ['childItems'], recursive: 'yes' })).toBe(false);
   });
 
   it('refuses a separator in the filter and an empty modified window', () => {

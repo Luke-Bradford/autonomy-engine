@@ -195,6 +195,134 @@ describe('get_metadata — a folder', () => {
   });
 });
 
+describe('get_metadata — Include subfolders (C8e)', () => {
+  const listed = async (extra: Record<string, unknown>) =>
+    (
+      (await outputsOf({ path: '.', fieldList: ['childItems'], recursive: true, ...extra }))
+        .childItems as Array<{ name: string; type: string; size: number | null }>
+    ).map((i) => [i.name, i.type, i.size]);
+
+  async function tree() {
+    await writeFile(join(root, 'top.csv'), 't', 'utf8');
+    await mkdir(join(root, 'a', 'deep'), { recursive: true });
+    await writeFile(join(root, 'a', 'x.csv'), 'xx', 'utf8');
+    await writeFile(join(root, 'a', 'notes.txt'), 'n', 'utf8');
+    await writeFile(join(root, 'a', 'deep', 'y.csv'), 'yyy', 'utf8');
+    await writeFile(join(root, 'a-b.csv'), 'ab', 'utf8');
+  }
+
+  it('lists every subfolder, each item named by its path below the folder, in tree order', async () => {
+    await tree();
+    // Tree order: a folder's contents follow it, before `a-b.csv`, though
+    // `-` sorts before `/` by code unit.
+    expect(await listed({})).toEqual([
+      ['a', 'directory', null],
+      ['a/deep', 'directory', null],
+      ['a/deep/y.csv', 'file', 3],
+      ['a/notes.txt', 'file', 1],
+      ['a/x.csv', 'file', 2],
+      ['a-b.csv', 'file', 2],
+      ['top.csv', 'file', 1],
+    ]);
+  });
+
+  it('lists the top level only when not ticked, as before', async () => {
+    await tree();
+    const out = await outputsOf({ path: '.', fieldList: ['childItems'] });
+    expect((out.childItems as Array<{ name: string }>).map((i) => i.name)).toEqual([
+      'a',
+      'a-b.csv',
+      'top.csv',
+    ]);
+  });
+
+  it('filters by the base name and by type at every depth, and walks folders it does not list', async () => {
+    await tree();
+    expect(await listed({ childFilter: '*.csv', childType: 'files' })).toEqual([
+      ['a/deep/y.csv', 'file', 3],
+      ['a/x.csv', 'file', 2],
+      ['a-b.csv', 'file', 2],
+      ['top.csv', 'file', 1],
+    ]);
+    expect(await listed({ childFilter: 'deep' })).toEqual([['a/deep', 'directory', null]]);
+    expect(await listed({ childType: 'folders' })).toEqual([
+      ['a', 'directory', null],
+      ['a/deep', 'directory', null],
+    ]);
+  });
+
+  it('walks folders under a modified window but lists files only', async () => {
+    await tree();
+    const old = new Date('2026-01-01T00:00:00Z');
+    for (const f of ['top.csv', 'a/x.csv', 'a/notes.txt', 'a-b.csv']) {
+      await utimes(join(root, f), old, old);
+    }
+    expect(await listed({ modifiedStart: '2026-09-01T00:00:00Z' })).toEqual([
+      ['a/deep/y.csv', 'file', 3],
+    ]);
+  });
+
+  it('lists a linked folder as a link and never walks into it', async () => {
+    await mkdir(join(outside, 'secret'));
+    await writeFile(join(outside, 'secret', 'k.txt'), 'k', 'utf8');
+    await symlink(join(outside, 'secret'), join(root, 'out'));
+    await mkdir(join(root, 'in'));
+    await symlink(join(outside, 'secret'), join(root, 'in', 'out2'));
+    expect(await listed({})).toEqual([
+      ['in', 'directory', null],
+      ['in/out2', 'symlink', null],
+      ['out', 'symlink', null],
+    ]);
+  });
+
+  it('counts every entry in the whole tree against the list limit', async () => {
+    await tree();
+    // Seven entries in all: exactly seven lists, six fails.
+    expect(await listed({ childFilter: 'top.csv' })).toEqual([['top.csv', 'file', 1]]);
+    const ok = await run(
+      { path: '.', fieldList: ['childItems'], recursive: true, childFilter: 'top.csv' },
+      { maxEntries: 7 },
+    );
+    expect(ok.type).toBe('succeeded');
+    const ev = await failureOf(
+      { path: '.', fieldList: ['childItems'], recursive: true, childFilter: 'top.csv' },
+      { maxEntries: 6 },
+    );
+    expect(ev).toMatchObject({
+      kind: 'permanent',
+      error: 'the folder and its subfolders have more than the 6-entry list limit',
+    });
+  });
+
+  it('stops on cancel', async () => {
+    await tree();
+    const ac = new AbortController();
+    ac.abort();
+    const ev = await failureOf(
+      { path: '.', fieldList: ['childItems'], recursive: true },
+      { signal: ac.signal },
+    );
+    expect(ev.kind).toBe('cancelled');
+  });
+
+  // Root reads everything, and Windows has no mode bits to take away.
+  it.skipIf(process.getuid?.() === 0 || process.platform === 'win32')(
+    'fails on a subfolder it cannot read',
+    async () => {
+      await tree();
+      const locked = join(root, 'a', 'deep');
+      const { chmod } = await import('node:fs/promises');
+      await chmod(locked, 0o000);
+      try {
+        const ev = await failureOf({ path: '.', fieldList: ['childItems'], recursive: true });
+        expect(ev).toMatchObject({ kind: 'permanent', error: expect.stringContaining('EACCES') });
+      } finally {
+        await chmod(locked, 0o755);
+      }
+    },
+  );
+});
+
 describe('get_metadata — a path that is not there', () => {
   it('answers exists false with Exists ticked, the missing parent included', async () => {
     expect(await outputsOf({ path: 'nope.csv', fieldList: ['exists', 'size'] })).toMatchObject({

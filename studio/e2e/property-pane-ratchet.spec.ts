@@ -332,7 +332,8 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   'Delete file': 7,
   // #1600 OR41 C8a — the 8 above and Child items' four settings: Filter's
   // wildcard syntax, Child entries' All, and the window's UTC and folders.
-  'Get metadata': 12,
+  // +1 for C8e's Include subfolders: each item is then named by its path.
+  'Get metadata': 13,
   'HTTP request': 9,
   // +3 for C7a's Settings, each `?` a fact its label lacks: First row only names
   // the output it writes, Max rows its ceiling, When over the limit both bounds.
@@ -520,12 +521,14 @@ function seeds(ids: SeedIds): Record<string, Seed> {
       },
     },
     'Delete file': fsNode('file_delete', { path: '/tmp/e2e/old.txt' }),
-    // #1600 OR41 C8a — Child items ticked, so its settings draw too.
+    // #1600 OR41 C8a — Child items ticked, so its settings draw too (C8e's
+    // Include subfolders among them).
     'Get metadata': fsNode('get_metadata', {
       path: '/tmp/e2e',
       fieldList: ['exists', 'childItems'],
       childFilter: '*.csv',
       childType: 'files',
+      recursive: true,
       modifiedStart: '2026-10-01T00:00:00Z',
     }),
     'Lookup (whole file as text)': fsNode('file_read', { path: '/tmp/e2e/in.txt' }),
