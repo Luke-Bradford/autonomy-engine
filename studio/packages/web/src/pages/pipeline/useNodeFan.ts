@@ -1,6 +1,7 @@
 import { useEffect, useState, type RefObject } from 'react';
 import { useConnection } from '@xyflow/react';
 import { useHoverIntent } from '../../hooks/useHoverIntent';
+import { focusVisible } from '../../lib/focusVisible';
 
 /**
  * #997/#1066 — whether a canvas node's source ports are fanned out, and the
@@ -119,14 +120,4 @@ export function useNodeFan(boxRef: RefObject<HTMLElement | null>): NodeFan {
     named: expanded && keyboard,
     handlers: { onPointerEnter: handlers.onPointerEnter, onPointerLeave: handlers.onPointerLeave },
   };
-}
-
-/** `:focus-visible`, or `false` in an engine that cannot parse it (Safari
-    before 15.4 throws), where the fan still opens and only the words stay off. */
-function focusVisible(el: Element): boolean {
-  try {
-    return el.matches(':focus-visible');
-  } catch {
-    return false;
-  }
 }

@@ -15,6 +15,7 @@ import { CONTAINER_GROUP_LABEL, containerToolboxEntries, toolboxGroups } from '.
 import type { CanvasState } from './canvasStore';
 import { NEW_CONTAINER_CONFIRM, newContainerQuestion } from './containerRules';
 import { useConfirm } from '../../lib/confirm/useConfirm';
+import { focusVisible } from '../../lib/focusVisible';
 import { uiStore } from '../../stores/uiStore';
 
 /** The Containers group's collapse key — not a catalog category, so it cannot collide with one. */
@@ -88,7 +89,8 @@ export function ActivityToolbox({ store, id }: { store: StoreApi<CanvasState>; i
   /**
    * #1683 — the one entry whose description is drawn, because a KEYBOARD put
    * focus on it. `title` shows only on mouse hover, so without this a sighted
-   * keyboard user never sees what an activity does.
+   * keyboard user never sees what an activity does. Keys carry an
+   * `activity:`/`container:` prefix, so a type and a kind cannot collide.
    */
   const [shownKey, setShownKey] = useState<string | null>(null);
 
@@ -221,7 +223,11 @@ export function ActivityToolbox({ store, id }: { store: StoreApi<CanvasState>; i
             if (!data.visible) {
               // Escape and a tooltip taking over hide with no event.
               setShownKey((k) => (k === entry.key ? null : k));
-            } else if (ev?.type === 'focus' && (ev.target as Element).matches(':focus-visible')) {
+            } else if (
+              ev?.type === 'focus' &&
+              ev.target instanceof Element &&
+              focusVisible(ev.target)
+            ) {
               setShownKey(entry.key);
             }
           }}

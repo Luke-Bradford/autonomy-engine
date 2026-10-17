@@ -202,6 +202,8 @@ test.describe('U5 activities toolbox', () => {
     const tips = page.getByRole('tooltip', { includeHidden: true });
 
     // A hover keeps the native title alone: no second, Fluent tooltip over it.
+    // A fixed wait, as a check that something does NOT appear has to be: over
+    // twice Fluent's 250ms show delay.
     await copy.hover();
     await page.waitForTimeout(600);
     await expect(tips).toHaveCount(0);
@@ -222,8 +224,10 @@ test.describe('U5 activities toolbox', () => {
     // The next item takes it over; there is still only one.
     await page.keyboard.press('Tab');
     await expect(copy).not.toBeFocused();
+    const next = await page.evaluate(() => document.activeElement?.getAttribute('title') ?? '');
+    expect(next).not.toBe('');
     await expect(tips).toHaveCount(1);
-    await expect(tips).not.toHaveText(does);
+    await expect(tips).toHaveText(next);
     await page.keyboard.press('Escape');
     await expect(tips).toHaveCount(0);
 
