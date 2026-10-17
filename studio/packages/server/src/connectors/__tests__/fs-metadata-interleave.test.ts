@@ -69,8 +69,8 @@ describe('get_metadata — an entry removed after the folder was read (#1736)', 
       await writeFile(join(root, 'gone.txt'), 'g', 'utf8');
       await writeFile(join(root, 'kept.txt'), 'k', 'utf8');
       const ev = await run({ path: '.', fieldList: ['childItems'], recursive });
-      expect(ev).toMatchObject({ type: 'succeeded' });
-      const items = (ev as { outputs: { childItems: Array<{ name: string }> } }).outputs.childItems;
+      if (ev.type !== 'succeeded') throw new Error(`expected success, got ${JSON.stringify(ev)}`);
+      const items = ev.outputs.childItems as Array<{ name: string }>;
       expect(items.map((i) => i.name)).toEqual(['kept.txt']);
     });
   }
