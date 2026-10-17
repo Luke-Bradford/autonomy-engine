@@ -327,7 +327,8 @@ describe('get_metadata — the lowered file_list answers as List directory did',
     const lowered = lowerRetiredTypes({ nodes: [stored], containers: [] }).nodes[0]!;
     expect(lowered.type).toBe(GET_METADATA_ACTIVITY_TYPE);
     // The dispatch input is the config the schema parses, `outputs` aside.
-    const { outputs: _contract, ...config } = lowered.config;
+    const config = { ...lowered.config };
+    delete config['outputs'];
     const input = getMetadataConfigSchema.parse(config);
     return {
       old: await dispatch(FILE_LIST_ACTIVITY_TYPE, { path }, maxEntries),
