@@ -26,7 +26,8 @@ import { blankNodeActivity, deriveNodeActivity, type NodeActivity } from './runS
  * and are left out on purpose. They name the attempt that failed only to RE-OPEN
  * the node for the next one, and the fold answers them by clearing the error,
  * input and span — which, over this one attempt's events, would wipe the very
- * failure the drawer was opened to read.
+ * failure the drawer was opened to read. `node.recheckDue` (#1600 C8d) is left
+ * out for the same reason: it re-opens a Wait until for its next check.
  */
 const SETTLED_BY_PREVIOUS = new Set([
   'timer.due',

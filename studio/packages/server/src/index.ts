@@ -26,6 +26,7 @@ import { createTumblingService } from './scheduler/tumbling.js';
 import { createAlarmClock, type AlarmClock } from './scheduler/alarms.js';
 import { createRetryAlarmHandler } from './scheduler/retry-alarm.js';
 import { createWaitAlarmHandler } from './scheduler/wait-alarm.js';
+import { createRecheckAlarmHandler } from './scheduler/recheck-alarm.js';
 import { createExternalWaitAlarmHandler } from './scheduler/external-wait-alarm.js';
 import { createContainerTimeoutAlarmHandler } from './scheduler/container-timeout-alarm.js';
 import { createScheduleTickHandler } from './scheduler/schedule-tick.js';
@@ -736,6 +737,8 @@ export async function buildApp(opts?: BuildAppOptions) {
       // #4 A5/A6 — the durable `wait` timer's `node_wait` handler; S1's second
       // node-level alarm consumer, wired here the same way retry's is.
       createWaitAlarmHandler(driverBoundary),
+      // #1600 OR41 C8d — a Get metadata Wait until's next check (`node_recheck`).
+      createRecheckAlarmHandler(driverBoundary),
       // #4 A13 — the `webhook` EXPIRY handler (`node_external_wait`); S1's third
       // node-level consumer, appending `externalWait.expired` when no callback arrives.
       createExternalWaitAlarmHandler(driverBoundary),

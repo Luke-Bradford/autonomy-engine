@@ -263,6 +263,11 @@ export interface RetryAlarms {
  */
 export const RETRY_WAKEUP_KIND = 'node_retry';
 
+/** The driver's clock: `deps.now`, or the wall clock when a caller gives none. */
+function clockOf(deps: Pick<DriverDeps, 'now'>): () => number {
+  return deps.now ?? (() => Date.now());
+}
+
 /**
  * The `kind` under which a `wait` node's timer alarm is armed (#4 A5/A6). Matches
  * the handler registered in `scheduler/wait-alarm.ts` — the clock refuses to arm a
@@ -280,6 +285,13 @@ export const WAIT_WAKEUP_KIND = 'node_wait';
  * `failure`) is webhook-specific, unlike wait's `timer.due` → `success`.
  */
 export const EXTERNAL_WAIT_WAKEUP_KIND = 'node_external_wait';
+
+/**
+ * #1600 OR41 C8d — the `kind` under which a Get metadata *Wait until* re-check
+ * alarm is armed. Matches the handler in `scheduler/recheck-alarm.ts`; its due
+ * fold re-dispatches the node (`node.recheckDue`), unlike wait's `success`.
+ */
+export const RECHECK_WAKEUP_KIND = 'node_recheck';
 
 /**
  * The `kind` under which a `loop` container's WALL-CLOCK timeout alarm is armed
@@ -477,7 +489,7 @@ export function retryArmInput(
     retryAfterSeconds?: number;
   },
 ): ArmWakeupInput {
-  const now = deps.now ?? (() => Date.now());
+  const now = clockOf(deps);
   const doc = deps.resolveDoc(args.pipelineVersionId);
   // #4 A4b — a retry held inside a PARALLEL foreach body names an instance key;
   // the policy lives on the doc node behind it (exact id first — a legacy
@@ -573,7 +585,7 @@ export function waitArmInput(
   deps: Pick<DriverDeps, 'now'>,
   args: { runId: string; nodeId: string; attemptId: string; seconds: number },
 ): ArmWakeupInput {
-  const now = deps.now ?? (() => Date.now());
+  const now = clockOf(deps);
   return {
     kind: WAIT_WAKEUP_KIND,
     // The per-kind `ref` shape S1 declares for wait. `attemptId` is the freshness
@@ -631,6 +643,62 @@ function armWait(
 }
 
 /**
+ * #1600 OR41 C8d — perform a `scheduleRecheck`: fix the *Give up after*
+ * deadline, then either ARM the re-check alarm and hand back
+ * `node.recheckScheduled` (arm before append, as `armWait`, so a parked node
+ * always has a live alarm), or, when the check that just answered "not yet"
+ * ran at or after the deadline, hand back the permanent `wait_until_timeout`
+ * failure instead.
+ *
+ * The deadline is the first check's time + *Give up after*, carried on the
+ * command from the node's state after the first `node.recheckScheduled`. A
+ * crash before that first event recomputes it from the resume time, a small,
+ * stated extension. The last alarm is clamped to the deadline, so the final
+ * check runs at it. Both times are STORED on the event, so replay never reads
+ * the clock.
+ */
+function armRecheck(
+  deps: DriverDeps,
+  state: RunState,
+  command: Extract<EngineCommand, { type: 'scheduleRecheck' }>,
+): EngineEvent {
+  const now = clockOf(deps)();
+  const giveUpAt = command.giveUpAt ?? now + command.giveUpAfterSeconds * 1000;
+  if (now >= giveUpAt) {
+    return {
+      type: 'node.failed',
+      runId: state.runId,
+      nodeId: command.nodeId,
+      attemptId: command.attemptId,
+      error: `Wait until gave up after ${command.giveUpAfterSeconds}s: ${command.reason}`,
+      kind: 'permanent',
+      code: FAILURE_CODES.WAIT_UNTIL_TIMEOUT,
+    };
+  }
+  const input = {
+    kind: RECHECK_WAKEUP_KIND,
+    ref: { runId: state.runId, nodeId: command.nodeId, attemptId: command.attemptId },
+    dueAt: Math.min(now + command.afterSeconds * 1000, giveUpAt),
+    discriminator: `recheck-${command.attemptId}`,
+  };
+  let row = deps.alarms.arm(input);
+  if (row.status !== 'pending') {
+    // A re-emitted command (crash recovery) whose alarm already came due while
+    // the node was still `ready`: the clock suppressed it, and parking on that
+    // spent row would leave the node with no live alarm. Arm a fresh one.
+    row = deps.alarms.arm({ ...input, discriminator: `${input.discriminator}-${now}` });
+  }
+  return {
+    type: 'node.recheckScheduled',
+    runId: state.runId,
+    nodeId: command.nodeId,
+    attemptId: command.attemptId,
+    nextCheckAt: row.dueAt,
+    giveUpAt,
+  };
+}
+
+/**
  * #4 A17 — the arm-input for a `loop` container's wall-clock timeout alarm. The
  * CONTAINER-scoped cousin of `waitArmInput`: its `ref` names the container (not a
  * node) and there is NO attempt handle — a container timeout is armed ONCE per run
@@ -650,7 +718,7 @@ export function containerTimeoutArmInput(
   deps: Pick<DriverDeps, 'now'>,
   args: { runId: string; containerId: string; seconds: number },
 ): ArmWakeupInput {
-  const now = deps.now ?? (() => Date.now());
+  const now = clockOf(deps);
   const bounded = Math.min(args.seconds, MAX_WAIT_SECONDS);
   return {
     kind: CONTAINER_TIMEOUT_WAKEUP_KIND,
@@ -710,7 +778,7 @@ export function externalWaitArmInput(
   deps: Pick<DriverDeps, 'now'>,
   args: { runId: string; nodeId: string; attemptId: string; timeoutSeconds: number },
 ): ArmWakeupInput {
-  const now = deps.now ?? (() => Date.now());
+  const now = clockOf(deps);
   return {
     kind: EXTERNAL_WAIT_WAKEUP_KIND,
     ref: { runId: args.runId, nodeId: args.nodeId, attemptId: args.attemptId },
@@ -758,7 +826,7 @@ function armExternalWait(
       timeoutSeconds: command.timeoutSeconds,
     }),
   );
-  const now = deps.now ?? (() => Date.now());
+  const now = clockOf(deps);
   recordExternalWait(deps.db, {
     runId: state.runId,
     nodeId: command.nodeId,
@@ -1275,6 +1343,10 @@ export async function pump(
       let source: EngineEvent[];
       if (command.type === 'scheduleRetry') {
         source = [armRetry(deps, state, command)];
+      } else if (command.type === 'scheduleRecheck') {
+        // #1600 OR41 C8d — a Get metadata Wait until re-check: arm then append
+        // `node.recheckScheduled` (parks the node), or fail it past the deadline.
+        source = [armRecheck(deps, state, command)];
       } else if (command.type === 'scheduleWait') {
         // #4 A6 — the driver's OWN `scheduleWait` command (a `control` `wait` parks
         // on a durable timer): ARM S1's alarm then append `timer.waitScheduled`, whose

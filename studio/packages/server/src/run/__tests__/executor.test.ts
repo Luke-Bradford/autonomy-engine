@@ -3808,6 +3808,37 @@ describe('createExecutor — config-sink secrets: dispatch resolution + redactio
     expect(JSON.stringify(loadEngineEvents(db, runId))).not.toContain(PLAINTEXT);
   });
 
+  it("#1600 C8d — maps notReady to node.notReady, the attempt's end, with a plaintext echo redacted", async () => {
+    const db = freshDb().db;
+    const PLAINTEXT = 'sk-in-the-reason';
+    await seedNamedSecret(db, 'waitkey', PLAINTEXT);
+    const connId = await seedConnection(db, 'http', {}, null);
+    const { doc, run, runId } = seedMarkerRun(db, markerNode('waitkey', connId));
+
+    const adapters = fakeHttpAdapter(async function* (): AsyncIterable<ActivityEvent> {
+      yield {
+        type: 'notReady',
+        reason: `'${PLAINTEXT}.csv' does not exist yet`,
+        recheckAfterSeconds: 10,
+        giveUpAfterSeconds: 60,
+      };
+    });
+
+    const state = await startRun(
+      { ...depsForDoc(db, doc, { adapters }), alarms: stubAlarms() },
+      run,
+    );
+    expect(state.status).toBe('waiting');
+    const events = loadEngineEvents(db, runId);
+    expect(events.find((e) => e.type === 'node.notReady')).toMatchObject({
+      reason: "'***.csv' does not exist yet",
+      recheckAfterSeconds: 10,
+      giveUpAfterSeconds: 60,
+    });
+    expect(events.map((e) => e.type)).toContain('node.recheckScheduled');
+    expect(JSON.stringify(events)).not.toContain(PLAINTEXT);
+  });
+
   it('folds the CONNECTION secret into the same choke-point pass (no scrub asymmetry)', async () => {
     // Deviation (b)'s guarantee: once a config sink pulls the choke point on,
     // the connection `secret` is redacted from the SAME emitted events — not

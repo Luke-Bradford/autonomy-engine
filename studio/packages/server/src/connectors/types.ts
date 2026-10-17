@@ -241,10 +241,11 @@ export interface ToolCallTelemetry {
  * `toolCalled` and `warned` are observability only (partial progress / a
  * per-response metering fact / a per-response prompt-completion capture fact /
  * an `agent_task` subprocess telemetry fact / an executed-tool-call fact / a
- * non-fatal advisory); exactly one terminal `succeeded`/`failed` ends the
- * stream. The executor maps these to engine events (`node.output` /
- * `activity.metered` / `activity.captured` / `activity.agentTelemetry` /
- * `activity.toolCalled` / `activity.warned` / `node.succeeded` / `node.failed`).
+ * non-fatal advisory); exactly one terminal `succeeded`/`failed`/`notReady`
+ * (#1600 C8d) ends the stream. The executor maps these to engine events
+ * (`node.output` / `activity.metered` / `activity.captured` /
+ * `activity.agentTelemetry` / `activity.toolCalled` / `activity.warned` /
+ * `node.succeeded` / `node.failed` / `node.notReady`).
  *
  * ONE terminal can mint TWO engine events (#725): a `failed` carrying a
  * `spendFact` yields an `activity.metered` BEFORE its `node.failed`, because a
@@ -279,6 +280,18 @@ export type ActivityEvent =
    */
   | { type: 'warned'; code: WarningCode; reason: string }
   | { type: 'succeeded'; outputs: Record<string, unknown> }
+  /**
+   * #1600 OR41 C8d — a Get metadata *Wait until* checked and the condition does
+   * not hold yet. A terminal of the attempt, like `succeeded`/`failed`; the
+   * executor maps it to `node.notReady` and the engine re-checks later. The two
+   * numbers are the node's resolved *Check every* and *Give up after*.
+   */
+  | {
+      type: 'notReady';
+      reason: string;
+      recheckAfterSeconds: number;
+      giveUpAfterSeconds: number;
+    }
   | {
       type: 'failed';
       kind: ConnectorErrorKind;

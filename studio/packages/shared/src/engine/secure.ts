@@ -136,6 +136,9 @@ export function redactSecureEvent(node: Node | undefined, event: EngineEvent): E
       return secureOut ? { ...event, name: SECURE_REDACTED, value: SECURE_REDACTED } : event;
     case 'node.failed':
       return { ...event, error: SECURE_ERROR_WITHHELD };
+    // #1600 C8d — a Wait until's reason names the path, as a failure would.
+    case 'node.notReady':
+      return { ...event, reason: SECURE_ERROR_WITHHELD };
     case 'activity.warned':
       return { ...event, reason: SECURE_ERROR_WITHHELD };
     case 'activity.captured':
@@ -201,6 +204,7 @@ export function secureEventNodeId(event: EngineEvent): string | undefined {
     case 'externalWait.completed':
     case 'node.output':
     case 'node.failed':
+    case 'node.notReady':
     case 'activity.warned':
     case 'activity.captured':
     case 'activity.agentTelemetry':

@@ -147,7 +147,10 @@ export class ParamResolveError extends Error {
  *                  AFTER arming the alarm — so a `wait_pending` node ALWAYS has a
  *                  live alarm row (unlike `retry_pending`, entered by `node.failed`
  *                  BEFORE the arm, which is why retry needs a boot re-arm and wait
- *                  does not).
+ *                  does not). #1600 C8d — also a Get metadata *Wait until* parked
+ *                  between checks (the node carries `recheck`): entered by
+ *                  `node.recheckScheduled`, also appended after its arm, and
+ *                  resolved by `node.recheckDue` (a new check), never `timer.due`.
  * - `external_wait_pending` — #4 A13's durable **external PARK**: a `webhook`
  *                  control node paused awaiting an inbound HTTP callback. NON-
  *                  terminal, resolved by `externalWait.completed` (→ `success`) or
@@ -288,6 +291,22 @@ export const NodeRunStateSchema = z.object({
    */
   inactive: z.boolean().optional(),
   /**
+   * #1600 OR41 C8d — set while a Get metadata *Wait until* is re-checking: by
+   * `node.notReady` (`notReadyAttemptId` names the attempt that said "not yet"),
+   * and `giveUpAt` by the first `node.recheckScheduled`, which fixes the deadline
+   * for every later check and retry. Removed when the node settles or a loop
+   * round resets it.
+   */
+  recheck: z
+    .object({
+      notReadyAttemptId: z.string(),
+      reason: z.string(),
+      afterSeconds: z.number().int().positive(),
+      giveUpAfterSeconds: z.number().int().positive(),
+      giveUpAt: z.number().int().optional(),
+    })
+    .optional(),
+  /**
    * F2b — POLICY retries taken for this node in the CURRENT loop round, and the
    * ONLY counter retry-eligibility reads (`retries < policy.retry`).
    *
@@ -352,7 +371,8 @@ export type RunLifecycleStatus = z.infer<typeof RunLifecycleStatusSchema>;
 /**
  * #5 S3 — WHY a run is `waiting`. The reasons are the run-level twins of the
  * node parked-states `awaitsExternalEvent` (`reduce.ts`) recognises:
- *   - `waiting_timer`       — a `wait` node parked `wait_pending` (#4 A6 timer).
+ *   - `waiting_timer`       — a `wait` node parked `wait_pending` (#4 A6 timer),
+ *                             or a Wait until between checks (#1600 C8d).
  *   - `waiting_external`    — a `webhook` node parked `external_wait_pending`
  *                             (#4 A13), or any inbound external-wait.
  *   - `waiting_concurrency` — admission held the run for a capacity slot. NO
@@ -678,6 +698,11 @@ export const FAILURE_CODES = {
    * internal timeout — that arrives as a plain connector `transient`.
    */
   TIMEOUT: 'timeout',
+  /**
+   * #1600 OR41 C8d — a Get metadata *Wait until* was still not satisfied at its
+   * *Give up after* deadline. Minted by the driver's `armRecheck`; permanent.
+   */
+  WAIT_UNTIL_TIMEOUT: 'wait_until_timeout',
   /** The adapter's stream ended with no terminal event (contract violation). */
   ADAPTER_NO_TERMINAL: 'adapter_no_terminal',
   /** The adapter threw instead of yielding a terminal `failed` (a bug). */
@@ -2077,6 +2102,51 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     /**
+     * #1600 OR41 C8d — a Get metadata *Wait until* checked and the condition is
+     * not met yet. Mapped by the executor from the adapter's `notReady`, and the
+     * attempt's terminal, like `node.succeeded`/`node.failed`. Its fold holds the
+     * node `ready` and asks the driver to re-check later (`scheduleRecheck`).
+     * The two numbers are the dispatch's resolved settings, frozen here so the
+     * reducer stays clock- and config-free.
+     */
+    type: z.literal('node.notReady'),
+    runId: z.string(),
+    nodeId: z.string(),
+    attemptId: z.string(),
+    /** What is not satisfied yet, e.g. "/in/a.csv does not exist yet". */
+    reason: z.string(),
+    recheckAfterSeconds: z.number().int().positive(),
+    giveUpAfterSeconds: z.number().int().positive(),
+  }),
+  z.object({
+    /**
+     * #1600 OR41 C8d — the re-check alarm is armed. Appended by the DRIVER after
+     * the arm (`armRecheck`), so, as for `timer.waitScheduled`, a parked node
+     * always has a live alarm. Its fold parks the node `wait_pending` and stamps
+     * the deadline. Both times are STORED facts from the armed row and the first
+     * check, never recomputed at fold time.
+     */
+    type: z.literal('node.recheckScheduled'),
+    runId: z.string(),
+    nodeId: z.string(),
+    /** The not-ready attempt this alarm answers (its freshness handle). */
+    attemptId: z.string(),
+    nextCheckAt: z.number().int(),
+    giveUpAt: z.number().int(),
+  }),
+  z.object({
+    /**
+     * #1600 OR41 C8d — the re-check is due. Appended by the alarm clock's
+     * `node_recheck` handler; its fold re-dispatches the node under a NEW
+     * attempt that does not spend the retry budget.
+     */
+    type: z.literal('node.recheckDue'),
+    runId: z.string(),
+    nodeId: z.string(),
+    previousAttemptId: z.string(),
+  }),
+  z.object({
+    /**
      * #4 A13 — the durable fact that a `webhook` control node has PARKED awaiting
      * an inbound HTTP callback. Appended by the DRIVER once the expiry alarm row +
      * the correlation row exist (`armExternalWait`), so the log records WHEN the
@@ -2592,6 +2662,22 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     attemptId: z.string(),
     /** Resolved, non-negative, finite duration in seconds (the reducer's pure half). */
     seconds: z.number(),
+  }),
+  z.object({
+    /**
+     * #1600 OR41 C8d — "this Get metadata is not ready: check again later." A
+     * driver-OWN command like `scheduleWait`: `armRecheck` fixes the deadline
+     * (`giveUpAt`, or now + `giveUpAfterSeconds` on the first check), and either
+     * arms the `node_recheck` alarm and appends `node.recheckScheduled`, or, once
+     * the deadline has passed, appends `node.failed{wait_until_timeout}`.
+     */
+    type: z.literal('scheduleRecheck'),
+    nodeId: z.string(),
+    attemptId: z.string(),
+    reason: z.string(),
+    afterSeconds: z.number().int().positive(),
+    giveUpAfterSeconds: z.number().int().positive(),
+    giveUpAt: z.number().int().nullable(),
   }),
   z.object({
     /**

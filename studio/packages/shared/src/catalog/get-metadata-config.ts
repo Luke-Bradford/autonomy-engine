@@ -100,6 +100,25 @@ export const GET_METADATA_FIELD_TITLES = optionTitles(fieldSchema, {
 
 const childTypeSchema = z.enum(['all', 'files', 'folders']);
 
+/**
+ * #1600 OR41 C8d — *Wait until* (catalogue §4.3), ADF's Validation activity
+ * (https://learn.microsoft.com/azure/data-factory/control-flow-validation-activity):
+ * re-check on a durable timer until the path holds the condition. `off` reads
+ * once, as before C8d. ADF's `sleep` and `timeout` are *Check every* and *Give
+ * up after*, with ADF's defaults (10 s, 12 h) and ADF's 7-day ceiling.
+ */
+export const GET_METADATA_WAIT_UNTIL = ['off', 'exists', 'nonEmpty', 'minimumSize'] as const;
+const waitUntilSchema = z.enum(GET_METADATA_WAIT_UNTIL);
+export const WAIT_UNTIL_CHECK_EVERY_DEFAULT = 10;
+export const WAIT_UNTIL_GIVE_UP_DEFAULT = 12 * 3600;
+const WAIT_UNTIL_GIVE_UP_MAX = 7 * 24 * 3600;
+/**
+ * The most checks one Wait until may make (*Give up after* / *Check every*).
+ * Every check is a dispatch on the run's log, and each alarm re-reads that log,
+ * so the count is bounded. ADF's defaults make 4,320.
+ */
+export const MAX_WAIT_UNTIL_CHECKS = 5000;
+
 export const getMetadataConfigSchema = z
   .object({
     // C8c — optional, because a database table is chosen on the Source tab (a
@@ -146,6 +165,36 @@ export const getMetadataConfigSchema = z
       'Modified before',
       'Only files last modified before this UTC time. Folders are left out when set.',
     ),
+    waitUntil: presented(waitUntilSchema.default('off'), {
+      title: 'Wait until',
+      description:
+        "Check the path again on a timer until this holds, then read the ticked fields (ADF's Validation). A missing path counts as not yet. The run waits without holding a worker.",
+      options: optionTitles(waitUntilSchema, {
+        off: 'Off',
+        exists: 'It exists',
+        nonEmpty: 'It is not empty',
+        minimumSize: 'It is at least N bytes',
+      }),
+    }),
+    minimumSize: presented(z.number().int().min(1).optional(), {
+      title: 'Minimum bytes',
+      description:
+        'The file must be at least this many bytes. A folder at the path fails the node.',
+    }),
+    checkEverySeconds: presented(
+      z.number().int().min(1).max(86_400).default(WAIT_UNTIL_CHECK_EVERY_DEFAULT),
+      {
+        title: 'Check every (seconds)',
+        description: "Seconds between checks. ADF's Sleep, default 10.",
+      },
+    ),
+    giveUpAfterSeconds: presented(
+      z.number().int().min(1).max(WAIT_UNTIL_GIVE_UP_MAX).default(WAIT_UNTIL_GIVE_UP_DEFAULT),
+      {
+        title: 'Give up after (seconds)',
+        description: `Fail the node if the condition still does not hold this long after the first check. ADF's Timeout, default 43200 (12 hours), at most 7 days and ${MAX_WAIT_UNTIL_CHECKS} checks.`,
+      },
+    ),
   })
   .superRefine((cfg, ctx) => {
     // As in `copyFilesConfigSchema`: refuse a setting that would be ignored,
@@ -172,6 +221,26 @@ export const getMetadataConfigSchema = z
     if (separator !== undefined) issue('childFilter', separator);
     const window = modifiedWindowIssue(cfg.modifiedStart, cfg.modifiedEnd);
     if (window !== undefined) issue('modifiedEnd', window);
+    // C8d
+    if (cfg.waitUntil === 'minimumSize' && cfg.minimumSize === undefined) {
+      issue('minimumSize', 'required when Wait until is It is at least N bytes');
+    }
+    if (cfg.waitUntil !== 'minimumSize' && cfg.minimumSize !== undefined) {
+      issue('minimumSize', 'only read when Wait until is It is at least N bytes');
+    }
+    if (cfg.waitUntil === 'off') {
+      if (cfg.checkEverySeconds !== WAIT_UNTIL_CHECK_EVERY_DEFAULT) {
+        issue('checkEverySeconds', 'only read when Wait until is set');
+      }
+      if (cfg.giveUpAfterSeconds !== WAIT_UNTIL_GIVE_UP_DEFAULT) {
+        issue('giveUpAfterSeconds', 'only read when Wait until is set');
+      }
+    } else if (cfg.giveUpAfterSeconds / cfg.checkEverySeconds > MAX_WAIT_UNTIL_CHECKS) {
+      issue(
+        'giveUpAfterSeconds',
+        `at most ${MAX_WAIT_UNTIL_CHECKS} checks: raise Check every or lower Give up after`,
+      );
+    }
   });
 export type GetMetadataConfig = z.infer<typeof getMetadataConfigSchema>;
 
@@ -212,6 +281,7 @@ export function getMetadataKindIssue(
   if (connectionKind === 'fs') {
     if (bindsDataset) {
       if (config.path !== undefined) return BOTH_PATH_AND_DATASET;
+      if (config.waitUntil !== 'off') return WAIT_UNTIL_NEEDS_PATH;
       return fileDatasetFieldIssue(config.fieldList);
     }
     if (config.path === undefined) {
@@ -226,8 +296,13 @@ export function getMetadataKindIssue(
     return 'a table is chosen on the Source tab; clear File or folder path';
   }
   if (foreign.length > 0) return `${titles(foreign)} read a file system path, not a table`;
+  if (config.waitUntil !== 'off') return WAIT_UNTIL_NEEDS_PATH;
   return undefined;
 }
+
+/** C8d-1 — Wait until checks a file system path; a dataset's waits for C8d-2. */
+const WAIT_UNTIL_NEEDS_PATH =
+  'Wait until checks a file or folder path; on a dataset it is not supported yet';
 
 const titles = (fields: readonly GetMetadataField[]): string =>
   fields.map((f) => GET_METADATA_FIELD_TITLES[f]).join(', ');
@@ -287,6 +362,10 @@ export function getMetadataNodeIssue(node: {
     return 'config.path: required: a file or folder path, or a dataset chosen on Source';
   }
   if (hasPath && hasTable) return `config.path: ${BOTH_PATH_AND_DATASET}`;
+  const wait = node.config['waitUntil'];
+  if (hasTable && wait !== undefined && wait !== 'off') {
+    return `config.waitUntil: ${WAIT_UNTIL_NEEDS_PATH}`;
+  }
   const list = node.config['fieldList'];
   // Not a list of fields: the config's own check reports it.
   if (!Array.isArray(list) || !list.every(isField)) return undefined;

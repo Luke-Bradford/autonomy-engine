@@ -260,3 +260,71 @@ describe('getMetadataNodeIssue (#1600 OR41 C8c)', () => {
     ).toEqual([]);
   });
 });
+
+describe('get_metadata Wait until (#1600 OR41 C8d)', () => {
+  const base = { path: '/in/a.csv', fieldList: ['exists'] };
+  const parse = (extra: Record<string, unknown>) =>
+    getMetadataConfigSchema.parse({ ...base, ...extra });
+
+  it("defaults to off, with ADF's Sleep and Timeout", () => {
+    expect(parse({})).toMatchObject({
+      waitUntil: 'off',
+      checkEverySeconds: 10,
+      giveUpAfterSeconds: 43200,
+    });
+    expect(ok({ ...base, waitUntil: 'exists' })).toBe(true);
+    expect(ok({ ...base, waitUntil: 'nonEmpty', checkEverySeconds: 60 })).toBe(true);
+  });
+
+  it('needs Minimum size only, and always, with It is at least N bytes', () => {
+    expect(issuesOf({ ...base, waitUntil: 'minimumSize' })).toEqual([
+      'minimumSize: required when Wait until is It is at least N bytes',
+    ]);
+    expect(ok({ ...base, waitUntil: 'minimumSize', minimumSize: 1024 })).toBe(true);
+    expect(issuesOf({ ...base, waitUntil: 'exists', minimumSize: 1024 })).toEqual([
+      'minimumSize: only read when Wait until is It is at least N bytes',
+    ]);
+  });
+
+  it('refuses a timer setting Wait until off would ignore', () => {
+    expect(issuesOf({ ...base, checkEverySeconds: 30, giveUpAfterSeconds: 60 })).toEqual([
+      'checkEverySeconds: only read when Wait until is set',
+      'giveUpAfterSeconds: only read when Wait until is set',
+    ]);
+  });
+
+  it('bounds the number of checks', () => {
+    expect(
+      ok({ ...base, waitUntil: 'exists', checkEverySeconds: 1, giveUpAfterSeconds: 5000 }),
+    ).toBe(true);
+    expect(
+      issuesOf({ ...base, waitUntil: 'exists', checkEverySeconds: 1, giveUpAfterSeconds: 5001 }),
+    ).toEqual([
+      'giveUpAfterSeconds: at most 5000 checks: raise Check every or lower Give up after',
+    ]);
+    expect(
+      ok({
+        ...base,
+        waitUntil: 'exists',
+        checkEverySeconds: 600,
+        giveUpAfterSeconds: 7 * 86400 + 1,
+      }),
+    ).toBe(false);
+  });
+
+  it('checks a path only: a dataset is refused at save and at dispatch', () => {
+    const waiting = { fieldList: ['exists'], waitUntil: 'exists' };
+    expect(getMetadataNodeIssue({ config: waiting, datasetIds: { source: 'ds' } })).toBe(
+      'config.waitUntil: Wait until checks a file or folder path; on a dataset it is not supported yet',
+    );
+    expect(getMetadataNodeIssue({ config: { ...waiting, path: '/in' } })).toBeUndefined();
+    const cfg = getMetadataConfigSchema.parse(waiting);
+    expect(getMetadataKindIssue(cfg, 'fs', true)).toBe(
+      'Wait until checks a file or folder path; on a dataset it is not supported yet',
+    );
+    expect(getMetadataKindIssue(cfg, 'sqlite', true)).toBe(
+      'Wait until checks a file or folder path; on a dataset it is not supported yet',
+    );
+    expect(getMetadataKindIssue({ ...cfg, path: '/in' }, 'fs', false)).toBeUndefined();
+  });
+});
