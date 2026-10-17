@@ -2,12 +2,15 @@ import type { Container, Node } from '../schemas/pipeline.js';
 import { protectEscapes, scanTemplateRefs } from '../engine/expr.js';
 import { renameNodeOutputRefs } from '../engine/nodeRefs.js';
 import { copyFilesConfigSchema } from './copy-files-config.js';
+import { deleteConfigSchema } from './delete-config.js';
 import { getMetadataConfigSchema } from './get-metadata-config.js';
 import { catalogOutputs } from './lower.js';
 import { getActivity } from './registry.js';
 import {
   COPY_FILES_ACTIVITY_TYPE,
+  DELETE_ACTIVITY_TYPE,
   FILE_COPY_ACTIVITY_TYPE,
+  FILE_DELETE_ACTIVITY_TYPE,
   FILE_LIST_ACTIVITY_TYPE,
   FILE_MOVE_ACTIVITY_TYPE,
   GET_METADATA_ACTIVITY_TYPE,
@@ -163,6 +166,26 @@ function lowerFileList(node: Node): Node | undefined {
   return { ...node, type: GET_METADATA_ACTIVITY_TYPE, config };
 }
 
+/**
+ * #1600 C9b — `file_delete` → Delete on the same connection and path, Path type
+ * File, with Fail if nothing matched on: Delete file failed on a missing file,
+ * and Delete's defaults (every modification time, one at a time) delete what it
+ * deleted. `path` keeps its name. The run differences (Allow writes, a file
+ * that is not a regular file, one deleted by someone else after it was chosen)
+ * are in the catalogue's §4.4.
+ */
+function lowerFileDelete(node: Node): Node | undefined {
+  if (carriesUnlowerable(node)) return undefined;
+  const { path } = node.config;
+  if (typeof path !== 'string') return undefined;
+  const config: Record<string, unknown> = { pathType: 'file', path, failIfNothingMatched: true };
+  if (!deleteConfigSchema.safeParse(config).success) return undefined;
+  const replacement = getActivity(DELETE_ACTIVITY_TYPE);
+  if (replacement === undefined) return undefined;
+  config['outputs'] = catalogOutputs(replacement);
+  return { ...node, type: DELETE_ACTIVITY_TYPE, config };
+}
+
 export const RETIRED_LOWERINGS: Readonly<Record<string, RetiredLowering>> = {
   [FILE_COPY_ACTIVITY_TYPE]: {
     to: COPY_FILES_ACTIVITY_TYPE,
@@ -178,6 +201,11 @@ export const RETIRED_LOWERINGS: Readonly<Record<string, RetiredLowering>> = {
     to: GET_METADATA_ACTIVITY_TYPE,
     outputs: { entries: 'childItems', path: 'path' },
     lower: lowerFileList,
+  },
+  [FILE_DELETE_ACTIVITY_TYPE]: {
+    to: DELETE_ACTIVITY_TYPE,
+    outputs: { path: 'path' },
+    lower: lowerFileDelete,
   },
 };
 

@@ -159,8 +159,9 @@ export function descriptionIssues(nodes: Node[]): string[] {
  * when After copy deletes or moves, does not allow writes (C9a: and a Delete
  * whose connection does not). The run refuses it
  * (`runFilesCopy`), so the author hears it here first. Above all for a stored
- * Copy file or Move file, which opens as this type (`lowerRetiredTypes`) while
- * its connection never needed the permission. A warning, not an issue: the
+ * Copy file or Move file, which opens as this type (`lowerRetiredTypes`), or a
+ * stored Delete file, which opens as Delete (C9b), while its connection never
+ * needed the permission. A warning, not an issue: the
  * connection is a separate, mutable row, and the run checks it at dispatch. A
  * `${}` or unknown connection id is skipped, as only the run knows it.
  */

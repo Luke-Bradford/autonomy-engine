@@ -362,7 +362,7 @@ export const GET_METADATA_ACTIVITY_TYPE = 'get_metadata';
 /**
  * #1600 OR41 C9a — Delete (catalogue §4.4). A new runnable type, read by its
  * catalog entry and the `fs` adapter's dispatch arm. `file_delete` is lowered to
- * it in C9b (§8).
+ * it (C9b, §8).
  */
 export const DELETE_ACTIVITY_TYPE = 'delete';
 

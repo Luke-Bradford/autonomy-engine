@@ -645,6 +645,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
     description: 'Delete a file on a file system connection.',
     kind: 'execution',
     category: 'general',
+    // #1600 C9b — retired from the palette: Delete covers it, and a stored node
+    // opens as Delete · File (`retired.ts`). It still runs.
+    inPalette: false,
     tabs: [{ key: 'location', bindings: ['connection'], fields: ['path'] }],
     idempotent: false,
     connectionKinds: ['fs'],
@@ -784,7 +787,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // subfolders, a modified window and, after them, the subfolders left empty.
     // The walk is Get metadata's (`fs-walk.ts`). `idempotent:false`: a delete
     // is a side effect, as Copy · Files as-is's is. Needs Allow writes on the
-    // connection. `file_delete` is lowered to it in C9b.
+    // connection. `file_delete` is lowered to it (C9b).
     type: DELETE_ACTIVITY_TYPE,
     title: 'Delete',
     description:

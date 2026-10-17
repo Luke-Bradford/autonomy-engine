@@ -3,7 +3,15 @@ import { mkdir, readdir, symlink, utimes, writeFile } from 'node:fs/promises';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DELETE_ACTIVITY_TYPE, getActivity } from '@autonomy-studio/shared';
+import { execFileSync } from 'node:child_process';
+import {
+  DELETE_ACTIVITY_TYPE,
+  FILE_DELETE_ACTIVITY_TYPE,
+  deleteConfigSchema,
+  getActivity,
+  lowerRetiredTypes,
+  type Node,
+} from '@autonomy-studio/shared';
 import { fsAdapter } from '../fs.js';
 import { cleanupTempRoots, tempRoot } from './temp-roots.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
@@ -313,4 +321,113 @@ describe('delete — Max concurrent deletes', () => {
     expect(outputs['filesDeleted']).toBe(40);
     expect(await tree(join(root, 'many'))).toEqual([]);
   });
+});
+
+// #1600 C9b — catalogue §8: a stored Delete file opens as Delete · File, Fail if
+// nothing matched on. Saved, it must do what the stored node did: delete the
+// same file, give the same `path`, and fail wherever Delete file failed. The
+// deliberate differences (§4.4) are pinned at the end.
+describe('delete — the lowered file_delete answers as Delete file did', () => {
+  async function dispatch(type: string, input: Record<string, unknown>, writable = true) {
+    const events: ActivityEvent[] = [];
+    const c: ActivityContext = {
+      runId: 'run_1',
+      nodeId: 'del',
+      attemptId: 'del#0',
+      activityType: type,
+      input,
+      connectionConfig: { roots: [root], writable },
+      signal: new AbortController().signal,
+    };
+    for await (const ev of fsAdapter.runActivity(c, null)) events.push(ev);
+    expect(events).toHaveLength(1);
+    return events[0]!;
+  }
+  /** The Delete config the stored `file_delete` opens as, as dispatch parses it. */
+  function lowered(path: string): Record<string, unknown> {
+    const stored = {
+      id: 'del',
+      type: FILE_DELETE_ACTIVITY_TYPE,
+      config: { path },
+      connectionId: 'c',
+      position: { x: 0, y: 0 },
+    } as Node;
+    const node = lowerRetiredTypes({ nodes: [stored], containers: [] }).nodes[0]!;
+    expect(node.type).toBe(DELETE_ACTIVITY_TYPE);
+    const config = { ...node.config };
+    delete config['outputs'];
+    return deleteConfigSchema.parse(config);
+  }
+  const old = (path: string, writable = true) =>
+    dispatch(FILE_DELETE_ACTIVITY_TYPE, { path }, writable);
+  const now = (path: string, writable = true) =>
+    dispatch(DELETE_ACTIVITY_TYPE, lowered(path), writable);
+
+  it('deletes the file and gives the same path', async () => {
+    await mkdir(join(root, 'in'));
+    await writeFile(join(root, 'in', 'a.csv'), 'a');
+    const before = await old('in/a.csv');
+    expect(existsSync(join(root, 'in', 'a.csv'))).toBe(false);
+    await writeFile(join(root, 'in', 'a.csv'), 'a');
+    const after = await now('in/a.csv');
+    expect(existsSync(join(root, 'in', 'a.csv'))).toBe(false);
+    if (before.type !== 'succeeded' || after.type !== 'succeeded') {
+      throw new Error(`expected success: ${JSON.stringify([before, after])}`);
+    }
+    expect(after.outputs['path']).toBe(before.outputs['path']);
+    expect(after.outputs['filesDeleted']).toBe(1);
+  });
+
+  it.each([
+    ['a missing file', async () => undefined, 'in/nope.csv'],
+    ['a missing folder', async () => undefined, 'gone/a.csv'],
+    ['a folder', async () => mkdir(join(root, 'in', 'sub'), { recursive: true }), 'in/sub'],
+    [
+      'a link at the path',
+      async () => {
+        await writeFile(join(outside, 'target.csv'), 't');
+        await mkdir(join(root, 'in'));
+        await symlink(join(outside, 'target.csv'), join(root, 'in', 'link.csv'));
+      },
+      'in/link.csv',
+    ],
+    ['a path outside the allowed folders', async () => undefined, '../escape.csv'],
+  ])(
+    'fails permanently on %s, deleting nothing, as Delete file does',
+    async (_why, setUp, path) => {
+      await setUp();
+      const before = await tree(root);
+      const was = await old(path);
+      const is = await now(path);
+      expect([was.type, is.type]).toEqual(['failed', 'failed']);
+      expect(was.type === 'failed' && is.type === 'failed' && [was.kind, is.kind]).toEqual([
+        'permanent',
+        'permanent',
+      ]);
+      expect(await tree(root)).toEqual(before);
+      if (existsSync(join(outside, 'target.csv')))
+        expect(await tree(outside)).toEqual(['target.csv']);
+    },
+  );
+
+  it('differs, as recorded: the lowered node needs Allow writes', async () => {
+    await writeFile(join(root, 'a.csv'), 'a');
+    const is = await now('a.csv', false);
+    expect(is.type === 'failed' && is.kind).toBe('permanent');
+    expect(existsSync(join(root, 'a.csv'))).toBe(true);
+    expect((await old('a.csv', false)).type).toBe('succeeded');
+    expect(existsSync(join(root, 'a.csv'))).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'differs, as recorded: a FIFO at the path is not a file, so the lowered node keeps it',
+    async () => {
+      execFileSync('mkfifo', [join(root, 'pipe')]);
+      const is = await now('pipe');
+      expect(is.type === 'failed' && is.kind).toBe('permanent');
+      expect(existsSync(join(root, 'pipe'))).toBe(true);
+      expect((await old('pipe')).type).toBe('succeeded');
+      expect(existsSync(join(root, 'pipe'))).toBe(false);
+    },
+  );
 });
