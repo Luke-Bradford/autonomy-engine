@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Container, Node } from '../../schemas/pipeline.js';
 import { copyFilesConfigSchema } from '../copy-files-config.js';
+import { deleteConfigSchema } from '../delete-config.js';
 import { getMetadataConfigSchema } from '../get-metadata-config.js';
 import { getActivity } from '../registry.js';
 import { RETIRED_LOWERINGS, lowerRetiredTypes, splitDestination } from '../retired.js';
@@ -304,5 +305,77 @@ describe('#1600 C8b — file_list → Get metadata · Child items', () => {
   it('returns the doc itself when nothing is retired', () => {
     const doc = { nodes: [reader({ items: '${nodes.list.output.entries}' })], containers: [] };
     expect(lowerRetiredTypes(doc)).toBe(doc);
+  });
+});
+
+describe('#1600 C9b — file_delete → Delete, one file', () => {
+  const del = (
+    config: Record<string, unknown> = { path: 'landing/old.csv' },
+    extra: Partial<Node> = {},
+  ) => fileNode('file_delete', config, { id: 'del', ...extra });
+
+  it('becomes Delete on the same connection and path, Path type File, Fail if nothing matched on', () => {
+    const node = del(
+      { path: 'landing/old.csv', outputs: [] },
+      { description: 'd', policy: { retry: 2 }, userProperties: [{ name: 'k', value: 'v' }] },
+    );
+    const [lowered] = lowerNodes([node]);
+    expect(lowered!.type).toBe('delete');
+    expect(lowered).toMatchObject({
+      id: 'del',
+      connectionId: 'conn_fs',
+      description: 'd',
+      policy: { retry: 2 },
+      userProperties: [{ name: 'k', value: 'v' }],
+      position: { x: 10, y: 20 },
+    });
+    const { outputs, ...config } = lowered!.config;
+    expect(config).toEqual({
+      pathType: 'file',
+      path: 'landing/old.csv',
+      failIfNothingMatched: true,
+    });
+    expect((outputs as { name: string }[]).map((o) => o.name)).toEqual(
+      getActivity('delete')!.outputs.map((o) => o.name),
+    );
+    // Delete's schema reads the defaults Delete file behaved as: one file, every
+    // modification time, one at a time.
+    expect(deleteConfigSchema.parse(config)).toMatchObject({
+      wildcard: '*',
+      recursive: false,
+      maxConcurrentConnections: 1,
+      deleteEmptyFolders: false,
+    });
+    expect(deleteConfigSchema.parse(config).modifiedStart).toBeUndefined();
+    expect(deleteConfigSchema.parse(config).modifiedEnd).toBeUndefined();
+  });
+
+  it('lowers an expression path as written', () => {
+    const [lowered] = lowerNodes([del({ path: 'in/${pipeline.parameters.name}.csv' })]);
+    expect(lowered!.type).toBe('delete');
+    expect(lowered!.config['path']).toBe('in/${pipeline.parameters.name}.csv');
+  });
+
+  it('leaves a `path` reader as it was: the output keeps its name', () => {
+    const reader = {
+      id: 'read',
+      type: 'set_variable',
+      config: { name: 'v', value: '${nodes.del.output.path}' },
+      position: { x: 0, y: 0 },
+    } as Node;
+    const doc = { nodes: [del(), reader], containers: [] };
+    const out = lowerRetiredTypes(doc);
+    expect(out.nodes[0]!.type).toBe('delete');
+    expect(out.nodes[1]).toBe(reader);
+  });
+
+  it.each([
+    ['a path that is not a string', del({ path: 3 })],
+    ['no path', del({})],
+    ['an empty path', del({ path: '' })],
+    ['connection params', del(undefined, { connectionParams: { root: 'x' } } as Partial<Node>)],
+    ['a dataset', del(undefined, { datasetIds: { source: 'ds' } } as Partial<Node>)],
+  ])('stays Delete file, by reference, with %s', (_why, node) => {
+    expect(lowerNodes([node])[0]).toBe(node);
   });
 });

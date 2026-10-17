@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { addActivity, canvasNodes, fillSelectedNodeConfig, toolbox } from './support/canvasGraph';
-import { fireAndSettle, openSeededCanvas } from './support/seedDoc';
+import { fireAndSettle, openSeededCanvas, seedVersion } from './support/seedDoc';
 import { pickConnection, properties } from './support/panels';
 import { seedConnection } from './support/seedResources';
 
@@ -121,6 +121,104 @@ test.describe('#1600 C9a — Delete', () => {
       expect(readdirSync(join(root, 'in')).sort()).toEqual(['day2', 'keep.csv']);
       expect(readdirSync(join(root, 'in', 'day2'))).toEqual(['keep.csv']);
       expect(existsSync(join(root, 'in'))).toBe(true);
+      await expectQuiet(page, problems);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * #1600 C9b — catalogue §8. A stored Delete file keeps running as it was.
+   * Opened in the editor it IS Delete, Path type File and Fail if nothing
+   * matched ticked, and Delete file is gone from the palette. Save writes it as
+   * Delete, and the saved version deletes the file as the stored one did.
+   */
+  test('a stored Delete file runs as before, opens as Delete, and saves as one', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1600-c9b-')));
+    try {
+      mkdirSync(join(root, 'in'));
+      writeFileSync(join(root, 'in', 'old.csv'), 'o');
+      const fs = await seedConnection(page, {
+        name: 'e2e 1600 c9b files',
+        kind: 'fs',
+        config: { roots: [root], writable: true },
+      });
+      const { pipelineId, pipelineVersionId } = await seedVersion(page, 'e2e 1600 c9b legacy', {
+        nodes: [
+          {
+            id: 'del',
+            type: 'file_delete',
+            position: { x: 0, y: 0 },
+            connectionId: fs,
+            config: { path: 'in/old.csv' },
+          },
+        ],
+      });
+      const outputsOf = async (versionId: string, name: string) => {
+        const runId = await fireAndSettle(page, versionId, name);
+        const events = (await (
+          await page.request.get(`/api/runs/${encodeURIComponent(runId)}/events`)
+        ).json()) as { type: string; payload: { nodeId?: string; outputs?: unknown } }[];
+        const done = events.find((e) => e.type === 'node.succeeded' && e.payload.nodeId === 'del');
+        expect(done, `events: ${JSON.stringify(events.map((e) => e.type))}`).toBeDefined();
+        return done!.payload.outputs;
+      };
+      // The stored version is untouched by the lowering: it runs as file_delete.
+      expect(await outputsOf(pipelineVersionId, 'e2e 1600 c9b old')).toEqual({
+        path: join(root, 'in', 'old.csv'),
+      });
+      expect(existsSync(join(root, 'in', 'old.csv'))).toBe(false);
+
+      await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+      await expect(canvasNodes(page)).toHaveCount(1);
+      await expect(
+        toolbox(page).getByRole('button', { name: 'Delete file', exact: true }),
+      ).toHaveCount(0);
+      await canvasNodes(page).filter({ hasText: 'Delete' }).click();
+      await tab(page, 'Source').click();
+      await expect(
+        properties(page)
+          .getByRole('combobox', { name: 'Path type', exact: true })
+          .locator('option:checked'),
+      ).toHaveText('File');
+      await expect(
+        properties(page).getByRole('textbox', { name: 'File or folder path', exact: true }),
+      ).toHaveValue('in/old.csv');
+      await tab(page, 'Settings').click();
+      await expect(checkbox(page, 'Fail if nothing matched')).toBeChecked();
+      // Any edit saves the node as its replacement.
+      await tab(page, 'General').click();
+      await properties(page)
+        .getByRole('textbox', { name: 'Activity description' })
+        .fill('lowered from Delete file');
+      await page.getByRole('button', { name: 'Save version' }).click();
+      await expect(page.locator('.notice')).toHaveText('Saved v2.');
+
+      const versions = (await (
+        await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+      ).json()) as {
+        id: string;
+        version: number;
+        nodes: { id: string; type: string; config: Record<string, unknown> }[];
+      }[];
+      const latest = versions.sort((a, b) => b.version - a.version)[0]!;
+      expect(latest.nodes[0]).toMatchObject({
+        id: 'del',
+        type: 'delete',
+        config: { pathType: 'file', path: 'in/old.csv', failIfNothingMatched: true },
+      });
+
+      writeFileSync(join(root, 'in', 'old.csv'), 'o');
+      writeFileSync(join(root, 'in', 'keep.csv'), 'k');
+      expect(await outputsOf(latest.id, 'e2e 1600 c9b new')).toEqual({
+        path: join(root, 'in', 'old.csv'),
+        filesDeleted: 1,
+        foldersDeleted: 0,
+      });
+      expect(readdirSync(join(root, 'in'))).toEqual(['keep.csv']);
       await expectQuiet(page, problems);
     } finally {
       rmSync(root, { recursive: true, force: true });
