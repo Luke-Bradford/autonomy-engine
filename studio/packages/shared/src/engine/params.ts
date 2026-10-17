@@ -5575,11 +5575,13 @@ function checkRefRoot(
         if (scope.advisories?.includes(msg) === false) scope.advisories.push(msg);
       } else if (!softOk && scope.nullOutputsById?.get(id)?.has(name)) {
         // #1736 — an unticked Get metadata field reads null, where ADF fails
-        // the reference. `default()` takes its fallback on null, so not there.
+        // the reference. Silent as `default()`'s first argument, the one place
+        // `softOk` marks; another null-tolerant fn (`coalesce`, `empty`) still
+        // warns, which is true: the read can only ever take its fallback.
         const title = GET_METADATA_FIELD_TITLES[name as GetMetadataField];
         const msg =
           `${where}: \${nodes.${id}.output.${name}} — node '${id}' does not tick ${title} in ` +
-          "its Field list, so this reads null; tick it, or make it default()'s first argument";
+          'its Field list, so this always reads null; tick it, or read it through default()';
         if (scope.advisories?.includes(msg) === false) scope.advisories.push(msg);
       }
       return;

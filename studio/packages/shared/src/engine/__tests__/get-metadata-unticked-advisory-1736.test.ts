@@ -40,7 +40,7 @@ describe('a read of an unticked Get metadata field (#1736)', () => {
     const w = warn([meta(['exists']), reader('${nodes.meta.output.size}')]);
     expect(w).toEqual([
       "nodes.r.config.task: ${nodes.meta.output.size} — node 'meta' does not tick Size in " +
-        "its Field list, so this reads null; tick it, or make it default()'s first argument",
+        'its Field list, so this always reads null; tick it, or read it through default()',
     ]);
   });
 
@@ -50,6 +50,28 @@ describe('a read of an unticked Get metadata field (#1736)', () => {
 
   it("as default()'s first argument it does not warn: default() takes the fallback on null", () => {
     expect(warn([meta(['exists']), reader('${default(nodes.meta.output.size, 0)}')])).toEqual([]);
+  });
+
+  it('coalesce() still warns: the read can only ever take its fallback', () => {
+    expect(warn([meta(['exists']), reader('${coalesce(nodes.meta.output.size, 0)}')])).toHaveLength(
+      1,
+    );
+  });
+
+  it('warns for a read from inside a ForEach body', () => {
+    const advisories: string[] = [];
+    const errs = validatePipelineDoc(
+      {
+        params: [],
+        variables: [],
+        nodes: [meta(['exists']), reader('${nodes.meta.output.size}')],
+        containers: [{ id: 'c', kind: 'foreach', children: ['r'], items: '${createArray(1)}' }],
+        edges: [{ id: 'e', from: 'meta', to: 'c', on: 'success' }],
+      },
+      { advisories },
+    );
+    expect(errs).toEqual([]);
+    expect(advisories).toEqual([expect.stringContaining("node 'meta' does not tick Size")]);
   });
 
   it('path is always filled, so reading it does not warn', () => {

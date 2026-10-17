@@ -288,9 +288,8 @@ interface CoreDef {
   options?: unknown;
 }
 
-/** The def under every `.optional()`/`.default()`/`.nullable()` wrapper. */
 /**
- * `schema` seen through every `.optional()`/`.default()` wrapper: the innermost
+ * `schema` seen through every `.optional()`/`.default()`/`.nullable()` wrapper: the innermost
  * zod schema, or `undefined` when it is not one. The ONE unwrap walk the enum
  * reads and the label gates share (#1736).
  */
@@ -304,6 +303,7 @@ function coreSchema(schema: unknown): { _zod: { def: CoreDef } } | undefined {
   }
   return undefined;
 }
+/** The def of {@link coreSchema}. */
 function coreDef(schema: unknown): CoreDef | undefined {
   return coreSchema(schema)?._zod.def;
 }
