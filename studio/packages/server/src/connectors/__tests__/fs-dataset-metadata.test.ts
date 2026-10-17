@@ -115,9 +115,9 @@ describe('get_metadata — a delimited dataset', () => {
   });
 
   it('without Exists, a missing file fails', async () => {
-    expect(
-      await failureOf({ fieldList: ['structure'] }, csv({ path: 'later.csv' })),
-    ).toMatchObject({ kind: 'permanent' });
+    expect(await failureOf({ fieldList: ['structure'] }, csv({ path: 'later.csv' }))).toMatchObject(
+      { kind: 'permanent' },
+    );
   });
 
   it("an empty file has no header to read, and fails with the reader's reason", async () => {

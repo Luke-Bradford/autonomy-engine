@@ -149,7 +149,9 @@ describe('getMetadataKindIssue (#1600 OR41 C8c)', () => {
         'fs',
         false,
       ),
-    ).toBe('Structure, Column count read a delimited or Excel dataset chosen on Source, not a path');
+    ).toBe(
+      'Structure, Column count read a delimited or Excel dataset chosen on Source, not a path',
+    );
   });
 
   it("C8c-2: takes a file dataset and a file's fields on a file system connection", () => {
@@ -174,9 +176,9 @@ describe('getMetadataKindIssue (#1600 OR41 C8c)', () => {
     expect(getMetadataKindIssue(cfg({ path: 'orders', fieldList: ['exists'] }), kind, true)).toBe(
       'a table is chosen on the Source tab; clear File or folder path',
     );
-    expect(getMetadataKindIssue(cfg({ fieldList: ['exists', 'size', 'childItems'] }), kind, true)).toBe(
-      'Size, Child items read a file system path, not a table',
-    );
+    expect(
+      getMetadataKindIssue(cfg({ fieldList: ['exists', 'size', 'childItems'] }), kind, true),
+    ).toBe('Size, Child items read a file system path, not a table');
   });
 
   it('offers each kind exactly its own fields', () => {

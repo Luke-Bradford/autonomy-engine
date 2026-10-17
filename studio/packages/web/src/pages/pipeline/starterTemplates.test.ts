@@ -110,7 +110,7 @@ describe('STARTER_TEMPLATES (#1413 OR22, #1420 part 4)', () => {
   // Keyed by id and checked for completeness below, so a new template has to
   // state its holds here rather than slip past an unbound-save check.
   const UNBOUND_HOLDS: Readonly<Record<string, RegExp>> = {
-    'summarise-folder': /^node 'list': config\.path: required: a file or folder path, or a table/,
+    'summarise-folder': /^node 'list': config\.path: required: a file or folder path, or a dataset/,
     'call-api-check': /^node 'call': config\.url: required$/,
   };
 
