@@ -294,19 +294,33 @@ describe('get_metadata — Include subfolders (C8e)', () => {
     });
   });
 
-  it('fails on a subfolder it cannot read', async () => {
-    if (process.getuid?.() === 0) return; // root reads everything
+  it('stops on cancel', async () => {
     await tree();
-    const locked = join(root, 'a', 'deep');
-    const { chmod } = await import('node:fs/promises');
-    await chmod(locked, 0o000);
-    try {
-      const ev = await failureOf({ path: '.', fieldList: ['childItems'], recursive: true });
-      expect(ev.kind).toBe('permanent');
-    } finally {
-      await chmod(locked, 0o755);
-    }
+    const ac = new AbortController();
+    ac.abort();
+    const ev = await failureOf(
+      { path: '.', fieldList: ['childItems'], recursive: true },
+      { signal: ac.signal },
+    );
+    expect(ev.kind).toBe('cancelled');
   });
+
+  // Root reads everything, and Windows has no mode bits to take away.
+  it.skipIf(process.getuid?.() === 0 || process.platform === 'win32')(
+    'fails on a subfolder it cannot read',
+    async () => {
+      await tree();
+      const locked = join(root, 'a', 'deep');
+      const { chmod } = await import('node:fs/promises');
+      await chmod(locked, 0o000);
+      try {
+        const ev = await failureOf({ path: '.', fieldList: ['childItems'], recursive: true });
+        expect(ev).toMatchObject({ kind: 'permanent', error: expect.stringContaining('EACCES') });
+      } finally {
+        await chmod(locked, 0o755);
+      }
+    },
+  );
 });
 
 describe('get_metadata — a path that is not there', () => {

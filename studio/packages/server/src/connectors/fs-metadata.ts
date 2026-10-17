@@ -30,11 +30,12 @@ import type { ActivityEvent } from './types.js';
  *   base64, the Content-MD5 form, and reads the whole file with no size cap,
  *   checking for cancel between chunks.
  * - Child items are sorted by name (code-unit order, not the host's locale),
- *   where a directory read's order depends on the OS. Each carries its size and
- *   last-modified time.
+ *   where a directory read's order depends on the OS; with Include subfolders,
+ *   by path in tree order. Each carries its size and last-modified time.
  * - Include subfolders (C8e) is a studio addition: ADF's Child items lists one
- *   level. Each item is then named by its `/`-separated path below the folder,
- *   in tree order.
+ *   level. Each item is then named by its `/`-separated path below the folder.
+ *   The walk is Copy · Files as-is's shape (`fs-files-copy.ts`), typed by
+ *   `lstat` and in tree order where Copy types by dirent and sorts plainly.
  * - Child items on a file FAIL rather than come back null, so a lowered
  *   `file_list` on a file still fails as it did. Size and Content MD5 on a
  *   folder are null.
@@ -136,16 +137,21 @@ async function childItemsOf(
   try {
     while (pending.length > 0) {
       const rel = pending.pop()!;
+      const at = rel === '' ? folder : join(folder, ...rel.split('/'));
       let dir: Awaited<ReturnType<typeof opendir>>;
       try {
-        // `opendir` has no `O_NOFOLLOW`; the target-symlink guard is the
-        // confine step's `lstat` for the folder itself, and the `lstat` below
-        // for a subfolder, the same residual `file_list` and Copy's walk
-        // state. A subfolder swapped for a link between the two could still
-        // be read; it would leak names, sizes and times, not contents.
-        dir = await opendir(rel === '' ? folder : join(folder, ...rel.split('/')));
+        // `opendir` has no `O_NOFOLLOW`. The top folder was confined and
+        // `lstat`ed just before this; a subfolder is `lstat`ed again here, so
+        // one swapped for a link while it waited on the stack is skipped. The
+        // residual is the gap between this `lstat` and the `opendir`, as in
+        // `file_list` and Copy's walk; a swap there would expose names, sizes
+        // and times, not contents.
+        if (rel !== '' && !(await lstat(at)).isDirectory()) continue;
+        dir = await opendir(at);
       } catch (err) {
-        if (rel !== '' && isMissing(err)) continue; // removed since it was listed
+        // A subfolder removed since it was listed is skipped. The top folder
+        // is not a child item, so its errors are the activity's.
+        if (rel !== '' && isMissing(err)) continue;
         throw err;
       }
       try {
@@ -163,9 +169,11 @@ async function childItemsOf(
             );
           }
           const name = rel === '' ? dirent.name : `${rel}/${dirent.name}`;
-          // With Include subfolders every entry is typed, because a folder is
-          // walked whether or not it is listed; without it only a match is.
-          if (!input.recursive && !matches(dirent.name)) continue;
+          const matched = matches(dirent.name);
+          // With Include subfolders every entry is `lstat`ed, one call each,
+          // because a folder is walked whether or not it is listed; without it
+          // only a match is. The `lstat` rather than the dirent's type, as below.
+          if (!input.recursive && !matched) continue;
           let st: Stats;
           try {
             st = await lstat(join(dir.path, dirent.name));
@@ -178,7 +186,7 @@ async function childItemsOf(
           const type = direntType(st);
           // A link is never followed, to a folder or anywhere else.
           if (input.recursive && type === 'directory') pending.push(name);
-          if (!matches(dirent.name)) continue;
+          if (!matched) continue;
           if (input.childType === 'files' && type !== 'file') continue;
           if (input.childType === 'folders' && type !== 'directory') continue;
           // ADF: with a modified window set, child items hold files only.

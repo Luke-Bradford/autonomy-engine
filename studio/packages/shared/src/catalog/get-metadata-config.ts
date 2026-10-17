@@ -70,7 +70,7 @@ export const getMetadataConfigSchema = z
     recursive: presented(z.boolean().default(false), {
       title: 'Include subfolders',
       description:
-        'Also lists what every subfolder holds, each named by its path below this folder, e.g. 2026/a.csv.',
+        "Also lists every subfolder's contents, each named by its path, e.g. 2026/a.csv.",
     }),
     modifiedStart: instant(
       'Modified from',
