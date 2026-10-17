@@ -233,8 +233,8 @@ test.describe('#1600 C8a — Get metadata', () => {
       await tab(page, 'Settings').click();
       await expect(box(page, 'Child items')).toBeChecked();
       await expect(box(page, 'Exists')).not.toBeChecked();
-      // Opening it is not an edit: Save waits for one.
-      await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
+      // Any edit saves the node as its replacement. (Opening it is not one: the
+      // canvas is not dirty, which canvasStore.test.ts asserts.)
       await tab(page, 'General').click();
       await properties(page)
         .getByRole('textbox', { name: 'Activity description' })
