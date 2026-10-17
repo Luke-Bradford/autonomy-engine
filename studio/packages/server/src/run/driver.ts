@@ -609,22 +609,52 @@ export function waitArmInput(
 }
 
 /**
+ * #1745 — ARM a parking alarm and return a row that is still LIVE, for the three
+ * holds whose alarm is armed before the event that parks the node (`armWait`,
+ * `armExternalWait`, `armRecheck`).
+ *
+ * Arming is idempotent by `(kind, dedupeKey)` whatever the row's status, so a
+ * re-emitted command can get back a SPENT row. That happens after a crash between
+ * the arm and the append, when the process stays down past the due time: the
+ * clock's first tick at boot finds the overdue row while the node is still
+ * `ready`, and the handler's parked-at-attempt guard suppresses it. Parking on
+ * that row would leave the node with no alarm, and the run `waiting` forever.
+ *
+ * So a spent row is replaced by a fresh one under a time-suffixed discriminator,
+ * at the spent row's ORIGINAL due time. That time has already passed, so the
+ * next tick fires it: the outage used up the wait, and a replayed arm keeps the
+ * original time as it always has (a webhook's correlation row keeps its original
+ * expiry too, so the two stay in agreement).
+ */
+function armLive(deps: DriverDeps, input: ArmWakeupInput): ScheduledWakeup {
+  const row = deps.alarms.arm(input);
+  if (row.status === 'pending') return row;
+  return deps.alarms.arm({
+    ...input,
+    dueAt: row.dueAt,
+    discriminator: `${input.discriminator}-${clockOf(deps)()}`,
+  });
+}
+
+/**
  * Perform a `scheduleWait` (#4 A6): ARM the durable alarm, then hand back the
  * `timer.waitScheduled` event recording when the wait is due. Same arm-before-append
  * asymmetry as `armRetry`, and here it is what removes the boot-reconcile burden:
  * the arm commits BEFORE the append that folds the node to `wait_pending`, so a
  * `wait_pending` node ALWAYS has a live alarm — a crash before the append leaves the
  * node `ready` (its `scheduleWait` re-emitted by `resume`/`projectRunState`, which
- * re-arms idempotently), never a parked node with no alarm. `dueAt` is read back
- * from the ARMED ROW, so a replayed command (idempotent by `(kind, dedupeKey)`)
- * keeps the ORIGINAL due time rather than a fresh one.
+ * re-arms idempotently, or past a spent row via `armLive`), never a parked node
+ * with no alarm. `dueAt` is read back from the ARMED ROW, so a replayed command
+ * (idempotent by `(kind, dedupeKey)`) keeps the ORIGINAL due time rather than a
+ * fresh one.
  */
 function armWait(
   deps: DriverDeps,
   state: RunState,
   command: Extract<EngineCommand, { type: 'scheduleWait' }>,
 ): EngineEvent {
-  const row = deps.alarms.arm(
+  const row = armLive(
+    deps,
     waitArmInput(deps, {
       runId: state.runId,
       nodeId: command.nodeId,
@@ -681,13 +711,7 @@ function armRecheck(
     dueAt: Math.min(now + command.afterSeconds * 1000, giveUpAt),
     discriminator: `recheck-${command.attemptId}`,
   };
-  let row = deps.alarms.arm(input);
-  if (row.status !== 'pending') {
-    // A re-emitted command (crash recovery) whose alarm already came due while
-    // the node was still `ready`: the clock suppressed it, and parking on that
-    // spent row would leave the node with no live alarm. Arm a fresh one.
-    row = deps.alarms.arm({ ...input, discriminator: `${input.discriminator}-${now}` });
-  }
+  const row = armLive(deps, input);
   return {
     type: 'node.recheckScheduled',
     runId: state.runId,
@@ -818,7 +842,8 @@ function armExternalWait(
     nodeId: command.nodeId,
     attemptId: command.attemptId,
   });
-  const row = deps.alarms.arm(
+  const row = armLive(
+    deps,
     externalWaitArmInput(deps, {
       runId: state.runId,
       nodeId: command.nodeId,

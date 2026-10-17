@@ -202,7 +202,7 @@ describe('#1600 C8d — the re-check alarm', () => {
     const run = seed(db);
     const t = NOW + 60_000;
     const exec = checker(() => false);
-    const { deps } = harness(db, exec, () => t);
+    const { deps, clock } = harness(db, exec, () => t);
     // The log a crash left: the check said "not yet", the alarm was armed, and
     // the process died before `node.recheckScheduled`. The overdue alarm then
     // fired at boot while the node was still `ready`, so the clock suppressed it.
@@ -232,9 +232,14 @@ describe('#1600 C8d — the re-check alarm', () => {
     await driveRun(deps, run.id);
 
     expect(stateOf(db, deps, run.id).nodes.g!.status).toBe('wait_pending');
+    // #1745 — the fresh alarm keeps the spent row's ORIGINAL due time, which has
+    // passed, so the next tick runs the overdue check.
     expect(listPendingWakeups(db)).toEqual([
-      expect.objectContaining({ kind: 'node_recheck', ref: at, dueAt: t + 10_000 }),
+      expect.objectContaining({ kind: 'node_recheck', ref: at, dueAt: NOW + 10_000 }),
     ]);
     expect(exec.checks).toEqual([]);
+    clock.tick();
+    await settle();
+    expect(exec.checks).toHaveLength(1);
   });
 });
