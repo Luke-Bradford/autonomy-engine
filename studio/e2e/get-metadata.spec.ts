@@ -301,12 +301,15 @@ test.describe('#1600 C8a — Get metadata', () => {
       await properties(page)
         .getByRole('combobox', { name: 'Child entries', exact: true })
         .selectOption({ label: 'Files only' });
-      // Measured at 1440x900: the whole Settings tab fits, the new box included.
-      const last = await properties(page)
-        .getByRole('textbox', { name: 'Modified before', exact: true })
+      // Measured at 1440x900: the box is drawn in the viewport, beside the
+      // other child settings, without scrolling the dock.
+      const drawn = await subfolders.boundingBox();
+      const filterBox = await properties(page)
+        .getByRole('textbox', { name: 'Filter', exact: true })
         .boundingBox();
-      expect(last, 'Modified before is drawn').not.toBeNull();
-      expect(last!.y + last!.height).toBeLessThanOrEqual(900);
+      expect(drawn, 'Include subfolders is drawn').not.toBeNull();
+      expect(drawn!.y + drawn!.height).toBeLessThanOrEqual(900);
+      expect(drawn!.y, 'below Filter').toBeGreaterThan(filterBox!.y);
       await properties(page).getByRole('button', { name: 'Apply config', exact: true }).click();
 
       await tab(page, 'Source').click();
