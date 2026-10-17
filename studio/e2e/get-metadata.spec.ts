@@ -234,6 +234,7 @@ test.describe('#1600 C8a — Get metadata', () => {
       await expect(box(page, 'Child items')).toBeChecked();
       await expect(box(page, 'Exists')).not.toBeChecked();
       // Opening it is not an edit: Save waits for one.
+      await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
       await tab(page, 'General').click();
       await properties(page)
         .getByRole('textbox', { name: 'Activity description' })

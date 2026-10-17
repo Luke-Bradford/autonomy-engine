@@ -52,9 +52,9 @@ export interface StarterTemplate {
 
 /**
  * The `Get metadata → Filter` head two templates share (#1600 C8b: Child items,
- * where it was List directory). The filter drops the
- * folder's sub-directories, and whatever `keep` adds on top: a directory handed
- * to a read or a copy fails the run rather than being skipped.
+ * where it was List directory). The filter drops the folder's sub-directories,
+ * and whatever `keep` adds on top: a directory handed to a read or a copy fails
+ * the run rather than being skipped.
  */
 function listFilesHead(keep = "equals(item.type, 'file')"): Node[] {
   return [

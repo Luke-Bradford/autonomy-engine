@@ -275,12 +275,12 @@ Sources: [Get Metadata](https://learn.microsoft.com/azure/data-factory/control-f
 - **Missing path:** with Exists ticked, a missing path (a missing parent included, `ENOENT` or `ENOTDIR`) gives `exists: false` and `null` elsewhere. Otherwise it fails as any read does.
   - That answer is never given for a path outside the roots. `confine.ts`'s `missingWithinRoots` walks up to the nearest ancestor `realpath` resolves and judges that canonical ancestor with the one containment test (`isWithinCanonicalRoots`, now shared with `resolveWithinRoots`). A dangling link on the way up is refused as well, because its target may be outside. So a link out of a root cannot turn `exists: false` into an oracle for outside folders.
   - A symlink at the path is refused even with Exists ticked, because the connector never follows one.
-- **Child items:** read from a folder only, and fail on a file, so C8b's lowering of `file_list` still fails where List directory did.
+- **Child items:** read from a folder only, and fail on a file, so the lowered `file_list` (C8b) still fails where List directory did.
   - The list limit (`maxEntries`) counts every entry visited, matched or not, as `file_list` does.
   - Each item is `{name, type, size, lastModified}`, with `size` `null` unless a file. Its type comes from an `lstat`, not the directory entry, so a file system that does not type its entries still filters correctly. The list is sorted by name in code-unit order, because a directory read's order depends on the OS.
   - A modified window leaves folders out, as ADF's does.
 - **Deliberate differences from ADF:**
-  - `itemType` and a child's `type` are `file_list`'s words (`file`, `directory`, `symlink`, `other`), not `File`/`Folder`, so C8b's lowering keeps a `type == 'directory'` test working.
+  - `itemType` and a child's `type` are `file_list`'s words (`file`, `directory`, `symlink`, `other`), not `File`/`Folder`, so a `type == 'directory'` test keeps working on the lowered `file_list` (C8b).
   - Content MD5 is a studio addition (ADF offers none for a file system). It is base64, the Content-MD5 form, and reads the whole file, checking for cancel between chunks.
   - Size is `null` for a folder.
   - Created is `null` where the file system records no birth time.
@@ -290,14 +290,16 @@ Sources: [Get Metadata](https://learn.microsoft.com/azure/data-factory/control-f
 **Built (C8b, 2026-10-17):** `file_list` is lowered to Get metadata · Child items (`retired.ts`), and List directory is retired from the palette. It still runs, and the server still accepts it.
 - **The lowered node:** same connection and path, `fieldList: ['childItems']`, and Get metadata's contract. The child item defaults (Filter `*`, which matches a dotfile, All entries, no window) list what List directory listed.
 - **The rename is rewritten, not aliased.** Get metadata has no `entries` output, so each `${nodes.<id>.output.entries…}` in the doc is rewritten to `childItems` when the node is lowered (`renameNodeOutputRefs` in `nodeRefs.ts`). That includes another node's config, user properties and bindings, a ForEach's `items` and a loop's `exitWhen`, but not a description, which is prose. So the lowering now runs over the doc (`lowerRetiredTypes({nodes, containers})`), not node by node.
-- **Faithful or not at all, as C1b.** The node stays List directory, and none of its readers changes, if any read cannot be rewritten for sure: a bare or indexed `.output`, or a string naming the node that cannot be scanned (an unterminated `${`). It also stays when it has no path or carries `connectionParams`, `connectionIds`, datasets or a call.
+- **Faithful or not at all, as C1b.** The node stays List directory, and none of its readers changes, if any read cannot be rewritten for sure: a bare or indexed `.output`, or a string naming the node that cannot be scanned (an unterminated `${`). It also stays when it has no path or carries `connectionParams`, `connectionIds`, datasets or a call. As in C1b, the lowered node gets Get metadata's contract in `config.outputs`, replacing whatever the stored node declared.
 - **The starter templates and the demo** use Get metadata · Child items.
 - **Deliberate differences after the next Save,** while the stored version keeps running as `file_list`:
   - child items are sorted by name, where List directory gave the OS's order;
   - each item also has `size` and `lastModified`;
   - a child's type comes from an `lstat`, not the directory entry;
   - a child removed during the listing is skipped;
-  - a child whose `lstat` fails (a folder that can be read but not searched) fails the run, where List directory listed it;
+  - a child whose `lstat` fails (a folder that can be read but not searched), or whose modified time cannot be written as a date, fails the run, where List directory listed it;
+  - one `lstat` per listed child, up to the list limit, so a large folder lists more slowly;
+  - the other field outputs (`exists`, `itemName` and the rest) are there and `null`. A bare `${nodes.<id>.output}` would therefore read a different object, which is one reason such a read is refused;
   - error wording differs, but a file or a missing path still fails `permanent`, and the list limit counts the same.
   - A server test runs both on one folder and compares names, types, path, failures and the limit (`fs-metadata.test.ts`).
 - No `CATALOG_VERSION` bump: there is no new type or field, and `get_metadata` already needs 43.
