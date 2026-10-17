@@ -1,5 +1,6 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
@@ -53,7 +54,9 @@ test.describe('#1600 C8a — Get metadata', () => {
       await canvasNodes(page).first().click();
 
       await tab(page, 'Settings').click();
-      await expect(fieldList(page).getByRole('checkbox')).toHaveCount(8);
+      // C8c — no connection yet, so its kind is unknown and every field is
+      // offered: a path's eight and a table's three.
+      await expect(fieldList(page).getByRole('checkbox')).toHaveCount(11);
       // A new node ticks nothing, as ADF's does; the child settings wait.
       for (const name of ['Exists', 'Size', 'Child items']) {
         await expect(box(page, name)).not.toBeChecked();
@@ -62,11 +65,11 @@ test.describe('#1600 C8a — Get metadata', () => {
       await expect(filter).toHaveCount(0);
 
       // Measured at 1440x900: the boxes pack in columns, all in the viewport.
-      const last = await box(page, 'Child items').boundingBox();
+      const last = await box(page, 'Row count').boundingBox();
       const first = await box(page, 'Exists').boundingBox();
-      expect(last, 'Child items has a box').not.toBeNull();
+      expect(last, 'Row count has a box').not.toBeNull();
       expect(last!.y + last!.height).toBeLessThanOrEqual(900);
-      expect(last!.y - first!.y, 'eight boxes do not stack eight deep').toBeLessThan(
+      expect(last!.y - first!.y, 'eleven boxes do not stack eleven deep').toBeLessThan(
         4 * first!.height + 4 * 8,
       );
       // A grid, not a wrapped line: equal columns, so the boxes in a row are
@@ -98,6 +101,10 @@ test.describe('#1600 C8a — Get metadata', () => {
 
       await tab(page, 'Source').click();
       await pickConnection(page, 'Connection', { id: fs });
+      // C8c — a path needs no dataset, so none is asked for on a file system.
+      await expect(properties(page).getByRole('combobox', { name: 'Source dataset' })).toHaveCount(
+        0,
+      );
       await fillSelectedNodeConfig(page, { 'File or folder path': 'in', Filter: '*.csv' });
 
       await page.getByRole('button', { name: 'Save version' }).click();
@@ -314,6 +321,10 @@ test.describe('#1600 C8a — Get metadata', () => {
 
       await tab(page, 'Source').click();
       await pickConnection(page, 'Connection', { id: fs });
+      // C8c — a path needs no dataset, so none is asked for on a file system.
+      await expect(properties(page).getByRole('combobox', { name: 'Source dataset' })).toHaveCount(
+        0,
+      );
       await fillSelectedNodeConfig(page, { 'File or folder path': 'in', Filter: '*.csv' });
       await page.getByRole('button', { name: 'Save version' }).click();
       await expect(page.locator('.notice')).toHaveText('Saved v2.');
@@ -343,6 +354,100 @@ test.describe('#1600 C8a — Get metadata', () => {
       await canvasNodes(page).first().click();
       await tab(page, 'Settings').click();
       await expect(subfolders).toBeChecked();
+      await expectQuiet(page, problems);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * #1600 OR41 C8c — the same activity on a database connection: the table is
+   * the Source tab's inline Table (no path), the field list offers a table's
+   * four fields only, and the run answers them from a real SQLite file.
+   */
+  test('on a SQLite connection: a table, its four fields, and the run answers them', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1600-c8c-')));
+    try {
+      const dbPath = join(root, 'warehouse.db');
+      const db = new DatabaseSync(dbPath);
+      db.exec(`
+        CREATE TABLE orders (id INTEGER PRIMARY KEY, note VARCHAR(20));
+        INSERT INTO orders VALUES (1, 'a'), (2, 'b'), (3, 'c');
+      `);
+      db.close();
+      const conn = await seedConnection(page, {
+        name: 'e2e 1600 c8c warehouse',
+        kind: 'sqlite',
+        config: { roots: [root], path: dbPath },
+      });
+      const pipelineId = await openSeededCanvas(page, 'e2e 1600 c8c table metadata', {
+        nodes: [
+          {
+            id: 'meta1',
+            type: 'get_metadata',
+            config: { fieldList: ['exists'] },
+            connectionId: conn,
+            position: { x: 0, y: 0 },
+          },
+        ],
+      });
+
+      await canvasNodes(page).first().click();
+      await tab(page, 'Source').click();
+      const pane = properties(page);
+      await expect(pane.getByRole('textbox', { name: 'File or folder path' })).toHaveCount(0);
+      const use = pane.getByRole('combobox', { name: 'Use' });
+      // A table only: Get metadata reads no query.
+      await expect(use.locator('option')).not.toContainText(['Query']);
+      await use.selectOption('table');
+      await pane.getByRole('textbox', { name: 'Table' }).fill('orders');
+
+      await tab(page, 'Settings').click();
+      // A table's four, in order: no path field is offered on a database.
+      await expect(fieldList(page).getByRole('checkbox')).toHaveCount(4);
+      for (const name of ['Exists', 'Structure', 'Column count', 'Row count']) {
+        await expect(box(page, name)).toBeVisible();
+      }
+      await expect(box(page, 'Exists')).toBeChecked();
+      for (const name of ['Structure', 'Column count', 'Row count']) await box(page, name).check();
+      await pane.getByRole('button', { name: 'Apply config', exact: true }).click();
+
+      await page.getByRole('button', { name: 'Save version' }).click();
+      await expect(page.locator('.notice')).toHaveText('Saved v2.');
+      const versions = (await (
+        await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+      ).json()) as { id: string; version: number; nodes: Record<string, unknown>[] }[];
+      const latest = versions.sort((a, b) => b.version - a.version)[0]!;
+      const node = latest.nodes[0]!;
+      expect(node['config']).toMatchObject({
+        fieldList: ['exists', 'structure', 'columnCount', 'rowCount'],
+      });
+      expect((node['config'] as Record<string, unknown>)['path']).toBeUndefined();
+      expect(node['inlineDatasets']).toEqual({
+        source: { kind: 'table', config: { table: 'orders' } },
+      });
+
+      const runId = await fireAndSettle(page, latest.id, 'e2e 1600 c8c');
+      const events = (await (
+        await page.request.get(`/api/runs/${encodeURIComponent(runId)}/events`)
+      ).json()) as { type: string; payload: Record<string, unknown> }[];
+      const done = events.find((e) => e.type === 'node.succeeded');
+      expect(done, `events: ${JSON.stringify(events)}`).toBeDefined();
+      expect(done!.payload.outputs).toMatchObject({
+        path: 'orders',
+        exists: true,
+        structure: [
+          { name: 'id', type: 'INTEGER' },
+          { name: 'note', type: 'VARCHAR(20)' },
+        ],
+        columnCount: 2,
+        rowCount: 3,
+        size: null,
+        childItems: null,
+      });
       await expectQuiet(page, problems);
     } finally {
       rmSync(root, { recursive: true, force: true });
