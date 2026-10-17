@@ -441,15 +441,17 @@ Source: [Delete](https://learn.microsoft.com/azure/data-factory/delete-activity)
 
 **Built (C9b, 2026-10-17):** a stored *Delete file* (`file_delete`) opens in the editor as Delete on the same connection and path, *Path type* File and *Fail if nothing matched* on, and the next Save writes it as `delete` (`lowerFileDelete` in `retired.ts`, §8). *Delete file* is no longer offered in the palette. A stored version still runs through `file_delete`'s own arm.
 
-- **Why those settings:** Delete file deleted one named file and failed when it was missing. File is the one-file path type; Fail if nothing matched keeps the missing-file failure. Delete's other defaults (every modification time, one at a time) delete what it deleted.
+- **Why those settings:** File is the one-file path type, and Fail if nothing matched keeps Delete file's failure on a missing file.
 - **`path` keeps its name and value.** Both resolve the path the same way and report the canonical path, so a `${nodes.x.output.path}` read needs no rewrite. `filesDeleted` and `foldersDeleted` are new outputs.
-- **The same outcome** for a file (deleted), and a `permanent` failure with nothing removed for a missing file or folder, a folder, a link at the path, and a path outside the allowed folders. A server test runs each case both ways.
+- **The same outcome** for a file (deleted), and a `permanent` failure with nothing removed for a missing file or folder, a folder, a link at the path, and a path outside the allowed folders.
 - **Faithful or not at all,** as the other lowerings: a node that carries something Delete would refuse or drop (`connectionParams`, datasets, a call), or whose path is not a string the Delete schema accepts, stays Delete file.
 - **Deliberate differences of the saved node from Delete file** (a stored version keeps the old behaviour until it is saved again):
   - It needs *Allow writes* on the connection, which Delete file never read. The Problems list warns first (`writeAccessWarnings`), as for a lowered Copy file.
   - Only a regular file is deleted. A FIFO, socket or device file at the path fails as "not a file", where Delete file unlinked it.
   - A file deleted by someone else after it was chosen is skipped and the node succeeds with `filesDeleted` 0, where Delete file failed on the missing file.
-  - Failure messages are Delete's, a cancel included.
+  - A failed unlink reports the outputs (`path` and the counts) before the failure, as every Delete does. Delete file reported none.
+  - A cancel or a timeout that arrives after the file was chosen stops it before the unlink. Delete file's unlink, once the path was resolved, ran regardless.
+  - Failure messages are Delete's.
 - No `CATALOG_VERSION` change: Delete already declares `path`, and leaving the palette stores nothing.
 
 ### 4.5 Script

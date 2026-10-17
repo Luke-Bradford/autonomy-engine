@@ -149,42 +149,55 @@ function lowerFileTransfer(afterCopy: 'keep' | 'delete') {
 }
 
 /**
+ * A retired node with one `path` on its one connection → `to`, the same node
+ * with `config(path)` as its config: the shape `file_list` and `file_delete`
+ * share. Undefined where the config fails `to`'s schema.
+ */
+function lowerPathNode(
+  to: string,
+  schema: { safeParse: (v: unknown) => { success: boolean } },
+  build: (path: string) => Record<string, unknown>,
+) {
+  return (node: Node): Node | undefined => {
+    if (carriesUnlowerable(node)) return undefined;
+    const { path } = node.config;
+    if (typeof path !== 'string') return undefined;
+    const config = build(path);
+    if (!schema.safeParse(config).success) return undefined;
+    const replacement = getActivity(to);
+    if (replacement === undefined) return undefined;
+    config['outputs'] = catalogOutputs(replacement);
+    return { ...node, type: to, config };
+  };
+}
+
+/**
  * #1600 C8b — `file_list` → Get metadata · Child items, on the same connection
  * and path. Get metadata's child item defaults (Filter `*`, which matches a
  * dotfile, and All entries, no modified window) list what List directory
  * listed. The `entries` → `childItems` rename is `lowerRetiredTypes`' job.
  */
-function lowerFileList(node: Node): Node | undefined {
-  if (carriesUnlowerable(node)) return undefined;
-  const { path } = node.config;
-  if (typeof path !== 'string') return undefined;
-  const config: Record<string, unknown> = { path, fieldList: ['childItems'] };
-  if (!getMetadataConfigSchema.safeParse(config).success) return undefined;
-  const replacement = getActivity(GET_METADATA_ACTIVITY_TYPE);
-  if (replacement === undefined) return undefined;
-  config['outputs'] = catalogOutputs(replacement);
-  return { ...node, type: GET_METADATA_ACTIVITY_TYPE, config };
-}
+const lowerFileList = lowerPathNode(
+  GET_METADATA_ACTIVITY_TYPE,
+  getMetadataConfigSchema,
+  (path) => ({
+    path,
+    fieldList: ['childItems'],
+  }),
+);
 
 /**
  * #1600 C9b — `file_delete` → Delete on the same connection and path, Path type
  * File, with Fail if nothing matched on: Delete file failed on a missing file,
  * and Delete's defaults (every modification time, one at a time) delete what it
- * deleted. `path` keeps its name. The run differences (Allow writes, a file
- * that is not a regular file, one deleted by someone else after it was chosen)
- * are in the catalogue's §4.4.
+ * deleted. `path` keeps its name. The run differences are in the catalogue's
+ * §4.4.
  */
-function lowerFileDelete(node: Node): Node | undefined {
-  if (carriesUnlowerable(node)) return undefined;
-  const { path } = node.config;
-  if (typeof path !== 'string') return undefined;
-  const config: Record<string, unknown> = { pathType: 'file', path, failIfNothingMatched: true };
-  if (!deleteConfigSchema.safeParse(config).success) return undefined;
-  const replacement = getActivity(DELETE_ACTIVITY_TYPE);
-  if (replacement === undefined) return undefined;
-  config['outputs'] = catalogOutputs(replacement);
-  return { ...node, type: DELETE_ACTIVITY_TYPE, config };
-}
+const lowerFileDelete = lowerPathNode(DELETE_ACTIVITY_TYPE, deleteConfigSchema, (path) => ({
+  pathType: 'file',
+  path,
+  failIfNothingMatched: true,
+}));
 
 export const RETIRED_LOWERINGS: Readonly<Record<string, RetiredLowering>> = {
   [FILE_COPY_ACTIVITY_TYPE]: {

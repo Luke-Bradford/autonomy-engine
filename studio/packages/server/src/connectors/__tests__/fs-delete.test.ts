@@ -397,6 +397,7 @@ describe('delete — the lowered file_delete answers as Delete file did', () => 
     async (_why, setUp, path) => {
       await setUp();
       const before = await tree(root);
+      const beforeOutside = await tree(outside);
       const was = await old(path);
       const is = await now(path);
       expect([was.type, is.type]).toEqual(['failed', 'failed']);
@@ -405,8 +406,8 @@ describe('delete — the lowered file_delete answers as Delete file did', () => 
         'permanent',
       ]);
       expect(await tree(root)).toEqual(before);
-      if (existsSync(join(outside, 'target.csv')))
-        expect(await tree(outside)).toEqual(['target.csv']);
+      // A link's target, outside the allowed folders, is kept too.
+      expect(await tree(outside)).toEqual(beforeOutside);
     },
   );
 
