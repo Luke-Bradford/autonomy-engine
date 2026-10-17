@@ -6,6 +6,7 @@ import {
   PanelLeftContractRegular,
   PanelLeftExpandRegular,
 } from '@fluentui/react-icons';
+import { Tooltip } from '@fluentui/react-components';
 import { useStore, type StoreApi } from 'zustand';
 import type { ContainerKind } from '@autonomy-studio/shared';
 import { setActivityDragType, setContainerDragKind } from './activityDnd';
@@ -84,6 +85,12 @@ export function ActivityToolbox({ store, id }: { store: StoreApi<CanvasState>; i
    */
   // Keyed by a catalog category, or `CONTAINERS_KEY` for the Containers group.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  /**
+   * #1683 — the one entry whose description is drawn, because a KEYBOARD put
+   * focus on it. `title` shows only on mouse hover, so without this a sighted
+   * keyboard user never sees what an activity does.
+   */
+  const [shownKey, setShownKey] = useState<string | null>(null);
 
   /* The rail offers EVERYTHING: it has no filter box, so a query typed before
      folding would otherwise hide entries with nothing on screen saying why.
@@ -185,6 +192,14 @@ export function ActivityToolbox({ store, id }: { store: StoreApi<CanvasState>; i
    * visible title is its name and the hover says what it does (#1413). On the
    * rail the title moves into `aria-label`, and into the hover ahead of the
    * description, because the glyph is all that is drawn.
+   *
+   * #1683 — a keyboard focus also draws that text, as a Fluent tooltip.
+   * `inaccessible`, not `description`: a `description` tooltip keeps a portal
+   * mounted for every item to point `aria-describedby` at, and `title` already
+   * is the accessible description. Controlled, and opened only for a
+   * `:focus-visible` focus: a hover keeps the native title alone rather than
+   * drawing two tooltips, and a click focuses without one. Always wrapped, so
+   * the button is never remounted, which would drop the focus that opened it.
    */
   function item(entry: {
     key: string;
@@ -194,28 +209,44 @@ export function ActivityToolbox({ store, id }: { store: StoreApi<CanvasState>; i
     onDragStart: (dataTransfer: DataTransfer) => void;
     onClick: () => void;
   }) {
+    const tip = rail ? `${entry.title} — ${entry.description}` : entry.description;
     return (
       <li key={entry.key}>
-        <button
-          type="button"
-          className="activity-toolbox__item"
-          draggable
-          aria-label={rail ? entry.title : undefined}
-          title={rail ? `${entry.title} — ${entry.description}` : entry.description}
-          onDragStart={(e: DragEvent<HTMLButtonElement>) => {
-            // A synthetic event can carry a null dataTransfer; a real
-            // dragstart never does.
-            if (e.dataTransfer) entry.onDragStart(e.dataTransfer);
+        <Tooltip
+          content={tip}
+          relationship="inaccessible"
+          positioning="after"
+          visible={shownKey === entry.key}
+          onVisibleChange={(ev, data) => {
+            if (!data.visible) {
+              // Escape and a tooltip taking over hide with no event.
+              setShownKey((k) => (k === entry.key ? null : k));
+            } else if (ev?.type === 'focus' && (ev.target as Element).matches(':focus-visible')) {
+              setShownKey(entry.key);
+            }
           }}
-          onClick={entry.onClick}
         >
-          {/* Decorative — the button's text, or on the rail its
+          <button
+            type="button"
+            className="activity-toolbox__item"
+            draggable
+            aria-label={rail ? entry.title : undefined}
+            title={tip}
+            onDragStart={(e: DragEvent<HTMLButtonElement>) => {
+              // A synthetic event can carry a null dataTransfer; a real
+              // dragstart never does.
+              if (e.dataTransfer) entry.onDragStart(e.dataTransfer);
+            }}
+            onClick={entry.onClick}
+          >
+            {/* Decorative — the button's text, or on the rail its
               `aria-label`, is its accessible name. */}
-          <span aria-hidden="true" className="activity-toolbox__icon">
-            {entry.icon}
-          </span>
-          {!rail && <span>{entry.title}</span>}
-        </button>
+            <span aria-hidden="true" className="activity-toolbox__icon">
+              {entry.icon}
+            </span>
+            {!rail && <span>{entry.title}</span>}
+          </button>
+        </Tooltip>
       </li>
     );
   }
@@ -276,7 +307,7 @@ export function ActivityToolbox({ store, id }: { store: StoreApi<CanvasState>; i
           g.label,
           g.entries.map((entry) =>
             item({
-              key: entry.type,
+              key: `activity:${entry.type}`,
               title: entry.title,
               description: entry.description,
               /* THE SAME GLYPH THE CANVAS DRAWS, and sharing it is the
@@ -300,7 +331,7 @@ export function ActivityToolbox({ store, id }: { store: StoreApi<CanvasState>; i
           CONTAINER_GROUP_LABEL,
           containerEntries.map((entry) =>
             item({
-              key: entry.kind,
+              key: `container:${entry.kind}`,
               title: entry.title,
               description: entry.description,
               icon: <entry.icon />,
