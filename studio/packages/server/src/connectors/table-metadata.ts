@@ -113,7 +113,7 @@ export async function* runTableMetadata(
   };
   const path = tableRef(dataset);
   try {
-    if (ctx.signal.aborted) throw new DatasetIoError('cancelled', 'Get metadata aborted');
+    // Cancel is checked by each store's open, before it reads anything.
     const columns = await io.describeTable(dataset, ctx.signal);
     if (columns === null) {
       if (!ticked.has('exists')) {
@@ -128,7 +128,6 @@ export async function* runTableMetadata(
       fields.structure = columns.map(({ name, type }) => ({ name, type }));
     if (ticked.has('columnCount')) fields.columnCount = columns.length;
     if (ticked.has('rowCount')) {
-      if (ctx.signal.aborted) throw new DatasetIoError('cancelled', 'Get metadata aborted');
       fields.rowCount = rowCountOf(await io.countRows(dataset, ctx.signal));
     }
   } catch (err) {

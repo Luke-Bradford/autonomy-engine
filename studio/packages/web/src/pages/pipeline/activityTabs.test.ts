@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { getActivity, type ActivityCatalogEntry } from '@autonomy-studio/shared';
-import { applicableFieldNames, nodeTypeTabs } from './activityTabs';
+import { applicableFieldNames, nodeTypeTabs, offeredFieldOptions } from './activityTabs';
 import { deriveConfigFields, seedFieldInputs } from './configForm';
 
 const fieldsOf = (entry: ActivityCatalogEntry) => deriveConfigFields(entry.configSchema) ?? [];
@@ -172,5 +172,53 @@ describe('applicableFieldNames on a set of choices (#1600 OR41 C8a)', () => {
       'fieldList',
       'childFilter',
     ]);
+  });
+});
+
+describe('Get metadata on the bound connection kind (#1600 OR41 C8c)', () => {
+  const meta = getActivity('get_metadata');
+  if (meta === undefined) throw new Error('get_metadata is catalogued');
+  const fields = fieldsOf(meta);
+  const all = fields.map((f) => f.name);
+  const shown = (config: Record<string, unknown>, kind: string | undefined) =>
+    applicableFieldNames(meta, all, fields, seedFieldInputs(fields, config), config, kind);
+  const fieldList = fields.find((f) => f.name === 'fieldList');
+  if (fieldList === undefined) throw new Error('fieldList is a field');
+  const offered = (kind: string | undefined, ticked: string[] = []) =>
+    offeredFieldOptions(meta, fieldList, kind, ticked.join('\n'));
+
+  it('draws the path on a file system connection, or while the kind is unknown, and not on a database', () => {
+    expect(shown({ fieldList: ['exists'] }, 'fs')).toEqual(['path', 'fieldList']);
+    expect(shown({ fieldList: ['exists'] }, undefined)).toEqual(['path', 'fieldList']);
+    expect(shown({ fieldList: ['exists'] }, 'sqlite')).toEqual(['fieldList']);
+    expect(shown({ fieldList: ['exists'] }, 'postgres')).toEqual(['fieldList']);
+    // A path a database node still holds stays in view, so it can be cleared.
+    expect(shown({ path: 't', fieldList: ['exists'] }, 'sqlite')).toEqual(['path', 'fieldList']);
+  });
+
+  it("offers the kind's own fields, keeps any already ticked, and every field while the kind is unknown", () => {
+    expect(offered('sqlite')).toEqual(['exists', 'structure', 'columnCount', 'rowCount']);
+    expect(offered('fs')).toEqual([
+      'exists',
+      'itemName',
+      'itemType',
+      'size',
+      'created',
+      'lastModified',
+      'contentMD5',
+      'childItems',
+    ]);
+    expect(offered('postgres', ['size'])).toEqual([
+      'exists',
+      'size',
+      'structure',
+      'columnCount',
+      'rowCount',
+    ]);
+    expect(offered(undefined)).toBeUndefined();
+    expect(offered('http')).toBeUndefined();
+    expect(offeredFieldOptions(meta, { name: 'childType', enumOptions: ['all'] }, 'fs', '')).toBe(
+      undefined,
+    );
   });
 });

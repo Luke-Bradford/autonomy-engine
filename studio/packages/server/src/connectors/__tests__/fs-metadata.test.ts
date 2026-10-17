@@ -108,6 +108,10 @@ describe('get_metadata — a file', () => {
       lastModified: null,
       contentMD5: null,
       childItems: null,
+      // C8c — a table's fields are in the one fixed contract too.
+      structure: null,
+      columnCount: null,
+      rowCount: null,
     });
   });
 
