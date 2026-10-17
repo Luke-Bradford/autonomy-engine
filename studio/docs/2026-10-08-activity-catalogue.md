@@ -342,6 +342,8 @@ Sources: [Get Metadata](https://learn.microsoft.com/azure/data-factory/control-f
     - a path with Structure, Column count or Row count is refused, because a path's columns come through a dataset;
     - a dataset with Child items is refused, because a dataset names one file or table, never a folder.
   - **At dispatch** (`getMetadataKindIssue`, now told whether a dataset is bound): Row count on a file dataset is refused, since it is a table's.
+  - The save check is stricter than C8c-1's: a table dataset with Child items, which used to save and then always fail at dispatch, is now refused at save, so such a doc no longer imports.
+  - The path's help and the Field list's help say a file's columns come through *Source dataset*.
 - **One path, then one reader.** The path fields, the Exists answer and the roots' confinement are C8a's (`doGetMetadata` on the dataset's path, with parameter overrides already merged). The columns are read by the dataset's own reader, the one Copy uses to describe its source (`describeColumns` through `fs.ts`'s reader fork), so Get metadata and Copy name a file's columns the same way.
   - A path that is not a file is refused before its reader opens it ("Structure and Column count need a file").
   - With *First row as header* off, columns are named by position (`column1`…), as Copy names them. ADF requires the header for a real structure; studio gives the positional one instead.

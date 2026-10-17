@@ -131,8 +131,11 @@ describe('get_metadata — a delimited dataset', () => {
     await mkdir(join(root, 'in'));
     expect(await failureOf({ fieldList: ['structure'] }, csv({ path: 'in' }))).toMatchObject({
       kind: 'permanent',
-      error: "Structure and Column count need a file, and 'in' is a directory",
+      error: "Structure needs a file, and 'in' is a directory",
     });
+    expect(
+      await failureOf({ fieldList: ['structure', 'columnCount'] }, csv({ path: 'in' })),
+    ).toMatchObject({ error: "Structure and Column count need a file, and 'in' is a directory" });
   });
 
   it('refuses what a dataset cannot answer, and a path beside it', async () => {

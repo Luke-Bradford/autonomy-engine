@@ -758,19 +758,20 @@ export const fsAdapter: ConnectorAdapter = {
       // C8c-2 — or a delimited or Excel dataset, and a file's fields.
       const { path } = input.data;
       const dataset = ctx.datasets?.source;
+      // The executor's connection check keeps a table off a file system, and its
+      // address step has already run this reader fork; re-stated first, so a
+      // wrong kind is named as one rather than as a wrong field.
+      const io = dataset === undefined ? undefined : fsReaderFor(dataset.kind);
+      if (dataset !== undefined && io === null) {
+        yield failed('permanent', notAnFsKind(dataset.kind));
+        return;
+      }
       const issue = getMetadataKindIssue(input.data, 'fs', dataset !== undefined);
       if (issue !== undefined) {
         yield failed('permanent', issue);
         return;
       }
-      if (dataset !== undefined) {
-        // The executor's connection check keeps a table off a file system, and
-        // its address step has already run this reader fork; re-stated.
-        const io = fsReaderFor(dataset.kind);
-        if (io === null) {
-          yield failed('permanent', notAnFsKind(dataset.kind));
-          return;
-        }
+      if (dataset !== undefined && io) {
         // Parameter overrides are merged in already; the reader re-validates
         // the whole config again when the columns are read.
         const target = DATASET_CONFIG_SCHEMAS[dataset.kind].safeParse(dataset.config);
@@ -798,7 +799,10 @@ export const fsAdapter: ConnectorAdapter = {
       }
       // `getMetadataKindIssue` has refused a missing path; never end silently.
       if (path === undefined) {
-        yield failed('permanent', 'File or folder path is required on a file system connection');
+        yield failed(
+          'permanent',
+          'File or folder path, or a delimited or Excel dataset chosen on Source, is required on a file system connection',
+        );
         return;
       }
       yield await doGetMetadata(cfg.data, { ...input.data, path }, ctx.signal);

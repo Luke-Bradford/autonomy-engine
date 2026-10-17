@@ -108,14 +108,15 @@ export const getMetadataConfigSchema = z
     // dispatch by `getMetadataKindIssue`.
     path: presented(singleLine(z.string()).min(1).optional(), {
       title: 'File or folder path',
-      description: "Absolute, or relative to the connection's first allowed folder.",
+      description:
+        "Absolute, or relative to the connection's first allowed folder. Leave empty to read a delimited or Excel dataset chosen as Source dataset instead.",
     }),
     // An array of enum members, so a `${}` can never be one: the ticks decide
     // which outputs are filled, and stay literal as ADF's checkbox grid does.
     fieldList: presented(z.array(fieldSchema).min(1, 'tick at least one field'), {
       title: 'Field list',
       description:
-        'Each ticked field fills the output of the same name; the rest are null. With Exists ticked, a missing path gives false instead of failing.',
+        "Each ticked field fills the output of the same name; the rest are null. With Exists ticked, a missing path or dataset file gives false instead of failing. A file's Structure and Column count are read through its dataset.",
       options: GET_METADATA_FIELD_TITLES,
     }),
     childFilter: presented(singleLine(z.string()).min(1).default('*'), {

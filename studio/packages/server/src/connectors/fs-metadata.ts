@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { basename, join } from 'node:path';
 import type { z } from 'zod';
 import {
+  GET_METADATA_FIELD_TITLES,
   emptyGetMetadataFields,
   type GetMetadataConfig,
   type GetMetadataField,
@@ -263,9 +264,13 @@ export async function doGetMetadata(
   // C8c-2 — and a file's columns a file only, before its reader is handed a
   // folder to open.
   if (readsColumns && type !== 'file') {
+    const named = input.fieldList
+      .filter((f) => f === 'structure' || f === 'columnCount')
+      .map((f) => GET_METADATA_FIELD_TITLES[f]);
+    const verb = named.length === 1 ? 'needs' : 'need';
     return failed(
       'permanent',
-      `Structure and Column count need a file, and '${input.path}' is a ${type}`,
+      `${named.join(' and ')} ${verb} a file, and '${input.path}' is a ${type}`,
     );
   }
   const fields = emptyFields();
@@ -294,7 +299,10 @@ export async function doGetMetadata(
     // `getMetadataKindIssue` has refused a file's columns on a bare path; never
     // end silently.
     if (readColumns === undefined) {
-      return failed('permanent', 'Structure and Column count read a dataset chosen on Source');
+      return failed(
+        'permanent',
+        'Structure, Column count read a delimited or Excel dataset chosen on Source, not a path',
+      );
     }
     let columns: Awaited<ReturnType<FileColumnsReader>>;
     try {
