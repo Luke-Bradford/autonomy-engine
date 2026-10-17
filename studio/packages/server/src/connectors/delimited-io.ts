@@ -202,7 +202,8 @@ async function prepareRead(
     );
   } catch (err) {
     // `resolveWithinRoots` leaves `realpath` on the target's PARENT unguarded on
-    // purpose, so a missing or unreadable directory arrives as a raw errno. Its
+    // purpose, so on a read a missing or unreadable directory arrives as a raw
+    // errno (on the address only an unreadable one, or one outside the roots). Its
     // docblock says every caller owes this wrapper, and names the one that
     // shipped without it (#1119) as the reason the note exists.
     throw readFailure(err, read.signal, `cannot resolve the delimited file '${config.data.path}'`);

@@ -135,6 +135,11 @@ export const isMissingErrno = (err: unknown): boolean => {
  * ORIGINAL error is rethrown, exactly as `resolveWithinRoots` would have thrown
  * it. So a caller sees nothing it would not have seen before for such a path,
  * and keeps classifying it through its own errno mapper.
+ *
+ * Residual: a folder created between the two calls makes `missingWithinRoots`
+ * answer the target's `realpath`, which follows a link AT the target that
+ * `resolveWithinRoots` would have refused. That answer is still judged inside
+ * the roots, so it names nothing outside them.
  */
 export async function resolveWithinRootsOrMissing(
   roots: readonly string[],
@@ -340,6 +345,9 @@ export type FsConfinement =
  * an unresolvable path rather than being flattened into the containment lie:
  * an operator who typos a subdirectory should not be told their path is outside
  * roots that in fact contain it. A caller wanting the real error takes `cause`.
+ *
+ * #1743 — `missingFolderOk` confines through {@link resolveWithinRootsOrMissing},
+ * for a dataset ADDRESS whose folder may not exist yet. Every read leaves it off.
  */
 export async function confineFsPath(
   connectionConfig: unknown,

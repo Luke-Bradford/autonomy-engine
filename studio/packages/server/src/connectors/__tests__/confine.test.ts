@@ -1,10 +1,8 @@
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { realpathSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync } from 'node:fs';
-import { resolveWithinRoots, resolveWithinRootsOrMissing } from '../confine.js';
+import { confineFsPath, resolveWithinRoots, resolveWithinRootsOrMissing } from '../confine.js';
 
 /**
  * #1119 M4 follow-up — the shared confinement guard NAMES THE RIGHT CONNECTOR.
@@ -98,6 +96,36 @@ describe('resolveWithinRootsOrMissing — a missing folder inside the roots', ()
       ok: true,
       path: join(root, 'in', 'a.csv'),
     });
+  });
+
+  it('takes a file where a folder is named as a folder that does not exist (ENOTDIR)', async () => {
+    const root = tempRoot();
+    writeFileSync(join(root, 'f.txt'), 'x', 'utf8');
+    expect(await resolveWithinRootsOrMissing([root], 'f.txt/a.csv', 'fs')).toEqual({
+      ok: true,
+      path: join(root, 'f.txt', 'a.csv'),
+    });
+  });
+
+  it('judges a root that is itself a link by where it points', async () => {
+    const real = tempRoot();
+    const linkRoot = join(tempRoot(), 'root-link');
+    symlinkSync(real, linkRoot);
+    expect(await resolveWithinRootsOrMissing([linkRoot], 'later/a.csv', 'fs')).toEqual({
+      ok: true,
+      path: join(real, 'later', 'a.csv'),
+    });
+  });
+
+  it("is confineFsPath's only on request: a read stays strict", async () => {
+    const root = tempRoot();
+    expect(await confineFsPath({ roots: [root] }, 'later/a.csv')).toMatchObject({
+      ok: false,
+      kind: 'errno',
+    });
+    expect(
+      await confineFsPath({ roots: [root] }, 'later/a.csv', { missingFolderOk: true }),
+    ).toEqual({ ok: true, path: join(root, 'later', 'a.csv') });
   });
 
   it('rethrows for a missing folder outside the roots', async () => {

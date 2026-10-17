@@ -12,7 +12,7 @@ import {
 import { failed } from './activity-events.js';
 import {
   CONFINED_READ_FLAGS,
-  isMissingErrno as isMissing,
+  isMissingErrno,
   resolveWithinRoots,
   resolveWithinRootsOrMissing,
 } from './confine.js';
@@ -166,7 +166,7 @@ async function childItemsOf(
       } catch (err) {
         // A subfolder removed since it was listed is skipped. The top folder
         // is not a child item, so its errors are the activity's.
-        if (rel !== '' && isMissing(err)) continue;
+        if (rel !== '' && isMissingErrno(err)) continue;
         throw err;
       }
       try {
@@ -193,7 +193,7 @@ async function childItemsOf(
           try {
             st = await lstat(join(dir.path, dirent.name));
           } catch (err) {
-            if (isMissing(err)) continue; // removed since it was listed
+            if (isMissingErrno(err)) continue; // removed since it was listed
             throw err;
           }
           // Typed from the `lstat`, not the dirent: a file system that does not
@@ -315,7 +315,8 @@ export async function doGetMetadata(
   try {
     st = await lstat(path);
   } catch (err) {
-    if (answersMissing && isMissing(err)) return waiting ? notYet(input, missing) : notThere(path);
+    if (answersMissing && isMissingErrno(err))
+      return waiting ? notYet(input, missing) : notThere(path);
     return failFromError(err, signal);
   }
 
@@ -326,7 +327,7 @@ export async function doGetMetadata(
       unmet = await waitUntilUnmet(input, path, st, type);
     } catch (err) {
       // A folder removed between the stat and the read is not there yet.
-      return isMissing(err) ? notYet(input, missing) : failFromError(err, signal);
+      return isMissingErrno(err) ? notYet(input, missing) : failFromError(err, signal);
     }
     if (unmet !== null) return unmet;
   }

@@ -272,6 +272,8 @@ export function untickedGetMetadataFields(
  * C8c-2 — on a file system the node reads a path or a delimited or Excel
  * dataset (`bindsDataset`, from the dispatch's resolved source), each with its
  * own fields. A database always reads its dataset, so it ignores the flag.
+ *
+ * C8d-2a — Wait until is refused on a database (a table's waits for C8d-2b).
  */
 export function getMetadataKindIssue(
   config: GetMetadataConfig,
@@ -350,6 +352,8 @@ const includes = (list: readonly GetMetadataField[], field: GetMetadataField): b
  * kind: a path is a file system item's, so its columns and rows come through a
  * dataset, and a dataset names one file or table, never a folder to list. A
  * saved dataset's kind is not known here, so the rest waits for dispatch.
+ *
+ * C8d-2a — so does Wait until on an inline dataset, which is never a file.
  */
 export function getMetadataNodeIssue(node: {
   readonly config: Readonly<Record<string, unknown>>;

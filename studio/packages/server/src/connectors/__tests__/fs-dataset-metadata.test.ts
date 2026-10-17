@@ -167,26 +167,26 @@ describe('get_metadata — a delimited dataset', () => {
   });
 });
 
-describe('get_metadata — an Excel dataset', () => {
-  const book = () =>
-    buildXlsx({
-      sheets: [
-        {
-          name: 'Sales',
-          rows: [
-            [
-              { kind: 'inline', text: 'region' },
-              { kind: 'inline', text: 'total' },
-            ],
-            [
-              { kind: 'inline', text: 'north' },
-              { kind: 'number', value: 3 },
-            ],
+const book = () =>
+  buildXlsx({
+    sheets: [
+      {
+        name: 'Sales',
+        rows: [
+          [
+            { kind: 'inline', text: 'region' },
+            { kind: 'inline', text: 'total' },
           ],
-        },
-      ],
-    });
+          [
+            { kind: 'inline', text: 'north' },
+            { kind: 'number', value: 3 },
+          ],
+        ],
+      },
+    ],
+  });
 
+describe('get_metadata — an Excel dataset', () => {
   it("reads the sheet's header, each column of no declared type", async () => {
     await writeFile(join(root, 'sales.xlsx'), book());
     const out = await outputsOf(
@@ -248,10 +248,19 @@ describe('get_metadata — Wait until on a file dataset', () => {
     expect(await outputsOf(atLeast, source)).toMatchObject({ size: 9 });
   });
 
-  it('waits for an Excel workbook the same way', async () => {
-    const input = { fieldList: ['exists'], waitUntil: 'exists', ...timers };
+  it('waits for an Excel workbook the same way, then reads its sheet', async () => {
+    const input = { fieldList: ['exists', 'columnCount'], waitUntil: 'exists', ...timers };
     expect(await run(input, sheet({ path: 'in/sales.xlsx' }))).toEqual(
       notReady("'in/sales.xlsx' does not exist yet"),
     );
+    await mkdir(join(root, 'in'));
+    await writeFile(join(root, 'in', 'sales.xlsx'), book());
+    expect(await outputsOf(input, sheet({ path: 'in/sales.xlsx' }))).toMatchObject({
+      exists: true,
+      columnCount: 2,
+    });
+    // The wait is on the file: a missing sheet holds it, then fails the read.
+    const ev = await failureOf(input, sheet({ path: 'in/sales.xlsx', sheet: 'Returns' }));
+    expect(ev.kind).toBe('permanent');
   });
 });

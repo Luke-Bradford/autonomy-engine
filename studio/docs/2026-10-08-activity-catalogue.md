@@ -378,8 +378,8 @@ Sources: [Get Metadata](https://learn.microsoft.com/azure/data-factory/control-f
 - **Crash recovery:** a not-ready node whose park was lost re-arms its alarm on resume, and a fresh one if the first was spent while the node was not parked.
 - **Deliberate differences from ADF:**
   - The settings are on Get metadata, not a separate Validation activity (§1).
-  - A dataset was not supported in C8d-1. C8d-2a adds a delimited or Excel dataset; a table waits for C8d-2b.
 - `CATALOG_VERSION` 46→47: a pre-C8d build strips the keys and reads once.
+- C8d-1 refused Wait until with a dataset bound; C8d-2a lifts that for a delimited or Excel dataset.
 
 **Built (C8d-2a, 2026-10-17):** *Wait until* on a **delimited or Excel dataset** on a file system connection, with #1743.
 
@@ -394,7 +394,7 @@ Sources: [Get Metadata](https://learn.microsoft.com/azure/data-factory/control-f
   - At dispatch, Wait until on a database connection (a table).
   - **Tradeoff:** a saved dataset's kind is not known at save, so a saved table dataset with Wait until on now saves and fails at its first run, where C8d-1 refused it at save. The editor draws Wait until only on a file system connection, so only a hand-written doc can reach it.
 - **Deliberate differences from ADF:** a delimited file of only a header, or an Excel workbook, is *not empty* once it has a byte. An Excel workbook is waited on as a file: when its sheet is missing, the wait holds and the column read then fails `permanent`.
-- `CATALOG_VERSION` 47→48: a pre-C8d-2a build refuses Wait until on a dataset at dispatch.
+- `CATALOG_VERSION` 47→48: a pre-C8d-2a build refuses Wait until on a dataset at save and at dispatch.
 
 Still open in C8: **C8d-2b** adds *Wait until* on a table dataset (SQLite, Postgres). It will bump `CATALOG_VERSION` 48→49.
 

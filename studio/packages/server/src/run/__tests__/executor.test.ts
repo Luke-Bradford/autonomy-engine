@@ -1068,6 +1068,52 @@ describe('createExecutor — fs connector end-to-end (#4 A11, real fsAdapter)', 
       expect(failed).toMatchObject({ kind: 'permanent' });
       expect(failed).not.toMatchObject({ code: FAILURE_CODES.DATASET_ADDRESS_UNRESOLVABLE });
     });
+
+    it('a Copy dispatches and fails at the read, permanent, writing nothing', async () => {
+      const store = await realpath(await mkdtemp(join(tmpdir(), 'exec-1743-sink-')));
+      try {
+        const dst = new Database(join(store, 'dst.db'));
+        dst.exec("CREATE TABLE stage (id TEXT); INSERT INTO stage VALUES ('kept')");
+        dst.close();
+        const db = freshDb().db;
+        const conn = await seedConnection(db, 'fs', { roots: [root] }, null);
+        const sinkConn = await seedConnection(
+          db,
+          'sqlite',
+          { roots: [store], path: 'dst.db', writable: true },
+          null,
+        );
+        const sinkDs = createDataset(db, {
+          ownerId: 'local',
+          name: `D${(seq += 1)}`,
+          connectionId: sinkConn,
+          kind: 'table',
+          config: { table: 'stage' },
+          columns: [{ name: 'id', type: 'string', nullable: true }],
+          parameters: [],
+        }).id;
+        const copy: Node = {
+          id: 'n1',
+          type: 'copy',
+          config: { mapping: [{ source: 'id', sink: 'id', type: 'string' }], mode: 'append' },
+          connectionIds: { source: conn, sink: sinkConn },
+          datasetIds: { source: seedCsv(db, conn, 'not-yet/orders.csv'), sink: sinkDs },
+          position: { x: 0, y: 0 },
+        };
+        const run = seedRun(db, seedVersion(db, [copy]));
+
+        const state = await startRun(deps(db), run);
+
+        expect(state.status).toBe('failure');
+        expect(eventTypes(db, run.id)).toContain('node.dispatched');
+        const failed = loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed');
+        expect(failed).toMatchObject({ kind: 'permanent' });
+        expect(failed).not.toMatchObject({ code: FAILURE_CODES.DATASET_ADDRESS_UNRESOLVABLE });
+        expect(rowsOf(join(store, 'dst.db'), 'SELECT id FROM stage')).toEqual([{ id: 'kept' }]);
+      } finally {
+        await rm(store, { recursive: true, force: true });
+      }
+    });
   });
 });
 
