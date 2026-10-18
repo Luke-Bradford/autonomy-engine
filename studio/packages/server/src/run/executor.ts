@@ -47,8 +47,8 @@ import { markExternalWaitExpired, recordExternalWait } from '../repo/external-wa
 import {
   deriveExternalWaitToken,
   externalWaitCallbackUrl,
-  loopbackCallbackWarning,
   hashExternalWaitToken,
+  loopbackCallbackWarning,
 } from '../webhooks/external-wait-token.js';
 import { connectionNotReadyReason, getConnection } from '../repo/connections.js';
 import { getDataset } from '../repo/datasets.js';
