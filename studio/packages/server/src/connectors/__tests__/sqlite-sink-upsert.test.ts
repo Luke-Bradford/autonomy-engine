@@ -179,6 +179,16 @@ describe('Upsert (SQLite)', () => {
     ).toMatch(/the sink has no column named 'nope'/);
   });
 
+  it('refuses two Key columns that are one column to the store, naming Key columns', async () => {
+    const at = store(SEEDED);
+    const err = await refusal(
+      write(at, ['id', 'name'], 'upsert', ['id', 'ID'], [{ id: 1, name: 'A' }]),
+    );
+    expect(err.message).toMatch(
+      /^Upsert's Key columns: 'id' and 'ID' both resolve to the sink column 'id'/,
+    );
+  });
+
   it("resolves a key by the store's own case rule", async () => {
     const at = store(SEEDED);
     await write(at, ['id', 'name'], 'upsert', ['ID'], [{ id: 1, name: 'A' }]);

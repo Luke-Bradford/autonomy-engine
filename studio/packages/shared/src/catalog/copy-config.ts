@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
 import { DataTypeSchema } from '../schemas/dataset.js';
+import { interpolationMode } from '../engine/expr.js';
+import { isSet } from './config-value.js';
 
 /** §6.2's per-column opt-out, named once so its display names can be checked against it. */
 const copyOnErrorSchema = z.enum(['fail', 'null']);
@@ -265,17 +267,13 @@ export type CopyKeyColumnIssue = {
   message: string;
 };
 
-/** Unset as the dock writes it: absent, or the list emptied. */
-function keyColumnsSet(value: unknown): boolean {
-  return value !== undefined && !(Array.isArray(value) && value.length === 0);
-}
-
 /**
  * The Key column rules (C3a), as plain data so the schema's `superRefine` and
  * the #444 write gate read ONE declaration — `copyMappingShapeIssues`' shape,
  * for its reason (#1176).
  *
- * - Key columns on any other write behaviour would be silently ignored.
+ * - Key columns on any other write behaviour would be silently ignored. A
+ *   `${}` behaviour is only known at dispatch, so it is not refused here.
  * - A key must be a mapped sink column, compared as a STRING as the duplicate
  *   sink rule is (#1151): the store folds case at dispatch, through
  *   `resolveSinkColumns`.
@@ -288,8 +286,11 @@ function keyColumnsSet(value: unknown): boolean {
  */
 export function copyKeyColumnIssues(config: Record<string, unknown>): CopyKeyColumnIssue[] {
   const keys = config['keyColumns'];
-  if (!keyColumnsSet(keys)) return [];
-  if ((config['mode'] ?? 'append') !== 'upsert') {
+  if (!isSet(keys)) return [];
+  const mode = config['mode'] ?? 'append';
+  // A `${}` Write behaviour is decided at dispatch, where it may be Upsert.
+  if (typeof mode === 'string' && interpolationMode(mode).mode !== 'literal') return [];
+  if (mode !== 'upsert') {
     return [{ path: [], message: 'only read when Write behaviour is Upsert' }];
   }
   if (!Array.isArray(keys)) return [];

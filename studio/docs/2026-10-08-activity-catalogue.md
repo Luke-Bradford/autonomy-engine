@@ -175,8 +175,12 @@ The run reads `col > old AND col <= new`, and outputs `watermark.old` and `water
   - **Deliberate difference from ADF: a NULL key fails the copy** and rolls it back, naming the row. `=` never matches NULL, so inserting it would add a row on every rerun. A null-safe match was rejected because PostgreSQL can neither index nor hash-join `IS NOT DISTINCT FROM`.
   - **SQLite:** per row, a `SELECT` for the key, then `UPDATE` or `INSERT`. Explicit keys with no index scan the table for each row (#1126's bound).
   - **PostgreSQL:** `SHARE ROW EXCLUSIVE` (so concurrent writers cannot race the match; readers are not blocked), a session-private staging table typed like the target, then per chunk one `UPDATE … FROM` and one `INSERT … WHERE NOT EXISTS` over `DISTINCT ON (keys)`. It needs SELECT on the target and TEMP on the database. `INSERT … ON CONFLICT` needs a unique index matching the keys, and `MERGE` refuses a target with rules and needs PostgreSQL 15.
-  - **A key repeated in the source:** the last row wins on both stores. `rowsWritten` is the store's own count of rows inserted plus rows updated. So the stores count repeats differently: SQLite counts every write (an insert, then its updates), PostgreSQL counts once per chunk.
-- **Deliberate difference from §4.1's `[▾ multi]`:** Key columns is a one-per-line list in C3a, since a choice list needs the sink's columns in the form. It is filed as polish for the mapping redesign (C4), which imports the sink schema.
+  - **A key repeated in the source:** the last row wins on both stores. `rowsWritten` is the store's own count of rows inserted plus rows updated. So the stores count repeats differently: SQLite counts every write (an insert, then its updates); PostgreSQL counts a key once per chunk, so a repeat in a later chunk counts again as an update.
+- **Deliberate difference from §4.1's `[▾ multi]`:** Key columns is a one-per-line list in C3a, since a choice list needs the sink's columns in the form. The choice list is #1768, to land with the mapping redesign (C4), which imports the sink schema.
+- **A `${}` Write behaviour** is decided at dispatch, so save does not refuse Key columns beside one.
+- **The default key is the primary key's key attributes only.** A `PRIMARY KEY … INCLUDE` column is not part of it.
+- **PostgreSQL stages with a column named `studio_copy_ord`**, so a mapping that writes a column of that name is refused under Upsert.
+- **Truncate then insert from a query that reads the same table waits on itself.** Its `ACCESS EXCLUSIVE` lock conflicts with the source cursor, so the copy waits until the activity timeout ends it. Nothing is truncated. Use Overwrite there.
 - The canvas card names the behaviour: `· overwrite`, `· truncate`, `· upsert on id`. `CATALOG_VERSION` 55→56.
 - **Not built here:** Pre-copy script and Batch size (C3b), *Auto-create from mapping* (C3c), and *Skip incompatible rows* (C6, which excludes Upsert).
 

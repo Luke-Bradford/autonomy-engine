@@ -827,7 +827,7 @@ describe('the postgres sink: Truncate then insert and Upsert (C3a)', () => {
         '"studio_copy_ord" FROM "public"."tgt" WITH NO DATA',
     );
     expect(sql.slice(stage + 1, stage + 5)).toEqual([
-      'DELETE FROM pg_temp."studio_copy_upsert"',
+      'TRUNCATE pg_temp."studio_copy_upsert"',
       'INSERT INTO pg_temp."studio_copy_upsert" ("a", "b", "studio_copy_ord") VALUES ($1, $2, $3), ($4, $5, $6)',
       'UPDATE "public"."tgt" AS t SET "b" = d."b" FROM (SELECT DISTINCT ON ("a") * FROM ' +
         'pg_temp."studio_copy_upsert" ORDER BY "a", "studio_copy_ord" DESC) AS d WHERE t."a" = d."a"',
@@ -1415,7 +1415,10 @@ describe.skipIf(LIVE_HOST === undefined)('the postgres sink, against a live post
       await expect(upsertInto('sink_up', ['a', 'b'], ['a'], rows)).resolves.toEqual({
         rowsWritten: 2,
       });
-      await upsertInto('sink_up', ['a', 'b'], ['a'], rows);
+      // The rerun matches both rows: two updates, no insert.
+      await expect(upsertInto('sink_up', ['a', 'b'], ['a'], rows)).resolves.toEqual({
+        rowsWritten: 2,
+      });
       expect(await tableRows('sink_up')).toEqual([
         { a: 1, b: 'a' },
         { a: 2, b: 'B' },
@@ -1456,6 +1459,63 @@ describe.skipIf(LIVE_HOST === undefined)('the postgres sink, against a live post
         rowsWritten: 1,
       });
       expect(await tableRows('sink_upo')).toEqual([{ a: 1 }, { a: 7 }]);
+    });
+
+    it('Upsert reads only the key attributes of a PRIMARY KEY … INCLUDE', async () => {
+      await withAdminClient((c) =>
+        c.query(
+          'drop table if exists sink_upi; create table sink_upi(a int, b text, primary key (a) include (b));' +
+            "insert into sink_upi values (1, 'a')",
+        ),
+      );
+      await upsertInto('sink_upi', ['a', 'b'], [], [{ a: 1, b: 'A' }]);
+      expect(await tableRows('sink_upi')).toEqual([{ a: 1, b: 'A' }]);
+    });
+
+    it('Upsert refuses a table with no primary key and no Key columns, untouched', async () => {
+      await withAdminClient((c) =>
+        c.query(
+          "drop table if exists sink_upz; create table sink_upz(a int, b text); insert into sink_upz values (1, 'a')",
+        ),
+      );
+      await expect(
+        upsertInto('sink_upz', ['a', 'b'], [], [{ a: 1, b: 'A' }]),
+      ).rejects.toMatchObject({
+        kind: 'permanent',
+        message: expect.stringContaining(
+          "Upsert needs Key columns: 'public.sink_upz' has no primary key",
+        ),
+      });
+      expect(await tableRows('sink_upz')).toEqual([{ a: 1, b: 'a' }]);
+    });
+
+    it("Upsert resolves a key by the store's case rule, and stages typed values as the target types them", async () => {
+      await withAdminClient((c) =>
+        c.query(
+          'drop table if exists sink_upt; create table sink_upt(id int, amount numeric(10,2), at timestamptz, doc jsonb);' +
+            "insert into sink_upt values (1, 1.00, '2026-01-01T00:00:00Z', '{}')",
+        ),
+      );
+      await expect(
+        upsertInto(
+          'sink_upt',
+          ['id', 'amount', 'at', 'doc'],
+          ['ID'],
+          [
+            { id: 1, amount: '12.50', at: '2026-10-18T12:00:00Z', doc: '{"k":1}' },
+            { id: 2, amount: '3', at: '2026-10-18T13:00:00Z', doc: '[]' },
+          ],
+        ),
+      ).resolves.toEqual({ rowsWritten: 2 });
+      const rows = await withAdminClient((c) =>
+        c.query(
+          "select id, amount::text as amount, to_char(at at time zone 'UTC', 'HH24') as hour, doc from sink_upt order by id",
+        ),
+      );
+      expect(rows.rows).toEqual([
+        { id: 1, amount: '12.50', hour: '12', doc: { k: 1 } },
+        { id: 2, amount: '3.00', hour: '13', doc: [] },
+      ]);
     });
 
     it('Upsert fails on a NULL key and rolls back what it had written', async () => {

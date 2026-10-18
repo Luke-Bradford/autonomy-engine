@@ -1025,6 +1025,12 @@ const ENTRIES: ActivityCatalogEntry[] = [
     //   that a `permanent` refusal reached by parsing an operator's SQL badly is
     //   the one direction a gate must never fail in.
     //
+    //   #1600 C3a — Truncate then insert is the exception: its sink lock is
+    //   `ACCESS EXCLUSIVE`, which DOES conflict with the source cursor's
+    //   `ACCESS SHARE`, so a `query` reading the table its Truncate empties
+    //   waits on itself until the activity timeout ends it. Nothing is lost
+    //   (nothing was truncated), and the spec's C3a note says to use Overwrite.
+    //
     // #1193 (slice 3b) then closed the ONE item those two re-measurements left:
     // the `storeIdentity` hole this widening made reachable. The address seam
     // now takes a credential, so two spellings of one host no longer read as two

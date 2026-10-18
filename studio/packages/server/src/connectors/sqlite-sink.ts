@@ -21,6 +21,7 @@ import {
   resolveSinkColumns,
   resolveUpsertKeys,
   type SinkColumn,
+  type UpsertKeyTarget,
 } from './sink-columns.js';
 import {
   confineStorePath,
@@ -130,7 +131,7 @@ function bindValue(value: SinkValue | undefined, column: string): SqliteValue {
  *  - a **VIEW** reports its columns through `pragma_table_info` exactly as a
  *    table does, so an emptiness check passes for one — and the real refusal
  *    ("cannot modify v because it is a view") then fires INSIDE the transaction,
- *    in `overwrite` mode after `DELETE FROM v` was already attempted. §7 requires
+ *    in `overwrite` (or `truncate`) mode after `DELETE FROM v` was already attempted. §7 requires
  *    the gate before the first row moves, so the type comes from `sqlite_master`;
  *  - a GENERATED column is absent from `table_info` (it is in `table_xinfo` with
  *    `hidden=2`) and refuses an INSERT with "cannot INSERT into generated
@@ -318,12 +319,7 @@ function prepareUpsert(
   db: Database.Database,
   qualified: string,
   columns: readonly SinkColumn[],
-  table: {
-    keyColumns: readonly string[];
-    tableColumns: readonly string[];
-    primaryKey: readonly string[];
-    table: string;
-  },
+  table: UpsertKeyTarget,
 ): {
   keys: SinkColumn[];
   nonKeys: SinkColumn[];
@@ -389,6 +385,9 @@ function prepareUpsert(
  * that better-sqlite3 enables `foreign_keys` by default, so a `DELETE` from a
  * parent table CASCADEs per the operator's own schema; that is their declared
  * intent and is left alone, but it is not visible in `rowsWritten`.
+ *
+ * **`truncate` is that same DELETE** (SQLite has no TRUNCATE), and **`upsert`**
+ * matches each row on its keys before writing it: `prepareUpsert` (C3a).
  *
  * `db.transaction()` is deliberately NOT used: it is synchronous-only, so it
  * cannot span the `await` this function needs between batches (§9's yield).

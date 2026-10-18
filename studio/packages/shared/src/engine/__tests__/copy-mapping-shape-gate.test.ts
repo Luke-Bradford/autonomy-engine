@@ -188,6 +188,22 @@ describe('C3a — the Upsert key rules reach the write gate', () => {
     ]);
   });
 
+  it('saves Key columns beside a ${} Write behaviour, which dispatch decides', () => {
+    expect(
+      validateDoc(
+        doc(
+          [upsert(['id'], '${params.how}')],
+          [],
+          [],
+          [
+            { name: 'batch', type: 'string', required: false },
+            { name: 'how', type: 'string', required: false },
+          ],
+        ),
+      ),
+    ).toEqual([]);
+  });
+
   it('REFUSES Key columns on a write behaviour that ignores them', () => {
     expect(
       validateDoc(

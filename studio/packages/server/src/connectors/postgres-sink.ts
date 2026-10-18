@@ -17,6 +17,7 @@ import {
   resolveSinkColumns,
   resolveUpsertKeys,
   type SinkColumn,
+  type UpsertKeyTarget,
 } from './sink-columns.js';
 import type { SinkValue } from './sqlite-sink.js';
 import {
@@ -144,7 +145,9 @@ interface DescribedSinkTable {
   readonly schema: string;
   readonly name: string;
   readonly columns: readonly SinkTableColumn[];
-  /** The primary key's columns in key order, the default Upsert key (C3a). */
+  /** The primary key's columns in key order, the default Upsert key (C3a).
+   * Only its key attributes: `indkey` also holds a `PRIMARY KEY … INCLUDE`'s
+   * payload columns, after the first `indnkeyatts`. */
   readonly primaryKey: readonly string[];
   /**
    * #1162 — true when something other than the column constraint can decide the
@@ -200,10 +203,11 @@ const DESCRIBE_SINK_SQL = `
             where a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
          ), '[]'::json) as columns,
          coalesce((
-           select json_agg(a.attname order by array_position(i.indkey::int2[], a.attnum))
+           select json_agg(a.attname order by k.ord)
              from pg_index i
-             join pg_attribute a on a.attrelid = i.indrelid and a.attnum = any(i.indkey)
-            where i.indrelid = c.oid and i.indisprimary
+             cross join lateral unnest(i.indkey::int2[]) with ordinality as k(attnum, ord)
+             join pg_attribute a on a.attrelid = i.indrelid and a.attnum = k.attnum
+            where i.indrelid = c.oid and i.indisprimary and k.ord <= i.indnkeyatts
          ), '[]'::json) as "primaryKey",
          exists (
            with recursive tree(relid) as (
@@ -400,12 +404,7 @@ async function stageUpsert(
   client: PostgresClient,
   writeTarget: string,
   columns: readonly SinkColumn[],
-  table: {
-    keyColumns: readonly string[];
-    tableColumns: readonly string[];
-    primaryKey: readonly string[];
-    table: string;
-  },
+  table: UpsertKeyTarget,
 ): Promise<PostgresUpsert> {
   const keys = resolveUpsertKeys({ ...table, mapped: columns });
   if (columns.some((c) => c.actual === UPSERT_ORDER_COLUMN)) {
@@ -446,8 +445,9 @@ async function stageUpsert(
 /**
  * Upsert one chunk: stage it, update the rows its keys match, insert the rest.
  * Returns the store's own count of rows updated plus rows inserted (#1270), so
- * a non-unique key counts every row it updated, and a key repeated within one
- * chunk counts once (only its last row is applied).
+ * a non-unique key counts every row it updated. A key repeated within one chunk
+ * counts once (only its last row is applied); one repeated in a later chunk
+ * counts again there, as the update of the row the earlier chunk wrote.
  */
 async function upsertChunk(
   client: PostgresClient,
@@ -456,7 +456,9 @@ async function upsertChunk(
   values: readonly SinkValue[],
   spelled: string,
 ): Promise<number> {
-  await client.query(`DELETE FROM ${UPSERT_STAGE}`);
+  // TRUNCATE, not DELETE: the stage is this session's alone, and a DELETE per
+  // chunk would leave every earlier chunk's dead rows in it until COMMIT.
+  await client.query(`TRUNCATE ${UPSERT_STAGE}`);
   await client.query(`${upsert.stageInsert}${tuples.join(', ')}`, [...values]);
   let written = 0;
   for (const statement of upsert.update === null
@@ -487,7 +489,8 @@ async function upsertChunk(
  * clean, and inventing the proof is the fail-open direction §4.2 forbids.
  *
  * **The LOCK comes before the §7 gate reads, and its STRENGTH depends on the
- * mode** (`LOCK_MODES`; this paragraph is the first two). Both modes take a lock that conflicts with `ACCESS EXCLUSIVE`, so a
+ * mode** (`LOCK_MODES` holds all four; this paragraph explains the first two).
+ * Every mode takes a lock that conflicts with `ACCESS EXCLUSIVE`, so a
  * concurrent `ALTER TABLE` cannot change the table between being described and
  * being written — the TOCTOU sqlite closes with `begin immediate`. But
  * `overwrite` takes `EXCLUSIVE` rather than `ROW EXCLUSIVE`, and that asymmetry

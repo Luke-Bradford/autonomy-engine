@@ -149,17 +149,27 @@ export function resolveSinkColumns(
  * every primary-key column must be mapped. A table with no primary key needs
  * Key columns.
  */
-export function resolveUpsertKeys(args: {
+export interface UpsertKeyTarget {
   readonly keyColumns: readonly string[];
-  readonly mapped: readonly SinkColumn[];
   readonly tableColumns: readonly string[];
   readonly primaryKey: readonly string[];
   readonly table: string;
-}): SinkColumn[] {
+}
+
+export function resolveUpsertKeys(
+  args: UpsertKeyTarget & { readonly mapped: readonly SinkColumn[] },
+): SinkColumn[] {
   const { keyColumns, mapped, tableColumns, primaryKey, table } = args;
   const byActual = new Map(mapped.map((c) => [c.actual, c]));
   if (keyColumns.length > 0) {
-    const keys = resolveSinkColumns(keyColumns, tableColumns);
+    let keys: SinkColumn[];
+    try {
+      keys = resolveSinkColumns(keyColumns, tableColumns);
+    } catch (err) {
+      // The resolver speaks of mapping rows; these names came from Key columns.
+      if (!(err instanceof DatasetIoError)) throw err;
+      throw new DatasetIoError('permanent', `Upsert's Key columns: ${err.message}`);
+    }
     const unmapped = keys.filter((k) => !byActual.has(k.actual)).map((k) => `'${k.mapped}'`);
     if (unmapped.length > 0) {
       throw new DatasetIoError(
