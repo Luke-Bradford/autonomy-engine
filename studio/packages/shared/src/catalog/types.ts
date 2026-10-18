@@ -43,7 +43,8 @@ export type ActivityCategory = (typeof ACTIVITY_CATEGORIES)[number];
  * addition rather than a per-entry string. The order is the vocabulary's own.
  * `settings` follows `mapping`, ADF's Copy order (Source · Sink · Mapping ·
  * Settings), so a Lookup opens on its Source (#1600 C7a); an activity whose
- * only or first tab is Settings is unaffected.
+ * only or first tab is Settings is unaffected. It also follows `auth`, so Web
+ * reads Request · Auth · Settings as catalogue §4.6 lists them (#1600 C11a).
  *
  * Display-only metadata, like `description`: nothing persists it on a version,
  * so declaring or regrouping tabs never bumps `CATALOG_VERSION`.
@@ -52,9 +53,9 @@ export const ACTIVITY_TAB_KEYS = [
   'source',
   'sink',
   'mapping',
-  'settings',
   'request',
   'auth',
+  'settings',
   'model',
   'prompt',
   'tools',
@@ -168,6 +169,9 @@ export const LLM_CALL_ACTIVITY_TYPE = 'llm_call';
  * (#1413, `web/…/starterTemplates.ts`) author it.
  */
 export const HTTP_REQUEST_ACTIVITY_TYPE = 'http_request';
+
+/** #1600 OR41 C11a — the `web` activity type (catalogue §4.6), which `http_request` lowers to. */
+export const WEB_ACTIVITY_TYPE = 'web';
 
 /**
  * The `Node.type` of the `agent_task` execution activity (the agent-CLI

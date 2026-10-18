@@ -49,6 +49,8 @@ describe('activity catalog', () => {
       'set_variable',
       'switch',
       'wait',
+      // #1600 OR41 C11a — Web.
+      'web',
       'webhook',
     ]);
   });
@@ -77,7 +79,7 @@ describe('activity catalog', () => {
     // it stats and lists, and writes nowhere.
     expect(idempotent).toEqual(['file_read', 'file_list', 'get_metadata', 'lookup']);
     // file_write/copy/move/delete MUST stay non-idempotent — each is a side effect.
-    for (const type of ['file_write', 'file_copy', 'file_move', 'file_delete', 'delete']) {
+    for (const type of ['file_write', 'file_copy', 'file_move', 'file_delete', 'delete', 'web']) {
       expect(getActivity(type)!.idempotent).toBe(false);
     }
   });
@@ -94,13 +96,14 @@ describe('activity catalog', () => {
     expect(getActivity('http_request')!.secretSinkFields).toEqual(['secretHeaders']);
   });
 
-  it('http_request is the ONLY activity in the whole catalog with a secret sink (fail-closed elsewhere)', () => {
+  it('http_request and web are the ONLY activities in the whole catalog with a secret sink (fail-closed elsewhere)', () => {
     // Assert across the full catalog, not a named subset, so a future activity
     // that silently gains a sink is caught here rather than slipping through.
     const withSink = [...catalog.values()]
       .filter((entry) => entry.secretSinkFields !== undefined)
       .map((entry) => entry.type);
-    expect(withSink).toEqual(['http_request']);
+    // #1600 OR41 C11a — Web keeps http_request's sink, which it replaces.
+    expect(withSink).toEqual(['http_request', 'web']);
   });
 
   it('M5 slice 4c (#1139): `copy` is the ONLY activity that declares a sink', () => {

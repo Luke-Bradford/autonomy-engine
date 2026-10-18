@@ -48,6 +48,11 @@ const CASES: Record<string, [Node, string]> = {
     }),
     'POST api.example.com/v1/orders',
   ],
+  // #1600 OR41 C11a — Web reads as http_request does; its method defaults to GET.
+  web: [
+    node('web', { config: { url: 'https://user:tok@api.example.com/v1/items?k=1' } }),
+    'GET api.example.com/v1/items',
+  ],
   [LLM_CALL_ACTIVITY_TYPE]: [
     node(LLM_CALL_ACTIVITY_TYPE, {
       config: { prompt: 'hi', model: 'claude-opus-5-5', outputMode: 'structured' },

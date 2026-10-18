@@ -1,12 +1,21 @@
 import {
   DEFAULT_HTTP_TIMEOUT_MS,
   formatZodIssues,
-  HTTP_SECRET_HEADERS_FIELD,
   httpConnectionConfigSchema,
   httpRequestInputSchema,
+  WEB_ACTIVITY_TYPE,
 } from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 import { redactSecrets } from './redact.js';
+import {
+  buildRequestHeaders,
+  collectResponseHeaders,
+  exchangeDeadline,
+  fetchWithoutLeakingSecrets,
+  resolveUrl,
+  sinkHeadersFrom,
+} from './http-shared.js';
+import { runWeb } from './http-web.js';
 
 /**
  * The `http` connector adapter: a generic HTTP request activity (the MVP
@@ -43,54 +52,10 @@ import { redactSecrets } from './redact.js';
  * run). `DEFAULT_HTTP_TIMEOUT_MS`, overridable per connection via `config.timeoutMs`.
  */
 
-/**
- * The `secretFields` key prefix for the `secretHeaders` sink (item 7 / S4),
- * derived from the shared SSOT field name (`HTTP_SECRET_HEADERS_FIELD`) so the
- * catalog declaration and this consumer can't desync. A resolved plaintext
- * arrives keyed `secretHeaders.<headerName>`; the header name is recovered by
- * STRIPPING this prefix (not `split('.')`), so a header name that itself
- * contains `.` (an RFC 7230 tchar) survives intact.
- */
-const SECRET_HEADERS_PREFIX = `${HTTP_SECRET_HEADERS_FIELD}.`;
-
 // #1087 — the connection shape lives in `shared/catalog/connection-config.ts`, and
 // #1480 moved the request shape (`httpRequestInputSchema`) to the shared catalog,
-// where the save gate checks a literal config against this same instance.
-
-/**
- * Map the resolved `secretFields` (keyed by config path) to request headers.
- * Only keys under the `secretHeaders` sink are consumed; the header name is the
- * path with `secretHeaders.` stripped (prefix-strip, never `split`, so a dotted
- * header name is preserved). Other sink paths — there are none for `http` today
- * — are ignored, keeping this adapter's consumption scoped to what it declares.
- */
-function sinkHeadersFrom(secretFields: Readonly<Record<string, string>>): Record<string, string> {
-  // Build via `Object.fromEntries` (define-property, [[DefineOwnProperty]]) rather
-  // than bracket-assignment ([[Set]]): a header named `__proto__` would hit
-  // Object.prototype's `__proto__` setter under [[Set]] and be SILENTLY DROPPED —
-  // the exact silent-loss failure this sink exists to fail-loudly avoid. Under
-  // define-property it becomes a real own property that survives the spread below.
-  return Object.fromEntries(
-    Object.entries(secretFields)
-      .filter(([path]) => path.startsWith(SECRET_HEADERS_PREFIX))
-      .map(([path, value]) => [path.slice(SECRET_HEADERS_PREFIX.length), value]),
-  );
-}
-
-/** Resolve a possibly-relative request url against an optional connection baseUrl. */
-function resolveUrl(baseUrl: string | undefined, url: string): string {
-  if (baseUrl === undefined || baseUrl === '') return url;
-  if (/^https?:\/\//i.test(url)) return url; // already absolute
-  return baseUrl.replace(/\/+$/, '') + '/' + url.replace(/^\/+/, '');
-}
-
-function collectResponseHeaders(res: Response): Record<string, string> {
-  const headers: Record<string, string> = {};
-  res.headers.forEach((value, key) => {
-    headers[key] = value;
-  });
-  return headers;
-}
+// where the save gate checks a literal config against this same instance. The
+// helpers shared with Web are in `http-shared.ts` (#1600 OR41 C11a).
 
 export const httpAdapter: ConnectorAdapter = {
   kind: 'http',
@@ -158,6 +123,11 @@ export const httpAdapter: ConnectorAdapter = {
       };
       return;
     }
+    // #1600 OR41 C11a — Web shares the connection, not the outcome mapping.
+    if (ctx.activityType === WEB_ACTIVITY_TYPE) {
+      yield* runWeb(ctx, connConfig.data, secret, secretFields);
+      return;
+    }
     const req = httpRequestInputSchema.safeParse(ctx.input);
     if (!req.success) {
       yield {
@@ -180,53 +150,48 @@ export const httpAdapter: ConnectorAdapter = {
       };
       return;
     }
-    const requestHeaders: Record<string, string> = {
-      ...(connConfig.data.headers ?? {}),
-      ...(headers ?? {}),
-      // The connection secret (if any) is a bearer default...
-      ...(secret !== null ? { Authorization: `Bearer ${secret}` } : {}),
-      // ...but a resolved config-sink header (item 7 / S4) is the LAST word — it
-      // overrides even the Bearer. Both are never surfaced in outputs, and their
-      // values are redacted from any echoed error below.
-      ...sinkHeadersFrom(secretFields),
-    };
+    const sinkHeaders = sinkHeadersFrom(secretFields);
+    // The connection secret (if any) is a bearer default, but a resolved
+    // config-sink header (item 7 / S4) is the LAST word — it overrides even the
+    // Bearer. Neither is surfaced in outputs (a response that echoes one is
+    // redacted, #1600 C11a), and their values are redacted from any echoed
+    // error below.
+    const requestHeaders = buildRequestHeaders(
+      connConfig.data.headers,
+      headers,
+      secret,
+      sinkHeaders,
+    );
+    const outputSecrets = [secret, ...Object.values(sinkHeaders)];
 
     // Bound the WHOLE exchange (connect + headers + body read). The controller
     // is aborted by the run's own signal (→ cancelled) OR by the timeout (→
     // transient); we track which so the catch can classify correctly.
     const timeoutMs = connConfig.data.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
-    const controller = new AbortController();
-    let timedOut = false;
-    const onExternalAbort = () => controller.abort();
-    if (ctx.signal.aborted) controller.abort();
-    else ctx.signal.addEventListener('abort', onExternalAbort, { once: true });
-    const timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, timeoutMs);
+    const deadline = exchangeDeadline(ctx.signal, timeoutMs);
 
     try {
-      const res = await fetch(resolveUrl(connConfig.data.baseUrl, url), {
-        method: httpMethod,
-        headers: requestHeaders,
-        body,
-        signal: controller.signal,
-      });
+      // A redirect to another origin drops the secret headers (#1600 C11a).
+      const res = await fetchWithoutLeakingSecrets(
+        resolveUrl(connConfig.data.baseUrl, url),
+        { method: httpMethod, headers: requestHeaders, body, signal: deadline.signal },
+        Object.keys(sinkHeaders),
+      );
       const responseBody = await res.text();
-      clearTimeout(timer); // exchange complete — disarm before emitting
+      deadline.disarm(); // exchange complete — disarm before emitting
       yield {
         type: 'succeeded',
         outputs: {
           status: res.status,
-          body: responseBody,
-          headers: collectResponseHeaders(res),
+          body: redactSecrets(responseBody, outputSecrets),
+          headers: collectResponseHeaders(res, outputSecrets),
         },
       };
     } catch (err) {
       // The run's own cancel wins over a coincident timeout.
       if (ctx.signal.aborted) {
         yield { type: 'failed', kind: 'cancelled', error: 'http request aborted' };
-      } else if (timedOut) {
+      } else if (deadline.timedOut()) {
         yield {
           type: 'failed',
           kind: 'transient',
@@ -252,8 +217,7 @@ export const httpAdapter: ConnectorAdapter = {
         };
       }
     } finally {
-      clearTimeout(timer);
-      ctx.signal.removeEventListener('abort', onExternalAbort);
+      deadline.dispose();
     }
   },
 };
