@@ -208,9 +208,7 @@ describe('the AUTHORED copy config (#1139, catalog configSchema)', () => {
     expect(copyInputSchema.parse({ mapping: [authored], mode: 'overwrite' }).mode).toBe(
       'overwrite',
     );
-    expect(copyInputSchema.safeParse({ mapping: [authored], mode: 'merge' }).success).toBe(
-      false,
-    );
+    expect(copyInputSchema.safeParse({ mapping: [authored], mode: 'merge' }).success).toBe(false);
   });
 
   it('REQUIRES a mapping — an empty default would author a copy that moves nothing', () => {
@@ -303,7 +301,7 @@ describe('copy Key columns (C3a)', () => {
     ]);
   });
 
-  it("refuses a key whose mapping row writes NULL on a conversion error — a null key matches nothing", () => {
+  it('refuses a key whose mapping row writes NULL on a conversion error — a null key matches nothing', () => {
     expect(
       issuesOf({
         mapping: [{ ...id, onError: 'null' }, name],

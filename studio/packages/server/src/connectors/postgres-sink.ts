@@ -459,7 +459,9 @@ async function upsertChunk(
   await client.query(`DELETE FROM ${UPSERT_STAGE}`);
   await client.query(`${upsert.stageInsert}${tuples.join(', ')}`, [...values]);
   let written = 0;
-  for (const statement of upsert.update === null ? [upsert.insert] : [upsert.update, upsert.insert]) {
+  for (const statement of upsert.update === null
+    ? [upsert.insert]
+    : [upsert.update, upsert.insert]) {
     const result = await client.query(statement);
     if (typeof result.rowCount !== 'number') {
       throw new DatasetIoError(

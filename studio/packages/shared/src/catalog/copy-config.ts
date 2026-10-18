@@ -384,7 +384,11 @@ const copyInputShape = <T extends z.ZodType>(mapping: T) =>
     })
     .superRefine((cfg, ctx) => {
       for (const issue of copyKeyColumnIssues(cfg)) {
-        ctx.addIssue({ code: 'custom', path: ['keyColumns', ...issue.path], message: issue.message });
+        ctx.addIssue({
+          code: 'custom',
+          path: ['keyColumns', ...issue.path],
+          message: issue.message,
+        });
       }
     });
 
