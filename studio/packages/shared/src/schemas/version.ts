@@ -586,7 +586,10 @@
 // connection).
 // BUMP 54→55 for #1600 OR41 C12a: Set variable's Operation. A pre-C12a build
 // ignores `operation`, so a Set variable · Append would replace the array.
-export const CATALOG_VERSION = 55;
+// BUMP 55→56 for #1600 OR41 C3a: Copy's Write behaviour Truncate then insert and
+// Upsert, with `keyColumns`. A pre-C3a build refuses both modes at dispatch, so
+// the bump is for import: it would accept the version and fail every run.
+export const CATALOG_VERSION = 56;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

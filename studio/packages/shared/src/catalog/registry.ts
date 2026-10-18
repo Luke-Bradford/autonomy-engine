@@ -981,9 +981,12 @@ const ENTRIES: ActivityCatalogEntry[] = [
     category: 'general',
     tabs: [
       { key: 'source', bindings: ['sourceConnection', 'sourceDataset'], fields: [] },
-      { key: 'sink', bindings: ['sinkConnection', 'sinkDataset'], fields: ['mode'] },
+      { key: 'sink', bindings: ['sinkConnection', 'sinkDataset'], fields: ['mode', 'keyColumns'] },
       { key: 'mapping', fields: ['mapping'] },
     ],
+    // #1600 OR41 C3a — Key columns are read only by Upsert, and save refuses
+    // them on any other write behaviour (`copyKeyColumnIssues`).
+    appliesWhen: { keyColumns: [{ field: 'mode', in: ['upsert'] }] },
     idempotent: false,
     // #1190 (M10 slice 2) — `postgres` joins the SOURCE allowlist, because the
     // executor dispatches a copy on the source connection's adapter and the

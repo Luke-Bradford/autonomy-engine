@@ -173,11 +173,11 @@ describe('copyDispatchInputSchema — the DISPATCH variant (#1134 M5 slice 4b)',
     expect(copyDispatchInputSchema.parse({ mapping: [row] }).mode).toBe('append');
   });
 
-  it('takes overwrite, and refuses any other mode', () => {
-    expect(copyDispatchInputSchema.parse({ mapping: [row], mode: 'overwrite' }).mode).toBe(
-      'overwrite',
-    );
-    expect(copyDispatchInputSchema.safeParse({ mapping: [row], mode: 'truncate' }).success).toBe(
+  it('takes each of the four write behaviours, and refuses any other mode', () => {
+    for (const mode of ['append', 'overwrite', 'truncate', 'upsert'] as const) {
+      expect(copyDispatchInputSchema.parse({ mapping: [row], mode }).mode).toBe(mode);
+    }
+    expect(copyDispatchInputSchema.safeParse({ mapping: [row], mode: 'merge' }).success).toBe(
       false,
     );
   });
@@ -208,7 +208,7 @@ describe('the AUTHORED copy config (#1139, catalog configSchema)', () => {
     expect(copyInputSchema.parse({ mapping: [authored], mode: 'overwrite' }).mode).toBe(
       'overwrite',
     );
-    expect(copyInputSchema.safeParse({ mapping: [authored], mode: 'truncate' }).success).toBe(
+    expect(copyInputSchema.safeParse({ mapping: [authored], mode: 'merge' }).success).toBe(
       false,
     );
   });
@@ -253,5 +253,72 @@ describe('the AUTHORED copy config (#1139, catalog configSchema)', () => {
     const numeric = { mapping: [{ sink: 'n', type: 'integer', expression: 42 }] };
     expect(copyInputSchema.safeParse(numeric).success).toBe(false);
     expect(copyDispatchInputSchema.safeParse(numeric).success).toBe(true);
+  });
+});
+
+/**
+ * #1600 OR41 C3a — Write behaviour Upsert and its Key columns (catalogue §4.1).
+ *
+ * The key rules are one declaration (`copyKeyColumnIssues`) read by both
+ * variants' `superRefine` and by the #444 write gate, so each is asserted with
+ * its PATH: a bare `success === false` would pass for a rule that named the
+ * wrong field.
+ */
+describe('copy Key columns (C3a)', () => {
+  const id = { source: 'id', sink: 'id', type: 'integer' as const };
+  const name = { source: 'name', sink: 'name', type: 'string' as const };
+  const issuesOf = (cfg: Record<string, unknown>) => {
+    const r = copyInputSchema.safeParse(cfg);
+    return r.success ? [] : r.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`);
+  };
+
+  it('takes Upsert with no Key columns (the table primary key) or with mapped ones', () => {
+    expect(issuesOf({ mapping: [id, name], mode: 'upsert' })).toEqual([]);
+    expect(issuesOf({ mapping: [id, name], mode: 'upsert', keyColumns: ['id'] })).toEqual([]);
+    expect(issuesOf({ mapping: [id, name], mode: 'upsert', keyColumns: ['id', 'name'] })).toEqual(
+      [],
+    );
+  });
+
+  it('refuses Key columns on any other write behaviour, which would silently ignore them', () => {
+    expect(issuesOf({ mapping: [id], mode: 'append', keyColumns: ['id'] })).toEqual([
+      'keyColumns: only read when Write behaviour is Upsert',
+    ]);
+    expect(issuesOf({ mapping: [id], keyColumns: ['id'] })).toEqual([
+      'keyColumns: only read when Write behaviour is Upsert',
+    ]);
+    // An empty list is unset, as the dock writes when the last key is removed.
+    expect(issuesOf({ mapping: [id], mode: 'append', keyColumns: [] })).toEqual([]);
+  });
+
+  it('refuses a key that no mapping row writes, compared as a string (#1151)', () => {
+    expect(issuesOf({ mapping: [id, name], mode: 'upsert', keyColumns: ['ID'] })).toEqual([
+      "keyColumns.0: 'ID' is not a mapped sink column, so no row carries its value",
+    ]);
+  });
+
+  it('refuses a key named twice', () => {
+    expect(issuesOf({ mapping: [id, name], mode: 'upsert', keyColumns: ['id', 'id'] })).toEqual([
+      "keyColumns.1: duplicate key column 'id'",
+    ]);
+  });
+
+  it("refuses a key whose mapping row writes NULL on a conversion error — a null key matches nothing", () => {
+    expect(
+      issuesOf({
+        mapping: [{ ...id, onError: 'null' }, name],
+        mode: 'upsert',
+        keyColumns: ['id'],
+      }),
+    ).toEqual([
+      "keyColumns.0: the mapping row for 'id' writes NULL on a conversion error, and a NULL key matches no row — set its On error to Fail",
+    ]);
+  });
+
+  it('applies the same rules to the dispatch variant', () => {
+    expect(
+      copyDispatchInputSchema.safeParse({ mapping: [id], mode: 'append', keyColumns: ['id'] })
+        .success,
+    ).toBe(false);
   });
 });
