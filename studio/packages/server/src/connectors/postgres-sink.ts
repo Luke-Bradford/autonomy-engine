@@ -590,15 +590,17 @@ async function autoCreatePostgresTable(
   // Monotonic, so a wall-clock step cannot stretch or cut the wait. Each poll
   // is itself bounded by the session's statement timers (`clientOptionsFor`).
   const deadline = performance.now() + waitMs;
+  // Recorded BEFORE the first try, so a grant whose reply is lost to an error
+  // (a cancel or a timeout landing mid-query) is still released by the caller.
+  // `pg_advisory_unlock` of a lock this session does not hold returns false
+  // with a notice, so releasing one that was never granted is harmless.
+  held.key = key;
   for (;;) {
     const locked = (
       (await client.query('select pg_try_advisory_lock($1::bigint) as "locked"', [key])).rows[0] as
         { locked?: unknown } | undefined
     )?.locked;
-    if (locked === true) {
-      held.key = key;
-      break;
-    }
+    if (locked === true) break;
     if (signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
     if (performance.now() >= deadline) {
       throw new DatasetIoError(

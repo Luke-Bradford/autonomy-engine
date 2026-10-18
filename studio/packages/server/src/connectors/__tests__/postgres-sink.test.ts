@@ -1107,8 +1107,9 @@ describe('the postgres sink: Auto-create from mapping (C3c)', () => {
     // It stops at the try the cancel landed on, rather than waiting out the lock.
     expect(sqlOf(rec).filter((q) => q === TRY_LOCK)).toHaveLength(2);
     expect(sqlOf(rec).some((q) => q.startsWith('CREATE TABLE'))).toBe(false);
-    // It never held the lock, so there is nothing to release.
-    expect(sqlOf(rec).at(-1)).toBe('ROLLBACK');
+    // Released after the ROLLBACK even though it was never granted: a grant whose
+    // reply was lost would look the same, and unlocking an unheld lock is a no-op.
+    expect(sqlOf(rec).slice(-2)).toEqual(['ROLLBACK', UNLOCK]);
   });
 
   it('stops waiting at the statement timeout with no signal, as the LOCK it precedes would', async () => {
@@ -1129,7 +1130,7 @@ describe('the postgres sink: Auto-create from mapping (C3c)', () => {
     const tries = sqlOf(rec).filter((q) => q === TRY_LOCK).length;
     expect(tries).toBeGreaterThan(1);
     expect(tries).toBeLessThan(50);
-    expect(sqlOf(rec).at(-1)).toBe('ROLLBACK');
+    expect(sqlOf(rec).slice(-2)).toEqual(['ROLLBACK', UNLOCK]);
   });
 
   it('rolls the create back on a cancel that lands while it runs', async () => {
