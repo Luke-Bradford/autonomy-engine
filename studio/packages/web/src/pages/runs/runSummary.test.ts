@@ -6,6 +6,7 @@ import type {
   RunEvent,
   RunState,
 } from '@autonomy-studio/shared';
+import { WEB_NO_REQUEST_OUTPUTS } from '@autonomy-studio/shared';
 import { projectRun } from './runProjection';
 import {
   deriveNodeActivity,
@@ -4106,7 +4107,9 @@ describe('#1600 OR41 C11c-2 — a Web with no Request URL (never dispatched)', (
     const [done] = deriveNodeActivity([park({ callback: 'ok' })]);
     expect(done!.status).toBe('success');
     expect(done!.attempts).toBe(1);
-    expect(done!.outputValues).toEqual({ callback: 'ok' });
+    // The fold has no doc; `arrived` is a Web's only, so the null request
+    // outputs the reducer stores are shown beside the callback.
+    expect(done!.outputValues).toEqual({ ...WEB_NO_REQUEST_OUTPUTS, callback: 'ok' });
     expect(done!.endedAtMs).toBe(1_000);
   });
 
