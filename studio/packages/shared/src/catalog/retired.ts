@@ -1,5 +1,6 @@
 import type { Container, Node } from '../schemas/pipeline.js';
 import { protectEscapes, scanTemplateRefs } from '../engine/expr.js';
+import { jsonClone } from '../engine/json-clone.js';
 import { renameNodeOutputRefs } from '../engine/nodeRefs.js';
 import { copyFilesConfigSchema } from './copy-files-config.js';
 import { deleteConfigSchema } from './delete-config.js';
@@ -249,7 +250,7 @@ function lowerHttpRequest(node: Node): Node | undefined {
   if (carriesPairedOrData(node)) return undefined;
   const replacement = getActivity(WEB_ACTIVITY_TYPE);
   if (replacement === undefined) return undefined;
-  const stored = structuredClone(node.config);
+  const stored = jsonClone(node.config);
   const { url, method, headers, body, outputs } = stored;
   if (outputs !== undefined && !keepsWebContract(outputs, replacement.outputs)) return undefined;
   const unknown = Object.entries(stored).filter(([key]) => !HTTP_REQUEST_KEYS.has(key));

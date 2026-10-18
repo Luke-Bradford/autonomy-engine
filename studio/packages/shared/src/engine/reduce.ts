@@ -69,6 +69,7 @@ import {
 } from './params.js';
 import { utf8ByteLength } from './functions.js';
 import { docNodeIdOf, instanceKey, parseInstanceKey } from './instance-key.js';
+import { jsonClone } from './json-clone.js';
 
 // ---------------------------------------------------------------------------
 // P2b + P2c — the PURE event-sourced reducer + walk (DAG, back-edges,
@@ -567,9 +568,7 @@ export function createEngine(doc: EngineDoc): Engine {
     const out: Record<string, unknown> = {};
     for (const v of variableDefs) {
       const value: unknown =
-        typeof v.default === 'object' && v.default !== null
-          ? JSON.parse(JSON.stringify(v.default))
-          : v.default;
+        typeof v.default === 'object' && v.default !== null ? jsonClone(v.default) : v.default;
       defineVariable(out, v.name, value);
     }
     return out;

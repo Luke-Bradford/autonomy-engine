@@ -6,6 +6,7 @@ import type {
   PipelineExportData,
   TriggerExportData,
 } from './envelope.js';
+import { jsonClone } from '../engine/json-clone.js';
 
 /**
  * #3 G5b — the CANONICAL CONTENT FORM of an exported resource: a stable string
@@ -79,12 +80,8 @@ import type {
  * shape of blanket-dropping the whole `webhook` key.
  */
 
-/** Deep clone via a JSON round-trip. Export `data` is always JSON-safe (it was
- * Zod-parsed from a JSON envelope), so this is lossless here and needs no
- * `structuredClone` global (absent from the shared `ES2023` lib set). */
-function jsonClone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
+// Export `data` is always JSON-safe (it was Zod-parsed from a JSON envelope),
+// so `jsonClone` is lossless here.
 
 /** Delete a fixed set of keys from a plain object in place. Typed as `unknown`
  * so it can drop fields the static type marks as required (they are excluded
