@@ -211,9 +211,9 @@ export type LlmFetchResult =
  * `http` adapter's abort/timeout classification: the run's own signal aborting
  * → `cancelled`; the timeout firing → `transient`; anything `fetch` throws
  * after that → `fetchFailure` (a malformed request `permanent`, a refused or
- * dropped connection `transient`). Returns
- * the completed response's status + body text for the adapter to map, or a
- * ready-to-yield `failed` event. It never throws for an expected error.
+ * dropped connection `transient`). Returns the completed response's status +
+ * body text for the adapter to map, or a ready-to-yield `failed` event. It
+ * never throws for an expected error.
  */
 export async function llmPost(
   ctx: ActivityContext,
