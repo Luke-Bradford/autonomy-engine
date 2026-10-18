@@ -95,6 +95,13 @@ export interface ActivityContext {
    * already public), safe to log.
    */
   activityType: string;
+  /**
+   * #1600 OR41 C11c — the absolute URL a Web *Wait for callback* sends as
+   * `callBackUri`. Set by the executor only for such a node, after it has
+   * recorded the wait's correlation row. It embeds a live capability token, so
+   * the adapter keeps it out of every output and error. Omitted otherwise.
+   */
+  callbackUri?: string;
   /** The node's prepared (substituted) config. Secret-free by construction. */
   input: Record<string, unknown>;
   /** The bound Connection's non-secret `config`. */
@@ -292,6 +299,13 @@ export type ActivityEvent =
       recheckAfterSeconds: number;
       giveUpAfterSeconds: number;
     }
+  /**
+   * #1600 OR41 C11c — a Web *Wait for callback* sent its request and it
+   * succeeded; the node now waits for the callback. A terminal: the executor
+   * maps it to `node.awaitingCallback` and the engine parks the node. `outputs`
+   * are the request's; `timeoutSeconds` is the resolved callback timeout.
+   */
+  | { type: 'awaitCallback'; outputs: Record<string, unknown>; timeoutSeconds: number }
   | {
       type: 'failed';
       kind: ConnectorErrorKind;

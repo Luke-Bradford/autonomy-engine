@@ -27,7 +27,11 @@ import { isDeterministicRowCorruption } from '../repo/row-corruption.js';
 import { getConnection } from '../repo/connections.js';
 import { recordConnectionQuotaExhaustion } from '../repo/connection-quota.js';
 import { getPipelineVersion } from '../repo/pipeline-versions.js';
-import { recordExternalWait } from '../repo/external-waits.js';
+import {
+  getExternalWaitByAttempt,
+  recordExternalWait,
+  stampExternalWaitExpiry,
+} from '../repo/external-waits.js';
 import { hashExternalWaitToken } from '../webhooks/external-wait-token.js';
 import type { Db } from '../repo/types.js';
 import type { RunDrives } from './drives.js';
@@ -838,11 +842,27 @@ function armExternalWait(
       `cannot park webhook node '${command.nodeId}': DriverDeps.signExternalWaitToken is not wired`,
     );
   }
-  const token = deps.signExternalWaitToken({
-    runId: state.runId,
-    nodeId: command.nodeId,
-    attemptId: command.attemptId,
-  });
+  const key = { runId: state.runId, nodeId: command.nodeId, attemptId: command.attemptId };
+  // #1600 OR41 C11c — a Web *Wait for callback* recorded its row before the
+  // request. A callback that already arrived settles the node here instead of
+  // parking it: no alarm is armed (nothing will expire), and `dueAt` is now.
+  const prior = getExternalWaitByAttempt(deps.db, key.runId, key.nodeId, key.attemptId);
+  if (prior !== null && prior.earlyCallback !== null) {
+    const arrived = JSON.parse(prior.earlyCallback) as {
+      callback: unknown;
+      reportedError?: string;
+    };
+    return {
+      type: 'externalWait.created',
+      ...key,
+      dueAt: clockOf(deps)(),
+      arrived: {
+        callback: arrived.callback,
+        ...(arrived.reportedError !== undefined ? { reportedError: arrived.reportedError } : {}),
+      },
+    };
+  }
+  const token = deps.signExternalWaitToken(key);
   const row = armLive(
     deps,
     externalWaitArmInput(deps, {
@@ -861,6 +881,9 @@ function armExternalWait(
     expiresAt: row.dueAt,
     now: now(),
   });
+  // A row recorded before the request holds a provisional expiry; the armed
+  // alarm's is the real one.
+  if (prior !== null) stampExternalWaitExpiry(deps.db, key, row.dueAt);
 
   return {
     type: 'externalWait.created',

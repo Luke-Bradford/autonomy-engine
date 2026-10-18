@@ -43,7 +43,10 @@ import {
   listRunSummariesPage,
 } from '../repo/index.js';
 import { getExternalWaitByAttempt, listPendingExternalWaitsByRun } from '../repo/external-waits.js';
-import { deriveExternalWaitToken } from '../webhooks/external-wait-token.js';
+import {
+  deriveExternalWaitToken,
+  externalWaitCallbackPath,
+} from '../webhooks/external-wait-token.js';
 import { makeRunActivityFold } from '../run/activity-counts.js';
 import { buildEngine, DocUnresolvableError, makeDocResolver } from '../run/driver.js';
 import {
@@ -679,11 +682,13 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
             nodeId: wait.nodeId,
             attemptId: wait.attemptId,
             expiresAt: wait.expiresAt,
-            callbackPath: `/api/external-wait/${deriveExternalWaitToken(fastify.masterKey, {
-              runId: wait.runId,
-              nodeId: wait.nodeId,
-              attemptId: wait.attemptId,
-            })}`,
+            callbackPath: externalWaitCallbackPath(
+              deriveExternalWaitToken(fastify.masterKey, {
+                runId: wait.runId,
+                nodeId: wait.nodeId,
+                attemptId: wait.attemptId,
+              }),
+            ),
           }) satisfies PendingExternalWait,
       );
     },

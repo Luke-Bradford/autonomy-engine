@@ -1,14 +1,17 @@
 import {
   DEFAULT_HTTP_TIMEOUT_MS,
   formatZodIssues,
+  webCallbackBody,
   webHasBody,
   WARNING_CODES,
+  WEB_DEFAULT_CALLBACK_TIMEOUT_SECONDS,
   webConfigSchema,
   type httpConnectionConfigSchema,
 } from '@autonomy-studio/shared';
 import type { z } from 'zod';
 import type { ActivityContext, ActivityEvent } from './types.js';
 import { redactSecrets } from './redact.js';
+import { failed } from './activity-events.js';
 import {
   buildRequestHeaders,
   collectResponseHeaders,
@@ -65,15 +68,43 @@ export async function* runWeb(
     return;
   }
   const cfg = parsed.data;
+  // #1600 OR41 C11c — Wait for callback sends the author's JSON object body with
+  // `callBackUri` added. The executor sets `ctx.callbackUri` for such a node.
+  let body = webHasBody(cfg) ? cfg.body : undefined;
+  let callbackUri: string | undefined;
+  if (cfg.waitForCallback) {
+    if (ctx.callbackUri === undefined) {
+      yield failed('permanent', 'Wait for callback has no callback URL to send');
+      return;
+    }
+    callbackUri = ctx.callbackUri;
+    const withUri = webCallbackBody(cfg.body, callbackUri);
+    if (!withUri.ok) {
+      yield failed('permanent', withUri.error);
+      return;
+    }
+    body = withUri.json;
+  }
   const sinkHeaders = sinkHeadersFrom(secretFields);
   const requestHeaders = buildRequestHeaders(connection.headers, cfg.headers, secret, sinkHeaders);
   // An error message drops every request header value, as `http_request`'s
   // does; the outputs only the secrets, since a response may legitimately hold
-  // a plain header's value.
-  const outputSecrets = [secret, ...Object.values(sinkHeaders)];
+  // a plain header's value. The callback URL and its token are secrets too: an
+  // endpoint that echoes its request would otherwise put a live capability
+  // into the run log (#925).
+  const outputSecrets = [
+    secret,
+    ...Object.values(sinkHeaders),
+    ...(callbackUri !== undefined ? [callbackUri, callbackToken(callbackUri)] : []),
+  ];
   // The bare secret too: a header value is `Bearer <secret>`, and a 401 body
   // may echo the token alone.
   const headerValues = [...Object.values(requestHeaders), ...outputSecrets];
+  // Added after `headerValues`: a fixed media type is no secret, and an error
+  // naming `application/json` should keep it.
+  if (callbackUri !== undefined && !hasHeader(requestHeaders, 'content-type')) {
+    requestHeaders['Content-Type'] = 'application/json';
+  }
 
   const timeoutMs =
     cfg.httpRequestTimeoutSeconds !== undefined
@@ -88,7 +119,7 @@ export async function* runWeb(
       {
         method: cfg.method,
         headers: requestHeaders,
-        ...(webHasBody(cfg) ? { body: cfg.body } : {}),
+        ...(body !== undefined ? { body } : {}),
         signal: deadline.signal,
       },
       Object.keys(sinkHeaders),
@@ -134,10 +165,10 @@ export async function* runWeb(
       new TextDecoder().decode(data, { stream: overLimit }),
       outputSecrets,
     );
-    let body: unknown = text;
+    let responseBody: unknown = text;
     if (cfg.parseAs === 'json') {
       const json = parseWebJson(text);
-      if (json.ok) body = json.value;
+      if (json.ok) responseBody = json.value;
       // An error status let through (Fail on HTTP error off, or Treat as
       // success) is often an HTML page: it stays text rather than fail the
       // node the author asked to succeed.
@@ -153,18 +184,24 @@ export async function* runWeb(
         reason: `the response was longer than Max size (${cfg.maxResponseBytes} bytes); the first ${data.byteLength} bytes were kept`,
       };
     }
-    yield {
-      type: 'succeeded',
-      outputs: {
-        status: res.status,
-        headers: collectResponseHeaders(res, outputSecrets),
-        body,
-        bytes: data.byteLength,
-        durationMs,
-        truncated: overLimit,
-        callback: null,
-      },
+    const outputs = {
+      status: res.status,
+      headers: collectResponseHeaders(res, outputSecrets),
+      body: responseBody,
+      bytes: data.byteLength,
+      durationMs,
+      truncated: overLimit,
     };
+    if (cfg.waitForCallback) {
+      // The request succeeded; the node now waits for its callback.
+      yield {
+        type: 'awaitCallback',
+        outputs,
+        timeoutSeconds: cfg.callbackTimeoutSeconds ?? WEB_DEFAULT_CALLBACK_TIMEOUT_SECONDS,
+      };
+      return;
+    }
+    yield { type: 'succeeded', outputs: { ...outputs, callback: null } };
   } catch (err) {
     const message = redactSecrets(err instanceof Error ? err.message : String(err), headerValues);
     if (ctx.signal.aborted) {
@@ -267,4 +304,14 @@ function parseWebJson(text: string): { ok: true; value: unknown } | { ok: false;
     } else if (c === '}' || c === ']') depth -= 1;
   }
   return { ok: true, value };
+}
+
+/** A header set's own case-insensitive lookup: HTTP header names are. */
+function hasHeader(headers: Record<string, string>, name: string): boolean {
+  return Object.keys(headers).some((key) => key.toLowerCase() === name);
+}
+
+/** The capability token at the end of a callback URL, redacted on its own too. */
+function callbackToken(callbackUri: string): string {
+  return callbackUri.slice(callbackUri.lastIndexOf('/') + 1);
 }

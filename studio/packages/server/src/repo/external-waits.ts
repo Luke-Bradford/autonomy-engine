@@ -139,10 +139,11 @@ function settleExternalWait(
   key: ExternalWaitAttempt,
   status: 'completed' | 'expired',
   now: number,
+  earlyCallback?: string,
 ): boolean {
   const res = db
     .update(externalWaits)
-    .set({ status, resolvedAt: now })
+    .set({ status, resolvedAt: now, ...(earlyCallback !== undefined ? { earlyCallback } : {}) })
     .where(
       and(
         eq(externalWaits.runId, key.runId),
@@ -164,6 +165,42 @@ function settleExternalWait(
  */
 export function markExternalWaitCompleted(db: Db, key: ExternalWaitAttempt, now: number): boolean {
   return settleExternalWait(db, key, 'completed', now);
+}
+
+/**
+ * #1600 OR41 C11c — settle a `pending` row to `completed` for a Web callback that
+ * arrived BEFORE its node parked, keeping the callback (and the failure it
+ * reports, if any) for the driver's arm (`armExternalWait`) to settle the node
+ * with — the arm runs without the node's config, so the verdict travels here. Same guard and
+ * exactly-once verdict as `markExternalWaitCompleted`.
+ */
+export function markExternalWaitArrivedEarly(
+  db: Db,
+  key: ExternalWaitAttempt,
+  now: number,
+  arrived: { callback: unknown; reportedError?: string },
+): boolean {
+  return settleExternalWait(db, key, 'completed', now, JSON.stringify(arrived));
+}
+
+/**
+ * #1600 OR41 C11c — stamp a still-`pending` row's `expiresAt` from its armed expiry
+ * alarm. A Web *Wait for callback* records its row before the request, with a
+ * provisional expiry; the park's arm then fixes the real one. Idempotent: a
+ * replayed arm reads the same alarm `dueAt`.
+ */
+export function stampExternalWaitExpiry(db: Db, key: ExternalWaitAttempt, expiresAt: number): void {
+  db.update(externalWaits)
+    .set({ expiresAt })
+    .where(
+      and(
+        eq(externalWaits.runId, key.runId),
+        eq(externalWaits.nodeId, key.nodeId),
+        eq(externalWaits.attemptId, key.attemptId),
+        eq(externalWaits.status, 'pending'),
+      ),
+    )
+    .run();
 }
 
 /**

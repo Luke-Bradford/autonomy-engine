@@ -36,10 +36,19 @@ import {
   type Node,
   type WarningCode,
   isNonOverridableConnectionConfigKey,
+  WEB_ACTIVITY_TYPE,
+  WEB_DEFAULT_CALLBACK_TIMEOUT_SECONDS,
+  WEB_MAX_REQUEST_TIMEOUT_SECONDS,
 } from '@autonomy-studio/shared';
 import { RUN_CANCELLED_REASON, runCancelledFailure } from './cancel.js';
 import { ACTIVITY_TIMEOUT_REASON, activityTimeoutFailure, armDeadline } from './timeout.js';
 import { getRun } from '../repo/runs.js';
+import { markExternalWaitExpired, recordExternalWait } from '../repo/external-waits.js';
+import {
+  deriveExternalWaitToken,
+  externalWaitCallbackUrl,
+  hashExternalWaitToken,
+} from '../webhooks/external-wait-token.js';
 import { connectionNotReadyReason, getConnection } from '../repo/connections.js';
 import { getDataset } from '../repo/datasets.js';
 import { getWorkspaceSettings } from '../repo/workspace-settings.js';
@@ -112,10 +121,36 @@ import type { ChildRuns } from './child.js';
  * subprocesses that each fail and re-record it. Only the optimisation is lost;
  * correctness (failure → window → later admissions skip) is unchanged.
  */
+/** #1600 OR41 C11c — a Web node set to *Wait for callback*. */
+function isCallbackWait(ctx: ActivityContext): boolean {
+  return ctx.activityType === WEB_ACTIVITY_TYPE && ctx.input.waitForCallback === true;
+}
+
+/**
+ * #1600 OR41 C11c — the expiry a Web *Wait for callback* row is recorded with
+ * before its request: the longest request plus the callback timeout. Provisional
+ * and informational (the owner listing shows it); nothing expires on it, and
+ * the park's arm stamps the armed alarm's real expiry.
+ */
+function provisionalCallbackWindowMs(ctx: ActivityContext): number {
+  const callback = ctx.input.callbackTimeoutSeconds;
+  const seconds =
+    WEB_MAX_REQUEST_TIMEOUT_SECONDS +
+    (typeof callback === 'number' ? callback : WEB_DEFAULT_CALLBACK_TIMEOUT_SECONDS);
+  return seconds * 1000;
+}
+
 export interface ExecutorDeps {
   db: Db;
   /** The secret-encryption master key (for just-in-time secret decrypt). */
   masterKey: Uint8Array;
+  /**
+   * #1600 OR41 C11c — the server's public base URL (`AUTONOMY_PUBLIC_URL`, or the
+   * bind address), which a Web *Wait for callback* joins to its callback path to
+   * send an absolute `callBackUri`. Unset, such a node fails at dispatch with a
+   * clear reason rather than send a URL nobody can call.
+   */
+  publicBaseUrl?: string;
   /** Resolve a run's immutable pipeline version (for the node's type/connection). */
   resolveDoc: DocResolver;
   /** Connector adapters by Connection kind. */
@@ -255,6 +290,9 @@ function redactEventPlaintexts(
   }
   if (ev.type === 'node.notReady') {
     return { ...ev, reason: redactSecrets(ev.reason, plaintexts) };
+  }
+  if (ev.type === 'node.awaitingCallback') {
+    return { ...ev, outputs: deepRedactRecord(ev.outputs, plaintexts) };
   }
   return ev;
 }
@@ -1192,6 +1230,37 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       emit(timeoutTerminal);
       return true;
     };
+    // #1600 OR41 C11c — a Web *Wait for callback* records its correlation row
+    // BEFORE the request, so a callback that arrives while the request is in
+    // flight (an endpoint may call back before it answers) finds it. Recorded
+    // here, inside the adapter slot and after `node.dispatched`, so queue time
+    // cannot eat the provisional expiry. A request that ends without
+    // `awaitCallback` expires the row in `finally`, so no dead attempt offers a
+    // callback URL. (A crash mid-request leaves it `pending` on an interrupted
+    // run, which completes nothing: the completer checks the node.)
+    let callbackAwaited = false;
+    const callbackWait = isCallbackWait(ctx) ? { runId, nodeId, attemptId } : undefined;
+    if (callbackWait !== undefined) {
+      if (deps.publicBaseUrl === undefined) {
+        emit(
+          nodeFailed(runId, nodeId, attemptId, {
+            error:
+              "Wait for callback needs the server's public URL (AUTONOMY_PUBLIC_URL), and none is configured",
+            kind: 'permanent',
+          }),
+        );
+        return;
+      }
+      const token = deriveExternalWaitToken(deps.masterKey, callbackWait);
+      const now = (deps.now ?? Date.now)();
+      recordExternalWait(deps.db, {
+        ...callbackWait,
+        tokenHash: hashExternalWaitToken(token),
+        expiresAt: now + provisionalCallbackWindowMs(ctx),
+        now,
+      });
+      ctx = { ...ctx, callbackUri: externalWaitCallbackUrl(deps.publicBaseUrl, token) };
+    }
     try {
       for await (const ev of adapter.runActivity(ctx, secret, secretFields, sinkSecret)) {
         if (ev.type === 'output') {
@@ -1314,6 +1383,20 @@ export function createExecutor(deps: ExecutorDeps): Executor {
             outputs: withTranscript(ctx, ev.outputs),
           });
           return;
+        } else if (ev.type === 'awaitCallback') {
+          // #1600 OR41 C11c — the request succeeded; the engine parks the node
+          // until its callback (`node.awaitingCallback`). Like `succeeded`, an
+          // outcome the adapter reached stands even after the deadline fired.
+          callbackAwaited = true;
+          emit({
+            type: 'node.awaitingCallback',
+            runId,
+            nodeId,
+            attemptId,
+            outputs: ev.outputs,
+            timeoutSeconds: ev.timeoutSeconds,
+          });
+          return;
         } else if (ev.type === 'notReady') {
           // #1600 OR41 C8d — a Wait until that does not hold yet ends the attempt;
           // the engine parks the node and re-checks (`node.notReady`).
@@ -1401,12 +1484,18 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     } finally {
       cancelDeadline?.();
       controller.abort();
+      if (callbackWait !== undefined && !callbackAwaited) {
+        markExternalWaitExpired(deps.db, callbackWait, (deps.now ?? Date.now)());
+      }
     }
   }
 
   /** The events that end an attempt — the only ones `runAdapter` holds. */
   const isNodeTerminal = (ev: EngineEvent): boolean =>
-    ev.type === 'node.succeeded' || ev.type === 'node.failed' || ev.type === 'node.notReady';
+    ev.type === 'node.succeeded' ||
+    ev.type === 'node.failed' ||
+    ev.type === 'node.notReady' ||
+    ev.type === 'node.awaitingCallback';
 
   async function* performDispatch(
     command: Extract<ExecutorCommand, { type: 'dispatchNode' }>,
