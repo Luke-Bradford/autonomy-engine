@@ -174,21 +174,23 @@ const ENTRIES: ActivityCatalogEntry[] = [
       { key: 'auth', fields: [HTTP_SECRET_HEADERS_FIELD] },
       {
         key: 'settings',
-        // Short fields side by side, so the dock packs them in pairs and the
-        // tab fits 1440x900: the two toggles share a row, Treat as success takes
-        // one, the two numbers share one, then the two choices.
+        // Ordered so the dock's three-column grid packs the tab into five
+        // rows at 1440x900, Wait for callback on or off: the three toggles
+        // share a row, Treat as success takes one, the two timeouts and Max size
+        // share one, Parse as (two columns) takes Report status on callback
+        // beside it, and When over the limit closes. C11c's three fields fill
+        // the free cells of rows that already existed rather than add a sixth.
         fields: [
           'failOnHttpError',
           'retryOnThrottle',
+          'waitForCallback',
           'successStatusCodes',
           'httpRequestTimeoutSeconds',
+          'callbackTimeoutSeconds',
           'maxResponseBytes',
           'parseAs',
-          'whenOverLimit',
-          // C11c — the toggle, then its two settings side by side.
-          'waitForCallback',
-          'callbackTimeoutSeconds',
           'reportStatusOnCallback',
+          'whenOverLimit',
         ],
       },
     ],

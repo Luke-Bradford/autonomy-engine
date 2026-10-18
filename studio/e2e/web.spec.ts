@@ -126,8 +126,8 @@ test.describe('#1600 C11a — Web', () => {
     );
     await expect(checkbox(page, 'Retry on 429 and 503')).toBeChecked();
     // Measured at 1440x900: the whole Settings tab is in the docked pane's
-    // view, its short fields packed in pairs (eight fields, six rows; C11c's
-    // two Wait for callback settings show only when it is on).
+    // view (eight fields, five rows; C11c's two Wait for callback settings
+    // show only when it is on, and fill free cells of the same five rows).
     const pane = (await properties(page).boundingBox())!;
     for (const control of [
       checkbox(page, 'Retry on 429 and 503'),
@@ -319,17 +319,29 @@ test.describe('#1600 C11c — Web Wait for callback', () => {
     await checkbox(page, 'Wait for callback').check();
     await expect(timeout).toBeVisible();
     await expect(checkbox(page, 'Report status on callback')).toBeVisible();
-    // Its two settings share a row, and the whole tab still fits the docked
-    // pane at 1440x900.
-    const timeoutBox = (await timeout.boundingBox())!;
-    const reportBox = (await checkbox(page, 'Report status on callback').boundingBox())!;
+    // The whole tab still fits the docked pane at 1440x900: the three fields
+    // fill free cells of existing rows (Wait for callback beside the two
+    // toggles, Callback timeout beside HTTP request timeout) instead of adding
+    // a row.
     const mid = (b: { y: number; height: number }) => b.y + b.height / 2;
-    expect(Math.abs(mid(timeoutBox) - mid(reportBox))).toBeLessThan(16);
+    const waitBox = (await checkbox(page, 'Wait for callback').boundingBox())!;
+    const failBox = (await checkbox(page, 'Fail on HTTP error').boundingBox())!;
+    expect(Math.abs(mid(waitBox) - mid(failBox))).toBeLessThan(4);
+    const timeoutBox = (await timeout.boundingBox())!;
+    const httpTimeoutBox = (await properties(page)
+      .getByRole('textbox', { name: 'HTTP request timeout', exact: true })
+      .boundingBox())!;
+    expect(Math.abs(mid(timeoutBox) - mid(httpTimeoutBox))).toBeLessThan(4);
     const pane = (await properties(page).boundingBox())!;
-    for (const control of [timeout, checkbox(page, 'Report status on callback')]) {
+    for (const control of [
+      timeout,
+      checkbox(page, 'Report status on callback'),
+      combobox(page, 'When over the limit'),
+    ]) {
       const box = (await control.boundingBox())!;
       expect(box.y + box.height).toBeLessThanOrEqual(Math.min(pane.y + pane.height, 900));
     }
+    await properties(page).getByRole('button', { name: 'Apply config', exact: true }).click();
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
 
