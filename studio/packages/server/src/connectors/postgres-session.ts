@@ -91,7 +91,10 @@ export interface PostgresClient {
    * concatenated"), and resolves its target through `to_regclass($1)` so a
    * relation name cannot be interpolated either.
    */
-  query(sql: string | PostgresExtendedQuery, values?: readonly unknown[]): Promise<PostgresQueryResult>;
+  query(
+    sql: string | PostgresExtendedQuery,
+    values?: readonly unknown[],
+  ): Promise<PostgresQueryResult>;
   end(): Promise<unknown>;
 }
 

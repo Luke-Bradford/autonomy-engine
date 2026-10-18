@@ -62,7 +62,7 @@ describe('sqlLeadingKeyword', () => {
     expect(sqlLeadingKeyword('Insert into t values (1)', 'postgres')).toBe('INSERT');
   });
 
-  it('skips whitespace and comments, by each store\'s own comment rules', () => {
+  it("skips whitespace and comments, by each store's own comment rules", () => {
     expect(sqlLeadingKeyword(' \n\t-- note\n/* a */ update t set a = 1', 'sqlite')).toBe('UPDATE');
     expect(sqlLeadingKeyword('/* /* nested */ still */ delete from t', 'postgres')).toBe('DELETE');
     // postgres ends a line comment at a CR; sqlite does not, so there the rest is comment.

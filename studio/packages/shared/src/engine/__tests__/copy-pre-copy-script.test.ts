@@ -9,7 +9,7 @@ import { COPY_ACTIVITY_TYPE } from '../../catalog/types.js';
  * construction too, for a doc that reached the store some other way: the
  * reducer never evaluates the statement, only its bind values.
  */
-describe('prepInput leaves a copy\'s Pre-copy script unsubstituted (C3b)', () => {
+describe("prepInput leaves a copy's Pre-copy script unsubstituted (C3b)", () => {
   const copy = (config: Record<string, unknown>): Node => ({
     id: 'c',
     type: COPY_ACTIVITY_TYPE,
@@ -37,7 +37,9 @@ describe('prepInput leaves a copy\'s Pre-copy script unsubstituted (C3b)', () =>
     });
     const cmd = eng
       .reduce(eng.seedState(), started)
-      .commands.find((c) => c.type === 'dispatchNode') as { preparedInput: Record<string, unknown> };
+      .commands.find((c) => c.type === 'dispatchNode') as {
+      preparedInput: Record<string, unknown>;
+    };
     expect(cmd.preparedInput).toEqual({
       mapping: [],
       preCopyScript: "delete from t where r = :r or note = '${run.runId}'",
@@ -50,7 +52,9 @@ describe('prepInput leaves a copy\'s Pre-copy script unsubstituted (C3b)', () =>
     const eng = createEngine({ nodes: [copy({ mapping: [] })], edges: [] });
     const cmd = eng
       .reduce(eng.seedState(), started)
-      .commands.find((c) => c.type === 'dispatchNode') as { preparedInput: Record<string, unknown> };
+      .commands.find((c) => c.type === 'dispatchNode') as {
+      preparedInput: Record<string, unknown>;
+    };
     expect(cmd.preparedInput).toEqual({ mapping: [] });
   });
 });

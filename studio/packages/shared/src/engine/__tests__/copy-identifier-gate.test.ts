@@ -185,7 +185,7 @@ describe('§8 — a Pre-copy script stays literal SQL (C3b)', () => {
     expect(
       validateDoc(doc([scriptNode({ preCopyScript: "delete from t where d = '${run.runId}'" })])),
     ).toEqual([
-      "node.c.preCopyScript: a Pre-copy script stays literal, so '${' in it is never evaluated — write :name in the SQL and give its value in Pre-copy script bind values",
+      "node.c.preCopyScript: a Pre-copy script stays literal, so '${' in it is never evaluated — write :name in the SQL and give its value in Pre-copy bind values",
     ]);
   });
 });

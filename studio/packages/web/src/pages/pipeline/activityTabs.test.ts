@@ -34,7 +34,13 @@ describe('nodeTypeTabs (#1477)', () => {
       {
         key: 'sink',
         label: 'Sink',
-        fields: ['mode', 'keyColumns'],
+        fields: [
+          'mode',
+          'keyColumns',
+          'preCopyScript',
+          'preCopyScriptParameters',
+          'writeBatchSize',
+        ],
         bindings: ['sinkConnection', 'sinkDataset'],
       },
       { key: 'mapping', label: 'Mapping', fields: ['mapping'], bindings: [] },

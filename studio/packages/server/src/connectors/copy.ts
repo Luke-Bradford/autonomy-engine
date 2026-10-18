@@ -446,22 +446,23 @@ export async function* runCopyActivity(
             : { batchRows: parsed.data.writeBatchSize }),
         }),
         {
-        mapping: mapping as readonly CopyPumpMappingEntry[],
-        counters,
-        // §6.4 — the SOURCE's facts, never the sink's. A CSV declares how it
-        // spells NULL and how it writes a date; the store being written into
-        // has real types and a real NULL and declares neither. Derived at the
-        // describe rung above rather than inline here — see the note there for
-        // why the empty-mapping guard has to cover both.
-        coercion,
-        onBatch: () => {
-          ticks.push({
-            rowsRead: counters.rowsRead,
-            rowsInFlight: counters.rowsWritten,
-            rowsFailed: counters.rowsFailed,
-          });
+          mapping: mapping as readonly CopyPumpMappingEntry[],
+          counters,
+          // §6.4 — the SOURCE's facts, never the sink's. A CSV declares how it
+          // spells NULL and how it writes a date; the store being written into
+          // has real types and a real NULL and declares neither. Derived at the
+          // describe rung above rather than inline here — see the note there for
+          // why the empty-mapping guard has to cover both.
+          coercion,
+          onBatch: () => {
+            ticks.push({
+              rowsRead: counters.rowsRead,
+              rowsInFlight: counters.rowsWritten,
+              rowsFailed: counters.rowsFailed,
+            });
+          },
         },
-      }),
+      ),
       signal: ctx.signal,
     }))()
     .then(

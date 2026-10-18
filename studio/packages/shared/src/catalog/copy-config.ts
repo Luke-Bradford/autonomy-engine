@@ -1,10 +1,5 @@
 import { z } from 'zod';
-import {
-  literalText,
-  optionTitles,
-  presented,
-  singleLine,
-} from '../schemas/field-presentation.js';
+import { literalText, optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
 import { DataTypeSchema } from '../schemas/dataset.js';
 import { interpolationMode } from '../engine/expr.js';
 import { isSet } from './config-value.js';
@@ -292,7 +287,7 @@ export type CopyKeyColumnIssue = {
 export function preCopyScriptIssue(config: Record<string, unknown>): string | null {
   const sql = config['preCopyScript'];
   return typeof sql === 'string' && sql.includes('${')
-    ? "a Pre-copy script stays literal, so '${' in it is never evaluated — write :name in the SQL and give its value in Pre-copy script bind values"
+    ? "a Pre-copy script stays literal, so '${' in it is never evaluated — write :name in the SQL and give its value in Pre-copy bind values"
     : null;
 }
 
@@ -417,15 +412,15 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
       preCopyScript: presented(literalText(z.string().min(1)).optional(), {
         title: 'Pre-copy script',
         description:
-          'One SQL statement run once before the rows are written, inside the copy\'s ' +
+          "One SQL statement run once before the rows are written, inside the copy's " +
           'transaction, so a failed copy undoes it. Literal: write :name and give its value ' +
-          'in Pre-copy script bind values. It runs before Write behaviour, so Overwrite and ' +
+          'in Pre-copy bind values. It runs before Write behaviour, so Overwrite and ' +
           'Truncate then insert also delete what it inserts. SQLite takes INSERT, UPDATE, ' +
           'DELETE, REPLACE, CREATE, DROP, ALTER or WITH; PostgreSQL also takes MERGE, ' +
           'TRUNCATE, SELECT, CALL and DO. Database sinks only.',
       }),
       preCopyScriptParameters: presented(z.record(z.string().min(1), bindValue).optional(), {
-        title: 'Pre-copy script bind values',
+        title: 'Pre-copy bind values',
         description:
           'A value for each :name in the Pre-copy script, keyed without the colon. A value ' +
           'is text unless a ${} expression gives a number or null.',

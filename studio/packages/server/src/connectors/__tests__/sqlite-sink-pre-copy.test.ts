@@ -143,7 +143,9 @@ describe('Pre-copy script (SQLite)', () => {
     async (sql) => {
       const at = store(SEEDED);
       const err = await refusal(write(at, { sql, parameters: {} }, [[]]));
-      expect(err.message).toMatch(/^a Pre-copy script on SQLite may not run \w+; it may begin with INSERT, UPDATE/);
+      expect(err.message).toMatch(
+        /^a Pre-copy script on SQLite may not run \w+; it may begin with INSERT, UPDATE/,
+      );
     },
   );
 
@@ -168,11 +170,9 @@ describe('Pre-copy script (SQLite)', () => {
 
   it('binds only the names the statement uses, so a spare value is not an error', async () => {
     const at = store(SEEDED);
-    await write(
-      at,
-      { sql: 'DELETE FROM sink WHERE id = :id', parameters: { id: 2, spare: 'x' } },
-      [[]],
-    );
+    await write(at, { sql: 'DELETE FROM sink WHERE id = :id', parameters: { id: 2, spare: 'x' } }, [
+      [],
+    ]);
     expect(rowsOf(at.path)).toEqual([{ id: 1, day: 'mon' }]);
   });
 
