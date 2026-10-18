@@ -71,12 +71,13 @@ test.describe('#1600 C11a — Web', () => {
     await expect(canvasNodes(page)).toHaveCount(1);
     await canvasNodes(page).first().click();
 
-    await expect(properties(page).getByRole('tab')).toHaveText([
-      'General',
-      'Request',
-      'Auth',
-      'Settings',
-    ]);
+    // General, then §4.6's Request · Auth · Settings, left to right.
+    await expect(properties(page).getByRole('tab')).toHaveCount(4);
+    const xs: number[] = [];
+    for (const name of ['General', 'Request', 'Auth', 'Settings']) {
+      xs.push((await tab(page, name).boundingBox())!.x);
+    }
+    expect(xs).toEqual([...xs].sort((a, b) => a - b));
 
     await tab(page, 'Request').click();
     await pickConnection(page, 'Connection', { id: http });
@@ -85,20 +86,33 @@ test.describe('#1600 C11a — Web', () => {
     // ADF's defaults, shown unset.
     await tab(page, 'Settings').click();
     await expect(checkbox(page, 'Fail on HTTP error')).toBeChecked();
-    await expect(properties(page).getByLabel('Treat as success', { exact: true })).toBeVisible();
-    await expect(combobox(page, 'Parse as').locator('option:checked')).toHaveText('JSON (default)');
     await expect(
-      combobox(page, 'When over the limit').locator('option:checked'),
-    ).toHaveText('Fail (default)');
+      properties(page).getByRole('textbox', { name: /^Treat as success/ }),
+    ).toBeVisible();
+    await expect(combobox(page, 'Parse as').locator('option:checked')).toHaveText('JSON (default)');
+    await expect(combobox(page, 'When over the limit').locator('option:checked')).toHaveText(
+      'Fail (default)',
+    );
     await expect(checkbox(page, 'Retry on 429 and 503')).toBeChecked();
-    // Measured at 1440x900: the whole Settings tab is in the docked pane's view.
-    const last = await checkbox(page, 'Retry on 429 and 503').boundingBox();
-    expect(last, 'Retry on 429 and 503 has a box').not.toBeNull();
-    expect(last!.y + last!.height).toBeLessThanOrEqual(900);
+    // Measured at 1440x900: the whole Settings tab is in the docked pane's
+    // view, its short fields packed in pairs (seven fields, five rows).
+    const pane = (await properties(page).boundingBox())!;
+    for (const control of [
+      checkbox(page, 'Retry on 429 and 503'),
+      combobox(page, 'When over the limit'),
+    ]) {
+      const box = (await control.boundingBox())!;
+      expect(box.y + box.height).toBeLessThanOrEqual(Math.min(pane.y + pane.height, 900));
+    }
+    const failBox = (await checkbox(page, 'Fail on HTTP error').boundingBox())!;
+    const retryBox = (await checkbox(page, 'Retry on 429 and 503').boundingBox())!;
+    expect(Math.abs(failBox.y - retryBox.y)).toBeLessThan(4);
 
     // Treat as success is Fail on HTTP error's: it goes when that is off.
     await checkbox(page, 'Fail on HTTP error').uncheck();
-    await expect(properties(page).getByLabel('Treat as success', { exact: true })).toHaveCount(0);
+    await expect(properties(page).getByRole('textbox', { name: /^Treat as success/ })).toHaveCount(
+      0,
+    );
     await checkbox(page, 'Fail on HTTP error').check();
 
     await fillSelectedNodeConfig(page, { 'Request URL': '/items' });
@@ -114,7 +128,10 @@ test.describe('#1600 C11a — Web', () => {
     }[];
     const latest = versions.sort((a, b) => b.version - a.version)[0]!;
     expect(latest.nodes.map((n) => n.type)).toEqual(['web']);
-    expect(latest.nodes[0]!.config).toMatchObject({ url: '/items', failOnHttpError: true });
+    expect(latest.nodes[0]!.config).toMatchObject({ url: '/items' });
+    // Ticked back to its default, Fail on HTTP error writes nothing: the key
+    // stays absent and the schema's default (on) applies.
+    expect(latest.nodes[0]!.config).not.toHaveProperty('failOnHttpError');
 
     const runId = await fireAndSettle(page, latest.id, 'e2e 1600 c11a');
     const events = await eventsOf(page, runId);
@@ -137,7 +154,15 @@ test.describe('#1600 C11a — Web', () => {
       config: { baseUrl: stubUrl },
     });
     const { pipelineVersionId } = await seedVersion(page, 'e2e 1600 c11a web 404', {
-      nodes: [{ id: 'call', type: 'web', connectionId: http, config: { url: '/missing' } }],
+      nodes: [
+        {
+          id: 'call',
+          type: 'web',
+          position: { x: 0, y: 0 },
+          connectionId: http,
+          config: { url: '/missing' },
+        },
+      ],
     });
     const runId = await fireAndSettle(page, pipelineVersionId, 'e2e 1600 c11a 404');
     const run = (await (

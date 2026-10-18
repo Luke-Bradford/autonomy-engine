@@ -170,14 +170,16 @@ const ENTRIES: ActivityCatalogEntry[] = [
       { key: 'auth', fields: [HTTP_SECRET_HEADERS_FIELD] },
       {
         key: 'settings',
+        // Short fields in pairs, so the dock packs them side by side and the
+        // tab fits 1440x900: the two status toggles, then the two numbers.
         fields: [
           'failOnHttpError',
+          'retryOnThrottle',
           'successStatusCodes',
           'httpRequestTimeoutSeconds',
-          'parseAs',
           'maxResponseBytes',
+          'parseAs',
           'whenOverLimit',
-          'retryOnThrottle',
         ],
       },
     ],

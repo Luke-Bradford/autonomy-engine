@@ -62,8 +62,9 @@ const HELP_LIMITS: Record<string, number> = {
   // +1 for C8d's Wait until, which says a missing path counts as not yet.
   'Get metadata': 9,
   'HTTP request': 9,
-  // #1600 OR41 C11a — Web, measured.
-  Web: 0,
+  // #1600 OR41 C11a — Web, measured: HTTP request's 9 and one on each of
+  // the seven Settings fields.
+  Web: 16,
   // +3 for C7a's Settings, each `?` a fact its label lacks: First row only names
   // the output it writes, Max rows its ceiling, When over the limit both bounds.
   // +1 for C7b's Read as, which says what each mode reads.
@@ -348,8 +349,8 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   // ADF names, defaults and bounds.
   'Get metadata': 17,
   'HTTP request': 9,
-  // #1600 OR41 C11a — Web, measured.
-  Web: 0,
+  // #1600 OR41 C11a — Web with every setting showing: the same 16.
+  Web: 16,
   // +3 for C7a's Settings, each `?` a fact its label lacks: First row only names
   // the output it writes, Max rows its ceiling, When over the limit both bounds.
   // +1 on each Lookup for C7b's Read as, whose `?` says what each mode reads;
