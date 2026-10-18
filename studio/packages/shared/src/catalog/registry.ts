@@ -393,7 +393,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
     description: 'Set a pipeline variable, or add a value to the end of an array variable.',
     kind: 'control',
     category: 'control',
-    tabs: [{ key: 'settings', fields: ['operation', 'variable', 'value'] }],
+    // Operation last: it has a default, and a tab lists its required fields
+    // first (`activity-tabs.test.ts`).
+    tabs: [{ key: 'settings', fields: ['variable', 'value', 'operation'] }],
     idempotent: false,
     connectionKinds: [],
     outputs: [],
