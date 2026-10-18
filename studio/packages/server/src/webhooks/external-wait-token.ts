@@ -88,9 +88,12 @@ export function externalWaitCallbackPath(token: string): string {
 
 /**
  * #1761 — why a `callBackUri` on this public base URL may never be called, or
- * `null`. A loopback host (`127.0.0.0/8`, `::1`, `localhost` and its
- * subdomains) is reachable only from this machine. Reads the origin alone, so
- * the sentence never holds a token.
+ * `null`. A loopback host (`127.0.0.0/8`, `::1`, either as IPv4-mapped IPv6,
+ * `localhost` and its subdomains, with or without a trailing dot) or an
+ * unspecified one (`0.0.0.0`, `::`) is reachable only from this machine. `URL`
+ * has already normalised the host (lower case, `127.1` and hex forms to dotted
+ * quads, IPv6 compressed). Reads the origin alone, so the sentence never holds
+ * a token.
  */
 export function loopbackCallbackWarning(publicBaseUrl: string): string | null {
   let url: URL;
@@ -99,15 +102,18 @@ export function loopbackCallbackWarning(publicBaseUrl: string): string | null {
   } catch {
     return null;
   }
-  const host = url.hostname.toLowerCase();
+  const host = url.hostname.toLowerCase().replace(/\.$/, '');
   const loopback =
     host === 'localhost' ||
     host.endsWith('.localhost') ||
+    /^127(\.\d{1,3}){3}$/.test(host) ||
+    host === '0.0.0.0' ||
     host === '[::1]' ||
-    /^127(\.\d{1,3}){3}$/.test(host);
+    host === '[::]' ||
+    /^\[::ffff:(7f[0-9a-f]{2}:[0-9a-f]{1,4}|0:0)\]$/.test(host);
   if (!loopback) return null;
   return (
-    `The callback URL starts ${url.origin}, a loopback address that only this machine can reach, ` +
+    `The callback URL starts ${url.origin}, an address that only this machine can reach, ` +
     'so a remote endpoint cannot call back and the activity waits until its callback timeout. ' +
     'Set AUTONOMY_PUBLIC_URL to an address the endpoint can reach.'
   );

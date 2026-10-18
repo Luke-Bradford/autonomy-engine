@@ -24,9 +24,14 @@ export async function answerConfirm(
   // dialog is found again on every poll (#1765): searching inside the element
   // the FIRST poll found would wait on that element for good if Fluent replaced
   // it while mounting.
+  // Both buttons, too: every `useConfirm` dialog has its dismiss and its action,
+  // and a half-mounted one holding only the first would make `accept` click
+  // Cancel.
   const { dialog, buttons } = await waitFor(() => {
     const found = screen.getByRole('alertdialog');
-    return { dialog: found, buttons: within(found).getAllByRole('button') };
+    const all = within(found).getAllByRole('button');
+    expect(all.length).toBeGreaterThanOrEqual(2);
+    return { dialog: found, buttons: all };
   });
   const text = dialog.textContent ?? '';
   const target = answer === 'cancel' ? buttons[0]! : buttons[buttons.length - 1]!;

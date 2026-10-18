@@ -373,6 +373,8 @@ describe('#1761 — a Web wait inside a parallel ForEach', () => {
       { list: ['a', 'b'] },
     );
     await untilStatus(runId, 'waiting');
+    // Both items' requests, however the two dispatches interleave with the park.
+    await until(() => sent.length === 2, 'both items to send their request');
 
     // Two requests, two DISTINCT callback URIs, two correlation rows.
     expect(sent).toHaveLength(2);
@@ -444,8 +446,9 @@ describe('#1761 — a crash between node.awaitingCallback and externalWait.creat
     });
     const key = { runId: run.id, nodeId: 'job', attemptId: 'job#0' };
     const token = deriveExternalWaitToken(first.app.masterKey, key);
+    // The URL is PUBLIC (its trailing `/` dropped) joined to the path.
     const callbackPath = externalWaitCallbackUrl(PUBLIC, token).slice(
-      'http://studio.test:9999/base'.length,
+      PUBLIC.replace(/\/+$/, '').length,
     );
     appendEngineEvent(db, {
       type: 'run.started',
@@ -472,8 +475,9 @@ describe('#1761 — a crash between node.awaitingCallback and externalWait.creat
     );
     updateRun(db, run.id, { status: 'running' });
     const before = loadEngineEvents(db, run.id).map((e) => e.type);
-    expect(before).toEqual(['run.started', 'node.dispatched', 'node.awaitingCallback']);
+    // Closed before asserting, so a failing check does not leak the first app.
     await first.app.close();
+    expect(before).toEqual(['run.started', 'node.dispatched', 'node.awaitingCallback']);
 
     // Server two boots on the same database and master key: reconcile resumes it.
     const second = await buildTestAppWithContext({

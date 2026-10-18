@@ -6169,13 +6169,21 @@ describe('createExecutor — a Web Wait for callback and the public base URL (#1
     expect(warned).toEqual([]);
   });
 
-  it('reads loopback as 127.0.0.0/8, ::1 and localhost, and nothing else', () => {
+  it('reads loopback as 127.0.0.0/8, ::1, localhost and the unspecified address, and nothing else', () => {
     for (const base of [
       'http://127.0.0.1:8080',
       'http://127.4.5.6',
+      'http://127.1',
       'http://[::1]:8080/base',
+      'http://[0:0:0:0:0:0:0:1]',
+      'http://[::ffff:127.0.0.1]',
+      'http://[::ffff:127.9.8.7]',
       'http://localhost:8080',
-      'http://studio.localhost',
+      'http://LOCALHOST.:8080',
+      'http://studio.localhost.',
+      'http://0.0.0.0:8080',
+      'http://[::]:8080',
+      'http://[::ffff:0.0.0.0]',
     ]) {
       expect(loopbackCallbackWarning(base), base).not.toBeNull();
     }
@@ -6185,6 +6193,8 @@ describe('createExecutor — a Web Wait for callback and the public base URL (#1
       'http://127.example.com',
       'http://localhost.example.com',
       'http://[::2]',
+      'http://[::ffff:10.0.0.5]',
+      'http://[::ffff:128.0.0.1]',
     ]) {
       expect(loopbackCallbackWarning(base), base).toBeNull();
     }
