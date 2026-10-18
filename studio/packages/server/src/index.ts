@@ -299,6 +299,8 @@ const ALARM_TICK_MS = 1_000;
 const RETENTION_SWEEP_MS = 60 * 60 * 1000;
 
 export interface BuildAppOptions {
+  /** #1600 OR41 C11c — overrides `AUTONOMY_PUBLIC_URL`/the bind address as the base of a Web *Wait for callback*'s `callBackUri`. Call-time only, for test isolation. */
+  publicBaseUrl?: string;
   /** Overrides `process.env.DB_PATH` / the built-in default. Call-time only — never a module-eval-time global. */
   dbPath?: string;
   /** Overrides `process.env.AUTONOMY_MASTER_KEY_FILE` for this app instance only; threaded through to `resolveMasterKey`. */
@@ -636,7 +638,8 @@ export async function buildApp(opts?: BuildAppOptions) {
     db,
     masterKey: masterKeyResolution.key,
     // #1600 OR41 C11c — the base of a Web *Wait for callback*'s `callBackUri`.
-    publicBaseUrl: resolvePublicBaseUrl(process.env.AUTONOMY_PUBLIC_URL, HOST, PORT),
+    publicBaseUrl:
+      opts?.publicBaseUrl ?? resolvePublicBaseUrl(process.env.AUTONOMY_PUBLIC_URL, HOST, PORT),
     resolveDoc,
     adapters: connectors,
     // #796 (P3b) — the `call_pipeline` spawn seam, closed LAZILY over `childRuns`
