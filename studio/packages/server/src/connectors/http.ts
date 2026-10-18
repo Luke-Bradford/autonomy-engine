@@ -9,9 +9,9 @@ import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.j
 import { redactSecrets } from './redact.js';
 import {
   buildRequestHeaders,
-  fetchFailure,
   collectResponseHeaders,
   exchangeDeadline,
+  fetchFailure,
   fetchWithoutLeakingSecrets,
   resolveUrl,
   sinkHeadersFrom,

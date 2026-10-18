@@ -209,8 +209,9 @@ export type LlmFetchResult =
 /**
  * Perform one JSON POST bounded by a whole-exchange timeout, mirroring the
  * `http` adapter's abort/timeout classification: the run's own signal aborting
- * → `cancelled`; the timeout firing → `transient`; a malformed request
- * (`TypeError`) → `permanent`; any other network error → `transient`. Returns
+ * → `cancelled`; the timeout firing → `transient`; anything `fetch` throws
+ * after that → `fetchFailure` (a malformed request `permanent`, a refused or
+ * dropped connection `transient`). Returns
  * the completed response's status + body text for the adapter to map, or a
  * ready-to-yield `failed` event. It never throws for an expected error.
  */
@@ -297,7 +298,9 @@ export async function llmPost(
     // where no exchange occurred at all. Marking every one would flip a
     // provider-unreachable run's cost to INCOMPLETE, which is a worse lie than the
     // gap it closes (the common case by far is "never reached the provider").
-    // Recorded as a known residual on #725. A malformed request (a non-network
+    // Recorded as a known residual on #725. Since #1757 a dropped connection is
+    // retryable, so with a retry policy that residual can now hide one billed
+    // attempt per retry, not just the last. A malformed request (a non-network
     // `TypeError`) never left the process and is unmarked for the plain reason.
     return {
       type: 'failed',

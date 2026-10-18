@@ -258,6 +258,8 @@ export function fetchFailure(
   const message = redactSecrets(err instanceof Error ? err.message : String(err), secrets);
   if (err instanceof TypeError && !isNetworkError(err))
     return { kind: 'permanent', error: message };
+  // The code is appended after redaction: it comes from the OS or undici
+  // (`ECONNREFUSED`), never from a request value.
   const code = (err as { cause?: { code?: unknown } } | null)?.cause?.code;
   return {
     kind: 'transient',

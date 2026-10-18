@@ -14,6 +14,7 @@ import {
   executeLocalTool,
   executeToolCalls,
   httpStatusFailure,
+  httpStatusFailureEvent,
   llmPost,
   meterUsage,
   noCompletionFailure,
@@ -840,10 +841,6 @@ describe('postJsonAndParse (#648)', () => {
   });
 });
 
-/** #2 L7 — the single builder for a non-2xx LLM failure. Attaches the parsed
- *  `retryAfterSeconds` hint ONLY when the failure is retryable (rate_limit /
- *  transient); an auth/permanent status carrying the header does NOT (it never
- *  retries, so the hint is meaningless). */
 /** #1757 — a refused connection reaches `llmPost` as `TypeError('fetch failed')`,
  *  the same class as a malformed request; it must still read as retryable. */
 describe('llmPost transport failures', () => {
@@ -875,6 +872,10 @@ describe('llmPost transport failures', () => {
   });
 });
 
+/** #2 L7 — the single builder for a non-2xx LLM failure. Attaches the parsed
+ *  `retryAfterSeconds` hint ONLY when the failure is retryable (rate_limit /
+ *  transient); an auth/permanent status carrying the header does NOT (it never
+ *  retries, so the hint is meaningless). */
 describe('httpStatusFailure', () => {
   const NOW = 1_000_000_000_000;
 
@@ -922,6 +923,40 @@ const ADDER: LlmToolDef = {
   },
   expression: '${add(tool.args.a, tool.args.b)}',
 };
+
+/** #1758 — the one builder Web and the LLM adapters share. */
+describe('httpStatusFailureEvent', () => {
+  const NOW = 1_000_000_000_000;
+
+  it('drops the colon for an empty excerpt and keeps the caller label', () => {
+    expect(
+      httpStatusFailureEvent({
+        label: 'HTTP 503 Service Unavailable',
+        excerpt: '',
+        kind: 'transient',
+        retryAfterHeader: '7',
+        nowMs: NOW,
+      }),
+    ).toEqual({
+      type: 'failed',
+      kind: 'transient',
+      error: 'HTTP 503 Service Unavailable',
+      retryAfterSeconds: 7,
+    });
+  });
+
+  it('a caller-set permanent kind carries no retry-after hint', () => {
+    expect(
+      httpStatusFailureEvent({
+        label: 'HTTP 429',
+        excerpt: 'slow down',
+        kind: 'permanent',
+        retryAfterHeader: '30',
+        nowMs: NOW,
+      }),
+    ).toEqual({ type: 'failed', kind: 'permanent', error: 'HTTP 429: slow down' });
+  });
+});
 
 describe('executeLocalTool (#2 L10a)', () => {
   it('validates args and evaluates the expression to a JSON result string', () => {
