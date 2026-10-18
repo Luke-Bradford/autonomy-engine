@@ -1094,3 +1094,71 @@ describe('copy activity — Batch size sets the batch on a real store (C3b)', ()
     expect(ticksOf(plain)).toBe(1);
   });
 });
+
+// #1600 OR41 C3c — Table option *Auto-create from mapping* reaches the sink as
+// the mapping's sink names and declared types, and on a real store the copy
+// creates the table it then writes.
+describe('copy activity — Auto-create from mapping (C3c)', () => {
+  const MAPPING = [
+    { source: 'id', sink: 'id', type: 'integer' },
+    { source: 'name', sink: 'label', type: 'string' },
+  ];
+
+  it('hands the sink the mapping as columns, and null for Use existing', async () => {
+    const seen: unknown[] = [];
+    const io: CopyIo = {
+      describeSource: () => Promise.resolve(['id', 'name']),
+      sourceCoercion: () => ({}),
+      readBatches: async function* () {
+        yield [{ id: 1, name: 'a' }];
+      },
+      writeRows: async ({ batches: incoming, autoCreate }) => {
+        seen.push(autoCreate);
+        let written = 0;
+        for await (const batch of incoming) written += batch.length;
+        return { rowsWritten: written };
+      },
+    };
+    const ctxWith = (input: unknown): ActivityContext =>
+      copyCtx({ root: tempRoot(), sourcePath: 'unused.db', sinkPath: 'unused-dst.db', input });
+    for (const input of [
+      { mapping: MAPPING, tableOption: 'autoCreate' },
+      { mapping: MAPPING },
+      { mapping: MAPPING, tableOption: 'none' },
+    ]) {
+      const events: ActivityEvent[] = [];
+      for await (const event of runCopyActivity(ctxWith(input), io)) events.push(event);
+      expect(terminal(events).type).toBe('succeeded');
+    }
+    expect(seen).toEqual([
+      [
+        { name: 'id', type: 'integer' },
+        { name: 'label', type: 'string' },
+      ],
+      null,
+      null,
+    ]);
+  });
+
+  it('creates the sink table on a real store and copies into it', async () => {
+    const root = tempRoot();
+    const sourcePath = seedDb(root, 3, 'src.db');
+    // A store with no `sink` table.
+    const sinkPath = seedDb(root, 0, 'dst.db');
+    const refused = await run(
+      copyCtx({ root, sourcePath, sinkPath, input: { mapping: MAPPING } }),
+    );
+    expect(terminal(refused).type).toBe('failed');
+    const events = await run(
+      copyCtx({ root, sourcePath, sinkPath, input: { mapping: MAPPING, tableOption: 'autoCreate' } }),
+    );
+    expect(terminal(events).type).toBe('succeeded');
+    expect(rowsOf(sinkPath, 'SELECT id, label FROM sink ORDER BY id')).toHaveLength(3);
+    expect(
+      rowsOf(sinkPath, "SELECT name, type FROM pragma_table_info('sink') ORDER BY cid"),
+    ).toEqual([
+      { name: 'id', type: 'INTEGER' },
+      { name: 'label', type: 'TEXT' },
+    ]);
+  });
+});

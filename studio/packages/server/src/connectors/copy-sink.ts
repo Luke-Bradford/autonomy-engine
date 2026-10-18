@@ -5,6 +5,7 @@ import {
   type CopyWriteMode,
 } from '@autonomy-studio/shared';
 import { DatasetIoError } from './dataset-io-error.js';
+import type { AutoCreateColumn } from './auto-create-table.js';
 import type { PreCopyScript } from './pre-copy-script.js';
 import { writePostgresDatasetRows } from './postgres-sink.js';
 import { defaultClientFactory, type PostgresClientFactory } from './postgres-session.js';
@@ -78,6 +79,10 @@ export interface SinkWriteRequest {
   /** #1600 OR41 C3b — the Pre-copy script, run once inside the write
    * transaction before the first row; `null` for none. */
   readonly preCopyScript: PreCopyScript | null;
+  /** #1600 OR41 C3c — Auto-create from mapping: the columns to create the sink
+   * table with when it does not exist; `null` when the Table option is Use
+   * existing. Required, so no adapter can drop the option on the way. */
+  readonly autoCreate: readonly AutoCreateColumn[] | null;
   readonly onBatch: (rowsWritten: number) => void;
   readonly signal: AbortSignal | undefined;
   /** Injectable for the offline tests; the live path uses `pg.Client`. */
@@ -105,6 +110,7 @@ export async function writeRowsToSink(
     mode,
     keyColumns,
     preCopyScript,
+    autoCreate,
     onBatch,
     signal,
   } = request;
@@ -137,6 +143,7 @@ export async function writeRowsToSink(
         mode,
         keyColumns,
         preCopyScript,
+        autoCreate,
         onBatch,
         ...(signal === undefined ? {} : { signal }),
       },
@@ -160,6 +167,7 @@ export async function writeRowsToSink(
         mode,
         keyColumns,
         preCopyScript,
+        autoCreate,
         onBatch,
         ...(signal === undefined ? {} : { signal }),
       },

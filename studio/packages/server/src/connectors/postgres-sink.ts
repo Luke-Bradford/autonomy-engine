@@ -13,6 +13,7 @@ import { rewriteNamedParametersToPositional } from './postgres-named-parameters.
 import { classifySinkFailure } from './error-kind.js';
 import { yieldToEventLoop } from './scheduling.js';
 import { quoteIdentifier } from './sql-identifier.js';
+import { autoCreateTableSql, type AutoCreateColumn } from './auto-create-table.js';
 import {
   refuseNullKey,
   refuseNullOnNonNullable,
@@ -69,6 +70,9 @@ export interface PostgresDatasetWrite {
   /** #1600 OR41 C3b — the Pre-copy script, run once inside the write
    * transaction before the first row. Absent or `null` runs none. */
   readonly preCopyScript?: PreCopyScript | null;
+  /** #1600 OR41 C3c — Auto-create from mapping: the columns to create the
+   * table with when it does not exist. Absent or `null` creates nothing. */
+  readonly autoCreate?: readonly AutoCreateColumn[] | null;
   /** Honoured at BATCH BOUNDARIES (§10) — a run cancel rolls the copy back. */
   readonly signal?: AbortSignal;
   /** §5's progress channel: the RUNNING TOTAL after each chunk is inserted into
@@ -502,6 +506,51 @@ async function runPostgresPreCopyScript(
   }
 }
 
+/** The advisory-lock key space Auto-create's lock is taken in (C3c). */
+const AUTO_CREATE_LOCK_SPACE = 'autonomy-studio:copy-auto-create';
+
+/** Whether `qualified` names a relation, resolved exactly as the LOCK and the
+ * describe resolve it (`to_regclass`, by `search_path` when unqualified). */
+const RELATION_EXISTS_SQL = 'select to_regclass($1) is not null as "exists"';
+
+/**
+ * #1600 OR41 C3c — Auto-create from mapping: create the sink table when it does
+ * not exist, inside the copy's transaction, so a failed copy undoes it.
+ *
+ * NOT `CREATE TABLE IF NOT EXISTS`. For an unqualified name that checks only
+ * the schema the table would be created in (the first in `search_path`), so
+ * with `search_path = s_b, public` and an existing `public.t` it would create
+ * `s_b.t`, and the copy would write into a new empty table instead of the one
+ * the name resolved to. The check here is `to_regclass`, the same resolution
+ * the LOCK and the describe use.
+ *
+ * Two copies auto-creating one table at once would both see it missing, and
+ * the second CREATE would fail on the first's catalog row. So a missing table
+ * is re-checked under a transaction-scoped advisory lock on the name, held to
+ * COMMIT: the second copy waits there, then finds the table. A table that
+ * already exists takes no lock, so copies into it run as they would without
+ * Auto-create.
+ */
+async function autoCreatePostgresTable(
+  client: PostgresClient,
+  qualified: string,
+  columns: readonly AutoCreateColumn[],
+): Promise<void> {
+  // Built first, so a refusal (a case collision, a name over 63 characters)
+  // runs no statement.
+  const ddl = autoCreateTableSql('postgres', qualified, columns);
+  const exists = async (): Promise<boolean> =>
+    ((await client.query(RELATION_EXISTS_SQL, [qualified])).rows[0] as { exists?: unknown })
+      ?.exists === true;
+  if (await exists()) return;
+  await client.query('select pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
+    AUTO_CREATE_LOCK_SPACE,
+    qualified,
+  ]);
+  if (await exists()) return;
+  await client.query(ddl);
+}
+
 /**
  * Write batches of mapped rows into a `table` dataset on a `postgres` store.
  *
@@ -606,6 +655,15 @@ export async function writePostgresDatasetRows(
     try {
       await client.query('BEGIN');
       inTransaction = true;
+
+      // #1600 OR41 C3c — BEFORE the write behaviour's LOCK, which needs the
+      // table, and so before the Pre-copy script, which may alter it. This is
+      // what lets a PostgreSQL sink table be created at all: a script cannot,
+      // because the LOCK comes first.
+      if (write.autoCreate != null) {
+        await autoCreatePostgresTable(client, qualified, write.autoCreate);
+        if (write.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
+      }
 
       try {
         await client.query(`LOCK TABLE ${qualified} IN ${LOCK_MODES[write.mode]} MODE`);
