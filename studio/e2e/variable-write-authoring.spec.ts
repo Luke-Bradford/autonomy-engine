@@ -5,7 +5,8 @@ import { fireAndSettle, nodeById, openSeededCanvas, seedVersion } from './suppor
 import { properties } from './support/panels';
 
 /**
- * #844 V6 — authoring a Set variable / Append variable node (spec V-D9).
+ * #844 V6 — authoring a Set variable node (spec V-D9). #1600 C12a — Append
+ * variable is now Set variable's Operation Append, and a stored one opens as it.
  *
  * V5 made the two writers runnable, but their `variable` field was a bare text
  * box: the author had to already know the declared names, and the `${}` flyout

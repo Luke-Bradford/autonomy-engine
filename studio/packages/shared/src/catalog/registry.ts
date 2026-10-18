@@ -408,6 +408,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
       }),
       variable: presented(literalText(singleLine(z.string())).min(1), {
         title: 'Variable name',
+        // #1600 C12a — Append variable's help, which Set variable now needs too.
+        description:
+          "The name of a variable declared on the pipeline's Variables tab. Append needs an array variable.",
       }),
       value: presented(singleLine(z.string()), { title: 'Value' }),
     }),

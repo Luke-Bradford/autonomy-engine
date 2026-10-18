@@ -101,7 +101,10 @@ const BY_TYPE: Readonly<Record<string, Glyph>> = {
   file_read: DatabaseArrowDown20Regular,
   /* #844 V5 — the variable writers. `set` draws the braces of a `${vars.x}`
      reference, which is what it feeds; `append` draws a list gaining a row,
-     because it only ever adds one element to an array. */
+     because it only ever adds one element to an array. #1600 C12a — a Set
+     variable · Append keeps the braces: one activity to an author (Operation in
+     the dock), so one glyph, as `file_read` shares Lookup's. The list glyph is
+     left for a stored Append variable that cannot be lowered. */
   set_variable: BracesVariable20Regular,
   append_variable: TextBulletListAdd20Regular,
 };

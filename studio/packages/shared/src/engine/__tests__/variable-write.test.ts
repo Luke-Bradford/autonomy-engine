@@ -342,6 +342,22 @@ describe('crash resume re-runs the SAME evaluation and checks', () => {
     expect(commands.some((c) => c.type === 'dispatchNode')).toBe(false);
   });
 
+  it('#1600 C12a — re-emits a Set variable · Append as an append', () => {
+    const e = eng([
+      node('w', { variable: 'list', value: '${params.x}', operation: 'append' }, 'set_variable'),
+    ]);
+    const projected = e.projectRunState([started({ x: 4 })]);
+    expect(projected.nodes.w!.status).toBe('ready');
+    expect(e.resume(projected).commands).toContainEqual<EngineCommand>({
+      type: 'writeVariable',
+      nodeId: 'w',
+      attemptId: 'w#0',
+      op: 'append',
+      name: 'list',
+      value: 4,
+    });
+  });
+
   it('routes a value that fails its check to failNode, never a blind write', () => {
     const e = eng([set('w', 'n', '${params.x}')]);
     const { commands } = e.resume(e.projectRunState([started({ x: 'four' })]));

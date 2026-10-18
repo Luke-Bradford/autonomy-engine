@@ -602,6 +602,7 @@ Sources: [Set variable](https://learn.microsoft.com/azure/data-factory/control-f
 - Append behaves exactly as `append_variable` did: an untyped element, never coerced, an array variable only. The fold takes only `variable.append` for an Append node and only `variable.set` for a Set one.
 - `append_variable` → Set variable · Append (§8), lowered in the editor only, as in C1b. It stays Append variable where it carries an `operation` key of its own (it never read one, and on Set variable it would decide the write), a connection or binding, or a config Set variable's schema refuses. Append variable left the palette and still runs.
 - The variable chooser follows the Operation as drafted, so choosing Append narrows it to array variables before Apply.
+- An `operation` key on a `set_variable` saved before C12a was never read (the save gate does not refuse an unknown config key, and nothing in studio wrote one), and is now. No stored version carries one: the operator's live store held 12 versions on 2026-10-18 and none had the key. A hand-written one would now decide the write, which is the price of reusing ADF's name.
 - Not built here: ＋ New variable in the chooser (variables are declared on the pipeline's Variables tab, as before) and the one-click *Convert*, which is C13's.
 - `CATALOG_VERSION` 54→55: a build before C12a ignores `operation`, so a Set variable · Append would replace the array.
 

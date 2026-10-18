@@ -76,8 +76,9 @@ const HELP_LIMITS: Record<string, number> = {
   Fail: 5,
   Filter: 7,
   'If condition': 6,
-  // +1 for #1600 C12a's Operation, whose `?` says what Append does to the value.
-  'Set variable': 6,
+  // +1 for #1600 C12a's Operation, whose `?` says what Append does to the value,
+  // and +1 for Variable name's, which Append variable had: where to declare one.
+  'Set variable': 7,
   Switch: 6,
   Wait: 6,
   ForEach: 5,
@@ -366,9 +367,10 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   Fail: 5,
   Filter: 7,
   'If condition': 6,
-  // +1 for #1600 C12a's Operation, whose `?` says what Append does to the value.
-  'Set variable': 6,
-  'Set variable (append)': 6,
+  // +1 for #1600 C12a's Operation, whose `?` says what Append does to the value,
+  // and +1 for Variable name's, which Append variable had: where to declare one.
+  'Set variable': 7,
+  'Set variable (append)': 7,
   Switch: 6,
   Wait: 6,
   'Wait (inactive)': 7,
