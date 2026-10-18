@@ -6,6 +6,7 @@ import { deleteConfigSchema } from './delete-config.js';
 import { getMetadataConfigSchema } from './get-metadata-config.js';
 import { catalogOutputs } from './lower.js';
 import { getActivity } from './registry.js';
+import { HTTP_SECRET_HEADERS_FIELD, WEB_MAX_RESPONSE_BYTES, webConfigSchema } from './web-config.js';
 import {
   COPY_FILES_ACTIVITY_TYPE,
   DELETE_ACTIVITY_TYPE,
@@ -14,6 +15,8 @@ import {
   FILE_LIST_ACTIVITY_TYPE,
   FILE_MOVE_ACTIVITY_TYPE,
   GET_METADATA_ACTIVITY_TYPE,
+  HTTP_REQUEST_ACTIVITY_TYPE,
+  WEB_ACTIVITY_TYPE,
 } from './types.js';
 
 /**
@@ -42,7 +45,8 @@ import {
  * A node is lowered only when the lowering is faithful. Otherwise it is
  * returned unchanged, still a valid runnable node of its retired type:
  * - it carries something a paired node refuses (`connectionParams`,
- *   `connectionIds`, datasets, a call);
+ *   `connectionIds`, datasets, a call). #1600 C11b — Web is a single-connection
+ *   node, as `http_request` is, so it keeps `connectionParams`;
  * - its destination splits in a way only the run could judge (`splitDestination`);
  * - the lowered config does not pass its replacement's schema (a half-filled node);
  * - #1600 C8b — an output it renames (`entries` → `childItems`) is read
@@ -199,6 +203,58 @@ const lowerFileDelete = lowerPathNode(DELETE_ACTIVITY_TYPE, deleteConfigSchema, 
   failIfNothingMatched: true,
 }));
 
+/** HTTP request's methods that send no body: it fails such a node that carries one. */
+const BODILESS_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD']);
+
+/**
+ * #1600 C11b — `http_request` → Web on the same connection, with Fail on HTTP
+ * error off (a 4xx or 5xx still succeeds, read from `status`) and Parse as Text
+ * (`body` stays the string it was), §8. Max size is the connections' read
+ * ceiling, the closest to HTTP request's unbounded read: ADF's 4 MiB default is
+ * a new node's. The method is upper-cased, as Web offers only the six upper-case
+ * names. The run differences are in the catalogue's §4.6.
+ *
+ * Stays HTTP request where Web would change the result:
+ * - a method outside Web's six, or an expression (only the run knows it);
+ * - a body on GET or HEAD, even an empty one: HTTP request fails that node at
+ *   every run, where Web sends `''` as no body and succeeds.
+ */
+function lowerHttpRequest(node: Node): Node | undefined {
+  // Not `carriesUnlowerable`: Web binds one connection, so `connectionParams`
+  // apply to it exactly as they did to HTTP request.
+  if (
+    node.connectionIds !== undefined ||
+    node.datasetIds !== undefined ||
+    node.datasetParams !== undefined ||
+    node.inlineDatasets !== undefined ||
+    node.call !== undefined
+  ) {
+    return undefined;
+  }
+  const { url, method, headers, body } = node.config;
+  const secretHeaders = node.config[HTTP_SECRET_HEADERS_FIELD];
+  if (method !== undefined && typeof method !== 'string') return undefined;
+  const upper = method === undefined ? 'GET' : method.toUpperCase();
+  if (BODILESS_METHODS.has(upper) && body !== undefined) return undefined;
+  const config: Record<string, unknown> = {
+    url,
+    method: upper,
+    ...(headers === undefined ? {} : { headers }),
+    ...(body === undefined ? {} : { body }),
+    ...(secretHeaders === undefined ? {} : { [HTTP_SECRET_HEADERS_FIELD]: secretHeaders }),
+    failOnHttpError: false,
+    parseAs: 'text',
+    maxResponseBytes: WEB_MAX_RESPONSE_BYTES,
+  };
+  // Refuses a missing or empty URL, and a method that is not one of the six
+  // (an expression, OPTIONS, one with spaces).
+  if (!webConfigSchema.safeParse(config).success) return undefined;
+  const replacement = getActivity(WEB_ACTIVITY_TYPE);
+  if (replacement === undefined) return undefined;
+  config['outputs'] = catalogOutputs(replacement);
+  return { ...node, type: WEB_ACTIVITY_TYPE, config };
+}
+
 export const RETIRED_LOWERINGS: Readonly<Record<string, RetiredLowering>> = {
   [FILE_COPY_ACTIVITY_TYPE]: {
     to: COPY_FILES_ACTIVITY_TYPE,
@@ -219,6 +275,13 @@ export const RETIRED_LOWERINGS: Readonly<Record<string, RetiredLowering>> = {
     to: DELETE_ACTIVITY_TYPE,
     outputs: { path: 'path' },
     lower: lowerFileDelete,
+  },
+  [HTTP_REQUEST_ACTIVITY_TYPE]: {
+    to: WEB_ACTIVITY_TYPE,
+    // Web's `body` is json, which types as `any`, so a read typed against
+    // HTTP request's string still types.
+    outputs: { status: 'status', body: 'body', headers: 'headers' },
+    lower: lowerHttpRequest,
   },
 };
 

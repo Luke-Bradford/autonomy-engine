@@ -3,6 +3,7 @@ import type { Container, Node } from '../../schemas/pipeline.js';
 import { copyFilesConfigSchema } from '../copy-files-config.js';
 import { deleteConfigSchema } from '../delete-config.js';
 import { getMetadataConfigSchema } from '../get-metadata-config.js';
+import { WEB_MAX_RESPONSE_BYTES, webConfigSchema } from '../web-config.js';
 import { getActivity } from '../registry.js';
 import { RETIRED_LOWERINGS, lowerRetiredTypes, splitDestination } from '../retired.js';
 
@@ -152,7 +153,11 @@ describe('#1600 C1b — §8 output aliases', () => {
       for (const o of from.outputs) {
         const target = to.outputs.find((t) => t.name === lowering.outputs[o.name]);
         expect(target, o.name).toBeDefined();
-        expect(target!.type).toBe(o.type);
+        // The same type, or `json` on the replacement: `json` types as `any`
+        // (`sigOfDeclared`), so every read that typed before still types. A
+        // widening is safe; a narrowing would refuse a saved expression, so it
+        // fails here. #1600 C11b: `http_request`'s string `body` is Web's json.
+        if (target!.type !== 'json') expect(target!.type).toBe(o.type);
       }
     },
   );
@@ -377,5 +382,96 @@ describe('#1600 C9b — file_delete → Delete, one file', () => {
     ['a dataset', del(undefined, { datasetIds: { source: 'ds' } } as Partial<Node>)],
   ])('stays Delete file, by reference, with %s', (_why, node) => {
     expect(lowerNodes([node])[0]).toBe(node);
+  });
+});
+
+describe('#1600 C11b — http_request → Web, Fail on HTTP error off, Parse as Text', () => {
+  const call = (config: Record<string, unknown> = { url: '/items' }, extra: Partial<Node> = {}) =>
+    ({
+      id: 'call',
+      type: 'http_request',
+      config,
+      connectionId: 'conn_http',
+      position: { x: 10, y: 20 },
+      ...extra,
+    }) as Node;
+
+  it("opens as Web on the same connection, keeping today's results", () => {
+    const node = call({
+      url: '/items/${run.runId}',
+      method: 'post',
+      headers: { 'x-trace': 'abc' },
+      body: '{"a":1}',
+      secretHeaders: { 'x-api-key': { $secret: 'api_key' } },
+      outputs: [],
+    });
+    const [lowered] = lowerNodes([node]);
+    expect(lowered!.type).toBe('web');
+    expect(lowered!.connectionId).toBe('conn_http');
+    expect(lowered!.position).toEqual({ x: 10, y: 20 });
+    const { outputs, ...config } = lowered!.config;
+    expect(config).toEqual({
+      url: '/items/${run.runId}',
+      method: 'POST',
+      headers: { 'x-trace': 'abc' },
+      body: '{"a":1}',
+      secretHeaders: { 'x-api-key': { $secret: 'api_key' } },
+      failOnHttpError: false,
+      parseAs: 'text',
+      maxResponseBytes: WEB_MAX_RESPONSE_BYTES,
+    });
+    expect(webConfigSchema.safeParse(config).success).toBe(true);
+    expect((outputs as { name: string }[]).map((o) => o.name)).toEqual(
+      getActivity('web')!.outputs.map((o) => o.name),
+    );
+  });
+
+  it('an unset method is GET, and a lowercase one is upper-cased', () => {
+    expect(lowerNodes([call()])[0]!.config['method']).toBe('GET');
+    expect(lowerNodes([call({ url: '/a', method: 'patch' })])[0]!.config['method']).toBe('PATCH');
+    expect(lowerNodes([call({ url: '/a', method: 'head' })])[0]!.config['method']).toBe('HEAD');
+  });
+
+  it('keeps connection parameter bindings: Web is a single-connection node too', () => {
+    const node = call({ url: '/a' }, { connectionParams: { region: '${pipeline().parameters.r}' } });
+    const [lowered] = lowerNodes([node]);
+    expect(lowered!.type).toBe('web');
+    expect(lowered!.connectionParams).toEqual({ region: '${pipeline().parameters.r}' });
+  });
+
+  it.each([
+    ['a method Web does not offer', { url: '/a', method: 'OPTIONS' }],
+    ['an expression method', { url: '/a', method: '${pipeline().parameters.m}' }],
+    ['a method with spaces', { url: '/a', method: ' get ' }],
+    ['no URL', {}],
+    ['an empty URL', { url: '' }],
+    // HTTP request fails these at every run (any body on GET or HEAD); Web
+    // would send '' as no body and succeed.
+    ['an empty body on GET', { url: '/a', body: '' }],
+    ['a body on HEAD', { url: '/a', method: 'HEAD', body: 'x' }],
+    ['an expression body on GET', { url: '/a', method: 'get', body: '${run.runId}' }],
+  ])('stays HTTP request with %s', (_label, config) => {
+    const node = call(config);
+    expect(lowerNodes([node])[0]).toBe(node);
+  });
+
+  it.each([
+    ['datasets', { datasetIds: { source: 'ds_1' } }],
+    ['paired connections', { connectionIds: { source: 'a', sink: 'b' } }],
+  ] as [string, Partial<Node>][])('stays HTTP request when it carries %s', (_label, extra) => {
+    const node = call({ url: '/a' }, extra);
+    expect(lowerNodes([node])[0]).toBe(node);
+  });
+
+  it("a reader of its outputs needs no rewrite: status, body and headers keep their names", () => {
+    const reader = {
+      id: 'check',
+      type: 'if',
+      config: { condition: '${greaterOrEquals(nodes.call.output.status, 400)}' },
+      position: { x: 0, y: 0 },
+    } as Node;
+    const nodes = lowerNodes([call(), reader]);
+    expect(nodes.map((n) => n.type)).toEqual(['web', 'if']);
+    expect(nodes[1]).toBe(reader);
   });
 });
