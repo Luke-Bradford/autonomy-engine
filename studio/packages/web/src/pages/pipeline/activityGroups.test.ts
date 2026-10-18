@@ -63,7 +63,10 @@ describe('toolboxGroups', () => {
 
   it('matches on title, case-insensitively', () => {
     const groups = toolboxGroups('hTtP');
-    expect(typesOf(groups)).toContain('http_request');
+    // Web's description names an HTTP connection; HTTP request itself is
+    // retired from the palette (#1600 C11b).
+    expect(typesOf(groups)).toContain('web');
+    expect(typesOf(groups)).not.toContain('http_request');
     expect(
       groups.every((g) =>
         g.entries.every((e) => /http/i.test(`${e.title} ${e.type} ${e.description}`)),
@@ -92,7 +95,7 @@ describe('toolboxGroups', () => {
   });
 
   it('OMITS a group whose every entry was filtered out', () => {
-    const groups = toolboxGroups('http_request');
+    const groups = toolboxGroups('get_metadata');
     expect(groups).toHaveLength(1);
     expect(groups[0]!.category).toBe('general');
     // An empty group would render a heading over nothing — a false "this category

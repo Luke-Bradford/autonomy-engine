@@ -542,7 +542,8 @@ describe('Web — a lowered HTTP request keeps its results', () => {
     } as Node;
     const node = lowerRetiredTypes({ nodes: [stored], containers: [] }).nodes[0]!;
     expect(node.type).toBe(WEB_ACTIVITY_TYPE);
-    const { outputs: _contract, ...input } = node.config;
+    const input = { ...node.config };
+    delete input['outputs']; // the contract, which the adapter does not read
     return input;
   };
 
@@ -554,7 +555,8 @@ describe('Web — a lowered HTTP request keeps its results', () => {
   }
   const answer = (events: ActivityEvent[]) => {
     const { status, body, headers } = succeeded(events).outputs as Record<string, unknown>;
-    const { date: _date, ...rest } = headers as Record<string, string>;
+    const rest = { ...(headers as Record<string, string>) };
+    delete rest['date']; // the two calls may straddle a second
     return { status, body, headers: rest };
   };
 
@@ -585,7 +587,10 @@ describe('Web — a lowered HTTP request keeps its results', () => {
     const { before, after } = await both({ url: '/items', ...(method ? { method } : {}) });
     expect(after).toHaveLength(1);
     expect(answer(after)).toEqual(answer(before));
-    expect(main.received[1]).toMatchObject({ url: main.received[0]!.url, method: main.received[0]!.method });
+    expect(main.received[1]).toMatchObject({
+      url: main.received[0]!.url,
+      method: main.received[0]!.method,
+    });
   });
 
   it('a POST sends the same body, headers and secret header', async () => {

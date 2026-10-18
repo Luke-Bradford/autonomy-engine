@@ -6,7 +6,11 @@ import { deleteConfigSchema } from './delete-config.js';
 import { getMetadataConfigSchema } from './get-metadata-config.js';
 import { catalogOutputs } from './lower.js';
 import { getActivity } from './registry.js';
-import { HTTP_SECRET_HEADERS_FIELD, WEB_MAX_RESPONSE_BYTES, webConfigSchema } from './web-config.js';
+import {
+  HTTP_SECRET_HEADERS_FIELD,
+  WEB_MAX_RESPONSE_BYTES,
+  webConfigSchema,
+} from './web-config.js';
 import {
   COPY_FILES_ACTIVITY_TYPE,
   DELETE_ACTIVITY_TYPE,
@@ -218,6 +222,9 @@ const BODILESS_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD']);
  * - a method outside Web's six, or an expression (only the run knows it);
  * - a body on GET or HEAD, even an empty one: HTTP request fails that node at
  *   every run, where Web sends `''` as no body and succeeds.
+ * - a contract (`config.outputs`) declaring an output Web has no name for: the
+ *   lowered node takes Web's contract, so a reader of that output would no
+ *   longer resolve.
  */
 function lowerHttpRequest(node: Node): Node | undefined {
   // Not `carriesUnlowerable`: Web binds one connection, so `connectionParams`
@@ -231,7 +238,15 @@ function lowerHttpRequest(node: Node): Node | undefined {
   ) {
     return undefined;
   }
-  const { url, method, headers, body } = node.config;
+  const replacement = getActivity(WEB_ACTIVITY_TYPE);
+  if (replacement === undefined) return undefined;
+  const { url, method, headers, body, outputs } = node.config;
+  if (Array.isArray(outputs)) {
+    const names = new Set(replacement.outputs.map((o) => o.name));
+    const webHas = (o: unknown) =>
+      typeof o === 'object' && o !== null && 'name' in o && names.has(o.name as string);
+    if (!outputs.every(webHas)) return undefined;
+  }
   const secretHeaders = node.config[HTTP_SECRET_HEADERS_FIELD];
   if (method !== undefined && typeof method !== 'string') return undefined;
   const upper = method === undefined ? 'GET' : method.toUpperCase();
@@ -249,8 +264,6 @@ function lowerHttpRequest(node: Node): Node | undefined {
   // Refuses a missing or empty URL, and a method that is not one of the six
   // (an expression, OPTIONS, one with spaces).
   if (!webConfigSchema.safeParse(config).success) return undefined;
-  const replacement = getActivity(WEB_ACTIVITY_TYPE);
-  if (replacement === undefined) return undefined;
   config['outputs'] = catalogOutputs(replacement);
   return { ...node, type: WEB_ACTIVITY_TYPE, config };
 }

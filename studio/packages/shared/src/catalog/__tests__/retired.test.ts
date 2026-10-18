@@ -433,7 +433,10 @@ describe('#1600 C11b — http_request → Web, Fail on HTTP error off, Parse as 
   });
 
   it('keeps connection parameter bindings: Web is a single-connection node too', () => {
-    const node = call({ url: '/a' }, { connectionParams: { region: '${pipeline().parameters.r}' } });
+    const node = call(
+      { url: '/a' },
+      { connectionParams: { region: '${pipeline().parameters.r}' } },
+    );
     const [lowered] = lowerNodes([node]);
     expect(lowered!.type).toBe('web');
     expect(lowered!.connectionParams).toEqual({ region: '${pipeline().parameters.r}' });
@@ -455,6 +458,20 @@ describe('#1600 C11b — http_request → Web, Fail on HTTP error off, Parse as 
     expect(lowerNodes([node])[0]).toBe(node);
   });
 
+  it('stays HTTP request when its contract declares an output Web does not have', () => {
+    const node = call({ url: '/a', outputs: [{ name: 'rows', type: 'json', optional: true }] });
+    expect(lowerNodes([node])[0]).toBe(node);
+    // Its own three outputs are Web's too, so that contract lowers.
+    const plain = call({
+      url: '/a',
+      outputs: [
+        { name: 'status', type: 'number', description: 'HTTP status' },
+        { name: 'body', type: 'string' },
+      ],
+    });
+    expect(lowerNodes([plain])[0]!.type).toBe('web');
+  });
+
   it.each([
     ['datasets', { datasetIds: { source: 'ds_1' } }],
     ['paired connections', { connectionIds: { source: 'a', sink: 'b' } }],
@@ -463,7 +480,7 @@ describe('#1600 C11b — http_request → Web, Fail on HTTP error off, Parse as 
     expect(lowerNodes([node])[0]).toBe(node);
   });
 
-  it("a reader of its outputs needs no rewrite: status, body and headers keep their names", () => {
+  it('a reader of its outputs needs no rewrite: status, body and headers keep their names', () => {
     const reader = {
       id: 'check',
       type: 'if',
