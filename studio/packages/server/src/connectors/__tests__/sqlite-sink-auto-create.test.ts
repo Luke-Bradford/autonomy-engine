@@ -39,6 +39,7 @@ function write(
     preCopyScript?: PreCopyScript;
     schema?: string;
     keyColumns?: string[];
+    signal?: AbortSignal;
   } = {},
 ) {
   return writeSqliteDatasetRows(
@@ -55,6 +56,7 @@ function write(
       keyColumns: opts.keyColumns ?? [],
       preCopyScript: opts.preCopyScript ?? null,
       autoCreate,
+      ...(opts.signal === undefined ? {} : { signal: opts.signal }),
     },
     batches(...chunks),
   );
@@ -240,7 +242,7 @@ describe('Auto-create from mapping (SQLite)', () => {
     );
     expect(err.kind).toBe('permanent');
     expect(err.message).toBe(
-      "Auto-create cannot create both 'id' and 'ID': a store compares column names without case",
+      "Auto-create cannot create both 'id' and 'ID': the copy matches sink columns without case",
     );
     expect(tablesOf(at.path)).toEqual([]);
   });
@@ -251,6 +253,39 @@ describe('Auto-create from mapping (SQLite)', () => {
       write(at, [{ name: 'id', type: 'integer' }], [[{ id: 1 }]], { schema: 'other' }),
     );
     expect(err.kind).toBe('permanent');
+    expect(tablesOf(at.path)).toEqual([]);
+  });
+
+  it('creates a column name the sink can write into an existing table, a space included', async () => {
+    const at = store();
+    await write(at, [{ name: 'Full Name', type: 'string' }], [[{ 'Full Name': 'Ann' }]]);
+    expect(rowsOf(at.path)).toEqual([{ 'Full Name': 'Ann' }]);
+  });
+
+  it('rolls the create back on a cancel between batches', async () => {
+    const at = store();
+    const controller = new AbortController();
+    async function* cancelling(): AsyncIterable<readonly Record<string, SinkValue>[]> {
+      yield [{ id: 1 }];
+      controller.abort();
+      yield [{ id: 2 }];
+    }
+    const err = await refusal(
+      writeSqliteDatasetRows(
+        {
+          connectionConfig: writableConfig(at.root, at.path),
+          datasetKind: 'table',
+          datasetConfig: { table: 'sink' },
+          columns: ['id'],
+          nullOnError: [],
+          mode: 'append',
+          autoCreate: [{ name: 'id', type: 'integer' }],
+          signal: controller.signal,
+        },
+        cancelling(),
+      ),
+    );
+    expect(err.kind).toBe('cancelled');
     expect(tablesOf(at.path)).toEqual([]);
   });
 

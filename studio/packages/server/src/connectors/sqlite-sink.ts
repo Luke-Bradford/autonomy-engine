@@ -288,6 +288,13 @@ async function storeLockKey(dbPath: string): Promise<string> {
   }
 }
 
+/** A sink table's quoted name: bare in `main`, schema-qualified otherwise. */
+function qualifiedSqliteTable(schema: string, table: string): string {
+  return schema === 'main'
+    ? quoteIdentifier(table, 'table')
+    : `${quoteIdentifier(schema, 'schema')}.${quoteIdentifier(table, 'table')}`;
+}
+
 /** The `table` dataset config of a SINK, or a refusal. */
 function sinkTargetFor(
   datasetKind: DatasetKind,
@@ -517,9 +524,7 @@ export async function writeSqliteDatasetRows(
         db.exec(
           autoCreateTableSql(
             'sqlite',
-            target.schema === 'main'
-              ? quoteIdentifier(target.table, 'table')
-              : `${quoteIdentifier(target.schema, 'schema')}.${quoteIdentifier(target.table, 'table')}`,
+            { qualified: qualifiedSqliteTable(target.schema, target.table), names: [] },
             write.autoCreate,
           ),
         );
@@ -546,10 +551,9 @@ export async function writeSqliteDatasetRows(
       });
       if (nullRefusal !== null) throw new DatasetIoError('permanent', nullRefusal);
 
-      const qualified =
-        target.schema === 'main'
-          ? quoteIdentifier(described.name, 'table')
-          : `${quoteIdentifier(target.schema, 'schema')}.${quoteIdentifier(described.name, 'table')}`;
+      // The store's own spelling from the describe, where the create above used
+      // the dataset's.
+      const qualified = qualifiedSqliteTable(target.schema, described.name);
 
       if (!(COPY_WRITE_MODES as readonly string[]).includes(write.mode)) {
         // `mode` is typed, so this is unreachable from in-repo callers — but an

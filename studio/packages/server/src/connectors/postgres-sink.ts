@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from 'node:timers/promises';
 import {
   COPY_WRITE_MODES,
   datasetConfigSchema,
@@ -13,7 +14,11 @@ import { rewriteNamedParametersToPositional } from './postgres-named-parameters.
 import { classifySinkFailure } from './error-kind.js';
 import { yieldToEventLoop } from './scheduling.js';
 import { quoteIdentifier } from './sql-identifier.js';
-import { autoCreateTableSql, type AutoCreateColumn } from './auto-create-table.js';
+import {
+  autoCreateLockKey,
+  autoCreateTableSql,
+  type AutoCreateColumn,
+} from './auto-create-table.js';
 import {
   refuseNullKey,
   refuseNullOnNonNullable,
@@ -506,12 +511,12 @@ async function runPostgresPreCopyScript(
   }
 }
 
-/** The advisory-lock key space Auto-create's lock is taken in (C3c). */
-const AUTO_CREATE_LOCK_SPACE = 'autonomy-studio:copy-auto-create';
-
 /** Whether `qualified` names a relation, resolved exactly as the LOCK and the
  * describe resolve it (`to_regclass`, by `search_path` when unqualified). */
 const RELATION_EXISTS_SQL = 'select to_regclass($1) is not null as "exists"';
+
+/** How often a copy waiting on another copy's Auto-create tries the lock again. */
+const AUTO_CREATE_LOCK_POLL_MS = 100;
 
 /**
  * #1600 OR41 C3c — Auto-create from mapping: create the sink table when it does
@@ -526,27 +531,58 @@ const RELATION_EXISTS_SQL = 'select to_regclass($1) is not null as "exists"';
  *
  * Two copies auto-creating one table at once would both see it missing, and
  * the second CREATE would fail on the first's catalog row. So a missing table
- * is re-checked under a transaction-scoped advisory lock on the name, held to
- * COMMIT: the second copy waits there, then finds the table. A table that
- * already exists takes no lock, so copies into it run as they would without
- * Auto-create.
+ * is re-checked under a transaction-scoped advisory lock, held to COMMIT: the
+ * second copy waits there, then finds the table. The key is the RESOLVED
+ * `schema.table` (`autoCreateLockKey`; an unqualified name's schema is
+ * `current_schema()`, where CREATE puts it), so `t` and `public.t` share one.
+ * The wait polls `pg_try_advisory_xact_lock` rather than blocking, so a cancel
+ * or the activity timeout ends it, where a blocking wait would hold until the
+ * other copy commits. A table that already exists takes no lock, so copies into
+ * it run as they would without Auto-create.
  */
 async function autoCreatePostgresTable(
   client: PostgresClient,
+  target: { readonly schema?: string; readonly table: string },
   qualified: string,
   columns: readonly AutoCreateColumn[],
+  signal: AbortSignal | undefined,
 ): Promise<void> {
   // Built first, so a refusal (a case collision, a name over 63 characters)
   // runs no statement.
-  const ddl = autoCreateTableSql('postgres', qualified, columns);
+  const ddl = autoCreateTableSql(
+    'postgres',
+    {
+      qualified,
+      names: target.schema === undefined ? [target.table] : [target.schema, target.table],
+    },
+    columns,
+  );
   const exists = async (): Promise<boolean> =>
-    ((await client.query(RELATION_EXISTS_SQL, [qualified])).rows[0] as { exists?: unknown })
-      ?.exists === true;
+    (
+      (await client.query(RELATION_EXISTS_SQL, [qualified])).rows[0] as
+        { exists?: unknown } | undefined
+    )?.exists === true;
   if (await exists()) return;
-  await client.query('select pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
-    AUTO_CREATE_LOCK_SPACE,
-    qualified,
-  ]);
+  // `null` when no `search_path` schema exists; the CREATE then fails with the
+  // server's own words, so the key only has to be stable.
+  const schema =
+    target.schema ??
+    String(
+      (
+        (await client.query('select current_schema() as "schema"')).rows[0] as
+          { schema?: unknown } | undefined
+      )?.schema ?? '',
+    );
+  const key = autoCreateLockKey(schema, target.table);
+  for (;;) {
+    const locked = (
+      (await client.query('select pg_try_advisory_xact_lock($1::bigint) as "locked"', [key]))
+        .rows[0] as { locked?: unknown } | undefined
+    )?.locked;
+    if (locked === true) break;
+    if (signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
+    await sleep(AUTO_CREATE_LOCK_POLL_MS);
+  }
   if (await exists()) return;
   await client.query(ddl);
 }
@@ -661,7 +697,7 @@ export async function writePostgresDatasetRows(
       // what lets a PostgreSQL sink table be created at all: a script cannot,
       // because the LOCK comes first.
       if (write.autoCreate != null) {
-        await autoCreatePostgresTable(client, qualified, write.autoCreate);
+        await autoCreatePostgresTable(client, target, qualified, write.autoCreate, write.signal);
         if (write.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
       }
 

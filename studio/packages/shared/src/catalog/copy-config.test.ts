@@ -415,7 +415,7 @@ describe('Table option: Auto-create from mapping (C3c)', () => {
     expect(result.success).toBe(false);
     expect(result.error?.issues[0]?.path).toEqual(['tableOption']);
     expect(result.error?.issues[0]?.message).toBe(
-      "Auto-create cannot create both 'id' and 'ID': a store compares column names without case",
+      "Auto-create cannot create both 'id' and 'ID': the copy matches sink columns without case",
     );
     expect(
       copyDispatchInputSchema.safeParse({ mapping: clash, tableOption: 'autoCreate' }).success,
@@ -428,7 +428,7 @@ describe('Table option: Auto-create from mapping (C3c)', () => {
   it('names the collision from the sink names alone', () => {
     expect(autoCreateCollisionIssue(['a', 'b', 'c'])).toBeNull();
     expect(autoCreateCollisionIssue(['Name', 'x', 'NAME'])).toBe(
-      "Auto-create cannot create both 'Name' and 'NAME': a store compares column names without case",
+      "Auto-create cannot create both 'Name' and 'NAME': the copy matches sink columns without case",
     );
   });
 });

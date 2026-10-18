@@ -372,15 +372,16 @@ const copyTableOptionSchema = z.enum(COPY_TABLE_OPTIONS);
  * existing table: the sink resolves each name by the store's own case rule. A
  * table this copy CREATES has no such rule to defer to. SQLite refuses the pair
  * as a duplicate column, and PostgreSQL creates both and the sink then cannot
- * tell which one a name means. Shared with the sinks, which re-check a `${}`
- * Table option at dispatch.
+ * tell which one a name means. The authored and dispatch schemas both run it
+ * (so a `${}` Table option is checked once resolved), and the sinks' DDL
+ * builder again for a direct caller.
  */
 export function autoCreateCollisionIssue(sinks: readonly string[]): string | null {
   const seen = new Map<string, string>();
   for (const sink of sinks) {
     const earlier = seen.get(nocaseFold(sink));
     if (earlier !== undefined) {
-      return `Auto-create cannot create both '${earlier}' and '${sink}': a store compares column names without case`;
+      return `Auto-create cannot create both '${earlier}' and '${sink}': the copy matches sink columns without case`;
     }
     seen.set(nocaseFold(sink), sink);
   }
@@ -419,11 +420,9 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
       tableOption: presented(copyTableOptionSchema.default('none'), {
         title: 'Table option',
         description:
-          "Auto-create from mapping creates the table, when it does not exist, from the mapping's " +
-          "sink columns and types, inside the copy's transaction, so a failed copy undoes it. " +
-          'Every column is nullable and there is no primary key. It runs before the Pre-copy ' +
-          'script, which can alter the new table. An existing table is used as it is. ' +
-          'Database sinks only.',
+          "Auto-create from mapping creates the table from the mapping's sink columns and types " +
+          'when it does not exist, before the Pre-copy script. Every column is nullable, with ' +
+          'no primary key. An existing table is used as it is.',
         options: optionTitles(copyTableOptionSchema, {
           none: 'Use existing',
           autoCreate: 'Auto-create from mapping',

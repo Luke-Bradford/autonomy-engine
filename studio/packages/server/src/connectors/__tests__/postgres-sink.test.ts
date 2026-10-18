@@ -1,5 +1,6 @@
 import pg from 'pg';
 import { describe, expect, it } from 'vitest';
+import { autoCreateLockKey } from '../auto-create-table.js';
 import { DatasetIoError } from '../dataset-io-error.js';
 import { writePostgresDatasetRows } from '../postgres-sink.js';
 import { resolveSinkColumns } from '../sink-columns.js';
@@ -87,6 +88,12 @@ function sinkFactory(
     /** Auto-create's existence checks, answered in turn (C3c). Past the end,
      * the relation exists unless `missing`. */
     exists?: boolean[];
+    /** Auto-create's `pg_try_advisory_xact_lock` answers, in turn; past the end, granted. */
+    locks?: boolean[];
+    /** What `current_schema()` answers (C3c). */
+    currentSchema?: string;
+    /** Called with every statement before it is answered. */
+    onQuery?: (sql: string) => void;
   } = {},
 ) {
   const rec: SinkRecorder = { queries: [], ended: 0 };
@@ -106,6 +113,13 @@ function sinkFactory(
         );
         if (fixture.failOn !== undefined && sql.startsWith(fixture.failOn.prefix)) {
           throw fixture.failOn.error;
+        }
+        fixture.onQuery?.(sql);
+        if (sql.includes('pg_try_advisory_xact_lock')) {
+          return { rows: [{ locked: fixture.locks?.shift() ?? true }], fields: [] };
+        }
+        if (sql.includes('current_schema()')) {
+          return { rows: [{ schema: fixture.currentSchema ?? 'public' }], fields: [] };
         }
         if (sql.includes('is not null as "exists"')) {
           return {
@@ -993,9 +1007,12 @@ describe('the postgres sink: Auto-create from mapping (C3c)', () => {
     { name: 'b', type: 'string' as const },
   ];
   const EXISTS = 'select to_regclass($1) is not null as "exists"';
-  const ADVISORY = 'select pg_advisory_xact_lock(hashtext($1), hashtext($2))';
+  const TRY_LOCK = 'select pg_try_advisory_xact_lock($1::bigint) as "locked"';
+  const CURRENT_SCHEMA = 'select current_schema() as "schema"';
   /** The statements from BEGIN on: the session's own setup precedes it. */
   const fromBegin = (rec: SinkRecorder) => sqlOf(rec).slice(sqlOf(rec).indexOf('BEGIN'));
+  const valuesOf = (rec: SinkRecorder, sql: string) =>
+    rec.queries.filter((q) => q.sql === sql).map((q) => q.values);
 
   it('checks, takes the advisory lock, re-checks and creates, all before the LOCK', async () => {
     const { rec, factory } = sinkFactory({ exists: [false, false] });
@@ -1006,17 +1023,25 @@ describe('the postgres sink: Auto-create from mapping (C3c)', () => {
     expect(fromBegin(rec).slice(0, 6)).toEqual([
       'BEGIN',
       EXISTS,
-      ADVISORY,
+      TRY_LOCK,
       EXISTS,
       'CREATE TABLE "public"."tgt" ("a" bigint, "b" text)',
       'LOCK TABLE "public"."tgt" IN ROW EXCLUSIVE MODE',
     ]);
-    const begin = sqlOf(rec).indexOf('BEGIN');
-    expect(rec.queries[begin + 1]!.values).toEqual(['"public"."tgt"']);
-    expect(rec.queries[begin + 2]!.values).toEqual([
-      'autonomy-studio:copy-auto-create',
-      '"public"."tgt"',
-    ]);
+    expect(valuesOf(rec, EXISTS)).toEqual([['"public"."tgt"'], ['"public"."tgt"']]);
+    expect(valuesOf(rec, TRY_LOCK)).toEqual([[autoCreateLockKey('public', 'tgt')]]);
+  });
+
+  it('keys an unqualified name on the schema CREATE would use, so both spellings share a lock', async () => {
+    const { rec, factory } = sinkFactory({ exists: [false, false], currentSchema: 'public' });
+    await writePostgresDatasetRows(
+      write({ createClient: factory, datasetConfig: { table: 'tgt' }, autoCreate: COLUMNS }),
+      batchesOf([{ a: 1, b: 2 }]),
+    );
+    expect(fromBegin(rec).slice(0, 5)).toEqual(['BEGIN', EXISTS, CURRENT_SCHEMA, TRY_LOCK, EXISTS]);
+    expect(valuesOf(rec, TRY_LOCK)).toEqual([[autoCreateLockKey('public', 'tgt')]]);
+    expect(autoCreateLockKey('public', 'tgt')).not.toBe(autoCreateLockKey('other', 'tgt'));
+    expect(autoCreateLockKey('public', 'tgt')).toMatch(/^-?\d+$/);
   });
 
   it('takes no advisory lock and creates nothing when the table exists', async () => {
@@ -1032,14 +1057,52 @@ describe('the postgres sink: Auto-create from mapping (C3c)', () => {
     ]);
   });
 
-  it('creates nothing when another copy created the table while it waited', async () => {
-    const { rec, factory } = sinkFactory({ exists: [false, true] });
+  it('waits while another copy holds the lock, then creates nothing once it has created the table', async () => {
+    const { rec, factory } = sinkFactory({ exists: [false, true], locks: [false, false] });
     await writePostgresDatasetRows(
       write({ createClient: factory, autoCreate: COLUMNS }),
       batchesOf([{ a: 1, b: 2 }]),
     );
+    expect(sqlOf(rec).filter((q) => q === TRY_LOCK)).toHaveLength(3);
     expect(sqlOf(rec).some((q) => q.startsWith('CREATE TABLE'))).toBe(false);
-    expect(sqlOf(rec)).toContain(ADVISORY);
+  });
+
+  it('stops waiting on a cancel, creates nothing, and rolls back', async () => {
+    const controller = new AbortController();
+    let tries = 0;
+    const { rec, factory } = sinkFactory({
+      exists: [false],
+      locks: [false, false, false, false],
+      onQuery: (sql) => {
+        if (sql === TRY_LOCK && ++tries === 2) controller.abort();
+      },
+    });
+    const err = await writePostgresDatasetRows(
+      write({ createClient: factory, autoCreate: COLUMNS, signal: controller.signal }),
+      batchesOf([{ a: 1, b: 2 }]),
+    ).catch((e: unknown) => e);
+    expect(err).toMatchObject({ kind: 'cancelled' });
+    // It stops at the try the cancel landed on, rather than waiting out the lock.
+    expect(sqlOf(rec).filter((q) => q === TRY_LOCK)).toHaveLength(2);
+    expect(sqlOf(rec).some((q) => q.startsWith('CREATE TABLE'))).toBe(false);
+    expect(sqlOf(rec).at(-1)).toBe('ROLLBACK');
+  });
+
+  it('rolls the create back on a cancel that lands while it runs', async () => {
+    const controller = new AbortController();
+    const { rec, factory } = sinkFactory({
+      exists: [false, false],
+      onQuery: (sql) => {
+        if (sql.startsWith('CREATE TABLE')) controller.abort();
+      },
+    });
+    const err = await writePostgresDatasetRows(
+      write({ createClient: factory, autoCreate: COLUMNS, signal: controller.signal }),
+      batchesOf([{ a: 1, b: 2 }]),
+    ).catch((e: unknown) => e);
+    expect(err).toMatchObject({ kind: 'cancelled' });
+    expect(sqlOf(rec).some((q) => q.startsWith('LOCK TABLE'))).toBe(false);
+    expect(sqlOf(rec).at(-1)).toBe('ROLLBACK');
   });
 
   it('creates every type as its PostgreSQL column type, an unqualified name unqualified', async () => {
@@ -1076,11 +1139,11 @@ describe('the postgres sink: Auto-create from mapping (C3c)', () => {
         { name: 'a', type: 'integer' as const },
         { name: 'A', type: 'string' as const },
       ],
-      "Auto-create cannot create both 'a' and 'A': a store compares column names without case",
+      "Auto-create cannot create both 'a' and 'A': the copy matches sink columns without case",
     ],
     [
       [{ name: 'c'.repeat(64), type: 'string' as const }],
-      `Auto-create cannot create column '${'c'.repeat(64)}': PostgreSQL names are at most 63 characters`,
+      `Auto-create cannot create '${'c'.repeat(64)}': a PostgreSQL name is at most 63 characters`,
     ],
   ])('refuses %j before any statement after BEGIN, and rolls back', async (autoCreate, message) => {
     const { rec, factory } = sinkFactory({ exists: [false, false] });
@@ -1089,6 +1152,23 @@ describe('the postgres sink: Auto-create from mapping (C3c)', () => {
       batchesOf([{ a: 1 }]),
     ).catch((e: unknown) => e);
     expect(err).toMatchObject({ kind: 'permanent', message });
+    expect(fromBegin(rec)).toEqual(['BEGIN', 'ROLLBACK']);
+  });
+
+  it('refuses a table name over 63 characters, which the server would truncate', async () => {
+    const { rec, factory } = sinkFactory();
+    const err = await writePostgresDatasetRows(
+      write({
+        createClient: factory,
+        datasetConfig: { schema: 'public', table: 't'.repeat(64) },
+        autoCreate: COLUMNS,
+      }),
+      batchesOf([{ a: 1, b: 2 }]),
+    ).catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      kind: 'permanent',
+      message: `Auto-create cannot create '${'t'.repeat(64)}': a PostgreSQL name is at most 63 characters`,
+    });
     expect(fromBegin(rec)).toEqual(['BEGIN', 'ROLLBACK']);
   });
 
@@ -1828,21 +1908,47 @@ describe.skipIf(LIVE_HOST === undefined)('the postgres sink, against a live post
       ).toEqual([{ r: null }]);
     });
 
-    it('lets two copies auto-create one table at once: one creates it, both write', async () => {
+    it('makes a copy wait for one that is creating the table, then write into it', async () => {
       await withAdminClient((c) => c.query('drop table if exists sink_ac_race'));
-      const one = (a: number) =>
-        writePostgresDatasetRows(
+      // The first "copy" is held open by hand, after its CREATE and before its
+      // COMMIT, holding the lock a copy takes. A second copy must neither fail
+      // on the uncommitted table nor create its own: it waits, then writes.
+      const holder = new pg.Client({
+        host: live.host,
+        port: live.port,
+        database: live.database,
+        user: live.user,
+        password,
+      });
+      await holder.connect();
+      try {
+        await holder.query('BEGIN');
+        await holder.query('select pg_advisory_xact_lock($1::bigint)', [
+          autoCreateLockKey('public', 'sink_ac_race'),
+        ]);
+        await holder.query('CREATE TABLE public.sink_ac_race (a bigint)');
+        await holder.query('insert into public.sink_ac_race values (1)');
+        let settled = false;
+        const second = writePostgresDatasetRows(
           liveWrite({
             datasetConfig: { schema: 'public', table: 'sink_ac_race' },
             columns: ['a'],
             autoCreate: [{ name: 'a', type: 'integer' }],
           }),
-          batchesOf([{ a }]),
-        );
-      await Promise.all([one(1), one(2), one(3)]);
+          batchesOf([{ a: 2n }]),
+        ).finally(() => {
+          settled = true;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        expect(settled).toBe(false);
+        await holder.query('COMMIT');
+        await second;
+      } finally {
+        await holder.end();
+      }
       expect(
         (await withAdminClient((c) => c.query('select a from sink_ac_race order by a'))).rows,
-      ).toEqual([{ a: '1' }, { a: '2' }, { a: '3' }]);
+      ).toEqual([{ a: '1' }, { a: '2' }]);
     });
 
     it('writes into an existing table as it is', async () => {
