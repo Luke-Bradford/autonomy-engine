@@ -128,4 +128,123 @@ test.describe('#1600 C3a — Copy Write behaviour', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  /**
+   * #1600 OR41 C3b — Pre-copy script and Batch size (catalogue §4.1), authored
+   * in the Sink tab and run for real: the script deletes the rows from :from up
+   * inside the copy's transaction, then the copy appends the incoming rows.
+   */
+  test('a Pre-copy script with a bind value runs before the rows, and Batch size is saved', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const problems = collectPageProblems(page);
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1600-c3b-')));
+    try {
+      const dbPath = join(root, 'crm.db');
+      const db = new DatabaseSync(dbPath);
+      db.exec(`
+        CREATE TABLE incoming (id INTEGER, name TEXT);
+        INSERT INTO incoming VALUES (2, 'Bea'), (3, 'Cal'), (4, 'Dee');
+        CREATE TABLE customers (id INTEGER, name TEXT);
+        INSERT INTO customers VALUES (1, 'Ann'), (2, 'Bee'), (3, 'Coe');
+      `);
+      db.close();
+      const conn = await seedConnection(page, {
+        name: 'e2e 1600 c3b crm',
+        kind: 'sqlite',
+        config: { roots: [root], path: dbPath, writable: true },
+      });
+      const sink = await seedDataset(page, {
+        name: 'e2e 1600 c3b customers',
+        kind: 'table',
+        connectionId: conn,
+        config: { table: 'customers' },
+        columns: [
+          { name: 'id', type: 'integer', nullable: true },
+          { name: 'name', type: 'string', nullable: true },
+        ],
+      });
+      const pipelineId = await openSeededCanvas(page, 'e2e 1600 c3b pre-copy', {
+        nodes: [
+          {
+            id: 'copy1',
+            type: 'copy',
+            config: {
+              mapping: [
+                { source: 'id', sink: 'id', type: 'integer' },
+                { source: 'name', sink: 'name', type: 'string' },
+              ],
+            },
+            connectionIds: { source: conn, sink: conn },
+            datasetIds: { sink },
+            inlineDatasets: { source: { kind: 'table', config: { table: 'incoming' } } },
+            position: { x: 0, y: 0 },
+          },
+        ],
+        edges: [],
+      });
+
+      await nodeById(page, 'copy1').click();
+      const pane = properties(page);
+      await pane.getByRole('tab', { name: 'Sink', exact: true }).click();
+      const script = pane.getByRole('textbox', { name: 'Pre-copy script', exact: true });
+      await script.fill('DELETE FROM customers WHERE id >= :from');
+      // The statement is literal (§8): no reference flyout on it, one on a bind value.
+      await expect(
+        pane.getByRole('button', { name: /^Insert reference into pre-copy script$/i }),
+      ).toHaveCount(0);
+      await pane.getByRole('button', { name: 'Add pre-copy bind values row', exact: true }).click();
+      await pane
+        .getByRole('textbox', { name: 'Pre-copy bind values row 1 key', exact: true })
+        .fill('from');
+      await pane
+        .getByRole('textbox', { name: 'Pre-copy bind values row 1 value', exact: true })
+        .fill('2');
+      await expect(
+        pane.getByRole('button', {
+          name: 'Insert reference into pre-copy bind values row 1 value',
+          exact: true,
+        }),
+      ).toBeVisible();
+      const batch = pane.getByRole('textbox', { name: /^Batch size/ });
+      await batch.fill('2');
+      // The whole Sink tab fits the dock at 1440x900, Batch size included.
+      const box = await batch.boundingBox();
+      expect(box!.y + box!.height).toBeLessThanOrEqual(900);
+      await pane.getByRole('button', { name: 'Apply config' }).click();
+
+      await page.getByRole('button', { name: 'Save version' }).click();
+      await expect(page.locator('.notice')).toHaveText('Saved v2.');
+      const versions = (await (
+        await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+      ).json()) as { id: string; version: number; nodes: Record<string, unknown>[] }[];
+      const latest = versions.sort((a, b) => b.version - a.version)[0]!;
+      const copy = latest.nodes.find((n) => n['id'] === 'copy1')!;
+      expect(copy['config']).toMatchObject({
+        preCopyScript: 'DELETE FROM customers WHERE id >= :from',
+        preCopyScriptParameters: { from: '2' },
+        writeBatchSize: 2,
+      });
+
+      const runId = await fireAndSettle(page, latest.id, 'e2e 1600 c3b run');
+      const run = await (await page.request.get(`/api/runs/${encodeURIComponent(runId)}`)).json();
+      expect(run.status, `run: ${JSON.stringify(run)}`).toBe('success');
+      const back = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        expect(back.prepare('SELECT id, name FROM customers ORDER BY id').all()).toEqual([
+          { id: 1, name: 'Ann' },
+          { id: 2, name: 'Bea' },
+          { id: 3, name: 'Cal' },
+          { id: 4, name: 'Dee' },
+        ]);
+      } finally {
+        back.close();
+      }
+
+      await expectQuiet(page, problems);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
