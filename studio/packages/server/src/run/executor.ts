@@ -47,6 +47,7 @@ import { markExternalWaitExpired, recordExternalWait } from '../repo/external-wa
 import {
   deriveExternalWaitToken,
   externalWaitCallbackUrl,
+  loopbackCallbackWarning,
   hashExternalWaitToken,
 } from '../webhooks/external-wait-token.js';
 import { connectionNotReadyReason, getConnection } from '../repo/connections.js';
@@ -1257,6 +1258,20 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           now,
         });
         ctx = { ...ctx, callbackUri: externalWaitCallbackUrl(deps.publicBaseUrl, token) };
+        // #1761 — a loopback base is the unset-`AUTONOMY_PUBLIC_URL` default, and
+        // a remote endpoint can never call it, so say why the node may only time
+        // out. Before the request, so it rides a failing attempt too.
+        const loopback = loopbackCallbackWarning(deps.publicBaseUrl);
+        if (loopback !== null) {
+          emit({
+            type: 'activity.warned',
+            runId,
+            nodeId,
+            attemptId,
+            code: WARNING_CODES.CALLBACK_URL_LOOPBACK satisfies WarningCode,
+            reason: loopback,
+          });
+        }
       }
       for await (const ev of adapter.runActivity(ctx, secret, secretFields, sinkSecret)) {
         if (ev.type === 'output') {

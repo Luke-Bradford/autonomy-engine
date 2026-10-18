@@ -19,6 +19,9 @@ import {
   type Node,
   type PipelineVersion,
   catalog as sharedCatalog,
+  getActivity,
+  WARNING_CODES,
+  WEB_ACTIVITY_TYPE,
 } from '@autonomy-studio/shared';
 import { createPipeline } from '../../repo/pipelines.js';
 import { insertLegacyVersion } from '../../__tests__/legacy-version.js';
@@ -38,6 +41,7 @@ import { loadEngineEvents } from '../events.js';
 import { until } from '../../__tests__/poll-until.js';
 import { DatasetIoError } from '../../connectors/dataset-io-error.js';
 import { createExecutor, PREFLIGHT_STORE_CONCURRENCY } from '../executor.js';
+import { loopbackCallbackWarning } from '../../webhooks/external-wait-token.js';
 import { createRunCancels } from '../cancel.js';
 import { ACTIVITY_TIMEOUT_REASON } from '../timeout.js';
 import { createRunDrives } from '../drives.js';
@@ -166,6 +170,7 @@ function deps(
     now?: () => number;
     alarms?: RetryAlarms;
     armDeadline?: (ms: number, fire: () => void) => () => void;
+    publicBaseUrl?: string;
   } = {},
 ) {
   const resolveDoc = resolveDocFor(db);
@@ -181,6 +186,7 @@ function deps(
       catalog: over.catalog,
       now: over.now,
       armDeadline: over.armDeadline,
+      publicBaseUrl: over.publicBaseUrl,
     }),
     // The same clock the executor gate reads also drives a retry's `dueAt`, so a
     // gate-armed retry lands deterministically in the `now`-injecting tests.
@@ -6104,5 +6110,93 @@ describe('createExecutor — a Lookup’s workspace Lookup max rows (#1600 OR41 
       present: false,
       value: undefined,
     });
+  });
+});
+
+describe('createExecutor — a Web Wait for callback and the public base URL (#1761)', () => {
+  /** A Web Wait for callback whose request the fake adapter refuses at once. */
+  async function runWebWait(publicBaseUrl: string | undefined) {
+    let sent: unknown;
+    const adapters = fakeHttpAdapter(async function* (ctx) {
+      sent = ctx.callbackUri;
+      yield { type: 'failed', kind: 'permanent', error: 'refused' };
+    });
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [
+      {
+        id: 'job',
+        type: WEB_ACTIVITY_TYPE,
+        connectionId: connId,
+        config: {
+          url: 'https://jobs.example.test/run',
+          method: 'POST',
+          waitForCallback: true,
+          outputs: getActivity(WEB_ACTIVITY_TYPE)!.outputs,
+        },
+        position: { x: 0, y: 0 },
+      },
+    ]);
+    const run = seedRun(db, pvId);
+    await startRun(deps(db, { adapters, publicBaseUrl }), run);
+    const events = loadEngineEvents(db, run.id);
+    return { events, sent, warned: events.filter((e) => e.type === 'activity.warned') };
+  }
+
+  it('warns at dispatch, before the request, when the callback URL is on a loopback host', async () => {
+    const { events, sent, warned } = await runWebWait('http://127.0.0.1:8080');
+    expect(String(sent).startsWith('http://127.0.0.1:8080/api/external-wait/')).toBe(true);
+    expect(warned).toEqual([
+      expect.objectContaining({
+        nodeId: 'job',
+        code: WARNING_CODES.CALLBACK_URL_LOOPBACK,
+        reason: expect.stringContaining('AUTONOMY_PUBLIC_URL') as unknown,
+      }),
+    ]);
+    // It names the origin, never the token the URL carries.
+    const token = String(sent).split('/').pop()!;
+    expect((warned[0] as { reason: string }).reason).not.toContain(token);
+    // It rides the failing attempt: written before the terminal.
+    const types = events.map((e) => e.type);
+    expect(types.indexOf('activity.warned')).toBeLessThan(types.indexOf('node.failed'));
+  });
+
+  it('says nothing for a base a remote endpoint can reach', async () => {
+    const { sent, warned } = await runWebWait('https://studio.example.com/base');
+    expect(String(sent).startsWith('https://studio.example.com/base/api/external-wait/')).toBe(
+      true,
+    );
+    expect(warned).toEqual([]);
+  });
+
+  it('reads loopback as 127.0.0.0/8, ::1 and localhost, and nothing else', () => {
+    for (const base of [
+      'http://127.0.0.1:8080',
+      'http://127.4.5.6',
+      'http://[::1]:8080/base',
+      'http://localhost:8080',
+      'http://studio.localhost',
+    ]) {
+      expect(loopbackCallbackWarning(base), base).not.toBeNull();
+    }
+    for (const base of [
+      'https://studio.example.com',
+      'http://10.0.0.5:8080',
+      'http://127.example.com',
+      'http://localhost.example.com',
+      'http://[::2]',
+    ]) {
+      expect(loopbackCallbackWarning(base), base).toBeNull();
+    }
+  });
+
+  it('fails the node permanently, before any request, with no public base URL wired', async () => {
+    const { events, sent } = await runWebWait(undefined);
+    expect(sent).toBeUndefined();
+    expect(events.find((e) => e.type === 'node.failed')).toMatchObject({
+      kind: 'permanent',
+      error: expect.stringContaining('AUTONOMY_PUBLIC_URL') as unknown,
+    });
+    expect(events.some((e) => e.type === 'activity.warned')).toBe(false);
   });
 });

@@ -86,6 +86,33 @@ export function externalWaitCallbackPath(token: string): string {
   return `/api/external-wait/${token}`;
 }
 
+/**
+ * #1761 — why a `callBackUri` on this public base URL may never be called, or
+ * `null`. A loopback host (`127.0.0.0/8`, `::1`, `localhost` and its
+ * subdomains) is reachable only from this machine. Reads the origin alone, so
+ * the sentence never holds a token.
+ */
+export function loopbackCallbackWarning(publicBaseUrl: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(publicBaseUrl);
+  } catch {
+    return null;
+  }
+  const host = url.hostname.toLowerCase();
+  const loopback =
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host === '[::1]' ||
+    /^127(\.\d{1,3}){3}$/.test(host);
+  if (!loopback) return null;
+  return (
+    `The callback URL starts ${url.origin}, a loopback address that only this machine can reach, ` +
+    'so a remote endpoint cannot call back and the activity waits until its callback timeout. ' +
+    'Set AUTONOMY_PUBLIC_URL to an address the endpoint can reach.'
+  );
+}
+
 /** The absolute callback URL: the public base URL (any trailing `/` dropped) joined to the path. */
 export function externalWaitCallbackUrl(publicBaseUrl: string, token: string): string {
   return `${publicBaseUrl.replace(/\/+$/, '')}${externalWaitCallbackPath(token)}`;

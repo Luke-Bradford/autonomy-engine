@@ -1149,6 +1149,16 @@ export const WARNING_CODES = {
    * `truncated: true`. The `reason` gives the limit only, never the body.
    */
   WEB_RESPONSE_TRUNCATED: 'web_response_truncated',
+  /**
+   * #1761 — a Web *Wait for callback* sent a `callBackUri` on a loopback host
+   * (`127.0.0.0/8`, `::1`, `localhost`). That is the default when
+   * `AUTONOMY_PUBLIC_URL` is unset, and a remote endpoint can never reach it, so
+   * the node would wait out its callback timeout with no trace of why. Emitted
+   * at dispatch, before the request, so it rides a failing attempt too. A local
+   * endpoint can reach the URL, which is why it warns rather than fails. The
+   * `reason` names the origin only, never the token.
+   */
+  CALLBACK_URL_LOOPBACK: 'callback_url_loopback',
 } as const;
 
 /** The warning codes the engine itself mints — see `WARNING_CODES`. */
