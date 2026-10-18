@@ -37,6 +37,7 @@ import {
   HTTP_SECRET_HEADERS_FIELD,
   httpSecretHeadersSchema,
   webConfigSchema,
+  webWaitsOnly,
 } from './web-config.js';
 import {
   GET_METADATA_FIELDS_BY_CONNECTION_KIND,
@@ -163,7 +164,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // text, and a 429/5xx carries the server's Retry-After to the retry alarm.
     // `http_request` lowers to it (C11b). Wait for callback (C11c) parks the
     // node on the external-wait machinery `webhook` uses and fills `callback`
-    // (declared since C11a, so no `formerOutputs` refresh).
+    // (declared since C11a, so no `formerOutputs` refresh). With no Request URL
+    // (C11c-2) it sends nothing and only waits, which is what `webhook` lowers to.
     type: WEB_ACTIVITY_TYPE,
     title: 'Web',
     description: 'Call a URL over an HTTP connection and read its response.',
@@ -194,7 +196,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
         ],
       },
     ],
-    // The rules `webConfigSchema`'s superRefine enforces.
+    // The rules `webConfigSchema`'s superRefine enforces, except C11c-2's: with
+    // no Request URL the request settings are refused at save but still shown,
+    // since a condition here can only name values, not "empty".
     appliesWhen: {
       successStatusCodes: [{ field: 'failOnHttpError', in: ['true'] }],
       callbackTimeoutSeconds: [{ field: 'waitForCallback', in: ['true'] }],
@@ -1273,8 +1277,17 @@ export function authorsCallBlob(node: Pick<Node, 'type' | 'call'>): boolean {
  * ONE statement of the rule: `validateDoc` refuses a timeout where it is false,
  * and the property dock offers the field only where it is true.
  */
-export function timeoutApplies(node: Pick<Node, 'type' | 'call'>): boolean {
-  return node.call === undefined && getActivity(node.type)?.kind === 'execution';
+export function timeoutApplies(
+  node: Pick<Node, 'type' | 'call'> & { config?: Record<string, unknown> },
+): boolean {
+  if (node.call !== undefined || getActivity(node.type)?.kind !== 'execution') return false;
+  // #1600 OR41 C11c-2 — a Web with no Request URL is never dispatched: it waits,
+  // as a `webhook` does, and its Callback timeout is the bound.
+  return !(
+    node.type === WEB_ACTIVITY_TYPE &&
+    node.config !== undefined &&
+    webWaitsOnly(node.config)
+  );
 }
 
 /**
@@ -1282,6 +1295,8 @@ export function timeoutApplies(node: Pick<Node, 'type' | 'call'>): boolean {
  * resolved and written on `node.dispatched`, so on exactly the nodes the
  * executor dispatches — the same set a timeout applies to.
  */
-export function userPropertiesApply(node: Pick<Node, 'type' | 'call'>): boolean {
+export function userPropertiesApply(
+  node: Pick<Node, 'type' | 'call'> & { config?: Record<string, unknown> },
+): boolean {
   return timeoutApplies(node);
 }

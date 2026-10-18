@@ -80,7 +80,7 @@ export const webConfigSchema = z
     url: presented(singleLine(z.string()).optional(), {
       title: 'Request URL',
       description:
-        "The address to call, joined to the connection's base URL when it is relative. Empty with Wait for callback on, nothing is sent and the activity only waits.",
+        "The address to call, joined to the connection's base URL when it is relative. With Wait for callback on and this empty, nothing is sent and the activity only waits.",
     }),
     method: presented(methodSchema.default('GET'), {
       title: 'Method',
@@ -182,20 +182,18 @@ export const webConfigSchema = z
       // their defaults and are inert: there is no response.
       if (!cfg.waitForCallback) {
         issue('url', 'required');
+      } else {
+        for (const field of [
+          'body',
+          'headers',
+          HTTP_SECRET_HEADERS_FIELD,
+          'httpRequestTimeoutSeconds',
+          'successStatusCodes',
+        ] as const) {
+          if (isSet(cfg[field])) issue(field, 'only sent with a Request URL');
+        }
         return;
       }
-      for (const field of [
-        'body',
-        'headers',
-        HTTP_SECRET_HEADERS_FIELD,
-        'httpRequestTimeoutSeconds',
-        'successStatusCodes',
-      ] as const) {
-        if (cfg[field] !== undefined && cfg[field] !== '') {
-          issue(field, 'only sent with a Request URL');
-        }
-      }
-      return;
     }
     if (webHasBody(cfg) && (cfg.method === 'GET' || cfg.method === 'HEAD')) {
       issue('body', `an HTTP ${cfg.method} cannot carry a body`);
@@ -308,8 +306,16 @@ export function webCallbackOutcome(
  * #1600 OR41 C11c-2 — whether a Web sends a request. An empty Request URL box
  * is no URL, as an empty Body box is no body.
  */
-export function webHasUrl(cfg: { url?: unknown }): boolean {
-  return cfg.url !== undefined && cfg.url !== '';
+export function webHasUrl<T extends { url?: unknown }>(cfg: T): cfg is T & { url: string } {
+  return typeof cfg.url === 'string' && cfg.url !== '';
+}
+
+/** A setting the author filled: not absent, and not an emptied box, list or table. */
+function isSet(value: unknown): boolean {
+  if (value === undefined || value === '') return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object' && value !== null) return Object.keys(value).length > 0;
+  return true;
 }
 
 /**

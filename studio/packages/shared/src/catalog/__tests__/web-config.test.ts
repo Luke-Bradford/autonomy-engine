@@ -11,6 +11,9 @@ import {
   callbackReportedError,
   WEB_MAX_CALLBACK_TIMEOUT_SECONDS,
   webWaitsOnly,
+  WEB_NO_REQUEST_OUTPUTS,
+  timeoutApplies,
+  userPropertiesApply,
   type Node,
 } from '../../index.js';
 import { activityNodeErrors } from '../../engine/activity-config-check.js';
@@ -226,5 +229,41 @@ describe('web config — no Request URL (#1600 OR41 C11c-2)', () => {
     expect(webWaitsOnly({ waitForCallback: true, url: '' })).toBe(true);
     expect(webWaitsOnly({ waitForCallback: true, url: '${pipeline().parameters.u}' })).toBe(false);
     expect(webWaitsOnly({ url: '' })).toBe(false);
+  });
+});
+
+describe('web config — no Request URL, review follow-ups (#1600 OR41 C11c-2)', () => {
+  it('an emptied table or list is not a request setting', () => {
+    expect(
+      issuesOf({
+        waitForCallback: true,
+        headers: {},
+        [HTTP_SECRET_HEADERS_FIELD]: {},
+        successStatusCodes: [],
+      }),
+    ).toEqual([]);
+  });
+
+  it('with Wait for callback off, a missing URL does not hide the other rules', () => {
+    expect(issuesOf({ callbackTimeoutSeconds: 60 })).toEqual([
+      'url: required',
+      'callbackTimeoutSeconds: only read when Wait for callback is on',
+    ]);
+  });
+
+  it('its null request outputs name every Web output but callback', () => {
+    const names = getActivity(WEB_ACTIVITY_TYPE)!
+      .outputs.map((o) => o.name)
+      .filter((n) => n !== 'callback');
+    expect(Object.keys(WEB_NO_REQUEST_OUTPUTS).sort()).toEqual(names.sort());
+  });
+
+  it('takes no activity timeout or user properties: it is never dispatched', () => {
+    const node = (config: Record<string, unknown>) =>
+      ({ type: WEB_ACTIVITY_TYPE, config }) as Pick<Node, 'type' | 'config'>;
+    expect(timeoutApplies(node({ waitForCallback: true }))).toBe(false);
+    expect(userPropertiesApply(node({ waitForCallback: true }))).toBe(false);
+    expect(timeoutApplies(node({ waitForCallback: true, url: '/x' }))).toBe(true);
+    expect(timeoutApplies(node({ url: '/x' }))).toBe(true);
   });
 });

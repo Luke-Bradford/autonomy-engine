@@ -381,6 +381,22 @@ describe('#1600 C11c-2 — a Web with no Request URL only waits', () => {
     ]);
   });
 
+  it('an inactive one is marked, never parked', () => {
+    const node = { ...waitsOnly(), state: 'inactive' as const };
+    const eng = engine([node]);
+    const r = eng.reduce(eng.seedState(), started);
+    expect(r.commands.map((c) => c.type)).not.toContain('scheduleExternalWait');
+    expect(r.state.nodes.w!.callback).toBeUndefined();
+  });
+
+  it('a callback timeout save would refuse fails the run cleanly instead of arming', () => {
+    const eng = engine([waitsOnly({ callbackTimeoutSeconds: 0 })]);
+    const r = eng.reduce(eng.seedState(), started);
+    expect(r.commands).toEqual([
+      expect.objectContaining({ type: 'finishRun', outcome: 'failure' }),
+    ]);
+  });
+
   it('a cancel before the park ends the wait at the arm', () => {
     const eng = engine([waitsOnly()]);
     const r = fold(eng, [started, cancel, created('w', 'w#0')]);

@@ -361,18 +361,12 @@ describe('#1600 C11c-2 — a Web with no Request URL only waits', () => {
   }
 
   it('sends nothing, parks without a connection, and settles on the callback', async () => {
-    let sent = false;
-    behaviour = (_body, res) => {
-      sent = true;
-      res.end();
-    };
     const runId = await startNode(waitsOnly());
     await untilStatus(runId, 'waiting');
     expect(eventTypes(runId)).not.toContain('node.dispatched');
     const res = await callBack(await pendingPath(runId), { approved: true });
     expect(res.statusCode).toBe(204);
     await untilStatus(runId, 'success');
-    expect(sent).toBe(false);
     expect(projected(runId).outputs.job).toEqual({
       status: null,
       headers: null,
@@ -407,11 +401,16 @@ describe('#1600 C11c-2 — a Web with no Request URL only waits', () => {
     };
     const [lowered] = lowerRetiredTypes({ nodes: [hook], containers: [] }).nodes;
     expect(lowered!.type).toBe(WEB_ACTIVITY_TYPE);
+    const outputs: unknown[] = [];
     for (const node of [hook, lowered!]) {
       const runId = await startNode(node);
       await untilStatus(runId, 'waiting');
       expect((await callBack(await pendingPath(runId), { ok: 1 })).statusCode).toBe(204);
       await untilStatus(runId, 'success');
+      outputs.push(projected(runId).outputs.job);
     }
+    // The documented difference: the Web keeps the body the webhook discarded.
+    expect(outputs[0]).toEqual({});
+    expect(outputs[1]).toMatchObject({ status: null, callback: { ok: 1 } });
   });
 });

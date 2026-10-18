@@ -607,6 +607,7 @@ describe('#1600 C11c-2 — webhook → Web · Wait for callback, no Request URL'
     ['a timeout past 7 days', { timeoutSeconds: `\${${WEB_MAX_CALLBACK_TIMEOUT_SECONDS + 1}}` }],
     ['a bare number', { timeoutSeconds: '60' }],
     ["a key that is one of Web's settings", { timeoutSeconds: '${60}', url: '/x' }],
+    ['a Wait for callback key of its own', { timeoutSeconds: '${60}', waitForCallback: false }],
   ])('stays a webhook with %s', (_why, config) => {
     const node = hook(config);
     expect(lowerNodes([node])[0]).toBe(node);

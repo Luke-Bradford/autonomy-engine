@@ -12,11 +12,10 @@ import { seedConnection } from './support/seedResources';
  * Web activity).
  *
  * What only a browser can show: the palette offers Web (and, since C11c-2, no
- * Webhook), its
- * Request · Auth · Settings tabs draw inside 1440x900 with ADF's defaults (Fail
- * on HTTP error on, so Treat as success shows; Parse as JSON), the form saves the
- * config, and the saved version reads a JSON response into `body`. A 404 FAILS
- * the run, where `http_request` succeeds with it.
+ * Webhook), its Request · Auth · Settings tabs draw inside 1440x900 with ADF's
+ * defaults (Fail on HTTP error on, so Treat as success shows; Parse as JSON),
+ * the form saves the config, and the saved version reads a JSON response into
+ * `body`. A 404 FAILS the run, where `http_request` succeeds with it.
  *
  * EGRESS-FREE: the endpoint is a stub on 127.0.0.1, as in `llm-capture.spec.ts`.
  */

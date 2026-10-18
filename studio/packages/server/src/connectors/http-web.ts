@@ -3,6 +3,7 @@ import {
   formatZodIssues,
   webCallbackBody,
   webHasBody,
+  webHasUrl,
   WARNING_CODES,
   webCallbackTimeoutSeconds,
   webConfigSchema,
@@ -57,6 +58,15 @@ export async function* runWeb(
   secret: string | null,
   secretFields: Readonly<Record<string, string>>,
 ): AsyncIterable<ActivityEvent> {
+  // #1600 OR41 C11c-2 — a Web whose stored URL is empty only waits and is never
+  // dispatched; one here had a `${}` URL that resolved empty, so there is
+  // nothing to call. Checked first: the schema would read the empty URL as the
+  // inbound-only wait and blame a request setting instead.
+  if (!webHasUrl(ctx.input)) {
+    yield { type: 'failed', kind: 'permanent', error: 'the Request URL resolved empty' };
+    return;
+  }
+  const url = ctx.input.url;
   const parsed = webConfigSchema.safeParse(ctx.input);
   if (!parsed.success) {
     yield {
@@ -67,14 +77,6 @@ export async function* runWeb(
     return;
   }
   const cfg = parsed.data;
-  // #1600 OR41 C11c-2 — a Web whose stored URL is empty only waits and is never
-  // dispatched; one here had a `${}` URL that resolved empty, so there is
-  // nothing to call.
-  if (cfg.url === undefined || cfg.url === '') {
-    yield { type: 'failed', kind: 'permanent', error: 'the Request URL resolved empty' };
-    return;
-  }
-  const url = cfg.url;
   // #1600 OR41 C11c — Wait for callback sends the author's JSON object body with
   // `callBackUri` added. The executor sets `ctx.callbackUri` for such a node.
   let body = webHasBody(cfg) ? cfg.body : undefined;
