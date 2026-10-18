@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { scanSqlPlaceholders, sqlBindNames } from './sql-placeholders.js';
+import { scanSqlPlaceholders, sqlBindNames, sqlLeadingKeyword } from './sql-placeholders.js';
 
 // #1600 OR41 C1q-c — the bind names the dock derives its rows from. The
 // postgres rules are pinned in depth by the reader's own suite
@@ -49,5 +49,41 @@ describe('sqlBindNames', () => {
   it('reports nothing for a statement with no placeholders', () => {
     expect(sqlBindNames('', 'sqlite')).toEqual([]);
     expect(sqlBindNames('select 1', 'postgres')).toEqual([]);
+  });
+});
+
+// #1600 OR41 C3b — the pre-copy script's allow-list keys on this word, and on
+// sqlite it is the ONLY barrier between authored SQL and an `ATTACH` that
+// writes outside the connection's roots. So every way of NOT starting with a
+// word must answer null, never the word after it.
+describe('sqlLeadingKeyword', () => {
+  it('upper-cases the first word', () => {
+    expect(sqlLeadingKeyword('delete from t', 'sqlite')).toBe('DELETE');
+    expect(sqlLeadingKeyword('Insert into t values (1)', 'postgres')).toBe('INSERT');
+  });
+
+  it("skips whitespace and comments, by each store's own comment rules", () => {
+    expect(sqlLeadingKeyword(' \n\t-- note\n/* a */ update t set a = 1', 'sqlite')).toBe('UPDATE');
+    expect(sqlLeadingKeyword('/* /* nested */ still */ delete from t', 'postgres')).toBe('DELETE');
+    // postgres ends a line comment at a CR; sqlite does not, so there the rest is comment.
+    expect(sqlLeadingKeyword('-- c\rdelete from t', 'postgres')).toBe('DELETE');
+    expect(sqlLeadingKeyword('-- c\rdelete from t', 'sqlite')).toBeNull();
+    // sqlite comments do not nest: the first close ends the comment.
+    expect(sqlLeadingKeyword('/* /* x */ attach', 'sqlite')).toBe('ATTACH');
+  });
+
+  it('answers null for a statement that does not begin with a word', () => {
+    // MEASURED by the C3b plan review: better-sqlite3 runs ";attach database …".
+    expect(sqlLeadingKeyword(";attach database 'x' as o", 'sqlite')).toBeNull();
+    expect(sqlLeadingKeyword(' ; delete from t', 'postgres')).toBeNull();
+    expect(sqlLeadingKeyword('(select 1)', 'postgres')).toBeNull();
+    expect(sqlLeadingKeyword('', 'sqlite')).toBeNull();
+    expect(sqlLeadingKeyword('/* never closed delete', 'sqlite')).toBeNull();
+    expect(sqlLeadingKeyword('"delete" from t', 'sqlite')).toBeNull();
+  });
+
+  it('reads the whole word, so a longer identifier is not its prefix', () => {
+    expect(sqlLeadingKeyword('deleted_rows', 'sqlite')).toBe('DELETED_ROWS');
+    expect(sqlLeadingKeyword('delete$x', 'postgres')).toBe('DELETE$X');
   });
 });

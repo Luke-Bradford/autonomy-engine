@@ -100,12 +100,16 @@ import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.j
  * **That rule is reader-scoped, and #1125's SINK breaks it by construction** —
  * it opens read-WRITE and it does `run()` and `exec()`. The invariant survives
  * because it was never "no `run()`" for its own sake; it was "the operator's SQL
- * is never handed to a method that would execute an `ATTACH`". The sink executes
- * NO operator-supplied SQL at all: every statement it runs is built here from an
- * identifier that `quoteIdentifier` has already refused unless it matches
- * `SQL_IDENTIFIER_RE`, and every value BINDS. A `query` dataset — the only place
- * operator SQL exists — is refused as a sink outright. So the two halves reach
- * the same guarantee by different routes, and neither weakens the other.
+ * is never handed to a method that would execute an `ATTACH`". Apart from one
+ * statement, the sink executes NO operator-supplied SQL: every statement it
+ * builds comes from an identifier that `quoteIdentifier` has already refused
+ * unless it matches `SQL_IDENTIFIER_RE`, and every value BINDS. A `query`
+ * dataset is refused as a sink outright. The one statement is a copy's
+ * Pre-copy script (#1600 OR41 C3b), and it reaches `run()` only through an
+ * allow-list of leading statements that excludes `ATTACH`, `VACUUM` and
+ * `PRAGMA` (`pre-copy-script.ts`), followed by a check that nothing was
+ * attached. So the two halves reach the same guarantee by different routes, and
+ * neither weakens the other.
  *
  * **#1127 narrowed the "already refused unless it matches `SQL_IDENTIFIER_RE`"
  * clause above, and the narrowing is by PROVENANCE.** A table or schema name
@@ -652,6 +656,7 @@ export const sqliteAdapter: ConnectorAdapter = {
           nullOnError,
           mode,
           keyColumns,
+          preCopyScript,
           onBatch,
           batches,
           signal,
@@ -665,6 +670,7 @@ export const sqliteAdapter: ConnectorAdapter = {
               nullOnError,
               mode,
               keyColumns,
+              preCopyScript,
               onBatch,
               signal,
             },

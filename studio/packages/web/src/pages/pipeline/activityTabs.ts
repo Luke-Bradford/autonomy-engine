@@ -140,6 +140,8 @@ export function applicableFieldNames(
           (c.connectionKind as readonly string[]).includes(connectionKind)
         );
       }
+      // #1600 OR41 C3b — the control holds a value, stored or typed.
+      if ('set' in c) return holds(c.field);
       const value = valueOf(c.field);
       // #1600 OR41 C8a — a set of choices holds its ticks one per line, and
       // applies when any is one of `in`; a single choice is the one-line case.

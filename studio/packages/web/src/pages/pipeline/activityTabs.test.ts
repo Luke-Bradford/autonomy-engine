@@ -34,7 +34,13 @@ describe('nodeTypeTabs (#1477)', () => {
       {
         key: 'sink',
         label: 'Sink',
-        fields: ['mode', 'keyColumns'],
+        fields: [
+          'mode',
+          'keyColumns',
+          'preCopyScript',
+          'preCopyScriptParameters',
+          'writeBatchSize',
+        ],
         bindings: ['sinkConnection', 'sinkDataset'],
       },
       { key: 'mapping', label: 'Mapping', fields: ['mapping'], bindings: [] },
@@ -105,6 +111,25 @@ describe('applicableFieldNames (#1686)', () => {
     // The checkbox as the author ticks it: a boolean draft over an unticked store.
     expect(shown({}, { ...seedFieldInputs(delFields, {}), recursive: true })).toBe(true);
     expect(shown({}, { ...seedFieldInputs(delFields, {}), recursive: false })).toBe(false);
+  });
+
+  it('shows a field conditioned `set` once its control holds a value (#1600 OR41 C3b)', () => {
+    const copy = getActivity('copy');
+    if (copy === undefined) throw new Error('copy is catalogued');
+    const copyFields = fieldsOf(copy);
+    const names = copyFields.map((f) => f.name);
+    const shown = (config: Record<string, unknown>, inputs = seedFieldInputs(copyFields, config)) =>
+      applicableFieldNames(copy, names, copyFields, inputs, config).includes(
+        'preCopyScriptParameters',
+      );
+    expect(shown({})).toBe(false);
+    // Typed, before any Apply.
+    expect(shown({}, { ...seedFieldInputs(copyFields, {}), preCopyScript: 'delete from t' })).toBe(
+      true,
+    );
+    expect(shown({ preCopyScript: 'delete from t' })).toBe(true);
+    // A stored value is drawn regardless, so it can be seen and cleared.
+    expect(shown({ preCopyScriptParameters: { d: 'x' } })).toBe(true);
   });
 
   const copyFiles = getActivity('copy_files');

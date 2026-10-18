@@ -108,11 +108,14 @@ export interface ActivityTab {
  * field's value is one of `in` (#1600 OR41 C8a: or, for a set of choices such
  * as Get metadata's field list, any ticked value is; C9a: a boolean's value is
  * `'true'` or `'false'`). #1600 OR41 C8c: or the
- * bound connection's kind is one of `connectionKind`. See
- * `ActivityCatalogEntry.appliesWhen`.
+ * bound connection's kind is one of `connectionKind`. #1600 OR41 C3b: or the
+ * controlling field holds any value (`set`), for a field that only means
+ * something beside another one (Copy's Pre-copy bind values beside its script).
+ * See `ActivityCatalogEntry.appliesWhen`.
  */
 export type ActivityFieldCondition =
   | { readonly field: string; readonly in: readonly [string, ...string[]] }
+  | { readonly field: string; readonly set: true }
   | { readonly connectionKind: readonly [ConnectionKind, ...ConnectionKind[]] };
 
 /**

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { CopyMappingSchema, copyDispatchInputSchema, copyInputSchema } from './copy-config.js';
+import {
+  COPY_DEFAULT_BATCH_ROWS,
+  COPY_MAX_BATCH_ROWS,
+  CopyMappingSchema,
+  copyDispatchInputSchema,
+  copyInputSchema,
+} from './copy-config.js';
 import { formatZodIssues } from '../schemas/zod-issues.js';
 
 /**
@@ -318,5 +324,69 @@ describe('copy Key columns (C3a)', () => {
       copyDispatchInputSchema.safeParse({ mapping: [id], mode: 'append', keyColumns: ['id'] })
         .success,
     ).toBe(false);
+  });
+});
+
+// #1600 OR41 C3b — Pre-copy script and Batch size (catalogue §4.1, database sink).
+describe('Pre-copy script and Batch size (C3b)', () => {
+  const row = { source: 'a', sink: 'id', type: 'integer' as const };
+
+  it('takes a script with bind values, and leaves both absent by default', () => {
+    const cfg = copyInputSchema.parse({
+      mapping: [row],
+      preCopyScript: 'delete from t where d = :d',
+      preCopyScriptParameters: { d: '${params.day}' },
+    });
+    expect(cfg.preCopyScript).toBe('delete from t where d = :d');
+    expect(cfg.preCopyScriptParameters).toEqual({ d: '${params.day}' });
+    const bare = copyInputSchema.parse({ mapping: [row] });
+    expect(bare.preCopyScript).toBeUndefined();
+    expect(bare.writeBatchSize).toBeUndefined();
+  });
+
+  it('types an authored bind value as text, a dispatched one as what it resolved to', () => {
+    // A whole-value `${}` may resolve to a number or null by dispatch time.
+    expect(
+      copyInputSchema.safeParse({
+        mapping: [row],
+        preCopyScript: 'delete from t where n = :n',
+        preCopyScriptParameters: { n: 5 },
+      }).success,
+    ).toBe(false);
+    expect(
+      copyDispatchInputSchema.parse({
+        mapping: [row],
+        preCopyScript: 'delete from t where n = :n',
+        preCopyScriptParameters: { n: 5, m: null, s: 'x' },
+      }).preCopyScriptParameters,
+    ).toEqual({ n: 5, m: null, s: 'x' });
+    // A boolean is not a value either store binds.
+    expect(
+      copyDispatchInputSchema.safeParse({
+        mapping: [row],
+        preCopyScript: 'delete from t where n = :n',
+        preCopyScriptParameters: { n: true },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('refuses bind values with no script to bind them into', () => {
+    const result = copyInputSchema.safeParse({
+      mapping: [row],
+      preCopyScriptParameters: { d: 'x' },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toEqual(['preCopyScriptParameters']);
+  });
+
+  it(`bounds Batch size to 1..${COPY_MAX_BATCH_ROWS} whole rows`, () => {
+    for (const ok of [1, COPY_DEFAULT_BATCH_ROWS, COPY_MAX_BATCH_ROWS]) {
+      expect(copyInputSchema.parse({ mapping: [row], writeBatchSize: ok }).writeBatchSize).toBe(ok);
+    }
+    for (const bad of [0, -1, 1.5, COPY_MAX_BATCH_ROWS + 1, '1000']) {
+      expect(
+        copyDispatchInputSchema.safeParse({ mapping: [row], writeBatchSize: bad }).success,
+      ).toBe(false);
+    }
   });
 });

@@ -981,3 +981,116 @@ describe('copy activity — §5 progress ticks stream while the copy runs (#1299
     expect(terminal(events).type).toBe('failed');
   });
 });
+
+// #1600 OR41 C3b — the two fields reach the I/O they configure: Batch size the
+// reader (whose batch the pump passes through to the sink), the Pre-copy script
+// the sink, with its substituted bind values.
+describe('copy activity — Batch size and Pre-copy script reach the I/O (C3b)', () => {
+  const MAPPING = [
+    { source: 'id', sink: 'id', type: 'integer' },
+    { source: 'name', sink: 'name', type: 'string' },
+  ];
+
+  function capturingIo(): {
+    io: CopyIo;
+    seen: { batchRows?: number | undefined; preCopyScript?: unknown };
+  } {
+    const seen: { batchRows?: number | undefined; preCopyScript?: unknown } = {};
+    const io: CopyIo = {
+      describeSource: () => Promise.resolve(['id', 'name']),
+      sourceCoercion: () => ({}),
+      readBatches: async function* ({ batchRows }) {
+        seen.batchRows = batchRows;
+        yield [{ id: 1, name: 'a' }];
+      },
+      writeRows: async ({ batches: incoming, preCopyScript }) => {
+        seen.preCopyScript = preCopyScript;
+        let written = 0;
+        for await (const batch of incoming) written += batch.length;
+        return { rowsWritten: written };
+      },
+    };
+    return { io, seen };
+  }
+
+  const ctxWith = (input: unknown): ActivityContext =>
+    copyCtx({ root: tempRoot(), sourcePath: 'unused.db', sinkPath: 'unused-dst.db', input });
+
+  async function drain(ctx: ActivityContext, io: CopyIo): Promise<ActivityEvent[]> {
+    const events: ActivityEvent[] = [];
+    for await (const event of runCopyActivity(ctx, io)) events.push(event);
+    return events;
+  }
+
+  it('passes Batch size to the reader, and nothing when it is empty', async () => {
+    const sized = capturingIo();
+    await drain(ctxWith({ mapping: MAPPING, writeBatchSize: 250 }), sized.io);
+    expect(sized.seen.batchRows).toBe(250);
+    const plain = capturingIo();
+    await drain(ctxWith({ mapping: MAPPING }), plain.io);
+    expect(plain.seen.batchRows).toBeUndefined();
+    expect(plain.seen.preCopyScript).toBeNull();
+  });
+
+  it('hands the sink the script with its bind values', async () => {
+    const { io, seen } = capturingIo();
+    const events = await drain(
+      ctxWith({
+        mapping: MAPPING,
+        preCopyScript: 'delete from sink where id = :id',
+        preCopyScriptParameters: { id: 7 },
+      }),
+      io,
+    );
+    expect(terminal(events).type).toBe('succeeded');
+    expect(seen.preCopyScript).toEqual({
+      sql: 'delete from sink where id = :id',
+      parameters: { id: 7 },
+    });
+  });
+
+  it('refuses a script that still holds a ${} at dispatch, before any I/O', async () => {
+    const { io, seen } = capturingIo();
+    const events = await drain(
+      ctxWith({ mapping: MAPPING, preCopyScript: "delete from sink where n = '${run.runId}'" }),
+      io,
+    );
+    const end = terminal(events);
+    expect(end.type).toBe('failed');
+    expect(end.type === 'failed' ? end.error : '').toMatch(/Pre-copy script stays literal/);
+    expect(seen.preCopyScript).toBeUndefined();
+  });
+});
+
+// #1600 OR41 C3b — Batch size on real stores: the copy moves one batch per tick,
+// so five rows at Batch size 2 are three batches, where the default is one.
+describe('copy activity — Batch size sets the batch on a real store (C3b)', () => {
+  const MAPPING = [
+    { source: 'id', sink: 'id', type: 'integer' },
+    { source: 'name', sink: 'name', type: 'string' },
+  ];
+  const ticksOf = (events: ActivityEvent[]): number =>
+    events.filter((e) => e.type === 'output' && e.name === COPY_PROGRESS_OUTPUT).length;
+
+  it('reads and writes five rows in batches of two', async () => {
+    const root = tempRoot();
+    const sinkPath = seedSink(root, 'dst.db');
+    const sourcePath = seedDb(root, 5, 'src.db');
+    const sized = await run(
+      copyCtx({ root, sourcePath, sinkPath, input: { mapping: MAPPING, writeBatchSize: 2 } }),
+    );
+    expect(terminal(sized).type).toBe('succeeded');
+    expect(ticksOf(sized)).toBe(3);
+    expect(rowsOf(sinkPath)).toHaveLength(5);
+
+    const plain = await run(
+      copyCtx({
+        root,
+        sourcePath,
+        sinkPath: seedSink(root, 'dst2.db'),
+        input: { mapping: MAPPING },
+      }),
+    );
+    expect(ticksOf(plain)).toBe(1);
+  });
+});

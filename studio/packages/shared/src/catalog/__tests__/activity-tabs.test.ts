@@ -86,6 +86,13 @@ describe('activity tabs (#1477)', () => {
             continue;
           }
           expect(c.field, `${name} conditions on itself`).not.toBe(name);
+          // #1600 OR41 C3b — or on another field merely holding a value.
+          if ('set' in c) {
+            expect(Object.keys(shape), `${name}: ${c.field} is not a config key`).toContain(
+              c.field,
+            );
+            continue;
+          }
           // #1600 OR41 C8a — or a set of choices (Get metadata's field list),
           // which a condition holds on when any ticked value is one of `in`.
           // C9a — or a boolean (Delete's Include subfolders), read as 'true'/'false'.

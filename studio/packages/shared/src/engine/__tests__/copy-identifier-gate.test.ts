@@ -156,3 +156,36 @@ describe('§8 — an Upsert key column must be a literal identifier (C3a)', () =
     ]);
   });
 });
+
+/**
+ * #1600 OR41 C3b — the Pre-copy script is SQL, so §8 holds it literal as it
+ * holds an inline query's: a `${}` in it would be substituted into the statement.
+ * Its bind values are the value half and take `${}` freely.
+ */
+describe('§8 — a Pre-copy script stays literal SQL (C3b)', () => {
+  const scriptNode = (config: Record<string, unknown>): Node => ({
+    ...copyNode([literalRow]),
+    config: { mapping: [literalRow], ...config },
+  });
+
+  it('accepts a literal script whose bind values are expressions', () => {
+    expect(
+      validateDoc(
+        doc([
+          scriptNode({
+            preCopyScript: 'delete from t where d = :d',
+            preCopyScriptParameters: { d: '${run.startedAt}' },
+          }),
+        ]),
+      ),
+    ).toEqual([]);
+  });
+
+  it('REFUSES a ${} in the script text', () => {
+    expect(
+      validateDoc(doc([scriptNode({ preCopyScript: "delete from t where d = '${run.runId}'" })])),
+    ).toEqual([
+      "node.c.preCopyScript: a Pre-copy script stays literal, so '${' in it is never evaluated — write :name in the SQL and give its value in Pre-copy bind values",
+    ]);
+  });
+});

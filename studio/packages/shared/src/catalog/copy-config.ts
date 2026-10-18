@@ -1,8 +1,9 @@
 import { z } from 'zod';
-import { optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
+import { literalText, optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
 import { DataTypeSchema } from '../schemas/dataset.js';
 import { interpolationMode } from '../engine/expr.js';
 import { isSet } from './config-value.js';
+import { SqlParameterValueSchema } from './dataset-config.js';
 
 /** §6.2's per-column opt-out, named once so its display names can be checked against it. */
 const copyOnErrorSchema = z.enum(['fail', 'null']);
@@ -261,11 +262,34 @@ export const COPY_WRITE_MODES = ['append', 'overwrite', 'truncate', 'upsert'] as
 export type CopyWriteMode = (typeof COPY_WRITE_MODES)[number];
 const copyWriteModeSchema = z.enum(COPY_WRITE_MODES);
 
+/**
+ * #1600 OR41 C3b — Batch size (`writeBatchSize`). The default is the batch every
+ * copy used before the field existed, so an empty field changes nothing (§8).
+ * The ceiling bounds what one batch holds in memory: the reader buffers a whole
+ * batch, and a sqlite sink writes it synchronously between event-loop yields.
+ */
+export const COPY_DEFAULT_BATCH_ROWS = 1000;
+export const COPY_MAX_BATCH_ROWS = 10_000;
+
 /** Where a key-column rule points: the whole field, or one entry of it. */
 export type CopyKeyColumnIssue = {
   path: readonly [] | readonly [number];
   message: string;
 };
+
+/**
+ * #1600 OR41 C3b — why a Pre-copy script breaks §8's literal rule, or `null`.
+ * `inlineQuerySqlIssue`'s rule for the same reason: the script is SQL, so a `${`
+ * substituted into it would let a value become a statement. The schema refines
+ * on it (so dispatch refuses a raw `${` too, since `prepInput` passes the script
+ * unsubstituted) and the #444 write gate replays it with the node's address.
+ */
+export function preCopyScriptIssue(config: Record<string, unknown>): string | null {
+  const sql = config['preCopyScript'];
+  return typeof sql === 'string' && sql.includes('${')
+    ? "a Pre-copy script stays literal, so '${' in it is never evaluated — write :name in the SQL and give its value in Pre-copy bind values"
+    : null;
+}
 
 /**
  * The Key column rules (C3a), as plain data so the schema's `superRefine` and
@@ -347,13 +371,12 @@ export function copyKeyColumnIssues(config: Record<string, unknown>): CopyKeyCol
  * the sink on an omitted field would be the worst possible polarity for a
  * mistyped config.
  *
- * §13 also lists a per-copy batch size among the node's flat scalars. It is NOT
- * declared here: `SqliteDatasetRead.batchRows` already defaults to
- * `COPY_BATCH_ROWS`, and exposing an author-set scheduling quantum is an
- * authoring-surface decision that belongs with the mapping panel (M8), not with
- * the first adapter that runs one.
+ * §13's per-copy batch size is `writeBatchSize` (C3b), which the catalogue put
+ * on the Sink tab. `preCopyScriptParameters` is the second field the two
+ * variants type differently, for `mapping.expression`'s reason: an authored
+ * value is text that may hold a `${}`, a dispatched one is what it resolved to.
  */
-const copyInputShape = <T extends z.ZodType>(mapping: T) =>
+const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bindValue: B) =>
   z
     .object({
       mapping,
@@ -382,8 +405,41 @@ const copyInputShape = <T extends z.ZodType>(mapping: T) =>
           "uses the table's primary key. A row whose key is NULL fails the copy, because a NULL " +
           'key matches no row.',
       }),
+      // #1600 OR41 C3b — ADF's `preCopyScript`. LITERAL, as an inline query's
+      // SQL is (§8, `inlineQuerySqlIssue`): save refuses a `${` in it and the
+      // reducer hands it to the sink unsubstituted (`prepInput`), so a value can
+      // never become SQL. Its values bind through `preCopyScriptParameters`.
+      preCopyScript: presented(literalText(z.string().min(1)).optional(), {
+        title: 'Pre-copy script',
+        description:
+          "One SQL statement, run once before the rows inside the copy's transaction, so a " +
+          'failed copy undoes it, and before Write behaviour. Literal: write :name and give ' +
+          'its value in Pre-copy bind values. Database sinks only.',
+      }),
+      preCopyScriptParameters: presented(z.record(z.string().min(1), bindValue).optional(), {
+        title: 'Pre-copy bind values',
+      }),
+      // #1600 OR41 C3b — ADF's `writeBatchSize`. The pump passes batches through
+      // one for one, so this is the rows per read AND per write batch. Empty is
+      // `COPY_DEFAULT_BATCH_ROWS`, today's batch, so a stored copy is unchanged.
+      writeBatchSize: presented(z.number().int().min(1).max(COPY_MAX_BATCH_ROWS).optional(), {
+        title: 'Batch size',
+        unit: 'rows',
+        description: `Read and written per batch, 1 to ${COPY_MAX_BATCH_ROWS}. Empty is ${COPY_DEFAULT_BATCH_ROWS}.`,
+      }),
     })
     .superRefine((cfg, ctx) => {
+      const scriptIssue = preCopyScriptIssue(cfg);
+      if (scriptIssue !== null) {
+        ctx.addIssue({ code: 'custom', path: ['preCopyScript'], message: scriptIssue });
+      }
+      if (cfg.preCopyScriptParameters !== undefined && cfg.preCopyScript === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['preCopyScriptParameters'],
+          message: 'Pre-copy bind values need a Pre-copy script to bind into',
+        });
+      }
       for (const issue of copyKeyColumnIssues(cfg)) {
         ctx.addIssue({
           code: 'custom',
@@ -420,6 +476,7 @@ export const copyInputSchema = copyInputShape(
   presented(CopyMappingSchema, {
     title: 'Column mapping',
   }),
+  z.string(),
 );
 
 /**
@@ -427,7 +484,10 @@ export const copyInputSchema = copyInputShape(
  * (#1134). See `CopyDispatchMappingSchema` for why `expression` is `unknown` by
  * the time it gets here.
  */
-export const copyDispatchInputSchema = copyInputShape(CopyDispatchMappingSchema);
+export const copyDispatchInputSchema = copyInputShape(
+  CopyDispatchMappingSchema,
+  SqlParameterValueSchema,
+);
 
 export type CopyMapping = z.infer<typeof CopyMappingSchema>;
 export type CopyInput = z.infer<typeof copyInputSchema>;

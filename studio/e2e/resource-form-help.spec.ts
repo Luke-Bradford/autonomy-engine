@@ -23,7 +23,9 @@ test.use({ viewport: { width: 1440, height: 900 } });
  * properties pane: Basics, Connection, Authentication, Advanced, Annotations),
  * the Secret picker's, and the kind's fields whose note is not its label.
  * #1712 raised agent_cli and postgres once, on purpose: the CLI timeout and the
- * two postgres timeouts now state the default the server applies.
+ * two postgres timeouts now state the default the server applies. #1600 OR41
+ * C3b raised sqlite and postgres once more: Allow writes now says it lets a
+ * Copy run its Pre-copy script, the SQL authority ticking it grants.
  */
 const CONNECTION_HELP_LIMITS: Record<string, number> = {
   anthropic_api: 8,
@@ -32,8 +34,8 @@ const CONNECTION_HELP_LIMITS: Record<string, number> = {
   agent_cli: 14,
   http: 7,
   fs: 10,
-  sqlite: 8,
-  postgres: 10,
+  sqlite: 9,
+  postgres: 11,
 };
 
 /**

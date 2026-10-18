@@ -222,6 +222,8 @@ export const sqliteConnectionConfigSchema = z.object({
   /** Whether this store may be used as a copy SINK (M5). Absent = read-only. */
   writable: presented(z.boolean().optional(), {
     title: 'Allow writes',
+    description:
+      'Lets a Copy write rows here and run its Pre-copy script, which may be any SQL its statement allow-list admits. Unticked, it only reads.',
   }),
 });
 
@@ -332,6 +334,8 @@ export const postgresConnectionConfigSchema = z.object({
    */
   writable: presented(z.boolean().optional(), {
     title: 'Allow writes',
+    description:
+      'Lets a Copy write rows here and run its Pre-copy script, which may be any SQL its statement allow-list admits. Unticked, it only reads.',
   }),
 });
 
