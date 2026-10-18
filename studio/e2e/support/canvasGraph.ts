@@ -131,7 +131,7 @@ export async function fillSelectedNodeConfig(
 
 /** The fields `fillNodeConfig` needs to make a palette-dropped node of each title savable. */
 export const SAVABLE_CONFIG: Readonly<Record<string, Record<string, string>>> = {
-  'Web': { 'Request URL': 'https://example.test/e2e' },
+  Web: { 'Request URL': 'https://example.test/e2e' },
   'Write file': { 'File path': 'out.txt', Content: 'e2e' },
 };
 
