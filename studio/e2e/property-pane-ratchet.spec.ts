@@ -80,7 +80,6 @@ const HELP_LIMITS: Record<string, number> = {
   'Set variable': 5,
   Switch: 6,
   Wait: 6,
-  'Webhook (external wait)': 6,
   ForEach: 5,
   Until: 5,
   Stage: 2,
@@ -372,7 +371,6 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   Switch: 6,
   Wait: 6,
   'Wait (inactive)': 7,
-  'Webhook (external wait)': 6,
   ForEach: 5,
   Until: 5,
   Stage: 2,
@@ -408,7 +406,6 @@ const SHOWS: Record<string, string[]> = {
   Switch: ['gold\nsilver'],
   Wait: ['${30}'],
   'Wait (inactive)': ['failure'],
-  'Webhook (external wait)': ['${600}'],
   ForEach: ["${createArray('a.csv', 'b.csv')}"],
   Until: ['${equals(1, 1)}'],
   Stage: ['any'],
@@ -716,14 +713,6 @@ function seeds(ids: SeedIds): Record<string, Seed> {
         config: { seconds: '${30}' },
         state: 'inactive',
         onInactiveMarkAs: 'failure',
-      },
-    },
-    'Webhook (external wait)': {
-      // #1600 C11c-2 — a declared output keeps it a Webhook on load.
-      node: {
-        ...control,
-        type: 'webhook',
-        config: { timeoutSeconds: '${600}', outputs: [{ name: 'decision', type: 'string' }] },
       },
     },
     ForEach: {
