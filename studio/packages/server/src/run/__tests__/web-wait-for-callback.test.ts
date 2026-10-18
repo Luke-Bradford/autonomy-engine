@@ -34,7 +34,9 @@ type Behaviour = (body: Record<string, unknown>, res: ServerResponse) => Promise
 
 let app: FastifyInstance;
 let stub: Server;
-let behaviour: Behaviour = (_b, res) => res.end();
+let behaviour: Behaviour = (_b, res) => {
+  res.end();
+};
 let connectionId: string;
 
 const PUBLIC = 'http://studio.test:9999/base/';
@@ -232,7 +234,9 @@ describe('#1600 C11c — Web Wait for callback through the app', () => {
   });
 
   it('the callback timeout fails the node', async () => {
-    behaviour = (_body, res) => res.end();
+    behaviour = (_body, res) => {
+      res.end();
+    };
     const runId = await startRun({ callbackTimeoutSeconds: 3600 });
     await untilStatus(runId, 'waiting');
     // Bring the armed expiry due; the app's alarm clock ticks every second.
