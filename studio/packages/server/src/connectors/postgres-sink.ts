@@ -589,7 +589,12 @@ async function autoCreatePostgresTable(
       break;
     }
     if (signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
-    await sleep(AUTO_CREATE_LOCK_POLL_MS);
+    // Tied to the signal, so a cancel ends the pause at once rather than up to
+    // one poll later; the rejection it then raises is the cancel, checked below.
+    await sleep(AUTO_CREATE_LOCK_POLL_MS, undefined, signal === undefined ? {} : { signal }).catch(
+      () => undefined,
+    );
+    if (signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
   }
   const exists =
     (
