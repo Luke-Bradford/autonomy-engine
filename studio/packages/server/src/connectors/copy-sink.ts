@@ -1,4 +1,9 @@
-import { COPY_ACTIVITY_TYPE, formatZodIssues, getActivity } from '@autonomy-studio/shared';
+import {
+  COPY_ACTIVITY_TYPE,
+  formatZodIssues,
+  getActivity,
+  type CopyWriteMode,
+} from '@autonomy-studio/shared';
 import { DatasetIoError } from './dataset-io-error.js';
 import { writePostgresDatasetRows } from './postgres-sink.js';
 import { defaultClientFactory, type PostgresClientFactory } from './postgres-session.js';
@@ -66,7 +71,9 @@ export interface SinkWriteRequest {
    * against the store's own NOT NULL columns (#1162). Required, so no path
    * can reach a store without the gate. */
   readonly nullOnError: readonly string[];
-  readonly mode: 'append' | 'overwrite';
+  readonly mode: CopyWriteMode;
+  /** Upsert's Key columns; empty means the table's primary key (C3a). */
+  readonly keyColumns: readonly string[];
   readonly onBatch: (rowsWritten: number) => void;
   readonly signal: AbortSignal | undefined;
   /** Injectable for the offline tests; the live path uses `pg.Client`. */
@@ -86,7 +93,7 @@ export async function writeRowsToSink(
   request: SinkWriteRequest,
   batches: AsyncIterable<readonly Record<string, SinkValue>[]>,
 ): Promise<{ readonly rowsWritten: number }> {
-  const { dataset, connection, columns, nullOnError, mode, onBatch, signal } = request;
+  const { dataset, connection, columns, nullOnError, mode, keyColumns, onBatch, signal } = request;
   if (connection.kind === 'sqlite') {
     // THE TWO ARMS PARSE IN DIFFERENT PLACES, and the asymmetry is a decision
     // rather than leftover history. Here the parse is the arm's, because the
@@ -114,6 +121,7 @@ export async function writeRowsToSink(
         columns,
         nullOnError,
         mode,
+        keyColumns,
         onBatch,
         ...(signal === undefined ? {} : { signal }),
       },
@@ -135,6 +143,7 @@ export async function writeRowsToSink(
         columns,
         nullOnError,
         mode,
+        keyColumns,
         onBatch,
         ...(signal === undefined ? {} : { signal }),
       },

@@ -13,6 +13,7 @@ import {
   type CopyCounters,
   type CopyProgress,
   type CopyPumpMappingEntry,
+  type CopyWriteMode,
 } from '@autonomy-studio/shared';
 import { AsyncEventQueue } from '../util/async-event-queue.js';
 import { failed } from './activity-events.js';
@@ -108,7 +109,9 @@ export interface CopyIo extends SourceIo {
      * against the store's own NOT NULL columns (#1162). Required, so no path
      * can reach a store without the gate. */
     readonly nullOnError: readonly string[];
-    readonly mode: 'append' | 'overwrite';
+    readonly mode: CopyWriteMode;
+    /** Upsert's Key columns; empty means the table's primary key (C3a). */
+    readonly keyColumns: readonly string[];
     readonly onBatch: (rowsWritten: number) => void;
     readonly batches: AsyncIterable<readonly Record<string, CoercedValue>[]>;
     readonly signal: AbortSignal | undefined;
@@ -283,6 +286,7 @@ export async function* runCopyActivity(
     return;
   }
   const { mapping, mode } = parsed.data;
+  const keyColumns = parsed.data.keyColumns ?? [];
 
   // The sink rows that may carry an injected null — computed once, because the
   // same list goes to the sink so the store's OWN schema is checked too (#1162).
@@ -414,6 +418,7 @@ export async function* runCopyActivity(
       columns,
       nullOnError,
       mode,
+      keyColumns,
       onBatch: (rowsWritten) => {
         counters.rowsWritten = rowsWritten;
       },

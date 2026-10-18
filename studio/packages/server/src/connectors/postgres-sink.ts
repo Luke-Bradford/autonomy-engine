@@ -1,15 +1,23 @@
 import {
+  COPY_WRITE_MODES,
   datasetConfigSchema,
   formatZodIssues,
   postgresConnectionConfigSchema,
   tableDatasetConfigSchema,
+  type CopyWriteMode,
   type DatasetKind,
 } from '@autonomy-studio/shared';
 import { DatasetIoError } from './dataset-io-error.js';
 import { classifySinkFailure } from './error-kind.js';
 import { yieldToEventLoop } from './scheduling.js';
 import { quoteIdentifier } from './sql-identifier.js';
-import { refuseNullOnNonNullable, resolveSinkColumns, type SinkColumn } from './sink-columns.js';
+import {
+  refuseNullKey,
+  refuseNullOnNonNullable,
+  resolveSinkColumns,
+  resolveUpsertKeys,
+  type SinkColumn,
+} from './sink-columns.js';
 import type { SinkValue } from './sqlite-sink.js';
 import {
   notAPostgresKind,
@@ -52,7 +60,9 @@ export interface PostgresDatasetWrite {
    * against the store's own NOT NULL columns (#1162). Required, so no path
    * can reach a store without the gate. */
   readonly nullOnError: readonly string[];
-  readonly mode: 'append' | 'overwrite';
+  readonly mode: CopyWriteMode;
+  /** Upsert's Key columns (C3a); empty or absent means the table's primary key. */
+  readonly keyColumns?: readonly string[];
   /** Honoured at BATCH BOUNDARIES (§10) — a run cancel rolls the copy back. */
   readonly signal?: AbortSignal;
   /** §5's progress channel: the RUNNING TOTAL after each chunk is inserted into
@@ -78,6 +88,29 @@ export interface PostgresDatasetWrite {
  * mapping tips over at 937 rows, well inside `COPY_BATCH_ROWS`.
  */
 const MAX_BIND_PARAMETERS = 65535;
+
+/**
+ * #1600 OR41 C3a — the lock each Write behaviour takes before the §7 gate reads.
+ * Every one conflicts with `ACCESS EXCLUSIVE`, so the table cannot change
+ * between being described and being written. `truncate` takes `ACCESS
+ * EXCLUSIVE` itself, up front, because TRUNCATE would otherwise upgrade a
+ * weaker lock mid-transaction. `upsert` takes `SHARE ROW EXCLUSIVE`, which
+ * conflicts with itself and with every writer's `ROW EXCLUSIVE`, so its
+ * "is this key there?" and the write that follows cannot race another writer;
+ * readers are not blocked.
+ */
+const LOCK_MODES: Readonly<Record<CopyWriteMode, string>> = {
+  append: 'ROW EXCLUSIVE',
+  overwrite: 'EXCLUSIVE',
+  truncate: 'ACCESS EXCLUSIVE',
+  upsert: 'SHARE ROW EXCLUSIVE',
+};
+
+/** Upsert's staging table: session-private, dropped at COMMIT or ROLLBACK. */
+const UPSERT_STAGE_NAME = 'studio_copy_upsert';
+const UPSERT_STAGE = `pg_temp.${quoteIdentifier(UPSERT_STAGE_NAME, 'table')}`;
+/** The staging column that orders a key repeated in the source: the last wins. */
+const UPSERT_ORDER_COLUMN = 'studio_copy_ord';
 
 /** The relkinds an INSERT can target. `r` is an ordinary table and `p` a
  * partitioned one, which routes to its partitions; everything else — a view
@@ -111,6 +144,8 @@ interface DescribedSinkTable {
   readonly schema: string;
   readonly name: string;
   readonly columns: readonly SinkTableColumn[];
+  /** The primary key's columns in key order, the default Upsert key (C3a). */
+  readonly primaryKey: readonly string[];
   /**
    * #1162 — true when something other than the column constraint can decide the
    * fate of a NULL, which makes `attnotnull` evidence of nothing. Measured
@@ -164,6 +199,12 @@ const DESCRIBE_SINK_SQL = `
              from pg_attribute a
             where a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
          ), '[]'::json) as columns,
+         coalesce((
+           select json_agg(a.attname order by array_position(i.indkey::int2[], a.attnum))
+             from pg_index i
+             join pg_attribute a on a.attrelid = i.indrelid and a.attnum = any(i.indkey)
+            where i.indrelid = c.oid and i.indisprimary
+         ), '[]'::json) as "primaryKey",
          exists (
            with recursive tree(relid) as (
              select c.oid
@@ -196,6 +237,7 @@ async function describeSinkTable(
         name: string;
         relkind: string;
         columns: SinkTableColumn[];
+        primaryKey: string[];
         fillsNulls: boolean;
       }
     | undefined;
@@ -213,6 +255,7 @@ async function describeSinkTable(
     schema: row.schema,
     name: row.name,
     columns: row.columns,
+    primaryKey: row.primaryKey,
     fillsNulls: row.fillsNulls,
   };
 }
@@ -325,6 +368,110 @@ function bindValue(value: SinkValue | undefined, column: string): SinkValue {
   return value;
 }
 
+/** An Upsert's prepared state: its keys, and the statements every chunk runs. */
+interface PostgresUpsert {
+  readonly keys: readonly SinkColumn[];
+  readonly stageInsert: string;
+  readonly update: string | null;
+  readonly insert: string;
+}
+
+/**
+ * #1600 OR41 C3a — set up an Upsert: resolve its keys, create the staging table
+ * and build the statements each chunk runs (`upsertChunk`).
+ *
+ * The stage is `CREATE TEMP TABLE … AS SELECT <mapped columns> FROM <target>
+ * WITH NO DATA`, so its columns have the target's types and a bound value
+ * coerces exactly as a plain insert's does. It is session-private and
+ * `ON COMMIT DROP`; a rollback drops it too. It needs the TEMP privilege on the
+ * database and SELECT on the target, as the match below does.
+ *
+ * Why a stage, and not the alternatives:
+ * - `INSERT … ON CONFLICT` needs a unique index matching the keys exactly, and
+ *   Key columns need not have one.
+ * - `MERGE` refuses a target with rules, which this sink otherwise writes to
+ *   (`fillsNulls`), and needs postgres 15.
+ * Both also fail when one statement meets a key twice, so the source still has
+ * to be reduced to one row per key: `DISTINCT ON` over the stage, the last row
+ * winning by `studio_copy_ord`. A later chunk sees an earlier chunk's writes, so
+ * the last row wins across chunks too.
+ */
+async function stageUpsert(
+  client: PostgresClient,
+  writeTarget: string,
+  columns: readonly SinkColumn[],
+  table: {
+    keyColumns: readonly string[];
+    tableColumns: readonly string[];
+    primaryKey: readonly string[];
+    table: string;
+  },
+): Promise<PostgresUpsert> {
+  const keys = resolveUpsertKeys({ ...table, mapped: columns });
+  if (columns.some((c) => c.actual === UPSERT_ORDER_COLUMN)) {
+    throw new DatasetIoError(
+      'permanent',
+      `Upsert stages rows with a column named '${UPSERT_ORDER_COLUMN}', which this mapping also writes`,
+    );
+  }
+  const q = (c: SinkColumn): string => quoteIdentifier(c.actual, 'column');
+  const columnList = columns.map(q).join(', ');
+  const order = quoteIdentifier(UPSERT_ORDER_COLUMN, 'column');
+  await client.query(
+    `CREATE TEMP TABLE ${quoteIdentifier(UPSERT_STAGE_NAME, 'table')} ON COMMIT DROP AS ` +
+      `SELECT ${columnList}, 0::bigint AS ${order} FROM ${writeTarget} WITH NO DATA`,
+  );
+  const keyList = keys.map(q).join(', ');
+  const latest =
+    `(SELECT DISTINCT ON (${keyList}) * FROM ${UPSERT_STAGE} ` +
+    `ORDER BY ${keyList}, ${order} DESC) AS d`;
+  const match = keys.map((k) => `t.${q(k)} = d.${q(k)}`).join(' AND ');
+  const nonKeys = columns.filter((c) => !keys.includes(c));
+  return {
+    keys,
+    stageInsert: `INSERT INTO ${UPSERT_STAGE} (${columnList}, ${order}) VALUES `,
+    // Every mapped column a key: an existing row has nothing to update.
+    update:
+      nonKeys.length === 0
+        ? null
+        : `UPDATE ${writeTarget} AS t SET ${nonKeys.map((c) => `${q(c)} = d.${q(c)}`).join(', ')} ` +
+          `FROM ${latest} WHERE ${match}`,
+    insert:
+      `INSERT INTO ${writeTarget} (${columnList}) ` +
+      `SELECT ${columns.map((c) => `d.${q(c)}`).join(', ')} FROM ${latest} ` +
+      `WHERE NOT EXISTS (SELECT 1 FROM ${writeTarget} AS t WHERE ${match})`,
+  };
+}
+
+/**
+ * Upsert one chunk: stage it, update the rows its keys match, insert the rest.
+ * Returns the store's own count of rows updated plus rows inserted (#1270), so
+ * a non-unique key counts every row it updated, and a key repeated within one
+ * chunk counts once (only its last row is applied).
+ */
+async function upsertChunk(
+  client: PostgresClient,
+  upsert: PostgresUpsert,
+  tuples: readonly string[],
+  values: readonly SinkValue[],
+  spelled: string,
+): Promise<number> {
+  await client.query(`DELETE FROM ${UPSERT_STAGE}`);
+  await client.query(`${upsert.stageInsert}${tuples.join(', ')}`, [...values]);
+  let written = 0;
+  for (const statement of upsert.update === null ? [upsert.insert] : [upsert.update, upsert.insert]) {
+    const result = await client.query(statement);
+    if (typeof result.rowCount !== 'number') {
+      throw new DatasetIoError(
+        'permanent',
+        `the store did not report a row count for the Upsert into '${spelled}'`,
+      );
+    }
+    written += result.rowCount;
+  }
+  return written;
+}
+
 /**
  * Write batches of mapped rows into a `table` dataset on a `postgres` store.
  *
@@ -397,9 +544,8 @@ export async function writePostgresDatasetRows(
   const target = sinkTargetFor(write.datasetKind, write.datasetConfig);
   const qualified = qualifiedTable(target);
   const spelled = target.schema === undefined ? target.table : `${target.schema}.${target.table}`;
-  const lockMode = write.mode === 'overwrite' ? 'EXCLUSIVE' : 'ROW EXCLUSIVE';
 
-  if (write.mode !== 'append' && write.mode !== 'overwrite') {
+  if (!(COPY_WRITE_MODES as readonly string[]).includes(write.mode)) {
     // `mode` is typed, so this is unreachable from in-repo callers — but an
     // unrecognised value silently behaving like `append` is the wrong failure
     // mode for the field that decides whether the operator's existing rows
@@ -424,7 +570,7 @@ export async function writePostgresDatasetRows(
       inTransaction = true;
 
       try {
-        await client.query(`LOCK TABLE ${qualified} IN ${lockMode} MODE`);
+        await client.query(`LOCK TABLE ${qualified} IN ${LOCK_MODES[write.mode]} MODE`);
       } catch (err) {
         // `42P01` is postgres saying the relation does not exist. Reported in
         // this module's own words, so a missing sink table reads identically
@@ -465,21 +611,57 @@ export async function writePostgresDatasetRows(
 
       if (write.mode === 'overwrite') {
         await client.query(`DELETE FROM ${writeTarget}`);
+      } else if (write.mode === 'truncate') {
+        try {
+          await client.query(`TRUNCATE ${writeTarget}`);
+        } catch (err) {
+          // `0A000` is how postgres refuses to TRUNCATE a table a foreign key
+          // references (and a foreign table whose wrapper cannot). Its own
+          // message names which; the hint is what to do about it.
+          if ((err as { code?: unknown } | null)?.code === '0A000') {
+            throw readFailure(
+              err,
+              `Truncate then insert could not empty '${spelled}' (Overwrite deletes the rows instead)`,
+              write.secret,
+              'write',
+            );
+          }
+          throw err;
+        }
       }
 
       const columnList = columns.map((c) => quoteIdentifier(c.actual, 'column')).join(', ');
-      const rowsPerStatement = Math.max(1, Math.floor(MAX_BIND_PARAMETERS / columns.length));
+      const upsert =
+        write.mode === 'upsert'
+          ? await stageUpsert(client, writeTarget, columns, {
+              keyColumns: write.keyColumns ?? [],
+              tableColumns: described.columns.map((c) => c.name),
+              primaryKey: described.primaryKey,
+              table: spelled,
+            })
+          : null;
+      // Upsert binds one more value per row: its order in the source.
+      const width = columns.length + (upsert === null ? 0 : 1);
+      const rowsPerStatement = Math.max(1, Math.floor(MAX_BIND_PARAMETERS / width));
 
       let first = true;
       let pending: SinkValue[] = [];
       let pendingRows = 0;
+      let rowNumber = 0;
 
       const flush = async (): Promise<void> => {
         if (pendingRows === 0) return;
         const tuples: string[] = [];
         let n = 1;
         for (let i = 0; i < pendingRows; i += 1) {
-          tuples.push(`(${columns.map(() => `$${n++}`).join(', ')})`);
+          tuples.push(`(${Array.from({ length: width }, () => `$${n++}`).join(', ')})`);
+        }
+        if (upsert !== null) {
+          rowsWritten += await upsertChunk(client, upsert, tuples, pending, spelled);
+          pending = [];
+          pendingRows = 0;
+          write.onBatch?.(rowsWritten);
+          return;
         }
         const inserted = await client.query(
           `INSERT INTO ${writeTarget} (${columnList}) VALUES ${tuples.join(', ')}`,
@@ -511,7 +693,10 @@ export async function writePostgresDatasetRows(
         first = false;
 
         for (const row of batch) {
+          rowNumber += 1;
+          if (upsert !== null) refuseNullKey(row, upsert.keys, rowNumber);
           for (const column of columns) pending.push(bindValue(row[column.mapped], column.mapped));
+          if (upsert !== null) pending.push(rowNumber);
           pendingRows += 1;
           // Chunked on the PARAMETER ceiling, not on the pump's batch size —
           // see `MAX_BIND_PARAMETERS` for what exceeding it actually does.
