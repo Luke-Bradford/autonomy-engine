@@ -181,10 +181,8 @@ test.describe('U8a — expression insert flyout', () => {
     // TWO `http_request` nodes, and #878's ordinal is what says which box the
     // reference points at; it used to be the raw doc id in brackets, a string
     // shown nowhere on the canvas.
-    const option = properties(page).getByRole('button', { name: /HTTP request 1 → body/ });
-    await expect(properties(page).getByRole('button', { name: /HTTP request 2 → / })).toHaveCount(
-      0,
-    );
+    const option = properties(page).getByRole('button', { name: /Web 1 → body/ });
+    await expect(properties(page).getByRole('button', { name: /Web 2 → / })).toHaveCount(0);
     await expect(option).toBeVisible();
     await option.click();
 
@@ -412,7 +410,7 @@ test.describe('U8a — expression insert flyout', () => {
     // choice is destructive.
     await expect(properties(page).getByText(/REPLACES its current value/)).toBeVisible();
     await properties(page)
-      .getByRole('button', { name: /HTTP request 1 → body/ })
+      .getByRole('button', { name: /Web 1 → body/ })
       .click();
     await properties(page).getByRole('button', { name: 'Apply config' }).click();
 

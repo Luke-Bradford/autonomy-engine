@@ -160,7 +160,8 @@ test('a tab label shows its problems, an unapplied edit, or that it is complete'
     ],
   });
   await nodeById(page, 'h').click();
-  await expectTabNames(tabs(page), ['General', 'Request', 'Auth']);
+  // The seeded HTTP request opens as Web (#1600 C11b), which adds Settings.
+  await expectTabNames(tabs(page), ['General', 'Request', 'Auth', 'Settings']);
   const request = tabs(page).getByRole('tab', { name: 'Request' });
   const auth = tabs(page).getByRole('tab', { name: 'Auth' });
   const url = properties(page).getByLabel('Request URL', { exact: true });

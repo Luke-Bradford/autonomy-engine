@@ -458,6 +458,25 @@ describe('#1600 C11b — http_request → Web, Fail on HTTP error off, Parse as 
     expect(lowerNodes([node])[0]).toBe(node);
   });
 
+  it('carries a key it does not know, as the config form does', () => {
+    const [lowered] = lowerNodes([call({ url: '/a', legacyExtra: { keep: true } })]);
+    expect(lowered!.type).toBe('web');
+    expect(lowered!.config['legacyExtra']).toEqual({ keep: true });
+  });
+
+  it.each([
+    ['parseAs', 'json'],
+    ['successStatusCodes', [404]],
+    ['failOnHttpError', true],
+    ['maxResponseBytes', 1024],
+  ])(
+    'stays HTTP request when it carries Web setting %s, which HTTP request never read',
+    (key, value) => {
+      const node = call({ url: '/a', [key]: value });
+      expect(lowerNodes([node])[0]).toBe(node);
+    },
+  );
+
   it('stays HTTP request when its contract declares an output Web does not have', () => {
     const node = call({ url: '/a', outputs: [{ name: 'rows', type: 'json', optional: true }] });
     expect(lowerNodes([node])[0]).toBe(node);

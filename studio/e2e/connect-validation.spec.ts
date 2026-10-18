@@ -278,9 +278,7 @@ test.describe('U6b connect-time validation', () => {
     await connectNodesBackwards(page, 0, 1);
     await expect(edgeGroup(page)).toHaveCount(1);
     const refusal = page.locator(REFUSAL);
-    await expect(refusal).toContainText(
-      "'Web 1' → 'Write file 1' already has a 'success' edge",
-    );
+    await expect(refusal).toContainText("'Web 1' → 'Write file 1' already has a 'success' edge");
     await expect(refusal).not.toContainText('close a loop');
 
     // And the reverse case: a backwards cycle-closer must SAY something.

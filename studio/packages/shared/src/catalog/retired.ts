@@ -210,6 +210,16 @@ const lowerFileDelete = lowerPathNode(DELETE_ACTIVITY_TYPE, deleteConfigSchema, 
 /** HTTP request's methods that send no body: it fails such a node that carries one. */
 const BODILESS_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD']);
 
+/** The config keys HTTP request reads, and its contract. */
+const HTTP_REQUEST_KEYS: ReadonlySet<string> = new Set([
+  'url',
+  'method',
+  'headers',
+  'body',
+  HTTP_SECRET_HEADERS_FIELD,
+  'outputs',
+]);
+
 /**
  * #1600 C11b — `http_request` → Web on the same connection, with Fail on HTTP
  * error off (a 4xx or 5xx still succeeds, read from `status`) and Parse as Text
@@ -224,7 +234,13 @@ const BODILESS_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD']);
  *   every run, where Web sends `''` as no body and succeeds.
  * - a contract (`config.outputs`) declaring an output Web has no name for: the
  *   lowered node takes Web's contract, so a reader of that output would no
- *   longer resolve.
+ *   longer resolve;
+ * - a key HTTP request never read that is one of Web's settings (`parseAs`,
+ *   `successStatusCodes`, …): Web would act on it.
+ *
+ * Any other key is carried over as it is, as the config form keeps a key it
+ * has no control for: an API-authored or imported doc may hold one this build
+ * does not know.
  */
 function lowerHttpRequest(node: Node): Node | undefined {
   // Not `carriesUnlowerable`: Web binds one connection, so `connectionParams`
@@ -248,10 +264,17 @@ function lowerHttpRequest(node: Node): Node | undefined {
     if (!outputs.every(webHas)) return undefined;
   }
   const secretHeaders = node.config[HTTP_SECRET_HEADERS_FIELD];
+  const unknown: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node.config)) {
+    if (HTTP_REQUEST_KEYS.has(key)) continue;
+    if (Object.hasOwn(webConfigSchema.shape, key)) return undefined;
+    unknown[key] = value;
+  }
   if (method !== undefined && typeof method !== 'string') return undefined;
   const upper = method === undefined ? 'GET' : method.toUpperCase();
   if (BODILESS_METHODS.has(upper) && body !== undefined) return undefined;
   const config: Record<string, unknown> = {
+    ...unknown,
     url,
     method: upper,
     ...(headers === undefined ? {} : { headers }),
