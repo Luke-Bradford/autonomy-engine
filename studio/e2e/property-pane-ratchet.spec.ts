@@ -719,7 +719,12 @@ function seeds(ids: SeedIds): Record<string, Seed> {
       },
     },
     'Webhook (external wait)': {
-      node: { ...control, type: 'webhook', config: { timeoutSeconds: '${600}' } },
+      // #1600 C11c-2 — a declared output keeps it a Webhook on load.
+      node: {
+        ...control,
+        type: 'webhook',
+        config: { timeoutSeconds: '${600}', outputs: [{ name: 'decision', type: 'string' }] },
+      },
     },
     ForEach: {
       container: {

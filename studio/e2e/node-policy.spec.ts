@@ -158,7 +158,8 @@ test.describe('#1312 — node run policy editor', () => {
           id: 'a',
           type: 'webhook',
           position: { x: 0, y: 0 },
-          config: { timeoutSeconds: '${600}' },
+          // #1600 C11c-2 — a declared output keeps it a Webhook on load.
+          config: { timeoutSeconds: '${600}', outputs: [{ name: 'decision', type: 'string' }] },
         },
       ],
     });
