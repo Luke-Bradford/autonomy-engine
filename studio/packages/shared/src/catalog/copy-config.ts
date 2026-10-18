@@ -389,6 +389,23 @@ export function autoCreateCollisionIssue(sinks: readonly string[]): string | nul
 }
 
 /**
+ * Auto-create's save rule (C3c), over an UNTYPED config: the Zod refine below
+ * and the #444 write gate (`params.ts`, which holds only `node.config`) both
+ * run it, as they run `copyKeyColumnIssues`. One reader of the mapping's sink
+ * names, so the two cannot disagree.
+ */
+export function copyTableOptionIssue(config: Record<string, unknown>): string | null {
+  if (config['tableOption'] !== 'autoCreate') return null;
+  const rows: unknown[] = Array.isArray(config['mapping']) ? config['mapping'] : [];
+  const sinks = rows.flatMap((row) => {
+    const sink =
+      typeof row === 'object' && row !== null ? (row as { sink?: unknown }).sink : undefined;
+    return typeof sink === 'string' ? [sink] : [];
+  });
+  return autoCreateCollisionIssue(sinks);
+}
+
+/**
  * The whole `copy` config, minus the one field the two variants disagree about
  * (#1134, §6.1+§4). Both variants below are built from this, for the reason the
  * `expression` docblock above gives about `mapping`: two independent `z.object`s
@@ -477,17 +494,9 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
       }),
     })
     .superRefine((cfg, ctx) => {
-      if (cfg.tableOption === 'autoCreate') {
-        // `mapping` is the variant's own schema here, so it is read untyped.
-        const rows: unknown = (cfg as { mapping?: unknown }).mapping;
-        const sinks = (Array.isArray(rows) ? rows : []).flatMap((row: unknown) => {
-          const sink = (row as { sink?: unknown } | null)?.sink;
-          return typeof sink === 'string' ? [sink] : [];
-        });
-        const collision = autoCreateCollisionIssue(sinks);
-        if (collision !== null) {
-          ctx.addIssue({ code: 'custom', path: ['tableOption'], message: collision });
-        }
+      const tableIssue = copyTableOptionIssue(cfg);
+      if (tableIssue !== null) {
+        ctx.addIssue({ code: 'custom', path: ['tableOption'], message: tableIssue });
       }
       const scriptIssue = preCopyScriptIssue(cfg);
       if (scriptIssue !== null) {

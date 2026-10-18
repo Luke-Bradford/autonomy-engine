@@ -217,3 +217,28 @@ describe('C3a — the Upsert key rules reach the write gate', () => {
     ).toEqual(['node.c.keyColumns: only read when Write behaviour is Upsert']);
   });
 });
+
+/**
+ * #1600 OR41 C3c — Auto-create's case-collision rule reaches the write gate, so
+ * a git-imported or POSTed version is refused at save as on the canvas.
+ */
+describe('C3c — the Auto-create rule reaches the write gate', () => {
+  const autoCreate = (tableOption: unknown): Node => ({
+    ...copyNode([]),
+    config: {
+      mapping: [row(), { source: 'b', sink: 'ID', type: 'string' }],
+      tableOption,
+    },
+  });
+
+  it('REFUSES sink names that differ only by case under Auto-create', () => {
+    expect(validateDoc(doc([autoCreate('autoCreate')]))).toEqual([
+      "node.c.tableOption: Auto-create cannot create both 'id' and 'ID': the copy matches sink columns without case",
+    ]);
+  });
+
+  it('accepts them when the table is used as it is', () => {
+    expect(validateDoc(doc([autoCreate('none')]))).toEqual([]);
+    expect(validateDoc(doc([autoCreate(undefined)]))).toEqual([]);
+  });
+});

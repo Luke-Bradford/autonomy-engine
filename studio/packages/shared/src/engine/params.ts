@@ -63,6 +63,7 @@ import {
 } from '../catalog/llm-config.js';
 import {
   copyKeyColumnIssues,
+  copyTableOptionIssue,
   copyMappingShapeIssues,
   preCopyScriptIssue,
 } from '../catalog/copy-config.js';
@@ -3027,6 +3028,9 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
       validateCopyMappingIdentifiers(node, errors);
       validateCopyMappingShape(node, errors); // #1176 — the three cross-row rules
       validateCopyKeyColumns(node, errors); // #1600 C3a — Upsert's Key columns
+      // #1600 C3c — Auto-create's case collision, for #1176's reason.
+      const tableIssue = copyTableOptionIssue(node.config);
+      if (tableIssue !== null) errors.push(`node.${node.id}.tableOption: ${tableIssue}`);
       const scriptIssue = preCopyScriptIssue(node.config); // #1600 C3b — §8, literal SQL
       if (scriptIssue !== null) errors.push(`node.${node.id}.preCopyScript: ${scriptIssue}`);
     }
