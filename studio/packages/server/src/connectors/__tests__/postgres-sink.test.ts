@@ -7,6 +7,7 @@ import type {
   PostgresClient,
   PostgresClientFactory,
   PostgresClientOptions,
+  PostgresExtendedQuery,
   PostgresQueryResult,
 } from '../postgres-session.js';
 import { DEFAULT_POSTGRES_PORT } from '../postgres-session.js';
@@ -38,6 +39,8 @@ const SINK_CONFIG = {
 interface Recorded {
   readonly sql: string;
   readonly values: readonly unknown[] | undefined;
+  /** Set when the statement was sent as a `PostgresExtendedQuery` (C3b). */
+  readonly queryMode?: 'extended';
 }
 
 interface SinkRecorder {
@@ -89,8 +92,15 @@ function sinkFactory(
     options.push(opts);
     return {
       async connect() {},
-      async query(sql: string, values?: readonly unknown[]): Promise<PostgresQueryResult> {
-        rec.queries.push({ sql, values });
+      async query(
+        input: string | PostgresExtendedQuery,
+        given?: readonly unknown[],
+      ): Promise<PostgresQueryResult> {
+        const sql = typeof input === 'string' ? input : input.text;
+        const values = typeof input === 'string' ? given : input.values;
+        rec.queries.push(
+          typeof input === 'string' ? { sql, values } : { sql, values, queryMode: input.queryMode },
+        );
         if (fixture.failOn !== undefined && sql.startsWith(fixture.failOn.prefix)) {
           throw fixture.failOn.error;
         }
@@ -902,6 +912,72 @@ describe('the postgres sink: Truncate then insert and Upsert (C3a)', () => {
   });
 });
 
+describe('the postgres sink: Pre-copy script (C3b)', () => {
+  it('runs after the lock and before the describe, over the extended protocol, with $n values', async () => {
+    const { rec, factory } = sinkFactory();
+    await writePostgresDatasetRows(
+      write({
+        createClient: factory,
+        preCopyScript: { sql: 'DELETE FROM tgt WHERE d = :d OR e = :d', parameters: { d: 'x' } },
+      }),
+      batchesOf([{ a: 1, b: 2 }]),
+    );
+    const sql = sqlOf(rec);
+    const script = rec.queries.findIndex((q) => q.sql.startsWith('DELETE FROM tgt'));
+    expect(sql[script - 1]).toMatch(/^LOCK TABLE/);
+    expect(script).toBeLessThan(sql.findIndex((q) => q.includes('to_regclass')));
+    expect(rec.queries[script]).toEqual({
+      sql: 'DELETE FROM tgt WHERE d = $1 OR e = $1',
+      values: ['x'],
+      queryMode: 'extended',
+    });
+  });
+
+  it('sends a script with no bind values over the extended protocol too', async () => {
+    const { rec, factory } = sinkFactory();
+    await writePostgresDatasetRows(
+      write({ createClient: factory, preCopyScript: { sql: 'DELETE FROM tgt', parameters: {} } }),
+      batchesOf(),
+    );
+    expect(rec.queries.find((q) => q.sql === 'DELETE FROM tgt')).toEqual({
+      sql: 'DELETE FROM tgt',
+      values: [],
+      queryMode: 'extended',
+    });
+  });
+
+  it.each(['COMMIT', 'ROLLBACK', 'SET search_path = x', 'VACUUM tgt', '; DELETE FROM tgt'])(
+    'refuses %s before it reaches the server, and rolls back',
+    async (scriptSql) => {
+      const { rec, factory } = sinkFactory();
+      const err = await writePostgresDatasetRows(
+        write({ createClient: factory, preCopyScript: { sql: scriptSql, parameters: {} } }),
+        batchesOf([{ a: 1, b: 2 }]),
+      ).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(DatasetIoError);
+      expect((err as DatasetIoError).message).toMatch(
+        /Pre-copy script (on PostgreSQL may not run|must begin with its statement)/,
+      );
+      expect(rec.queries.some((q) => q.queryMode === 'extended')).toBe(false);
+      expect(sqlOf(rec).at(-1)).toBe('ROLLBACK');
+    },
+  );
+
+  it("names a failing script and redacts the credential from the server's words", async () => {
+    const { factory } = sinkFactory({
+      failOn: { prefix: 'DELETE FROM audit', error: pgError('42501', 'permission denied for pw') },
+    });
+    const err = await writePostgresDatasetRows(
+      write({ createClient: factory, preCopyScript: { sql: 'DELETE FROM audit', parameters: {} } }),
+      batchesOf([{ a: 1, b: 2 }]),
+    ).catch((e: unknown) => e);
+    expect((err as DatasetIoError).message).toMatch(
+      /^the Pre-copy script failed: permission denied for /,
+    );
+    expect((err as DatasetIoError).message).not.toContain('pw');
+  });
+});
+
 describe.skipIf(LIVE_HOST === undefined)('the postgres sink, against a live postgres', () => {
   const live = {
     host: LIVE_HOST ?? '',
@@ -1528,6 +1604,64 @@ describe.skipIf(LIVE_HOST === undefined)('the postgres sink, against a live post
         upsertInto('sink_upn', ['a', 'b'], ['a'], [{ a: 1, b: 'A' }], [{ a: null, b: 'n' }]),
       ).rejects.toMatchObject({ kind: 'permanent', message: expect.stringContaining('is NULL') });
       expect(await tableRows('sink_upn')).toEqual([{ a: 1, b: 'a' }]);
+    });
+  });
+
+  // #1600 OR41 C3b — the claims the offline suite can only assert the shape of.
+  describe('Pre-copy script (C3b)', () => {
+    it('runs with its bind value inside the copy, and is undone when the copy fails', async () => {
+      await withAdminClient((c) =>
+        c.query(
+          "drop table if exists sink_pre; create table sink_pre(a int not null, b text); insert into sink_pre values (1, 'keep'), (2, 'drop')",
+        ),
+      );
+      await writePostgresDatasetRows(
+        liveWrite({
+          datasetConfig: { schema: 'public', table: 'sink_pre' },
+          preCopyScript: { sql: 'delete from sink_pre where b = :b', parameters: { b: 'drop' } },
+        }),
+        batchesOf([{ a: 3, b: 'new' }]),
+      );
+      expect(
+        await withAdminClient((c) => c.query('select a, b from sink_pre order by a')),
+      ).toMatchObject({
+        rows: [
+          { a: 1, b: 'keep' },
+          { a: 3, b: 'new' },
+        ],
+      });
+      await expect(
+        writePostgresDatasetRows(
+          liveWrite({
+            datasetConfig: { schema: 'public', table: 'sink_pre' },
+            preCopyScript: { sql: 'delete from sink_pre', parameters: {} },
+          }),
+          batchesOf([{ a: null, b: 'x' }]),
+        ),
+      ).rejects.toBeInstanceOf(DatasetIoError);
+      expect(
+        (await withAdminClient((c) => c.query('select a from sink_pre order by a'))).rows,
+      ).toEqual([{ a: 1 }, { a: 3 }]);
+    });
+
+    it('lets the server refuse a second statement, so a COMMIT cannot follow an allowed word', async () => {
+      await withAdminClient((c) =>
+        c.query(
+          "drop table if exists sink_pre2; create table sink_pre2(a int, b text); insert into sink_pre2 values (1, 'keep')",
+        ),
+      );
+      await expect(
+        writePostgresDatasetRows(
+          liveWrite({
+            datasetConfig: { schema: 'public', table: 'sink_pre2' },
+            preCopyScript: { sql: 'delete from sink_pre2; commit', parameters: {} },
+          }),
+          batchesOf([{ a: 2, b: 'x' }]),
+        ),
+      ).rejects.toThrow(/^the Pre-copy script failed: cannot insert multiple commands/);
+      expect((await withAdminClient((c) => c.query('select a from sink_pre2'))).rows).toEqual([
+        { a: 1 },
+      ]);
     });
   });
 });
