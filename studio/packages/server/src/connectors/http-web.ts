@@ -1,9 +1,8 @@
 import {
   DEFAULT_HTTP_TIMEOUT_MS,
   formatZodIssues,
-  hasBody,
+  webHasBody,
   WARNING_CODES,
-  WEB_MAX_JSON_DEPTH,
   webConfigSchema,
   type httpConnectionConfigSchema,
 } from '@autonomy-studio/shared';
@@ -11,7 +10,9 @@ import type { z } from 'zod';
 import type { ActivityContext, ActivityEvent } from './types.js';
 import { redactSecrets } from './redact.js';
 import {
+  buildRequestHeaders,
   collectResponseHeaders,
+  exchangeDeadline,
   fetchWithoutLeakingSecrets,
   isNetworkError,
   readBodyBounded,
@@ -32,14 +33,18 @@ type HttpConnectionConfig = z.infer<typeof httpConnectionConfigSchema>;
  *   excerpt of the body. `classifyHttpStatus` decides the kind: 401/403 `auth`,
  *   429 `rate_limit`, 5xx `transient`, any other `permanent`. A retryable one
  *   carries the server's `Retry-After` to the retry alarm. *Retry on 429 and 503*
- *   off makes a 429 `permanent` and ignores `Retry-After`; a 5xx stays a retry
- *   candidate, as every 5xx is.
+ *   off makes those two `permanent`; any other 5xx stays a retry candidate.
  * - **The body is bounded.** At most *Max size* bytes are read; a longer body
  *   fails (`permanent`), or with *Truncate* keeps the prefix, sets `truncated`
  *   and warns. A `Content-Length` over the limit fails before the body is read,
- *   except under a `Content-Encoding`, where it is the compressed size.
+ *   except under a `Content-Encoding`, where it is the compressed size, and on
+ *   a HEAD, 204 or 304, which have no body.
  * - **Parse as** JSON (an empty body is null; a body that is not JSON, or nests
- *   deeper than `WEB_MAX_JSON_DEPTH`, fails `permanent`) or Text.
+ *   deeper than `WEB_MAX_JSON_DEPTH`, fails `permanent`, except that an error
+ *   status let through keeps a non-JSON body as text) or Text.
+ * - **No secret reaches the outputs.** The Bearer and the secret headers are
+ *   redacted from the body and the response headers, for an endpoint that
+ *   echoes its request.
  * - **A network failure is `transient`.** `http_request` reports Node's
  *   `TypeError('fetch failed')` as a malformed request (`permanent`); Web reads
  *   the cause (`isNetworkError`).
@@ -61,27 +66,18 @@ export async function* runWeb(
   }
   const cfg = parsed.data;
   const sinkHeaders = sinkHeadersFrom(secretFields);
-  const requestHeaders: Record<string, string> = {
-    ...(connection.headers ?? {}),
-    ...(cfg.headers ?? {}),
-    ...(secret !== null ? { Authorization: `Bearer ${secret}` } : {}),
-    ...sinkHeaders,
-  };
-  const secrets = Object.values(requestHeaders);
+  const requestHeaders = buildRequestHeaders(connection.headers, cfg.headers, secret, sinkHeaders);
+  // An error message drops every request header value, as `http_request`'s
+  // does; the outputs only the secrets, since a response may legitimately hold
+  // a plain header's value.
+  const headerValues = Object.values(requestHeaders);
+  const outputSecrets = [secret, ...Object.values(sinkHeaders)];
 
   const timeoutMs =
     cfg.httpRequestTimeoutSeconds !== undefined
       ? cfg.httpRequestTimeoutSeconds * 1000
       : (connection.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS);
-  const controller = new AbortController();
-  let timedOut = false;
-  const onExternalAbort = () => controller.abort();
-  if (ctx.signal.aborted) controller.abort();
-  else ctx.signal.addEventListener('abort', onExternalAbort, { once: true });
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
+  const deadline = exchangeDeadline(ctx.signal, timeoutMs);
 
   const startedAt = Date.now();
   try {
@@ -90,8 +86,8 @@ export async function* runWeb(
       {
         method: cfg.method,
         headers: requestHeaders,
-        ...(hasBody(cfg) ? { body: cfg.body } : {}),
-        signal: controller.signal,
+        ...(webHasBody(cfg) ? { body: cfg.body } : {}),
+        signal: deadline.signal,
       },
       Object.keys(sinkHeaders),
     );
@@ -103,12 +99,15 @@ export async function* runWeb(
     if (failsOnStatus) {
       // Enough of the body for the excerpt, never more than Max size.
       const { data } = await readBodyBounded(res.body, Math.min(cfg.maxResponseBytes, 4096));
-      yield statusFailure(res, new TextDecoder().decode(data), cfg.retryOnThrottle, secrets);
+      yield statusFailure(res, new TextDecoder().decode(data), cfg.retryOnThrottle, headerValues);
       return;
     }
 
+    // A HEAD, a 204 and a 304 have no body, whatever their Content-Length says.
+    const bodiless = cfg.method === 'HEAD' || res.status === 204 || res.status === 304;
     const declared = Number(res.headers.get('content-length'));
     if (
+      !bodiless &&
       cfg.whenOverLimit === 'fail' &&
       res.headers.get('content-encoding') === null &&
       Number.isFinite(declared) &&
@@ -119,7 +118,7 @@ export async function* runWeb(
       return;
     }
     const { data, overLimit } = await readBodyBounded(res.body, cfg.maxResponseBytes);
-    clearTimeout(timer); // exchange complete — disarm before emitting
+    deadline.disarm(); // exchange complete — disarm before emitting
     const durationMs = Date.now() - startedAt;
     if (overLimit && cfg.whenOverLimit === 'fail') {
       yield overLimitFailure(cfg.maxResponseBytes);
@@ -127,15 +126,23 @@ export async function* runWeb(
     }
     // `stream: true` on a truncated body holds back a UTF-8 sequence the cut
     // split, rather than decoding it to U+FFFD.
-    const text = new TextDecoder().decode(data, { stream: overLimit });
+    // A response that echoes the Bearer or a secret header (an echo endpoint
+    // does) must not carry it into the run log.
+    const text = redactSecrets(
+      new TextDecoder().decode(data, { stream: overLimit }),
+      outputSecrets,
+    );
     let body: unknown = text;
     if (cfg.parseAs === 'json') {
-      const json = parseJsonBody(text);
-      if (!json.ok) {
+      const json = parseWebJson(text);
+      if (json.ok) body = json.value;
+      // An error status let through (Fail on HTTP error off, or Treat as
+      // success) is often an HTML page: it stays text rather than fail the
+      // node the author asked to succeed.
+      else if (res.status < 400) {
         yield { type: 'failed', kind: 'permanent', error: json.error };
         return;
       }
-      body = json.value;
     }
     if (overLimit) {
       yield {
@@ -148,7 +155,7 @@ export async function* runWeb(
       type: 'succeeded',
       outputs: {
         status: res.status,
-        headers: collectResponseHeaders(res),
+        headers: collectResponseHeaders(res, outputSecrets),
         body,
         bytes: data.byteLength,
         durationMs,
@@ -157,10 +164,10 @@ export async function* runWeb(
       },
     };
   } catch (err) {
-    const message = redactSecrets(err instanceof Error ? err.message : String(err), secrets);
+    const message = redactSecrets(err instanceof Error ? err.message : String(err), headerValues);
     if (ctx.signal.aborted) {
       yield { type: 'failed', kind: 'cancelled', error: 'web request aborted' };
-    } else if (timedOut) {
+    } else if (deadline.timedOut()) {
       yield {
         type: 'failed',
         kind: 'transient',
@@ -180,8 +187,7 @@ export async function* runWeb(
       };
     }
   } finally {
-    clearTimeout(timer);
-    ctx.signal.removeEventListener('abort', onExternalAbort);
+    deadline.dispose();
   }
 }
 
@@ -192,14 +198,17 @@ function statusFailure(
   secrets: readonly string[],
 ): Extract<ActivityEvent, { type: 'failed' }> {
   const classified = classifyHttpStatus(res.status);
-  const kind = classified === 'rate_limit' && !retryOnThrottle ? 'permanent' : classified;
-  const excerpt = redactSecrets(errorExcerpt(bodyText), secrets);
+  const throttled = res.status === 429 || res.status === 503;
+  const kind = throttled && !retryOnThrottle ? 'permanent' : classified;
+  // Redact the whole text, then cut: a secret the cut split would otherwise
+  // survive as a prefix.
+  const excerpt = errorExcerpt(redactSecrets(bodyText, secrets));
   const event: Extract<ActivityEvent, { type: 'failed' }> = {
     type: 'failed',
     kind,
     error: `HTTP ${res.status}${res.statusText === '' ? '' : ` ${res.statusText}`}${excerpt === '' ? '' : `: ${excerpt}`}`,
   };
-  if (retryOnThrottle && (kind === 'rate_limit' || kind === 'transient')) {
+  if (kind === 'rate_limit' || kind === 'transient') {
     const retryAfterSeconds = parseRetryAfter(res.headers.get('retry-after'), Date.now());
     if (retryAfterSeconds !== undefined) event.retryAfterSeconds = retryAfterSeconds;
   }
@@ -215,12 +224,28 @@ function overLimitFailure(maxBytes: number): Extract<ActivityEvent, { type: 'fai
 }
 
 /**
- * The body read as JSON: an empty body is null. The depth is measured on the
- * text, without recursion, before `JSON.parse` builds a value that recursive
- * walks downstream (redaction, cloning) could overflow on.
+ * Deeper JSON fails. The redaction walk (`redact.ts`, `MAX_REDACT_DEPTH` 100)
+ * masks whatever lies past its ceiling, so a body nearer that ceiling could lose
+ * values to it; 64 leaves the margin.
  */
-function parseJsonBody(text: string): { ok: true; value: unknown } | { ok: false; error: string } {
+export const WEB_MAX_JSON_DEPTH = 64;
+
+/**
+ * The body read as JSON: an empty body is null. The depth is measured on the
+ * text, without recursion, so a value no recursive walk downstream can take
+ * (redaction, cloning) never reaches the outputs.
+ */
+function parseWebJson(text: string): { ok: true; value: unknown } | { ok: false; error: string } {
   if (text.trim() === '') return { ok: true, value: null };
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return {
+      ok: false,
+      error: 'the response is not JSON; set Parse as to Text to read it as text',
+    };
+  }
   let depth = 0;
   let inString = false;
   for (let i = 0; i < text.length; i += 1) {
@@ -239,12 +264,5 @@ function parseJsonBody(text: string): { ok: true; value: unknown } | { ok: false
       }
     } else if (c === '}' || c === ']') depth -= 1;
   }
-  try {
-    return { ok: true, value: JSON.parse(text) as unknown };
-  } catch {
-    return {
-      ok: false,
-      error: 'the response is not JSON; set Parse as to Text to read it as text',
-    };
-  }
+  return { ok: true, value };
 }

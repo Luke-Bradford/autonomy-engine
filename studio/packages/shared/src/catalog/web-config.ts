@@ -39,11 +39,10 @@ export const httpSecretHeadersSchema = z.record(z.string(), SecretRefSchema).opt
  * ADF's five methods plus HEAD, which studio adds: the connection test already
  * sends one, and `http_request` (lowered to Web in C11b) accepted it.
  */
-export const WEB_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'] as const;
+const WEB_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'] as const;
 const methodSchema = z.enum(WEB_METHODS);
 
 const parseAsSchema = z.enum(['json', 'text']);
-export type WebParseAs = z.infer<typeof parseAsSchema>;
 
 const whenOverLimitSchema = z.enum(['fail', 'truncate']);
 
@@ -59,9 +58,6 @@ export const WEB_MAX_RESPONSE_BYTES = DEFAULT_MAX_READ_BYTES;
 
 /** ADF's `httpRequestTimeout` ceiling, 10 minutes. */
 export const WEB_MAX_REQUEST_TIMEOUT_SECONDS = 600;
-
-/** A JSON response nested deeper than this fails: walks over it are recursive. */
-export const WEB_MAX_JSON_DEPTH = 100;
 
 export const webConfigSchema = z
   .object({
@@ -112,7 +108,7 @@ export const webConfigSchema = z
     parseAs: presented(parseAsSchema.default('json'), {
       title: 'Parse as',
       description:
-        'JSON reads the body into a value; an empty body is null. Text keeps it a string.',
+        'JSON reads the body into a value; an empty body is null. Text keeps it a string. An error status let through keeps a body that is not JSON as text.',
       options: optionTitles(parseAsSchema, { json: 'JSON', text: 'Text' }),
     }),
     maxResponseBytes: presented(
@@ -131,7 +127,7 @@ export const webConfigSchema = z
     retryOnThrottle: presented(z.boolean().default(true), {
       title: 'Retry on 429 and 503',
       description:
-        "A 429 or 5xx is retried under the activity's retry policy, after the server's Retry-After when it sends one. Off, a 429 fails without retrying and Retry-After is ignored.",
+        "A 429 or 5xx is retried under the activity's retry policy, after the server's Retry-After when it sends one. Off, a 429 or 503 fails without retrying; any other 5xx is still retried.",
     }),
   })
   .superRefine((cfg, ctx) => {
@@ -145,14 +141,12 @@ export const webConfigSchema = z
     if (cfg.whenOverLimit === 'truncate' && cfg.parseAs !== 'text') {
       issue('whenOverLimit', 'Truncate needs Parse as Text: a JSON prefix is not JSON');
     }
-    if (hasBody(cfg) && (cfg.method === 'GET' || cfg.method === 'HEAD')) {
+    if (webHasBody(cfg) && (cfg.method === 'GET' || cfg.method === 'HEAD')) {
       issue('body', `an HTTP ${cfg.method} cannot carry a body`);
     }
   });
 
-export type WebConfig = z.infer<typeof webConfigSchema>;
-
 /** An empty Body box is no body, so it never makes a GET unsaveable. */
-export function hasBody(cfg: { body?: string }): cfg is { body: string } {
+export function webHasBody(cfg: { body?: string }): cfg is { body: string } {
   return cfg.body !== undefined && cfg.body !== '';
 }

@@ -1,4 +1,5 @@
 import { HTTP_SECRET_HEADERS_FIELD } from '@autonomy-studio/shared';
+import { redactSecrets } from './redact.js';
 
 /**
  * The pieces of an HTTP exchange that `http_request` (`http.ts`) and Web
@@ -38,6 +39,25 @@ export function sinkHeadersFrom(
   );
 }
 
+/**
+ * A request's headers, in the order both http activities send them: the
+ * connection's defaults, the node's headers, the connection secret as a Bearer,
+ * then the resolved secret headers, which have the last word.
+ */
+export function buildRequestHeaders(
+  connectionHeaders: Readonly<Record<string, string>> | undefined,
+  nodeHeaders: Readonly<Record<string, string>> | undefined,
+  secret: string | null,
+  sinkHeaders: Readonly<Record<string, string>>,
+): Record<string, string> {
+  return {
+    ...(connectionHeaders ?? {}),
+    ...(nodeHeaders ?? {}),
+    ...(secret !== null ? { Authorization: `Bearer ${secret}` } : {}),
+    ...sinkHeaders,
+  };
+}
+
 /** Resolve a possibly-relative request url against an optional connection baseUrl. */
 export function resolveUrl(baseUrl: string | undefined, url: string): string {
   if (baseUrl === undefined || baseUrl === '') return url;
@@ -45,12 +65,55 @@ export function resolveUrl(baseUrl: string | undefined, url: string): string {
   return baseUrl.replace(/\/+$/, '') + '/' + url.replace(/^\/+/, '');
 }
 
-export function collectResponseHeaders(res: Response): Record<string, string> {
+/**
+ * The response headers as an output, with `secrets` redacted from their values:
+ * an endpoint that echoes its request (a debugging endpoint does) must not carry
+ * a Bearer or a secret header into the run log (#1600 C11a).
+ */
+export function collectResponseHeaders(
+  res: Response,
+  secrets: readonly (string | null)[],
+): Record<string, string> {
   const headers: Record<string, string> = {};
   res.headers.forEach((value, key) => {
-    headers[key] = value;
+    headers[key] = redactSecrets(value, secrets);
   });
   return headers;
+}
+
+/**
+ * One exchange's deadline: `signal` aborts when the run's own signal does, or
+ * once `timeoutMs` has passed, and `timedOut()` says which, so the caller can
+ * report a cancel as `cancelled` and a timeout as `transient`. Spans whatever
+ * the caller awaits on `signal`, the body read included, so a hung or slow
+ * endpoint can never hold a worker-pool slot. `disarm` stops the timer once the
+ * exchange is complete; `dispose` (in a `finally`) also drops the listener.
+ *
+ * Shared by `http_request`, Web and the LLM adapters' `llmPost` (#1600 C11a),
+ * which each carried this block.
+ */
+export function exchangeDeadline(
+  runSignal: AbortSignal,
+  timeoutMs: number,
+): { signal: AbortSignal; timedOut: () => boolean; disarm: () => void; dispose: () => void } {
+  const controller = new AbortController();
+  let timedOut = false;
+  const onRunAbort = () => controller.abort();
+  if (runSignal.aborted) controller.abort();
+  else runSignal.addEventListener('abort', onRunAbort, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  return {
+    signal: controller.signal,
+    timedOut: () => timedOut,
+    disarm: () => clearTimeout(timer),
+    dispose: () => {
+      clearTimeout(timer);
+      runSignal.removeEventListener('abort', onRunAbort);
+    },
+  };
 }
 
 /** The fetch standard's redirect limit. */
@@ -133,8 +196,13 @@ export async function fetchWithoutLeakingSecrets(
  * never succeed as it is.
  */
 const NETWORK_ERROR_CODES = new Set([
+  'ECONNABORTED',
   'ECONNREFUSED',
   'ECONNRESET',
+  'EHOSTDOWN',
+  'ENETDOWN',
+  'ENETRESET',
+  'EAI_FAIL',
   'ENOTFOUND',
   'EAI_AGAIN',
   'ETIMEDOUT',
@@ -146,6 +214,7 @@ const NETWORK_ERROR_CODES = new Set([
   'UND_ERR_CONNECT_TIMEOUT',
   'UND_ERR_HEADERS_TIMEOUT',
   'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_RES_CONTENT_LENGTH_MISMATCH',
 ]);
 
 /**

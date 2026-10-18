@@ -577,7 +577,8 @@
 // BUMP 50→51 for #1600 OR41 C9c: Delete's session log fields and its `logPath`
 // output. A pre-C9c build never yields `logPath`, so it fails such a node
 // "missing declared output".
-// BUMP 51→52 for #1600 OR41 C11a: a new runnable type, `web`, C8a's reason.
+// BUMP 51→52 for #1600 OR41 C11a: a new runnable type, `web`. A pre-C11a build
+// refuses the unknown type at import (C8a's reason).
 export const CATALOG_VERSION = 52;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did

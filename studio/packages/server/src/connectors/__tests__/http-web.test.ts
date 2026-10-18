@@ -5,9 +5,9 @@ import {
   HTTP_REQUEST_ACTIVITY_TYPE,
   WARNING_CODES,
   WEB_ACTIVITY_TYPE,
-  WEB_MAX_JSON_DEPTH,
 } from '@autonomy-studio/shared';
 import { httpAdapter } from '../http.js';
+import { WEB_MAX_JSON_DEPTH } from '../http-web.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
 
 /**
@@ -190,15 +190,43 @@ describe('Web — Fail on HTTP error', () => {
     expect(failed(await run({ url: '/' })).kind).toBe('auth');
   });
 
-  it('Retry on 429 and 503 off: a 429 is permanent, Retry-After is ignored', async () => {
-    main.set(json(429, {}, { 'retry-after': '7' }));
-    const event = failed(await run({ url: '/', retryOnThrottle: false }));
-    expect(event.kind).toBe('permanent');
-    expect(event.retryAfterSeconds).toBeUndefined();
-    main.set(json(503, {}, { 'retry-after': '9' }));
-    const unavailable = failed(await run({ url: '/', retryOnThrottle: false }));
-    expect(unavailable.kind).toBe('transient');
-    expect(unavailable.retryAfterSeconds).toBeUndefined();
+  it('Retry on 429 and 503 off: both are permanent; another 5xx still retries', async () => {
+    for (const status of [429, 503]) {
+      main.set(json(status, {}, { 'retry-after': '7' }));
+      const event = failed(await run({ url: '/', retryOnThrottle: false }));
+      expect(event.kind, String(status)).toBe('permanent');
+      expect(event.retryAfterSeconds).toBeUndefined();
+    }
+    main.set(json(502, {}, { 'retry-after': '9' }));
+    expect(failed(await run({ url: '/', retryOnThrottle: false }))).toMatchObject({
+      kind: 'transient',
+      retryAfterSeconds: 9,
+    });
+  });
+
+  it('a let-through error status keeps a body that is not JSON as text', async () => {
+    main.set((_q, res) => res.writeHead(404).end('<h1>Not here</h1>'));
+    expect(succeeded(await run({ url: '/', successStatusCodes: [404] })).outputs).toMatchObject({
+      status: 404,
+      body: '<h1>Not here</h1>',
+    });
+    main.set((_q, res) => res.writeHead(502).end('<h1>Bad gateway</h1>'));
+    expect(succeeded(await run({ url: '/', failOnHttpError: false })).outputs.body).toBe(
+      '<h1>Bad gateway</h1>',
+    );
+  });
+
+  it('redacts a secret that the excerpt cut would split', async () => {
+    main.set((req, res) => {
+      res.writeHead(400).end(`${'x'.repeat(495)}${String(req.headers['x-api-key'])}`);
+    });
+    const event = failed(
+      await run(
+        { url: '/', secretHeaders: { 'X-Api-Key': { $secret: 'k' } } },
+        { secretFields: { 'secretHeaders.X-Api-Key': 'sk-live-0123456789' } },
+      ),
+    );
+    expect(event.error).not.toContain('sk-li');
   });
 
   it('redacts a secret the server echoes into its error body', async () => {
@@ -262,6 +290,26 @@ describe('Web — Max size', () => {
     expect(succeeded(events).outputs).toMatchObject({ body: 'ab', bytes: 3, truncated: true });
   });
 
+  it('refuses on Content-Length without waiting for the body', async () => {
+    // Headers promise 5000 bytes and no byte follows: only the Content-Length
+    // check can answer before the timeout.
+    main.set((_q, res) => {
+      res.writeHead(200, { 'content-length': '5000' });
+      res.flushHeaders();
+    });
+    const event = failed(
+      await run({ url: '/', maxResponseBytes: 1000, httpRequestTimeoutSeconds: 5 }),
+    );
+    expect(event.error).toContain('Max size (1000 bytes)');
+  });
+
+  it('a HEAD is not refused for the size of the body it does not carry', async () => {
+    main.set((_q, res) => res.writeHead(200, { 'content-length': '5000' }).end());
+    expect(
+      succeeded(await run({ url: '/', method: 'HEAD', maxResponseBytes: 1000 })).outputs,
+    ).toMatchObject({ status: 200, body: null, bytes: 0 });
+  });
+
   it('a body of exactly Max size is whole', async () => {
     main.set((_q, res) => res.end('"12345678"'));
     expect(succeeded(await run({ url: '/', maxResponseBytes: 10 })).outputs).toMatchObject({
@@ -291,6 +339,29 @@ describe('Web — the request', () => {
       'x-api-key': 'sk-live-123',
     });
     expect(JSON.stringify(events)).not.toMatch(/sk-live-123|bearer-1/);
+  });
+
+  it('redacts the Bearer and a secret header from an echoed response', async () => {
+    main.set((req, res) => {
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'x-echo': String(req.headers.authorization),
+      });
+      res.end(JSON.stringify({ auth: req.headers.authorization, key: req.headers['x-api-key'] }));
+    });
+    for (const activityType of [WEB_ACTIVITY_TYPE, HTTP_REQUEST_ACTIVITY_TYPE]) {
+      const events = await run(
+        { url: '/', secretHeaders: { 'X-Api-Key': { $secret: 'k' } } },
+        {
+          activityType,
+          secret: 'bearer-1',
+          secretFields: { 'secretHeaders.X-Api-Key': 'sk-live-123' },
+        },
+      );
+      const out = JSON.stringify(succeeded(events).outputs);
+      expect(out, activityType).not.toMatch(/bearer-1|sk-live-123/);
+      expect(out, activityType).toContain('Bearer ***');
+    }
   });
 
   it('sends no body for an empty Body box on a GET', async () => {
@@ -325,6 +396,7 @@ describe('Web — the request', () => {
     );
     expect(succeeded(events).outputs.status).toBe(200);
     expect(other.received[0]!.headers['x-api-key']).toBeUndefined();
+    expect(other.received[0]!.headers.authorization).toBeUndefined();
   });
 
   it('keeps the secret headers on a same-origin redirect', async () => {
@@ -347,6 +419,28 @@ describe('Web — the request', () => {
     });
     const events = await run({ url: '/form', method: 'POST', body: 'a=1' });
     expect(succeeded(events).outputs.body).toEqual({ method: 'GET', body: '' });
+  });
+
+  it('a 307 keeps the method and body; a 301 after a POST becomes a GET', async () => {
+    main.set((req, res, body) => {
+      if (req.url === '/keep') res.writeHead(307, { location: '/landed' }).end();
+      else if (req.url === '/moved') res.writeHead(301, { location: '/landed' }).end();
+      else json(200, { method: req.method, body })(req, res, '');
+    });
+    expect(succeeded(await run({ url: '/keep', method: 'PUT', body: 'a=1' })).outputs.body).toEqual(
+      { method: 'PUT', body: 'a=1' },
+    );
+    expect(
+      succeeded(await run({ url: '/moved', method: 'POST', body: 'a=1' })).outputs.body,
+    ).toEqual({ method: 'GET', body: '' });
+  });
+
+  it('a redirect to a non-HTTP URL fails permanent', async () => {
+    main.set((_q, res) => res.writeHead(302, { location: 'file:///etc/passwd' }).end());
+    expect(failed(await run({ url: '/' }))).toMatchObject({
+      kind: 'permanent',
+      error: 'a redirect to a non-HTTP URL (file:)',
+    });
   });
 
   it('a redirect loop fails permanent', async () => {
@@ -383,6 +477,26 @@ describe('Web — failures to complete', () => {
     );
     expect(event).toMatchObject({ kind: 'transient', error: 'web request timed out after 1000ms' });
     expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it('a timeout while the body is read is transient', async () => {
+    main.set((_q, res) => {
+      res.writeHead(200);
+      res.write('{"partial":'); // and nothing more
+    });
+    expect(failed(await run({ url: '/', httpRequestTimeoutSeconds: 1 }))).toMatchObject({
+      kind: 'transient',
+      error: 'web request timed out after 1000ms',
+    });
+  });
+
+  it('a connection dropped mid-body is transient', async () => {
+    main.set((_q, res) => {
+      res.writeHead(200, { 'content-length': '100' });
+      res.write('{"partial":');
+      setTimeout(() => res.socket?.destroy(), 20);
+    });
+    expect(failed(await run({ url: '/' })).kind).toBe('transient');
   });
 
   it('the run cancel is cancelled', async () => {

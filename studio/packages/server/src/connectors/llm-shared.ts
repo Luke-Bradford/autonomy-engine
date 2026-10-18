@@ -31,6 +31,7 @@ import type {
   LlmUsage,
   ToolCallTelemetry,
 } from './types.js';
+import { exchangeDeadline } from './http-shared.js';
 import { redactSecrets } from './redact.js';
 import { sha256Hex } from '../util/hash.js';
 
@@ -220,25 +221,17 @@ export async function llmPost(
   body: unknown,
   timeoutMs: number,
 ): Promise<LlmFetchResult> {
-  const controller = new AbortController();
-  let timedOut = false;
-  const onExternalAbort = () => controller.abort();
-  if (ctx.signal.aborted) controller.abort();
-  else ctx.signal.addEventListener('abort', onExternalAbort, { once: true });
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
+  const deadline = exchangeDeadline(ctx.signal, timeoutMs);
 
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...headers },
       body: JSON.stringify(body),
-      signal: controller.signal,
+      signal: deadline.signal,
     });
     const bodyText = await res.text();
-    clearTimeout(timer);
+    deadline.disarm();
     // `Headers.get` is case-insensitive and returns `null` when absent — the exact
     // shape `parseRetryAfter` expects (L7). Captured for every status; only a
     // retryable failure ever reads it.
@@ -288,7 +281,7 @@ export async function llmPost(
     // refuses, and the mirror image of the hole #725 exists to close. Knowing
     // whether generation started is what options (1) streaming / (2) a token-scaled
     // timeout buy; tracked there, not faked here.
-    if (timedOut) {
+    if (deadline.timedOut()) {
       return {
         type: 'failed',
         event: {
@@ -325,8 +318,7 @@ export async function llmPost(
       },
     };
   } finally {
-    clearTimeout(timer);
-    ctx.signal.removeEventListener('abort', onExternalAbort);
+    deadline.dispose();
   }
 }
 
