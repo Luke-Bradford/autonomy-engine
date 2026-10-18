@@ -167,6 +167,19 @@ The run reads `col > old AND col <= new`, and outputs `watermark.old` and `water
 | Database | **Connection** as above. **Table** `[▾ existing]` ⓕ, or **Table option** *Auto-create from mapping*, which generates DDL with quoted identifiers and types from the mapping. **Write behaviour** Append · Overwrite (delete then insert, one transaction) · Truncate then insert · Upsert (Key columns `[▾ multi]`, default the primary key). **Pre-copy script** (SQL ⓕ, runs once). Batch size (default 1000) |
 | Files | **Folder** ⓕ, **File name** ⓕ (or prefix plus *Max rows per file*, Rows mode). **Copy behaviour** Preserve hierarchy · Flatten · Merge into one file (Files as-is plus folder sources). **If file exists** Overwrite · Skip · Fail (default Overwrite). In Rows mode only: **Format** (Delimited, later JSON / Parquet OR14) with its write options |
 
+**Built (C3a, #1600): Write behaviour on a database sink** ([Azure SQL Database as a sink](https://learn.microsoft.com/azure/data-factory/connector-azure-sql-database#azure-sql-database-as-the-sink): `writeBehavior`, `upsertSettings.keys`).
+- **Stored as `mode`**, which held Append and Overwrite before C3a, so no saved copy changes its content hash: `append` · `overwrite` · `truncate` · `upsert` (`COPY_WRITE_MODES`). Absent is Append. The field is titled *Write behaviour*, a literal enum.
+- **Overwrite** deletes the rows, then inserts, in one transaction. **Truncate then insert** runs the store's TRUNCATE inside the same transaction. On PostgreSQL that needs the TRUNCATE privilege, fires no delete triggers, refuses a table a foreign key references (the refusal says to use Overwrite) and holds `ACCESS EXCLUSIVE` until the copy commits. SQLite has no TRUNCATE, so there it is Overwrite's `DELETE`, which cascades per the schema's `ON DELETE`. The field's help says so.
+- **Upsert** updates the rows whose **Key columns** match and inserts the rest. Key columns are `keyColumns`, literal column names (§8; the write gate refuses a `${}`), each a mapped sink column. Empty means the table's primary key, every column of which must be mapped. The keys need no unique constraint (ADF's Upsert needs none either).
+  - **Save refuses:** Key columns on any other behaviour, a key no mapping row writes, a key named twice, and a key whose mapping row writes NULL on a conversion error. Names compare as strings, as the duplicate-sink rule does. The sink resolves them by the store's case rule (`resolveSinkColumns`).
+  - **Deliberate difference from ADF: a NULL key fails the copy** and rolls it back, naming the row. `=` never matches NULL, so inserting it would add a row on every rerun. A null-safe match was rejected because PostgreSQL can neither index nor hash-join `IS NOT DISTINCT FROM`.
+  - **SQLite:** per row, a `SELECT` for the key, then `UPDATE` or `INSERT`. Explicit keys with no index scan the table for each row (#1126's bound).
+  - **PostgreSQL:** `SHARE ROW EXCLUSIVE` (so concurrent writers cannot race the match; readers are not blocked), a session-private staging table typed like the target, then per chunk one `UPDATE … FROM` and one `INSERT … WHERE NOT EXISTS` over `DISTINCT ON (keys)`. It needs SELECT on the target and TEMP on the database. `INSERT … ON CONFLICT` needs a unique index matching the keys, and `MERGE` refuses a target with rules and needs PostgreSQL 15.
+  - **A key repeated in the source:** the last row wins on both stores. `rowsWritten` is the store's own count of rows inserted plus rows updated. So the stores count repeats differently: SQLite counts every write (an insert, then its updates), PostgreSQL counts once per chunk.
+- **Deliberate difference from §4.1's `[▾ multi]`:** Key columns is a one-per-line list in C3a, since a choice list needs the sink's columns in the form. It is filed as polish for the mapping redesign (C4), which imports the sink schema.
+- The canvas card names the behaviour: `· overwrite`, `· truncate`, `· upsert on id`. `CATALOG_VERSION` 55→56.
+- **Not built here:** Pre-copy script and Batch size (C3b), *Auto-create from mapping* (C3c), and *Skip incompatible rows* (C6, which excludes Upsert).
+
 **Mapping** (Rows mode only; the design discussed with the operator 2026-10-08):
 
 ```text
@@ -644,7 +657,7 @@ The **capture level** (workspace setting, overridable per pipeline and per activ
 | Capability | File system (fs) | SQLite | Postgres | HTTP | S3 / Blob / SFTP | MySQL / SQL Server / Snowflake |
 |---|---|---|---|---|---|---|
 | Copy source, rows | ✓ delimited, excel; JSON/Parquet OR14 | ✓ table, query | ✓ table, query | T (JSON response as rows) | OR13 | OR15 |
-| Copy sink, rows | T delimited (OR14 writer) | ✓ append/overwrite; **T** truncate, upsert, auto-create, pre-copy | ✓ same | — | OR13 | OR15 |
+| Copy sink, rows | T delimited (OR14 writer) | ✓ append/overwrite/truncate/upsert (C3a); **T** auto-create, pre-copy | ✓ same | — | OR13 | OR15 |
 | Copy, files as-is | ✓ copy/move (single file); **T** folder, wildcard, list, delete-after | — | — | T (download to file) | OR13 | — |
 | Lookup | ✓ | ✓ | ✓ | (use Web) | OR13 | OR15 |
 | Get metadata | ✓ full field list (C8a), a file dataset's structure and column count (C8c-2); **T** wait | ✓ exists, structure, columns, rows (C8c-1) | ✓ same | — | OR13 | OR15 |
@@ -666,7 +679,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C1 | **Copy: Files as-is**. Folder/wildcard/list/recursive/modified-between source; preserve/flatten/merge; if-exists; after-copy keep/delete/move. Lower file_copy and file_move. Split: **C1a** the `copy_files` type, its fs engine, the fs `writable` permission and the dock toggle; **C1b** the `file_copy`/`file_move` lowering with output aliases (§8), and both retired from the palette (moved forward from C13, since their lowering exists) | part of OR30 #1478 |
 | C1q | **Copy + Lookup: database source Use Table · Query, inline** (operator ask 2026-10-14; §4.1's Database row had no slice). Split: **C1q-a** the engine — `Node.inlineDatasets.source` {kind table/query, config}, `datasetIds.source` optional beside it, save rules, dispatch, portability (`CATALOG_VERSION` 38); **C1q-b** the dock's Source block (Use Saved dataset · Table · Query, the literal SQL statement with ⤢, the `:name` bind values table with ⓕ values), the same block on Lookup, and the watermark-journey e2e; **C1q-c** Preview, the table dropdown, Query timeout, `:name`-derived rows (*Import from statement*) and a type per bind value (all built; C1q complete) | — |
 | C2 | Copy: inline source + file sink (rows → delimited). Lower file_write | OR14 writer dependency |
-| C3 | Copy: database sink. Truncate, upsert (keys), auto-create from mapping, pre-copy script, batch size | OR15 upsert/auto-create |
+| C3 | Copy: database sink. Truncate, upsert (keys), auto-create from mapping, pre-copy script, batch size. Split: **C3a** Write behaviour Truncate then insert and Upsert with Key columns (built); **C3b** Pre-copy script and Batch size; **C3c** *Auto-create from mapping* | OR15 upsert/auto-create |
 | C4 | Copy: mapping redesign (x → y rows from imported schemas, map-by-name default, type conversion settings, ƒx whole mapping, additional columns) | depends on OR10 import |
 | C5 | Copy: incremental (watermark Automatic / Expression; files modified-since-last-success) | OR15 incremental |
 | C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs | — |

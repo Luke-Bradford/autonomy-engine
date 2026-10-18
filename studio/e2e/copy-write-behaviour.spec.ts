@@ -71,7 +71,9 @@ test.describe('#1600 C3a — Copy Write behaviour', () => {
       const pane = properties(page);
       await pane.getByRole('tab', { name: 'Sink', exact: true }).click();
       const behaviour = pane.getByRole('combobox', { name: 'Write behaviour' });
+      // The empty choice writes nothing, which reads as the default, Append.
       await expect(behaviour.locator('option')).toHaveText([
+        'Append (default)',
         'Append',
         'Overwrite',
         'Truncate then insert',
