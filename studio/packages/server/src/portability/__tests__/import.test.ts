@@ -1505,7 +1505,7 @@ describe('importEnvelope: history saved before #1480 (#1492)', () => {
   it('admits an unrunnable HISTORICAL version, stored as it was, and reports it', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Copier' });
-    insertLegacyVersion(db, doc(pipeline.id, 'truncate'));
+    insertLegacyVersion(db, doc(pipeline.id, 'merge'));
     createPipelineVersion(db, doc(pipeline.id, 'append'));
 
     const result = importEnvelope(db, 'owner-b', exportPipeline(db, pipeline.id, 'owner-a'));
@@ -1520,7 +1520,7 @@ describe('importEnvelope: history saved before #1480 (#1492)', () => {
       },
     ]);
     expect(result.versions.map((v) => [v.version, v.nodes[0]?.config.mode])).toEqual([
-      [1, 'truncate'],
+      [1, 'merge'],
       [2, 'append'],
     ]);
     expect(listPipelineVersions(db, result.pipeline.id)).toHaveLength(2);
@@ -1531,8 +1531,8 @@ describe('importEnvelope: history saved before #1480 (#1492)', () => {
     const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Copier' });
     const many = ISSUE_LIST_CAP + 1;
     insertLegacyVersion(db, {
-      ...doc(pipeline.id, 'truncate'),
-      nodes: Array.from({ length: many }, (_, i) => ({ ...copyNode('truncate'), id: `n${i}` })),
+      ...doc(pipeline.id, 'merge'),
+      nodes: Array.from({ length: many }, (_, i) => ({ ...copyNode('merge'), id: `n${i}` })),
     });
     createPipelineVersion(db, doc(pipeline.id, 'append'));
 
@@ -1549,7 +1549,7 @@ describe('importEnvelope: history saved before #1480 (#1492)', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Copier' });
     createPipelineVersion(db, doc(pipeline.id, 'append'));
-    insertLegacyVersion(db, doc(pipeline.id, 'truncate'));
+    insertLegacyVersion(db, doc(pipeline.id, 'merge'));
 
     expect(() => importEnvelope(db, 'owner-b', exportPipeline(db, pipeline.id, 'owner-a'))).toThrow(
       InvalidPipelineDocError,
@@ -1560,7 +1560,7 @@ describe('importEnvelope: history saved before #1480 (#1492)', () => {
   it('the head is the LAST version in the file, not the highest number', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Copier' });
-    insertLegacyVersion(db, doc(pipeline.id, 'truncate'));
+    insertLegacyVersion(db, doc(pipeline.id, 'merge'));
     createPipelineVersion(db, doc(pipeline.id, 'append'));
     const envelope = JSON.parse(JSON.stringify(exportPipeline(db, pipeline.id, 'owner-a')));
     // Hand-reordered: the unrunnable v1 is now last, so it would become the head.
@@ -1573,7 +1573,7 @@ describe('importEnvelope: history saved before #1480 (#1492)', () => {
   it('still refuses a historical version with a STRUCTURAL fault beside the activity one', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Copier' });
-    insertLegacyVersion(db, doc(pipeline.id, 'truncate'));
+    insertLegacyVersion(db, doc(pipeline.id, 'merge'));
     createPipelineVersion(db, doc(pipeline.id, 'append'));
     const envelope = JSON.parse(JSON.stringify(exportPipeline(db, pipeline.id, 'owner-a')));
     const exportedNode = envelope.data.versions[0].nodes[0];
@@ -1603,7 +1603,7 @@ describe('importEnvelope: history saved before #1480 (#1492)', () => {
   it('a bundle reports the unrunnable history on its own member only', () => {
     const { db } = freshDb();
     const old = createPipeline(db, { ownerId: 'owner-a', name: 'Old' });
-    insertLegacyVersion(db, doc(old.id, 'truncate'));
+    insertLegacyVersion(db, doc(old.id, 'merge'));
     createPipelineVersion(db, doc(old.id, 'append'));
     const fresh = createPipeline(db, { ownerId: 'owner-a', name: 'Fresh' });
     createPipelineVersion(db, doc(fresh.id, 'append'));

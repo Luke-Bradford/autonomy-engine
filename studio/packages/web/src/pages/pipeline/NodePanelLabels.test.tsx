@@ -102,7 +102,10 @@ describe('node panel labels (#1396)', () => {
                 : // #1600 C8d — a number (Wait until's timer settings) takes a number.
                   f.kind === 'number'
                   ? 1
-                  : 'x',
+                  : // #1600 C3a — a list (Copy's Key columns) takes a list.
+                    f.kind === 'stringList'
+                    ? ['x']
+                    : 'x',
           ]),
       ]);
       const overrides =

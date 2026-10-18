@@ -171,14 +171,14 @@ describe('C3a — the Upsert key rules reach the write gate', () => {
   });
 
   it('accepts a mapped key', () => {
-    expect(validateDoc(doc([upsert(['id'])], [], [], [{ name: 'batch', type: 'string' }]))).toEqual(
+    expect(validateDoc(doc([upsert(['id'])], [], [], [{ name: 'batch', type: 'string', required: false }]))).toEqual(
       [],
     );
   });
 
   it('REFUSES a key no mapping row writes', () => {
     expect(
-      validateDoc(doc([upsert(['nope'])], [], [], [{ name: 'batch', type: 'string' }])),
+      validateDoc(doc([upsert(['nope'])], [], [], [{ name: 'batch', type: 'string', required: false }])),
     ).toEqual([
       "node.c.keyColumns[0]: 'nope' is not a mapped sink column, so no row carries its value",
     ]);
@@ -186,7 +186,7 @@ describe('C3a — the Upsert key rules reach the write gate', () => {
 
   it('REFUSES Key columns on a write behaviour that ignores them', () => {
     expect(
-      validateDoc(doc([upsert(['id'], 'overwrite')], [], [], [{ name: 'batch', type: 'string' }])),
+      validateDoc(doc([upsert(['id'], 'overwrite')], [], [], [{ name: 'batch', type: 'string', required: false }])),
     ).toEqual(['node.c.keyColumns: only read when Write behaviour is Upsert']);
   });
 });
