@@ -72,6 +72,25 @@ import type {
 import type { DocResolver, Executor, ExecutorCommand } from './driver.js';
 import type { ChildRuns } from './child.js';
 
+/** #1600 OR41 C11c — a Web node set to *Wait for callback*. */
+function isCallbackWait(ctx: ActivityContext): boolean {
+  return ctx.activityType === WEB_ACTIVITY_TYPE && ctx.input.waitForCallback === true;
+}
+
+/**
+ * #1600 OR41 C11c — the expiry a Web *Wait for callback* row is recorded with
+ * before its request: the longest request plus the callback timeout. Provisional
+ * and informational (the owner listing shows it); nothing expires on it, and
+ * the park's arm stamps the armed alarm's real expiry.
+ */
+function provisionalCallbackWindowMs(ctx: ActivityContext): number {
+  const callback = ctx.input.callbackTimeoutSeconds;
+  const seconds =
+    WEB_MAX_REQUEST_TIMEOUT_SECONDS +
+    (typeof callback === 'number' ? callback : WEB_DEFAULT_CALLBACK_TIMEOUT_SECONDS);
+  return seconds * 1000;
+}
+
 /**
  * P3 — the REAL executor: the connector-facing half of the run engine's impure
  * boundary. The driver sequences reduce↔persist; THIS turns a `dispatchNode`
@@ -121,25 +140,6 @@ import type { ChildRuns } from './child.js';
  * subprocesses that each fail and re-record it. Only the optimisation is lost;
  * correctness (failure → window → later admissions skip) is unchanged.
  */
-/** #1600 OR41 C11c — a Web node set to *Wait for callback*. */
-function isCallbackWait(ctx: ActivityContext): boolean {
-  return ctx.activityType === WEB_ACTIVITY_TYPE && ctx.input.waitForCallback === true;
-}
-
-/**
- * #1600 OR41 C11c — the expiry a Web *Wait for callback* row is recorded with
- * before its request: the longest request plus the callback timeout. Provisional
- * and informational (the owner listing shows it); nothing expires on it, and
- * the park's arm stamps the armed alarm's real expiry.
- */
-function provisionalCallbackWindowMs(ctx: ActivityContext): number {
-  const callback = ctx.input.callbackTimeoutSeconds;
-  const seconds =
-    WEB_MAX_REQUEST_TIMEOUT_SECONDS +
-    (typeof callback === 'number' ? callback : WEB_DEFAULT_CALLBACK_TIMEOUT_SECONDS);
-  return seconds * 1000;
-}
-
 export interface ExecutorDeps {
   db: Db;
   /** The secret-encryption master key (for just-in-time secret decrypt). */
@@ -1240,28 +1240,28 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // run, which completes nothing: the completer checks the node.)
     let callbackAwaited = false;
     const callbackWait = isCallbackWait(ctx) ? { runId, nodeId, attemptId } : undefined;
-    if (callbackWait !== undefined) {
-      if (deps.publicBaseUrl === undefined) {
-        emit(
-          nodeFailed(runId, nodeId, attemptId, {
-            error:
-              "Wait for callback needs the server's public URL (AUTONOMY_PUBLIC_URL), and none is configured",
-            kind: 'permanent',
-          }),
-        );
-        return;
-      }
-      const token = deriveExternalWaitToken(deps.masterKey, callbackWait);
-      const now = (deps.now ?? Date.now)();
-      recordExternalWait(deps.db, {
-        ...callbackWait,
-        tokenHash: hashExternalWaitToken(token),
-        expiresAt: now + provisionalCallbackWindowMs(ctx),
-        now,
-      });
-      ctx = { ...ctx, callbackUri: externalWaitCallbackUrl(deps.publicBaseUrl, token) };
-    }
     try {
+      if (callbackWait !== undefined) {
+        if (deps.publicBaseUrl === undefined) {
+          emit(
+            nodeFailed(runId, nodeId, attemptId, {
+              error:
+                "Wait for callback needs the server's public URL (AUTONOMY_PUBLIC_URL), and none is configured",
+              kind: 'permanent',
+            }),
+          );
+          return;
+        }
+        const token = deriveExternalWaitToken(deps.masterKey, callbackWait);
+        const now = (deps.now ?? Date.now)();
+        recordExternalWait(deps.db, {
+          ...callbackWait,
+          tokenHash: hashExternalWaitToken(token),
+          expiresAt: now + provisionalCallbackWindowMs(ctx),
+          now,
+        });
+        ctx = { ...ctx, callbackUri: externalWaitCallbackUrl(deps.publicBaseUrl, token) };
+      }
       for await (const ev of adapter.runActivity(ctx, secret, secretFields, sinkSecret)) {
         if (ev.type === 'output') {
           emit({ type: 'node.output', runId, nodeId, name: ev.name, value: ev.value });

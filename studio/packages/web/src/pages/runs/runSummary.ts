@@ -22,6 +22,7 @@ import {
   type RunState,
   type VariableWrite,
   type WaitingReason,
+  webCallbackOutcome,
 } from '@autonomy-studio/shared';
 
 import { parseEngineEvent } from './parsedEvent';
@@ -804,9 +805,9 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
     docNodeIdOf(rawNodeId) === rawNodeId ? undefined : rawNodeId;
 
   /**
-   * #1600 OR41 C11c — a Web *Wait for callback* settled by its callback, as the
-   * reducer's `settleWebCallback` does: the request outputs plus `callback`, or
-   * the failure the callback reported (its message rides the event).
+   * #1600 OR41 C11c — a Web *Wait for callback* settled by its callback, by the
+   * rule the reducer uses (`webCallbackOutcome`): the request outputs plus
+   * `callback`, or the failure the callback reported (its message rides the event).
    */
   const settleWebCallback = (
     n: FoldingNode,
@@ -816,13 +817,10 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
     reportedError: string | undefined,
   ): void => {
     clearResult(n);
-    if (reportedError !== undefined) {
-      n.status = 'failure';
-      n.error = reportedError;
-    } else {
-      n.status = 'success';
-      n.outputValues = { ...request, callback };
-    }
+    const outcome = webCallbackOutcome(request, callback, reportedError);
+    n.status = outcome.status;
+    if (outcome.status === 'failure') n.error = outcome.error;
+    else n.outputValues = outcome.outputs;
     n.instanceId = instanceOf(rawNodeId);
   };
 

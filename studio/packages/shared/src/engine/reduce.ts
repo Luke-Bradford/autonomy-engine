@@ -42,6 +42,7 @@ import {
   WAIT_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
 } from '../catalog/types.js';
+import { webCallbackOutcome } from '../catalog/web-config.js';
 import { outputContract, storeOutputs, validateOutputs } from './outputs.js';
 import { hasSecureOutput, redactSecureEvent, secureEventNodeId } from './secure.js';
 import {
@@ -4403,12 +4404,13 @@ export function createEngine(doc: EngineDoc): Engine {
     diagnostics: string[],
   ): ReduceResult {
     const unparked = withoutHeldWait(unparkIfWaiting(state), nodeId);
-    if (reportedError !== undefined) {
+    const outcome = webCallbackOutcome(request, callback, reportedError);
+    if (outcome.status === 'failure') {
       return settle(withNode(unparked, nodeId, { status: 'failure' }), diagnostics);
     }
     const contract = outputContract(docNodeFor(nodeId)!);
-    const merged = { ...request, callback };
-    const stored = contract.kind === 'declared' ? storeOutputs(contract, merged) : merged;
+    const stored =
+      contract.kind === 'declared' ? storeOutputs(contract, outcome.outputs) : outcome.outputs;
     let next = withNode(unparked, nodeId, { status: 'success' });
     next = { ...next, outputs: { ...next.outputs, [nodeId]: stored } };
     return settle(next, diagnostics);

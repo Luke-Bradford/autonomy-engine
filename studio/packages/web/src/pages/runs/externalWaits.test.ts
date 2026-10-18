@@ -68,7 +68,7 @@ describe('describeCallbackBody', () => {
         typeof describeCallbackBody
       >[0];
     expect(describeCallbackBody(web({ waitForCallback: true }))).toBe(
-      'The callback body is JSON, kept whole as the callback output. An empty body is null.',
+      'The callback body is JSON, kept whole as the callback output.',
     );
     expect(
       describeCallbackBody(web({ waitForCallback: true, reportStatusOnCallback: true })),

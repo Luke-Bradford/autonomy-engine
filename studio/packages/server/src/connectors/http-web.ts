@@ -11,7 +11,6 @@ import {
 import type { z } from 'zod';
 import type { ActivityContext, ActivityEvent } from './types.js';
 import { redactSecrets } from './redact.js';
-import { failed } from './activity-events.js';
 import {
   buildRequestHeaders,
   collectResponseHeaders,
@@ -74,13 +73,17 @@ export async function* runWeb(
   let callbackUri: string | undefined;
   if (cfg.waitForCallback) {
     if (ctx.callbackUri === undefined) {
-      yield failed('permanent', 'Wait for callback has no callback URL to send');
+      yield {
+        type: 'failed',
+        kind: 'permanent',
+        error: 'Wait for callback has no callback URL to send',
+      };
       return;
     }
     callbackUri = ctx.callbackUri;
     const withUri = webCallbackBody(cfg.body, callbackUri);
     if (!withUri.ok) {
-      yield failed('permanent', withUri.error);
+      yield { type: 'failed', kind: 'permanent', error: withUri.error };
       return;
     }
     body = withUri.json;
@@ -123,6 +126,7 @@ export async function* runWeb(
         signal: deadline.signal,
       },
       Object.keys(sinkHeaders),
+      callbackUri !== undefined,
     );
 
     const failsOnStatus =
@@ -270,11 +274,14 @@ function overLimitFailure(maxBytes: number): Extract<ActivityEvent, { type: 'fai
 export const WEB_MAX_JSON_DEPTH = 64;
 
 /**
- * The body read as JSON: an empty body is null. The depth is measured on the
+ * The body read as JSON: an empty body is null. Also reads a Wait for callback's
+ * callback body (#1600 C11c, `external-wait-service.ts`). The depth is measured on the
  * text, without recursion, so a value no recursive walk downstream can take
  * (redaction, cloning) never reaches the outputs.
  */
-function parseWebJson(text: string): { ok: true; value: unknown } | { ok: false; error: string } {
+export function parseWebJson(
+  text: string,
+): { ok: true; value: unknown } | { ok: false; error: string } {
   if (text.trim() === '') return { ok: true, value: null };
   let value: unknown;
   try {

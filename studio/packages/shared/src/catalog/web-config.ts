@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
 import { SecretRefSchema } from '../schemas/secret-ref.js';
 import { DEFAULT_HTTP_TIMEOUT_MS, DEFAULT_MAX_READ_BYTES } from './connection-config.js';
+import { interpolationMode } from '../engine/expr.js';
 
 /**
  * The `http_request` secret-SINK config field name (item 7 / S4) — the ONE
@@ -190,7 +191,7 @@ export const webConfigSchema = z
         );
       }
       // A `${}` body is only known at dispatch, where the adapter checks it.
-      if (cfg.body !== undefined && !cfg.body.includes('${')) {
+      if (cfg.body !== undefined && interpolationMode(cfg.body).mode === 'literal') {
         const body = webCallbackBody(cfg.body, 'https://example.invalid/');
         if (!body.ok) issue('body', body.error);
       }
@@ -257,8 +258,26 @@ export function callbackReportedError(callback: unknown): string | undefined {
     if (typeof Message === 'string' && Message !== '') parts.push(Message);
   }
   const detail = parts.length > 0 ? `: ${parts.join(': ')}` : '';
-  // Bounded: the message lands in the run log and the run view.
-  return `the callback reported StatusCode ${code}${detail}`.slice(0, 1000);
+  // Bounded: the message lands in the run log and the run view. Cut by code
+  // point, so a surrogate pair is never split.
+  return Array.from(`the callback reported StatusCode ${code}${detail}`).slice(0, 1000).join('');
+}
+
+/**
+ * #1600 OR41 C11c — how a Web *Wait for callback* settles on its callback: the
+ * request's outputs plus `callback`, or the failure the callback reported. The
+ * ONE rule for the reducer (which then filters the outputs through the declared
+ * contract) and the two read models that project the log (the run view and the
+ * Monitor's activity runs).
+ */
+export function webCallbackOutcome(
+  request: Record<string, unknown>,
+  callback: unknown,
+  reportedError: string | undefined,
+): { status: 'success'; outputs: Record<string, unknown> } | { status: 'failure'; error: string } {
+  return reportedError !== undefined
+    ? { status: 'failure', error: reportedError }
+    : { status: 'success', outputs: { ...request, callback } };
 }
 
 /** An empty Body box is no body, so it never makes a GET unsaveable. */

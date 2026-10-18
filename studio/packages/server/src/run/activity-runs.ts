@@ -13,6 +13,7 @@ import {
   type NodeRunStatus,
   type PipelineVersion,
   type RunState,
+  webCallbackOutcome,
 } from '@autonomy-studio/shared';
 import type { Engine, SkipReason } from '@autonomy-studio/shared';
 import { loggedCount, reusedIds } from './activity-counts.js';
@@ -140,15 +141,10 @@ function resultOf(
       return { attemptId: e.previousAttemptId, status: 'success' };
     // #1600 C11c — a Web callback that reported a failure fails the attempt.
     case 'externalWait.completed':
-      return e.reportedError !== undefined
-        ? { attemptId: e.previousAttemptId, status: 'failure', error: e.reportedError }
-        : { attemptId: e.previousAttemptId, status: 'success' };
+      return callbackResult(e.previousAttemptId, e.reportedError);
     // #1600 C11c — a Web callback that came before the park settles on the arm.
     case 'externalWait.created':
-      if (e.arrived === undefined) return null;
-      return e.arrived.reportedError !== undefined
-        ? { attemptId: e.attemptId, status: 'failure', error: e.arrived.reportedError }
-        : { attemptId: e.attemptId, status: 'success' };
+      return e.arrived === undefined ? null : callbackResult(e.attemptId, e.arrived.reportedError);
     case 'externalWait.expired':
       return {
         attemptId: e.previousAttemptId,
@@ -161,6 +157,17 @@ function resultOf(
     default:
       return null;
   }
+}
+
+/** #1600 C11c — a callback's attempt result, by the reducer's rule (`webCallbackOutcome`). */
+function callbackResult(
+  attemptId: string,
+  reportedError: string | undefined,
+): { attemptId: string; status: NodeRunStatus; error?: string } {
+  const outcome = webCallbackOutcome({}, null, reportedError);
+  return outcome.status === 'failure'
+    ? { attemptId, status: 'failure', error: outcome.error }
+    : { attemptId, status: 'success' };
 }
 
 /** A short label for a ForEach item: a scalar as text, or an object's `name`. */

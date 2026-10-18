@@ -134,6 +134,16 @@ export interface ExternalWaitAttempt {
   attemptId: string;
 }
 
+/** The still-`pending` row of one attempt: the guard every write here takes. */
+function pendingAttempt(key: ExternalWaitAttempt) {
+  return and(
+    eq(externalWaits.runId, key.runId),
+    eq(externalWaits.nodeId, key.nodeId),
+    eq(externalWaits.attemptId, key.attemptId),
+    eq(externalWaits.status, 'pending'),
+  );
+}
+
 function settleExternalWait(
   db: Db,
   key: ExternalWaitAttempt,
@@ -144,14 +154,7 @@ function settleExternalWait(
   const res = db
     .update(externalWaits)
     .set({ status, resolvedAt: now, ...(earlyCallback !== undefined ? { earlyCallback } : {}) })
-    .where(
-      and(
-        eq(externalWaits.runId, key.runId),
-        eq(externalWaits.nodeId, key.nodeId),
-        eq(externalWaits.attemptId, key.attemptId),
-        eq(externalWaits.status, 'pending'),
-      ),
-    )
+    .where(pendingAttempt(key))
     .run();
   return res.changes > 0;
 }
@@ -190,17 +193,7 @@ export function markExternalWaitArrivedEarly(
  * replayed arm reads the same alarm `dueAt`.
  */
 export function stampExternalWaitExpiry(db: Db, key: ExternalWaitAttempt, expiresAt: number): void {
-  db.update(externalWaits)
-    .set({ expiresAt })
-    .where(
-      and(
-        eq(externalWaits.runId, key.runId),
-        eq(externalWaits.nodeId, key.nodeId),
-        eq(externalWaits.attemptId, key.attemptId),
-        eq(externalWaits.status, 'pending'),
-      ),
-    )
-    .run();
+  db.update(externalWaits).set({ expiresAt }).where(pendingAttempt(key)).run();
 }
 
 /**

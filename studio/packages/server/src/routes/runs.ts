@@ -27,6 +27,7 @@ import {
   type ActivityRunsResponse,
   type PipelineVersion,
   type Run,
+  TERMINAL_RUN_ROW_STATUS,
 } from '@autonomy-studio/shared';
 import {
   getPipeline,
@@ -676,6 +677,10 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       );
       // #925 — every `callbackPath` below embeds a live capability token.
       noStore(reply);
+      // #1600 C11c — a finished run completes nothing, so it offers nothing: a
+      // row a crash or a cancel left `pending` (no alarm will expire it) would
+      // otherwise sit on the panel as a door that cannot open.
+      if (TERMINAL_RUN_ROW_STATUS.has(run.status)) return [];
       return listPendingExternalWaitsByRun(db, run.id).map(
         (wait) =>
           ({

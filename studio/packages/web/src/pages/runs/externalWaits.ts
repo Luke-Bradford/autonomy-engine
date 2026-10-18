@@ -71,9 +71,10 @@ export function describeCallbackBody(node: Node | null): string | null {
   if (node.type === WEB_ACTIVITY_TYPE) {
     // #1600 OR41 C11c — a Web *Wait for callback* keeps the whole JSON body as
     // its `callback` output (the server's `parseWebCallbackBody`).
+    // Said of the body, not of this panel's editor, which sends an object.
     return node.config.reportStatusOnCallback === true
       ? 'The callback body is JSON, kept whole as the callback output. A StatusCode of 400 or above fails the activity with its Error.'
-      : 'The callback body is JSON, kept whole as the callback output. An empty body is null.';
+      : 'The callback body is JSON, kept whole as the callback output.';
   }
 
   const contract = outputContract(node);
