@@ -1194,14 +1194,18 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         if (e.arrived !== undefined) {
           // #1600 OR41 C11c-2 — a Web with no Request URL (never dispatched, so
           // no held request) whose callback came in a crash window before the
-          // park: settled on the arm. Only a Web's park carries `arrived`.
-          settleWebCallback(
-            n,
-            e.nodeId,
-            WEB_NO_REQUEST_OUTPUTS,
-            e.arrived.callback,
-            e.arrived.reportedError,
-          );
+          // park: settled on the arm. Only a Web's park carries `arrived`. Under
+          // a cancel the reducer ends the wait instead (`onExternalWaitCreated`
+          // holds it from preparation), as for a held request above.
+          if (cancelled) n.status = 'failure';
+          else
+            settleWebCallback(
+              n,
+              e.nodeId,
+              WEB_NO_REQUEST_OUTPUTS,
+              e.arrived.callback,
+              e.arrived.reportedError,
+            );
           closeSpan(n, e.nodeId, row.ts);
         }
         break;

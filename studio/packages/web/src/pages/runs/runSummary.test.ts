@@ -4113,6 +4113,15 @@ describe('#1600 OR41 C11c-2 — a Web with no Request URL (never dispatched)', (
     expect(done!.endedAtMs).toBe(1_000);
   });
 
+  it('under a cancel, an arrival fails it, as the reducer ends the wait', () => {
+    const [done] = deriveNodeActivity([
+      envelope({ type: 'run.cancelRequested', runId: 'r', source: { kind: 'operator' } }, 500),
+      park({ callback: 'ok' }),
+    ]);
+    expect(done!.status).toBe('failure');
+    expect(done!.outputValues).toBeUndefined();
+  });
+
   it('an early reported failure fails it at the arm', () => {
     const [done] = deriveNodeActivity([
       park({ callback: {}, reportedError: 'the callback reported StatusCode 500' }),
