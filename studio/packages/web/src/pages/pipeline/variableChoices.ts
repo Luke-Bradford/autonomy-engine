@@ -1,8 +1,4 @@
-import {
-  APPEND_VARIABLE_ACTIVITY_TYPE,
-  SET_VARIABLE_ACTIVITY_TYPE,
-  type VariableDef,
-} from '@autonomy-studio/shared';
+import { isVariableWriterType, variableWriteOp, type VariableDef } from '@autonomy-studio/shared';
 
 /** What a variable writer's `variable` chooser offers (#844 V6, spec V-D9). */
 export interface VariableWriteChoices {
@@ -13,8 +9,10 @@ export interface VariableWriteChoices {
 }
 
 /**
- * The declared variables a `set_variable`/`append_variable` node may write, or
- * `undefined` for any other activity.
+ * The declared variables a variable writer may write, or `undefined` for any
+ * other activity. #1600 C12a — a Set variable follows its `operation` as the dock
+ * draft holds it: empty is the schema default, Set, and a value the save refuses
+ * is read as Set too, since the node's own issue says what is wrong with it.
  *
  * An append is offered only the `array` variables, because the save gate
  * refuses any other (`validateVariableWriteConfig`), and a chooser offering a
@@ -26,10 +24,12 @@ export interface VariableWriteChoices {
  */
 export function variableWriteChoices(
   nodeType: string,
+  operation: unknown,
   variables: readonly VariableDef[],
 ): VariableWriteChoices | undefined {
-  const isAppend = nodeType === APPEND_VARIABLE_ACTIVITY_TYPE;
-  if (!isAppend && nodeType !== SET_VARIABLE_ACTIVITY_TYPE) return undefined;
+  if (!isVariableWriterType(nodeType)) return undefined;
+  const config = operation === undefined || operation === '' ? {} : { operation };
+  const isAppend = variableWriteOp({ type: nodeType, config }) === 'append';
   const eligible = isAppend ? variables.filter((v) => v.type === 'array') : variables;
   const types = new Map(eligible.map((v) => [v.name, v.type]));
   return {

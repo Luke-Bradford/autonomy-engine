@@ -1,11 +1,12 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { deselect } from './support/canvasGraph';
-import { nodeById, openSeededCanvas } from './support/seedDoc';
+import { deselect, toolbox } from './support/canvasGraph';
+import { fireAndSettle, nodeById, openSeededCanvas, seedVersion } from './support/seedDoc';
 import { properties } from './support/panels';
 
 /**
- * #844 V6 — authoring a Set variable / Append variable node (spec V-D9).
+ * #844 V6 — authoring a Set variable node (spec V-D9). #1600 C12a — Append
+ * variable is now Set variable's Operation Append, and a stored one opens as it.
  *
  * V5 made the two writers runnable, but their `variable` field was a bare text
  * box: the author had to already know the declared names, and the `${}` flyout
@@ -97,13 +98,29 @@ test.describe('#844 V6 — set/append variable config form', () => {
     await expectQuiet(page, problems);
   });
 
-  test('an Append variable node is offered only arrays, and says so when there are none', async ({
+  test('#1600 C12a — Operation Append is offered only arrays, and says so when there are none', async ({
     page,
   }) => {
     const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'v6 append chooser', SEED);
 
+    // Choosing Append narrows a Set variable's chooser to the arrays at once,
+    // before Apply; back to Set, every variable again.
+    await nodeById(page, 's').click();
+    const operation = properties(page).getByRole('combobox', { name: 'Operation', exact: true });
+    await expect(operation.locator('option:checked')).toHaveText('Set (default)');
+    await operation.selectOption('append');
+    expect(await chooserOptions(page)).toEqual([
+      ['', '— choose —'],
+      ['rows', 'rows (array)'],
+    ]);
+    await operation.selectOption('set');
+    expect((await chooserOptions(page)).map(([v]) => v)).toEqual(['', 'count', 'rows', 'label']);
+    await properties(page).getByRole('button', { name: 'Revert', exact: true }).click();
+
+    // The seed's stored Append variable opens as a Set variable · Append.
     await nodeById(page, 'a').click();
+    await expect(operation.locator('option:checked')).toHaveText('Append');
     expect(await chooserOptions(page)).toEqual([
       ['', '— choose —'],
       ['rows', 'rows (array)'],
@@ -122,7 +139,79 @@ test.describe('#844 V6 — set/append variable config form', () => {
     await expect(properties(page).locator('.config-field-choices-empty')).toHaveText(
       /^No array variables/,
     );
-    await expect(properties(page)).toContainText('append_variable needs an array variable');
+    await expect(properties(page)).toContainText('Append needs an array variable');
+
+    await expectQuiet(page, problems);
+  });
+
+  test('#1600 C12a — a stored Append variable runs as before, opens as Set variable · Append, and saves as one', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const { pipelineId, pipelineVersionId } = await seedVersion(page, 'e2e 1600 c12a legacy', {
+      nodes: [
+        {
+          id: 'add',
+          type: 'append_variable',
+          position: { x: 0, y: 0 },
+          config: { variable: 'rows', value: 'x' },
+        },
+      ],
+      variables: [{ name: 'rows', type: 'array', default: [] }],
+    });
+    const appendsOf = async (versionId: string, name: string) => {
+      const runId = await fireAndSettle(page, versionId, name);
+      const events = (await (
+        await page.request.get(`/api/runs/${encodeURIComponent(runId)}/events`)
+      ).json()) as { type: string; payload: { nodeId?: string; name?: string; value?: unknown } }[];
+      expect(events.some((e) => e.type === 'variable.set')).toBe(false);
+      return events
+        .filter((e) => e.type === 'variable.append')
+        .map((e) => [e.payload.nodeId, e.payload.name, e.payload.value]);
+    };
+    // The stored version is untouched by the lowering: it runs as append_variable.
+    expect(await appendsOf(pipelineVersionId, 'e2e 1600 c12a old')).toEqual([['add', 'rows', 'x']]);
+
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+    await expect(nodeById(page, 'add')).toBeVisible();
+    await expect(
+      toolbox(page).getByRole('button', { name: 'Append variable', exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      toolbox(page).getByRole('button', { name: 'Set variable', exact: true }),
+    ).toHaveCount(1);
+    await nodeById(page, 'add').click();
+    await expect(
+      properties(page)
+        .getByRole('combobox', { name: 'Operation', exact: true })
+        .locator('option:checked'),
+    ).toHaveText('Append');
+    await expect(
+      properties(page).getByRole('textbox', { name: 'Variable name', exact: true }),
+    ).toHaveValue('rows');
+    // Any edit saves the node as its replacement.
+    await properties(page).getByRole('tab', { name: 'General' }).click();
+    await properties(page)
+      .getByRole('textbox', { name: 'Activity description' })
+      .fill('lowered from Append variable');
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+
+    const versions = (await (
+      await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+    ).json()) as {
+      id: string;
+      version: number;
+      nodes: { id: string; type: string; config: Record<string, unknown> }[];
+    }[];
+    const latest = versions.reduce((x, y) => (x.version > y.version ? x : y));
+    expect(latest.nodes[0]).toMatchObject({
+      id: 'add',
+      type: 'set_variable',
+      config: { operation: 'append', variable: 'rows', value: 'x' },
+    });
+    // The saved Set variable · Append writes exactly what the old type did.
+    expect(await appendsOf(latest.id, 'e2e 1600 c12a new')).toEqual([['add', 'rows', 'x']]);
 
     await expectQuiet(page, problems);
   });

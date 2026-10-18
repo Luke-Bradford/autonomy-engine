@@ -3088,7 +3088,7 @@ export function PipelinePanel({
                   <>
                     Named values a run holds from start to finish, read as{' '}
                     <code>{'${vars.name}'}</code>. Every run starts each one at its default; a Set
-                    variable or Append variable activity changes it.
+                    variable activity changes it.
                   </>
                 }
                 columns={VARIABLE_COLUMNS}
@@ -3632,9 +3632,12 @@ export function NodePanel({
   // name that is no longer declared (renamed or deleted on the Variables tab)
   // leaves the chooser on its placeholder, and the node's own issue list says
   // why.
+  // #1600 C12a — and a Set variable's chooser follows its Operation as drafted,
+  // so choosing Append narrows the list to arrays before Apply.
+  const draftOperation = editor.inputs['operation'];
   const variableChoices = useMemo(
-    () => variableWriteChoices(nodeType, docVariables),
-    [nodeType, docVariables],
+    () => variableWriteChoices(nodeType, draftOperation, docVariables),
+    [nodeType, draftOperation, docVariables],
   );
   const choicesFor = (fieldName: string): FieldChoices | undefined =>
     fieldName === 'variable' && variableChoices !== undefined

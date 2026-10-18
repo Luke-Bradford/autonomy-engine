@@ -33,7 +33,6 @@ import { GET_METADATA_ACTIVITY_TYPE } from '../catalog/types.js';
 import { activityNodeErrors } from './activity-config-check.js';
 import { MAX_CONFIG_DEPTH } from './limits.js';
 import {
-  APPEND_VARIABLE_ACTIVITY_TYPE,
   EXECUTE_PIPELINE_ACTIVITY_TYPE,
   FAIL_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
@@ -44,12 +43,13 @@ import {
   IF_BRANCH_TRUE,
   IF_BRANCH_FALSE,
   LLM_CALL_ACTIVITY_TYPE,
-  SET_VARIABLE_ACTIVITY_TYPE,
   SWITCH_ACTIVITY_TYPE,
   SWITCH_DEFAULT_BRANCH,
   WAIT_ACTIVITY_TYPE,
   WEB_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
+  isVariableWriterType,
+  variableWriteOp,
 } from '../catalog/types.js';
 import {
   findLlmMessagesRowIndex,
@@ -1339,6 +1339,12 @@ function validateVariableWriteConfig(
   variables: ReadonlyMap<string, VariableDef>,
   errors: string[],
 ): void {
+  // #1600 C12a — Set variable's Operation is a literal choice: it decides which
+  // event the write is and what the guard counts, so a `${}` cannot hold it.
+  const op = variableWriteOp(node);
+  if (op === undefined) {
+    errors.push(`node.${node.id}.operation: must be Set or Append ('set' or 'append')`);
+  }
   const name = node.config['variable'];
   let def: VariableDef | undefined;
   if (typeof name !== 'string' || name === '' || name.includes('${')) {
@@ -1350,10 +1356,10 @@ function validateVariableWriteConfig(
     def = variables.get(name);
     if (def === undefined) {
       errors.push(`node.${node.id}.variable: '${name}' is not a declared variable`);
-    } else if (node.type === APPEND_VARIABLE_ACTIVITY_TYPE && def.type !== 'array') {
+    } else if (op === 'append' && def.type !== 'array') {
       errors.push(
-        `node.${node.id}.variable: append_variable needs an array variable, but '${name}' ` +
-          `is ${articled(def.type)} — use set_variable`,
+        `node.${node.id}.variable: Append needs an array variable, but '${name}' ` +
+          `is ${articled(def.type)} — use Set`,
       );
       def = undefined;
     }
@@ -1366,7 +1372,7 @@ function validateVariableWriteConfig(
     );
     return;
   }
-  if (node.type !== SET_VARIABLE_ACTIVITY_TYPE || def === undefined) return;
+  if (op !== 'set' || def === undefined) return;
   const mode = variableValueMode(raw);
   // `whole` is typed by `scanVariableWriteValue`; an unterminated `${` by `scan`.
   if (mode === 'literal' || mode === 'interpolated') {
@@ -1388,7 +1394,7 @@ function validateVariableWriteConfig(
  * already walked the field.
  */
 function scanVariableWriteValue(node: Node, scope: ScanScope, errors: string[]): void {
-  if (node.type !== SET_VARIABLE_ACTIVITY_TYPE) return;
+  if (variableWriteOp(node) !== 'set') return;
   const name = node.config['variable'];
   const raw = node.config['value'];
   if (typeof name !== 'string' || typeof raw !== 'string') return;
@@ -2992,7 +2998,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     // #4 A7 — a `fail`'s `message` presence (save-time half).
     if (node.type === FAIL_ACTIVITY_TYPE) validateFailConfig(node, errors);
     // #844 V5 — a `set_variable`/`append_variable`'s variable + value (save-time half).
-    if (node.type === SET_VARIABLE_ACTIVITY_TYPE || node.type === APPEND_VARIABLE_ACTIVITY_TYPE) {
+    if (isVariableWriterType(node.type)) {
       validateVariableWriteConfig(node, variables, errors);
     }
     // #4 A8 — a `filter`'s `items`+`predicate` presence + whole-value shape.
@@ -5135,7 +5141,7 @@ function validateSecurePolicy(node: Node, errors: string[]): void {
   // #844 V5 (spec V-D4/V-D8) — a variable write lands in `RunState.variables`,
   // readable everywhere through `${vars}`, and its `variable.*` event is not
   // redacted, so a "secure" write would be a leak with a padlock on it.
-  if (node.type === SET_VARIABLE_ACTIVITY_TYPE || node.type === APPEND_VARIABLE_ACTIVITY_TYPE) {
+  if (isVariableWriterType(node.type)) {
     errors.push(
       `node '${node.id}': policy.${flags} is not supported on '${node.type}' — the value it ` +
         'writes is readable everywhere as ${vars.<name>} and is recorded in the run log',

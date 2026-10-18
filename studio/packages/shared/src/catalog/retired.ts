@@ -14,6 +14,7 @@ import {
   webConfigSchema,
 } from './web-config.js';
 import {
+  APPEND_VARIABLE_ACTIVITY_TYPE,
   COPY_FILES_ACTIVITY_TYPE,
   DELETE_ACTIVITY_TYPE,
   FILE_COPY_ACTIVITY_TYPE,
@@ -22,6 +23,7 @@ import {
   FILE_MOVE_ACTIVITY_TYPE,
   GET_METADATA_ACTIVITY_TYPE,
   HTTP_REQUEST_ACTIVITY_TYPE,
+  SET_VARIABLE_ACTIVITY_TYPE,
   WEB_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
 } from './types.js';
@@ -342,6 +344,32 @@ function lowerWebhook(node: Node): Node | undefined {
   return { ...node, type: WEB_ACTIVITY_TYPE, config };
 }
 
+/**
+ * #1600 OR41 C12a — `append_variable` → Set variable · Append (§4.7, §8). The
+ * same variable, value and write: the engine reads Operation Append exactly as
+ * it read `append_variable`, one `variable.append` per run of the node.
+ *
+ * Stays Append variable where Set variable would read it differently:
+ * - an `operation` key of its own: an append never read one, and on Set
+ *   variable it would decide the write;
+ * - a connection or any other binding (an append binds none, so it was inert);
+ * - a config the replacement's schema refuses (a structured `value`).
+ *
+ * Any other key is carried over, as in `lowerWebhook`.
+ */
+function lowerAppendVariable(node: Node): Node | undefined {
+  if (node.connectionId !== undefined || carriesUnlowerable(node)) return undefined;
+  const replacement = getActivity(SET_VARIABLE_ACTIVITY_TYPE);
+  if (replacement === undefined || Object.hasOwn(node.config, 'operation')) return undefined;
+  const config: Record<string, unknown> = {
+    // `fromEntries`, not assignment: an own `__proto__` key stays a key.
+    ...Object.fromEntries(Object.entries(jsonClone(node.config))),
+    operation: 'append',
+  };
+  if (!replacement.configSchema.safeParse(config).success) return undefined;
+  return { ...node, type: SET_VARIABLE_ACTIVITY_TYPE, config };
+}
+
 export const RETIRED_LOWERINGS: Readonly<Record<string, RetiredLowering>> = {
   [FILE_COPY_ACTIVITY_TYPE]: {
     to: COPY_FILES_ACTIVITY_TYPE,
@@ -375,6 +403,12 @@ export const RETIRED_LOWERINGS: Readonly<Record<string, RetiredLowering>> = {
     to: WEB_ACTIVITY_TYPE,
     outputs: {},
     lower: lowerWebhook,
+  },
+  // Neither writer has outputs: the write is read back as `${vars.<name>}`.
+  [APPEND_VARIABLE_ACTIVITY_TYPE]: {
+    to: SET_VARIABLE_ACTIVITY_TYPE,
+    outputs: {},
+    lower: lowerAppendVariable,
   },
 };
 

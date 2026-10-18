@@ -4,6 +4,7 @@ import { copyFilesConfigSchema } from '../copy-files-config.js';
 import { deleteConfigSchema } from '../delete-config.js';
 import { getMetadataConfigSchema } from '../get-metadata-config.js';
 import { getActivity } from '../registry.js';
+import { variableWriteOp } from '../types.js';
 import { RETIRED_LOWERINGS, lowerRetiredTypes, splitDestination } from '../retired.js';
 import {
   WEB_MAX_CALLBACK_TIMEOUT_SECONDS,
@@ -625,5 +626,62 @@ describe('#1600 C11c-2 — webhook → Web · Wait for callback, no Request URL'
       hook({ timeoutSeconds: `\${${WEB_MAX_CALLBACK_TIMEOUT_SECONDS}}` }),
     ]);
     expect(lowered!.type).toBe('web');
+  });
+});
+
+describe('#1600 C12a — append_variable → Set variable · Append', () => {
+  const appendNode = (
+    config: Record<string, unknown> = { variable: 'rows', value: '${item}' },
+    extra: Partial<Node> = {},
+  ) =>
+    ({
+      id: 'add',
+      type: 'append_variable',
+      config,
+      position: { x: 10, y: 20 },
+      description: 'collect',
+      ...extra,
+    }) as Node;
+
+  it('opens as a Set variable whose Operation is Append, everything else kept', () => {
+    const [lowered] = lowerNodes([appendNode()]);
+    expect(lowered).toEqual({
+      ...appendNode(),
+      type: 'set_variable',
+      config: { variable: 'rows', value: '${item}', operation: 'append' },
+    });
+    expect(variableWriteOp(lowered!)).toBe('append');
+    expect(getActivity('set_variable')!.configSchema.safeParse(lowered!.config).success).toBe(true);
+  });
+
+  it('carries an unknown key and a stored contract over', () => {
+    const [lowered] = lowerNodes([
+      appendNode({ variable: 'rows', value: 'x', outputs: [], note: 'kept' }),
+    ]);
+    expect(lowered!.config).toEqual({
+      variable: 'rows',
+      value: 'x',
+      outputs: [],
+      note: 'kept',
+      operation: 'append',
+    });
+  });
+
+  it.each([
+    [
+      'an Operation key of its own (an append never read one)',
+      { variable: 'rows', value: 'x', operation: 'set' },
+    ],
+    ['a structured value the replacement refuses', { variable: 'rows', value: 5 }],
+  ])('stays an Append variable with %s', (_why, config) => {
+    const node = appendNode(config);
+    expect(lowerNodes([node])[0]).toBe(node);
+  });
+
+  it('stays an Append variable with a connection or a call', () => {
+    const withConnection = appendNode(undefined, { connectionId: 'c1' });
+    expect(lowerNodes([withConnection])[0]).toBe(withConnection);
+    const withCall = appendNode(undefined, { call: { pipelineVersionId: 'pv' } } as Partial<Node>);
+    expect(lowerNodes([withCall])[0]).toBe(withCall);
   });
 });

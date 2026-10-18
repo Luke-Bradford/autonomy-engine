@@ -50,8 +50,19 @@ describe('set_variable / append_variable config rules', () => {
           set('d', 'list', '${createArray(1)}'),
           append('e', 'list', 'plain text'),
           append('f', 'list', '${params.x}'),
+          // #1600 C12a — Operation Append takes an untyped element, as append_variable does.
+          node('g', { variable: 'list', value: 'plain text', operation: 'append' }, 'set_variable'),
+          node('h', { variable: 'n', value: '5', operation: 'set' }, 'set_variable'),
         ],
-        [edge('a', 'b'), edge('b', 'c'), edge('c', 'd'), edge('d', 'e'), edge('e', 'f')],
+        [
+          edge('a', 'b'),
+          edge('b', 'c'),
+          edge('c', 'd'),
+          edge('d', 'e'),
+          edge('e', 'f'),
+          edge('f', 'g'),
+          edge('g', 'h'),
+        ],
       ),
     ).toEqual([]);
   });
@@ -60,7 +71,22 @@ describe('set_variable / append_variable config rules', () => {
     ['an undeclared variable', set('w', 'ghost', '1'), "'ghost' is not a declared variable"],
     ['a ${} variable name', set('w', '${params.x}', '1'), 'must be the literal name'],
     ['a missing variable', node('w', { value: '1' }, 'set_variable'), 'must be the literal name'],
-    ['append onto a non-array', append('w', 'n', '1'), 'append_variable needs an array variable'],
+    ['append onto a non-array', append('w', 'n', '1'), 'Append needs an array variable'],
+    [
+      'an Operation Append onto a non-array',
+      node('w', { variable: 'n', value: '1', operation: 'append' }, 'set_variable'),
+      'Append needs an array variable',
+    ],
+    [
+      'an unknown Operation',
+      node('w', { variable: 'n', value: '1', operation: 'prepend' }, 'set_variable'),
+      'node.w.operation: must be Set or Append',
+    ],
+    [
+      'a ${} Operation',
+      node('w', { variable: 'n', value: '1', operation: '${params.x}' }, 'set_variable'),
+      'node.w.operation: must be Set or Append',
+    ],
     ['a literal the coercion refuses', set('w', 'n', 'abc'), 'expected a finite number'],
     ['text around the braces for a number', set('w', 'n', 'n=${params.x}'), 'text around'],
     ['a literal for an array', set('w', 'list', '[1]'), 'not a literal'],
@@ -87,6 +113,7 @@ describe('set_variable / append_variable config rules', () => {
   it.each([
     ['secureInput', set('w', 'n', '1')],
     ['secureOutput', append('w', 'list', '1')],
+    ['secureInput', node('w', { variable: 'n', value: '1', operation: 'prepend' }, 'set_variable')],
   ])('refuses policy.%s on a variable write', (flag, n) => {
     const errs = validate([{ ...n, policy: { [flag]: true } }]);
     expect(errs.some((e) => e.includes(`policy.${flag} is not supported`))).toBe(true);

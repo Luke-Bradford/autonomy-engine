@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { literalText, presented, singleLine } from '../schemas/field-presentation.js';
+import { literalText, optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
 import { CallConfigSchema, type Node, type Output } from '../schemas/pipeline.js';
 import type { ActivityCatalog, ActivityCatalogEntry } from './types.js';
 import {
@@ -23,6 +23,7 @@ import {
   LLM_CALL_ACTIVITY_TYPE,
   LOOKUP_ACTIVITY_TYPE,
   SET_VARIABLE_ACTIVITY_TYPE,
+  SET_VARIABLE_OPERATIONS,
   SWITCH_ACTIVITY_TYPE,
   WAIT_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
@@ -106,6 +107,9 @@ export const httpRequestInputSchema = z.object({
   // caught rather than silently ignored.
   [HTTP_SECRET_HEADERS_FIELD]: httpSecretHeadersSchema,
 });
+
+/** #1600 C12a — Set variable's Operation field. */
+const setVariableOperationSchema = z.enum(SET_VARIABLE_OPERATIONS);
 
 const ENTRIES: ActivityCatalogEntry[] = [
   {
@@ -380,18 +384,33 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // `configSchema` is palette metadata; the save-time rules are `validateDoc`'s
     // `validateVariableWriteConfig` plus the guard. No outputs: the write IS the
     // result, read back as `${vars.<name>}`.
+    // #1600 OR41 C12a (catalogue §4.7) — Operation Set or Append: ADF's Append
+    // variable is this activity's second operation, and `append_variable` is
+    // lowered to it (`retired.ts`). Literal (an enum, so no dynamic content):
+    // it decides the event and what the determinism guard counts.
     type: SET_VARIABLE_ACTIVITY_TYPE,
     title: 'Set variable',
-    description: 'Set a pipeline variable to a value.',
+    description: 'Set a pipeline variable, or add a value to the end of an array variable.',
     kind: 'control',
     category: 'control',
-    tabs: [{ key: 'settings', fields: ['variable', 'value'] }],
+    // Operation last: it has a default, and a tab lists its required fields
+    // first (`activity-tabs.test.ts`).
+    tabs: [{ key: 'settings', fields: ['variable', 'value', 'operation'] }],
     idempotent: false,
     connectionKinds: [],
     outputs: [],
     configSchema: z.object({
+      operation: presented(setVariableOperationSchema.default('set'), {
+        title: 'Operation',
+        description:
+          'Set replaces the value. Append adds one value to the end of an array variable, as is, without converting it.',
+        options: optionTitles(setVariableOperationSchema, { set: 'Set', append: 'Append' }),
+      }),
       variable: presented(literalText(singleLine(z.string())).min(1), {
         title: 'Variable name',
+        // #1600 C12a — Append variable's help, which Set variable now needs too.
+        description:
+          "The name of a variable declared on the pipeline's Variables tab. Append needs an array variable.",
       }),
       value: presented(singleLine(z.string()), { title: 'Value' }),
     }),
@@ -401,6 +420,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // twin that appends ONE element to an `array` variable. The element is
     // untyped JSON, so it is not coerced: a literal appends a string, a
     // whole-value `${}` appends its native value.
+    // #1600 C12a — retired from the palette: Set variable · Append covers it,
+    // and a stored node opens as one (`retired.ts`). It still runs.
+    inPalette: false,
     type: APPEND_VARIABLE_ACTIVITY_TYPE,
     title: 'Append variable',
     description: 'Add a value to the end of an array variable.',

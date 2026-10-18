@@ -215,6 +215,39 @@ export const SET_VARIABLE_ACTIVITY_TYPE = 'set_variable';
 export const APPEND_VARIABLE_ACTIVITY_TYPE = 'append_variable';
 
 /**
+ * #1600 OR41 C12a — Set variable's Operation (catalogue §4.7): ADF's Set
+ * variable and Append variable as one activity. An absent `operation` is Set,
+ * so every `set_variable` saved before C12a keeps its meaning. `append_variable`
+ * is retired from the palette and lowered to Operation Append (`retired.ts`).
+ * C12b adds *Pipeline return value*.
+ */
+export const SET_VARIABLE_OPERATIONS = ['set', 'append'] as const;
+export type SetVariableOperation = (typeof SET_VARIABLE_OPERATIONS)[number];
+
+/**
+ * What a variable-writing node does: `set` or `append`, or `undefined` for a
+ * node that is not a writer or a `set_variable` whose `operation` is not one
+ * of `SET_VARIABLE_OPERATIONS` (the save gate refuses it, the run ends
+ * `invalid_event`). Whether a node IS a writer is the type alone
+ * (`isVariableWriterType`), so a bad operation is still checked as one.
+ */
+export function variableWriteOp(node: {
+  type: string;
+  config: Readonly<Record<string, unknown>>;
+}): SetVariableOperation | undefined {
+  if (node.type === APPEND_VARIABLE_ACTIVITY_TYPE) return 'append';
+  if (node.type !== SET_VARIABLE_ACTIVITY_TYPE) return undefined;
+  const op = Object.hasOwn(node.config, 'operation') ? node.config['operation'] : undefined;
+  if (op === undefined) return 'set';
+  return SET_VARIABLE_OPERATIONS.find((o) => o === op);
+}
+
+/** A `set_variable`/`append_variable` node type: the variable writers. */
+export function isVariableWriterType(type: string): boolean {
+  return type === SET_VARIABLE_ACTIVITY_TYPE || type === APPEND_VARIABLE_ACTIVITY_TYPE;
+}
+
+/**
  * The `Node.type` of the `switch` control activity (#4 A2). Same constant-SSOT
  * rationale as `IF_ACTIVITY_TYPE`: a typed identifier read STRUCTURALLY in the
  * same three sites that must agree — the reducer's control-dispatch discriminant

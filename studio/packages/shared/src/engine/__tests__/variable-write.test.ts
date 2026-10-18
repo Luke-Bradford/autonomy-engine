@@ -120,6 +120,61 @@ describe('append_variable appends ONE element to the current array', () => {
   });
 });
 
+describe('#1600 C12a — a Set variable with Operation Append is an append', () => {
+  const setAppend = (id: string, variable: string, value: string): Node =>
+    node(id, { variable, value, operation: 'append' }, 'set_variable');
+
+  it('appends one element, records variable.append, and folds exactly as append_variable does', () => {
+    const lowered = driveRun(
+      eng([setAppend('a', 'list', 'x'), setAppend('b', 'list', '${params.k}')], [edge('a', 'b')]),
+      { params: { k: 7 }, resolve: simpleResolve() },
+    );
+    const stored = driveRun(
+      eng([append('a', 'list', 'x'), append('b', 'list', '${params.k}')], [edge('a', 'b')]),
+      { params: { k: 7 }, resolve: simpleResolve() },
+    );
+    expect(lowered.state.variables['list']).toEqual(['x', 7]);
+    expect(lowered.log).toEqual(stored.log);
+    expect(lowered.finish?.outcome).toBe('success');
+  });
+
+  it('an explicit Operation Set is a set', () => {
+    const { state } = driveRun(
+      eng([node('w', { variable: 'n', value: '5', operation: 'set' }, 'set_variable')]),
+      {
+        resolve: simpleResolve(),
+      },
+    );
+    expect(state.variables['n']).toBe(5);
+  });
+
+  it('an unknown Operation ends the run invalid_event, never a guessed write', () => {
+    const { state, finish } = driveRun(
+      eng([node('w', { variable: 'list', value: 'x', operation: 'prepend' }, 'set_variable')]),
+      { resolve: simpleResolve() },
+    );
+    expect(finish).toMatchObject({ outcome: 'failure', reason: 'invalid_event' });
+    expect(state.variables['list']).toEqual([]);
+  });
+
+  it('the fold refuses a variable.set for an Append node', () => {
+    const e = eng([setAppend('w', 'list', 'x')]);
+    const ready = e.reduce(e.seedState(), started()).state;
+    const r = e.reduce(ready, {
+      type: 'variable.set',
+      runId: RUN,
+      nodeId: 'w',
+      attemptId: 'w#0',
+      name: 'list',
+      value: ['x'],
+    });
+    expect(r.commands).toEqual([
+      { type: 'finishRun', outcome: 'failure', reason: 'invalid_event' },
+    ]);
+    expect(r.state.variables['list']).toEqual([]);
+  });
+});
+
 describe('a value that cannot be WRITTEN fails the node permanently; one that cannot be EVALUATED fails the run', () => {
   it('a whole-value of the wrong type is a type mismatch, handled by a failure edge', () => {
     const e = eng(
@@ -285,6 +340,22 @@ describe('crash resume re-runs the SAME evaluation and checks', () => {
       value: 4,
     });
     expect(commands.some((c) => c.type === 'dispatchNode')).toBe(false);
+  });
+
+  it('#1600 C12a — re-emits a Set variable · Append as an append', () => {
+    const e = eng([
+      node('w', { variable: 'list', value: '${params.x}', operation: 'append' }, 'set_variable'),
+    ]);
+    const projected = e.projectRunState([started({ x: 4 })]);
+    expect(projected.nodes.w!.status).toBe('ready');
+    expect(e.resume(projected).commands).toContainEqual<EngineCommand>({
+      type: 'writeVariable',
+      nodeId: 'w',
+      attemptId: 'w#0',
+      op: 'append',
+      name: 'list',
+      value: 4,
+    });
   });
 
   it('routes a value that fails its check to failNode, never a blind write', () => {

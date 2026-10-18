@@ -596,6 +596,16 @@ Sources: [Set variable](https://learn.microsoft.com/azure/data-factory/control-f
 - **Variable** `[▾ declared variables]` (literal, with ＋ New variable).
 - **Value** ⓕ.
 
+**How C12a built it** (Set and Append; Pipeline return value is C12b):
+- `set_variable` gained `operation` (`set` · `append`, `SET_VARIABLE_OPERATIONS`). An absent key is Set, so every Set variable saved before C12a keeps its meaning and its content hash. The dock's empty choice reads *Set (default)* and writes nothing. It is the tab's last field, after Variable and Value, where ADF puts the variable type first: a tab lists its required fields before its defaulted ones. It is a literal enum with no dynamic content, because it decides which event the write is (`variable.set` or `variable.append`) and what the determinism guard counts.
+- One reading of a node's operation, `variableWriteOp`, used by the reducer (the write, its fold check and crash resume), the save rules, the dock's chooser and the card summary. Whether a node is a writer at all stays its type (`isVariableWriterType`), so a `set_variable` with an unknown operation is still checked as one: refused at save (`node.<id>.operation: must be Set or Append`), and a run of an older stored version that holds one ends `invalid_event` rather than guessing a write.
+- Append behaves exactly as `append_variable` did: an untyped element, never coerced, an array variable only. The fold takes only `variable.append` for an Append node and only `variable.set` for a Set one.
+- `append_variable` → Set variable · Append (§8), lowered in the editor only, as in C1b. It stays Append variable where it carries an `operation` key of its own (it never read one, and on Set variable it would decide the write), a connection or binding, or a config Set variable's schema refuses. Append variable left the palette and still runs.
+- The variable chooser follows the Operation as drafted, so choosing Append narrows it to array variables before Apply.
+- An `operation` key on a `set_variable` saved before C12a was never read (the save gate does not refuse an unknown config key, and nothing in studio wrote one), and is now. No stored version carries one: the operator's live store held 12 versions on 2026-10-18 and none had the key. A hand-written one would now decide the write, which is the price of reusing ADF's name.
+- Not built here: ＋ New variable in the chooser (variables are declared on the pipeline's Variables tab, as before) and the one-click *Convert*, which is C13's.
+- `CATALOG_VERSION` 54→55: a build before C12a ignores `operation`, so a Set variable · Append would replace the array.
+
 ### 4.8 Unchanged except as noted
 
 | Activity | Change |
@@ -665,7 +675,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C9 | Delete: wildcard, folders, dates, log. Lower file_delete. Split: **C9a** the `delete` type on a file system connection, with path type, wildcard, Include subfolders, modified window, Max concurrent deletes, Fail if nothing matched and Delete empty folders, on Get metadata's walk (built); **C9b** the `file_delete` lowering (Path type File, Fail if nothing matched on, `path` kept), Delete file retired from the palette (built); **C9c** the session log and `logPath` (a new output, so a `formerOutputs` snapshot and a version bump), shared with Copy's (built) | OR17 #1408 |
 | C10 | Script activity | OR12 #1403, OR15 sql_script |
 | C11 | Web: fail-on-error, response cap, parse, retry-after, wait-for-callback. Lower http_request and webhook. Split: **C11a** the `web` type, its Request, Auth and Settings tabs, and the redirect walk that keeps secret headers on their origin (built); **C11b** the `http_request` lowering (Fail on HTTP error off, Parse as Text, method upper-cased) and HTTP request retired from the palette (built); **C11c-1** Wait for callback with a URL (built); **C11c-2** a Web with no URL, the `webhook` lowering and Webhook retired from the palette (built) | — |
-| C12 | Set variable operations + pipeline return value. Lower append_variable | OR34 outputs |
+| C12 | Set variable operations + pipeline return value. Lower append_variable. Split: **C12a** Operation Set · Append, the `append_variable` lowering and Append variable retired from the palette (built); **C12b** Pipeline return value, read by the parent as `output.pipelineReturnValue.<key>`, with OR34 #1483's pipeline outputs | OR34 outputs |
 | C13 | Palette regroup (§2), retire the remaining old types from the palette (C1b retired Copy file and Move file), `CATALOG_VERSION` bump, the migration guarantees in §8. `file_read` is NOT retired: since C7b it is Lookup's *Whole file as text* mode, so it is never refused, converted or listed as retired | — |
 
 **Order:** C0, then C1 (the operator's "copy and copy file" complaint), C7, C8, C9 (cheap consolidations), C11, C12, then C2–C6 as their dependencies (OR10, OR14) land, then C10 and C13. C13 can only land once every retired type has a lowering.
@@ -687,7 +697,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
   | `lookup` | Lookup · not first-row-only, so today's `rows` shape is kept |
   | `http_request` | Web · Fail on HTTP error **off**, Parse as Text, Max size 10 MiB, so today's behaviour is kept (C11b) |
   | `webhook` | Web · Wait for callback, no URL, when it declares no outputs (C11c-2) |
-  | `append_variable` | Set variable · Append |
+  | `append_variable` | Set variable · Append (C12a) |
 
   The saved document is not rewritten until the author saves it again. Old versions keep running and replay identically, because a version is immutable and binds the type it holds.
 

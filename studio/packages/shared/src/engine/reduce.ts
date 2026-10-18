@@ -28,7 +28,6 @@ import {
 } from './types.js';
 import { resolveUserProperties } from './user-properties.js';
 import {
-  APPEND_VARIABLE_ACTIVITY_TYPE,
   FAIL_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
   FILTER_RESULT_OUTPUT,
@@ -36,12 +35,13 @@ import {
   IF_BRANCH_TRUE,
   IF_BRANCH_FALSE,
   LLM_CALL_ACTIVITY_TYPE,
-  SET_VARIABLE_ACTIVITY_TYPE,
   SWITCH_ACTIVITY_TYPE,
   SWITCH_DEFAULT_BRANCH,
   WAIT_ACTIVITY_TYPE,
   WEB_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
+  isVariableWriterType,
+  variableWriteOp,
 } from '../catalog/types.js';
 import {
   WEB_MAX_CALLBACK_TIMEOUT_SECONDS,
@@ -641,14 +641,18 @@ export function createEngine(doc: EngineDoc): Engine {
     sid: string,
     attemptId: string,
   ): EngineCommand {
-    const op = node.type === SET_VARIABLE_ACTIVITY_TYPE ? 'set' : 'append';
+    // #1600 C12a — a `set_variable`'s Operation, or `append_variable`'s append.
+    const op = variableWriteOp(node);
+    if (op === undefined) {
+      throw new SubstituteError(`'${node.type}' node has an unknown operation`);
+    }
     const name = node.config['variable'];
     const def = typeof name === 'string' ? variableDefByName.get(name) : undefined;
     if (typeof name !== 'string' || def === undefined) {
       throw new SubstituteError(`'${node.type}' node names no declared variable`);
     }
     if (op === 'append' && def.type !== 'array') {
-      throw new SubstituteError(`append_variable targets '${name}', which is not an array`);
+      throw new SubstituteError(`an Append targets '${name}', which is not an array`);
     }
     const raw = node.config['value'];
     if (typeof raw !== 'string') {
@@ -1882,7 +1886,7 @@ export function createEngine(doc: EngineDoc): Engine {
       });
       return { state: next, changed: true };
     }
-    if (node.type === SET_VARIABLE_ACTIVITY_TYPE || node.type === APPEND_VARIABLE_ACTIVITY_TYPE) {
+    if (isVariableWriterType(node.type)) {
       // #844 V5 (spec V-D4) — a `control` variable write is ENGINE-evaluated like
       // `fail`/`filter` (checked here, before `node.call` and dispatch): evaluate
       // and check the value PURELY, hold the node `ready` (the driver owes
@@ -3975,8 +3979,11 @@ export function createEngine(doc: EngineDoc): Engine {
       }
       const op = event.type === 'variable.set' ? 'set' : 'append';
       const node = docNodeFor(event.nodeId);
-      const expected = op === 'set' ? SET_VARIABLE_ACTIVITY_TYPE : APPEND_VARIABLE_ACTIVITY_TYPE;
-      if (node?.type !== expected) return invalid(`it is not a ${expected} node`);
+      // #1600 C12a — the node's own operation, so a Set variable · Append takes
+      // only `variable.append`, as `append_variable` does.
+      if (node === undefined || variableWriteOp(node) !== op) {
+        return invalid(`it is not a variable writer whose operation is ${op}`);
+      }
       if (node.config['variable'] !== event.name) {
         return invalid(`it writes '${String(node.config['variable'])}', not '${event.name}'`);
       }
@@ -5080,10 +5087,7 @@ export function createEngine(doc: EngineDoc): Engine {
           });
           continue;
         }
-        if (
-          node.type === SET_VARIABLE_ACTIVITY_TYPE ||
-          node.type === APPEND_VARIABLE_ACTIVITY_TYPE
-        ) {
+        if (isVariableWriterType(node.type)) {
           // #844 V5 crash recovery (spec V-D4): the node folded `ready` after
           // `tryDispatchNode` pushed its command, and a crash lost it. Re-run the
           // SAME evaluation and checks through `variableWriteCommand` — never a
