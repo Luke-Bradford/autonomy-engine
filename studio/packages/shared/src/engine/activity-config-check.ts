@@ -2,7 +2,7 @@
  * #1480 — the save-time half of each activity's dispatch-time config parse.
  *
  * Until this existed a version could save with a `type` no adapter knows, or a
- * config the adapter refuses (`copy` with `mode: 'truncate'`), and fail only
+ * config the adapter refuses (`copy` with `mode: 'merge'`), and fail only
  * when a run dispatched it — inside a version that is IMMUTABLE, so it could be
  * re-authored but never repaired, and that triggers and Execute pipeline could
  * already be bound to. A version that saves must be one the run will accept.

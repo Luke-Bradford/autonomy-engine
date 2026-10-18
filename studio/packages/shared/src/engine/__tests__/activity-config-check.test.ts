@@ -65,7 +65,7 @@ describe('activityNodeErrors (#1480)', () => {
   });
 
   it('refuses a bad enum literal with the field path', () => {
-    const errors = activityNodeErrors(node('copy', { ...goodCopy, mode: 'truncate' }));
+    const errors = activityNodeErrors(node('copy', { ...goodCopy, mode: 'merge' }));
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatch(/^node 'n1': config\.mode: /);
   });
@@ -212,7 +212,7 @@ describe('validatePipelineDoc carries the check (#1480)', () => {
       containers: [],
       nodes: [
         node('sql_execute', {}),
-        { ...node('copy', { ...goodCopy, mode: 'truncate' }), id: 'c' },
+        { ...node('copy', { ...goodCopy, mode: 'merge' }), id: 'c' },
       ],
     };
     const issues = validatePipelineDoc(doc);

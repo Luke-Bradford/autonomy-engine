@@ -178,7 +178,7 @@ test.describe('#959 portability', () => {
       data: { versions: { nodes: { config: { mode: string } }[] }[] };
     };
     expect(envelope.data.versions).toHaveLength(2);
-    envelope.data.versions[0]!.nodes[0]!.config.mode = 'truncate'; // history, not the head
+    envelope.data.versions[0]!.nodes[0]!.config.mode = 'merge'; // history, not the head
 
     await gotoPipelines(page);
     await (await openImportDrawer(page)).getByLabel('Export file').setInputFiles({

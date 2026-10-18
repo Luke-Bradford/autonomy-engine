@@ -141,7 +141,7 @@ describe('portability routes (export + import)', () => {
         await app.inject({ method: 'GET', url: `/api/pipelines/${pipeline.id}/export` })
       ).json();
       envelope.data.pipeline.name = 'Copier (imported)';
-      envelope.data.versions[0].nodes[0].config.mode = 'truncate'; // the hand-edit
+      envelope.data.versions[0].nodes[0].config.mode = 'merge'; // the hand-edit
 
       const before = (await app.inject({ method: 'GET', url: '/api/pipelines' })).json().length;
       const importRes = await app.inject({ method: 'POST', url: '/api/import', payload: envelope });
