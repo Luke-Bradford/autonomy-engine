@@ -18,6 +18,7 @@ import {
 import { classifySinkFailure } from './error-kind.js';
 import { yieldToEventLoop } from './scheduling.js';
 import { quoteIdentifier } from './sql-identifier.js';
+import { autoCreateTableSql, type AutoCreateColumn } from './auto-create-table.js';
 // #1196 — the mapped→actual resolver moved to a leaf when postgres became the
 // second sink; the matching rule is not store-specific.
 import {
@@ -83,6 +84,9 @@ export interface SqliteDatasetWrite {
   /** #1600 OR41 C3b — the Pre-copy script, run once inside the write
    * transaction before the first row. Absent or `null` runs none. */
   readonly preCopyScript?: PreCopyScript | null;
+  /** #1600 OR41 C3c — Auto-create from mapping: the columns to create the
+   * table with when it does not exist. Absent or `null` creates nothing. */
+  readonly autoCreate?: readonly AutoCreateColumn[] | null;
   /** Honoured at BATCH BOUNDARIES (§10) — a run cancel rolls the copy back. */
   readonly signal?: AbortSignal;
   /**
@@ -504,6 +508,22 @@ export async function writeSqliteDatasetRows(
       // `ALTER TABLE` between describing the sink and the first insert would be
       // a live TOCTOU on exactly the check that exists to prevent it.
       db.exec('begin immediate');
+
+      // #1600 OR41 C3c — under the write lock, so no other copy can create it
+      // between the check and the create, and inside the transaction, so a
+      // failed copy undoes it. BEFORE the Pre-copy script, which may alter the
+      // new table, and before the describe, which then finds it.
+      if (write.autoCreate != null) {
+        db.exec(
+          autoCreateTableSql(
+            'sqlite',
+            target.schema === 'main'
+              ? quoteIdentifier(target.table, 'table')
+              : `${quoteIdentifier(target.schema, 'schema')}.${quoteIdentifier(target.table, 'table')}`,
+            write.autoCreate,
+          ),
+        );
+      }
 
       // #1600 OR41 C3b — under the write lock and BEFORE the describe, so a
       // script that alters the table is described as it now is, and inside the

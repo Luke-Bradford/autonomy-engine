@@ -479,9 +479,12 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
     })
     .superRefine((cfg, ctx) => {
       if (cfg.tableOption === 'autoCreate') {
-        const sinks = (cfg.mapping as readonly { sink?: unknown }[]).flatMap((row) =>
-          typeof row.sink === 'string' ? [row.sink] : [],
-        );
+        // `mapping` is the variant's own schema here, so it is read untyped.
+        const rows: unknown = (cfg as { mapping?: unknown }).mapping;
+        const sinks = (Array.isArray(rows) ? rows : []).flatMap((row: unknown) => {
+          const sink = (row as { sink?: unknown } | null)?.sink;
+          return typeof sink === 'string' ? [sink] : [];
+        });
         const collision = autoCreateCollisionIssue(sinks);
         if (collision !== null) {
           ctx.addIssue({ code: 'custom', path: ['tableOption'], message: collision });
