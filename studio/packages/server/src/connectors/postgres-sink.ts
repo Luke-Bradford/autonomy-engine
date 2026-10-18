@@ -1,6 +1,7 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
   COPY_WRITE_MODES,
+  DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS,
   datasetConfigSchema,
   formatZodIssues,
   postgresConnectionConfigSchema,
@@ -557,6 +558,7 @@ async function autoCreatePostgresTable(
   columns: readonly AutoCreateColumn[],
   signal: AbortSignal | undefined,
   held: { key: string | null },
+  waitMs: number,
 ): Promise<void> {
   // Built first, so a refusal (a case collision, a name over 63 characters)
   // runs no statement.
@@ -569,7 +571,8 @@ async function autoCreatePostgresTable(
     columns,
   );
   // `null` when no `search_path` schema exists; the CREATE then fails with the
-  // server's own words, so the key only has to be stable.
+  // server's own words, so the key only has to be stable. Every such copy then
+  // shares the `''` key, which serialises only copies that are about to fail.
   const schema =
     target.schema ??
     String(
@@ -579,6 +582,10 @@ async function autoCreatePostgresTable(
       )?.schema ?? '',
     );
   const key = autoCreateLockKey(schema, target.table);
+  // Bounded like the statement it stands in for: the LOCK TABLE after it would
+  // wait at most the session's statement timeout, so this wait does too, signal
+  // or no signal. Permanent, as a statement timeout on a write is (57014).
+  const deadline = Date.now() + waitMs;
   for (;;) {
     const locked = (
       (await client.query('select pg_try_advisory_lock($1::bigint) as "locked"', [key])).rows[0] as
@@ -589,6 +596,12 @@ async function autoCreatePostgresTable(
       break;
     }
     if (signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
+    if (Date.now() >= deadline) {
+      throw new DatasetIoError(
+        'permanent',
+        `Auto-create waited ${waitMs}ms for another copy creating '${target.schema === undefined ? target.table : `${target.schema}.${target.table}`}', and it is still running`,
+      );
+    }
     // Tied to the signal, so a cancel ends the pause at once rather than up to
     // one poll later; the rejection it then raises is the cancel, checked below.
     await sleep(AUTO_CREATE_LOCK_POLL_MS, undefined, signal === undefined ? {} : { signal }).catch(
@@ -730,6 +743,7 @@ export async function writePostgresDatasetRows(
           write.autoCreate,
           write.signal,
           autoCreateLock,
+          cfg.data.statementTimeoutMs ?? DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS,
         );
         if (write.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
       }

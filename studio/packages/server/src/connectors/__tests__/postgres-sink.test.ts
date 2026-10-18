@@ -1096,6 +1096,27 @@ describe('the postgres sink: Auto-create from mapping (C3c)', () => {
     expect(sqlOf(rec).at(-1)).toBe('ROLLBACK');
   });
 
+  it('stops waiting at the statement timeout with no signal, as the LOCK it precedes would', async () => {
+    const { rec, factory } = sinkFactory({ locks: Array<boolean>(50).fill(false) });
+    const err = await writePostgresDatasetRows(
+      write({
+        createClient: factory,
+        connectionConfig: { ...SINK_CONFIG, statementTimeoutMs: 250 },
+        autoCreate: COLUMNS,
+      }),
+      batchesOf([{ a: 1, b: 2 }]),
+    ).catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      kind: 'permanent',
+      message:
+        "Auto-create waited 250ms for another copy creating 'public.tgt', and it is still running",
+    });
+    const tries = sqlOf(rec).filter((q) => q === TRY_LOCK).length;
+    expect(tries).toBeGreaterThan(1);
+    expect(tries).toBeLessThan(50);
+    expect(sqlOf(rec).at(-1)).toBe('ROLLBACK');
+  });
+
   it('rolls the create back on a cancel that lands while it runs', async () => {
     const controller = new AbortController();
     const { rec, factory } = sinkFactory({
