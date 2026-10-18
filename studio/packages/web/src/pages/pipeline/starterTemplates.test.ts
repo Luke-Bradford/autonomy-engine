@@ -4,7 +4,7 @@ import {
   COPY_ACTIVITY_TYPE,
   EdgeSchema,
   GET_METADATA_ACTIVITY_TYPE,
-  HTTP_REQUEST_ACTIVITY_TYPE,
+  WEB_ACTIVITY_TYPE,
   getActivity,
   lowerPipelineNodes,
   StrictNodeSchema,
@@ -21,7 +21,7 @@ import { STARTER_TEMPLATES, type StarterTemplate } from './starterTemplates';
  */
 const OPERATOR_FIELDS: Readonly<Record<string, Record<string, unknown>>> = {
   [GET_METADATA_ACTIVITY_TYPE]: { path: 'inbox' },
-  [HTTP_REQUEST_ACTIVITY_TYPE]: { url: 'https://example.test/status' },
+  [WEB_ACTIVITY_TYPE]: { url: 'https://example.test/status' },
 };
 
 /**

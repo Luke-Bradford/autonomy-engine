@@ -960,10 +960,17 @@ describe('canvasStore — loadVersion lowers legacy node contracts (#526 / F13b)
     const s = createCanvasStore();
     s.getState().loadVersion(version());
     const [a] = s.getState().nodes;
-    expect(a!.config['outputs']).toEqual([
-      { name: 'status', type: 'number' },
-      { name: 'body', type: 'string' },
-      { name: 'headers', type: 'json' },
+    // The fixture's stored HTTP request opens as Web (#1600 C11b), whose
+    // contract is the one seeded.
+    expect(a!.type).toBe('web');
+    expect((a!.config['outputs'] as { name: string }[]).map((o) => o.name)).toEqual([
+      'status',
+      'headers',
+      'body',
+      'bytes',
+      'durationMs',
+      'truncated',
+      'callback',
     ]);
   });
 

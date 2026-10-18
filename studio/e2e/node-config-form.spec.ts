@@ -50,16 +50,18 @@ test.describe('U7 — per-activity node config form', () => {
   test('a setting typed into a derived control SURVIVES a save and reload', async ({ page }) => {
     const problems = collectPageProblems(page);
     const id = await openSeededCanvas(page, 'u7 round trip', {
-      nodes: [{ id: 'a', type: 'http_request', position: { x: 0, y: 0 }, config: {} }],
+      nodes: [{ id: 'a', type: 'web', position: { x: 0, y: 0 }, config: {} }],
     });
 
     await canvasNodes(page).first().click();
 
     // The hole this ticket closes: the settings are NAMED on screen. `url` and
     // `method` are not strings this spec invented — they are the keys of
-    // `http_request`'s own `configSchema`, so a control per key is the assertion.
+    // `web`'s own `configSchema`, so a control per key is the assertion.
     await expect(properties(page).getByRole('textbox', { name: 'Request URL' })).toBeVisible();
-    await expect(properties(page).getByRole('textbox', { name: 'HTTP method' })).toBeVisible();
+    await expect(
+      properties(page).getByRole('combobox', { name: 'Method', exact: true }),
+    ).toBeVisible();
     // And the blob editor an author used to have to understand is not the
     // default surface any more.
     await expect(properties(page).getByLabel('Config (JSON)')).toHaveCount(0);
@@ -67,7 +69,9 @@ test.describe('U7 — per-activity node config form', () => {
     await properties(page)
       .getByRole('textbox', { name: 'Request URL' })
       .fill('https://example.test/hook');
-    await properties(page).getByRole('textbox', { name: 'HTTP method' }).fill('POST');
+    await properties(page)
+      .getByRole('combobox', { name: 'Method', exact: true })
+      .selectOption('POST');
     await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -82,9 +86,9 @@ test.describe('U7 — per-activity node config form', () => {
     await expect(properties(page).getByRole('textbox', { name: 'Request URL' })).toHaveValue(
       'https://example.test/hook',
     );
-    await expect(properties(page).getByRole('textbox', { name: 'HTTP method' })).toHaveValue(
-      'POST',
-    );
+    await expect(
+      properties(page).getByRole('combobox', { name: 'Method', exact: true }),
+    ).toHaveValue('POST');
     expect(await persistedConfig(page, id)).toMatchObject({
       url: 'https://example.test/hook',
       method: 'POST',
@@ -163,7 +167,8 @@ test.describe('U7 — per-activity node config form', () => {
     });
     await canvasNodes(page).first().click();
     const tabs = properties(page).getByRole('tablist', { name: 'Activity properties' });
-    await expectTabNames(tabs, ['General', 'Request', 'Auth']);
+    // The seeded HTTP request opens as Web (#1600 C11b), which adds Settings.
+    await expectTabNames(tabs, ['General', 'Request', 'Auth', 'Settings']);
     const request = properties(page).getByRole('tabpanel', { name: 'Request' });
     await expect(request).toBeVisible();
     await expect(request.getByRole('combobox', { name: 'Connection' })).toBeVisible();
@@ -310,7 +315,10 @@ test.describe('U7 — per-activity node config form', () => {
       nodes: [
         {
           id: 'a',
-          type: 'http_request',
+          // Web, not HTTP request: a stored HTTP request opens as Web with
+          // Web's contract (#1600 C11b), which is the lowering, not the apply
+          // path this spec is about.
+          type: 'web',
           position: { x: 0, y: 0 },
           config: {
             url: 'https://before',

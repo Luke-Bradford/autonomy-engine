@@ -1,11 +1,17 @@
 import type { Container, Node } from '../schemas/pipeline.js';
 import { protectEscapes, scanTemplateRefs } from '../engine/expr.js';
+import { jsonClone } from '../engine/json-clone.js';
 import { renameNodeOutputRefs } from '../engine/nodeRefs.js';
 import { copyFilesConfigSchema } from './copy-files-config.js';
 import { deleteConfigSchema } from './delete-config.js';
 import { getMetadataConfigSchema } from './get-metadata-config.js';
 import { catalogOutputs } from './lower.js';
-import { getActivity } from './registry.js';
+import { getActivity, httpRequestInputSchema } from './registry.js';
+import {
+  HTTP_SECRET_HEADERS_FIELD,
+  WEB_MAX_RESPONSE_BYTES,
+  webConfigSchema,
+} from './web-config.js';
 import {
   COPY_FILES_ACTIVITY_TYPE,
   DELETE_ACTIVITY_TYPE,
@@ -14,6 +20,8 @@ import {
   FILE_LIST_ACTIVITY_TYPE,
   FILE_MOVE_ACTIVITY_TYPE,
   GET_METADATA_ACTIVITY_TYPE,
+  HTTP_REQUEST_ACTIVITY_TYPE,
+  WEB_ACTIVITY_TYPE,
 } from './types.js';
 
 /**
@@ -42,7 +50,8 @@ import {
  * A node is lowered only when the lowering is faithful. Otherwise it is
  * returned unchanged, still a valid runnable node of its retired type:
  * - it carries something a paired node refuses (`connectionParams`,
- *   `connectionIds`, datasets, a call);
+ *   `connectionIds`, datasets, a call). #1600 C11b — Web is a single-connection
+ *   node, as `http_request` is, so it keeps `connectionParams`;
  * - its destination splits in a way only the run could judge (`splitDestination`);
  * - the lowered config does not pass its replacement's schema (a half-filled node);
  * - #1600 C8b — an output it renames (`entries` → `childItems`) is read
@@ -103,14 +112,17 @@ export function splitDestination(
   return { folder: folder === '' ? '/' : folder, name: unprotect(s.slice(cut + 1)) };
 }
 
-/** Anything a single-connection replacement would refuse or a lowering would drop. */
-const carriesUnlowerable = (node: Node) =>
-  node.connectionParams !== undefined ||
+/** Anything a lowering would drop: paired connections, datasets, a call. */
+const carriesPairedOrData = (node: Node) =>
   node.connectionIds !== undefined ||
   node.datasetIds !== undefined ||
   node.datasetParams !== undefined ||
   node.inlineDatasets !== undefined ||
   node.call !== undefined;
+
+/** Anything a single-connection replacement would refuse or a lowering would drop. */
+const carriesUnlowerable = (node: Node) =>
+  node.connectionParams !== undefined || carriesPairedOrData(node);
 
 /** `file_copy` and `file_move` → Copy · Files as-is, one file, After copy Keep or Delete source. */
 function lowerFileTransfer(afterCopy: 'keep' | 'delete') {
@@ -199,6 +211,90 @@ const lowerFileDelete = lowerPathNode(DELETE_ACTIVITY_TYPE, deleteConfigSchema, 
   failIfNothingMatched: true,
 }));
 
+/** HTTP request's methods that send no body: it fails such a node that carries one. */
+const BODILESS_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD']);
+
+/** The config keys HTTP request reads, from the schema its arm parses, and its contract. */
+const HTTP_REQUEST_KEYS: ReadonlySet<string> = new Set([
+  ...Object.keys(httpRequestInputSchema.shape),
+  'outputs',
+]);
+
+/**
+ * #1600 C11b — `http_request` → Web on the same connection, with Fail on HTTP
+ * error off (a 4xx or 5xx still succeeds, read from `status`) and Parse as Text
+ * (`body` stays the string it was), §8. Max size is the connections' read
+ * ceiling, the closest to HTTP request's unbounded read: ADF's 4 MiB default is
+ * a new node's. The method is upper-cased, as Web offers only the six upper-case
+ * names. The run differences are in the catalogue's §4.6.
+ *
+ * Stays HTTP request where Web would change the result:
+ * - a method outside Web's six, or an expression (only the run knows it);
+ * - a body on GET or HEAD, even an empty one: HTTP request fails that node at
+ *   every run, where Web sends `''` as no body and succeeds;
+ * - a contract (`config.outputs`) that is not a list, or that declares an
+ *   output Web lacks or types narrower (the lowered node takes Web's contract,
+ *   so a reader of that output would no longer resolve or type);
+ * - a key that is one of Web's own settings, which HTTP request never read
+ *   (`parseAs`, `successStatusCodes`): Web would act on it;
+ * - a config Web's schema refuses (no URL, a header that is not a string).
+ *
+ * Any other key is carried over as it is, as the config form keeps a key it
+ * has no control for: an API-authored or imported doc may hold one this build
+ * does not know. The config is cloned, so the lowered node shares no object
+ * with the stored one.
+ */
+function lowerHttpRequest(node: Node): Node | undefined {
+  // Not `carriesUnlowerable`: Web binds one connection, so `connectionParams`
+  // apply to it exactly as they did to HTTP request.
+  if (carriesPairedOrData(node)) return undefined;
+  const replacement = getActivity(WEB_ACTIVITY_TYPE);
+  if (replacement === undefined) return undefined;
+  const stored = jsonClone(node.config);
+  const { url, method, headers, body, outputs } = stored;
+  if (outputs !== undefined && !keepsWebContract(outputs, replacement.outputs)) return undefined;
+  const unknown = Object.entries(stored).filter(([key]) => !HTTP_REQUEST_KEYS.has(key));
+  if (unknown.some(([key]) => Object.hasOwn(webConfigSchema.shape, key))) return undefined;
+  if (method !== undefined && typeof method !== 'string') return undefined;
+  const upper = method === undefined ? 'GET' : method.toUpperCase();
+  if (BODILESS_METHODS.has(upper) && body !== undefined) return undefined;
+  const secretHeaders = stored[HTTP_SECRET_HEADERS_FIELD];
+  const config: Record<string, unknown> = {
+    // `fromEntries`, not assignment: an own `__proto__` key stays a key.
+    ...Object.fromEntries(unknown),
+    url,
+    method: upper,
+    ...(headers === undefined ? {} : { headers }),
+    ...(body === undefined ? {} : { body }),
+    ...(secretHeaders === undefined ? {} : { [HTTP_SECRET_HEADERS_FIELD]: secretHeaders }),
+    failOnHttpError: false,
+    parseAs: 'text',
+    maxResponseBytes: WEB_MAX_RESPONSE_BYTES,
+  };
+  if (!webConfigSchema.safeParse(config).success) return undefined;
+  config['outputs'] = catalogOutputs(replacement);
+  return { ...node, type: WEB_ACTIVITY_TYPE, config };
+}
+
+/**
+ * Whether a stored contract survives being replaced by Web's: a list whose
+ * every entry is one of Web's outputs, of the same type or one Web declares
+ * `json` (which types as `any`, so every read still types).
+ */
+function keepsWebContract(
+  outputs: unknown,
+  web: readonly { name: string; type: string }[],
+): boolean {
+  if (!Array.isArray(outputs)) return false;
+  const types = new Map(web.map((o) => [o.name, o.type]));
+  return outputs.every((o: unknown) => {
+    if (typeof o !== 'object' || o === null) return false;
+    const { name, type } = o as { name?: unknown; type?: unknown };
+    const webType = typeof name === 'string' ? types.get(name) : undefined;
+    return webType !== undefined && (webType === type || webType === 'json');
+  });
+}
+
 export const RETIRED_LOWERINGS: Readonly<Record<string, RetiredLowering>> = {
   [FILE_COPY_ACTIVITY_TYPE]: {
     to: COPY_FILES_ACTIVITY_TYPE,
@@ -219,6 +315,13 @@ export const RETIRED_LOWERINGS: Readonly<Record<string, RetiredLowering>> = {
     to: DELETE_ACTIVITY_TYPE,
     outputs: { path: 'path' },
     lower: lowerFileDelete,
+  },
+  [HTTP_REQUEST_ACTIVITY_TYPE]: {
+    to: WEB_ACTIVITY_TYPE,
+    // Web's `body` is json, which types as `any`, so a read typed against
+    // HTTP request's string still types.
+    outputs: { status: 'status', body: 'body', headers: 'headers' },
+    lower: lowerHttpRequest,
   },
 };
 

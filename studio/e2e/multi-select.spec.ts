@@ -51,7 +51,7 @@ import { properties } from './support/panels';
  */
 async function seedTwoNodes(page: Page, name: string, connect = false): Promise<void> {
   await openCanvas(page, name);
-  await addActivity(page, 'HTTP request');
+  await addActivity(page, 'Web');
   await expect(canvasNodes(page)).toHaveCount(1);
   await addActivity(page, 'Write file');
   await fitAndSettle(page, 1);

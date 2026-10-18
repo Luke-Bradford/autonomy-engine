@@ -513,7 +513,7 @@ Sources: [Web](https://learn.microsoft.com/azure/data-factory/control-flow-web-a
 
 **Built (C11a).** The `web` type, on an http connection, with the Request, Auth and Settings tabs above, except *Wait for callback* (C11c) and Pagination. Decisions made while building it:
 - **Field names** are ADF's (`method`, `url`, `headers`, `body`), with the timeout as `httpRequestTimeoutSeconds`, in seconds like every studio duration. An empty timeout uses the connection's `timeoutMs`, else 30 s. The labels are *Request URL* and *Request headers*, as on HTTP request, because a field's label may not contain another label on its panel (the connection's *Base URL*, the *Secret headers*). The Request tab puts the URL first, as ADF does: a tab lists its required fields first.
-- **Methods** are ADF's five plus HEAD, which studio adds because `http_request` accepted it and the connection test sends one. C11b has to upper-case a lowercase method when it lowers `http_request`; a method outside the six cannot be lowered, so that node stays `http_request` and C13's Convert explains why.
+- **Methods** are ADF's five plus HEAD, which studio adds because `http_request` accepted it and the connection test sends one. C11b upper-cases a lowercase method when it lowers `http_request`; a method outside the six cannot be lowered, so that node stays `http_request`, and C13's Convert has to explain why.
 - **Fail on HTTP error** uses `classifyHttpStatus`, as the LLM adapters do: 401/403 fail `auth`, 429 `rate_limit`, any 5xx `transient`, anything else `permanent`. The error is `HTTP <status> <text>: <first 500 characters of the body>`; the whole body is redacted of every request header value before it is cut. The secure flags withhold it, as they withhold every error. A retryable failure carries `Retry-After` to the retry alarm. *Retry on 429 and 503* off makes those two `permanent`; any other 5xx stays a retry candidate. The policy's retry count still decides whether anything retries.
 - **Max size** defaults to ADF's 4 MiB and is capped at the connections' read ceiling, `DEFAULT_MAX_READ_BYTES` (10 MiB), because the body lands in `node.succeeded` on every attempt. A `Content-Length` over the limit fails before the body is read, except under a `Content-Encoding` (it is then the compressed size) and on a HEAD, 204 or 304 (no body). *Truncate* needs Parse as Text, because a JSON prefix is not JSON. It keeps the first Max size bytes, without a UTF-8 character the cut split, sets the `truncated` output and warns `web_response_truncated`. `truncated` is not in the list above; it is Lookup's two-channel rule (C7c). `bytes` is the body bytes read.
 - **Parse as JSON.** An empty body (a 204) is null. A body that is not JSON fails `permanent` and names Parse as Text, and so does one nested deeper than 64 levels, which keeps clear of the redaction walk's 100-level ceiling. An error status let through (Fail on HTTP error off, or *Treat as success*) keeps a body that is not JSON as text, because an error page is usually HTML.
@@ -522,7 +522,31 @@ Sources: [Web](https://learn.microsoft.com/azure/data-factory/control-flow-web-a
 - **Redirects** are followed by studio, not by `fetch`, so the secret headers, the Bearer and cookies are dropped on a redirect to another origin. Node's own walk forwarded a custom secret header such as `X-Api-Key`. Plain headers (the connection's defaults and the Request headers table) still follow, as a browser's do, so a credential belongs in *Secret headers*. `http_request` now uses the same walk.
 - **`callback`** is declared now and is always null until C11c fills it, so a C11a node needs no contract refresh then.
 - **Not built:** *Format JSON* on Body (polish), and Pagination (a placeholder above).
-- **The palette** shows Web next to HTTP request until C11b lowers `http_request` and retires it.
+- **The palette** showed Web next to HTTP request until C11b (below).
+
+**Built (C11b, 2026-10-18):** a stored *HTTP request* (`http_request`) opens in the editor as Web on the same connection, with *Fail on HTTP error* off, *Parse as* Text and *Max size* 10 MiB, and the next Save writes it as `web` (`lowerHttpRequest` in `retired.ts`, §8). *HTTP request* is no longer offered in the palette. A stored version still runs through `http_request`'s own arm.
+
+- **Why those settings:** Fail on HTTP error off lets a 4xx or 5xx succeed and be read from `status`, as before. Text keeps `body` the string it was. Max size is the read ceiling (`WEB_MAX_RESPONSE_BYTES`), the closest to HTTP request's unbounded read. ADF's 4 MiB default, and §4.6's "closes today's uncapped body", apply to a new node only.
+- **Outputs keep their names.** `status`, `body` and `headers` are Web's too, so no read is rewritten. Web's `body` is declared `json`, which types as `any`, so every expression that typed against HTTP request's string `body` still types. `bytes`, `durationMs`, `truncated` and `callback` are new outputs.
+- **The method is upper-cased** (`patch` → `PATCH`). An unset method is GET.
+- **Connection parameters are kept.** Web binds one connection, as HTTP request does, so `connectionParams` apply to it unchanged. This differs from the other lowerings, whose replacements pair two connections.
+- **Faithful or not at all.** The node stays HTTP request when:
+  - its method is not one of the six, or is an expression;
+  - it is a GET or HEAD with a body, even an empty one (HTTP request fails that node at every run, and Web would send `''` as no body and succeed);
+  - its contract is not a list, or declares an output Web lacks or types narrower (a reader of it would no longer resolve or type);
+  - it carries a key that is one of Web's own settings (`parseAs`, `successStatusCodes`), which HTTP request never read and Web would act on;
+  - it carries paired connections, datasets or a call;
+  - its config fails Web's schema (no URL, a header that is not a string).
+- **Unknown keys are carried over**, unlike in the other lowerings, which build the config afresh. The config form keeps a key it has no control for, and an API-authored or imported doc may hold one that this build does not know.
+- **The same answer.** A server test runs each stored config as HTTP request and its lowering as Web against one stub. It compares `status`, `body` and `headers`, and the request's path and method, for a 200, a 404 HTML page, a 503 with Retry-After, a 204, a HEAD and a JSON body kept as text. For a POST it also compares the body and headers sent, with the connection's Bearer and a secret header. For a timeout it compares the failure kind.
+- **Deliberate differences of the saved node from HTTP request** (a stored version keeps the old behaviour until it is saved again):
+  - A refused connection or a DNS failure is `transient`, so a retry policy retries it (C11a, above).
+  - A response over 10 MiB fails, where HTTP request read it whole.
+  - A lowercase method goes out upper-case. Node's `fetch` already upper-cased all but PATCH.
+  - A POST, PUT, PATCH or DELETE with an empty body sends no body, and so no `text/plain` Content-Type.
+  - A contract the author edited (descriptions, `optional`) is replaced by Web's, as in every lowering.
+  - Error and cancel messages are Web's ("web request timed out").
+- **The starter template** *Call an API and stop on an error response* now adds a Web with Fail on HTTP error off, so its If still reads the status. With Fail on HTTP error on, ADF's default, the Web alone would fail the run on an error status.
 
 ### 4.7 Set variable
 Sources: [Set variable](https://learn.microsoft.com/azure/data-factory/control-flow-set-variable-activity), [Append variable](https://learn.microsoft.com/azure/data-factory/control-flow-append-variable-activity), [pipeline return value](https://learn.microsoft.com/azure/data-factory/tutorial-pipeline-return-value).
@@ -599,7 +623,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c-1** tables (SQLite, Postgres) with per-kind field options (built); **C8c-2** a delimited or Excel dataset source's structure and column count (built); **C8d-1** Wait until on a file system path (built); **C8d-2a** Wait until on a delimited or Excel dataset, with #1743 (built); **C8d-2b** Wait until on a table dataset (built); **C8e** Include subfolders (built) | OR17 #1408 |
 | C9 | Delete: wildcard, folders, dates, log. Lower file_delete. Split: **C9a** the `delete` type on a file system connection, with path type, wildcard, Include subfolders, modified window, Max concurrent deletes, Fail if nothing matched and Delete empty folders, on Get metadata's walk (built); **C9b** the `file_delete` lowering (Path type File, Fail if nothing matched on, `path` kept), Delete file retired from the palette (built); **C9c** the session log and `logPath` (a new output, so a `formerOutputs` snapshot and a version bump), shared with Copy's (built) | OR17 #1408 |
 | C10 | Script activity | OR12 #1403, OR15 sql_script |
-| C11 | Web: fail-on-error, response cap, parse, retry-after, wait-for-callback. Lower http_request and webhook. Split: **C11a** the `web` type, its Request, Auth and Settings tabs, and the redirect walk that keeps secret headers on their origin (built); **C11b** the `http_request` lowering (Fail on HTTP error off, Parse as Text, method upper-cased) and HTTP request retired from the palette; **C11c** Wait for callback and the `webhook` lowering | — |
+| C11 | Web: fail-on-error, response cap, parse, retry-after, wait-for-callback. Lower http_request and webhook. Split: **C11a** the `web` type, its Request, Auth and Settings tabs, and the redirect walk that keeps secret headers on their origin (built); **C11b** the `http_request` lowering (Fail on HTTP error off, Parse as Text, method upper-cased) and HTTP request retired from the palette (built); **C11c** Wait for callback and the `webhook` lowering | — |
 | C12 | Set variable operations + pipeline return value. Lower append_variable | OR34 outputs |
 | C13 | Palette regroup (§2), retire the remaining old types from the palette (C1b retired Copy file and Move file), `CATALOG_VERSION` bump, the migration guarantees in §8. `file_read` is NOT retired: since C7b it is Lookup's *Whole file as text* mode, so it is never refused, converted or listed as retired | — |
 
@@ -620,7 +644,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
   | `file_list` | Get metadata · Child items |
   | `file_delete` | Delete · File · Fail if nothing matched (C9b) |
   | `lookup` | Lookup · not first-row-only, so today's `rows` shape is kept |
-  | `http_request` | Web · Fail on HTTP error **off**, so today's behaviour is kept |
+  | `http_request` | Web · Fail on HTTP error **off**, Parse as Text, Max size 10 MiB, so today's behaviour is kept (C11b) |
   | `webhook` | Web · Wait for callback, no URL |
   | `append_variable` | Set variable · Append |
 

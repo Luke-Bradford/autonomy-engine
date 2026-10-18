@@ -37,7 +37,7 @@ export const httpSecretHeadersSchema = z.record(z.string(), SecretRefSchema).opt
 
 /**
  * ADF's five methods plus HEAD, which studio adds: the connection test already
- * sends one, and `http_request` (lowered to Web in C11b) accepted it.
+ * sends one, and `http_request` (lowered to Web, C11b) accepted it.
  */
 const WEB_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'] as const;
 const methodSchema = z.enum(WEB_METHODS);

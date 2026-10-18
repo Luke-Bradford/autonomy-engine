@@ -108,7 +108,7 @@ test.describe('#852 — the bottom property dock', () => {
     await openSeededCanvas(page, 'dock tabs', seed);
 
     await nodeById(page, 'a').click();
-    await expect(properties(page).getByRole('heading', { name: /HTTP request/ })).toBeVisible();
+    await expect(properties(page).getByRole('heading', { name: /^Web/ })).toBeVisible();
     // #1477 — an HTTP node's first type tab is Request.
     await expect(properties(page).getByRole('tab', { name: 'Request' })).toHaveAttribute(
       'aria-selected',

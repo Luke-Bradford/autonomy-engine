@@ -33,10 +33,10 @@ test.describe('U5 activities toolbox', () => {
     // Groups are present and populated before any filtering.
     await expect(toolbox(page).getByRole('list', { name: 'General', exact: true })).toBeVisible();
     await expect(toolbox(page).getByRole('list', { name: 'AI', exact: true })).toBeVisible();
-    await expect(toolbox(page).getByRole('button', { name: 'HTTP request' })).toBeVisible();
+    await expect(toolbox(page).getByRole('button', { name: 'Web', exact: true })).toBeVisible();
 
     await toolbox(page).getByRole('searchbox', { name: 'Filter activities' }).fill('http');
-    await expect(toolbox(page).getByRole('button', { name: 'HTTP request' })).toBeVisible();
+    await expect(toolbox(page).getByRole('button', { name: 'Web', exact: true })).toBeVisible();
     await expect(toolbox(page).getByRole('button', { name: 'LLM call' })).toHaveCount(0);
     // A heading over nothing would be a false "this category has matches" signal.
     await expect(toolbox(page).getByRole('list', { name: 'AI', exact: true })).toHaveCount(0);
@@ -69,12 +69,12 @@ test.describe('U5 activities toolbox', () => {
     await openCanvas(page, 'e2e u5 collapse search');
 
     await toolbox(page).getByRole('button', { name: 'Collapse General' }).click();
-    await expect(toolbox(page).getByRole('button', { name: 'HTTP request' })).toHaveCount(0);
+    await expect(toolbox(page).getByRole('button', { name: 'Web', exact: true })).toHaveCount(0);
 
     // The match must not stay behind a disclosure closed while looking at a
     // different list — otherwise search appears to return nothing at all.
     await toolbox(page).getByRole('searchbox', { name: 'Filter activities' }).fill('http');
-    await expect(toolbox(page).getByRole('button', { name: 'HTTP request' })).toBeVisible();
+    await expect(toolbox(page).getByRole('button', { name: 'Web', exact: true })).toBeVisible();
     // ...and no disclosure is offered while it has nothing to control, so there
     // is no control whose label disagrees with the screen and whose click would
     // rewrite the saved preference invisibly.
@@ -83,7 +83,7 @@ test.describe('U5 activities toolbox', () => {
     await toolbox(page).getByRole('searchbox', { name: 'Filter activities' }).fill('');
     // Suspended, not discarded.
     await expect(toolbox(page).getByRole('button', { name: 'Expand General' })).toBeVisible();
-    await expect(toolbox(page).getByRole('button', { name: 'HTTP request' })).toHaveCount(0);
+    await expect(toolbox(page).getByRole('button', { name: 'Web', exact: true })).toHaveCount(0);
 
     await expectQuiet(page, problems);
   });
@@ -95,11 +95,11 @@ test.describe('U5 activities toolbox', () => {
     await toolbox(page).getByRole('button', { name: 'Collapse General' }).click();
     // `hidden` on the list, so the items are gone from the a11y tree too, not
     // merely painted out.
-    await expect(toolbox(page).getByRole('button', { name: 'HTTP request' })).toHaveCount(0);
+    await expect(toolbox(page).getByRole('button', { name: 'Web', exact: true })).toHaveCount(0);
     await expect(toolbox(page).getByRole('button', { name: 'LLM call' })).toBeVisible();
 
     await toolbox(page).getByRole('button', { name: 'Expand General' }).click();
-    await expect(toolbox(page).getByRole('button', { name: 'HTTP request' })).toBeVisible();
+    await expect(toolbox(page).getByRole('button', { name: 'Web', exact: true })).toBeVisible();
 
     await expectQuiet(page, problems);
   });
@@ -111,7 +111,7 @@ test.describe('U5 activities toolbox', () => {
     await openCanvas(page, 'e2e u5 keyboard');
 
     await expect(canvasNodes(page)).toHaveCount(0);
-    const item = toolbox(page).getByRole('button', { name: 'HTTP request' });
+    const item = toolbox(page).getByRole('button', { name: 'Web', exact: true });
     await item.focus();
     // The element the browser actually focused, not the one we asked it to —
     // an item that is not a real button would fail here rather than silently
@@ -120,7 +120,7 @@ test.describe('U5 activities toolbox', () => {
     await page.keyboard.press('Enter');
 
     await expect(canvasNodes(page)).toHaveCount(1);
-    await expect(canvasNodes(page)).toContainText('HTTP request');
+    await expect(canvasNodes(page)).toContainText('Web');
     await expectQuiet(page, problems);
   });
 
@@ -270,11 +270,11 @@ test.describe('U5 activities toolbox', () => {
     const target = { x: Math.round(paneBox!.width * 0.5), y: Math.round(paneBox!.height * 0.3) };
 
     await toolbox(page)
-      .getByRole('button', { name: 'HTTP request' })
+      .getByRole('button', { name: 'Web', exact: true })
       .dragTo(pane, { targetPosition: target });
 
     await expect(canvasNodes(page)).toHaveCount(2);
-    const dropped = canvasNodes(page).filter({ hasText: 'HTTP request' });
+    const dropped = canvasNodes(page).filter({ hasText: 'Web' });
     await expect(dropped).toHaveCount(1);
 
     // The node's TOP-LEFT lands under the pointer (see `FlowCanvas.onDrop` for
@@ -301,12 +301,12 @@ test.describe('U5 activities toolbox', () => {
     // corner — a placement the operator never pointed at.
     const minimap = page.locator('.react-flow__minimap');
     await expect(minimap).toBeVisible();
-    await toolbox(page).getByRole('button', { name: 'HTTP request' }).dragTo(minimap);
+    await toolbox(page).getByRole('button', { name: 'Web', exact: true }).dragTo(minimap);
 
     await expect(canvasNodes(page)).toHaveCount(0);
     // And the canvas is still usable afterwards — the refused drag left no
     // stuck state behind.
-    await toolbox(page).getByRole('button', { name: 'HTTP request' }).click();
+    await toolbox(page).getByRole('button', { name: 'Web', exact: true }).click();
     await expect(canvasNodes(page)).toHaveCount(1);
 
     await expectQuiet(page, problems);

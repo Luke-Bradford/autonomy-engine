@@ -50,8 +50,8 @@ for (const { density, theme } of DESIGN_RUNS) {
     await openSeededCanvas(page, `S6n canvas ${density} ${Date.now()}`, STAGED);
     await expectAppearance(page, theme, d);
 
-    // A palette-dropped HTTP request has no URL yet, so it carries an issue count.
-    await addActivity(page, 'HTTP request');
+    // A palette-dropped Web has no URL yet, so it carries an issue count.
+    await addActivity(page, 'Web');
     const issue = page.locator('.flow-issue-badge');
     await expect(issue).toHaveCount(1);
     await expect(nodeById(page, 'hold').locator('.flow-node-badge')).toHaveCount(1);

@@ -61,7 +61,7 @@ test.describe('#1600 C0f — the workspace default activity timeout', () => {
   test('a new activity starts with the 12 h default', async ({ page }) => {
     const problems = collectPageProblems(page);
     await openCanvasWithDefault(page, 'timeout default 12h', 43_200);
-    await addActivity(page, 'HTTP request');
+    await addActivity(page, 'Web');
     await openNewestGeneral(page);
     await expect(properties(page).getByLabel(TIMEOUT, { exact: true })).toHaveValue('43200');
     await expectQuiet(page, problems);
@@ -70,7 +70,7 @@ test.describe('#1600 C0f — the workspace default activity timeout', () => {
   test('a changed default is what the next new activity gets', async ({ page }) => {
     await putDefault(page, 600);
     await openCanvasWithDefault(page, 'timeout default 600', 600);
-    await addActivity(page, 'HTTP request');
+    await addActivity(page, 'Web');
     await openNewestGeneral(page);
     await expect(properties(page).getByLabel(TIMEOUT, { exact: true })).toHaveValue('600');
   });
@@ -80,7 +80,7 @@ test.describe('#1600 C0f — the workspace default activity timeout', () => {
   }) => {
     await putDefault(page, null);
     await openCanvasWithDefault(page, 'timeout default off', null);
-    await addActivity(page, 'HTTP request');
+    await addActivity(page, 'Web');
     await openNewestGeneral(page);
     await expect(properties(page).getByLabel(TIMEOUT, { exact: true })).toHaveValue('');
     await addActivity(page, 'Wait');

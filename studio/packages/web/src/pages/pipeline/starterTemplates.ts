@@ -4,12 +4,12 @@ import {
   FILE_READ_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
   GET_METADATA_ACTIVITY_TYPE,
-  HTTP_REQUEST_ACTIVITY_TYPE,
   IF_ACTIVITY_TYPE,
   LLM_CALL_ACTIVITY_TYPE,
   type Container,
   type Edge,
   type Node,
+  WEB_ACTIVITY_TYPE,
 } from '@autonomy-studio/shared';
 
 /**
@@ -143,9 +143,12 @@ export const STARTER_TEMPLATES: readonly StarterTemplate[] = [
     nodes: [
       {
         id: 'call',
-        type: HTTP_REQUEST_ACTIVITY_TYPE,
+        // #1600 C11b — Web, with Fail on HTTP error off so the If below reads
+        // the status. (Left on, ADF's default, the Web node alone fails the run
+        // on a 4xx or 5xx.)
+        type: WEB_ACTIVITY_TYPE,
         position: { x: 0, y: 0 },
-        config: { method: 'GET' },
+        config: { method: 'GET', failOnHttpError: false, parseAs: 'text' },
       },
       {
         id: 'check',

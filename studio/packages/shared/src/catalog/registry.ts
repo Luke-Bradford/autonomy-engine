@@ -113,6 +113,10 @@ const ENTRIES: ActivityCatalogEntry[] = [
     description: 'Send a request to a URL over an HTTP connection and capture the response.',
     kind: 'execution',
     category: 'general',
+    // #1600 C11b — retired from the palette: Web covers it, and a stored node
+    // opens as Web with Fail on HTTP error off and Parse as Text (`retired.ts`).
+    // It still runs.
+    inPalette: false,
     tabs: [
       { key: 'request', bindings: ['connection'], fields: ['url', 'method', 'headers', 'body'] },
       { key: 'auth', fields: [HTTP_SECRET_HEADERS_FIELD] },
@@ -157,7 +161,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // connection. Unlike `http_request`, a 4xx/5xx FAILS by default (Fail on
     // HTTP error), the body is read up to Max size and parsed as JSON or kept as
     // text, and a 429/5xx carries the server's Retry-After to the retry alarm.
-    // `http_request` lowers to it in C11b; `webhook` as Wait for callback in
+    // `http_request` lowers to it (C11b); `webhook` as Wait for callback in
     // C11c, which fills `callback` (declared now so C11c needs no
     // `formerOutputs` refresh).
     type: WEB_ACTIVITY_TYPE,

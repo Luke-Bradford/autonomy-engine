@@ -35,7 +35,7 @@ const REFUSAL = '.canvas-refusal';
  *  to hold all four ports of a two-node graph. */
 
 async function seedTwoNodes(page: Page): Promise<void> {
-  await addActivity(page, 'HTTP request');
+  await addActivity(page, 'Web');
   await expect(canvasNodes(page)).toHaveCount(1);
   await addActivity(page, 'Write file');
   await fitAndSettle(page, 1);

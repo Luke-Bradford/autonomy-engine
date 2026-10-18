@@ -29,7 +29,7 @@ test.describe('undo/redo (U17)', () => {
     await expect(redo).toBeDisabled();
     await expect(undo).toHaveAttribute('title', 'Nothing to undo.');
 
-    await addActivity(page, 'HTTP request');
+    await addActivity(page, 'Web');
     await expect(canvasNodes(page)).toHaveCount(1);
     await expect(undo).toBeEnabled();
 
@@ -49,8 +49,8 @@ test.describe('undo/redo (U17)', () => {
     const problems = collectPageProblems(page);
     await openCanvas(page, 'e2e undo delete');
 
-    await addActivity(page, 'HTTP request');
-    await addActivity(page, 'HTTP request');
+    await addActivity(page, 'Web');
+    await addActivity(page, 'Web');
     await expect(canvasNodes(page)).toHaveCount(2);
     await viewportSettled(page);
 
@@ -70,7 +70,7 @@ test.describe('undo/redo (U17)', () => {
     const problems = collectPageProblems(page);
     await openCanvas(page, 'e2e undo keys');
 
-    await addActivity(page, 'HTTP request');
+    await addActivity(page, 'Web');
     await expect(canvasNodes(page)).toHaveCount(1);
 
     // Both platform chords, since the app runs under either.
@@ -99,7 +99,7 @@ test.describe('undo/redo (U17)', () => {
     // exemption deleted (a leaked undo reverts the param, not the node), and
     // asserting the FIELD passed too — the browser's own undo reverts a
     // programmatic fill to exactly the value the store's undo would.
-    await addActivity(page, 'HTTP request');
+    await addActivity(page, 'Web');
     await expect(canvasNodes(page)).toHaveCount(1);
 
     await name.press('ControlOrMeta+z');

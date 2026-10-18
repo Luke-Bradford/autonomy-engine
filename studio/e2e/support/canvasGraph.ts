@@ -131,7 +131,7 @@ export async function fillSelectedNodeConfig(
 
 /** The fields `fillNodeConfig` needs to make a palette-dropped node of each title savable. */
 export const SAVABLE_CONFIG: Readonly<Record<string, Record<string, string>>> = {
-  'HTTP request': { 'Request URL': 'https://example.test/e2e' },
+  Web: { 'Request URL': 'https://example.test/e2e' },
   'Write file': { 'File path': 'out.txt', Content: 'e2e' },
 };
 
@@ -319,7 +319,7 @@ export async function dragNodeBy(page: Page, index: number, dx: number, dy: numb
  * `sourceTitle` chooses what the edge hangs off — an `If condition` is the one
  * that declares business branches.
  */
-export async function seedSelectedEdge(page: Page, sourceTitle = 'HTTP request'): Promise<void> {
+export async function seedSelectedEdge(page: Page, sourceTitle = 'Web'): Promise<void> {
   await addActivity(page, sourceTitle);
   await expect(canvasNodes(page)).toHaveCount(1);
   await addActivity(page, 'Write file');

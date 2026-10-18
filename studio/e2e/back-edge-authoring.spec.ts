@@ -37,16 +37,16 @@ const OFFER = 'Make it a back-edge';
 
 /** See `connect-validation.spec.ts` — a reverse drag needs all four ports in the pane. */
 
-/** `HTTP request → Write file`, so the reverse drag closes a forward cycle. */
+/** `Web → Write file`, so the reverse drag closes a forward cycle. */
 async function seedChain(page: Page): Promise<void> {
-  await addActivity(page, 'HTTP request');
+  await addActivity(page, 'Web');
   await expect(canvasNodes(page)).toHaveCount(1);
   await addActivity(page, 'Write file');
   await fitAndSettle(page, 1);
   await expect(canvasNodes(page)).toHaveCount(2);
   // Both start without the field their adapter requires, which the save gate
   // refuses (#1480); the operator fills them, so the chain is savable.
-  await fillNodeConfig(page, 0, SAVABLE_CONFIG['HTTP request']!);
+  await fillNodeConfig(page, 0, SAVABLE_CONFIG['Web']!);
   await fillNodeConfig(page, 1, SAVABLE_CONFIG['Write file']!);
   await dragNodeBy(page, 1, 300, 60);
   await connectNodes(page, 0, 1);
