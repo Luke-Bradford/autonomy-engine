@@ -1,5 +1,4 @@
 import {
-  WEB_ACTIVITY_TYPE,
   COPY_ACTIVITY_TYPE,
   FAIL_ACTIVITY_TYPE,
   FILE_READ_ACTIVITY_TYPE,
@@ -10,6 +9,7 @@ import {
   type Container,
   type Edge,
   type Node,
+  WEB_ACTIVITY_TYPE,
 } from '@autonomy-studio/shared';
 
 /**

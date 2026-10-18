@@ -597,7 +597,9 @@ describe('Web — a lowered HTTP request keeps its results', () => {
     const bodies: string[] = [];
     main.set((q, res, body) => {
       bodies.push(body);
-      res.end(`${q.headers['x-trace']} ${q.headers['x-api-key']} ${body}`);
+      res.end(
+        `${q.headers['x-trace']} ${q.headers['x-api-key']} ${q.headers.authorization} ${body}`,
+      );
     });
     const config = {
       url: '/items',
@@ -607,6 +609,7 @@ describe('Web — a lowered HTTP request keeps its results', () => {
       secretHeaders: { 'X-Api-Key': { $secret: 'api_key' } },
     };
     const { before, after } = await both(config, {
+      secret: 'conn-bearer-token',
       secretFields: { 'secretHeaders.X-Api-Key': 'sk-live-0123456789' },
     });
     expect(answer(after)).toEqual(answer(before));
@@ -617,6 +620,7 @@ describe('Web — a lowered HTTP request keeps its results', () => {
         'x-trace': 'abc',
         'x-api-key': 'sk-live-0123456789',
         'content-type': 'application/json',
+        authorization: 'Bearer conn-bearer-token',
       });
     }
   });

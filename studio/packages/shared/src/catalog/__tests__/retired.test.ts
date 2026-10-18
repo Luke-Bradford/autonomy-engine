@@ -3,9 +3,9 @@ import type { Container, Node } from '../../schemas/pipeline.js';
 import { copyFilesConfigSchema } from '../copy-files-config.js';
 import { deleteConfigSchema } from '../delete-config.js';
 import { getMetadataConfigSchema } from '../get-metadata-config.js';
-import { WEB_MAX_RESPONSE_BYTES, webConfigSchema } from '../web-config.js';
 import { getActivity } from '../registry.js';
 import { RETIRED_LOWERINGS, lowerRetiredTypes, splitDestination } from '../retired.js';
+import { WEB_MAX_RESPONSE_BYTES, webConfigSchema } from '../web-config.js';
 
 const fileNode = (type: string, config: Record<string, unknown>, extra: Partial<Node> = {}): Node =>
   ({
@@ -153,11 +153,13 @@ describe('#1600 C1b — §8 output aliases', () => {
       for (const o of from.outputs) {
         const target = to.outputs.find((t) => t.name === lowering.outputs[o.name]);
         expect(target, o.name).toBeDefined();
-        // The same type, or `json` on the replacement: `json` types as `any`
-        // (`sigOfDeclared`), so every read that typed before still types. A
-        // widening is safe; a narrowing would refuse a saved expression, so it
-        // fails here. #1600 C11b: `http_request`'s string `body` is Web's json.
-        if (target!.type !== 'json') expect(target!.type).toBe(o.type);
+        // The same type, or, for an output that keeps its NAME, `json` on the
+        // replacement: `json` types as `any` (`sigOfDeclared`), so every read
+        // that typed before still types. #1600 C11b: `http_request`'s string
+        // `body` is Web's json. A renamed alias must keep its type exactly, so
+        // a mis-aliased name that lands on some json output still fails.
+        const widened = target!.type === 'json' && target!.name === o.name;
+        if (!widened) expect(target!.type).toBe(o.type);
       }
     },
   );
@@ -477,6 +479,33 @@ describe('#1600 C11b — http_request → Web, Fail on HTTP error off, Parse as 
     },
   );
 
+  it.each([
+    ['a method that is not a string', { url: '/a', method: 5 }],
+    ['a URL that is not a string', { url: 5 }],
+    ['a header that is not a string', { url: '/a', headers: { 'x-n': 5 } }],
+    ['a contract that is not a list', { url: '/a', outputs: { status: 'number' } }],
+    ['a contract entry that is not an object', { url: '/a', outputs: ['status'] }],
+    ['a contract typing status json', { url: '/a', outputs: [{ name: 'status', type: 'json' }] }],
+  ])('stays HTTP request with %s', (_label, config) => {
+    const node = call(config);
+    expect(lowerNodes([node])[0]).toBe(node);
+  });
+
+  it('shares no object with the stored node, and keeps an own __proto__ key', () => {
+    const config = JSON.parse(
+      '{"url":"/a","headers":{"x-a":"1"},"extra":{"k":1},"__proto__":{"polluted":true}}',
+    ) as Record<string, unknown>;
+    const node = call(config, { connectionParams: { region: 'eu' } });
+    const [lowered] = lowerNodes([node]);
+    expect(lowered!.type).toBe('web');
+    expect(lowered!.config['headers']).toEqual({ 'x-a': '1' });
+    expect(lowered!.config['headers']).not.toBe(config['headers']);
+    expect(lowered!.config['extra']).not.toBe(config['extra']);
+    expect(Object.hasOwn(lowered!.config, '__proto__')).toBe(true);
+    expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
+    expect(lowered!.connectionParams).toEqual({ region: 'eu' });
+  });
+
   it('stays HTTP request when its contract declares an output Web does not have', () => {
     const node = call({ url: '/a', outputs: [{ name: 'rows', type: 'json', optional: true }] });
     expect(lowerNodes([node])[0]).toBe(node);
@@ -493,11 +522,17 @@ describe('#1600 C11b — http_request → Web, Fail on HTTP error off, Parse as 
 
   it.each([
     ['datasets', { datasetIds: { source: 'ds_1' } }],
+    ['dataset parameters', { datasetParams: { source: { p: 'x' } } }],
+    ['inline datasets', { inlineDatasets: {} }],
+    ['a call', { call: { pipelineId: 'pl_1' } }],
     ['paired connections', { connectionIds: { source: 'a', sink: 'b' } }],
-  ] as [string, Partial<Node>][])('stays HTTP request when it carries %s', (_label, extra) => {
-    const node = call({ url: '/a' }, extra);
-    expect(lowerNodes([node])[0]).toBe(node);
-  });
+  ] as unknown as [string, Partial<Node>][])(
+    'stays HTTP request when it carries %s',
+    (_label, extra) => {
+      const node = call({ url: '/a' }, extra);
+      expect(lowerNodes([node])[0]).toBe(node);
+    },
+  );
 
   it('a reader of its outputs needs no rewrite: status, body and headers keep their names', () => {
     const reader = {
