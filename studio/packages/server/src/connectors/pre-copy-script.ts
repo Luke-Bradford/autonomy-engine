@@ -27,9 +27,12 @@ export interface PreCopyScript {
  * **sqlite: this list is the file-confinement boundary.** The sink opens a file
  * `confineStorePath` has placed inside the connection's roots, and before C3b it
  * ran no authored SQL at all (`sqlite.ts`'s header). Authored SQL could step
- * outside: `ATTACH DATABASE '<path>'` creates or opens any file the process can
- * reach (MEASURED by the C3b plan review: it runs inside `begin immediate`), and
- * `VACUUM INTO '<path>'` writes one. So neither is listed, nor is `PRAGMA`.
+ * outside: MEASURED on better-sqlite3 12, `ATTACH DATABASE '<path>'` runs inside
+ * `begin immediate` and opens any existing database file the process can reach
+ * (the sink opens with `fileMustExist`, whose flags an attach inherits, so it
+ * cannot create one), and the sink's dataset may name the attached schema.
+ * `VACUUM INTO '<path>'` writes a file (SQLite refuses it inside a transaction,
+ * which is not a rule to lean on). So neither is listed, nor is `PRAGMA`.
  * Nothing in the list reaches a file: better-sqlite3 compiles in no file-backed
  * virtual table, and `load_extension` is not authorized (sqlite.ts). better-
  * sqlite3's `prepare` refuses more than one statement, so the word checked is

@@ -360,9 +360,8 @@ function prepareUpsert(
  * the connection's roots now that it runs authored SQL; `prepare` refuses a
  * second statement, so the word checked is the statement run. The tripwire
  * after it costs one pragma read: an attached database would mean the list let
- * through something it should not, so the copy fails and rolls back rather than
- * write beside a file outside the roots. (A file `ATTACH` created would already
- * exist; the tripwire limits the damage, the list prevents it.)
+ * through something it should not, so the copy fails and rolls back before it
+ * writes a row into a schema outside the roots.
  *
  * Synchronous, like every statement here: a script that runs long blocks the
  * event loop for its duration and a cancel is seen only after it (the reader's
