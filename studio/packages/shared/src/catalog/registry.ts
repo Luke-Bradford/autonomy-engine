@@ -997,7 +997,12 @@ const ENTRIES: ActivityCatalogEntry[] = [
     ],
     // #1600 OR41 C3a — Key columns are read only by Upsert, and save refuses
     // them on any other write behaviour (`copyKeyColumnIssues`).
-    appliesWhen: { keyColumns: [{ field: 'mode', in: ['upsert'] }] },
+    // C3b — Pre-copy bind values only mean something beside a script, and save
+    // refuses them without one.
+    appliesWhen: {
+      keyColumns: [{ field: 'mode', in: ['upsert'] }],
+      preCopyScriptParameters: [{ field: 'preCopyScript', set: true }],
+    },
     idempotent: false,
     // #1190 (M10 slice 2) — `postgres` joins the SOURCE allowlist, because the
     // executor dispatches a copy on the source connection's adapter and the

@@ -189,12 +189,19 @@ test.describe('#1600 C3a — Copy Write behaviour', () => {
       const pane = properties(page);
       await pane.getByRole('tab', { name: 'Sink', exact: true }).click();
       const script = pane.getByRole('textbox', { name: 'Pre-copy script', exact: true });
+      const addBind = pane.getByRole('button', {
+        name: 'Add pre-copy bind values row',
+        exact: true,
+      });
+      // Bind values only mean something beside a script, so they show once it has one.
+      await expect(addBind).toHaveCount(0);
       await script.fill('DELETE FROM customers WHERE id >= :from');
+      await expect(addBind).toBeVisible();
       // The statement is literal (§8): no reference flyout on it, one on a bind value.
       await expect(
         pane.getByRole('button', { name: /^Insert reference into pre-copy script$/i }),
       ).toHaveCount(0);
-      await pane.getByRole('button', { name: 'Add pre-copy bind values row', exact: true }).click();
+      await addBind.click();
       await pane
         .getByRole('textbox', { name: 'Pre-copy bind values row 1 key', exact: true })
         .fill('from');
@@ -207,11 +214,8 @@ test.describe('#1600 C3a — Copy Write behaviour', () => {
           exact: true,
         }),
       ).toBeVisible();
-      const batch = pane.getByRole('textbox', { name: /^Batch size/ });
-      await batch.fill('2');
-      // The whole Sink tab fits the dock at 1440x900, Batch size included.
-      const box = await batch.boundingBox();
-      expect(box!.y + box!.height).toBeLessThanOrEqual(900);
+      // The fresh Sink tab fitting whole at 1440x900 is activity-tabs.spec's gate.
+      await pane.getByRole('textbox', { name: /^Batch size/ }).fill('2');
       await pane.getByRole('button', { name: 'Apply config' }).click();
 
       await page.getByRole('button', { name: 'Save version' }).click();

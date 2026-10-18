@@ -418,9 +418,6 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
       }),
       preCopyScriptParameters: presented(z.record(z.string().min(1), bindValue).optional(), {
         title: 'Pre-copy bind values',
-        description:
-          'A value for each :name in the Pre-copy script, keyed without the colon. A value ' +
-          'is text unless a ${} expression gives a number or null.',
       }),
       // #1600 OR41 C3b — ADF's `writeBatchSize`. The pump passes batches through
       // one for one, so this is the rows per read AND per write batch. Empty is

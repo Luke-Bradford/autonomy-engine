@@ -50,7 +50,10 @@ test.use({ viewport: { width: 1440, height: 900 } });
  * obvious from the label, measured.
  */
 const HELP_LIMITS: Record<string, number> = {
-  'Copy data': 9,
+  // +2 for #1600 OR41 C3b: Pre-copy script (literal, transactional, runs before
+  // Write behaviour) and Batch size (its range and what empty means) are new
+  // fields whose notes the labels cannot carry. Pre-copy bind values has none.
+  'Copy data': 11,
   // #1600 OR41 C9a — Delete, measured: the pane's own `?`s and one on each
   // Source and Settings field but Delete empty folders, which waits for
   // Include subfolders. +2 for C9c's Session log and Write to (Log folder
@@ -332,11 +335,12 @@ test('every catalog activity and container: no wide button, no `?` on a heading,
 const INLINE_SQL = 'SELECT id FROM orders WHERE region = :region AND load <> :load';
 
 const SEEDED_HELP_LIMITS: Record<string, number> = {
-  'Copy data': 9,
+  // +2 each for #1600 OR41 C3b's Pre-copy script and Batch size (HELP_LIMITS).
+  'Copy data': 11,
   'Copy data (files as-is)': 19,
   'Copy data (files from a folder)': 16,
   // +1 for C1q-c's Query timeout, a new field whose `?` says blank means no limit.
-  'Copy data (inline query)': 13,
+  'Copy data (inline query)': 15,
   // #1600 OR41 C9a — Delete with every setting showing: the 14 above and
   // Delete empty folders', which says it never removes the folder at the path.
   // +3 for C9c's Session log, Write to and Log folder.
