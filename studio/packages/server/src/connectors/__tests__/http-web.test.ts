@@ -5,6 +5,8 @@ import {
   HTTP_REQUEST_ACTIVITY_TYPE,
   WARNING_CODES,
   WEB_ACTIVITY_TYPE,
+  lowerRetiredTypes,
+  type Node,
 } from '@autonomy-studio/shared';
 import { httpAdapter } from '../http.js';
 import { WEB_MAX_JSON_DEPTH } from '../http-web.js';
@@ -521,5 +523,105 @@ describe('Web — failures to complete', () => {
     expect(event.kind).toBe('permanent');
     expect(event.error).toContain('Parse as Text');
     expect(main.received).toHaveLength(0);
+  });
+});
+
+/**
+ * #1600 C11b — a stored HTTP request, lowered to Web by the editor's load
+ * (`lowerRetiredTypes`), answers as HTTP request did: the same request on the
+ * wire, and the same `status`, `body` and `headers`.
+ */
+describe('Web — a lowered HTTP request keeps its results', () => {
+  const lowered = (config: Record<string, unknown>) => {
+    const stored = {
+      id: 'call',
+      type: HTTP_REQUEST_ACTIVITY_TYPE,
+      config,
+      connectionId: 'conn_http',
+      position: { x: 0, y: 0 },
+    } as Node;
+    const node = lowerRetiredTypes({ nodes: [stored], containers: [] }).nodes[0]!;
+    expect(node.type).toBe(WEB_ACTIVITY_TYPE);
+    const { outputs: _contract, ...input } = node.config;
+    return input;
+  };
+
+  /** Run the stored config as HTTP request, then its lowering as Web. */
+  async function both(config: Record<string, unknown>, over: Parameters<typeof run>[1] = {}) {
+    const before = await run(config, { ...over, activityType: HTTP_REQUEST_ACTIVITY_TYPE });
+    const after = await run(lowered(config), over);
+    return { before, after };
+  }
+  const answer = (events: ActivityEvent[]) => {
+    const { status, body, headers } = succeeded(events).outputs as Record<string, unknown>;
+    const { date: _date, ...rest } = headers as Record<string, string>;
+    return { status, body, headers: rest };
+  };
+
+  it.each([
+    ['a 200 text body', 'GET', (_q: IncomingMessage, res: ServerResponse) => res.end('hello')],
+    [
+      'a 404 HTML page',
+      'get',
+      (_q: IncomingMessage, res: ServerResponse) =>
+        res.writeHead(404, { 'content-type': 'text/html' }).end('<h1>Not found</h1>'),
+    ],
+    [
+      'a 503 with Retry-After',
+      undefined,
+      (_q: IncomingMessage, res: ServerResponse) =>
+        res.writeHead(503, { 'retry-after': '9' }).end('busy'),
+    ],
+    ['a 204', 'DELETE', (_q: IncomingMessage, res: ServerResponse) => res.writeHead(204).end()],
+    ['a HEAD', 'head', (_q: IncomingMessage, res: ServerResponse) => res.end()],
+    [
+      'a JSON body, kept as text',
+      'GET',
+      (_q: IncomingMessage, res: ServerResponse) =>
+        res.writeHead(200, { 'content-type': 'application/json' }).end('{"a":1}'),
+    ],
+  ])('%s', async (_label, method, handler) => {
+    main.set(handler);
+    const { before, after } = await both({ url: '/items', ...(method ? { method } : {}) });
+    expect(after).toHaveLength(1);
+    expect(answer(after)).toEqual(answer(before));
+    expect(main.received[1]).toMatchObject({ url: main.received[0]!.url, method: main.received[0]!.method });
+  });
+
+  it('a POST sends the same body, headers and secret header', async () => {
+    const bodies: string[] = [];
+    main.set((q, res, body) => {
+      bodies.push(body);
+      res.end(`${q.headers['x-trace']} ${q.headers['x-api-key']} ${body}`);
+    });
+    const config = {
+      url: '/items',
+      method: 'post',
+      headers: { 'x-trace': 'abc', 'content-type': 'application/json' },
+      body: '{"a":1}',
+      secretHeaders: { 'X-Api-Key': { $secret: 'api_key' } },
+    };
+    const { before, after } = await both(config, {
+      secretFields: { 'secretHeaders.X-Api-Key': 'sk-live-0123456789' },
+    });
+    expect(answer(after)).toEqual(answer(before));
+    expect(bodies).toEqual(['{"a":1}', '{"a":1}']);
+    for (const r of main.received) {
+      expect(r.method).toBe('POST');
+      expect(r.headers).toMatchObject({
+        'x-trace': 'abc',
+        'x-api-key': 'sk-live-0123456789',
+        'content-type': 'application/json',
+      });
+    }
+  });
+
+  it('a timeout fails both the same way', async () => {
+    main.set(() => undefined); // never answers
+    const { before, after } = await both(
+      { url: '/slow' },
+      { connectionConfig: { baseUrl: main.url(), timeoutMs: 50 } },
+    );
+    expect(failed(after).kind).toBe(failed(before).kind);
   });
 });
