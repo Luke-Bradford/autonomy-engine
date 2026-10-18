@@ -530,15 +530,24 @@ const AUTO_CREATE_LOCK_POLL_MS = 100;
  * the LOCK and the describe use.
  *
  * Two copies auto-creating one table at once would both see it missing, and
- * the second CREATE would fail on the first's catalog row. So a missing table
- * is re-checked under a transaction-scoped advisory lock, held to COMMIT: the
- * second copy waits there, then finds the table. The key is the RESOLVED
- * `schema.table` (`autoCreateLockKey`; an unqualified name's schema is
- * `current_schema()`, where CREATE puts it), so `t` and `public.t` share one.
- * The wait polls `pg_try_advisory_xact_lock` rather than blocking, so a cancel
- * or the activity timeout ends it, where a blocking wait would hold until the
- * other copy commits. A table that already exists takes no lock, so copies into
- * it run as they would without Auto-create.
+ * the second CREATE would fail on the first's catalog row. So the check runs
+ * under an advisory lock on the RESOLVED `schema.table` (`autoCreateLockKey`;
+ * an unqualified name's schema is `current_schema()`, where CREATE puts it, so
+ * `t` and `public.t` share one key):
+ *
+ * - **The lock comes BEFORE any lookup of the name.** Measured in CI: with a
+ *   `to_regclass` before the lock and another after it, a copy that waited on
+ *   one creating the table still missed it once that one had committed, and its
+ *   CREATE failed with *already exists*. The likely mechanism is the backend's
+ *   catalog cache keeping the first miss within the transaction. Looking the
+ *   name up only once, after the lock, leaves nothing to keep.
+ * - **Session-scoped, so a table that exists releases it at once**: copies into
+ *   an existing table do not serialise. A copy that creates the table holds it
+ *   until its session ends, after COMMIT or ROLLBACK, so the next copy finds
+ *   the table (or, after a rollback, creates it).
+ * - **Polled with `pg_try_advisory_lock`** rather than blocking, so a cancel or
+ *   the activity timeout ends the wait, where a blocking wait would hold until
+ *   the other copy's whole write has committed.
  */
 async function autoCreatePostgresTable(
   client: PostgresClient,
@@ -557,12 +566,6 @@ async function autoCreatePostgresTable(
     },
     columns,
   );
-  const exists = async (): Promise<boolean> =>
-    (
-      (await client.query(RELATION_EXISTS_SQL, [qualified])).rows[0] as
-        { exists?: unknown } | undefined
-    )?.exists === true;
-  if (await exists()) return;
   // `null` when no `search_path` schema exists; the CREATE then fails with the
   // server's own words, so the key only has to be stable.
   const schema =
@@ -576,14 +579,23 @@ async function autoCreatePostgresTable(
   const key = autoCreateLockKey(schema, target.table);
   for (;;) {
     const locked = (
-      (await client.query('select pg_try_advisory_xact_lock($1::bigint) as "locked"', [key]))
-        .rows[0] as { locked?: unknown } | undefined
+      (await client.query('select pg_try_advisory_lock($1::bigint) as "locked"', [key])).rows[0] as
+        { locked?: unknown } | undefined
     )?.locked;
     if (locked === true) break;
     if (signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
     await sleep(AUTO_CREATE_LOCK_POLL_MS);
   }
-  if (await exists()) return;
+  const exists =
+    (
+      (await client.query(RELATION_EXISTS_SQL, [qualified])).rows[0] as
+        { exists?: unknown } | undefined
+    )?.exists === true;
+  if (exists) {
+    await client.query('select pg_advisory_unlock($1::bigint)', [key]);
+    return;
+  }
+  // Held until the session ends, after this copy's COMMIT or ROLLBACK.
   await client.query(ddl);
 }
 
