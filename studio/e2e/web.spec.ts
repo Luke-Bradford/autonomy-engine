@@ -308,7 +308,10 @@ test.describe('#1600 C11c — Web Wait for callback', () => {
     });
     await canvasNodes(page).first().click();
     await tab(page, 'Settings').click();
-    const timeout = properties(page).getByRole('spinbutton', { name: /^Callback timeout/ });
+    const timeout = properties(page).getByRole('textbox', {
+      name: 'Callback timeout',
+      exact: true,
+    });
     // Its two settings belong to it: hidden while it is off.
     await expect(checkbox(page, 'Wait for callback')).not.toBeChecked();
     await expect(timeout).toHaveCount(0);
