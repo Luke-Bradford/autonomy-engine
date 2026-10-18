@@ -19,10 +19,20 @@ export async function answerConfirm(
   user: Pick<UserEvent, 'click'>,
   answer: 'accept' | 'cancel',
 ): Promise<string> {
-  const dialog = await screen.findByRole('alertdialog');
   // Wait for the BUTTONS too (#1495): the dialog can be found while Fluent is
-  // still mounting it, before its contents are in the accessibility tree.
-  const buttons = await within(dialog).findAllByRole('button');
+  // still mounting it, before its contents are in the accessibility tree. The
+  // dialog is found again on every poll (#1765): searching inside the element
+  // the FIRST poll found would wait on that element for good if Fluent replaced
+  // it while mounting.
+  // Both buttons, too: every `useConfirm` dialog has its dismiss and its action,
+  // and a half-mounted one holding only the first would make `accept` click
+  // Cancel.
+  const { dialog, buttons } = await waitFor(() => {
+    const found = screen.getByRole('alertdialog');
+    const all = within(found).getAllByRole('button');
+    expect(all.length).toBeGreaterThanOrEqual(2);
+    return { dialog: found, buttons: all };
+  });
   const text = dialog.textContent ?? '';
   const target = answer === 'cancel' ? buttons[0]! : buttons[buttons.length - 1]!;
   await user.click(target);

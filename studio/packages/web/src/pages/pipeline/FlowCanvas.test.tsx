@@ -1590,8 +1590,10 @@ describe('FlowCanvas context menu (#1477 OR29)', () => {
 
   /** Accept the container-edit confirm, checking it names the act `label`. */
   async function answer(label: string): Promise<string> {
-    const dialog = await within(document.body).findByRole('alertdialog');
-    expect(await within(dialog).findByRole('button', { name: label })).toBeTruthy();
+    // The dialog is found again on every poll, as `answerConfirm` does (#1765).
+    await waitFor(() =>
+      within(within(document.body).getByRole('alertdialog')).getByRole('button', { name: label }),
+    );
     return answerConfirm(userEvent.setup(), 'accept');
   }
 

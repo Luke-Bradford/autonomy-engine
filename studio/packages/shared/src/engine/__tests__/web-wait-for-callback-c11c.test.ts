@@ -261,6 +261,55 @@ describe('#1600 C11c — crash recovery (run.resumed)', () => {
   });
 });
 
+describe('#1600 C11c — a loop reset while parked (#1761)', () => {
+  // A parked node can only be reset after it was ABANDONED: a loop's wall-clock
+  // timeout flips its live children to `skipped` (`abandonLiveChildren` spreads
+  // the node, so the held `callback` survives), the loop fails, its failure edge
+  // runs `h`, and `h`'s back-edge to the loop resets the abandoned children. The
+  // reset must drop the held request, or the next round's park would find a
+  // stale record from the round before.
+  it('a back-edge reset drops the held callback of an abandoned node', () => {
+    const eng = createEngine({
+      nodes: [web('w'), { ...web('h'), type: 'noop', config: {} }],
+      edges: [
+        { id: 'lp->h', from: 'lp', to: 'h', on: 'failure' },
+        {
+          id: 'h->lp:success',
+          from: 'h',
+          to: 'lp',
+          on: 'success',
+          back: true,
+          maxBounces: 2,
+        },
+      ],
+      containers: [{ id: 'lp', kind: 'loop', children: ['w'], maxRounds: 3, timeout: 60 }],
+    });
+    const parked = fold(eng, [started, dispatched('w', 'w#0'), awaiting('w', 'w#0')]);
+    expect(parked.state.nodes.w!.callback).toBeDefined();
+
+    const timedOut = fold(
+      eng,
+      [{ type: 'container.timedOut', runId: RUN, containerId: 'lp' }],
+      parked.state,
+    );
+    expect(timedOut.state.nodes.w!.status).toBe('skipped');
+    // The abandonment itself keeps the record; only the reset below drops it.
+    expect(timedOut.state.nodes.w!.callback).toBeDefined();
+
+    const bounced = fold(
+      eng,
+      [
+        dispatched('h', 'h#0'),
+        { type: 'node.succeeded', runId: RUN, nodeId: 'h', attemptId: 'h#0', outputs: {} },
+      ],
+      timedOut.state,
+    );
+    expect(Object.values(bounced.state.bounces)).toEqual([1]);
+    expect(bounced.state.nodes.w!.status).toBe('pending');
+    expect(bounced.state.nodes.w!.callback).toBeUndefined();
+  });
+});
+
 describe('#1600 C11c — secure output', () => {
   const secure = web('w', {}, { secureOutput: true });
   const eng = engine([secure]);
