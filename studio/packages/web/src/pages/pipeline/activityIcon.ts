@@ -45,6 +45,8 @@ type Glyph = ComponentType<{ className?: string }>;
 
 const BY_TYPE: Readonly<Record<string, Glyph>> = {
   http_request: Globe20Regular,
+  // #1600 OR41 C11a — Web, which `http_request` lowers to (C11b): the same glyph.
+  web: Globe20Regular,
   llm_call: Sparkle20Regular,
   agent_task: Bot20Regular,
   /* The catalog's ids are SHORTER than the titles they draw — `if`, not

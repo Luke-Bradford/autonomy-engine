@@ -1126,6 +1126,12 @@ export const WARNING_CODES = {
    * `rows` is empty for a reason that is not an empty source.
    */
   LOOKUP_TRUNCATED: 'lookup_truncated',
+  /**
+   * #1600 OR41 C11a — a Web response was longer than its Max size and *When over
+   * the limit* is Truncate: the node succeeds with the first Max size bytes and
+   * `truncated: true`. The `reason` gives the limit only, never the body.
+   */
+  WEB_RESPONSE_TRUNCATED: 'web_response_truncated',
 } as const;
 
 /** The warning codes the engine itself mints — see `WARNING_CODES`. */

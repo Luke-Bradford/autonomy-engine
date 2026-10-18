@@ -169,6 +169,9 @@ export const LLM_CALL_ACTIVITY_TYPE = 'llm_call';
  */
 export const HTTP_REQUEST_ACTIVITY_TYPE = 'http_request';
 
+/** #1600 OR41 C11a — the `web` activity type (catalogue §4.6), which `http_request` lowers to. */
+export const WEB_ACTIVITY_TYPE = 'web';
+
 /**
  * The `Node.type` of the `agent_task` execution activity (the agent-CLI
  * subprocess). A named constant, not a magic string, because it now has more than

@@ -26,6 +26,8 @@ import {
   SWITCH_ACTIVITY_TYPE,
   WAIT_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
+  WEB_ACTIVITY_TYPE,
+  HTTP_REQUEST_ACTIVITY_TYPE,
   type Node,
 } from '@autonomy-studio/shared';
 import { formatElapsed } from '../runs/format';
@@ -66,7 +68,8 @@ export function activitySummary(
     return callDetaches(node.call) ? 'starts a pipeline' : 'runs a pipeline and waits';
   }
   switch (node.type) {
-    case 'http_request': {
+    case HTTP_REQUEST_ACTIVITY_TYPE:
+    case WEB_ACTIVITY_TYPE: {
       const url = text(c.url);
       if (url === undefined) return null;
       const method = (text(c.method) ?? 'GET').toUpperCase();

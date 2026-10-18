@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { literalText, presented, singleLine } from '../schemas/field-presentation.js';
 import { CallConfigSchema, type Node, type Output } from '../schemas/pipeline.js';
-import { SecretRefSchema } from '../schemas/secret-ref.js';
 import type { ActivityCatalog, ActivityCatalogEntry } from './types.js';
 import {
   AGENT_TASK_ACTIVITY_TYPE,
@@ -20,6 +19,7 @@ import {
   FILTER_RESULT_OUTPUT,
   IF_ACTIVITY_TYPE,
   HTTP_REQUEST_ACTIVITY_TYPE,
+  WEB_ACTIVITY_TYPE,
   LLM_CALL_ACTIVITY_TYPE,
   LOOKUP_ACTIVITY_TYPE,
   SET_VARIABLE_ACTIVITY_TYPE,
@@ -33,6 +33,11 @@ import { agentTaskConfigSchema } from './agent-config.js';
 import { copyDispatchInputSchema, copyInputSchema } from './copy-config.js';
 import { copyFilesConfigSchema } from './copy-files-config.js';
 import { deleteConfigSchema } from './delete-config.js';
+import {
+  HTTP_SECRET_HEADERS_FIELD,
+  httpSecretHeadersSchema,
+  webConfigSchema,
+} from './web-config.js';
 import {
   GET_METADATA_FIELDS_BY_CONNECTION_KIND,
   GET_METADATA_WAIT_UNTIL_BY_CONNECTION_KIND,
@@ -83,24 +88,6 @@ const optionalOut = (name: string, type: Output['type']): Output => ({
  * the most useful thing the form can say; it is pinned valid by a test.
  */
 const WHOLE_SECONDS_HINT = 'A whole ${} expression giving a number, e.g. ${30}.';
-
-/**
- * The `http_request` secret-SINK config field name (item 7 / S4) — the ONE
- * source of truth. The catalog declares it as a sink here; the server http
- * adapter (`connectors/http.ts`) imports it to derive the `secretFields` key
- * prefix it consumes. Shared so a rename can't silently desync the two sides
- * (a magic string on each would drop the secret header without a type error).
- */
-export const HTTP_SECRET_HEADERS_FIELD = 'secretHeaders';
-
-/**
- * The Zod SHAPE of the `secretHeaders` sink value: header name → inert
- * `{$secret:name}` marker. SSOT'd here (not just the field NAME above) so the
- * catalog `configSchema` below and the http adapter's live `httpRequestInputSchema`
- * (`connectors/http.ts`) can't desync on the value/key constraints either — one
- * change to the record shape reaches both consumers, type-checked.
- */
-export const httpSecretHeadersSchema = z.record(z.string(), SecretRefSchema).optional();
 
 /**
  * The per-activity request settings the http adapter reads from a node's
@@ -164,6 +151,56 @@ const ENTRIES: ActivityCatalogEntry[] = [
       }),
     }),
     dispatchConfigSchema: httpRequestInputSchema,
+  },
+  {
+    // #1600 OR41 C11a — Web (catalogue §4.6): ADF's Web activity on an http
+    // connection. Unlike `http_request`, a 4xx/5xx FAILS by default (Fail on
+    // HTTP error), the body is read up to Max size and parsed as JSON or kept as
+    // text, and a 429/5xx carries the server's Retry-After to the retry alarm.
+    // `http_request` lowers to it in C11b; `webhook` as Wait for callback in
+    // C11c, which fills `callback` (declared now so C11c needs no
+    // `formerOutputs` refresh).
+    type: WEB_ACTIVITY_TYPE,
+    title: 'Web',
+    description: 'Call a URL over an HTTP connection and read its response.',
+    kind: 'execution',
+    category: 'general',
+    tabs: [
+      { key: 'request', bindings: ['connection'], fields: ['method', 'url', 'headers', 'body'] },
+      { key: 'auth', fields: [HTTP_SECRET_HEADERS_FIELD] },
+      {
+        key: 'settings',
+        fields: [
+          'failOnHttpError',
+          'successStatusCodes',
+          'httpRequestTimeoutSeconds',
+          'parseAs',
+          'maxResponseBytes',
+          'whenOverLimit',
+          'retryOnThrottle',
+        ],
+      },
+    ],
+    // The rule `webConfigSchema`'s superRefine enforces.
+    appliesWhen: {
+      successStatusCodes: [{ field: 'failOnHttpError', in: ['true'] }],
+    },
+    idempotent: false,
+    connectionKinds: ['http'],
+    outputs: [
+      out('status', 'number'),
+      out('headers', 'json'),
+      // Parsed (JSON) or a string (Text); null for an empty JSON body.
+      out('body', 'json'),
+      // The body bytes read: after a truncation, the bytes kept.
+      out('bytes', 'number'),
+      out('durationMs', 'number'),
+      out('truncated', 'boolean'),
+      optionalOut('callback', 'json'),
+    ],
+    secretSinkFields: [HTTP_SECRET_HEADERS_FIELD],
+    configSchema: webConfigSchema,
+    dispatchConfigSchema: webConfigSchema,
   },
   {
     type: LLM_CALL_ACTIVITY_TYPE,
