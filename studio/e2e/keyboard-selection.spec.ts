@@ -80,7 +80,7 @@ test.describe('#737 keyboard selection', () => {
     await page
       .getByRole('region', { name: 'Activities', exact: true })
       .getByRole('button', {
-        name: 'HTTP request',
+        name: 'Web',
         exact: true,
       })
       .click();
@@ -121,7 +121,7 @@ test.describe('#737 keyboard selection', () => {
     await openCanvas(page, 'e2e kbd save');
     await page
       .getByRole('region', { name: 'Activities', exact: true })
-      .getByRole('button', { name: 'HTTP request', exact: true })
+      .getByRole('button', { name: 'Web', exact: true })
       .click();
     await expect(canvasNodes(page)).toHaveCount(1);
 

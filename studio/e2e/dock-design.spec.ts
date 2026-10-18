@@ -96,7 +96,7 @@ for (const { density, theme } of DESIGN_RUNS) {
     await expectAppearance(page, theme, d);
 
     // An activity with nothing filled in, so Problems has an issue to list.
-    await addActivity(page, 'HTTP request');
+    await addActivity(page, 'Web');
     await expect.poll(() => validationIssues(page)).not.toEqual([]);
     await deselect(page);
     // Opened, since it never opens by itself (#1694 OR42).

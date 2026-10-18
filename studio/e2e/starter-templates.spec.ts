@@ -79,7 +79,7 @@ test.describe('starter templates on an empty canvas (#1413)', () => {
 
     const guide = page.getByRole('region', { name: 'Start this pipeline' });
     const target = guide.getByRole('button', { name: /^Summarise every document/ });
-    await toolbox(page).getByRole('button', { name: 'HTTP request', exact: true }).dragTo(target);
+    await toolbox(page).getByRole('button', { name: 'Web', exact: true }).dragTo(target);
 
     await expect(canvasNodes(page)).toHaveCount(1);
     await expect(guide).toHaveCount(0);

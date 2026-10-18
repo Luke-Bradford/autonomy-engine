@@ -361,7 +361,7 @@ test.describe('pipeline version history', () => {
     await seedThreeVersions(page, 'history-refusal');
 
     // A palette-dropped HTTP node needs its URL before the doc saves (#1480).
-    await addSavableActivity(page, 'HTTP request');
+    await addSavableActivity(page, 'Web');
     // #1393 — dirty is the mark on Save (its description), not a paragraph.
     await expect(page.locator('.dirty-dot')).toHaveCSS('visibility', 'visible');
     await expect(page.getByRole('button', { name: 'Save version' })).toHaveAccessibleDescription(
@@ -413,7 +413,7 @@ test.describe('pipeline version history', () => {
 
     // This tab, still based on v1, makes an edit and saves.
     // A palette-dropped HTTP node needs its URL before the doc saves (#1480).
-    await addSavableActivity(page, 'HTTP request');
+    await addSavableActivity(page, 'Web');
     await page.getByRole('button', { name: 'Save version' }).click();
 
     const banner = page.locator('.notice-conflict');
@@ -500,7 +500,7 @@ test.describe('pipeline version history', () => {
     // Raise the banner: another writer lands v2, this tab saves from v1.
     await mintVersion(page, pipelineId, V3, pipelineVersionId, name);
     // A palette-dropped HTTP node needs its URL before the doc saves (#1480).
-    await addSavableActivity(page, 'HTTP request');
+    await addSavableActivity(page, 'Web');
     await page.getByRole('button', { name: 'Save version' }).click();
 
     const override = page.getByRole('button', { name: 'Save as v3 anyway' });
@@ -566,7 +566,7 @@ test.describe('pipeline version history', () => {
 
     const v2 = await mintVersion(page, pipelineId, V3, pipelineVersionId, name);
     // A palette-dropped HTTP node needs its URL before the doc saves (#1480).
-    await addSavableActivity(page, 'HTTP request');
+    await addSavableActivity(page, 'Web');
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.getByRole('button', { name: 'Save as v3 anyway' })).toBeEnabled();
 

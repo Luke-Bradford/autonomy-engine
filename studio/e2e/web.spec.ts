@@ -174,3 +174,77 @@ test.describe('#1600 C11a — Web', () => {
     expect(String(failed?.payload.error)).toBe('HTTP 404 Not Found: {"error":"no such path"}');
   });
 });
+
+test.describe('#1600 C11b — a stored HTTP request opens as Web', () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test('it keeps its run, opens as Web with Fail on HTTP error off and Parse as Text, and saves as Web', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const http = await seedConnection(page, {
+      name: 'e2e 1600 c11b http',
+      kind: 'http',
+      config: { baseUrl: stubUrl },
+    });
+    const { pipelineId, pipelineVersionId } = await seedVersion(page, 'e2e 1600 c11b legacy', {
+      nodes: [
+        {
+          id: 'call',
+          type: 'http_request',
+          position: { x: 0, y: 0 },
+          connectionId: http,
+          config: { url: '/missing', method: 'get' },
+        },
+      ],
+    });
+    const answerOf = async (versionId: string, name: string) => {
+      const runId = await fireAndSettle(page, versionId, name);
+      const done = (await eventsOf(page, runId)).find(
+        (e) => e.type === 'node.succeeded' && e.payload['nodeId'] === 'call',
+      );
+      expect(done, 'the node succeeds: a 404 is data, not a failure').toBeDefined();
+      const { status, body } = done!.payload['outputs'] as Record<string, unknown>;
+      return { status, body };
+    };
+    // The stored version is untouched by the lowering: it runs as http_request.
+    const before = await answerOf(pipelineVersionId, 'e2e 1600 c11b old');
+    expect(before).toEqual({ status: 404, body: '{"error":"no such path"}' });
+
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+    await expect(canvasNodes(page)).toHaveCount(1);
+    await expect(
+      toolbox(page).getByRole('button', { name: 'HTTP request', exact: true }),
+    ).toHaveCount(0);
+    await expect(toolbox(page).getByRole('button', { name: 'Web', exact: true })).toBeVisible();
+    await canvasNodes(page).filter({ hasText: 'Web' }).click();
+    await expect(combobox(page, 'Method').locator('option:checked')).toHaveText('GET');
+    await tab(page, 'Settings').click();
+    await expect(checkbox(page, 'Fail on HTTP error')).not.toBeChecked();
+    await expect(combobox(page, 'Parse as').locator('option:checked')).toHaveText('Text');
+    // Any edit saves the node as its replacement.
+    await tab(page, 'General').click();
+    await properties(page)
+      .getByRole('textbox', { name: 'Activity description' })
+      .fill('lowered from HTTP request');
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+
+    const versions = (await (
+      await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+    ).json()) as {
+      id: string;
+      version: number;
+      nodes: { id: string; type: string; config: Record<string, unknown> }[];
+    }[];
+    const latest = versions.sort((a, b) => b.version - a.version)[0]!;
+    expect(latest.nodes[0]).toMatchObject({
+      id: 'call',
+      type: 'web',
+      config: { url: '/missing', method: 'GET', failOnHttpError: false, parseAs: 'text' },
+    });
+    // The re-saved node answers as the old one did.
+    expect(await answerOf(latest.id, 'e2e 1600 c11b new')).toEqual(before);
+    expectQuiet(problems);
+  });
+});
