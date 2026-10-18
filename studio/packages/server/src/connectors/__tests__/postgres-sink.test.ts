@@ -84,6 +84,9 @@ function sinkFactory(
     insertRowCount?: (sent: number) => number | null | undefined;
     /** What an Upsert's UPDATE reports as its `rowCount` (C3a). */
     updateRowCount?: number;
+    /** Auto-create's existence checks, answered in turn (C3c). Past the end,
+     * the relation exists unless `missing`. */
+    exists?: boolean[];
   } = {},
 ) {
   const rec: SinkRecorder = { queries: [], ended: 0 };
@@ -103,6 +106,9 @@ function sinkFactory(
         );
         if (fixture.failOn !== undefined && sql.startsWith(fixture.failOn.prefix)) {
           throw fixture.failOn.error;
+        }
+        if (sql.includes('is not null as "exists"')) {
+          return { rows: [{ exists: fixture.exists?.shift() ?? fixture.missing !== true }], fields: [] };
         }
         if (sql.includes('to_regclass')) {
           if (fixture.missing === true) return { rows: [], fields: [] };
@@ -978,6 +984,128 @@ describe('the postgres sink: Pre-copy script (C3b)', () => {
   });
 });
 
+describe('the postgres sink: Auto-create from mapping (C3c)', () => {
+  const COLUMNS = [
+    { name: 'a', type: 'integer' as const },
+    { name: 'b', type: 'string' as const },
+  ];
+  const EXISTS = 'select to_regclass($1) is not null as "exists"';
+  const ADVISORY = 'select pg_advisory_xact_lock(hashtext($1), hashtext($2))';
+  /** The statements from BEGIN on: the session's own setup precedes it. */
+  const fromBegin = (rec: SinkRecorder) => sqlOf(rec).slice(sqlOf(rec).indexOf('BEGIN'));
+
+  it('checks, takes the advisory lock, re-checks and creates, all before the LOCK', async () => {
+    const { rec, factory } = sinkFactory({ exists: [false, false] });
+    await writePostgresDatasetRows(
+      write({ createClient: factory, autoCreate: COLUMNS }),
+      batchesOf([{ a: 1, b: 2 }]),
+    );
+    expect(fromBegin(rec).slice(0, 6)).toEqual([
+      'BEGIN',
+      EXISTS,
+      ADVISORY,
+      EXISTS,
+      'CREATE TABLE "public"."tgt" ("a" bigint, "b" text)',
+      'LOCK TABLE "public"."tgt" IN ROW EXCLUSIVE MODE',
+    ]);
+    const begin = sqlOf(rec).indexOf('BEGIN');
+    expect(rec.queries[begin + 1]!.values).toEqual(['"public"."tgt"']);
+    expect(rec.queries[begin + 2]!.values).toEqual([
+      'autonomy-studio:copy-auto-create',
+      '"public"."tgt"',
+    ]);
+  });
+
+  it('takes no advisory lock and creates nothing when the table exists', async () => {
+    const { rec, factory } = sinkFactory({ exists: [true] });
+    await writePostgresDatasetRows(
+      write({ createClient: factory, autoCreate: COLUMNS }),
+      batchesOf([{ a: 1, b: 2 }]),
+    );
+    expect(fromBegin(rec).slice(0, 3)).toEqual([
+      'BEGIN',
+      EXISTS,
+      'LOCK TABLE "public"."tgt" IN ROW EXCLUSIVE MODE',
+    ]);
+  });
+
+  it('creates nothing when another copy created the table while it waited', async () => {
+    const { rec, factory } = sinkFactory({ exists: [false, true] });
+    await writePostgresDatasetRows(
+      write({ createClient: factory, autoCreate: COLUMNS }),
+      batchesOf([{ a: 1, b: 2 }]),
+    );
+    expect(sqlOf(rec).some((q) => q.startsWith('CREATE TABLE'))).toBe(false);
+    expect(sqlOf(rec)).toContain(ADVISORY);
+  });
+
+  it('creates every type as its PostgreSQL column type, an unqualified name unqualified', async () => {
+    const { rec, factory } = sinkFactory({
+      exists: [false, false],
+      columns: ['s', 'i', 'n', 'b', 'd', 't', 'x'].map((name) => col(name)),
+    });
+    await writePostgresDatasetRows(
+      write({
+        createClient: factory,
+        datasetConfig: { table: 'tgt' },
+        columns: ['s', 'i', 'n', 'b', 'd', 't', 'x'],
+        autoCreate: [
+          { name: 's', type: 'string' },
+          { name: 'i', type: 'integer' },
+          { name: 'n', type: 'number' },
+          { name: 'b', type: 'boolean' },
+          { name: 'd', type: 'date' },
+          { name: 't', type: 'timestamp' },
+          { name: 'x', type: 'binary' },
+        ],
+      }),
+      batchesOf(),
+    );
+    expect(sqlOf(rec).find((q) => q.startsWith('CREATE TABLE'))).toBe(
+      'CREATE TABLE "tgt" ("s" text, "i" bigint, "n" double precision, "b" boolean, ' +
+        '"d" date, "t" timestamptz, "x" bytea)',
+    );
+  });
+
+  it.each([
+    [
+      [
+        { name: 'a', type: 'integer' as const },
+        { name: 'A', type: 'string' as const },
+      ],
+      "Auto-create cannot create both 'a' and 'A': a store compares column names without case",
+    ],
+    [
+      [{ name: 'c'.repeat(64), type: 'string' as const }],
+      `Auto-create cannot create column '${'c'.repeat(64)}': PostgreSQL names are at most 63 characters`,
+    ],
+  ])('refuses %j before any statement after BEGIN, and rolls back', async (autoCreate, message) => {
+    const { rec, factory } = sinkFactory({ exists: [false, false] });
+    const err = await writePostgresDatasetRows(
+      write({ createClient: factory, autoCreate, columns: autoCreate.map((c) => c.name) }),
+      batchesOf([{ a: 1 }]),
+    ).catch((e: unknown) => e);
+    expect(err).toMatchObject({ kind: 'permanent', message });
+    expect(fromBegin(rec)).toEqual(['BEGIN', 'ROLLBACK']);
+  });
+
+  it("reports a refused CREATE in the store's words, permanent, and rolls back", async () => {
+    const { rec, factory } = sinkFactory({
+      exists: [false, false],
+      failOn: { prefix: 'CREATE TABLE', error: pgError('42501', 'permission denied for schema public') },
+    });
+    const err = await writePostgresDatasetRows(
+      write({ createClient: factory, autoCreate: COLUMNS }),
+      batchesOf([{ a: 1, b: 2 }]),
+    ).catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      kind: 'permanent',
+      message: "the copy into 'public.tgt' failed: permission denied for schema public",
+    });
+    expect(sqlOf(rec).at(-1)).toBe('ROLLBACK');
+  });
+});
+
 describe.skipIf(LIVE_HOST === undefined)('the postgres sink, against a live postgres', () => {
   const live = {
     host: LIVE_HOST ?? '',
@@ -1608,6 +1736,127 @@ describe.skipIf(LIVE_HOST === undefined)('the postgres sink, against a live post
   });
 
   // #1600 OR41 C3b — the claims the offline suite can only assert the shape of.
+  describe('Auto-create from mapping (C3c)', () => {
+    const EVERY_TYPE = [
+      { name: 's', type: 'string' as const },
+      { name: 'i', type: 'integer' as const },
+      { name: 'n', type: 'number' as const },
+      { name: 'b', type: 'boolean' as const },
+      { name: 'd', type: 'date' as const },
+      { name: 't', type: 'timestamp' as const },
+      { name: 'x', type: 'binary' as const },
+    ];
+
+    it('creates the table with every type, writes each value back exactly, and nullable', async () => {
+      await withAdminClient((c) => c.query('drop table if exists sink_ac'));
+      const bytes = new Uint8Array([0, 1, 254]);
+      await writePostgresDatasetRows(
+        liveWrite({
+          datasetConfig: { schema: 'public', table: 'sink_ac' },
+          columns: EVERY_TYPE.map((c) => c.name),
+          autoCreate: EVERY_TYPE,
+        }),
+        batchesOf([
+          {
+            s: 'Ann',
+            i: 9007199254740993n,
+            n: 1.5,
+            b: true,
+            d: '2026-07-15',
+            t: '2026-07-15T13:45:00.000Z',
+            x: bytes,
+          },
+          { s: null, i: null, n: null, b: null, d: null, t: null, x: null },
+        ]),
+      );
+      const shape = await withAdminClient((c) =>
+        c.query(
+          `select a.attname as name, format_type(a.atttypid, a.atttypmod) as type, a.attnotnull as "notNull"
+             from pg_attribute a where a.attrelid = 'public.sink_ac'::regclass and a.attnum > 0
+            order by a.attnum`,
+        ),
+      );
+      expect(shape.rows).toEqual([
+        { name: 's', type: 'text', notNull: false },
+        { name: 'i', type: 'bigint', notNull: false },
+        { name: 'n', type: 'double precision', notNull: false },
+        { name: 'b', type: 'boolean', notNull: false },
+        { name: 'd', type: 'date', notNull: false },
+        { name: 't', type: 'timestamp with time zone', notNull: false },
+        { name: 'x', type: 'bytea', notNull: false },
+      ]);
+      const back = await withAdminClient((c) =>
+        c.query(
+          `select s, i::text as i, n, b, d::text as d, (t at time zone 'UTC')::text as t, x
+             from sink_ac order by s nulls last`,
+        ),
+      );
+      expect(back.rows[0]).toMatchObject({
+        s: 'Ann',
+        i: '9007199254740993',
+        n: 1.5,
+        b: true,
+        d: '2026-07-15',
+        t: '2026-07-15 13:45:00',
+      });
+      expect(new Uint8Array(back.rows[0].x as Buffer)).toEqual(bytes);
+      expect(back.rows[1]).toMatchObject({ s: null, i: null, b: null });
+    });
+
+    it('undoes the create when the copy fails', async () => {
+      await withAdminClient((c) => c.query('drop table if exists sink_ac_fail'));
+      await expect(
+        writePostgresDatasetRows(
+          liveWrite({
+            datasetConfig: { schema: 'public', table: 'sink_ac_fail' },
+            columns: ['a'],
+            mode: 'upsert',
+            autoCreate: [{ name: 'a', type: 'integer' }],
+          }),
+          batchesOf([{ a: 1 }]),
+        ),
+      ).rejects.toThrow(/Upsert needs Key columns/);
+      expect(
+        (await withAdminClient((c) => c.query("select to_regclass('public.sink_ac_fail') as r")))
+          .rows,
+      ).toEqual([{ r: null }]);
+    });
+
+    it('lets two copies auto-create one table at once: one creates it, both write', async () => {
+      await withAdminClient((c) => c.query('drop table if exists sink_ac_race'));
+      const one = (a: number) =>
+        writePostgresDatasetRows(
+          liveWrite({
+            datasetConfig: { schema: 'public', table: 'sink_ac_race' },
+            columns: ['a'],
+            autoCreate: [{ name: 'a', type: 'integer' }],
+          }),
+          batchesOf([{ a }]),
+        );
+      await Promise.all([one(1), one(2), one(3)]);
+      expect(
+        (await withAdminClient((c) => c.query('select a from sink_ac_race order by a'))).rows,
+      ).toEqual([{ a: '1' }, { a: '2' }, { a: '3' }]);
+    });
+
+    it('writes into an existing table as it is', async () => {
+      await withAdminClient((c) =>
+        c.query('drop table if exists sink_ac_old; create table sink_ac_old(a text, extra int)'),
+      );
+      await writePostgresDatasetRows(
+        liveWrite({
+          datasetConfig: { schema: 'public', table: 'sink_ac_old' },
+          columns: ['a'],
+          autoCreate: [{ name: 'a', type: 'integer' }],
+        }),
+        batchesOf([{ a: 5n }]),
+      );
+      expect(
+        (await withAdminClient((c) => c.query('select a, extra from sink_ac_old'))).rows,
+      ).toEqual([{ a: '5', extra: null }]);
+    });
+  });
+
   describe('Pre-copy script (C3b)', () => {
     it('runs with its bind value inside the copy, and is undone when the copy fails', async () => {
       await withAdminClient((c) =>
