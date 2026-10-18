@@ -166,7 +166,7 @@ test.describe('#1139 — copy-node authoring', () => {
     // that made #1167's 23 -> 24 bump show up here rather than only in the
     // shared package's own tests. Importing `CATALOG_VERSION` would make this
     // assert that two copies of one constant agree, which is not the claim.
-    expect(latest.catalogVersion).toBe(54); // #1600 C11c-2 — a Web with no Request URL
+    expect(latest.catalogVersion).toBe(55); // #1600 C12a — Set variable's Operation
 
     await expectQuiet(page, problems);
   });

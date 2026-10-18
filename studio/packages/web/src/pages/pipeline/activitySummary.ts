@@ -30,6 +30,7 @@ import {
   webCallbackTimeoutSeconds,
   webWaitsOnly,
   HTTP_REQUEST_ACTIVITY_TYPE,
+  variableWriteOp,
   type Node,
 } from '@autonomy-studio/shared';
 import { formatElapsed } from '../runs/format';
@@ -99,9 +100,12 @@ export function activitySummary(
     case FAIL_ACTIVITY_TYPE:
       return text(c.message) ?? null;
     case SET_VARIABLE_ACTIVITY_TYPE:
-      return assignment(c.variable, '=', c.value);
-    case APPEND_VARIABLE_ACTIVITY_TYPE:
-      return assignment(c.variable, '+=', c.value);
+    case APPEND_VARIABLE_ACTIVITY_TYPE: {
+      // #1600 C12a — a Set variable's Operation; an unknown one summarises nothing.
+      const op = variableWriteOp(node);
+      if (op === undefined) return null;
+      return assignment(c.variable, op === 'set' ? '=' : '+=', c.value);
+    }
     case FILTER_ACTIVITY_TYPE: {
       const items = text(c.items);
       if (items === undefined) return null;

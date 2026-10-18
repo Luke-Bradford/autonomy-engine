@@ -165,6 +165,19 @@ describe('activitySummary', () => {
     }
   });
 
+  it('#1600 C12a — a Set variable reads its Operation: = for Set, += for Append', () => {
+    const write = (type: string, config: Record<string, unknown>) =>
+      activitySummary(
+        node(type, { config: { variable: 'rows', value: 'x', ...config } }),
+        () => undefined,
+      );
+    expect(write('set_variable', {})).toBe(write('set_variable', { operation: 'set' }));
+    expect(write('set_variable', { operation: 'append' })).toBe(write('append_variable', {}));
+    expect(write('set_variable', { operation: 'append' })).toContain('+=');
+    expect(write('set_variable', {})).not.toContain('+=');
+    expect(write('set_variable', { operation: 'prepend' })).toBeNull();
+  });
+
   it('gives no line for a type the catalog does not know', () => {
     expect(activitySummary(node('custom_thing', { config: { path: 'x' } }), () => undefined)).toBe(
       null,

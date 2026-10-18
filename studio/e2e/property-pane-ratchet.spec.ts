@@ -72,12 +72,12 @@ const HELP_LIMITS: Record<string, number> = {
   'Write file': 7,
   'Agent task': 8,
   'LLM call': 15,
-  'Append variable': 6,
   'Execute pipeline': 6,
   Fail: 5,
   Filter: 7,
   'If condition': 6,
-  'Set variable': 5,
+  // +1 for #1600 C12a's Operation, whose `?` says what Append does to the value.
+  'Set variable': 6,
   Switch: 6,
   Wait: 6,
   ForEach: 5,
@@ -362,12 +362,13 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   'Agent task': 8,
   'LLM call': 15,
   'LLM call (structured)': 15,
-  'Append variable': 6,
   'Execute pipeline': 6,
   Fail: 5,
   Filter: 7,
   'If condition': 6,
-  'Set variable': 5,
+  // +1 for #1600 C12a's Operation, whose `?` says what Append does to the value.
+  'Set variable': 6,
+  'Set variable (append)': 6,
   Switch: 6,
   Wait: 6,
   'Wait (inactive)': 7,
@@ -397,8 +398,8 @@ const SHOWS: Record<string, string[]> = {
   'Agent task': ['Summarise the repo', '/tmp/e2e', 'E2E-1'],
   'LLM call': ['Price of SKU-1?', 'lookup_price', 'claude-haiku-4-5', 'E2E-1'],
   'LLM call (structured)': ['Classify'],
-  'Append variable': ['rows', 'x'],
   'Set variable': ['count', '5'],
+  'Set variable (append)': ['rows', 'x'],
   'Execute pipeline': ['eu'],
   Fail: ['Stopped: ${run.runId}'],
   Filter: ['${greater(item, 1)}'],
@@ -673,11 +674,16 @@ function seeds(ids: SeedIds): Record<string, Seed> {
         },
       },
     },
-    'Append variable': {
-      node: { ...retryOnly, type: 'append_variable', config: { variable: 'rows', value: 'x' } },
-    },
     'Set variable': {
       node: { ...retryOnly, type: 'set_variable', config: { variable: 'count', value: '5' } },
+    },
+    // #1600 C12a — Append variable is Set variable's Append operation.
+    'Set variable (append)': {
+      node: {
+        ...retryOnly,
+        type: 'set_variable',
+        config: { operation: 'append', variable: 'rows', value: 'x' },
+      },
     },
     'Execute pipeline': {
       node: {
