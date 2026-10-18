@@ -243,6 +243,31 @@ export function isNetworkError(err: unknown): boolean {
 }
 
 /**
+ * Classify what `fetch` threw, once the caller has ruled out its own cancel and
+ * timeout. A `TypeError` that is not a network failure is a malformed request
+ * (bad URL, forbidden header, a redirect loop) and never succeeds as it is:
+ * `permanent`. Anything else, a refused or dropped connection included, is
+ * `transient`, and names its `cause.code` because `fetch failed` alone does not
+ * say why. The message is redacted: a header-validation `TypeError` quotes the
+ * bad value verbatim, which could be a secret.
+ */
+export function fetchFailure(
+  err: unknown,
+  secrets: readonly (string | null | undefined)[],
+): { kind: 'permanent' | 'transient'; error: string } {
+  const message = redactSecrets(err instanceof Error ? err.message : String(err), secrets);
+  if (err instanceof TypeError && !isNetworkError(err))
+    return { kind: 'permanent', error: message };
+  // The code is appended after redaction: it comes from the OS or undici
+  // (`ECONNREFUSED`), never from a request value.
+  const code = (err as { cause?: { code?: unknown } } | null)?.cause?.code;
+  return {
+    kind: 'transient',
+    error: typeof code === 'string' ? `${message} (${code})` : message,
+  };
+}
+
+/**
  * Read a response body, keeping at most `maxBytes`. `overLimit` is true when
  * the body was longer; the stream is then cancelled, so the socket closes and a
  * large (or decompressing) body stops downloading.

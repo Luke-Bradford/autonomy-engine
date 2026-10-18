@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_STRUCTURED_REPAIRS,
@@ -12,6 +14,8 @@ import {
   executeLocalTool,
   executeToolCalls,
   httpStatusFailure,
+  httpStatusFailureEvent,
+  llmPost,
   meterUsage,
   noCompletionFailure,
   normalizeModelId,
@@ -837,6 +841,37 @@ describe('postJsonAndParse (#648)', () => {
   });
 });
 
+/** #1757 — a refused connection reaches `llmPost` as `TypeError('fetch failed')`,
+ *  the same class as a malformed request; it must still read as retryable. */
+describe('llmPost transport failures', () => {
+  const lctx = (): ActivityContext => ({
+    runId: 'run_1',
+    nodeId: 'n1',
+    attemptId: 'n1#0',
+    activityType: 'llm_call',
+    input: {},
+    connectionConfig: {},
+    signal: new AbortController().signal,
+  });
+
+  it('a refused connection is transient, with its cause, and no spend fact', async () => {
+    const closed = createServer();
+    await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', resolve));
+    const port = (closed.address() as AddressInfo).port;
+    await new Promise((resolve) => closed.close(resolve));
+    const res = await llmPost(lctx(), `http://127.0.0.1:${port}/v1`, {}, {}, 5_000);
+    expect(res).toEqual({
+      type: 'failed',
+      event: { type: 'failed', kind: 'transient', error: 'fetch failed (ECONNREFUSED)' },
+    });
+  });
+
+  it('a malformed URL stays permanent', async () => {
+    const res = await llmPost(lctx(), 'http://exa mple.com/', {}, {}, 5_000);
+    expect(res.type === 'failed' && res.event.kind).toBe('permanent');
+  });
+});
+
 /** #2 L7 — the single builder for a non-2xx LLM failure. Attaches the parsed
  *  `retryAfterSeconds` hint ONLY when the failure is retryable (rate_limit /
  *  transient); an auth/permanent status carrying the header does NOT (it never
@@ -888,6 +923,40 @@ const ADDER: LlmToolDef = {
   },
   expression: '${add(tool.args.a, tool.args.b)}',
 };
+
+/** #1758 — the one builder Web and the LLM adapters share. */
+describe('httpStatusFailureEvent', () => {
+  const NOW = 1_000_000_000_000;
+
+  it('drops the colon for an empty excerpt and keeps the caller label', () => {
+    expect(
+      httpStatusFailureEvent({
+        label: 'HTTP 503 Service Unavailable',
+        excerpt: '',
+        kind: 'transient',
+        retryAfterHeader: '7',
+        nowMs: NOW,
+      }),
+    ).toEqual({
+      type: 'failed',
+      kind: 'transient',
+      error: 'HTTP 503 Service Unavailable',
+      retryAfterSeconds: 7,
+    });
+  });
+
+  it('a caller-set permanent kind carries no retry-after hint', () => {
+    expect(
+      httpStatusFailureEvent({
+        label: 'HTTP 429',
+        excerpt: 'slow down',
+        kind: 'permanent',
+        retryAfterHeader: '30',
+        nowMs: NOW,
+      }),
+    ).toEqual({ type: 'failed', kind: 'permanent', error: 'HTTP 429: slow down' });
+  });
+});
 
 describe('executeLocalTool (#2 L10a)', () => {
   it('validates args and evaluates the expression to a JSON result string', () => {

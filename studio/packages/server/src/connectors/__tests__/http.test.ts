@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { httpAdapter } from '../http.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
@@ -220,6 +222,21 @@ describe('httpAdapter.runActivity', () => {
       { type: 'failed', kind: 'permanent', error: 'an HTTP GET cannot carry a body' },
     ]);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  // #1757 — Node's fetch throws `TypeError('fetch failed')` for a refused port too;
+  // the cause, not the class, tells it from a malformed request. A real socket.
+  it('maps a refused connection (a TypeError from fetch) to a transient failure', async () => {
+    const closed = createServer();
+    await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', resolve));
+    const port = (closed.address() as AddressInfo).port;
+    await new Promise((resolve) => closed.close(resolve));
+    const events = await drain(
+      httpAdapter.runActivity(ctx({ input: { url: `http://127.0.0.1:${port}/` } }), null),
+    );
+    expect(events).toEqual([
+      { type: 'failed', kind: 'transient', error: 'fetch failed (ECONNREFUSED)' },
+    ]);
   });
 
   it('maps a malformed-request TypeError (e.g. bad URL) to a permanent failure', async () => {
