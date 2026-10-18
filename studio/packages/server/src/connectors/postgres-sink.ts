@@ -587,7 +587,9 @@ async function autoCreatePostgresTable(
   // or no signal. TRANSIENT, as that LOCK's own timeout is (57014, and 55P03 a
   // lock not available): nothing has been written yet and the transaction rolls
   // back, so a retry is safe and finds the table once the creator commits.
-  const deadline = Date.now() + waitMs;
+  // Monotonic, so a wall-clock step cannot stretch or cut the wait. Each poll
+  // is itself bounded by the session's statement timers (`clientOptionsFor`).
+  const deadline = performance.now() + waitMs;
   for (;;) {
     const locked = (
       (await client.query('select pg_try_advisory_lock($1::bigint) as "locked"', [key])).rows[0] as
@@ -598,7 +600,7 @@ async function autoCreatePostgresTable(
       break;
     }
     if (signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
-    if (Date.now() >= deadline) {
+    if (performance.now() >= deadline) {
       throw new DatasetIoError(
         'transient',
         `Auto-create waited ${waitMs}ms for another copy creating '${target.schema === undefined ? target.table : `${target.schema}.${target.table}`}', and it is still running`,
@@ -617,8 +619,15 @@ async function autoCreatePostgresTable(
         { exists?: unknown } | undefined
     )?.exists === true;
   if (exists) {
-    await client.query('select pg_advisory_unlock($1::bigint)', [key]);
-    held.key = null;
+    // Best effort: a failed release must not fail a copy whose table exists.
+    // `held` stays set, so the caller's `finally` tries again, and the session's
+    // end releases it regardless.
+    try {
+      await client.query('select pg_advisory_unlock($1::bigint)', [key]);
+      held.key = null;
+    } catch {
+      // Released by the caller's retry or by the session's end.
+    }
     return;
   }
   // Held to this copy's COMMIT or ROLLBACK: the caller releases `held` then.

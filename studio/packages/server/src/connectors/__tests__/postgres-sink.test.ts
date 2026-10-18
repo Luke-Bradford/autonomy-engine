@@ -1065,6 +1065,21 @@ describe('the postgres sink: Auto-create from mapping (C3c)', () => {
     expect(valuesOf(rec, UNLOCK)).toEqual([[autoCreateLockKey('public', 'tgt')]]);
   });
 
+  it('still writes when releasing the lock fails, and tries the release again after COMMIT', async () => {
+    const { rec, factory } = sinkFactory({
+      exists: [true],
+      failOn: { prefix: UNLOCK, error: pgError('08006', 'connection failure') },
+    });
+    const result = await writePostgresDatasetRows(
+      write({ createClient: factory, autoCreate: COLUMNS }),
+      batchesOf([{ a: 1, b: 2 }]),
+    );
+    expect(result.rowsWritten).toBe(1);
+    const queries = sqlOf(rec);
+    expect(queries.filter((q) => q === UNLOCK)).toHaveLength(2);
+    expect(queries.lastIndexOf(UNLOCK)).toBeGreaterThan(queries.indexOf('COMMIT'));
+  });
+
   it('waits while another copy holds the lock, then creates nothing once it has created the table', async () => {
     const { rec, factory } = sinkFactory({ exists: [true], locks: [false, false] });
     await writePostgresDatasetRows(
