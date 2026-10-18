@@ -681,6 +681,10 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
    * safe because a cancel only fails a row still showing `wait_pending`.
    */
   const recheckParked = new Set<string>();
+  // #1600 OR41 C11c — a Web *Wait for callback*'s request outputs, by node, held
+  // from `node.awaitingCallback` until the callback settles it (the reducer's
+  // `NodeRunState.callback`). Its park continues the request's attempt and span.
+  const heldCallbacks = new Map<string, Record<string, unknown>>();
   /**
    * #1746 — whether a `run.cancelRequested` has been folded. The reducer's
    * `onCancelRequested` fails every held retry and every parked re-check with no
@@ -798,6 +802,29 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
   /** The raw id, when this event came from a foreach ITEM INSTANCE of the node. */
   const instanceOf = (rawNodeId: string): string | undefined =>
     docNodeIdOf(rawNodeId) === rawNodeId ? undefined : rawNodeId;
+
+  /**
+   * #1600 OR41 C11c — a Web *Wait for callback* settled by its callback, as the
+   * reducer's `settleWebCallback` does: the request outputs plus `callback`, or
+   * the failure the callback reported (its message rides the event).
+   */
+  const settleWebCallback = (
+    n: FoldingNode,
+    rawNodeId: string,
+    request: Record<string, unknown>,
+    callback: unknown,
+    reportedError: string | undefined,
+  ): void => {
+    clearResult(n);
+    if (reportedError !== undefined) {
+      n.status = 'failure';
+      n.error = reportedError;
+    } else {
+      n.status = 'success';
+      n.outputValues = { ...request, callback };
+    }
+    n.instanceId = instanceOf(rawNodeId);
+  };
 
   /**
    * A TERMINAL event for a node we never saw start. That happens for the
@@ -937,6 +964,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // #1600 C8d — a Wait until re-check continues its first check's attempt
         // and span, as the Monitor's activity run does: no new attempt.
         const recheck = rechecking.delete(e.nodeId);
+        heldCallbacks.delete(e.nodeId); // #1600 C11c — a new attempt holds nothing
         if (!recheck) {
           dispatchesByRawNode.set(e.nodeId, (dispatchesByRawNode.get(e.nodeId) ?? 0) + 1);
         }
@@ -1125,8 +1153,41 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         openSpan(n, e.nodeId, row.ts);
         break;
       }
+      case 'node.awaitingCallback': {
+        // #1600 OR41 C11c — the request succeeded; the node now waits for its
+        // callback. It stays open; `externalWait.created` parks it.
+        const n = ensure(e.nodeId);
+        if (cancelled) {
+          // `onAwaitingCallback` fails it under a cancel, as for a re-check.
+          if (n.status === 'dispatched') {
+            n.status = 'failure';
+            closeSpan(n, e.nodeId, row.ts);
+          }
+          break;
+        }
+        heldCallbacks.set(e.nodeId, e.outputs);
+        break;
+      }
       case 'externalWait.created': {
         const n = ensure(e.nodeId);
+        const held = heldCallbacks.get(e.nodeId);
+        if (held !== undefined) {
+          // #1600 OR41 C11c — a Web's park: the same attempt and span as its
+          // request, so no new attempt and no new span.
+          if (cancelled) {
+            heldCallbacks.delete(e.nodeId);
+            n.status = 'failure';
+            closeSpan(n, e.nodeId, row.ts);
+          } else if (e.arrived !== undefined) {
+            // The callback came before the park: settled now.
+            heldCallbacks.delete(e.nodeId);
+            settleWebCallback(n, e.nodeId, held, e.arrived.callback, e.arrived.reportedError);
+            closeSpan(n, e.nodeId, row.ts);
+          } else {
+            n.status = 'external_wait_pending';
+          }
+          break;
+        }
         n.status = 'external_wait_pending';
         n.attempts += 1;
         clearResult(n);
@@ -1158,6 +1219,15 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // The callback arrived, and THIS is the node's success event (reduce.ts
         // `onExternalWaitCompleted` flips it to `success` directly).
         const n = ensure(e.nodeId);
+        const held = heldCallbacks.get(e.nodeId);
+        if (held !== undefined) {
+          // #1600 OR41 C11c — a Web's callback: its request outputs plus
+          // `callback`, or the failure the callback reported.
+          heldCallbacks.delete(e.nodeId);
+          settleWebCallback(n, e.nodeId, held, e.outputs?.callback ?? null, e.reportedError);
+          closeSpan(n, e.nodeId, row.ts);
+          break;
+        }
         clearResult(n);
         n.status = 'success';
         // #911 — and so this is the ONLY place a webhook's declared outputs can be
@@ -1173,6 +1243,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         break;
       }
       case 'externalWait.expired': {
+        heldCallbacks.delete(e.nodeId); // #1600 C11c — a Web's wait expires too
         // #4 A13 — the expiry alarm beat the callback, which the reducer treats as
         // a PERMANENT failure. The event carries no message (there is no provider
         // to quote), so state the reason rather than leave a red row with a blank

@@ -97,6 +97,7 @@ function attemptOf(e: EngineEvent): { nodeId: string; attemptId: string } | null
     case 'timer.waitScheduled':
     case 'externalWait.created':
     case 'node.notReady':
+    case 'node.awaitingCallback':
       return { nodeId: e.nodeId, attemptId: e.attemptId };
     case 'call.started':
     case 'call.detached':
@@ -136,8 +137,18 @@ function resultOf(
             error: e.reason ?? `the called pipeline's run ended ${e.childOutcome}`,
           };
     case 'timer.due':
-    case 'externalWait.completed':
       return { attemptId: e.previousAttemptId, status: 'success' };
+    // #1600 C11c — a Web callback that reported a failure fails the attempt.
+    case 'externalWait.completed':
+      return e.reportedError !== undefined
+        ? { attemptId: e.previousAttemptId, status: 'failure', error: e.reportedError }
+        : { attemptId: e.previousAttemptId, status: 'success' };
+    // #1600 C11c — a Web callback that came before the park settles on the arm.
+    case 'externalWait.created':
+      if (e.arrived === undefined) return null;
+      return e.arrived.reportedError !== undefined
+        ? { attemptId: e.attemptId, status: 'failure', error: e.arrived.reportedError }
+        : { attemptId: e.attemptId, status: 'success' };
     case 'externalWait.expired':
       return {
         attemptId: e.previousAttemptId,

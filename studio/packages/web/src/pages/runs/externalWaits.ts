@@ -1,4 +1,4 @@
-import { outputContract, resolveDocNode } from '@autonomy-studio/shared';
+import { outputContract, resolveDocNode, WEB_ACTIVITY_TYPE } from '@autonomy-studio/shared';
 import type {
   Node,
   PendingExternalWait,
@@ -68,6 +68,13 @@ export function parkedDocNode(doc: PipelineVersion | null, nodeId: string): Node
  */
 export function describeCallbackBody(node: Node | null): string | null {
   if (node === null) return null;
+  if (node.type === WEB_ACTIVITY_TYPE) {
+    // #1600 OR41 C11c — a Web *Wait for callback* keeps the whole JSON body as
+    // its `callback` output (the server's `parseWebCallbackBody`).
+    return node.config.reportStatusOnCallback === true
+      ? 'The callback body is JSON, kept whole as the callback output. A StatusCode of 400 or above fails the activity with its Error.'
+      : 'The callback body is JSON, kept whole as the callback output. An empty body is null.';
+  }
 
   const contract = outputContract(node);
   if (contract.kind === 'invalid') {
