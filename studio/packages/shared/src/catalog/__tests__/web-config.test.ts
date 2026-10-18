@@ -10,6 +10,10 @@ import {
   webCallbackBody,
   callbackReportedError,
   WEB_MAX_CALLBACK_TIMEOUT_SECONDS,
+  webWaitsOnly,
+  WEB_NO_REQUEST_OUTPUTS,
+  timeoutApplies,
+  userPropertiesApply,
   type Node,
 } from '../../index.js';
 import { activityNodeErrors } from '../../engine/activity-config-check.js';
@@ -183,5 +187,83 @@ describe('web config — Wait for callback (#1600 OR41 C11c)', () => {
     expect(callbackReportedError({ Output: { ok: 1 } })).toBeUndefined();
     expect(callbackReportedError([{ StatusCode: 500 }])).toBeUndefined();
     expect(callbackReportedError(null)).toBeUndefined();
+  });
+});
+
+describe('web config — no Request URL (#1600 OR41 C11c-2)', () => {
+  it('refuses no URL, or an empty one, unless Wait for callback is on', () => {
+    expect(issuesOf({})).toEqual(['url: required']);
+    expect(issuesOf({ url: '' })).toEqual(['url: required']);
+    expect(issuesOf({ waitForCallback: true })).toEqual([]);
+    expect(issuesOf({ url: '', waitForCallback: true, callbackTimeoutSeconds: 60 })).toEqual([]);
+  });
+
+  it('accepts the default GET, which only matters when a request is sent', () => {
+    expect(issuesOf({ waitForCallback: true, method: 'GET' })).toEqual([]);
+    expect(issuesOf({ url: '/x', waitForCallback: true, method: 'GET' })).toHaveLength(1);
+  });
+
+  it('refuses a request setting, which has nothing to apply to', () => {
+    expect(
+      issuesOf({
+        waitForCallback: true,
+        body: '{}',
+        headers: { a: 'b' },
+        [HTTP_SECRET_HEADERS_FIELD]: { k: { $secret: 's' } },
+        httpRequestTimeoutSeconds: 5,
+        successStatusCodes: [404],
+      }),
+    ).toEqual([
+      'body: only sent with a Request URL',
+      'headers: only sent with a Request URL',
+      `${HTTP_SECRET_HEADERS_FIELD}: only sent with a Request URL`,
+      'httpRequestTimeoutSeconds: only sent with a Request URL',
+      'successStatusCodes: only sent with a Request URL',
+    ]);
+    // An empty Body box is no body.
+    expect(issuesOf({ waitForCallback: true, body: '' })).toEqual([]);
+  });
+
+  it('webWaitsOnly reads the stored config: Wait for callback on and no URL', () => {
+    expect(webWaitsOnly({ waitForCallback: true })).toBe(true);
+    expect(webWaitsOnly({ waitForCallback: true, url: '' })).toBe(true);
+    expect(webWaitsOnly({ waitForCallback: true, url: '${pipeline().parameters.u}' })).toBe(false);
+    expect(webWaitsOnly({ url: '' })).toBe(false);
+  });
+});
+
+describe('web config — no Request URL, review follow-ups (#1600 OR41 C11c-2)', () => {
+  it('an emptied table or list is not a request setting', () => {
+    expect(
+      issuesOf({
+        waitForCallback: true,
+        headers: {},
+        [HTTP_SECRET_HEADERS_FIELD]: {},
+        successStatusCodes: [],
+      }),
+    ).toEqual([]);
+  });
+
+  it('with Wait for callback off, a missing URL does not hide the other rules', () => {
+    expect(issuesOf({ callbackTimeoutSeconds: 60 })).toEqual([
+      'url: required',
+      'callbackTimeoutSeconds: only read when Wait for callback is on',
+    ]);
+  });
+
+  it('its null request outputs name every Web output but callback', () => {
+    const names = getActivity(WEB_ACTIVITY_TYPE)!
+      .outputs.map((o) => o.name)
+      .filter((n) => n !== 'callback');
+    expect(Object.keys(WEB_NO_REQUEST_OUTPUTS).sort()).toEqual(names.sort());
+  });
+
+  it('takes no activity timeout or user properties: it is never dispatched', () => {
+    const node = (config: Record<string, unknown>) =>
+      ({ type: WEB_ACTIVITY_TYPE, config }) as Pick<Node, 'type' | 'config'>;
+    expect(timeoutApplies(node({ waitForCallback: true }))).toBe(false);
+    expect(userPropertiesApply(node({ waitForCallback: true }))).toBe(false);
+    expect(timeoutApplies(node({ waitForCallback: true, url: '/x' }))).toBe(true);
+    expect(timeoutApplies(node({ url: '/x' }))).toBe(true);
   });
 });

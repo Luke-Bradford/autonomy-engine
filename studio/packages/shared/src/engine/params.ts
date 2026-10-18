@@ -48,6 +48,7 @@ import {
   SWITCH_ACTIVITY_TYPE,
   SWITCH_DEFAULT_BRANCH,
   WAIT_ACTIVITY_TYPE,
+  WEB_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
 } from '../catalog/types.js';
 import {
@@ -5063,6 +5064,12 @@ function validateTimeoutPolicy(node: Node, errors: string[]): void {
     );
   } else if (node.type === WEBHOOK_ACTIVITY_TYPE) {
     refuse(`'${node.type}'`, 'it waits for its callback; set its own Timeout instead');
+  } else if (node.type === WEB_ACTIVITY_TYPE) {
+    // #1600 OR41 C11c-2 — `timeoutApplies` is false only with no Request URL.
+    refuse(
+      'a Web with no Request URL',
+      'it sends nothing and waits for its callback; set its Callback timeout instead',
+    );
   } else if (node.type === WAIT_ACTIVITY_TYPE) {
     refuse(`'${node.type}'`, 'its duration is its own setting');
   } else if (getActivity(node.type) !== undefined) {

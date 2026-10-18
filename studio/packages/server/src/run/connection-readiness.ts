@@ -2,6 +2,8 @@ import {
   catalog,
   interpolationMode,
   switchedOffNodeIds,
+  WEB_ACTIVITY_TYPE,
+  webWaitsOnly,
   type ActivityCatalogEntry,
   type ConnectionDependentsResponse,
   type ConnectionKind,
@@ -105,6 +107,9 @@ function connectionEndsOfNode(
   entry: ActivityCatalogEntry | undefined,
 ): { ref: string; kinds: readonly ConnectionKind[] }[] {
   if (entry === undefined || entry.connectionKinds.length === 0) return [];
+  // #1600 OR41 C11c-2 — a Web that only waits is never dispatched, so a
+  // connection left on it is never resolved and must not block enable.
+  if (node.type === WEB_ACTIVITY_TYPE && webWaitsOnly(node.config)) return [];
   if (entry.sinkConnectionKinds !== undefined) {
     const pair = node.connectionIds;
     return pair === undefined

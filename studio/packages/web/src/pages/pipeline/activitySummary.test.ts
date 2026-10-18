@@ -230,6 +230,15 @@ describe('activitySummary', () => {
   });
 });
 
+describe('#1600 OR41 C11c-2 — a Web with no Request URL', () => {
+  it('reads as the Webhook it stands for', () => {
+    const waits = node('web', { config: { waitForCallback: true, callbackTimeoutSeconds: 900 } });
+    expect(activitySummary(waits, () => undefined)).toBe('callback · timeout 15m 00s');
+    const fallback = node('web', { config: { waitForCallback: true, url: '' } });
+    expect(activitySummary(fallback, () => undefined)).toBe('callback · timeout 10m 00s');
+  });
+});
+
 describe('activityBadges', () => {
   it('#1600 C0c — an inactive activity leads with its mark: inactive, and the outcome it records', () => {
     expect(activityBadges(node('http_request', { state: 'inactive' }))).toEqual([

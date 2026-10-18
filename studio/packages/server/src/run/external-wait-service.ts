@@ -3,6 +3,7 @@ import {
   checkInboundOutputs,
   resolveDocNode,
   WEB_ACTIVITY_TYPE,
+  webWaitsOnly,
   type EngineEvent,
   type RunEvent,
 } from '@autonomy-studio/shared';
@@ -168,11 +169,19 @@ function parseCallbackBody(body: Buffer | undefined): Record<string, unknown> {
  * response limit (`parseWebJson`, which the redaction walk relies on), is
  * refused (`invalid_payload`; the node stays parked so the caller can retry),
  * unlike a `webhook`'s, whose declared contract decides.
+ *
+ * C11c-2: a Web that only waits (no Request URL) keeps such a body as text
+ * instead. It stands in for a `webhook`, which accepted any body, so a caller
+ * that sends text or a form still completes it; a Web that sent a request told
+ * its endpoint to call back with JSON, and the endpoint can retry.
  */
 function parseWebCallbackBody(
   body: Buffer | undefined,
+  keepText: boolean,
 ): { ok: true; value: unknown } | { ok: false; reason: string } {
-  const parsed = parseWebJson(body === undefined ? '' : body.toString('utf8'));
+  const text = body === undefined ? '' : body.toString('utf8');
+  const parsed = parseWebJson(text);
+  if (!parsed.ok && keepText) return { ok: true, value: text };
   return parsed.ok
     ? parsed
     : {
@@ -249,7 +258,7 @@ export function createExternalWaitCompleter(deps: DriveDeps): ExternalWaitComple
           if (!early && ns.status !== 'external_wait_pending') {
             return { verdict: 'not_completable', record: null };
           }
-          const parsed = parseWebCallbackBody(body);
+          const parsed = parseWebCallbackBody(body, webWaitsOnly(docNode.config));
           if (!parsed.ok) {
             return { verdict: 'invalid_payload', record: null, reason: parsed.reason };
           }

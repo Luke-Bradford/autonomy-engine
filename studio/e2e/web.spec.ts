@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { addActivity, canvasNodes, fillSelectedNodeConfig, toolbox } from './support/canvasGraph';
-import { fireAndSettle, openSeededCanvas, seedVersion } from './support/seedDoc';
+import { fireAndSettle, fireManualTrigger, openSeededCanvas, seedVersion } from './support/seedDoc';
 import { pickConnection, properties } from './support/panels';
 import { seedConnection } from './support/seedResources';
 
@@ -11,11 +11,11 @@ import { seedConnection } from './support/seedResources';
  * #1600 OR41 C11a — Web on an http connection (activity catalogue §4.6, ADF's
  * Web activity).
  *
- * What only a browser can show: the palette offers Web beside Webhook, its
- * Request · Auth · Settings tabs draw inside 1440x900 with ADF's defaults (Fail
- * on HTTP error on, so Treat as success shows; Parse as JSON), the form saves the
- * config, and the saved version reads a JSON response into `body`. A 404 FAILS
- * the run, where `http_request` succeeds with it.
+ * What only a browser can show: the palette offers Web (and, since C11c-2, no
+ * Webhook), its Request · Auth · Settings tabs draw inside 1440x900 with ADF's
+ * defaults (Fail on HTTP error on, so Treat as success shows; Parse as JSON),
+ * the form saves the config, and the saved version reads a JSON response into
+ * `body`. A 404 FAILS the run, where `http_request` succeeds with it.
  *
  * EGRESS-FREE: the endpoint is a stub on 127.0.0.1, as in `llm-capture.spec.ts`.
  */
@@ -96,7 +96,7 @@ test.describe('#1600 C11a — Web', () => {
     });
     const pipelineId = await openSeededCanvas(page, 'e2e 1600 c11a web', { nodes: [] });
 
-    // `exact`: Webhook (external wait) sits in the same group.
+    // `exact`: no other palette entry is named Web alone.
     await expect(toolbox(page).getByRole('button', { name: 'Web', exact: true })).toHaveCount(1);
     await addActivity(page, 'Web');
     await expect(canvasNodes(page)).toHaveCount(1);
@@ -409,5 +409,105 @@ test.describe('#1600 C11c — Web Wait for callback', () => {
     expect(created?.payload.arrived).toMatchObject({
       reportedError: 'the callback reported StatusCode 500: E42: disk full',
     });
+  });
+});
+
+test.describe('#1600 C11c-2 — a Web with no Request URL only waits', () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  const runOf = async (page: Page, runId: string) =>
+    (await (await page.request.get(`/api/runs/${encodeURIComponent(runId)}`)).json()) as {
+      status: string;
+    };
+
+  test('a stored Webhook opens as a Web that only waits, saves as one, and settles on a callback', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const { pipelineId } = await seedVersion(page, 'e2e 1600 c11c2 hook', {
+      nodes: [
+        {
+          id: 'hook',
+          type: 'webhook',
+          position: { x: 0, y: 0 },
+          config: { timeoutSeconds: '${900}' },
+        },
+      ],
+    });
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+    await expect(canvasNodes(page)).toHaveCount(1);
+    // Webhook has left the palette; Web covers it.
+    await expect(toolbox(page).getByRole('button', { name: /^Webhook/ })).toHaveCount(0);
+    await expect(toolbox(page).getByRole('button', { name: 'Web', exact: true })).toBeVisible();
+    const card = canvasNodes(page).filter({ hasText: /^Web\b/ });
+    await expect(card).toContainText('callback · timeout 15m 00s');
+    await card.click();
+
+    // Request: no URL and no connection, which is what makes it only wait.
+    await tab(page, 'Request').click();
+    await expect(
+      properties(page).getByRole('textbox', { name: 'Request URL', exact: true }),
+    ).toHaveValue('');
+    await tab(page, 'Settings').click();
+    await expect(checkbox(page, 'Wait for callback')).toBeChecked();
+    const timeout = properties(page).getByRole('textbox', {
+      name: 'Callback timeout',
+      exact: true,
+    });
+    await expect(timeout).toHaveValue('900');
+    await expect(checkbox(page, 'Report status on callback')).not.toBeChecked();
+    // Measured at 1440x900: the settings it carries are on screen in the pane.
+    const pane = (await properties(page).boundingBox())!;
+    for (const control of [checkbox(page, 'Wait for callback'), timeout]) {
+      const box = (await control.boundingBox())!;
+      expect(box.y + box.height).toBeLessThanOrEqual(Math.min(pane.y + pane.height, 900));
+    }
+
+    // Any edit saves the node as its replacement.
+    await tab(page, 'General').click();
+    await properties(page)
+      .getByRole('textbox', { name: 'Activity description' })
+      .fill('lowered from Webhook');
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+    const versions = (await (
+      await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+    ).json()) as {
+      id: string;
+      version: number;
+      nodes: { id: string; type: string; connectionId?: string; config: Record<string, unknown> }[];
+    }[];
+    const latest = versions.sort((a, b) => b.version - a.version)[0]!;
+    expect(latest.nodes[0]).toMatchObject({
+      id: 'hook',
+      type: 'web',
+      config: { waitForCallback: true, callbackTimeoutSeconds: 900 },
+    });
+    expect(latest.nodes[0]!.config).not.toHaveProperty('url');
+    expect(latest.nodes[0]!.connectionId).toBeUndefined();
+
+    // It runs: parks without sending anything, and a text callback settles it,
+    // as a Webhook accepted any body.
+    const runId = await fireManualTrigger(page, latest.id, 'e2e 1600 c11c2');
+    await expect
+      .poll(async () => (await runOf(page, runId)).status, { timeout: 20_000 })
+      .toBe('waiting');
+    const waits = (await (
+      await page.request.get(`/api/runs/${encodeURIComponent(runId)}/external-waits`)
+    ).json()) as { callbackPath: string }[];
+    expect(waits).toHaveLength(1);
+    const res = await page.request.post(waits[0]!.callbackPath, {
+      headers: { 'content-type': 'text/plain' },
+      data: 'approved',
+    });
+    expect(res.status()).toBe(204);
+    await expect
+      .poll(async () => (await runOf(page, runId)).status, { timeout: 20_000 })
+      .toBe('success');
+    const events = await eventsOf(page, runId);
+    expect(events.map((e) => e.type)).not.toContain('node.dispatched');
+    const done = events.find((e) => e.type === 'externalWait.completed');
+    expect(done?.payload.outputs).toEqual({ callback: 'approved' });
+    await expectQuiet(page, problems);
   });
 });

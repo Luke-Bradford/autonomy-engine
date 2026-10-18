@@ -48,7 +48,9 @@ test.describe('#1394 readable activity cards', () => {
         {
           id: 'hook',
           type: 'webhook',
-          config: { timeoutSeconds: '${3600}' },
+          // #1600 C11c-2 — a declared output keeps it a Webhook on load (one
+          // without opens as Web), so its title is still the catalog's longest.
+          config: { timeoutSeconds: '${3600}', outputs: [{ name: 'decision', type: 'string' }] },
           position: { x: 0, y: 0 },
         },
         {

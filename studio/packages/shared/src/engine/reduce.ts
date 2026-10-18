@@ -40,9 +40,16 @@ import {
   SWITCH_ACTIVITY_TYPE,
   SWITCH_DEFAULT_BRANCH,
   WAIT_ACTIVITY_TYPE,
+  WEB_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
 } from '../catalog/types.js';
-import { webCallbackOutcome } from '../catalog/web-config.js';
+import {
+  WEB_MAX_CALLBACK_TIMEOUT_SECONDS,
+  WEB_NO_REQUEST_OUTPUTS,
+  webCallbackOutcome,
+  webCallbackTimeoutSeconds,
+  webWaitsOnly,
+} from '../catalog/web-config.js';
 import { outputContract, storeOutputs, validateOutputs } from './outputs.js';
 import { hasSecureOutput, redactSecureEvent, secureEventNodeId } from './secure.js';
 import {
@@ -1998,6 +2005,45 @@ export function createEngine(doc: EngineDoc): Engine {
         currentAttemptId: attemptId,
       });
       commands.push({ type: 'scheduleExternalWait', nodeId: sid, attemptId, timeoutSeconds });
+      return { state: next, changed: true };
+    }
+    if (node.type === WEB_ACTIVITY_TYPE && webWaitsOnly(node.config)) {
+      // #1600 OR41 C11c-2 — a Web *Wait for callback* with no Request URL sends
+      // nothing (ADF's Webhook with nothing to call), so it is never handed to
+      // the executor: no request, no connection. Hold it `ready` exactly as
+      // `onAwaitingCallback` does after a request, with the request outputs as
+      // nulls, and ask the driver to park it. From here the C11c paths are the
+      // same: `resume` re-parks it on `callback`, and the callback, the expiry
+      // or a cancel settles it.
+      const timeoutSeconds = webCallbackTimeoutSeconds(node.config);
+      if (
+        !Number.isSafeInteger(timeoutSeconds) ||
+        timeoutSeconds < 1 ||
+        timeoutSeconds > WEB_MAX_CALLBACK_TIMEOUT_SECONDS
+      ) {
+        // Save refuses this; a doc that skipped it fails cleanly, as a bad
+        // `webhook` timeout does, rather than arming an alarm it cannot.
+        return prepFailure(
+          state,
+          sid,
+          new Error(
+            `callbackTimeoutSeconds must be a whole number from 1 to ${WEB_MAX_CALLBACK_TIMEOUT_SECONDS}`,
+          ),
+          diagnostics,
+        );
+      }
+      const callback: NonNullable<NodeRunState['callback']> = {
+        attemptId,
+        request: { ...WEB_NO_REQUEST_OUTPUTS },
+        timeoutSeconds,
+      };
+      const next = withNode(state, sid, {
+        status: 'ready',
+        attempts: ns.attempts + 1,
+        currentAttemptId: attemptId,
+        callback,
+      });
+      commands.push(callbackWaitCommand(sid, callback));
       return { state: next, changed: true };
     }
     if (node.call !== undefined) {
@@ -4984,7 +5030,9 @@ export function createEngine(doc: EngineDoc): Engine {
         // #1600 OR41 C11c crash recovery: `node.awaitingCallback` held the node
         // `ready` and its `scheduleExternalWait` was lost. Re-park, NEVER
         // re-dispatch: the request was sent and answered, and Web is not
-        // idempotent. `armExternalWait` is idempotent (see the webhook fork).
+        // idempotent. C11c-2: a Web with no Request URL is held here from its
+        // preparation, and is never dispatched at all. `armExternalWait` is
+        // idempotent (see the webhook fork).
         commands.push(callbackWaitCommand(id, ns.callback));
         continue;
       }

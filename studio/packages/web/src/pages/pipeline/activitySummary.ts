@@ -27,6 +27,8 @@ import {
   WAIT_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
   WEB_ACTIVITY_TYPE,
+  webCallbackTimeoutSeconds,
+  webWaitsOnly,
   HTTP_REQUEST_ACTIVITY_TYPE,
   type Node,
 } from '@autonomy-studio/shared';
@@ -70,6 +72,10 @@ export function activitySummary(
   switch (node.type) {
     case HTTP_REQUEST_ACTIVITY_TYPE:
     case WEB_ACTIVITY_TYPE: {
+      // #1600 OR41 C11c-2 — no Request URL: the Webhook's wait, so its summary.
+      if (node.type === WEB_ACTIVITY_TYPE && webWaitsOnly(c)) {
+        return `callback · timeout ${formatElapsed(webCallbackTimeoutSeconds(c) * 1000)}`;
+      }
       const url = text(c.url);
       if (url === undefined) return null;
       const method = (text(c.method) ?? 'GET').toUpperCase();

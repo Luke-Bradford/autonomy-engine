@@ -23,6 +23,7 @@ import {
   type VariableWrite,
   type WaitingReason,
   webCallbackOutcome,
+  WEB_NO_REQUEST_OUTPUTS,
 } from '@autonomy-studio/shared';
 
 import { parseEngineEvent } from './parsedEvent';
@@ -1190,6 +1191,23 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         n.attempts += 1;
         clearResult(n);
         openSpan(n, e.nodeId, row.ts);
+        if (e.arrived !== undefined) {
+          // #1600 OR41 C11c-2 — a Web with no Request URL (never dispatched, so
+          // no held request) whose callback came in a crash window before the
+          // park: settled on the arm. Only a Web's park carries `arrived`. Under
+          // a cancel the reducer ends the wait instead (`onExternalWaitCreated`
+          // holds it from preparation), as for a held request above.
+          if (cancelled) n.status = 'failure';
+          else
+            settleWebCallback(
+              n,
+              e.nodeId,
+              WEB_NO_REQUEST_OUTPUTS,
+              e.arrived.callback,
+              e.arrived.reportedError,
+            );
+          closeSpan(n, e.nodeId, row.ts);
+        }
         break;
       }
       // SPLIT rather than sharing one two-label case, following the same
@@ -1217,7 +1235,14 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // The callback arrived, and THIS is the node's success event (reduce.ts
         // `onExternalWaitCompleted` flips it to `success` directly).
         const n = ensure(e.nodeId);
-        const held = heldCallbacks.get(e.nodeId);
+        // #1600 OR41 C11c-2 — a Web with no Request URL has no held request, and
+        // only a Web's callback carries `reportedError`: settle it the same way.
+        // On a success this fold cannot tell it from a webhook (it has no doc),
+        // so it shows `e.outputs`, the callback, without the null request
+        // outputs the reducer stores beside it.
+        const held =
+          heldCallbacks.get(e.nodeId) ??
+          (e.reportedError !== undefined ? WEB_NO_REQUEST_OUTPUTS : undefined);
         if (held !== undefined) {
           // #1600 OR41 C11c — a Web's callback: its request outputs plus
           // `callback`, or the failure the callback reported.

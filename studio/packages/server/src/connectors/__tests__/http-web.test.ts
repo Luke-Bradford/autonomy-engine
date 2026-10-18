@@ -464,6 +464,16 @@ describe('Web — the request', () => {
 });
 
 describe('Web — failures to complete', () => {
+  it('a `${}` Request URL that resolved empty fails permanent, naming the URL (#1600 C11c-2)', async () => {
+    for (const input of [
+      { url: '' },
+      { url: '', waitForCallback: true, method: 'POST', body: '{}' },
+    ]) {
+      const event = failed(await run(input));
+      expect(event).toMatchObject({ kind: 'permanent', error: 'the Request URL resolved empty' });
+    }
+  });
+
   it('a refused connection is transient', async () => {
     const closed = createServer();
     await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', resolve));

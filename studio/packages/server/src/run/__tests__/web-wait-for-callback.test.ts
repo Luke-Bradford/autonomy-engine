@@ -6,7 +6,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   CATALOG_VERSION,
   getActivity,
+  lowerRetiredTypes,
   WEB_ACTIVITY_TYPE,
+  WEBHOOK_ACTIVITY_TYPE,
   type Node,
 } from '@autonomy-studio/shared';
 import { buildTestAppWithContext } from '../../__tests__/build-test-app.js';
@@ -86,7 +88,7 @@ async function startRun(
   config: Record<string, unknown> = {},
   policy?: Node['policy'],
 ): Promise<string> {
-  const node: Node = {
+  return startNode({
     id: 'job',
     type: WEB_ACTIVITY_TYPE,
     connectionId,
@@ -100,7 +102,10 @@ async function startRun(
     },
     position: { x: 0, y: 0 },
     ...(policy !== undefined ? { policy } : {}),
-  };
+  });
+}
+
+async function startNode(node: Node): Promise<string> {
   const pipeline = createPipeline(app.db, { ownerId: 'local', name: `Web wait ${Math.random()}` });
   const version = createPipelineVersion(app.db, {
     pipelineId: pipeline.id,
@@ -332,5 +337,80 @@ describe('#1600 C11c — the public base URL', () => {
     expect(() => resolvePublicBaseUrl('studio.example.com', 'x', 1)).toThrow(/AUTONOMY_PUBLIC_URL/);
     expect(() => resolvePublicBaseUrl('ftp://h/', 'x', 1)).toThrow(/AUTONOMY_PUBLIC_URL/);
     expect(() => resolvePublicBaseUrl('https://h/?a=1', 'x', 1)).toThrow(/AUTONOMY_PUBLIC_URL/);
+  });
+});
+
+describe('#1600 C11c-2 — a Web with no Request URL only waits', () => {
+  const waitsOnly = (id = 'job'): Node => ({
+    id,
+    type: WEB_ACTIVITY_TYPE,
+    config: {
+      waitForCallback: true,
+      callbackTimeoutSeconds: 300,
+      outputs: getActivity(WEB_ACTIVITY_TYPE)!.outputs,
+    },
+    position: { x: 0, y: 0 },
+  });
+
+  async function pendingPath(runId: string): Promise<string> {
+    const res = await app.inject({ method: 'GET', url: `/api/runs/${runId}/external-waits` });
+    expect(res.statusCode).toBe(200);
+    const waits = res.json() as Array<{ callbackPath: string }>;
+    expect(waits).toHaveLength(1);
+    return waits[0]!.callbackPath;
+  }
+
+  it('sends nothing, parks without a connection, and settles on the callback', async () => {
+    const runId = await startNode(waitsOnly());
+    await untilStatus(runId, 'waiting');
+    expect(eventTypes(runId)).not.toContain('node.dispatched');
+    const res = await callBack(await pendingPath(runId), { approved: true });
+    expect(res.statusCode).toBe(204);
+    await untilStatus(runId, 'success');
+    expect(projected(runId).outputs.job).toEqual({
+      status: null,
+      headers: null,
+      body: null,
+      bytes: null,
+      durationMs: null,
+      truncated: null,
+      callback: { approved: true },
+    });
+  });
+
+  it('keeps a callback body that is not JSON as text, as a webhook accepted any body', async () => {
+    const runId = await startNode(waitsOnly());
+    await untilStatus(runId, 'waiting');
+    const res = await app.inject({
+      method: 'POST',
+      url: await pendingPath(runId),
+      headers: { 'content-type': 'text/plain' },
+      payload: 'approved',
+    });
+    expect(res.statusCode).toBe(204);
+    await untilStatus(runId, 'success');
+    expect(projected(runId).outputs.job).toMatchObject({ callback: 'approved' });
+  });
+
+  it('a stored webhook and its lowering settle the same way on the same callback', async () => {
+    const hook: Node = {
+      id: 'job',
+      type: WEBHOOK_ACTIVITY_TYPE,
+      config: { timeoutSeconds: '${300}' },
+      position: { x: 0, y: 0 },
+    };
+    const [lowered] = lowerRetiredTypes({ nodes: [hook], containers: [] }).nodes;
+    expect(lowered!.type).toBe(WEB_ACTIVITY_TYPE);
+    const outputs: unknown[] = [];
+    for (const node of [hook, lowered!]) {
+      const runId = await startNode(node);
+      await untilStatus(runId, 'waiting');
+      expect((await callBack(await pendingPath(runId), { ok: 1 })).statusCode).toBe(204);
+      await untilStatus(runId, 'success');
+      outputs.push(projected(runId).outputs.job);
+    }
+    // The documented difference: the Web keeps the body the webhook discarded.
+    expect(outputs[0]).toEqual({});
+    expect(outputs[1]).toMatchObject({ status: null, callback: { ok: 1 } });
   });
 });

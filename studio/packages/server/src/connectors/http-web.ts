@@ -3,8 +3,9 @@ import {
   formatZodIssues,
   webCallbackBody,
   webHasBody,
+  webHasUrl,
   WARNING_CODES,
-  WEB_DEFAULT_CALLBACK_TIMEOUT_SECONDS,
+  webCallbackTimeoutSeconds,
   webConfigSchema,
   type httpConnectionConfigSchema,
 } from '@autonomy-studio/shared';
@@ -57,6 +58,15 @@ export async function* runWeb(
   secret: string | null,
   secretFields: Readonly<Record<string, string>>,
 ): AsyncIterable<ActivityEvent> {
+  // #1600 OR41 C11c-2 — a Web whose stored URL is empty only waits and is never
+  // dispatched; one here had a `${}` URL that resolved empty, so there is
+  // nothing to call. Checked first: the schema would read the empty URL as the
+  // inbound-only wait and blame a request setting instead.
+  if (!webHasUrl(ctx.input)) {
+    yield { type: 'failed', kind: 'permanent', error: 'the Request URL resolved empty' };
+    return;
+  }
+  const url = ctx.input.url;
   const parsed = webConfigSchema.safeParse(ctx.input);
   if (!parsed.success) {
     yield {
@@ -118,7 +128,7 @@ export async function* runWeb(
   const startedAt = Date.now();
   try {
     const res = await fetchWithoutLeakingSecrets(
-      resolveUrl(connection.baseUrl, cfg.url),
+      resolveUrl(connection.baseUrl, url),
       {
         method: cfg.method,
         headers: requestHeaders,
@@ -201,7 +211,7 @@ export async function* runWeb(
       yield {
         type: 'awaitCallback',
         outputs,
-        timeoutSeconds: cfg.callbackTimeoutSeconds ?? WEB_DEFAULT_CALLBACK_TIMEOUT_SECONDS,
+        timeoutSeconds: webCallbackTimeoutSeconds(cfg),
       };
       return;
     }

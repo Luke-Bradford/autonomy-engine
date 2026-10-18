@@ -67,12 +67,18 @@ describe('describeCallbackBody', () => {
       ({ id: 'w', type: 'web', config, position: { x: 0, y: 0 } }) as Parameters<
         typeof describeCallbackBody
       >[0];
-    expect(describeCallbackBody(web({ waitForCallback: true }))).toBe(
+    expect(describeCallbackBody(web({ url: '/jobs', waitForCallback: true }))).toBe(
       'The callback body is JSON, kept whole as the callback output.',
     );
     expect(
-      describeCallbackBody(web({ waitForCallback: true, reportStatusOnCallback: true })),
+      describeCallbackBody(
+        web({ url: '/jobs', waitForCallback: true, reportStatusOnCallback: true }),
+      ),
     ).toContain('StatusCode of 400 or above fails the activity');
+    // #1600 C11c-2 — with no Request URL a body that is not JSON is kept as text.
+    expect(describeCallbackBody(web({ waitForCallback: true }))).toBe(
+      'The callback body is kept whole as the callback output: JSON is parsed, anything else is kept as text.',
+    );
   });
 
   it('says nothing when there is no node to read a contract off', () => {

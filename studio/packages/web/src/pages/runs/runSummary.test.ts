@@ -6,6 +6,7 @@ import type {
   RunEvent,
   RunState,
 } from '@autonomy-studio/shared';
+import { WEB_NO_REQUEST_OUTPUTS } from '@autonomy-studio/shared';
 import { projectRun } from './runProjection';
 import {
   deriveNodeActivity,
@@ -4064,5 +4065,68 @@ describe('#1600 OR41 C11c — a Web Wait for callback', () => {
     expect(done!.status).toBe('success');
     expect(done!.attempts).toBe(1);
     expect(done!.outputValues).toEqual({ ...REQUEST, callback: { done: true } });
+  });
+});
+
+describe('#1600 OR41 C11c-2 — a Web with no Request URL (never dispatched)', () => {
+  const park = (arrived?: { callback: unknown; reportedError?: string }) =>
+    envelope(
+      {
+        type: 'externalWait.created',
+        runId: 'r',
+        nodeId: 'w',
+        attemptId: 'w#0',
+        dueAt: 9,
+        ...(arrived !== undefined ? { arrived } : {}),
+      },
+      1_000,
+    );
+
+  it('a reported failure fails it, though no request was held', () => {
+    const [done] = deriveNodeActivity([
+      park(),
+      envelope(
+        {
+          type: 'externalWait.completed',
+          runId: 'r',
+          nodeId: 'w',
+          previousAttemptId: 'w#0',
+          outputs: { callback: { StatusCode: 403 } },
+          reportedError: 'the callback reported StatusCode 403',
+        },
+        2_000,
+      ),
+    ]);
+    expect(done!.status).toBe('failure');
+    expect(done!.error).toBe('the callback reported StatusCode 403');
+    expect(done!.attempts).toBe(1);
+    expect(done!.endedAtMs).toBe(2_000);
+  });
+
+  it('a callback that came in the crash window settles it at the arm, on one attempt', () => {
+    const [done] = deriveNodeActivity([park({ callback: 'ok' })]);
+    expect(done!.status).toBe('success');
+    expect(done!.attempts).toBe(1);
+    // The fold has no doc; `arrived` is a Web's only, so the null request
+    // outputs the reducer stores are shown beside the callback.
+    expect(done!.outputValues).toEqual({ ...WEB_NO_REQUEST_OUTPUTS, callback: 'ok' });
+    expect(done!.endedAtMs).toBe(1_000);
+  });
+
+  it('under a cancel, an arrival fails it, as the reducer ends the wait', () => {
+    const [done] = deriveNodeActivity([
+      envelope({ type: 'run.cancelRequested', runId: 'r', source: { kind: 'operator' } }, 500),
+      park({ callback: 'ok' }),
+    ]);
+    expect(done!.status).toBe('failure');
+    expect(done!.outputValues).toBeUndefined();
+  });
+
+  it('an early reported failure fails it at the arm', () => {
+    const [done] = deriveNodeActivity([
+      park({ callback: {}, reportedError: 'the callback reported StatusCode 500' }),
+    ]);
+    expect(done!.status).toBe('failure');
+    expect(done!.error).toBe('the callback reported StatusCode 500');
   });
 });
