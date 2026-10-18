@@ -1107,7 +1107,7 @@ describe('the postgres sink: Auto-create from mapping (C3c)', () => {
       batchesOf([{ a: 1, b: 2 }]),
     ).catch((e: unknown) => e);
     expect(err).toMatchObject({
-      kind: 'permanent',
+      kind: 'transient',
       message:
         "Auto-create waited 250ms for another copy creating 'public.tgt', and it is still running",
     });

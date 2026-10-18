@@ -584,7 +584,9 @@ async function autoCreatePostgresTable(
   const key = autoCreateLockKey(schema, target.table);
   // Bounded like the statement it stands in for: the LOCK TABLE after it would
   // wait at most the session's statement timeout, so this wait does too, signal
-  // or no signal. Permanent, as a statement timeout on a write is (57014).
+  // or no signal. TRANSIENT, as that LOCK's own timeout is (57014, and 55P03 a
+  // lock not available): nothing has been written yet and the transaction rolls
+  // back, so a retry is safe and finds the table once the creator commits.
   const deadline = Date.now() + waitMs;
   for (;;) {
     const locked = (
@@ -598,7 +600,7 @@ async function autoCreatePostgresTable(
     if (signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
     if (Date.now() >= deadline) {
       throw new DatasetIoError(
-        'permanent',
+        'transient',
         `Auto-create waited ${waitMs}ms for another copy creating '${target.schema === undefined ? target.table : `${target.schema}.${target.table}`}', and it is still running`,
       );
     }
