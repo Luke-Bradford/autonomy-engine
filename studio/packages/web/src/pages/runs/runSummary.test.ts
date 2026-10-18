@@ -3981,3 +3981,88 @@ describe('deriveNodeActivity — a Get metadata Wait until (#1600 OR41 C8d)', ()
     expect(row.spans).toHaveLength(1);
   });
 });
+
+describe('#1600 OR41 C11c — a Web Wait for callback', () => {
+  const REQUEST = { status: 202, body: { accepted: true } };
+  const toHeld = [
+    envelope(
+      { type: 'node.dispatched', runId: 'r', nodeId: 'w', attemptId: 'w#0', idempotent: false },
+      1_000,
+    ),
+    envelope(
+      {
+        type: 'node.awaitingCallback',
+        runId: 'r',
+        nodeId: 'w',
+        attemptId: 'w#0',
+        outputs: REQUEST,
+        timeoutSeconds: 600,
+      },
+      2_000,
+    ),
+  ];
+  const park = envelope(
+    { type: 'externalWait.created', runId: 'r', nodeId: 'w', attemptId: 'w#0', dueAt: 9 },
+    3_000,
+  );
+
+  it('parks on the request’s attempt and span, then settles with request outputs plus callback', () => {
+    const [held] = deriveNodeActivity([...toHeld]);
+    expect(held!.status).toBe('dispatched');
+    const [parked] = deriveNodeActivity([...toHeld, park]);
+    expect(parked!.status).toBe('external_wait_pending');
+    expect(parked!.attempts).toBe(1);
+    const [done] = deriveNodeActivity([
+      ...toHeld,
+      park,
+      envelope(
+        {
+          type: 'externalWait.completed',
+          runId: 'r',
+          nodeId: 'w',
+          previousAttemptId: 'w#0',
+          outputs: { callback: { Output: 1 } },
+        },
+        4_000,
+      ),
+    ]);
+    expect(done!.status).toBe('success');
+    expect(done!.attempts).toBe(1);
+    expect(done!.outputValues).toEqual({ ...REQUEST, callback: { Output: 1 } });
+  });
+
+  it('a reported failure shows the callback’s message', () => {
+    const [done] = deriveNodeActivity([
+      ...toHeld,
+      park,
+      envelope({
+        type: 'externalWait.completed',
+        runId: 'r',
+        nodeId: 'w',
+        previousAttemptId: 'w#0',
+        outputs: { callback: { StatusCode: 500 } },
+        reportedError: 'the callback reported StatusCode 500',
+      }),
+    ]);
+    expect(done!.status).toBe('failure');
+    expect(done!.error).toBe('the callback reported StatusCode 500');
+    expect(done!.outputValues).toBeUndefined();
+  });
+
+  it('a callback that came before the park settles at the arm', () => {
+    const [done] = deriveNodeActivity([
+      ...toHeld,
+      envelope({
+        type: 'externalWait.created',
+        runId: 'r',
+        nodeId: 'w',
+        attemptId: 'w#0',
+        dueAt: 9,
+        arrived: { callback: { done: true } },
+      }),
+    ]);
+    expect(done!.status).toBe('success');
+    expect(done!.attempts).toBe(1);
+    expect(done!.outputValues).toEqual({ ...REQUEST, callback: { done: true } });
+  });
+});

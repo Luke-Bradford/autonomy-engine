@@ -62,6 +62,19 @@ describe('parkedDocNode', () => {
 });
 
 describe('describeCallbackBody', () => {
+  it('#1600 C11c — a Web Wait for callback keeps the whole JSON body as its callback output', () => {
+    const web = (config: Record<string, unknown>) =>
+      ({ id: 'w', type: 'web', config, position: { x: 0, y: 0 } }) as Parameters<
+        typeof describeCallbackBody
+      >[0];
+    expect(describeCallbackBody(web({ waitForCallback: true }))).toBe(
+      'The callback body is JSON, kept whole as the callback output. An empty body is null.',
+    );
+    expect(
+      describeCallbackBody(web({ waitForCallback: true, reportStatusOnCallback: true })),
+    ).toContain('StatusCode of 400 or above fails the activity');
+  });
+
   it('says nothing when there is no node to read a contract off', () => {
     expect(describeCallbackBody(null)).toBeNull();
   });
