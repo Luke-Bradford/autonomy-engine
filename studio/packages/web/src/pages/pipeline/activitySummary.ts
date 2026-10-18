@@ -142,9 +142,16 @@ export function activitySummary(
       if (ids === undefined) return null;
       const from = inlineSourceLabel(node) ?? dataset(ids.source, datasetName);
       const line = arrow(from, dataset(ids.sink, datasetName));
-      // `append` is the default and says nothing; `overwrite` deletes, and a
-      // destructive step should say so on its face.
-      return line !== null && c.mode === 'overwrite' ? `${line} · overwrite` : line;
+      // `append` is the default and says nothing; `overwrite` and `truncate`
+      // empty the table, and a destructive step should say so on its face.
+      // `upsert` names its keys, which decide which rows it replaces (C3a).
+      if (line === null) return null;
+      if (c.mode === 'overwrite' || c.mode === 'truncate') return `${line} · ${c.mode}`;
+      if (c.mode !== 'upsert') return line;
+      const keys = Array.isArray(c.keyColumns)
+        ? c.keyColumns.filter((k) => typeof k === 'string')
+        : [];
+      return keys.length === 0 ? `${line} · upsert` : `${line} · upsert on ${keys.join(', ')}`;
     }
     case COPY_FILES_ACTIVITY_TYPE: {
       // An empty sink folder is the connection's first allowed folder.

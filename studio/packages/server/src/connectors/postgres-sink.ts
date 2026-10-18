@@ -487,7 +487,7 @@ async function upsertChunk(
  * clean, and inventing the proof is the fail-open direction §4.2 forbids.
  *
  * **The LOCK comes before the §7 gate reads, and its STRENGTH depends on the
- * mode.** Both modes take a lock that conflicts with `ACCESS EXCLUSIVE`, so a
+ * mode** (`LOCK_MODES`; this paragraph is the first two). Both modes take a lock that conflicts with `ACCESS EXCLUSIVE`, so a
  * concurrent `ALTER TABLE` cannot change the table between being described and
  * being written — the TOCTOU sqlite closes with `begin immediate`. But
  * `overwrite` takes `EXCLUSIVE` rather than `ROW EXCLUSIVE`, and that asymmetry
@@ -510,6 +510,13 @@ async function upsertChunk(
  * `ON DELETE` rules, which is their declared intent. The cost is that a large
  * overwrite is a row-by-row delete; that bound is #1126's, already filed against
  * the sqlite sink for the same reason.
+ *
+ * **`truncate` and `upsert` (C3a) are the operator's explicit choices.**
+ * Truncate then insert is the TRUNCATE the paragraph above avoids for
+ * Overwrite, with all of its costs, named in the field's help: it needs the
+ * TRUNCATE privilege, fires no delete triggers, refuses a referenced table and
+ * holds `ACCESS EXCLUSIVE` until the copy commits. Upsert is `stageUpsert`'s.
+ * `LOCK_MODES` holds each behaviour's lock and why.
  */
 export async function writePostgresDatasetRows(
   write: PostgresDatasetWrite,

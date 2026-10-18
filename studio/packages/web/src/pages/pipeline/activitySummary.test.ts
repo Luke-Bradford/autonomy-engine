@@ -165,6 +165,20 @@ describe('activitySummary', () => {
     }
   });
 
+  it('#1600 C3a — a Copy names its Write behaviour, except the default Append', () => {
+    const copy = (config: Record<string, unknown>) =>
+      activitySummary(
+        node(COPY_ACTIVITY_TYPE, { config, datasetIds: { source: 'ds_src', sink: 'ds_sink' } }),
+        (id) => NAMES.get(id),
+      );
+    expect(copy({ mode: 'append' })).toBe('orders.csv → orders table');
+    expect(copy({ mode: 'truncate' })).toBe('orders.csv → orders table · truncate');
+    expect(copy({ mode: 'upsert' })).toBe('orders.csv → orders table · upsert');
+    expect(copy({ mode: 'upsert', keyColumns: ['id', 'day'] })).toBe(
+      'orders.csv → orders table · upsert on id, day',
+    );
+  });
+
   it('#1600 C12a — a Set variable reads its Operation: = for Set, += for Append', () => {
     const write = (type: string, config: Record<string, unknown>) =>
       activitySummary(
