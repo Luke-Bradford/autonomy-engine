@@ -1277,17 +1277,11 @@ export function authorsCallBlob(node: Pick<Node, 'type' | 'call'>): boolean {
  * ONE statement of the rule: `validateDoc` refuses a timeout where it is false,
  * and the property dock offers the field only where it is true.
  */
-export function timeoutApplies(
-  node: Pick<Node, 'type' | 'call'> & { config?: Record<string, unknown> },
-): boolean {
+export function timeoutApplies(node: Pick<Node, 'type' | 'call' | 'config'>): boolean {
   if (node.call !== undefined || getActivity(node.type)?.kind !== 'execution') return false;
   // #1600 OR41 C11c-2 — a Web with no Request URL is never dispatched: it waits,
   // as a `webhook` does, and its Callback timeout is the bound.
-  return !(
-    node.type === WEB_ACTIVITY_TYPE &&
-    node.config !== undefined &&
-    webWaitsOnly(node.config)
-  );
+  return !(node.type === WEB_ACTIVITY_TYPE && webWaitsOnly(node.config));
 }
 
 /**
@@ -1295,8 +1289,6 @@ export function timeoutApplies(
  * resolved and written on `node.dispatched`, so on exactly the nodes the
  * executor dispatches — the same set a timeout applies to.
  */
-export function userPropertiesApply(
-  node: Pick<Node, 'type' | 'call'> & { config?: Record<string, unknown> },
-): boolean {
+export function userPropertiesApply(node: Pick<Node, 'type' | 'call' | 'config'>): boolean {
   return timeoutApplies(node);
 }
