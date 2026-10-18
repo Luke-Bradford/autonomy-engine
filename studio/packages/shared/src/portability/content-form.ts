@@ -6,6 +6,8 @@ import type {
   PipelineExportData,
   TriggerExportData,
 } from './envelope.js';
+// Export `data` is always JSON-safe (it was Zod-parsed from a JSON envelope),
+// so `jsonClone` is lossless here.
 import { jsonClone } from '../engine/json-clone.js';
 
 /**
@@ -79,9 +81,6 @@ import { jsonClone } from '../engine/json-clone.js';
  * content and is KEPT, so this stays structure-aware, never the #473 fail-open
  * shape of blanket-dropping the whole `webhook` key.
  */
-
-// Export `data` is always JSON-safe (it was Zod-parsed from a JSON envelope),
-// so `jsonClone` is lossless here.
 
 /** Delete a fixed set of keys from a plain object in place. Typed as `unknown`
  * so it can drop fields the static type marks as required (they are excluded

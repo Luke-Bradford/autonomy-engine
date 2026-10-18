@@ -217,7 +217,9 @@ test.describe('#1600 C11b — a stored HTTP request opens as Web', () => {
       toolbox(page).getByRole('button', { name: 'HTTP request', exact: true }),
     ).toHaveCount(0);
     await expect(toolbox(page).getByRole('button', { name: 'Web', exact: true })).toBeVisible();
-    await canvasNodes(page).filter({ hasText: 'Web' }).click();
+    await canvasNodes(page)
+      .filter({ hasText: /^Web\b/ })
+      .click();
     await expect(combobox(page, 'Method').locator('option:checked')).toHaveText('GET');
     await tab(page, 'Settings').click();
     await expect(checkbox(page, 'Fail on HTTP error')).not.toBeChecked();
