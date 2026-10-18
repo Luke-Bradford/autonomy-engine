@@ -36,9 +36,8 @@ test.beforeAll(async () => {
       req.on('end', () => {
         callbacksSent.push(raw);
         const { callBackUri, fail } = JSON.parse(raw) as { callBackUri: string; fail?: boolean };
-        res.writeHead(202, { 'content-type': 'application/json' }).end('{"accepted":true}');
-        setTimeout(() => {
-          void fetch(callBackUri, {
+        const callBack = () =>
+          fetch(callBackUri, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify(
@@ -47,7 +46,15 @@ test.beforeAll(async () => {
                 : { Output: { rows: 3 } },
             ),
           });
-        }, 50);
+        if (fail === true) {
+          // A synchronous endpoint: it calls back BEFORE it answers the request.
+          void callBack().then(() =>
+            res.writeHead(200, { 'content-type': 'application/json' }).end('{}'),
+          );
+          return;
+        }
+        res.writeHead(202, { 'content-type': 'application/json' }).end('{"accepted":true}');
+        setTimeout(() => void callBack(), 50);
       });
       return;
     }
@@ -309,7 +316,12 @@ test.describe('#1600 C11c — Web Wait for callback', () => {
     await checkbox(page, 'Wait for callback').check();
     await expect(timeout).toBeVisible();
     await expect(checkbox(page, 'Report status on callback')).toBeVisible();
-    // Measured at 1440x900: the whole tab still fits the docked pane.
+    // Its two settings share a row, and the whole tab still fits the docked
+    // pane at 1440x900.
+    const timeoutBox = (await timeout.boundingBox())!;
+    const reportBox = (await checkbox(page, 'Report status on callback').boundingBox())!;
+    const mid = (b: { y: number; height: number }) => b.y + b.height / 2;
+    expect(Math.abs(mid(timeoutBox) - mid(reportBox))).toBeLessThan(16);
     const pane = (await properties(page).boundingBox())!;
     for (const control of [timeout, checkbox(page, 'Report status on callback')]) {
       const box = (await control.boundingBox())!;
@@ -347,7 +359,7 @@ test.describe('#1600 C11c — Web Wait for callback', () => {
     await expectQuiet(page, problems);
   });
 
-  test('Report status on callback: a reported StatusCode 500 fails the run with its message', async ({
+  test('Report status on callback: an early StatusCode 500 fails the run with its message', async ({
     page,
   }) => {
     const http = await seedConnection(page, {
@@ -377,9 +389,10 @@ test.describe('#1600 C11c — Web Wait for callback', () => {
       await page.request.get(`/api/runs/${encodeURIComponent(runId)}`)
     ).json()) as { status: string };
     expect(run.status).toBe('failure');
-    const done = (await eventsOf(page, runId)).find((e) => e.type === 'externalWait.completed');
-    expect(done?.payload.reportedError).toBe(
-      'the callback reported StatusCode 500: E42: disk full',
-    );
+    // The endpoint called back before it answered: the arm carried the callback.
+    const created = (await eventsOf(page, runId)).find((e) => e.type === 'externalWait.created');
+    expect(created?.payload.arrived).toMatchObject({
+      reportedError: 'the callback reported StatusCode 500: E42: disk full',
+    });
   });
 });

@@ -82,7 +82,10 @@ function callBack(path: string, payload: unknown) {
   });
 }
 
-async function startRun(config: Record<string, unknown> = {}): Promise<string> {
+async function startRun(
+  config: Record<string, unknown> = {},
+  policy?: Node['policy'],
+): Promise<string> {
   const node: Node = {
     id: 'job',
     type: WEB_ACTIVITY_TYPE,
@@ -96,6 +99,7 @@ async function startRun(config: Record<string, unknown> = {}): Promise<string> {
       ...config,
     },
     position: { x: 0, y: 0 },
+    ...(policy !== undefined ? { policy } : {}),
   };
   const pipeline = createPipeline(app.db, { ownerId: 'local', name: `Web wait ${Math.random()}` });
   const version = createPipelineVersion(app.db, {
@@ -181,6 +185,45 @@ describe('#1600 C11c — Web Wait for callback through the app', () => {
     expect(types).not.toContain('externalWait.completed');
   });
 
+  it('an early callback that reports a failure fails the run at the arm', async () => {
+    behaviour = async (body, res) => {
+      await callBack(callbackPathOf(body), { StatusCode: 403, Error: { Message: 'denied' } });
+      res.end();
+    };
+    const runId = await startRun({ reportStatusOnCallback: true });
+    await untilStatus(runId, 'failure');
+    const created = loadEngineEvents(app.db, runId).find((e) => e.type === 'externalWait.created');
+    expect(created).toMatchObject({
+      arrived: { reportedError: 'the callback reported StatusCode 403: denied' },
+    });
+  });
+
+  it('an early callback is accepted, but a request that then fails still fails the run', async () => {
+    behaviour = async (body, res) => {
+      await callBack(callbackPathOf(body), { done: true });
+      res.writeHead(500).end('boom');
+    };
+    const runId = await startRun();
+    await untilStatus(runId, 'failure');
+    const attemptId = projected(runId).nodes.job!.currentAttemptId!;
+    expect(getExternalWaitByAttempt(app.db, runId, 'job', attemptId)?.status).toBe('completed');
+    expect(eventTypes(runId)).not.toContain('node.awaitingCallback');
+  });
+
+  it('a secure node keeps an early callback on the row as the log would: redacted', async () => {
+    behaviour = async (body, res) => {
+      await callBack(callbackPathOf(body), { secret: 'sk-live-early' });
+      res.end();
+    };
+    const runId = await startRun({}, { secureOutput: true });
+    await untilStatus(runId, 'success');
+    const attemptId = projected(runId).nodes.job!.currentAttemptId!;
+    const row = getExternalWaitByAttempt(app.db, runId, 'job', attemptId)!;
+    expect(row.earlyCallback).not.toBeNull();
+    expect(row.earlyCallback).not.toContain('sk-live-early');
+    expect(JSON.stringify(loadEngineEvents(app.db, runId))).not.toContain('sk-live-early');
+  });
+
   it('Report status on callback: a StatusCode of 400 or above fails the run', async () => {
     let path: string | undefined;
     behaviour = (body, res) => {
@@ -245,6 +288,27 @@ describe('#1600 C11c — Web Wait for callback through the app', () => {
     );
     await untilStatus(runId, 'failure');
     expect(eventTypes(runId)).toContain('externalWait.expired');
+  });
+
+  it('a finished run offers no callback, even for a row left pending', async () => {
+    let path: string | undefined;
+    behaviour = (body, res) => {
+      path = callbackPathOf(body);
+      res.end();
+    };
+    const runId = await startRun();
+    await untilStatus(runId, 'waiting');
+    // A cancel ends the run; nothing settles the row it parked on.
+    const cancelled = await app.inject({ method: 'POST', url: `/api/runs/${runId}/cancel` });
+    expect(cancelled.statusCode).toBeLessThan(300);
+    await until(
+      () => statusOf(runId) === 'cancelled' || statusOf(runId) === 'failure',
+      'the run to end',
+      { iterations: 1500 },
+    );
+    const listed = await app.inject({ method: 'GET', url: `/api/runs/${runId}/external-waits` });
+    expect(listed.json()).toEqual([]);
+    expect((await callBack(path!, {})).statusCode).toBe(404);
   });
 });
 

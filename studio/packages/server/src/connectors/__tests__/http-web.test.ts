@@ -710,6 +710,34 @@ describe('Web — Wait for callback (#1600 OR41 C11c)', () => {
     expect(main.received).toHaveLength(0);
   });
 
+  it('refuses a redirect that would re-send callBackUri to another origin, or drop it', async () => {
+    other.set(json(200, {}));
+    main.set((_q, res) => res.writeHead(307, { location: `${other.url()}/jobs` }).end());
+    const crossOrigin = await run(wait, { callbackUri });
+    expect(failed(crossOrigin)).toMatchObject({ kind: 'permanent' });
+    expect(failed(crossOrigin).error).toContain('another origin');
+    expect(other.received).toHaveLength(0);
+
+    main.set((_q, res) => res.writeHead(302, { location: '/moved' }).end());
+    const dropped = await run(wait, { callbackUri });
+    expect(failed(dropped).error).toContain('drop the body');
+
+    // A same-origin 307 keeps the body, and is followed.
+    let hops = 0;
+    main.set((req, res, body) => {
+      hops += 1;
+      if (req.url === '/jobs') res.writeHead(307, { location: '/jobs2' }).end();
+      else {
+        sent = { body, contentType: req.headers['content-type'] };
+        res.writeHead(202).end();
+      }
+    });
+    const same = await run(wait, { callbackUri });
+    expect(hops).toBe(2);
+    expect(JSON.parse(sent!.body)).toEqual({ callBackUri: callbackUri });
+    expect(same[0]!.type).toBe('awaitCallback');
+  });
+
   it('without Wait for callback, still succeeds with callback null', async () => {
     main.set(json(200, {}));
     const events = await run({ url: '/jobs', method: 'POST' });
