@@ -181,7 +181,7 @@ export const webConfigSchema = z
       // a request setting has nothing to apply to. The response settings keep
       // their defaults and are inert: there is no response.
       if (!cfg.waitForCallback) {
-        issue('url', 'required unless Wait for callback is on');
+        issue('url', 'required');
         return;
       }
       for (const field of [

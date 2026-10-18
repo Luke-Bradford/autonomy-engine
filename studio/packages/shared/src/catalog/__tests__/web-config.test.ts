@@ -189,8 +189,8 @@ describe('web config — Wait for callback (#1600 OR41 C11c)', () => {
 
 describe('web config — no Request URL (#1600 OR41 C11c-2)', () => {
   it('refuses no URL, or an empty one, unless Wait for callback is on', () => {
-    expect(issuesOf({})).toEqual(['url: required unless Wait for callback is on']);
-    expect(issuesOf({ url: '' })).toEqual(['url: required unless Wait for callback is on']);
+    expect(issuesOf({})).toEqual(['url: required']);
+    expect(issuesOf({ url: '' })).toEqual(['url: required']);
     expect(issuesOf({ waitForCallback: true })).toEqual([]);
     expect(issuesOf({ url: '', waitForCallback: true, callbackTimeoutSeconds: 60 })).toEqual([]);
   });
