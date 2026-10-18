@@ -324,7 +324,8 @@ function lowerWebhook(node: Node): Node | undefined {
   if (replacement === undefined) return undefined;
   const { timeoutSeconds, outputs, ...rest } = jsonClone(node.config);
   if (outputs !== undefined && !(Array.isArray(outputs) && outputs.length === 0)) return undefined;
-  const match = typeof timeoutSeconds === 'string' ? WEBHOOK_LITERAL_TIMEOUT.exec(timeoutSeconds) : null;
+  const match =
+    typeof timeoutSeconds === 'string' ? WEBHOOK_LITERAL_TIMEOUT.exec(timeoutSeconds) : null;
   const seconds = match === null ? NaN : Number(match[1]);
   if (!(seconds <= WEB_MAX_CALLBACK_TIMEOUT_SECONDS)) return undefined;
   const unknown = Object.entries(rest);

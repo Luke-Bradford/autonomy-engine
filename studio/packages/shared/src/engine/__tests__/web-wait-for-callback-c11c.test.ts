@@ -289,9 +289,10 @@ describe('#1600 C11c-2 — a Web with no Request URL only waits', () => {
   // No URL, no connection: the inbound-only wait a `webhook` was.
   const waitsOnly = (config: Record<string, unknown> = {}): Node => {
     const node = web('w', { callbackTimeoutSeconds: 120, ...config });
-    const { url: _url, method: _method, ...rest } = node.config;
-    const { connectionId: _c, ...bare } = node;
-    return { ...bare, config: rest };
+    delete node.config.method;
+    if (!('url' in config)) delete node.config.url;
+    delete node.connectionId;
+    return node;
   };
   const NULLS = {
     status: null,

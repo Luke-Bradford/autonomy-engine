@@ -554,7 +554,10 @@ describe('#1600 C11b — http_request → Web, Fail on HTTP error off, Parse as 
 });
 
 describe('#1600 C11c-2 — webhook → Web · Wait for callback, no Request URL', () => {
-  const hook = (config: Record<string, unknown> = { timeoutSeconds: '${900}' }, extra: Partial<Node> = {}) =>
+  const hook = (
+    config: Record<string, unknown> = { timeoutSeconds: '${900}' },
+    extra: Partial<Node> = {},
+  ) =>
     ({
       id: 'hook',
       type: 'webhook',
@@ -593,7 +596,10 @@ describe('#1600 C11c-2 — webhook → Web · Wait for callback, no Request URL'
   });
 
   it.each([
-    ['declared outputs (the callback is checked and read by key)', { timeoutSeconds: '${60}', outputs: [{ name: 'decision', type: 'string' }] }],
+    [
+      'declared outputs (the callback is checked and read by key)',
+      { timeoutSeconds: '${60}', outputs: [{ name: 'decision', type: 'string' }] },
+    ],
     ['a contract that is not a list', { timeoutSeconds: '${60}', outputs: {} }],
     ['an expression timeout', { timeoutSeconds: '${pipeline().parameters.t}' }],
     ['a fractional timeout', { timeoutSeconds: '${1.5}' }],
@@ -614,7 +620,9 @@ describe('#1600 C11c-2 — webhook → Web · Wait for callback, no Request URL'
   });
 
   it('lowers at the 7-day ceiling', () => {
-    const [lowered] = lowerNodes([hook({ timeoutSeconds: `\${${WEB_MAX_CALLBACK_TIMEOUT_SECONDS}}` })]);
+    const [lowered] = lowerNodes([
+      hook({ timeoutSeconds: `\${${WEB_MAX_CALLBACK_TIMEOUT_SECONDS}}` }),
+    ]);
     expect(lowered!.type).toBe('web');
   });
 });
