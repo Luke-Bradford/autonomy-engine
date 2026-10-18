@@ -166,7 +166,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     kind: 'execution',
     category: 'general',
     tabs: [
-      { key: 'request', bindings: ['connection'], fields: ['method', 'url', 'headers', 'body'] },
+      { key: 'request', bindings: ['connection'], fields: ['url', 'method', 'headers', 'body'] },
       { key: 'auth', fields: [HTTP_SECRET_HEADERS_FIELD] },
       {
         key: 'settings',

@@ -242,6 +242,9 @@ function parseJsonBody(text: string): { ok: true; value: unknown } | { ok: false
   try {
     return { ok: true, value: JSON.parse(text) as unknown };
   } catch {
-    return { ok: false, error: 'the response is not JSON; set Parse as to Text to read it as text' };
+    return {
+      ok: false,
+      error: 'the response is not JSON; set Parse as to Text to read it as text',
+    };
   }
 }

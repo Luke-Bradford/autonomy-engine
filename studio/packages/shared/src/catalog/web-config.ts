@@ -66,7 +66,7 @@ export const WEB_MAX_JSON_DEPTH = 100;
 export const webConfigSchema = z
   .object({
     url: presented(singleLine(z.string()).min(1), {
-      title: 'URL',
+      title: 'Request URL',
       description: "The address to call, joined to the connection's base URL when it is relative.",
     }),
     method: presented(methodSchema.default('GET'), {
@@ -80,7 +80,9 @@ export const webConfigSchema = z
         HEAD: 'HEAD',
       }),
     }),
-    headers: presented(z.record(z.string(), z.string()).optional(), { title: 'Headers' }),
+    headers: presented(z.record(z.string(), z.string()).optional(), {
+      title: 'Request headers',
+    }),
     body: presented(z.string().optional(), {
       title: 'Body',
       description: 'The payload sent with POST, PUT, PATCH or DELETE. GET and HEAD send none.',
@@ -103,13 +105,14 @@ export const webConfigSchema = z
     httpRequestTimeoutSeconds: presented(
       z.number().int().min(1).max(WEB_MAX_REQUEST_TIMEOUT_SECONDS).optional(),
       {
-        title: 'Request timeout (seconds)',
-        description: `How long the whole exchange may take, 1 to ${WEB_MAX_REQUEST_TIMEOUT_SECONDS}. Empty uses the connection's timeout, or ${DEFAULT_HTTP_TIMEOUT_MS / 1000}. ADF's httpRequestTimeout.`,
+        title: 'HTTP request timeout',
+        description: `Seconds the whole exchange may take, 1 to ${WEB_MAX_REQUEST_TIMEOUT_SECONDS}. Empty uses the connection's timeout, or ${DEFAULT_HTTP_TIMEOUT_MS / 1000}. ADF's httpRequestTimeout.`,
       },
     ),
     parseAs: presented(parseAsSchema.default('json'), {
       title: 'Parse as',
-      description: 'JSON reads the body into a value; an empty body is null. Text keeps it a string.',
+      description:
+        'JSON reads the body into a value; an empty body is null. Text keeps it a string.',
       options: optionTitles(parseAsSchema, { json: 'JSON', text: 'Text' }),
     }),
     maxResponseBytes: presented(
