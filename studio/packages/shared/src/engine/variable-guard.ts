@@ -2,7 +2,7 @@
 // rerun-from-failed write carry (V-D7). V5 wired both: the guard runs inside
 // `validatePipelineDoc` (`validate-pipeline.ts`) and the carry in the server's
 // rerun-from-failed reseed.
-import { APPEND_VARIABLE_ACTIVITY_TYPE, SET_VARIABLE_ACTIVITY_TYPE } from '../catalog/types.js';
+import { isVariableWriterType } from '../catalog/types.js';
 import { docNodeIdOf } from './instance-key.js';
 import { switchedOffNodeIds } from '../schemas/pipeline.js';
 import {
@@ -53,7 +53,7 @@ export function variableGuardErrors(doc: ValidatedDoc, reads: VariableReads): st
   // #1600 C0c — an inactive writer never writes, so it is no writer; nor does
   // one inside an inactive container (C0e).
   const off = switchedOffNodeIds(doc.nodes, doc.containers ?? []);
-  const writers = doc.nodes.filter((n) => isVariableWriter(n.type) && !off.has(n.id));
+  const writers = doc.nodes.filter((n) => isVariableWriterType(n.type) && !off.has(n.id));
   if (writers.length === 0) return [];
   const containers = doc.containers ?? [];
   const containerById = new Map(containers.map((c) => [c.id, c]));
@@ -378,9 +378,4 @@ export function copiedVariableWritesOf(
     });
   }
   return out;
-}
-
-/** A `set_variable`/`append_variable` node type — the guard's writers. */
-function isVariableWriter(type: string): boolean {
-  return type === SET_VARIABLE_ACTIVITY_TYPE || type === APPEND_VARIABLE_ACTIVITY_TYPE;
 }
