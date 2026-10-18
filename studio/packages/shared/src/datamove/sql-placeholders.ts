@@ -377,3 +377,46 @@ export function sqlBindNames(sql: string, dialect: SqlDialect): string[] {
   }
   return names;
 }
+
+/** Each store's whitespace: postgres's `scan.l` `space`, sqlite's `sqlite3Isspace`. */
+const SQL_SPACE: Record<SqlDialect, RegExp> = {
+  postgres: /[ \t\n\r\f\v]/,
+  sqlite: /[ \t\n\f\r]/,
+};
+
+/**
+ * #1600 OR41 C3b — the first word of `sql`, upper-cased, after the whitespace
+ * and comments `dialect`'s own lexer skips; `null` when the text does not begin
+ * with a word.
+ *
+ * The pre-copy script's allow-list keys on this, and on sqlite it is the only
+ * barrier between authored SQL and an `ATTACH` or `VACUUM INTO` that writes a
+ * file outside the connection's roots. So it errs one way only: anything it does
+ * not recognise as a leading word (a `;`, a `(`, a quote, an unclosed comment)
+ * is `null`, which the caller refuses. MEASURED by the C3b plan review:
+ * better-sqlite3 runs `;attach database …`, so a scan that stepped over a `;`
+ * would have read the empty statement's successor as the statement.
+ *
+ * Skipping a character the store does not skip only makes the store raise a
+ * syntax error, and not skipping one it does only refuses here, so neither
+ * divergence lets a different statement through.
+ */
+export function sqlLeadingKeyword(sql: string, dialect: SqlDialect): string | null {
+  let i = 0;
+  while (i < sql.length) {
+    const char = sql[i] as string;
+    if (SQL_SPACE[dialect].test(char)) {
+      i += 1;
+    } else if (char === '-' && sql[i + 1] === '-') {
+      i = dialect === 'postgres' ? endOfLineComment(sql, i) : endOfLfLineComment(sql, i);
+    } else if (char === '/' && sql[i + 1] === '*') {
+      i = dialect === 'postgres' ? endOfBlockComment(sql, i) : endOfFlatBlockComment(sql, i);
+    } else {
+      break;
+    }
+  }
+  if (!/[A-Za-z]/.test(sql[i] ?? '')) return null;
+  let end = i;
+  while (isIdentifierChar(sql[end])) end += 1;
+  return sql.slice(i, end).toUpperCase();
+}

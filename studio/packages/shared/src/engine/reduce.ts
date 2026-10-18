@@ -34,6 +34,7 @@ import {
   IF_ACTIVITY_TYPE,
   IF_BRANCH_TRUE,
   IF_BRANCH_FALSE,
+  COPY_ACTIVITY_TYPE,
   LLM_CALL_ACTIVITY_TYPE,
   SWITCH_ACTIVITY_TYPE,
   SWITCH_DEFAULT_BRANCH,
@@ -1433,6 +1434,17 @@ export function createEngine(doc: EngineDoc): Engine {
       const { tools, ...rest } = node.config;
       const prepared = substitute(rest, buildCtx(state), 0, item) as Record<string, unknown>;
       prepared['tools'] = tools;
+      return prepared;
+    }
+    // #1600 OR41 C3b — a copy's Pre-copy script is SQL, which §8 holds literal
+    // exactly as `resolveInlineDatasets` holds an inline query's: only the bind
+    // values are the value half. Re-attached RAW, so a `${` that reached a
+    // stored doc without passing save is never evaluated into a statement; the
+    // dispatch schema then refuses it (`preCopyScriptIssue`).
+    if (node.type === COPY_ACTIVITY_TYPE && node.config['preCopyScript'] !== undefined) {
+      const { preCopyScript, ...rest } = node.config;
+      const prepared = substitute(rest, buildCtx(state), 0, item) as Record<string, unknown>;
+      prepared['preCopyScript'] = preCopyScript;
       return prepared;
     }
     return substitute(node.config, buildCtx(state), 0, item) as Record<string, unknown>;

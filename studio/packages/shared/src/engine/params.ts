@@ -61,7 +61,11 @@ import {
   llmToolsSurfaceSchema,
   lowerOutputSchema,
 } from '../catalog/llm-config.js';
-import { copyKeyColumnIssues, copyMappingShapeIssues } from '../catalog/copy-config.js';
+import {
+  copyKeyColumnIssues,
+  copyMappingShapeIssues,
+  preCopyScriptIssue,
+} from '../catalog/copy-config.js';
 import type { GetMetadataField } from '../catalog/get-metadata-config.js';
 import {
   GET_METADATA_FIELD_TITLES,
@@ -3023,6 +3027,8 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
       validateCopyMappingIdentifiers(node, errors);
       validateCopyMappingShape(node, errors); // #1176 — the three cross-row rules
       validateCopyKeyColumns(node, errors); // #1600 C3a — Upsert's Key columns
+      const scriptIssue = preCopyScriptIssue(node.config); // #1600 C3b — §8, literal SQL
+      if (scriptIssue !== null) errors.push(`node.${node.id}.preCopyScript: ${scriptIssue}`);
     }
     // #1480 — an unknown `type`, or a literal config the adapter would refuse
     // at dispatch, is refused here: a version that saves must be one that runs.

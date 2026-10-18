@@ -981,7 +981,18 @@ const ENTRIES: ActivityCatalogEntry[] = [
     category: 'general',
     tabs: [
       { key: 'source', bindings: ['sourceConnection', 'sourceDataset'], fields: [] },
-      { key: 'sink', bindings: ['sinkConnection', 'sinkDataset'], fields: ['mode', 'keyColumns'] },
+      {
+        key: 'sink',
+        bindings: ['sinkConnection', 'sinkDataset'],
+        // #1600 OR41 C3b — ADF's sink order: behaviour, then the script, then the batch.
+        fields: [
+          'mode',
+          'keyColumns',
+          'preCopyScript',
+          'preCopyScriptParameters',
+          'writeBatchSize',
+        ],
+      },
       { key: 'mapping', fields: ['mapping'] },
     ],
     // #1600 OR41 C3a — Key columns are read only by Upsert, and save refuses
