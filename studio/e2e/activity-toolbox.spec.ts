@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { openCanvas } from './support/canvas';
 import { canvasNodes, toolbox } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
+import { expectOverlayUnobstructed } from './support/occlusion';
 
 /**
  * U5 — the Activities toolbox and its drag-drop onto the canvas.
@@ -184,6 +185,63 @@ test.describe('U5 activities toolbox', () => {
     // `overflow-y: auto` cannot clip it — the same reasoning as the U3 pane.
     expect(parseFloat(ring.offset)).toBeLessThan(0);
 
+    await expectQuiet(page, problems);
+  });
+
+  // #1683 — the description reaches a sighted keyboard user, not only a mouse.
+  // Every focus step is a Tab: a `.focus()` does not match `:focus-visible`
+  // (see the focus-ring test above), and the tooltip is gated on it.
+  test('tabbing to an activity shows what it does, open and on the rail', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await openCanvas(page, 'e2e 1683 focus description');
+    const does =
+      'Copy rows from a source dataset into a sink dataset, mapping columns between them, or copy files as they are.';
+    const copy = toolbox(page).getByRole('button', { name: 'Copy data', exact: true });
+    // Every tooltip in the DOM, hidden or not: an idle portal per item would
+    // count here.
+    const tips = page.getByRole('tooltip', { includeHidden: true });
+
+    // A hover keeps the native title alone: no second, Fluent tooltip over it.
+    // A fixed wait, as a check that something does NOT appear has to be: over
+    // twice Fluent's 250ms show delay.
+    await copy.hover();
+    await page.waitForTimeout(600);
+    await expect(tips).toHaveCount(0);
+    await page.mouse.move(0, 0);
+
+    // Filter box → the group's disclosure → its first activity.
+    await toolbox(page).getByRole('searchbox', { name: 'Filter activities' }).focus();
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
+    await expect(copy).toBeFocused();
+    await expect(tips).toHaveCount(1);
+    await expect(tips).toHaveText(does);
+    await expectOverlayUnobstructed(tips, 'palette description');
+    // Still the item's description, not its name.
+    await expect(copy).toHaveAccessibleName('Copy data');
+    await expect(copy).toHaveAccessibleDescription(does);
+
+    // The next item takes it over; there is still only one.
+    await page.keyboard.press('Tab');
+    await expect(copy).not.toBeFocused();
+    const next = await page.evaluate(() => document.activeElement?.getAttribute('title') ?? '');
+    expect(next).not.toBe('');
+    await expect(tips).toHaveCount(1);
+    await expect(tips).toHaveText(next);
+    await page.keyboard.press('Escape');
+    await expect(tips).toHaveCount(0);
+
+    // The rail draws only glyphs, so its tooltip carries the name as well.
+    await toolbox(page).getByRole('button', { name: 'Collapse activities' }).click();
+    const expand = toolbox(page).getByRole('button', { name: 'Expand activities' });
+    await expect(expand).toBeVisible();
+    await expand.focus();
+    await page.keyboard.press('Tab');
+    await expect(copy).toBeFocused();
+    await expect(tips).toHaveCount(1);
+    await expect(tips).toHaveText(`Copy data — ${does}`);
+    await expectOverlayUnobstructed(tips, 'rail description');
+    await expect(copy).toHaveAccessibleDescription(`Copy data — ${does}`);
     await expectQuiet(page, problems);
   });
 
