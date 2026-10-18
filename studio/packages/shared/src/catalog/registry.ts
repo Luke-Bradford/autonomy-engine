@@ -512,13 +512,17 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // never dispatched). Cataloguing the TYPE bumped `CATALOG_VERSION` 9→10 so an
     // older build refuses a webhook-doc it cannot route rather than treating it
     // inert. Config rides `Node.config` (not `Node.call`), so it is NOT a
-    // structural-call and is generically authorable (no palette exclusion).
+    // structural-call.
     type: WEBHOOK_ACTIVITY_TYPE,
     title: 'Webhook (external wait)',
     description:
       'Pause until another system calls back over HTTP, or fail when the timeout passes.',
     kind: 'control',
     category: 'control',
+    // #1600 OR41 C11c-2 — retired from the palette: Web's Wait for callback with
+    // no Request URL covers it, and a stored node without declared outputs opens
+    // as that (`retired.ts`). It still runs.
+    inPalette: false,
     tabs: [{ key: 'settings', fields: ['timeoutSeconds'] }],
     idempotent: false,
     connectionKinds: [],

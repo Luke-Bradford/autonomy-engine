@@ -9,6 +9,7 @@ import { catalogOutputs } from './lower.js';
 import { getActivity, httpRequestInputSchema } from './registry.js';
 import {
   HTTP_SECRET_HEADERS_FIELD,
+  WEB_MAX_CALLBACK_TIMEOUT_SECONDS,
   WEB_MAX_RESPONSE_BYTES,
   webConfigSchema,
 } from './web-config.js';
@@ -22,6 +23,7 @@ import {
   GET_METADATA_ACTIVITY_TYPE,
   HTTP_REQUEST_ACTIVITY_TYPE,
   WEB_ACTIVITY_TYPE,
+  WEBHOOK_ACTIVITY_TYPE,
 } from './types.js';
 
 /**
@@ -295,6 +297,50 @@ function keepsWebContract(
   });
 }
 
+/** A webhook timeout that is one whole-number `${}` literal, e.g. `${600}`. */
+const WEBHOOK_LITERAL_TIMEOUT = /^\$\{\s*([1-9]\d*)\s*\}$/;
+
+/**
+ * #1600 OR41 C11c-2 — `webhook` → Web · Wait for callback with no Request URL
+ * (§4.6, §8): it sends nothing and waits, with the timeout as the callback
+ * timeout. Report status on callback stays off, as a webhook never read one.
+ *
+ * Stays Webhook where Web would change the result:
+ * - a declared contract (`config.outputs` other than `[]`): a webhook checks
+ *   the callback against it and refuses a body missing a key (the node stays
+ *   parked), and its readers read `output.<key>`; Web keeps the whole body as
+ *   `callback`, unchecked, and a read cannot be renamed to a path;
+ * - a timeout that is not one whole number from 1 to 7 days in `${}`: an
+ *   expression is only known at the run, 0 completes at once, and Web's
+ *   callback timeout is a literal number with a 7-day ceiling;
+ * - a connection or any other binding (a webhook binds none, so it was inert);
+ * - a key that is one of Web's own settings, which a webhook never read.
+ *
+ * Any other key is carried over, as in `lowerHttpRequest`.
+ */
+function lowerWebhook(node: Node): Node | undefined {
+  if (node.connectionId !== undefined || carriesUnlowerable(node)) return undefined;
+  const replacement = getActivity(WEB_ACTIVITY_TYPE);
+  if (replacement === undefined) return undefined;
+  const { timeoutSeconds, outputs, ...rest } = jsonClone(node.config);
+  if (outputs !== undefined && !(Array.isArray(outputs) && outputs.length === 0)) return undefined;
+  const match = typeof timeoutSeconds === 'string' ? WEBHOOK_LITERAL_TIMEOUT.exec(timeoutSeconds) : null;
+  const seconds = match === null ? NaN : Number(match[1]);
+  if (!(seconds <= WEB_MAX_CALLBACK_TIMEOUT_SECONDS)) return undefined;
+  const unknown = Object.entries(rest);
+  if (unknown.some(([key]) => Object.hasOwn(webConfigSchema.shape, key))) return undefined;
+  const config: Record<string, unknown> = {
+    // `fromEntries`, not assignment: an own `__proto__` key stays a key.
+    ...Object.fromEntries(unknown),
+    waitForCallback: true,
+    callbackTimeoutSeconds: seconds,
+    reportStatusOnCallback: false,
+  };
+  if (!webConfigSchema.safeParse(config).success) return undefined;
+  config['outputs'] = catalogOutputs(replacement);
+  return { ...node, type: WEB_ACTIVITY_TYPE, config };
+}
+
 export const RETIRED_LOWERINGS: Readonly<Record<string, RetiredLowering>> = {
   [FILE_COPY_ACTIVITY_TYPE]: {
     to: COPY_FILES_ACTIVITY_TYPE,
@@ -322,6 +368,12 @@ export const RETIRED_LOWERINGS: Readonly<Record<string, RetiredLowering>> = {
     // HTTP request's string still types.
     outputs: { status: 'status', body: 'body', headers: 'headers' },
     lower: lowerHttpRequest,
+  },
+  // A webhook's catalog outputs are none: only a contract-less one lowers.
+  [WEBHOOK_ACTIVITY_TYPE]: {
+    to: WEB_ACTIVITY_TYPE,
+    outputs: {},
+    lower: lowerWebhook,
   },
 };
 

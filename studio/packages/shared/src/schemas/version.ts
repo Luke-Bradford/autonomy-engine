@@ -581,7 +581,10 @@
 // refuses the unknown type at import (C8a's reason).
 // BUMP 52→53 for #1600 OR41 C11c: Web's Wait for callback settings. A pre-C11c
 // build would send the request and succeed without waiting.
-export const CATALOG_VERSION = 53;
+// BUMP 53→54 for #1600 OR41 C11c-2: a Web with Wait for callback and no Request
+// URL only waits. A pre-C11c-2 build would dispatch it and fail it (no URL, no
+// connection).
+export const CATALOG_VERSION = 54;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

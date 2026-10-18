@@ -75,9 +75,12 @@ export const WEB_CALLBACK_URI_KEY = 'callBackUri';
 
 export const webConfigSchema = z
   .object({
-    url: presented(singleLine(z.string()).min(1), {
+    // #1600 OR41 C11c-2 — optional only for Wait for callback, where an empty
+    // URL sends nothing and the node only waits (the superRefine below).
+    url: presented(singleLine(z.string()).optional(), {
       title: 'Request URL',
-      description: "The address to call, joined to the connection's base URL when it is relative.",
+      description:
+        "The address to call, joined to the connection's base URL when it is relative. Empty with Wait for callback on, nothing is sent and the activity only waits.",
     }),
     method: presented(methodSchema.default('GET'), {
       title: 'Method',
@@ -142,13 +145,13 @@ export const webConfigSchema = z
     // decides whether the node parks, so it is not dynamic content.
     waitForCallback: presented(z.boolean().default(false), {
       title: 'Wait for callback',
-      description: `Add ${WEB_CALLBACK_URI_KEY} to the JSON body and wait until that URL is called. The callback's JSON body is the callback output. ADF's Webhook activity.`,
+      description: `Wait until studio's callback URL is called; its JSON body is the callback output. With a Request URL, ${WEB_CALLBACK_URI_KEY} is added to the JSON body; without one, nothing is sent. ADF's Webhook activity.`,
     }),
     callbackTimeoutSeconds: presented(
       z.number().int().min(1).max(WEB_MAX_CALLBACK_TIMEOUT_SECONDS).optional(),
       {
         title: 'Callback timeout',
-        description: `Seconds to wait for the callback after the request succeeds, 1 to ${WEB_MAX_CALLBACK_TIMEOUT_SECONDS}. Empty waits ${WEB_DEFAULT_CALLBACK_TIMEOUT_SECONDS}. A wait that runs out fails the activity.`,
+        description: `Seconds to wait for the callback after the request succeeds (or from the start, with no Request URL), 1 to ${WEB_MAX_CALLBACK_TIMEOUT_SECONDS}. Empty waits ${WEB_DEFAULT_CALLBACK_TIMEOUT_SECONDS}. A wait that runs out fails the activity.`,
       },
     ),
     reportStatusOnCallback: presented(z.boolean().default(false), {
@@ -172,6 +175,27 @@ export const webConfigSchema = z
     }
     if (cfg.whenOverLimit === 'truncate' && cfg.parseAs !== 'text') {
       issue('whenOverLimit', 'Truncate needs Parse as Text: a JSON prefix is not JSON');
+    }
+    if (!webHasUrl(cfg)) {
+      // #1600 OR41 C11c-2 — no URL is Wait for callback's inbound-only wait, so
+      // a request setting has nothing to apply to. The response settings keep
+      // their defaults and are inert: there is no response.
+      if (!cfg.waitForCallback) {
+        issue('url', 'required unless Wait for callback is on');
+        return;
+      }
+      for (const field of [
+        'body',
+        'headers',
+        HTTP_SECRET_HEADERS_FIELD,
+        'httpRequestTimeoutSeconds',
+        'successStatusCodes',
+      ] as const) {
+        if (cfg[field] !== undefined && cfg[field] !== '') {
+          issue(field, 'only sent with a Request URL');
+        }
+      }
+      return;
     }
     if (webHasBody(cfg) && (cfg.method === 'GET' || cfg.method === 'HEAD')) {
       issue('body', `an HTTP ${cfg.method} cannot carry a body`);
@@ -279,6 +303,44 @@ export function webCallbackOutcome(
     ? { status: 'failure', error: reportedError }
     : { status: 'success', outputs: { ...request, callback } };
 }
+
+/**
+ * #1600 OR41 C11c-2 — whether a Web sends a request. An empty Request URL box
+ * is no URL, as an empty Body box is no body.
+ */
+export function webHasUrl(cfg: { url?: unknown }): boolean {
+  return cfg.url !== undefined && cfg.url !== '';
+}
+
+/**
+ * #1600 OR41 C11c-2 — a Web that only waits: Wait for callback on and no
+ * Request URL, ADF's Webhook with nothing to call. The engine parks it without
+ * dispatching it (no request, no connection). Read from the stored config, so
+ * the reducer, the run views and the save rule cannot disagree.
+ */
+export function webWaitsOnly(cfg: Record<string, unknown>): boolean {
+  return cfg.waitForCallback === true && !webHasUrl(cfg);
+}
+
+/** #1600 OR41 C11c — the callback timeout in seconds: the setting, or ADF's 10 minutes. */
+export function webCallbackTimeoutSeconds(cfg: Record<string, unknown>): number {
+  const seconds = cfg.callbackTimeoutSeconds;
+  return typeof seconds === 'number' ? seconds : WEB_DEFAULT_CALLBACK_TIMEOUT_SECONDS;
+}
+
+/**
+ * #1600 OR41 C11c-2 — a Web that only waits sent no request, so its request
+ * outputs are present nulls (a read of `status` resolves to null rather than
+ * failing as missing), and `callback` is its one result.
+ */
+export const WEB_NO_REQUEST_OUTPUTS: Readonly<Record<string, null>> = Object.freeze({
+  status: null,
+  headers: null,
+  body: null,
+  bytes: null,
+  durationMs: null,
+  truncated: null,
+});
 
 /** An empty Body box is no body, so it never makes a GET unsaveable. */
 export function webHasBody(cfg: { body?: string }): cfg is { body: string } {

@@ -4,7 +4,7 @@ import {
   webCallbackBody,
   webHasBody,
   WARNING_CODES,
-  WEB_DEFAULT_CALLBACK_TIMEOUT_SECONDS,
+  webCallbackTimeoutSeconds,
   webConfigSchema,
   type httpConnectionConfigSchema,
 } from '@autonomy-studio/shared';
@@ -67,6 +67,14 @@ export async function* runWeb(
     return;
   }
   const cfg = parsed.data;
+  // #1600 OR41 C11c-2 — a Web whose stored URL is empty only waits and is never
+  // dispatched; one here had a `${}` URL that resolved empty, so there is
+  // nothing to call.
+  if (cfg.url === undefined || cfg.url === '') {
+    yield { type: 'failed', kind: 'permanent', error: 'the Request URL resolved empty' };
+    return;
+  }
+  const url = cfg.url;
   // #1600 OR41 C11c — Wait for callback sends the author's JSON object body with
   // `callBackUri` added. The executor sets `ctx.callbackUri` for such a node.
   let body = webHasBody(cfg) ? cfg.body : undefined;
@@ -118,7 +126,7 @@ export async function* runWeb(
   const startedAt = Date.now();
   try {
     const res = await fetchWithoutLeakingSecrets(
-      resolveUrl(connection.baseUrl, cfg.url),
+      resolveUrl(connection.baseUrl, url),
       {
         method: cfg.method,
         headers: requestHeaders,
@@ -201,7 +209,7 @@ export async function* runWeb(
       yield {
         type: 'awaitCallback',
         outputs,
-        timeoutSeconds: cfg.callbackTimeoutSeconds ?? WEB_DEFAULT_CALLBACK_TIMEOUT_SECONDS,
+        timeoutSeconds: webCallbackTimeoutSeconds(cfg),
       };
       return;
     }

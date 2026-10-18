@@ -309,7 +309,8 @@ export const NodeRunStateSchema = z.object({
   /**
    * #1600 OR41 C11c — a Web *Wait for callback* whose request succeeded: set by
    * `node.awaitingCallback` with the request's outputs and the resolved callback
-   * timeout, held while the driver parks the node (`scheduleExternalWait`), and
+   * timeout (or, C11c-2, when a Web with no Request URL is prepared: no request,
+   * so the outputs are nulls), held while the driver parks the node (`scheduleExternalWait`), and
    * merged with the callback when it arrives. Removed when the node settles or a
    * loop round resets it. Its presence on a `ready` node is what tells `resume`
    * to re-park rather than re-send the request.

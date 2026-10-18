@@ -37,8 +37,8 @@ import {
   type WarningCode,
   isNonOverridableConnectionConfigKey,
   WEB_ACTIVITY_TYPE,
-  WEB_DEFAULT_CALLBACK_TIMEOUT_SECONDS,
   WEB_MAX_REQUEST_TIMEOUT_SECONDS,
+  webCallbackTimeoutSeconds,
 } from '@autonomy-studio/shared';
 import { RUN_CANCELLED_REASON, runCancelledFailure } from './cancel.js';
 import { ACTIVITY_TIMEOUT_REASON, activityTimeoutFailure, armDeadline } from './timeout.js';
@@ -84,11 +84,7 @@ function isCallbackWait(ctx: ActivityContext): boolean {
  * the park's arm stamps the armed alarm's real expiry.
  */
 function provisionalCallbackWindowMs(ctx: ActivityContext): number {
-  const callback = ctx.input.callbackTimeoutSeconds;
-  const seconds =
-    WEB_MAX_REQUEST_TIMEOUT_SECONDS +
-    (typeof callback === 'number' ? callback : WEB_DEFAULT_CALLBACK_TIMEOUT_SECONDS);
-  return seconds * 1000;
+  return (WEB_MAX_REQUEST_TIMEOUT_SECONDS + webCallbackTimeoutSeconds(ctx.input)) * 1000;
 }
 
 /**
