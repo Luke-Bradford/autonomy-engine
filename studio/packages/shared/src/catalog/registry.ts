@@ -161,9 +161,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // connection. Unlike `http_request`, a 4xx/5xx FAILS by default (Fail on
     // HTTP error), the body is read up to Max size and parsed as JSON or kept as
     // text, and a 429/5xx carries the server's Retry-After to the retry alarm.
-    // `http_request` lowers to it (C11b); `webhook` as Wait for callback in
-    // C11c, which fills `callback` (declared now so C11c needs no
-    // `formerOutputs` refresh).
+    // `http_request` lowers to it (C11b). Wait for callback (C11c) parks the
+    // node on the external-wait machinery `webhook` uses and fills `callback`
+    // (declared since C11a, so no `formerOutputs` refresh).
     type: WEB_ACTIVITY_TYPE,
     title: 'Web',
     description: 'Call a URL over an HTTP connection and read its response.',
@@ -185,12 +185,18 @@ const ENTRIES: ActivityCatalogEntry[] = [
           'maxResponseBytes',
           'parseAs',
           'whenOverLimit',
+          // C11c — the toggle, then its two settings side by side.
+          'waitForCallback',
+          'callbackTimeoutSeconds',
+          'reportStatusOnCallback',
         ],
       },
     ],
-    // The rule `webConfigSchema`'s superRefine enforces.
+    // The rules `webConfigSchema`'s superRefine enforces.
     appliesWhen: {
       successStatusCodes: [{ field: 'failOnHttpError', in: ['true'] }],
+      callbackTimeoutSeconds: [{ field: 'waitForCallback', in: ['true'] }],
+      reportStatusOnCallback: [{ field: 'waitForCallback', in: ['true'] }],
     },
     idempotent: false,
     connectionKinds: ['http'],

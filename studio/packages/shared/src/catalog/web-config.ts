@@ -59,6 +59,19 @@ export const WEB_MAX_RESPONSE_BYTES = DEFAULT_MAX_READ_BYTES;
 /** ADF's `httpRequestTimeout` ceiling, 10 minutes. */
 export const WEB_MAX_REQUEST_TIMEOUT_SECONDS = 600;
 
+/** ADF Webhook's default callback timeout, 10 minutes. */
+export const WEB_DEFAULT_CALLBACK_TIMEOUT_SECONDS = 600;
+
+/**
+ * The longest callback wait: 7 days. ADF documents no ceiling; this one keeps a
+ * forgotten wait from holding a run open for months, and is far past any
+ * approval or job a callback stands for.
+ */
+export const WEB_MAX_CALLBACK_TIMEOUT_SECONDS = 7 * 24 * 60 * 60;
+
+/** The body key studio adds for *Wait for callback*, as ADF's Webhook does. */
+export const WEB_CALLBACK_URI_KEY = 'callBackUri';
+
 export const webConfigSchema = z
   .object({
     url: presented(singleLine(z.string()).min(1), {
@@ -124,6 +137,24 @@ export const webConfigSchema = z
         'Fail, or keep the first Max size bytes, set truncated and warn. Truncate needs Parse as Text.',
       options: optionTitles(whenOverLimitSchema, { fail: 'Fail', truncate: 'Truncate' }),
     }),
+    // #1600 OR41 C11c — ADF's Webhook, as a Web setting (§4.6). Literal: it
+    // decides whether the node parks, so it is not dynamic content.
+    waitForCallback: presented(z.boolean().default(false), {
+      title: 'Wait for callback',
+      description: `Add ${WEB_CALLBACK_URI_KEY} to the JSON body and wait until that URL is called. The callback's JSON body is the callback output. ADF's Webhook activity.`,
+    }),
+    callbackTimeoutSeconds: presented(
+      z.number().int().min(1).max(WEB_MAX_CALLBACK_TIMEOUT_SECONDS).optional(),
+      {
+        title: 'Callback timeout',
+        description: `Seconds to wait for the callback after the request succeeds, 1 to ${WEB_MAX_CALLBACK_TIMEOUT_SECONDS}. Empty waits ${WEB_DEFAULT_CALLBACK_TIMEOUT_SECONDS}. A wait that runs out fails the activity.`,
+      },
+    ),
+    reportStatusOnCallback: presented(z.boolean().default(false), {
+      title: 'Report status on callback',
+      description:
+        'A callback whose StatusCode is 400 or above fails the activity, with its Error.ErrorCode and Error.Message.',
+    }),
     retryOnThrottle: presented(z.boolean().default(true), {
       title: 'Retry on 429 and 503',
       description:
@@ -144,7 +175,91 @@ export const webConfigSchema = z
     if (webHasBody(cfg) && (cfg.method === 'GET' || cfg.method === 'HEAD')) {
       issue('body', `an HTTP ${cfg.method} cannot carry a body`);
     }
+    if (!cfg.waitForCallback) {
+      if (cfg.callbackTimeoutSeconds !== undefined) {
+        issue('callbackTimeoutSeconds', 'only read when Wait for callback is on');
+      }
+      if (cfg.reportStatusOnCallback) {
+        issue('reportStatusOnCallback', 'only read when Wait for callback is on');
+      }
+    } else {
+      if (cfg.method === 'GET' || cfg.method === 'HEAD') {
+        issue(
+          'method',
+          `Wait for callback sends ${WEB_CALLBACK_URI_KEY} in the body, which an HTTP ${cfg.method} cannot carry`,
+        );
+      }
+      // A `${}` body is only known at dispatch, where the adapter checks it.
+      if (cfg.body !== undefined && !cfg.body.includes('${')) {
+        const body = webCallbackBody(cfg.body, 'https://example.invalid/');
+        if (!body.ok) issue('body', body.error);
+      }
+    }
   });
+
+/**
+ * #1600 OR41 C11c — the body *Wait for callback* sends: the author's JSON object
+ * with `callBackUri` set (it replaces an author key of that name, as ADF adds
+ * its own). An empty body sends `{ callBackUri }`. Any other body is refused:
+ * the URL has to travel in a JSON object. The ONE rule, read at save (a literal
+ * body) and at dispatch (a resolved `${}` body).
+ */
+export function webCallbackBody(
+  body: string | undefined,
+  callbackUri: string,
+): { ok: true; json: string } | { ok: false; error: string } {
+  const refuse = {
+    ok: false,
+    error: `Wait for callback sends a JSON object body, to carry ${WEB_CALLBACK_URI_KEY}; this body is not one`,
+  } as const;
+  let value: unknown = {};
+  if (body !== undefined && body.trim() !== '') {
+    try {
+      value = JSON.parse(body);
+    } catch {
+      return refuse;
+    }
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return refuse;
+  return { ok: true, json: JSON.stringify({ ...value, [WEB_CALLBACK_URI_KEY]: callbackUri }) };
+}
+
+/**
+ * #1600 OR41 C11c — ADF's *Report status on callback*: the failure a callback
+ * reports, or `undefined` when it reports none. ADF's body is
+ * `{ Output, Error: { ErrorCode, Message }, StatusCode }`, and a StatusCode of
+ * 400 or above fails the activity. StatusCode may be a number or a numeric
+ * string (ADF's example sends `"403"`). Anything else (no StatusCode, a
+ * non-object body, a StatusCode that is not a whole number) reports nothing,
+ * so the callback succeeds, as ADF treats a callback without one.
+ *
+ * Computed by the server when it appends the callback, and carried on the event
+ * as `reportedError`, so every reader of the log shows the same message.
+ */
+export function callbackReportedError(callback: unknown): string | undefined {
+  if (typeof callback !== 'object' || callback === null || Array.isArray(callback)) {
+    return undefined;
+  }
+  const record = callback as Record<string, unknown>;
+  const raw = record.StatusCode;
+  const code =
+    typeof raw === 'number'
+      ? raw
+      : typeof raw === 'string' && /^\d+$/.test(raw.trim())
+        ? Number(raw)
+        : NaN;
+  if (!Number.isInteger(code) || code < 400) return undefined;
+  const error = record.Error;
+  const parts: string[] = [];
+  if (typeof error === 'object' && error !== null && !Array.isArray(error)) {
+    const { ErrorCode, Message } = error as Record<string, unknown>;
+    if (typeof ErrorCode === 'string' && ErrorCode !== '') parts.push(ErrorCode);
+    if (typeof Message === 'string' && Message !== '') parts.push(Message);
+  }
+  const detail = parts.length > 0 ? `: ${parts.join(': ')}` : '';
+  // Bounded: the message lands in the run log and the run view.
+  return `the callback reported StatusCode ${code}${detail}`.slice(0, 1000);
+}
 
 /** An empty Body box is no body, so it never makes a GET unsaveable. */
 export function webHasBody(cfg: { body?: string }): cfg is { body: string } {

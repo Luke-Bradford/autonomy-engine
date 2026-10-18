@@ -3088,6 +3088,7 @@ export function createEngine(doc: EngineDoc): Engine {
       // #1600 C8d — each round gets its own Wait until deadline. Settling already
       // drops the record; this covers a node abandoned while parked.
       delete reset.recheck;
+      delete reset.callback; // #1600 C11c — the same, for a held Web request
       nodes[id] = reset;
       if (Object.prototype.hasOwnProperty.call(outputs, id)) {
         if (outputs === state.outputs) outputs = { ...outputs };
@@ -3822,12 +3823,15 @@ export function createEngine(doc: EngineDoc): Engine {
             : `node '${event.nodeId}' produced invalid outputs: ${errs.join('; ')}`,
         );
         return settle(
-          withoutRecheck(withNode(state, event.nodeId, { status: 'failure' }), event.nodeId),
+          withoutHeldWait(withNode(state, event.nodeId, { status: 'failure' }), event.nodeId),
           diagnostics,
         );
       }
       const stored = storeOutputs(checked, event.outputs);
-      let next = withoutRecheck(withNode(state, event.nodeId, { status: 'success' }), event.nodeId);
+      let next = withoutHeldWait(
+        withNode(state, event.nodeId, { status: 'success' }),
+        event.nodeId,
+      );
       next = { ...next, outputs: { ...next.outputs, [event.nodeId]: stored } };
       return settle(next, diagnostics);
     }
@@ -4018,7 +4022,7 @@ export function createEngine(doc: EngineDoc): Engine {
         // CX1 (#1320) D2 — cancel mode schedules no retry: the failure is
         // terminal. The cancel STOPPED work if this is the abort it caused, or if
         // it refused a retry the policy would have run (D3).
-        const failedNode = withoutRecheck(
+        const failedNode = withoutHeldWait(
           withNode(state, event.nodeId, { status: 'failure' }),
           event.nodeId,
         );
@@ -4053,7 +4057,7 @@ export function createEngine(doc: EngineDoc): Engine {
         };
       }
       return settle(
-        withoutRecheck(withNode(state, event.nodeId, { status: 'failure' }), event.nodeId),
+        withoutHeldWait(withNode(state, event.nodeId, { status: 'failure' }), event.nodeId),
         diagnostics,
       );
     }
@@ -4302,7 +4306,7 @@ export function createEngine(doc: EngineDoc): Engine {
     if (state.cancelRequested !== null) {
       return settle(
         markStoppedWork(
-          withoutRecheck(withNode(state, event.nodeId, { status: 'failure' }), event.nodeId),
+          withoutHeldWait(withNode(state, event.nodeId, { status: 'failure' }), event.nodeId),
         ),
         diagnostics,
       );
@@ -4339,6 +4343,78 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
+   * #1600 OR41 C11c — fold `node.awaitingCallback`: a Web *Wait for callback*
+   * sent its request and it succeeded. The attempt's request is done but the
+   * node is not: hold it `ready` with the request's outputs (the driver owes
+   * `externalWait.created`, the `webhook` handshake) and ask the driver to park
+   * it. Guarded like `onNotReady`; in cancel mode the cancel ends the wait
+   * before it starts (CX1 D2).
+   */
+  function onAwaitingCallback(
+    state: RunState,
+    event: Extract<EngineEvent, { type: 'node.awaitingCallback' }>,
+    diagnostics: string[],
+  ): ReduceResult {
+    const ns = state.nodes[event.nodeId];
+    if (ns === undefined || !LIVE_NODE.has(ns.status)) return { state, commands: [], diagnostics };
+    if (event.attemptId !== ns.currentAttemptId) return { state, commands: [], diagnostics };
+    if (state.cancelRequested !== null) {
+      return settle(
+        markStoppedWork(withNode(state, event.nodeId, { status: 'failure' })),
+        diagnostics,
+      );
+    }
+    const callback: NonNullable<NodeRunState['callback']> = {
+      attemptId: event.attemptId,
+      request: event.outputs,
+      timeoutSeconds: event.timeoutSeconds,
+    };
+    return {
+      state: withNode(state, event.nodeId, { status: 'ready', callback }),
+      commands: [callbackWaitCommand(event.nodeId, callback)],
+      diagnostics,
+    };
+  }
+
+  function callbackWaitCommand(
+    nodeId: string,
+    callback: NonNullable<NodeRunState['callback']>,
+  ): EngineCommand {
+    return {
+      type: 'scheduleExternalWait',
+      nodeId,
+      attemptId: callback.attemptId,
+      timeoutSeconds: callback.timeoutSeconds,
+    };
+  }
+
+  /**
+   * #1600 OR41 C11c — settle a Web *Wait for callback* on its callback: the
+   * held request outputs plus `callback`, filtered through the declared
+   * contract, or a permanent failure when the callback reported one. Shared by
+   * the park's completion and by a callback that arrived before the park.
+   */
+  function settleWebCallback(
+    state: RunState,
+    nodeId: string,
+    request: Record<string, unknown>,
+    callback: unknown,
+    reportedError: string | undefined,
+    diagnostics: string[],
+  ): ReduceResult {
+    const unparked = withoutHeldWait(unparkIfWaiting(state), nodeId);
+    if (reportedError !== undefined) {
+      return settle(withNode(unparked, nodeId, { status: 'failure' }), diagnostics);
+    }
+    const contract = outputContract(docNodeFor(nodeId)!);
+    const merged = { ...request, callback };
+    const stored = contract.kind === 'declared' ? storeOutputs(contract, merged) : merged;
+    let next = withNode(unparked, nodeId, { status: 'success' });
+    next = { ...next, outputs: { ...next.outputs, [nodeId]: stored } };
+    return settle(next, diagnostics);
+  }
+
+  /**
    * #1600 OR41 C8d — fold `node.recheckScheduled`: the re-check alarm is armed,
    * so PARK the node `wait_pending` (the same park as a `wait`: the run goes
    * `waiting`, nothing is in flight) and stamp the deadline. Guarded on the held
@@ -4363,7 +4439,7 @@ export function createEngine(doc: EngineDoc): Engine {
       // stopped ends here, as `onNotReady`'s cancel branch would have ended it.
       return settle(
         markStoppedWork(
-          withoutRecheck(withNode(state, event.nodeId, { status: 'failure' }), event.nodeId),
+          withoutHeldWait(withNode(state, event.nodeId, { status: 'failure' }), event.nodeId),
         ),
         diagnostics,
       );
@@ -4611,6 +4687,29 @@ export function createEngine(doc: EngineDoc): Engine {
     if (ns.status !== 'ready' || ns.currentAttemptId !== event.attemptId) {
       return { state, commands: [], diagnostics };
     }
+    // #1600 OR41 C11c — a Web *Wait for callback* holding its request.
+    const held = ns.callback?.attemptId === event.attemptId ? ns.callback : undefined;
+    if (held !== undefined && state.cancelRequested !== null) {
+      // A cancel folded between `node.awaitingCallback` and this arm: the wait
+      // ends here, as `onAwaitingCallback`'s cancel branch would have ended it.
+      return settle(
+        markStoppedWork(
+          withoutHeldWait(withNode(state, event.nodeId, { status: 'failure' }), event.nodeId),
+        ),
+        diagnostics,
+      );
+    }
+    if (held !== undefined && event.arrived !== undefined) {
+      // The callback came before the park: settle now, never park.
+      return settleWebCallback(
+        state,
+        event.nodeId,
+        held.request,
+        event.arrived.callback,
+        event.arrived.reportedError,
+        diagnostics,
+      );
+    }
     return settle(withNode(state, event.nodeId, { status: 'external_wait_pending' }), diagnostics);
   }
 
@@ -4644,6 +4743,18 @@ export function createEngine(doc: EngineDoc): Engine {
     if (ns === undefined) return { state, commands: [], diagnostics };
     if (ns.status !== 'external_wait_pending' || ns.currentAttemptId !== event.previousAttemptId) {
       return { state, commands: [], diagnostics };
+    }
+    // #1600 OR41 C11c — a parked Web *Wait for callback*: the event carries
+    // `{ callback }`; merge it with the held request outputs.
+    if (ns.callback?.attemptId === event.previousAttemptId) {
+      return settleWebCallback(
+        state,
+        event.nodeId,
+        ns.callback.request,
+        event.outputs?.callback ?? null,
+        event.reportedError,
+        diagnostics,
+      );
     }
     const node = docNodeFor(event.nodeId)!;
     const contract = outputContract(node);
@@ -4697,7 +4808,10 @@ export function createEngine(doc: EngineDoc): Engine {
     // from the failure below (unhandled timeout) sets the terminal status last, so
     // the intermediate `running` is invisible either way.
     return settle(
-      withNode(unparkIfWaiting(state), event.nodeId, { status: 'failure' }),
+      withoutHeldWait(
+        withNode(unparkIfWaiting(state), event.nodeId, { status: 'failure' }),
+        event.nodeId,
+      ),
       diagnostics,
     );
   }
@@ -4778,7 +4892,7 @@ export function createEngine(doc: EngineDoc): Engine {
       const lost =
         ns.status === 'ready' || (ns.status === 'waiting' && docNodeFor(id)?.call !== undefined);
       if (lost)
-        next = markStoppedWork(withoutRecheck(withNode(next, id, { status: 'failure' }), id));
+        next = markStoppedWork(withoutHeldWait(withNode(next, id, { status: 'failure' }), id));
     }
     return settle(next, diagnostics);
   }
@@ -4862,6 +4976,14 @@ export function createEngine(doc: EngineDoc): Engine {
         // of which is `dispatchNode`: re-deriving that would RUN a switched-off
         // activity. Idempotent for the same reason as the forks below.
         commands.push(inactivateCommand(node, id, ns.currentAttemptId));
+        continue;
+      }
+      if (ns.status === 'ready' && ns.callback?.attemptId === ns.currentAttemptId) {
+        // #1600 OR41 C11c crash recovery: `node.awaitingCallback` held the node
+        // `ready` and its `scheduleExternalWait` was lost. Re-park, NEVER
+        // re-dispatch: the request was sent and answered, and Web is not
+        // idempotent. `armExternalWait` is idempotent (see the webhook fork).
+        commands.push(callbackWaitCommand(id, ns.callback));
         continue;
       }
       if (ns.status === 'ready' && ns.recheck?.notReadyAttemptId === ns.currentAttemptId) {
@@ -5143,7 +5265,7 @@ export function createEngine(doc: EngineDoc): Engine {
         // cancel prevented is work it stopped. Its attempt is KEPT (unlike a
         // retry hold's, whose failure already settled that attempt), because
         // this failure is what ends the attempt the Monitor still shows open.
-        next = markStoppedWork(withoutRecheck(withNode(next, id, { status: 'failure' }), id));
+        next = markStoppedWork(withoutHeldWait(withNode(next, id, { status: 'failure' }), id));
       }
     }
     return settle(next, diagnostics);
@@ -5360,6 +5482,8 @@ export function createEngine(doc: EngineDoc): Engine {
         return onWaitDue(state, event, diagnostics);
       case 'node.notReady':
         return onNotReady(state, event, diagnostics);
+      case 'node.awaitingCallback':
+        return onAwaitingCallback(state, event, diagnostics);
       case 'node.recheckScheduled':
         return onRecheckScheduled(state, event, diagnostics);
       case 'node.recheckDue':
@@ -5555,11 +5679,14 @@ function withNode(state: RunState, id: string, patch: Partial<NodeRunState>): Ru
 }
 
 /** #1600 C8d — remove a settled node's Wait until record (no key left behind). */
-function withoutRecheck(state: RunState, id: string): RunState {
+function withoutHeldWait(state: RunState, id: string): RunState {
   const prev = state.nodes[id]!;
-  if (prev.recheck === undefined) return state;
+  if (prev.recheck === undefined && prev.callback === undefined) return state;
   const next = { ...prev };
+  // #1600 C8d's re-check record, and C11c's held Web request: both describe a
+  // wait the node is in, and end with it.
   delete next.recheck;
+  delete next.callback;
   return { ...state, nodes: { ...state.nodes, [id]: next } };
 }
 
