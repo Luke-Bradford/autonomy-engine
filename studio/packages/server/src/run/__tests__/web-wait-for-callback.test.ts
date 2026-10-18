@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   CATALOG_VERSION,
@@ -9,16 +10,24 @@ import {
   lowerRetiredTypes,
   WEB_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
+  type Container,
   type Node,
+  type Param,
 } from '@autonomy-studio/shared';
 import { buildTestAppWithContext } from '../../__tests__/build-test-app.js';
 import { until } from '../../__tests__/poll-until.js';
+import { armWakeup, listPendingWakeups } from '../../repo/scheduled-wakeups.js';
 import { createConnection } from '../../repo/connections.js';
 import { createPipeline, createPipelineVersion, getPipelineVersion } from '../../repo/index.js';
-import { getRun } from '../../repo/runs.js';
-import { getExternalWaitByAttempt } from '../../repo/external-waits.js';
-import { buildEngine } from '../driver.js';
-import { loadEngineEvents } from '../events.js';
+import { createRun, getRun, updateRun } from '../../repo/runs.js';
+import { getExternalWaitByAttempt, recordExternalWait } from '../../repo/external-waits.js';
+import {
+  deriveExternalWaitToken,
+  externalWaitCallbackUrl,
+  hashExternalWaitToken,
+} from '../../webhooks/external-wait-token.js';
+import { buildEngine, externalWaitArmInput } from '../driver.js';
+import { appendEngineEvent, loadEngineEvents } from '../events.js';
 import { resolvePublicBaseUrl } from '../../index.js';
 
 /**
@@ -106,19 +115,30 @@ async function startRun(
 }
 
 async function startNode(node: Node): Promise<string> {
+  return startDoc([node], [], []);
+}
+
+/** A run of a doc with containers and params (#1761: a Web wait inside a ForEach). */
+async function startDoc(
+  nodes: Node[],
+  containers: Container[],
+  params: Param[],
+  runParams: Record<string, unknown> = {},
+): Promise<string> {
   const pipeline = createPipeline(app.db, { ownerId: 'local', name: `Web wait ${Math.random()}` });
   const version = createPipelineVersion(app.db, {
     pipelineId: pipeline.id,
-    params: [],
+    params,
     outputs: [],
-    nodes: [node],
+    nodes,
     edges: [],
+    containers,
     catalogVersion: CATALOG_VERSION,
   });
   const res = await app.inject({
     method: 'POST',
     url: `/api/pipelines/${pipeline.id}/runs`,
-    payload: { pipelineVersionId: version.id, params: {} },
+    payload: { pipelineVersionId: version.id, params: runParams },
   });
   expect(res.statusCode).toBe(202);
   return (res.json() as { runId: string }).runId;
@@ -136,6 +156,12 @@ function projected(runId: string) {
   const doc = getPipelineVersion(app.db, getRun(app.db, runId)!.pipelineVersionId)!;
   return buildEngine(doc).projectRunState(loadEngineEvents(app.db, runId));
 }
+
+/** The node ids whose callback has settled them, in log order. */
+const completedNodes = (runId: string) =>
+  loadEngineEvents(app.db, runId).flatMap((e) =>
+    e.type === 'externalWait.completed' ? [e.nodeId] : [],
+  );
 
 const eventTypes = (runId: string) => loadEngineEvents(app.db, runId).map((e) => e.type);
 
@@ -314,6 +340,183 @@ describe('#1600 C11c — Web Wait for callback through the app', () => {
     const listed = await app.inject({ method: 'GET', url: `/api/runs/${runId}/external-waits` });
     expect(listed.json()).toEqual([]);
     expect((await callBack(path!, {})).statusCode).toBe(404);
+  });
+});
+
+describe('#1761 — a Web wait inside a parallel ForEach', () => {
+  it('gives each item its own callBackUri, and each callback settles its own item', async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    behaviour = (body, res) => {
+      sent.push(body);
+      res.writeHead(202, { 'content-type': 'application/json' });
+      res.end('{"accepted":true}');
+    };
+    const runId = await startDoc(
+      [
+        {
+          id: 'w',
+          type: WEB_ACTIVITY_TYPE,
+          connectionId,
+          config: {
+            url: '/jobs',
+            method: 'POST',
+            body: '{"item":"${item}"}',
+            waitForCallback: true,
+            outputs: getActivity(WEB_ACTIVITY_TYPE)!.outputs,
+          },
+          position: { x: 0, y: 0 },
+        },
+      ],
+      // batchCount 2 = both items in flight together, so both park at once.
+      [{ id: 'fe', kind: 'foreach', children: ['w'], items: '${params.list}', batchCount: 2 }],
+      [{ name: 'list', type: 'json', required: true }],
+      { list: ['a', 'b'] },
+    );
+    await untilStatus(runId, 'waiting');
+
+    // Two requests, two DISTINCT callback URIs, two correlation rows.
+    expect(sent).toHaveLength(2);
+    const listed = await app.inject({ method: 'GET', url: `/api/runs/${runId}/external-waits` });
+    expect(listed.json() as unknown[]).toHaveLength(2);
+    const state = projected(runId);
+    expect(state.nodes['w@0']!.status).toBe('external_wait_pending');
+    expect(state.nodes['w@1']!.status).toBe('external_wait_pending');
+
+    // Each request names its item; call back the SECOND item's first.
+    const pathOf = (item: string) => callbackPathOf(sent.find((b) => b.item === item)!);
+    expect(pathOf('a')).not.toBe(pathOf('b'));
+    expect((await callBack(pathOf('b'), { for: 'b' })).statusCode).toBe(204);
+    await until(() => completedNodes(runId).includes('w@1'), 'item b to settle', {
+      iterations: 1500,
+    });
+    // Only item b settled: item a is still parked and so is the run.
+    expect(completedNodes(runId)).toEqual(['w@1']);
+    expect(projected(runId).nodes['w@0']!.status).toBe('external_wait_pending');
+    expect(statusOf(runId)).toBe('waiting');
+
+    expect((await callBack(pathOf('a'), { for: 'a' })).statusCode).toBe(204);
+    await untilStatus(runId, 'success');
+    // The ForEach collects each item's outputs in item order, each carrying the
+    // callback body that settled THAT item.
+    const results = (projected(runId).outputs.fe as { results: unknown[] }).results;
+    expect(results).toMatchObject([
+      { status: 202, callback: { for: 'a' } },
+      { status: 202, callback: { for: 'b' } },
+    ]);
+    expect(completedNodes(runId).sort()).toEqual(['w@0', 'w@1']);
+  });
+});
+
+describe('#1761 — a crash between node.awaitingCallback and externalWait.created', () => {
+  it('re-parks on boot exactly once, on the already-armed alarm, and a callback then settles it', async () => {
+    // Server one writes the crash window by hand (the log is append-only): the
+    // executor's pre-request correlation row, the request's `node.awaitingCallback`,
+    // and the expiry alarm the driver armed — but no `externalWait.created`.
+    const first = await buildTestAppWithContext({ publicBaseUrl: PUBLIC });
+    const db = first.app.db;
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'Web wait crash' });
+    const version = createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [
+        {
+          id: 'job',
+          type: WEB_ACTIVITY_TYPE,
+          config: {
+            url: '/jobs',
+            method: 'POST',
+            waitForCallback: true,
+            outputs: getActivity(WEB_ACTIVITY_TYPE)!.outputs,
+          },
+          position: { x: 0, y: 0 },
+        },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+    const run = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: version.id,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+    const key = { runId: run.id, nodeId: 'job', attemptId: 'job#0' };
+    const token = deriveExternalWaitToken(first.app.masterKey, key);
+    const callbackPath = externalWaitCallbackUrl(PUBLIC, token).slice(
+      'http://studio.test:9999/base'.length,
+    );
+    appendEngineEvent(db, {
+      type: 'run.started',
+      runId: run.id,
+      pipelineVersionId: version.id,
+      params: {},
+    });
+    appendEngineEvent(db, { type: 'node.dispatched', ...key, idempotent: false });
+    recordExternalWait(db, {
+      ...key,
+      tokenHash: hashExternalWaitToken(token),
+      expiresAt: Date.now() + 600_000,
+      now: Date.now(),
+    });
+    appendEngineEvent(db, {
+      type: 'node.awaitingCallback',
+      ...key,
+      outputs: { status: 202, headers: {}, body: null, bytes: 0, durationMs: 1, truncated: false },
+      timeoutSeconds: 600,
+    });
+    const alarm = armWakeup(
+      db,
+      externalWaitArmInput({ now: Date.now }, { ...key, timeoutSeconds: 600 }),
+    );
+    updateRun(db, run.id, { status: 'running' });
+    const before = loadEngineEvents(db, run.id).map((e) => e.type);
+    expect(before).toEqual(['run.started', 'node.dispatched', 'node.awaitingCallback']);
+    await first.app.close();
+
+    // Server two boots on the same database and master key: reconcile resumes it.
+    const second = await buildTestAppWithContext({
+      publicBaseUrl: PUBLIC,
+      dbPath: join(first.tmpDir, 'test.sqlite'),
+      masterKeyFile: join(first.tmpDir, 'master.key'),
+    });
+    try {
+      await until(() => getRun(second.app.db, run.id)?.status === 'waiting', 'the resumed run', {
+        iterations: 1500,
+      });
+      const types = loadEngineEvents(second.app.db, run.id).map((e) => e.type);
+      // Re-parked once, and never re-sent: no second dispatch, no second request.
+      expect(types.filter((t) => t === 'externalWait.created')).toHaveLength(1);
+      expect(types.filter((t) => t === 'node.dispatched')).toHaveLength(1);
+      expect(types.filter((t) => t === 'node.awaitingCallback')).toHaveLength(1);
+      // The ONE alarm is the row armed before the crash, not a second one.
+      const armed = listPendingWakeups(second.app.db).filter(
+        (w) => w.kind === 'node_external_wait' && (w.ref as { runId?: string }).runId === run.id,
+      );
+      expect(armed).toEqual([alarm]);
+      const created = loadEngineEvents(second.app.db, run.id).find(
+        (e) => e.type === 'externalWait.created',
+      );
+      expect(created).toMatchObject({ ...key, dueAt: alarm.dueAt });
+      const listed = await second.app.inject({
+        method: 'GET',
+        url: `/api/runs/${run.id}/external-waits`,
+      });
+      expect(listed.json() as Array<{ callbackPath: string }>).toMatchObject([{ callbackPath }]);
+
+      // The callback URL the request carried before the crash still settles it.
+      const res = await second.app.inject({
+        method: 'POST',
+        url: callbackPath,
+        headers: { 'content-type': 'application/json' },
+        payload: JSON.stringify({ ok: true }),
+      });
+      expect(res.statusCode).toBe(204);
+      expect(getRun(second.app.db, run.id)?.status).toBe('success');
+    } finally {
+      await second.app.close();
+    }
   });
 });
 
