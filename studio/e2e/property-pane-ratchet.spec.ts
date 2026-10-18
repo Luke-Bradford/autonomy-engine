@@ -62,8 +62,9 @@ const HELP_LIMITS: Record<string, number> = {
   // +1 for C8d's Wait until, which says a missing path counts as not yet.
   'Get metadata': 9,
   // #1600 OR41 C11a — Web, measured: HTTP request's 9 and one on each of
-  // the seven Settings fields.
-  Web: 16,
+  // the seven Settings fields. +1 for C11c's Wait for callback (its two
+  // settings wait for it).
+  Web: 17,
   // +3 for C7a's Settings, each `?` a fact its label lacks: First row only names
   // the output it writes, Max rows its ceiling, When over the limit both bounds.
   // +1 for C7b's Read as, which says what each mode reads.
@@ -347,8 +348,9 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   // Minimum bytes says a folder fails, Check every and Give up after their
   // ADF names, defaults and bounds.
   'Get metadata': 17,
-  // #1600 OR41 C11a — Web with every setting showing: the same 16.
-  Web: 16,
+  // #1600 OR41 C11a — Web with every setting showing: the same 16. +3 for
+  // C11c's Wait for callback, Callback timeout and Report status on callback.
+  Web: 19,
   // +3 for C7a's Settings, each `?` a fact its label lacks: First row only names
   // the output it writes, Max rows its ceiling, When over the limit both bounds.
   // +1 on each Lookup for C7b's Read as, whose `?` says what each mode reads;
@@ -392,7 +394,7 @@ const SHOWS: Record<string, string[]> = {
   'Get metadata': ['/tmp/e2e', '*.csv', '2026-10-01T00:00:00Z', '1024', '3600', '2048', 'E2E-1'],
   'Lookup (whole file as text)': ['/tmp/e2e/in.txt', '2048', 'E2E-1'],
   'Write file': ['/tmp/e2e/out.txt', '2048', 'E2E-1'],
-  Web: ['/v1/orders', 'X-Trace', '45', '2048', 'E2E-1'],
+  Web: ['/v1/orders', 'X-Trace', '45', '2048', '120', 'E2E-1'],
   Lookup: ['orders_2026.csv', '4096', 'E2E-1'],
   'Agent task': ['Summarise the repo', '/tmp/e2e', 'E2E-1'],
   'LLM call': ['Price of SKU-1?', 'lookup_price', 'claude-haiku-4-5', 'E2E-1'],
@@ -583,6 +585,10 @@ function seeds(ids: SeedIds): Record<string, Seed> {
           maxResponseBytes: 2048,
           whenOverLimit: 'truncate',
           retryOnThrottle: false,
+          // #1600 OR41 C11c — on, so its two settings draw.
+          waitForCallback: true,
+          callbackTimeoutSeconds: 120,
+          reportStatusOnCallback: true,
         },
       },
     },
