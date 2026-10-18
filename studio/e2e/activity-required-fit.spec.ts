@@ -106,8 +106,10 @@ test('every catalog activity shows its required fields without a scroll at 1280Ã
     await expect(nodeById(page, id)).toHaveCount(0);
   }
 
-  // A selector that matched nothing would pass vacuously.
-  expect(measured).toBeGreaterThan(activities.length);
+  // A selector that matched nothing would pass vacuously. At least one per
+  // activity on average: #1600 C12a's retired Append variable (two required
+  // fields) left exactly one.
+  expect(measured).toBeGreaterThanOrEqual(activities.length);
   expect(misses).toEqual([]);
   await expectQuiet(page, problems);
 });
