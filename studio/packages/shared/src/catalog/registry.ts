@@ -981,9 +981,12 @@ const ENTRIES: ActivityCatalogEntry[] = [
     category: 'general',
     tabs: [
       { key: 'source', bindings: ['sourceConnection', 'sourceDataset'], fields: [] },
-      { key: 'sink', bindings: ['sinkConnection', 'sinkDataset'], fields: ['mode'] },
+      { key: 'sink', bindings: ['sinkConnection', 'sinkDataset'], fields: ['mode', 'keyColumns'] },
       { key: 'mapping', fields: ['mapping'] },
     ],
+    // #1600 OR41 C3a — Key columns are read only by Upsert, and save refuses
+    // them on any other write behaviour (`copyKeyColumnIssues`).
+    appliesWhen: { keyColumns: [{ field: 'mode', in: ['upsert'] }] },
     idempotent: false,
     // #1190 (M10 slice 2) — `postgres` joins the SOURCE allowlist, because the
     // executor dispatches a copy on the source connection's adapter and the
@@ -1021,6 +1024,12 @@ const ENTRIES: ActivityCatalogEntry[] = [
     //   unreachable one, and it is still not guess-refused: §7 ② is explicit
     //   that a `permanent` refusal reached by parsing an operator's SQL badly is
     //   the one direction a gate must never fail in.
+    //
+    //   #1600 C3a — Truncate then insert is the exception: its sink lock is
+    //   `ACCESS EXCLUSIVE`, which DOES conflict with the source cursor's
+    //   `ACCESS SHARE`, so a `query` reading the table its Truncate empties
+    //   waits on itself until the activity timeout ends it. Nothing is lost
+    //   (nothing was truncated), and the spec's C3a note says to use Overwrite.
     //
     // #1193 (slice 3b) then closed the ONE item those two re-measurements left:
     // the `storeIdentity` hole this widening made reachable. The address seam

@@ -850,7 +850,7 @@ describe('pipelines routes', () => {
       ],
       [
         'a bad enum literal',
-        { id: 'n', type: 'copy', config: { mapping: MAPPING, mode: 'truncate' }, position: AT },
+        { id: 'n', type: 'copy', config: { mapping: MAPPING, mode: 'merge' }, position: AT },
         /^node 'n': config\.mode: /,
       ],
       [
@@ -897,7 +897,7 @@ describe('pipelines routes', () => {
     it('an invalid version saved before the gate still opens, and a save from it is refused (#1480)', async () => {
       const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'Legacy' });
       const nodes = [
-        { id: 'n', type: 'copy', config: { mapping: MAPPING, mode: 'truncate' }, position: AT },
+        { id: 'n', type: 'copy', config: { mapping: MAPPING, mode: 'merge' }, position: AT },
       ];
       const legacy = insertLegacyVersion(app.db, {
         pipelineId: pipeline.id,
@@ -912,7 +912,7 @@ describe('pipelines routes', () => {
         url: `/api/pipelines/${pipeline.id}/versions/${legacy.version}`,
       });
       expect(opened.statusCode).toBe(200);
-      expect(opened.json().nodes[0].config.mode).toBe('truncate');
+      expect(opened.json().nodes[0].config.mode).toBe('merge');
 
       const resaved = await app.inject({
         method: 'POST',

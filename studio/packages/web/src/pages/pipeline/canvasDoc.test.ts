@@ -145,7 +145,7 @@ describe('validateCanvas', () => {
     const copy: Node = {
       id: 'load',
       type: 'copy',
-      config: { mapping: [{ source: 'id', sink: 'id', type: 'integer' }], mode: 'truncate' },
+      config: { mapping: [{ source: 'id', sink: 'id', type: 'integer' }], mode: 'merge' },
       position: { x: 0, y: 0 },
     };
     expect(validateCanvas([copy], [], [], [], [], [])).toEqual([

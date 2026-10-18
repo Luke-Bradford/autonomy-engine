@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
 import { DataTypeSchema } from '../schemas/dataset.js';
+import { interpolationMode } from '../engine/expr.js';
+import { isSet } from './config-value.js';
 
 /** §6.2's per-column opt-out, named once so its display names can be checked against it. */
 const copyOnErrorSchema = z.enum(['fail', 'null']);
@@ -243,8 +245,88 @@ export const CopyMappingSchema = mappingArray(z.string().optional());
  */
 export const CopyDispatchMappingSchema = mappingArray(z.unknown().optional());
 
-/** How a `copy` writes into its sink: add rows, or replace what it holds. */
-const copyWriteModeSchema = z.enum(['append', 'overwrite']);
+/**
+ * How a `copy` writes into its sink — the catalogue's *Write behaviour* (§4.1,
+ * #1600 OR41 C3a). Stored as `mode` because Append and Overwrite were stored
+ * under that key before C3a, and renaming it would change every saved copy's
+ * content hash for nothing.
+ *
+ * - `append` adds the rows.
+ * - `overwrite` deletes the table's rows, then inserts, in one transaction.
+ * - `truncate` empties the table with the store's TRUNCATE, then inserts. On
+ *   SQLite, which has no TRUNCATE, it is the same `DELETE` as `overwrite`.
+ * - `upsert` updates the rows whose Key columns match and inserts the rest.
+ */
+export const COPY_WRITE_MODES = ['append', 'overwrite', 'truncate', 'upsert'] as const;
+export type CopyWriteMode = (typeof COPY_WRITE_MODES)[number];
+const copyWriteModeSchema = z.enum(COPY_WRITE_MODES);
+
+/** Where a key-column rule points: the whole field, or one entry of it. */
+export type CopyKeyColumnIssue = {
+  path: readonly [] | readonly [number];
+  message: string;
+};
+
+/**
+ * The Key column rules (C3a), as plain data so the schema's `superRefine` and
+ * the #444 write gate read ONE declaration — `copyMappingShapeIssues`' shape,
+ * for its reason (#1176).
+ *
+ * - Key columns on any other write behaviour would be silently ignored. A
+ *   `${}` behaviour is only known at dispatch, so it is not refused here.
+ * - A key must be a mapped sink column, compared as a STRING as the duplicate
+ *   sink rule is (#1151): the store folds case at dispatch, through
+ *   `resolveSinkColumns`.
+ * - A key named twice.
+ * - A key whose mapping row writes NULL on a conversion error. A NULL key
+ *   matches no row, so the sink refuses it at run time; this says so at save.
+ *
+ * `config` is untyped because the write gate holds an operator's raw config.
+ * Anything that is not an array of strings is the schema's to refuse.
+ */
+export function copyKeyColumnIssues(config: Record<string, unknown>): CopyKeyColumnIssue[] {
+  const keys = config['keyColumns'];
+  if (!isSet(keys)) return [];
+  const mode = config['mode'] ?? 'append';
+  // A `${}` Write behaviour is decided at dispatch, where it may be Upsert.
+  if (typeof mode === 'string' && interpolationMode(mode).mode !== 'literal') return [];
+  if (mode !== 'upsert') {
+    return [{ path: [], message: 'only read when Write behaviour is Upsert' }];
+  }
+  if (!Array.isArray(keys)) return [];
+  const rows = Array.isArray(config['mapping']) ? (config['mapping'] as unknown[]) : null;
+  const rowFor = (sink: string): Record<string, unknown> | undefined =>
+    rows?.find(
+      (r): r is Record<string, unknown> =>
+        typeof r === 'object' && r !== null && (r as Record<string, unknown>)['sink'] === sink,
+    );
+  const issues: CopyKeyColumnIssue[] = [];
+  const seen = new Set<string>();
+  keys.forEach((key, i) => {
+    if (typeof key !== 'string') return;
+    if (seen.has(key)) {
+      issues.push({ path: [i], message: `duplicate key column '${key}'` });
+      return;
+    }
+    seen.add(key);
+    // A whole-value `${}` mapping is only known at dispatch, where the sink
+    // checks the key against the resolved columns.
+    if (rows === null) return;
+    const row = rowFor(key);
+    if (row === undefined) {
+      issues.push({
+        path: [i],
+        message: `'${key}' is not a mapped sink column, so no row carries its value`,
+      });
+    } else if (row['onError'] === 'null') {
+      issues.push({
+        path: [i],
+        message: `the mapping row for '${key}' writes NULL on a conversion error, and a NULL key matches no row — set its On error to Fail`,
+      });
+    }
+  });
+  return issues;
+}
 
 /**
  * The whole `copy` config, minus the one field the two variants disagree about
@@ -260,9 +342,10 @@ const copyWriteModeSchema = z.enum(['append', 'overwrite']);
  * blob by the canvas — `config.outputs` included (#1 F13) — which a strict
  * schema would reject on every edit.
  *
- * `mode` defaults to the NON-DESTRUCTIVE arm. `'overwrite'` DELETEs inside the
- * write transaction (§4), so a default that erased the sink on an omitted field
- * would be the worst possible polarity for a mistyped config.
+ * `mode` defaults to the NON-DESTRUCTIVE arm. `'overwrite'` and `'truncate'`
+ * empty the table inside the write transaction (§4), so a default that erased
+ * the sink on an omitted field would be the worst possible polarity for a
+ * mistyped config.
  *
  * §13 also lists a per-copy batch size among the node's flat scalars. It is NOT
  * declared here: `SqliteDatasetRead.batchRows` already defaults to
@@ -271,15 +354,44 @@ const copyWriteModeSchema = z.enum(['append', 'overwrite']);
  * the first adapter that runs one.
  */
 const copyInputShape = <T extends z.ZodType>(mapping: T) =>
-  z.object({
-    mapping,
-    mode: presented(copyWriteModeSchema.default('append'), {
-      title: 'Write mode',
-      description:
-        'Append adds the rows; Overwrite replaces what the sink holds. Defaults to Append.',
-      options: optionTitles(copyWriteModeSchema, { append: 'Append', overwrite: 'Overwrite' }),
-    }),
-  });
+  z
+    .object({
+      mapping,
+      mode: presented(copyWriteModeSchema.default('append'), {
+        title: 'Write behaviour',
+        description:
+          'Append adds the rows. Overwrite deletes the rows, then inserts, in one transaction. ' +
+          'Truncate then insert empties the table with TRUNCATE (on PostgreSQL it needs the ' +
+          'TRUNCATE privilege, fires no delete triggers, refuses a table a foreign key ' +
+          'references and blocks readers until the copy commits; SQLite has no TRUNCATE, so ' +
+          'there it deletes as Overwrite does). Upsert updates the rows whose Key columns ' +
+          'match and inserts the rest. Defaults to Append.',
+        options: optionTitles(copyWriteModeSchema, {
+          append: 'Append',
+          overwrite: 'Overwrite',
+          truncate: 'Truncate then insert',
+          upsert: 'Upsert',
+        }),
+      }),
+      // Literal column names: §8 refuses a `${}` identifier at the write gate
+      // (`validateCopyMappingIdentifiers`), as it does a mapping's sink.
+      keyColumns: presented(z.array(z.string().min(1)).optional(), {
+        title: 'Key columns',
+        description:
+          'The sink columns that identify a row for Upsert, each a mapped sink column. Empty ' +
+          "uses the table's primary key. A row whose key is NULL fails the copy, because a NULL " +
+          'key matches no row.',
+      }),
+    })
+    .superRefine((cfg, ctx) => {
+      for (const issue of copyKeyColumnIssues(cfg)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['keyColumns', ...issue.path],
+          message: issue.message,
+        });
+      }
+    });
 
 /**
  * The AUTHORED `copy` config — what a node's `config` holds, what the catalog

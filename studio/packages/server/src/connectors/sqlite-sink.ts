@@ -1,6 +1,12 @@
 import { stat } from 'node:fs/promises';
 import Database from 'better-sqlite3';
-import { formatZodIssues, type CoercedValue, type DatasetKind } from '@autonomy-studio/shared';
+import {
+  COPY_WRITE_MODES,
+  formatZodIssues,
+  type CoercedValue,
+  type CopyWriteMode,
+  type DatasetKind,
+} from '@autonomy-studio/shared';
 import { SQLITE_BUSY_TIMEOUT_MS } from '../limits.js';
 import { KeyedQueue } from '../util/keyed-queue.js';
 import { DatasetIoError } from './dataset-io-error.js';
@@ -9,7 +15,14 @@ import { yieldToEventLoop } from './scheduling.js';
 import { quoteIdentifier } from './sql-identifier.js';
 // #1196 — the mapped→actual resolver moved to a leaf when postgres became the
 // second sink; the matching rule is not store-specific.
-import { refuseNullOnNonNullable, resolveSinkColumns } from './sink-columns.js';
+import {
+  refuseNullKey,
+  refuseNullOnNonNullable,
+  resolveSinkColumns,
+  resolveUpsertKeys,
+  type SinkColumn,
+  type UpsertKeyTarget,
+} from './sink-columns.js';
 import {
   confineStorePath,
   findSqliteRelation,
@@ -44,8 +57,8 @@ import {
  */
 export type SinkValue = CoercedValue;
 
-/** `append` adds to what is there; `overwrite` replaces the table's contents. */
-export type SqliteWriteMode = 'append' | 'overwrite';
+/** The copy's Write behaviour (catalogue §4.1). `truncate` is `overwrite` here: SQLite has no TRUNCATE. */
+export type SqliteWriteMode = CopyWriteMode;
 
 /** What one dataset write needs to know. */
 export interface SqliteDatasetWrite {
@@ -60,6 +73,8 @@ export interface SqliteDatasetWrite {
    * can reach a store without the gate. */
   readonly nullOnError: readonly string[];
   readonly mode: SqliteWriteMode;
+  /** Upsert's Key columns (C3a); empty or absent means the table's primary key. */
+  readonly keyColumns?: readonly string[];
   /** Honoured at BATCH BOUNDARIES (§10) — a run cancel rolls the copy back. */
   readonly signal?: AbortSignal;
   /**
@@ -116,7 +131,7 @@ function bindValue(value: SinkValue | undefined, column: string): SqliteValue {
  *  - a **VIEW** reports its columns through `pragma_table_info` exactly as a
  *    table does, so an emptiness check passes for one — and the real refusal
  *    ("cannot modify v because it is a view") then fires INSIDE the transaction,
- *    in `overwrite` mode after `DELETE FROM v` was already attempted. §7 requires
+ *    in `overwrite` (or `truncate`) mode after `DELETE FROM v` was already attempted. §7 requires
  *    the gate before the first row moves, so the type comes from `sqlite_master`;
  *  - a GENERATED column is absent from `table_info` (it is in `table_xinfo` with
  *    `hidden=2`) and refuses an INSERT with "cannot INSERT into generated
@@ -133,7 +148,14 @@ function describeSinkTable(
   schemaName: string,
   table: string,
 ):
-  | { ok: true; name: string; columns: string[]; notNull: ReadonlySet<string> }
+  | {
+      ok: true;
+      name: string;
+      columns: string[];
+      notNull: ReadonlySet<string>;
+      /** The primary key's columns in key order, the default Upsert key (C3a). */
+      primaryKey: string[];
+    }
   | { ok: false; reason: string } {
   const qualifiedSchema = quoteIdentifier(schemaName, 'schema');
   // `COLLATE NOCASE` — `findSqliteRelation` says why; `resolveSinkColumns`
@@ -162,6 +184,10 @@ function describeSinkTable(
     ok: true,
     name: found.name,
     columns: columns.map((c) => c.name),
+    primaryKey: columns
+      .filter((c) => c.pk > 0)
+      .sort((a, b) => a.pk - b.pk)
+      .map((c) => c.name),
     notNull: certainlyNotNull(columns, typeof found.sql === 'string' ? found.sql : '', hasTrigger),
   };
 }
@@ -276,6 +302,50 @@ function sinkTargetFor(
 }
 
 /**
+ * #1600 OR41 C3a — Upsert's statements, prepared once per copy.
+ *
+ * A row whose keys match is UPDATEd, otherwise INSERTed. The match is a SELECT
+ * rather than "UPDATE, then INSERT when it changed nothing", because a BEFORE
+ * UPDATE trigger's `raise(ignore)` reports 0 changes and would turn an existing
+ * row into a duplicate. It runs per row, so explicit Key columns with no index
+ * scan the table for every row: #1126's bound, here for the lookup.
+ *
+ * No unique constraint is needed on the keys, and `INSERT … ON CONFLICT` is not
+ * used because it requires one that matches them exactly. A key repeated in the
+ * source is applied row by row, so the last one wins and `rowsWritten` counts
+ * each write (an insert, then its updates).
+ */
+function prepareUpsert(
+  db: Database.Database,
+  qualified: string,
+  columns: readonly SinkColumn[],
+  table: UpsertKeyTarget,
+): {
+  keys: SinkColumn[];
+  nonKeys: SinkColumn[];
+  exists: Database.Statement;
+  update: Database.Statement | null;
+} {
+  const keys = resolveUpsertKeys({ ...table, mapped: columns });
+  const nonKeys = columns.filter((c) => !keys.includes(c));
+  const where = keys.map((k) => `${quoteStoreIdentifier(k.actual)} = ?`).join(' AND ');
+  return {
+    keys,
+    nonKeys,
+    exists: db.prepare(`SELECT 1 FROM ${qualified} WHERE ${where} LIMIT 1`),
+    // Every mapped column a key: an existing row has nothing to update.
+    update:
+      nonKeys.length === 0
+        ? null
+        : db.prepare(
+            `UPDATE ${qualified} SET ${nonKeys
+              .map((c) => `${quoteStoreIdentifier(c.actual)} = ?`)
+              .join(', ')} WHERE ${where}`,
+          ),
+  };
+}
+
+/**
  * Write batches of mapped rows into a `table` dataset on a `sqlite` store —
  * §4's atomic sink, and the consumer that finally makes `config.writable` mean
  * something.
@@ -315,6 +385,9 @@ function sinkTargetFor(
  * that better-sqlite3 enables `foreign_keys` by default, so a `DELETE` from a
  * parent table CASCADEs per the operator's own schema; that is their declared
  * intent and is left alone, but it is not visible in `rowsWritten`.
+ *
+ * **`truncate` is that same DELETE** (SQLite has no TRUNCATE), and **`upsert`**
+ * matches each row on its keys before writing it: `prepareUpsert` (C3a).
  *
  * `db.transaction()` is deliberately NOT used: it is synchronous-only, so it
  * cannot span the `await` this function needs between batches (§9's yield).
@@ -402,15 +475,18 @@ export async function writeSqliteDatasetRows(
           ? quoteIdentifier(described.name, 'table')
           : `${quoteIdentifier(target.schema, 'schema')}.${quoteIdentifier(described.name, 'table')}`;
 
-      if (write.mode !== 'append' && write.mode !== 'overwrite') {
+      if (!(COPY_WRITE_MODES as readonly string[]).includes(write.mode)) {
         // `mode` is typed, so this is unreachable from in-repo callers — but an
         // unrecognised value silently behaving like `append` is the wrong
         // failure mode for the field that decides whether the operator's
         // existing rows survive.
         throw new DatasetIoError('permanent', `unknown copy write mode '${String(write.mode)}'`);
       }
-      if (write.mode === 'overwrite') {
+      if (write.mode === 'overwrite' || write.mode === 'truncate') {
         // Inside the transaction, so a later failure restores these rows.
+        // `truncate` is this same DELETE: SQLite has no TRUNCATE, and a DELETE
+        // with no WHERE is its truncate optimisation (C3a). So unlike postgres
+        // it cascades per the schema's ON DELETE and fires delete triggers.
         //
         // ONE unbatched statement, and its bound is worth stating: SQLite's
         // truncate optimisation makes this cheap on a plain table (measured,
@@ -430,7 +506,18 @@ export async function writeSqliteDatasetRows(
           ` VALUES (${columns.map(() => '?').join(', ')})`,
       );
 
+      const upsert =
+        write.mode === 'upsert'
+          ? prepareUpsert(db, qualified, columns, {
+              keyColumns: write.keyColumns ?? [],
+              tableColumns: described.columns,
+              primaryKey: described.primaryKey,
+              table: target.table,
+            })
+          : null;
+
       let first = true;
+      let rowNumber = 0;
       for await (const batch of batches) {
         // Cancellation and the yield are BOTH at the batch boundary (§9, §10).
         if (!first) await yieldToEventLoop();
@@ -438,6 +525,22 @@ export async function writeSqliteDatasetRows(
         first = false;
 
         for (const row of batch) {
+          rowNumber += 1;
+          if (upsert !== null) {
+            refuseNullKey(row, upsert.keys, rowNumber);
+            const keyValues = upsert.keys.map((k) => bindValue(row[k.mapped], k.mapped));
+            if (upsert.exists.get(keyValues) !== undefined) {
+              // The store's own count, as for an insert (#1270): every row the
+              // keys match, so a non-unique key updates each of its rows.
+              if (upsert.update !== null) {
+                rowsWritten += upsert.update.run([
+                  ...upsert.nonKeys.map((c) => bindValue(row[c.mapped], c.mapped)),
+                  ...keyValues,
+                ]).changes;
+              }
+              continue;
+            }
+          }
           // #1270 — the store's own count, not one per statement executed. A
           // BEFORE trigger's `raise(ignore)` or an `ON CONFLICT IGNORE` clause
           // discards the row and reports 0 (measured); counting the statement

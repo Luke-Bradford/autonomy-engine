@@ -136,6 +136,89 @@ export function resolveSinkColumns(
 }
 
 /**
+ * #1600 OR41 C3a — the columns an Upsert matches rows on, as resolved sink
+ * columns, or why there are none. Shared by both sinks so they refuse alike.
+ *
+ * Explicit Key columns resolve against EVERY column the store has, through
+ * `resolveSinkColumns`, so a key is "the same column" by the store's own rule
+ * (#1151) and a missing one is reported as missing. Only then is it required
+ * to be mapped: a real column that no row writes is a different mistake, and
+ * the refusal says which.
+ *
+ * Empty Key columns mean the table's primary key, in the store's spelling, and
+ * every primary-key column must be mapped. A table with no primary key needs
+ * Key columns.
+ */
+export interface UpsertKeyTarget {
+  readonly keyColumns: readonly string[];
+  readonly tableColumns: readonly string[];
+  readonly primaryKey: readonly string[];
+  readonly table: string;
+}
+
+export function resolveUpsertKeys(
+  args: UpsertKeyTarget & { readonly mapped: readonly SinkColumn[] },
+): SinkColumn[] {
+  const { keyColumns, mapped, tableColumns, primaryKey, table } = args;
+  const byActual = new Map(mapped.map((c) => [c.actual, c]));
+  if (keyColumns.length > 0) {
+    let keys: SinkColumn[];
+    try {
+      keys = resolveSinkColumns(keyColumns, tableColumns);
+    } catch (err) {
+      // The resolver speaks of mapping rows; these names came from Key columns.
+      if (!(err instanceof DatasetIoError)) throw err;
+      throw new DatasetIoError('permanent', `Upsert's Key columns: ${err.message}`);
+    }
+    const unmapped = keys.filter((k) => !byActual.has(k.actual)).map((k) => `'${k.mapped}'`);
+    if (unmapped.length > 0) {
+      throw new DatasetIoError(
+        'permanent',
+        `the Upsert key column ${unmapped.join(', ')} is not mapped, so no row carries its value`,
+      );
+    }
+    return keys.map((k) => byActual.get(k.actual) as SinkColumn);
+  }
+  if (primaryKey.length === 0) {
+    throw new DatasetIoError(
+      'permanent',
+      `Upsert needs Key columns: '${table}' has no primary key to match rows on`,
+    );
+  }
+  const unmapped = primaryKey.filter((name) => !byActual.has(name)).map((n) => `'${n}'`);
+  if (unmapped.length > 0) {
+    throw new DatasetIoError(
+      'permanent',
+      `the primary key column ${unmapped.join(', ')} of '${table}' is not mapped, so Upsert ` +
+        'cannot match rows on it: map it, or set Key columns',
+    );
+  }
+  return primaryKey.map((name) => byActual.get(name) as SinkColumn);
+}
+
+/**
+ * #1600 OR41 C3a — an Upsert row whose key is NULL fails the copy. `=` never
+ * matches NULL, so inserting it would add a new row on every rerun, which is
+ * the duplication an Upsert exists to prevent. A null-safe match is not used
+ * because Postgres can neither index nor hash-join `IS NOT DISTINCT FROM`.
+ */
+export function refuseNullKey(
+  row: Readonly<Record<string, unknown>>,
+  keys: readonly SinkColumn[],
+  rowNumber: number,
+): void {
+  for (const key of keys) {
+    if (row[key.mapped] === null) {
+      throw new DatasetIoError(
+        'permanent',
+        `row ${rowNumber}: the Upsert key column '${key.actual}' is NULL, and a NULL key ` +
+          'matches no row, so the row cannot be upserted',
+      );
+    }
+  }
+}
+
+/**
  * Where a refusal's "this column is NOT NULL" came from. Two sources, ONE rule
  * (#1162) — and the lookup differs between them on purpose, so it is spelled
  * out per source rather than hidden behind a predicate.

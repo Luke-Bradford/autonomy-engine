@@ -154,3 +154,66 @@ describe('#1176 — what the gate still declines to read', () => {
     expect(validateDoc(doc([copyNode([row(), row({ source: 'a', sink: 'ID' })])]))).toEqual([]);
   });
 });
+
+/**
+ * #1600 OR41 C3a — the Key column rules reach the write gate, on a mapping
+ * whose value is a `${}` expression, so the assertion cannot be satisfied by the
+ * dispatch-schema replay alone (#1480 parses only a literal config).
+ */
+describe('C3a — the Upsert key rules reach the write gate', () => {
+  const upsert = (keyColumns: unknown, mode = 'upsert'): Node => ({
+    ...copyNode([]),
+    config: {
+      mapping: [row(), { expression: '${params.batch}', sink: 'batch', type: 'string' }],
+      mode,
+      keyColumns,
+    },
+  });
+
+  it('accepts a mapped key', () => {
+    expect(
+      validateDoc(
+        doc([upsert(['id'])], [], [], [{ name: 'batch', type: 'string', required: false }]),
+      ),
+    ).toEqual([]);
+  });
+
+  it('REFUSES a key no mapping row writes', () => {
+    expect(
+      validateDoc(
+        doc([upsert(['nope'])], [], [], [{ name: 'batch', type: 'string', required: false }]),
+      ),
+    ).toEqual([
+      "node.c.keyColumns[0]: 'nope' is not a mapped sink column, so no row carries its value",
+    ]);
+  });
+
+  it('saves Key columns beside a ${} Write behaviour, which dispatch decides', () => {
+    expect(
+      validateDoc(
+        doc(
+          [upsert(['id'], '${params.how}')],
+          [],
+          [],
+          [
+            { name: 'batch', type: 'string', required: false },
+            { name: 'how', type: 'string', required: false },
+          ],
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  it('REFUSES Key columns on a write behaviour that ignores them', () => {
+    expect(
+      validateDoc(
+        doc(
+          [upsert(['id'], 'overwrite')],
+          [],
+          [],
+          [{ name: 'batch', type: 'string', required: false }],
+        ),
+      ),
+    ).toEqual(['node.c.keyColumns: only read when Write behaviour is Upsert']);
+  });
+});

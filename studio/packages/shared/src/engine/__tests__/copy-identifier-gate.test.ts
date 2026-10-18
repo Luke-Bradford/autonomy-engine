@@ -128,3 +128,31 @@ describe('the §8 rule is identifier-only — a malformed per-FIELD shape is not
     expectOnlySchemaIssues(validateDoc(doc([copyNode([{ source: 42, sink: null }])])));
   });
 });
+
+/**
+ * #1600 OR41 C3a — Upsert's Key columns are identifiers too. Substitution is in
+ * the reducer, so a `${}` key would reach the sink as an ordinary string; the
+ * save gate is the only place the distinction exists (§8).
+ */
+describe('§8 — an Upsert key column must be a literal identifier (C3a)', () => {
+  const upsertNode = (keyColumns: unknown): Node => ({
+    ...copyNode([literalRow]),
+    config: { mapping: [literalRow], mode: 'upsert', keyColumns },
+  });
+
+  it('accepts literal key columns', () => {
+    expect(validateDoc(doc([upsertNode(['id'])]))).toEqual([]);
+  });
+
+  it('REFUSES a ${} expression as a key column, naming its index', () => {
+    expect(validateDoc(doc([upsertNode(['${params.key}'])]))).toEqual([
+      'node.c.keyColumns[0]: a key column name must be a literal, not a ${} expression — §8 prohibits a dynamic identifier',
+    ]);
+  });
+
+  it('REFUSES a whole-value ${} in place of the list', () => {
+    expect(validateDoc(doc([upsertNode('${params.keys}')]))).toEqual([
+      'node.c.keyColumns: Key columns must be a literal list of column names, not a ${} expression — §8 prohibits a dynamic identifier',
+    ]);
+  });
+});

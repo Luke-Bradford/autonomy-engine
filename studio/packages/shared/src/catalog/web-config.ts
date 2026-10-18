@@ -3,6 +3,7 @@ import { optionTitles, presented, singleLine } from '../schemas/field-presentati
 import { SecretRefSchema } from '../schemas/secret-ref.js';
 import { DEFAULT_HTTP_TIMEOUT_MS, DEFAULT_MAX_READ_BYTES } from './connection-config.js';
 import { interpolationMode } from '../engine/expr.js';
+import { isSet } from './config-value.js';
 
 /**
  * The `http_request` secret-SINK config field name (item 7 / S4) — the ONE
@@ -308,14 +309,6 @@ export function webCallbackOutcome(
  */
 export function webHasUrl<T extends { url?: unknown }>(cfg: T): cfg is T & { url: string } {
   return typeof cfg.url === 'string' && cfg.url !== '';
-}
-
-/** A setting the author filled: not absent, and not an emptied box, list or table. */
-function isSet(value: unknown): boolean {
-  if (value === undefined || value === '') return false;
-  if (Array.isArray(value)) return value.length > 0;
-  if (typeof value === 'object' && value !== null) return Object.keys(value).length > 0;
-  return true;
 }
 
 /**

@@ -1,5 +1,6 @@
 import pg from 'pg';
 import { describe, expect, it } from 'vitest';
+import { DatasetIoError } from '../dataset-io-error.js';
 import { writePostgresDatasetRows } from '../postgres-sink.js';
 import { resolveSinkColumns } from '../sink-columns.js';
 import type {
@@ -72,11 +73,14 @@ function sinkFactory(
     relkind?: string;
     columns?: ReturnType<typeof col>[];
     fillsNulls?: boolean;
+    primaryKey?: string[];
     missing?: boolean;
     failOn?: { prefix: string; error: unknown };
     /** What an INSERT reports as its `rowCount`, given how many tuples it sent.
      * Defaults to every tuple landing — the plain-table case. */
     insertRowCount?: (sent: number) => number | null | undefined;
+    /** What an Upsert's UPDATE reports as its `rowCount` (C3a). */
+    updateRowCount?: number;
   } = {},
 ) {
   const rec: SinkRecorder = { queries: [], ended: 0 };
@@ -99,11 +103,15 @@ function sinkFactory(
                 name: fixture.name ?? 'tgt',
                 relkind: fixture.relkind ?? 'r',
                 columns: fixture.columns ?? [col('a'), col('b')],
+                primaryKey: fixture.primaryKey ?? [],
                 fillsNulls: fixture.fillsNulls ?? false,
               },
             ],
             fields: [],
           };
+        }
+        if (sql.startsWith('UPDATE')) {
+          return { rows: [], fields: [], rowCount: fixture.updateRowCount ?? 0 };
         }
         if (sql.startsWith('INSERT INTO')) {
           const sent = (sql.match(/\(\$\d/g) ?? []).length;
@@ -755,6 +763,145 @@ begin
   end if;
 end $$`;
 
+/**
+ * #1600 OR41 C3a — Truncate then insert and Upsert: the statements on the wire.
+ * What the table ends up holding is the live suite's to prove (below); these
+ * pin the shape, lock and order that run everywhere, CI or not.
+ */
+describe('the postgres sink: Truncate then insert and Upsert (C3a)', () => {
+  const lockOf = (rec: SinkRecorder) => {
+    const sql = sqlOf(rec);
+    return sql[sql.indexOf('BEGIN') + 1] ?? '';
+  };
+
+  it('Truncate takes ACCESS EXCLUSIVE up front and TRUNCATEs after the gate, before any INSERT', async () => {
+    const { rec, factory } = sinkFactory();
+    await writePostgresDatasetRows(
+      write({ createClient: factory, mode: 'truncate' }),
+      batchesOf([{ a: 1, b: 2 }]),
+    );
+    expect(lockOf(rec)).toContain('IN ACCESS EXCLUSIVE MODE');
+    const sql = sqlOf(rec);
+    const truncate = sql.indexOf('TRUNCATE "public"."tgt"');
+    expect(truncate).toBeGreaterThan(sql.findIndex((q) => q.includes('to_regclass')));
+    expect(truncate).toBeLessThan(sql.findIndex((q) => q.startsWith('INSERT INTO')));
+    expect(sql.some((q) => q.startsWith('DELETE'))).toBe(false);
+  });
+
+  it("refuses a TRUNCATE postgres will not run (0A000) in postgres's words, with what to do instead", async () => {
+    const { rec, factory } = sinkFactory({
+      failOn: {
+        prefix: 'TRUNCATE',
+        error: pgError('0A000', 'cannot truncate a table referenced in a foreign key constraint'),
+      },
+    });
+    const err = await writePostgresDatasetRows(
+      write({ createClient: factory, mode: 'truncate' }),
+      batchesOf([{ a: 1, b: 2 }]),
+    ).then(
+      () => undefined,
+      (e: unknown) => e as DatasetIoError,
+    );
+    expect(err?.kind).toBe('permanent');
+    expect(err?.message).toMatch(
+      /could not empty 'public\.tgt' \(Overwrite deletes the rows instead\)/,
+    );
+    expect(err?.message).toMatch(/referenced in a foreign key constraint/);
+    expect(sqlOf(rec)).toContain('ROLLBACK');
+  });
+
+  it('Upsert takes SHARE ROW EXCLUSIVE, stages typed like the target, then updates and inserts', async () => {
+    const { rec, factory } = sinkFactory({ updateRowCount: 1 });
+    const result = await writePostgresDatasetRows(
+      write({ createClient: factory, mode: 'upsert', keyColumns: ['a'] }),
+      batchesOf([
+        { a: 1, b: 'x' },
+        { a: 2, b: 'y' },
+      ]),
+    );
+    expect(lockOf(rec)).toContain('IN SHARE ROW EXCLUSIVE MODE');
+    const sql = sqlOf(rec);
+    const stage = sql.findIndex((q) => q.startsWith('CREATE TEMP TABLE'));
+    expect(sql[stage]).toBe(
+      'CREATE TEMP TABLE "studio_copy_upsert" ON COMMIT DROP AS SELECT "a", "b", 0::bigint AS ' +
+        '"studio_copy_ord" FROM "public"."tgt" WITH NO DATA',
+    );
+    expect(sql.slice(stage + 1, stage + 5)).toEqual([
+      'TRUNCATE pg_temp."studio_copy_upsert"',
+      'INSERT INTO pg_temp."studio_copy_upsert" ("a", "b", "studio_copy_ord") VALUES ($1, $2, $3), ($4, $5, $6)',
+      'UPDATE "public"."tgt" AS t SET "b" = d."b" FROM (SELECT DISTINCT ON ("a") * FROM ' +
+        'pg_temp."studio_copy_upsert" ORDER BY "a", "studio_copy_ord" DESC) AS d WHERE t."a" = d."a"',
+      'INSERT INTO "public"."tgt" ("a", "b") SELECT d."a", d."b" FROM (SELECT DISTINCT ON ("a") * ' +
+        'FROM pg_temp."studio_copy_upsert" ORDER BY "a", "studio_copy_ord" DESC) AS d WHERE NOT ' +
+        'EXISTS (SELECT 1 FROM "public"."tgt" AS t WHERE t."a" = d."a")',
+    ]);
+    // Each row carries its order in the source, so the last of a repeated key wins.
+    expect(rec.queries[stage + 2]?.values).toEqual([1, 'x', 1, 2, 'y', 2]);
+    // The UPDATE's 1 plus the INSERT…SELECT's 0 (the fake's count for no tuples).
+    expect(result.rowsWritten).toBe(1);
+  });
+
+  it("defaults to the table's primary key, and skips the UPDATE when every mapped column is a key", async () => {
+    const { rec, factory } = sinkFactory({ columns: [col('a')], primaryKey: ['a'] });
+    await writePostgresDatasetRows(
+      write({ createClient: factory, mode: 'upsert', columns: ['a'] }),
+      batchesOf([{ a: 1 }]),
+    );
+    const sql = sqlOf(rec);
+    expect(sql.some((q) => q.startsWith('UPDATE'))).toBe(false);
+    expect(sql.some((q) => q.includes('DISTINCT ON ("a")'))).toBe(true);
+  });
+
+  it('refuses a NULL key before the chunk is sent, and rolls back', async () => {
+    const { rec, factory } = sinkFactory();
+    const err = await writePostgresDatasetRows(
+      write({ createClient: factory, mode: 'upsert', keyColumns: ['a'] }),
+      batchesOf([{ a: null, b: 'x' }]),
+    ).then(
+      () => undefined,
+      (e: unknown) => e as DatasetIoError,
+    );
+    expect(err?.message).toMatch(/row 1: the Upsert key column 'a' is NULL/);
+    const sql = sqlOf(rec);
+    expect(sql.some((q) => q.startsWith('INSERT'))).toBe(false);
+    expect(sql).toContain('ROLLBACK');
+  });
+
+  it('refuses a mapping that writes the staging order column', async () => {
+    const { factory } = sinkFactory({ columns: [col('a'), col('studio_copy_ord')] });
+    const err = await writePostgresDatasetRows(
+      write({
+        createClient: factory,
+        mode: 'upsert',
+        keyColumns: ['a'],
+        columns: ['a', 'studio_copy_ord'],
+      }),
+      batchesOf([{ a: 1, studio_copy_ord: 2 }]),
+    ).then(
+      () => undefined,
+      (e: unknown) => e as DatasetIoError,
+    );
+    expect(err?.message).toMatch(
+      /a column named 'studio_copy_ord', which this mapping also writes/,
+    );
+  });
+
+  it('chunks an Upsert on the parameter ceiling counting the order column', async () => {
+    // 32767 columns + the order column = 32768 parameters a row, so one row a
+    // statement: a chunk that forgot the extra column would send two rows
+    // (65534 + 2 > 65535) and garble the bind message.
+    const names = Array.from({ length: 32767 }, (_, i) => `c${i}`);
+    const { rec, factory } = sinkFactory({ columns: names.map((n) => col(n)) });
+    const row = Object.fromEntries(names.map((n) => [n, 1]));
+    await writePostgresDatasetRows(
+      write({ createClient: factory, mode: 'upsert', keyColumns: ['c0'], columns: names }),
+      batchesOf([row, row]),
+    );
+    const staged = rec.queries.filter((q) => q.sql.startsWith('INSERT INTO pg_temp'));
+    expect(staged).toHaveLength(2);
+  });
+});
+
 describe.skipIf(LIVE_HOST === undefined)('the postgres sink, against a live postgres', () => {
   const live = {
     host: LIVE_HOST ?? '',
@@ -1192,6 +1339,195 @@ describe.skipIf(LIVE_HOST === undefined)('the postgres sink, against a live post
     ).rejects.toMatchObject({
       kind: 'permanent',
       message: expect.stringContaining('is a view, not a table'),
+    });
+  });
+
+  /**
+   * #1600 OR41 C3a — Truncate then insert and Upsert against a real table. The
+   * offline suite pins the statements; these prove what the table holds.
+   */
+  describe('Truncate then insert and Upsert (C3a)', () => {
+    const tableRows = async (table: string) =>
+      (await withAdminClient((c) => c.query(`select * from ${table} order by 1`))).rows;
+    const upsertInto = (
+      table: string,
+      columns: string[],
+      keyColumns: string[],
+      ...chunks: Record<string, SinkValue>[][]
+    ) =>
+      writePostgresDatasetRows(
+        liveWrite({
+          datasetConfig: { schema: 'public', table },
+          columns,
+          mode: 'upsert',
+          keyColumns,
+        }),
+        batchesOf(...chunks),
+      );
+
+    it('Truncate empties the table, then inserts', async () => {
+      await withAdminClient((c) =>
+        c.query(
+          "drop table if exists sink_tr; create table sink_tr(a int, b text); insert into sink_tr values (1, 'a')",
+        ),
+      );
+      await expect(
+        writePostgresDatasetRows(
+          liveWrite({ datasetConfig: { schema: 'public', table: 'sink_tr' }, mode: 'truncate' }),
+          batchesOf([{ a: 9, b: 'z' }]),
+        ),
+      ).resolves.toEqual({ rowsWritten: 1 });
+      expect(await tableRows('sink_tr')).toEqual([{ a: 9, b: 'z' }]);
+    });
+
+    it('Truncate refuses a table a foreign key references, and leaves it intact', async () => {
+      await withAdminClient((c) =>
+        c.query(
+          'drop table if exists sink_trc; drop table if exists sink_trp;' +
+            'create table sink_trp(a int primary key, b text);' +
+            'create table sink_trc(p int references sink_trp(a));' +
+            "insert into sink_trp values (1, 'kept'); insert into sink_trc values (1)",
+        ),
+      );
+      await expect(
+        writePostgresDatasetRows(
+          liveWrite({ datasetConfig: { schema: 'public', table: 'sink_trp' }, mode: 'truncate' }),
+          batchesOf([{ a: 2, b: 'x' }]),
+        ),
+      ).rejects.toMatchObject({
+        kind: 'permanent',
+        message: expect.stringContaining('Overwrite deletes the rows instead'),
+      });
+      expect(await tableRows('sink_trp')).toEqual([{ a: 1, b: 'kept' }]);
+    });
+
+    it('Upsert updates matched keys, inserts the rest, and a rerun adds nothing', async () => {
+      // No unique constraint on the key: Upsert does not need one.
+      await withAdminClient((c) =>
+        c.query(
+          "drop table if exists sink_up; create table sink_up(a int, b text); insert into sink_up values (1, 'a'), (2, 'b')",
+        ),
+      );
+      const rows = [
+        { a: 2, b: 'B' },
+        { a: 3, b: 'c' },
+      ];
+      await expect(upsertInto('sink_up', ['a', 'b'], ['a'], rows)).resolves.toEqual({
+        rowsWritten: 2,
+      });
+      // The rerun matches both rows: two updates, no insert.
+      await expect(upsertInto('sink_up', ['a', 'b'], ['a'], rows)).resolves.toEqual({
+        rowsWritten: 2,
+      });
+      expect(await tableRows('sink_up')).toEqual([
+        { a: 1, b: 'a' },
+        { a: 2, b: 'B' },
+        { a: 3, b: 'c' },
+      ]);
+    });
+
+    it("Upsert uses a composite primary key, and the source's last row for a key wins", async () => {
+      await withAdminClient((c) =>
+        c.query(
+          'drop table if exists sink_upk; create table sink_upk(a int, b int, v text, primary key (b, a));' +
+            "insert into sink_upk values (1, 1, 'x')",
+        ),
+      );
+      await upsertInto(
+        'sink_upk',
+        ['a', 'b', 'v'],
+        [],
+        [
+          { a: 1, b: 1, v: 'first' },
+          { a: 1, b: 1, v: 'last' },
+        ],
+        [{ a: 2, b: 1, v: 'n' }],
+      );
+      expect(await tableRows('sink_upk')).toEqual([
+        { a: 1, b: 1, v: 'last' },
+        { a: 2, b: 1, v: 'n' },
+      ]);
+    });
+
+    it('Upsert with every mapped column a key inserts only the missing keys', async () => {
+      await withAdminClient((c) =>
+        c.query(
+          'drop table if exists sink_upo; create table sink_upo(a int primary key); insert into sink_upo values (1)',
+        ),
+      );
+      await expect(upsertInto('sink_upo', ['a'], [], [{ a: 1 }, { a: 7 }])).resolves.toEqual({
+        rowsWritten: 1,
+      });
+      expect(await tableRows('sink_upo')).toEqual([{ a: 1 }, { a: 7 }]);
+    });
+
+    it('Upsert reads only the key attributes of a PRIMARY KEY … INCLUDE', async () => {
+      await withAdminClient((c) =>
+        c.query(
+          'drop table if exists sink_upi; create table sink_upi(a int, b text, primary key (a) include (b));' +
+            "insert into sink_upi values (1, 'a')",
+        ),
+      );
+      await upsertInto('sink_upi', ['a', 'b'], [], [{ a: 1, b: 'A' }]);
+      expect(await tableRows('sink_upi')).toEqual([{ a: 1, b: 'A' }]);
+    });
+
+    it('Upsert refuses a table with no primary key and no Key columns, untouched', async () => {
+      await withAdminClient((c) =>
+        c.query(
+          "drop table if exists sink_upz; create table sink_upz(a int, b text); insert into sink_upz values (1, 'a')",
+        ),
+      );
+      await expect(
+        upsertInto('sink_upz', ['a', 'b'], [], [{ a: 1, b: 'A' }]),
+      ).rejects.toMatchObject({
+        kind: 'permanent',
+        message: expect.stringContaining(
+          "Upsert needs Key columns: 'public.sink_upz' has no primary key",
+        ),
+      });
+      expect(await tableRows('sink_upz')).toEqual([{ a: 1, b: 'a' }]);
+    });
+
+    it("Upsert resolves a key by the store's case rule, and stages typed values as the target types them", async () => {
+      await withAdminClient((c) =>
+        c.query(
+          'drop table if exists sink_upt; create table sink_upt(id int, amount numeric(10,2), at timestamptz, doc jsonb);' +
+            "insert into sink_upt values (1, 1.00, '2026-01-01T00:00:00Z', '{}')",
+        ),
+      );
+      await expect(
+        upsertInto(
+          'sink_upt',
+          ['id', 'amount', 'at', 'doc'],
+          ['ID'],
+          [
+            { id: 1, amount: '12.50', at: '2026-10-18T12:00:00Z', doc: '{"k":1}' },
+            { id: 2, amount: '3', at: '2026-10-18T13:00:00Z', doc: '[]' },
+          ],
+        ),
+      ).resolves.toEqual({ rowsWritten: 2 });
+      const rows = await withAdminClient((c) =>
+        c.query(
+          "select id, amount::text as amount, to_char(at at time zone 'UTC', 'HH24') as hour, doc from sink_upt order by id",
+        ),
+      );
+      expect(rows.rows).toEqual([
+        { id: 1, amount: '12.50', hour: '12', doc: { k: 1 } },
+        { id: 2, amount: '3.00', hour: '13', doc: [] },
+      ]);
+    });
+
+    it('Upsert fails on a NULL key and rolls back what it had written', async () => {
+      await withAdminClient((c) =>
+        c.query(
+          "drop table if exists sink_upn; create table sink_upn(a int, b text); insert into sink_upn values (1, 'a')",
+        ),
+      );
+      await expect(
+        upsertInto('sink_upn', ['a', 'b'], ['a'], [{ a: 1, b: 'A' }], [{ a: null, b: 'n' }]),
+      ).rejects.toMatchObject({ kind: 'permanent', message: expect.stringContaining('is NULL') });
+      expect(await tableRows('sink_upn')).toEqual([{ a: 1, b: 'a' }]);
     });
   });
 });

@@ -61,7 +61,7 @@ import {
   llmToolsSurfaceSchema,
   lowerOutputSchema,
 } from '../catalog/llm-config.js';
-import { copyMappingShapeIssues } from '../catalog/copy-config.js';
+import { copyKeyColumnIssues, copyMappingShapeIssues } from '../catalog/copy-config.js';
 import type { GetMetadataField } from '../catalog/get-metadata-config.js';
 import {
   GET_METADATA_FIELD_TITLES,
@@ -3022,6 +3022,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     if (node.type === COPY_ACTIVITY_TYPE) {
       validateCopyMappingIdentifiers(node, errors);
       validateCopyMappingShape(node, errors); // #1176 — the three cross-row rules
+      validateCopyKeyColumns(node, errors); // #1600 C3a — Upsert's Key columns
     }
     // #1480 — an unknown `type`, or a literal config the adapter would refuse
     // at dispatch, is refused here: a version that saves must be one that runs.
@@ -3651,6 +3652,42 @@ function validateCopyMappingIdentifiers(node: Node, errors: string[]): void {
       );
     }
   });
+}
+
+/**
+ * #1600 OR41 C3a — Upsert's Key columns are identifiers, so §8 applies to them
+ * exactly as to a mapping's `sink`: a `${}` would be substituted in the reducer
+ * and reach the sink as an ordinary string. A whole-value `${}` in place of the
+ * list is refused too, unlike a whole-value `mapping`, because there is no
+ * value half here: every entry is a column name. Then the shared key rules
+ * (`copyKeyColumnIssues`), replayed for #1176's reason: a rule only the canvas
+ * and dispatch read does not hold for a git-imported version.
+ */
+function validateCopyKeyColumns(node: Node, errors: string[]): void {
+  const keys = node.config['keyColumns'];
+  if (typeof keys === 'string' && interpolationMode(keys).mode !== 'literal') {
+    errors.push(
+      `node.${node.id}.keyColumns: Key columns must be a literal list of column names, not a ` +
+        `\${} expression — §8 prohibits a dynamic identifier`,
+    );
+    return;
+  }
+  if (Array.isArray(keys)) {
+    let dynamic = false;
+    keys.forEach((key, i) => {
+      if (typeof key !== 'string' || interpolationMode(key).mode === 'literal') return;
+      dynamic = true;
+      errors.push(
+        `node.${node.id}.keyColumns[${i}]: a key column name must be a literal, not a ` +
+          `\${} expression — §8 prohibits a dynamic identifier`,
+      );
+    });
+    if (dynamic) return;
+  }
+  for (const issue of copyKeyColumnIssues(node.config)) {
+    const where = issue.path.length === 0 ? 'keyColumns' : `keyColumns[${issue.path[0]}]`;
+    errors.push(`node.${node.id}.${where}: ${issue.message}`);
+  }
 }
 
 /**
