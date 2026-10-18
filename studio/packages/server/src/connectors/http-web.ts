@@ -70,8 +70,10 @@ export async function* runWeb(
   // An error message drops every request header value, as `http_request`'s
   // does; the outputs only the secrets, since a response may legitimately hold
   // a plain header's value.
-  const headerValues = Object.values(requestHeaders);
   const outputSecrets = [secret, ...Object.values(sinkHeaders)];
+  // The bare secret too: a header value is `Bearer <secret>`, and a 401 body
+  // may echo the token alone.
+  const headerValues = [...Object.values(requestHeaders), ...outputSecrets];
 
   const timeoutMs =
     cfg.httpRequestTimeoutSeconds !== undefined
@@ -195,7 +197,7 @@ function statusFailure(
   res: Response,
   bodyText: string,
   retryOnThrottle: boolean,
-  secrets: readonly string[],
+  secrets: readonly (string | null)[],
 ): Extract<ActivityEvent, { type: 'failed' }> {
   const classified = classifyHttpStatus(res.status);
   const throttled = res.status === 429 || res.status === 503;

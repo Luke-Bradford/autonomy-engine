@@ -229,6 +229,16 @@ describe('Web — Fail on HTTP error', () => {
     expect(event.error).not.toContain('sk-li');
   });
 
+  it('redacts the bare Bearer token from an error body', async () => {
+    main.set((req, res) => {
+      const token = String(req.headers.authorization).replace(/^Bearer /, '');
+      res.writeHead(401).end(`invalid token: ${token}`);
+    });
+    const event = failed(await run({ url: '/' }, { secret: 'tok-abc-123' }));
+    expect(event.kind).toBe('auth');
+    expect(event.error).not.toContain('tok-abc-123');
+  });
+
   it('redacts a secret the server echoes into its error body', async () => {
     main.set((req, res) => {
       res.writeHead(400).end(`bad key ${String(req.headers['x-api-key'])}`);
