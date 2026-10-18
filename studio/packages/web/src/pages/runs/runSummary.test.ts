@@ -4066,3 +4066,55 @@ describe('#1600 OR41 C11c — a Web Wait for callback', () => {
     expect(done!.outputValues).toEqual({ ...REQUEST, callback: { done: true } });
   });
 });
+
+describe('#1600 OR41 C11c-2 — a Web with no Request URL (never dispatched)', () => {
+  const park = (arrived?: { callback: unknown; reportedError?: string }) =>
+    envelope(
+      {
+        type: 'externalWait.created',
+        runId: 'r',
+        nodeId: 'w',
+        attemptId: 'w#0',
+        dueAt: 9,
+        ...(arrived !== undefined ? { arrived } : {}),
+      },
+      1_000,
+    );
+
+  it('a reported failure fails it, though no request was held', () => {
+    const [done] = deriveNodeActivity([
+      park(),
+      envelope(
+        {
+          type: 'externalWait.completed',
+          runId: 'r',
+          nodeId: 'w',
+          previousAttemptId: 'w#0',
+          outputs: { callback: { StatusCode: 403 } },
+          reportedError: 'the callback reported StatusCode 403',
+        },
+        2_000,
+      ),
+    ]);
+    expect(done!.status).toBe('failure');
+    expect(done!.error).toBe('the callback reported StatusCode 403');
+    expect(done!.attempts).toBe(1);
+    expect(done!.endedAtMs).toBe(2_000);
+  });
+
+  it('a callback that came in the crash window settles it at the arm, on one attempt', () => {
+    const [done] = deriveNodeActivity([park({ callback: 'ok' })]);
+    expect(done!.status).toBe('success');
+    expect(done!.attempts).toBe(1);
+    expect(done!.outputValues).toEqual({ callback: 'ok' });
+    expect(done!.endedAtMs).toBe(1_000);
+  });
+
+  it('an early reported failure fails it at the arm', () => {
+    const [done] = deriveNodeActivity([
+      park({ callback: {}, reportedError: 'the callback reported StatusCode 500' }),
+    ]);
+    expect(done!.status).toBe('failure');
+    expect(done!.error).toBe('the callback reported StatusCode 500');
+  });
+});

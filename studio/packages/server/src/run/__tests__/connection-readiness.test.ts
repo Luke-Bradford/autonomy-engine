@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
   CATALOG_VERSION,
+  WEB_ACTIVITY_TYPE,
   type ActivityCatalogEntry,
   type NewTrigger,
   type Container,
@@ -754,5 +755,25 @@ describe('connectionDependents — the NODE buckets (#1252)', () => {
     const connId = readyConnection(db);
     versionRef(db, 'someone-else', connId);
     expect(connectionDependents(db, 'local', connId).nodes).toEqual([]);
+  });
+});
+
+describe('#1600 OR41 C11c-2 — a Web with no Request URL', () => {
+  const web = (config: Record<string, unknown>): Node => ({
+    id: 'w',
+    type: WEB_ACTIVITY_TYPE,
+    connectionId: 'gone',
+    config: { waitForCallback: true, ...config },
+    position: { x: 0, y: 0 },
+  });
+
+  it('never blocks enable on a connection it never resolves', () => {
+    const { db } = freshDb();
+    const waits = versionWithNodes(db, 'local', [web({})]);
+    expect(unreadyConnectionsForVersion(db, 'local', waits)).toEqual([]);
+    const sends = versionWithNodes(db, 'local', [web({ url: '/x', method: 'POST' })]);
+    expect(unreadyConnectionsForVersion(db, 'local', sends)).toEqual([
+      { connectionId: 'gone', reason: 'missing' },
+    ]);
   });
 });

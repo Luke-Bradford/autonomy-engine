@@ -284,3 +284,105 @@ describe('#1600 C11c — secure output', () => {
     expect(eng.redact(plain)).toEqual(plain);
   });
 });
+
+describe('#1600 C11c-2 — a Web with no Request URL only waits', () => {
+  // No URL, no connection: the inbound-only wait a `webhook` was.
+  const waitsOnly = (config: Record<string, unknown> = {}): Node => {
+    const node = web('w', { callbackTimeoutSeconds: 120, ...config });
+    const { url: _url, method: _method, ...rest } = node.config;
+    const { connectionId: _c, ...bare } = node;
+    return { ...bare, config: rest };
+  };
+  const NULLS = {
+    status: null,
+    headers: null,
+    body: null,
+    bytes: null,
+    durationMs: null,
+    truncated: null,
+  };
+
+  it('is never dispatched: run.started holds it ready and asks the driver to park it', () => {
+    const eng = engine([waitsOnly()]);
+    const r = eng.reduce(eng.seedState(), started);
+    expect(r.commands).toEqual([
+      { type: 'scheduleExternalWait', nodeId: 'w', attemptId: 'w#0', timeoutSeconds: 120 },
+    ]);
+    expect(r.state.nodes.w!.status).toBe('ready');
+    expect(r.state.nodes.w!.callback).toEqual({
+      attemptId: 'w#0',
+      request: NULLS,
+      timeoutSeconds: 120,
+    });
+  });
+
+  it("waits ADF's 10 minutes when the timeout is empty", () => {
+    const node = waitsOnly();
+    delete node.config.callbackTimeoutSeconds;
+    const eng = engine([node]);
+    const r = eng.reduce(eng.seedState(), started);
+    expect(r.commands).toEqual([expect.objectContaining({ timeoutSeconds: 600 })]);
+  });
+
+  it('an empty Request URL box is no URL', () => {
+    const eng = engine([waitsOnly({ url: '' })]);
+    const r = eng.reduce(eng.seedState(), started);
+    expect(r.commands.map((c) => c.type)).toEqual(['scheduleExternalWait']);
+  });
+
+  it('a Web with a URL is still dispatched', () => {
+    const eng = engine([web('w')]);
+    const r = eng.reduce(eng.seedState(), started);
+    expect(r.commands.map((c) => c.type)).toEqual(['dispatchNode']);
+  });
+
+  it('settles on the callback with null request outputs plus callback', () => {
+    const eng = engine([waitsOnly()]);
+    const callback = { approved: true };
+    const r = fold(eng, [started, created('w', 'w#0'), completed('w', 'w#0', callback)]);
+    expect(r.state.nodes.w!.status).toBe('success');
+    expect(r.state.outputs.w).toEqual({ ...NULLS, callback });
+  });
+
+  it('a reported failure fails it', () => {
+    const eng = engine([waitsOnly({ reportStatusOnCallback: true })]);
+    const r = fold(eng, [
+      started,
+      created('w', 'w#0'),
+      completed('w', 'w#0', { StatusCode: 403 }, 'the callback reported StatusCode 403'),
+    ]);
+    expect(r.state.nodes.w!.status).toBe('failure');
+  });
+
+  it('an expiry fails it', () => {
+    const eng = engine([waitsOnly()]);
+    const r = fold(eng, [
+      started,
+      created('w', 'w#0'),
+      { type: 'externalWait.expired', runId: RUN, nodeId: 'w', previousAttemptId: 'w#0' },
+    ]);
+    expect(r.state.nodes.w!.status).toBe('failure');
+  });
+
+  it('a callback that came in the crash window settles it at the arm', () => {
+    const eng = engine([waitsOnly()]);
+    const r = fold(eng, [started, created('w', 'w#0', { callback: 'ok' })]);
+    expect(r.state.nodes.w!.status).toBe('success');
+    expect(r.state.outputs.w).toEqual({ ...NULLS, callback: 'ok' });
+  });
+
+  it('a crash before the park re-parks it on resume, never dispatching it', () => {
+    const eng = engine([waitsOnly()]);
+    const { state } = fold(eng, [started]);
+    const r = eng.reduce(state, { type: 'run.resumed', runId: RUN, reason: 'boot_reconcile' });
+    expect(r.commands).toEqual([
+      { type: 'scheduleExternalWait', nodeId: 'w', attemptId: 'w#0', timeoutSeconds: 120 },
+    ]);
+  });
+
+  it('a cancel before the park ends the wait at the arm', () => {
+    const eng = engine([waitsOnly()]);
+    const r = fold(eng, [started, cancel, created('w', 'w#0')]);
+    expect(r.state.nodes.w!.status).toBe('failure');
+  });
+});

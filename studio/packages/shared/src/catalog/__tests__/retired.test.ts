@@ -5,7 +5,12 @@ import { deleteConfigSchema } from '../delete-config.js';
 import { getMetadataConfigSchema } from '../get-metadata-config.js';
 import { getActivity } from '../registry.js';
 import { RETIRED_LOWERINGS, lowerRetiredTypes, splitDestination } from '../retired.js';
-import { WEB_MAX_RESPONSE_BYTES, webConfigSchema } from '../web-config.js';
+import {
+  WEB_MAX_CALLBACK_TIMEOUT_SECONDS,
+  WEB_MAX_RESPONSE_BYTES,
+  webConfigSchema,
+  webWaitsOnly,
+} from '../web-config.js';
 
 const fileNode = (type: string, config: Record<string, unknown>, extra: Partial<Node> = {}): Node =>
   ({
@@ -168,7 +173,8 @@ describe('#1600 C1b — §8 output aliases', () => {
     for (const retired of Object.keys(RETIRED_LOWERINGS)) {
       const entry = getActivity(retired)!;
       expect(entry.inPalette).toBe(false);
-      expect(entry.dispatchConfigSchema).toBeDefined();
+      // A control type (C11c-2's `webhook`) is engine-evaluated, never dispatched.
+      if (entry.kind !== 'control') expect(entry.dispatchConfigSchema).toBeDefined();
     }
   });
 });
@@ -544,5 +550,71 @@ describe('#1600 C11b — http_request → Web, Fail on HTTP error off, Parse as 
     const nodes = lowerNodes([call(), reader]);
     expect(nodes.map((n) => n.type)).toEqual(['web', 'if']);
     expect(nodes[1]).toBe(reader);
+  });
+});
+
+describe('#1600 C11c-2 — webhook → Web · Wait for callback, no Request URL', () => {
+  const hook = (config: Record<string, unknown> = { timeoutSeconds: '${900}' }, extra: Partial<Node> = {}) =>
+    ({
+      id: 'hook',
+      type: 'webhook',
+      config,
+      position: { x: 10, y: 20 },
+      description: 'approval',
+      ...extra,
+    }) as Node;
+
+  it('opens as a Web that only waits, with the timeout as the callback timeout', () => {
+    const [lowered] = lowerNodes([hook()]);
+    expect(lowered!.type).toBe('web');
+    expect(lowered!.connectionId).toBeUndefined();
+    expect(lowered!.position).toEqual({ x: 10, y: 20 });
+    expect(lowered!.description).toBe('approval');
+    const { outputs, ...config } = lowered!.config;
+    expect(config).toEqual({
+      waitForCallback: true,
+      callbackTimeoutSeconds: 900,
+      reportStatusOnCallback: false,
+    });
+    expect(webWaitsOnly(lowered!.config)).toBe(true);
+    expect(outputs).toEqual(getActivity('web')!.outputs);
+    expect(webConfigSchema.safeParse(config).success).toBe(true);
+  });
+
+  it('lowers an empty declared contract, and a spaced literal timeout', () => {
+    const [lowered] = lowerNodes([hook({ timeoutSeconds: '${ 60 }', outputs: [] })]);
+    expect(lowered!.type).toBe('web');
+    expect(lowered!.config.callbackTimeoutSeconds).toBe(60);
+  });
+
+  it('carries an unknown key over', () => {
+    const [lowered] = lowerNodes([hook({ timeoutSeconds: '${60}', note: 'kept' })]);
+    expect(lowered!.config.note).toBe('kept');
+  });
+
+  it.each([
+    ['declared outputs (the callback is checked and read by key)', { timeoutSeconds: '${60}', outputs: [{ name: 'decision', type: 'string' }] }],
+    ['a contract that is not a list', { timeoutSeconds: '${60}', outputs: {} }],
+    ['an expression timeout', { timeoutSeconds: '${pipeline().parameters.t}' }],
+    ['a fractional timeout', { timeoutSeconds: '${1.5}' }],
+    ['a zero timeout', { timeoutSeconds: '${0}' }],
+    ['a timeout past 7 days', { timeoutSeconds: `\${${WEB_MAX_CALLBACK_TIMEOUT_SECONDS + 1}}` }],
+    ['a bare number', { timeoutSeconds: '60' }],
+    ["a key that is one of Web's settings", { timeoutSeconds: '${60}', url: '/x' }],
+  ])('stays a webhook with %s', (_why, config) => {
+    const node = hook(config);
+    expect(lowerNodes([node])[0]).toBe(node);
+  });
+
+  it('stays a webhook with a connection or a call', () => {
+    const withConnection = hook(undefined, { connectionId: 'c1' });
+    expect(lowerNodes([withConnection])[0]).toBe(withConnection);
+    const withCall = hook(undefined, { call: { pipelineVersionId: 'pv' } } as Partial<Node>);
+    expect(lowerNodes([withCall])[0]).toBe(withCall);
+  });
+
+  it('lowers at the 7-day ceiling', () => {
+    const [lowered] = lowerNodes([hook({ timeoutSeconds: `\${${WEB_MAX_CALLBACK_TIMEOUT_SECONDS}}` })]);
+    expect(lowered!.type).toBe('web');
   });
 });
