@@ -27,6 +27,7 @@ import {
   type ActivityRunsResponse,
   type PipelineVersion,
   type Run,
+  TERMINAL_RUN_ROW_STATUS,
 } from '@autonomy-studio/shared';
 import {
   getPipeline,
@@ -43,7 +44,10 @@ import {
   listRunSummariesPage,
 } from '../repo/index.js';
 import { getExternalWaitByAttempt, listPendingExternalWaitsByRun } from '../repo/external-waits.js';
-import { deriveExternalWaitToken } from '../webhooks/external-wait-token.js';
+import {
+  deriveExternalWaitToken,
+  externalWaitCallbackPath,
+} from '../webhooks/external-wait-token.js';
 import { makeRunActivityFold } from '../run/activity-counts.js';
 import { buildEngine, DocUnresolvableError, makeDocResolver } from '../run/driver.js';
 import {
@@ -673,17 +677,23 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       );
       // #925 — every `callbackPath` below embeds a live capability token.
       noStore(reply);
+      // #1600 C11c — a finished run completes nothing, so it offers nothing: a
+      // row a crash or a cancel left `pending` (no alarm will expire it) would
+      // otherwise sit on the panel as a door that cannot open.
+      if (TERMINAL_RUN_ROW_STATUS.has(run.status)) return [];
       return listPendingExternalWaitsByRun(db, run.id).map(
         (wait) =>
           ({
             nodeId: wait.nodeId,
             attemptId: wait.attemptId,
             expiresAt: wait.expiresAt,
-            callbackPath: `/api/external-wait/${deriveExternalWaitToken(fastify.masterKey, {
-              runId: wait.runId,
-              nodeId: wait.nodeId,
-              attemptId: wait.attemptId,
-            })}`,
+            callbackPath: externalWaitCallbackPath(
+              deriveExternalWaitToken(fastify.masterKey, {
+                runId: wait.runId,
+                nodeId: wait.nodeId,
+                attemptId: wait.attemptId,
+              }),
+            ),
           }) satisfies PendingExternalWait,
       );
     },

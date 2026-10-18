@@ -79,6 +79,7 @@ function run(
     secretFields?: Record<string, string>;
     signal?: AbortSignal;
     activityType?: string;
+    callbackUri?: string;
   } = {},
 ): Promise<ActivityEvent[]> {
   const ctx: ActivityContext = {
@@ -89,6 +90,7 @@ function run(
     input,
     connectionConfig: over.connectionConfig ?? { baseUrl: main.url() },
     signal: over.signal ?? new AbortController().signal,
+    ...(over.callbackUri !== undefined ? { callbackUri: over.callbackUri } : {}),
   } as ActivityContext;
   return drain(httpAdapter.runActivity(ctx, over.secret ?? null, over.secretFields ?? {}));
 }
@@ -632,5 +634,113 @@ describe('Web — a lowered HTTP request keeps its results', () => {
       { connectionConfig: { baseUrl: main.url(), timeoutMs: 50 } },
     );
     expect(failed(after).kind).toBe(failed(before).kind);
+  });
+});
+
+describe('Web — Wait for callback (#1600 OR41 C11c)', () => {
+  const callbackUri = 'http://127.0.0.1:8080/api/external-wait/TOKEN_abc123';
+  const wait = { url: '/jobs', method: 'POST', waitForCallback: true };
+  let sent: { body: string; contentType: string | undefined } | undefined;
+  const capture =
+    (status: number, value: unknown): Handler =>
+    (req, res, body) => {
+      sent = { body, contentType: req.headers['content-type'] };
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(value));
+    };
+
+  it('adds callBackUri to the JSON body, sends JSON, and waits instead of succeeding', async () => {
+    main.set(capture(202, { accepted: true }));
+    const events = await run({ ...wait, body: '{"job":"nightly"}' }, { callbackUri });
+    expect(JSON.parse(sent!.body)).toEqual({ job: 'nightly', callBackUri: callbackUri });
+    expect(sent!.contentType).toBe('application/json');
+    expect(events).toHaveLength(1);
+    const ev = events[0] as Extract<ActivityEvent, { type: 'awaitCallback' }>;
+    expect(ev.type).toBe('awaitCallback');
+    expect(ev.timeoutSeconds).toBe(600);
+    expect(ev.outputs).toMatchObject({ status: 202, body: { accepted: true }, truncated: false });
+    expect('callback' in ev.outputs).toBe(false);
+  });
+
+  it('sends { callBackUri } for an empty body, keeps an author Content-Type, and passes the timeout', async () => {
+    main.set(capture(200, {}));
+    const events = await run(
+      {
+        ...wait,
+        headers: { 'content-type': 'application/vnd.job+json' },
+        callbackTimeoutSeconds: 90,
+      },
+      { callbackUri },
+    );
+    expect(JSON.parse(sent!.body)).toEqual({ callBackUri: callbackUri });
+    expect(sent!.contentType).toBe('application/vnd.job+json');
+    expect((events[0] as Extract<ActivityEvent, { type: 'awaitCallback' }>).timeoutSeconds).toBe(
+      90,
+    );
+  });
+
+  it('keeps the callback URL and its token out of the outputs of an echoing endpoint', async () => {
+    main.set((req, res, body) => {
+      res.writeHead(200, { 'content-type': 'application/json', 'x-echo': body });
+      res.end(JSON.stringify({ echoed: body, token: 'TOKEN_abc123' }));
+    });
+    const events = await run(wait, { callbackUri });
+    const text = JSON.stringify(events);
+    expect(text).not.toContain('TOKEN_abc123');
+    expect(text).not.toContain(callbackUri);
+  });
+
+  it('an error status fails as without the wait, and does not wait', async () => {
+    main.set(json(500, { boom: true }));
+    const events = await run(wait, { callbackUri });
+    expect(failed(events)).toMatchObject({ type: 'failed', kind: 'transient' });
+    expect(JSON.stringify(events)).not.toContain('TOKEN_abc123');
+  });
+
+  it('refuses a resolved body that is not a JSON object, before any request', async () => {
+    const events = await run({ ...wait, body: '[1,2]' }, { callbackUri });
+    expect(failed(events)).toMatchObject({ kind: 'permanent' });
+    expect(failed(events).error).toContain('JSON object body');
+    expect(main.received).toHaveLength(0);
+  });
+
+  it('refuses to run without a callback URL from the executor', async () => {
+    const events = await run(wait);
+    expect(failed(events)).toMatchObject({ kind: 'permanent' });
+    expect(main.received).toHaveLength(0);
+  });
+
+  it('refuses a redirect that would re-send callBackUri to another origin, or drop it', async () => {
+    other.set(json(200, {}));
+    main.set((_q, res) => res.writeHead(307, { location: `${other.url()}/jobs` }).end());
+    const crossOrigin = await run(wait, { callbackUri });
+    expect(failed(crossOrigin)).toMatchObject({ kind: 'permanent' });
+    expect(failed(crossOrigin).error).toContain('another origin');
+    expect(other.received).toHaveLength(0);
+
+    main.set((_q, res) => res.writeHead(302, { location: '/moved' }).end());
+    const dropped = await run(wait, { callbackUri });
+    expect(failed(dropped).error).toContain('drop the body');
+
+    // A same-origin 307 keeps the body, and is followed.
+    let hops = 0;
+    main.set((req, res, body) => {
+      hops += 1;
+      if (req.url === '/jobs') res.writeHead(307, { location: '/jobs2' }).end();
+      else {
+        sent = { body, contentType: req.headers['content-type'] };
+        res.writeHead(202).end();
+      }
+    });
+    const same = await run(wait, { callbackUri });
+    expect(hops).toBe(2);
+    expect(JSON.parse(sent!.body)).toEqual({ callBackUri: callbackUri });
+    expect(same[0]!.type).toBe('awaitCallback');
+  });
+
+  it('without Wait for callback, still succeeds with callback null', async () => {
+    main.set(json(200, {}));
+    const events = await run({ url: '/jobs', method: 'POST' });
+    expect(succeeded(events).outputs.callback).toBeNull();
   });
 });

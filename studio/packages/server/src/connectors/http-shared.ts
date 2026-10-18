@@ -146,6 +146,13 @@ export async function fetchWithoutLeakingSecrets(
   url: string,
   init: { method: string; headers: Record<string, string>; body?: string; signal: AbortSignal },
   secretHeaderNames: readonly string[],
+  /**
+   * #1600 OR41 C11c — the body carries a capability (Wait for callback's
+   * `callBackUri`). A redirect to another origin would re-send it there (a 307
+   * or 308 keeps the body), and one that turns the request into a GET would
+   * drop it, so the endpoint could never call back. Both throw instead.
+   */
+  bodyCarriesSecret = false,
 ): Promise<Response> {
   // The first hop sends exactly what the caller built (the url string, a plain
   // headers object), so a request that is never redirected is unchanged.
@@ -176,10 +183,17 @@ export async function fetchWithoutLeakingSecrets(
     if (next.protocol !== 'http:' && next.protocol !== 'https:') {
       throw new TypeError(`a redirect to a non-HTTP URL (${next.protocol})`);
     }
-    if (
+    const dropsBody =
       (res.status === 303 && method !== 'GET' && method !== 'HEAD') ||
-      ((res.status === 301 || res.status === 302) && method === 'POST')
-    ) {
+      ((res.status === 301 || res.status === 302) && method === 'POST');
+    if (bodyCarriesSecret && (dropsBody || next.origin !== current.origin)) {
+      throw new TypeError(
+        dropsBody
+          ? `a ${res.status} redirect would drop the body, and with it callBackUri`
+          : 'a redirect to another origin would re-send the body, and with it callBackUri',
+      );
+    }
+    if (dropsBody) {
       method = 'GET';
       body = undefined;
       without(BODY_HEADERS);

@@ -76,3 +76,17 @@ export function deriveExternalWaitToken(
 export function hashExternalWaitToken(token: string): string {
   return sha256Hex(token);
 }
+
+/**
+ * The anonymous callback route's path for a token (`routes/external-wait.ts`).
+ * One builder for the owner-scoped listing's relative `callbackPath` and the
+ * absolute `callBackUri` a Web *Wait for callback* sends (#1600 OR41 C11c).
+ */
+export function externalWaitCallbackPath(token: string): string {
+  return `/api/external-wait/${token}`;
+}
+
+/** The absolute callback URL: the public base URL (any trailing `/` dropped) joined to the path. */
+export function externalWaitCallbackUrl(publicBaseUrl: string, token: string): string {
+  return `${publicBaseUrl.replace(/\/+$/, '')}${externalWaitCallbackPath(token)}`;
+}

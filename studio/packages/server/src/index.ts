@@ -102,6 +102,40 @@ export function resolvePort(raw: string | undefined): number {
   return n;
 }
 
+/**
+ * #1600 OR41 C11c — the server's public base URL, which a Web *Wait for callback*
+ * joins to its callback path to send an absolute `callBackUri`. Configuration,
+ * not a decision: `AUTONOMY_PUBLIC_URL` overrides (an `http(s)` URL, a path
+ * prefix allowed for a reverse proxy, no query or fragment; a trailing `/` is
+ * dropped). Unset, it is the bind address — loopback by default, so only a
+ * callback from this machine can reach it; a wildcard bind (`0.0.0.0`, `::`)
+ * becomes `127.0.0.1`, since a wildcard is not an address anyone can call.
+ * A malformed value throws at boot, like `PORT`.
+ */
+export function resolvePublicBaseUrl(raw: string | undefined, host: string, port: number): string {
+  if (raw === undefined || raw.trim() === '') {
+    const wildcard = host === '0.0.0.0' || host === '::' || host === '';
+    const name = wildcard ? '127.0.0.1' : host.includes(':') ? `[${host}]` : host;
+    return `http://${name}:${port}`;
+  }
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    throw new Error(`Invalid AUTONOMY_PUBLIC_URL "${raw}" — must be an absolute http(s) URL`);
+  }
+  if (
+    (url.protocol !== 'http:' && url.protocol !== 'https:') ||
+    url.search !== '' ||
+    url.hash !== ''
+  ) {
+    throw new Error(
+      `Invalid AUTONOMY_PUBLIC_URL "${raw}" — must be an http(s) URL with no query or fragment`,
+    );
+  }
+  return `${url.origin}${url.pathname}`.replace(/\/+$/, '');
+}
+
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /**
@@ -265,6 +299,8 @@ const ALARM_TICK_MS = 1_000;
 const RETENTION_SWEEP_MS = 60 * 60 * 1000;
 
 export interface BuildAppOptions {
+  /** #1600 OR41 C11c — overrides `AUTONOMY_PUBLIC_URL`/the bind address as the base of a Web *Wait for callback*'s `callBackUri`. Call-time only, for test isolation. */
+  publicBaseUrl?: string;
   /** Overrides `process.env.DB_PATH` / the built-in default. Call-time only — never a module-eval-time global. */
   dbPath?: string;
   /** Overrides `process.env.AUTONOMY_MASTER_KEY_FILE` for this app instance only; threaded through to `resolveMasterKey`. */
@@ -601,6 +637,9 @@ export async function buildApp(opts?: BuildAppOptions) {
   const executor = createExecutor({
     db,
     masterKey: masterKeyResolution.key,
+    // #1600 OR41 C11c — the base of a Web *Wait for callback*'s `callBackUri`.
+    publicBaseUrl:
+      opts?.publicBaseUrl ?? resolvePublicBaseUrl(process.env.AUTONOMY_PUBLIC_URL, HOST, PORT),
     resolveDoc,
     adapters: connectors,
     // #796 (P3b) — the `call_pipeline` spawn seam, closed LAZILY over `childRuns`

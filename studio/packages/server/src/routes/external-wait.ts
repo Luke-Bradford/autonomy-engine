@@ -74,10 +74,15 @@ export const externalWaitRoutes: FastifyPluginAsync = async (fastify) => {
     '/api/external-wait/:token',
     async (request, reply) => {
       const body = request.body instanceof Buffer ? request.body : undefined;
-      const { outcome, reason, drive } = await fastify.externalWaitCompleter.complete(
+      const { outcome, reason, drive, background } = await fastify.externalWaitCompleter.complete(
         request.params.token,
         body,
       );
+      if (outcome === 'completed' && background === true) {
+        // #1600 C11c — a Web callback: settled, the run drives in the background.
+        void drive;
+        return reply.status(204).send();
+      }
       if (outcome === 'completed') {
         // AWAITED, unlike the owner-scoped sibling (#901), which answers the moment
         // the settle commits. Kept because this route has always answered only once

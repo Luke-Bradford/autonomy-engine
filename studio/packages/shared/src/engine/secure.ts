@@ -11,13 +11,15 @@
  * to read (resolved question 2, the MVP half).
  *
  * WHAT it scrubs, per event, for a secure node (anything else passes untouched):
- *  - `node.succeeded` / `externalWait.completed` (secureOutput) — every output
+ *  - `node.succeeded` / `externalWait.completed` / `node.awaitingCallback` and an
+ *    early callback on `externalWait.created` (secureOutput) — every output
  *    VALUE becomes a marker. Keys stay: they are the author's declared vocabulary,
  *    and `validateOutputs` still has to see them to report a missing output.
  *  - `node.output` (secureOutput) — the streamed value AND its name; an adapter
  *    may build a name from data, which is why the plaintext scrub
  *    (`redactEventPlaintexts`) scrubs names too.
- *  - `node.failed.error` / `activity.warned.reason` (either flag) — free text an
+ *  - `node.failed.error` / `activity.warned.reason` / a callback's
+ *    `reportedError` (either flag) — free text an
  *    adapter may build from a request or response body. `kind`/`code` stay, so
  *    retry policy and failure routing are unchanged; only the prose is withheld.
  *  - the content hashes on `activity.captured` / `activity.agentTelemetry` /
@@ -129,10 +131,36 @@ export function redactSecureEvent(node: Node | undefined, event: EngineEvent): E
   switch (event.type) {
     case 'node.succeeded':
       return secureOut ? { ...event, outputs: redactOutputs(node, event.outputs) } : event;
-    case 'externalWait.completed':
+    case 'externalWait.completed': {
+      // #1600 C11c — a reported failure's message quotes the callback, as a
+      // `node.failed` error may quote a response: EITHER flag withholds it.
+      const withError =
+        event.reportedError !== undefined
+          ? { ...event, reportedError: SECURE_ERROR_WITHHELD }
+          : event;
       return secureOut && event.outputs !== undefined
-        ? { ...event, outputs: redactOutputs(node, event.outputs) }
-        : event;
+        ? { ...withError, outputs: redactOutputs(node, event.outputs) }
+        : withError;
+    }
+    // #1600 C11c — the request's outputs, held for the callback: as `node.succeeded`.
+    case 'node.awaitingCallback':
+      return secureOut ? { ...event, outputs: redactOutputs(node, event.outputs) } : event;
+    // #1600 C11c — a callback that arrived before the park: as `externalWait.completed`.
+    case 'externalWait.created': {
+      if (event.arrived === undefined) return event;
+      const callback = secureOut
+        ? redactOutputs(node, { callback: event.arrived.callback }).callback
+        : event.arrived.callback;
+      return {
+        ...event,
+        arrived: {
+          callback,
+          ...(event.arrived.reportedError !== undefined
+            ? { reportedError: SECURE_ERROR_WITHHELD }
+            : {}),
+        },
+      };
+    }
     case 'node.output':
       // #1600 OR41 C9c — a session log line carries an item's error, as a
       // failure does, so EITHER flag withholds it, as for `node.failed`.
@@ -207,6 +235,8 @@ export function secureEventNodeId(event: EngineEvent): string | undefined {
     case 'node.dispatched':
     case 'node.succeeded':
     case 'externalWait.completed':
+    case 'externalWait.created':
+    case 'node.awaitingCallback':
     case 'node.output':
     case 'node.failed':
     case 'node.notReady':

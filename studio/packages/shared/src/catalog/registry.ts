@@ -161,9 +161,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // connection. Unlike `http_request`, a 4xx/5xx FAILS by default (Fail on
     // HTTP error), the body is read up to Max size and parsed as JSON or kept as
     // text, and a 429/5xx carries the server's Retry-After to the retry alarm.
-    // `http_request` lowers to it (C11b); `webhook` as Wait for callback in
-    // C11c, which fills `callback` (declared now so C11c needs no
-    // `formerOutputs` refresh).
+    // `http_request` lowers to it (C11b). Wait for callback (C11c) parks the
+    // node on the external-wait machinery `webhook` uses and fills `callback`
+    // (declared since C11a, so no `formerOutputs` refresh).
     type: WEB_ACTIVITY_TYPE,
     title: 'Web',
     description: 'Call a URL over an HTTP connection and read its response.',
@@ -174,23 +174,31 @@ const ENTRIES: ActivityCatalogEntry[] = [
       { key: 'auth', fields: [HTTP_SECRET_HEADERS_FIELD] },
       {
         key: 'settings',
-        // Short fields side by side, so the dock packs them in pairs and the
-        // tab fits 1440x900: the two toggles share a row, Treat as success takes
-        // one, the two numbers share one, then the two choices.
+        // Ordered so the dock's three-column grid packs the tab into five
+        // rows at 1440x900, Wait for callback on or off: the three toggles
+        // share a row, Treat as success takes one, the two timeouts and Max size
+        // share one, Parse as (two columns) takes Report status on callback
+        // beside it, and When over the limit closes. C11c's three fields fill
+        // the free cells of rows that already existed rather than add a sixth.
         fields: [
           'failOnHttpError',
           'retryOnThrottle',
+          'waitForCallback',
           'successStatusCodes',
           'httpRequestTimeoutSeconds',
+          'callbackTimeoutSeconds',
           'maxResponseBytes',
           'parseAs',
+          'reportStatusOnCallback',
           'whenOverLimit',
         ],
       },
     ],
-    // The rule `webConfigSchema`'s superRefine enforces.
+    // The rules `webConfigSchema`'s superRefine enforces.
     appliesWhen: {
       successStatusCodes: [{ field: 'failOnHttpError', in: ['true'] }],
+      callbackTimeoutSeconds: [{ field: 'waitForCallback', in: ['true'] }],
+      reportStatusOnCallback: [{ field: 'waitForCallback', in: ['true'] }],
     },
     idempotent: false,
     connectionKinds: ['http'],

@@ -1,15 +1,22 @@
 import {
+  callbackReportedError,
   checkInboundOutputs,
   resolveDocNode,
+  WEB_ACTIVITY_TYPE,
   type EngineEvent,
   type RunEvent,
 } from '@autonomy-studio/shared';
 import { getRun } from '../repo/runs.js';
-import { getExternalWaitByTokenHash, markExternalWaitCompleted } from '../repo/external-waits.js';
+import {
+  getExternalWaitByTokenHash,
+  markExternalWaitArrivedEarly,
+  markExternalWaitCompleted,
+} from '../repo/external-waits.js';
 import { hashExternalWaitToken } from '../webhooks/external-wait-token.js';
 import { loadEngineEvents, terminalFactFromLog } from './events.js';
 import { buildEngine, DocUnresolvableError, type DriveDeps } from './driver.js';
 import { foldOutOfBand, publishThenDrive } from './out-of-band.js';
+import { parseWebJson, WEB_MAX_JSON_DEPTH } from '../connectors/http-web.js';
 
 /**
  * #4 A13 — the inbound-callback COMPLETER for a parked `webhook` node: the run-side
@@ -118,6 +125,15 @@ export interface ExternalWaitCompletion {
    * safe discard rather than an unhandled rejection.
    */
   drive?: Promise<void>;
+  /**
+   * #1600 OR41 C11c — `true` for a Web *Wait for callback*: the anonymous route
+   * answers once the wait is settled and lets the run drive in the background,
+   * as the owner door does. A Web callback has no caller relying on the
+   * webhook's await, and holding the remote system's request open for the whole
+   * downstream run would block a single-threaded endpoint that the run's next
+   * Web call needs.
+   */
+  background?: true;
 }
 
 export interface ExternalWaitCompleter {
@@ -145,6 +161,26 @@ function parseCallbackBody(body: Buffer | undefined): Record<string, unknown> {
     : {};
 }
 
+/**
+ * #1600 OR41 C11c — a Web *Wait for callback*'s callback body: ADF requires JSON,
+ * and the parsed value (any JSON, an object usually) is the `callback` output.
+ * An empty body is null. A body that is not JSON, or nests deeper than Web's
+ * response limit (`parseWebJson`, which the redaction walk relies on), is
+ * refused (`invalid_payload`; the node stays parked so the caller can retry),
+ * unlike a `webhook`'s, whose declared contract decides.
+ */
+function parseWebCallbackBody(
+  body: Buffer | undefined,
+): { ok: true; value: unknown } | { ok: false; reason: string } {
+  const parsed = parseWebJson(body === undefined ? '' : body.toString('utf8'));
+  return parsed.ok
+    ? parsed
+    : {
+        ok: false,
+        reason: `the callback body must be JSON, nested at most ${WEB_MAX_JSON_DEPTH} levels`,
+      };
+}
+
 export function createExternalWaitCompleter(deps: DriveDeps): ExternalWaitCompleter {
   const now = deps.now ?? (() => Date.now());
   return {
@@ -169,6 +205,10 @@ export function createExternalWaitCompleter(deps: DriveDeps): ExternalWaitComple
         record: RunEvent | null;
         reason?: string;
         contractDefect?: boolean;
+        /** #1600 C11c — kept on the row for the park's arm; nothing to drive. */
+        early?: boolean;
+        /** #1600 C11c — a Web callback: its caller is not held for the drive. */
+        web?: boolean;
       };
       const result: TxResult = deps.db.transaction((): TxResult => {
         const events = loadEngineEvents(deps.db, runId);
@@ -195,6 +235,70 @@ export function createExternalWaitCompleter(deps: DriveDeps): ExternalWaitComple
 
         const state = engine.projectRunState(events);
         const ns = state.nodes[row.nodeId];
+        // #1600 OR41 C11c — a Web *Wait for callback* (its own rules, below).
+        const docNode = resolveDocNode(doc.nodes, row.nodeId);
+        if (
+          docNode?.type === WEB_ACTIVITY_TYPE &&
+          docNode.config.waitForCallback === true &&
+          ns !== undefined &&
+          ns.currentAttemptId === row.attemptId
+        ) {
+          const early = ns.status === 'ready' || ns.status === 'dispatched';
+          // Settled or failed attempts answer the uniform 404 before the body is
+          // read: a 422 is only for a live wait (no state oracle).
+          if (!early && ns.status !== 'external_wait_pending') {
+            return { verdict: 'not_completable', record: null };
+          }
+          const parsed = parseWebCallbackBody(body);
+          if (!parsed.ok) {
+            return { verdict: 'invalid_payload', record: null, reason: parsed.reason };
+          }
+          const reportedError =
+            docNode.config.reportStatusOnCallback === true
+              ? callbackReportedError(parsed.value)
+              : undefined;
+          if (early) {
+            // The endpoint called back before the node parked (before it even
+            // answered the request). Keep the callback on the row: the park's
+            // arm reads it and settles the node. Nothing is appended here — the
+            // pump that owns the node is mid-request, and an out-of-band fold
+            // would never reach its in-memory state.
+            // Kept as the log will hold it: a secure node's values are redacted
+            // before they are stored, as `appendAndFold` would redact the event.
+            const asLogged = engine.redact({
+              type: 'externalWait.created',
+              runId,
+              nodeId: row.nodeId,
+              attemptId: row.attemptId,
+              dueAt: 0,
+              arrived: {
+                callback: parsed.value,
+                ...(reportedError !== undefined ? { reportedError } : {}),
+              },
+            });
+            const arrived = asLogged.type === 'externalWait.created' ? asLogged.arrived : undefined;
+            if (
+              arrived === undefined ||
+              !markExternalWaitArrivedEarly(deps.db, row, now(), arrived)
+            ) {
+              return { verdict: 'not_completable', record: null };
+            }
+            return { verdict: 'completed', record: null, early: true };
+          }
+          if (!markExternalWaitCompleted(deps.db, row, now())) {
+            return { verdict: 'not_completable', record: null };
+          }
+          const event: EngineEvent = {
+            type: 'externalWait.completed',
+            runId,
+            nodeId: row.nodeId,
+            previousAttemptId: row.attemptId,
+            outputs: { callback: parsed.value },
+            ...(reportedError !== undefined ? { reportedError } : {}),
+          };
+          const folded = foldOutOfBand(deps.db, engine, state, [event], deps.log);
+          return { verdict: 'completed', record: folded.records[0], web: true };
+        }
         if (
           ns === undefined ||
           ns.status !== 'external_wait_pending' ||
@@ -250,6 +354,8 @@ export function createExternalWaitCompleter(deps: DriveDeps): ExternalWaitComple
         return { verdict: 'completed', record: folded.records[0] };
       });
 
+      // #1600 C11c — settled on the row; the run's own pump settles the node.
+      if (result.early === true) return { outcome: 'completed' };
       if (result.record === null) {
         if (result.contractDefect) {
           // Corrupt `config.outputs` on the parked node (pre-F13a): a server-side
@@ -269,7 +375,7 @@ export function createExternalWaitCompleter(deps: DriveDeps): ExternalWaitComple
       // the settle commits, whichever caller this is — a wait is completed as soon as
       // this returns, and no caller's choice about awaiting can delay the run.
       const drive = publishThenDrive(deps, [result.record]);
-      return { outcome: 'completed', drive };
+      return { outcome: 'completed', drive, ...(result.web === true ? { background: true } : {}) };
     },
   };
 }

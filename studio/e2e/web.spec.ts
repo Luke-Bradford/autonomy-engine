@@ -24,9 +24,40 @@ const ITEMS = { rows: [{ id: 1 }, { id: 2 }] };
 
 let stub: Server;
 let stubUrl: string;
+const callbacksSent: string[] = [];
 
 test.beforeAll(async () => {
   stub = createServer((req, res) => {
+    if (req.url === '/jobs') {
+      // #1600 C11c — the remote system: accept the job, then call studio back
+      // on the absolute callBackUri it sent (the real server, over loopback).
+      let raw = '';
+      req.on('data', (c: Buffer) => (raw += c.toString()));
+      req.on('end', () => {
+        callbacksSent.push(raw);
+        const { callBackUri, fail } = JSON.parse(raw) as { callBackUri: string; fail?: boolean };
+        const callBack = () =>
+          fetch(callBackUri, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(
+              fail === true
+                ? { Error: { ErrorCode: 'E42', Message: 'disk full' }, StatusCode: '500' }
+                : { Output: { rows: 3 } },
+            ),
+          });
+        if (fail === true) {
+          // A synchronous endpoint: it calls back BEFORE it answers the request.
+          void callBack().then(() =>
+            res.writeHead(200, { 'content-type': 'application/json' }).end('{}'),
+          );
+          return;
+        }
+        res.writeHead(202, { 'content-type': 'application/json' }).end('{"accepted":true}');
+        setTimeout(() => void callBack(), 50);
+      });
+      return;
+    }
     if (req.url === '/items') {
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(ITEMS));
     } else {
@@ -95,7 +126,8 @@ test.describe('#1600 C11a — Web', () => {
     );
     await expect(checkbox(page, 'Retry on 429 and 503')).toBeChecked();
     // Measured at 1440x900: the whole Settings tab is in the docked pane's
-    // view, its short fields packed in pairs (seven fields, five rows).
+    // view (eight fields, five rows; C11c's two Wait for callback settings
+    // show only when it is on, and fill free cells of the same five rows).
     const pane = (await properties(page).boundingBox())!;
     for (const control of [
       checkbox(page, 'Retry on 429 and 503'),
@@ -248,5 +280,134 @@ test.describe('#1600 C11b — a stored HTTP request opens as Web', () => {
     // The re-saved node answers as the old one did.
     expect(await answerOf(latest.id, 'e2e 1600 c11b new')).toEqual(before);
     await expectQuiet(page, problems);
+  });
+});
+
+test.describe('#1600 C11c — Web Wait for callback', () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test('turns on Wait for callback, saves, and the run waits for the callback', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const http = await seedConnection(page, {
+      name: 'e2e 1600 c11c http',
+      kind: 'http',
+      config: { baseUrl: stubUrl },
+    });
+    const pipelineId = await openSeededCanvas(page, 'e2e 1600 c11c web wait', {
+      nodes: [
+        {
+          id: 'job',
+          type: 'web',
+          position: { x: 0, y: 0 },
+          connectionId: http,
+          config: { url: '/jobs', method: 'POST', body: '{"job":"nightly"}' },
+        },
+      ],
+    });
+    await canvasNodes(page).first().click();
+    await tab(page, 'Settings').click();
+    const timeout = properties(page).getByRole('textbox', {
+      name: 'Callback timeout',
+      exact: true,
+    });
+    // Its two settings belong to it: hidden while it is off.
+    await expect(checkbox(page, 'Wait for callback')).not.toBeChecked();
+    await expect(timeout).toHaveCount(0);
+    await expect(checkbox(page, 'Report status on callback')).toHaveCount(0);
+    await checkbox(page, 'Wait for callback').check();
+    await expect(timeout).toBeVisible();
+    await expect(checkbox(page, 'Report status on callback')).toBeVisible();
+    // The whole tab still fits the docked pane at 1440x900: the three fields
+    // fill free cells of existing rows (Wait for callback beside the two
+    // toggles, Callback timeout beside HTTP request timeout) instead of adding
+    // a row.
+    const mid = (b: { y: number; height: number }) => b.y + b.height / 2;
+    const waitBox = (await checkbox(page, 'Wait for callback').boundingBox())!;
+    const failBox = (await checkbox(page, 'Fail on HTTP error').boundingBox())!;
+    expect(Math.abs(mid(waitBox) - mid(failBox))).toBeLessThan(4);
+    const timeoutBox = (await timeout.boundingBox())!;
+    const httpTimeoutBox = (await properties(page)
+      .getByRole('textbox', { name: 'HTTP request timeout', exact: true })
+      .boundingBox())!;
+    expect(Math.abs(mid(timeoutBox) - mid(httpTimeoutBox))).toBeLessThan(4);
+    const pane = (await properties(page).boundingBox())!;
+    for (const control of [
+      timeout,
+      checkbox(page, 'Report status on callback'),
+      combobox(page, 'When over the limit'),
+    ]) {
+      const box = (await control.boundingBox())!;
+      expect(box.y + box.height).toBeLessThanOrEqual(Math.min(pane.y + pane.height, 900));
+    }
+    await properties(page).getByRole('button', { name: 'Apply config', exact: true }).click();
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+
+    const versions = (await (
+      await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+    ).json()) as { id: string; version: number; nodes: { config: Record<string, unknown> }[] }[];
+    const latest = versions.sort((a, b) => b.version - a.version)[0]!;
+    expect(latest.nodes[0]!.config).toMatchObject({ waitForCallback: true });
+
+    const sentBefore = callbacksSent.length;
+    const runId = await fireAndSettle(page, latest.id, 'e2e 1600 c11c');
+    const run = (await (
+      await page.request.get(`/api/runs/${encodeURIComponent(runId)}`)
+    ).json()) as { status: string };
+    expect(run.status).toBe('success');
+    // The endpoint got the author's body plus an absolute callBackUri on this server.
+    const sent = JSON.parse(callbacksSent[sentBefore]!) as Record<string, unknown>;
+    expect(sent.job).toBe('nightly');
+    expect(String(sent.callBackUri)).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/api\/external-wait\//);
+
+    const events = await eventsOf(page, runId);
+    const types = events.map((e) => e.type);
+    expect(types).toContain('node.awaitingCallback');
+    expect(types).toContain('externalWait.created');
+    const done = events.find((e) => e.type === 'externalWait.completed');
+    expect(done?.payload.outputs).toEqual({ callback: { Output: { rows: 3 } } });
+    // The capability token never reaches the log.
+    const token = String(sent.callBackUri).split('/').at(-1)!;
+    expect(JSON.stringify(events)).not.toContain(token);
+    await expectQuiet(page, problems);
+  });
+
+  test('Report status on callback: an early StatusCode 500 fails the run with its message', async ({
+    page,
+  }) => {
+    const http = await seedConnection(page, {
+      name: 'e2e 1600 c11c http fail',
+      kind: 'http',
+      config: { baseUrl: stubUrl },
+    });
+    const { pipelineVersionId } = await seedVersion(page, 'e2e 1600 c11c web report', {
+      nodes: [
+        {
+          id: 'job',
+          type: 'web',
+          position: { x: 0, y: 0 },
+          connectionId: http,
+          config: {
+            url: '/jobs',
+            method: 'POST',
+            body: '{"fail":true}',
+            waitForCallback: true,
+            reportStatusOnCallback: true,
+          },
+        },
+      ],
+    });
+    const runId = await fireAndSettle(page, pipelineVersionId, 'e2e 1600 c11c report');
+    const run = (await (
+      await page.request.get(`/api/runs/${encodeURIComponent(runId)}`)
+    ).json()) as { status: string };
+    expect(run.status).toBe('failure');
+    // The endpoint called back before it answered: the arm carried the callback.
+    const created = (await eventsOf(page, runId)).find((e) => e.type === 'externalWait.created');
+    expect(created?.payload.arrived).toMatchObject({
+      reportedError: 'the callback reported StatusCode 500: E42: disk full',
+    });
   });
 });

@@ -666,6 +666,12 @@ export const externalWaits = sqliteTable(
     expiresAt: integer('expires_at').notNull(),
     /** Epoch ms the row settled (`completed`/`expired`); null while `pending`. */
     resolvedAt: integer('resolved_at'),
+    /**
+     * #1600 OR41 C11c — a Web callback that arrived before the node parked, as
+     * JSON text `{ callback, reportedError? }`; null when none did. Read by the driver's arm, which then
+     * settles the node instead of parking it (migration 0049).
+     */
+    earlyCallback: text('early_callback'),
   },
   (table) => [
     uniqueIndex('external_waits_token_hash_idx').on(table.tokenHash),

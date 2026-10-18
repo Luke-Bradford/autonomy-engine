@@ -307,6 +307,21 @@ export const NodeRunStateSchema = z.object({
     })
     .optional(),
   /**
+   * #1600 OR41 C11c — a Web *Wait for callback* whose request succeeded: set by
+   * `node.awaitingCallback` with the request's outputs and the resolved callback
+   * timeout, held while the driver parks the node (`scheduleExternalWait`), and
+   * merged with the callback when it arrives. Removed when the node settles or a
+   * loop round resets it. Its presence on a `ready` node is what tells `resume`
+   * to re-park rather than re-send the request.
+   */
+  callback: z
+    .object({
+      attemptId: z.string(),
+      request: z.record(z.string(), z.unknown()),
+      timeoutSeconds: z.number().int().positive(),
+    })
+    .optional(),
+  /**
    * F2b — POLICY retries taken for this node in the CURRENT loop round, and the
    * ONLY counter retry-eligibility reads (`retries < policy.retry`).
    *
@@ -2126,6 +2141,23 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     /**
+     * #1600 OR41 C11c — a Web *Wait for callback* sent its request (with
+     * `callBackUri`) and it succeeded. Mapped by the executor from the adapter's
+     * `awaitCallback`, and the attempt's terminal, like `node.notReady`. Its fold
+     * holds the node `ready` with the request's outputs and asks the driver to
+     * park it (`scheduleExternalWait`, the `webhook` path). `outputs` are the
+     * request's, without `callback`; the timeout is the dispatch's resolved
+     * setting, frozen here so the reducer stays config-free.
+     */
+    type: z.literal('node.awaitingCallback'),
+    runId: z.string(),
+    nodeId: z.string(),
+    attemptId: z.string(),
+    outputs: z.record(z.string(), z.unknown()),
+    timeoutSeconds: z.number().int().positive(),
+  }),
+  z.object({
+    /**
      * #1600 OR41 C8d — the re-check alarm is armed. Appended by the DRIVER after
      * the arm (`armRecheck`), so, as for `timer.waitScheduled`, a parked node
      * always has a live alarm. Its fold parks the node `wait_pending` and stamps
@@ -2179,6 +2211,15 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     /** The attempt this external wait parks (the alarm/correlation freshness handle). */
     attemptId: z.string(),
     dueAt: z.number().int(),
+    /**
+     * #1600 OR41 C11c — a Web *Wait for callback* whose callback ARRIVED before
+     * the node parked (the endpoint called back before it answered the request).
+     * The completer kept it on the correlation row; the driver's arm reads it and
+     * carries it here, and the fold settles the node straight away instead of
+     * parking it. No expiry alarm is armed then, and `dueAt` is the arm time.
+     * `reportedError` is set as on `externalWait.completed`.
+     */
+    arrived: z.object({ callback: z.unknown(), reportedError: z.string().optional() }).optional(),
   }),
   z.object({
     /**
@@ -2207,6 +2248,15 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     nodeId: z.string(),
     previousAttemptId: z.string(),
     outputs: z.record(z.string(), z.unknown()).optional(),
+    /**
+     * #1600 OR41 C11c — a Web *Wait for callback* with *Report status on
+     * callback* whose callback reported a StatusCode of 400 or above
+     * (`callbackReportedError`). The fold then FAILS the node, permanently, as an
+     * expiry does. Computed at append so every reader shows one message. For a
+     * Web node `outputs` is `{ callback }`; the fold merges the held request
+     * outputs.
+     */
+    reportedError: z.string().optional(),
   }),
   z.object({
     /**

@@ -143,6 +143,14 @@ describe('#443 — terminalStatusOf', () => {
         giveUpAfterSeconds: 60,
       },
       {
+        type: 'node.awaitingCallback',
+        ...run,
+        nodeId: 'n1',
+        attemptId: 'n1#0',
+        outputs: { status: 202 },
+        timeoutSeconds: 600,
+      },
+      {
         type: 'node.recheckScheduled',
         ...run,
         nodeId: 'n1',
