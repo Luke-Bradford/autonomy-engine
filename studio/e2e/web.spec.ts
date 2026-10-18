@@ -245,6 +245,6 @@ test.describe('#1600 C11b — a stored HTTP request opens as Web', () => {
     });
     // The re-saved node answers as the old one did.
     expect(await answerOf(latest.id, 'e2e 1600 c11b new')).toEqual(before);
-    expectQuiet(problems);
+    await expectQuiet(page, problems);
   });
 });
