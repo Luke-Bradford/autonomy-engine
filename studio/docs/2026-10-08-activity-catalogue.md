@@ -566,7 +566,27 @@ Sources: [Web](https://learn.microsoft.com/azure/data-factory/control-flow-web-a
   - A request that ends without waiting expires its row, so a dead attempt offers no callback URL.
   - A crash mid-request can leave a `pending` row on an interrupted run. It completes nothing, because the completer checks the node.
 - **Crash recovery:** a node held `ready` with its request's outputs re-parks on resume. It never re-sends the request; Web is not idempotent.
-- **Not built (C11c-2):** a Web with no URL, the `webhook` lowering, and Webhook leaving the palette.
+- **Not built in C11c-1 (C11c-2, below):** a Web with no URL, the `webhook` lowering, and Webhook leaving the palette.
+
+**Built (C11c-2, 2026-10-18): a Web with no URL, and the `webhook` lowering.** C11 is complete with it.
+
+- **No Request URL.** With *Wait for callback* on, the Request URL may be empty (an empty box is no URL). The Web then sends nothing and only waits: ADF's Webhook with nothing to call, and what studio's `webhook` did.
+  - With *Wait for callback* off, a URL is still required.
+  - Save refuses a request setting that would have nothing to apply to: Body, Request headers, Secret headers, HTTP request timeout and Treat as success. The response settings keep their defaults and are inert.
+- **The engine never dispatches it.** The reducer holds it `ready` and parks it on the `webhook` machinery, as `node.awaitingCallback` does after a request (`webWaitsOnly`). It needs no connection, and a connection left on it neither resolves nor blocks a trigger's enable (`connection-readiness.ts`). From the park on, every C11c-1 rule holds: callback timeout, Report status on callback, early callback, crash re-park, cancel.
+- **Outputs.** `callback` is the callback's body. The request outputs (`status`, `headers`, `body`, `bytes`, `durationMs`, `truncated`) are present nulls, so a read of one resolves to null rather than failing as missing.
+- **A body that is not JSON is kept as text**, where a Web that sent a request refuses it with 422. A Webhook accepted any body, so this keeps the lowering faithful. A Web that sent a request told its endpoint to call back with JSON, and the endpoint can retry.
+- **Card:** *callback · timeout 10m 00s*, as the Webhook's was.
+- **The `webhook` lowering** (`lowerWebhook` in `retired.ts`, §8). A stored Webhook opens as Web with *Wait for callback* on, no URL, *Callback timeout* from its timeout and *Report status on callback* off. The next Save writes it as `web`. A stored version still runs through `webhook`'s own arm. *Webhook* is no longer offered in the palette.
+- **Faithful or not at all.** The node stays a Webhook when:
+  - it declares outputs (`config.outputs` other than `[]`). A Webhook checks the callback against its contract, answering 422 for a missing key while the node stays parked, and its readers read `output.<key>`. Web keeps the whole body as `callback`, unchecked, and a read cannot be renamed to a path. C13's Convert has to explain this;
+  - its timeout is anything but one whole number from 1 to 7 days in `${}` (`${900}`, `${ 900 }`). An expression is only known at the run, `${0}` completes at once, and Web's *Callback timeout* is a literal number with a 7-day ceiling;
+  - it carries a connection or any other binding, or a key that is one of Web's own settings.
+- **Deliberate differences of the saved node from Webhook:**
+  - The callback is answered 204 at once and the run continues in the background, as for every Web callback (C11c-1). A Webhook's callback was answered only once the run came to rest.
+  - The body is kept as `callback`; a Webhook with no declared outputs discarded it.
+  - An array or scalar JSON body is the callback; a Webhook with no contract read it as `{}`.
+- `CATALOG_VERSION` 53→54: a build before C11c-2 would dispatch a Web with no URL and fail it.
 
 ### 4.7 Set variable
 Sources: [Set variable](https://learn.microsoft.com/azure/data-factory/control-flow-set-variable-activity), [Append variable](https://learn.microsoft.com/azure/data-factory/control-flow-append-variable-activity), [pipeline return value](https://learn.microsoft.com/azure/data-factory/tutorial-pipeline-return-value).
@@ -619,7 +639,7 @@ The **capture level** (workspace setting, overridable per pipeline and per activ
 | Get metadata | ✓ full field list (C8a), a file dataset's structure and column count (C8c-2); **T** wait | ✓ exists, structure, columns, rows (C8c-1) | ✓ same | — | OR13 | OR15 |
 | Delete | ✓ one file, wildcard, subfolders, dates, empty folders (C9a); session log (C9c) | — (Script) | — (Script) | — | OR13 | — |
 | Script | — | **T** | **T** | — | — | OR15 |
-| Web | — | — | — | ✓ fail-on-error, cap, parse, Retry-After (C11a); **T** callback | — | — |
+| Web | — | — | — | ✓ fail-on-error, cap, parse, Retry-After (C11a); ✓ callback, with or without a URL (C11c) | — | — |
 | Test connection | ✓ roots | ✓ `select 1` | ✓ `select 1` | ✓ HEAD | OR13 | OR15 |
 | Preview / import schema | OR10 #1401 | OR10 | OR10 | OR10 | OR13 | OR15 |
 
@@ -643,7 +663,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c-1** tables (SQLite, Postgres) with per-kind field options (built); **C8c-2** a delimited or Excel dataset source's structure and column count (built); **C8d-1** Wait until on a file system path (built); **C8d-2a** Wait until on a delimited or Excel dataset, with #1743 (built); **C8d-2b** Wait until on a table dataset (built); **C8e** Include subfolders (built) | OR17 #1408 |
 | C9 | Delete: wildcard, folders, dates, log. Lower file_delete. Split: **C9a** the `delete` type on a file system connection, with path type, wildcard, Include subfolders, modified window, Max concurrent deletes, Fail if nothing matched and Delete empty folders, on Get metadata's walk (built); **C9b** the `file_delete` lowering (Path type File, Fail if nothing matched on, `path` kept), Delete file retired from the palette (built); **C9c** the session log and `logPath` (a new output, so a `formerOutputs` snapshot and a version bump), shared with Copy's (built) | OR17 #1408 |
 | C10 | Script activity | OR12 #1403, OR15 sql_script |
-| C11 | Web: fail-on-error, response cap, parse, retry-after, wait-for-callback. Lower http_request and webhook. Split: **C11a** the `web` type, its Request, Auth and Settings tabs, and the redirect walk that keeps secret headers on their origin (built); **C11b** the `http_request` lowering (Fail on HTTP error off, Parse as Text, method upper-cased) and HTTP request retired from the palette (built); **C11c** Wait for callback and the `webhook` lowering | — |
+| C11 | Web: fail-on-error, response cap, parse, retry-after, wait-for-callback. Lower http_request and webhook. Split: **C11a** the `web` type, its Request, Auth and Settings tabs, and the redirect walk that keeps secret headers on their origin (built); **C11b** the `http_request` lowering (Fail on HTTP error off, Parse as Text, method upper-cased) and HTTP request retired from the palette (built); **C11c-1** Wait for callback with a URL (built); **C11c-2** a Web with no URL, the `webhook` lowering and Webhook retired from the palette (built) | — |
 | C12 | Set variable operations + pipeline return value. Lower append_variable | OR34 outputs |
 | C13 | Palette regroup (§2), retire the remaining old types from the palette (C1b retired Copy file and Move file), `CATALOG_VERSION` bump, the migration guarantees in §8. `file_read` is NOT retired: since C7b it is Lookup's *Whole file as text* mode, so it is never refused, converted or listed as retired | — |
 
@@ -665,7 +685,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
   | `file_delete` | Delete · File · Fail if nothing matched (C9b) |
   | `lookup` | Lookup · not first-row-only, so today's `rows` shape is kept |
   | `http_request` | Web · Fail on HTTP error **off**, Parse as Text, Max size 10 MiB, so today's behaviour is kept (C11b) |
-  | `webhook` | Web · Wait for callback, no URL |
+  | `webhook` | Web · Wait for callback, no URL, when it declares no outputs (C11c-2) |
   | `append_variable` | Set variable · Append |
 
   The saved document is not rewritten until the author saves it again. Old versions keep running and replay identically, because a version is immutable and binds the type it holds.
