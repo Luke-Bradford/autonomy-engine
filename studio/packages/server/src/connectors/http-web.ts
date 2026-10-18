@@ -15,13 +15,13 @@ import {
   buildRequestHeaders,
   collectResponseHeaders,
   exchangeDeadline,
+  fetchFailure,
   fetchWithoutLeakingSecrets,
-  isNetworkError,
   readBodyBounded,
   resolveUrl,
   sinkHeadersFrom,
 } from './http-shared.js';
-import { classifyHttpStatus, errorExcerpt, parseRetryAfter } from './llm-shared.js';
+import { classifyHttpStatus, errorExcerpt, httpStatusFailureEvent } from './llm-shared.js';
 
 type HttpConnectionConfig = z.infer<typeof httpConnectionConfigSchema>;
 
@@ -47,9 +47,9 @@ type HttpConnectionConfig = z.infer<typeof httpConnectionConfigSchema>;
  * - **No secret reaches the outputs.** The Bearer and the secret headers are
  *   redacted from the body and the response headers, for an endpoint that
  *   echoes its request.
- * - **A network failure is `transient`.** `http_request` reports Node's
- *   `TypeError('fetch failed')` as a malformed request (`permanent`); Web reads
- *   the cause (`isNetworkError`).
+ * - **A network failure is `transient`.** Node's `fetch` throws
+ *   `TypeError('fetch failed')` for one, the class of a malformed request
+ *   (`permanent`); `fetchFailure` reads the cause.
  */
 export async function* runWeb(
   ctx: ActivityContext,
@@ -207,7 +207,6 @@ export async function* runWeb(
     }
     yield { type: 'succeeded', outputs: { ...outputs, callback: null } };
   } catch (err) {
-    const message = redactSecrets(err instanceof Error ? err.message : String(err), headerValues);
     if (ctx.signal.aborted) {
       yield { type: 'failed', kind: 'cancelled', error: 'web request aborted' };
     } else if (deadline.timedOut()) {
@@ -216,18 +215,8 @@ export async function* runWeb(
         kind: 'transient',
         error: `web request timed out after ${timeoutMs}ms`,
       };
-    } else if (err instanceof TypeError && !isNetworkError(err)) {
-      // A malformed request (bad URL, forbidden header, a redirect loop) never
-      // succeeds as-is. A header-validation TypeError quotes the bad value
-      // verbatim, which could be a secret, hence the redaction.
-      yield { type: 'failed', kind: 'permanent', error: message };
     } else {
-      const cause = (err as { cause?: { code?: unknown } }).cause?.code;
-      yield {
-        type: 'failed',
-        kind: 'transient',
-        error: typeof cause === 'string' ? `${message} (${cause})` : message,
-      };
+      yield { type: 'failed', ...fetchFailure(err, headerValues) };
     }
   } finally {
     deadline.dispose();
@@ -245,17 +234,13 @@ function statusFailure(
   const kind = throttled && !retryOnThrottle ? 'permanent' : classified;
   // Redact the whole text, then cut: a secret the cut split would otherwise
   // survive as a prefix.
-  const excerpt = errorExcerpt(redactSecrets(bodyText, secrets));
-  const event: Extract<ActivityEvent, { type: 'failed' }> = {
-    type: 'failed',
+  return httpStatusFailureEvent({
+    label: `HTTP ${res.status}${res.statusText === '' ? '' : ` ${res.statusText}`}`,
+    excerpt: errorExcerpt(redactSecrets(bodyText, secrets)),
     kind,
-    error: `HTTP ${res.status}${res.statusText === '' ? '' : ` ${res.statusText}`}${excerpt === '' ? '' : `: ${excerpt}`}`,
-  };
-  if (kind === 'rate_limit' || kind === 'transient') {
-    const retryAfterSeconds = parseRetryAfter(res.headers.get('retry-after'), Date.now());
-    if (retryAfterSeconds !== undefined) event.retryAfterSeconds = retryAfterSeconds;
-  }
-  return event;
+    retryAfterHeader: res.headers.get('retry-after'),
+    nowMs: Date.now(),
+  });
 }
 
 function overLimitFailure(maxBytes: number): Extract<ActivityEvent, { type: 'failed' }> {

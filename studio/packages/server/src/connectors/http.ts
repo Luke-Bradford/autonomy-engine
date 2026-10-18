@@ -9,6 +9,7 @@ import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.j
 import { redactSecrets } from './redact.js';
 import {
   buildRequestHeaders,
+  fetchFailure,
   collectResponseHeaders,
   exchangeDeadline,
   fetchWithoutLeakingSecrets,
@@ -197,24 +198,8 @@ export const httpAdapter: ConnectorAdapter = {
           kind: 'transient',
           error: `http request timed out after ${timeoutMs}ms`,
         };
-      } else if (err instanceof TypeError) {
-        // A malformed request (bad URL, forbidden header, etc.) — never succeeds
-        // as-is. Redact outgoing header values: a header-validation TypeError
-        // quotes the bad value verbatim, which could be the secret bearer token.
-        yield {
-          type: 'failed',
-          kind: 'permanent',
-          error: redactSecrets(err.message, Object.values(requestHeaders)),
-        };
       } else {
-        yield {
-          type: 'failed',
-          kind: 'transient',
-          error: redactSecrets(
-            err instanceof Error ? err.message : String(err),
-            Object.values(requestHeaders),
-          ),
-        };
+        yield { type: 'failed', ...fetchFailure(err, Object.values(requestHeaders)) };
       }
     } finally {
       deadline.dispose();

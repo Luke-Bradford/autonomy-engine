@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_STRUCTURED_REPAIRS,
@@ -12,6 +14,7 @@ import {
   executeLocalTool,
   executeToolCalls,
   httpStatusFailure,
+  llmPost,
   meterUsage,
   noCompletionFailure,
   normalizeModelId,
@@ -841,6 +844,37 @@ describe('postJsonAndParse (#648)', () => {
  *  `retryAfterSeconds` hint ONLY when the failure is retryable (rate_limit /
  *  transient); an auth/permanent status carrying the header does NOT (it never
  *  retries, so the hint is meaningless). */
+/** #1757 — a refused connection reaches `llmPost` as `TypeError('fetch failed')`,
+ *  the same class as a malformed request; it must still read as retryable. */
+describe('llmPost transport failures', () => {
+  const lctx = (): ActivityContext => ({
+    runId: 'run_1',
+    nodeId: 'n1',
+    attemptId: 'n1#0',
+    activityType: 'llm_call',
+    input: {},
+    connectionConfig: {},
+    signal: new AbortController().signal,
+  });
+
+  it('a refused connection is transient, with its cause, and no spend fact', async () => {
+    const closed = createServer();
+    await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', resolve));
+    const port = (closed.address() as AddressInfo).port;
+    await new Promise((resolve) => closed.close(resolve));
+    const res = await llmPost(lctx(), `http://127.0.0.1:${port}/v1`, {}, {}, 5_000);
+    expect(res).toEqual({
+      type: 'failed',
+      event: { type: 'failed', kind: 'transient', error: 'fetch failed (ECONNREFUSED)' },
+    });
+  });
+
+  it('a malformed URL stays permanent', async () => {
+    const res = await llmPost(lctx(), 'http://exa mple.com/', {}, {}, 5_000);
+    expect(res.type === 'failed' && res.event.kind).toBe('permanent');
+  });
+});
+
 describe('httpStatusFailure', () => {
   const NOW = 1_000_000_000_000;
 

@@ -31,7 +31,7 @@ import type {
   LlmUsage,
   ToolCallTelemetry,
 } from './types.js';
-import { exchangeDeadline } from './http-shared.js';
+import { exchangeDeadline, fetchFailure } from './http-shared.js';
 import { redactSecrets } from './redact.js';
 import { sha256Hex } from '../util/hash.js';
 
@@ -291,31 +291,17 @@ export async function llmPost(
         },
       };
     }
-    const headerValues = Object.values(headers);
-    if (err instanceof TypeError) {
-      return {
-        type: 'failed',
-        event: {
-          type: 'failed',
-          kind: 'permanent',
-          error: redactSecrets(err.message, headerValues),
-        },
-      };
-    }
-    // #725 — the generic network branch is deliberately UNMARKED, and it is the
-    // one genuinely lossy call here. A connection reset mid-generation IS billed,
-    // but it is indistinguishable at this layer from DNS failure / connection
-    // refused, where no exchange occurred at all. Marking every one would flip a
+    // #725 — the network branch is deliberately UNMARKED, and it is the one
+    // genuinely lossy call here. A connection reset mid-generation IS billed, but
+    // it is indistinguishable at this layer from DNS failure / connection refused,
+    // where no exchange occurred at all. Marking every one would flip a
     // provider-unreachable run's cost to INCOMPLETE, which is a worse lie than the
     // gap it closes (the common case by far is "never reached the provider").
-    // Recorded as a known residual on #725.
+    // Recorded as a known residual on #725. A malformed request (a non-network
+    // `TypeError`) never left the process and is unmarked for the plain reason.
     return {
       type: 'failed',
-      event: {
-        type: 'failed',
-        kind: 'transient',
-        error: redactSecrets(err instanceof Error ? err.message : String(err), headerValues),
-      },
+      event: { type: 'failed', ...fetchFailure(err, Object.values(headers)) },
     };
   } finally {
     deadline.dispose();
@@ -1236,14 +1222,36 @@ export function httpStatusFailure(
   retryAfterHeader: string | null,
   nowMs: number,
 ): Extract<ActivityEvent, { type: 'failed' }> {
-  const kind = classifyHttpStatus(status);
+  return httpStatusFailureEvent({
+    label: `${provider} HTTP ${status}`,
+    excerpt: errorExcerpt(bodyText),
+    kind: classifyHttpStatus(status),
+    retryAfterHeader,
+    nowMs,
+  });
+}
+
+/**
+ * #1758 — the ONE builder for a non-2xx response's `failed` event, shared by the
+ * LLM adapters (`httpStatusFailure`) and Web. Callers own the parts that differ:
+ * the message `label`, the `excerpt` (Web redacts before cutting) and the `kind`
+ * (Web may override a throttle). The retry-after hint rides only a retryable
+ * kind, for the reason `httpStatusFailure`'s comment gives.
+ */
+export function httpStatusFailureEvent(opts: {
+  label: string;
+  excerpt: string;
+  kind: ConnectorErrorKind;
+  retryAfterHeader: string | null;
+  nowMs: number;
+}): Extract<ActivityEvent, { type: 'failed' }> {
   const event: Extract<ActivityEvent, { type: 'failed' }> = {
     type: 'failed',
-    kind,
-    error: `${provider} HTTP ${status}: ${errorExcerpt(bodyText)}`,
+    kind: opts.kind,
+    error: `${opts.label}${opts.excerpt === '' ? '' : `: ${opts.excerpt}`}`,
   };
-  if (kind === 'rate_limit' || kind === 'transient') {
-    const retryAfterSeconds = parseRetryAfter(retryAfterHeader, nowMs);
+  if (opts.kind === 'rate_limit' || opts.kind === 'transient') {
+    const retryAfterSeconds = parseRetryAfter(opts.retryAfterHeader, opts.nowMs);
     if (retryAfterSeconds !== undefined) event.retryAfterSeconds = retryAfterSeconds;
   }
   return event;
