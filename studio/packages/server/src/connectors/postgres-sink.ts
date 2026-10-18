@@ -8,6 +8,8 @@ import {
   type DatasetKind,
 } from '@autonomy-studio/shared';
 import { DatasetIoError } from './dataset-io-error.js';
+import { preCopyScriptRefusal, type PreCopyScript } from './pre-copy-script.js';
+import { rewriteNamedParametersToPositional } from './postgres-named-parameters.js';
 import { classifySinkFailure } from './error-kind.js';
 import { yieldToEventLoop } from './scheduling.js';
 import { quoteIdentifier } from './sql-identifier.js';
@@ -64,6 +66,9 @@ export interface PostgresDatasetWrite {
   readonly mode: CopyWriteMode;
   /** Upsert's Key columns (C3a); empty or absent means the table's primary key. */
   readonly keyColumns?: readonly string[];
+  /** #1600 OR41 C3b — the Pre-copy script, run once inside the write
+   * transaction before the first row. Absent or `null` runs none. */
+  readonly preCopyScript?: PreCopyScript | null;
   /** Honoured at BATCH BOUNDARIES (§10) — a run cancel rolls the copy back. */
   readonly signal?: AbortSignal;
   /** §5's progress channel: the RUNNING TOTAL after each chunk is inserted into
@@ -477,6 +482,27 @@ async function upsertChunk(
 }
 
 /**
+ * #1600 OR41 C3b — run a copy's Pre-copy script on the open write transaction:
+ * the allow-list (`PRE_COPY_SCRIPT_STATEMENTS`), then `:name` rewritten to `$n`
+ * as the reader does, over the extended protocol so the server runs one
+ * statement only.
+ */
+async function runPreCopyScript(
+  client: PostgresClient,
+  script: PreCopyScript,
+  secret: string | null,
+): Promise<void> {
+  const refusal = preCopyScriptRefusal(script, 'postgres');
+  if (refusal !== null) throw new DatasetIoError('permanent', refusal);
+  const statement = rewriteNamedParametersToPositional(script.sql, script.parameters);
+  try {
+    await client.query({ text: statement.sql, values: statement.values, queryMode: 'extended' });
+  } catch (err) {
+    throw readFailure(err, 'the Pre-copy script failed', secret, 'write');
+  }
+}
+
+/**
  * Write batches of mapped rows into a `table` dataset on a `postgres` store.
  *
  * **ONE transaction, committed once (§4.1)** — `BEGIN` … inserts … `COMMIT`,
@@ -591,6 +617,16 @@ export async function writePostgresDatasetRows(
           throw new DatasetIoError('permanent', `there is no table '${spelled}' in the store`);
         }
         throw err;
+      }
+
+      // #1600 OR41 C3b — AFTER the lock, which is taken first and strongest so
+      // nothing in this transaction upgrades it (`LOCK_MODES`); a script's own
+      // DML or ALTER only takes what the lock already holds or more, in this
+      // session. BEFORE the describe, so a script that alters the table is
+      // described as it now is. Inside the transaction, so a failed copy undoes
+      // it.
+      if (write.preCopyScript != null) {
+        await runPreCopyScript(client, write.preCopyScript, write.secret);
       }
 
       const described = await describeSinkTable(client, qualified, spelled);

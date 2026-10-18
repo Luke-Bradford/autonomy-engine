@@ -1,3 +1,5 @@
+import { COPY_DEFAULT_BATCH_ROWS } from '@autonomy-studio/shared';
+
 /**
  * `ISSUE_LIST_CAP` MOVED to `@autonomy-studio/shared`
  * (`shared/src/schemas/zod-issues.ts`) in #1183, and this pointer is left rather
@@ -42,7 +44,9 @@
  * hold every global adapter slot" hazard is live, mitigated by the batch-yield
  * half of §9 which IS built (the reader yields between batches).
  */
-export const COPY_BATCH_ROWS = 1000;
+// #1600 OR41 C3b — the shared default an empty Batch size means, one number for
+// the field's help and the readers.
+export const COPY_BATCH_ROWS = COPY_DEFAULT_BATCH_ROWS;
 
 /**
  * #1125 M5 slice 2 — how long a SQLite open/lock may wait before it reports

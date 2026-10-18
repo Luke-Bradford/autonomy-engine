@@ -10,6 +10,11 @@ import {
 import { SQLITE_BUSY_TIMEOUT_MS } from '../limits.js';
 import { KeyedQueue } from '../util/keyed-queue.js';
 import { DatasetIoError } from './dataset-io-error.js';
+import {
+  preCopyScriptRefusal,
+  usedSqliteParameters,
+  type PreCopyScript,
+} from './pre-copy-script.js';
 import { classifySinkFailure } from './error-kind.js';
 import { yieldToEventLoop } from './scheduling.js';
 import { quoteIdentifier } from './sql-identifier.js';
@@ -75,6 +80,9 @@ export interface SqliteDatasetWrite {
   readonly mode: SqliteWriteMode;
   /** Upsert's Key columns (C3a); empty or absent means the table's primary key. */
   readonly keyColumns?: readonly string[];
+  /** #1600 OR41 C3b — the Pre-copy script, run once inside the write
+   * transaction before the first row. Absent or `null` runs none. */
+  readonly preCopyScript?: PreCopyScript | null;
   /** Honoured at BATCH BOUNDARIES (§10) — a run cancel rolls the copy back. */
   readonly signal?: AbortSignal;
   /**
@@ -346,6 +354,45 @@ function prepareUpsert(
 }
 
 /**
+ * #1600 OR41 C3b — run a copy's Pre-copy script on the open write transaction.
+ *
+ * The allow-list (`PRE_COPY_SCRIPT_STATEMENTS`) is what keeps this sink inside
+ * the connection's roots now that it runs authored SQL; `prepare` refuses a
+ * second statement, so the word checked is the statement run. The tripwire
+ * after it costs one pragma read: an attached database would mean the list let
+ * through something it should not, so the copy fails and rolls back rather than
+ * write beside a file outside the roots. (A file `ATTACH` created would already
+ * exist; the tripwire limits the damage, the list prevents it.)
+ *
+ * Synchronous, like every statement here: a script that runs long blocks the
+ * event loop for its duration and a cancel is seen only after it (the reader's
+ * hazard, and #1126's for a large DELETE).
+ */
+function runPreCopyScript(db: Database.Database, script: PreCopyScript): void {
+  const refusal = preCopyScriptRefusal(script, 'sqlite');
+  if (refusal !== null) throw new DatasetIoError('permanent', refusal);
+  try {
+    const statement = db.prepare(script.sql);
+    const parameters = usedSqliteParameters(script);
+    if (parameters === undefined) statement.run();
+    else statement.run(parameters);
+  } catch (err) {
+    throw storeFailure(err, 'the Pre-copy script failed');
+  }
+  const attached = db
+    .prepare('select name from pragma_database_list')
+    .all()
+    .map((r) => (r as { name: string }).name)
+    .filter((name) => name !== 'main' && name !== 'temp');
+  if (attached.length > 0) {
+    throw new DatasetIoError(
+      'permanent',
+      `the Pre-copy script attached a database (${attached.join(', ')}), which a copy sink never may`,
+    );
+  }
+}
+
+/**
  * Write batches of mapped rows into a `table` dataset on a `sqlite` store —
  * §4's atomic sink, and the consumer that finally makes `config.writable` mean
  * something.
@@ -456,6 +503,11 @@ export async function writeSqliteDatasetRows(
       // `ALTER TABLE` between describing the sink and the first insert would be
       // a live TOCTOU on exactly the check that exists to prevent it.
       db.exec('begin immediate');
+
+      // #1600 OR41 C3b — under the write lock and BEFORE the describe, so a
+      // script that alters the table is described as it now is, and inside the
+      // transaction, so a failed copy undoes it.
+      if (write.preCopyScript != null) runPreCopyScript(db, write.preCopyScript);
 
       const described = describeSinkTable(db, target.schema, target.table);
       if (!described.ok) throw new DatasetIoError('permanent', described.reason);

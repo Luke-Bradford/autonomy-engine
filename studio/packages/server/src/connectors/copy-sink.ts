@@ -5,6 +5,7 @@ import {
   type CopyWriteMode,
 } from '@autonomy-studio/shared';
 import { DatasetIoError } from './dataset-io-error.js';
+import type { PreCopyScript } from './pre-copy-script.js';
 import { writePostgresDatasetRows } from './postgres-sink.js';
 import { defaultClientFactory, type PostgresClientFactory } from './postgres-session.js';
 import { writeSqliteDatasetRows, type SinkValue } from './sqlite-sink.js';
@@ -74,6 +75,9 @@ export interface SinkWriteRequest {
   readonly mode: CopyWriteMode;
   /** Upsert's Key columns; empty means the table's primary key (C3a). */
   readonly keyColumns: readonly string[];
+  /** #1600 OR41 C3b — the Pre-copy script, run once inside the write
+   * transaction before the first row; `null` for none. */
+  readonly preCopyScript: PreCopyScript | null;
   readonly onBatch: (rowsWritten: number) => void;
   readonly signal: AbortSignal | undefined;
   /** Injectable for the offline tests; the live path uses `pg.Client`. */
@@ -93,7 +97,17 @@ export async function writeRowsToSink(
   request: SinkWriteRequest,
   batches: AsyncIterable<readonly Record<string, SinkValue>[]>,
 ): Promise<{ readonly rowsWritten: number }> {
-  const { dataset, connection, columns, nullOnError, mode, keyColumns, onBatch, signal } = request;
+  const {
+    dataset,
+    connection,
+    columns,
+    nullOnError,
+    mode,
+    keyColumns,
+    preCopyScript,
+    onBatch,
+    signal,
+  } = request;
   if (connection.kind === 'sqlite') {
     // THE TWO ARMS PARSE IN DIFFERENT PLACES, and the asymmetry is a decision
     // rather than leftover history. Here the parse is the arm's, because the
@@ -122,6 +136,7 @@ export async function writeRowsToSink(
         nullOnError,
         mode,
         keyColumns,
+        preCopyScript,
         onBatch,
         ...(signal === undefined ? {} : { signal }),
       },
@@ -144,6 +159,7 @@ export async function writeRowsToSink(
         nullOnError,
         mode,
         keyColumns,
+        preCopyScript,
         onBatch,
         ...(signal === undefined ? {} : { signal }),
       },

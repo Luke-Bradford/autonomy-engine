@@ -18,6 +18,7 @@ import {
 import { AsyncEventQueue } from '../util/async-event-queue.js';
 import { failed } from './activity-events.js';
 import { DatasetIoError } from './dataset-io-error.js';
+import type { PreCopyScript } from './pre-copy-script.js';
 import { refuseNullOnNonNullable } from './sink-columns.js';
 import type { SourceIo } from './source-io.js';
 import type { ActivityContext, ActivityEvent, ResolvedDataset } from './types.js';
@@ -112,6 +113,9 @@ export interface CopyIo extends SourceIo {
     readonly mode: CopyWriteMode;
     /** Upsert's Key columns; empty means the table's primary key (C3a). */
     readonly keyColumns: readonly string[];
+    /** #1600 OR41 C3b — the Pre-copy script, run once inside the write
+     * transaction before the first row; `null` for none. */
+    readonly preCopyScript: PreCopyScript | null;
     readonly onBatch: (rowsWritten: number) => void;
     readonly batches: AsyncIterable<readonly Record<string, CoercedValue>[]>;
     readonly signal: AbortSignal | undefined;
@@ -287,6 +291,12 @@ export async function* runCopyActivity(
   }
   const { mapping, mode } = parsed.data;
   const keyColumns = parsed.data.keyColumns ?? [];
+  // #1600 OR41 C3b — the script and its (already substituted) bind values travel
+  // together; each sink checks the statement against its own store's rules.
+  const preCopyScript: PreCopyScript | null =
+    parsed.data.preCopyScript === undefined
+      ? null
+      : { sql: parsed.data.preCopyScript, parameters: parsed.data.preCopyScriptParameters ?? {} };
 
   // The sink rows that may carry an injected null — computed once, because the
   // same list goes to the sink so the store's OWN schema is checked too (#1162).
@@ -419,12 +429,23 @@ export async function* runCopyActivity(
       nullOnError,
       mode,
       keyColumns,
+      preCopyScript,
       onBatch: (rowsWritten) => {
         counters.rowsWritten = rowsWritten;
       },
       dataset: sink,
       connection: sinkConnection,
-      batches: pumpCopyRows(io.readBatches({ dataset: source, signal: ctx.signal }), {
+      // #1600 OR41 C3b — Batch size. The pump passes batches through one for one,
+      // so the reader's batch is the sink's; absent keeps the reader's default.
+      batches: pumpCopyRows(
+        io.readBatches({
+          dataset: source,
+          signal: ctx.signal,
+          ...(parsed.data.writeBatchSize === undefined
+            ? {}
+            : { batchRows: parsed.data.writeBatchSize }),
+        }),
+        {
         mapping: mapping as readonly CopyPumpMappingEntry[],
         counters,
         // §6.4 — the SOURCE's facts, never the sink's. A CSV declares how it

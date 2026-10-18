@@ -91,8 +91,23 @@ export interface PostgresClient {
    * concatenated"), and resolves its target through `to_regclass($1)` so a
    * relation name cannot be interpolated either.
    */
-  query(sql: string, values?: readonly unknown[]): Promise<PostgresQueryResult>;
+  query(sql: string | PostgresExtendedQuery, values?: readonly unknown[]): Promise<PostgresQueryResult>;
   end(): Promise<unknown>;
+}
+
+/**
+ * #1600 OR41 C3b — a statement sent over the EXTENDED protocol even with no
+ * values: `pg`'s own query config (`queryMode: 'extended'` makes
+ * `requiresPreparation` true, pg 8.23 `lib/query.js`), passed straight to
+ * `pg.Client.query`. The server then refuses a second statement in the text
+ * (`42601`, measured for a valued query in `postgres.ts`'s `runBound`), which is
+ * what a Pre-copy script needs: on the simple protocol `delete …; commit` would
+ * run both and split the script from its copy's transaction.
+ */
+export interface PostgresExtendedQuery {
+  readonly text: string;
+  readonly values: readonly unknown[];
+  readonly queryMode: 'extended';
 }
 
 export type PostgresClientFactory = (options: PostgresClientOptions) => PostgresClient;
