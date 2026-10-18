@@ -1030,8 +1030,11 @@ describe('the postgres sink: Auto-create from mapping (C3c)', () => {
     ]);
     expect(valuesOf(rec, EXISTS)).toEqual([['"public"."tgt"']]);
     expect(valuesOf(rec, TRY_LOCK)).toEqual([[autoCreateLockKey('public', 'tgt')]]);
-    // Held to the session's end, so the next copy finds the committed table.
-    expect(sqlOf(rec)).not.toContain(UNLOCK);
+    // Held to the COMMIT, so the next copy finds the committed table, then released.
+    const queries = sqlOf(rec);
+    expect(queries.filter((q) => q === UNLOCK)).toHaveLength(1);
+    expect(queries.indexOf(UNLOCK)).toBeGreaterThan(queries.indexOf('COMMIT'));
+    expect(valuesOf(rec, UNLOCK)).toEqual([[autoCreateLockKey('public', 'tgt')]]);
   });
 
   it('keys an unqualified name on the schema CREATE would use, so both spellings share a lock', async () => {
@@ -1089,6 +1092,7 @@ describe('the postgres sink: Auto-create from mapping (C3c)', () => {
     // It stops at the try the cancel landed on, rather than waiting out the lock.
     expect(sqlOf(rec).filter((q) => q === TRY_LOCK)).toHaveLength(2);
     expect(sqlOf(rec).some((q) => q.startsWith('CREATE TABLE'))).toBe(false);
+    // It never held the lock, so there is nothing to release.
     expect(sqlOf(rec).at(-1)).toBe('ROLLBACK');
   });
 
@@ -1106,7 +1110,7 @@ describe('the postgres sink: Auto-create from mapping (C3c)', () => {
     ).catch((e: unknown) => e);
     expect(err).toMatchObject({ kind: 'cancelled' });
     expect(sqlOf(rec).some((q) => q.startsWith('LOCK TABLE'))).toBe(false);
-    expect(sqlOf(rec).at(-1)).toBe('ROLLBACK');
+    expect(sqlOf(rec).slice(-2)).toEqual(['ROLLBACK', UNLOCK]);
   });
 
   it('creates every type as its PostgreSQL column type, an unqualified name unqualified', async () => {
@@ -1192,7 +1196,8 @@ describe('the postgres sink: Auto-create from mapping (C3c)', () => {
       kind: 'permanent',
       message: "the copy into 'public.tgt' failed: permission denied for schema public",
     });
-    expect(sqlOf(rec).at(-1)).toBe('ROLLBACK');
+    // The lock it took is released after the ROLLBACK, not left to the session.
+    expect(sqlOf(rec).slice(-2)).toEqual(['ROLLBACK', UNLOCK]);
   });
 });
 

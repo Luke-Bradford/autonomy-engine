@@ -542,9 +542,10 @@ const AUTO_CREATE_LOCK_POLL_MS = 100;
  *   catalog cache keeping the first miss within the transaction. Looking the
  *   name up only once, after the lock, leaves nothing to keep.
  * - **Session-scoped, so a table that exists releases it at once**: copies into
- *   an existing table do not serialise. A copy that creates the table holds it
- *   until its session ends, after COMMIT or ROLLBACK, so the next copy finds
- *   the table (or, after a rollback, creates it).
+ *   an existing table do not serialise. A copy that creates the table, or fails
+ *   between the lock and the create, holds it in `held` until the caller's
+ *   COMMIT or ROLLBACK, then releases it, so the next copy finds the table (or,
+ *   after a rollback, creates it). Ending the session would release it too.
  * - **Polled with `pg_try_advisory_lock`** rather than blocking, so a cancel or
  *   the activity timeout ends the wait, where a blocking wait would hold until
  *   the other copy's whole write has committed.
@@ -555,6 +556,7 @@ async function autoCreatePostgresTable(
   qualified: string,
   columns: readonly AutoCreateColumn[],
   signal: AbortSignal | undefined,
+  held: { key: string | null },
 ): Promise<void> {
   // Built first, so a refusal (a case collision, a name over 63 characters)
   // runs no statement.
@@ -582,7 +584,10 @@ async function autoCreatePostgresTable(
       (await client.query('select pg_try_advisory_lock($1::bigint) as "locked"', [key])).rows[0] as
         { locked?: unknown } | undefined
     )?.locked;
-    if (locked === true) break;
+    if (locked === true) {
+      held.key = key;
+      break;
+    }
     if (signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
     await sleep(AUTO_CREATE_LOCK_POLL_MS);
   }
@@ -593,9 +598,10 @@ async function autoCreatePostgresTable(
     )?.exists === true;
   if (exists) {
     await client.query('select pg_advisory_unlock($1::bigint)', [key]);
+    held.key = null;
     return;
   }
-  // Held until the session ends, after this copy's COMMIT or ROLLBACK.
+  // Held to this copy's COMMIT or ROLLBACK: the caller releases `held` then.
   await client.query(ddl);
 }
 
@@ -697,6 +703,9 @@ export async function writePostgresDatasetRows(
     'cannot reach the postgres server to write the sink',
   );
 
+  // #1600 OR41 C3c — the Auto-create lock this copy still holds, released
+  // after its COMMIT or ROLLBACK (`autoCreatePostgresTable`).
+  const autoCreateLock: { key: string | null } = { key: null };
   try {
     let rowsWritten = 0;
     let inTransaction = false;
@@ -709,7 +718,14 @@ export async function writePostgresDatasetRows(
       // what lets a PostgreSQL sink table be created at all: a script cannot,
       // because the LOCK comes first.
       if (write.autoCreate != null) {
-        await autoCreatePostgresTable(client, target, qualified, write.autoCreate, write.signal);
+        await autoCreatePostgresTable(
+          client,
+          target,
+          qualified,
+          write.autoCreate,
+          write.signal,
+          autoCreateLock,
+        );
         if (write.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
       }
 
@@ -894,6 +910,16 @@ export async function writePostgresDatasetRows(
     }
     return { rowsWritten };
   } finally {
+    if (autoCreateLock.key !== null) {
+      // After COMMIT or ROLLBACK, so the next copy finds the committed table (or,
+      // after a rollback, creates it). Ending the session releases it too, so a
+      // failure here (a broken connection) changes nothing.
+      try {
+        await client.query('select pg_advisory_unlock($1::bigint)', [autoCreateLock.key]);
+      } catch {
+        // The close below releases it.
+      }
+    }
     try {
       // Measured on the reader's path: ending a client with an open transaction
       // discards it server-side, so this is also the backstop for a throw that

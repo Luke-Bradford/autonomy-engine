@@ -35,6 +35,8 @@ interface AutoCreateStore {
   readonly quoteColumn: (name: string) => string;
   /** Whether the statement carries `IF NOT EXISTS`. */
   readonly ifNotExists: boolean;
+  /** The store's name, for a refusal. */
+  readonly title: string;
 }
 
 /**
@@ -64,6 +66,7 @@ export const AUTO_CREATE_STORES: Readonly<Record<'sqlite' | 'postgres', AutoCrea
     maxName: null,
     quoteColumn: quoteStoreIdentifier,
     ifNotExists: true,
+    title: 'SQLite',
   },
   postgres: {
     types: {
@@ -78,6 +81,7 @@ export const AUTO_CREATE_STORES: Readonly<Record<'sqlite' | 'postgres', AutoCrea
     maxName: 63,
     quoteColumn: (name) => quoteIdentifier(name, 'column'),
     ifNotExists: false,
+    title: 'PostgreSQL',
   },
 };
 
@@ -104,7 +108,7 @@ export function autoCreateTableSql(
     if (long !== undefined) {
       throw new DatasetIoError(
         'permanent',
-        `Auto-create cannot create '${long}': a ${store === 'postgres' ? 'PostgreSQL' : store} name is at most ${max} characters`,
+        `Auto-create cannot create '${long}': a ${spec.title} name is at most ${max} characters`,
       );
     }
   }
@@ -115,7 +119,7 @@ export function autoCreateTableSql(
 /**
  * The PostgreSQL advisory-lock key Auto-create serialises one table's creation
  * on: the first 8 bytes of a SHA-256 over a fixed prefix and `schema.table`, as
- * a signed 64-bit integer (`pg_try_advisory_xact_lock(bigint)`). `schema` is the
+ * a signed 64-bit integer (`pg_try_advisory_lock(bigint)`). `schema` is the
  * RESOLVED creation schema, so two copies spelling one table differently (`t`
  * and `public.t`) take one lock. Computed here rather than with the server's
  * `hashtext`, which is internal and undocumented. Names hold no `.`
