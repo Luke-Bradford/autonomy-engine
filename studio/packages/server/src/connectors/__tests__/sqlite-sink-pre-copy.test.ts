@@ -165,7 +165,9 @@ describe('Pre-copy script (SQLite)', () => {
         [],
       ]),
     );
-    expect(err.message).toBe("the Pre-copy script's :day has no bind value");
+    expect(err.message).toBe(
+      "the Pre-copy script binds 'day' with no value in Pre-copy bind values",
+    );
   });
 
   it('binds only the names the statement uses, so a spare value is not an error', async () => {

@@ -362,12 +362,14 @@ function prepareUpsert(
  * after it costs one pragma read: an attached database would mean the list let
  * through something it should not, so the copy fails and rolls back before it
  * writes a row into a schema outside the roots.
+ * It has no test of its own, by design: past the allow-list nothing reaches it.
+ * The C3b PR's mutation run (allow-list disabled) is its evidence.
  *
  * Synchronous, like every statement here: a script that runs long blocks the
  * event loop for its duration and a cancel is seen only after it (the reader's
  * hazard, and #1126's for a large DELETE).
  */
-function runPreCopyScript(db: Database.Database, script: PreCopyScript): void {
+function runSqlitePreCopyScript(db: Database.Database, script: PreCopyScript): void {
   const refusal = preCopyScriptRefusal(script, 'sqlite');
   if (refusal !== null) throw new DatasetIoError('permanent', refusal);
   try {
@@ -506,7 +508,10 @@ export async function writeSqliteDatasetRows(
       // #1600 OR41 C3b — under the write lock and BEFORE the describe, so a
       // script that alters the table is described as it now is, and inside the
       // transaction, so a failed copy undoes it.
-      if (write.preCopyScript != null) runPreCopyScript(db, write.preCopyScript);
+      if (write.preCopyScript != null) {
+        runSqlitePreCopyScript(db, write.preCopyScript);
+        if (write.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
+      }
 
       const described = describeSinkTable(db, target.schema, target.table);
       if (!described.ok) throw new DatasetIoError('permanent', described.reason);

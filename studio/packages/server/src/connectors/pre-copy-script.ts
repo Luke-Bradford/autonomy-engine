@@ -93,7 +93,8 @@ export function preCopyScriptRefusal(script: PreCopyScript, dialect: SqlDialect)
     (name) => !Object.prototype.hasOwnProperty.call(script.parameters, name),
   );
   if (missing.length > 0) {
-    return `the Pre-copy script's ${missing.map((n) => `:${n}`).join(', ')} ${missing.length === 1 ? 'has' : 'have'} no bind value`;
+    // Named without a prefix: sqlite also binds `@n`, `$n` and `?n` from the record.
+    return `the Pre-copy script binds ${missing.map((n) => `'${n}'`).join(', ')} with no value in Pre-copy bind values`;
   }
   return null;
 }
@@ -108,5 +109,7 @@ export function usedSqliteParameters(
 ): Record<string, SqlParameterValue> | undefined {
   const names = sqlBindNames(script.sql, 'sqlite');
   if (names.length === 0) return undefined;
-  return Object.fromEntries(names.map((name) => [name, script.parameters[name] ?? null]));
+  return Object.fromEntries(
+    Object.entries(script.parameters).filter(([name]) => names.includes(name)),
+  );
 }

@@ -487,7 +487,7 @@ async function upsertChunk(
  * as the reader does, over the extended protocol so the server runs one
  * statement only.
  */
-async function runPreCopyScript(
+async function runPostgresPreCopyScript(
   client: PostgresClient,
   script: PreCopyScript,
   secret: string | null,
@@ -619,14 +619,16 @@ export async function writePostgresDatasetRows(
         throw err;
       }
 
-      // #1600 OR41 C3b — AFTER the lock, which is taken first and strongest so
-      // nothing in this transaction upgrades it (`LOCK_MODES`); a script's own
-      // DML or ALTER only takes what the lock already holds or more, in this
-      // session. BEFORE the describe, so a script that alters the table is
-      // described as it now is. Inside the transaction, so a failed copy undoes
-      // it.
+      // #1600 OR41 C3b — AFTER the write behaviour's lock, so the copy holds it
+      // before the script runs. A script that needs a STRONGER lock on the sink
+      // (ALTER, DROP or TRUNCATE in Append, Overwrite or Upsert) upgrades it
+      // inside this transaction, so two such copies at once can deadlock: postgres
+      // ends one with `40P01`, which is transient and retried. BEFORE the
+      // describe, so a script that alters the table is described as it now is.
+      // Inside the transaction, so a failed copy undoes it.
       if (write.preCopyScript != null) {
-        await runPreCopyScript(client, write.preCopyScript, write.secret);
+        await runPostgresPreCopyScript(client, write.preCopyScript, write.secret);
+        if (write.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
       }
 
       const described = await describeSinkTable(client, qualified, spelled);

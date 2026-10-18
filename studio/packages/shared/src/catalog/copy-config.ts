@@ -412,12 +412,9 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
       preCopyScript: presented(literalText(z.string().min(1)).optional(), {
         title: 'Pre-copy script',
         description:
-          "One SQL statement run once before the rows are written, inside the copy's " +
-          'transaction, so a failed copy undoes it. Literal: write :name and give its value ' +
-          'in Pre-copy bind values. It runs before Write behaviour, so Overwrite and ' +
-          'Truncate then insert also delete what it inserts. SQLite takes INSERT, UPDATE, ' +
-          'DELETE, REPLACE, CREATE, DROP, ALTER or WITH; PostgreSQL also takes MERGE, ' +
-          'TRUNCATE, SELECT, CALL and DO. Database sinks only.',
+          "One SQL statement, run once before the rows inside the copy's transaction, so a " +
+          'failed copy undoes it, and before Write behaviour. Literal: write :name and give ' +
+          'its value in Pre-copy bind values. Database sinks only.',
       }),
       preCopyScriptParameters: presented(z.record(z.string().min(1), bindValue).optional(), {
         title: 'Pre-copy bind values',
@@ -431,7 +428,7 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
       writeBatchSize: presented(z.number().int().min(1).max(COPY_MAX_BATCH_ROWS).optional(), {
         title: 'Batch size',
         unit: 'rows',
-        description: `Rows read and written per batch, 1 to ${COPY_MAX_BATCH_ROWS}. Empty is ${COPY_DEFAULT_BATCH_ROWS}. PostgreSQL still splits a batch whose values exceed its 65535 bind parameters.`,
+        description: `Read and written per batch, 1 to ${COPY_MAX_BATCH_ROWS}. Empty is ${COPY_DEFAULT_BATCH_ROWS}.`,
       }),
     })
     .superRefine((cfg, ctx) => {
@@ -443,7 +440,7 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
         ctx.addIssue({
           code: 'custom',
           path: ['preCopyScriptParameters'],
-          message: 'bind values need a Pre-copy script to bind into',
+          message: 'Pre-copy bind values need a Pre-copy script to bind into',
         });
       }
       for (const issue of copyKeyColumnIssues(cfg)) {

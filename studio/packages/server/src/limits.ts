@@ -43,9 +43,10 @@ import { COPY_DEFAULT_BATCH_ROWS } from '@autonomy-studio/shared';
  * the residual is that `copy` is reachable from 4c onward, so §9's "long copies
  * hold every global adapter slot" hazard is live, mitigated by the batch-yield
  * half of §9 which IS built (the reader yields between batches).
+ *
+ * #1600 OR41 C3b — the value is shared `COPY_DEFAULT_BATCH_ROWS`, what an empty
+ * Batch size means, so the field's help and the readers state one number.
  */
-// #1600 OR41 C3b — the shared default an empty Batch size means, one number for
-// the field's help and the readers.
 export const COPY_BATCH_ROWS = COPY_DEFAULT_BATCH_ROWS;
 
 /**

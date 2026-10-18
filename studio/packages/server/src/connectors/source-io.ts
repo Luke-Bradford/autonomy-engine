@@ -44,8 +44,9 @@ export interface SourceIo {
      * through this seam so a CONSUMER can choose, because the right batch size
      * is a property of what the reader is being read FOR.
      *
-     * `copy` leaves it unset and takes the streaming default: every row it reads
-     * is a row it writes, so a long pull is pure throughput. `lookup` asks for
+     * `copy` passes its Batch size (`writeBatchSize`, #1600 C3b), or leaves it
+     * unset for the streaming default: every row it reads is a row it writes, so
+     * a long pull is pure throughput. `lookup` asks for
      * {@link LOOKUP_BATCH_ROWS}, because it discards all but a bounded prefix
      * and a batch is otherwise the one quantity nothing bounds for it.
      */

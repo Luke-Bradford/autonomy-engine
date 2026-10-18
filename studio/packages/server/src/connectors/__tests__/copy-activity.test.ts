@@ -1061,3 +1061,36 @@ describe('copy activity — Batch size and Pre-copy script reach the I/O (C3b)',
     expect(seen.preCopyScript).toBeUndefined();
   });
 });
+
+// #1600 OR41 C3b — Batch size on real stores: the copy moves one batch per tick,
+// so five rows at Batch size 2 are three batches, where the default is one.
+describe('copy activity — Batch size sets the batch on a real store (C3b)', () => {
+  const MAPPING = [
+    { source: 'id', sink: 'id', type: 'integer' },
+    { source: 'name', sink: 'name', type: 'string' },
+  ];
+  const ticksOf = (events: ActivityEvent[]): number =>
+    events.filter((e) => e.type === 'output' && e.name === COPY_PROGRESS_OUTPUT).length;
+
+  it('reads and writes five rows in batches of two', async () => {
+    const root = tempRoot();
+    const sinkPath = seedSink(root, 'dst.db');
+    const sourcePath = seedDb(root, 5, 'src.db');
+    const sized = await run(
+      copyCtx({ root, sourcePath, sinkPath, input: { mapping: MAPPING, writeBatchSize: 2 } }),
+    );
+    expect(terminal(sized).type).toBe('succeeded');
+    expect(ticksOf(sized)).toBe(3);
+    expect(rowsOf(sinkPath)).toHaveLength(5);
+
+    const plain = await run(
+      copyCtx({
+        root,
+        sourcePath,
+        sinkPath: seedSink(root, 'dst2.db'),
+        input: { mapping: MAPPING },
+      }),
+    );
+    expect(ticksOf(plain)).toBe(1);
+  });
+});
