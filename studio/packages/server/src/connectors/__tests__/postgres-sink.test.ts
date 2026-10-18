@@ -108,7 +108,10 @@ function sinkFactory(
           throw fixture.failOn.error;
         }
         if (sql.includes('is not null as "exists"')) {
-          return { rows: [{ exists: fixture.exists?.shift() ?? fixture.missing !== true }], fields: [] };
+          return {
+            rows: [{ exists: fixture.exists?.shift() ?? fixture.missing !== true }],
+            fields: [],
+          };
         }
         if (sql.includes('to_regclass')) {
           if (fixture.missing === true) return { rows: [], fields: [] };
@@ -1092,7 +1095,10 @@ describe('the postgres sink: Auto-create from mapping (C3c)', () => {
   it("reports a refused CREATE in the store's words, permanent, and rolls back", async () => {
     const { rec, factory } = sinkFactory({
       exists: [false, false],
-      failOn: { prefix: 'CREATE TABLE', error: pgError('42501', 'permission denied for schema public') },
+      failOn: {
+        prefix: 'CREATE TABLE',
+        error: pgError('42501', 'permission denied for schema public'),
+      },
     });
     const err = await writePostgresDatasetRows(
       write({ createClient: factory, autoCreate: COLUMNS }),

@@ -1145,12 +1145,15 @@ describe('copy activity — Auto-create from mapping (C3c)', () => {
     const sourcePath = seedDb(root, 3, 'src.db');
     // A store with no `sink` table.
     const sinkPath = seedDb(root, 0, 'dst.db');
-    const refused = await run(
-      copyCtx({ root, sourcePath, sinkPath, input: { mapping: MAPPING } }),
-    );
+    const refused = await run(copyCtx({ root, sourcePath, sinkPath, input: { mapping: MAPPING } }));
     expect(terminal(refused).type).toBe('failed');
     const events = await run(
-      copyCtx({ root, sourcePath, sinkPath, input: { mapping: MAPPING, tableOption: 'autoCreate' } }),
+      copyCtx({
+        root,
+        sourcePath,
+        sinkPath,
+        input: { mapping: MAPPING, tableOption: 'autoCreate' },
+      }),
     );
     expect(terminal(events).type).toBe('succeeded');
     expect(rowsOf(sinkPath, 'SELECT id, label FROM sink ORDER BY id')).toHaveLength(3);

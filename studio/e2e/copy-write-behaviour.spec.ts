@@ -314,7 +314,9 @@ test.describe('#1600 C3a — Copy Write behaviour', () => {
       ]);
       // ADF's order: the Table option comes before Write behaviour.
       const optionBox = await option.boundingBox();
-      const behaviourBox = await pane.getByRole('combobox', { name: 'Write behaviour' }).boundingBox();
+      const behaviourBox = await pane
+        .getByRole('combobox', { name: 'Write behaviour' })
+        .boundingBox();
       expect(optionBox!.y).toBeLessThan(behaviourBox!.y);
       await option.selectOption('autoCreate');
       await pane.getByRole('button', { name: 'Apply config' }).click();
@@ -339,7 +341,9 @@ test.describe('#1600 C3a — Copy Write behaviour', () => {
           { name: 'person_id', type: 'INTEGER' },
           { name: 'full_name', type: 'TEXT' },
         ]);
-        expect(back.prepare('SELECT person_id, full_name FROM people ORDER BY person_id').all()).toEqual([
+        expect(
+          back.prepare('SELECT person_id, full_name FROM people ORDER BY person_id').all(),
+        ).toEqual([
           { person_id: 1, full_name: 'Ann' },
           { person_id: 2, full_name: 'Bea' },
         ]);

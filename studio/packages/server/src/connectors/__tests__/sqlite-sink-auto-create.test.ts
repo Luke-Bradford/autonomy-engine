@@ -45,7 +45,10 @@ function write(
     {
       connectionConfig: writableConfig(at.root, at.path),
       datasetKind: 'table',
-      datasetConfig: { table: 'sink', ...(opts.schema === undefined ? {} : { schema: opts.schema }) },
+      datasetConfig: {
+        table: 'sink',
+        ...(opts.schema === undefined ? {} : { schema: opts.schema }),
+      },
       columns: (autoCreate ?? [{ name: 'id' }]).map((c) => c.name),
       nullOnError: [],
       mode: opts.mode ?? 'append',
@@ -67,10 +70,10 @@ async function refusal(promise: Promise<unknown>): Promise<DatasetIoError> {
 }
 
 function schemaOf(path: string, table = 'sink'): { name: string; type: string }[] {
-  return rowsOf(
-    path,
-    `SELECT name, type FROM pragma_table_info('${table}') ORDER BY cid`,
-  ) as { name: string; type: string }[];
+  return rowsOf(path, `SELECT name, type FROM pragma_table_info('${table}') ORDER BY cid`) as {
+    name: string;
+    type: string;
+  }[];
 }
 
 function tablesOf(path: string): string[] {
@@ -121,12 +124,18 @@ describe('Auto-create from mapping (SQLite)', () => {
     ]);
     // Every column is nullable and there is no primary key.
     expect(
-      rowsOf(at.path, "SELECT count(*) AS c FROM pragma_table_info('sink') WHERE \"notnull\" OR pk"),
+      rowsOf(
+        at.path,
+        'SELECT count(*) AS c FROM pragma_table_info(\'sink\') WHERE "notnull" OR pk',
+      ),
     ).toEqual([{ c: 0 }]);
     const db = new Database(at.path, { readonly: true });
     try {
       db.defaultSafeIntegers(true);
-      const rows = db.prepare('SELECT * FROM sink ORDER BY rowid').all() as Record<string, unknown>[];
+      const rows = db.prepare('SELECT * FROM sink ORDER BY rowid').all() as Record<
+        string,
+        unknown
+      >[];
       expect(rows[0]).toMatchObject({
         s: 'Ann',
         i: 9007199254740993n,
@@ -149,7 +158,9 @@ describe('Auto-create from mapping (SQLite)', () => {
   });
 
   it('uses an existing table as it is, matched without case, and alters nothing', async () => {
-    const at = store('CREATE TABLE Sink (id TEXT, extra INTEGER); INSERT INTO Sink VALUES (\'a\', 1);');
+    const at = store(
+      "CREATE TABLE Sink (id TEXT, extra INTEGER); INSERT INTO Sink VALUES ('a', 1);",
+    );
     await write(at, [{ name: 'ID', type: 'integer' }], [[{ ID: 7n }]]);
     expect(schemaOf(at.path, 'Sink')).toEqual([
       { name: 'id', type: 'TEXT' },
@@ -176,7 +187,9 @@ describe('Auto-create from mapping (SQLite)', () => {
     const err = await refusal(
       write(at, [{ name: 'id', type: 'integer' }], [[{ id: 1 }]], { mode: 'upsert' }),
     );
-    expect(err.message).toBe("Upsert needs Key columns: 'sink' has no primary key to match rows on");
+    expect(err.message).toBe(
+      "Upsert needs Key columns: 'sink' has no primary key to match rows on",
+    );
     expect(tablesOf(at.path)).toEqual([]);
   });
 
@@ -188,7 +201,17 @@ describe('Auto-create from mapping (SQLite)', () => {
     ];
     const upsert = { mode: 'upsert' as const, keyColumns: ['id'] };
     await write(at, cols, [[{ id: 1, name: 'Ann' }]], upsert);
-    await write(at, cols, [[{ id: 1, name: 'Bea' }, { id: 2, name: 'Cal' }]], upsert);
+    await write(
+      at,
+      cols,
+      [
+        [
+          { id: 1, name: 'Bea' },
+          { id: 2, name: 'Cal' },
+        ],
+      ],
+      upsert,
+    );
     expect(rowsOf(at.path)).toEqual([
       { id: 1, name: 'Bea' },
       { id: 2, name: 'Cal' },

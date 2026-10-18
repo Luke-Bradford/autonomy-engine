@@ -401,12 +401,10 @@ describe('Table option: Auto-create from mapping (C3c)', () => {
     expect(COPY_TABLE_OPTIONS).toEqual(['none', 'autoCreate']);
     expect(copyInputSchema.parse({ mapping: [id] }).tableOption).toBe('none');
     expect(copyDispatchInputSchema.parse({ mapping: [id] }).tableOption).toBe('none');
-    expect(
-      copyInputSchema.parse({ mapping: [id], tableOption: 'autoCreate' }).tableOption,
-    ).toBe('autoCreate');
-    expect(copyInputSchema.safeParse({ mapping: [id], tableOption: 'create' }).success).toBe(
-      false,
+    expect(copyInputSchema.parse({ mapping: [id], tableOption: 'autoCreate' }).tableOption).toBe(
+      'autoCreate',
     );
+    expect(copyInputSchema.safeParse({ mapping: [id], tableOption: 'create' }).success).toBe(false);
   });
 
   it('refuses, under Auto-create, two sink names that differ only by case', () => {
