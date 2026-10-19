@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   COPY_DEFAULT_BATCH_ROWS,
   COPY_MAX_BATCH_ROWS,
+  COPY_TABLE_OPTIONS,
   CopyMappingSchema,
+  autoCreateCollisionIssue,
   copyDispatchInputSchema,
   copyInputSchema,
 } from './copy-config.js';
@@ -388,5 +390,45 @@ describe('Pre-copy script and Batch size (C3b)', () => {
         copyDispatchInputSchema.safeParse({ mapping: [row], writeBatchSize: bad }).success,
       ).toBe(false);
     }
+  });
+});
+
+describe('Table option: Auto-create from mapping (C3c)', () => {
+  const id = { source: 'a', sink: 'id', type: 'integer' as const };
+  const name = { source: 'b', sink: 'name', type: 'string' as const };
+
+  it('defaults to none (use the existing table) and takes the two ADF values', () => {
+    expect(COPY_TABLE_OPTIONS).toEqual(['none', 'autoCreate']);
+    expect(copyInputSchema.parse({ mapping: [id] }).tableOption).toBe('none');
+    expect(copyDispatchInputSchema.parse({ mapping: [id] }).tableOption).toBe('none');
+    expect(copyInputSchema.parse({ mapping: [id], tableOption: 'autoCreate' }).tableOption).toBe(
+      'autoCreate',
+    );
+    expect(copyInputSchema.safeParse({ mapping: [id], tableOption: 'create' }).success).toBe(false);
+  });
+
+  it('refuses, under Auto-create, two sink names that differ only by case', () => {
+    const clash = [id, { ...name, sink: 'ID' }];
+    // Without Auto-create the names are compared as strings (#1151), so this stands.
+    expect(copyInputSchema.safeParse({ mapping: clash }).success).toBe(true);
+    const result = copyInputSchema.safeParse({ mapping: clash, tableOption: 'autoCreate' });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toEqual(['tableOption']);
+    expect(result.error?.issues[0]?.message).toBe(
+      "Auto-create cannot create both 'id' and 'ID': the copy matches sink columns without case",
+    );
+    expect(
+      copyDispatchInputSchema.safeParse({ mapping: clash, tableOption: 'autoCreate' }).success,
+    ).toBe(false);
+    expect(
+      copyInputSchema.safeParse({ mapping: [id, name], tableOption: 'autoCreate' }).success,
+    ).toBe(true);
+  });
+
+  it('names the collision from the sink names alone', () => {
+    expect(autoCreateCollisionIssue(['a', 'b', 'c'])).toBeNull();
+    expect(autoCreateCollisionIssue(['Name', 'x', 'NAME'])).toBe(
+      "Auto-create cannot create both 'Name' and 'NAME': the copy matches sink columns without case",
+    );
   });
 });

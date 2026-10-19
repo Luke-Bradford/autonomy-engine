@@ -251,4 +251,109 @@ test.describe('#1600 C3a — Copy Write behaviour', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  /**
+   * #1600 OR41 C3c — Table option *Auto-create from mapping* (catalogue §4.1),
+   * picked in the Sink tab and run for real: the sink table does not exist, so
+   * the copy creates it from the mapping's sink names and types, then writes.
+   */
+  test('Auto-create from mapping creates the missing sink table and copies into it', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const problems = collectPageProblems(page);
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1600-c3c-')));
+    try {
+      const dbPath = join(root, 'crm.db');
+      const db = new DatabaseSync(dbPath);
+      db.exec(`
+        CREATE TABLE incoming (id INTEGER, name TEXT);
+        INSERT INTO incoming VALUES (1, 'Ann'), (2, 'Bea');
+      `);
+      db.close();
+      const conn = await seedConnection(page, {
+        name: 'e2e 1600 c3c crm',
+        kind: 'sqlite',
+        config: { roots: [root], path: dbPath, writable: true },
+      });
+      const sink = await seedDataset(page, {
+        name: 'e2e 1600 c3c people',
+        kind: 'table',
+        connectionId: conn,
+        config: { table: 'people' },
+        columns: [],
+      });
+      const pipelineId = await openSeededCanvas(page, 'e2e 1600 c3c auto-create', {
+        nodes: [
+          {
+            id: 'copy1',
+            type: 'copy',
+            config: {
+              mapping: [
+                { source: 'id', sink: 'person_id', type: 'integer' },
+                { source: 'name', sink: 'full_name', type: 'string' },
+              ],
+            },
+            connectionIds: { source: conn, sink: conn },
+            datasetIds: { sink },
+            inlineDatasets: { source: { kind: 'table', config: { table: 'incoming' } } },
+            position: { x: 0, y: 0 },
+          },
+        ],
+        edges: [],
+      });
+
+      await nodeById(page, 'copy1').click();
+      const pane = properties(page);
+      await pane.getByRole('tab', { name: 'Sink', exact: true }).click();
+      const option = pane.getByRole('combobox', { name: 'Table option' });
+      await expect(option.locator('option')).toHaveText([
+        'Use existing (default)',
+        'Use existing',
+        'Auto-create from mapping',
+      ]);
+      // ADF's order: the Table option comes before Write behaviour.
+      const optionBox = await option.boundingBox();
+      const behaviourBox = await pane
+        .getByRole('combobox', { name: 'Write behaviour' })
+        .boundingBox();
+      expect(optionBox!.y).toBeLessThan(behaviourBox!.y);
+      await option.selectOption('autoCreate');
+      await pane.getByRole('button', { name: 'Apply config' }).click();
+
+      await page.getByRole('button', { name: 'Save version' }).click();
+      await expect(page.locator('.notice')).toHaveText('Saved v2.');
+      const versions = (await (
+        await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+      ).json()) as { id: string; version: number; nodes: Record<string, unknown>[] }[];
+      const latest = versions.sort((a, b) => b.version - a.version)[0]!;
+      const copy = latest.nodes.find((n) => n['id'] === 'copy1')!;
+      expect(copy['config']).toMatchObject({ tableOption: 'autoCreate' });
+
+      const runId = await fireAndSettle(page, latest.id, 'e2e 1600 c3c run');
+      const run = await (await page.request.get(`/api/runs/${encodeURIComponent(runId)}`)).json();
+      expect(run.status, `run: ${JSON.stringify(run)}`).toBe('success');
+      const back = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        expect(
+          back.prepare("SELECT name, type FROM pragma_table_info('people') ORDER BY cid").all(),
+        ).toEqual([
+          { name: 'person_id', type: 'INTEGER' },
+          { name: 'full_name', type: 'TEXT' },
+        ]);
+        expect(
+          back.prepare('SELECT person_id, full_name FROM people ORDER BY person_id').all(),
+        ).toEqual([
+          { person_id: 1, full_name: 'Ann' },
+          { person_id: 2, full_name: 'Bea' },
+        ]);
+      } finally {
+        back.close();
+      }
+
+      await expectQuiet(page, problems);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

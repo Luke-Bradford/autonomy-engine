@@ -19,6 +19,7 @@ import { AsyncEventQueue } from '../util/async-event-queue.js';
 import { failed } from './activity-events.js';
 import { DatasetIoError } from './dataset-io-error.js';
 import type { PreCopyScript } from './pre-copy-script.js';
+import type { AutoCreateColumn } from './auto-create-table.js';
 import { refuseNullOnNonNullable } from './sink-columns.js';
 import type { SourceIo } from './source-io.js';
 import type { ActivityContext, ActivityEvent, ResolvedDataset } from './types.js';
@@ -116,6 +117,9 @@ export interface CopyIo extends SourceIo {
     /** #1600 OR41 C3b — the Pre-copy script, run once inside the write
      * transaction before the first row; `null` for none. */
     readonly preCopyScript: PreCopyScript | null;
+    /** #1600 OR41 C3c — the columns Auto-create makes the sink table with when
+     * it does not exist; `null` for Use existing. */
+    readonly autoCreate: readonly AutoCreateColumn[] | null;
     readonly onBatch: (rowsWritten: number) => void;
     readonly batches: AsyncIterable<readonly Record<string, CoercedValue>[]>;
     readonly signal: AbortSignal | undefined;
@@ -297,6 +301,12 @@ export async function* runCopyActivity(
     parsed.data.preCopyScript === undefined
       ? null
       : { sql: parsed.data.preCopyScript, parameters: parsed.data.preCopyScriptParameters ?? {} };
+  // #1600 OR41 C3c — the mapping's sink names and declared types, in mapping
+  // order. Each sink checks its store's own limits on them.
+  const autoCreate: readonly AutoCreateColumn[] | null =
+    parsed.data.tableOption === 'autoCreate'
+      ? mapping.map((row) => ({ name: row.sink, type: row.type }))
+      : null;
 
   // The sink rows that may carry an injected null — computed once, because the
   // same list goes to the sink so the store's OWN schema is checked too (#1162).
@@ -430,6 +440,7 @@ export async function* runCopyActivity(
       mode,
       keyColumns,
       preCopyScript,
+      autoCreate,
       onBatch: (rowsWritten) => {
         counters.rowsWritten = rowsWritten;
       },

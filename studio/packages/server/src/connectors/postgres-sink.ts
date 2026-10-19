@@ -1,5 +1,7 @@
+import { setTimeout as sleep } from 'node:timers/promises';
 import {
   COPY_WRITE_MODES,
+  DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS,
   datasetConfigSchema,
   formatZodIssues,
   postgresConnectionConfigSchema,
@@ -13,6 +15,11 @@ import { rewriteNamedParametersToPositional } from './postgres-named-parameters.
 import { classifySinkFailure } from './error-kind.js';
 import { yieldToEventLoop } from './scheduling.js';
 import { quoteIdentifier } from './sql-identifier.js';
+import {
+  autoCreateLockKey,
+  autoCreateTableSql,
+  type AutoCreateColumn,
+} from './auto-create-table.js';
 import {
   refuseNullKey,
   refuseNullOnNonNullable,
@@ -69,6 +76,9 @@ export interface PostgresDatasetWrite {
   /** #1600 OR41 C3b — the Pre-copy script, run once inside the write
    * transaction before the first row. Absent or `null` runs none. */
   readonly preCopyScript?: PreCopyScript | null;
+  /** #1600 OR41 C3c — Auto-create from mapping: the columns to create the
+   * table with when it does not exist. Absent or `null` creates nothing. */
+  readonly autoCreate?: readonly AutoCreateColumn[] | null;
   /** Honoured at BATCH BOUNDARIES (§10) — a run cancel rolls the copy back. */
   readonly signal?: AbortSignal;
   /** §5's progress channel: the RUNNING TOTAL after each chunk is inserted into
@@ -502,6 +512,130 @@ async function runPostgresPreCopyScript(
   }
 }
 
+/** Whether `qualified` names a relation, resolved exactly as the LOCK and the
+ * describe resolve it (`to_regclass`, by `search_path` when unqualified). */
+const RELATION_EXISTS_SQL = 'select to_regclass($1) is not null as "exists"';
+
+/** How often a copy waiting on another copy's Auto-create tries the lock again. */
+const AUTO_CREATE_LOCK_POLL_MS = 100;
+
+/**
+ * #1600 OR41 C3c — Auto-create from mapping: create the sink table when it does
+ * not exist, inside the copy's transaction, so a failed copy undoes it.
+ *
+ * NOT `CREATE TABLE IF NOT EXISTS`. For an unqualified name that checks only
+ * the schema the table would be created in (the first in `search_path`), so
+ * with `search_path = s_b, public` and an existing `public.t` it would create
+ * `s_b.t`, and the copy would write into a new empty table instead of the one
+ * the name resolved to. The check here is `to_regclass`, the same resolution
+ * the LOCK and the describe use.
+ *
+ * Two copies auto-creating one table at once would both see it missing, and
+ * the second CREATE would fail on the first's catalog row. So the check runs
+ * under an advisory lock on the RESOLVED `schema.table` (`autoCreateLockKey`;
+ * an unqualified name's schema is `current_schema()`, where CREATE puts it, so
+ * `t` and `public.t` share one key):
+ *
+ * - **The lock comes BEFORE any lookup of the name.** Measured in CI: with a
+ *   `to_regclass` before the lock and another after it, a copy that waited on
+ *   one creating the table still missed it once that one had committed, and its
+ *   CREATE failed with *already exists*. The likely mechanism is the backend's
+ *   catalog cache keeping the first miss within the transaction. Looking the
+ *   name up only once, after the lock, leaves nothing to keep.
+ * - **Session-scoped, so a table that exists releases it at once**: copies into
+ *   an existing table do not serialise. A copy that creates the table, or fails
+ *   between the lock and the create, holds it in `held` until the caller's
+ *   COMMIT or ROLLBACK, then releases it, so the next copy finds the table (or,
+ *   after a rollback, creates it). Ending the session would release it too.
+ * - **Polled with `pg_try_advisory_lock`** rather than blocking, so a cancel or
+ *   the activity timeout ends the wait, where a blocking wait would hold until
+ *   the other copy's whole write has committed.
+ */
+async function autoCreatePostgresTable(
+  client: PostgresClient,
+  target: { readonly schema?: string; readonly table: string },
+  qualified: string,
+  columns: readonly AutoCreateColumn[],
+  signal: AbortSignal | undefined,
+  held: { key: string | null },
+  waitMs: number,
+): Promise<void> {
+  // Built first, so a refusal (a case collision, a name over 63 characters)
+  // runs no statement.
+  const ddl = autoCreateTableSql(
+    'postgres',
+    {
+      qualified,
+      names: target.schema === undefined ? [target.table] : [target.schema, target.table],
+    },
+    columns,
+  );
+  // `null` when no `search_path` schema exists; the CREATE then fails with the
+  // server's own words, so the key only has to be stable. Every such copy then
+  // shares the `''` key, which serialises only copies that are about to fail.
+  const schema =
+    target.schema ??
+    String(
+      (
+        (await client.query('select current_schema() as "schema"')).rows[0] as
+          { schema?: unknown } | undefined
+      )?.schema ?? '',
+    );
+  const key = autoCreateLockKey(schema, target.table);
+  // Bounded like the statement it stands in for: the LOCK TABLE after it would
+  // wait at most the session's statement timeout, so this wait does too, signal
+  // or no signal. TRANSIENT, as that LOCK's own timeout is (57014, and 55P03 a
+  // lock not available): nothing has been written yet and the transaction rolls
+  // back, so a retry is safe and finds the table once the creator commits.
+  // Monotonic, so a wall-clock step cannot stretch or cut the wait. Each poll
+  // is itself bounded by the session's statement timers (`clientOptionsFor`).
+  const deadline = performance.now() + waitMs;
+  // Recorded BEFORE the first try, so a grant whose reply is lost to an error
+  // (a cancel or a timeout landing mid-query) is still released by the caller.
+  // `pg_advisory_unlock` of a lock this session does not hold returns false
+  // with a notice, so releasing one that was never granted is harmless.
+  held.key = key;
+  for (;;) {
+    const locked = (
+      (await client.query('select pg_try_advisory_lock($1::bigint) as "locked"', [key])).rows[0] as
+        { locked?: unknown } | undefined
+    )?.locked;
+    if (locked === true) break;
+    if (signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
+    if (performance.now() >= deadline) {
+      throw new DatasetIoError(
+        'transient',
+        `Auto-create waited ${waitMs}ms for another copy creating '${target.schema === undefined ? target.table : `${target.schema}.${target.table}`}', and it is still running`,
+      );
+    }
+    // Tied to the signal, so a cancel ends the pause at once rather than up to
+    // one poll later; the rejection it then raises is the cancel, checked below.
+    await sleep(AUTO_CREATE_LOCK_POLL_MS, undefined, signal === undefined ? {} : { signal }).catch(
+      () => undefined,
+    );
+    if (signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
+  }
+  const exists =
+    (
+      (await client.query(RELATION_EXISTS_SQL, [qualified])).rows[0] as
+        { exists?: unknown } | undefined
+    )?.exists === true;
+  if (exists) {
+    // Best effort: a failed release must not fail a copy whose table exists.
+    // `held` stays set, so the caller's `finally` tries again, and the session's
+    // end releases it regardless.
+    try {
+      await client.query('select pg_advisory_unlock($1::bigint)', [key]);
+      held.key = null;
+    } catch {
+      // Released by the caller's retry or by the session's end.
+    }
+    return;
+  }
+  // Held to this copy's COMMIT or ROLLBACK: the caller releases `held` then.
+  await client.query(ddl);
+}
+
 /**
  * Write batches of mapped rows into a `table` dataset on a `postgres` store.
  *
@@ -600,12 +734,32 @@ export async function writePostgresDatasetRows(
     'cannot reach the postgres server to write the sink',
   );
 
+  // #1600 OR41 C3c — the Auto-create lock this copy still holds, released
+  // after its COMMIT or ROLLBACK (`autoCreatePostgresTable`).
+  const autoCreateLock: { key: string | null } = { key: null };
   try {
     let rowsWritten = 0;
     let inTransaction = false;
     try {
       await client.query('BEGIN');
       inTransaction = true;
+
+      // #1600 OR41 C3c — BEFORE the write behaviour's LOCK, which needs the
+      // table, and so before the Pre-copy script, which may alter it. This is
+      // what lets a PostgreSQL sink table be created at all: a script cannot,
+      // because the LOCK comes first.
+      if (write.autoCreate != null) {
+        await autoCreatePostgresTable(
+          client,
+          target,
+          qualified,
+          write.autoCreate,
+          write.signal,
+          autoCreateLock,
+          cfg.data.statementTimeoutMs ?? DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS,
+        );
+        if (write.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
+      }
 
       try {
         await client.query(`LOCK TABLE ${qualified} IN ${LOCK_MODES[write.mode]} MODE`);
@@ -788,6 +942,16 @@ export async function writePostgresDatasetRows(
     }
     return { rowsWritten };
   } finally {
+    if (autoCreateLock.key !== null) {
+      // After COMMIT or ROLLBACK, so the next copy finds the committed table (or,
+      // after a rollback, creates it). Ending the session releases it too, so a
+      // failure here (a broken connection) changes nothing.
+      try {
+        await client.query('select pg_advisory_unlock($1::bigint)', [autoCreateLock.key]);
+      } catch {
+        // The close below releases it.
+      }
+    }
     try {
       // Measured on the reader's path: ending a client with an open transaction
       // discards it server-side, so this is also the backstop for a throw that

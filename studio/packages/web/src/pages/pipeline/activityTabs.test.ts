@@ -35,6 +35,7 @@ describe('nodeTypeTabs (#1477)', () => {
         key: 'sink',
         label: 'Sink',
         fields: [
+          'tableOption',
           'mode',
           'keyColumns',
           'preCopyScript',

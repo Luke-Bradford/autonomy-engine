@@ -4,6 +4,7 @@ import { DataTypeSchema } from '../schemas/dataset.js';
 import { interpolationMode } from '../engine/expr.js';
 import { isSet } from './config-value.js';
 import { SqlParameterValueSchema } from './dataset-config.js';
+import { nocaseFold } from '../datamove/schema-drift.js';
 
 /** §6.2's per-column opt-out, named once so its display names can be checked against it. */
 const copyOnErrorSchema = z.enum(['fail', 'null']);
@@ -353,6 +354,58 @@ export function copyKeyColumnIssues(config: Record<string, unknown>): CopyKeyCol
 }
 
 /**
+ * #1600 OR41 C3c — the catalogue's *Table option* (§4.1), ADF's `tableOption`.
+ *
+ * - `none` writes into a table that must already exist.
+ * - `autoCreate` creates the table, when it does not exist, from the mapping's
+ *   sink names and types, inside the copy's write transaction. An existing
+ *   table is used as it is: nothing is altered.
+ */
+export const COPY_TABLE_OPTIONS = ['none', 'autoCreate'] as const;
+export type CopyTableOption = (typeof COPY_TABLE_OPTIONS)[number];
+const copyTableOptionSchema = z.enum(COPY_TABLE_OPTIONS);
+
+/**
+ * Auto-create's refusal of two sink names that differ only by case (C3c).
+ *
+ * The mapping compares sink names as strings (#1151), which is right for an
+ * existing table: the sink resolves each name by the store's own case rule. A
+ * table this copy CREATES has no such rule to defer to. SQLite refuses the pair
+ * as a duplicate column, and PostgreSQL creates both and the sink then cannot
+ * tell which one a name means. The authored and dispatch schemas both run it
+ * (so a `${}` Table option is checked once resolved), and the sinks' DDL
+ * builder again for a direct caller.
+ */
+export function autoCreateCollisionIssue(sinks: readonly string[]): string | null {
+  const seen = new Map<string, string>();
+  for (const sink of sinks) {
+    const earlier = seen.get(nocaseFold(sink));
+    if (earlier !== undefined) {
+      return `Auto-create cannot create both '${earlier}' and '${sink}': the copy matches sink columns without case`;
+    }
+    seen.set(nocaseFold(sink), sink);
+  }
+  return null;
+}
+
+/**
+ * Auto-create's save rule (C3c), over an UNTYPED config: the Zod refine below
+ * and the #444 write gate (`params.ts`, which holds only `node.config`) both
+ * run it, as they run `copyKeyColumnIssues`. One reader of the mapping's sink
+ * names, so the two cannot disagree.
+ */
+export function copyTableOptionIssue(config: Record<string, unknown>): string | null {
+  if (config['tableOption'] !== 'autoCreate') return null;
+  const rows: unknown[] = Array.isArray(config['mapping']) ? config['mapping'] : [];
+  const sinks = rows.flatMap((row) => {
+    const sink =
+      typeof row === 'object' && row !== null ? (row as { sink?: unknown }).sink : undefined;
+    return typeof sink === 'string' ? [sink] : [];
+  });
+  return autoCreateCollisionIssue(sinks);
+}
+
+/**
  * The whole `copy` config, minus the one field the two variants disagree about
  * (#1134, §6.1+§4). Both variants below are built from this, for the reason the
  * `expression` docblock above gives about `mapping`: two independent `z.object`s
@@ -380,6 +433,18 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
   z
     .object({
       mapping,
+      // #1600 OR41 C3c — before Write behaviour, in ADF's order.
+      tableOption: presented(copyTableOptionSchema.default('none'), {
+        title: 'Table option',
+        description:
+          "Auto-create from mapping creates the table from the mapping's sink columns and types " +
+          'when it does not exist, before the Pre-copy script. Every column is nullable, with ' +
+          'no primary key. An existing table is used as it is.',
+        options: optionTitles(copyTableOptionSchema, {
+          none: 'Use existing',
+          autoCreate: 'Auto-create from mapping',
+        }),
+      }),
       mode: presented(copyWriteModeSchema.default('append'), {
         title: 'Write behaviour',
         description:
@@ -429,6 +494,10 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
       }),
     })
     .superRefine((cfg, ctx) => {
+      const tableIssue = copyTableOptionIssue(cfg);
+      if (tableIssue !== null) {
+        ctx.addIssue({ code: 'custom', path: ['tableOption'], message: tableIssue });
+      }
       const scriptIssue = preCopyScriptIssue(cfg);
       if (scriptIssue !== null) {
         ctx.addIssue({ code: 'custom', path: ['preCopyScript'], message: scriptIssue });

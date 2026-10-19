@@ -984,8 +984,10 @@ const ENTRIES: ActivityCatalogEntry[] = [
       {
         key: 'sink',
         bindings: ['sinkConnection', 'sinkDataset'],
-        // #1600 OR41 C3b — ADF's sink order: behaviour, then the script, then the batch.
+        // #1600 OR41 C3b — ADF's sink order: behaviour, then the script, then the
+        // batch. C3c's Table option comes first, as ADF's does.
         fields: [
+          'tableOption',
           'mode',
           'keyColumns',
           'preCopyScript',

@@ -18,6 +18,7 @@ import {
 import { classifySinkFailure } from './error-kind.js';
 import { yieldToEventLoop } from './scheduling.js';
 import { quoteIdentifier } from './sql-identifier.js';
+import { autoCreateTableSql, type AutoCreateColumn } from './auto-create-table.js';
 // #1196 — the mapped→actual resolver moved to a leaf when postgres became the
 // second sink; the matching rule is not store-specific.
 import {
@@ -83,6 +84,9 @@ export interface SqliteDatasetWrite {
   /** #1600 OR41 C3b — the Pre-copy script, run once inside the write
    * transaction before the first row. Absent or `null` runs none. */
   readonly preCopyScript?: PreCopyScript | null;
+  /** #1600 OR41 C3c — Auto-create from mapping: the columns to create the
+   * table with when it does not exist. Absent or `null` creates nothing. */
+  readonly autoCreate?: readonly AutoCreateColumn[] | null;
   /** Honoured at BATCH BOUNDARIES (§10) — a run cancel rolls the copy back. */
   readonly signal?: AbortSignal;
   /**
@@ -282,6 +286,13 @@ async function storeLockKey(dbPath: string): Promise<string> {
   } catch {
     return dbPath;
   }
+}
+
+/** A sink table's quoted name: bare in `main`, schema-qualified otherwise. */
+function qualifiedSqliteTable(schema: string, table: string): string {
+  return schema === 'main'
+    ? quoteIdentifier(table, 'table')
+    : `${quoteIdentifier(schema, 'schema')}.${quoteIdentifier(table, 'table')}`;
 }
 
 /** The `table` dataset config of a SINK, or a refusal. */
@@ -505,6 +516,20 @@ export async function writeSqliteDatasetRows(
       // a live TOCTOU on exactly the check that exists to prevent it.
       db.exec('begin immediate');
 
+      // #1600 OR41 C3c — under the write lock, so no other copy can create it
+      // between the check and the create, and inside the transaction, so a
+      // failed copy undoes it. BEFORE the Pre-copy script, which may alter the
+      // new table, and before the describe, which then finds it.
+      if (write.autoCreate != null) {
+        db.exec(
+          autoCreateTableSql(
+            'sqlite',
+            { qualified: qualifiedSqliteTable(target.schema, target.table), names: [] },
+            write.autoCreate,
+          ),
+        );
+      }
+
       // #1600 OR41 C3b — under the write lock and BEFORE the describe, so a
       // script that alters the table is described as it now is, and inside the
       // transaction, so a failed copy undoes it.
@@ -526,10 +551,9 @@ export async function writeSqliteDatasetRows(
       });
       if (nullRefusal !== null) throw new DatasetIoError('permanent', nullRefusal);
 
-      const qualified =
-        target.schema === 'main'
-          ? quoteIdentifier(described.name, 'table')
-          : `${quoteIdentifier(target.schema, 'schema')}.${quoteIdentifier(described.name, 'table')}`;
+      // The store's own spelling from the describe, where the create above used
+      // the dataset's.
+      const qualified = qualifiedSqliteTable(target.schema, described.name);
 
       if (!(COPY_WRITE_MODES as readonly string[]).includes(write.mode)) {
         // `mode` is typed, so this is unreachable from in-repo callers — but an

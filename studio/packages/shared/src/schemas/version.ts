@@ -592,7 +592,10 @@
 // BUMP 56→57 for #1600 OR41 C3b: Copy's Pre-copy script and Batch size. The copy
 // dispatch schema is not strict, so a pre-C3b build would ignore the script and
 // copy without it.
-export const CATALOG_VERSION = 57;
+// BUMP 57→58 for #1600 OR41 C3c: Copy's Table option (Auto-create from mapping).
+// The copy dispatch schema is not strict, so a pre-C3c build would ignore it and
+// refuse the copy for a missing table.
+export const CATALOG_VERSION = 58;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the
