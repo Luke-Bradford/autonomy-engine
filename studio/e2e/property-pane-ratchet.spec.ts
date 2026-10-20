@@ -355,7 +355,8 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   'Copy data (files as-is)': 20,
   'Copy data (files from a folder)': 19,
   // +1 for C1q-c's Query timeout, a new field whose `?` says blank means no limit.
-  'Copy data (inline query)': 18,
+  // +1 for C6e-1's Verify after copy, measured at 19.
+  'Copy data (inline query)': 19,
   // #1600 OR41 C9a — Delete with every setting showing: the 14 above and
   // Delete empty folders', which says it never removes the folder at the path.
   // +3 for C9c's Session log, Write to and Log folder.

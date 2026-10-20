@@ -84,8 +84,9 @@ test.describe('#1600 C6e-1 — Copy Verify after copy', () => {
       await behaviour.selectOption('append');
       await settingsTab.click();
 
-      // Off by default, between Skip incompatible rows and the Session log (the
-      // spec's Settings order), and inside the 900px viewport.
+      // Off by default, beside Skip incompatible rows on one row (short fields
+      // pack, UI standard rule 5) and above the Session log (the spec's Settings
+      // order), inside the 900px viewport.
       await expect(verify).not.toBeChecked();
       const skipBox = await pane
         .getByRole('checkbox', { name: 'Skip incompatible rows', exact: true })
@@ -93,8 +94,9 @@ test.describe('#1600 C6e-1 — Copy Verify after copy', () => {
       const verifyBox = await verify.boundingBox();
       const levelBox = await pane.getByRole('combobox', { name: 'Session log' }).boundingBox();
       expect(skipBox && verifyBox && levelBox, 'all three fields have a box').toBeTruthy();
-      expect(skipBox!.y).toBeLessThan(verifyBox!.y);
-      expect(verifyBox!.y).toBeLessThan(levelBox!.y);
+      expect(Math.abs(skipBox!.y - verifyBox!.y)).toBeLessThan(1);
+      expect(skipBox!.x).toBeLessThan(verifyBox!.x);
+      expect(verifyBox!.y + verifyBox!.height).toBeLessThanOrEqual(levelBox!.y);
       expect(levelBox!.y + levelBox!.height).toBeLessThanOrEqual(900);
       await verify.check();
       await pane.getByRole('button', { name: 'Apply config' }).click();
