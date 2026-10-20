@@ -6,6 +6,7 @@ import {
   COPY_PROGRESS_OUTPUT,
   SESSION_LOG_OUTPUT,
   SESSION_LOG_RUN_MAX_LINES,
+  WARNING_CODES,
   newCopyCounters,
   type DatasetColumn,
 } from '@autonomy-studio/shared';
@@ -1325,5 +1326,81 @@ describe('copy activity — the session log, to the run log (#1600 OR41 C6a)', (
     const lines = lineValues(events);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(new RegExp(`^${ts} Warning TabularRowSkip row 3 `));
+  });
+});
+
+describe('copy activity — Skip incompatible rows (#1600 OR41 C6d-1)', () => {
+  const lineValues = (events: ActivityEvent[]): string[] =>
+    events.flatMap((e) =>
+      e.type === 'output' && e.name === SESSION_LOG_OUTPUT
+        ? [(e.value as string).replace(/^\S+ /, '')]
+        : [],
+    );
+  /** A source whose flags are given, and a sink that holds each flag once. */
+  function stores(root: string, flags: string[]): { sourcePath: string; sinkPath: string } {
+    const sourcePath = join(root, 'src.db');
+    const src = new Database(sourcePath);
+    src.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, flag TEXT)');
+    const insert = src.prepare('INSERT INTO t VALUES (?, ?)');
+    flags.forEach((flag, i) => insert.run(i + 1, flag));
+    src.close();
+    const sinkPath = seedSink(root, 'dst.db');
+    const db = new Database(sinkPath);
+    db.exec('CREATE UNIQUE INDEX sink_flag ON sink (flag)');
+    db.close();
+    return { sourcePath, sinkPath };
+  }
+  const input = (skipIncompatibleRows: boolean) => ({
+    mapping: [
+      { source: 'id', sink: 'id', type: 'integer' },
+      { source: 'flag', sink: 'flag', type: 'integer' },
+    ],
+    skipIncompatibleRows,
+  });
+
+  it('skips a row the sink rejects, numbered as its source row, beside the coercion skips', async () => {
+    const root = tempRoot();
+    const { sourcePath, sinkPath } = stores(root, ['1', '2', 'x', '2']);
+    const events = await run(copyCtx({ root, sourcePath, sinkPath, input: input(true) }));
+    const end = terminal(events);
+    expect(end.type).toBe('succeeded');
+    expect(end.type === 'succeeded' ? end.outputs : {}).toMatchObject({
+      rowsRead: 4,
+      rowsWritten: 2,
+      rowsFailed: 2,
+    });
+    expect(lineValues(events)).toEqual([
+      expect.stringMatching(/^Warning TabularRowSkip row 3 not_a_number: into 'flag': /),
+      "Warning TabularRowSkip row 4 sink_rejected: into 'sink': UNIQUE constraint failed: sink.flag",
+    ]);
+    const warnings = events.filter((e) => e.type === 'warned');
+    // The rows the sink rejected are not a store that discarded rows (#1273).
+    expect(warnings.map((w) => (w.type === 'warned' ? w.code : ''))).toEqual([
+      WARNING_CODES.COPY_ROWS_FAILED,
+    ]);
+    const reason = warnings[0]?.type === 'warned' ? warnings[0].reason : '';
+    expect(reason).toContain('(1 not_a_number, 1 sink_rejected)');
+    expect(rowsOf(sinkPath, 'SELECT id, flag FROM sink ORDER BY id')).toEqual([
+      { id: 1, flag: 1 },
+      { id: 2, flag: 2 },
+    ]);
+  });
+
+  it('reports the lowest row first when the sink rejects a row before a coercion drop', async () => {
+    const root = tempRoot();
+    const { sourcePath, sinkPath } = stores(root, ['1', '1', 'x']);
+    const events = await run(copyCtx({ root, sourcePath, sinkPath, input: input(true) }));
+    const warning = events.find((e) => e.type === 'warned');
+    expect(warning?.type === 'warned' ? warning.reason : '').toContain(
+      "First at row 2 into 'sink': UNIQUE constraint failed: sink.flag.",
+    );
+  });
+
+  it('off, the rejected row fails the copy and nothing lands', async () => {
+    const root = tempRoot();
+    const { sourcePath, sinkPath } = stores(root, ['1', '2', '2']);
+    const end = terminal(await run(copyCtx({ root, sourcePath, sinkPath, input: input(false) })));
+    expect(end).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(rowsOf(sinkPath)).toEqual([]);
   });
 });

@@ -294,6 +294,33 @@ export function preCopyScriptIssue(config: Record<string, unknown>): string | nu
 }
 
 /**
+ * #1600 OR41 C6d-1 — why Skip incompatible rows cannot apply, or `null`. ADF's
+ * `enableSkipIncompatibleRow` "doesn't apply" with Upsert, and studio's
+ * PostgreSQL Upsert writes each chunk as one set statement, so a rejected row
+ * cannot be told apart from the rest. A `${}` Write behaviour is decided at
+ * dispatch, where the dispatch schema (the same shape) sees the resolved value.
+ * The schema refines on it and the #444 write gate replays it.
+ */
+export function copySkipIncompatibleIssue(config: Record<string, unknown>): string | null {
+  if (config['skipIncompatibleRows'] !== true) return null;
+  return literalWriteMode(config) === 'upsert' ? SKIP_INCOMPATIBLE_UPSERT_REFUSAL : null;
+}
+
+/** The one sentence save and both sinks refuse Skip incompatible rows with Upsert in. */
+export const SKIP_INCOMPATIBLE_UPSERT_REFUSAL =
+  'Skip incompatible rows does not apply to Upsert, as in ADF';
+
+/**
+ * A copy config's Write behaviour as stored, or `null` when it is a `${}` that
+ * only dispatch can resolve. Absent is the default, Append. Untyped, because the
+ * write gate holds an operator's raw config.
+ */
+function literalWriteMode(config: Record<string, unknown>): unknown {
+  const mode = config['mode'] ?? 'append';
+  return typeof mode === 'string' && interpolationMode(mode).mode !== 'literal' ? null : mode;
+}
+
+/**
  * The Key column rules (C3a), as plain data so the schema's `superRefine` and
  * the #444 write gate read ONE declaration — `copyMappingShapeIssues`' shape,
  * for its reason (#1176).
@@ -313,9 +340,9 @@ export function preCopyScriptIssue(config: Record<string, unknown>): string | nu
 export function copyKeyColumnIssues(config: Record<string, unknown>): CopyKeyColumnIssue[] {
   const keys = config['keyColumns'];
   if (!isSet(keys)) return [];
-  const mode = config['mode'] ?? 'append';
   // A `${}` Write behaviour is decided at dispatch, where it may be Upsert.
-  if (typeof mode === 'string' && interpolationMode(mode).mode !== 'literal') return [];
+  const mode = literalWriteMode(config);
+  if (mode === null) return [];
   if (mode !== 'upsert') {
     return [{ path: [], message: 'only read when Write behaviour is Upsert' }];
   }
@@ -497,6 +524,16 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
       // level: the run log is the one destination until C6c brings Write to and
       // a log folder, so there is nothing for `sessionLogIssues` to refuse yet.
       logLevel: sessionLogConfigFields.logLevel,
+      // #1600 OR41 C6d-1 — ADF's `enableSkipIncompatibleRow`, Settings · Fault
+      // tolerance. Literal like every boolean today (ⓕ on typed fields is OR38
+      // #1573). Off writes exactly the statements a copy wrote before C6d.
+      skipIncompatibleRows: presented(z.boolean().default(false), {
+        title: 'Skip incompatible rows',
+        description:
+          'Skips and logs a row the sink rejects (a duplicate key, NOT NULL, CHECK, a value the ' +
+          "column cannot hold) instead of failing. A trigger's rejection still fails. Not with " +
+          'Upsert. Slower when on.',
+      }),
     })
     .superRefine((cfg, ctx) => {
       const tableIssue = copyTableOptionIssue(cfg);
@@ -513,6 +550,10 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
           path: ['preCopyScriptParameters'],
           message: 'Pre-copy bind values need a Pre-copy script to bind into',
         });
+      }
+      const skipIssue = copySkipIncompatibleIssue(cfg);
+      if (skipIssue !== null) {
+        ctx.addIssue({ code: 'custom', path: ['skipIncompatibleRows'], message: skipIssue });
       }
       for (const issue of copyKeyColumnIssues(cfg)) {
         ctx.addIssue({

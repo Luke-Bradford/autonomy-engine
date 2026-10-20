@@ -83,6 +83,10 @@ export interface SinkWriteRequest {
    * table with when it does not exist; `null` when the Table option is Use
    * existing. Required, so no adapter can drop the option on the way. */
   readonly autoCreate: readonly AutoCreateColumn[] | null;
+  /** #1600 OR41 C6d-1 — Skip incompatible rows: a rejected row's position in
+   * its batch and the store's reason; `null` is off. Required, so no adapter
+   * can drop the option on the way. */
+  readonly onRowRejected: ((position: number, reason: string) => void) | null;
   readonly onBatch: (rowsWritten: number) => void;
   readonly signal: AbortSignal | undefined;
   /** Injectable for the offline tests; the live path uses `pg.Client`. */
@@ -111,6 +115,7 @@ export async function writeRowsToSink(
     keyColumns,
     preCopyScript,
     autoCreate,
+    onRowRejected,
     onBatch,
     signal,
   } = request;
@@ -144,6 +149,7 @@ export async function writeRowsToSink(
         keyColumns,
         preCopyScript,
         autoCreate,
+        onRowRejected,
         onBatch,
         ...(signal === undefined ? {} : { signal }),
       },
@@ -168,6 +174,7 @@ export async function writeRowsToSink(
         keyColumns,
         preCopyScript,
         autoCreate,
+        onRowRejected,
         onBatch,
         ...(signal === undefined ? {} : { signal }),
       },

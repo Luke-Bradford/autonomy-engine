@@ -1440,3 +1440,165 @@ describe('classifySinkFailure (§4.2)', () => {
     );
   });
 });
+
+describe('Skip incompatible rows (#1600 OR41 C6d-1)', () => {
+  const ddl =
+    'create table sink (id integer primary key, note text not null check (length(note) < 10));';
+  async function* two(
+    ...batches: Record<string, SinkValue>[][]
+  ): AsyncIterable<readonly Record<string, SinkValue>[]> {
+    for (const batch of batches) yield batch;
+  }
+  const rows = (): [Record<string, SinkValue>[], Record<string, SinkValue>[]] => [
+    [
+      { id: 1, note: 'a' },
+      { id: 1, note: 'dup' },
+      { id: 2, note: null },
+    ],
+    [
+      { id: 3, note: 'far too long' },
+      { id: 4, note: 'ok' },
+    ],
+  ];
+  function copy(
+    root: string,
+    path: string,
+    opts: {
+      mode?: SqliteWriteMode;
+      onRowRejected?: ((position: number, reason: string) => void) | null;
+      ticks?: number[];
+    },
+    batches: AsyncIterable<readonly Record<string, SinkValue>[]>,
+  ) {
+    return writeSqliteDatasetRows(
+      {
+        nullOnError: [],
+        connectionConfig: writableConfig(root, path),
+        datasetKind: 'table',
+        datasetConfig: { table: 'sink' },
+        columns: ['id', 'note'],
+        mode: opts.mode ?? 'append',
+        onRowRejected: opts.onRowRejected ?? null,
+        ...(opts.ticks === undefined ? {} : { onBatch: (n: number) => opts.ticks?.push(n) }),
+      },
+      batches,
+    );
+  }
+
+  it('skips each row the store rejects, by its position in its batch, and keeps the rest', async () => {
+    const root = tempRoot();
+    const path = storeWith(root, ddl);
+    const rejected: [number, string][] = [];
+    const ticks: number[] = [];
+    const result = await copy(
+      root,
+      path,
+      { onRowRejected: (p, r) => rejected.push([p, r]), ticks },
+      two(...rows()),
+    );
+    expect(rejected).toEqual([
+      [1, 'UNIQUE constraint failed: sink.id'],
+      [2, 'NOT NULL constraint failed: sink.note'],
+      [0, 'CHECK constraint failed: length(note) < 10'],
+    ]);
+    expect(result.rowsWritten).toBe(2);
+    expect(ticks).toEqual([1, 2]);
+    expect(rowsOf(path, 'select id, note from sink order by id')).toEqual([
+      { id: 1, note: 'a' },
+      { id: 4, note: 'ok' },
+    ]);
+  });
+
+  it('off, the first rejected row fails the copy and nothing lands, as before C6d', async () => {
+    const root = tempRoot();
+    const path = storeWith(root, ddl);
+    const err = await failure(copy(root, path, {}, two(...rows())));
+    expect(err.kind).toBe('permanent');
+    expect(err.message).toContain('UNIQUE constraint failed: sink.id');
+    expect(rowsOf(path, 'select id from sink')).toEqual([]);
+  });
+
+  it("does not skip a trigger's rejection, which fails the copy as on PostgreSQL", async () => {
+    const root = tempRoot();
+    const path = storeWith(
+      root,
+      ddl,
+      "create trigger no before insert on sink when new.id = 4 begin select raise(abort, 'no 4'); end;",
+    );
+    const err = await failure(copy(root, path, { onRowRejected: () => {} }, two(...rows())));
+    expect(err.message).toContain('no 4');
+    expect(rowsOf(path, 'select id from sink')).toEqual([]);
+  });
+
+  it("fails the copy on a trigger's RAISE(ROLLBACK), which ends the transaction", async () => {
+    const root = tempRoot();
+    const path = storeWith(
+      root,
+      "create table sink (id integer primary key, note text check (note <> 'x'));",
+      "create trigger rb before insert on sink when new.id = 2 begin select raise(rollback, 'gone'); end;",
+    );
+    const err = await failure(
+      copy(
+        root,
+        path,
+        { onRowRejected: () => {} },
+        one([
+          { id: 1, note: 'a' },
+          { id: 2, note: 'b' },
+          { id: 3, note: 'c' },
+        ]),
+      ),
+    );
+    expect(err.message).toContain('gone');
+    // Row 3 must not have been inserted outside the transaction, in autocommit.
+    expect(rowsOf(path, 'select id from sink')).toEqual([]);
+  });
+
+  it('fails the copy on an ON CONFLICT ROLLBACK constraint, which ends the transaction', async () => {
+    const root = tempRoot();
+    const path = storeWith(
+      root,
+      'create table sink (id integer primary key on conflict rollback, note text);',
+    );
+    const err = await failure(
+      copy(
+        root,
+        path,
+        { onRowRejected: () => {} },
+        one([
+          { id: 1, note: 'a' },
+          { id: 1, note: 'b' },
+          { id: 3, note: 'c' },
+        ]),
+      ),
+    );
+    expect(err.message).toContain('UNIQUE constraint failed: sink.id');
+    // Not skipped: the conflict took row 1 with it, and row 3 would land alone.
+    expect(rowsOf(path, 'select id from sink')).toEqual([]);
+  });
+
+  it('under Overwrite, replaces the rows and still skips the rejected one', async () => {
+    const root = tempRoot();
+    const path = storeWith(root, ddl, "insert into sink values (9, 'old');");
+    const rejected: number[] = [];
+    const result = await copy(
+      root,
+      path,
+      { mode: 'overwrite', onRowRejected: (p) => rejected.push(p) },
+      two(...rows()),
+    );
+    expect(rejected).toEqual([1, 2, 0]);
+    expect(result.rowsWritten).toBe(2);
+    expect(rowsOf(path, 'select id from sink order by id')).toEqual([{ id: 1 }, { id: 4 }]);
+  });
+
+  it('refuses it with Upsert', async () => {
+    const root = tempRoot();
+    const path = storeWith(root, ddl);
+    const err = await failure(
+      copy(root, path, { mode: 'upsert', onRowRejected: () => {} }, two(...rows())),
+    );
+    expect(err.kind).toBe('permanent');
+    expect(err.message).toContain('Skip incompatible rows does not apply to Upsert');
+  });
+});

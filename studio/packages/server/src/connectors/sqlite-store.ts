@@ -92,7 +92,12 @@ const TRANSIENT_SQLITE_CODES = new Set(['SQLITE_BUSY', 'SQLITE_LOCKED', 'SQLITE_
  * something to retry into.
  */
 export function isTransientSqliteCode(code: string): boolean {
-  return TRANSIENT_SQLITE_CODES.has(code.split('_').slice(0, 2).join('_'));
+  return TRANSIENT_SQLITE_CODES.has(primarySqliteCode(code));
+}
+
+/** An extended result code's primary code: `SQLITE_CONSTRAINT_UNIQUE` → `SQLITE_CONSTRAINT`. */
+export function primarySqliteCode(code: string): string {
+  return code.split('_').slice(0, 2).join('_');
 }
 
 /** Map a thrown store error onto a `DatasetIoError` (fail-safe: unrecognised → permanent).

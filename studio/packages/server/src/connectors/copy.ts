@@ -6,6 +6,7 @@ import {
   formatZodIssues,
   newCopyCounters,
   pumpCopyRows,
+  recordCopyRowFailure,
   SESSION_LOG_RUN_MAX_LINES,
   SessionLog,
   SOURCE_DRIFT_MESSAGES,
@@ -123,6 +124,8 @@ export interface CopyIo extends SourceIo {
     /** #1600 OR41 C3c — the columns Auto-create makes the sink table with when
      * it does not exist; `null` for Use existing. */
     readonly autoCreate: readonly AutoCreateColumn[] | null;
+    /** #1600 OR41 C6d-1 — Skip incompatible rows; `null` is off. */
+    readonly onRowRejected: ((position: number, reason: string) => void) | null;
     readonly onBatch: (rowsWritten: number) => void;
     readonly batches: AsyncIterable<readonly Record<string, CoercedValue>[]>;
     readonly signal: AbortSignal | undefined;
@@ -420,6 +423,37 @@ export async function* runCopyActivity(
   const log = new SessionLog(parsed.data.logLevel, undefined, {
     keepAtMost: SESSION_LOG_RUN_MAX_LINES,
   });
+  // #1600 OR41 C6d-1 — the read index of each row in the batch the sink is
+  // writing, so a row it rejects is numbered as the source row it came from.
+  let sinkBatchRows: readonly number[] = [];
+  const sinkTable = typeof sink.config['table'] === 'string' ? sink.config['table'] : sink.name;
+  // The store's reason names the column or constraint, never the value.
+  const onRowRejected = parsed.data.skipIncompatibleRows
+    ? (position: number, reason: string): void => {
+        const rowIndex = sinkBatchRows[position];
+        // Unreachable: the pump gives an index for every row it hands the sink.
+        if (rowIndex === undefined) throw new Error('a rejected row has no source row');
+        const failure: CopyRowFailure = {
+          rowIndex,
+          sink: sinkTable,
+          code: 'sink_rejected',
+          reason,
+        };
+        recordCopyRowFailure(counters, failure);
+        logRowSkip(failure);
+      }
+    : null;
+  // One line shape for a skipped row, whichever half of the copy dropped it.
+  // The reason never holds the value (`coerce.ts`, and each sink's
+  // `incompatibleRowReason`), so no row data reaches the log.
+  function logRowSkip(f: CopyRowFailure): void {
+    log.add(
+      'Warning',
+      'TabularRowSkip',
+      `row ${rowNumber(f)}`,
+      `${f.code}: into '${f.sink}': ${f.reason}`,
+    );
+  }
   // Where the batch just pumped began, for Everything's per-batch line.
   let batchFrom = { rowsRead: 0, rowsFailed: 0 };
   let logged = false;
@@ -472,6 +506,7 @@ export async function* runCopyActivity(
       keyColumns,
       preCopyScript,
       autoCreate,
+      onRowRejected,
       onBatch: (rowsWritten) => {
         counters.rowsWritten = rowsWritten;
       },
@@ -496,15 +531,9 @@ export async function* runCopyActivity(
           // describe rung above rather than inline here — see the note there for
           // why the empty-mapping guard has to cover both.
           coercion,
-          // The reason never holds the value (`coerce.ts`), so no row data
-          // reaches the log.
-          onRowFailure: (f) => {
-            log.add(
-              'Warning',
-              'TabularRowSkip',
-              `row ${rowNumber(f)}`,
-              `${f.code}: into '${f.sink}': ${f.reason}`,
-            );
+          onRowFailure: logRowSkip,
+          onSinkBatch: (rowIndices) => {
+            sinkBatchRows = rowIndices;
           },
           onBatch: () => {
             // "Read", never "written": the sink's tick is not committed truth.

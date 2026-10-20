@@ -242,3 +242,23 @@ describe('C3c — the Auto-create rule reaches the write gate', () => {
     expect(validateDoc(doc([autoCreate(undefined)]))).toEqual([]);
   });
 });
+
+/** #1600 OR41 C6d-1 — Skip incompatible rows with Upsert is refused at save too. */
+describe('C6d-1 — Skip incompatible rows reaches the write gate', () => {
+  const copy = (mode: unknown, skipIncompatibleRows: unknown): Node => ({
+    ...copyNode([]),
+    config: { mapping: [row()], mode, skipIncompatibleRows },
+  });
+
+  it('REFUSES it with Upsert', () => {
+    expect(validateDoc(doc([copy('upsert', true)]))).toEqual([
+      'node.c.skipIncompatibleRows: Skip incompatible rows does not apply to Upsert, as in ADF',
+    ]);
+  });
+
+  it('accepts it on the other write behaviours', () => {
+    expect(validateDoc(doc([copy('append', true)]))).toEqual([]);
+    expect(validateDoc(doc([copy(undefined, true)]))).toEqual([]);
+    expect(validateDoc(doc([copy('upsert', false)]))).toEqual([]);
+  });
+});

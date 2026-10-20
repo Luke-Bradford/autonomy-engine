@@ -65,6 +65,7 @@ import {
   copyKeyColumnIssues,
   copyTableOptionIssue,
   copyMappingShapeIssues,
+  copySkipIncompatibleIssue,
   preCopyScriptIssue,
 } from '../catalog/copy-config.js';
 import type { GetMetadataField } from '../catalog/get-metadata-config.js';
@@ -3033,6 +3034,8 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
       if (tableIssue !== null) errors.push(`node.${node.id}.tableOption: ${tableIssue}`);
       const scriptIssue = preCopyScriptIssue(node.config); // #1600 C3b — §8, literal SQL
       if (scriptIssue !== null) errors.push(`node.${node.id}.preCopyScript: ${scriptIssue}`);
+      const skipIssue = copySkipIncompatibleIssue(node.config); // #1600 C6d-1 — not with Upsert
+      if (skipIssue !== null) errors.push(`node.${node.id}.skipIncompatibleRows: ${skipIssue}`);
     }
     // #1480 — an unknown `type`, or a literal config the adapter would refuse
     // at dispatch, is refused here: a version that saves must be one that runs.

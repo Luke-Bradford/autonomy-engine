@@ -102,12 +102,21 @@ export interface CopyPumpMappingEntry {
   readonly onError: 'fail' | 'null';
 }
 
+/**
+ * A dropped row's bounded code: a coercion failure from this pump, or
+ * `sink_rejected` for a row the sink database refused under Skip incompatible
+ * rows (#1600 OR41 C6d-1).
+ */
+export type CopyRowFailureCode = CoercionFailureCode | 'sink_rejected';
+
 /** The first row that failed, kept for prose an operator can act on. */
 export interface CopyRowFailure {
   /** 0-based, across the whole copy rather than within its batch. */
   readonly rowIndex: number;
+  /** The sink column, or for `sink_rejected` the sink table, which the store's
+   * reason names its column (if any) within. */
   readonly sink: string;
-  readonly code: CoercionFailureCode;
+  readonly code: CopyRowFailureCode;
   readonly reason: string;
 }
 
@@ -131,7 +140,8 @@ export interface CopyCounters {
    * successful copy names that gap as `COPY_STORE_COUNT_DIFFERS` (#1273).
    */
   rowsWritten: number;
-  /** Rows NOT written because a mapped value failed coercion under `onError: 'fail'`. */
+  /** Rows NOT written: a mapped value failed coercion under `onError: 'fail'`, or
+   * (C6d-1) the sink database rejected the row under Skip incompatible rows. */
   rowsFailed: number;
   /**
    * Source bytes as measured AT THIS BOUNDARY: the values the reader
@@ -155,7 +165,7 @@ export interface CopyCounters {
    * code FOR: "a summary that can say '410 not_integral, 2 unparseable_date'
    * needs a bounded code, not unbounded per-row prose".
    */
-  failuresByCode: Partial<Record<CoercionFailureCode, number>>;
+  failuresByCode: Partial<Record<CopyRowFailureCode, number>>;
   firstFailure?: CopyRowFailure;
 }
 
@@ -220,6 +230,15 @@ export interface CopyPumpOptions {
    * all failing is exactly the one that must not look hung.
    */
   readonly onBatch?: () => void;
+  /**
+   * #1600 OR41 C6d-1 — the 0-based read index of each row in the batch about to
+   * be yielded, in its order, called just before the sink takes it. The sink
+   * reports a row it rejects by its position in the batch, and this numbers it
+   * as the source row it came from, as `onRowFailure` numbers a coercion drop.
+   * Sound only because a sink finishes batch N before it pulls N + 1 (both do:
+   * SQLite's loop is synchronous, and PostgreSQL flushes at each batch's end).
+   */
+  readonly onSinkBatch?: (rowIndices: readonly number[]) => void;
 }
 
 /** How one sink column gets its value, resolved ONCE for the whole copy. */
@@ -358,10 +377,18 @@ function constantPlan(
   };
 }
 
-function recordFailure(counters: CopyCounters, failure: CopyRowFailure): void {
+/**
+ * Count one dropped row, for both halves of the copy. `firstFailure` is the
+ * LOWEST row, not the first recorded: the pump coerces a whole batch before the
+ * sink sees it, so a sink rejection (C6d-1) at row 5 arrives after a coercion
+ * drop at row 900 of the same batch.
+ */
+export function recordCopyRowFailure(counters: CopyCounters, failure: CopyRowFailure): void {
   counters.rowsFailed += 1;
   counters.failuresByCode[failure.code] = (counters.failuresByCode[failure.code] ?? 0) + 1;
-  if (counters.firstFailure === undefined) counters.firstFailure = failure;
+  if (counters.firstFailure === undefined || failure.rowIndex < counters.firstFailure.rowIndex) {
+    counters.firstFailure = failure;
+  }
 }
 
 /**
@@ -421,6 +448,7 @@ export async function* pumpCopyRows(
 
   for await (const batch of batches) {
     const out: Record<string, CoercedValue>[] = [];
+    const rowIndices: number[] = [];
 
     for (const row of batch) {
       // Resolved from the first row's key set, which for every v1 source is the
@@ -454,15 +482,21 @@ export async function* pumpCopyRows(
           code: result.code,
           reason: result.reason,
         };
-        recordFailure(counters, failure);
+        recordCopyRowFailure(counters, failure);
         opts.onRowFailure?.(failure);
         failed = true;
         break; // the row is lost either way; the first reason is the one reported
       }
-      if (!failed) out.push(mapped);
+      if (!failed) {
+        out.push(mapped);
+        rowIndices.push(counters.rowsRead - 1);
+      }
     }
 
-    if (out.length > 0) yield out;
+    if (out.length > 0) {
+      opts.onSinkBatch?.(rowIndices);
+      yield out;
+    }
     opts.onBatch?.();
   }
 }

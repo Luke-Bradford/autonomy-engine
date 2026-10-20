@@ -3,6 +3,7 @@ import Database from 'better-sqlite3';
 import {
   COPY_WRITE_MODES,
   formatZodIssues,
+  SKIP_INCOMPATIBLE_UPSERT_REFUSAL,
   type CoercedValue,
   type CopyWriteMode,
   type DatasetKind,
@@ -33,6 +34,7 @@ import {
   confineStorePath,
   findSqliteRelation,
   parseTableTarget,
+  primarySqliteCode,
   quoteStoreIdentifier,
   sqliteConnectionConfigSchema,
   storeFailure,
@@ -87,6 +89,13 @@ export interface SqliteDatasetWrite {
   /** #1600 OR41 C3c — Auto-create from mapping: the columns to create the
    * table with when it does not exist. Absent or `null` creates nothing. */
   readonly autoCreate?: readonly AutoCreateColumn[] | null;
+  /**
+   * #1600 OR41 C6d-1 — Skip incompatible rows: called with a rejected row's
+   * position in its batch and the store's reason, and the copy goes on. Absent
+   * or `null` is off, and the first rejected row fails the copy as before.
+   * Refused with Upsert, as the config is.
+   */
+  readonly onRowRejected?: ((position: number, reason: string) => void) | null;
   /** Honoured at BATCH BOUNDARIES (§10) — a run cancel rolls the copy back. */
   readonly signal?: AbortSignal;
   /**
@@ -405,6 +414,32 @@ function runSqlitePreCopyScript(db: Database.Database, script: PreCopyScript): v
 }
 
 /**
+ * #1600 OR41 C6d-1 — the store's reason when a row is incompatible with the
+ * sink, or `null` when the failure is not the row's and must fail the copy.
+ *
+ * Every SQLITE_CONSTRAINT code but a trigger's: a duplicate key, NOT NULL,
+ * CHECK, an immediate foreign key and a STRICT table's datatype, plus
+ * SQLITE_MISMATCH (a non-integer rowid) and SQLITE_TOOBIG. Their messages name
+ * the table, column or CHECK expression and never the value (measured, as
+ * `UNIQUE constraint failed: sink.id`), so no row data reaches the log. A
+ * trigger's RAISE(ABORT) is the author's own refusal and fails the copy, as
+ * PostgreSQL's RAISE EXCEPTION (P0001) does, so the two stores agree.
+ */
+function incompatibleRowReason(err: unknown): string | null {
+  const code = (err as { code?: unknown } | undefined)?.code;
+  if (typeof code !== 'string' || code === 'SQLITE_CONSTRAINT_TRIGGER') return null;
+  const primary = primarySqliteCode(code);
+  if (
+    primary !== 'SQLITE_CONSTRAINT' &&
+    primary !== 'SQLITE_MISMATCH' &&
+    primary !== 'SQLITE_TOOBIG'
+  ) {
+    return null;
+  }
+  return err instanceof Error ? err.message : code;
+}
+
+/**
  * Write batches of mapped rows into a `table` dataset on a `sqlite` store —
  * §4's atomic sink, and the consumer that finally makes `config.writable` mean
  * something.
@@ -459,6 +494,11 @@ export async function writeSqliteDatasetRows(
 ): Promise<SqliteWriteResult> {
   if (write.columns.length === 0) {
     throw new DatasetIoError('permanent', 'a copy sink needs at least one mapped column');
+  }
+  // #1600 OR41 C6d-1 — before the write lock, the Pre-copy script and the
+  // overwrite's DELETE, as the config refuses it (a `${}` mode reaches here).
+  if (write.onRowRejected != null && write.mode === 'upsert') {
+    throw new DatasetIoError('permanent', SKIP_INCOMPATIBLE_UPSERT_REFUSAL);
   }
 
   // §8: the stored connection is not assumed well-formed — `routes/connections.ts`
@@ -596,6 +636,19 @@ export async function writeSqliteDatasetRows(
             })
           : null;
 
+      const insertRow = (row: Record<string, SinkValue>): number =>
+        insert.run(columns.map((column) => bindValue(row[column.mapped], column.mapped))).changes;
+      // #1600 OR41 C6d-1 — Skip incompatible rows' statements, prepared once.
+      const skipper =
+        write.onRowRejected == null
+          ? null
+          : {
+              report: write.onRowRejected,
+              savepoint: db.prepare('SAVEPOINT studio_copy_row'),
+              release: db.prepare('RELEASE studio_copy_row'),
+              rollbackTo: db.prepare('ROLLBACK TO studio_copy_row'),
+            };
+
       let first = true;
       let rowNumber = 0;
       for await (const batch of batches) {
@@ -604,8 +657,29 @@ export async function writeSqliteDatasetRows(
         if (write.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
         first = false;
 
-        for (const row of batch) {
+        for (const [position, row] of batch.entries()) {
           rowNumber += 1;
+          if (skipper !== null) {
+            // #1600 OR41 C6d-1 — one savepoint per row, so a rejected row is
+            // undone whole (a `FAIL` conflict and a BEFORE trigger's writes
+            // included), where a statement's own ABORT would not undo those.
+            skipper.savepoint.run();
+            try {
+              rowsWritten += insertRow(row);
+              skipper.release.run();
+            } catch (err) {
+              // FIRST, before any ROLLBACK TO: a trigger's RAISE(ROLLBACK) has
+              // ended the whole transaction (measured), so the savepoint is
+              // gone and the next row would insert in autocommit.
+              if (!db.inTransaction) throw err;
+              const reason = incompatibleRowReason(err);
+              if (reason === null) throw err;
+              skipper.rollbackTo.run();
+              skipper.release.run();
+              skipper.report(position, reason);
+            }
+            continue;
+          }
           if (upsert !== null) {
             refuseNullKey(row, upsert.keys, rowNumber);
             const keyValues = upsert.keys.map((k) => bindValue(row[k.mapped], k.mapped));
@@ -627,9 +701,7 @@ export async function writeSqliteDatasetRows(
           // would report a row as moved that the store never kept. `changes` is
           // the outer INSERT's alone — an AFTER trigger's own writes do not
           // inflate it (measured, and pinned by a test).
-          rowsWritten += insert.run(
-            columns.map((column) => bindValue(row[column.mapped], column.mapped)),
-          ).changes;
+          rowsWritten += insertRow(row);
         }
         write.onBatch?.(rowsWritten);
       }

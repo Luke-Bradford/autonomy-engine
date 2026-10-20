@@ -7,6 +7,7 @@ import {
   autoCreateCollisionIssue,
   copyDispatchInputSchema,
   copyInputSchema,
+  copySkipIncompatibleIssue,
 } from './copy-config.js';
 import { formatZodIssues } from '../schemas/zod-issues.js';
 
@@ -430,5 +431,52 @@ describe('Table option: Auto-create from mapping (C3c)', () => {
     expect(autoCreateCollisionIssue(['Name', 'x', 'NAME'])).toBe(
       "Auto-create cannot create both 'Name' and 'NAME': the copy matches sink columns without case",
     );
+  });
+});
+
+describe('Skip incompatible rows (C6d-1)', () => {
+  const id = { source: 'a', sink: 'id', type: 'integer' as const };
+
+  it('defaults to off and takes a boolean', () => {
+    expect(copyInputSchema.parse({ mapping: [id] }).skipIncompatibleRows).toBe(false);
+    expect(copyDispatchInputSchema.parse({ mapping: [id] }).skipIncompatibleRows).toBe(false);
+    expect(
+      copyInputSchema.parse({ mapping: [id], skipIncompatibleRows: true }).skipIncompatibleRows,
+    ).toBe(true);
+    expect(copyInputSchema.safeParse({ mapping: [id], skipIncompatibleRows: 'yes' }).success).toBe(
+      false,
+    );
+  });
+
+  it('is refused with Upsert, as ADF does, on the field', () => {
+    const result = copyInputSchema.safeParse({
+      mapping: [id],
+      mode: 'upsert',
+      skipIncompatibleRows: true,
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((i) => i.path)).toEqual([['skipIncompatibleRows']]);
+    expect(
+      copyInputSchema.safeParse({ mapping: [id], mode: 'upsert', skipIncompatibleRows: false })
+        .success,
+    ).toBe(true);
+    for (const mode of ['append', 'overwrite', 'truncate']) {
+      expect(
+        copyInputSchema.safeParse({ mapping: [id], mode, skipIncompatibleRows: true }).success,
+      ).toBe(true);
+    }
+  });
+
+  it('leaves a ${} Write behaviour to dispatch, which sees the resolved mode', () => {
+    expect(
+      copySkipIncompatibleIssue({ mode: '${pipeline().parameters.m}', skipIncompatibleRows: true }),
+    ).toBeNull();
+    expect(
+      copyDispatchInputSchema.safeParse({
+        mapping: [id],
+        mode: 'upsert',
+        skipIncompatibleRows: true,
+      }).success,
+    ).toBe(false);
   });
 });
