@@ -11,7 +11,6 @@ import {
   type CopyWriteMode,
   type DatasetKind,
 } from '@autonomy-studio/shared';
-import { verifyBeforeCommit } from './copy-verify.js';
 import { DatasetIoError } from './dataset-io-error.js';
 import { preCopyScriptRefusal, type PreCopyScript } from './pre-copy-script.js';
 import { rewriteNamedParametersToPositional } from './postgres-named-parameters.js';
@@ -1041,7 +1040,9 @@ export async function writePostgresDatasetRows(
       if (write.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
       // #1600 OR41 C6e-1 — after the last flush, so every row the store took or
       // Skip incompatible rows replayed is counted, and inside the transaction.
-      verifyBeforeCommit(write.verifyBeforeCommit, rowsWritten);
+      // Permanent: a retry reads the same rows into the same store.
+      const unverified = write.verifyBeforeCommit?.(rowsWritten) ?? null;
+      if (unverified !== null) throw new DatasetIoError('permanent', unverified);
       await client.query('COMMIT');
       inTransaction = false;
     } catch (err) {

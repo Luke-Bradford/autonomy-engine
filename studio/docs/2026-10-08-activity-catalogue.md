@@ -254,7 +254,7 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
 | Group | Fields | Default |
 |---|---|---|
 | Fault tolerance | *Skip incompatible rows* (Rows; not with Upsert). *Skip missing files* (on), *Skip forbidden files* (off) (files) | off / as listed |
-| Data consistency | *Verify after copy*: row counts (Rows) or size + modified time (Files as-is) | off |
+| Data consistency | *Verify after copy*: row counts (Rows; not with Upsert) or size + modified time (Files as-is) | off |
 | Performance | Degree of parallelism (files and partitioned reads), Batch size | auto / 1000 |
 | Session log | **Logging** Off · Warnings (skipped rows and files) · Everything (every file and row batch). **Mode** Best effort · Reliable. **Write to** connection + folder ⓕ, or *Run log* (kept with the run, capped). | Warnings to the run log |
 
@@ -362,11 +362,12 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
 - **Setting:** `validateDataConsistency`, ADF's name, a literal boolean, default off (ⓕ on typed fields is OR38 #1573).
 - **The check is ADF's for a table:** rows read = rows written + rows skipped. Rows written is the store's own count, the one `rowsWritten` reports (#1270). The skipped rows are both kinds `rowsFailed` counts: a value a column's *If it won't convert* dropped, and a row the sink rejected under *Skip incompatible rows*. It is the condition `COPY_STORE_COUNT_DIFFERS` already warns on (`storeCountAdvisory`), judged as a gate instead of a warning.
 - **When:** after the last batch is written and before COMMIT, inside the write transaction (`verifyBeforeCommit`, run by both sinks). A mismatch fails the copy `permanent` with `Verify after copy failed: the copy read R row(s) and skipped S, so N should have been written, but the store reports K`, and the sink's ROLLBACK unwinds the rows, an Overwrite's or Truncate's emptying, the Pre-copy script and an Auto-create. The failure path reports `rowsWritten: 0` because the sink proved the rollback. If the rollback itself fails, the sink's usual "the rollback FAILED" message and `partialWritePossible` apply, as on any failure. Off, a copy commits exactly as before C6e, and a mismatch is still the `COPY_STORE_COUNT_DIFFERS` warning.
-- **What it catches:** a store that kept a different number of rows than it was sent, such as a trigger's `RAISE(IGNORE)`, a rule, or a conflict clause that discards rows.
+- **What it catches:** a store whose own count of the rows it kept differs from the rows it was sent, such as a trigger's `RAISE(IGNORE)`, an `ON CONFLICT IGNORE` clause, or a PostgreSQL rule. A trigger or rule that discards rows on purpose therefore fails a verified copy, which the field's `?` says.
+- **What it does not catch:** it compares the store's per-statement count, not a recount of the table. A SQLite `ON CONFLICT REPLACE` column reports each insert as one row while the table ends with fewer, so it passes. Recounting the table is not built: on Append it would need a count before and after, and a concurrent writer would make it wrong.
 - **Refused with Upsert,** on the field (`copyVerifyConsistencyIssue`), at the #444 write gate, and by both sinks before a lock or a session (a `${}` Write behaviour that resolves to Upsert is caught there; `VERIFY_CONSISTENCY_UPSERT_REFUSAL`). An Upsert's store count is not the rows it was sent: on SQLite a matched row adds 0 when every mapped column is a key, and a key that is not unique adds one per row it updates; on PostgreSQL `DISTINCT ON` counts a key repeated in a chunk once. A row-count check would fail correct copies. The dock does not draw it under Upsert (`appliesWhen`), unless it holds a value or the Write behaviour is a `${}`.
 - **Deliberate differences from ADF:**
   - ADF checks "after job completes", once the rows have landed. Studio checks before COMMIT, so a failed verification leaves the store as it was.
-  - Not with Upsert (above). ADF does not say.
+  - Not with Upsert (above). ADF's page does not mention Upsert.
   - No session-log line. The failure is the node's error, as for every rows Copy failure (C6a).
 - **Not built here:**
   - **C6e-2:** Files as-is: size and modified time per file, and *Skip inconsistent files* (ADF's `skipErrorFile.dataInconsistency`, only with preserve hierarchy).

@@ -10,7 +10,12 @@ import {
   newCopyCounters,
   type DatasetColumn,
 } from '@autonomy-studio/shared';
-import { runCopyActivity, storeCountAdvisory, type CopyIo } from '../copy.js';
+import {
+  runCopyActivity,
+  storeCountAdvisory,
+  verifyAfterCopyFailure,
+  type CopyIo,
+} from '../copy.js';
 import { DatasetIoError } from '../dataset-io-error.js';
 import { sqliteAdapter } from '../sqlite.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
@@ -1514,5 +1519,31 @@ describe('copy activity — Verify after copy (#1600 OR41 C6e-1)', () => {
       'Verify after copy does not apply to Upsert',
     );
     expect(rowsOf(sinkPath)).toEqual([]);
+  });
+});
+
+describe('verifyAfterCopyFailure — rows read = rows written + rows skipped (C6e-1)', () => {
+  const counters = (rowsRead: number, rowsFailed: number) => ({
+    ...newCopyCounters(),
+    rowsRead,
+    rowsFailed,
+    // A tick, which the verdict must not read: the store's count is handed in.
+    rowsWritten: 999,
+  });
+
+  it('passes when the store kept every row the copy sent', () => {
+    expect(verifyAfterCopyFailure(counters(5, 2), 3)).toBeNull();
+    expect(verifyAfterCopyFailure(counters(0, 0), 0)).toBeNull();
+  });
+
+  it('fails when the store kept fewer, or reports more, than it was sent', () => {
+    expect(verifyAfterCopyFailure(counters(5, 2), 2)).toBe(
+      'Verify after copy failed: the copy read 5 row(s) and skipped 2, so 3 should have been ' +
+        'written, but the store reports 2',
+    );
+    expect(verifyAfterCopyFailure(counters(5, 2), 4)).toBe(
+      'Verify after copy failed: the copy read 5 row(s) and skipped 2, so 3 should have been ' +
+        'written, but the store reports 4',
+    );
   });
 });

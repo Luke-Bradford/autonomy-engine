@@ -557,7 +557,8 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
         title: 'Verify after copy',
         description:
           'Before the copy commits, checks that the rows read equal the rows written plus the ' +
-          'rows skipped. If they differ, the copy fails and nothing is written. Not with Upsert.',
+          'rows skipped. If they differ, the copy fails and is rolled back, so a trigger or rule ' +
+          'that discards rows fails it. Not with Upsert.',
       }),
     })
     .superRefine((cfg, ctx) => {

@@ -9,7 +9,6 @@ import {
   type CopyWriteMode,
   type DatasetKind,
 } from '@autonomy-studio/shared';
-import { verifyBeforeCommit } from './copy-verify.js';
 import { SQLITE_BUSY_TIMEOUT_MS } from '../limits.js';
 import { KeyedQueue } from '../util/keyed-queue.js';
 import { DatasetIoError } from './dataset-io-error.js';
@@ -722,7 +721,9 @@ export async function writeSqliteDatasetRows(
       if (write.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
       // #1600 OR41 C6e-1 — inside the transaction, so a failed check unwinds
       // the rows, an Overwrite's DELETE, the Pre-copy script and an Auto-create.
-      verifyBeforeCommit(write.verifyBeforeCommit, rowsWritten);
+      // Permanent: a retry reads the same rows into the same store.
+      const unverified = write.verifyBeforeCommit?.(rowsWritten) ?? null;
+      if (unverified !== null) throw new DatasetIoError('permanent', unverified);
       db.exec('commit');
     } catch (err) {
       const failure = storeFailure(err, `the copy into '${target.table}' failed`);

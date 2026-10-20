@@ -239,8 +239,9 @@ function rowsSent(counters: CopyCounters): number {
  * the rows Skip incompatible rows let the sink reject.
  */
 export function verifyAfterCopyFailure(counters: CopyCounters, rowsWritten: number): string | null {
+  // The advisory's own test, so the warning and the gate can never disagree.
+  if (storeCountAdvisory({ ...counters, rowsWritten }) === null) return null;
   const sent = rowsSent(counters);
-  if (rowsWritten === sent) return null;
   return (
     `Verify after copy failed: the copy read ${counters.rowsRead} row(s) and skipped ` +
     `${counters.rowsFailed}, so ${sent} should have been written, but the store reports ${rowsWritten}`

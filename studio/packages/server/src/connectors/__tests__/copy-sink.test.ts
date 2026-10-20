@@ -176,6 +176,8 @@ describe('writeRowsToSink dispatch (#1196)', () => {
         writable: true,
       },
     };
+    // #1600 OR41 C6e-1 — the hook reaches the postgres writer too.
+    const seen: number[] = [];
     const result = await writeRowsToSink(
       {
         nullOnError: [],
@@ -188,7 +190,10 @@ describe('writeRowsToSink dispatch (#1196)', () => {
         preCopyScript: null,
         autoCreate: null,
         onRowRejected: null,
-        verifyBeforeCommit: null,
+        verifyBeforeCommit: (n) => {
+          seen.push(n);
+          return null;
+        },
         onBatch: () => {},
         signal: undefined,
         createClient: factory,
@@ -196,6 +201,7 @@ describe('writeRowsToSink dispatch (#1196)', () => {
       oneBatch({ name: 'ada', age: 36 }),
     );
     expect(result).toEqual({ rowsWritten: 1 });
+    expect(seen).toEqual([1]);
     expect(statements).toContain('BEGIN');
     expect(statements.some((s) => s.startsWith('INSERT INTO'))).toBe(true);
     expect(statements).toContain('COMMIT');

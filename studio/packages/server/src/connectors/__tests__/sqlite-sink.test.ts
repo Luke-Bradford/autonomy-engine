@@ -1677,6 +1677,38 @@ describe('Verify after copy (#1600 OR41 C6e-1)', () => {
     ]);
   });
 
+  it('a cancel after the last batch wins over the check, which never runs', async () => {
+    const root = tempRoot();
+    const path = storeWith(root, 'create table sink (id integer, note text);');
+    const controller = new AbortController();
+    async function* thenCancel(): AsyncIterable<readonly Record<string, SinkValue>[]> {
+      yield three();
+      controller.abort();
+    }
+    let ran = false;
+    const err = await failure(
+      writeSqliteDatasetRows(
+        {
+          nullOnError: [],
+          connectionConfig: writableConfig(root, path),
+          datasetKind: 'table',
+          datasetConfig: { table: 'sink' },
+          columns: ['id', 'note'],
+          mode: 'append',
+          signal: controller.signal,
+          verifyBeforeCommit: () => {
+            ran = true;
+            return 'unverified';
+          },
+        },
+        thenCancel(),
+      ),
+    );
+    expect(err.kind).toBe('cancelled');
+    expect(ran).toBe(false);
+    expect(rowsOf(path, 'select id from sink')).toEqual([]);
+  });
+
   it('refuses it with Upsert, before anything is written', async () => {
     const root = tempRoot();
     const path = storeWith(root, 'create table sink (id integer primary key, note text);');
