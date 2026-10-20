@@ -340,7 +340,8 @@ const INLINE_SQL = 'SELECT id FROM orders WHERE region = :region AND load <> :lo
 const SEEDED_HELP_LIMITS: Record<string, number> = {
   // +2 each for #1600 OR41 C3b's Pre-copy script and Batch size (HELP_LIMITS),
   // +1 each for C3c's Table option.
-  // +1 each for #1600 OR41 C6a's Session log (rows), and C6b's (files as-is).
+  // +1 each for #1600 OR41 C6a's Session log (rows); C6b's (Files as-is) took
+  // the folder walk to 17 and the list walk stayed within its 19.
   'Copy data': 13,
   'Copy data (files as-is)': 19,
   'Copy data (files from a folder)': 17,

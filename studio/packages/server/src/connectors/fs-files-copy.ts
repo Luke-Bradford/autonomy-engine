@@ -466,12 +466,15 @@ async function writeTarget(
   log: SessionLog,
 ): Promise<'written' | 'exists'> {
   let read = 0;
+  // Each source's bytes, for its FileRead line.
+  const reads: { rel: string; bytes: number }[] = [];
   const writeInto = async (dst: Awaited<ReturnType<typeof open>>) => {
     for (const s of target.sources) {
       const src = await openSource(s);
       try {
         const bytes = await streamInto(src.fh, dst, signal);
         read += bytes;
+        reads.push({ rel: s.rel, bytes });
         stamps.set(s.abs, stampOf(src.st, bytes));
       } finally {
         await closeQuietly(src.fh);
@@ -493,9 +496,7 @@ async function writeTarget(
   c.filesWritten += 1;
   // Logged beside the counters, once the write has landed, so a line never
   // claims a file the counters do not.
-  for (const s of target.sources) {
-    log.add('Info', 'FileRead', s.rel, `read ${counted(stamps.get(s.abs)!.read, 'byte')}`);
-  }
+  for (const r of reads) log.add('Info', 'FileRead', r.rel, `read ${counted(r.bytes, 'byte')}`);
   const [only] = target.sources;
   log.add(
     'Info',

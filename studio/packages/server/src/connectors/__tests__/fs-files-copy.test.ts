@@ -944,6 +944,23 @@ describe('#1600 C6b — session log', () => {
   });
 
   it.skipIf(process.getuid?.() === 0)(
+    'a skip whose byte comparison fails part-way still logs its line',
+    async () => {
+      await chmod(await put('in/b.txt', 'same b'), 0o000);
+      await put('b.txt', 'same b', dst);
+      const events = await run(
+        { sourcePath: 'in', ifExists: 'skip', afterCopy: 'delete' },
+        { sourceWritable: true },
+      );
+      expect(failure(events)).toBeDefined();
+      expect(logLines(events)).toEqual([
+        "Warning FileSkip b.txt skipped: 'b.txt' already exists and If file exists is Skip",
+      ]);
+      expect(events).toContainEqual({ type: 'output', name: 'filesSkipped', value: 1 });
+    },
+  );
+
+  it.skipIf(process.getuid?.() === 0)(
     'a failure part-way keeps the lines logged, ahead of the counters',
     async () => {
       await put('in/a.txt', 'a');
