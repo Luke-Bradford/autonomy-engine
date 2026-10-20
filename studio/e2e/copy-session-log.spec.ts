@@ -141,6 +141,100 @@ test.describe('#1600 C6 — Copy session log', () => {
   });
 
   /**
+   * #1772 — a long session log's FIRST lines are reachable in the Logs tab:
+   * 250 skipped rows log past one page of 200, and filtering to `sessionLog`
+   * then paging to First shows row 1's skip.
+   */
+  test('a session log longer than one page reads from its first skipped row', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const problems = collectPageProblems(page);
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1772-')));
+    try {
+      const dbPath = join(root, 'shop.db');
+      const db = new DatabaseSync(dbPath);
+      db.exec(`CREATE TABLE incoming (id INTEGER, qty TEXT);
+        CREATE TABLE orders (id INTEGER, qty INTEGER);`);
+      const insert = db.prepare('INSERT INTO incoming VALUES (?, ?)');
+      for (let id = 1; id <= 260; id++) insert.run(id, id <= 250 ? 'lots' : String(id));
+      db.close();
+      const conn = await seedConnection(page, {
+        name: 'e2e 1772 shop',
+        kind: 'sqlite',
+        config: { roots: [root], path: dbPath, writable: true },
+      });
+      const sink = await seedDataset(page, {
+        name: 'e2e 1772 orders',
+        kind: 'table',
+        connectionId: conn,
+        config: { table: 'orders' },
+        columns: [
+          { name: 'id', type: 'integer', nullable: true },
+          { name: 'qty', type: 'integer', nullable: true },
+        ],
+      });
+      const pipelineId = await openSeededCanvas(page, 'e2e 1772 long session log', {
+        nodes: [
+          {
+            id: 'copy1',
+            type: 'copy',
+            config: {
+              logLevel: 'info',
+              mapping: [
+                { source: 'id', sink: 'id', type: 'integer' },
+                { source: 'qty', sink: 'qty', type: 'integer' },
+              ],
+            },
+            connectionIds: { source: conn, sink: conn },
+            datasetIds: { sink },
+            inlineDatasets: { source: { kind: 'table', config: { table: 'incoming' } } },
+            position: { x: 0, y: 0 },
+          },
+        ],
+        edges: [],
+      });
+      const versions = (await (
+        await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+      ).json()) as { id: string; version: number }[];
+      const latest = versions.sort((x, y) => y.version - x.version)[0]!;
+      const runId = await fireAndSettle(page, latest.id, 'e2e 1772');
+      const run = await (await page.request.get(`/api/runs/${encodeURIComponent(runId)}`)).json();
+      expect(run.status, `run: ${JSON.stringify(run)}`).toBe('success');
+
+      await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+      await page.locator('.activity-runs__table .activity-runs__open').first().click();
+      const drawer = page.locator('#run-detail-drawer');
+      await drawer
+        .getByRole('tablist', { name: 'Activity run details' })
+        .getByRole('tab', { name: 'Logs', exact: true })
+        .click();
+      const values = drawer.locator('.node-logs tbody tr td:last-child');
+      // Opens on the newest page, which no longer holds row 1's skip.
+      await expect(values).toHaveCount(200);
+      await expect(values.filter({ hasText: /TabularRowSkip row 1 / })).toHaveCount(0);
+
+      await drawer.getByRole('combobox', { name: 'Name' }).selectOption('sessionLog');
+      const first = drawer.getByRole('button', { name: 'First', exact: true });
+      await first.click();
+      await expect(drawer.locator('.node-logs-controls__range')).toHaveText(
+        /^Lines 1–200 of 2\d\d$/,
+      );
+      await expect(values.first()).toHaveText(/ Warning TabularRowSkip row 1 not_a_number: /);
+      // Every line on the page is the session log's.
+      await expect(drawer.locator('.node-logs tbody tr td:nth-child(2)')).toHaveText(
+        Array<string>(200).fill('sessionLog'),
+      );
+      const box = await first.boundingBox();
+      expect(box, 'First has a box').not.toBeNull();
+      expect(box!.y).toBeGreaterThanOrEqual(0);
+      expect(box!.y + box!.height).toBeLessThanOrEqual(900);
+
+      await expectQuiet(page, problems);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
    * #1600 OR41 C6b — the same Settings tab on Copy · Files as-is, run for real
    * on a file connection: Everything logs each file read and written, and the
    * file If file exists = Skip left in place is a FileSkip with why.
