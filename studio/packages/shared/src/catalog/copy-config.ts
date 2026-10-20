@@ -294,6 +294,21 @@ export function preCopyScriptIssue(config: Record<string, unknown>): string | nu
 }
 
 /**
+ * #1600 OR41 C6d-1 — why Skip incompatible rows cannot apply, or `null`. ADF's
+ * `enableSkipIncompatibleRow` "doesn't apply" with Upsert, and studio's
+ * PostgreSQL Upsert writes each chunk as one set statement, so a rejected row
+ * cannot be told apart from the rest. A `${}` Write behaviour is decided at
+ * dispatch, where the dispatch schema (the same shape) sees the resolved value.
+ * The schema refines on it and the #444 write gate replays it.
+ */
+export function copySkipIncompatibleIssue(config: Record<string, unknown>): string | null {
+  if (config['skipIncompatibleRows'] !== true) return null;
+  const mode = config['mode'] ?? 'append';
+  if (typeof mode === 'string' && interpolationMode(mode).mode !== 'literal') return null;
+  return mode === 'upsert' ? 'Skip incompatible rows does not apply to Upsert, as in ADF' : null;
+}
+
+/**
  * The Key column rules (C3a), as plain data so the schema's `superRefine` and
  * the #444 write gate read ONE declaration — `copyMappingShapeIssues`' shape,
  * for its reason (#1176).
@@ -497,6 +512,18 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
       // level: the run log is the one destination until C6c brings Write to and
       // a log folder, so there is nothing for `sessionLogIssues` to refuse yet.
       logLevel: sessionLogConfigFields.logLevel,
+      // #1600 OR41 C6d-1 — ADF's `enableSkipIncompatibleRow`, Settings · Fault
+      // tolerance. Literal like every boolean today (ⓕ on typed fields is OR38
+      // #1573). Off writes exactly the statements a copy wrote before C6d.
+      skipIncompatibleRows: presented(z.boolean().default(false), {
+        title: 'Skip incompatible rows',
+        description:
+          'A row the sink database rejects (a duplicate key, a NULL in a NOT NULL column, a ' +
+          'failed CHECK or foreign key, a value the column type cannot hold) is skipped and ' +
+          'logged, and the copy goes on. A trigger that rejects a row still fails the copy. ' +
+          'Not with Upsert. Slower when on: SQLite takes a savepoint per row, and PostgreSQL ' +
+          'one per batch, replaying a batch row by row when it holds a rejected row.',
+      }),
     })
     .superRefine((cfg, ctx) => {
       const tableIssue = copyTableOptionIssue(cfg);
@@ -513,6 +540,10 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
           path: ['preCopyScriptParameters'],
           message: 'Pre-copy bind values need a Pre-copy script to bind into',
         });
+      }
+      const skipIssue = copySkipIncompatibleIssue(cfg);
+      if (skipIssue !== null) {
+        ctx.addIssue({ code: 'custom', path: ['skipIncompatibleRows'], message: skipIssue });
       }
       for (const issue of copyKeyColumnIssues(cfg)) {
         ctx.addIssue({

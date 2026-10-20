@@ -601,7 +601,10 @@
 // NO BUMP for #1600 OR41 C6b: Copy · Files as-is's `logLevel`, on the same
 // reasoning. `copyFilesConfigSchema` is not strict either, so a pre-C6b build
 // strips it and copies the same files, losing only the log lines.
-export const CATALOG_VERSION = 58;
+// BUMP 58→59 for #1600 OR41 C6d-1: Copy's Skip incompatible rows. The copy
+// dispatch schema is not strict, so a pre-C6d build would ignore it and FAIL a
+// copy this build finishes, which is an outcome, not only a log line.
+export const CATALOG_VERSION = 59;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the
