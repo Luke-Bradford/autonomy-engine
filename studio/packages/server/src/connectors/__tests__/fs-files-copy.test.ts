@@ -108,6 +108,13 @@ const failure = (events: ActivityEvent[]) => {
   if (ev.type !== 'failed') throw new Error(`expected failed, got ${JSON.stringify(ev)}`);
   return ev;
 };
+/** Each session log line without its timestamp. */
+const logLines = (events: ActivityEvent[]) =>
+  events.flatMap((e) =>
+    e.type === 'output' && e.name === SESSION_LOG_OUTPUT
+      ? [String(e.value).replace(/^\S+ /, '')]
+      : [],
+  );
 
 describe('Copy · Files as-is — selection', () => {
   it('copies a folder by wildcard, into subfolders, preserving the hierarchy', async () => {
@@ -815,14 +822,6 @@ describe('#1600 C1b — a lowered file_copy / file_move runs as the retired type
  * terminal, ahead of a failure's counters.
  */
 describe('#1600 C6b — session log', () => {
-  /** Each line without its timestamp. */
-  const logLines = (events: ActivityEvent[]) =>
-    events.flatMap((e) =>
-      e.type === 'output' && e.name === SESSION_LOG_OUTPUT
-        ? [String(e.value).replace(/^\S+ /, '')]
-        : [],
-    );
-
   it('Everything logs each file read and written, before the success', async () => {
     await put('in/a.txt', 'aaa');
     await put('in/sub/b.txt', 'b');
@@ -990,5 +989,153 @@ describe('#1600 C6b — session log', () => {
     expect(lines[SESSION_LOG_RUN_MAX_LINES]).toBe(
       'Warning SessionLog  2 more lines not kept in the run log',
     );
+  });
+});
+
+/**
+ * #1600 OR41 C6d-2 — fault tolerance on a source of several files (ADF's
+ * `skipErrorFile`, https://learn.microsoft.com/azure/data-factory/copy-activity-fault-tolerance):
+ * Skip forbidden files skips a file or subfolder the connection may not read,
+ * logged as a `FileSkip` and counted when it is a file. The races Skip missing
+ * files covers are in `fs-files-copy-interleave.test.ts`.
+ */
+describe('#1600 C6d-2 — Skip forbidden files', () => {
+  const asRoot = process.getuid?.() === 0;
+
+  it.skipIf(asRoot)('skips and logs a file it may not read, and copies the rest', async () => {
+    await put('in/a.txt', 'a');
+    await chmod(await put('in/b.txt', 'b'), 0o000);
+    const events = await run({ sourcePath: 'in', sinkFolder: 'out', skipForbiddenFiles: true });
+    expect(outputs(events)).toMatchObject({ filesRead: 1, filesWritten: 1, filesSkipped: 1 });
+    expect(await tree(dst)).toEqual(['out/a.txt']);
+    expect(logLines(events)).toEqual([
+      'Warning FileSkip b.txt skipped: permission denied and Skip forbidden files is on',
+    ]);
+  });
+
+  it.skipIf(asRoot)('off, the default, fails on that file', async () => {
+    await put('in/a.txt', 'a');
+    await chmod(await put('in/b.txt', 'b'), 0o000);
+    expect(failure(await run({ sourcePath: 'in' }))).toMatchObject({ kind: 'permanent' });
+  });
+
+  it.skipIf(asRoot)('skips a subfolder it may not list, logged and not counted', async () => {
+    await put('in/a.txt', 'a');
+    await put('in/locked/c.txt', 'c');
+    await chmod(join(src, 'in/locked'), 0o000);
+    try {
+      const events = await run({ sourcePath: 'in', skipForbiddenFiles: true });
+      expect(outputs(events)).toMatchObject({ filesWritten: 1, filesSkipped: 0 });
+      expect(logLines(events)).toEqual([
+        'Warning FileSkip locked skipped: folder permission denied and Skip forbidden files is on',
+      ]);
+      expect(failure(await run({ sourcePath: 'in' }))).toBeDefined();
+    } finally {
+      await chmod(join(src, 'in/locked'), 0o755);
+    }
+  });
+
+  it.skipIf(asRoot)(
+    'a merge leaves the forbidden file out, with the bits of the files it holds',
+    async () => {
+      await chmod(await put('in/a.txt', 'aa'), 0o644);
+      await chmod(await put('in/b.txt', 'b'), 0o000);
+      await chmod(await put('in/c.txt', 'c'), 0o644);
+      const events = await run({
+        sourcePath: 'in',
+        copyBehavior: 'merge',
+        sinkFileName: 'all.txt',
+        skipForbiddenFiles: true,
+        logLevel: 'info',
+      });
+      expect(outputs(events)).toMatchObject({ filesRead: 2, filesWritten: 1, filesSkipped: 1 });
+      expect(await readFile(join(dst, 'all.txt'), 'utf8')).toBe('aac');
+      expect((await stat(join(dst, 'all.txt'))).mode & 0o777).toBe(0o644);
+      expect(logLines(events)).toEqual([
+        'Warning FileSkip b.txt skipped: permission denied and Skip forbidden files is on',
+        'Info FileRead a.txt read 2 bytes',
+        'Info FileRead c.txt read 1 byte',
+        'Info FileWrite all.txt wrote 3 bytes merged from 2 files',
+      ]);
+    },
+  );
+
+  it.skipIf(asRoot)('After copy Delete removes only the files it copied', async () => {
+    await put('in/a.txt', 'a');
+    await chmod(await put('in/b.txt', 'b'), 0o000);
+    const events = await run(
+      { sourcePath: 'in', afterCopy: 'delete', skipForbiddenFiles: true },
+      { sourceWritable: true },
+    );
+    expect(outputs(events)).toMatchObject({ filesDeleted: 1, filesSkipped: 1 });
+    expect(await tree(join(src, 'in'))).toEqual(['b.txt']);
+  });
+
+  it.skipIf(asRoot)('skips a file-list line inside a folder it may not search', async () => {
+    await put('in/a.txt', 'a');
+    await put('in/locked/c.txt', 'c');
+    await put('list.txt', 'a.txt\nlocked/c.txt\n');
+    await chmod(join(src, 'in/locked'), 0o000);
+    try {
+      const cfg = { sourcePath: 'in', pathType: 'list', fileListPath: 'list.txt' };
+      const events = await run({ ...cfg, skipForbiddenFiles: true });
+      expect(outputs(events)).toMatchObject({ filesWritten: 1, filesSkipped: 1 });
+      expect(logLines(events)).toEqual([
+        'Warning FileSkip locked/c.txt skipped: permission denied and Skip forbidden files is on',
+      ]);
+      expect(failure(await run(cfg))).toBeDefined();
+    } finally {
+      await chmod(join(src, 'in/locked'), 0o755);
+    }
+  });
+
+  it.skipIf(asRoot)('skips a forbidden file once when two list lines name it', async () => {
+    await put('in/locked/c.txt', 'c');
+    await put('list.txt', 'locked/c.txt\n./locked/c.txt\n');
+    await chmod(join(src, 'in/locked'), 0o000);
+    try {
+      const events = await run({
+        sourcePath: 'in',
+        pathType: 'list',
+        fileListPath: 'list.txt',
+        skipForbiddenFiles: true,
+      });
+      expect(outputs(events)).toMatchObject({ filesWritten: 0, filesSkipped: 1 });
+      expect(logLines(events)).toHaveLength(1);
+    } finally {
+      await chmod(join(src, 'in/locked'), 0o755);
+    }
+  });
+
+  it.skipIf(asRoot)('never skips the source folder itself', async () => {
+    await put('in/a.txt', 'a');
+    await chmod(join(src, 'in'), 0o000);
+    try {
+      const events = await run({ sourcePath: 'in', skipForbiddenFiles: true });
+      expect(failure(events).error).toContain('EACCES');
+    } finally {
+      await chmod(join(src, 'in'), 0o755);
+    }
+  });
+
+  it.skipIf(asRoot)('If file exists = Skip keeps a source it may not read to compare', async () => {
+    await chmod(await put('in/b.txt', 'b'), 0o000);
+    await put('b.txt', 'b', dst);
+    const events = await run(
+      { sourcePath: 'in', ifExists: 'skip', afterCopy: 'delete', skipForbiddenFiles: true },
+      { sourceWritable: true },
+    );
+    expect(outputs(events)).toMatchObject({ filesSkipped: 1, filesDeleted: 0 });
+    expect(logLines(events)).toEqual([
+      "Warning FileSkip b.txt skipped: 'b.txt' already exists and If file exists is Skip; its source could not be read: permission denied and Skip forbidden files is on",
+    ]);
+    expect(await tree(join(src, 'in'))).toEqual(['b.txt']);
+  });
+
+  it('still refuses a file-list line naming a file that is not there', async () => {
+    await put('in/a.txt', 'a');
+    await put('list.txt', 'a.txt\nnope.txt\n');
+    const events = await run({ sourcePath: 'in', pathType: 'list', fileListPath: 'list.txt' });
+    expect(failure(events).error).toContain("file list path 'nope.txt' does not exist");
   });
 });

@@ -1,4 +1,4 @@
-import { constants as fsConstants, type BigIntStats } from 'node:fs';
+import { constants as fsConstants, type BigIntStats, type Dir } from 'node:fs';
 import {
   link,
   lstat,
@@ -19,8 +19,8 @@ import {
   SessionLog,
   type CopyFilesConfig,
 } from '@autonomy-studio/shared';
-import { failed, sessionLogRunEvents } from './activity-events.js';
-import { O_NOFOLLOW, resolveWithinRoots } from './confine.js';
+import { failed, REMOVED_BY_SOMEONE_ELSE, sessionLogRunEvents } from './activity-events.js';
+import { O_NOFOLLOW, isMissingErrno, resolveWithinRoots } from './confine.js';
 import { fsConnectionConfigSchema } from './fs-connection.js';
 import {
   DEFAULT_MAX_LIST_ENTRIES,
@@ -101,6 +101,17 @@ import { FS_STREAM_CHUNK_BYTES } from '../limits.js';
  * match; Warnings logs each `FileSkip`, with why. The After copy delete or move
  * is not an operation of ADF's copy log, and the counters report it. No Error
  * line: the node's error names the file a copy failed on.
+ *
+ * FAULT TOLERANCE (#1600 OR41 C6d-2, catalogue §4.1; ADF's `skipErrorFile`).
+ * On a source of several files (a folder or a file list), *Skip missing files*
+ * (on by default) skips a file or subfolder removed by someone else during the
+ * copy, and *Skip forbidden files* (off by default) one the connection may not
+ * read or list. Each is a `FileSkip` line, and a skipped file is counted in
+ * `filesSkipped`; a skipped subfolder is not, since its files were never seen.
+ * A skipped source is never written, deleted or moved. One file always fails,
+ * as in ADF, and so does a file-list line naming a file that is not there (the
+ * author's mistake, not a race). Only the source's own open, listing or stat is
+ * skipped: a sink failure, a source replaced by another file, and an abort fail.
  */
 
 type FsConfig = z.infer<typeof fsConnectionConfigSchema>;
@@ -131,6 +142,35 @@ interface PlannedDir {
 }
 
 class Refusal extends Error {}
+
+/** #1600 C6d-2 — why a source is skipped rather than failing the copy. */
+type SkipWhy = 'missing' | 'forbidden';
+/** Classifies a source's open, listing or stat error: a skip, or `undefined` to fail. */
+type Skips = (err: unknown) => SkipWhy | undefined;
+
+const FORBIDDEN_ERRNOS: ReadonlySet<string> = new Set(['EACCES', 'EPERM']);
+
+/** The `FileSkip` message's reason. The missing one is Delete's. */
+const SKIP_WHY: Record<SkipWhy, string> = {
+  missing: `${REMOVED_BY_SOMEONE_ELSE} and Skip missing files is on`,
+  forbidden: 'permission denied and Skip forbidden files is on',
+};
+
+/** ADF's rule: only a source of several files skips one; one file fails. */
+function skipsFor(cfg: CopyFilesConfig, signal: AbortSignal): Skips {
+  return (err) => {
+    if (cfg.pathType === 'file' || signal.aborted) return undefined;
+    if (cfg.skipMissingFiles && isMissingErrno(err)) return 'missing';
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (cfg.skipForbiddenFiles && code !== undefined && FORBIDDEN_ERRNOS.has(code)) {
+      return 'forbidden';
+    }
+    return undefined;
+  };
+}
+
+/** Logs a skip, counting it when it is a file. */
+type OnSkip = (rel: string, why: SkipWhy, folder: boolean) => void;
 
 function refuse(message: string): never {
   throw new Refusal(message);
@@ -328,6 +368,8 @@ async function selectSources(
   source: FsConfig,
   contains: (mtimeMs: number) => boolean,
   signal: AbortSignal,
+  skips: Skips,
+  onSkip: OnSkip,
 ): Promise<{ root: string; files: SourceFile[] }> {
   const cap = source.maxEntries ?? DEFAULT_MAX_LIST_ENTRIES;
   const root = await confined(source.roots, cfg.sourcePath);
@@ -353,7 +395,16 @@ async function selectSources(
     const pending: string[] = [''];
     while (pending.length > 0) {
       const relDir = pending.pop()!;
-      const dir = await opendir(join(root, relDir));
+      let dir: Dir;
+      try {
+        dir = await opendir(join(root, relDir));
+      } catch (err) {
+        // A subfolder, never the source path itself, which has nothing to copy.
+        const why = relDir === '' ? undefined : skips(err);
+        if (why === undefined) throw err;
+        onSkip(relDir, why, true);
+        continue;
+      }
       try {
         for (;;) {
           if (signal.aborted) throw new Error('file copy aborted');
@@ -371,7 +422,16 @@ async function selectSources(
             if (cfg.recursive) pending.push(rel);
           } else if (d.isFile() && matches(d.name)) {
             const abs = join(root, rel);
-            take(abs, rel, await lstat(abs, { bigint: true }));
+            let st: BigIntStats;
+            try {
+              st = await lstat(abs, { bigint: true });
+            } catch (err) {
+              const why = skips(err);
+              if (why === undefined) throw err;
+              onSkip(rel, why, false);
+              continue;
+            }
+            take(abs, rel, st);
           }
         }
       } finally {
@@ -405,13 +465,28 @@ async function selectSources(
     // Two lines naming one file (`a.txt`, `./a.txt`) copy it once: a merge
     // would write it twice, and a delete after copy would fail on the second.
     const named = new Set<string>();
+    const skippedLines = new Set<string>();
     for (const line of lines) {
       const segments = segmentsBelow(root, line, 'file list path');
-      const abs = await confined(source.roots, join(root, ...segments));
-      // `resolveWithinRoots` canonicalises the parent, so a symlinked folder in
-      // the line could still land elsewhere in the roots. Hold it to the source.
-      if (!within(root, abs)) refuse(`file list path '${line}' leaves the source path`);
-      const st = await lstatOrNull(abs);
+      let abs: string;
+      let st: BigIntStats | null;
+      try {
+        abs = await confined(source.roots, join(root, ...segments));
+        // `resolveWithinRoots` canonicalises the parent, so a symlinked folder in
+        // the line could still land elsewhere in the roots. Hold it to the source.
+        if (!within(root, abs)) refuse(`file list path '${line}' leaves the source path`);
+        st = await lstatOrNull(abs);
+      } catch (err) {
+        // Only a forbidden line is skipped while planning. A line naming a file
+        // that is not there is refused below: it is the author's, not a race.
+        if (skips(err) !== 'forbidden') throw err;
+        // Two lines naming it (`a/b.txt`, `./a/b.txt`) skip it once, as they
+        // would copy it once.
+        const rel = join(...segments);
+        if (!skippedLines.has(rel)) onSkip(rel, 'forbidden', false);
+        skippedLines.add(rel);
+        continue;
+      }
       if (st === null) refuse(`file list path '${line}' does not exist`);
       if (!st!.isFile()) refuse(`file list path '${line}' is not a file`);
       if (named.has(abs)) continue;
@@ -464,13 +539,33 @@ async function writeTarget(
   c: Counters,
   stamps: Map<string, ReadStamp>,
   log: SessionLog,
-): Promise<'written' | 'exists'> {
+  openOrSkip: (s: SourceFile) => Promise<OpenedSource | undefined>,
+): Promise<'written' | 'exists' | 'skipped'> {
   let read = 0;
   // Each source's bytes, for its FileRead line.
   const reads: { rel: string; bytes: number }[] = [];
+  // #1600 C6d-2 — a merge first opens each source and closes it again, so a
+  // skipped one is known before the file's bits are set from the files it
+  // holds. One lost to a race after that is skipped too, leaving the merge's
+  // bits narrower than they need be, never wider.
+  let sources = target.sources;
+  if (sources.length > 1) {
+    const kept: SourceFile[] = [];
+    for (const s of sources) {
+      const probe = await openOrSkip(s);
+      if (probe === undefined) continue;
+      await closeQuietly(probe.fh);
+      kept.push(s);
+    }
+    sources = kept;
+  }
+  if (sources.length === 0) return 'skipped';
+  // Set when every source was skipped mid-write: no file is landed then.
+  let nothingRead = false;
   const writeInto = async (dst: Awaited<ReturnType<typeof open>>) => {
-    for (const s of target.sources) {
-      const src = await openSource(s);
+    for (const s of sources) {
+      const src = await openOrSkip(s);
+      if (src === undefined) continue;
       try {
         const bytes = await streamInto(src.fh, dst, signal);
         read += bytes;
@@ -480,17 +575,23 @@ async function writeTarget(
         await closeQuietly(src.fh);
       }
     }
+    if (reads.length === 0) {
+      // Thrown so `atomicReplace` removes the temp rather than land an empty file.
+      nothingRead = true;
+      throw new Error('every source was skipped');
+    }
   };
   // The copy keeps its source's permission bits; a merge keeps the bits every
   // source shares, so it is never more open than any file it holds.
-  const mode = target.sources.reduce((m, s) => m & s.mode, 0o777);
+  const mode = sources.reduce((m, s) => m & s.mode, 0o777);
   const result = await atomicReplace(finalPath, tmpSuffix, signal, writeInto, {
     noClobber,
     mode,
   });
+  if (nothingRead) return 'skipped';
   if (result === TARGET_EXISTS) return 'exists';
   if (result !== undefined) throw new EventFailure(result);
-  c.filesRead += target.sources.length;
+  c.filesRead += reads.length;
   c.bytesRead += read;
   c.bytesWritten += read;
   c.filesWritten += 1;
@@ -504,14 +605,30 @@ async function writeTarget(
     sinkRel(target),
     target.sources.length === 1 && only !== undefined
       ? `wrote ${counted(read, 'byte')} from '${only.rel}'`
-      : `wrote ${counted(read, 'byte')} merged from ${counted(target.sources.length, 'file')}`,
+      : `wrote ${counted(read, 'byte')} merged from ${counted(reads.length, 'file')}`,
   );
   return 'written';
 }
 
-/** Open a planned source, refusing one that is no longer the file the plan saw. */
-async function openSource(s: SourceFile): Promise<{ fh: FileHandle; st: BigIntStats }> {
-  const fh = await open(s.abs, fsConstants.O_RDONLY | O_NOFOLLOW);
+interface OpenedSource {
+  readonly fh: FileHandle;
+  readonly st: BigIntStats;
+}
+
+/**
+ * Open a planned source, refusing one that is no longer the file the plan saw.
+ * Only the open's own error can be a skip (C6d-2): `skips` says why, and the
+ * reason is returned. A replaced file is refused, never skipped.
+ */
+async function openSource(s: SourceFile, skips: Skips): Promise<OpenedSource | SkipWhy> {
+  let fh: FileHandle;
+  try {
+    fh = await open(s.abs, fsConstants.O_RDONLY | O_NOFOLLOW);
+  } catch (err) {
+    const why = skips(err);
+    if (why === undefined) throw err;
+    return why;
+  }
   try {
     const st = await fh.stat({ bigint: true });
     if (!st.isFile()) refuse(`source '${s.abs}' is no longer a regular file`);
@@ -531,8 +648,9 @@ function stampOf(st: BigIntStats, read: number): ReadStamp {
 
 /**
  * True when the regular file at `targetPath` holds exactly the bytes of the
- * source `s`. Stamps the source from this read, as a copy would, so After copy
- * can check it is still the file that was compared. Size first; a same-size
+ * source `s`, or why the source was skipped instead (C6d-2). Stamps the
+ * source from this read, as a copy would, so After copy can check it is still
+ * the file that was compared. Size first; a same-size
  * pair is read in chunks, never whole.
  */
 async function alreadyCopied(
@@ -540,7 +658,8 @@ async function alreadyCopied(
   targetPath: string,
   signal: AbortSignal,
   stamps: Map<string, ReadStamp>,
-): Promise<boolean> {
+  skips: Skips,
+): Promise<boolean | SkipWhy> {
   let dst: FileHandle;
   try {
     // O_NONBLOCK: a FIFO standing at the target must not block the open.
@@ -551,11 +670,14 @@ async function alreadyCopied(
     if (NOT_COMPARABLE.has((err as NodeJS.ErrnoException).code ?? '')) return false;
     throw err;
   }
-  let src: Awaited<ReturnType<typeof openSource>> | undefined;
+  let src: OpenedSource | undefined;
   try {
     const dstSt = await dst.stat({ bigint: true });
     if (!dstSt.isFile()) return false;
-    src = await openSource(s);
+    const opened = await openSource(s, skips);
+    // C6d-2 — the source went, or cannot be read: not compared, so not removed.
+    if (typeof opened === 'string') return opened;
+    src = opened;
     if (dstSt.size !== src.st.size) return false;
     const a = Buffer.allocUnsafe(FS_STREAM_CHUNK_BYTES);
     const b = Buffer.allocUnsafe(FS_STREAM_CHUNK_BYTES);
@@ -701,11 +823,33 @@ export async function* runFilesCopy(
   // Capped as it is kept, as a rows Copy's is (C6a): a folder can hold more
   // files than the run log shows lines.
   const log = new SessionLog(cfg.logLevel, undefined, { keepAtMost: SESSION_LOG_RUN_MAX_LINES });
+  // #1600 C6d-2 — the sources skipped as missing or forbidden: never written,
+  // deleted, moved or counted again.
+  const skips = skipsFor(cfg, signal);
+  const gone = new Set<string>();
+  const onSkip: OnSkip = (rel, why, folder) => {
+    if (!folder) c.filesSkipped += 1;
+    log.add('Warning', 'FileSkip', rel, `skipped: ${folder ? 'folder ' : ''}${SKIP_WHY[why]}`);
+  };
+  const openOrSkip = async (s: SourceFile): Promise<OpenedSource | undefined> => {
+    const opened = await openSource(s, skips);
+    if (typeof opened !== 'string') return opened;
+    gone.add(s.abs);
+    onSkip(s.rel, opened, false);
+    return undefined;
+  };
   let started = false;
   let where: CopyPaths | undefined;
   try {
     // ── Plan ────────────────────────────────────────────────────────────
-    const { root, files } = await selectSources(cfg, source, window.contains, signal);
+    const { root, files } = await selectSources(
+      cfg,
+      source,
+      window.contains,
+      signal,
+      skips,
+      onSkip,
+    );
     const sinkDir = await planDir(sink.roots, cfg.sinkFolder);
     const targets = planTargets(cfg, sinkDir.path, files);
     // Named as `planTargets` names them, so `dest` is known when nothing is selected too.
@@ -784,8 +928,10 @@ export async function* runFilesCopy(
         );
       }
     }
-    // Nothing selected: a success that creates no folders.
+    // Nothing selected: a success that creates no folders. Its lines are the
+    // skips made while selecting (C6d-2).
     if (targets.length === 0) {
+      yield* sessionLogRunEvents(log, { folderHint: false });
       yield { type: 'succeeded', outputs: outputsOf(c, where) };
       return;
     }
@@ -813,11 +959,13 @@ export async function* runFilesCopy(
       // copied, so a retry removes the source an earlier attempt left behind.
       // `why` is how the target came to be there, for the FileSkip lines.
       const skip = async (why: string) => {
-        c.filesSkipped += t.sources.length;
+        // A merge's sources skipped as missing or forbidden were counted then.
+        const left = t.sources.filter((s) => !gone.has(s.abs));
+        c.filesSkipped += left.length;
         const skipped = `skipped: '${sinkRel(t)}' ${why} and If file exists is Skip`;
         const [only] = t.sources;
         if (cfg.afterCopy === 'keep' || t.sources.length !== 1 || only === undefined) {
-          for (const s of t.sources) {
+          for (const s of left) {
             log.add(
               'Warning',
               'FileSkip',
@@ -828,9 +976,9 @@ export async function* runFilesCopy(
           return false;
         }
         // Logged even when the comparison throws, so the counted skip has its line.
-        let copied: boolean | undefined;
+        let copied: boolean | SkipWhy | undefined;
         try {
-          copied = await alreadyCopied(only, finalPath, signal, stamps);
+          copied = await alreadyCopied(only, finalPath, signal, stamps, skips);
         } finally {
           log.add(
             'Warning',
@@ -838,12 +986,14 @@ export async function* runFilesCopy(
             only.rel,
             copied === undefined
               ? skipped
-              : copied
+              : copied === true
                 ? `${skipped}; it holds this file's bytes, so After copy still applies`
-                : `${skipped}; the source is kept`,
+                : copied === false
+                  ? `${skipped}; the source is kept`
+                  : `${skipped}; its source could not be read: ${SKIP_WHY[copied]}`,
           );
         }
-        return copied;
+        return copied === true;
       };
       if (cfg.ifExists === 'skip' && (await lstatOrNull(finalPath)) !== null) {
         if (!(await skip('already exists'))) continue;
@@ -857,7 +1007,9 @@ export async function* runFilesCopy(
           c,
           stamps,
           log,
+          openOrSkip,
         );
+        if (outcome === 'skipped') continue;
         if (outcome === 'exists') {
           if (cfg.ifExists === 'fail')
             refuse(`'${finalPath}' appeared during the copy and If file exists is Fail`);
@@ -872,6 +1024,8 @@ export async function* runFilesCopy(
         await flush();
       }
       for (const s of t.sources) {
+        // A merge source skipped as missing or forbidden was never copied.
+        if (gone.has(s.abs)) continue;
         if (cfg.afterCopy !== 'keep') await unchangedSince(s, stamps.get(s.abs));
         if (cfg.afterCopy === 'delete') {
           await unlink(s.abs);
@@ -905,7 +1059,8 @@ export async function* runFilesCopy(
   } catch (err) {
     // The lines logged so far, ahead of the counters, as a rows Copy's are.
     yield* sessionLogRunEvents(log, { folderHint: false });
-    if (started) {
+    // A skip made while selecting is counted, so its line has its counter.
+    if (started || c.filesSkipped > 0) {
       for (const [name, value] of Object.entries(outputsOf(c, where)))
         yield { type: 'output', name, value };
     }

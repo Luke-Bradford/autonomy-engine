@@ -112,6 +112,20 @@ export const copyFilesConfigSchema = z
         fail: 'Fail',
       }),
     }),
+    // #1600 OR41 C6d-2 — ADF's `skipErrorFile.fileMissing` and `.fileForbidden`,
+    // Settings · Fault tolerance, with ADF's defaults. As in ADF they apply only
+    // when the source names several files (a folder or a file list); one file
+    // fails whatever they say. Literal, like every boolean today (OR38 #1573).
+    skipMissingFiles: presented(z.boolean().default(true), {
+      title: 'Skip missing files',
+      description:
+        'Folder or file list only. Skips and logs a file or subfolder removed by someone else during the copy, instead of failing. A file-list line naming a file that is not there still fails.',
+    }),
+    skipForbiddenFiles: presented(z.boolean().default(false), {
+      title: 'Skip forbidden files',
+      description:
+        'Folder or file list only. Skips and logs a file or subfolder the connection is not permitted to read, instead of failing.',
+    }),
     // #1600 OR41 C6b — the Settings tab's Session log, a rows Copy's field (C6a).
     // Only the level: the run log is the one destination until C6c.
     logLevel: sessionLogConfigFields.logLevel,
@@ -141,6 +155,15 @@ export const copyFilesConfigSchema = z
     }
     if (cfg.afterCopy !== 'move' && cfg.moveTo !== undefined) {
       issue('moveTo', 'a move-to folder is only used when After copy is Move source to');
+    }
+    // C6d-2 — Skip missing files is on by default, so it cannot be told apart
+    // here; Skip forbidden files is off by default, so asking for it on one file
+    // is a request the copy would not honour.
+    if (cfg.pathType === 'file' && cfg.skipForbiddenFiles) {
+      issue(
+        'skipForbiddenFiles',
+        'skipping a forbidden file needs a folder or a file list; one file fails instead',
+      );
     }
     if (cfg.copyBehavior === 'merge') {
       if (cfg.pathType === 'file') {

@@ -346,8 +346,11 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   // the folder walk to 17 and the list walk stayed within its 19.
   // +1 each for C6d-1's Skip incompatible rows (rows only).
   'Copy data': 14,
-  'Copy data (files as-is)': 19,
-  'Copy data (files from a folder)': 17,
+  // #1600 OR41 C6d-2's Skip missing files and Skip forbidden files add two `?`s
+  // to each walk, measured: the list walk reads 20 (its limit had been one above
+  // its count), the folder walk 19.
+  'Copy data (files as-is)': 20,
+  'Copy data (files from a folder)': 19,
   // +1 for C1q-c's Query timeout, a new field whose `?` says blank means no limit.
   'Copy data (inline query)': 18,
   // #1600 OR41 C9a — Delete with every setting showing: the 14 above and

@@ -275,7 +275,7 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
 - **Not built here:**
   - **C6b:** files-as-is lines: `FileRead`, `FileWrite` and `FileSkip` (built, below).
   - **C6c:** *Write to* a folder, which needs a log connection binding of its own. A database-to-database copy has no file system connection, and ADF's `logLocationSettings` names a linked service. C6c also brings `logPath`, an appending writer and *Mode* Best effort · Reliable.
-  - **C6d:** fault tolerance: **C6d-1** the rows the sink rejects (built, below); **C6d-2** a files-as-is Copy's *Skip missing files* and *Skip forbidden files*.
+  - **C6d:** fault tolerance: **C6d-1** the rows the sink rejects (built, below); **C6d-2** a files-as-is Copy's *Skip missing files* and *Skip forbidden files* (built, below).
   - **C6e:** consistency.
   - **C6f:** parallelism and the complete outputs.
 
@@ -294,7 +294,7 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
 - **No Error line**, as on a rows Copy. Here the reason is that the node's error names the file the copy failed on.
 - **The run-log loop is one helper.** Delete, a rows Copy and a files Copy now yield their lines through `sessionLogRunEvents` (`connectors/activity-events.ts`), rather than three copies of the loop.
 - No new output and no `CATALOG_VERSION` bump: `copyFilesConfigSchema` is not strict, so a pre-C6b build strips `logLevel` and copies the same files (the ledger's no-bump entry). A lowered `file_copy` or `file_move` gets the default but always overwrites, so it never skips and logs nothing.
-- **Not built here:** `FileSkip` for missing or forbidden files, which is fault tolerance (C6d-2). A line holding a space or a newline in a file name is ambiguous in the run log's space-separated form, as Delete's is; C6c's CSV file is the unambiguous form.
+- **Not built here:** `FileSkip` for missing or forbidden files, which is fault tolerance (C6d-2, built below). A line holding a space or a newline in a file name is ambiguous in the run log's space-separated form, as Delete's is; C6c's CSV file is the unambiguous form.
 
 **Built (C6d-1, 2026-10-20):** a rows Copy's *Skip incompatible rows*, the Settings tab's first field, before the Session log as in ADF ([fault tolerance](https://learn.microsoft.com/azure/data-factory/copy-activity-fault-tolerance): `enableSkipIncompatibleRow`, default false).
 - **Setting:** `skipIncompatibleRows`, a literal boolean, default off (ⓕ on typed fields is OR38 #1573). Save refuses it with Upsert (`copySkipIncompatibleIssue`, on the field and at the #444 write gate), because ADF's "doesn't apply" with Upsert and studio's PostgreSQL Upsert writes each chunk as one set statement. A `${}` Write behaviour is left to dispatch, where the dispatch schema sees the resolved value. The dock does not draw it under Upsert (`appliesWhen`), unless it holds a value or the Write behaviour is a `${}` (UI standard rule 3). Both sinks refuse it with Upsert too, before any lock is taken, which is where a `${}` mode that resolved to Upsert is caught (`SKIP_INCOMPATIBLE_UPSERT_REFUSAL`, one sentence for all three).
@@ -332,6 +332,31 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
   - The skipped row is logged by its number, not its content.
   - Triggers' rejections are not skipped.
 - `CATALOG_VERSION` 58→59: a pre-C6d build ignores the key and fails a copy this build finishes.
+
+**Built (C6d-2, 2026-10-20):** a files-as-is Copy's *Skip missing files* and *Skip forbidden files*, the Settings tab's first two fields, before the Session log ([fault tolerance](https://learn.microsoft.com/azure/data-factory/copy-activity-fault-tolerance), "Copying binary files": `skipErrorFile.fileMissing`, default true, and `.fileForbidden`, default false).
+- **Settings:** `skipMissingFiles` (on) and `skipForbiddenFiles` (off), literal booleans with ADF's defaults. As in ADF they apply only to a source of several files: a Folder (with or without a wildcard) or a File list. One file fails whatever they say. The dock draws them only for those path types (`appliesWhen`), and save refuses *Skip forbidden files* on one file. *Skip missing files* on one file cannot be refused, because it is the default and a default cannot be told from a choice. A saved Folder or File list Copy has neither key, so it now reads with *Skip missing files* on: a file removed during its copy is skipped with a warning where it used to fail the copy, as in ADF.
+- **What is skipped:**
+  - *Missing:* a file or subfolder removed by someone else after the copy chose it (`ENOENT` or `ENOTDIR`). That is a file gone between the folder's listing and its stat, a subfolder gone before it is listed, or a source gone before it is opened, including before *If file exists* = Skip compares it.
+  - *Forbidden:* a file the connection may not open, a subfolder it may not list, or a file-list line in a folder it may not search (`EACCES` or `EPERM`).
+  - Only the source's own open, listing or stat. A sink failure, a source replaced by another file, a symlink and an abort still fail.
+- **How it is reported:**
+  - A *Warning* `FileSkip` line. The item is the file's path under the source path (for a file-list line, the line as written, normalised), and the message is `skipped: removed by someone else and Skip missing files is on` (Delete's wording) or `skipped: permission denied and Skip forbidden files is on`.
+  - A skipped subfolder's line says `folder`. It is not counted in `filesSkipped`, because its files were never seen.
+  - Under *If file exists* = Skip, the compared target's one line adds `; its source could not be read: <reason>`, and the file is counted once.
+  - Two file-list lines naming one forbidden file skip it once, as they would copy it once.
+  - Skips made while selecting are counted beside a later plan refusal too, so a line never claims a file the counters do not.
+- **A skipped source is never written, deleted or moved.**
+  - No file is landed for a target whose sources were all skipped, so a missing source never becomes an empty copy.
+  - A merge opens each source and closes it again before it writes, so the merged file's bits are those of the files it holds. A source lost to a race after that is left out too, and the bits are then narrower than they need be, never wider.
+  - After copy leaves a skipped source where it is.
+- **Deliberate differences from ADF:**
+  - **A file-list line naming a file that is not there still fails** (`file list path '…' does not exist`). ADF's *fileMissing* is for files "being deleted by other applications" during the copy. A line that names nothing is the author's mistake, and skipping it by default would hide a typo.
+  - The message is the reason, not the underlying error.
+  - A file is skipped only before it is read, at its open, listing or stat. ADF can skip one part-way ("skipped after read N bytes"); here an error mid-read fails the copy, which leaves no partial file to explain.
+  - ADF lists File System among the stores for *fileMissing* but not *fileForbidden*. Studio's file connection offers both.
+  - *Skip missing files* and *Skip forbidden files* are one switch each, not ADF's `skipErrorFile` object. *Data inconsistency* waits for C6e, and *Invalid file name* applies only to ADLS Gen2 and S3, which studio does not have.
+- **Residual:** a preserve-hierarchy copy whose only file in a subfolder is skipped as it is opened leaves that subfolder empty in the sink, because the folders are made before the file is opened (#1777).
+- `CATALOG_VERSION` 59→60: a pre-C6d-2 build strips both keys and fails a copy this build finishes.
 
 ### 4.2 Lookup
 Source: [Lookup](https://learn.microsoft.com/azure/data-factory/control-flow-lookup-activity).
@@ -808,7 +833,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C3 | Copy: database sink. Truncate, upsert (keys), auto-create from mapping, pre-copy script, batch size. Split: **C3a** Write behaviour Truncate then insert and Upsert with Key columns (built); **C3b** Pre-copy script and Batch size (built); **C3c** *Auto-create from mapping* (built) | OR15 upsert/auto-create |
 | C4 | Copy: mapping redesign (x → y rows from imported schemas, map-by-name default, type conversion settings, ƒx whole mapping, additional columns) | depends on OR10 import |
 | C5 | Copy: incremental (watermark Automatic / Expression; files modified-since-last-success) | OR15 incremental |
-| C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs. Split: **C6a** the session log of a rows Copy, to the run log (built); **C6b** files-as-is lines (built); **C6c** Write to a folder on a log connection, `logPath`, Mode; **C6d-1** Skip incompatible rows, the rows the sink rejects (built); **C6d-2** Skip missing and forbidden files; **C6e** consistency; **C6f** parallelism and complete outputs | — |
+| C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs. Split: **C6a** the session log of a rows Copy, to the run log (built); **C6b** files-as-is lines (built); **C6c** Write to a folder on a log connection, `logPath`, Mode; **C6d-1** Skip incompatible rows, the rows the sink rejects (built); **C6d-2** Skip missing and forbidden files (built); **C6e** consistency; **C6f** parallelism and complete outputs | — |
 | C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Rows · Whole file as text (`file_read` as Lookup's second type), the title *Lookup* (built); **C7c** *When over the limit* and `bytes`/`truncated` for the text mode, limited by the connection's `maxBytes` rather than the 1 MiB byte cap (built); **C7d** the workspace Lookup max rows (1000 by default, up to ADF's 5000) and the Monitor Rows read column (built) | — |
 | C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c-1** tables (SQLite, Postgres) with per-kind field options (built); **C8c-2** a delimited or Excel dataset source's structure and column count (built); **C8d-1** Wait until on a file system path (built); **C8d-2a** Wait until on a delimited or Excel dataset, with #1743 (built); **C8d-2b** Wait until on a table dataset (built); **C8e** Include subfolders (built) | OR17 #1408 |
 | C9 | Delete: wildcard, folders, dates, log. Lower file_delete. Split: **C9a** the `delete` type on a file system connection, with path type, wildcard, Include subfolders, modified window, Max concurrent deletes, Fail if nothing matched and Delete empty folders, on Get metadata's walk (built); **C9b** the `file_delete` lowering (Path type File, Fail if nothing matched on, `path` kept), Delete file retired from the palette (built); **C9c** the session log and `logPath` (a new output, so a `formerOutputs` snapshot and a version bump), shared with Copy's (built) | OR17 #1408 |

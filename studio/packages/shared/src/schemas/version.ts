@@ -604,7 +604,11 @@
 // BUMP 58→59 for #1600 OR41 C6d-1: Copy's Skip incompatible rows. The copy
 // dispatch schema is not strict, so a pre-C6d build would ignore it and FAIL a
 // copy this build finishes, which is an outcome, not only a log line.
-export const CATALOG_VERSION = 59;
+// BUMP 59→60 for #1600 OR41 C6d-2: Copy · Files as-is's Skip missing files
+// (on by default) and Skip forbidden files. `copyFilesConfigSchema` is not
+// strict, so a pre-C6d-2 build would strip them and FAIL a copy this build
+// finishes, which is an outcome, not only a log line.
+export const CATALOG_VERSION = 60;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

@@ -19,6 +19,8 @@ describe('copy_files config', () => {
       afterCopy: 'keep',
       copyBehavior: 'preserve',
       ifExists: 'overwrite',
+      skipMissingFiles: true,
+      skipForbiddenFiles: false,
       logLevel: 'warning',
     });
     expect(issues({})).toEqual([expect.stringMatching(/^sourcePath: /)]);
@@ -106,15 +108,17 @@ describe('copy_files appliesWhen (#1686)', () => {
   // The dock's view rule must agree with the schema's cross-field checks: over
   // every combination of the three controls, a field the schema refuses is one
   // the dock leaves out, and one it needs is one the dock draws. Include
-  // subfolders is left out of the comparison: it has a default, so the schema
-  // cannot tell it set from left (the superRefine's own note).
+  // subfolders and Skip missing files are left out of the comparison: each
+  // defaults to on, so the schema cannot tell it set from left (the
+  // superRefine's own note).
   const entry = getActivity(COPY_FILES_ACTIVITY_TYPE);
   const rules = entry?.appliesWhen ?? {};
-  const held: Record<string, string> = {
+  const held: Record<string, unknown> = {
     wildcard: '*.csv',
     fileListPath: 'list.txt',
     moveTo: 'done',
     sinkFileName: 'all.csv',
+    skipForbiddenFiles: true,
   };
   const combos = (['file', 'folder', 'list'] as const).flatMap((pathType) =>
     (['keep', 'delete', 'move'] as const).flatMap((afterCopy) =>
@@ -133,7 +137,9 @@ describe('copy_files appliesWhen (#1686)', () => {
     issues(config).some((i) => i.startsWith(`${name}:`));
 
   it('covers every conditional field', () => {
-    expect(Object.keys(rules).sort()).toEqual([...Object.keys(held), 'recursive'].sort());
+    expect(Object.keys(rules).sort()).toEqual(
+      [...Object.keys(held), 'recursive', 'skipMissingFiles'].sort(),
+    );
   });
 
   it.each(Object.keys(held))('%s is drawn exactly where the schema accepts it', (name) => {
@@ -159,6 +165,30 @@ describe('copy_files session log (#1600 OR41 C6b)', () => {
   it('is drawn on the Settings tab, after Sink, as on a rows Copy', () => {
     const tabs = getActivity(COPY_FILES_ACTIVITY_TYPE)!.tabs!;
     expect(tabs.map((t) => t.key)).toEqual(['source', 'sink', 'settings']);
-    expect(tabs[2]!.fields).toEqual(['logLevel']);
+    expect(tabs[2]!.fields).toEqual(['skipMissingFiles', 'skipForbiddenFiles', 'logLevel']);
+  });
+});
+
+describe('copy_files fault tolerance (#1600 OR41 C6d-2)', () => {
+  it('skips missing files and not forbidden ones by default, as in ADF', () => {
+    const cfg = copyFilesConfigSchema.parse({ sourcePath: 'in' });
+    expect(cfg.skipMissingFiles).toBe(true);
+    expect(cfg.skipForbiddenFiles).toBe(false);
+  });
+
+  it('refuses Skip forbidden files on one file, which fails whatever it says', () => {
+    expect(issues({ sourcePath: 'a.txt', pathType: 'file', skipForbiddenFiles: true })).toEqual([
+      'skipForbiddenFiles: skipping a forbidden file needs a folder or a file list; one file fails instead',
+    ]);
+    expect(issues({ sourcePath: 'in', skipForbiddenFiles: true })).toEqual([]);
+    expect(
+      issues({
+        sourcePath: 'in',
+        pathType: 'list',
+        fileListPath: 'l.txt',
+        skipForbiddenFiles: true,
+      }),
+    ).toEqual([]);
+    expect(issues({ sourcePath: 'a.txt', pathType: 'file', skipMissingFiles: false })).toEqual([]);
   });
 });

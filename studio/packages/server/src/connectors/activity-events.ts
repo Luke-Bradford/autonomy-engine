@@ -23,6 +23,12 @@ export function failed(kind: ConnectorErrorKind, error: string): ActivityEvent {
 }
 
 /**
+ * #1600 OR41 C6d-2 — the session log's reason for an item someone else removed
+ * while the activity ran: Delete's skip and Copy's *Skip missing files*.
+ */
+export const REMOVED_BY_SOMEONE_ELSE = 'removed by someone else';
+
+/**
  * #1600 OR41 C8d — a Get metadata *Wait until* that does not hold yet: check
  * again after the node's *Check every*. Shared by the path and the table halves
  * (C8d-2b) so the two answer it in one shape.
