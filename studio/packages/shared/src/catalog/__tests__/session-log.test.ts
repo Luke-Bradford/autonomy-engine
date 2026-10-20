@@ -70,3 +70,35 @@ describe('sessionLogRunValues', () => {
     );
   });
 });
+
+/** #1600 OR41 C6a — Copy's log can run to a line per skipped row, so it is capped as it is kept. */
+describe('SessionLog with keepAtMost', () => {
+  it('keeps the first lines, counts the rest, and still keeps an Error line', () => {
+    const log = new SessionLog('info', at('2026-10-20T00:00:00Z'), { keepAtMost: 2 });
+    for (let i = 0; i < 5; i += 1) log.add('Warning', 'TabularRowSkip', `row ${i + 1}`, 'skipped');
+    log.add('Info', 'TabularRowBatch', 'rows 1-5', 'read');
+    log.add('Error', 'Copy', '', 'failed');
+    expect(log.lines.map((l) => l.item)).toEqual(['row 1', 'row 2', '']);
+    expect(log.dropped).toBe(4);
+  });
+
+  it('does not count a line its level filters out', () => {
+    const log = new SessionLog('warning', undefined, { keepAtMost: 1 });
+    log.add('Warning', 'TabularRowSkip', 'row 1', 'skipped');
+    log.add('Info', 'TabularRowBatch', 'rows 1-1', 'read');
+    expect(log.dropped).toBe(0);
+  });
+
+  it('reports the lines it dropped in the run log, without a folder hint where there is no folder', () => {
+    const log = new SessionLog('warning', at('2026-10-20T00:00:00Z'), { keepAtMost: 1 });
+    for (let i = 0; i < 4; i += 1) log.add('Warning', 'TabularRowSkip', `row ${i + 1}`, 'skipped');
+    const values = sessionLogRunValues(log.lines, at('2026-10-20T00:00:09Z'), {
+      dropped: log.dropped,
+      folderHint: false,
+    });
+    expect(values).toEqual([
+      '2026-10-20T00:00:00.000Z Warning TabularRowSkip row 1 skipped',
+      '2026-10-20T00:00:09.000Z Warning SessionLog  3 more lines not kept in the run log',
+    ]);
+  });
+});

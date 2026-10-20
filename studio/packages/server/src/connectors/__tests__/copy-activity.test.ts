@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   COPY_ACTIVITY_TYPE,
   COPY_PROGRESS_OUTPUT,
+  SESSION_LOG_OUTPUT,
+  SESSION_LOG_RUN_MAX_LINES,
   newCopyCounters,
   type DatasetColumn,
 } from '@autonomy-studio/shared';
@@ -1163,5 +1165,134 @@ describe('copy activity — Auto-create from mapping (C3c)', () => {
       { name: 'id', type: 'INTEGER' },
       { name: 'label', type: 'TEXT' },
     ]);
+  });
+});
+
+describe('copy activity — the session log, to the run log (#1600 OR41 C6a)', () => {
+  const lineValues = (events: ActivityEvent[]): string[] =>
+    events.flatMap((e) =>
+      e.type === 'output' && e.name === SESSION_LOG_OUTPUT ? [e.value as string] : [],
+    );
+  const dropping = (logLevel?: string) => ({
+    mapping: [
+      { source: 'id', sink: 'id', type: 'integer' },
+      // `name` holds 'row-N', which cannot become an integer: every row is skipped.
+      { source: 'name', sink: 'flag', type: 'integer' },
+    ],
+    ...(logLevel === undefined ? {} : { logLevel }),
+  });
+  const ts = '\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z';
+
+  it('by default logs each skipped row as a Warning, numbered from 1, before the terminal', async () => {
+    const root = tempRoot();
+    const events = await run(
+      copyCtx({
+        root,
+        sourcePath: seedDb(root, 2, 'src.db'),
+        sinkPath: seedSink(root, 'dst.db'),
+        input: dropping(),
+      }),
+    );
+    const lines = lineValues(events);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(
+      new RegExp(`^${ts} Warning TabularRowSkip row 1 not_a_number: into 'flag': .+`),
+    );
+    expect(lines[1]).toMatch(new RegExp(`^${ts} Warning TabularRowSkip row 2 `));
+    const firstLine = events.findIndex((e) => e.type === 'output' && e.name === SESSION_LOG_OUTPUT);
+    expect(firstLine).toBeLessThan(events.findIndex((e) => e.type === 'warned'));
+    expect(terminal(events).type).toBe('succeeded');
+    // The advisory numbers rows as the log does, so one row has one number.
+    const warning = events.find((e) => e.type === 'warned');
+    expect(warning?.type === 'warned' ? warning.reason : '').toContain('First at row 1 ');
+  });
+
+  it('Everything also logs each batch read', async () => {
+    const root = tempRoot();
+    const events = await run(
+      copyCtx({
+        root,
+        sourcePath: seedDb(root, 3, 'src.db'),
+        sinkPath: seedSink(root, 'dst.db'),
+        input: dropping('info'),
+      }),
+    );
+    const lines = lineValues(events);
+    expect(lines).toHaveLength(4);
+    expect(lines[3]).toMatch(
+      new RegExp(`^${ts} Info TabularRowBatch rows 1-3 read 3 rows, 3 skipped$`),
+    );
+  });
+
+  it('Off logs nothing, and a copy that skips nothing logs nothing at Warnings', async () => {
+    const root = tempRoot();
+    const off = await run(
+      copyCtx({
+        root,
+        sourcePath: seedDb(root, 2, 'src.db'),
+        sinkPath: seedSink(root, 'dst.db'),
+        input: dropping('off'),
+      }),
+    );
+    expect(lineValues(off)).toEqual([]);
+    const clean = await run(
+      copyCtx({ root, sourcePath: seedDb(root, 2, 'b.db'), sinkPath: seedSink(root, 'e.db') }),
+    );
+    expect(lineValues(clean)).toEqual([]);
+  });
+
+  it(`keeps ${SESSION_LOG_RUN_MAX_LINES} lines and counts the rest, with no folder to point at`, async () => {
+    const root = tempRoot();
+    const n = SESSION_LOG_RUN_MAX_LINES + 5;
+    const events = await run(
+      copyCtx({
+        root,
+        sourcePath: seedDb(root, n, 'src.db'),
+        sinkPath: seedSink(root, 'dst.db'),
+        input: dropping(),
+      }),
+    );
+    const lines = lineValues(events);
+    expect(lines).toHaveLength(SESSION_LOG_RUN_MAX_LINES + 1);
+    expect(lines.at(-2)).toContain(` row ${SESSION_LOG_RUN_MAX_LINES} `);
+    expect(lines.at(-1)).toMatch(/ SessionLog {2}5 more lines not kept in the run log$/);
+  });
+
+  it('a copy that fails keeps the lines it logged, ahead of the terminal, with no Error line', async () => {
+    const root = tempRoot();
+    const sourcePath = join(root, 'src.db');
+    const src = new Database(sourcePath);
+    src.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, flag TEXT)');
+    const insert = src.prepare('INSERT INTO t (id, name, flag) VALUES (?, ?, ?)');
+    src.transaction(() => {
+      // Row 3 cannot become an integer; row 1100, in the second batch, breaks
+      // the sink's NOT NULL and fails the copy.
+      for (let i = 1; i <= 1200; i += 1)
+        insert.run(i, i === 1100 ? null : `row-${i}`, i === 3 ? 'bad' : '5');
+    })();
+    src.close();
+    const sinkPath = join(root, 'dst.db');
+    const dst = new Database(sinkPath);
+    dst.exec('CREATE TABLE sink (id INTEGER, note TEXT NOT NULL, flag INTEGER)');
+    dst.close();
+
+    const events = await run(
+      copyCtx({
+        root,
+        sourcePath,
+        sinkPath,
+        input: {
+          mapping: [
+            { source: 'id', sink: 'id', type: 'integer' },
+            { source: 'name', sink: 'note', type: 'string' },
+            { source: 'flag', sink: 'flag', type: 'integer' },
+          ],
+        },
+      }),
+    );
+    expect(terminal(events).type).toBe('failed');
+    const lines = lineValues(events);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(new RegExp(`^${ts} Warning TabularRowSkip row 3 `));
   });
 });

@@ -297,6 +297,21 @@ export function prettyStoredJson(text: string): string | null {
   }
 }
 
+/**
+ * #1600 OR41 C6a — the cap on a value in the Logs tab, in UTF-16 units. The tab
+ * is where a log line is read, so it shows the line whole (a session log line
+ * runs past the inline cap); this bounds only a value no line would reach.
+ * Download keeps every value whole.
+ */
+export const MAX_LOG_VALUE_CHARS = 4000;
+
+/** A streamed value as the Logs tab shows it: `formatOutputValue`, at the log's cap. */
+export function formatLogValue(value: unknown): string {
+  const text = typeof value === 'string' ? value : jsonText(value);
+  if (text.length <= MAX_LOG_VALUE_CHARS) return text;
+  return `${text.slice(0, surrogateSafeCut(text, MAX_LOG_VALUE_CHARS))}…`;
+}
+
 /** The cap on a streamed output value's inline rendering, in UTF-16 units. */
 export const MAX_INLINE_OUTPUT_CHARS = 80;
 
