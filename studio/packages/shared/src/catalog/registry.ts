@@ -1135,6 +1135,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
         bindings: ['sinkConnection'],
         fields: ['sinkFolder', 'sinkFileName', 'copyBehavior', 'ifExists'],
       },
+      // #1600 OR41 C6b — a rows Copy's Settings tab (C6a), with its one field.
+      { key: 'settings', fields: ['logLevel'] },
     ],
     // #1686 — the same rules `copyFilesConfigSchema`'s superRefine enforces,
     // read by the dock to leave out what cannot apply.

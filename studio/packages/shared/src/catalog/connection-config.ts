@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
 import { MAX_RETRY_INTERVAL_SECONDS } from '../schemas/pipeline.js';
+import { counted } from './counted.js';
 import { formatZodIssues } from '../schemas/zod-issues.js';
 import {
   CONNECTION_KIND_LABELS,
@@ -85,10 +86,9 @@ const MIB = 1024 * 1024;
 /** "Defaults to N." with N in a readable unit when it has one: 30000 ms reads
  * "(30 seconds)", 10485760 bytes "(10 MiB)". */
 function defaultNote(value: number, unit?: 'ms' | 'bytes'): string {
-  const plural = (n: number, word: string) => `${String(n)} ${word}${n === 1 ? '' : 's'}`;
   let readable: string | undefined;
-  if (unit === 'ms' && value % 60_000 === 0) readable = plural(value / 60_000, 'minute');
-  else if (unit === 'ms' && value % 1000 === 0) readable = plural(value / 1000, 'second');
+  if (unit === 'ms' && value % 60_000 === 0) readable = counted(value / 60_000, 'minute');
+  else if (unit === 'ms' && value % 1000 === 0) readable = counted(value / 1000, 'second');
   else if (unit === 'bytes' && value % MIB === 0) readable = `${String(value / MIB)} MiB`;
   return `Defaults to ${String(value)}${readable === undefined ? '' : ` (${readable})`}.`;
 }

@@ -19,5 +19,6 @@ export * from './copy-files-config.js';
 export * from './get-metadata-config.js';
 export * from './delete-config.js';
 export * from './web-config.js';
+export * from './counted.js';
 export * from './session-log.js';
 export * from './lookup-config.js';

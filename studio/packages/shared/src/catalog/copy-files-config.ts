@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
 import { instant, modifiedWindowIssue, wildcardIssue } from './file-selection.js';
+import { sessionLogConfigFields } from './session-log.js';
 
 /**
  * #1600 OR41 C1a — the config of Copy in **Files as-is** mode (activity
@@ -111,6 +112,9 @@ export const copyFilesConfigSchema = z
         fail: 'Fail',
       }),
     }),
+    // #1600 OR41 C6b — the Settings tab's Session log, a rows Copy's field (C6a).
+    // Only the level: the run log is the one destination until C6c.
+    logLevel: sessionLogConfigFields.logLevel,
   })
   .superRefine((cfg, ctx) => {
     // Every rule here refuses a config that would do something other than what

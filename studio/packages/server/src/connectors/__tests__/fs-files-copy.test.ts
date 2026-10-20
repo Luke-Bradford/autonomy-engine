@@ -21,6 +21,8 @@ import {
   FILE_COPY_ACTIVITY_TYPE,
   FILE_MOVE_ACTIVITY_TYPE,
   lowerRetiredTypes,
+  SESSION_LOG_OUTPUT,
+  SESSION_LOG_RUN_MAX_LINES,
   type Node,
 } from '@autonomy-studio/shared';
 import { fsAdapter } from '../fs.js';
@@ -802,5 +804,191 @@ describe('#1600 C1b — a lowered file_copy / file_move runs as the retired type
       false,
     );
     expect(last(events).type).toBe('succeeded');
+  });
+});
+
+/**
+ * #1600 OR41 C6b — a files-as-is Copy's session log, to the run log (catalogue
+ * §4.1, §5; ADF's copy log, https://learn.microsoft.com/azure/data-factory/copy-activity-log):
+ * Everything logs a `FileRead` per source and a `FileWrite` per file written,
+ * Warnings only each `FileSkip`. The lines are `node.output sessionLog`, at the
+ * terminal, ahead of a failure's counters.
+ */
+describe('#1600 C6b — session log', () => {
+  /** Each line without its timestamp. */
+  const logLines = (events: ActivityEvent[]) =>
+    events.flatMap((e) =>
+      e.type === 'output' && e.name === SESSION_LOG_OUTPUT
+        ? [String(e.value).replace(/^\S+ /, '')]
+        : [],
+    );
+
+  it('Everything logs each file read and written, before the success', async () => {
+    await put('in/a.txt', 'aaa');
+    await put('in/sub/b.txt', 'b');
+    const events = await run({ sourcePath: 'in', logLevel: 'info' });
+    expect(logLines(events)).toEqual([
+      'Info FileRead a.txt read 3 bytes',
+      "Info FileWrite a.txt wrote 3 bytes from 'a.txt'",
+      'Info FileRead sub/b.txt read 1 byte',
+      "Info FileWrite sub/b.txt wrote 1 byte from 'sub/b.txt'",
+    ]);
+    expect(last(events).type).toBe('succeeded');
+  });
+
+  it('a merge logs each source read and the one file written', async () => {
+    await put('in/a.txt', 'aa');
+    await put('in/b.txt', 'b');
+    const events = await run({
+      sourcePath: 'in',
+      copyBehavior: 'merge',
+      sinkFileName: 'all/joined.txt',
+      logLevel: 'info',
+    });
+    expect(logLines(events)).toEqual([
+      'Info FileRead a.txt read 2 bytes',
+      'Info FileRead b.txt read 1 byte',
+      'Info FileWrite all/joined.txt wrote 3 bytes merged from 2 files',
+    ]);
+  });
+
+  it('Warnings, the default, logs nothing for files copied', async () => {
+    await put('in/a.txt', 'a');
+    expect(logLines(await run({ sourcePath: 'in' }))).toEqual([]);
+  });
+
+  it('logs nothing when nothing is selected', async () => {
+    await put('in/a.txt', 'a');
+    const events = await run({ sourcePath: 'in', wildcard: '*.csv', logLevel: 'info' });
+    expect(logLines(events)).toEqual([]);
+    expect(last(events).type).toBe('succeeded');
+  });
+
+  describe('a skipped file', () => {
+    beforeEach(async () => {
+      await put('in/a.txt', 'new a');
+      await put('in/b.txt', 'new b');
+      await put('b.txt', 'old b', dst);
+    });
+
+    it('Warnings logs it with why, and that its source is kept', async () => {
+      const events = await run(
+        { sourcePath: 'in', ifExists: 'skip', afterCopy: 'delete' },
+        { sourceWritable: true },
+      );
+      expect(logLines(events)).toEqual([
+        "Warning FileSkip b.txt skipped: 'b.txt' already exists and If file exists is Skip; the source is kept",
+      ]);
+      expect(outputs(events)).toMatchObject({ filesSkipped: 1 });
+    });
+
+    it('with After copy Keep, it says nothing about the source', async () => {
+      const events = await run({ sourcePath: 'in', ifExists: 'skip' });
+      expect(logLines(events)).toEqual([
+        "Warning FileSkip b.txt skipped: 'b.txt' already exists and If file exists is Skip",
+      ]);
+    });
+
+    it('Off logs nothing', async () => {
+      const events = await run({ sourcePath: 'in', ifExists: 'skip', logLevel: 'off' });
+      expect(logLines(events)).toEqual([]);
+      expect(outputs(events)).toMatchObject({ filesSkipped: 1 });
+    });
+
+    it('a merge logs every source it skipped', async () => {
+      await put('all.txt', 'old', dst);
+      const events = await run({
+        sourcePath: 'in',
+        copyBehavior: 'merge',
+        sinkFileName: 'all.txt',
+        ifExists: 'skip',
+      });
+      expect(logLines(events)).toEqual([
+        "Warning FileSkip a.txt skipped: 'all.txt' already exists and If file exists is Skip",
+        "Warning FileSkip b.txt skipped: 'all.txt' already exists and If file exists is Skip",
+      ]);
+      expect(outputs(events)).toMatchObject({ filesSkipped: 2 });
+    });
+
+    it('a merge skipped under Delete source says each source is kept', async () => {
+      await put('all.txt', 'old', dst);
+      const events = await run(
+        {
+          sourcePath: 'in',
+          copyBehavior: 'merge',
+          sinkFileName: 'all.txt',
+          ifExists: 'skip',
+          afterCopy: 'delete',
+        },
+        { sourceWritable: true },
+      );
+      expect(logLines(events)).toEqual([
+        "Warning FileSkip a.txt skipped: 'all.txt' already exists and If file exists is Skip; the source is kept",
+        "Warning FileSkip b.txt skipped: 'all.txt' already exists and If file exists is Skip; the source is kept",
+      ]);
+      expect(await tree(src)).toEqual(['in/a.txt', 'in/b.txt']);
+    });
+  });
+
+  it('a skipped copy that already holds the source bytes says After copy still applies', async () => {
+    await put('in/b.txt', 'same b');
+    await put('b.txt', 'same b', dst);
+    const events = await run(
+      { sourcePath: 'in', ifExists: 'skip', afterCopy: 'delete' },
+      { sourceWritable: true },
+    );
+    expect(logLines(events)).toEqual([
+      "Warning FileSkip b.txt skipped: 'b.txt' already exists and If file exists is Skip; it holds this file's bytes, so After copy still applies",
+    ]);
+    expect(outputs(events)).toMatchObject({ filesSkipped: 1, filesDeleted: 1 });
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'a skip whose byte comparison fails part-way still logs its line',
+    async () => {
+      await chmod(await put('in/b.txt', 'same b'), 0o000);
+      await put('b.txt', 'same b', dst);
+      const events = await run(
+        { sourcePath: 'in', ifExists: 'skip', afterCopy: 'delete' },
+        { sourceWritable: true },
+      );
+      expect(failure(events)).toBeDefined();
+      expect(logLines(events)).toEqual([
+        "Warning FileSkip b.txt skipped: 'b.txt' already exists and If file exists is Skip",
+      ]);
+      expect(events).toContainEqual({ type: 'output', name: 'filesSkipped', value: 1 });
+    },
+  );
+
+  it.skipIf(process.getuid?.() === 0)(
+    'a failure part-way keeps the lines logged, ahead of the counters',
+    async () => {
+      await put('in/a.txt', 'a');
+      await chmod(await put('in/b.txt', 'b'), 0o000);
+      const events = await run({ sourcePath: 'in', logLevel: 'info' });
+      expect(failure(events)).toMatchObject({ kind: 'permanent' });
+      expect(logLines(events)).toEqual([
+        'Info FileRead a.txt read 1 byte',
+        "Info FileWrite a.txt wrote 1 byte from 'a.txt'",
+      ]);
+      const firstLine = events.findIndex(
+        (e) => e.type === 'output' && e.name === SESSION_LOG_OUTPUT,
+      );
+      const firstCounter = events.findIndex(
+        (e) => e.type === 'output' && e.name === 'filesWritten',
+      );
+      expect(firstLine).toBeGreaterThanOrEqual(0);
+      expect(firstLine).toBeLessThan(firstCounter);
+    },
+  );
+
+  it(`keeps ${SESSION_LOG_RUN_MAX_LINES} lines and counts the rest, with no folder to point at`, async () => {
+    const n = SESSION_LOG_RUN_MAX_LINES / 2 + 1;
+    for (let i = 0; i < n; i += 1) await put(`in/${String(i).padStart(4, '0')}.txt`, 'x');
+    const lines = logLines(await run({ sourcePath: 'in', logLevel: 'info' }));
+    expect(lines).toHaveLength(SESSION_LOG_RUN_MAX_LINES + 1);
+    expect(lines[SESSION_LOG_RUN_MAX_LINES]).toBe(
+      'Warning SessionLog  2 more lines not kept in the run log',
+    );
   });
 });

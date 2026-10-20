@@ -6,10 +6,8 @@ import {
   formatZodIssues,
   newCopyCounters,
   pumpCopyRows,
-  SESSION_LOG_OUTPUT,
   SESSION_LOG_RUN_MAX_LINES,
   SessionLog,
-  sessionLogRunValues,
   SOURCE_DRIFT_MESSAGES,
   WARNING_CODES,
   type CoercedValue,
@@ -21,7 +19,7 @@ import {
   type CopyWriteMode,
 } from '@autonomy-studio/shared';
 import { AsyncEventQueue } from '../util/async-event-queue.js';
-import { failed } from './activity-events.js';
+import { failed, sessionLogRunEvents } from './activity-events.js';
 import { DatasetIoError } from './dataset-io-error.js';
 import type { PreCopyScript } from './pre-copy-script.js';
 import type { AutoCreateColumn } from './auto-create-table.js';
@@ -431,12 +429,7 @@ export async function* runCopyActivity(
     if (logged) return;
     logged = true;
     // No folder hint: Copy cannot write its log to a folder until C6c.
-    for (const value of sessionLogRunValues(log.lines, undefined, {
-      dropped: log.dropped,
-      folderHint: false,
-    })) {
-      yield { type: 'output', name: SESSION_LOG_OUTPUT, value };
-    }
+    yield* sessionLogRunEvents(log, { folderHint: false });
   }
 
   // §7 row 4 — ALLOWED, so it never blocks the copy, and never silent either.
