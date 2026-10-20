@@ -66,6 +66,7 @@ import {
   copyTableOptionIssue,
   copyMappingShapeIssues,
   copySkipIncompatibleIssue,
+  copyVerifyConsistencyIssue,
   preCopyScriptIssue,
 } from '../catalog/copy-config.js';
 import type { GetMetadataField } from '../catalog/get-metadata-config.js';
@@ -3036,6 +3037,10 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
       if (scriptIssue !== null) errors.push(`node.${node.id}.preCopyScript: ${scriptIssue}`);
       const skipIssue = copySkipIncompatibleIssue(node.config); // #1600 C6d-1 — not with Upsert
       if (skipIssue !== null) errors.push(`node.${node.id}.skipIncompatibleRows: ${skipIssue}`);
+      const verifyIssue = copyVerifyConsistencyIssue(node.config); // #1600 C6e-1 — not with Upsert
+      if (verifyIssue !== null) {
+        errors.push(`node.${node.id}.validateDataConsistency: ${verifyIssue}`);
+      }
     }
     // #1480 — an unknown `type`, or a literal config the adapter would refuse
     // at dispatch, is refused here: a version that saves must be one that runs.

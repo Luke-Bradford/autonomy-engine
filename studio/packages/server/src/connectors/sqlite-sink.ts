@@ -4,10 +4,12 @@ import {
   COPY_WRITE_MODES,
   formatZodIssues,
   SKIP_INCOMPATIBLE_UPSERT_REFUSAL,
+  VERIFY_CONSISTENCY_UPSERT_REFUSAL,
   type CoercedValue,
   type CopyWriteMode,
   type DatasetKind,
 } from '@autonomy-studio/shared';
+import { verifyBeforeCommit } from './copy-verify.js';
 import { SQLITE_BUSY_TIMEOUT_MS } from '../limits.js';
 import { KeyedQueue } from '../util/keyed-queue.js';
 import { DatasetIoError } from './dataset-io-error.js';
@@ -96,6 +98,13 @@ export interface SqliteDatasetWrite {
    * Refused with Upsert, as the config is.
    */
   readonly onRowRejected?: ((position: number, reason: string) => void) | null;
+  /**
+   * #1600 OR41 C6e-1 — Verify after copy: called once the last batch is
+   * written and before COMMIT, with the store's own count of the rows it kept.
+   * A reason fails the copy `permanent` and rolls everything back; `null`
+   * commits. Absent or `null` is off. Refused with Upsert, as the config is.
+   */
+  readonly verifyBeforeCommit?: ((rowsWritten: number) => string | null) | null;
   /** Honoured at BATCH BOUNDARIES (§10) — a run cancel rolls the copy back. */
   readonly signal?: AbortSignal;
   /**
@@ -500,6 +509,10 @@ export async function writeSqliteDatasetRows(
   if (write.onRowRejected != null && write.mode === 'upsert') {
     throw new DatasetIoError('permanent', SKIP_INCOMPATIBLE_UPSERT_REFUSAL);
   }
+  // #1600 OR41 C6e-1 — Verify after copy, refused with Upsert on the same terms.
+  if (write.verifyBeforeCommit != null && write.mode === 'upsert') {
+    throw new DatasetIoError('permanent', VERIFY_CONSISTENCY_UPSERT_REFUSAL);
+  }
 
   // §8: the stored connection is not assumed well-formed — `routes/connections.ts`
   // runs no per-kind validation on write, so any shape is storable.
@@ -707,6 +720,9 @@ export async function writeSqliteDatasetRows(
       }
 
       if (write.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
+      // #1600 OR41 C6e-1 — inside the transaction, so a failed check unwinds
+      // the rows, an Overwrite's DELETE, the Pre-copy script and an Auto-create.
+      verifyBeforeCommit(write.verifyBeforeCommit, rowsWritten);
       db.exec('commit');
     } catch (err) {
       const failure = storeFailure(err, `the copy into '${target.table}' failed`);

@@ -126,6 +126,8 @@ export interface CopyIo extends SourceIo {
     readonly autoCreate: readonly AutoCreateColumn[] | null;
     /** #1600 OR41 C6d-1 — Skip incompatible rows; `null` is off. */
     readonly onRowRejected: ((position: number, reason: string) => void) | null;
+    /** #1600 OR41 C6e-1 — Verify after copy, run before COMMIT; `null` is off. */
+    readonly verifyBeforeCommit: ((rowsWritten: number) => string | null) | null;
     readonly onBatch: (rowsWritten: number) => void;
     readonly batches: AsyncIterable<readonly Record<string, CoercedValue>[]>;
     readonly signal: AbortSignal | undefined;
@@ -204,7 +206,7 @@ function failureSummary(counters: CopyCounters): string {
  * never reached the store, and `failureSummary` already accounts for it.
  */
 export function storeCountAdvisory(counters: CopyCounters): string | null {
-  const sent = counters.rowsRead - counters.rowsFailed;
+  const sent = rowsSent(counters);
   const kept = counters.rowsWritten;
   if (kept === sent) return null;
   if (kept < sent) {
@@ -219,6 +221,29 @@ export function storeCountAdvisory(counters: CopyCounters): string | null {
     `the store reports ${kept} row(s) written for the ${sent} the copy sent — a rule or ` +
     "trigger on the sink rewrote the inserts, so rowsWritten is the store's count, " +
     'not rows this copy delivered'
+  );
+}
+
+/** The rows the copy handed the store: every row read, less every row skipped. */
+function rowsSent(counters: CopyCounters): number {
+  return counters.rowsRead - counters.rowsFailed;
+}
+
+/**
+ * #1600 OR41 C6e-1 — Verify after copy's verdict, or `null` when the copy is
+ * consistent: ADF's rule for a table, rows read = rows written + rows skipped
+ * (https://learn.microsoft.com/azure/data-factory/copy-activity-data-consistency).
+ * `storeCountAdvisory`'s condition, judged before COMMIT on the store's own
+ * count, which is handed in because `counters.rowsWritten` is only a tick then.
+ * The skipped rows are both kinds `rowsFailed` holds: the coercion drops and
+ * the rows Skip incompatible rows let the sink reject.
+ */
+export function verifyAfterCopyFailure(counters: CopyCounters, rowsWritten: number): string | null {
+  const sent = rowsSent(counters);
+  if (rowsWritten === sent) return null;
+  return (
+    `Verify after copy failed: the copy read ${counters.rowsRead} row(s) and skipped ` +
+    `${counters.rowsFailed}, so ${sent} should have been written, but the store reports ${rowsWritten}`
   );
 }
 
@@ -507,6 +532,11 @@ export async function* runCopyActivity(
       preCopyScript,
       autoCreate,
       onRowRejected,
+      // #1600 OR41 C6e-1 — by then the pump has drained, so the read and
+      // skipped counts are final, and the sink's rejections are in them.
+      verifyBeforeCommit: parsed.data.validateDataConsistency
+        ? (rowsWritten) => verifyAfterCopyFailure(counters, rowsWritten)
+        : null,
       onBatch: (rowsWritten) => {
         counters.rowsWritten = rowsWritten;
       },

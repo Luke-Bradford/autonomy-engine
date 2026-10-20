@@ -311,6 +311,22 @@ export const SKIP_INCOMPATIBLE_UPSERT_REFUSAL =
   'Skip incompatible rows does not apply to Upsert, as in ADF';
 
 /**
+ * #1600 OR41 C6e-1 — Verify after copy is refused with Upsert, as `null` when it
+ * is fine. Not ADF's rule but studio's: an Upsert's store count is not the rows
+ * it was sent on either store (SQLite adds 0 for a matched row when every
+ * column is a key and N for a key that is not unique; PostgreSQL's `DISTINCT
+ * ON` counts a key repeated in a chunk once), so a row-count check would fail
+ * correct copies. A `${}` Write behaviour is left to dispatch, as C6d-1's is.
+ */
+export function copyVerifyConsistencyIssue(config: Record<string, unknown>): string | null {
+  if (config['validateDataConsistency'] !== true) return null;
+  return literalWriteMode(config) === 'upsert' ? VERIFY_CONSISTENCY_UPSERT_REFUSAL : null;
+}
+
+/** The one sentence save and both sinks refuse Verify after copy with Upsert in. */
+export const VERIFY_CONSISTENCY_UPSERT_REFUSAL = 'Verify after copy does not apply to Upsert';
+
+/**
  * A copy config's Write behaviour as stored, or `null` when it is a `${}` that
  * only dispatch can resolve. Absent is the default, Append. Untyped, because the
  * write gate holds an operator's raw config.
@@ -534,6 +550,15 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
           "column cannot hold) instead of failing. A trigger's rejection still fails. Not with " +
           'Upsert. Slower when on.',
       }),
+      // #1600 OR41 C6e-1 — ADF's `validateDataConsistency` for a table copy
+      // (https://learn.microsoft.com/azure/data-factory/copy-activity-data-consistency).
+      // Literal, like Skip incompatible rows. Off commits exactly as before C6e.
+      validateDataConsistency: presented(z.boolean().default(false), {
+        title: 'Verify after copy',
+        description:
+          'Before the copy commits, checks that the rows read equal the rows written plus the ' +
+          'rows skipped. If they differ, the copy fails and nothing is written. Not with Upsert.',
+      }),
     })
     .superRefine((cfg, ctx) => {
       const tableIssue = copyTableOptionIssue(cfg);
@@ -554,6 +579,10 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
       const skipIssue = copySkipIncompatibleIssue(cfg);
       if (skipIssue !== null) {
         ctx.addIssue({ code: 'custom', path: ['skipIncompatibleRows'], message: skipIssue });
+      }
+      const verifyIssue = copyVerifyConsistencyIssue(cfg);
+      if (verifyIssue !== null) {
+        ctx.addIssue({ code: 'custom', path: ['validateDataConsistency'], message: verifyIssue });
       }
       for (const issue of copyKeyColumnIssues(cfg)) {
         ctx.addIssue({

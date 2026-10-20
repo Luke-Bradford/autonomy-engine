@@ -87,6 +87,10 @@ export interface SinkWriteRequest {
    * its batch and the store's reason; `null` is off. Required, so no adapter
    * can drop the option on the way. */
   readonly onRowRejected: ((position: number, reason: string) => void) | null;
+  /** #1600 OR41 C6e-1 — Verify after copy's check, run before COMMIT with the
+   * store's count; `null` is off. Required, so no adapter can drop the option
+   * on the way. */
+  readonly verifyBeforeCommit: ((rowsWritten: number) => string | null) | null;
   readonly onBatch: (rowsWritten: number) => void;
   readonly signal: AbortSignal | undefined;
   /** Injectable for the offline tests; the live path uses `pg.Client`. */
@@ -116,6 +120,7 @@ export async function writeRowsToSink(
     preCopyScript,
     autoCreate,
     onRowRejected,
+    verifyBeforeCommit,
     onBatch,
     signal,
   } = request;
@@ -150,6 +155,7 @@ export async function writeRowsToSink(
         preCopyScript,
         autoCreate,
         onRowRejected,
+        verifyBeforeCommit,
         onBatch,
         ...(signal === undefined ? {} : { signal }),
       },
@@ -175,6 +181,7 @@ export async function writeRowsToSink(
         preCopyScript,
         autoCreate,
         onRowRejected,
+        verifyBeforeCommit,
         onBatch,
         ...(signal === undefined ? {} : { signal }),
       },

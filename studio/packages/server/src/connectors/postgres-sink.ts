@@ -6,10 +6,12 @@ import {
   formatZodIssues,
   postgresConnectionConfigSchema,
   SKIP_INCOMPATIBLE_UPSERT_REFUSAL,
+  VERIFY_CONSISTENCY_UPSERT_REFUSAL,
   tableDatasetConfigSchema,
   type CopyWriteMode,
   type DatasetKind,
 } from '@autonomy-studio/shared';
+import { verifyBeforeCommit } from './copy-verify.js';
 import { DatasetIoError } from './dataset-io-error.js';
 import { preCopyScriptRefusal, type PreCopyScript } from './pre-copy-script.js';
 import { rewriteNamedParametersToPositional } from './postgres-named-parameters.js';
@@ -84,6 +86,13 @@ export interface PostgresDatasetWrite {
    * a rejected row's position in its batch and the reason. Absent or `null` is
    * off, which writes exactly the statements a copy wrote before C6d. */
   readonly onRowRejected?: ((position: number, reason: string) => void) | null;
+  /**
+   * #1600 OR41 C6e-1 — Verify after copy: called once the last batch is
+   * written and before COMMIT, with the store's own count of the rows it kept.
+   * A reason fails the copy `permanent` and rolls everything back; `null`
+   * commits. Absent or `null` is off. Refused with Upsert, as the config is.
+   */
+  readonly verifyBeforeCommit?: ((rowsWritten: number) => string | null) | null;
   /** Honoured at BATCH BOUNDARIES (§10) — a run cancel rolls the copy back. */
   readonly signal?: AbortSignal;
   /** §5's progress channel: the RUNNING TOTAL after each chunk is inserted into
@@ -743,6 +752,10 @@ export async function writePostgresDatasetRows(
   if (write.onRowRejected != null && write.mode === 'upsert') {
     throw new DatasetIoError('permanent', SKIP_INCOMPATIBLE_UPSERT_REFUSAL);
   }
+  // #1600 OR41 C6e-1 — Verify after copy, refused with Upsert on the same terms.
+  if (write.verifyBeforeCommit != null && write.mode === 'upsert') {
+    throw new DatasetIoError('permanent', VERIFY_CONSISTENCY_UPSERT_REFUSAL);
+  }
 
   // §8: the stored connection is not assumed well-formed — `routes/connections.ts`
   // runs no per-kind validation on write, so any shape is storable. `openSession`
@@ -1026,6 +1039,9 @@ export async function writePostgresDatasetRows(
       await flush();
 
       if (write.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
+      // #1600 OR41 C6e-1 — after the last flush, so every row the store took or
+      // Skip incompatible rows replayed is counted, and inside the transaction.
+      verifyBeforeCommit(write.verifyBeforeCommit, rowsWritten);
       await client.query('COMMIT');
       inTransaction = false;
     } catch (err) {
