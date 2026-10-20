@@ -94,6 +94,8 @@ function sinkFactory(
     currentSchema?: string;
     /** Called with every statement before it is answered. */
     onQuery?: (sql: string) => void;
+    /** An INSERT's error, given its bound values; `undefined` lets it land (C6d-1). */
+    insertError?: (values: readonly unknown[]) => unknown;
   } = {},
 ) {
   const rec: SinkRecorder = { queries: [], ended: 0 };
@@ -147,6 +149,8 @@ function sinkFactory(
           return { rows: [], fields: [], rowCount: fixture.updateRowCount ?? 0 };
         }
         if (sql.startsWith('INSERT INTO')) {
+          const error = fixture.insertError?.(values ?? []);
+          if (error !== undefined) throw error;
           const sent = (sql.match(/\(\$\d/g) ?? []).length;
           const rowCount = (fixture.insertRowCount ?? ((n: number) => n))(sent);
           return { rows: [], fields: [], rowCount };
@@ -773,6 +777,124 @@ describe('resolveSinkColumns’ postgres-only ambiguity rung (#1196)', () => {
  * The LIVE half — the same opt-in as `postgres.test.ts`'s.
  * ------------------------------------------------------------------ */
 
+describe('the postgres sink: Skip incompatible rows (#1600 OR41 C6d-1)', () => {
+  const dup = pgError('23505', 'duplicate key value violates unique constraint "tgt_pkey"');
+  Object.assign(dup, { constraint: 'tgt_pkey', detail: 'Key (a)=(2) already exists.' });
+  const rejectA2 = (values: readonly unknown[]) => {
+    // Every INSERT holding a = 2, as postgres fails a whole statement.
+    for (let i = 0; i < values.length; i += 2) if (values[i] === 2) return dup;
+    return undefined;
+  };
+  const rowsAt = (...as: number[]) => as.map((a) => ({ a, b: 'x' }));
+
+  it('replays a rejected batch row by row under savepoints, skipping the rejected row', async () => {
+    const { rec, factory } = sinkFactory({ insertError: rejectA2 });
+    const rejected: [number, string][] = [];
+    const result = await writePostgresDatasetRows(
+      write({ createClient: factory, onRowRejected: (p, r) => rejected.push([p, r]) }),
+      batchesOf(rowsAt(1, 2, 3), rowsAt(4)),
+    );
+    // Built from the code and the constraint, never the message or the detail,
+    // which quote the value.
+    expect(rejected).toEqual([[1, "23505 unique_violation, constraint 'tgt_pkey'"]]);
+    expect(result.rowsWritten).toBe(3);
+    const sql = sqlOf(rec);
+    const from = sql.indexOf('SAVEPOINT studio_copy_batch');
+    const tail = sql.slice(from, sql.indexOf('COMMIT') + 1).map((q) => q.split(' (')[0]);
+    expect(tail).toEqual([
+      'SAVEPOINT studio_copy_batch',
+      'INSERT INTO "public"."tgt"',
+      'ROLLBACK TO SAVEPOINT studio_copy_batch',
+      'SAVEPOINT studio_copy_row',
+      'INSERT INTO "public"."tgt"',
+      'RELEASE SAVEPOINT studio_copy_row',
+      'SAVEPOINT studio_copy_row',
+      'INSERT INTO "public"."tgt"',
+      'ROLLBACK TO SAVEPOINT studio_copy_row',
+      'RELEASE SAVEPOINT studio_copy_row',
+      'SAVEPOINT studio_copy_row',
+      'INSERT INTO "public"."tgt"',
+      'RELEASE SAVEPOINT studio_copy_row',
+      'RELEASE SAVEPOINT studio_copy_batch',
+      // The second batch holds no rejected row: one savepoint, one INSERT.
+      'SAVEPOINT studio_copy_batch',
+      'INSERT INTO "public"."tgt"',
+      'RELEASE SAVEPOINT studio_copy_batch',
+      'COMMIT',
+    ]);
+  });
+
+  it('numbers a rejected row by its place in the batch across a bind-limit flush', async () => {
+    // Two columns bind 32,767 rows per statement, so row 32,768 is in the
+    // second statement of the same batch.
+    const rows = Array.from({ length: 32_770 }, (_, i) => ({ a: i === 32_768 ? 2 : 10 + i, b: 'x' }));
+    const rejected: number[] = [];
+    const result = await writePostgresDatasetRows(
+      write({
+        createClient: sinkFactory({ insertError: rejectA2 }).factory,
+        onRowRejected: (p) => rejected.push(p),
+      }),
+      batchesOf(rows),
+    );
+    expect(rejected).toEqual([32_768]);
+    expect(result.rowsWritten).toBe(32_769);
+  });
+
+  it('fails the copy on an error that is not the row\'s, without a replay', async () => {
+    const denied = pgError('42501', 'permission denied for table tgt');
+    const { rec, factory } = sinkFactory({ insertError: () => denied });
+    await expect(
+      writePostgresDatasetRows(
+        write({ createClient: factory, onRowRejected: () => {} }),
+        batchesOf(rowsAt(1, 2)),
+      ),
+    ).rejects.toThrow(/permission denied/);
+    const sql = sqlOf(rec);
+    expect(sql.filter((q) => q.startsWith('INSERT INTO'))).toHaveLength(1);
+    expect(sql).not.toContain('SAVEPOINT studio_copy_row');
+    expect(sql).toContain('ROLLBACK');
+  });
+
+  it('names the column a NOT NULL or a bound type error reports, and only the code without one', async () => {
+    const notNull = Object.assign(pgError('23502', 'null value in column "b"'), { column: 'b' });
+    const badInt = pgError('22P02', 'invalid input syntax for type integer: "abc"');
+    const rejected: string[] = [];
+    await writePostgresDatasetRows(
+      write({
+        createClient: sinkFactory({
+          insertError: (v) => (v.length !== 2 ? notNull : v[0] === 1 ? notNull : v[0] === 2 ? badInt : undefined),
+        }).factory,
+        onRowRejected: (_, r) => rejected.push(r),
+      }),
+      batchesOf(rowsAt(1, 2, 3)),
+    );
+    expect(rejected).toEqual([
+      "23502 not_null_violation, column 'b'",
+      '22P02 invalid_text_representation',
+    ]);
+    expect(rejected.join()).not.toContain('abc');
+  });
+
+  it('off, writes exactly the statements it wrote before C6d', async () => {
+    const { rec, factory } = sinkFactory();
+    await writePostgresDatasetRows(write({ createClient: factory }), batchesOf(rowsAt(1, 2)));
+    expect(sqlOf(rec).some((q) => q.includes('SAVEPOINT'))).toBe(false);
+  });
+
+  it('refuses it with Upsert', async () => {
+    await expect(
+      writePostgresDatasetRows(
+        write({
+          createClient: sinkFactory({ primaryKey: ['a'] }).factory,
+          mode: 'upsert',
+          onRowRejected: () => {},
+        }),
+        batchesOf(rowsAt(1)),
+      ),
+    ).rejects.toThrow(/does not apply to Upsert/);
+  });
+});
+
 const LIVE_HOST = process.env.STUDIO_TEST_POSTGRES_HOST;
 
 describe('the live postgres sink service (#1196 M10)', () => {
@@ -1275,6 +1397,47 @@ describe.skipIf(LIVE_HOST === undefined)('the postgres sink, against a live post
       secret: password,
       ...overrides,
     });
+
+  it('skips the rows a real postgres rejects under Skip incompatible rows, and keeps the rest (C6d-1)', async () => {
+    await withAdminClient(async (c) => {
+      await c.query(
+        "drop table if exists sink_skip; create table sink_skip(a int primary key, b varchar(3) not null check (b <> 'bad'))",
+      );
+    });
+    const rejected: [number, string][] = [];
+    const result = await writePostgresDatasetRows(
+      liveWrite({
+        datasetConfig: { schema: 'public', table: 'sink_skip' },
+        onRowRejected: (p, r) => rejected.push([p, r]),
+      }),
+      batchesOf(
+        [
+          { a: 1, b: 'ok' },
+          { a: 1, b: 'dup' },
+          { a: 2, b: null },
+          { a: 3, b: 'too long' },
+          { a: 4, b: 'bad' },
+        ],
+        [
+          { a: 'x', b: 'ok' },
+          { a: 6, b: 'ok' },
+        ],
+      ),
+    );
+    expect(rejected).toEqual([
+      [1, "23505 unique_violation, constraint 'sink_skip_pkey'"],
+      [2, "23502 not_null_violation, column 'b'"],
+      [3, '22001 string_data_right_truncation'],
+      [4, "23514 check_violation, constraint 'sink_skip_b_check'"],
+      [0, '22P02 invalid_text_representation'],
+    ]);
+    expect(result.rowsWritten).toBe(2);
+    const rows = await withAdminClient((c) => c.query('select a, b from sink_skip order by a'));
+    expect(rows.rows).toEqual([
+      { a: 1, b: 'ok' },
+      { a: 6, b: 'ok' },
+    ]);
+  });
 
   it("REFUSES an onError:'null' row into a real NOT NULL column, and the table is untouched (#1162)", async () => {
     await withAdminClient(async (c) => {
